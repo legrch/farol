@@ -916,7 +916,7 @@ try {
       }
       saved = await readSetupSettings(window);
     }
-    const retainedWorkspaces = saved.computer.workspaces;
+    let retainedWorkspaces = saved.computer.workspaces;
     let verifiedWorkspaces = retainedWorkspaces;
     const retainedProfile = { ...activeFixtureProfile };
     const stateRoot = path.join(retainedProfile.userData, "farol-next-state");
@@ -924,27 +924,10 @@ try {
     let policyConfigSha256;
     let policyRunMarker;
     if (behavior) {
-      // Add has already connected. This separate advanced-policy journey
-      // explicitly stops the original connection and observes its result;
-      // never replay an uncertain stop or infer closure from navigation.
-      await setupStep(window, "connection", "Connection");
-      await window.getByText("Connection help", { exact: true }).click();
-      await window
-        .getByRole("button", { name: "Connection diagnostics", exact: true })
-        .click();
-      await setupAction(window, "Stop connection", {
-        scope: ".settings-page",
-      });
-      saved = await readSetupSettings(window);
-      assert.equal(saved.connectors.secureMcp.runtime, null);
-      assert.equal(saved.connectors.secureMcp.attachment, null);
-      assert.equal(saved.setup.connect.outcomeUnknown, false);
-      assert.deepEqual(saved.computer.workspaces, retainedWorkspaces);
-      // Supported current React Settings -> IPC owner save only. Reading the
-      // owned config observes publication; this test never writes policy bytes.
-      const beforePolicy = saved;
-      assert.equal(Object.hasOwn(beforePolicy.computer, "filePolicy"), false);
-      assert.equal(beforePolicy.connectors.secureMcp.runtime, null);
+      // Save while connected through the current React form. The acknowledged
+      // edit owns drain/check/reconnect; no manual Verify or Connect click and
+      // no configuration-byte writes or direct IPC mutation are substitutes.
+      assert.equal(Object.hasOwn(saved.computer, "filePolicy"), false);
       await window
         .getByRole("navigation", { name: "Sections", exact: true })
         .getByRole("button", { name: "Settings", exact: true })
@@ -953,29 +936,225 @@ try {
         .getByRole("navigation", { name: "Settings navigation", exact: true })
         .getByRole("button", { name: "This Mac", exact: true })
         .click();
-      await window
-        .getByRole("region", {
-          name: "Files in approved workspaces",
-          exact: true,
-        })
-        .getByRole("combobox")
-        .selectOption("approved-roots-v1");
-      await setupAction(window, "Save file permissions", {
-        scope: ".settings-page",
-      });
-      saved = await readSetupSettings(window);
-      assert.equal(saved.computer.filePolicy, "approved-roots-v1");
-      assert.equal(saved.revision, beforePolicy.revision + 1);
-      assert.equal(
-        saved.computer.generation,
-        beforePolicy.computer.generation + 1,
+      async function savePermissionAndRecover(region, name, field, value) {
+        const before = await readSetupSettings(window);
+        const priorRuntime = before.connectors.secureMcp.runtime;
+        assert.equal(priorRuntime?.state, "ready");
+        const startedAt = Date.now();
+        const form = window.getByRole("region", { name: region, exact: true });
+        await form.getByRole("combobox").selectOption(value);
+        // Arm before the one Save click. Observe its retained DOM receipt,
+        // since automatic follow-ups may replace the page feedback. No extra
+        // action or Diagnostics navigation is needed to read this projection.
+        const observation = await window.evaluateHandle((field) => {
+          const container = document.querySelector(".settings-page");
+          if (!container?.checkVisibility())
+            throw new Error("PERMISSION_SAVE_SURFACE_MISSING");
+          const kind =
+            field === "filePolicy"
+              ? "computer.update-file-policy"
+              : "computer.update-commands";
+          const id = `settings:${kind}:`;
+          const read = () =>
+            [
+              ...container.querySelectorAll(
+                '[aria-label="Retained actions"] li',
+              ),
+            ].find((row) => row.querySelector("code")?.textContent === id)
+              ?.textContent;
+          if (read()) throw new Error("PERMISSION_SAVE_ALREADY_RETAINED");
+          const observed = { result: null, observer: null };
+          observed.observer = new MutationObserver(() => {
+            if (observed.result !== null) return;
+            const current = read();
+            if (current && current !== `${id}: pending`)
+              observed.result = current;
+          });
+          observed.observer.observe(container, {
+            subtree: true,
+            childList: true,
+            characterData: true,
+          });
+          return observed;
+        }, field);
+        try {
+          await form.getByRole("button", { name, exact: true }).click();
+          await window.waitForFunction(
+            (value) => value.result !== null,
+            observation,
+          );
+          assert.equal(
+            await observation.evaluate((value) => value.result),
+            `settings:${field === "filePolicy" ? "computer.update-file-policy" : "computer.update-commands"}:: applied`,
+            `PERMISSION_SAVE_UNCONFIRMED:${field}`,
+          );
+        } finally {
+          await observation.evaluate((value) => value.observer.disconnect());
+          await observation.dispose();
+        }
+        const deadline = Date.now() + 15000;
+        let after;
+        for (;;) {
+          after = await readSetupSettings(window);
+          assert.equal(after.setup.computer.outcomeUnknown, false);
+          assert.equal(after.setup.connect.outcomeUnknown, false);
+          if (
+            after.computer[field] === value &&
+            after.setup.computer.verified?.configRevision ===
+              after.computer.generation &&
+            after.connectors.secureMcp.runtime?.state === "ready" &&
+            after.connectors.secureMcp.runtime.runtimeGeneration !==
+              priorRuntime.runtimeGeneration &&
+            after.connectors.secureMcp.challenge?.runtimeGeneration ===
+              after.connectors.secureMcp.runtime.runtimeGeneration
+          )
+            break;
+          if (Date.now() >= deadline)
+            throw new Error(`PERMISSION_SAVE_RECOVERY_TIMEOUT:${field}`);
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        // Proof/runtime publication advances Settings revision separately; the
+        // permission edit itself advances Computer authority exactly once.
+        // Git checks only does not activate workspace-shell authority.
+        assert.ok(after.revision > before.revision);
+        assert.deepEqual(after.computer, {
+          ...before.computer,
+          [field]: value,
+          generation: before.computer.generation + 1,
+          workspaces: after.computer.workspaces,
+        });
+        assert.deepEqual(
+          after.computer.workspaces.map(
+            ({ accessCheck, ...workspace }) => workspace,
+          ),
+          before.computer.workspaces.map(
+            ({ accessCheck, ...workspace }) => workspace,
+          ),
+        );
+        for (const [index, workspace] of after.computer.workspaces.entries()) {
+          const check = workspace.accessCheck;
+          assert.ok(check, "PERMISSION_SAVE_ACCESS_PROOF_MISSING");
+          assert.match(check.checkId, /^[0-9a-f-]{36}$/u);
+          assert.notEqual(
+            check.checkId,
+            before.computer.workspaces[index].accessCheck?.checkId,
+          );
+          assert.deepEqual(check, {
+            checkId: check.checkId,
+            buildId: build.buildId,
+            computerGeneration: after.computer.generation,
+            verifiedAt: check.verifiedAt,
+            rootIdentity: workspace.rootIdentity,
+          });
+          assert.ok(
+            Date.parse(check.verifiedAt) >= startedAt,
+            "PERMISSION_SAVE_ACCESS_PROOF_STALE",
+          );
+        }
+        assert.equal(
+          after.setup.computer.verified.workspaceId,
+          before.setup.computer.verified.workspaceId,
+        );
+        assert.equal(after.setup.computer.verified.buildId, build.buildId);
+        assert.ok(
+          Date.parse(after.setup.computer.verified.verifiedAt) >= startedAt,
+        );
+        assert.equal(after.setup.computer.reachable, "reachable");
+        const connector = after.connectors.secureMcp;
+        assert.equal(connector.runtime.buildId, build.buildId);
+        assert.equal(
+          connector.runtime.computerGeneration,
+          after.computer.generation,
+        );
+        assert.equal(
+          connector.runtime.connectorGeneration,
+          connector.generation,
+        );
+        assert.equal(
+          connector.challenge.computerGeneration,
+          after.computer.generation,
+        );
+        assert.equal(connector.challenge.buildId, build.buildId);
+        assert.notEqual(
+          connector.challenge.challengeSha256,
+          before.connectors.secureMcp.challenge?.challengeSha256,
+        );
+        assert.deepEqual(
+          { ...connector, runtime: null, challenge: null },
+          { ...before.connectors.secureMcp, runtime: null, challenge: null },
+        );
+        assert.equal(connector.attachment, null);
+        assert.equal(after.setup.connect.verified, null);
+        assert.equal(after.setup.chatgpt.verified, null);
+        assert.deepEqual(activeFixtureProfile, retainedProfile);
+        assert.deepEqual(
+          JSON.parse(await fs.readFile(configFile, "utf8")).computer,
+          after.computer,
+        );
+        assert.equal(
+          fixtureVerifications,
+          0,
+          "PERMISSION_SAVE_REPLAYED_ATTACHMENT",
+        );
+        assert.equal(
+          nonReadRequests,
+          0,
+          "PERMISSION_SAVE_SENT_TO_BROWSER_FIXTURE",
+        );
+        observations.push({
+          kind: "settings-permission-save-auto-verified-and-reconnected",
+          field,
+          value,
+          computerGeneration: after.computer.generation,
+          runtimeGeneration: connector.runtime.runtimeGeneration,
+          workspaceVerification: "fresh",
+          commandExecution: "NOT_RUN",
+        });
+        return after;
+      }
+      saved = await savePermissionAndRecover(
+        "Files in approved workspaces",
+        "Save file permissions",
+        "filePolicy",
+        "approved-roots-v1",
       );
-      assert.deepEqual(saved.computer.workspaces, retainedWorkspaces);
-      assert.equal(saved.computer.commands, beforePolicy.computer.commands);
-      assert.equal(saved.setup.computer.verified, null);
-      assert.equal(saved.setup.computer.reachable, "unknown");
-      assert.equal(saved.setup.computer.outcomeUnknown, false);
+      await openSetup(window);
+      await assertSetupOverview(window, connectedOverview);
+      await window
+        .getByRole("navigation", { name: "Sections", exact: true })
+        .getByRole("button", { name: "Settings", exact: true })
+        .click();
+      await window
+        .getByRole("navigation", { name: "Settings navigation", exact: true })
+        .getByRole("button", { name: "This Mac", exact: true })
+        .click();
+      assert.equal(saved.computer.commands, "none");
+      saved = await savePermissionAndRecover(
+        "Terminal & Git",
+        "Save permissions",
+        "commands",
+        "verification",
+      );
+      retainedWorkspaces = saved.computer.workspaces;
+      verifiedWorkspaces = retainedWorkspaces;
+      await openSetup(window);
+      await assertSetupOverview(window, connectedOverview);
+      // A separate acknowledged Stop retains the fresh folder proof and makes
+      // the existing SAME-profile clean Quit/reopen a stopped-connection case.
+      const beforeStop = saved;
+      await setupStep(window, "connection", "Connection");
+      await window.getByText("Connection help", { exact: true }).click();
+      await window
+        .getByRole("button", { name: "Connection diagnostics", exact: true })
+        .click();
+      await setupAction(window, "Stop connection", { scope: ".settings-page" });
+      saved = await readSetupSettings(window);
+      assert.deepEqual(saved.computer, beforeStop.computer);
+      assert.deepEqual(saved.setup.computer, beforeStop.setup.computer);
+      assert.equal(saved.setup.connect.outcomeUnknown, false);
+      assert.equal(saved.setup.connect.verified, null);
       assert.equal(saved.connectors.secureMcp.runtime, null);
+      assert.equal(saved.connectors.secureMcp.challenge, null);
       assert.equal(saved.connectors.secureMcp.attachment, null);
       const persisted = await fs.readFile(configFile);
       assert.deepEqual(JSON.parse(persisted).computer, saved.computer);
@@ -993,13 +1172,11 @@ try {
         configFile,
         configSha256: policyConfigSha256,
         computerGeneration: saved.computer.generation,
-        workspaceVerification: "invalidated",
+        workspaceVerification: "fresh-and-retained-after-explicit-stop",
+        commands: saved.computer.commands,
       });
     }
-    await assertSetupOverview(
-      window,
-      behavior ? uncheckedOverview : workspaceOverview,
-    );
+    await assertSetupOverview(window, workspaceOverview);
     assert.equal(nonReadRequests, 0);
     // A known graceful quit permits reusing this SAME disposable profile.
     // Approved folders and saved credentials alone never make Computer ready.
@@ -1042,10 +1219,7 @@ try {
     assert.equal(partial.connectors.secureMcp.attachment, null);
     assert.equal(partial.connectors.secureMcp.lastVerifiedAttachment, null);
     assert.equal(partial.setup.connect.verified, null);
-    await reviewSetupWithoutChanges(
-      window,
-      behavior ? uncheckedOverview : workspaceOverview,
-    );
+    await reviewSetupWithoutChanges(window, workspaceOverview);
     assert.equal(nonReadRequests, 0);
     observations.push({
       kind: "partial-quit-reopen-and-nondestructive-review",
@@ -1059,7 +1233,8 @@ try {
       );
       assert.deepEqual(partial.computer, saved.computer);
       assert.equal(partial.computer.filePolicy, "approved-roots-v1");
-      assert.equal(partial.setup.computer.verified, null);
+      assert.deepEqual(partial.setup.computer, saved.setup.computer);
+      assert.equal(partial.computer.commands, "verification");
       assert.equal(
         createHash("sha256")
           .update(await fs.readFile(configFile))
@@ -1068,8 +1243,8 @@ try {
         "POLICY_CONFIG_CHANGED_ON_REOPEN",
       );
       assert.equal(fixtureVerifications, 0, "POLICY_SAVE_REPLAYED_ATTACHMENT");
-      // Readiness stayed withdrawn through Quit/reopen. Only the normal
-      // workspace command performs fresh Go inspection under the new policy.
+      // Folder proof survives the explicit Stop and Quit/reopen; the connection
+      // stays stopped. A later explicit Verify refreshes only the folder proof.
       await setupStep(window, "folders", "Workspaces");
       const verificationStarted = Date.now();
       await setupAction(window, "Verify workspace");

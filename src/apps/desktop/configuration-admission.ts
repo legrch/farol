@@ -46,7 +46,9 @@ export function isDrainedWorkspaceChange(kind: string): boolean {
   return (
     kind === "computer.add-workspace" ||
     kind === "computer.remove-workspace" ||
-    kind === "computer.update-access"
+    kind === "computer.update-access" ||
+    kind === "computer.update-commands" ||
+    kind === "computer.update-file-policy"
   );
 }
 

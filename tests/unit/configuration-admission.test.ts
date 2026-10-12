@@ -28,14 +28,17 @@ describe("AUTH-07 Computer authority while a native Agent runs", () => {
     expect(workspaceConfigurationRoute(false, true)).toBe("drain");
     expect(workspaceConfigurationRoute(false, false)).toBe("configure-stopped");
   });
-  it("selects only the three workspace changes for an existing admitted host drain", () => {
+  it("selects only supported workspace and permission changes for an existing admitted host drain", () => {
     const changes = [
       "computer.add-workspace",
       "computer.remove-workspace",
       "computer.update-access",
+      "computer.update-commands",
+      "computer.update-file-policy",
     ];
     for (const kind of changes) {
       expect(isDrainedWorkspaceChange(kind)).toBe(true);
+      expect(changesComputerAuthority(kind)).toBe(true);
       expect(
         configurationAdmission(kind, {
           agentActive: false,
@@ -51,9 +54,16 @@ describe("AUTH-07 Computer authority while a native Agent runs", () => {
         }),
       ).toBe("CODEX_HOST_TASK_IN_PROGRESS");
     }
-    for (const kind of computerAuthorityCommands.filter(
-      (candidate) => !changes.includes(candidate),
-    )) {
+    for (const kind of [
+      ...computerAuthorityCommands.filter(
+        (candidate) => !changes.includes(candidate),
+      ),
+      "computer.verify-workspace",
+      "host.select-codex",
+      "host.select-discovered-codex",
+      "host.verify-codex",
+      "host.remove-codex",
+    ]) {
       expect(isDrainedWorkspaceChange(kind)).toBe(false);
       expect(
         configurationAdmission(kind, {

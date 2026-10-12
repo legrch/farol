@@ -7,6 +7,8 @@ export type WorkspaceConfigurationCommand = Readonly<
       kind:
         | "computer.add-workspace"
         | "computer.update-access"
+        | "computer.update-commands"
+        | "computer.update-file-policy"
         | "computer.remove-workspace";
     }
   >
@@ -99,6 +101,8 @@ export class WorkspaceConfigurationDrain<Result> {
       ![
         "computer.add-workspace",
         "computer.update-access",
+        "computer.update-commands",
+        "computer.update-file-policy",
         "computer.remove-workspace",
       ].includes(this.command.kind) ||
       typeof this.ports?.stop !== "function" ||

@@ -1931,6 +1931,119 @@ function connectionSettings() {
   return value;
 }
 describe("bounded Settings writer", () => {
+  for (const permission of ["commands", "file-policy"] as const) {
+    it.each([
+      "success",
+      "refused-save",
+      "unknown-save",
+      "unknown-check",
+      "refused-check",
+      "stale-generation",
+      "changed-connector",
+      "no-workspace",
+    ] as const)(
+      `continues an acknowledged ${permission} save through fresh verification and reconnect: %s`,
+      async (outcome) => {
+        let value = connectionSettings();
+        value.computer.commands = "none";
+        if (outcome === "no-workspace") {
+          value.computer.workspaces = [];
+          value.setup.computer.verified = null;
+        }
+        const saveKind =
+          permission === "commands"
+            ? "computer.update-commands"
+            : "computer.update-file-policy";
+        const label =
+          permission === "commands" ? "Command access" : "File access";
+        const button =
+          permission === "commands"
+            ? "Save permissions"
+            : "Save file permissions";
+        const h = await mount("computer", value);
+        expect(h.button(button).disabled).toBe(true);
+        await change(
+          h.field(label),
+          permission === "commands" ? "workspace" : "approved-roots-v1",
+        );
+        vi.mocked(h.f.api.configure).mockImplementation(async (command) => {
+          if (
+            (command.kind === saveKind && outcome === "unknown-save") ||
+            (command.kind === "computer.verify-workspace" &&
+              outcome === "unknown-check")
+          )
+            throw new Error("original reply lost");
+          if (
+            (command.kind === saveKind && outcome === "refused-save") ||
+            (command.kind === "computer.verify-workspace" &&
+              outcome === "refused-check")
+          )
+            return {
+              ok: false,
+              error: "CONNECTOR_STOP_UNCONFIRMED",
+              snapshot: { status: "ready", settings: value },
+            };
+          value = structuredClone(value);
+          value.revision++;
+          if (
+            command.kind === "computer.update-commands" ||
+            command.kind === "computer.update-file-policy"
+          ) {
+            if (command.kind === "computer.update-commands")
+              value.computer.commands = command.commands;
+            else value.computer.filePolicy = command.filePolicy;
+            value.computer.generation += outcome === "stale-generation" ? 2 : 1;
+            if (outcome === "changed-connector")
+              value.connectors.secureMcp.generation++;
+            value.connectors.secureMcp.runtime = null;
+            value.connectors.secureMcp.attachment = null;
+            value.connectors.secureMcp.challenge = null;
+            value.setup.computer.verified = null;
+            value.setup.computer.reachable = "unknown";
+            value.setup.connect.verified = null;
+          } else if (command.kind === "computer.verify-workspace") {
+            const workspace = value.computer.workspaces[0]!;
+            expect(command.workspaceId).toBe(workspace.workspaceId);
+            // Activating workspace commands may publish one extra generation
+            // with the matching new physical access proof.
+            if (permission === "commands") value.computer.generation++;
+            value.setup.computer.verified = {
+              ...proof(value),
+              workspaceId: workspace.workspaceId,
+            };
+            value.setup.computer.reachable = "reachable";
+            workspace.accessCheck = {
+              checkId: command.checkId,
+              buildId: "3".repeat(64),
+              computerGeneration: value.computer.generation,
+              rootIdentity: workspace.rootIdentity!,
+              verifiedAt: "2026-10-12T08:00:00.000Z",
+            };
+          } else if (command.kind === "connector.start") {
+            value.connectors.secureMcp.runtime = {
+              ...connectionSettings().connectors.secureMcp.runtime!,
+              computerGeneration: value.computer.generation,
+              runtimeGeneration: "e".repeat(64),
+            };
+          } else throw new Error(`Unexpected command: ${command.kind}`);
+          return { ok: true, snapshot: { status: "ready", settings: value } };
+        });
+        await h.click(button);
+        expect(h.calls().map((command) => command.kind)).toEqual(
+          outcome === "success"
+            ? [saveKind, "computer.verify-workspace", "connector.start"]
+            : outcome === "unknown-check" || outcome === "refused-check"
+              ? [saveKind, "computer.verify-workspace"]
+              : [saveKind],
+        );
+        const dispatched = h.calls().length;
+        await h.remount();
+        expect(h.calls()).toHaveLength(dispatched);
+        if (outcome === "success") expect(h.button(button).disabled).toBe(true);
+      },
+    );
+  }
+
   it.each([
     "success",
     "workspace-commands",
@@ -2374,7 +2487,18 @@ describe("bounded Settings writer", () => {
     expect(h.button("Save exclusions").disabled).toBe(false);
   });
   it("uses all real command policies and never performs an Astra host check", async () => {
-    const h = await mount("computer");
+    let value = settings();
+    const h = await mount("computer", value);
+    vi.mocked(h.f.api.configure).mockImplementation(async (command) => {
+      expect(command.kind).toBe("computer.update-commands");
+      if (command.kind === "computer.update-commands") {
+        value = structuredClone(value);
+        value.revision++;
+        value.computer.generation++;
+        value.computer.commands = command.commands;
+      }
+      return { ok: true, snapshot: { status: "ready", settings: value } };
+    });
     for (const commands of ["verification", "workspace", "none"]) {
       await change(h.field("Command access"), commands);
       await h.click("Save permissions");
@@ -4636,9 +4760,9 @@ it("keeps read-only connection guidance available while the original Save result
   expect(h.button("Save & connect").disabled).toBe(true);
   expect(h.f.api.task).not.toHaveBeenCalled();
 });
-// No command capability projection is exposed to this renderer in the current beta.
+// Saved permission and file checks do not prove native command availability.
 it.each(["none", "verification", "workspace"] as const)(
-  "B04 saved %s permission stays distinct from unavailable beta commands with current or stale file evidence",
+  "saved %s permission stays distinct from command availability with current or stale file evidence",
   async (commands) => {
     for (const current of [true, false]) {
       const value = connectionSettings();
@@ -4656,22 +4780,20 @@ it.each(["none", "verification", "workspace"] as const)(
             ? "Git checks only"
             : "Terminal in approved folders";
       expect(copy()).toContain(`Saved command permission: ${saved}.`);
-      expect(copy()).toContain("Command capability: unavailable in this beta");
       expect(copy()).toContain(
-        "Shell and Git execution are not active through the external connector",
-      );
-      expect(copy()).toContain(
-        "Command verification: not qualified for this beta",
+        "Shell requires a supported build and verified workspace access",
       );
       expect(copy()).toContain(
         "File and connection checks do not verify command execution",
       );
       expect(h.field("Command access").value).toBe(commands);
+      expect(h.button("Save permissions").disabled).toBe(true);
       await change(
         h.field("Command access"),
         commands === "none" ? "workspace" : "none",
       );
       expect(copy()).toContain(`Saved command permission: ${saved}.`);
+      expect(h.button("Save permissions").disabled).toBe(false);
       expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
       expect(h.calls()).toEqual([]);
       await h.pageTo("connection");

@@ -30,9 +30,11 @@ const commands = [
     access: "write",
   },
   { kind: "computer.remove-workspace", workspaceId: "opaque-workspace" },
+  { kind: "computer.update-commands", commands: "workspace" },
+  { kind: "computer.update-file-policy", filePolicy: "approved-roots-v1" },
 ] as const satisfies readonly WorkspaceConfigurationCommand[];
 
-function fixture() {
+function fixture(command: WorkspaceConfigurationCommand = commands[1]) {
   const events: string[] = [];
   const state = {
     reservationHeld: true,
@@ -72,7 +74,7 @@ function fixture() {
     return result;
   });
   const ports = { current, stop, recordStopped, apply };
-  const drain = new WorkspaceConfigurationDrain(commands[1], ports);
+  const drain = new WorkspaceConfigurationDrain(command, ports);
   return { events, state, result, ports, drain };
 }
 
@@ -207,67 +209,70 @@ describe("one admitted workspace configuration drain", () => {
     await expect(drain.run()).resolves.toEqual(consumed);
   });
 
-  it("keeps the original caller reservation held across every awaited phase", async () => {
-    const f = fixture();
-    const reservation = new AuthorityTransitionReservation();
-    const stop = deferred<WorkspaceConfigurationConfirmation>();
-    const record = deferred<WorkspaceConfigurationConfirmation>();
-    const apply = deferred<typeof f.result>();
-    const recording = deferred<void>();
-    const applying = deferred<void>();
-    const drain = new WorkspaceConfigurationDrain(commands[0], {
-      current: () =>
-        reservation.current() === "authority-change" && f.ports.current(),
-      stop: () => stop.promise,
-      recordStopped: () => {
-        recording.resolve();
-        return record.promise;
-      },
-      apply: () => {
-        applying.resolve();
-        return apply.promise;
-      },
-    });
-    const operation = reservation.withReservation("authority-change", () =>
-      drain.run(),
-    );
-    for (const release of [
-      async () => {
-        stop.resolve(true);
-        await recording.promise;
-      },
-      async () => {
-        record.resolve(true);
-        await applying.promise;
-      },
-      async () => {
-        apply.resolve(f.result);
-      },
-    ]) {
-      expect(reservation.current()).toBe("authority-change");
-      for (const kind of [
-        "connector-start",
-        "agent-admission",
-        "authority-change",
-      ] as const) {
-        const forbidden = vi.fn(async () => "unexpected");
-        await expect(
-          reservation.withReservation(kind, forbidden),
-        ).resolves.toEqual({
-          admitted: false,
-          heldBy: "authority-change",
-        });
-        expect(forbidden).not.toHaveBeenCalled();
+  it.each(commands)(
+    "keeps the original caller reservation held across every awaited phase for $kind",
+    async (command) => {
+      const f = fixture(command);
+      const reservation = new AuthorityTransitionReservation();
+      const stop = deferred<WorkspaceConfigurationConfirmation>();
+      const record = deferred<WorkspaceConfigurationConfirmation>();
+      const apply = deferred<typeof f.result>();
+      const recording = deferred<void>();
+      const applying = deferred<void>();
+      const drain = new WorkspaceConfigurationDrain(command, {
+        current: () =>
+          reservation.current() === "authority-change" && f.ports.current(),
+        stop: () => stop.promise,
+        recordStopped: () => {
+          recording.resolve();
+          return record.promise;
+        },
+        apply: () => {
+          applying.resolve();
+          return apply.promise;
+        },
+      });
+      const operation = reservation.withReservation("authority-change", () =>
+        drain.run(),
+      );
+      for (const release of [
+        async () => {
+          stop.resolve(true);
+          await recording.promise;
+        },
+        async () => {
+          record.resolve(true);
+          await applying.promise;
+        },
+        async () => {
+          apply.resolve(f.result);
+        },
+      ]) {
+        expect(reservation.current()).toBe("authority-change");
+        for (const kind of [
+          "connector-start",
+          "agent-admission",
+          "authority-change",
+        ] as const) {
+          const forbidden = vi.fn(async () => "unexpected");
+          await expect(
+            reservation.withReservation(kind, forbidden),
+          ).resolves.toEqual({
+            admitted: false,
+            heldBy: "authority-change",
+          });
+          expect(forbidden).not.toHaveBeenCalled();
+        }
+        await expect(drain.run()).resolves.toEqual(consumed);
+        await release();
       }
-      await expect(drain.run()).resolves.toEqual(consumed);
-      await release();
-    }
-    await expect(operation).resolves.toEqual({
-      admitted: true,
-      value: { status: "completed", phase: "apply", result: f.result },
-    });
-    expect(reservation.current()).toBeNull();
-  });
+      await expect(operation).resolves.toEqual({
+        admitted: true,
+        value: { status: "completed", phase: "apply", result: f.result },
+      });
+      expect(reservation.current()).toBeNull();
+    },
+  );
 
   it.each([
     ["missing", undefined],
@@ -358,86 +363,98 @@ describe("one admitted workspace configuration drain", () => {
     },
   );
 
-  for (const phase of ["stop", "record-stopped"] as const) {
-    it.each([
-      "reservationHeld",
-      "permissionGeneration",
-      "settingsGeneration",
-      "quit",
-      "update",
-    ] as const)(`blocks a late ${phase} after %s drift`, async (field) => {
-      const f = fixture();
-      const gate = deferred<WorkspaceConfigurationConfirmation>();
-      const entered = deferred<void>();
-      const port = phase === "stop" ? f.ports.stop : f.ports.recordStopped;
-      port.mockImplementation(() => {
-        f.events.push(phase);
-        entered.resolve();
-        return gate.promise;
-      });
-      const operation = f.drain.run();
-      await entered.promise;
-      if (field === "reservationHeld") f.state.reservationHeld = false;
-      else if (field === "quit" || field === "update") f.state[field] = true;
-      else f.state[field] += 1;
-      gate.resolve(true);
-      await expect(operation).resolves.toEqual({
-        status: "stale",
-        phase,
-        error: "WORKSPACE_CONFIGURATION_NOT_CURRENT",
-      });
-      expect(f.events).toEqual(
-        phase === "stop" ? ["stop"] : ["stop", "record-stopped"],
+  for (const command of commands) {
+    for (const phase of ["stop", "record-stopped"] as const) {
+      it.each([
+        "reservationHeld",
+        "permissionGeneration",
+        "settingsGeneration",
+        "quit",
+        "update",
+      ] as const)(
+        `blocks a late ${phase} for ${command.kind} after %s drift`,
+        async (field) => {
+          const f = fixture(command);
+          const gate = deferred<WorkspaceConfigurationConfirmation>();
+          const entered = deferred<void>();
+          const port = phase === "stop" ? f.ports.stop : f.ports.recordStopped;
+          port.mockImplementation(() => {
+            f.events.push(phase);
+            entered.resolve();
+            return gate.promise;
+          });
+          const operation = f.drain.run();
+          await entered.promise;
+          if (field === "reservationHeld") f.state.reservationHeld = false;
+          else if (field === "quit" || field === "update")
+            f.state[field] = true;
+          else f.state[field] += 1;
+          gate.resolve(true);
+          await expect(operation).resolves.toEqual({
+            status: "stale",
+            phase,
+            error: "WORKSPACE_CONFIGURATION_NOT_CURRENT",
+          });
+          expect(f.events).toEqual(
+            phase === "stop" ? ["stop"] : ["stop", "record-stopped"],
+          );
+          expect(f.ports.apply).not.toHaveBeenCalled();
+          if (phase === "stop")
+            expect(f.ports.recordStopped).not.toHaveBeenCalled();
+          await expect(f.drain.run()).resolves.toEqual(consumed);
+        },
       );
-      expect(f.ports.apply).not.toHaveBeenCalled();
-      if (phase === "stop")
-        expect(f.ports.recordStopped).not.toHaveBeenCalled();
-      await expect(f.drain.run()).resolves.toEqual(consumed);
-    });
 
-    it.each([
-      [
-        "known refusal",
-        false,
-        "refused",
-        "WORKSPACE_CONFIGURATION_PHASE_REFUSED",
-      ],
-      [
-        "unknown",
-        "unknown",
-        "unknown",
-        "WORKSPACE_CONFIGURATION_PHASE_UNCONFIRMED",
-      ],
-      [
-        "missing confirmation",
-        undefined,
-        "unknown",
-        "WORKSPACE_CONFIGURATION_PHASE_UNCONFIRMED",
-      ],
-      [
-        "truthy malformed confirmation",
-        { stopped: true },
-        "unknown",
-        "WORKSPACE_CONFIGURATION_PHASE_UNCONFIRMED",
-      ],
-    ] as const)(
-      `blocks ${phase} %s without claiming effect absence`,
-      async (_label, confirmation, status, error) => {
-        const f = fixture();
-        const port = phase === "stop" ? f.ports.stop : f.ports.recordStopped;
-        port.mockImplementation(async () => {
-          f.events.push(phase);
-          return confirmation as WorkspaceConfigurationConfirmation;
-        });
-        await expect(f.drain.run()).resolves.toEqual({ status, phase, error });
-        expect(f.events).toEqual(
-          phase === "stop" ? ["stop"] : ["stop", "record-stopped"],
-        );
-        expect(f.ports.apply).not.toHaveBeenCalled();
-        expect(f.ports.current).toHaveBeenCalledTimes(phase === "stop" ? 3 : 5);
-        await expect(f.drain.run()).resolves.toEqual(consumed);
-      },
-    );
+      it.each([
+        [
+          "known refusal",
+          false,
+          "refused",
+          "WORKSPACE_CONFIGURATION_PHASE_REFUSED",
+        ],
+        [
+          "unknown",
+          "unknown",
+          "unknown",
+          "WORKSPACE_CONFIGURATION_PHASE_UNCONFIRMED",
+        ],
+        [
+          "missing confirmation",
+          undefined,
+          "unknown",
+          "WORKSPACE_CONFIGURATION_PHASE_UNCONFIRMED",
+        ],
+        [
+          "truthy malformed confirmation",
+          { stopped: true },
+          "unknown",
+          "WORKSPACE_CONFIGURATION_PHASE_UNCONFIRMED",
+        ],
+      ] as const)(
+        `blocks ${phase} %s for ${command.kind} without claiming effect absence`,
+        async (_label, confirmation, status, error) => {
+          const f = fixture(command);
+          const port = phase === "stop" ? f.ports.stop : f.ports.recordStopped;
+          port.mockImplementation(async () => {
+            f.events.push(phase);
+            return confirmation as WorkspaceConfigurationConfirmation;
+          });
+          await expect(f.drain.run()).resolves.toEqual({
+            status,
+            phase,
+            error,
+          });
+          expect(f.events).toEqual(
+            phase === "stop" ? ["stop"] : ["stop", "record-stopped"],
+          );
+          expect(f.ports.apply).not.toHaveBeenCalled();
+          expect(f.ports.current).toHaveBeenCalledTimes(
+            phase === "stop" ? 3 : 5,
+          );
+          await expect(f.drain.run()).resolves.toEqual(consumed);
+        },
+      );
+    }
   }
 
   it.each(["stop", "record-stopped", "apply"] as const)(
@@ -615,30 +632,33 @@ describe("one admitted workspace configuration drain", () => {
     expect(f.ports.stop).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps a late original apply reply intact without reporting current completion", async () => {
-    const f = fixture();
-    const gate = deferred<typeof f.result>();
-    const entered = deferred<void>();
-    f.ports.apply.mockImplementation(() => {
-      f.events.push("apply");
-      entered.resolve();
-      return gate.promise;
-    });
-    const operation = f.drain.run();
-    await entered.promise;
-    f.state.settingsGeneration += 1;
-    gate.resolve(f.result);
-    const reply = await operation;
-    expect(reply).toEqual({
-      status: "stale",
-      phase: "apply",
-      error: "WORKSPACE_CONFIGURATION_NOT_CURRENT",
-      result: f.result,
-    });
-    if (reply.status !== "stale" || reply.phase !== "apply")
-      throw new Error("Expected late original reply");
-    expect(reply.result).toBe(f.result);
-    await expect(f.drain.run()).resolves.toEqual(consumed);
-    expect(f.ports.apply).toHaveBeenCalledTimes(1);
-  });
+  it.each(commands)(
+    "keeps a late original $kind apply reply intact without reporting current completion",
+    async (command) => {
+      const f = fixture(command);
+      const gate = deferred<typeof f.result>();
+      const entered = deferred<void>();
+      f.ports.apply.mockImplementation(() => {
+        f.events.push("apply");
+        entered.resolve();
+        return gate.promise;
+      });
+      const operation = f.drain.run();
+      await entered.promise;
+      f.state.settingsGeneration += 1;
+      gate.resolve(f.result);
+      const reply = await operation;
+      expect(reply).toEqual({
+        status: "stale",
+        phase: "apply",
+        error: "WORKSPACE_CONFIGURATION_NOT_CURRENT",
+        result: f.result,
+      });
+      if (reply.status !== "stale" || reply.phase !== "apply")
+        throw new Error("Expected late original reply");
+      expect(reply.result).toBe(f.result);
+      await expect(f.drain.run()).resolves.toEqual(consumed);
+      expect(f.ports.apply).toHaveBeenCalledTimes(1);
+    },
+  );
 });

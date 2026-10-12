@@ -582,7 +582,9 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
         if (
           result.state === "applied" &&
           (command.kind === "computer.remove-workspace" ||
-            command.kind === "computer.update-access") &&
+            command.kind === "computer.update-access" ||
+            command.kind === "computer.update-commands" ||
+            command.kind === "computer.update-file-policy") &&
           soleIntent(current, after, command.kind, id)
         ) {
           // Continue only this acknowledged edit. Observation, remount and a
@@ -928,7 +930,13 @@ async function continueWorkspaceSetup(
   after: WindowSnapshot,
   command: Extract<
     ProductConfigurationCommand,
-    { kind: "computer.remove-workspace" | "computer.update-access" }
+    {
+      kind:
+        | "computer.remove-workspace"
+        | "computer.update-access"
+        | "computer.update-commands"
+        | "computer.update-file-policy";
+    }
   >,
 ): Promise<void> {
   if (
@@ -951,7 +959,9 @@ async function continueWorkspaceSetup(
     return;
   const workspaces = settings.computer.workspaces;
   const workspace =
-    workspaces.find((item) => item.workspaceId === command.workspaceId) ??
+    ("workspaceId" in command
+      ? workspaces.find((item) => item.workspaceId === command.workspaceId)
+      : undefined) ??
     workspaces.find(
       (item) => item.workspaceId === prior.setup.computer.verified?.workspaceId,
     ) ??
@@ -2088,7 +2098,7 @@ function ThisMac({ settings, snapshot, facade, actions }: PageProps) {
       <p className="description">
         Terminal &amp; Git access is optional. Farol checks workspace access
         again after you save a workspace change and restores a configured
-        connection. Command access has its own verification.
+        connection. Shell also requires a supported runtime on this Mac.
       </p>
       <button
         type="button"
@@ -2141,12 +2151,16 @@ function ThisMac({ settings, snapshot, facade, actions }: PageProps) {
             </select>
           </label>
           <p className="description">
-            Saving requires a stopped connection and fresh folder verification.
-            It does not grant another folder or enable Terminal access.
+            Farol pauses the connection, saves your choice, checks workspace
+            access and reconnects when configured. This does not grant another
+            folder or enable Terminal access.
           </p>
           <button
             className="primary"
-            disabled={!actions.allowed("computer.update-file-policy")}
+            disabled={
+              filePolicy === (settings.computer.filePolicy ?? "") ||
+              !actions.allowed("computer.update-file-policy")
+            }
           >
             Save file permissions
           </button>
@@ -2159,16 +2173,12 @@ function ThisMac({ settings, snapshot, facade, actions }: PageProps) {
             : settings.computer.commands === "verification"
               ? "Saved command permission: Git checks only."
               : "Saved command permission: Terminal in approved folders."}{" "}
-          Changing saved permissions requires workspace verification again.
+          Farol checks workspace access again after saving.
         </p>
         <p className="description">
-          Command capability: unavailable in this beta. Shell and Git execution
-          are not active through the external connector.
-        </p>
-        <p className="description">
-          Command verification: not qualified for this beta. File and connection
-          checks do not verify command execution. File Computer can be ready
-          independently of command availability.
+          Shell requires a supported build and verified workspace access. File
+          and connection checks do not verify command execution. File Computer
+          can be ready independently of command availability.
         </p>
         <form
           onSubmit={(event) => {
@@ -2191,13 +2201,16 @@ function ThisMac({ settings, snapshot, facade, actions }: PageProps) {
             </select>
           </label>
           <p className="description">
-            Saving preserves your permission choice; it does not activate
-            command execution in this beta. Review technical limits in
+            Farol pauses the connection, saves your choice, checks workspace
+            access and reconnects when configured. Review technical limits in
             Diagnostics.
           </p>
           <button
             className="primary"
-            disabled={!actions.allowed("computer.update-commands")}
+            disabled={
+              commands === settings.computer.commands ||
+              !actions.allowed("computer.update-commands")
+            }
           >
             Save permissions
           </button>
@@ -3694,11 +3707,11 @@ function Diagnostics({ snapshot, settings, facade, actions }: PageProps) {
       <details>
         <summary>Terminal &amp; Git details</summary>
         <p className="description">
-          Shell and Git execution are unavailable and unqualified in this beta.
-          The saved Git-check permission covers bounded Git status and HEAD
-          commands with Apple Git; the saved workspace permission covers a
-          sandboxed workspace shell. Both exclude network access; expanded Git
-          access remains a separate workspace approval.
+          Shell requires a supported build and verified workspace access. The
+          saved Git-check permission covers bounded Git status and HEAD commands
+          with Apple Git; the saved workspace permission covers a sandboxed
+          workspace shell. Both exclude network access; expanded Git access
+          remains a separate workspace approval.
         </p>
       </details>
       <details>
