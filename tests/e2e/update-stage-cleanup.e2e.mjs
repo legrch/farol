@@ -29,9 +29,12 @@ const extractor = path.join(
 );
 const packageResources = path.join(appPath, "Contents/Resources/app");
 const executable = path.join(runtime, "Contents/MacOS/Electron");
+assert.ok(
+  ["github-owner-beta", "github-stable"].includes(artifact.updateChannel),
+);
 const expected = {
   ...artifact,
-  channel: "owner-beta",
+  channel: artifact.updateChannel === "github-stable" ? "stable" : "owner-beta",
   signing: "unsigned",
   platform: artifact.runtime.platform,
   arch: artifact.runtime.arch,

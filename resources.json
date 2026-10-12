@@ -2,7 +2,7 @@
   "schema": "farol.next.resource-manifest/1",
   "product": {
     "name": "Farol Next Preview",
-    "version": "0.2.1",
+    "version": "0.2.2",
     "bundleId": "local.farol.next.preview",
     "updateChannel": "github-stable"
   },

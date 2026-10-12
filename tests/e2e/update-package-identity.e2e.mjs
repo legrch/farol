@@ -16,8 +16,12 @@ const root = path.resolve(import.meta.dirname, "../..");
 const { artifactFile, appPath } = candidatePaths(root);
 const artifact = JSON.parse(await fs.readFile(artifactFile, "utf8"));
 assertCanonicalArtifactPath(root, artifact);
-assert.equal(artifact.updateChannel, "github-owner-beta");
-const expected = { ...artifact, channel: "owner-beta", signing: "unsigned" };
+assert.ok(
+  ["github-owner-beta", "github-stable"].includes(artifact.updateChannel),
+);
+const channel =
+  artifact.updateChannel === "github-stable" ? "stable" : "owner-beta";
+const expected = { ...artifact, channel, signing: "unsigned" };
 const scratch = await fs.mkdtemp(
   path.join(os.tmpdir(), "farol-update-identity-"),
 );
@@ -84,7 +88,10 @@ try {
       `${label} measured identity must satisfy the updater`,
     );
     assert.equal(
-      packageMatchesRelease(actual, { ...expected, channel: "stable" }),
+      packageMatchesRelease(actual, {
+        ...expected,
+        channel: channel === "stable" ? "owner-beta" : "stable",
+      }),
       false,
       "a foreign release channel must remain refused",
     );
