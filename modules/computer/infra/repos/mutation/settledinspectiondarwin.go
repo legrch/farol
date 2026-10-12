@@ -50,9 +50,17 @@ func inspectInterruptedChatSettledExisting(ctx context.Context, root Root, expec
 }
 
 func inspectSettledNative(ctx context.Context, root Root, count int, observe func(settledObservation) error) (err error) {
-	// Only the two named closed policies may select a native inventory bound.
+	// Preserve the two named settled policies' exact inventory bounds.
 	if count != settledRecordCount && count != interruptedChatSettledRecordCount {
 		return settledRefusal()
+	}
+	return inspectBoundedNative(ctx, root, count, observe)
+}
+
+// Shared storage observation only; public policy selection remains separate.
+func inspectBoundedNative(ctx context.Context, root Root, count int, observe func(settledObservation) error) (err error) {
+	if ctx == nil || ctx.Err() != nil || count < 1 || count > maxPreservedRecords || observe == nil {
+		return unavailable()
 	}
 	// Existing owner only: no O_CREAT, mkdir, repair, sync or publication.
 	d, err := openNativeMode(root, false)
