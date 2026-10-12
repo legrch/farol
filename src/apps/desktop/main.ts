@@ -48,6 +48,10 @@ import {
 } from "../../../apps/desktop/read-account-commands";
 declare const __FAROL_GO_CORE__: unknown;
 declare const __FAROL_GO_RESOURCES__: unknown;
+declare const __FAROL_GO_SHELL__: {
+  readonly support: unknown;
+  readonly watchdogSourceBase64: string;
+} | null;
 import { createMenuBar } from "./menu-bar";
 import { promises as rawFs } from "original-fs";
 import {
@@ -487,6 +491,16 @@ const compiledGoCore =
   typeof __FAROL_GO_CORE__ === "undefined" ? null : __FAROL_GO_CORE__;
 const compiledGoResources =
   typeof __FAROL_GO_RESOURCES__ === "undefined" ? null : __FAROL_GO_RESOURCES__;
+const compiledGoShell =
+  typeof __FAROL_GO_SHELL__ === "undefined" || __FAROL_GO_SHELL__ === null
+    ? undefined
+    : {
+        support: __FAROL_GO_SHELL__.support,
+        watchdogSource: Buffer.from(
+          __FAROL_GO_SHELL__.watchdogSourceBase64,
+          "base64",
+        ),
+      };
 let desktopGoCore: DesktopGoCore | null = null;
 const buildIdentity = readRuntimeBuildIdentity(directory);
 const productName = buildIdentity.product;
@@ -11199,6 +11213,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       startDesktopGoCore({
         compiledArtifact: compiledGoCore,
         compiledResources: compiledGoResources,
+        ...(compiledGoShell ? { compiledShell: compiledGoShell } : {}),
         previousHostDrainConfirmed: previousRunClean,
         build: buildIdentity,
         artifactRoot: directory,

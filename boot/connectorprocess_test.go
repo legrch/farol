@@ -21,7 +21,7 @@ import (
 
 // Real connector/host guard/execution issuer/process owners. Persistence,
 // physical workspace and child are explicit in-memory doubles. The positive
-// fixture selects a Shell ceiling directly; normal Open still strips Shell.
+// fixture selects a Shell ceiling directly; Open without a producer strips it.
 // No child, filesystem, socket, provider, native qualification or MCP is used.
 type connectorProcessJournalDouble struct {
 	*chatMutationJournal
@@ -196,8 +196,8 @@ func connectorProcessFixture(t *testing.T) (*computerConnector, *connectorJourna
 	return s, access, j, n, input
 }
 
-// Controlled trusted launch, independent of production Open's explicit refusal
-// to publish Shell. Real connector publication and current host gates still run.
+// Controlled trusted launch, independent of Open's conditional producer gate.
+// Real connector publication and current host gates still run.
 func selectConnectorProcessSlot(t *testing.T, s *computerConnector, access *connectorJournalFixture, input wire.ComputerConnectorOpen, suffix string) {
 	t.Helper()
 	if s.current != nil {

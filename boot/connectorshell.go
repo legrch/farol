@@ -19,7 +19,7 @@ import (
 // Trusted boot input only. The release loader must authenticate support and
 // attest the complete protected bundle before constructing this factory. Hash
 // equality and native measurement cannot issue that release acceptance.
-// Normal NativeRuntime startup supplies no factory until that loader is wired.
+// NativeRuntime supplies it only from the builder-selected private launch pipe.
 type connectorShellConfig struct {
 	runtimeID, home string
 	support         nativeprocess.RootScopedPlatformSupport

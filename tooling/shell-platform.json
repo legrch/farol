@@ -1,0 +1,203 @@
+{
+  "schema": "farol-shell-platform/1",
+  "id": "macos-26A434-arm64-roots-v1",
+  "osBuild": "26A434",
+  "compiler": "approved-roots-seatbelt-v1",
+  "filesystemClass": "local-apfs-no-nested-mounts-v1",
+  "hostTrust": "protected-host-pathnames-v1",
+  "network": "none",
+  "compilerInputs": [
+    {
+      "path": "modules/computer/infra/process/anchor.go",
+      "sha256": "e8c14121c70d36e8153f6a8fe4d0c5d3edfa11f7b765788ef869631ab4812efb"
+    },
+    {
+      "path": "modules/computer/infra/process/anchordarwin.go",
+      "sha256": "5018bb2fc5f926042bf68f725b9163554ad72128c7d927b64405c3ed2c766caf"
+    },
+    {
+      "path": "modules/computer/infra/process/anchorother.go",
+      "sha256": "0ecd1dedacd271ec870df94cd75d32e7eed28bfad85c2540358e48c6b3f4bd7e"
+    },
+    {
+      "path": "modules/computer/infra/process/cancel.go",
+      "sha256": "1f1c403ce3534d5b23bacd2e086593b18d8836382607a003ec397e8aca3386eb"
+    },
+    {
+      "path": "modules/computer/infra/process/confinement.go",
+      "sha256": "c20d32f772eff9bfd83ad5a378f23831757bc32982087e6bc898aa04601195fd"
+    },
+    {
+      "path": "modules/computer/infra/process/darwin.go",
+      "sha256": "627bc31756ed411badba7ac6f1610f1ce2aef0a4af35c32d6bb9e95cca2261a2"
+    },
+    {
+      "path": "modules/computer/infra/process/drain.go",
+      "sha256": "cca6fc8f5c6e22ef3a7c7578faff4de015576decf91d0b696a83d860ccbceb29"
+    },
+    {
+      "path": "modules/computer/infra/process/gitread.go",
+      "sha256": "53aa23929ef970bfb3de6a6965d873961ea3f2ac95132a4830593b5e2ba4e282"
+    },
+    {
+      "path": "modules/computer/infra/process/heldguest.go",
+      "sha256": "50af1e37393b21fe8648c871a18666b1aaa38527d609191cdb0386e8a7c886b6"
+    },
+    {
+      "path": "modules/computer/infra/process/heldguestdarwin.go",
+      "sha256": "ea1da63f493b87e1f1744d52b0c2a99d78a4d82bdf14c46152567e43ec992af6"
+    },
+    {
+      "path": "modules/computer/infra/process/heldguestother.go",
+      "sha256": "61de94cfb1ed7a0fb1d3a77eb97d18369af09ff196f69a42aca65f391455fcff"
+    },
+    {
+      "path": "modules/computer/infra/process/measuredarwin.go",
+      "sha256": "c510ef93f9fb40ee31acb3e6831addd918124fdb9dddcc562ef90c5e405367df"
+    },
+    {
+      "path": "modules/computer/infra/process/measurement.go",
+      "sha256": "9ad3e71952733d4778a37d89fc55646363bfa8c61ca832001f229dcf43d61e46"
+    },
+    {
+      "path": "modules/computer/infra/process/measureother.go",
+      "sha256": "44c4a03a8ad6b1fbc928db04d20766a2abf7c345f7f95a5ef5fa8b99783aaa8a"
+    },
+    {
+      "path": "modules/computer/infra/process/observe.go",
+      "sha256": "60b4907986f4ba4125e6f3669174aada4502d578a981bb3a4d2415bd98046a1e"
+    },
+    {
+      "path": "modules/computer/infra/process/parent.go",
+      "sha256": "06a800828118d1c8532660257d737222315d187f4872ade2dea8d8e275960c83"
+    },
+    {
+      "path": "modules/computer/infra/process/parentdarwin.go",
+      "sha256": "74dee9163ad3c008371d1df25a0dfef0b82f2abe5d6ed88b3378a409269a257b"
+    },
+    {
+      "path": "modules/computer/infra/process/parentother.go",
+      "sha256": "d87ba4c4d7d57a6bd2e314e82e01b7b388cb39c22b3cc9e7ff61e9c2475c6911"
+    },
+    {
+      "path": "modules/computer/infra/process/platformnamespaces.go",
+      "sha256": "5b11b3ad633119bbbb4d3cd3ea958fb454851543cdccbc08679fddc0611f1e85"
+    },
+    {
+      "path": "modules/computer/infra/process/platformpathdarwin.go",
+      "sha256": "963ce4d42f5991d174bacfbc494b2780f1fa7b922539f452fb5bdf86ac7806fa"
+    },
+    {
+      "path": "modules/computer/infra/process/platformqualification.go",
+      "sha256": "fe10409b97b5ec14437ca68465c7ed489780d71977d4a09b7b77f94a6e0021b7"
+    },
+    {
+      "path": "modules/computer/infra/process/platformqualificationdarwin.go",
+      "sha256": "7abddf8028bf58381b7434728cf4aae802cba79a76200cecb7c0fc804c5c2c5b"
+    },
+    {
+      "path": "modules/computer/infra/process/platformqualificationother.go",
+      "sha256": "c65603620182b86b1f97e85e66c310044c2f37bf32ef8609e09d9c0e3aa2cf87"
+    },
+    {
+      "path": "modules/computer/infra/process/platformwatchdog.go",
+      "sha256": "15f6f15d1f3a6059854c0b6c91bdd299595b32c755a2556cb8e0c065f0f7d006"
+    },
+    {
+      "path": "modules/computer/infra/process/prepare.go",
+      "sha256": "6cd30e42bc9301b41c3d031ec87a1448d4ff3d2344eb454a50099e110bbbdb23"
+    },
+    {
+      "path": "modules/computer/infra/process/probedarwin.go",
+      "sha256": "d1ce2152ea84180f0f675667e2d90f34ac2bcff3223042538411123f89e46102"
+    },
+    {
+      "path": "modules/computer/infra/process/probeother.go",
+      "sha256": "396f79e3ddfe4bfb51548cab9a56fd9000265e9c38dd7577d1dc54202ba76312"
+    },
+    {
+      "path": "modules/computer/infra/process/process.go",
+      "sha256": "0e6f7488df2753cbdf2fa3440bf7b6f44a9e94bda3d6a8965087a804da8aeaaa"
+    },
+    {
+      "path": "modules/computer/infra/process/qualification.go",
+      "sha256": "db3efdb73121337289b9dbe141a8ff407b77d1f6b49ef7e1d7c2a5322960e163"
+    },
+    {
+      "path": "modules/computer/infra/process/read.go",
+      "sha256": "d4b598e4a4cd01b642b7e2cbd55a7d4f2f377a6f9b8183b6e917f5537ff6f0fe"
+    },
+    {
+      "path": "modules/computer/infra/process/rootscoped.go",
+      "sha256": "6f11ced8c1ccf4474e0fb506e0ab4aac47933ef1c92c401d1f64fc71be2535ab"
+    },
+    {
+      "path": "modules/computer/infra/process/spawn.go",
+      "sha256": "424f6306f9cf7a9659fb8adbbbe71fa0f6fcb0670762a2f02c36e1986fe1ca57"
+    },
+    {
+      "path": "modules/computer/infra/process/unsupported.go",
+      "sha256": "abe993a3243f9adae60a121fc99c0481b58009678e902f607c480da3b547a4cd"
+    },
+    {
+      "path": "modules/computer/infra/process/watchdog.go",
+      "sha256": "a32d575070d833143161a3dba2a9ab3c87254479633e54c3b00b7c1238b55dc3"
+    },
+    {
+      "path": "modules/computer/infra/process/watchdogdarwin.go",
+      "sha256": "824fc5754ad87e359f6145cb403f93cefdde38c94823946423e8b0a429cd6654"
+    },
+    {
+      "path": "modules/computer/infra/process/watchdogipc.go",
+      "sha256": "11fd02bf82e639e971d76e1da49a4e0d7b54e1b1917460b7c6e9cdb63746fcfb"
+    },
+    {
+      "path": "modules/computer/infra/process/watchdogother.go",
+      "sha256": "91b7894ff6df51634c3780bc7097ecb3995cd7b6ee63711fef03818b47531a19"
+    }
+  ],
+  "watchdogSource": {
+    "path": "src/modules/computer/infra/native/shell-watchdog-source.ts",
+    "fileSHA256": "e91075d779dfad3034319160ce2e3816689713eb8837309aaa6de69d52e6aac8",
+    "sourceSHA256": "11929632aa172c6ff850038b59c7ff24658d0f475b83bea069c58b0e2ef5ee02"
+  },
+  "mechanism": {
+    "path": "/usr/bin/sandbox-exec",
+    "sha256": "58839ef01b4eef8aac0d2aa8f9d1c074ae45aafe3533965b030672450064acc8"
+  },
+  "imports": [
+    {
+      "path": "/System/Library/Sandbox/Profiles/dyld-support.sb",
+      "sha256": "bdfc2354c683c8fb95a39e63fbc8610e9739b0256c89ab880564edefbe73a5ce"
+    }
+  ],
+  "executables": [
+    {
+      "path": "/bin/bash",
+      "sha256": "d59c6f2312e551e9c46497329d435b6ec74fbc46e9155b84170f377127ed004e"
+    },
+    {
+      "path": "/bin/sh",
+      "sha256": "84ca7f9b83021621e16059a1c7850df72a462d879e8239d566236ca6ddd00953"
+    },
+    {
+      "path": "/bin/cat",
+      "sha256": "1e238665b377c3ef21734890c783aa828cf912d175b90998b88276cefad0b25a"
+    },
+    {
+      "path": "/bin/ls",
+      "sha256": "13f44bfe1c4af602da4465c834dbe7b16a5441ccbd843178b36116ee23422bfb"
+    },
+    {
+      "path": "/Library/Developer/CommandLineTools/usr/bin/git",
+      "sha256": "74b90b9f97ec79bfe7886a4fc6132533b3e1014ef4195d28abd1ca9bf321f34a"
+    }
+  ],
+  "watchdogSHA256": "ad321e34b2795d1910ff1a24f2b4249269f556dc7184ea64f353a851339f1582",
+  "runtime": {
+    "version": "44.4.2",
+    "treeDigestVersion": "farol.next.tree-digest/v2",
+    "treeSHA256": "74c981ff1037632abb28499d4f8127cddafd459130109c7a3c7695be94de2e12",
+    "distributionSHA256": "52f8354eacad1dbe43ee12345b0fa9e1fc7de137f77571abbe12efbbc896aad8"
+  }
+}

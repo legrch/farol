@@ -23,8 +23,8 @@ var _ connectorProcessRepository = (*mutationrepo.Repository)(nil)
 // Trusted root selects an already qualified producer using this exact lease.
 // Selection may inspect native inputs but MUST NOT reserve, spawn or signal.
 // It returns a fixed physical workspace observer, never a body-selected lookup.
-// No production caller is installed until native confinement/cleanup and durable
-// terminal retention are qualified. This join alone does not enable Shell.
+// Only independently selected native support supplies this caller. This join
+// alone grants no workspace access or native/release acceptance.
 type connectorProcessSelection func(context.Context, *execution.Lease) (processsvc.Prepared, processsvc.ObservationWorkspace, error)
 
 type connectorProcessOperation struct {
@@ -61,8 +61,8 @@ func (s *computerConnector) processSlot(slot *connectorSlot) bool {
 // startProcess joins the existing current connector, execution issuer, shared
 // operation ledger and durable reservation before ONE selected Start. Requests
 // cannot inject a lease, scope, journal or replacement producer. This unexported
-// composition method is shared by the optional wire adapter; normal startup
-// still supplies no native default.
+// composition method is shared by the optional wire adapter; startup without
+// qualified native support supplies no process producer.
 func (s *computerConnector) startProcess(ctx context.Context, slot *connectorSlot, operation, call string, selectLaunch connectorProcessSelection) (*processct.StartResponse, error) {
 	if !s.processSlot(slot) || ctx == nil || ctx.Err() != nil || !validIngressID(operation) || !validIngressID(call) || selectLaunch == nil {
 		return nil, connectorProcessRefusal("PROCESS_INPUT_INVALID")

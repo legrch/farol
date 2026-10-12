@@ -32,6 +32,33 @@ checkout files remain readable. No symlink target or credential was read to
 override that guard. The exact bounded operation evidence is retained in
 `external-dev-0a651651-agent-store.json`.
 
+## Build-selected Shell candidate
+
+The current source candidate adds a build-selected Shell route. The exact
+platform expectations live in `tooling/shell-platform.json`: macOS `26A434`,
+ARM64, the complete process implementation source set, watchdog resource,
+system mechanism/import/tool hashes and the independently pinned Electron
+runtime. The builder refuses changed inputs instead of updating these pins.
+After authenticating its Go output it compiles the resulting support into the
+same host; it never embeds the backend's resulting hash into that backend.
+The support digest identifies this selection and is not a native or release
+acceptance receipt. Final candidate, external Shell/Git, installation and OTA
+acceptance remain required before delivery.
+
+The host verifies its compiled resource closure and nested runtime before
+passing support through the original child's private launch pipe. Go measures
+the selected native class before constructing the existing process factory.
+Unsupported system/tool bytes withhold Shell without replacing the File route.
+Workspace authority, root-scoped policy, physical identities, command mode and
+the original execution deadline remain mandatory. Tool pins grant execution of
+those images, not access to an entire toolchain or its configuration. Ordinary
+Git dependency/configuration roots still need applicable approved access.
+The selected Git image is the Command Line Tools binary under `/Library`.
+The system `/usr/bin/git` dispatcher is multiply linked, and Xcode's binary
+has a shared-writable `/Applications` ancestor; neither satisfies this image
+class. Selecting the Command Line Tools image does not widen its filesystem
+access or establish a successful ordinary Git journey.
+
 ## Installed beta.9 evidence
 
 On 11 October, one real OTA installed unsigned macOS ARM64 beta.9, build `23`,
