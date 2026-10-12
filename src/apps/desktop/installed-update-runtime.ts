@@ -660,7 +660,15 @@ export async function waitForInstalledUpdateRelaunch(
                     "rollback_started",
                     "rolled_back",
                   ];
-        if (!eligible.includes(receipt.priorPhase))
+        const recoveredForward =
+          hint.action === "recover" &&
+          hint.phase === "completed" &&
+          receipt.priorPhase === "rollback_started" &&
+          legacyPredecessorRequiresStateRecovery(
+            op.source.version,
+            op.target.version,
+          );
+        if (!eligible.includes(receipt.priorPhase) && !recoveredForward)
           throw new Error("UPDATE_RELAUNCH_RECEIPT_MISMATCH");
       }
       pinned ??= Operation.parse(op);

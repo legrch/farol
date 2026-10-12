@@ -188,6 +188,42 @@ function fixture(phase: Phase = "completed", action: Action = "apply") {
   };
 }
 
+function forwardRecoveryFixture(
+  sourceVersion = "0.2.0-owner.beta.11",
+  targetVersion = "0.2.0-owner.beta.12",
+) {
+  const f = fixture("completed", "recover");
+  const predecessor = identity(sourceVersion, "25", "5");
+  const current = identity(targetVersion, "26", "6");
+  const pair = {
+    operationId,
+    source: {
+      digest: "7".repeat(64),
+      version: predecessor.version,
+      buildId: predecessor.buildId,
+    },
+    target: {
+      digest: "8".repeat(64),
+      version: current.version,
+      buildId: current.buildId,
+    },
+  };
+  f.receipt.operation = pair;
+  f.receipt.priorPhase = "rollback_started";
+  f.receipt.installedBefore = pair.target;
+  Object.assign(f.journal, pair);
+  f.hint.buildId = current.buildId;
+  const options = {
+    ...f.options,
+    build: current,
+    args: [prefix + JSON.stringify(f.hint)],
+  };
+  f.records.set(path.join(directory, "build-identity.json"), current);
+  f.builds.set(slot, pair.target);
+  f.builds.set(f.companionPath, pair.source);
+  return { ...f, options, pair };
+}
+
 function rejectedFixture() {
   const f = fixture("rollback_completed", "recover");
   f.receipt.priorPhase = "rolled_back";
@@ -367,6 +403,69 @@ describe("installed updater startup correlation (pure ports only)", () => {
       expect(f.options.pause).not.toHaveBeenCalled();
     },
   );
+
+  it("admits forward recovery only after completed journal and original helper exit", async () => {
+    const f = forwardRecoveryFixture();
+    f.journal.phase = "launch_requested";
+    f.observation.readProcess.mockResolvedValue({
+      stdout: helper.processStart,
+      stderr: "",
+    });
+    f.transitions.push(
+      () => {
+        f.journal.phase = "completed";
+      },
+      () => {
+        f.observation.readProcess.mockRejectedValue({
+          code: 1,
+          stdout: "",
+          stderr: "",
+        });
+      },
+    );
+    const admission = await waitForInstalledUpdateRelaunch(f.options);
+    expect(admission).not.toBeNull();
+    expect(f.options.pause).toHaveBeenCalledTimes(2);
+    await admission!.recheck();
+    expect(f.observation.readBuild).toHaveBeenCalledWith(
+      directory,
+      slot,
+      expect.any(Number),
+    );
+    expect(f.observation.readBuild).toHaveBeenCalledWith(
+      directory,
+      f.companionPath,
+      expect.any(Number),
+    );
+    f.builds.set(f.companionPath, f.pair.target);
+    await expect(admission!.recheck()).rejects.toThrow(
+      "UPDATE_RELAUNCH_PHYSICAL_PAIR_CHANGED",
+    );
+  });
+
+  it.each([
+    "compatible-pair",
+    "wrong-action",
+    "wrong-journal",
+    "wrong-target",
+    "wrong-predecessor",
+  ])("refuses forward recovery with %s", async (change) => {
+    const f =
+      change === "compatible-pair"
+        ? forwardRecoveryFixture("0.2.0-owner.beta.10", "0.2.0-owner.beta.11")
+        : forwardRecoveryFixture();
+    let options = f.options;
+    if (change === "wrong-action") {
+      f.receipt.action = "rollback";
+      f.hint.action = "rollback";
+      options = { ...options, args: [prefix + JSON.stringify(f.hint)] };
+    }
+    if (change === "wrong-journal") f.journal.phase = "rolled_back";
+    if (change === "wrong-target") f.builds.set(slot, f.pair.source);
+    if (change === "wrong-predecessor")
+      f.builds.set(f.companionPath, f.pair.target);
+    await expect(waitForInstalledUpdateRelaunch(options)).rejects.toThrow();
+  });
 
   it("waits for completion and exact helper exit, with process observation before journal read", async () => {
     const f = fixture();

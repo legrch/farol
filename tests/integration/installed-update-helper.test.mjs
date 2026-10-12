@@ -248,7 +248,7 @@ helper.main()
   child.stdio[3].end(JSON.stringify(request));
   return result;
 }
-function invokeWithFakeOpen(request, log) {
+function invokeWithFakeOpen(request, log, captureArguments = false) {
   const program = `
 import importlib.util, json, os, sys
 spec = importlib.util.spec_from_file_location("update_helper", sys.argv[1])
@@ -258,7 +258,7 @@ original = helper.subprocess.run
 def run(command, *args, **kwargs):
     if command[0] == "/usr/bin/open":
         with open(sys.argv[2], "a", encoding="utf-8") as file:
-            file.write("open\\n")
+            file.write(json.dumps(command) + "\\n" if sys.argv[3] == "arguments" else "open\\n")
         return type("Result", (), {"returncode": 0})()
     return original(command, *args, **kwargs)
 helper.subprocess.run = run
@@ -266,7 +266,16 @@ helper.main()
 `;
   const child = spawn(
     "/usr/bin/python3",
-    ["-I", "-S", "-B", "-c", program, helper, log],
+    [
+      "-I",
+      "-S",
+      "-B",
+      "-c",
+      program,
+      helper,
+      log,
+      captureArguments ? "arguments" : "count",
+    ],
     {
       cwd: "/",
       env: { LANG: "C.UTF-8", PATH: "/usr/bin:/bin" },
@@ -822,6 +831,58 @@ describe("installed update helper", () => {
     expect((await fs.readdir(f.op)).sort()).toEqual(entriesBefore);
     expect(await treeDigest(f.state)).toBe(stateBefore);
     expect(await treeDigest(workspace)).toBe(workspaceBefore);
+  });
+
+  it("completes live forward recovery with one recover/completed target relaunch hint", async () => {
+    const f = await fixture("0.2.0-owner.beta.11", "0.2.0-owner.beta.12");
+    const previous = path.join(f.op, "previous.app");
+    await fs.rename(f.app, previous);
+    await fs.rename(path.join(f.op, "staged.app"), f.app);
+    await phase(f, "rollback_started");
+    const log = path.join(f.root, "open-arguments.jsonl");
+    // Real helper/lease/handoff; only the OS application launcher is doubled.
+    const recovery = invokeWithFakeOpen(
+      { ...f.request, action: "recover", relaunch: true },
+      log,
+      true,
+    );
+    await recovery.ready;
+    await expect(fs.lstat(log)).rejects.toMatchObject({ code: "ENOENT" });
+    await confirmQuit(f);
+    const closed = once(f.child, "close");
+    f.child.kill("SIGTERM");
+    await closed;
+    expect(await recovery).toMatchObject({
+      exitCode: 0,
+      result: { phase: "completed" },
+    });
+    const launches = (await fs.readFile(log, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(launches).toHaveLength(1);
+    expect(launches[0].slice(0, 4)).toEqual([
+      "/usr/bin/open",
+      "-a",
+      f.app,
+      "--args",
+    ]);
+    expect(launches[0]).toHaveLength(5);
+    const prefix = "--farol-installed-update-relaunch=";
+    expect(launches[0][4].startsWith(prefix)).toBe(true);
+    expect(JSON.parse(launches[0][4].slice(prefix.length))).toMatchObject({
+      operationId: f.request.operationId,
+      action: "recover",
+      phase: "completed",
+      buildId: f.request.target.buildId,
+      helper: { pid: expect.any(Number), processStart: expect.any(String) },
+    });
+    expect(
+      JSON.parse(await fs.readFile(path.join(f.op, "journal.json"), "utf8"))
+        .phase,
+    ).toBe("completed");
+    expect(await treeDigest(f.app)).toBe(f.request.target.digest);
+    expect(await treeDigest(previous)).toBe(f.request.source.digest);
   });
 
   for (const targetSlot of ["previous.app", "failed.app"]) {
