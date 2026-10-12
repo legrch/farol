@@ -474,7 +474,7 @@ def bundle(fd):
         value = strict_json(raw)
         keys = "schema product version bundleId updateChannel builtAt sourceCommit sourceTreeDigest sourceDirty buildId"
         shape(value, keys + (" buildVersion" if "buildVersion" in value else ""))
-        if (type(value["schema"]) is not int or value["schema"] != 1) or value["product"] != "Farol Next Preview" or value["bundleId"] != "local.farol.next.preview" or value["sourceDirty"] is not False or value["updateChannel"] not in ("local-preview-only", "github-owner-beta", "github-stable"):
+        if (type(value["schema"]) is not int or value["schema"] != 1) or value["product"] != "Farol Next Preview" or value["bundleId"] != "local.farol.next.preview" or value["sourceDirty"] is not False or value["updateChannel"] not in ("local-preview-only", "github-owner-beta"):
             refuse("BUILD_IDENTITY_INVALID")
         canonical_at(value["builtAt"])
         hex_value(value["sourceCommit"], 40)
@@ -483,8 +483,6 @@ def bundle(fd):
         if "buildVersion" in value and (not isinstance(value["buildVersion"], str) or not re.fullmatch(r"[1-9][0-9]{0,8}", value["buildVersion"])):
             refuse("BUILD_IDENTITY_INVALID")
         if value["updateChannel"] == "github-owner-beta" and ("buildVersion" not in value or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-owner\.beta\.(0|[1-9][0-9]*)", value["version"])):
-            refuse("BUILD_IDENTITY_INVALID")
-        if value["updateChannel"] == "github-stable" and ("buildVersion" not in value or not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", value["version"])):
             refuse("BUILD_IDENTITY_INVALID")
         body = {key: value[key] for key in ("schema", "product", "version", "bundleId", "updateChannel")}
         if "buildVersion" in value:

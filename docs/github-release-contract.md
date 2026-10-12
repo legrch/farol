@@ -19,7 +19,7 @@ Publish an accepted release under `v<version>`, with a single `farol-release.jso
 | `platform`, `arch`                            | `darwin`, `arm64`                                                                       |
 | `signing`, `notarized`, `sourceDirty`         | `unsigned`, `false`, `false` for this Phase-1 contract                                  |
 
-Owner-beta packages use `github-owner-beta` and a monotonic macOS build version. The producer creates this release manifest only from a clean, accepted package and proves the copied source/build/package fields against its package attestation. Current schema-6 and schema-7 packages contain `Farol.app` and use the fixed `~/Applications/Farol.app` slot after the explicit [closed product cutover](product-cutover.md). Schema 7 also requires the existing embedded Go/core artifact checks. The hidden `local.farol.next.preview` bundle identifier and NEW profile remain unchanged. Historical schema-5 releases keep their original `Farol Next Preview.app` layout and immutable bytes. The historical schema-5 installed consumer cannot consume schema 6; the historical closed-repair apply route accepts only schema 5. Neither an archive rename nor a rewritten receipt establishes a new baseline. The release manifest's package product remains the verifier's hidden compatibility identity, distinct from its visible Farol name.
+Stable packages use `github-stable`; retained owner-beta packages use `github-owner-beta`. Both require a monotonic macOS build version. The producer creates this release manifest only from a clean, accepted package and proves the copied source/build/package fields against its package attestation. Current schema-6 and schema-7 packages contain `Farol.app` and use the fixed `~/Applications/Farol.app` slot after the explicit [closed product cutover](product-cutover.md). Schema 7 also requires the existing embedded Go/core artifact checks. The hidden `local.farol.next.preview` bundle identifier and NEW profile remain unchanged. Historical schema-5 releases keep their original `Farol Next Preview.app` layout and immutable bytes. The historical schema-5 installed consumer cannot consume schema 6; the historical closed-repair apply route accepts only schema 5. Neither an archive rename nor a rewritten receipt establishes a new baseline. The release manifest's package product remains the verifier's hidden compatibility identity, distinct from its visible Farol name.
 
 Stable checks accept only non-draft, non-prerelease SemVer releases. Owner beta checks accept only GitHub prereleases with a version of the form `<major>.<minor>.<patch>-owner.beta.<number>`. The version must be strictly newer than the installed version. Build metadata is deliberately excluded to prevent multiple byte identities under one precedence version. No update is a terminal, quiet result, not an error.
 
@@ -61,8 +61,11 @@ Restart & Update claims the existing authority, task-mutation and kernel
 promotion gates and reads the existing promotion obligations. The initial
 composition reserves local work, drains a configured idle connector and observes
 open embedded ChatGPT documents through the fresh idle admission described in
-[Installed updater lifecycle](installed-update-runtime.md). Active or uncertain
-browser work and unreconciled shared task routes still refuse restart.
+[Installed updater lifecycle](installed-update-runtime.md). Automatic
+installation waits for active or uncertain browser work. Manual
+Install and Relaunch uses the exact-version interruption confirmation described
+in that lifecycle document; unreconciled task and installer effects remain
+owned by their existing drain and recovery paths.
 A known pre-dispatch refusal offers Check again. An uncertain download, ready
 record, or helper handoff stays blocked across restart and never dispatches a
 replacement operation automatically.
@@ -77,9 +80,10 @@ root. Neither this protocol nor unsigned distribution disables Gatekeeper.
 Publication must use an immutable new tag and a draft release until all assets
 are uploaded. The archive contains only the accepted application and its public
 package attestation; remove the producer's absolute `artifactPath` from the
-published attestation. Private source, test logs, Brain material, user profiles
-and credentials never belong in the public release repository. Offline tests
-and source gates do not qualify a real installed GitHub upgrade.
+published attestation. Private test logs, Brain material, user profiles and
+credentials never belong in public release assets. Source publication is a
+separate owner-authorized action. Offline tests and source gates do not qualify
+a real installed GitHub upgrade.
 
 Interrupted downloads have an operation-owned staging directory and a durable
 producer PID/start witness before the first request. On a later launch, an intent

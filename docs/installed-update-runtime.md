@@ -5,7 +5,7 @@ its existing owner data directory. Temporary `task run` copies do not update the
 installed app. The GitHub channel and package identity are fixed by the release
 contract; no source checkout, credentials or local diagnostics are published.
 
-On explicit Restart, a configured idle connector is drained without deleting its
+For an idle update, a configured connector is drained without deleting its
 saved route. Desktop first reserves configuration/task admission and the promotion
 lease. The Computer fence then exclusively excludes file/shell handlers and Codex
 dispatch. The existing durable Desktop obligation report runs under those
@@ -24,8 +24,9 @@ Workspace grants, task selection, route, credentials and the selected ChatGPT
 app remain saved. A failed drain does not launch the updater helper. Later does
 not enter this drain at all.
 
-An open embedded ChatGPT document is admitted only after a fresh public-DOM
-observation of an empty usable composer, a visible enabled Start voice mode
+For automatic installation, an open embedded ChatGPT document is admitted only
+after a fresh public-DOM observation of an empty usable composer, a visible
+enabled Start voice mode
 control, and no enabled Send control. Disabled Send alone does not establish
 voice readiness; an absent, renamed, disabled or ambiguous voice entry control
 leaves admission unknown. Native CSS visibility includes opacity and ancestor

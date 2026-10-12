@@ -1,10 +1,10 @@
 # Preparing public OTA assets
 
-`tooling/prepare-release-archive.py` prepares an offline owner-beta release from
-this checkout's exact, clean package. It performs no upload, source push,
+`tooling/prepare-release-archive.py` prepares an offline stable or owner-beta
+release from this checkout's exact, clean package. It performs no upload, source push,
 application launch, installation, profile read, or credential access. The source
-repository remains private. A successful preparation is evidence for Lead's
-publication decision; it does not authorize publication or establish installed
+repository is published separately under the owner-approved source policy.
+A successful preparation is evidence for Lead's publication decision; it does not authorize publication or establish installed
 OTA acceptance.
 
 Lead first builds and qualifies the candidate through `task package` from clean,
@@ -87,7 +87,8 @@ Exactly these three output-root files are intended for deliberate publication:
 - `SHA256SUMS`
 
 The manifest uses strict `farol.github-release/1`, `repository: "legrch/farol"`,
-`channel: "owner-beta"`, the exact ZIP size and digest, and the measured package
+`channel: "stable"` for ordinary semantic versions or `"owner-beta"` for the
+retained beta format, the exact ZIP size and digest, and the measured package
 identity. `artifactSha256` is the extracted app tree digest, distinct from the ZIP
 SHA-256. `SHA256SUMS` covers the ZIP. The historical `legrch/farol-releases` feed is
 not a producer option or fallback.
