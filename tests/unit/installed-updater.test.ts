@@ -2461,6 +2461,38 @@ describe("explicit browser interruption and scoped automatic installation", () =
       recoveryRequired: true,
     });
   });
+  it("explicitly postpones a ready candidate after a temporary admission refusal", async () => {
+    const f = fixture();
+    const updater = new InstalledUpdater({
+      ...f.ports,
+      readAutomaticUpdatePreference: async () => ({
+        status: "confirmed",
+        enabled: true,
+        scope: "download-and-install",
+      }),
+    });
+    f.ports.restart.mockResolvedValueOnce({
+      status: "blocked",
+      code: "UPDATE_BROWSER_DRAFT",
+    });
+    await updater.initialize();
+    await updater.scheduledCheck();
+    expect(updater.snapshot()).toMatchObject({
+      phase: "ready",
+      deferred: true,
+      blockedBy: "UPDATE_BROWSER_DRAFT",
+    });
+    await updater.later();
+    f.ports.restart.mockResolvedValue({ status: "accepted" });
+    await updater.scheduledCheck();
+    await updater.scheduledCheck();
+    expect(f.ports.restart).toHaveBeenCalledTimes(1);
+    expect(f.ports.download).toHaveBeenCalledTimes(1);
+    expect(updater.snapshot()).toMatchObject({
+      phase: "ready",
+      deferred: true,
+    });
+  });
   it("never converts legacy download-only consent into installation consent", async () => {
     const f = fixture();
     const updater = new InstalledUpdater({

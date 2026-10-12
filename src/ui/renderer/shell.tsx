@@ -841,7 +841,7 @@ function Update({
           <>
             <button
               ref={!localDismiss ? safeAction : undefined}
-              disabled={disabled || update.deferred}
+              disabled={disabled}
               onClick={() => {
                 void facade.update("later").then((result) => {
                   if (result.state === "applied") facade.overlay("none");

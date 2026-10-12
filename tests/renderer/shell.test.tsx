@@ -1372,7 +1372,9 @@ it.each(["available", "ready"] as const)(
     )!;
     trigger.focus();
     await act(async () => trigger.click());
-    expect(button(host, "Remind Me Later").disabled).toBe(true);
+    expect(button(host, "Remind Me Later").disabled).toBe(
+      phase === "available",
+    );
     expect(document.activeElement).toBe(button(host, "Continue working"));
     await act(async () => button(host, "Continue working").click());
     expect(c.getSnapshot().overlay).toBe("none");
@@ -1380,6 +1382,31 @@ it.each(["available", "ready"] as const)(
     expect(f.api.installedUpdate).not.toHaveBeenCalled();
   },
 );
+it("a temporarily blocked ready update can establish explicit postponement", async () => {
+  const { host, c, f } = await mount();
+  vi.mocked(f.api.installedUpdate).mockClear();
+  vi.mocked(f.api.installedUpdate).mockResolvedValue({
+    phase: "ready",
+    version: "1.0",
+    deferred: true,
+    blockedBy: "UPDATE_BROWSER_DRAFT",
+  });
+  await act(async () => {
+    f.emit("update", {
+      phase: "ready",
+      version: "1.0",
+      deferred: true,
+      blockedBy: "UPDATE_BROWSER_DRAFT",
+    });
+    c.overlay("update");
+  });
+  expect(button(host, "Remind Me Later").disabled).toBe(false);
+  await act(async () => button(host, "Remind Me Later").click());
+  expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+    kind: "later",
+  });
+  expect(c.getSnapshot().overlay).toBe("none");
+});
 it("Updates moves focus to local dismissal when a focused release action becomes pending", async () => {
   const { host, c, f } = await mount();
   vi.mocked(f.api.installedUpdate).mockClear();
