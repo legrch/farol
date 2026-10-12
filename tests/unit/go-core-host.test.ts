@@ -577,6 +577,30 @@ describe("normal Go host startup", () => {
     await host.close();
   });
 
+  it("keeps the readable packaged route for a version-1 profile without Shell metadata", async () => {
+    const input = shellSelection();
+    ports.provision.mockReturnValueOnce({
+      profileId: context.profileId,
+      root: "/synthetic/state/go-core",
+      storeMode: "open",
+      settingsMutations: false,
+    });
+    const f = transport();
+    start.mockResolvedValue(f.client);
+    const host = await startDesktopGoCore(input);
+    expect(ports.resources).toHaveBeenCalledTimes(1);
+    expect(ports.runtime).toHaveBeenCalledTimes(1);
+    expect(start).toHaveBeenCalledTimes(1);
+    const native = start.mock.calls[0]![1]!;
+    expect(native.storeMode).toBe("open");
+    expect(native.settingsMutations).toBe(false);
+    expect(Object.hasOwn(native, "shellMetadata")).toBe(false);
+    expect(() => host.settingsMutationProfile()).toThrow(
+      "host_mutation_storage_unavailable",
+    );
+    await host.close();
+  });
+
   it.each([undefined, null])(
     "withholds selected Shell without resource closure: %s",
     async (compiledResources) => {

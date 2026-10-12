@@ -1,5 +1,25 @@
 # Selected process ownership
 
+## Current product composition
+
+The packaged desktop host conditionally registers the root-scoped Shell producer
+through `boot/connectorshell.go` and `boot/nativeruntime.go`. It requires compiled
+support, resource/runtime qualification and mutation-capable profile storage.
+Version-1 profiles retain their readable Go route without Shell or migration;
+source Dev also retains the File route because it has no protected app bundle.
+Package attestation failures still refuse startup rather than selecting a fallback.
+The normal producer uses `RootScopedGit` under the captured `approved-roots-v1`
+policy; it does not activate the separate `QualifiedGitRead` selection below.
+
+Source registration is not release qualification. Disposable packaged MCP checks
+cover bounded Bash, synthetic Git and observation of an original result after
+MCP reconnect. Ordinary Git configuration/hooks, external Shell, cancellation and
+subsequent retirement remain unqualified. A stop ACK can precede loss of the
+supervisor's command-exit observation; the unknown original operation must remain
+preserved without replay. See [current approval boundaries](../../../../docs/sandbox-approvals.md)
+and [Computer parity](../../../../docs/computer-parity.md) for the selected contract
+and the separate native, source and installed evidence.
+
 ## Bounded GS1 Git read selection — source only
 
 `SeatbeltSelection.Git = QualifiedGitRead` with its non-nil `GitReadSelection`
@@ -44,10 +64,12 @@ admission store, journal or fallback.
 
 ### Exact Lead glue and remaining gate
 
-At the requested base, `boot/nativeruntime.go` leaves `connector.processes`
-unset. `boot/computerconnector.go` requires both process and mutation producers
-before admitting Shell; `boot/connectorprocesswire.go` already owns retained
-Start/Read/Cancel. Catalogue refresh cannot fill this selection seam.
+At the historical GS1 base, `boot/nativeruntime.go` left `connector.processes`
+unset. The current normal producer above fills that seam for `RootScopedGit`,
+but does not select the closed GS1 views. `boot/computerconnector.go` still
+requires both process and mutation producers before admitting Shell;
+`boot/connectorprocesswire.go` owns retained Start/Read/Cancel. Catalogue refresh
+cannot select the separate GS1 producer.
 
 Lead can map only the three closed input views to `GitReadArguments`, build the
 trusted `GitReadSelection` and `Command` from the SAME immutable lease snapshot,
@@ -81,11 +103,11 @@ hooks/toolchain or external reconnect evidence. Host qualification, root wiring,
 aggregate/risk review and real GS1 acceptance remain Lead-owned. Historical
 refused/unknown operations are neither replayed nor replaced.
 
-The opt-in `approved-roots-v1` compiler is documented in [Root-scoped access and approvals](../../../../docs/sandbox-approvals.md). It preserves the existing process/lease/journal owners and does not activate native Shell. The strict credential-alias gate described below remains historical evidence for the legacy policy; it is not a completed qualification of the new root-scoped contract.
+The opt-in `approved-roots-v1` compiler is documented in [Root-scoped access and approvals](../../../../docs/sandbox-approvals.md). It preserves the existing process/lease/journal owners; the compiler alone grants no execution authority. Current conditional product wiring is described above. The strict credential-alias gate below remains historical evidence for the legacy policy, not a qualification of the new root-scoped contract.
 
-This source slice owns one process operation in Go. It is not registered in the
-product route, and its tests do not qualify native execution. The active
-TypeScript sandbox/watchdog and Claude peer remain in place.
+This source slice owns one process operation in Go. Its controlled tests do not
+qualify native execution. The root-scoped product producer reuses the existing
+watchdog resource; separate legacy TypeScript and Claude paths remain in place.
 
 The opt-in Darwin test `TestNativeSeatbeltCredentialAliases` is an explicit
 native policy gate (`go test -tags farol_native_process
@@ -95,8 +117,8 @@ Seatbelt profile, using only disposable synthetic files. On October 6, 2026,
 the allowed baseline succeeded and direct credential, symlink and outside-root
 reads were denied, but a hardlink revealed the protected synthetic content.
 The exact child exited and the gate **failed**. This demonstrates a confinement
-gap, not process/product qualification. Do not enable the production shell or
-substitute a permissive qualification callback while this gate is unresolved.
+gap, not process/product qualification. Do not activate that legacy-policy
+selection or substitute a permissive qualification callback while its gate is unresolved.
 The build tag keeps this real native operation out of ordinary pure tests.
 
 ## Trusted composition

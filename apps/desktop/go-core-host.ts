@@ -612,8 +612,10 @@ export async function startDesktopGoCore(
   try {
     const hostLifetimeId = randomUUID();
     const childLaunchId = randomUUID();
+    // Version-1 profiles retain their read-only Go route. Package attestation
+    // still ran above; optional Shell cannot add storage or force a migration.
     const shellMetadata =
-      shell && shellBundle
+      shell && shellBundle && storage.settingsMutations
         ? encodeShellLaunch(shell.support, shell.support, expected, {
             profileId: storage.profileId,
             hostLifetimeId,
