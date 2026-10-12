@@ -59,6 +59,61 @@ const NormalPromotionReceipt = z.strictObject({
   }),
   verifiedDestinationSha256: Digest,
 });
+
+// Strict persisted DTOs remain identical to the installed updater owner.
+const AcceptedBuild = z.strictObject({
+  digest: Digest,
+  version: z.string().max(128),
+  buildId: Digest,
+});
+const Operation = z.strictObject({
+  operationId: z.string().regex(/^[a-f0-9]{32}$/u),
+  source: AcceptedBuild,
+  target: AcceptedBuild,
+});
+const Retained = z.strictObject({
+  schema: z.literal("farol.ready-update/1"),
+  handle: z.string().max(4096),
+  manifest: z.unknown(),
+  notes: z.string().max(4096).optional(),
+  operation: Operation.nullable(),
+  downloadId: z
+    .string()
+    .regex(/^[a-f0-9]{32}$/u)
+    .optional(),
+  preparation: Operation.optional(),
+  archiveReleased: z.boolean().optional(),
+  helper: z
+    .strictObject({
+      pid: z.number().int().min(2),
+      processStart: z.string().min(1).max(128).nullable(),
+    })
+    .nullable()
+    .optional(),
+});
+const Journal = Operation.extend({
+  schema: z.literal("farol.installed-update-journal/1"),
+  phase: z.enum([
+    "prepared",
+    "predecessor_saved",
+    "new_installed",
+    "verified",
+    "rollback_started",
+    "rolled_back",
+    "launch_requested",
+    "completed",
+    "cancelled",
+    "cancel_launch_requested",
+    "cancel_completed",
+    "rollback_launch_requested",
+    "rollback_completed",
+  ]),
+});
+const SavedReceipt = Retained.extend({
+  observedAt: z.string().max(64),
+  phase: Journal.shape.phase,
+  runningBuildId: Digest,
+});
 const Selection = z.strictObject({
   schema: z.literal("farol.installed-replacement-selection/1"),
   sourceCommit: z.string().regex(/^[a-f0-9]{40}$/u),
@@ -184,7 +239,87 @@ async function updaterSnapshot(updates) {
   return items;
 }
 
-// Public metadata only: no archive, stage, browser or auth contents are read.
+// Installed package and updater records only; no browser or auth contents.
+// An ordinary OTA leaves the original promotion receipt untouched. Accept
+// its completed, matching target only through the updater's retained record,
+// exact journal and physically retained predecessor. Never rewrite history.
+async function confirmCompletedUpdate(updates, appSha256, build) {
+  const raw = await bytes(path.join(updates, "last-update.json"));
+  const parsed = SavedReceipt.safeParse(JSON.parse(raw));
+  if (!parsed.success) fail("REPLACEMENT_UPDATE_RECEIPT_UNCONFIRMED");
+  const saved = parsed.data;
+  const op = saved.operation;
+  const manifest = saved.manifest;
+  if (
+    saved.phase !== "completed" ||
+    !op ||
+    saved.preparation ||
+    saved.runningBuildId !== build.buildId ||
+    !same(op.target, {
+      digest: appSha256,
+      version: build.version,
+      buildId: build.buildId,
+    }) ||
+    !manifest ||
+    typeof manifest !== "object" ||
+    Array.isArray(manifest) ||
+    manifest.schema !== "farol.github-release/1" ||
+    !["legrch/farol", "legrch/farol-releases"].includes(manifest.repository) ||
+    manifest.product !== build.product ||
+    manifest.bundleId !== build.bundleId ||
+    manifest.sourceDirty !== false ||
+    manifest.platform !== "darwin" ||
+    manifest.arch !== "arm64" ||
+    manifest.signing !== "unsigned" ||
+    manifest.notarized !== false ||
+    manifest.artifactSha256 !== appSha256 ||
+    manifest.buildId !== build.buildId ||
+    manifest.version !== build.version ||
+    manifest.buildVersion !== build.buildVersion ||
+    manifest.sourceCommit !== build.sourceCommit ||
+    manifest.sourceTreeDigest !== build.sourceTreeDigest ||
+    `github-${manifest.channel}` !== build.updateChannel
+  )
+    fail("REPLACEMENT_UPDATE_RECEIPT_UNCONFIRMED");
+  await safeDirectory(updates, true);
+  const operationRoot = path.join(updates, op.operationId);
+  await safeDirectory(operationRoot, true);
+  const journal = Journal.parse(
+    JSON.parse(await bytes(path.join(operationRoot, "journal.json"))),
+  );
+  if (
+    journal.phase !== "completed" ||
+    !same(
+      {
+        operationId: journal.operationId,
+        source: journal.source,
+        target: journal.target,
+      },
+      op,
+    )
+  )
+    fail("REPLACEMENT_UPDATE_JOURNAL_UNCONFIRMED");
+  const previous = path.join(operationRoot, "previous.app");
+  await safeDirectory(previous);
+  const previousBuild = assertBuildIdentity(
+    JSON.parse(
+      await bytes(
+        path.join(previous, "Contents/Resources/app/build-identity.json"),
+        65536,
+        false,
+      ),
+    ),
+  );
+  if (
+    !same(op.source, {
+      digest: await treeDigest(previous),
+      version: previousBuild.version,
+      buildId: previousBuild.buildId,
+    })
+  )
+    fail("REPLACEMENT_UPDATE_PREDECESSOR_CHANGED");
+}
+
 export async function snapshotInstalledReplacement(home) {
   const userData = promotionUserData(home);
   const apps = path.join(home, "Applications");
@@ -219,13 +354,15 @@ export async function snapshotInstalledReplacement(home) {
     r.destination !== app ||
     r.receipt !== app + ".receipt.json" ||
     r.activation.userData !== userData ||
-    r.artifactSha256 !== appSha256 ||
-    r.verifiedDestinationSha256 !== appSha256 ||
-    r.sourceCommit !== build.sourceCommit ||
-    r.sourceTreeDigest !== build.sourceTreeDigest ||
-    r.version !== build.version
+    r.artifactSha256 !== r.verifiedDestinationSha256
   )
     fail("REPLACEMENT_NORMAL_RECEIPT_UNCONFIRMED");
+  const initialInstall =
+    r.artifactSha256 === appSha256 &&
+    r.sourceCommit === build.sourceCommit &&
+    r.sourceTreeDigest === build.sourceTreeDigest &&
+    r.version === build.version;
+  if (!initialInstall) await confirmCompletedUpdate(updates, appSha256, build);
   return {
     applicationsIdentity: identity(await safeDirectory(apps)),
     profileIdentity: identity(await safeDirectory(userData, true)),

@@ -974,3 +974,184 @@ catch (error) { process.send({ kind: "replacement-failed", message: error.messag
     15000,
   );
 });
+async function completedUpdateFixture() {
+  const f = await fixture();
+  const build = JSON.parse(
+    await fs.readFile(
+      path.join(f.oldApp, "Contents/Resources/app/build-identity.json"),
+      "utf8",
+    ),
+  );
+  const previousBuild = createBuildIdentity({
+    version: "0.2.0-owner.beta.4",
+    buildVersion: "18",
+    updateChannel: "github-owner-beta",
+    builtAt: "2026-10-10T00:00:00.000Z",
+    sourceCommit: "4".repeat(40),
+    sourceTreeDigest: "4".repeat(64),
+    sourceDirty: false,
+  });
+  const directory = path.join(f.updates, "c".repeat(32));
+  const previous = path.join(directory, "previous.app");
+  await fs.mkdir(path.join(previous, "Contents/Resources/app"), {
+    recursive: true,
+    mode: 0o700,
+  });
+  await fs.writeFile(
+    path.join(previous, "Contents/Resources/app/build-identity.json"),
+    JSON.stringify(previousBuild),
+    { mode: 0o644 },
+  );
+  const previousDigest = await treeDigest(previous);
+  const initial = JSON.parse(f.oldReceipt);
+  Object.assign(initial, {
+    version: previousBuild.version,
+    sourceCommit: previousBuild.sourceCommit,
+    sourceTreeDigest: previousBuild.sourceTreeDigest,
+    artifactSha256: previousDigest,
+    verifiedDestinationSha256: previousDigest,
+  });
+  f.oldReceipt = JSON.stringify(initial) + "\n";
+  await fs.writeFile(f.oldApp + ".receipt.json", f.oldReceipt);
+  const operation = {
+    operationId: "c".repeat(32),
+    source: {
+      digest: previousDigest,
+      version: previousBuild.version,
+      buildId: previousBuild.buildId,
+    },
+    target: {
+      digest: await treeDigest(f.oldApp),
+      version: build.version,
+      buildId: build.buildId,
+    },
+  };
+  const manifest = {
+    schema: "farol.github-release/1",
+    repository: "legrch/farol",
+    channel: "owner-beta",
+    product: build.product,
+    bundleId: build.bundleId,
+    version: build.version,
+    buildVersion: build.buildVersion,
+    sourceCommit: build.sourceCommit,
+    sourceTreeDigest: build.sourceTreeDigest,
+    buildId: build.buildId,
+    artifactSha256: operation.target.digest,
+    archiveSha256: "a".repeat(64),
+    archiveName: "fixture.zip",
+    archiveSize: 1024,
+    platform: "darwin",
+    arch: "arm64",
+    signing: "unsigned",
+    notarized: false,
+    sourceDirty: false,
+  };
+  const saved = {
+    schema: "farol.ready-update/1",
+    handle: path.join(f.updates, "fixture.zip"),
+    manifest,
+    operation,
+    observedAt: "2026-10-10T00:00:00.000Z",
+    phase: "completed",
+    runningBuildId: build.buildId,
+  };
+  const journal = {
+    ...operation,
+    schema: "farol.installed-update-journal/1",
+    phase: "completed",
+  };
+  await fs.writeFile(
+    path.join(f.updates, "last-update.json"),
+    JSON.stringify(saved),
+  );
+  await fs.writeFile(
+    path.join(directory, "journal.json"),
+    JSON.stringify(journal),
+    { mode: 0o600 },
+  );
+  f.selection.snapshot = await snapshotInstalledReplacement(f.home);
+  return { ...f, saved, journal, directory, previous };
+}
+
+describe("closed replacement after ordinary OTA", () => {
+  it("retains the original promotion receipt and completed update chain", async () => {
+    const f = await completedUpdateFixture();
+    const result = await replaceInstalledPreview(f.selection, true, f.deps);
+    expect(result.operation).toBe("completed");
+    expect(
+      await fs.readFile(path.join(f.custody, "previous.receipt.json"), "utf8"),
+    ).toBe(f.oldReceipt);
+    expect(
+      JSON.parse(
+        await fs.readFile(
+          path.join(f.custody, "installed-updates/last-update.json"),
+          "utf8",
+        ),
+      ),
+    ).toEqual(f.saved);
+    expect(await treeDigest(path.join(f.custody, "previous.app"))).toBe(
+      f.selection.snapshot.appSha256,
+    );
+    expect(await treeDigest(f.oldApp)).toBe(f.artifact.artifactSha256);
+  });
+  it.each([
+    "receipt-phase",
+    "receipt-extra",
+    "target",
+    "manifest",
+    "journal-phase",
+    "journal-operation",
+    "predecessor",
+  ])("refuses %s without moving installed bytes", async (kind) => {
+    const f = await completedUpdateFixture();
+    if (kind === "receipt-phase") f.saved.phase = "launch_requested";
+    if (kind === "receipt-extra") f.saved.unexpected = true;
+    if (kind === "target") f.saved.operation.target.digest = "0".repeat(64);
+    if (kind === "manifest") f.saved.manifest.sourceCommit = "0".repeat(40);
+    if (kind === "journal-phase") f.journal.phase = "launch_requested";
+    if (kind === "journal-operation") f.journal.operationId = "d".repeat(32);
+    if (kind === "predecessor")
+      await fs.writeFile(path.join(f.previous, "modified"), "changed");
+    await fs.writeFile(
+      path.join(f.updates, "last-update.json"),
+      JSON.stringify(f.saved),
+    );
+    await fs.writeFile(
+      path.join(f.directory, "journal.json"),
+      JSON.stringify(f.journal),
+    );
+    await expect(snapshotInstalledReplacement(f.home)).rejects.toThrow();
+    expect(await treeDigest(f.oldApp)).toBe(f.selection.snapshot.appSha256);
+    expect(await fs.readFile(f.oldApp + ".receipt.json", "utf8")).toBe(
+      f.oldReceipt,
+    );
+    await expect(fs.lstat(f.custody)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it("uses the owning updater's complete persisted DTO shapes", async () => {
+    const owner = await fs.readFile(
+      new URL(
+        "../../src/apps/desktop/installed-update-runtime.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const tool = await fs.readFile(
+      new URL("../../tooling/replace-installed-preview.mjs", import.meta.url),
+      "utf8",
+    );
+    for (const name of [
+      "AcceptedBuild",
+      "Operation",
+      "Retained",
+      "Journal",
+      "SavedReceipt",
+    ]) {
+      const pattern = new RegExp(
+        "^const " + name + " = [\\s\\S]*?^\\}\\);",
+        "m",
+      );
+      expect(tool.match(pattern)?.[0]).toBe(owner.match(pattern)?.[0]);
+    }
+  });
+});
