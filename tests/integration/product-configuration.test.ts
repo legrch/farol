@@ -17,6 +17,7 @@ import { ownerSettingsComputerApproval } from "../../src/modules/computer/infra/
 import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
 import { taskPolicy } from "../fixtures/task-policy";
+import { resumeComputerConnector } from "../../src/apps/desktop/connector-resume-policy";
 import { GuidedWorkspaceAccess } from "../../src/ui/guided-workspace-access";
 import { onboardingFacts } from "../../src/ui/guided-onboarding";
 const roots: string[] = [];
@@ -372,6 +373,105 @@ async function computerEvidenceFixture(
 }
 
 describe("Computer evidence approval generations", () => {
+  it.each(["ready", "update-drained"] as const)(
+    "resumes %s after a real verification commit withdraws old-build Shell evidence",
+    async (mode) => {
+      const { service, workspaceId, rootIdentity, verification } =
+        await computerEvidenceFixture();
+      const second = await service.addReadonlyWorkspace({
+        root: "/Users/example/other",
+        label: "Other",
+        rootIdentity: { device: "1", inode: "3" },
+      });
+      expect(second.ok).toBe(true);
+      const otherId = approval(second.snapshot).workspaces[1]!.workspaceId;
+      for (const [id, identity] of [
+        [workspaceId, rootIdentity],
+        [otherId, { device: "1", inode: "3" }],
+      ] as const)
+        expect(
+          (
+            await service.recordComputerVerification(id, verification, {
+              rootIdentity: identity,
+            })
+          ).ok,
+        ).toBe(true);
+      await service.recordComputerVerification(workspaceId, verification, {
+        rootIdentity,
+      });
+      await service.recordSecureMcpTunnelClient({
+        executablePath: "/selected/tunnel-client",
+        executableSha256: "a".repeat(64),
+        version: "1.0.0",
+        protocol: "openai-tunnel-client/v1",
+      });
+      await service.configureSecureMcpTunnel({ tunnelId: "synthetic" });
+      await service.recordSecureMcpCredential("stored");
+      const generation = approval(service.snapshot()).generation;
+      expect(
+        (
+          await service.recordSecureMcpRuntime({
+            state: "ready",
+            runtimeGeneration: "b".repeat(64),
+            computerGeneration: generation,
+            buildId: verification.buildId,
+          })
+        ).ok,
+      ).toBe(true);
+      if (mode === "update-drained")
+        expect((await service.recordSecureMcpDrainedForUpdate()).ok).toBe(true);
+      const before = service.snapshot();
+      expect(approval(before).workspaces.map((w) => w.shellVerified)).toEqual([
+        true,
+        true,
+      ]);
+      const buildId = "d".repeat(64);
+      const start = vi.fn(async () => {
+        const snapshot = service.snapshot();
+        expect(snapshot).toMatchObject({
+          settings: {
+            computer: { generation: generation + 2 },
+            connectors: { secureMcp: { runtime: null } },
+          },
+        });
+        expect(
+          approval(snapshot).workspaces.map((w) => w.shellVerified),
+        ).toEqual([true, true]);
+        return { ok: true };
+      });
+      expect(
+        await resumeComputerConnector(
+          {
+            environment: "preview",
+            buildEnvironment: "preview",
+            previousRunClean: true,
+            buildId,
+            snapshot: before,
+          },
+          {
+            current: () => service.snapshot(),
+            mayContinue: () => true,
+            verifyWorkspace: (id) =>
+              service.recordComputerVerification(
+                id,
+                { ...verification, buildId },
+                {
+                  rootIdentity:
+                    id === workspaceId
+                      ? rootIdentity
+                      : { device: "1", inode: "3" },
+                  expectedGeneration: approval(service.snapshot()).generation,
+                },
+              ),
+            start,
+          },
+        ),
+      ).toBe("started");
+      expect(start).toHaveBeenCalledOnce();
+      // This proves settings-owner composition, not a native tunnel launch.
+    },
+  );
+
   it.each([false, true])(
     "continues guided recovery across the real owner's seal (revoked Git: %s)",
     async (revokedGit) => {

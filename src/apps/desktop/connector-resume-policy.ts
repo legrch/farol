@@ -1,4 +1,7 @@
-import type { ProductConfigurationSnapshot } from "../../pkg/product-settings/contract";
+import type {
+  ProductConfigurationSnapshot,
+  ProductSettings,
+} from "../../pkg/product-settings/contract";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 
 /** Restore a confirmed, same-session update drain only after admission releases.
@@ -118,10 +121,95 @@ export function shouldResumeComputerConnector(
   );
 }
 
+// Re-verification can legitimately change effective Shell authority: workspaces
+// still carrying the old build's check become stale. The settings owner advances
+// both generations and withdraws the old runtime. Admit that single known write,
+// while preserving every saved grant and connector selection. A concurrent Stop,
+// settings edit or second write changes the revision and must win over resume.
+// A separate intent fence also catches a no-op Stop after runtime withdrawal.
+function isOwnVerificationRefresh(
+  before: ProductSettings,
+  after: ProductSettings,
+  workspaceId: string,
+  buildId: string,
+): boolean {
+  const delta = after.computer.generation - before.computer.generation;
+  const check = after.setup.computer.verified;
+  const selected = after.computer.workspaces.find(
+    (workspace) => workspace.workspaceId === workspaceId,
+  );
+  if (
+    after.revision !== before.revision + 1 ||
+    (delta !== 0 && delta !== 1) ||
+    after.nativeHosts.taskRoute !== null ||
+    after.computer.pendingEdit !== null ||
+    after.setup.connect.outcomeUnknown ||
+    after.setup.computer.outcomeUnknown ||
+    after.setup.computer.reachable !== "reachable" ||
+    check?.workspaceId !== workspaceId ||
+    check.buildId !== buildId ||
+    check.configRevision !== after.computer.generation ||
+    selected?.accessCheck?.buildId !== buildId ||
+    selected.accessCheck.computerGeneration !== after.computer.generation ||
+    JSON.stringify(selected.accessCheck.rootIdentity) !==
+      JSON.stringify(selected.rootIdentity)
+  )
+    return false;
+  const grants = (settings: ProductSettings) => {
+    const {
+      generation: _generation,
+      workspaces,
+      ...computer
+    } = settings.computer;
+    return {
+      ...computer,
+      workspaces: workspaces.map(
+        ({ accessCheck: _check, ...workspace }) => workspace,
+      ),
+    };
+  };
+  const selection = (settings: ProductSettings) => {
+    const {
+      generation: _generation,
+      runtime: _runtime,
+      challenge: _challenge,
+      attachment: _attachment,
+      ...connector
+    } = settings.connectors.secureMcp;
+    return connector;
+  };
+  if (
+    JSON.stringify(grants(before)) !== JSON.stringify(grants(after)) ||
+    JSON.stringify(selection(before)) !== JSON.stringify(selection(after))
+  )
+    return false;
+  const prior = before.connectors.secureMcp;
+  const current = after.connectors.secureMcp;
+  if (delta === 0)
+    return (
+      current.generation === prior.generation &&
+      JSON.stringify(current.runtime) === JSON.stringify(prior.runtime) &&
+      JSON.stringify(current.challenge) === JSON.stringify(prior.challenge) &&
+      JSON.stringify(current.attachment) === JSON.stringify(prior.attachment)
+    );
+  return (
+    current.generation ===
+      prior.generation + (prior.runtime === null ? 0 : 1) &&
+    current.runtime === null &&
+    current.challenge === null &&
+    current.attachment === null &&
+    after.setup.connect.configured &&
+    after.setup.connect.reachable === "unknown" &&
+    after.setup.connect.verified === null &&
+    after.setup.connect.unavailable === null
+  );
+}
+
 /** Compose the existing workspace check before a new-build connector start.
  * Exactly empty workspace configuration needs no file verification.
  * The check must return a known success; readback cannot repair a lost reply.
- * It may refresh only the already bound workspace selected by clean resume.
+ * Refresh already bound workspaces only, with the selected workspace last.
+ * Otherwise a stale secondary workspace would prevent the shared Shell scope.
  */
 export async function resumeComputerConnector(
   input: Parameters<typeof shouldResumeComputerConnector>[0] & {
@@ -129,11 +217,13 @@ export async function resumeComputerConnector(
   },
   ports: Readonly<{
     current(): ProductConfigurationSnapshot;
+    mayContinue(): boolean;
     verifyWorkspace(workspaceId: string): Promise<{ ok: boolean }>;
     start(): Promise<{ ok: boolean }>;
   }>,
 ): Promise<"skipped" | "verification-refused" | "started" | "start-refused"> {
-  if (!shouldResumeComputerConnector(input)) return "skipped";
+  if (!ports.mayContinue() || !shouldResumeComputerConnector(input))
+    return "skipped";
   if (input.snapshot.status !== "ready") return "skipped";
   const settings = input.snapshot.settings;
   const verified = settings.setup.computer.verified;
@@ -142,30 +232,32 @@ export async function resumeComputerConnector(
     verified?.buildId !== input.buildId
   ) {
     if (!verified || verified.workspaceId === null) return "skipped";
-    const workspaceId = verified.workspaceId;
-    const computerGeneration = settings.computer.generation;
-    const connectorGeneration = settings.connectors.secureMcp.generation;
-    const runtimeGeneration =
-      settings.connectors.secureMcp.runtime?.runtimeGeneration;
-    const runtimeBuildId = settings.connectors.secureMcp.runtime?.buildId;
-    const result = await ports.verifyWorkspace(workspaceId);
-    if (!result.ok) return "verification-refused";
-    const current = ports.current();
-    if (
-      !shouldResumeComputerConnector({ ...input, snapshot: current }) ||
-      current.status !== "ready" ||
-      current.settings.computer.generation !== computerGeneration ||
-      current.settings.connectors.secureMcp.generation !==
-        connectorGeneration ||
-      current.settings.connectors.secureMcp.runtime?.runtimeGeneration !==
-        runtimeGeneration ||
-      current.settings.connectors.secureMcp.runtime?.buildId !==
-        runtimeBuildId ||
-      current.settings.computer.workspaces.length === 0 ||
-      current.settings.setup.computer.verified?.workspaceId !== workspaceId ||
-      current.settings.setup.computer.verified?.buildId !== input.buildId
-    )
-      return "verification-refused";
+    const selectedId = verified.workspaceId;
+    const workspaces = identityBoundWorkspaces(settings.computer.workspaces);
+    const ids = [
+      ...workspaces
+        .filter((workspace) => workspace.workspaceId !== selectedId)
+        .map((workspace) => workspace.workspaceId),
+      selectedId,
+    ];
+    let before = structuredClone(settings);
+    for (const workspaceId of ids) {
+      const result = await ports.verifyWorkspace(workspaceId);
+      if (!result.ok || !ports.mayContinue()) return "verification-refused";
+      const current = ports.current();
+      if (
+        current.status !== "ready" ||
+        !isOwnVerificationRefresh(
+          before,
+          current.settings,
+          workspaceId,
+          input.buildId,
+        )
+      )
+        return "verification-refused";
+      before = structuredClone(current.settings);
+    }
   }
+  if (!ports.mayContinue()) return "start-refused";
   return (await ports.start()).ok ? "started" : "start-refused";
 }

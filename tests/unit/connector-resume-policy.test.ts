@@ -126,13 +126,21 @@ describe("clean connector resume across builds", () => {
       snapshot: { status: "ready" as const, settings },
     };
     const ports = {
+      mayContinue: () => true,
       current: (): ProductConfigurationSnapshot => ({
         status: "ready",
         settings: current,
       }),
       verifyWorkspace: vi.fn(async (id: string) => {
         order.push(`verify:${id}`);
+        current.revision++;
         current.setup.computer.verified!.buildId = buildId;
+        current.computer.workspaces[0]!.accessCheck = {
+          buildId,
+          computerGeneration: current.computer.generation,
+          verifiedAt: at,
+          rootIdentity: current.computer.workspaces[0]!.rootIdentity!,
+        };
         return { ok: true };
       }),
       start: vi.fn(async () => {
@@ -223,6 +231,21 @@ describe("clean connector resume across builds", () => {
     );
     expect(f.ports.start).not.toHaveBeenCalled();
   });
+  it("honors a Stop intent even when it leaves settings unchanged", async () => {
+    const f = fixture();
+    let allowed = true;
+    f.ports.mayContinue = () => allowed;
+    const verify = f.ports.verifyWorkspace.getMockImplementation()!;
+    f.ports.verifyWorkspace.mockImplementation(async (id) => {
+      const result = await verify(id);
+      allowed = false;
+      return result;
+    });
+    expect(await resumeComputerConnector(f.input, f.ports)).toBe(
+      "verification-refused",
+    );
+    expect(f.ports.start).not.toHaveBeenCalled();
+  });
   it("does not start or repeat after a lost verification reply", async () => {
     const f = fixture();
     f.ports.verifyWorkspace.mockRejectedValue(new Error("LOST_REPLY"));
@@ -234,6 +257,10 @@ describe("clean connector resume across builds", () => {
   });
   it.each([
     "old-build",
+    "concurrent-write",
+    "changed-root",
+    "changed-tunnel",
+    "changed-access",
     "changed-generation",
     "changed-workspace",
     "aligned-computer-generation",
@@ -249,6 +276,20 @@ describe("clean connector resume across builds", () => {
   ])("refuses %s after verification", async (mode) => {
     const f = fixture();
     f.ports.verifyWorkspace.mockImplementation(async () => {
+      f.current.revision++;
+      f.current.computer.workspaces[0]!.accessCheck = {
+        buildId: f.input.buildId,
+        computerGeneration: f.current.computer.generation,
+        verifiedAt: at,
+        rootIdentity: f.current.computer.workspaces[0]!.rootIdentity!,
+      };
+      if (mode === "concurrent-write") f.current.revision++;
+      if (mode === "changed-root")
+        f.current.computer.workspaces[0]!.root = "/other";
+      if (mode === "changed-access")
+        f.current.computer.workspaces[0]!.access = "write";
+      if (mode === "changed-tunnel")
+        f.current.connectors.secureMcp.tunnelId = "other";
       if (mode !== "old-build")
         f.current.setup.computer.verified!.buildId = f.input.buildId;
       if (mode === "changed-generation") f.current.computer.generation++;
@@ -425,6 +466,7 @@ describe("exactly empty workspace connector resume", () => {
     const settings = withoutWorkspace();
     alter(settings);
     const ports = {
+      mayContinue: () => true,
       current: () => ({ status: "ready" as const, settings }),
       verifyWorkspace: vi.fn(async () => ({ ok: true })),
       start: vi.fn(async () => ({ ok: true })),
@@ -684,6 +726,7 @@ describe("confirmed same-session update abort recovery (injected connector, no l
             snapshot: { status: "ready", settings: f.stopped },
           },
           {
+            mayContinue: () => true,
             current: () => ({ status: "ready", settings: f.stopped }),
             verifyWorkspace,
             start,

@@ -802,6 +802,7 @@ let secureMcpConnectorRuntime: SecureMcpConnectorRuntime | null = null;
 let modelLifecycle: FarolModelLifecycle | null = null;
 let connectorTaskAdmission = false;
 let connectorStartInFlight: Promise<void> | null = null;
+let startupConnectorResumeCancelled = false;
 let connectorTransportWatch: ConnectorTransportWatch<ConnectorTransportCapture> | null =
   null;
 let connectorTransportTimer: NodeJS.Timeout | null = null;
@@ -5927,6 +5928,16 @@ async function configureProduct(
   value: unknown,
 ): Promise<ProductConfigurationResult> {
   const parsed = ProductConfigurationCommandSchema.safeParse(value);
+  if (
+    parsed.success &&
+    [
+      "connector.stop",
+      "connector.start",
+      "connector.repair",
+      "connector.save-and-connect",
+    ].includes(parsed.data.kind)
+  )
+    startupConnectorResumeCancelled = true;
   // Capture the original runtime before the request counter closes background
   // admission. An explicit Stop must never be undone by a later timer tick.
   if (
@@ -11702,6 +11713,10 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     },
     {
       current: () => configuration!.snapshot(),
+      mayContinue: () =>
+        !startupConnectorResumeCancelled &&
+        !quitInProgress &&
+        !installedUpdateAdmission,
       // The normal command retains authority reservation, physical-root and
       // Go inspection checks. No synthetic verification receipt is written.
       verifyWorkspace: (workspaceId) =>
