@@ -2620,7 +2620,7 @@ it.each([
     const f = fixture();
     const c = new WindowController(f.api);
     await c.start();
-    c.navigate({ area: "settings", page: "updates" });
+    c.navigate({ area: "settings", page: "diagnostics" });
     c.overlay("update");
     f.emit("update", { phase: "applying", version: "1.0" });
     const before = c.getSnapshot();

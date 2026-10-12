@@ -204,9 +204,9 @@ it.each([
     );
     expect(host.querySelector("dialog h2")?.textContent).toBe(
       view.phase === "available"
-        ? "A new version of Farol is available"
+        ? "Update available"
         : view.phase === "ready"
-          ? "Update Farol?"
+          ? "Ready to install"
           : "The update did not finish",
     );
     expect(f.api.installedUpdate).toHaveBeenCalledTimes(1);
@@ -216,9 +216,7 @@ it("viewing the sheet acknowledges the exact notice once under StrictMode withou
   const { host, c, f } = await mount();
   vi.mocked(f.api.installedUpdate).mockResolvedValue(withSeen(available));
   await act(async () => button(host, "View update").click());
-  expect(host.querySelector("dialog h2")?.textContent).toBe(
-    "A new version of Farol is available",
-  );
+  expect(host.querySelector("dialog h2")?.textContent).toBe("Update available");
   expect(c.getSnapshot().update).toEqual(withSeen(available));
   expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
     kind: "notice-seen",
@@ -303,7 +301,7 @@ it("a known preference refusal keeps the notice visible and remains inspectable 
   expect(host.querySelector("dialog")?.textContent).not.toContain(
     "Update actions are paused",
   );
-  expect(button(host, "Download Update").disabled).toBe(false);
+  expect(button(host, "Download and Install").disabled).toBe(false);
   expect(f.api.installedUpdate).toHaveBeenCalledTimes(1);
 });
 it("acknowledging a notice never clears an unknown update intention even after a fresh status event", async () => {

@@ -47,6 +47,14 @@ async function mount(data = bootstrap(), compactViewport = () => false) {
   });
   return { f, c, host, root };
 }
+function openUpdates(f: ReturnType<typeof fixture>) {
+  f.emit("action", {
+    action: "open-updates",
+    source: "update-command",
+    eventId: crypto.randomUUID(),
+    authWindowGeneration: null,
+  });
+}
 function button(host: Element, label: string) {
   const found = [...host.querySelectorAll<HTMLButtonElement>("button")].find(
     (button) =>
@@ -990,7 +998,7 @@ it("R05 R32 R34 activity inspection displays only metadata and returns to exact 
 it("R16 R23 R24 distinct update controls preserve exact operations and pending fence", async () => {
   const { host, c, f } = await mount();
   await act(async () => c.overlay("update"));
-  await act(async () => button(host, "Check for Updates").click());
+  await act(async () => openUpdates(f));
   expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "check" });
   const ready = {
     phase: "ready",
@@ -1013,7 +1021,7 @@ it("R16 R23 R24 distinct update controls preserve exact operations and pending f
   expect(c.getSnapshot().overlay).toBe("none");
   await act(async () => {
     f.emit("update", { phase: "recovery", version: "1.0", blockedBy: null });
-    c.overlay("update");
+    c.overlay("update-recovery");
   });
   await act(async () => button(host, "Recover").click());
   expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "recover" });
@@ -1040,7 +1048,7 @@ it("offers Download only for a current available release", async () => {
   });
   expect(host.textContent).toContain("is available to download");
   expect(document.activeElement).toBe(button(host, "Remind Me Later"));
-  await act(async () => button(host, "Download Update").click());
+  await act(async () => button(host, "Download and Install").click());
   expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "download" });
   await act(async () => f.emit("update", { phase: "idle", checkedAt: 10 }));
   expect((await c.update("download")).state).toBe("refused");
@@ -1092,13 +1100,13 @@ it("renders release notes as text without creating provider-supplied markup", as
 it.each([
   [
     { phase: "available", version: "1.0", deferred: false },
-    "A new version of Farol is available",
+    "Update available",
     "is available to download",
-    ["Skip This Version", "Remind Me Later", "Download Update"],
+    ["Skip This Version", "Remind Me Later", "Download and Install"],
   ],
   [
     { phase: "ready", version: "1.0", deferred: false, blockedBy: null },
-    "Update Farol?",
+    "Ready to install",
     "is ready to install.",
     ["Remind Me Later", "Install and Relaunch"],
   ],
@@ -1122,8 +1130,8 @@ it.each([
   ],
   [
     { phase: "idle", checkedAt: null },
-    "Farol updates",
-    "Check for updates to see if a new version is available.",
+    "Update status",
+    "Update availability has not been checked.",
     ["Done"],
   ],
   [
@@ -1146,7 +1154,7 @@ it.each([
     },
     "The update did not finish",
     "An earlier package check did not finish. Its files are saved.",
-    ["Cancel", "Recover"],
+    ["Dismiss", "Review Diagnostics"],
   ],
 ] satisfies [WindowSnapshot["update"], string, string, string[]][])(
   "Updates %j shows its own heading, state and release actions",
@@ -1178,27 +1186,22 @@ it.each([
       expect(technical?.open).toBe(false);
       expect(technical?.querySelector("code")?.textContent).toBe(update.code);
     }
-    expect(dialog.querySelector(".update-installed")?.textContent).toContain(
-      "Current version: Farol 0.1.8 beta 1.",
-    );
+    expect(dialog.querySelector(".update-installed")).toBeNull();
+    expect(
+      [...dialog.querySelectorAll("summary")].some(
+        (node) => node.textContent === "Details",
+      ),
+    ).toBe(false);
     expect(
       [...dialog.querySelectorAll(".update-actions button")].map((b) =>
         b.textContent?.trim(),
       ),
     ).toEqual(actions);
-    expect(dialog.querySelector(".update-check button")?.textContent).toBe(
-      "Check for Updates",
-    );
-    expect(dialog.querySelector(".update-actions .update-check")).toBeNull();
+    expect(dialog.querySelector(".update-check")).toBeNull();
     if (update.phase === "available" || update.phase === "ready") {
       expect(dialog.querySelector(".update-options")).toBeNull();
       expect(dialog.querySelectorAll('input[type="checkbox"]')).toHaveLength(1);
       expect(dialog.querySelector(".update-policy-strip")).toBeNull();
-    }
-    if (update.phase === "ready" || update.phase === "downloading") {
-      expect(dialog.querySelector<HTMLElement>(".update-check")?.hidden).toBe(
-        true,
-      );
     }
     if (update.phase === "applying") {
       expect(dialog.querySelector('[aria-label="Close"]')).toBeNull();
@@ -1250,7 +1253,7 @@ it("keeps real recovery refusals visible and fenced", async () => {
       version: "1.0",
       blockedBy: "WORK_PENDING",
     });
-    c.overlay("update");
+    c.overlay("update-recovery");
   });
   const block = host.querySelector("dialog .update-block")!;
   expect(block.getAttribute("role")).toBe("alert");
@@ -1382,7 +1385,7 @@ it("Updates moves focus to local dismissal when a focused release action becomes
     f.emit("update", { phase: "available", version: "1.0", deferred: false });
     c.overlay("update");
   });
-  const download = button(host, "Download Update");
+  const download = button(host, "Download and Install");
   download.focus();
   await act(async () => download.click());
   expect(download.disabled).toBe(true);
@@ -1391,7 +1394,7 @@ it("Updates moves focus to local dismissal when a focused release action becomes
   expect(c.getSnapshot().intents.update?.state).toBe("unknown");
   await act(async () => button(host, "Continue working").click());
   await act(async () => c.overlay("update"));
-  expect(button(host, "Download Update").disabled).toBe(true);
+  expect(button(host, "Download and Install").disabled).toBe(true);
   expect(document.activeElement).toBe(button(host, "Continue working"));
   expect(f.api.installedUpdate).toHaveBeenCalledTimes(1);
 });
@@ -1422,12 +1425,8 @@ it("Updates uses only supplied notes and confirmed installed version", async () 
       embeddedElectron: null,
     }),
   );
-  expect(host.querySelector("dialog .update-installed")?.textContent).toBe(
-    "Installed version cannot be confirmed in this session.",
-  );
-  expect(
-    host.querySelector("dialog .update-installed")?.textContent,
-  ).not.toContain("0.1.8");
+  expect(host.querySelector("dialog .update-installed")).toBeNull();
+  expect(host.querySelector("dialog")?.textContent).not.toContain("0.1.8");
 });
 it("offers version-scoped Skip only for an available release", async () => {
   const { host, c, f } = await mount();
@@ -1878,7 +1877,7 @@ it("R24 checking and rollback controls follow recovery and drain eligibility", a
       f.emit("update", update);
       c.overlay("update");
     });
-    expect(button(host, "Check for Updates").disabled).toBe(true);
+    expect(host.querySelector(".update-check")).toBeNull();
   }
   expect(host.textContent).not.toContain("Roll Back");
   await act(async () => {
@@ -2444,22 +2443,20 @@ it.each([null, Date.UTC(2026, 9, 12, 10, 30)])(
       c.overlay("update");
     });
     const dialog = host.querySelector("dialog")!;
-    expect(dialog.getAttribute("aria-label")).toBe("Farol updates");
+    expect(dialog.getAttribute("aria-label")).toBe(
+      checkedAt === null ? "Update status" : "Farol is up to date",
+    );
     expect(dialog.textContent).toContain(
       checkedAt === null
-        ? "Check for updates to see if a new version is available."
-        : "No updates available.",
+        ? "Update availability has not been checked."
+        : "You’re using the latest version of Farol.",
     );
-    if (checkedAt !== null)
-      expect(dialog.textContent).toContain(
-        `Last checked: ${new Date(checkedAt).toLocaleString()}.`,
-      );
-    else expect(dialog.textContent).not.toContain("Last checked:");
+    expect(dialog.textContent).not.toContain("Last checked:");
     expect(dialog.textContent).not.toMatch(
-      /latest|Roll Back|roll back|restore|0\.9|WORK_PENDING/i,
+      /Roll Back|roll back|restore|0\.9|WORK_PENDING/i,
     );
     expect(dialog.querySelector(".update-block")).toBeNull();
-    expect(button(dialog, "Check for Updates").disabled).toBe(false);
+    expect(dialog.querySelector(".update-check")).toBeNull();
     expect(f.api.installedUpdate).not.toHaveBeenCalled();
   },
 );
@@ -2470,25 +2467,33 @@ it("does not show the previous no-update result during a new pending or unknown 
     c.overlay("update");
   });
   expect(host.querySelector("dialog")?.textContent).toContain(
-    "No updates available.",
+    "You’re using the latest version of Farol.",
   );
   const pending = deferred<unknown>();
   vi.mocked(f.api.installedUpdate).mockReturnValueOnce(pending.promise);
-  await act(async () => button(host, "Check for Updates").click());
+  await act(async () => openUpdates(f));
   expect(host.querySelector("dialog")?.textContent).toContain(
     "Checking update status…",
   );
   expect(host.querySelector("dialog")?.textContent).not.toContain(
-    "No updates available.",
+    "You’re using the latest version of Farol.",
+  );
+  expect(host.querySelector("dialog")?.getAttribute("aria-label")).toBe(
+    "Checking for Farol updates",
   );
   await act(async () => pending.reject(new Error("lost response")));
   expect(host.querySelector("dialog")?.textContent).toContain(
     "Update status could not be confirmed.",
   );
   expect(host.querySelector("dialog")?.textContent).not.toContain(
-    "No updates available.",
+    "You’re using the latest version of Farol.",
   );
-  expect(button(host, "Check for Updates").disabled).toBe(true);
+  expect(host.querySelector("dialog")?.getAttribute("aria-label")).toBe(
+    "Update status unconfirmed",
+  );
+  vi.mocked(f.api.installedUpdate).mockClear();
+  await act(async () => openUpdates(f));
+  expect(f.api.installedUpdate).not.toHaveBeenCalled();
 });
 it("normal failed Updates omits optional rollback and keeps update checking", async () => {
   const { host, c, f } = await mount();
@@ -2504,7 +2509,7 @@ it("normal failed Updates omits optional rollback and keeps update checking", as
   const dialog = host.querySelector("dialog")!;
   expect(dialog.textContent).not.toMatch(/Roll Back|roll back|0\.9/);
   expect(dialog.querySelector(".update-block")).toBeNull();
-  expect(button(dialog, "Check for Updates").disabled).toBe(false);
+  expect(dialog.querySelector(".update-check")).toBeNull();
 });
 it.each(["WORK_PENDING", "UPDATE_BROWSER_STATE_UNKNOWN"])(
   "Diagnostics rollback retains the backend admission fence %s",
@@ -2652,7 +2657,7 @@ it.each([
       "No previous version is available to restore",
     );
     expect(dialog.textContent).not.toMatch(
-      /Roll Back|Check for Updates|Download Update|Install and Relaunch|Skip This Version|Remind Me Later|Update settings|What’s new|WORK_PENDING/,
+      /Roll Back|Check for Updates|Download and Install|Install and Relaunch|Skip This Version|Remind Me Later|Update settings|What’s new|WORK_PENDING/,
     );
     expect(dialog.querySelector(".update-check")).toBeNull();
     await act(async () => button(dialog, "Done").click());
@@ -2690,7 +2695,7 @@ it.each([
     const { host, c, f } = await mount();
     await act(async () => {
       f.emit("update", update);
-      c.overlay(action === "Roll Back" ? "update-recovery" : "update");
+      c.overlay("update-recovery");
     });
     const copy = host
       .querySelector("dialog")!
@@ -2744,34 +2749,35 @@ it("B04 distinguishes installed and downloaded versions and refuses an unknown-s
     c.overlay("update");
   });
   const text = host.querySelector("dialog")!.textContent!;
-  expect(text).toContain("Current version: Farol 0.1.8 beta 1.");
+  expect(text).not.toContain("Current version:");
   expect(text).toContain("Farol 0.2.0 beta 4 is ready to install.");
   expect(text).toContain("close open ChatGPT sessions and interrupt work");
   expect(text).not.toContain("UPDATE_BROWSER_STATE_UNKNOWN");
   expect(text).not.toContain("Restart is blocked");
-  expect(button(host, "Check for Updates").disabled).toBe(true);
+  expect(host.querySelector(".update-check")).toBeNull();
   expect(button(host, "Install and Relaunch").disabled).toBe(false);
   vi.mocked(f.api.installedUpdate).mockClear();
-  await act(async () => button(host, "Check for Updates").click());
+  await act(async () => openUpdates(f));
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
 });
-it("B04 rechecks current update state at click time before Check dispatch", async () => {
-  const { host, c, f } = await mount();
-  await act(async () => c.overlay("update"));
-  expect(button(host, "Check for Updates").disabled).toBe(false);
-  const current = c.getSnapshot();
-  const read = vi.spyOn(c, "getSnapshot").mockReturnValue({
-    ...current,
-    update: {
+it("native menu preserves the current destination and downloaded update without another check", async () => {
+  const { c, f, host } = await mount();
+  await act(async () => {
+    c.navigate({ area: "settings", page: "connection" });
+    f.emit("update", {
       phase: "ready",
-      version: "0.2.0-owner.beta.4",
+      version: "0.2.2",
       deferred: false,
-      blockedBy: "UPDATE_BROWSER_STATE_UNKNOWN",
-    },
+      blockedBy: null,
+    });
   });
+  const destination = c.getSnapshot().destination;
   vi.mocked(f.api.installedUpdate).mockClear();
-  await act(async () => button(host, "Check for Updates").click());
-  read.mockRestore();
+  await act(async () => openUpdates(f));
+  expect(c.getSnapshot().destination).toEqual(destination);
+  expect(host.querySelector("dialog")?.getAttribute("aria-label")).toBe(
+    "Ready to install",
+  );
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
 });
 const boundedUpdateActions = [
@@ -2801,7 +2807,7 @@ it.each(boundedUpdateActions)(
     const { host, c, f } = await mount();
     await act(async () => {
       f.emit("update", { ...update, blockedBy: "WORK_PENDING" });
-      c.overlay(kind === "rollback" ? "update-recovery" : "update");
+      c.overlay(kind === "restart-confirmed" ? "update" : "update-recovery");
     });
     expect(button(host, action).disabled).toBe(true);
     await act(async () => button(host, action).click());
@@ -2818,14 +2824,14 @@ it.each(boundedUpdateActions)(
     vi.mocked(f.api.installedUpdate).mockReturnValueOnce(operation.promise);
     await act(async () => {
       f.emit("update", update);
-      c.overlay(kind === "rollback" ? "update-recovery" : "update");
+      c.overlay(kind === "restart-confirmed" ? "update" : "update-recovery");
     });
     await act(async () => button(host, action).click());
     expect(c.getSnapshot().intents.update?.state).toBe("pending");
     expect(button(host, action).disabled).toBe(true);
     if (kind === "rollback")
       expect(host.querySelector(".update-check")).toBeNull();
-    else expect(button(host, "Check for Updates").disabled).toBe(true);
+    else expect(host.querySelector(".update-check")).toBeNull();
     await act(async () => button(host, action).click());
     await act(async () => operation.reject(new Error("reply lost")));
     expect(c.getSnapshot().intents.update?.state).toBe("unknown");
@@ -2834,12 +2840,12 @@ it.each(boundedUpdateActions)(
     );
     await act(async () => button(host, "Close").click());
     await act(async () =>
-      c.overlay(kind === "rollback" ? "update-recovery" : "update"),
+      c.overlay(kind === "restart-confirmed" ? "update" : "update-recovery"),
     );
     expect(button(host, action).disabled).toBe(true);
     if (kind === "rollback")
       expect(host.querySelector(".update-check")).toBeNull();
-    else expect(button(host, "Check for Updates").disabled).toBe(true);
+    else expect(host.querySelector(".update-check")).toBeNull();
     await act(async () => button(host, action).click());
     expect(
       vi
@@ -3400,4 +3406,220 @@ it("Activity preserves search-trigger focus when an unrelated dialog is dismisse
   await act(async () => trigger.click());
   await act(async () => button(host, "Close").click());
   expect(document.activeElement).toBe(trigger);
+});
+
+it("retired Updates is absent from Settings navigation and page search", async () => {
+  const { host, c } = await mount();
+  await act(async () => c.navigate({ area: "settings", page: "general" }));
+  expect(
+    host.querySelector('nav[aria-label="Settings navigation"]'),
+  ).not.toBeNull();
+  expect(
+    [
+      ...host.querySelectorAll('nav[aria-label="Settings navigation"] button'),
+    ].some((node) => node.textContent?.trim() === "Updates"),
+  ).toBe(false);
+  expect(host.querySelector(".settings-page")?.textContent).not.toContain(
+    "Update status",
+  );
+  await act(async () => c.overlay("search"));
+  const input = host.querySelector<HTMLInputElement>(
+    'dialog input[aria-label="Find a page"]',
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )!.set!.call(input, "Updates");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(
+    host.querySelector("dialog .search-results")?.textContent,
+  ).not.toContain("Updates");
+});
+it.each<WindowSnapshot["update"]>([
+  { phase: "checking" },
+  { phase: "downloading" },
+  { phase: "failed", code: "UPDATE_HANDOFF_UNKNOWN", recoveryRequired: false },
+])(
+  "native menu opens $phase without replacing it with another check",
+  async (update) => {
+    const { c, f, host } = await mount();
+    await act(async () => f.emit("update", update));
+    vi.mocked(f.api.installedUpdate).mockClear();
+    await act(async () => openUpdates(f));
+    expect(c.getSnapshot().overlay).toBe("update");
+    expect(c.getSnapshot().update).toEqual(update);
+    expect(f.api.installedUpdate).not.toHaveBeenCalled();
+    expect(host.querySelector("dialog")).not.toBeNull();
+  },
+);
+it("menu checks once immediately and suppresses concurrent checks", async () => {
+  const { f, host } = await mount();
+  const pending = deferred<unknown>();
+  vi.mocked(f.api.installedUpdate)
+    .mockClear()
+    .mockReturnValueOnce(pending.promise);
+  await act(async () => {
+    openUpdates(f);
+    openUpdates(f);
+  });
+  expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+    kind: "check",
+  });
+  expect(host.querySelector("dialog")?.getAttribute("aria-label")).toBe(
+    "Checking for Farol updates",
+  );
+  await act(async () => pending.resolve({ phase: "idle", checkedAt: 1000 }));
+  expect(host.querySelector("dialog")?.getAttribute("aria-label")).toBe(
+    "Farol is up to date",
+  );
+  await act(async () => openUpdates(f));
+  expect(f.api.installedUpdate).toHaveBeenCalledTimes(2);
+});
+
+it("dialog saves automatic download-and-install consent in both directions without restarting", async () => {
+  const { host, c, f } = await mount();
+  const off: WindowSnapshot["update"] = {
+    phase: "idle",
+    checkedAt: 1000,
+    automaticUpdatePreference: {
+      status: "confirmed",
+      scope: "download-and-install",
+      enabled: false,
+    },
+  };
+  const on: WindowSnapshot["update"] = {
+    ...off,
+    automaticUpdatePreference: {
+      status: "confirmed",
+      scope: "download-and-install",
+      enabled: true,
+    },
+  };
+  await act(async () => {
+    f.emit("update", off);
+    c.overlay("update");
+  });
+  const checkbox = host.querySelector<HTMLInputElement>(
+    'dialog input[type="checkbox"]',
+  )!;
+  expect(checkbox.checked).toBe(false);
+  expect(host.querySelectorAll('dialog input[type="checkbox"]')).toHaveLength(
+    1,
+  );
+  expect(host.querySelector("dialog")?.textContent).not.toContain(
+    "Installation on Quit",
+  );
+  vi.mocked(f.api.installedUpdate).mockClear().mockResolvedValueOnce(on);
+  await act(async () => checkbox.click());
+  expect(checkbox.checked).toBe(true);
+  expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+    kind: "set-automatic-update-preference",
+    scope: "download-and-install",
+    enabled: true,
+  });
+  vi.mocked(f.api.installedUpdate).mockResolvedValueOnce(off);
+  await act(async () => checkbox.click());
+  expect(checkbox.checked).toBe(false);
+  expect(f.api.installedUpdate).toHaveBeenLastCalledWith({
+    kind: "set-automatic-update-preference",
+    scope: "download-and-install",
+    enabled: false,
+  });
+  expect(f.api.installedUpdate).toHaveBeenCalledTimes(2);
+});
+it("dialog retains an unknown automatic preference without permitting another save", async () => {
+  const { host, c, f } = await mount();
+  const off: WindowSnapshot["update"] = {
+    phase: "idle",
+    checkedAt: 1000,
+    automaticUpdatePreference: {
+      status: "confirmed",
+      scope: "download-and-install",
+      enabled: false,
+    },
+  };
+  await act(async () => {
+    f.emit("update", off);
+    c.overlay("update");
+  });
+  const checkbox = host.querySelector<HTMLInputElement>(
+    'dialog input[type="checkbox"]',
+  )!;
+  vi.mocked(f.api.installedUpdate)
+    .mockClear()
+    .mockResolvedValueOnce({
+      ...off,
+      automaticUpdatePreference: {
+        status: "unknown",
+        enabled: false,
+        code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
+      },
+    });
+  await act(async () => checkbox.click());
+  expect(c.getSnapshot().intents["update-automatic-downloads"]?.state).toBe(
+    "unknown",
+  );
+  expect(checkbox.disabled).toBe(true);
+  expect(host.querySelector("dialog")?.textContent).toContain(
+    "Do not repeat this change",
+  );
+  await act(async () => checkbox.click());
+  expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+    kind: "set-automatic-update-preference",
+    scope: "download-and-install",
+    enabled: true,
+  });
+});
+
+it("normal update issues direct recovery to Diagnostics without a recovery command", async () => {
+  const { host, c, f } = await mount();
+  await act(async () => {
+    f.emit("update", { phase: "recovery", version: "0.2.2", blockedBy: null });
+    c.overlay("update");
+  });
+  expect(
+    [...host.querySelectorAll("dialog button")].map((node) => node.textContent),
+  ).not.toContain("Recover");
+  expect(host.querySelector("dialog")?.textContent).not.toContain(
+    "stays closed until recovery completion",
+  );
+  vi.mocked(f.api.installedUpdate).mockClear();
+  await act(async () => button(host, "Review Diagnostics").click());
+  expect(c.getSnapshot().destination).toMatchObject({
+    area: "settings",
+    page: "diagnostics",
+  });
+  expect(c.getSnapshot().overlay).toBe("none");
+  expect(f.api.installedUpdate).not.toHaveBeenCalled();
+  await act(async () => button(host, "Review recovery options").click());
+  expect(c.getSnapshot().overlay).toBe("update-recovery");
+  expect(button(host, "Recover").disabled).toBe(false);
+  expect(f.api.installedUpdate).not.toHaveBeenCalled();
+});
+
+it("native menu rechecks an available release while its rail opens the saved offer directly", async () => {
+  const { host, f, c } = await mount();
+  await act(async () =>
+    f.emit("update", { phase: "available", version: "0.2.2", deferred: false }),
+  );
+  vi.mocked(f.api.installedUpdate).mockClear();
+  await act(async () => button(host, "Update available").click());
+  expect(host.querySelector("dialog")?.getAttribute("aria-label")).toBe(
+    "Update available",
+  );
+  expect(f.api.installedUpdate).not.toHaveBeenCalled();
+  await act(async () => c.overlay("none"));
+  vi.mocked(f.api.installedUpdate).mockResolvedValueOnce({
+    phase: "idle",
+    checkedAt: 1000,
+  });
+  await act(async () => openUpdates(f));
+  expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+    kind: "check",
+  });
+  expect(host.querySelector("dialog")?.getAttribute("aria-label")).toBe(
+    "Farol is up to date",
+  );
 });

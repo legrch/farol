@@ -1,5 +1,6 @@
 import {
   automaticUpdateAvailable,
+  updateCheckAllowed,
   confirmedRestartAllowed,
 } from "./update-eligibility";
 import {
@@ -506,7 +507,7 @@ export class WindowController implements RendererFacade {
       if (this.refreshPending || this.overflow) await this.refresh();
       if (this.pendingUpdateCheck && !this.disposed) {
         this.pendingUpdateCheck = false;
-        await this.update("check");
+        await this.checkUpdateOnOpen();
       }
     })();
     return this.startPromise;
@@ -2113,6 +2114,19 @@ export class WindowController implements RendererFacade {
     }
     return true;
   }
+  private checkUpdateOnOpen(): Promise<Intent> | undefined {
+    const { update, intents } = this.state;
+    // Opening the menu observes an existing download/install or retained unknown.
+    if (
+      intents.update?.state === "pending" ||
+      intents.update?.state === "unknown" ||
+      update.phase === "ready" ||
+      (update.phase === "failed" && update.code.includes("UNKNOWN")) ||
+      !updateCheckAllowed(update)
+    )
+      return;
+    return this.update("check");
+  }
   private shellAction(value: unknown): void {
     const parsed = ShellActionSchema.safeParse(value);
     if (!parsed.success || this.seenActions.has(parsed.data.eventId)) return;
@@ -2134,10 +2148,9 @@ export class WindowController implements RendererFacade {
     else if (action.action === "open-quick-switcher") this.overlay("search");
     else if (action.action === "close-overlay") this.dismissOverlay();
     else if (action.action === "open-updates") {
-      this.navigate({ area: "settings", page: "updates" });
       this.overlay("update");
       if (this.booting) this.pendingUpdateCheck = true;
-      else void this.update("check");
+      else void this.checkUpdateOnOpen();
     } else {
       if (
         action.source === "auth-window-closed" &&

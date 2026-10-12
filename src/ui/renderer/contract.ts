@@ -59,7 +59,6 @@ export type SettingsPage =
   | "connection"
   | "model"
   | "shortcuts"
-  | "updates"
   | "diagnostics";
 export type Destination = Readonly<{
   area: "home" | "chatgpt" | "activity" | "setup" | "settings";

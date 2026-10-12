@@ -23,7 +23,6 @@ import { setupSteps } from "./setup-navigation";
 import { designIconPath, designIconViewBox } from "./design-icons";
 import { UpdateNotice, acknowledgeUpdateNotice } from "./update-notice";
 import {
-  updateCheckAllowed,
   confirmedRestartAllowed,
   isConfirmedBrowserBlock,
   updateVersionLabel,
@@ -44,7 +43,6 @@ const pages: readonly [SettingsPage, string][] = [
   ["computer", "This Mac"],
   ["connection", "Connection"],
   ["shortcuts", "Keyboard shortcuts"],
-  ["updates", "Updates"],
   ["diagnostics", "Diagnostics"],
 ];
 export function Icon({ name }: { name: string }) {
@@ -556,15 +554,15 @@ function Search({
   );
 }
 const updateSheetTitles: Record<WindowSnapshot["update"]["phase"], string> = {
-  available: "A new version of Farol is available",
-  ready: "Update Farol?",
+  available: "Update available",
+  ready: "Ready to install",
   failed: "The update did not finish",
-  recovery: "Farol update recovery",
+  recovery: "Update needs attention",
   checking: "Checking for Farol updates",
   downloading: "Downloading Farol update",
   applying: "Restarting to update Farol",
   unavailable: "Farol updates unavailable",
-  idle: "Farol updates",
+  idle: "Update status",
 };
 function Update({
   snapshot,
@@ -596,7 +594,6 @@ function Update({
       (update.phase === "failed" && !update.recoveryRequired))
       ? update.rollbackVersion
       : undefined;
-  const canCheck = !recoveryMode && updateCheckAllowed(update);
   const release =
     !recoveryMode && (update.phase === "available" || update.phase === "ready");
   const blockedBy =
@@ -608,37 +605,39 @@ function Update({
       : undefined;
   const localDismiss = !release || disabled || update.deferred;
   const stateCopy =
-    recoveryMode && !recovery
-      ? rollbackVersion
-        ? `Restore previous version ${rollbackVersion}.`
-        : "No previous version is available to restore in the current update state."
-      : update.phase === "ready"
-        ? `Farol ${updateVersionLabel(update.version)} is ready to install.`
-        : update.phase === "available"
-          ? `Farol ${updateVersionLabel(update.version)} is available to download.`
-          : update.phase === "failed"
-            ? updateResultMessage(
-                "failed",
-                update.recoveryRequired,
-                update.code,
-              )
-            : update.phase === "unavailable"
-              ? updateResultMessage("unavailable")
-              : update.phase === "recovery"
-                ? `Recovery required for ${update.version}`
-                : update.phase === "applying"
-                  ? `Applying version ${update.version}…`
-                  : update.phase === "checking"
-                    ? "Checking for updates…"
-                    : update.phase === "downloading"
-                      ? updateDownloadMessage(update)
-                      : intent?.state === "unknown"
-                        ? "Update status could not be confirmed."
-                        : intent?.state === "pending"
-                          ? "Checking update status…"
-                          : update.checkedAt === null
-                            ? "Check for updates to see if a new version is available."
-                            : "No updates available.";
+    !recoveryMode && snapshot.status !== "current"
+      ? "Update status could not be confirmed. Review Diagnostics."
+      : recoveryMode && !recovery
+        ? rollbackVersion
+          ? `Restore previous version ${rollbackVersion}.`
+          : "No previous version is available to restore in the current update state."
+        : update.phase === "ready"
+          ? `Farol ${updateVersionLabel(update.version)} is ready to install.`
+          : update.phase === "available"
+            ? `Farol ${updateVersionLabel(update.version)} is available to download.`
+            : update.phase === "failed"
+              ? updateResultMessage(
+                  "failed",
+                  update.recoveryRequired,
+                  update.code,
+                )
+              : update.phase === "unavailable"
+                ? updateResultMessage("unavailable")
+                : update.phase === "recovery"
+                  ? `Recovery required for ${update.version}`
+                  : update.phase === "applying"
+                    ? `Applying version ${update.version}…`
+                    : update.phase === "checking"
+                      ? "Checking for updates…"
+                      : update.phase === "downloading"
+                        ? updateDownloadMessage(update)
+                        : intent?.state === "unknown"
+                          ? "Update status could not be confirmed."
+                          : intent?.state === "pending"
+                            ? "Checking update status…"
+                            : update.checkedAt === null
+                              ? "Update availability has not been checked."
+                              : "You’re using the latest version of Farol.";
   useEffect(() => {
     const active = document.activeElement;
     const target = safeAction.current;
@@ -660,7 +659,15 @@ function Update({
           : update.phase === "downloading" &&
               update.progress?.stage === "verifying"
             ? "Checking Farol update"
-            : updateSheetTitles[update.phase]
+            : intent?.state === "unknown"
+              ? "Update status unconfirmed"
+              : intent?.state === "pending" && update.phase === "idle"
+                ? "Checking for Farol updates"
+                : snapshot.status !== "current"
+                  ? "Update status unconfirmed"
+                  : update.phase === "idle" && update.checkedAt !== null
+                    ? "Farol is up to date"
+                    : updateSheetTitles[update.phase]
       }
       onClose={() => facade.overlay("none")}
       dismissible={update.phase !== "applying"}
@@ -684,21 +691,9 @@ function Update({
           >
             {stateCopy}
           </p>
-          {!recoveryMode &&
-            update.phase === "idle" &&
-            update.checkedAt !== null && (
-              <p className="description">
-                Last checked: {new Date(update.checkedAt).toLocaleString()}.
-              </p>
-            )}
           {!recoveryMode && update.phase === "downloading" && (
             <UpdateDownloadProgress update={update} />
           )}
-          <p className="update-installed">
-            {snapshot.status === "current" && snapshot.installedVersion
-              ? `Current version: Farol ${updateVersionLabel(snapshot.installedVersion.version)}.`
-              : "Installed version cannot be confirmed in this session."}
-          </p>
         </>
       }
     >
@@ -720,18 +715,6 @@ function Update({
             <code>{update.code}</code>
           </details>
         )}
-      {!recoveryMode &&
-        snapshot.status === "current" &&
-        snapshot.installedVersion && (
-          <details className="update-technical-code">
-            <summary>Details</summary>
-            <p>Installed version: {snapshot.installedVersion.version}</p>
-            {snapshot.installedVersion.buildVersion && (
-              <p>Build: {snapshot.installedVersion.buildVersion}</p>
-            )}
-            {"version" in update && <p>Update version: {update.version}</p>}
-          </details>
-        )}
       {!recoveryMode && (
         <AutomaticUpdateChoice snapshot={snapshot} facade={facade} />
       )}
@@ -741,7 +724,7 @@ function Update({
           restarting.
         </p>
       )}
-      {recovery ? (
+      {recoveryMode && recovery ? (
         <p className="description">
           Farol will quit to finish recovery. If recovery restores the previous
           version, it stays closed until recovery completion is confirmed. Start
@@ -757,8 +740,7 @@ function Update({
         </p>
       ) : !recoveryMode && update.phase === "available" ? (
         <p className="description">
-          Download the verified package when you choose. This does not restart
-          Farol or interrupt current work.
+          Download the update, then confirm installation and restart.
         </p>
       ) : null}
       {blockedBy &&
@@ -787,26 +769,6 @@ function Update({
             </details>
           </div>
         )}
-      {!recoveryMode && (
-        <div className="update-check" hidden={!canCheck}>
-          <button
-            disabled={disabled || !canCheck}
-            onClick={() => {
-              const latest = facade.getSnapshot();
-              if (
-                latest.status !== "current" ||
-                latest.intents.update?.state === "pending" ||
-                latest.intents.update?.state === "unknown" ||
-                !updateCheckAllowed(latest.update)
-              )
-                return;
-              void facade.update("check");
-            }}
-          >
-            Check for Updates
-          </button>
-        </div>
-      )}
       <div
         className={`update-actions${update.phase === "available" ? "" : " two"}`}
       >
@@ -819,7 +781,7 @@ function Update({
               : update.phase === "idle"
                 ? "Done"
                 : recovery || rollbackVersion
-                  ? "Cancel"
+                  ? "Dismiss"
                   : update.phase === "failed" || update.phase === "unavailable"
                     ? "Dismiss"
                     : "Continue working"}
@@ -867,7 +829,7 @@ function Update({
                   void facade.update("download");
               }}
             >
-              Download Update
+              Download and Install
             </button>
           </>
         )}
@@ -895,16 +857,26 @@ function Update({
             </button>
           </>
         )}
-        {(update.phase === "recovery" ||
-          (update.phase === "failed" && update.recoveryRequired)) && (
+        {recoveryMode &&
+          (update.phase === "recovery" ||
+            (update.phase === "failed" && update.recoveryRequired)) && (
+            <button
+              disabled={
+                disabled ||
+                (update.phase === "recovery" && update.blockedBy !== null)
+              }
+              onClick={() => void facade.update("recover")}
+            >
+              Recover
+            </button>
+          )}
+        {!recoveryMode && recovery && (
           <button
-            disabled={
-              disabled ||
-              (update.phase === "recovery" && update.blockedBy !== null)
+            onClick={() =>
+              facade.navigate({ area: "settings", page: "diagnostics" })
             }
-            onClick={() => void facade.update("recover")}
           >
-            Recover
+            Review Diagnostics
           </button>
         )}
         {recoveryMode &&

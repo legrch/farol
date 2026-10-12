@@ -26,20 +26,6 @@ import { signInPresentation } from "./sign-in-presentation";
 import { computerSetup } from "./computer-setup";
 import { visibleSetupSection, type SetupSection } from "./setup-checklist";
 import { commandAllowed, dependencyFences } from "./command-eligibility";
-import {
-  updateCheckAllowed,
-  isConfirmedBrowserBlock,
-  updateVersionLabel,
-} from "./update-eligibility";
-import { AutomaticUpdateChoice } from "./automatic-update-choice";
-import {
-  UpdateDownloadProgress,
-  updateDownloadMessage,
-} from "./update-download";
-import {
-  updateBlockMessage,
-  updateResultMessage,
-} from "../update-block-message";
 import { ChatDirect } from "./chat-direct";
 import { ChatReadonly } from "./chat-readonly";
 import { ChatHistory } from "./chat-history";
@@ -720,9 +706,6 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
       </div>
       <div hidden={snapshot.destination.page !== "shortcuts"}>
         <Shortcuts {...props} />
-      </div>
-      <div hidden={snapshot.destination.page !== "updates"}>
-        <Updates {...props} />
       </div>
       <div
         hidden={
@@ -3230,171 +3213,6 @@ function Shortcuts({ snapshot, facade }: PageProps) {
           </p>
         )}
       </Group>
-    </>
-  );
-}
-function Updates({ snapshot, facade, actions }: PageProps) {
-  const busy = useRef(false);
-  const [checking, setChecking] = useState(false);
-  const update = snapshot.update;
-  const current =
-    snapshot.status === "current" ? snapshot.installedVersion : null;
-  if (snapshot.environment === "dev") {
-    return (
-      <>
-        <h2>Updates</h2>
-        <Group title="Development app">
-          <p className="description">
-            Farol Dev is updated by rebuilding the development app from source.
-            Installed app updates are available in the installed Farol app.
-          </p>
-        </Group>
-      </>
-    );
-  }
-  return (
-    <>
-      <h2>Updates</h2>
-      <Group title="Update status">
-        <p className="description">
-          {current
-            ? `Current version: Farol ${updateVersionLabel(current.version)}.`
-            : "Installed version could not be confirmed from this app session."}
-        </p>
-        {current && (
-          <details>
-            <summary>Details</summary>
-            <p>Installed version: {current.version}</p>
-            {current.buildVersion && <p>Build: {current.buildVersion}</p>}
-            {"version" in update && <p>Update version: {update.version}</p>}
-          </details>
-        )}
-        <p className="badges" role="status">
-          {update.phase === "ready"
-            ? `Downloaded: Farol ${updateVersionLabel(update.version)}. Ready to install; this version is not installed yet.`
-            : update.phase === "available"
-              ? `Available: Farol ${updateVersionLabel(update.version)}. Download it when you choose; this version is not installed.`
-              : update.phase === "checking"
-                ? "Checking for updates…"
-                : update.phase === "downloading"
-                  ? updateDownloadMessage(update)
-                  : update.phase === "applying"
-                    ? "Installing the update…"
-                    : update.phase === "idle"
-                      ? snapshot.intents.update?.state === "unknown"
-                        ? "Update status could not be confirmed."
-                        : snapshot.intents.update?.state === "pending"
-                          ? "Checking update status…"
-                          : update.checkedAt === null
-                            ? "Check for updates to see if a new version is available."
-                            : "No updates available."
-                      : update.phase === "recovery"
-                        ? "The update needs recovery."
-                        : "The update needs attention."}
-        </p>
-        {snapshot.intents.update?.state === "unknown" && (
-          <p className="notice" role="alert">
-            The last update action could not be confirmed. Review Diagnostics
-            before trying again.
-          </p>
-        )}
-        {update.phase === "idle" && update.checkedAt !== null && (
-          <p className="description">
-            Last checked: {new Date(update.checkedAt).toLocaleString()}.
-          </p>
-        )}
-        {update.phase === "downloading" && (
-          <UpdateDownloadProgress update={update} />
-        )}
-        {(update.phase === "failed" || update.phase === "unavailable") && (
-          <>
-            <p className="notice" role="status">
-              {updateResultMessage(
-                update.phase,
-                update.phase === "failed" && update.recoveryRequired,
-                update.code,
-              )}
-            </p>
-            {((update.phase === "failed" && update.recoveryRequired) ||
-              !isConfirmedBrowserBlock(update.code)) && (
-              <details>
-                <summary>Technical code</summary>
-                <code>{update.code}</code>
-              </details>
-            )}
-          </>
-        )}
-        {update.phase !== "idle" &&
-          "blockedBy" in update &&
-          update.blockedBy &&
-          (update.phase === "recovery" ||
-            !isConfirmedBrowserBlock(update.blockedBy)) && (
-            <>
-              <p className="notice" role="status">
-                {update.phase === "recovery"
-                  ? updateBlockMessage(update.blockedBy)
-                  : "This update needs attention. Review Diagnostics before restarting."}
-              </p>
-              <details>
-                <summary>Technical code</summary>
-                <code>{update.blockedBy}</code>
-              </details>
-            </>
-          )}
-        <div className="control-row">
-          {update.phase !== "idle" && update.phase !== "checking" && (
-            <button
-              type="button"
-              className="primary"
-              onClick={() => facade.overlay("update")}
-            >
-              {update.phase === "ready"
-                ? "Install and Relaunch…"
-                : update.phase === "available"
-                  ? `Update to ${updateVersionLabel(update.version)}…`
-                  : update.phase === "downloading" ||
-                      update.phase === "applying"
-                    ? "View progress"
-                    : "Review update issue"}
-            </button>
-          )}
-          <button
-            type="button"
-            className={update.phase === "idle" ? "primary" : "subtle"}
-            disabled={
-              checking ||
-              snapshot.intents.update?.state === "pending" ||
-              snapshot.intents.update?.state === "unknown" ||
-              !updateCheckAllowed(update) ||
-              actions.disabled ||
-              !commandAllowed(snapshot, "general.update")
-            }
-            onClick={() => {
-              const latest = facade.getSnapshot();
-              if (
-                busy.current ||
-                latest.intents.update?.state === "pending" ||
-                latest.intents.update?.state === "unknown" ||
-                !updateCheckAllowed(latest.update) ||
-                !commandAllowed(latest, "general.update")
-              )
-                return;
-              busy.current = true;
-              setChecking(true);
-              void facade
-                .update("check")
-                .catch(() => {})
-                .finally(() => {
-                  busy.current = false;
-                  setChecking(false);
-                });
-            }}
-          >
-            Check for Updates
-          </button>
-        </div>
-      </Group>
-      <AutomaticUpdateChoice snapshot={snapshot} facade={facade} />
     </>
   );
 }
