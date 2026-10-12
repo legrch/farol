@@ -2267,7 +2267,7 @@ async function native(selected, inputs, report, save) {
           .getByRole("button", { name: "Home", exact: true })
           .click({ timeout: 5000 });
         await window
-          .locator(".home-page")
+          .locator("[data-home-view]")
           .waitFor({ state: "visible", timeout: 5000 });
         await hidden();
         const section = window.locator(
@@ -2376,7 +2376,7 @@ async function native(selected, inputs, report, save) {
             .getByRole("button", { name: "Home", exact: true })
             .click({ timeout: 5000 });
           await window
-            .locator(".home-page")
+            .locator("[data-home-view]")
             .waitFor({ state: "visible", timeout: 5000 });
           await window
             .locator('section[aria-label="Read-only file preview"]')
@@ -2431,7 +2431,7 @@ async function native(selected, inputs, report, save) {
           .getByRole("button", { name: "Home", exact: true })
           .click({ timeout: 5000 });
         await window
-          .locator(".home-page")
+          .locator("[data-home-view]")
           .waitFor({ state: "visible", timeout: 5000 });
         await observeAccount(
           "observed-same-revision-refresh-retained",
@@ -2817,7 +2817,7 @@ async function native(selected, inputs, report, save) {
             .click({ timeout: 5000 });
         } else retainedSettings(reopened.settings, savedSettings.value);
         await reopened.window
-          .locator(".home-page")
+          .locator("[data-home-view]")
           .waitFor({ state: "visible", timeout: 5000 });
         await reopened.window
           .getByRole("button", { name: "Home", exact: true })
