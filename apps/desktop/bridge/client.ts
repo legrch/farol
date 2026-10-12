@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
+import type { Writable } from "node:stream";
 import { Decoder, frame } from "./frame.ts";
 import type { QualifiedProfileLaunch } from "./profile.ts";
 import {
@@ -762,6 +763,9 @@ export interface NativeCoreLaunch {
   readonly previousHostDrainConfirmed?: boolean;
   readonly hostLifetimeId?: string;
   readonly childLaunchId?: string;
+  // Produced by the independently verified packaged host. The private Go
+  // decoder binds these bytes to this exact profile/build/host/child launch.
+  readonly shellMetadata?: Uint8Array;
   readonly onLifecycleObservation?: (
     observation: BackendLifecycleObservation,
   ) => void;
@@ -784,6 +788,7 @@ export async function spawnCore(
       throw new BridgeError(result.state, result.code);
   };
   let child: ChildProcessWithoutNullStreams;
+  let shellMetadata: Buffer | undefined;
   try {
     if (!isAbsolute(executable))
       throw new BridgeError("refused", "executable_path_required");
@@ -855,7 +860,26 @@ export async function spawnCore(
     if (native?.previousHostDrainConfirmed === true)
       args.push("--previous-host-drain-confirmed");
     if (native?.settingsMutations === true) args.push("--settings-mutations");
-    child = spawn(executable, args, { stdio: ["pipe", "pipe", "pipe"] });
+    if (native?.shellMetadata !== undefined) {
+      if (
+        !(native.shellMetadata instanceof Uint8Array) ||
+        native.shellMetadata.byteLength === 0 ||
+        native.shellMetadata.byteLength > 256 * 1024 ||
+        native.settingsMutations !== true ||
+        native.hostLifetimeId === undefined ||
+        native.childLaunchId === undefined
+      )
+        throw new BridgeError("refused", "invalid_shell_launch_metadata");
+      shellMetadata = Buffer.from(native.shellMetadata);
+      args.push("--shell-support-fd", "3");
+    }
+    // stdin/stdout/stderr remain pipes in both variants. The fourth stream is
+    // private startup input only, never part of the ordinary RPC protocol.
+    child = spawn(executable, args, {
+      stdio: shellMetadata
+        ? ["pipe", "pipe", "pipe", "pipe"]
+        : ["pipe", "pipe", "pipe"],
+    }) as ChildProcessWithoutNullStreams;
   } catch (error) {
     // No child was returned: release only this launch's qualified descriptors.
     release();
@@ -873,14 +897,62 @@ export async function spawnCore(
         }
       : undefined,
   );
+  let metadataPipe: Writable | undefined;
   try {
+    const startupDeadline = performance.now() + timeoutMs;
+    if (shellMetadata) {
+      const stream = child.stdio[3];
+      if (!stream || !("end" in stream) || typeof stream.end !== "function")
+        throw new BridgeError("unavailable", "shell_metadata_pipe_unavailable");
+      metadataPipe = stream as Writable;
+      await writeShellMetadata(metadataPipe, shellMetadata, timeoutMs);
+    }
+    const handshakeBudget = shellMetadata
+      ? startupDeadline - performance.now()
+      : timeoutMs;
+    if (handshakeBudget <= 0)
+      throw new BridgeError("unavailable", "shell_metadata_startup_timeout");
     await client.handshake(
       { protocolMajor, protocolMinor, buildId, profileId },
-      timeoutMs,
+      handshakeBudget,
     );
     return client;
   } catch (error) {
+    metadataPipe?.destroy();
     await client.close();
     throw error;
   }
+}
+
+// One bounded end/write. A successful callback proves only local pipe delivery;
+// the SAME child's subsequent handshake proves it accepted startup. Keep an error
+// listener after settlement so a late error never becomes an unhandled exception.
+function writeShellMetadata(
+  stream: Writable,
+  bytes: Buffer,
+  timeoutMs: number,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (failed: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (failed)
+        reject(
+          new BridgeError("unavailable", "shell_metadata_delivery_failed"),
+        );
+      else resolve();
+    };
+    const timer = setTimeout(() => finish(true), timeoutMs);
+    stream.on("error", () => finish(true));
+    stream.once("close", () => finish(true));
+    try {
+      stream.end(bytes, (error?: Error | null) =>
+        finish(error != null || stream.errored != null),
+      );
+    } catch {
+      finish(true);
+    }
+  });
 }

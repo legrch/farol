@@ -1,0 +1,129 @@
+{
+  "declaration": {
+    "schema": "farol-shell-support/1",
+    "core": {
+      "schema": "farol-core-artifact/1",
+      "build": {
+        "buildId": "development",
+        "sourceSHA": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceTreeDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "platform": {
+          "goos": "darwin",
+          "goarch": "arm64"
+        }
+      },
+      "binary": {
+        "path": "farol-backend",
+        "size": 64,
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    },
+    "qualification": {
+      "releaseId": "fixture-release",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "osBuild": "25A123",
+      "compilerSHA256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "compiler": "approved-roots-seatbelt-v1",
+      "filesystemClass": "local-apfs-no-nested-mounts-v1",
+      "hostTrust": "protected-host-pathnames-v1",
+      "network": "none"
+    },
+    "mechanism": {
+      "path": "/usr/bin/sandbox-exec",
+      "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    "imports": [
+      {
+        "path": "/System/Library/Sandbox/Profiles/dyld-support.sb",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+      }
+    ],
+    "executables": [
+      {
+        "path": "/bin/bash",
+        "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      {
+        "path": "/usr/bin/git",
+        "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+      }
+    ],
+    "watchdog": {
+      "relativePath": "Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron",
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "sourceSHA256": "25a60fa1b72a8744520329896be62ad07c824ef5130af736726732fd3e1eaa43"
+    },
+    "runtime": {
+      "version": "44.4.2",
+      "treeDigestVersion": "farol.next.tree-digest/v2",
+      "treeSHA256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "distributionSHA256": "6666666666666666666666666666666666666666666666666666666666666666"
+    }
+  },
+  "host": {
+    "profileId": "fixture-profile",
+    "hostLifetimeId": "fixture-host",
+    "childLaunchId": "fixture-child",
+    "appRoot": {
+      "path": "/Applications/Farol.app",
+      "device": "16777232",
+      "inode": "42"
+    },
+    "watchdogSource": "// Synthetic watchdog fixture; never executed.\n"
+  },
+  "payload": {
+    "Schema": "farol-shell-launch/1",
+    "BuildID": "development",
+    "ProfileID": "fixture-profile",
+    "HostLifetimeID": "fixture-host",
+    "ChildLaunchID": "fixture-child",
+    "Support": {
+      "ReleaseID": "fixture-release",
+      "QualificationSHA256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "CompilerSHA256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "OS": "darwin",
+      "OSBuild": "25A123",
+      "Architecture": "arm64",
+      "Compiler": "approved-roots-seatbelt-v1",
+      "FilesystemClass": "local-apfs-no-nested-mounts-v1",
+      "HostTrust": "protected-host-pathnames-v1",
+      "Backend": {
+        "Path": "/Applications/Farol.app/Contents/Resources/app/farol-backend",
+        "SHA256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "Watchdog": {
+        "Path": "/Applications/Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron",
+        "SHA256": "4444444444444444444444444444444444444444444444444444444444444444"
+      },
+      "Mechanism": {
+        "Path": "/usr/bin/sandbox-exec",
+        "SHA256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      "WatchdogSourceSHA256": "25a60fa1b72a8744520329896be62ad07c824ef5130af736726732fd3e1eaa43",
+      "Imports": [
+        {
+          "Path": "/System/Library/Sandbox/Profiles/dyld-support.sb",
+          "SHA256": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ],
+      "Executables": [
+        {
+          "Path": "/bin/bash",
+          "SHA256": "2222222222222222222222222222222222222222222222222222222222222222"
+        },
+        {
+          "Path": "/usr/bin/git",
+          "SHA256": "3333333333333333333333333333333333333333333333333333333333333333"
+        }
+      ],
+      "ProtectedBundle": {
+        "Path": "/Applications/Farol.app",
+        "Identity": {
+          "Device": "16777232",
+          "Inode": "42"
+        }
+      }
+    },
+    "WatchdogSourceBase64": "Ly8gU3ludGhldGljIHdhdGNoZG9nIGZpeHR1cmU7IG5ldmVyIGV4ZWN1dGVkLgo="
+  }
+}

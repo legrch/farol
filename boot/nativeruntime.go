@@ -35,6 +35,8 @@ type NativeLaunch struct {
 	PreviousHostDrainConfirmed    bool
 	SettingsMutations             bool
 	CodexRead                     *NativeCodexReadSelection
+	// Only Run's bounded inherited-host decoder constructs this selection.
+	shell *connectorShellConfig
 }
 type NativeRuntime struct {
 	cancel           context.CancelFunc
@@ -183,6 +185,14 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 		// External MCP and Settings share the same mutation journal, native owner,
 		// retained attempt map and retirement fence. No second executor is opened.
 		runtime.connector.mutations = runtime.mutations
+		if launch.shell != nil {
+			// Unsupported or changed native support withholds only Shell. The
+			// established file Computer keeps its own independently valid route.
+			factory, shellErr := newConnectorShellFactory(lifetime, *launch.shell, accessrepo.Clock{})
+			if shellErr == nil {
+				runtime.connector.processes = factory.selectShell
+			}
+		}
 	}
 	if runtime.retirement != nil {
 		runtime.historyAuthority, err = newHistoryReadAuthority(lifetime, chatport.HistoryReadScope{ProfileID: scope.ProfileID, BackendGeneration: scope.BackendGeneration, OwnerID: launch.OwnerID}, func() error {

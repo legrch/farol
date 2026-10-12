@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -63,6 +63,124 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
   vi.useRealTimers();
+});
+
+describe("inherited Shell startup metadata", () => {
+  function setup(pipe: Writable = new PassThrough()) {
+    const f = fixture();
+    Object.assign(f.child, {
+      stdio: [f.child.stdin, f.child.stdout, f.child.stderr, pipe],
+    });
+    const native: NativeCoreLaunch = {
+      ...f.native,
+      settingsMutations: true,
+      hostLifetimeId: "host-one",
+      childLaunchId: "child-one",
+      shellMetadata: Buffer.from("synthetic startup metadata"),
+    };
+    return { ...f, native, pipe };
+  }
+  it("copies bytes to descriptor 3 once, before the same child handshake", async () => {
+    const f = setup();
+    const chunks: Buffer[] = [];
+    f.pipe.on("data", (bytes: Buffer) => chunks.push(bytes));
+    const pending = spawnCore(
+      "/owned/backend",
+      "profile",
+      "test",
+      1000,
+      f.native,
+    );
+    f.native.shellMetadata!.fill(0);
+    const client = await pending;
+    expect(Buffer.concat(chunks).toString()).toBe("synthetic startup metadata");
+    expect(vi.mocked(spawn).mock.calls[0]?.[1]).toContain("--shell-support-fd");
+    expect(vi.mocked(spawn).mock.calls[0]?.[2]).toEqual({
+      stdio: ["pipe", "pipe", "pipe", "pipe"],
+    });
+    expect(JSON.stringify(vi.mocked(spawn).mock.calls)).not.toContain(
+      "synthetic startup metadata",
+    );
+    expect(f.handshake).toHaveBeenCalledTimes(1);
+    expect(f.child.stdin.readableLength).toBe(0);
+    expect(() =>
+      f.pipe.emit("error", new Error("late private diagnostic")),
+    ).not.toThrow();
+    await client.close();
+    expect(f.profile.close).toHaveBeenCalledTimes(1);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+  it("rejects missing storage, lifetime or oversized metadata before spawn", async () => {
+    for (const override of [
+      { settingsMutations: false },
+      { hostLifetimeId: undefined, childLaunchId: undefined },
+      { shellMetadata: Buffer.alloc(0) },
+      { shellMetadata: Buffer.alloc(256 * 1024 + 1) },
+    ]) {
+      vi.mocked(spawn).mockClear();
+      const f = setup();
+      const input = { ...f.native, ...override } as NativeCoreLaunch;
+      await expect(
+        spawnCore("/owned/backend", "profile", "test", 1000, input),
+      ).rejects.toMatchObject({ code: "invalid_shell_launch_metadata" });
+      expect(spawn).not.toHaveBeenCalled();
+      expect(f.profile.close).toHaveBeenCalledTimes(1);
+    }
+  });
+  it("closes only the original child when delivery fails", async () => {
+    const pipe = new Writable({
+      write(_bytes, _encoding, done) {
+        done(new Error("private failure"));
+      },
+    });
+    const f = setup(pipe);
+    await expect(
+      spawnCore("/owned/backend", "profile", "test", 1000, f.native),
+    ).rejects.toMatchObject({ code: "shell_metadata_delivery_failed" });
+    expect(f.handshake).not.toHaveBeenCalled();
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(f.profile.close).toHaveBeenCalledTimes(1);
+  });
+  it("bounds a stalled write without renewing startup", async () => {
+    vi.useFakeTimers();
+    const f = setup(
+      new Writable({
+        write() {
+          /* Deliberately never acknowledge. */
+        },
+      }),
+    );
+    const rejected = expect(
+      spawnCore("/owned/backend", "profile", "test", 100, f.native),
+    ).rejects.toMatchObject({ code: "shell_metadata_delivery_failed" });
+    await vi.advanceTimersByTimeAsync(101);
+    await rejected;
+    expect(f.handshake).not.toHaveBeenCalled();
+    expect(f.profile.close).toHaveBeenCalledTimes(1);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+  it("subtracts delivery time from the original handshake budget", async () => {
+    vi.useFakeTimers();
+    const f = setup(
+      new Writable({
+        write(_bytes, _encoding, done) {
+          setTimeout(done, 25);
+        },
+      }),
+    );
+    const pending = spawnCore(
+      "/owned/backend",
+      "profile",
+      "test",
+      100,
+      f.native,
+    );
+    await vi.advanceTimersByTimeAsync(25);
+    const client = await pending;
+    expect(f.handshake.mock.calls[0]?.[1]).toBeGreaterThan(0);
+    expect(f.handshake.mock.calls[0]?.[1]).toBeLessThanOrEqual(75);
+    await client.close();
+  });
 });
 
 describe("native backend launch binding", () => {

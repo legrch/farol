@@ -89,7 +89,11 @@ func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Wri
 	hostLifetime := flags.String("host-lifetime", "", "trusted initiating host lifetime")
 	previousDrain := flags.Bool("previous-host-drain-confirmed", false, "trusted exact-profile previous host drain witness; never inferred from journal")
 	childLaunch := flags.String("child-launch", "", "exact child launch identity")
+	shellFD := flags.Int("shell-support-fd", 0, "optional inherited trusted Shell metadata descriptor; only 3 is supported")
 	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || *profile == "" {
+		return 2
+	}
+	if *shellFD != 0 && *shellFD != 3 {
 		return 2
 	}
 	var launch *NativeLaunch
@@ -103,8 +107,20 @@ func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Wri
 			return 2
 		}
 		launch = &NativeLaunch{Profile: ProfileBinding{ProfileID: *profile, Root: *root, Device: dev, Inode: ino}, OwnerID: *owner, ComputerID: *computer, Home: *home, StoreMode: *storeMode, HostLifetimeID: *hostLifetime, ChildLaunchID: *childLaunch, PreviousHostDrainConfirmed: *previousDrain, SettingsMutations: *settingsMutations}
-	} else if *device != "" || *inode != "" || *owner != "" || *computer != "" || *home != "" || *storeMode != "" || *hostLifetime != "" || *childLaunch != "" || *previousDrain || *settingsMutations {
+	} else if *device != "" || *inode != "" || *owner != "" || *computer != "" || *home != "" || *storeMode != "" || *hostLifetime != "" || *childLaunch != "" || *previousDrain || *settingsMutations || *shellFD != 0 {
 		return 2
+	}
+	if *shellFD == 3 {
+		raw, err := readShellLaunchPipe()
+		if err != nil {
+			fmt.Fprintln(diagnostics, "SHELL_LAUNCH_METADATA_INVALID")
+			return 2
+		}
+		launch.shell, err = decodeShellLaunch(raw, *launch)
+		if err != nil {
+			fmt.Fprintln(diagnostics, "SHELL_LAUNCH_METADATA_INVALID")
+			return 2
+		}
 	}
 	if err := serve(context.Background(), *profile, launch, in, out); err != nil {
 		fmt.Fprintln(diagnostics, "farol backend:", err)

@@ -204,9 +204,22 @@ neither root exit nor context cancellation proves descendant settlement. There
 is no recursive or crash-time cleanup. The existing connector ledger bounds
 selection attempts per backend lifetime. A qualified cleanup policy remains
 separate work. CPU composition tests use synthetic scratch/platform inputs and
-a qualifier that always refuses execution. The factory is not selected by normal
-startup: authenticated support delivery, complete package attestation and native
-external qualification remain required before activation.
+a qualifier that always refuses execution.
+
+The host/backend startup boundary can now carry a private Shell declaration on
+inherited descriptor 3. The host copies at most 256 KiB and delivers it once;
+delivery consumes the original handshake budget. Go accepts only a pipe/socket,
+requires bounded EOF within two seconds and closes the original descriptor once.
+Strict JSON and exact field spellings bind the payload to the compiled BuildID,
+profile, initiating host and child launch. Watchdog bytes must match the selected
+source digest, and backend/helper paths must remain inside the selected package
+layout. This inherited channel supplies correlation, not release authority.
+
+Native startup selects the factory only with explicit host metadata and mutation
+storage. Unsupported native support withholds Shell while preserving the existing
+file route. The normal desktop host does not yet supply this optional selection:
+authenticated build support, complete package attestation and native external
+qualification remain required before product activation.
 
 Remaining qualification and integration:
 
