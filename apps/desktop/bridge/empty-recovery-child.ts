@@ -42,6 +42,8 @@ export interface ExactEmptyRecoverySelection {
 export interface EmptyRecoverySelectionInput {
   readonly UnacknowledgedDev?: true;
   readonly InstalledEmpty?: true;
+  readonly InstalledPreserved?: true;
+  readonly Preserved?: readonly unknown[];
   readonly Interrupted?: {
     readonly OriginalHandoffID: string;
     readonly ExpectedACKDigest: readonly number[];
@@ -205,6 +207,8 @@ export function prepareEmptyRecoveryChild(
       ...(fields.includes("Interrupted") ? ["Interrupted"] : []),
       ...(fields.includes("UnacknowledgedDev") ? ["UnacknowledgedDev"] : []),
       ...(fields.includes("InstalledEmpty") ? ["InstalledEmpty"] : []),
+      ...(fields.includes("InstalledPreserved") ? ["InstalledPreserved"] : []),
+      ...(fields.includes("Preserved") ? ["Preserved"] : []),
     ]);
     if (
       fields.includes("UnacknowledgedDev") &&
@@ -220,6 +224,22 @@ export function prepareEmptyRecoveryChild(
         v.Mutations.length !== 0)
     )
       throw Error("invalid installed empty selection");
+    if (fields.includes("InstalledPreserved")) {
+      if (
+        v.InstalledPreserved !== true ||
+        fields.includes("InstalledEmpty") ||
+        fields.includes("Interrupted") ||
+        fields.includes("UnacknowledgedDev") ||
+        !Array.isArray(v.Mutations) ||
+        v.Mutations.length !== 0 ||
+        !Array.isArray(v.Preserved) ||
+        v.Preserved.length < 1 ||
+        v.Preserved.length > 128
+      )
+        throw Error("invalid installed preserved selection");
+    } else if (fields.includes("Preserved")) {
+      throw Error("preserved records require explicit maintenance selection");
+    }
     if (fields.includes("Interrupted")) {
       const interrupted = object(v.Interrupted, [
         "OriginalHandoffID",
@@ -270,7 +290,7 @@ export function prepareEmptyRecoveryChild(
     )
       throw Error("input correlation mismatch");
     preparationMode =
-      v.InstalledEmpty === true
+      v.InstalledEmpty === true || v.InstalledPreserved === true
         ? "prepare-installed-empty-recovery"
         : "prepare-empty-recovery";
   } catch {

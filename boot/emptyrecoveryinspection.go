@@ -21,9 +21,11 @@ type emptyRecoveryInspectionInput struct {
 	OwnerID, ComputerID string
 	AccessDigest        [32]byte
 	Mutations           []mutationrepo.ExpectedSettledRecord
-	Interrupted         *interruptedRetirementInput `json:",omitempty"`
-	UnacknowledgedDev   bool                        `json:",omitempty"`
-	InstalledEmpty      bool                        `json:",omitempty"`
+	Interrupted         *interruptedRetirementInput            `json:",omitempty"`
+	UnacknowledgedDev   bool                                   `json:",omitempty"`
+	InstalledEmpty      bool                                   `json:",omitempty"`
+	InstalledPreserved  bool                                   `json:",omitempty"`
+	Preserved           []mutationrepo.ExpectedPreservedRecord `json:",omitempty"`
 }
 
 type interruptedRetirementInput struct {
@@ -38,6 +40,7 @@ type emptyRecoveryInspection struct {
 	Retained             mutationrepo.SettledInspection
 	InterruptedRetained  *mutationrepo.InterruptedChatSettledInspection
 	EmptyRetained        *mutationrepo.EmptyInspection
+	PreservedRetained    *mutationrepo.PreservedInspection
 	HandoffSteps         int
 }
 
@@ -68,6 +71,12 @@ type emptyRecoveryChatClaims struct {
 }
 
 func withEmptyRecoveryClaims(ctx context.Context, in emptyRecoveryInspectionInput, visit func(emptyRecoveryInspection, *emptyRecoveryChatClaims) error) (resultErr error) {
+	if in.InstalledPreserved && (in.InstalledEmpty || in.UnacknowledgedDev || in.Interrupted != nil || !emptyRecoveryInstalledRoot(in.Profile.Root) || len(in.Mutations) != 0 || len(in.Preserved) == 0) {
+		return emptyrecovery.Refused
+	}
+	if !in.InstalledPreserved && len(in.Preserved) != 0 {
+		return emptyrecovery.Refused
+	}
 	if in.InstalledEmpty && (in.UnacknowledgedDev || in.Interrupted != nil || !emptyRecoveryInstalledRoot(in.Profile.Root) || len(in.Mutations) != 0) {
 		return emptyrecovery.Refused
 	}
@@ -165,6 +174,16 @@ func withEmptyRecoveryClaims(ctx context.Context, in emptyRecoveryInspectionInpu
 				return inspectEmptyRecoveryNamespaces(ctx, computer, chat, task, len(hv.Stages))
 			}
 			if err := verify(); err != nil {
+				return err
+			}
+			if in.InstalledPreserved {
+				_, err = mutationrepo.InspectPreserved(ctx, mutationrepo.Root{Path: computer.Path, Device: computer.Device, Inode: computer.Inode, OwnerUID: computer.OwnerUID}, mutationrepo.SettledSelection{OwnerID: in.OwnerID, ProfileID: in.Profile.ProfileID, ComputerID: in.ComputerID}, in.Preserved, func(retained mutationrepo.PreservedInspection) error {
+					if err := verify(); err != nil {
+						return err
+					}
+					callbackErr := visit(emptyRecoveryInspection{Plan: *plan, Computer: computer, Chat: chat, Task: task, Access: access, PreservedRetained: &retained, HandoffSteps: len(hv.Stages)}, claims)
+					return errors.Join(callbackErr, verify())
+				})
 				return err
 			}
 			if in.InstalledEmpty {

@@ -38,7 +38,8 @@ for (const mutation of fixture.Input.Mutations) {
 const userData = path.dirname(path.dirname(fixture.Profile.Root));
 if (
   path.basename(userData) !==
-    (fixture.Input.InstalledEmpty === true
+    (fixture.Input.InstalledEmpty === true ||
+    fixture.Input.InstalledPreserved === true
       ? "Farol Next Preview"
       : "Farol Dev") ||
   path.dirname(path.dirname(userData)) !== path.join(root, "_output/tmp") ||
@@ -83,7 +84,7 @@ try {
   await build({
     stdin: {
       contents:
-        'export { recoverClosedEmptyChat, recoverInterruptedEmptyChat, recoverUnacknowledgedEmptyDev, recoverInstalledEmptyChat } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts";',
+        'export { recoverClosedEmptyChat, recoverInterruptedEmptyChat, recoverUnacknowledgedEmptyDev, recoverInstalledEmptyChat, recoverInstalledPreservedChat } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts";',
       resolveDir: root,
       loader: "ts",
     },
@@ -99,12 +100,15 @@ try {
     recoverInterruptedEmptyChat,
     recoverUnacknowledgedEmptyDev,
     recoverInstalledEmptyChat,
+    recoverInstalledPreservedChat,
     assertClosedConnectorProcesses,
   } = createRequire(import.meta.url)(output);
   const s = fixture.Input.Selection;
   const interrupted = fixture.Input.Interrupted !== undefined;
   const unacknowledged = fixture.UnacknowledgedDev === true;
-  const installed = fixture.Input.InstalledEmpty === true;
+  const installed =
+    fixture.Input.InstalledEmpty === true ||
+    fixture.Input.InstalledPreserved === true;
   if (unacknowledged || installed) {
     const actual = await activationObligations(userData, {
       isAlive: () => false,
@@ -115,9 +119,11 @@ try {
       ...(fixture.PreviousConfirmedQuit === true
         ? []
         : [
-            installed
-              ? "QUIT_UNCONFIRMED:connector,go-core"
-              : "QUIT_UNCONFIRMED:go-core,connector",
+            fixture.Input.InstalledPreserved === true
+              ? "QUIT_UNCONFIRMED:go-core"
+              : installed
+                ? "QUIT_UNCONFIRMED:connector,go-core"
+                : "QUIT_UNCONFIRMED:go-core,connector",
           ]),
       "QUIT_UNCONFIRMED:crash",
     ]);
@@ -127,13 +133,16 @@ try {
     (unacknowledged && interrupted)
   )
     throw Error("HOST_FIXTURE_MODE_INVALID");
-  const recover = installed
-    ? recoverInstalledEmptyChat
-    : unacknowledged
-      ? recoverUnacknowledgedEmptyDev
-      : interrupted
-        ? recoverInterruptedEmptyChat
-        : recoverClosedEmptyChat;
+  const recover =
+    fixture.Input.InstalledPreserved === true
+      ? recoverInstalledPreservedChat
+      : installed
+        ? recoverInstalledEmptyChat
+        : unacknowledged
+          ? recoverUnacknowledgedEmptyDev
+          : interrupted
+            ? recoverInterruptedEmptyChat
+            : recoverClosedEmptyChat;
   const result = await recover({
     userData,
     executable: path.join(directory, "farol-backend"),

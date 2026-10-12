@@ -162,6 +162,25 @@ export function emptyRecoveryIntent(
   return {
     ...selected,
     Mutations: mutations,
+    ...(selected.Preserved === undefined
+      ? {}
+      : {
+          Preserved: selected.Preserved.map((value) => {
+            const retained = record(value);
+            const identity = record(retained.Identity);
+            for (const [key, zero] of Object.entries(defaults)) {
+              if (!Object.hasOwn(identity, key)) identity[key] = zero;
+              else if (
+                typeof identity[key] !== typeof zero ||
+                (key === "TaskEpoch" &&
+                  (!Number.isSafeInteger(identity[key]) ||
+                    Number(identity[key]) < 0))
+              )
+                throw Error("EMPTY_CHAT_RECOVERY_SELECTION_INVALID");
+            }
+            return retained;
+          }),
+        }),
     Profile: {
       ProfileID: profile.profileId,
       Root: profile.root,
@@ -183,7 +202,9 @@ export async function recoverClosedEmptyChat(
   if (
     input.selectionInput.Interrupted !== undefined ||
     input.selectionInput.UnacknowledgedDev !== undefined ||
-    input.selectionInput.InstalledEmpty !== undefined
+    input.selectionInput.InstalledEmpty !== undefined ||
+    input.selectionInput.InstalledPreserved !== undefined ||
+    input.selectionInput.Preserved !== undefined
   )
     throw Error("EMPTY_CHAT_RECOVERY_SELECTION_INVALID");
   return recoverSelectedEmptyChat(input);
@@ -205,6 +226,8 @@ export async function recoverInterruptedEmptyChat(
     !interrupted ||
     input.selectionInput.UnacknowledgedDev !== undefined ||
     input.selectionInput.InstalledEmpty !== undefined ||
+    input.selectionInput.InstalledPreserved !== undefined ||
+    input.selectionInput.Preserved !== undefined ||
     !/^[a-f0-9]{64}$/u.test(input.expectedQuitSha256) ||
     !["Farol Dev", "Farol DEV"].includes(path.basename(input.userData))
   )
@@ -223,6 +246,8 @@ export async function recoverUnacknowledgedEmptyDev(
     input.selectionInput.Interrupted !== undefined ||
     input.selectionInput.UnacknowledgedDev !== true ||
     input.selectionInput.InstalledEmpty !== undefined ||
+    input.selectionInput.InstalledPreserved !== undefined ||
+    input.selectionInput.Preserved !== undefined ||
     !/^[a-f0-9]{64}$/u.test(input.expectedQuitSha256) ||
     !["Farol Dev", "Farol DEV"].includes(path.basename(input.userData))
   )
@@ -238,6 +263,8 @@ export async function recoverInstalledEmptyChat(
 ) {
   if (
     input.selectionInput.InstalledEmpty !== true ||
+    input.selectionInput.InstalledPreserved !== undefined ||
+    input.selectionInput.Preserved !== undefined ||
     input.selectionInput.UnacknowledgedDev !== undefined ||
     input.selectionInput.Interrupted !== undefined ||
     input.selectionInput.Mutations.length !== 0 ||
@@ -246,6 +273,50 @@ export async function recoverInstalledEmptyChat(
   )
     throw Error("INSTALLED_EMPTY_RECOVERY_SELECTION_INVALID");
   return recoverSelectedEmptyChat(input, input.expectedQuitSha256, false, true);
+}
+
+// Owner-selected maintenance preserves the exact Computer journal, including
+// unresolved reservations. It never settles, deletes or retries those operations.
+export async function recoverInstalledPreservedChat(
+  input: ClosedEmptyChatRecoveryInput & { expectedQuitSha256: string },
+) {
+  if (
+    input.selectionInput.InstalledPreserved !== true ||
+    input.selectionInput.InstalledEmpty !== undefined ||
+    input.selectionInput.UnacknowledgedDev !== undefined ||
+    input.selectionInput.Interrupted !== undefined ||
+    input.selectionInput.Mutations.length !== 0 ||
+    !Array.isArray(input.selectionInput.Preserved) ||
+    input.selectionInput.Preserved.length < 1 ||
+    input.selectionInput.Preserved.length > 128 ||
+    !/^[a-f0-9]{64}$/u.test(input.expectedQuitSha256) ||
+    path.basename(input.userData) !== "Farol Next Preview"
+  )
+    throw Error("INSTALLED_PRESERVED_RECOVERY_SELECTION_INVALID");
+  return recoverSelectedEmptyChat(
+    input,
+    input.expectedQuitSha256,
+    false,
+    true,
+    true,
+  );
+}
+
+export function installedPreservedQuitScope(run: unknown, quit: unknown): void {
+  const marker = RunMarkerSchema.safeParse(run);
+  const receipt = QuitReceiptSchema.safeParse(quit);
+  if (
+    !marker.success ||
+    !receipt.success ||
+    receipt.data.drained ||
+    Date.parse(receipt.data.at) <= Date.parse(marker.data.startedAt) ||
+    !receipt.data.unconfirmed.includes("go-core") ||
+    receipt.data.unconfirmed.some(
+      (v) => v !== "go-core" && v !== "connector",
+    ) ||
+    new Set(receipt.data.unconfirmed).size !== receipt.data.unconfirmed.length
+  )
+    throw Error("INSTALLED_PRESERVED_RECOVERY_QUIT_CHANGED");
 }
 
 export function installedEmptyQuitScope(run: unknown, quit: unknown): void {
@@ -294,6 +365,7 @@ async function recoverSelectedEmptyChat(
   expectedQuitSha256?: string,
   unacknowledgedDev = false,
   installedEmpty = false,
+  installedPreserved = false,
 ): Promise<
   Readonly<{
     phase: "prepared_for_cold_start";
@@ -357,7 +429,9 @@ async function recoverSelectedEmptyChat(
         if (failedQuit) {
           const quit = JSON.parse(failedQuit.bytes.toString("utf8"));
           if (installedEmpty) {
-            installedEmptyQuitScope(
+            (installedPreserved
+              ? installedPreservedQuitScope
+              : installedEmptyQuitScope)(
               JSON.parse(run.bytes.toString("utf8")),
               quit,
             );
@@ -873,7 +947,7 @@ async function finishEmptyRecoveryHost({
         }
       : undefined;
   const receipt = Buffer.from(
-    `${JSON.stringify({ schema: "farol.closed-empty-chat-recovery/1", operationId: exact.operationId, buildId: exact.buildId, failedRunSha256: input.expectedRunSha256, configSha256: input.expectedConfigSha256, publication: child.publication, acknowledgement: child.acknowledgement, originalChildTerminal: child.terminal, recorderConfirmed: true, ...(knownFailure ? { knownFailure } : {}), ...(interruptedRetirement ? { interruptedRetirement } : {}), ...(unacknowledgedDev ? (input.selectionInput.InstalledEmpty ? { installedEmptyLifetime: unacknowledgedDev } : { unacknowledgedDev }) : {}) })}\n`,
+    `${JSON.stringify({ schema: "farol.closed-empty-chat-recovery/1", operationId: exact.operationId, buildId: exact.buildId, failedRunSha256: input.expectedRunSha256, configSha256: input.expectedConfigSha256, publication: child.publication, acknowledgement: child.acknowledgement, originalChildTerminal: child.terminal, recorderConfirmed: true, ...(knownFailure ? { knownFailure } : {}), ...(interruptedRetirement ? { interruptedRetirement } : {}), ...(unacknowledgedDev ? (input.selectionInput.InstalledPreserved ? { installedPreservedLifetime: unacknowledgedDev } : input.selectionInput.InstalledEmpty ? { installedEmptyLifetime: unacknowledgedDev } : { unacknowledgedDev }) : {}) })}\n`,
   );
   const f = await fs.open(
     completion,

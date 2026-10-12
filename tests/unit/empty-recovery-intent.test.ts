@@ -118,3 +118,35 @@ describe("empty recovery intent Go value codec", () => {
     },
   );
 });
+
+it("normalizes preserved identities without changing their selected bytes or caller", () => {
+  const base = selection();
+  const input = {
+    ...base,
+    Mutations: [],
+    InstalledPreserved: true as const,
+    Preserved: [
+      {
+        Key: "a".repeat(64) + ".json",
+        SHA256: "b".repeat(64),
+        Identity: base.Mutations[0]!.Binding.Identity,
+      },
+    ],
+  };
+  const before = structuredClone(input);
+  expect(emptyRecoveryIntent(input, profile)).toMatchObject({
+    Preserved: [
+      {
+        ...input.Preserved[0],
+        Identity: {
+          ...input.Preserved[0]!.Identity,
+          SessionID: "",
+          TaskID: "",
+          TaskEpoch: 0,
+          ParticipantID: "",
+        },
+      },
+    ],
+  });
+  expect(input).toEqual(before);
+});

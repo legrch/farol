@@ -778,3 +778,54 @@ it.each([
     expect(ports.spawn).not.toHaveBeenCalled();
   },
 );
+
+it("preserves read-only reservations through the installed maintenance command", async () => {
+  const input = {
+    ...selectionInput,
+    InstalledPreserved: true as const,
+    Preserved: [
+      { Key: "a".repeat(64) + ".json", SHA256: "b".repeat(64), Identity: {} },
+    ],
+  };
+  const done = prepareEmptyRecoveryChild(
+    "/attested/backend",
+    profile,
+    input,
+    expected,
+  );
+  expect(ports.spawn.mock.calls[0]![1][0]).toBe(
+    "prepare-installed-empty-recovery",
+  );
+  expect(JSON.parse(child.stdin.write.mock.calls[0]![0] as string)).toEqual(
+    input,
+  );
+  send(prepared());
+  send(acknowledged());
+  child.emit("close", 0, null);
+  await expect(done).resolves.toMatchObject({
+    terminal: { exitCode: "0", forced: false },
+  });
+});
+it.each([
+  { InstalledPreserved: false, Preserved: [{}] },
+  { InstalledPreserved: true },
+  { InstalledPreserved: true, Preserved: [] },
+  { InstalledPreserved: true, Preserved: Array(129).fill({}) },
+  { Preserved: [{}] },
+  { InstalledPreserved: true, Preserved: [{}], InstalledEmpty: true },
+  { InstalledPreserved: true, Preserved: [{}], UnacknowledgedDev: true },
+  { InstalledPreserved: true, Preserved: [{}], Interrupted: {} },
+  { InstalledPreserved: true, Preserved: [{}], Mutations: [{}] },
+])("rejects ambiguous preserved selection before spawning %#", async (mode) => {
+  await expect(
+    prepareEmptyRecoveryChild(
+      "/attested/backend",
+      profile,
+      { ...selectionInput, ...mode } as unknown as Parameters<
+        typeof prepareEmptyRecoveryChild
+      >[2],
+      expected,
+    ),
+  ).rejects.toMatchObject({ state: "refused" });
+  expect(ports.spawn).not.toHaveBeenCalled();
+});

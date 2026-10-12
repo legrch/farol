@@ -40,9 +40,14 @@ func TestNativeInstalledEmptyHostWithBuiltCore(t *testing.T) {
 	testEmptyRecoveryHostWithBuiltCore(t, false, false, false, true)
 }
 
+func TestNativeInstalledPreservedHostWithBuiltCore(t *testing.T) {
+	testEmptyRecoveryHostWithBuiltCore(t, false, false, false, true, true)
+}
+
 func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledged bool, previousQuit ...bool) {
 	previousConfirmed := len(previousQuit) == 1 && previousQuit[0]
-	installed := len(previousQuit) == 2 && previousQuit[1]
+	installed := len(previousQuit) >= 2 && previousQuit[1]
+	preserved := len(previousQuit) == 3 && previousQuit[2]
 	if !*ingressNative {
 		t.Skip("Requires exclusive native lane and -ingress-native")
 	}
@@ -62,7 +67,9 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledge
 	BuildID = manifest.BuildID
 	defer func() { BuildID = previous }()
 	var in emptyRecoveryInspectionInput
-	if installed {
+	if preserved {
+		in = installedPreservedRecoveryFixture(t)
+	} else if installed {
 		in = installedEmptyRecoveryFixture(t)
 	} else {
 		in = emptyRecoveryFixtureStateAt(t, true, interrupted, unacknowledged)
@@ -101,6 +108,9 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledge
 		quit = []byte("{\"schema\":1,\"at\":\"2026-10-08T10:00:14.146Z\",\"drained\":false,\"unconfirmed\":[\"go-core\",\"connector\"]}\n")
 		if installed {
 			quit = []byte("{\"schema\":1,\"at\":\"2026-10-08T10:00:14.146Z\",\"drained\":false,\"unconfirmed\":[\"connector\",\"go-core\"]}\n")
+		}
+		if preserved {
+			quit = []byte("{\"schema\":1,\"at\":\"2026-10-08T10:00:14.146Z\",\"drained\":false,\"unconfirmed\":[\"go-core\"]}\n")
 		}
 		if previousConfirmed {
 			quit = []byte("{\"schema\":1,\"at\":\"2026-10-08T09:39:05.070Z\",\"drained\":true,\"unconfirmed\":[]}\n")
@@ -147,7 +157,10 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledge
 	// The production child still owns its unchanged 5s/8s pipe deadlines.
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
-	node := filepath.Join(os.Getenv("HOME"), ".nvm/versions/node/v24.20.0/bin/node")
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.CommandContext(ctx, node, filepath.Join(repo, "tests/e2e/closed-empty-chat-host.e2e.mjs"), inputPath)
 	cmd.Dir = repo
 	out, err := cmd.CombinedOutput()
@@ -197,9 +210,10 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledge
 			t.Fatal("configuration changed", err)
 		}
 		var completed struct {
-			UnacknowledgedDev      struct{ OriginalRetirement, OriginalACK, OriginalTerminal, TerminalReceiptScope, OriginalQuitScope, PreviousConfirmedQuitSha256, FailedQuitSha256 string }
-			InstalledEmptyLifetime struct{ OriginalRetirement, OriginalACK, OriginalTerminal, TerminalReceiptScope, OriginalQuitScope, PreviousConfirmedQuitSha256, FailedQuitSha256 string }
-			InterruptedRetirement  json.RawMessage
+			UnacknowledgedDev          struct{ OriginalRetirement, OriginalACK, OriginalTerminal, TerminalReceiptScope, OriginalQuitScope, PreviousConfirmedQuitSha256, FailedQuitSha256 string }
+			InstalledPreservedLifetime struct{ OriginalRetirement, OriginalACK, OriginalTerminal, TerminalReceiptScope, OriginalQuitScope, PreviousConfirmedQuitSha256, FailedQuitSha256 string }
+			InstalledEmptyLifetime     struct{ OriginalRetirement, OriginalACK, OriginalTerminal, TerminalReceiptScope, OriginalQuitScope, PreviousConfirmedQuitSha256, FailedQuitSha256 string }
+			InterruptedRetirement      json.RawMessage
 		}
 		if err := json.Unmarshal(receipt, &completed); err != nil {
 			t.Fatal(err)
@@ -209,6 +223,9 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledge
 				t.Fatal("installed maintenance relabeled Dev")
 			}
 			completed.UnacknowledgedDev = completed.InstalledEmptyLifetime
+			if preserved {
+				completed.UnacknowledgedDev = completed.InstalledPreservedLifetime
+			}
 		}
 		if completed.UnacknowledgedDev.OriginalRetirement != "absent" || completed.UnacknowledgedDev.OriginalACK != "absent" || completed.UnacknowledgedDev.OriginalTerminal != "unobserved" || completed.UnacknowledgedDev.TerminalReceiptScope != "new-maintenance-child" || len(completed.InterruptedRetirement) != 0 {
 			t.Fatal("invented original terminal/ACK")
@@ -226,6 +243,15 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledge
 		var reconciled struct{ Phase string }
 		if json.Unmarshal(retired, &reconciled) != nil || reconciled.Phase != "retired_unconfirmed" {
 			t.Fatal("connector falsely confirmed", string(retired))
+		}
+	}
+	if preserved {
+		for _, selected := range in.Preserved {
+			raw, err := os.ReadFile(filepath.Join(profile.Root, "computer", "mutations", selected.Key))
+			sum := sha256.Sum256(raw)
+			if err != nil || hex.EncodeToString(sum[:]) != selected.SHA256 {
+				t.Fatal("maintenance changed retained Computer record", err)
+			}
 		}
 	}
 	if err := refusePendingEmptyRecovery(profile); err != nil {

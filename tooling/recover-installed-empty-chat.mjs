@@ -96,7 +96,7 @@ async function privateBytes(file, maximum) {
   }
 }
 
-async function run() {
+export async function runInstalledRecovery(preserved = false) {
   const options = parseInstalledEmptyRecoveryOptions(process.argv.slice(2));
   if (
     process.platform !== "darwin" ||
@@ -156,7 +156,7 @@ async function run() {
     await build({
       stdin: {
         contents:
-          'export { recoverInstalledEmptyChat } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts"; export { parseJSON } from "./apps/desktop/bridge/frame.ts";',
+          'export { recoverInstalledEmptyChat, recoverInstalledPreservedChat } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts"; export { parseJSON } from "./apps/desktop/bridge/frame.ts";',
         resolveDir: root,
         sourcefile: "empty-chat-host-entry.ts",
         loader: "ts",
@@ -170,13 +170,22 @@ async function run() {
     });
     const {
       recoverInstalledEmptyChat,
+      recoverInstalledPreservedChat,
       assertClosedConnectorProcesses,
       parseJSON,
     } = createRequire(import.meta.url)(output);
     const metadata = parseJSON(marker.toString("utf8"));
     const selected = parseJSON(selection.toString("utf8"));
     if (
-      selected.InstalledEmpty !== true ||
+      (preserved
+        ? selected.InstalledPreserved !== true ||
+          Object.hasOwn(selected, "InstalledEmpty") ||
+          !Array.isArray(selected.Preserved) ||
+          selected.Preserved.length < 1 ||
+          selected.Preserved.length > 128
+        : selected.InstalledEmpty !== true ||
+          Object.hasOwn(selected, "InstalledPreserved") ||
+          Object.hasOwn(selected, "Preserved")) ||
       Object.hasOwn(selected, "UnacknowledgedDev") ||
       Object.hasOwn(selected, "Interrupted") ||
       !Array.isArray(selected.Mutations) ||
@@ -215,7 +224,10 @@ async function run() {
       )
         throw Error("EMPTY_CHAT_RECOVERY_ATTESTATION_CHANGED");
     };
-    const result = await recoverInstalledEmptyChat({
+    const recover = preserved
+      ? recoverInstalledPreservedChat
+      : recoverInstalledEmptyChat;
+    const result = await recover({
       userData,
       executable: path.join(root, "_output/build/app/farol-backend"),
       profile: {
@@ -252,7 +264,7 @@ if (
   path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
   try {
-    await run();
+    await runInstalledRecovery();
   } catch (error) {
     const code =
       error instanceof Error && /^[A-Z][A-Z0-9_]{1,100}$/u.test(error.message)

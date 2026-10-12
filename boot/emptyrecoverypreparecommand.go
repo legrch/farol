@@ -74,7 +74,7 @@ func runSelectedEmptyRecoveryPreparationDeadline(args []string, in io.Reader, ou
 	if d.Decode(&selected) != nil || d.Decode(new(any)) != io.EOF || selected.Profile != (ProfileBinding{}) {
 		return 2
 	}
-	if selected.InstalledEmpty != installed || installed && (selected.UnacknowledgedDev || selected.Interrupted != nil || len(selected.Mutations) != 0) {
+	if (selected.InstalledEmpty || selected.InstalledPreserved) != installed || installed && (selected.InstalledEmpty && selected.InstalledPreserved || selected.UnacknowledgedDev || selected.Interrupted != nil || len(selected.Mutations) != 0) {
 		return 2
 	}
 	selected.Profile = binding
