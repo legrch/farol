@@ -6,6 +6,9 @@ export default defineConfig({
     include: ["tests/**/*.test.{ts,tsx,mjs}"],
     exclude: ["tests/renderer/**"],
     sequence: { concurrent: false },
+    // Bound file-level native helper/compiler fan-out on a shared Mac. Keep
+    // product deadlines and coverage gates unchanged; each fixture owns its IO.
+    maxWorkers: 2,
     // 23 integration files spawn real processes, helpers or volumes, and none
     // of that fits vitest's 5 s default on a loaded machine. A budget, not an
     // assertion; 30 s still catches a hang.
