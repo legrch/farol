@@ -174,7 +174,9 @@ it("omits an absent optional observer from the actual native launch object", () 
     settings: { computer: { computerId: "controlled-only" } },
     storage: { storeMode: "open", settingsMutations: true },
     selection: { previousHostDrainConfirmed: true },
-    randomUUID: () => "controlled-lifetime",
+    hostLifetimeId: "controlled-host-lifetime",
+    childLaunchId: "controlled-child-launch",
+    shellMetadata: undefined,
   });
   expect(Object.hasOwn(options, "onLifecycleObservation")).toBe(false);
 });

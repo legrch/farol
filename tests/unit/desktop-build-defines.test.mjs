@@ -42,6 +42,8 @@ it("both actual host build passes keep optional ws native addons disabled", asyn
     const define = evaluate(property(object, "define"), {
       common: { define: commonDefine },
       core,
+      coreResources: { kind: "controlled-resources" },
+      shellSupport: { kind: "controlled-shell-support" },
       JSON,
     });
     const compiled = await build({
