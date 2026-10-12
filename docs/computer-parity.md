@@ -7,6 +7,37 @@ boundary ran against an actual temporary macOS workspace or installed host;
 `FIXTURE_APP` means the assembled Electron product ran with the deterministic
 provider/host fixture; `BLOCKED_OWNER` and `NOT_RUN` remain open evidence rows.
 
+Source implementation, packaged fixture evidence and installed/live behavior are
+separate qualification layers. A capability present in source or a fixture is not
+an installed capability unless an installed witness is recorded below.
+
+## Installed beta.13 status — 12 October 2026
+
+One installed unsigned macOS ARM64 beta.13, build `27`, from source
+`4e0a6e19ed8fae383990bb50f28431d558cbc487` completed a real OTA from beta.12.
+The published update was discovered and downloaded automatically; one ordinary
+Restart and Update action completed, the target became ready, and existing
+grants, credentials and update preferences were preserved. The connector
+automatically became ready, a fresh external catalogue request succeeded, and
+read-only native inspection confirmed a running app window on screen. This is a
+single installed OTA, connection and catalogue observation, not broad runtime or
+visual qualification. A later external bootstrap, two create-only writes and a read succeeded in a
+disposable local repository. Durable write receipts and local hash readback
+agreed. External execution of its tests and a Git commit remain unqualified,
+as do hardware sleep and reconnect after sleep. A native selection timeout and
+unconfirmed separate reopen do not establish a crash or visual acceptance.
+
+| Evidence layer   | Current status                                                                                                                                                                                                                                                          |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Source           | Go runtime wiring in `boot/nativeruntime.go` selects the Shell factory when trusted launch metadata is supplied. Beta.13 installed advertisement and activation were not observed.                                                                                      |
+| Packaged fixture | Local disposable-profile Bash and Git journeys passed for package `cbd4cf31`; they used fixture-controlled approvals/settings and do not qualify the beta.13 install or ordinary saved workspace access. Later source changes also have their own coverage boundary.    |
+| Installed/live   | Beta.13 OTA, automatic connection readiness, external catalogue/bootstrap, two durable file creations and a read with matching local hash are observed. External Shell/Git, persistent Chat continuation after restart, Models, Agent and workflows remain unqualified. |
+
+Beta.13 also implements the compact update affordance, confirmation, settings
+disclosure, measured download progress and separate verification stage. Source,
+package and update-flow checks are implementation evidence; the installed OTA
+receipt does not claim that a user visually accepted each update screen.
+
 ## Current Go Dev evidence
 
 The current desktop selects the protected Go connector for catalogue, bootstrap,
@@ -18,8 +49,8 @@ file create → read → exact-digest edit → stale-digest conflict → readbac
 the external connection. Normal Quit and later builds retained that edited file,
 folder configuration and connection without recreating the profile or repeating
 the mutation. These are ordinary Dev/external witnesses, not installed or
-canonical-package acceptance. Exact request/build/profile receipts
-are preserved locally under `_output/evidence/startup-recovery-20261004/`.
+canonical-package acceptance. Exact request/build/profile receipts are retained
+privately.
 
 The same running Dev also passed a later external read of its repository checkout
 inside `.codex`, then create → exact-digest edit → readback of a synthetic file in
@@ -29,12 +60,11 @@ durable completion receipt. This qualifies that file route, not `.claude`, shell
 Git or provider-session behavior. Bootstrap correctly reports an unavailable
 ancestor `AGENTS.md` when it is a symlink and leaves `complete: false`; ordinary
 checkout files remain readable. No symlink target or credential was read to
-override that guard. The exact bounded operation evidence is retained in
-`external-dev-0a651651-agent-store.json`.
+override that guard. The exact bounded operation evidence is retained privately.
 
 ## Build-selected Shell candidate
 
-The current source candidate adds a build-selected Shell route. The exact
+Current source contains a build-selected Shell route and Go factory. The exact
 platform expectations live in `tooling/shell-platform.json`: macOS `26A434`,
 ARM64, the complete process implementation source set, watchdog resource,
 system mechanism/import/tool hashes and the independently pinned Electron
@@ -42,8 +72,9 @@ runtime. The builder refuses changed inputs instead of updating these pins.
 After authenticating its Go output it compiles the resulting support into the
 same host; it never embeds the backend's resulting hash into that backend.
 The support digest identifies this selection and is not a native or release
-acceptance receipt. Final candidate, external Shell/Git, installation and OTA
-acceptance remain required before delivery.
+acceptance receipt. In normal startup, missing trusted Shell metadata withholds
+the route. External Shell/Git, installed activation and ordinary workspace
+qualification remain open.
 
 The host verifies its compiled resource closure and nested runtime before
 passing support through the original child's private launch pipe. Go measures
@@ -56,8 +87,9 @@ Git dependency/configuration roots still need applicable approved access.
 Root-scoped Shell admission now selects a fixed ten-minute budget for preparation
 and execution, capped by owner expiry. Status reads retain their own 15-second
 lease and cannot extend a command. Legacy Shell remains limited to 15 seconds.
-This source capability requires native/package qualification before release;
-it does not activate additional tools, filesystem roots or network access.
+This source capability does not establish installed activation or external
+qualification, and does not activate additional tools, filesystem roots or
+network access by itself.
 The selected Git image is the Command Line Tools binary under `/Library`.
 The system `/usr/bin/git` dispatcher is multiply linked, and Xcode's binary
 has a shared-writable `/Applications` ancestor; neither satisfies this image
@@ -199,9 +231,8 @@ control acknowledgement also fences the existing operation and retirement.
 
 These source and storage results do not establish real process closure, crash or
 power-loss recovery, normal-startup Shell admission, public MCP Shell/Git,
-installed behavior or accepted whole-range cutover. The build-selected candidate
-and its bounded local native evidence above are separate from these earlier
-source/storage results and from installed external qualification.
+installed behavior or accepted whole-range cutover. Beta.13's later OTA and
+catalogue witness is recorded above; it does not change those limits for Shell/Git.
 
 Actual external `computer_mutation_read` is now qualified separately from its
 source registration. Dev `67d8af51` observed the original completed edit after a
@@ -246,7 +277,7 @@ external no-duplicate witness; lower-layer duplicate guards retain their own sco
 | `open_workspace`, `request_access`                                                                                | Owner-controlled Setup/Settings grant folders and authority. `computer_workspace_bootstrap` returns the selected task root, approved physical identity and applicable root/nested AGENTS chain; unavailable instructions remain explicit. No model can expand access.                                                                                                                                                                                                                                                                                                                                    | `workspace-bootstrap-mcp.test.ts`, `readonly-computer-action.test.ts`, packaged read-only MCP fixture                                                  | Local native-helper/public-MCP fixtures; live new-connector qualification remains separate                     |
 | `read`, `ls`, `glob`, `grep`                                                                                      | Bounded read/list/text-search preserve explicit completeness limits. Recursive filename/include discovery uses ordinary approved shell, e.g. `rg --files --glob`, with actual ignore coverage and exit status. List/search alone are not full recursive filename parity.                                                                                                                                                                                                                                                                                                                                 | Native read-only tests, Computer MCP and workspace shell fixtures; [context contract](computer-workspace-context.md)                                   | Local/package evidence; owner workflow and detached-process limitations remain separate                        |
 | `write`, `edit`                                                                                                   | Explicit write approval, exact source digest, descriptor-relative containment, atomic replace, conflict detection, stable operation ID and content-free durable receipt. An uncertain replace acknowledgement is never replayed. Product Agent assignments remain read/verify-only; the general delegated Computer boundary preserves write authority only when mutation ownership was explicitly granted.                                                                                                                                                                                               | Settings mutation flow and mutable Computer MCP; `native-mutable-workspace.test.ts`, `mutable-computer-action.test.ts`, `mutable-computer-mcp.test.ts` | `REAL_LOCAL` + `FIXTURE_APP`                                                                                   |
-| `bash`                                                                                                            | Owner-selected `workspace` command mode exposes `computer_shell_start/read/cancel` through the new Computer MCP. Each call sees one task-granted workspace. The native Seatbelt profile denies network and sensitive paths; complete Git object history requires a separate owner approval for that folder. A per-command watchdog enforces the absolute authority deadline and stops its process group if MCP disappears. Exit/signal and stdout/stderr are read from the live handle; a lost acknowledgement after restart is explicitly unknown and cannot execute again under the same operation ID. | Computer MCP and native sandbox fixtures; `sandboxed-workspace-shell.test.ts`, `secure-mcp-launch-contract.test.ts`, `workspace-shell-mcp.e2e.mjs`     | `REAL_LOCAL` + built and packaged MCP fixtures; owner connector proof pending                                  |
+| `bash`                                                                                                            | Owner-selected `workspace` command mode exposes `computer_shell_start/read/cancel` through the new Computer MCP. Each call sees one task-granted workspace. The native Seatbelt profile denies network and sensitive paths; complete Git object history requires a separate owner approval for that folder. A per-command watchdog enforces the absolute authority deadline and stops its process group if MCP disappears. Exit/signal and stdout/stderr are read from the live handle; a lost acknowledgement after restart is explicitly unknown and cannot execute again under the same operation ID. | Computer MCP and native sandbox fixtures; `sandboxed-workspace-shell.test.ts`, `secure-mcp-launch-contract.test.ts`, `workspace-shell-mcp.e2e.mjs`     | `REAL_LOCAL` + built/packaged fixtures; installed beta.13 external Shell/Git proof pending                     |
 | `guidance_search`, `guidance_fetch`                                                                               | `computer_guidance_search/fetch` use a product-owned manifest embedded in the attested build. Fetch resolves published IDs only, every reference is manifest-listed, and malformed/missing catalogues are explicitly unavailable. Private owner Brain rules are not bundled.                                                                                                                                                                                                                                                                                                                             | `published-guidance.test.ts`, `workspace-bootstrap-mcp.test.ts`, packaged read-only MCP fixture                                                        | Source/local/package qualification; live connector schema refresh remains separate                             |
 | `codex_task_create`, `codex_task_status`, `codex_task_result`, `codex_task_observe`, `codex_task_adopt`           | A separate task grant exposes create/status/exact result and read-only inspection of one owner-selected native thread in the exact saved project and physical workspace. Adoption persists a read-only handle to one verified turn; it cannot start, resume, fork, steer or continue work. Active steering and same-thread continuation remain source-only and disabled until live host qualification; durable owner-task control is not yet implemented.                                                                                                                                                | Persistent handoff journal, desktop task grant, Computer MCP, disposable fake-socket fixtures                                                          | Built/packaged fixture; live shared-runtime and owner-task proof pending                                       |
 | `claude_task_create`, `claude_task_status`                                                                        | Existing Computer MCP + sealed fixture-only grant, physical canonical/writer binding, tasks.harnesses.claude-code, durable one-shot dispatch and bounded recorded-terminal result. No Codex fallback; live native Claude and shared visibility remain unqualified.                                                                                                                                                                                                                                                                                                                                       | Claude source/process/journal/MCP fixtures; [candidate contract](claude-handoff-candidate.md)                                                          | Fixture-only route implemented; no production Desktop grant, live auth/network or native session qualification |

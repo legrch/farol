@@ -24,10 +24,31 @@ integration notes must not be read as current product acceptance.
   shell/Git grants, attachments and evidence boundaries.
 
 Computer-only use does not require embedded login or Model/Agent. Review broader
-file and Git permissions explicitly. Model and Product Agent remain disabled;
-source fixtures are not proof of a live task route.
+file and Git permissions explicitly. Installed beta.13 has one fresh external
+catalogue, bootstrap, create and read witnesses; Shell/Git, persistent Chat continuation after restart, Models,
+Agent and workflows remain unqualified. Source and packaged fixtures do not prove
+those installed/live routes.
 
 ## Installation and updates
+
+On 12 October, one installed unsigned macOS ARM64 beta.12 instance completed a
+real OTA to [beta.13](https://github.com/legrch/farol/releases/tag/v0.2.0-owner.beta.13),
+build `27`, source `4e0a6e19ed8fae383990bb50f28431d558cbc487`. The published
+update was discovered and downloaded automatically. One ordinary
+Restart and Update action completed the transition; the installed target was
+ready, its retained predecessor and existing grants, credentials and update
+preferences were preserved, and the connector automatically became ready. A
+fresh external catalogue request succeeded. Read-only native inspection confirmed
+the running app had an on-screen window. A later external check created two fixture files in a disposable local Git
+repository with durable mutation receipts; an external read and independent local
+hash check matched. This qualifies those File Computer operations on beta.13,
+not execution of the fixture tests or a Git commit through Farol. Hardware sleep,
+broad connection reliability and full visual acceptance remain unqualified.
+
+Beta.13 implements a compact update flow with a bottom-rail update affordance,
+Install and Relaunch confirmation, secondary settings disclosure, measured
+download progress and a separate verification stage. These implementation and
+package checks are distinct from the installed OTA observation above.
 
 On 11 October, the installed beta.10 instance completed a real OTA to
 [beta.11](https://github.com/legrch/farol/releases/tag/v0.2.0-owner.beta.11),
@@ -39,11 +60,12 @@ ready. Existing workspace grants, connection credentials and update preferences
 were preserved. External catalogue, instruction bootstrap, create, edit and read
 then succeeded; independent local readback matched the returned file hash.
 
-Beta.11 supports connecting with no workspace access and fixes workspace changes
-after a normal Quit and reopen. Package checks also covered empty catalogue,
-denied file access without a workspace, known tunnel-termination recovery and
-beta.10 reading the retained settings. Actual hardware sleep, live clipboard,
-external Shell/Git and broader Chat/model/Agent activation remain unqualified.
+The historical beta.11 package supports connecting with no workspace access and
+fixes workspace changes after a normal Quit and reopen. Package checks also
+covered empty catalogue, denied file access without a workspace, known
+tunnel-termination recovery and beta.10 reading the retained settings. Actual
+hardware sleep, live clipboard, external Shell/Git and broader Chat/model/Agent
+activation remain unqualified.
 Injected sleep events are not hardware-sleep evidence.
 
 On 11 October, one installed unsigned macOS ARM64 beta.8 instance completed a
