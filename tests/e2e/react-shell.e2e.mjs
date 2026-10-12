@@ -661,7 +661,7 @@ try {
   });
   const replacement = await replacementPromise;
   await replacement
-    .getByRole("dialog", { name: "Farol updates", exact: true })
+    .getByRole("dialog", { name: "Farol updates unavailable", exact: true })
     .waitFor({ state: "visible", timeout: 10000 });
   assert.equal(
     await replacement.locator(".toolbar-title strong").textContent(),
@@ -677,7 +677,7 @@ try {
     "REOPEN_UPDATE_OVERLAY_NOT_OCCLUDED",
   );
   await replacement
-    .getByRole("dialog", { name: "Farol updates", exact: true })
+    .getByRole("dialog", { name: "Farol updates unavailable", exact: true })
     .getByRole("button", { name: "Close", exact: true })
     .click();
   await replacement
