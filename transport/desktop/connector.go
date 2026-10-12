@@ -36,6 +36,14 @@ func validateConnectorConfig(config ConnectorConfig) error {
 			if method.Handle == nil {
 				return ErrConnectorUnavailable
 			}
+		case "computer.process.start", "computer.process.read", "computer.process.cancel":
+			// The trusted boot owner selects the complete process slice. This
+			// transport carries its handlers; it never creates a process owner.
+			for _, required := range []string{"computer.process.start", "computer.process.read", "computer.process.cancel"} {
+				if config.Methods[required].Handle == nil {
+					return ErrConnectorUnavailable
+				}
+			}
 		default:
 			return ErrConnectorUnavailable
 		}

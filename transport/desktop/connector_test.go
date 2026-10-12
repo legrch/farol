@@ -205,3 +205,62 @@ func TestConnectionRejectsDuplicateHelloAndAuthorityRegistration(t *testing.T) {
 		t.Fatal("authority issuer exposed to MCP")
 	}
 }
+
+func TestConnectorProcessSlicePreflight(t *testing.T) {
+	handler := Method{Handle: func(context.Context, Request) (*Outcome, error) {
+		return &Outcome{Status: "ok", Data: json.RawMessage(`{}`)}, nil
+	}}
+	config := ConnectorConfig{Endpoint: wire.ComputerConnectorEndpoint{
+		Binding:    wire.ComputerConnectorBinding{BuildId: "build", ProfileId: "profile", BackendGeneration: "backend", RuntimeId: "runtime", ConnectorGeneration: "1"},
+		SocketPath: "/private/tmp/fixture.sock", Token: strings.Repeat("a", 64),
+	}, Methods: map[string]Method{"computer.workspace.list": handler, "computer.process.start": handler, "computer.process.read": handler, "computer.process.cancel": handler}}
+	if err := validateConnectorConfig(config); err != nil {
+		t.Fatal("complete trusted process slice rejected", err)
+	}
+	for _, name := range []string{"computer.process.start", "computer.process.read", "computer.process.cancel"} {
+		delete(config.Methods, name)
+		if validateConnectorConfig(config) != ErrConnectorUnavailable {
+			t.Fatal("partial process slice accepted", name)
+		}
+		config.Methods[name] = Method{}
+		if validateConnectorConfig(config) != ErrConnectorUnavailable {
+			t.Fatal("empty process handler accepted", name)
+		}
+		config.Methods[name] = handler
+	}
+	config.Methods["computer.authority.publish"] = handler
+	if validateConnectorConfig(config) != ErrConnectorUnavailable {
+		t.Fatal("process slice exposed authority issuer")
+	}
+}
+
+func TestConnectorProcessSliceHandshake(t *testing.T) {
+	// Real framing and handshake with in-memory pipe/handlers only.
+	// This does not execute a process or qualify native endpoint permissions.
+	client, config, calls, done := connectorFixture(t, "computer.process.start", "computer.process.read", "computer.process.cancel")
+	writeConnectorJSON(t, client, wire.ComputerConnectorHello{Binding: config.Endpoint.Binding, Token: config.Endpoint.Token})
+	var binding wire.ComputerConnectorBinding
+	readConnectorJSON(t, client, &binding)
+	writeConnectorJSON(t, client, map[string]any{"jsonrpc": "2.0", "id": "handshake", "method": "core.handshake", "params": map[string]any{"body": wire.Handshake{ProtocolMajor: wire.ProtocolMajor, ProtocolMinor: wire.ProtocolMinor, BuildId: "build", ProfileId: "profile"}}})
+	var reply wire.Response
+	readConnectorJSON(t, client, &reply)
+	if reply.Result == nil || reply.Result.Status != "ok" {
+		t.Fatal("process handshake failed")
+	}
+	var identity wire.Identity
+	if json.Unmarshal(reply.Result.Data, &identity) != nil {
+		t.Fatal("invalid identity")
+	}
+	for _, name := range []string{"computer.process.start", "computer.process.read", "computer.process.cancel"} {
+		if !slices.Contains(identity.Capabilities, name) {
+			t.Fatal("process capability missing", name)
+		}
+	}
+	if calls.Load() != 0 {
+		t.Fatal("handshake invoked process handler")
+	}
+	_ = client.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
