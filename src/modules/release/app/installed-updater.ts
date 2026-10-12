@@ -853,7 +853,10 @@ export class InstalledUpdater {
     ) {
       // The check reply must not wait for a large transfer. download() owns its
       // existing busy/drain lifetime, progress, retained result and Quit fence.
-      void this.prepareManualCandidate(candidate);
+      void this.prepareManualCandidate(candidate).catch(() => {
+        // Existing owners retain failure/UNKNOWN and settle their drain even
+        // when presentation throws. Observe rejection without replay or reset.
+      });
     }
   }
 

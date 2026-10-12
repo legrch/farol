@@ -1994,6 +1994,38 @@ describe("automatic update preference (ports only; no automatic release acceptan
     ).toHaveLength(0);
   });
 
+  it("observes detached failure when both transfer and recovery presentation fail", async () => {
+    const { updater, ports, advance } = preferenceFixture(true);
+    let rejectTransfer!: (error: Error) => void;
+    ports.download.mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          rejectTransfer = reject;
+        }),
+    );
+    ports.publish.mockImplementation((view) => {
+      if (view.phase === "failed")
+        throw new Error("controlled presentation failure");
+    });
+    await updater.initialize();
+    await updater.manualCheck();
+    await vi.waitFor(() => expect(ports.download).toHaveBeenCalledTimes(1));
+    rejectTransfer(new Error("controlled transfer failure"));
+    await vi.waitFor(() =>
+      expect(updater.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        recoveryRequired: true,
+      }),
+    );
+    advance(UPDATE_RECHECK_MS);
+    await updater.manualCheck();
+    await updater.scheduledCheck();
+    expect(ports.download).toHaveBeenCalledTimes(1);
+    expect(ports.restart).not.toHaveBeenCalled();
+    await updater.close();
+  });
+
   it("manual preparation preserves an unknown transfer without automatic replay", async () => {
     const { updater, ports, advance } = preferenceFixture(true);
     ports.download.mockResolvedValue({
