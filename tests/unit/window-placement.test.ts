@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   parseAllowPrimaryDisplay,
   parseBuiltInDisplayOnly,
+  parseSidecarDisplayOnly,
+  parsePreviewWindowSize,
   parsePreviewWindowMode,
   selectPreviewWindowPlacement,
   type PreviewDisplay,
@@ -274,4 +276,103 @@ describe("built-in-display-only test placement", () => {
       ]),
     ).toBe(true);
   });
+});
+
+describe("explicit iPad test presentation", () => {
+  const sidecar: PreviewDisplay = {
+    id: 7,
+    internal: false,
+    label: "Sidecar Display (AirPlay)",
+    bounds: { x: -1135, y: 0, width: 1135, height: 789 },
+    workArea: { x: -1135, y: 30, width: 1135, height: 759 },
+  };
+  it("selects the named Sidecar even with another built-in secondary", () => {
+    const result = selectPreviewWindowPlacement(
+      [externalPrimary, builtInSecondary, sidecar],
+      5,
+      { width: 1100, height: 740 },
+      false,
+      false,
+      true,
+    );
+    expect(result).toMatchObject({
+      displayId: 7,
+      selection: "sidecar",
+      bounds: { x: -1118, y: 39, width: 1100, height: 740 },
+    });
+  });
+  it("hides when Sidecar disappears, is primary, or conflicts with a built-in constraint", () => {
+    expect(() =>
+      selectPreviewWindowPlacement(
+        [externalPrimary, builtInSecondary],
+        5,
+        { width: 1100, height: 740 },
+        true,
+        false,
+        true,
+      ),
+    ).toThrow("SIDECAR_DISPLAY_UNAVAILABLE");
+    expect(() =>
+      selectPreviewWindowPlacement(
+        [sidecar, builtInSecondary],
+        7,
+        { width: 1100, height: 740 },
+        false,
+        false,
+        true,
+      ),
+    ).toThrow("SIDECAR_DISPLAY_UNAVAILABLE");
+    expect(() =>
+      selectPreviewWindowPlacement(
+        [externalPrimary, sidecar],
+        5,
+        { width: 1100, height: 740 },
+        false,
+        true,
+        true,
+      ),
+    ).toThrow("VISIBLE_TEST_DISPLAY_CONFLICT");
+  });
+  it("does not reinterpret the existing exact-viewport constraint", () => {
+    expect(() =>
+      selectPreviewWindowPlacement(
+        [externalPrimary, sidecar],
+        5,
+        { width: 1180, height: 760 },
+        false,
+        false,
+        true,
+      ),
+    ).toThrow("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
+  });
+});
+
+it("accepts a bounded explicit test viewport without changing normal launches", () => {
+  expect(parseSidecarDisplayOnly([])).toBe(false);
+  expect(parseSidecarDisplayOnly(["--sidecar-display-only"])).toBe(true);
+  expect(parsePreviewWindowSize([], "default")).toEqual({
+    width: 1180,
+    height: 760,
+  });
+  expect(
+    parsePreviewWindowSize(
+      ["--preview-window-size=1100x740"],
+      "secondary-visible",
+    ),
+  ).toEqual({ width: 1100, height: 740 });
+  for (const mode of ["default", "hidden", "secondary-visible"] as const) {
+    for (const value of ["10x20", "Infinityx740", "600x519", "4000x3000"])
+      expect(() =>
+        parsePreviewWindowSize([`--preview-window-size=${value}`], mode),
+      ).toThrow("PREVIEW_WINDOW_SIZE_INVALID");
+  }
+  expect(() =>
+    parsePreviewWindowSize(["--preview-window-size=1100x740"], "default"),
+  ).toThrow("PREVIEW_WINDOW_SIZE_INVALID");
+  expect(() =>
+    parsePreviewWindowSize(
+      ["--preview-window-size=1100x740", "--preview-window-size=1100x740"],
+      "hidden",
+    ),
+  ).toThrow("PREVIEW_WINDOW_SIZE_INVALID");
 });

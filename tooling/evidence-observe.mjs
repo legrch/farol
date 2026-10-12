@@ -318,7 +318,7 @@ async function main(arguments_) {
     attemptId: option(arguments_, "--attempt"),
     subject,
     processPattern: new RegExp(
-      option(arguments_, "--process") ?? "Farol Next Preview",
+      option(arguments_, "--process") ?? "Farol(?: Next Preview)?(?:\\.app/|$)",
       "u",
     ),
     intervalMs: Number(option(arguments_, "--interval-ms") ?? 500),

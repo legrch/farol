@@ -57,6 +57,9 @@ export async function runDesktopStartupBoundary<T>(
   }
 }
 const DISPLAY_PRECONDITION_CODES = new Set([
+  "SIDECAR_DISPLAY_UNAVAILABLE",
+  "VISIBLE_TEST_DISPLAY_CONFLICT",
+  "PREVIEW_WINDOW_SIZE_INVALID",
   "BUILT_IN_DISPLAY_UNAVAILABLE",
   "SECONDARY_DISPLAY_UNAVAILABLE",
   "WINDOW_DISPLAY_UNAVAILABLE",
@@ -95,7 +98,7 @@ export function desktopStartupFailureReport(
   environment: DesktopEnvironment,
 ): string {
   const code = desktopStartupFailureCode(error);
-  const product = environment === "dev" ? "Farol Dev" : "Farol Next Preview";
+  const product = environment === "dev" ? "Farol Dev" : "Farol";
   const remedy = PREVIOUS_DRAIN_FAILURE_CODES.has(code)
     ? "The previous session did not confirm shutdown. Preserve the existing profile and its recovery records; rebuilding the app does not settle this state. Use a qualified recovery procedure before reopening that profile."
     : DISPLAY_PRECONDITION_CODES.has(code)

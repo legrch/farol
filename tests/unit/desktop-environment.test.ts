@@ -100,7 +100,7 @@ describe("desktop environment identity", () => {
   });
 
   it.each(["preview", "dev"] as const)(
-    "keeps the %s internal process name stable independently of the display name",
+    "uses the %s visible name for macOS without changing storage identity",
     (buildEnvironment) => {
       const source = fs.readFileSync(
         new URL("../../src/apps/desktop/main.ts", import.meta.url),
@@ -116,7 +116,7 @@ describe("desktop environment identity", () => {
         productName: "Farol Next Preview",
       });
       expect(process.title).toBe(
-        buildEnvironment === "dev" ? "Farol Dev" : "Farol Next Preview",
+        buildEnvironment === "dev" ? "Farol Dev" : "Farol",
       );
     },
   );

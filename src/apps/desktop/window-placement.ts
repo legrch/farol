@@ -10,6 +10,7 @@ export interface PreviewRectangle {
 export interface PreviewDisplay {
   readonly id: number;
   readonly internal: boolean;
+  readonly label?: string;
   readonly bounds: PreviewRectangle;
   readonly workArea: PreviewRectangle;
 }
@@ -19,7 +20,10 @@ export interface PreviewWindowPlacement {
   readonly internal: boolean;
   readonly primary: boolean;
   readonly selection:
-    "non-primary-internal" | "non-primary" | "owner-allowed-primary";
+    | "non-primary-internal"
+    | "non-primary"
+    | "owner-allowed-primary"
+    | "sidecar";
   readonly bounds: PreviewRectangle;
 }
 
@@ -56,6 +60,32 @@ export function parseBuiltInDisplayOnly(
   arguments_: readonly string[],
 ): boolean {
   return arguments_.includes(builtInDisplayOnlyFlag);
+}
+
+export function parseSidecarDisplayOnly(
+  arguments_: readonly string[],
+): boolean {
+  return arguments_.includes("--sidecar-display-only");
+}
+
+export function parsePreviewWindowSize(
+  arguments_: readonly string[],
+  mode: PreviewWindowMode,
+): Readonly<{ width: number; height: number }> {
+  const prefix = "--preview-window-size=";
+  const values = arguments_.filter((value) => value.startsWith(prefix));
+  if (values.length === 0) return { width: 1180, height: 760 };
+  const match =
+    values.length === 1
+      ? /^([0-9]{3,4})x([0-9]{3,4})$/u.exec(values[0]!.slice(prefix.length))
+      : null;
+  if (mode === "default" || !match)
+    throw new Error("PREVIEW_WINDOW_SIZE_INVALID");
+  const width = Number(match[1]),
+    height = Number(match[2]);
+  if (width < 640 || height < 520 || width > 3840 || height > 2160)
+    throw new Error("PREVIEW_WINDOW_SIZE_INVALID");
+  return { width, height };
 }
 
 function centeredBounds(
@@ -98,6 +128,7 @@ export function selectPreviewWindowPlacement(
   requested: Readonly<{ width: number; height: number }>,
   allowPrimaryDisplay = false,
   builtInDisplayOnly = false,
+  sidecarDisplayOnly = false,
 ): PreviewWindowPlacement {
   if (displays.length === 0) {
     throw new Error("WINDOW_DISPLAY_UNAVAILABLE");
@@ -118,9 +149,21 @@ export function selectPreviewWindowPlacement(
     (builtInDisplayOnly || !nonPrimary)
       ? primary
       : undefined;
-  const selected = builtInDisplayOnly
-    ? (nonPrimaryInternal ?? ownerAllowedPrimary)
-    : (nonPrimaryInternal ?? nonPrimary ?? ownerAllowedPrimary);
+  if (sidecarDisplayOnly && builtInDisplayOnly)
+    throw new Error("VISIBLE_TEST_DISPLAY_CONFLICT");
+  const sidecar = ordered.find(
+    (display) =>
+      display.id !== primaryDisplayId &&
+      !display.internal &&
+      /\b(?:sidecar|ipad)\b/iu.test(display.label ?? ""),
+  );
+  if (sidecarDisplayOnly && !sidecar)
+    throw new Error("SIDECAR_DISPLAY_UNAVAILABLE");
+  const selected = sidecarDisplayOnly
+    ? sidecar
+    : builtInDisplayOnly
+      ? (nonPrimaryInternal ?? ownerAllowedPrimary)
+      : (nonPrimaryInternal ?? nonPrimary ?? ownerAllowedPrimary);
   if (!selected) {
     throw new Error(
       builtInDisplayOnly
@@ -129,11 +172,13 @@ export function selectPreviewWindowPlacement(
     );
   }
   const isPrimary = selected.id === primaryDisplayId;
-  const selection = isPrimary
-    ? "owner-allowed-primary"
-    : selected.internal
-      ? "non-primary-internal"
-      : "non-primary";
+  const selection = sidecarDisplayOnly
+    ? "sidecar"
+    : isPrimary
+      ? "owner-allowed-primary"
+      : selected.internal
+        ? "non-primary-internal"
+        : "non-primary";
 
   return {
     displayId: selected.id,

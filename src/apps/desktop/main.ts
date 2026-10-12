@@ -1,3 +1,7 @@
+import {
+  ABOUT_PANEL_SIZE,
+  DesktopAboutPanel,
+} from "../../../apps/desktop/about-panel";
 import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
 import { connectorVerificationProof } from "./connector-verification-proof";
 import {
@@ -226,6 +230,8 @@ import {
 import {
   parseAllowPrimaryDisplay,
   parseBuiltInDisplayOnly,
+  parseSidecarDisplayOnly,
+  parsePreviewWindowSize,
   parsePreviewWindowMode,
   selectPreviewWindowPlacement,
 } from "./window-placement";
@@ -705,7 +711,8 @@ const windowMode = parsePreviewWindowMode(process.argv);
 // absence keeps every display-selection outcome exactly as before.
 const allowPrimaryDisplay = parseAllowPrimaryDisplay(process.argv);
 const builtInDisplayOnly = parseBuiltInDisplayOnly(process.argv);
-const initialWindowSize = { width: 1180, height: 760 } as const;
+const sidecarDisplayOnly = parseSidecarDisplayOnly(process.argv);
+const initialWindowSize = parsePreviewWindowSize(process.argv, windowMode);
 const demoTasks = [
   {
     ownerId: "demo-local-preview",
@@ -760,11 +767,9 @@ const controlSchema = z.strictObject({
 
 type RuntimeReady = z.infer<typeof readySchema>;
 app.setName(activeDesktopIdentity.applicationName);
-// The visible production name must not change the observed process identity.
-process.title =
-  buildEnvironment === "dev"
-    ? activeDesktopIdentity.applicationName
-    : productName;
+// macOS also exposes the process title as the application name. Storage,
+// bundle, executable and receipt identities remain explicit compatibility values.
+process.title = activeDesktopIdentity.applicationName;
 if (process.platform === "win32")
   app.setAppUserModelId(activeDesktopIdentity.applicationId);
 if (process.platform === "darwin") {
@@ -776,12 +781,13 @@ if (process.platform === "darwin") {
     applicationVersion: displayEdition
       ? `${buildIdentity.version} (${displayEdition})`
       : buildIdentity.version,
-    version: buildIdentity.sourceCommit.slice(0, 12),
+    version: "",
   });
 }
 
 let window: BrowserWindow | null = null;
 let aboutOpen = false;
+let aboutPanel: DesktopAboutPanel | null = null;
 let runtimeChild: UtilityProcess | null = null;
 let runtime: RuntimeReady | null = null;
 let runtimeState: "starting" | "ready" | "offline" | "failed" = "starting";
@@ -9801,9 +9807,8 @@ function desktopBrandImage() {
 function requestAbout(): void {
   if (quitInProgress || installedUpdateAdmission || aboutOpen) return;
   aboutOpen = true;
-  // The macOS standard About panel takes its icon from the Electron runtime
-  // bundle, independently of the selected Dock artwork. A native message sheet
-  // can use that same verified artwork without changing the runtime bundle.
+  // A dedicated panel uses the verified Farol artwork without inheriting the
+  // vendor runtime icon or exposing technical release identity in the UI.
   void containWindowOpenFailure(ensureWindow, recoverWindowOpenFailure)
     .then(async (outcome) => {
       if (outcome !== "opened") return;
@@ -9815,15 +9820,15 @@ function requestAbout(): void {
           window.isDestroyed()
         )
           return;
-        await dialog.showMessageBox(window, {
-          type: "none",
-          title: `About ${displayProductName}`,
-          message: displayProductName,
-          detail: `Version ${buildIdentity.version}${displayEdition ? ` (${displayEdition})` : ""}\nSource ${buildIdentity.sourceCommit.slice(0, 12)}`,
-          icon: desktopBrandImage(),
-          buttons: ["OK"],
-          defaultId: 0,
-          cancelId: 0,
+        aboutPanel ??= new DesktopAboutPanel();
+        await aboutPanel.open({
+          owner: window,
+          name: displayProductName,
+          version: buildIdentity.version,
+          builtAt: buildIdentity.builtAt,
+          icon: desktopBrandImage().toDataURL(),
+          mode: windowMode,
+          place: () => selectedVisibleTestPlacement(ABOUT_PANEL_SIZE).bounds,
         });
       } catch {
         console.error("DESKTOP_ABOUT_PRESENTATION_FAILED");
@@ -10819,6 +10824,7 @@ async function createWindow(): Promise<void> {
           initialWindowSize,
           allowPrimaryDisplay,
           builtInDisplayOnly,
+          sidecarDisplayOnly,
         )
       : null;
   window = new BrowserWindow({
@@ -10938,6 +10944,7 @@ function selectedVisibleTestPlacement(
     requested,
     allowPrimaryDisplay,
     builtInDisplayOnly,
+    sidecarDisplayOnly,
   );
 }
 
@@ -10969,6 +10976,7 @@ function revealWindow(): void {
 
 function reconcileVisibleTestDisplay(): void {
   if (windowMode !== "secondary-visible") return;
+  aboutPanel?.reconcile();
   if (windowPresentationReady && window !== null && !window.isDestroyed()) {
     window.hide();
     try {
