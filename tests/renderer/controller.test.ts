@@ -591,7 +591,7 @@ describe("normal Quit preference command provenance", () => {
     },
   );
 
-  it("keeps observation and the separate download choice available after an unknown quit write", async () => {
+  it("keeps observation available but fences combined update consent after an unknown quit write", async () => {
     const { f, c } = await controller();
     vi.mocked(f.api.installedUpdate).mockRejectedValueOnce(
       new Error("reply lost"),
@@ -603,12 +603,12 @@ describe("normal Quit preference command provenance", () => {
       ...off,
       automaticUpdatePreference: { status: "confirmed", enabled: true },
     });
-    expect((await c.setAutomaticDownloads(true)).state).toBe("applied");
+    expect((await c.setAutomaticDownloads(true)).state).toBe("refused");
     expect(c.getSnapshot().intents["update-install-on-quit"]).toBe(original);
     expect(c.getSnapshot().update.installOnQuitPreference).toEqual(
       off.installOnQuitPreference,
     );
-    expect(f.api.installedUpdate).toHaveBeenCalledTimes(2);
+    expect(f.api.installedUpdate).toHaveBeenCalledTimes(1);
     expect(f.api.installedUpdate).not.toHaveBeenCalledWith({ kind: "restart" });
     c.dispose();
   });

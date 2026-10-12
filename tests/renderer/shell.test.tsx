@@ -1000,7 +1000,10 @@ it("R16 R23 R24 distinct update controls preserve exact operations and pending f
   };
   await act(async () => f.emit("update", ready));
   await act(async () => button(host, "Install and Relaunch").click());
-  expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "restart" });
+  expect(f.api.installedUpdate).toHaveBeenCalledWith({
+    kind: "restart-confirmed",
+    version: "1.0",
+  });
   await act(async () => {
     f.emit("update", ready);
     c.overlay("update");
@@ -1096,7 +1099,7 @@ it.each([
   [
     { phase: "ready", version: "1.0", deferred: false, blockedBy: null },
     "Update Farol?",
-    "is ready. Farol will close briefly and reopen after installation.",
+    "is ready to install.",
     ["Remind Me Later", "Install and Relaunch"],
   ],
   [
@@ -1176,7 +1179,7 @@ it.each([
       expect(technical?.querySelector("code")?.textContent).toBe(update.code);
     }
     expect(dialog.querySelector(".update-installed")?.textContent).toContain(
-      "Installed: Farol 0.1.8-owner.beta.1 (build 10)",
+      "Current version: Farol 0.1.8 beta 1.",
     );
     expect(
       [...dialog.querySelectorAll(".update-actions button")].map((b) =>
@@ -1188,9 +1191,8 @@ it.each([
     );
     expect(dialog.querySelector(".update-actions .update-check")).toBeNull();
     if (update.phase === "available" || update.phase === "ready") {
-      expect(
-        dialog.querySelector<HTMLDetailsElement>(".update-options")?.open,
-      ).toBe(false);
+      expect(dialog.querySelector(".update-options")).toBeNull();
+      expect(dialog.querySelectorAll('input[type="checkbox"]')).toHaveLength(1);
       expect(dialog.querySelector(".update-policy-strip")).toBeNull();
     }
     if (update.phase === "ready" || update.phase === "downloading") {
@@ -1239,55 +1241,112 @@ it("describes an uncertain update as requiring recovery without claiming the ins
   );
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
 });
+it("keeps real recovery refusals visible and fenced", async () => {
+  const { host, c, f } = await mount();
+  vi.mocked(f.api.installedUpdate).mockClear();
+  await act(async () => {
+    f.emit("update", {
+      phase: "recovery",
+      version: "1.0",
+      blockedBy: "WORK_PENDING",
+    });
+    c.overlay("update");
+  });
+  const block = host.querySelector("dialog .update-block")!;
+  expect(block.getAttribute("role")).toBe("alert");
+  expect(block.querySelector("strong")?.textContent).toBe(
+    "Recovery is blocked",
+  );
+  expect(block.querySelector("details code")?.textContent).toBe("WORK_PENDING");
+  expect(button(host, "Recover").disabled).toBe(true);
+  await act(async () => button(host, "Recover").click());
+  expect(f.api.installedUpdate).not.toHaveBeenCalled();
+});
+
 it.each([
-  [
-    "ready",
-    "UPDATE_BROWSER_DRAFT",
-    "Send or clear the unsent ChatGPT draft",
-    true,
-  ],
-  [
-    "ready",
-    "UPDATE_BROWSER_STATE_UNKNOWN",
-    "Do not retry this update action",
-    false,
-  ],
-  ["recovery", "WORK_PENDING", "Farol can’t restart safely yet", false],
-] as const)(
-  "Updates %s groups the %s reason with its fenced action",
-  async (phase, code, message, canCheck) => {
+  "UPDATE_BROWSER_OPEN",
+  "UPDATE_BROWSER_BUSY",
+  "UPDATE_BROWSER_DRAFT",
+  "UPDATE_BROWSER_STATE_UNKNOWN",
+])(
+  "confirms manual installation despite %s, binding the displayed version",
+  async (blockedBy) => {
     const { host, c, f } = await mount();
     vi.mocked(f.api.installedUpdate).mockClear();
     await act(async () => {
-      f.emit(
-        "update",
-        phase === "ready"
-          ? { phase, version: "1.0", deferred: false, blockedBy: code }
-          : { phase, version: "1.0", blockedBy: code },
-      );
+      f.emit("update", {
+        phase: "ready",
+        version: "0.2.1",
+        deferred: false,
+        blockedBy,
+      });
       c.overlay("update");
     });
-    const block = host.querySelector("dialog .update-block")!;
-    expect(block.getAttribute("role")).toBe("alert");
-    expect(block.querySelector("strong")?.textContent).toBe(
-      phase === "ready" ? "Restart is blocked" : "Recovery is blocked",
+    const dialog = host.querySelector("dialog")!;
+    expect(dialog.textContent).toContain(
+      "Farol will close open ChatGPT sessions and interrupt work before restarting.",
     );
-    expect(block.querySelector("p")?.textContent).toContain(message);
-    expect(block.querySelector("details code")?.textContent).toBe(code);
-    expect(block.querySelector("details")?.hasAttribute("open")).toBe(false);
-    const action = button(
-      host,
-      phase === "ready" ? "Install and Relaunch" : "Recover",
+    expect(dialog.textContent).not.toContain("Restart is blocked");
+    expect(dialog.textContent).not.toContain(blockedBy);
+    expect(dialog.querySelector(".update-block")).toBeNull();
+    const pending = deferred<unknown>();
+    vi.mocked(f.api.installedUpdate).mockReturnValueOnce(pending.promise);
+    const install = button(dialog, "Install and Relaunch");
+    expect(install.disabled).toBe(false);
+    await act(async () => {
+      install.click();
+      install.click();
+    });
+    expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+      kind: "restart-confirmed",
+      version: "0.2.1",
+    });
+    expect(host.querySelectorAll("dialog")).toHaveLength(1);
+    expect(button(dialog, "Install and Relaunch").disabled).toBe(true);
+    await act(async () => pending.reject(new Error("reply lost")));
+    await act(async () =>
+      f.emit("update", {
+        phase: "ready",
+        version: "0.2.1",
+        deferred: false,
+        blockedBy: null,
+      }),
     );
-    expect(action.disabled).toBe(true);
-    expect(button(host, "Check for Updates").disabled).toBe(!canCheck);
-    expect(document.activeElement).toBe(
-      button(host, phase === "ready" ? "Remind Me Later" : "Cancel"),
+    expect(button(dialog, "Install and Relaunch").disabled).toBe(true);
+    await act(async () => button(dialog, "Install and Relaunch").click());
+    expect(f.api.installedUpdate).toHaveBeenCalledTimes(1);
+  },
+);
+
+it.each(["UPDATE_BROWSER_RELEASE_UNCONFIRMED", "UPDATE_STATE_UNREADABLE"])(
+  "keeps %s as a concise issue with Diagnostics and a disabled install",
+  async (blockedBy) => {
+    const { host, c, f } = await mount();
+    vi.mocked(f.api.installedUpdate).mockClear();
+    await act(async () => {
+      f.emit("update", {
+        phase: "ready",
+        version: "0.2.1",
+        deferred: false,
+        blockedBy,
+      });
+      c.overlay("update");
+    });
+    const dialog = host.querySelector("dialog")!;
+    expect(dialog.querySelector(".update-block")).toBeNull();
+    expect(dialog.querySelector(".update-issue p")?.textContent).toContain(
+      "Review Diagnostics before restarting.",
     );
-    await act(async () => action.click());
+    expect(
+      dialog.querySelector(".update-issue details code")?.textContent,
+    ).toBe(blockedBy);
+    const install = button(dialog, "Install and Relaunch");
+    expect(install.disabled).toBe(true);
+    await act(async () => install.click());
     expect(f.api.installedUpdate).not.toHaveBeenCalled();
   },
 );
+
 it.each(["available", "ready"] as const)(
   "Updates deferred %s keeps a usable local dismiss and restores the rail trigger",
   async (phase) => {
@@ -1344,9 +1403,13 @@ it("Updates uses only supplied notes and confirmed installed version", async () 
   });
   expect(host.querySelector("dialog .update-release")).toBeNull();
   expect(
-    host.querySelector("dialog .update-preference strong")?.textContent,
-  ).toBe("Automatic downloads");
-  expect(button(host, "Turn on automatic downloads").disabled).toBe(true);
+    host.querySelector("dialog .automatic-update-choice strong")?.textContent,
+  ).toBe("Automatically update Farol");
+  expect(
+    host.querySelector<HTMLInputElement>(
+      "dialog .automatic-update-choice input",
+    )?.disabled,
+  ).toBe(true);
   expect(host.querySelector("dialog")?.textContent).not.toContain(
     "install when you quit",
   );
@@ -2660,13 +2723,14 @@ it("B04 an ordinary successful target update explains restart with its available
     c.overlay("update");
   });
   const copy = host.querySelector("dialog")!.textContent!.replace(/\s+/gu, " ");
-  expect(copy).toContain(
-    "Version 1.0 is ready. Farol will close briefly and reopen after installation.",
-  );
+  expect(copy).toContain("Farol 1.0 is ready to install.");
   expect(copy).not.toContain("stays closed");
   expect(button(host, "Install and Relaunch").disabled).toBe(false);
   await act(async () => button(host, "Install and Relaunch").click());
-  expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "restart" });
+  expect(f.api.installedUpdate).toHaveBeenCalledWith({
+    kind: "restart-confirmed",
+    version: "1.0",
+  });
 });
 it("B04 distinguishes installed and downloaded versions and refuses an unknown-state Check", async () => {
   const { host, c, f } = await mount();
@@ -2680,15 +2744,13 @@ it("B04 distinguishes installed and downloaded versions and refuses an unknown-s
     c.overlay("update");
   });
   const text = host.querySelector("dialog")!.textContent!;
-  expect(text).toContain("Installed: Farol 0.1.8-owner.beta.1 (build 10)");
-  expect(text).toContain(
-    "Version 0.2.0-owner.beta.4 is ready. Farol will close briefly and reopen after installation.",
-  );
-  expect(text).toContain("Installation has not started");
-  expect(text).toContain("Do not retry this update action");
-  expect(text).toContain("Technical code");
+  expect(text).toContain("Current version: Farol 0.1.8 beta 1.");
+  expect(text).toContain("Farol 0.2.0 beta 4 is ready to install.");
+  expect(text).toContain("close open ChatGPT sessions and interrupt work");
+  expect(text).not.toContain("UPDATE_BROWSER_STATE_UNKNOWN");
+  expect(text).not.toContain("Restart is blocked");
   expect(button(host, "Check for Updates").disabled).toBe(true);
-  expect(button(host, "Install and Relaunch").disabled).toBe(true);
+  expect(button(host, "Install and Relaunch").disabled).toBe(false);
   vi.mocked(f.api.installedUpdate).mockClear();
   await act(async () => button(host, "Check for Updates").click());
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
@@ -2726,12 +2788,12 @@ const boundedUpdateActions = [
   [
     { phase: "ready", version: "1.0", deferred: false, blockedBy: null },
     "Install and Relaunch",
-    "restart",
+    "restart-confirmed",
   ],
 ] satisfies [
   WindowSnapshot["update"],
   string,
-  "recover" | "rollback" | "restart",
+  "recover" | "rollback" | "restart-confirmed",
 ][];
 it.each(boundedUpdateActions)(
   "B04 blocked current work fences %j while %s remains inspectable",

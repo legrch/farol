@@ -1,4 +1,8 @@
 import {
+  automaticUpdateAvailable,
+  confirmedRestartAllowed,
+} from "./update-eligibility";
+import {
   defaultNavigationShortcuts,
   parseNavigationShortcuts,
   type NavigationShortcuts,
@@ -1479,7 +1483,10 @@ export class WindowController implements RendererFacade {
       return { id: intention, state: "applied", code: null };
     });
   }
-  update(action: UpdateAction, noticeKey?: string): Promise<Intent> {
+  update(
+    action: UpdateAction | "restart-confirmed",
+    noticeKey?: string,
+  ): Promise<Intent> {
     if (action === "notice-seen") {
       const current = this.state.update;
       const notice = "notice" in current ? current.notice : undefined;
@@ -1555,9 +1562,24 @@ export class WindowController implements RendererFacade {
         state: "refused",
         code: "UPDATE_NOT_READY",
       });
-    return this.dispatch("update", action, async () => {
+    if (
+      action === "restart-confirmed" &&
+      (!confirmedRestartAllowed(this.state.update) ||
+        this.state.update.phase !== "ready" ||
+        this.state.update.version !== noticeKey)
+    )
+      return Promise.resolve({
+        id: "update",
+        state: "refused",
+        code: "UPDATE_NOT_READY",
+      });
+    return this.dispatch("update", { action, version: noticeKey }, async () => {
       const value = InstalledUpdateViewSchema.safeParse(
-        await this.api.installedUpdate({ kind: action }),
+        await this.api.installedUpdate(
+          action === "restart-confirmed"
+            ? { kind: "restart-confirmed", version: noticeKey! }
+            : { kind: action },
+        ),
       );
       if (!value.success)
         return {
@@ -1587,32 +1609,17 @@ export class WindowController implements RendererFacade {
     const key = "update-automatic-downloads";
     const current = this.state;
     const preference = current.update.automaticUpdatePreference;
-    if (
-      current.status !== "current" ||
-      current.runtime !== "ready" ||
-      !current.buildId ||
-      current.intents["update-install-on-quit"]?.state === "pending" ||
-      !preference ||
-      preference.status !== "confirmed" ||
-      current.intents[key]?.state === "pending" ||
-      current.intents[key]?.state === "unknown" ||
-      current.intents.update?.state === "pending" ||
-      current.intents.update?.state === "unknown" ||
-      current.update.phase === "checking" ||
-      current.update.phase === "downloading" ||
-      current.update.phase === "applying" ||
-      current.update.phase === "recovery" ||
-      (current.update.phase === "failed" &&
-        current.update.code.includes("UNKNOWN")) ||
-      (current.update.phase === "ready" &&
-        current.update.blockedBy?.includes("UNKNOWN"))
-    )
+    if (!automaticUpdateAvailable(current))
       return Promise.resolve({
         id: key,
         state: "refused",
         code: "UPDATE_AUTOMATIC_PREFERENCE_UNAVAILABLE",
       });
-    if (preference.enabled === enabled)
+    if (
+      preference?.status === "confirmed" &&
+      preference.enabled === enabled &&
+      preference.scope === "download-and-install"
+    )
       return Promise.resolve({ id: key, state: "applied", code: null });
     return this.dispatch(key, enabled, async () => {
       const revision = this.updateRevision;
@@ -1620,6 +1627,7 @@ export class WindowController implements RendererFacade {
         await this.api.installedUpdate({
           kind: "set-automatic-update-preference",
           enabled,
+          scope: "download-and-install",
         }),
       );
       if (!parsed.success || !parsed.data.automaticUpdatePreference)
@@ -1630,7 +1638,9 @@ export class WindowController implements RendererFacade {
         };
       if (this.updateRevision === revision) this.adoptUpdate(parsed.data);
       const result = parsed.data.automaticUpdatePreference;
-      return result.status === "confirmed" && result.enabled === enabled
+      return result.status === "confirmed" &&
+        result.enabled === enabled &&
+        result.scope === "download-and-install"
         ? { id: key, state: "applied", code: null }
         : result.status === "blocked"
           ? { id: key, state: "refused", code: result.code }

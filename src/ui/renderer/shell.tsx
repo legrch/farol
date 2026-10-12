@@ -13,11 +13,7 @@ import {
 } from "../../pkg/shell-layout/geometry";
 import { useRenderer } from "./services";
 import { PanelBoundary } from "./boundary";
-import {
-  InstallOnQuitChoice,
-  Settings,
-  useSettingsAttention,
-} from "./settings";
+import { Settings, useSettingsAttention } from "./settings";
 import type { RendererFacade, SettingsPage, WindowSnapshot } from "./contract";
 import { computerSetup } from "./computer-setup";
 import { TaskEditor } from "./task";
@@ -26,7 +22,13 @@ import { Setup, SetupNavigation } from "./setup";
 import { setupSteps } from "./setup-navigation";
 import { designIconPath, designIconViewBox } from "./design-icons";
 import { UpdateNotice, acknowledgeUpdateNotice } from "./update-notice";
-import { updateCheckAllowed } from "./update-eligibility";
+import {
+  updateCheckAllowed,
+  confirmedRestartAllowed,
+  isConfirmedBrowserBlock,
+  updateVersionLabel,
+} from "./update-eligibility";
+import { AutomaticUpdateChoice } from "./automatic-update-choice";
 import {
   UpdateDownloadProgress,
   updateDownloadMessage,
@@ -575,8 +577,6 @@ function Update({
 }) {
   const update = snapshot.update;
   const intent = snapshot.intents.update;
-  const preference = update.automaticUpdatePreference;
-  const preferenceIntent = snapshot.intents["update-automatic-downloads"];
   const safeAction = useRef<HTMLButtonElement>(null);
   const progressStatus = useRef<HTMLParagraphElement>(null);
   const noticeKey = "notice" in update ? update.notice?.key : undefined;
@@ -613,9 +613,9 @@ function Update({
         ? `Restore previous version ${rollbackVersion}.`
         : "No previous version is available to restore in the current update state."
       : update.phase === "ready"
-        ? `Version ${update.version} is ready. Farol will close briefly and reopen after installation.`
+        ? `Farol ${updateVersionLabel(update.version)} is ready to install.`
         : update.phase === "available"
-          ? `Version ${update.version} is available to download.`
+          ? `Farol ${updateVersionLabel(update.version)} is available to download.`
           : update.phase === "failed"
             ? updateResultMessage(
                 "failed",
@@ -696,7 +696,7 @@ function Update({
           )}
           <p className="update-installed">
             {snapshot.status === "current" && snapshot.installedVersion
-              ? `Installed: Farol ${snapshot.installedVersion.version}${snapshot.installedVersion.buildVersion ? ` (build ${snapshot.installedVersion.buildVersion})` : ""}.`
+              ? `Current version: Farol ${updateVersionLabel(snapshot.installedVersion.version)}.`
               : "Installed version cannot be confirmed in this session."}
           </p>
         </>
@@ -706,82 +706,40 @@ function Update({
         (update.phase === "available" || update.phase === "ready") &&
         update.notes && (
           <details className="update-release">
-            <summary>What’s new in Farol {update.version}</summary>
+            <summary>
+              What’s new in Farol {updateVersionLabel(update.version)}
+            </summary>
             <p className="update-notes">{update.notes}</p>
           </details>
         )}
       {(!recoveryMode || recovery) &&
-        (update.phase === "failed" || update.phase === "unavailable") && (
+        (update.phase === "failed" || update.phase === "unavailable") &&
+        (recovery || !isConfirmedBrowserBlock(update.code)) && (
           <details className="update-technical-code">
             <summary>Technical code</summary>
             <code>{update.code}</code>
           </details>
         )}
-      {release && (
-        <details
-          className="update-options"
-          open={
-            preferenceIntent?.state === "unknown" ||
-            snapshot.intents["update-install-on-quit"]?.state === "unknown"
-          }
-        >
-          <summary>Update settings</summary>
-          {(update.phase === "available" || update.phase === "ready") && (
-            <div className="update-preference">
-              <div className="copy">
-                <strong>Automatic downloads</strong>
-                <p className="description" role="status">
-                  {preference?.status === "confirmed"
-                    ? preference.enabled
-                      ? "Future eligible updates download during scheduled checks. Installation requires Install and Relaunch or separate consent to install on normal Quit."
-                      : "Future updates download only when you choose."
-                    : "Automatic download preference cannot be confirmed in this session."}
-                </p>
-              </div>
-              <button
-                type="button"
-                disabled={
-                  disabled ||
-                  preference?.status !== "confirmed" ||
-                  preferenceIntent?.state === "pending" ||
-                  preferenceIntent?.state === "unknown" ||
-                  snapshot.intents["update-install-on-quit"]?.state ===
-                    "pending" ||
-                  (update.phase === "ready" &&
-                    Boolean(update.blockedBy?.includes("UNKNOWN")))
-                }
-                onClick={() => {
-                  const latest = facade.getSnapshot();
-                  const choice = latest.update.automaticUpdatePreference;
-                  if (
-                    latest.status !== "current" ||
-                    choice?.status !== "confirmed" ||
-                    latest.intents["update-automatic-downloads"]?.state ===
-                      "pending" ||
-                    latest.intents["update-automatic-downloads"]?.state ===
-                      "unknown"
-                  )
-                    return;
-                  void facade.setAutomaticDownloads(!choice.enabled);
-                }}
-              >
-                {preference?.status === "confirmed" && preference.enabled
-                  ? "Turn off automatic downloads"
-                  : "Turn on automatic downloads"}
-              </button>
-              {preferenceIntent?.state === "unknown" && (
-                <p role="alert">Preference outcome unknown. Do not retry.</p>
-              )}
-            </div>
-          )}
-          {(update.phase === "available" || update.phase === "ready") && (
-            <div className="update-preference">
-              <div className="copy">
-                <InstallOnQuitChoice snapshot={snapshot} facade={facade} />
-              </div>
-            </div>
-          )}
-        </details>
+      {!recoveryMode &&
+        snapshot.status === "current" &&
+        snapshot.installedVersion && (
+          <details className="update-technical-code">
+            <summary>Details</summary>
+            <p>Installed version: {snapshot.installedVersion.version}</p>
+            {snapshot.installedVersion.buildVersion && (
+              <p>Build: {snapshot.installedVersion.buildVersion}</p>
+            )}
+            {"version" in update && <p>Update version: {update.version}</p>}
+          </details>
+        )}
+      {!recoveryMode && (
+        <AutomaticUpdateChoice snapshot={snapshot} facade={facade} />
+      )}
+      {!recoveryMode && update.phase === "ready" && (
+        <p className="description update-confirmation">
+          Farol will close open ChatGPT sessions and interrupt work before
+          restarting.
+        </p>
       )}
       {recovery ? (
         <p className="description">
@@ -803,22 +761,32 @@ function Update({
           Farol or interrupt current work.
         </p>
       ) : null}
-      {blockedBy && (
-        <div className="update-block" role="alert">
-          <strong>
-            {recovery
-              ? "Recovery is blocked"
-              : rollbackVersion
-                ? "Roll back is blocked"
-                : "Restart is blocked"}
-          </strong>
-          <p>{updateBlockMessage(blockedBy)}</p>
-          <details>
-            <summary>Technical code</summary>
-            <code>{blockedBy}</code>
-          </details>
-        </div>
-      )}
+      {blockedBy &&
+        (recoveryMode || recovery || !isConfirmedBrowserBlock(blockedBy)) && (
+          <div
+            className={
+              recoveryMode || recovery ? "update-block" : "update-issue"
+            }
+            role="alert"
+          >
+            <strong>
+              {recovery
+                ? "Recovery is blocked"
+                : rollbackVersion
+                  ? "Roll back is blocked"
+                  : "Update needs attention"}
+            </strong>
+            <p>
+              {recoveryMode || recovery
+                ? updateBlockMessage(blockedBy)
+                : "Review Diagnostics before restarting."}
+            </p>
+            <details>
+              <summary>Technical code</summary>
+              <code>{blockedBy}</code>
+            </details>
+          </div>
+        )}
       {!recoveryMode && (
         <div className="update-check" hidden={!canCheck}>
           <button
@@ -918,8 +886,10 @@ function Update({
             </button>
             <button
               className="primary"
-              disabled={disabled || update.blockedBy !== null}
-              onClick={() => void facade.update("restart")}
+              disabled={disabled || !confirmedRestartAllowed(update)}
+              onClick={() =>
+                void facade.update("restart-confirmed", update.version)
+              }
             >
               Install and Relaunch
             </button>

@@ -26,12 +26,16 @@ import { signInPresentation } from "./sign-in-presentation";
 import { computerSetup } from "./computer-setup";
 import { visibleSetupSection, type SetupSection } from "./setup-checklist";
 import { commandAllowed, dependencyFences } from "./command-eligibility";
-import { updateCheckAllowed } from "./update-eligibility";
+import {
+  updateCheckAllowed,
+  isConfirmedBrowserBlock,
+  updateVersionLabel,
+} from "./update-eligibility";
+import { AutomaticUpdateChoice } from "./automatic-update-choice";
 import {
   UpdateDownloadProgress,
   updateDownloadMessage,
 } from "./update-download";
-import { canSetInstallOnQuitPreference } from "./controller";
 import {
   updateBlockMessage,
   updateResultMessage,
@@ -3229,79 +3233,10 @@ function Shortcuts({ snapshot, facade }: PageProps) {
     </>
   );
 }
-export function InstallOnQuitChoice({ snapshot, facade }: SettingsProps) {
-  const preference = snapshot.update.installOnQuitPreference;
-  const intent = snapshot.intents["update-install-on-quit"];
-  const descriptionId = useId();
-  const confirmed =
-    snapshot.environment === "preview" &&
-    preference?.status === "confirmed" &&
-    preference.scope === "install-on-normal-quit";
-  return (
-    <>
-      <label className="setting-row">
-        <input
-          type="checkbox"
-          checked={confirmed && preference.enabled}
-          disabled={!canSetInstallOnQuitPreference(snapshot, facade)}
-          aria-describedby={descriptionId}
-          onChange={(event) => {
-            const enabled = event.currentTarget.checked;
-            if (!canSetInstallOnQuitPreference(facade.getSnapshot(), facade))
-              return;
-            void facade.setInstallOnQuitPreference(enabled);
-          }}
-        />
-        Install downloaded updates when I quit Farol
-      </label>
-      <p id={descriptionId} className="description" role="status">
-        {intent?.state === "unknown"
-          ? "Quit installation preference outcome is unknown. Do not repeat this change; review Diagnostics."
-          : intent?.state === "pending"
-            ? "Saving quit installation preference…"
-            : confirmed
-              ? preference.enabled
-                ? "On. Eligible downloaded updates may install when you quit Farol normally, after safety checks. Farol stays closed."
-                : "Off. Quitting Farol does not install updates. Use Install and Relaunch to install when you choose."
-              : "Off. Quit installation preference cannot be confirmed in this session."}
-      </p>
-      {preference?.status !== "confirmed" && preference?.code && (
-        <p className="notice" role="status">
-          {preference.code}
-        </p>
-      )}
-      {intent?.state === "refused" && (
-        <p className="notice" role="status">
-          Quit installation preference change was refused. {intent.code}
-        </p>
-      )}
-      <p className="description">
-        Automatic downloads do not grant permission to install. This separate
-        choice applies only to normal Quit, with no automatic relaunch.
-      </p>
-    </>
-  );
-}
 function Updates({ snapshot, facade, actions }: PageProps) {
   const busy = useRef(false);
   const [checking, setChecking] = useState(false);
   const update = snapshot.update;
-  const preference = update.automaticUpdatePreference;
-  const preferenceIntent = snapshot.intents["update-automatic-downloads"];
-  const preferenceBusy =
-    preferenceIntent?.state === "pending" ||
-    preferenceIntent?.state === "unknown";
-  const preferenceAvailable =
-    preference?.status === "confirmed" &&
-    !preferenceBusy &&
-    snapshot.intents["update-install-on-quit"]?.state !== "pending" &&
-    !actions.disabled &&
-    update.phase !== "checking" &&
-    update.phase !== "downloading" &&
-    update.phase !== "applying" &&
-    update.phase !== "recovery" &&
-    !(update.phase === "failed" && update.code.includes("UNKNOWN")) &&
-    !(update.phase === "ready" && update.blockedBy?.includes("UNKNOWN"));
   const current =
     snapshot.status === "current" ? snapshot.installedVersion : null;
   if (snapshot.environment === "dev") {
@@ -3323,14 +3258,22 @@ function Updates({ snapshot, facade, actions }: PageProps) {
       <Group title="Update status">
         <p className="description">
           {current
-            ? `Installed: Farol ${current.version}${current.buildVersion ? ` (build ${current.buildVersion})` : ""}.`
+            ? `Current version: Farol ${updateVersionLabel(current.version)}.`
             : "Installed version could not be confirmed from this app session."}
         </p>
+        {current && (
+          <details>
+            <summary>Details</summary>
+            <p>Installed version: {current.version}</p>
+            {current.buildVersion && <p>Build: {current.buildVersion}</p>}
+            {"version" in update && <p>Update version: {update.version}</p>}
+          </details>
+        )}
         <p className="badges" role="status">
           {update.phase === "ready"
-            ? `Downloaded: Farol ${update.version}. Ready to install; this version is not installed yet.`
+            ? `Downloaded: Farol ${updateVersionLabel(update.version)}. Ready to install; this version is not installed yet.`
             : update.phase === "available"
-              ? `Available: Farol ${update.version}. Download it when you choose; this version is not installed.`
+              ? `Available: Farol ${updateVersionLabel(update.version)}. Download it when you choose; this version is not installed.`
               : update.phase === "checking"
                 ? "Checking for updates…"
                 : update.phase === "downloading"
@@ -3372,18 +3315,25 @@ function Updates({ snapshot, facade, actions }: PageProps) {
                 update.code,
               )}
             </p>
-            <details>
-              <summary>Technical code</summary>
-              <code>{update.code}</code>
-            </details>
+            {((update.phase === "failed" && update.recoveryRequired) ||
+              !isConfirmedBrowserBlock(update.code)) && (
+              <details>
+                <summary>Technical code</summary>
+                <code>{update.code}</code>
+              </details>
+            )}
           </>
         )}
         {update.phase !== "idle" &&
           "blockedBy" in update &&
-          update.blockedBy && (
+          update.blockedBy &&
+          (update.phase === "recovery" ||
+            !isConfirmedBrowserBlock(update.blockedBy)) && (
             <>
               <p className="notice" role="status">
-                {updateBlockMessage(update.blockedBy)}
+                {update.phase === "recovery"
+                  ? updateBlockMessage(update.blockedBy)
+                  : "This update needs attention. Review Diagnostics before restarting."}
               </p>
               <details>
                 <summary>Technical code</summary>
@@ -3401,7 +3351,7 @@ function Updates({ snapshot, facade, actions }: PageProps) {
               {update.phase === "ready"
                 ? "Install and Relaunch…"
                 : update.phase === "available"
-                  ? `Update to ${update.version}…`
+                  ? `Update to ${updateVersionLabel(update.version)}…`
                   : update.phase === "downloading" ||
                       update.phase === "applying"
                     ? "View progress"
@@ -3444,60 +3394,7 @@ function Updates({ snapshot, facade, actions }: PageProps) {
           </button>
         </div>
       </Group>
-      <details
-        className="update-options"
-        open={
-          preferenceIntent?.state === "unknown" ||
-          snapshot.intents["update-install-on-quit"]?.state === "unknown"
-        }
-      >
-        <summary>Automatic update settings</summary>
-        <Group title="Automatic downloads">
-          <p className="description" role="status">
-            {preference?.status === "confirmed"
-              ? preference.enabled
-                ? "On. Farol downloads eligible updates during scheduled checks. Installation requires Install and Relaunch or separate consent to install on normal Quit."
-                : "Off. Farol checks for updates, but downloads only when you choose."
-              : "Download preference cannot be confirmed in this session."}
-          </p>
-          {preference?.status !== "confirmed" && preference?.code && (
-            <p className="notice" role="status">
-              {preference.code}
-            </p>
-          )}
-          {preferenceIntent?.state === "unknown" && (
-            <p className="notice" role="status">
-              Preference outcome is unknown. Do not repeat this change; review
-              Diagnostics.
-            </p>
-          )}
-          <button
-            type="button"
-            className="subtle"
-            disabled={!preferenceAvailable}
-            onClick={() => {
-              const latest = facade.getSnapshot();
-              const choice = latest.update.automaticUpdatePreference;
-              if (
-                choice?.status !== "confirmed" ||
-                latest.intents["update-automatic-downloads"]?.state ===
-                  "pending" ||
-                latest.intents["update-automatic-downloads"]?.state ===
-                  "unknown"
-              )
-                return;
-              void facade.setAutomaticDownloads(!choice.enabled);
-            }}
-          >
-            {preference?.status === "confirmed" && preference.enabled
-              ? "Turn off automatic downloads"
-              : "Turn on automatic downloads"}
-          </button>
-        </Group>
-        <Group title="Installation on Quit">
-          <InstallOnQuitChoice snapshot={snapshot} facade={facade} />
-        </Group>
-      </details>
+      <AutomaticUpdateChoice snapshot={snapshot} facade={facade} />
     </>
   );
 }

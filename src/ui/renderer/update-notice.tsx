@@ -1,4 +1,8 @@
 import type { RendererFacade, WindowSnapshot } from "./contract";
+import {
+  isConfirmedBrowserBlock,
+  updateVersionLabel,
+} from "./update-eligibility";
 import { updateBlockMessage } from "../update-block-message";
 
 export function acknowledgeUpdateNotice(facade: RendererFacade): void {
@@ -54,13 +58,13 @@ export function UpdateNotice({
         <strong>
           {update.phase === "failed"
             ? "The update did not finish"
-            : `Farol ${update.version} is ${update.phase === "ready" ? "downloaded" : "available"}`}
+            : `Farol ${updateVersionLabel(update.version)} is ${update.phase === "ready" ? "downloaded" : "available"}`}
         </strong>
         <p>
           {update.phase === "failed"
             ? "Review the update status when you choose."
             : update.phase === "ready"
-              ? update.blockedBy
+              ? update.blockedBy && !isConfirmedBrowserBlock(update.blockedBy)
                 ? `Installation has not started. ${updateBlockMessage(update.blockedBy)}`
                 : "Ready to install. Farol will restart when you choose."
               : "A new version is available when you’re ready."}

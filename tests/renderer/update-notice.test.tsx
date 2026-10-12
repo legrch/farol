@@ -72,43 +72,10 @@ function button(host: Element, label: string): HTMLButtonElement {
   if (!found) throw new Error(`BUTTON_MISSING:${label}`);
   return found;
 }
-it("offers only confirmed automatic downloads in the update sheet", async () => {
-  const off: InstalledUpdateView = {
-    phase: "available",
-    version: available.version,
-    deferred: false,
-    automaticUpdatePreference: { status: "confirmed", enabled: false },
-  };
-  const on: InstalledUpdateView = {
-    ...off,
-    automaticUpdatePreference: { status: "confirmed", enabled: true },
-  };
-  const { host, c, f } = await mount(off);
-  await act(async () =>
-    host.querySelector<HTMLButtonElement>(".rail .update-action")!.click(),
-  );
-  expect(host.textContent).toContain(
-    "Future updates download only when you choose",
-  );
-  vi.mocked(f.api.installedUpdate).mockResolvedValueOnce(on);
-  await act(async () => button(host, "Turn on automatic downloads").click());
-  expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
-    kind: "set-automatic-update-preference",
-    enabled: true,
-  });
-  expect(c.getSnapshot().intents["update-automatic-downloads"]?.state).toBe(
-    "applied",
-  );
-  expect(host.textContent).toContain(
-    "Installation requires Install and Relaunch or separate consent",
-  );
-  expect(f.api.installedUpdate).not.toHaveBeenCalledWith({ kind: "restart" });
-});
-
 it.each(["available", "ready"] as const)(
-  "shows a native normal Quit opt-in in the %s sheet without saving on mount",
+  "uses one atomic automatic update choice in the %s sheet and preserves an unknown save",
   async (phase) => {
-    const off: InstalledUpdateView = {
+    const legacy: InstalledUpdateView = {
       ...(phase === "ready" ? { phase, blockedBy: null } : { phase }),
       version: available.version,
       deferred: false,
@@ -116,22 +83,30 @@ it.each(["available", "ready"] as const)(
       installOnQuitPreference: {
         status: "confirmed",
         scope: "install-on-normal-quit",
-        enabled: false,
+        enabled: true,
       },
     };
-    const { host, c, f } = await mount(off);
+    const { host, c, f } = await mount(legacy);
     await act(async () =>
       host.querySelector<HTMLButtonElement>(".rail .update-action")!.click(),
     );
     const checkbox = () =>
       host.querySelector<HTMLInputElement>('dialog input[type="checkbox"]')!;
+    expect(host.querySelectorAll('dialog input[type="checkbox"]')).toHaveLength(
+      1,
+    );
     expect(checkbox().closest("label")?.textContent).toContain(
-      "Install downloaded updates when I quit Farol",
+      "Automatically update Farol",
     );
     expect(checkbox().checked).toBe(false);
-    expect(checkbox().disabled).toBe(false);
     expect(host.textContent).toContain(
-      "Automatic downloads do not grant permission to install",
+      "Download and install updates when Farol is idle.",
+    );
+    expect(host.textContent).not.toContain(
+      "Install downloaded updates when I quit Farol",
+    );
+    expect(host.textContent).not.toContain(
+      "Automatic downloads do not grant permission",
     );
     expect(f.api.installedUpdate).not.toHaveBeenCalled();
     const waiting = deferred<unknown>();
@@ -141,15 +116,17 @@ it.each(["available", "ready"] as const)(
       checkbox().click();
     });
     expect(checkbox().disabled).toBe(true);
-    expect(c.getSnapshot().intents["update-install-on-quit"]?.state).toBe(
-      "pending",
-    );
+    expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+      kind: "set-automatic-update-preference",
+      enabled: true,
+      scope: "download-and-install",
+    });
     await act(async () => waiting.reject(new Error("reply lost")));
-    const original = c.getSnapshot().intents["update-install-on-quit"];
+    const original = c.getSnapshot().intents["update-automatic-downloads"];
     expect(original?.state).toBe("unknown");
     await act(async () => {
       c.overlay("none");
-      f.emit("update", off);
+      f.emit("update", legacy);
     });
     await act(async () =>
       host.querySelector<HTMLButtonElement>(".rail .update-action")!.click(),
@@ -158,28 +135,23 @@ it.each(["available", "ready"] as const)(
     expect(host.querySelector("dialog")?.textContent).toContain(
       "Do not repeat this change",
     );
-    expect(c.getSnapshot().intents["update-install-on-quit"]).toBe(original);
-    expect(button(host, "Turn off automatic downloads").disabled).toBe(false);
+    expect(c.getSnapshot().intents["update-automatic-downloads"]).toBe(
+      original,
+    );
     expect(button(host, "Remind Me Later").disabled).toBe(false);
-    expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
-      kind: "set-install-on-quit-preference",
-      enabled: true,
-    });
   },
 );
 
-it("never enables or displays granted quit consent in a Dev sheet", async () => {
-  const update: InstalledUpdateView = {
-    phase: "available",
-    version: available.version,
-    deferred: false,
-    installOnQuitPreference: {
-      status: "confirmed",
-      scope: "install-on-normal-quit",
-      enabled: true,
+it("never grants automatic updating in a Dev sheet", async () => {
+  const { host, f } = await mount(
+    {
+      phase: "available",
+      version: available.version,
+      deferred: false,
+      automaticUpdatePreference: { status: "confirmed", enabled: true },
     },
-  };
-  const { host, f } = await mount(update, "dev");
+    "dev",
+  );
   await act(async () =>
     host.querySelector<HTMLButtonElement>(".rail .update-action")!.click(),
   );
@@ -188,9 +160,6 @@ it("never enables or displays granted quit consent in a Dev sheet", async () => 
   )!;
   expect(checkbox.disabled).toBe(true);
   expect(checkbox.checked).toBe(false);
-  expect(host.textContent).toContain(
-    "Off. Quit installation preference cannot be confirmed",
-  );
   await act(async () => checkbox.click());
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
 });
@@ -389,7 +358,7 @@ it("unknown release state remains inspectable and cannot be acknowledged", async
   );
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
 });
-it("does not invite a restart when a downloaded update has unresolved browser admission", async () => {
+it("offers explicit confirmation when browser activity could not be observed", async () => {
   const blocked: InstalledUpdateView = {
     phase: "ready",
     version: available.version,
@@ -400,14 +369,14 @@ it("does not invite a restart when a downloaded update has unresolved browser ad
   const { host, f } = await mount(blocked);
   const notice = host.querySelector('[aria-label="Update notice"]')!;
   expect(notice.textContent).toContain("is downloaded");
-  expect(notice.textContent).toContain("Installation has not started");
-  expect(notice.textContent).toContain("Do not retry this update action");
-  expect(notice.textContent).not.toContain("Restart when you choose");
+  expect(notice.textContent).toContain("Ready to install");
+  expect(notice.textContent).not.toContain("Do not retry this update action");
   expect(button(notice, "Dismiss update notice").disabled).toBe(true);
   await act(async () => button(notice, "View update").click());
   expect(host.querySelector("dialog")?.textContent).toContain(
-    "Installation has not started",
+    "close open ChatGPT sessions and interrupt work",
   );
+  expect(button(host, "Install and Relaunch").disabled).toBe(false);
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
 });
 it("notice contracts reject unbound or malformed commands and metadata", () => {

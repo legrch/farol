@@ -19,7 +19,6 @@ import {
 import type { ProductSettings } from "../../src/pkg/product-settings/contract";
 import { bootstrap, deferred, fixture, settings, signInReply } from "./fixture";
 
-const quitChoiceLabel = "Install downloaded updates when I quit Farol";
 const quitOff: WindowSnapshot["update"] = {
   phase: "idle",
   checkedAt: null,
@@ -30,198 +29,38 @@ const quitOff: WindowSnapshot["update"] = {
     enabled: false,
   },
 };
-function quitCheckbox(host: Element): HTMLInputElement {
-  const label = [...host.querySelectorAll("label")].find((node) =>
-    node.textContent?.includes(quitChoiceLabel),
+function automaticCheckbox(host: Element): HTMLInputElement {
+  const input = host.querySelector<HTMLInputElement>(
+    '.automatic-update-choice input[type="checkbox"]',
   );
-  const input = label?.querySelector<HTMLInputElement>(
-    'input[type="checkbox"]',
-  );
-  if (!input) throw new Error("QUIT_CHOICE_MISSING");
+  if (!input) throw new Error("AUTOMATIC_UPDATE_CHOICE_MISSING");
   return input;
 }
 
-describe("explicit normal Quit installation choice", () => {
-  it("saves only explicit quit consent once, independently of automatic downloads", async () => {
-    const h = await mount("updates", settings(), "preview", quitOff);
-    const checkbox = quitCheckbox(h.host);
-    expect(checkbox.checked).toBe(false);
-    expect(checkbox.disabled).toBe(false);
-    expect(checkbox.closest("label")?.textContent).toContain(quitChoiceLabel);
-    expect(
-      document.getElementById(checkbox.getAttribute("aria-describedby")!),
-    ).not.toBeNull();
-    expect(h.f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
-      kind: "status",
-    });
-    expect(h.host.textContent).toContain(
-      "Automatic downloads do not grant permission to install",
-    );
-    vi.mocked(h.f.api.installedUpdate).mockClear();
-    const pending = deferred<unknown>();
-    vi.mocked(h.f.api.installedUpdate).mockReturnValueOnce(pending.promise);
-    await act(async () => {
-      checkbox.click();
-      checkbox.click();
-    });
-    expect(h.c.getSnapshot().intents["update-install-on-quit"]).toEqual({
-      id: "update-install-on-quit",
-      state: "pending",
-      code: null,
-    });
-    expect(quitCheckbox(h.host).disabled).toBe(true);
-    expect(h.button("Turn on automatic downloads").disabled).toBe(true);
-    const on: WindowSnapshot["update"] = {
-      ...quitOff,
-      installOnQuitPreference: {
-        status: "confirmed",
-        scope: "install-on-normal-quit",
-        enabled: true,
-      },
-    };
-    await act(async () => pending.resolve(on));
-    expect(quitCheckbox(h.host).checked).toBe(true);
-    expect(h.c.getSnapshot().intents["update-install-on-quit"]?.state).toBe(
-      "applied",
-    );
-    expect(
-      h.c.getSnapshot().intents["update-automatic-downloads"],
-    ).toBeUndefined();
-    expect(h.f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
-      kind: "set-install-on-quit-preference",
-      enabled: true,
-    });
-    expect(h.host.textContent).toContain("Farol stays closed");
-    vi.mocked(h.f.api.installedUpdate).mockResolvedValueOnce({
-      ...on,
-      automaticUpdatePreference: { status: "confirmed", enabled: true },
-    });
-    await h.click("Turn on automatic downloads");
-    expect(h.c.getSnapshot().update.installOnQuitPreference).toEqual(
-      on.installOnQuitPreference,
-    );
-    expect(h.c.getSnapshot().intents["update-install-on-quit"]?.state).toBe(
-      "applied",
-    );
-    vi.mocked(h.f.api.installedUpdate).mockResolvedValueOnce({
-      ...quitOff,
-      automaticUpdatePreference: { status: "confirmed", enabled: true },
-    });
-    await act(async () => quitCheckbox(h.host).click());
-    expect(h.f.api.installedUpdate).toHaveBeenLastCalledWith({
-      kind: "set-install-on-quit-preference",
-      enabled: false,
-    });
-    expect(quitCheckbox(h.host).checked).toBe(false);
-    expect(h.c.getSnapshot().update.automaticUpdatePreference).toEqual({
+it("Settings offers one automatic update checkbox and no separate quit-install choice", async () => {
+  const h = await mount("updates", settings(), "preview", {
+    phase: "idle",
+    checkedAt: null,
+    automaticUpdatePreference: { status: "confirmed", enabled: true },
+    installOnQuitPreference: {
       status: "confirmed",
+      scope: "install-on-normal-quit",
       enabled: true,
-    });
-    expect(h.f.api.installedUpdate).toHaveBeenCalledTimes(3);
-    expect(h.calls()).toEqual([]);
+    },
   });
-
-  it("retains the original unknown choice after refresh, remount and late confirmed events", async () => {
-    const h = await mount("updates", settings(), "preview", quitOff);
-    vi.mocked(h.f.api.installedUpdate).mockClear();
-    vi.mocked(h.f.api.installedUpdate).mockRejectedValueOnce(
-      new Error("reply lost"),
-    );
-    await act(async () => quitCheckbox(h.host).click());
-    const original = h.c.getSnapshot().intents["update-install-on-quit"];
-    expect(original).toMatchObject({
-      id: "update-install-on-quit",
-      state: "unknown",
-    });
-    await act(async () => h.c.refresh());
-    await act(async () => h.f.emit("update", quitOff));
-    await h.pageTo("diagnostics");
-    await h.pageTo("updates");
-    await h.remount();
-    expect(h.c.getSnapshot().intents["update-install-on-quit"]).toBe(original);
-    expect(quitCheckbox(h.host).disabled).toBe(true);
-    expect(h.host.textContent).toContain(
-      "Do not repeat this change; review Diagnostics",
-    );
-    expect(activePage(h.host).textContent).not.toContain("View update");
-    await act(async () => quitCheckbox(h.host).click());
-    expect(await h.c.setInstallOnQuitPreference(true)).toBe(original);
-    expect(h.f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
-      kind: "set-install-on-quit-preference",
-      enabled: true,
-    });
-  });
-
-  it.each([
-    undefined,
-    {
-      status: "blocked",
-      enabled: false,
-      code: "UPDATE_QUIT_PREFERENCE_UNREADABLE",
-    },
-    {
-      status: "unknown",
-      enabled: false,
-      code: "UPDATE_QUIT_PREFERENCE_OUTCOME_UNKNOWN",
-    },
-  ] satisfies WindowSnapshot["update"]["installOnQuitPreference"][])(
-    "fails closed for unconfirmed quit consent %j but leaves review available",
-    async (preference) => {
-      const update = { ...quitOff };
-      delete update.installOnQuitPreference;
-      if (preference) update.installOnQuitPreference = preference;
-      const h = await mount("updates", settings(), "preview", update);
-      expect(quitCheckbox(h.host).disabled).toBe(true);
-      expect(quitCheckbox(h.host).checked).toBe(false);
-      expect(h.host.textContent).toContain(
-        "Off. Quit installation preference cannot be confirmed",
-      );
-      expect(activePage(h.host).textContent).not.toContain("View update");
-      vi.mocked(h.f.api.installedUpdate).mockClear();
-      await act(async () => quitCheckbox(h.host).click());
-      expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
-    },
+  const page = activePage(h.host);
+  expect(page.querySelectorAll('input[type="checkbox"]')).toHaveLength(1);
+  expect(automaticCheckbox(page).checked).toBe(false);
+  expect(page.textContent).toContain("Automatically update Farol");
+  expect(page.textContent).toContain(
+    "Download and install updates when Farol is idle.",
   );
-
-  it("rechecks latest quit eligibility before a rendered checkbox dispatches", async () => {
-    const h = await mount("updates", settings(), "preview", quitOff);
-    const input = quitCheckbox(h.host);
-    vi.mocked(h.f.api.installedUpdate).mockClear();
-    const read = vi
-      .spyOn(h.c, "getSnapshot")
-      .mockReturnValue({ ...h.c.getSnapshot(), environment: "dev" });
-    await act(async () => input.click());
-    read.mockRestore();
-    expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
-  });
-
-  it("disables quit consent for an idle update with unknown admission while review stays available", async () => {
-    const h = await mount("updates", settings(), "preview", {
-      ...quitOff,
-      blockedBy: "UPDATE_BROWSER_STATE_UNKNOWN",
-    });
-    expect(quitCheckbox(h.host).disabled).toBe(true);
-    expect(activePage(h.host).textContent).not.toContain("View update");
-    vi.mocked(h.f.api.installedUpdate).mockClear();
-    await act(async () => quitCheckbox(h.host).click());
-    expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
-  });
-
-  it("never offers quit installation in Dev even with a confirmed enabled projection", async () => {
-    const h = await mount("updates", settings(), "dev", {
-      ...quitOff,
-      installOnQuitPreference: {
-        status: "confirmed",
-        scope: "install-on-normal-quit",
-        enabled: true,
-      },
-    });
-    expect(
-      activePage(h.host).querySelector('input[type="checkbox"]'),
-    ).toBeNull();
-    vi.mocked(h.f.api.installedUpdate).mockClear();
-    expect((await h.c.setInstallOnQuitPreference(false)).state).toBe("refused");
-    expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
+  expect(page.textContent).not.toContain("Installation on Quit");
+  expect(page.textContent).not.toContain(
+    "Automatic downloads do not grant permission",
+  );
+  expect(h.f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+    kind: "status",
   });
 });
 
@@ -2779,12 +2618,13 @@ describe("bounded Settings writer", () => {
     await h.click("Check for Updates");
     expect(h.f.api.installedUpdate).toHaveBeenCalledTimes(1);
   });
-  it("changes only the confirmed automatic download preference without granting installation consent", async () => {
+  it("saves download-and-install consent atomically in either direction", async () => {
     const off = {
       phase: "idle" as const,
       checkedAt: null,
       automaticUpdatePreference: {
         status: "confirmed" as const,
+        scope: "download-and-install" as const,
         enabled: false,
       },
     };
@@ -2792,34 +2632,38 @@ describe("bounded Settings writer", () => {
       ...off,
       automaticUpdatePreference: {
         status: "confirmed" as const,
+        scope: "download-and-install" as const,
         enabled: true,
       },
     };
-    const h = await mount("updates", settings(), "preview", off);
-    expect(h.host.textContent).toContain("Off. Farol checks for updates");
+    const h = await mount("updates", settings(), "preview", {
+      ...off,
+      automaticUpdatePreference: { status: "confirmed", enabled: false },
+    });
+    expect(automaticCheckbox(h.host).checked).toBe(false);
     expect(h.f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
       kind: "status",
     });
     vi.mocked(h.f.api.installedUpdate).mockResolvedValueOnce(on);
-    await h.click("Turn on automatic downloads");
+    await act(async () => automaticCheckbox(h.host).click());
     expect(h.f.api.installedUpdate).toHaveBeenLastCalledWith({
       kind: "set-automatic-update-preference",
       enabled: true,
+      scope: "download-and-install",
     });
     expect(h.c.getSnapshot().intents["update-automatic-downloads"]?.state).toBe(
       "applied",
     );
-    expect(h.host.textContent).toContain(
-      "Installation requires Install and Relaunch or separate consent",
-    );
+    expect(automaticCheckbox(h.host).checked).toBe(true);
     expect(h.f.api.installedUpdate).not.toHaveBeenCalledWith({
       kind: "restart",
     });
     vi.mocked(h.f.api.installedUpdate).mockResolvedValueOnce(off);
-    await h.click("Turn off automatic downloads");
+    await act(async () => automaticCheckbox(h.host).click());
     expect(h.f.api.installedUpdate).toHaveBeenLastCalledWith({
       kind: "set-automatic-update-preference",
       enabled: false,
+      scope: "download-and-install",
     });
   });
   it("keeps an uncertain automatic download choice disabled without retry", async () => {
@@ -2828,10 +2672,14 @@ describe("bounded Settings writer", () => {
       checkedAt: null,
       automaticUpdatePreference: {
         status: "confirmed" as const,
+        scope: "download-and-install" as const,
         enabled: false,
       },
     };
-    const h = await mount("updates", settings(), "preview", off);
+    const h = await mount("updates", settings(), "preview", {
+      ...off,
+      automaticUpdatePreference: { status: "confirmed", enabled: false },
+    });
     vi.mocked(h.f.api.installedUpdate).mockClear();
     vi.mocked(h.f.api.installedUpdate).mockResolvedValueOnce({
       ...off,
@@ -2841,25 +2689,24 @@ describe("bounded Settings writer", () => {
         code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
       },
     });
-    await h.click("Turn on automatic downloads");
+    await act(async () => automaticCheckbox(h.host).click());
     expect(h.c.getSnapshot().intents["update-automatic-downloads"]?.state).toBe(
       "unknown",
     );
-    expect(
-      h.host.querySelector<HTMLDetailsElement>(".update-options")?.open,
-    ).toBe(true);
-    expect(h.button("Turn on automatic downloads").disabled).toBe(true);
-    await h.click("Turn on automatic downloads");
+    expect(h.host.textContent).toContain("Do not repeat this change");
+    expect(automaticCheckbox(h.host).disabled).toBe(true);
+    await act(async () => automaticCheckbox(h.host).click());
     expect(h.f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
       kind: "set-automatic-update-preference",
       enabled: true,
+      scope: "download-and-install",
     });
   });
   it("does not expose automatic downloads without a confirmed installed preference", async () => {
     const h = await mount("updates");
-    expect(h.button("Turn on automatic downloads").disabled).toBe(true);
+    expect(automaticCheckbox(h.host).disabled).toBe(true);
     expect(h.host.textContent).toContain(
-      "Download preference cannot be confirmed",
+      "Update preference cannot be confirmed",
     );
     expect(h.f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
       kind: "status",
@@ -2918,15 +2765,23 @@ describe("bounded Settings writer", () => {
     });
     expect(h.host.textContent).toContain("Update status");
     expect(h.host.textContent).toContain(
-      "Installed: Farol 0.1.8-owner.beta.1 (build 10).",
+      "Current version: Farol 0.1.8 beta 1.",
     );
     expect(h.host.textContent).toContain(
-      "Downloaded: Farol 0.2.0-owner.beta.4. Ready to install; this version is not installed yet.",
+      "Downloaded: Farol 0.2.0 beta 4. Ready to install; this version is not installed yet.",
     );
     expect(h.host.textContent).not.toContain("Installed update");
-    expect(h.host.textContent).toContain("UPDATE_BROWSER_STATE_UNKNOWN");
-    expect(h.host.textContent).toContain("Installation has not started");
-    expect(h.host.textContent).toContain("Do not retry this update action");
+    expect(activePage(h.host).textContent).not.toContain(
+      "UPDATE_BROWSER_STATE_UNKNOWN",
+    );
+    expect(activePage(h.host).textContent).not.toContain(
+      "Do not retry this update action",
+    );
+    const details = [...activePage(h.host).querySelectorAll("details")].find(
+      (node) => node.querySelector("summary")?.textContent === "Details",
+    )!;
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain("Build: 10");
     expect(h.button("Check for Updates").disabled).toBe(true);
     expect(h.calls()).toEqual([]);
   });

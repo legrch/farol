@@ -1123,30 +1123,48 @@ kbd {
 .update-sheet .update-notes {
   margin-top: 10px;
 }
-.update-preference {
+.automatic-update-choice {
+  margin: 18px 0;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+.automatic-update-choice label {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 14px;
-  padding: 15px 0;
-  margin: 16px 0;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
+  justify-content: space-between;
+  gap: 16px;
+  cursor: pointer;
 }
-.update-preference .copy {
-  flex: 1;
-  min-width: min(180px, 100%);
+.automatic-update-choice label > span {
+  min-width: 0;
 }
-.update-preference strong {
+.automatic-update-choice strong {
+  display: block;
   font-size: 13px;
 }
-.update-preference p {
+.automatic-update-choice .description {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+}
+.automatic-update-choice input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+.automatic-update-choice p,
+.update-issue {
   font-size: 12px;
   color: var(--muted);
-  margin: 4px 0 0;
 }
-.update-preference > [role="alert"] {
-  flex-basis: 100%;
+.update-issue {
+  margin: 14px 0;
+}
+.update-issue p {
+  margin: 6px 0;
 }
 .update-block {
   border-left: 3px solid var(--warn);
