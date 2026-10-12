@@ -1243,52 +1243,31 @@ try {
         "POLICY_CONFIG_CHANGED_ON_REOPEN",
       );
       assert.equal(fixtureVerifications, 0, "POLICY_SAVE_REPLAYED_ATTACHMENT");
-      // Folder proof survives the explicit Stop and Quit/reopen; the connection
-      // stays stopped. A later explicit Verify refreshes only the folder proof.
+      // The automatic save check is still current after Stop and Quit/reopen.
+      // Setup therefore offers no redundant Verify action. Inspecting Setup
+      // must retain that exact proof instead of issuing another check.
       await setupStep(window, "folders", "Workspaces");
-      const verificationStarted = Date.now();
-      await setupAction(window, "Verify workspace");
-      const reverified = await readSetupSettings(window);
       assert.equal(
-        reverified.setup.computer.verified.workspaceId,
-        retainedWorkspaces[0].workspaceId,
+        await window
+          .locator(".setup-page")
+          .getByRole("button", { name: "Verify workspace", exact: true })
+          .count(),
+        0,
       );
+      const retained = await readSetupSettings(window);
+      assert.deepEqual(retained.computer, saved.computer);
+      assert.deepEqual(retained.setup.computer, saved.setup.computer);
       assert.equal(
-        reverified.setup.computer.verified.configRevision,
+        retained.setup.computer.verified.configRevision,
         saved.computer.generation,
       );
-      assert.equal(reverified.setup.computer.verified.buildId, build.buildId);
-      assert.equal(reverified.computer.filePolicy, "approved-roots-v1");
-      // Rechecking publishes a new proof for this generation. It must retain
-      // every authority/configuration field and only refresh that proof.
-      assert.deepEqual(
-        reverified.computer.workspaces.map(
-          ({ accessCheck, ...workspace }) => workspace,
-        ),
-        retainedWorkspaces.map(({ accessCheck, ...workspace }) => workspace),
-      );
-      const refreshedCheck = reverified.computer.workspaces[0].accessCheck;
-      // The known Verify workspace command issues no checkId. Its fresh proof
-      // preserves the physical/build fields without reusing an older issued ID.
-      assert.equal(
-        Object.hasOwn(refreshedCheck, "checkId"),
-        false,
-        "POLICY_REVERIFICATION_REUSED_ISSUED_CHECK_ID",
-      );
-      assert.deepEqual(refreshedCheck, {
-        buildId: retainedWorkspaces[0].accessCheck.buildId,
-        computerGeneration: saved.computer.generation,
-        verifiedAt: refreshedCheck.verifiedAt,
-        rootIdentity: retainedWorkspaces[0].accessCheck.rootIdentity,
-      });
-      assert.ok(
-        Date.parse(refreshedCheck.verifiedAt) >= verificationStarted,
-        "POLICY_REVERIFICATION_ACCESS_PROOF_STALE",
-      );
-      verifiedWorkspaces = reverified.computer.workspaces;
+      assert.equal(retained.setup.computer.verified.buildId, build.buildId);
+      assert.equal(retained.connectors.secureMcp.runtime, null);
+      assert.equal(retained.connectors.secureMcp.attachment, null);
+      verifiedWorkspaces = retained.computer.workspaces;
       await assertSetupOverview(window, workspaceOverview);
       observations.push({
-        kind: "new-format-policy-retained-reopen-fresh-workspace-verification",
+        kind: "new-format-policy-retained-reopen-without-repeated-verification",
         configSha256: policyConfigSha256,
         readerRollback: "NOT_RUN",
         helperRollback: "NOT_RUN",
