@@ -322,6 +322,19 @@ try {
   assert.equal(view.visible, true);
   assert.equal(view.bounds.y, shellGeometry.windowBar);
   const browserId = view.id;
+  // Set once in this document's JS world. A same-URL reload in the same
+  // WebContents clears this proof even if the server returns identical HTML.
+  const documentProof = randomUUID();
+  await app.evaluate(
+    async ({ webContents }, { id, proof }) => {
+      await webContents
+        .fromId(id)
+        .executeJavaScript(
+          `window.__farolNativeDocumentProof = ${JSON.stringify(proof)}`,
+        );
+    },
+    { id: browserId, proof: documentProof },
+  );
   const assertBrowserDetachedAndAlive = async (state, code) => {
     assert.equal(
       state
@@ -341,11 +354,14 @@ try {
         attempt: await contents.executeJavaScript(
           "document.getElementById('fixture')?.dataset.attempt",
         ),
+        documentProof: await contents.executeJavaScript(
+          "window.__farolNativeDocumentProof",
+        ),
       };
     }, browserId);
     assert.deepEqual(
       retained,
-      { id: browserId, url: fixtureUrl, attempt: attemptId },
+      { id: browserId, url: fixtureUrl, attempt: attemptId, documentProof },
       "DETACHED_BROWSER_LIFETIME_CHANGED",
     );
   };
@@ -656,6 +672,19 @@ try {
     (await surfaces()).every((w) => !w.visible),
     "REPLACEMENT_WINDOW_TOOK_FOCUS",
   );
+  await assertBrowserDetachedAndAlive(
+    await surfaces(),
+    "REOPEN_UPDATE_OVERLAY_NOT_OCCLUDED",
+  );
+  await replacement
+    .getByRole("dialog", { name: "Farol updates", exact: true })
+    .getByRole("button", { name: "Close", exact: true })
+    .click();
+  await replacement
+    .getByRole("button", { name: "ChatGPT", exact: true })
+    .first()
+    .click();
+  await replacement.waitForTimeout(100);
   const reopenedView = (await surfaces())
     .flatMap((window) => window.views)
     .find((candidate) => candidate.id === browserId);
@@ -663,8 +692,8 @@ try {
   assert.equal(reopenedView.url, fixtureUrl, "REOPEN_NAVIGATED_RETAINED_VIEW");
   assert.equal(
     reopenedView.visible,
-    false,
-    "REOPEN_UPDATE_OVERLAY_NOT_OCCLUDED",
+    true,
+    "REOPEN_BROWSER_NOT_VISIBLE_AFTER_DISMISS",
   );
   assert.equal(
     documentRequests,
