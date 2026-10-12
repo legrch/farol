@@ -322,6 +322,33 @@ try {
   assert.equal(view.visible, true);
   assert.equal(view.bounds.y, shellGeometry.windowBar);
   const browserId = view.id;
+  const assertBrowserDetachedAndAlive = async (state, code) => {
+    assert.equal(
+      state
+        .flatMap((window) => window.views)
+        .some((view) => view.id === browserId),
+      false,
+      code,
+    );
+    // Covered views leave the native host/AX tree; their exact WebContents and
+    // document must survive until the overlay is dismissed.
+    const retained = await app.evaluate(async ({ webContents }, id) => {
+      const contents = webContents.fromId(id);
+      if (!contents || contents.isDestroyed()) return null;
+      return {
+        id: contents.id,
+        url: contents.getURL(),
+        attempt: await contents.executeJavaScript(
+          "document.getElementById('fixture')?.dataset.attempt",
+        ),
+      };
+    }, browserId);
+    assert.deepEqual(
+      retained,
+      { id: browserId, url: fixtureUrl, attempt: attemptId },
+      "DETACHED_BROWSER_LIFETIME_CHANGED",
+    );
+  };
   assert.equal(
     await app.evaluate(
       async ({ webContents }, id) =>
@@ -359,13 +386,7 @@ try {
   await page.getByRole("button", { name: "Find a page", exact: true }).click();
   await page.waitForTimeout(100);
   state = await surfaces();
-  assert.equal(
-    state
-      .flatMap((window) => window.views)
-      .find((view) => view.id === browserId)?.visible,
-    false,
-    "NATIVE_OVERLAY_OCCLUSION",
-  );
+  await assertBrowserDetachedAndAlive(state, "NATIVE_OVERLAY_OCCLUSION");
   for (const key of ["Tab", "Shift+Tab"]) {
     await page.keyboard.press(key);
     assert.equal(
@@ -424,10 +445,8 @@ try {
     .click();
   await page.waitForTimeout(100);
   compactState = await surfaces();
-  assert.equal(
-    compactState.flatMap((w) => w.views).find((v) => v.id === browserId)
-      ?.visible,
-    false,
+  await assertBrowserDetachedAndAlive(
+    compactState,
     "COMPACT_SIDEBAR_OCCLUSION",
   );
   await page
