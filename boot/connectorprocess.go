@@ -73,6 +73,9 @@ func connectorPreparationFailure(err error) error {
 		code = denied.Code
 	case errors.As(err, &native) && native != nil:
 		unknown = native.Unknown
+		if native.FilesystemUnsupported {
+			code = "PROCESS_FILESYSTEM_UNSUPPORTED"
+		}
 		if unknown {
 			code = "PROCESS_OUTCOME_UNKNOWN"
 		}
@@ -82,7 +85,7 @@ func connectorPreparationFailure(err error) error {
 		code = "PROCESS_CANCELLED"
 	}
 	switch code {
-	case "PROCESS_PREPARATION_UNAVAILABLE", "PROCESS_PREPARATION_POLICY_MISMATCH",
+	case "PROCESS_PREPARATION_UNAVAILABLE", "PROCESS_PREPARATION_POLICY_MISMATCH", "PROCESS_FILESYSTEM_UNSUPPORTED",
 		"PROCESS_PREPARATION_WORKSPACE_STALE", "PROCESS_PREPARATION_SCOPE_REFUSED",
 		"PROCESS_PREPARATION_DEADLINE", "PROCESS_PREPARATION_AUTHORIZATION_CHANGED",
 		"PROCESS_CANCELLED", "PROCESS_NATIVE_REFUSED", "PROCESS_PREPARATION_UNKNOWN", "PROCESS_OUTCOME_UNKNOWN",

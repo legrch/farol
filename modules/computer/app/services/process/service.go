@@ -180,6 +180,9 @@ func (s *Service) withCurrent(ctx context.Context, disclose func() error) error 
 func boundary(err error) error {
 	var native *NativeFailure
 	if errors.As(err, &native) && !native.Unknown {
+		if native.FilesystemUnsupported {
+			return fail("PROCESS_FILESYSTEM_UNSUPPORTED", false)
+		}
 		return fail("PROCESS_NATIVE_REFUSED", false)
 	}
 	return fail("PROCESS_OUTCOME_UNKNOWN", true)

@@ -412,6 +412,8 @@ func connectorPreparationCases() []struct {
 		{"native-refused", &processsvc.Failure{Code: "PROCESS_NATIVE_REFUSED"}, "PROCESS_NATIVE_REFUSED", "refused"},
 		{"unknown", &processct.Failure{Code: "PROCESS_PREPARATION_UNKNOWN", Outcome: "outcome_unknown", Retry: "automatic"}, "PROCESS_PREPARATION_UNKNOWN", "outcome_unknown"},
 		{"native-unknown", &processsvc.NativeFailure{Unknown: true}, "PROCESS_OUTCOME_UNKNOWN", "outcome_unknown"},
+		{"native-filesystem", &processsvc.NativeFailure{FilesystemUnsupported: true}, "PROCESS_FILESYSTEM_UNSUPPORTED", "refused"},
+		{"unknown-filesystem", &processsvc.NativeFailure{Unknown: true, FilesystemUnsupported: true}, "PROCESS_OUTCOME_UNKNOWN", "outcome_unknown"},
 		{"raw-secret", errors.New("synthetic token=fixture-private command=private /private/fixture"), "PROCESS_PREPARATION_UNAVAILABLE", "refused"},
 		{"contract-secret", &processct.Failure{Code: "SECRET_TOKEN_FIXTURE_PRIVATE", Outcome: "refused", Retry: "automatic"}, "PROCESS_PREPARATION_UNAVAILABLE", "refused"},
 		{"service-secret", &processsvc.Failure{Code: "/private/fixture token=fixture-private"}, "PROCESS_PREPARATION_UNAVAILABLE", "refused"},
@@ -434,6 +436,12 @@ func TestConnectorProcessPreparationPreservesOnlyClosedCodes(t *testing.T) {
 			}
 			if out, err := s.startProcess(context.Background(), s.current, "preparation-operation", "another-call", selection); out != nil || err == nil {
 				t.Fatal("preparation failure permitted replay")
+			}
+			if tc.name == "native-filesystem" {
+				awaitProcessCollection(t, s, "preparation-operation")
+				if s.drainProcessesForRetirement(context.Background()) != nil || s.mutations.freezeForRetirement() != nil {
+					t.Fatal("known pre-reservation refusal blocked clean retirement")
+				}
 			}
 		})
 	}

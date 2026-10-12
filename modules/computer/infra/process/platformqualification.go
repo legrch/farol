@@ -319,7 +319,13 @@ func (s *RootScopedPlatformStrategy) Select(ctx context.Context, policy Seatbelt
 	}
 	binding := s.Binding()
 	binding.SelectionSHA256 = digest
-	return &RootScopedPlatformSelection{&platformSelection{strategy: *s, policy: policy, original: original, wrapped: wrapped, binding: binding}}, nil
+	selected := &RootScopedPlatformSelection{&platformSelection{strategy: *s, policy: policy, original: original, wrapped: wrapped, binding: binding}}
+	// Reject unsupported roots before reserving an execution. StartLease repeats
+	// these checks against the same selection and its original deadline.
+	if _, err := selected.frozen.inspectDirectories(ctx); err != nil {
+		return nil, err
+	}
+	return selected, nil
 }
 
 func platformCommandText(c Command) bool {
@@ -438,7 +444,10 @@ func (s *platformSelection) inspectDirectories(ctx context.Context) ([]platformD
 			return refuse()
 		}
 		f, err := s.strategy.frozen.facts.directory(ctx, d.path)
-		if err != nil || f.path != d.path || f.filesystem != "apfs" || !f.local || f.nested ||
+		if err == nil && f.path == d.path && (f.filesystem != "apfs" || !f.local || f.nested) {
+			return nil, &processsvc.NativeFailure{FilesystemUnsupported: true}
+		}
+		if err != nil || f.path != d.path ||
 			(f.mount != "/" && !absolutePolicyPath(f.mount)) ||
 			f.identity.Device != d.device || f.identity.Inode == "" || (d.identity != (authority.RootIdentity{}) && f.identity != d.identity) {
 			return refuse()

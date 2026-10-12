@@ -350,6 +350,7 @@ async function computerEvidenceFixture(
     rootIdentity,
   });
   const workspaceId = approval(added.snapshot).workspaces[0]!.workspaceId;
+  await service.updateComputerFilePolicy("approved-roots-v1");
   await service.updateComputerCommands(commands);
   const verification = {
     profile: "computer.local.read/1",
@@ -1259,7 +1260,7 @@ describe("Farol Next product configuration", () => {
     expect(linkedApproval.workspaces[0]).toMatchObject({
       gitMetadata,
       gitHistoryApproved: false,
-      shellVerified: true,
+      shellVerified: false, // Legacy file policy does not qualify the Go Shell.
     });
     const restarted = new ProductConfigurationService(
       new ProductSettingsStore({ root }),
@@ -1308,7 +1309,7 @@ describe("Farol Next product configuration", () => {
     expect(replacedApproval.workspaces[0]).toMatchObject({
       gitMetadata: replacementMetadata,
       gitHistoryApproved: false,
-      shellVerified: true,
+      shellVerified: false,
     });
     expect(sameMetadata.workspaces[0]?.gitMetadata).toEqual(gitMetadata);
 

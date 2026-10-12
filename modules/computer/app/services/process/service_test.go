@@ -200,7 +200,7 @@ func TestOneAttemptAndImmutableDeadline(t *testing.T) {
 	}
 }
 func TestPublicationUnknownExistingAndLostSpawnACKNeverReplay(t *testing.T) {
-	for _, mode := range []string{"existing", "publication-error", "crossed-receipt", "spawn-unknown", "spawn-refused"} {
+	for _, mode := range []string{"existing", "publication-error", "crossed-receipt", "spawn-unknown", "spawn-refused", "filesystem-refused", "filesystem-unknown"} {
 		t.Run(mode, func(t *testing.T) {
 			s, _, _, r, p := setup(t)
 			switch mode {
@@ -214,13 +214,20 @@ func TestPublicationUnknownExistingAndLostSpawnACKNeverReplay(t *testing.T) {
 				p.err = &NativeFailure{Unknown: true}
 			case "spawn-refused":
 				p.err = &NativeFailure{}
+			case "filesystem-refused":
+				p.err = &NativeFailure{FilesystemUnsupported: true}
+			case "filesystem-unknown":
+				p.err = &NativeFailure{Unknown: true, FilesystemUnsupported: true}
 			}
 			_, first := s.Start(context.Background(), StartRequest{"operation"})
 			if first == nil {
 				t.Fatal("accepted")
 			}
-			if mode != "spawn-refused" {
+			if mode != "spawn-refused" && mode != "filesystem-refused" {
 				unknown(t, first)
+			}
+			if mode == "filesystem-refused" && first.Error() != "PROCESS_FILESYSTEM_UNSUPPORTED" {
+				t.Fatal("filesystem refusal lost", first)
 			}
 			_, second := s.Start(context.Background(), StartRequest{"operation"})
 			if second != first {

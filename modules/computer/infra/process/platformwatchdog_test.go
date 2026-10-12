@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -201,5 +202,28 @@ func TestRootScopedPlatformWatchdogPreservesUnknownRelease(t *testing.T) {
 	_, err = f.route.Start(context.Background(), processcontract.StartRequest{OperationID: "operation"})
 	if err == nil || f.host.starts.Load() != 1 || f.host.calls.Load() != 1 || f.reservation.calls != 1 {
 		t.Fatal("unknown operation was dispatched again")
+	}
+}
+
+func TestRootScopedPlatformRejectsUnsupportedScopeBeforeReservation(t *testing.T) {
+	for _, mode := range []string{"nested", "remote", "filesystem"} {
+		t.Run(mode, func(t *testing.T) {
+			f, pf := newPlatformWatchdogFixture(t)
+			value := pf.facts.directories[pf.original.Root]
+			switch mode {
+			case "nested":
+				value.nested = true
+			case "remote":
+				value.local = false
+			case "filesystem":
+				value.filesystem = "nfs"
+			}
+			pf.facts.directories[pf.original.Root] = value
+			_, err := f.preparer.Prepare(context.Background(), processsvc.Invocation(parentInvocation()))
+			var native *processsvc.NativeFailure
+			if !errors.As(err, &native) || !native.FilesystemUnsupported || native.Unknown || f.reservation.calls != 0 || f.host.calls.Load() != 0 {
+				t.Fatal("unsupported filesystem reached reservation or lost its classification", err)
+			}
+		})
 	}
 }
