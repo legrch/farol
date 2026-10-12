@@ -178,12 +178,19 @@ After the running package and predecessor are reconciled with a settled operatio
 the archive is reclaimed through its bounded, checksum-verified descriptor. A
 zero-length archive reconciles a completed truncation after interruption. Only
 then is archive release recorded in the durable receipt. The previous installed
-app remains available for rollback; no workspace or settings are reclaimed.
+app remains retained; rollback still requires a compatible state reader. No
+workspace or settings are reclaimed.
 
 At startup the updater reads the same operation journal and measures the current
 slot and predecessor/staged/failed pair. It does not launch a helper while
 rendering or silently download a replacement. A settled target offers the measured
-predecessor through **Quit & Restore Previous Version**. A known interrupted
+predecessor through **Quit & Restore Previous Version** only when the known
+state-reader boundary allows restoration. From beta.12, completed supervised
+Shell results use format v6, which beta.11 and earlier readers reject. Restoring
+those predecessors is blocked before app exchange, including recovery paths;
+records are never rewritten or downgraded to make an old reader accept them.
+The predecessor bundle and current records remain retained. This guard does not
+qualify rollback compatibility for later versions. A known interrupted
 pair offers **Quit & Finish Recovery** only after the original helper PID/start
 time has been observed as ended; a permission error or malformed process readback
 keeps recovery blocked. Both actions acquire the existing work

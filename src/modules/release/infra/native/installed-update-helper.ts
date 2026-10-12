@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { legacyPredecessorRequiresStateRecovery } from "../../domain/predecessor-state";
 
 const HELPER_SHA256 =
-  "374bd80f277de5408a88c209b5d3870ca218ff45706ffcd9e7eb63f5a47fb1aa";
+  "a72e0ec8486b5f2f06318aa229f7c172442d4e55fe12acb61d8a4e960f01b550";
 const MAX_HELPER_BYTES = 64 * 1024;
 const APP_NAME = "Farol.app";
 const execFileAsync = promisify(execFile);

@@ -636,17 +636,22 @@ def matches_tree(parent, name, build):
 def require_predecessor_state(request):
     # Strict 0.1/beta3 readers reject current settings/retained records.
     # Through beta9, readers also reject connection-only attachment/authority
-    # state. Keep this boundary in sync with release/domain/predecessor-state.
+    # state. Through beta11, completed Shell readers also reject the v6
+    # supervised format written from beta12. Keep both boundaries in sync
+    # with release/domain/predecessor-state.
     # No app+state downgrade is qualified for these predecessors.
     # Refuse before restoring its app; never launch it against newer settings.
     # This is not a compatibility claim for other release transitions.
     source = request["source"]["version"]
     target = request["target"]["version"]
     previous_state_readers = {f"0.2.0-owner.beta.{n}" for n in range(1, 10)}
+    previous_process_readers = {f"0.2.0-owner.beta.{n}" for n in range(1, 12)}
     if ((source.startswith("0.1.") and not target.startswith("0.1."))
             or source == "0.2.0-owner.beta.3"
             or (source in previous_state_readers
-                and target not in previous_state_readers)):
+                and target not in previous_state_readers)
+            or (source in previous_process_readers
+                and target not in previous_process_readers)):
         fail("predecessor_state_unqualified")
 
 
