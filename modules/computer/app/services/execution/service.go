@@ -118,7 +118,7 @@ func (s *Service) withCurrent(ctx context.Context, expected *port.TaskBinding, i
 // Admit observes current owners once, then returns a private immutable lease.
 // It does not change the durable participant, admit an identity, clear intent,
 // dispatch work or replay any operation. The owning parsed operation selects the
-// budget; verification's composite budget is 120s, ordinary/mutable work 15s.
+// budget: root-scoped Shell has 10m, composite verification 120s, other work 15s.
 func (s *Service) Admit(ctx context.Context, kind authority.Capability) (*Lease, error) {
 	return s.admit(ctx, kind, false)
 }
@@ -151,6 +151,8 @@ func (s *Service) admit(ctx context.Context, kind authority.Capability, catalogu
 		lifetime := authority.OrdinaryExecutionLifetime
 		if kind == authority.Verify {
 			lifetime = authority.VerificationExecutionLifetime
+		} else if kind == authority.Shell && a.FilePolicy == authority.RootScopedFiles {
+			lifetime = authority.ProcessExecutionLifetime
 		}
 		fixed, err := authority.Lease(p, a, now, lifetime)
 		if err != nil {

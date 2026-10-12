@@ -453,6 +453,27 @@ func TestRootScopedPlatformRejectsEveryInvocationFieldAndWrappedArgument(t *test
 	}
 }
 
+func TestRootScopedPlatformProcessBudgetRetainsOriginalDeadline(t *testing.T) {
+	f := platformFixtureCPU(t)
+	s := f.selectCommand(t)
+	deadline := f.clock.value.Add(authority.ProcessExecutionLifetime)
+	q, err := s.BindInvocation(context.Background(), f.original, s.WrappedCommand(), deadline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.clock.value = f.clock.value.Add(30 * time.Second)
+	if err := q.ValidateBound(context.Background(), f.original, s.WrappedCommand(), deadline); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.ValidateBound(context.Background(), f.original, s.WrappedCommand(), deadline.Add(time.Second)); err == nil {
+		t.Fatal("progress renewed original process budget")
+	}
+	f.clock.value = deadline
+	if err := q.ValidateBound(context.Background(), f.original, s.WrappedCommand(), deadline); err == nil {
+		t.Fatal("process admitted at original deadline")
+	}
+}
+
 func TestRootScopedPlatformDeadlineFixedAcrossCopiesAndRefusals(t *testing.T) {
 	f := platformFixtureCPU(t)
 	s, q, deadline := f.qualify(t)
@@ -470,7 +491,7 @@ func TestRootScopedPlatformDeadlineFixedAcrossCopiesAndRefusals(t *testing.T) {
 	if q.Qualify(context.Background(), s.WrappedCommand()) == nil {
 		t.Fatal("expired invocation accepted")
 	}
-	for _, delta := range []time.Duration{-time.Second, 0, 16 * time.Second} {
+	for _, delta := range []time.Duration{-time.Second, 0, authority.ProcessExecutionLifetime + time.Millisecond} {
 		g := platformFixtureCPU(t)
 		selected := g.selectCommand(t)
 		if _, err := selected.BindInvocation(context.Background(), g.original, selected.WrappedCommand(), g.clock.value.Add(delta)); err == nil {

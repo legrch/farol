@@ -182,7 +182,7 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
           Object.entries(message.environment).some(([name, value]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || typeof value !== "string" || value.includes("\0")) ||
           Object.entries(message.environment).reduce((total, [name, value]) => total + Buffer.byteLength(name) + Buffer.byteLength(value) + 1, 0) > 64 * 1024 ||
           typeof message.stdinBase64 !== "string" || message.stdinBase64.length > 1398104 ||
-          !Number.isSafeInteger(message.deadlineAt) || message.deadlineAt <= Date.now() || message.deadlineAt > Date.now() + 15000) {
+          !Number.isSafeInteger(message.deadlineAt) || message.deadlineAt <= Date.now() || message.deadlineAt > Date.now() + 600000) {
         refuse(errorReason.invalidPrepare); return;
       }
       const input = Buffer.from(message.stdinBase64, "base64");

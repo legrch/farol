@@ -136,6 +136,40 @@ function fixture(mode: string | null = "go-prepared-v1", selected = true) {
 }
 
 describe("explicitly selected prepared watchdog without native effects", () => {
+  it("keeps a ten-minute process deadline across start and cancellation", () => {
+    const f = fixture();
+    f.selection.deadlineAt = 601000;
+    f.prepare();
+    expect([...f.timers.values()].map((timer) => timer.at)).toEqual([601000]);
+    f.tick(17000);
+    f.start();
+    expect(f.spawn).toHaveBeenCalledTimes(1);
+    expect(f.signals).toEqual([]);
+    f.tick(600999);
+    f.stop();
+    expect(f.child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+    expect(f.signals).toEqual([[-4242, "SIGTERM"]]);
+    expect([...f.timers.values()].map((timer) => timer.at)).toEqual([601000]);
+    f.tick(601000);
+    expect(f.messages).toContainEqual({ type: "deadline", id: f.id });
+    expect(f.signals).toEqual([
+      [-4242, "SIGTERM"],
+      [-4242, "SIGKILL"],
+    ]);
+  });
+
+  it("refuses an oversized process budget before dispatch", () => {
+    const f = fixture();
+    f.selection.deadlineAt = 601001;
+    f.prepare();
+    expect(f.messages.some((message) => message.type === "prepared")).toBe(
+      false,
+    );
+    expect(f.spawn).not.toHaveBeenCalled();
+    expect(f.signals).toEqual([]);
+    expect(f.process.exit).toHaveBeenCalledExactlyOnceWith(0);
+  });
+
   it("stops same-group descendants while the observer retains final output", () => {
     const f = fixture();
     f.prepare();

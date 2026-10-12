@@ -34,7 +34,7 @@ func NewForInvocation(operationID string, lease Execution, preparer InvocationPr
 		return nil, fail("PROCESS_INPUT_INVALID", false)
 	}
 	now, deadline := clock.Now(), lease.Deadline()
-	if now.UnixMilli() <= 0 || now.UnixMilli() > 9007199254740991 || deadline.UnixMilli() <= 0 || deadline.UnixMilli() > 9007199254740991 || !now.Before(deadline) || deadline.After(now.Add(authority.OrdinaryExecutionLifetime)) {
+	if now.UnixMilli() <= 0 || now.UnixMilli() > 9007199254740991 || deadline.UnixMilli() <= 0 || deadline.UnixMilli() > 9007199254740991 || !now.Before(deadline) || deadline.After(now.Add(authority.ProcessExecutionLifetime)) {
 		return nil, authority.Fail("AUTHORITY_EXPIRED", "task-grant")
 	}
 	seal := Seal{WorkspaceID: scope.WorkspaceID, Root: scope.Root, Cwd: scope.Cwd, RootIdentity: scope.RootIdentity, Write: scope.Write}

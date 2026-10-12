@@ -9,6 +9,10 @@ const TaskGrantLifetime = 12 * time.Hour
 const OrdinaryExecutionLifetime = 15 * time.Second
 const VerificationExecutionLifetime = 120 * time.Second
 
+// ProcessExecutionLifetime bounds root-scoped Shell preparation and execution.
+// Reading progress cannot renew this original lease or the owner's earlier cap.
+const ProcessExecutionLifetime = 10 * time.Minute
+
 // Reissue derives through the existing policy mechanism. Only the admitted
 // ceiling's expiry changes; current owner approval independently bounds it.
 func Reissue(a Approval, ceiling Admission, now time.Time, lifetime time.Duration) (*Grant, error) {

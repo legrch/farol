@@ -193,8 +193,10 @@ runs inside Computer or peer inspect callbacks. The root injects the selected
 published current Chat/Task peer through the existing execution lease; there is
 no process-specific authority system or latest-task lookup.
 
-The fixed deadline remains the original lease deadline. The current ordinary
-execution budget is 15 seconds; this slice does not expand it for shell or Claude.
+The fixed deadline remains the original lease deadline. Root-scoped Shell has
+up to ten minutes for preparation and execution, capped by current owner expiry.
+Legacy Shell and ordinary read/mutation leases retain their 15-second budget.
+Progress reads use a separate short READ lease and never renew the process.
 A current-owner watch stops after its first denied/unknown observation and requests
 cleanup on the already owned child. Cancellation, timeout, authority loss and
 output overflow share one irreversible signal attempt. A refused/unknown signal
@@ -303,7 +305,9 @@ checks immutable seal/invocation drift and uses the existing durable Reserve ->
 current guard -> one Spawn path. Refused/unknown preparation/start cannot be
 reconstructed, moved to another executor or reset by a new turn/reconnect.
 Known preparation survives denied disclosure and can be observed without building
-again. The original ordinary deadline is never reset or widened beyond 15 seconds.
+again. The original deadline is never reset. The invocation constructor accepts
+up to the ten-minute process ceiling; trusted admission selects the actual
+budget, and legacy native strategies retain their existing shorter limits.
 
 ### Concrete remaining dependency before real Claude
 

@@ -216,6 +216,28 @@ func TestPrepareConstructorPreservesDeadlineAndRejectsInflation(t *testing.T) {
 	_, err = NewForInvocation("next", e, p, r, &sync.Mutex{}, c)
 	prepareCode(t, err, "AUTHORITY_EXPIRED")
 }
+func TestPrepareProcessBudgetSurvivesPreparationWithoutRenewal(t *testing.T) {
+	_, p, c, e, r, request := prepareSetup(t)
+	e.deadline = c.now.Add(authority.ProcessExecutionLifetime)
+	e.p.Grant.ExpiresAt, e.a.ExpiresAt = e.deadline, e.deadline
+	s, err := NewForInvocation("operation", e, p, r, &sync.Mutex{}, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := e.deadline
+	p.before = func() { c.now = c.now.Add(30 * time.Second) }
+	if _, err = s.Prepare(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	start(t, s)
+	if !p.selected.deadline.Equal(original) || !s.intent.Deadline.Equal(original) {
+		t.Fatal("preparation reset process deadline")
+	}
+	e.deadline = c.now.Add(authority.ProcessExecutionLifetime + time.Millisecond)
+	_, err = NewForInvocation("too-long", e, p, r, &sync.Mutex{}, c)
+	prepareCode(t, err, "AUTHORITY_EXPIRED")
+}
+
 func TestPrepareCurrentAdmissionStillGatesStartAfterReady(t *testing.T) {
 	s, p, _, e, r, request := prepareSetup(t)
 	_, err := s.Prepare(context.Background(), request)

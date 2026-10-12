@@ -402,7 +402,7 @@ func (s *platformSelection) current(ctx context.Context, deadline time.Time) boo
 		return false
 	}
 	now := s.strategy.frozen.clock.Now()
-	return now.Before(deadline) && !deadline.After(now.Add(15*time.Second))
+	return now.Before(deadline) && !deadline.After(now.Add(authority.ProcessExecutionLifetime))
 }
 
 type platformDirectoryBinding struct {

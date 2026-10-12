@@ -89,7 +89,7 @@
     },
     {
       "path": "modules/computer/infra/process/platformqualification.go",
-      "sha256": "fe10409b97b5ec14437ca68465c7ed489780d71977d4a09b7b77f94a6e0021b7"
+      "sha256": "fcceb53bfcfb6018d7ec1cdf7a6dfdf3a7b43cf1463d52cea9d50f6bb821dce4"
     },
     {
       "path": "modules/computer/infra/process/platformqualificationdarwin.go",
@@ -141,7 +141,7 @@
     },
     {
       "path": "modules/computer/infra/process/watchdog.go",
-      "sha256": "a32d575070d833143161a3dba2a9ab3c87254479633e54c3b00b7c1238b55dc3"
+      "sha256": "cbf51c83a8b16e491475af24d654ed8b901e5645e038e7f2ad35c295558876d8"
     },
     {
       "path": "modules/computer/infra/process/watchdogdarwin.go",
@@ -158,8 +158,8 @@
   ],
   "watchdogSource": {
     "path": "src/modules/computer/infra/native/shell-watchdog-source.ts",
-    "fileSHA256": "9fc135d8eec38a23517c509cb8544aed7644d75d36046d77b2ffa9ccf47355b3",
-    "sourceSHA256": "17edd194ddafd3b548407a00377196f951cd7524d6b7138ca6b0ea7442041406"
+    "fileSHA256": "88c61408d11fa4877ad7a60115f6749346287deb86dca9b6ca4937ab1912b5d2",
+    "sourceSHA256": "603c6d4d351ca5aaf52d9da7329e1b060e9d7148f7e27d4b73ace773a6337928"
   },
   "mechanism": {
     "path": "/usr/bin/sandbox-exec",

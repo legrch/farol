@@ -53,6 +53,11 @@ Workspace authority, root-scoped policy, physical identities, command mode and
 the original execution deadline remain mandatory. Tool pins grant execution of
 those images, not access to an entire toolchain or its configuration. Ordinary
 Git dependency/configuration roots still need applicable approved access.
+Root-scoped Shell admission now selects a fixed ten-minute budget for preparation
+and execution, capped by owner expiry. Status reads retain their own 15-second
+lease and cannot extend a command. Legacy Shell remains limited to 15 seconds.
+This source capability requires native/package qualification before release;
+it does not activate additional tools, filesystem roots or network access.
 The selected Git image is the Command Line Tools binary under `/Library`.
 The system `/usr/bin/git` dispatcher is multiply linked, and Xcode's binary
 has a shared-writable `/Applications` ancestor; neither satisfies this image

@@ -9,10 +9,10 @@ into this writer from accepted `acb131d`.
 
 ## Two lifetimes
 
-| Value           | Admission and expiry behavior                                                                                                                                                                                                                           |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Outer TaskGrant | Freshly derived under independently current owner approval and an already admitted sealed ceiling. Its 12-hour lifetime is capped by current approval expiry. An expired template can supply the same ceiling only with trusted current task admission. |
-| Execution lease | One private snapshot and deadline for one admitted operation. Ordinary/read/mutable budgets are 15 seconds; composite verification is 120 seconds. The deadline is capped by approval expiry at admission, independently of the outer expiry.           |
+| Value           | Admission and expiry behavior                                                                                                                                                                                                                                                                    |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Outer TaskGrant | Freshly derived under independently current owner approval and an already admitted sealed ceiling. Its 12-hour lifetime is capped by current approval expiry. An expired template can supply the same ceiling only with trusted current task admission.                                          |
+| Execution lease | One private snapshot and deadline for one admitted operation. Root-scoped Shell has ten minutes; legacy Shell and ordinary/read/mutable work have 15 seconds; composite verification has 120 seconds. The deadline is capped by approval expiry at admission, independently of the outer expiry. |
 
 Renewal changes time alone. Owner, session, task, task epoch, authority ID,
 Computer ID/generation, participant identity/role/ownership/parent, physical root

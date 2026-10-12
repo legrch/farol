@@ -175,8 +175,12 @@ func (*watchdogBoundary) Start(context.Context, Command, func(context.Context) e
 	return nil, &processsvc.NativeFailure{} // Only the original lease can select time.
 }
 func (b *watchdogBoundary) StartLease(ctx context.Context, command Command, request processsvc.SpawnRequest, stdout, stderr io.Writer) (owned, error) {
+	budget := authority.OrdinaryExecutionLifetime
+	if b.strategy != nil {
+		budget = authority.ProcessExecutionLifetime
+	}
 	if ctx == nil || ctx.Err() != nil || request.Check == nil || stdout == nil || stderr == nil || b.execution.Err() != nil ||
-		!b.clock.Now().Before(request.Deadline) || request.Deadline.After(b.clock.Now().Add(15*time.Second)) {
+		!b.clock.Now().Before(request.Deadline) || request.Deadline.After(b.clock.Now().Add(budget)) {
 		return nil, &processsvc.NativeFailure{}
 	}
 	launch, err := selectedLaunch(b.policy, command)
