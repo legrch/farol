@@ -270,7 +270,9 @@ const artifact = {
     reason:
       buildIdentity.updateChannel === "github-owner-beta"
         ? "owner-beta-distribution"
-        : "local-development-preview",
+        : buildIdentity.updateChannel === "github-stable"
+          ? "stable-distribution"
+          : "local-development-preview",
     runtimeBytes: "unmodified-vendor-bundle",
   },
   notarized: false,

@@ -18,6 +18,7 @@ try {
 import assert from 'node:assert/strict';
 import { app, BrowserWindow, WebContentsView } from 'electron';
 import { chatGptUpdateIdleProbe } from './src/apps/desktop/chatgpt-update-idle.ts';
+import { ChatGptRoute } from './src/apps/desktop/chatgpt-route.ts';
 import { NativeViewVisibility } from './apps/desktop/bridge/native-view-visibility.ts';
 import { deriveSurfaceLayout } from './src/apps/desktop/surface-layout.ts';
 app.setPath('userData', ${JSON.stringify(path.join(scratch, "profile"))});
@@ -66,10 +67,21 @@ try {
   await view.webContents.executeJavaScript('(() => { const b=document.createElement("button"); b.type="button"; b.setAttribute("aria-label","Other action"); document.querySelector("form").append(b); })()');
   assert.deepEqual(await probe(), { state: 'unknown' });
   observations.push('draft-running-unknown-action-refused');
+  const route = new ChatGptRoute({homeUrl:'https://chatgpt.com/',initialUrl:'https://chatgpt.com/',e2eOrigin:null,parent:()=>null});
+  const contents=view.webContents;
+  Reflect.set(route,'routeWindow',{kind:'embedded',webContents:contents,isDestroyed:()=>contents.isDestroyed(),destroy:()=>contents.close({waitForBeforeUnload:false})});
+  const admission=await route.acquireUpdateClose();
+  assert.equal(admission.ok,true);
+  assert.equal(contents.isDestroyed(),true);
+  assert.deepEqual(await admission.recheck(),{ok:true});
+  assert.deepEqual(await route.open(),{status:'unreachable'});
+  await admission.release();
+  observations.push('confirmed-native-close-observed-and-fenced');
   process.stdout.write(JSON.stringify({ result: 'PASS', observations,
     mode: 'hidden-disposable-electron', provider: 'NOT_RUN', installedOTA: 'NOT_RUN' }) + '\\n');
 } finally {
-  if (view && !view.webContents.isDestroyed()) view.webContents.close();
+  const remaining = view?.webContents;
+  if (remaining && !remaining.isDestroyed()) remaining.close();
   if (host && !host.isDestroyed()) host.destroy();
   app.quit();
 }

@@ -3,7 +3,11 @@ import { z } from "zod";
 const Code = z.string().regex(/^[A-Z][A-Z0-9_]{0,100}$/u);
 // Missing projection in a transitional caller must be treated as OFF.
 export const AutomaticUpdatePreferenceSchema = z.discriminatedUnion("status", [
-  z.strictObject({ status: z.literal("confirmed"), enabled: z.boolean() }),
+  z.strictObject({
+    status: z.literal("confirmed"),
+    enabled: z.boolean(),
+    scope: z.literal("download-and-install").optional(),
+  }),
   z.strictObject({
     status: z.enum(["blocked", "unknown"]),
     enabled: z.literal(false),
@@ -16,7 +20,11 @@ export type AutomaticUpdatePreference = z.infer<
 export const AutomaticUpdatePreferenceResultSchema = z.discriminatedUnion(
   "status",
   [
-    z.strictObject({ status: z.literal("confirmed"), enabled: z.boolean() }),
+    z.strictObject({
+      status: z.literal("confirmed"),
+      enabled: z.boolean(),
+      scope: z.literal("download-and-install").optional(),
+    }),
     z.strictObject({ status: z.enum(["refused", "unknown"]), code: Code }),
   ],
 );
@@ -189,6 +197,10 @@ export function canRecheckUpdateAdmission(code: string): boolean {
 
 export const InstalledUpdateCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({
+    kind: z.literal("restart-confirmed"),
+    version: z.string().min(1).max(128),
+  }),
+  z.strictObject({
     kind: z.enum([
       "status",
       "check",
@@ -203,6 +215,7 @@ export const InstalledUpdateCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("set-automatic-update-preference"),
     enabled: z.boolean(),
+    scope: z.literal("download-and-install").optional(),
   }),
   z.strictObject({
     kind: z.literal("set-install-on-quit-preference"),

@@ -9,6 +9,7 @@ import { z } from "zod";
 import {
   InstalledUpdater,
   type InstalledUpdaterPorts,
+  type ConfirmedUpdateRestart,
   type ReadyUpdate,
   type UpdateHandoff,
 } from "../../modules/release/app/installed-updater";
@@ -83,10 +84,17 @@ const NoticePreferences = z.strictObject({
     .optional(),
 });
 // Separate file/schema: older strict Skip/Later and notice readers stay compatible.
-const AutomaticUpdatePreferences = z.strictObject({
-  schema: z.literal("farol.installed-automatic-update-preference/1"),
-  enabled: z.boolean(),
-});
+const AutomaticUpdatePreferences = z.discriminatedUnion("schema", [
+  z.strictObject({
+    schema: z.literal("farol.installed-automatic-update-preference/1"),
+    enabled: z.boolean(),
+  }),
+  z.strictObject({
+    schema: z.literal("farol.installed-automatic-update-preference/2"),
+    scope: z.literal("download-and-install"),
+    enabled: z.boolean(),
+  }),
+]);
 const InstallOnQuitPreferences = z.strictObject({
   schema: z.literal("farol.installed-install-on-quit-preference/1"),
   scope: z.literal("install-on-normal-quit"),
@@ -517,7 +525,7 @@ export async function waitForInstalledUpdateRelaunch(
   if (
     options.userData !== profile ||
     options.directory !== directory ||
-    build.updateChannel !== "github-owner-beta" ||
+    !["github-owner-beta", "github-stable"].includes(build.updateChannel) ||
     !build.buildVersion ||
     build.sourceDirty ||
     hint.buildId !== build.buildId ||
@@ -1053,6 +1061,7 @@ export type InstalledUpdateRuntimeOptions = Readonly<{
   acquireAdmission(
     desktopWorkSettled: () => Promise<boolean>,
     quit?: NormalQuitApplyContext,
+    confirmation?: ConfirmedUpdateRestart,
   ): Promise<InstalledUpdateAdmission>;
   // Bound to the current normal-Quit hook lifetime, never wire/request data.
   // The host closes this fence before destructive collection or hook settlement.
@@ -1064,7 +1073,8 @@ export type InstalledUpdateRuntimeOptions = Readonly<{
 /**
  * Returns the single release owner. After initialize(), composition uses
  * scheduledCheck() for startup/periodic checks and check(true) for explicit
- * checks. Scheduling never applies an update or requests Quit; close() drains
+ * checks. Only explicit download-and-install consent permits scheduled idle
+ * installation; legacy automatic-download consent never does. close() drains
  * any download/retention already dispatched by that owner.
  */
 export async function createInstalledUpdateRuntime(
@@ -1285,7 +1295,9 @@ async function createRuntime(
       }
     : null;
   if (
-    options.build.updateChannel !== "github-owner-beta" ||
+    !["github-owner-beta", "github-stable"].includes(
+      options.build.updateChannel,
+    ) ||
     !options.build.buildVersion ||
     options.build.sourceDirty
   )
@@ -1377,7 +1389,20 @@ async function createRuntime(
     root,
     "automatic-update-preference.json",
   );
+  const automaticUnconfirmedFile = path.join(
+    root,
+    "automatic-update-unconfirmed.json",
+  );
+  let automaticPreferenceUnknown = false;
   const readAutomaticPreference = async () => {
+    try {
+      await fs.lstat(automaticUnconfirmedFile);
+      automaticPreferenceUnknown = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (automaticPreferenceUnknown)
+      throw new Error("UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN");
     await canonicalOwnedDirectory(root, true);
     const raw = await readRecord(automaticPreferenceFile);
     if (raw === null) {
@@ -1396,7 +1421,6 @@ async function createRuntime(
     }
     return AutomaticUpdatePreferences.parse(raw);
   };
-  let automaticPreferenceUnknown = false;
   const quitPreferenceFile = path.join(root, "install-on-quit-preference.json");
   const quitUnconfirmedFile = path.join(
     root,
@@ -1492,15 +1516,18 @@ async function createRuntime(
   const acquireAdmission = async (
     beforeEffect: () => void = () => undefined,
     quit?: NormalQuitApplyContext,
+    confirmation?: ConfirmedUpdateRestart,
   ): Promise<InstalledUpdateAdmission> => {
     if (admissionReleaseUnconfirmed)
       return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
     try {
       beforeEffect();
-      const admission = await options.acquireAdmission(
-        () => drained(beforeEffect),
-        ...(quit ? ([quit] as const) : []),
-      );
+      const settled = () => drained(beforeEffect);
+      const admission = confirmation
+        ? await options.acquireAdmission(settled, quit, confirmation)
+        : quit
+          ? await options.acquireAdmission(settled, quit)
+          : await options.acquireAdmission(settled);
       if (
         !admission.ok &&
         admission.code === "UPDATE_BROWSER_RELEASE_UNCONFIRMED"
@@ -2003,24 +2030,37 @@ async function createRuntime(
     readAutomaticUpdatePreference: async () => {
       try {
         const preference = await readAutomaticPreference();
-        return { status: "confirmed", enabled: preference.enabled };
+        return {
+          status: "confirmed",
+          enabled: preference.enabled,
+          ...(preference.schema ===
+          "farol.installed-automatic-update-preference/2"
+            ? { scope: preference.scope }
+            : {}),
+        };
       } catch {
         return {
-          status: "blocked",
+          status: automaticPreferenceUnknown ? "unknown" : "blocked",
           enabled: false,
-          code: "UPDATE_AUTOMATIC_PREFERENCE_UNREADABLE",
+          code: automaticPreferenceUnknown
+            ? "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN"
+            : "UPDATE_AUTOMATIC_PREFERENCE_UNREADABLE",
         };
       }
     },
-    writeAutomaticUpdatePreference: async (enabled) => {
+    writeAutomaticUpdatePreference: async (enabled, scope) => {
       if (automaticPreferenceUnknown)
         return {
           status: "unknown",
           code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
         };
       const record = AutomaticUpdatePreferences.safeParse({
-        schema: "farol.installed-automatic-update-preference/1",
+        schema:
+          scope === "download-and-install"
+            ? "farol.installed-automatic-update-preference/2"
+            : "farol.installed-automatic-update-preference/1",
         enabled,
+        ...(scope === undefined ? {} : { scope }),
       });
       if (!record.success)
         return {
@@ -2028,23 +2068,41 @@ async function createRuntime(
           code: "UPDATE_AUTOMATIC_PREFERENCE_INVALID",
         };
       try {
-        await readAutomaticPreference();
+        const prior = await readAutomaticPreference();
+        if (
+          prior.schema === "farol.installed-automatic-update-preference/2" &&
+          scope === undefined
+        )
+          return {
+            status: "refused",
+            code: "UPDATE_AUTOMATIC_PREFERENCE_SCOPE_REQUIRED",
+          };
       } catch {
         return {
           status: "refused",
           code: "UPDATE_AUTOMATIC_PREFERENCE_UNREADABLE",
         };
       }
+      if (scope === "download-and-install")
+        try {
+          await writeRecord(automaticUnconfirmedFile, {
+            schema: "farol.installed-automatic-update-unconfirmed/1",
+            enabled,
+            ...(scope === undefined ? {} : { scope }),
+          });
+        } catch {
+          return {
+            status: "refused",
+            code: "UPDATE_AUTOMATIC_PREFERENCE_FENCE_UNCONFIRMED",
+          };
+        }
       try {
-        // ACK only after temporary-file fsync, rename, parent fsync and exact readback.
         await writeRecord(automaticPreferenceFile, record.data);
-        const observed = await readAutomaticPreference();
-        if (observed.enabled !== enabled)
+        const observed = AutomaticUpdatePreferences.parse(
+          await readRecord(automaticPreferenceFile),
+        );
+        if (JSON.stringify(observed) !== JSON.stringify(record.data))
           throw new Error("UPDATE_AUTOMATIC_PREFERENCE_CHANGED");
-        return AutomaticUpdatePreferenceResultSchema.parse({
-          status: "confirmed",
-          enabled,
-        });
       } catch {
         automaticPreferenceUnknown = true;
         return {
@@ -2052,6 +2110,26 @@ async function createRuntime(
           code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
         };
       }
+      if (scope === "download-and-install")
+        try {
+          await fs.unlink(automaticUnconfirmedFile);
+          const parent = await fs.open(
+            root,
+            constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+          );
+          try {
+            await parent.sync();
+          } finally {
+            await parent.close();
+          }
+        } catch {
+          /* Exact durable preference ACK survives conservative fence cleanup. */
+        }
+      return AutomaticUpdatePreferenceResultSchema.parse({
+        status: "confirmed",
+        enabled,
+        ...(scope === undefined ? {} : { scope }),
+      });
     },
     readInstallOnQuitPreference: async () => {
       try {
@@ -2543,7 +2621,9 @@ async function createRuntime(
           version: options.build.version,
           buildVersion: options.build.buildVersion!,
         },
-        "owner-beta",
+        options.build.updateChannel === "github-stable"
+          ? "stable"
+          : "owner-beta",
         transport,
       );
       if (!found.ok) return known(`UPDATE_${found.code.toUpperCase()}`);
@@ -2654,7 +2734,13 @@ async function createRuntime(
             )
               return known("UPDATE_ORIGINAL_READY_CHANGED");
             const manifest = localArchive.manifest;
-            if (!manifest || manifest.channel !== "owner-beta")
+            if (
+              !manifest ||
+              manifest.channel !==
+                (options.build.updateChannel === "github-stable"
+                  ? "stable"
+                  : "owner-beta")
+            )
               return known("UPDATE_LOCAL_MANIFEST_INVALID");
             let current: z.infer<typeof AcceptedBuild>;
             try {
@@ -2920,12 +3006,13 @@ async function createRuntime(
         () => "UPDATE_RESTORE_OUTCOME_UNKNOWN",
       );
     },
-    restart: (update) => apply(update),
+    restart: (update, confirmation) => apply(update, undefined, confirmation),
     applyOnQuit: (update, context) => apply(update, context),
   });
   const apply = async (
     update: ReadyUpdate,
     quitContext?: NormalQuitApplyContext,
+    confirmation?: ConfirmedUpdateRestart,
   ): Promise<UpdateHandoff> => {
     if (admissionReleaseUnconfirmed)
       return {
@@ -2941,6 +3028,18 @@ async function createRuntime(
       return { status: "unknown", code: "UPDATE_HANDOFF_UNRECONCILED" };
     if (!retained || retained.handle !== update.handle)
       return { status: "blocked", code: "UPDATE_PACKAGE_NOT_READY" };
+    const confirmedManifest = confirmation
+      ? parseRetainedGithubReleaseManifest(retained)
+      : null;
+    if (
+      confirmation &&
+      (quitContext ||
+        confirmation.kind !== "interrupt-browser" ||
+        confirmation.version !== update.manifest.version ||
+        !confirmedManifest?.ok ||
+        confirmedManifest.value.version !== confirmation.version)
+    )
+      return { status: "blocked", code: "UPDATE_CONFIRMATION_STALE" };
     let keepAdmission = false;
     const expired = () =>
       quitContext !== undefined &&
@@ -2976,7 +3075,11 @@ async function createRuntime(
     let admission: InstalledUpdateAdmission;
     try {
       admission = await wait(async () => {
-        const acquired = await acquireAdmission(ensureActive, quitContext);
+        const acquired = await acquireAdmission(
+          ensureActive,
+          quitContext,
+          confirmation,
+        );
         // If the host timed out while acquiring, retain the original lease
         // until its actual result can be settled. Timeout is not cancellation.
         if (acquired.ok && quitContext) heldAdmission = acquired;

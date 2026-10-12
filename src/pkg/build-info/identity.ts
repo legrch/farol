@@ -11,7 +11,11 @@ export const BuildIdentitySchema = z
     product: z.literal("Farol Next Preview"),
     version: z.string().regex(/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u),
     bundleId: z.literal("local.farol.next.preview"),
-    updateChannel: z.enum(["local-preview-only", "github-owner-beta"]),
+    updateChannel: z.enum([
+      "local-preview-only",
+      "github-owner-beta",
+      "github-stable",
+    ]),
     buildVersion: z
       .string()
       .regex(/^[1-9][0-9]{0,8}$/u)
@@ -27,6 +31,14 @@ export const BuildIdentitySchema = z
       value.updateChannel !== "github-owner-beta" ||
       (value.buildVersion !== undefined &&
         /^[0-9]+\.[0-9]+\.[0-9]+-owner\.beta\.(0|[1-9][0-9]*)$/u.test(
+          value.version,
+        )),
+  )
+  .refine(
+    (value) =>
+      value.updateChannel !== "github-stable" ||
+      (value.buildVersion !== undefined &&
+        /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u.test(
           value.version,
         )),
   );

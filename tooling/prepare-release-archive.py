@@ -171,18 +171,17 @@ def read_artifact():
     require(type(artifact) is dict and set(artifact) == ARTIFACT_FIELDS, "ARTIFACT_FIELDS_INVALID")
     require(type(artifact["schema"]) is int and artifact["schema"] == 7, "ARTIFACT_SCHEMA_INVALID")
     require(artifact["artifactPath"] == str(APP), "ARTIFACT_PATH_INVALID")
-    require(
-        re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-owner\.beta\.(0|[1-9][0-9]*)", artifact["version"]) is not None,
-        "VERSION_INVALID",
-    )
+    stable = artifact["updateChannel"] == "github-stable"
+    version_pattern = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)" + ("" if stable else r"-owner\.beta\.(0|[1-9][0-9]*)")
+    require(re.fullmatch(version_pattern, artifact["version"]) is not None, "VERSION_INVALID")
     require(re.fullmatch(r"[1-9][0-9]{0,8}", artifact["buildVersion"]) is not None, "BUILD_VERSION_INVALID")
     require(
         artifact["product"] == "Farol Next Preview"
         and artifact["bundleId"] == "local.farol.next.preview"
-        and artifact["updateChannel"] == "github-owner-beta"
+        and artifact["updateChannel"] in ("github-owner-beta", "github-stable")
         and artifact["signing"] == {
             "kind": "unsigned",
-            "reason": "owner-beta-distribution",
+            "reason": "stable-distribution" if stable else "owner-beta-distribution",
             "runtimeBytes": "unmodified-vendor-bundle",
         }
         and artifact["notarized"] is False,
@@ -495,12 +494,12 @@ def prepare(expected, destination):
         # verifier and declared host Node; never execute the packaged JS entry.
         [node_executable(), str(ROOT / "tooling/verify-package-standalone.mjs"), str(stage / "artifact.json"),
          str(stage / APP_NAME), artifact["version"], artifact["buildVersion"],
-         "github-owner-beta"],
+         artifact["updateChannel"]],
     )
     require(type(actual) is dict and all(actual.get(field) == artifact[field] for field in FIELDS),
             "PHYSICAL_IDENTITY_MISMATCH")
     require(
-        actual.get("updateChannel") == "github-owner-beta"
+        actual.get("updateChannel") == artifact["updateChannel"]
         and actual.get("signing") == "unsigned"
         and actual.get("notarized") is False,
         "PHYSICAL_RELEASE_IDENTITY_MISMATCH",
@@ -514,7 +513,7 @@ def prepare(expected, destination):
     manifest = {field: actual[field] for field in FIELDS}
     manifest.update(
         schema="farol.github-release/1", repository="legrch/farol",
-        channel="owner-beta", archiveSha256=digest, archiveName=archive_name,
+        channel="stable" if artifact["updateChannel"] == "github-stable" else "owner-beta", archiveSha256=digest, archiveName=archive_name,
         archiveSize=size, platform="darwin", arch="arm64",
         signing=actual["signing"], notarized=actual["notarized"], sourceDirty=False,
     )

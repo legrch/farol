@@ -2344,3 +2344,153 @@ describe("automatic update preference (ports only; no automatic release acceptan
     await updater.close();
   });
 });
+
+describe("explicit browser interruption and scoped automatic installation", () => {
+  it.each([
+    "UPDATE_BROWSER_STATE_UNKNOWN",
+    "UPDATE_BROWSER_BUSY",
+    "UPDATE_BROWSER_DRAFT",
+    "UPDATE_BROWSER_OPEN",
+  ])("permits version-bound confirmation after %s", async (code) => {
+    const f = fixture();
+    await f.updater.initialize();
+    await f.updater.check(true);
+    await f.updater.download();
+    f.ports.restart.mockResolvedValueOnce({ status: "blocked", code });
+    await f.updater.restart();
+    await f.updater.restartConfirmed("0.0.0");
+    expect(f.ports.restart).toHaveBeenCalledTimes(1);
+    await f.updater.restartConfirmed(staged.manifest.version);
+    expect(f.ports.restart).toHaveBeenLastCalledWith(staged, {
+      kind: "interrupt-browser",
+      version: staged.manifest.version,
+    });
+    expect(f.updater.snapshot().phase).toBe("applying");
+  });
+  it.each([
+    "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+    "UPDATE_RETAINED_PACKAGE_INVALID",
+  ])("does not override %s", async (code) => {
+    const f = fixture();
+    await f.updater.initialize();
+    await f.updater.check(true);
+    await f.updater.download();
+    f.ports.restart.mockResolvedValueOnce({ status: "blocked", code });
+    await f.updater.restart();
+    await f.updater.restartConfirmed(staged.manifest.version);
+    expect(f.ports.restart).toHaveBeenCalledTimes(1);
+  });
+  it("does not repeat an unknown installation after confirmation", async () => {
+    const f = fixture();
+    await f.updater.initialize();
+    await f.updater.check(true);
+    await f.updater.download();
+    f.ports.restart.mockResolvedValueOnce({
+      status: "unknown",
+      code: "UPDATE_HANDOFF_UNKNOWN",
+    });
+    await f.updater.restartConfirmed(staged.manifest.version);
+    await f.updater.restartConfirmed(staged.manifest.version);
+    expect(f.ports.restart).toHaveBeenCalledTimes(1);
+    expect(f.updater.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+    });
+  });
+  it("requires strict version-bound wire consent", () => {
+    expect(
+      InstalledUpdateCommandSchema.safeParse({ kind: "restart-confirmed" })
+        .success,
+    ).toBe(false);
+    expect(
+      InstalledUpdateCommandSchema.safeParse({
+        kind: "restart-confirmed",
+        version: staged.manifest.version,
+        force: true,
+      }).success,
+    ).toBe(false);
+    expect(
+      InstalledUpdateCommandSchema.safeParse({
+        kind: "restart-confirmed",
+        version: staged.manifest.version,
+      }).success,
+    ).toBe(true);
+  });
+  it("downloads and installs when the new choice is confirmed, with no interruption consent", async () => {
+    const f = fixture();
+    const updater = new InstalledUpdater({
+      ...f.ports,
+      readAutomaticUpdatePreference: async () => ({
+        status: "confirmed",
+        enabled: true,
+        scope: "download-and-install",
+      }),
+    });
+    await updater.initialize();
+    await updater.scheduledCheck();
+    expect(f.ports.download).toHaveBeenCalledTimes(1);
+    expect(f.ports.restart).toHaveBeenCalledWith(staged);
+  });
+  it("observes idle later after a known pre-dispatch refusal, but never repeats unknown handoff", async () => {
+    const f = fixture();
+    const updater = new InstalledUpdater({
+      ...f.ports,
+      readAutomaticUpdatePreference: async () => ({
+        status: "confirmed",
+        enabled: true,
+        scope: "download-and-install",
+      }),
+    });
+    f.ports.restart
+      .mockResolvedValueOnce({
+        status: "blocked",
+        code: "UPDATE_BROWSER_STATE_UNKNOWN",
+      })
+      .mockResolvedValueOnce({
+        status: "unknown",
+        code: "UPDATE_HANDOFF_UNKNOWN",
+      });
+    await updater.initialize();
+    await updater.scheduledCheck();
+    await updater.scheduledCheck();
+    await updater.scheduledCheck();
+    expect(f.ports.restart).toHaveBeenCalledTimes(2);
+    expect(f.ports.download).toHaveBeenCalledTimes(1);
+    expect(updater.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+    });
+  });
+  it("never converts legacy download-only consent into installation consent", async () => {
+    const f = fixture();
+    const updater = new InstalledUpdater({
+      ...f.ports,
+      readAutomaticUpdatePreference: async () => ({
+        status: "confirmed",
+        enabled: true,
+      }),
+    });
+    await updater.initialize();
+    await updater.scheduledCheck();
+    await updater.scheduledCheck();
+    expect(f.ports.download).toHaveBeenCalledTimes(1);
+    expect(f.ports.restart).not.toHaveBeenCalled();
+  });
+  it("respects Remind Me Later for this runtime", async () => {
+    const f = fixture();
+    const updater = new InstalledUpdater({
+      ...f.ports,
+      readAutomaticUpdatePreference: async () => ({
+        status: "confirmed",
+        enabled: true,
+        scope: "download-and-install",
+      }),
+    });
+    await updater.initialize();
+    await updater.check(true);
+    await updater.download();
+    await updater.later();
+    await updater.scheduledCheck();
+    expect(f.ports.restart).not.toHaveBeenCalled();
+  });
+});

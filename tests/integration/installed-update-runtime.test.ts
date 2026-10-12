@@ -5770,3 +5770,98 @@ describe("normal Quit runtime (disposable files; helper and native ports doubled
     },
   );
 });
+
+describe("confirmed updates and unified preference (disposable state, native ports doubled)", () => {
+  it("forwards confirmation once and relaunches through the existing installer", async () => {
+    const acquireAdmission = vi.fn(async () => ({
+      ok: true as const,
+      release,
+    }));
+    const controller = (await createInstalledUpdateRuntime({
+      ...options(),
+      acquireAdmission,
+    }))!;
+    await controller.initialize();
+    await controller.check(true);
+    await controller.download();
+    await controller.restartConfirmed("0.0.0");
+    expect(acquireAdmission).not.toHaveBeenCalled();
+    await controller.restartConfirmed(manifest.version);
+    expect(acquireAdmission).toHaveBeenCalledExactlyOnceWith(
+      expect.any(Function),
+      undefined,
+      { kind: "interrupt-browser", version: manifest.version },
+    );
+    expect(mocks.helper).toHaveBeenCalledOnce();
+    expect(mocks.helper.mock.calls[0]![1]).toMatchObject({ relaunch: true });
+    expect(quit).toHaveBeenCalledOnce();
+    await controller.restartConfirmed(manifest.version);
+    expect(mocks.helper).toHaveBeenCalledOnce();
+    await controller.close();
+  });
+  it("persists unified consent and OFF supersedes old install-on-quit", async () => {
+    const controller = (await createInstalledUpdateRuntime(options()))!;
+    await controller.initialize();
+    await controller.setInstallOnQuitPreference(true);
+    expect(
+      await controller.setAutomaticUpdatePreference(
+        false,
+        "download-and-install",
+      ),
+    ).toEqual({
+      status: "confirmed",
+      enabled: false,
+      scope: "download-and-install",
+    });
+    await controller.close();
+    const reopened = (await createInstalledUpdateRuntime(options()))!;
+    await reopened.initialize();
+    expect(reopened.automaticUpdatePreference()).toEqual({
+      status: "confirmed",
+      enabled: false,
+      scope: "download-and-install",
+    });
+    await reopened.check(true);
+    await reopened.download();
+    expect(
+      await reopened.applyOnNormalQuit({
+        kind: "ordinary-quit",
+        deadlineAt: Date.now() + 10000,
+      }),
+    ).toMatchObject({ status: "skipped", code: "UPDATE_QUIT_NOT_OPTED_IN" });
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await reopened.close();
+  });
+  it("preserves lost unified consent ACK across a new lifetime without enabling install", async () => {
+    const controller = (await createInstalledUpdateRuntime(options()))!;
+    await controller.initialize();
+    const preference = path.join(
+      userData,
+      "installed-updates/automatic-update-preference.json",
+    );
+    const rename = fs.rename.bind(fs);
+    const fault = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      await rename(...args);
+      if (String(args[1]) === preference)
+        throw new Error("lost durable write ACK");
+    });
+    expect(
+      await controller.setAutomaticUpdatePreference(
+        true,
+        "download-and-install",
+      ),
+    ).toMatchObject({ status: "unknown" });
+    fault.mockRestore();
+    await controller.close();
+    const reopened = (await createInstalledUpdateRuntime(options()))!;
+    await reopened.initialize();
+    expect(reopened.automaticUpdatePreference()).toMatchObject({
+      status: "unknown",
+      enabled: false,
+    });
+    await reopened.scheduledCheck();
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await reopened.close();
+  });
+});

@@ -99,3 +99,15 @@ describe("package CLI release channel", () => {
     },
   );
 });
+
+it("uses the stable release channel for an ordinary version", async () => {
+  const result = await runVerifier(
+    {
+      version: "0.2.1",
+      farolRelease: { buildVersion: "30", updateChannel: "github-stable" },
+    },
+    "github-stable",
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+});

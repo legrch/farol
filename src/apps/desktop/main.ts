@@ -66,7 +66,8 @@ import {
   type NormalQuitApplyContext,
 } from "../../modules/release/contract/installed-update";
 import {
-  UPDATE_RECHECK_MS,
+  UPDATE_IDLE_CHECK_MS,
+  type ConfirmedUpdateRestart,
   type InstalledUpdater,
 } from "../../modules/release/app/installed-updater";
 import { selectedConnectorApp } from "../../pkg/product-settings/connector-app-selection";
@@ -839,12 +840,17 @@ async function installedUpdateCommand(
   else if (command.data.kind === "notice-seen")
     await installedUpdater.acknowledgeNotice(command.data.noticeKey);
   else if (command.data.kind === "set-automatic-update-preference") {
-    await installedUpdater.setAutomaticUpdatePreference(command.data.enabled);
+    await installedUpdater.setAutomaticUpdatePreference(
+      command.data.enabled,
+      command.data.scope,
+    );
     return installedUpdater.snapshot();
   } else if (command.data.kind === "set-install-on-quit-preference") {
     await installedUpdater.setInstallOnQuitPreference(command.data.enabled);
     return installedUpdater.snapshot();
-  } else if (command.data.kind === "restart") await installedUpdater.restart();
+  } else if (command.data.kind === "restart-confirmed")
+    await installedUpdater.restartConfirmed(command.data.version);
+  else if (command.data.kind === "restart") await installedUpdater.restart();
   else if (command.data.kind === "recover" || command.data.kind === "rollback")
     await installedUpdater.restore(command.data.kind);
   return installedUpdateView;
@@ -872,6 +878,7 @@ async function initializeInstalledUpdater(): Promise<void> {
       acquireAdmission: async (
         desktopWorkSettled,
         quit?: NormalQuitApplyContext,
+        confirmation?: ConfirmedUpdateRestart,
       ) => {
         // Only the host's original preparation may borrow the Quit admission.
         // New IPC work remains fenced by quitInProgress throughout preparation.
@@ -979,14 +986,16 @@ async function initializeInstalledUpdater(): Promise<void> {
           ]);
           for (const route of routes) {
             if (!admissionCurrent()) return abort("UPDATE_WORK_PENDING");
-            const browser = await route.acquireUpdateIdle(
-              quit
-                ? {
-                    deadlineAt: quit.deadlineAt,
-                    canStartEffect: admissionCurrent,
-                  }
-                : undefined,
-            );
+            const browser = confirmation
+              ? await route.acquireUpdateClose()
+              : await route.acquireUpdateIdle(
+                  quit
+                    ? {
+                        deadlineAt: quit.deadlineAt,
+                        canStartEffect: admissionCurrent,
+                      }
+                    : undefined,
+                );
             if (!browser.ok) {
               browserReleaseUnconfirmed =
                 browser.code === "UPDATE_BROWSER_RELEASE_UNCONFIRMED";
@@ -1058,7 +1067,7 @@ async function initializeInstalledUpdater(): Promise<void> {
     void installedUpdater.scheduledCheck();
     installedUpdateTimer = setInterval(() => {
       void installedUpdater?.scheduledCheck();
-    }, UPDATE_RECHECK_MS);
+    }, UPDATE_IDLE_CHECK_MS);
     installedUpdateTimer.unref();
   } catch {
     publishInstalledUpdate({

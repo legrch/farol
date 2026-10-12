@@ -50,11 +50,19 @@ type UpdatePhaseView =
 
 // This is a persisted choice, not proof that any automatic release effect ran.
 export type AutomaticUpdatePreference =
-  | Readonly<{ status: "confirmed"; enabled: boolean }>
+  | Readonly<{
+      status: "confirmed";
+      enabled: boolean;
+      scope?: "download-and-install" | undefined;
+    }>
   | Readonly<{ status: "blocked" | "unknown"; enabled: false; code: string }>;
 
 export type AutomaticUpdatePreferenceResult =
-  | Readonly<{ status: "confirmed"; enabled: boolean }>
+  | Readonly<{
+      status: "confirmed";
+      enabled: boolean;
+      scope?: "download-and-install" | undefined;
+    }>
   | Readonly<{ status: "refused" | "unknown"; code: string }>;
 
 // This independent choice never inherits the legacy download-only preference.

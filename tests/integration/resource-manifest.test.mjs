@@ -22,7 +22,7 @@ describe("Farol Next resource ownership", () => {
       product: {
         ...EXPECTED_RESOURCE_MANIFEST.product,
         version: packageDocument.version,
-        updateChannel: "github-owner-beta",
+        updateChannel: packageDocument.farolRelease.updateChannel,
       },
       integrations: {
         ...EXPECTED_RESOURCE_MANIFEST.integrations,

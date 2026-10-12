@@ -1618,6 +1618,77 @@ export class ChatGptRoute {
     );
   }
 
+  /** Explicit update consent closes browser work instead of inferring DOM idle. */
+  async acquireUpdateClose(): Promise<BrowserUpdateAdmission> {
+    // Programmatic tasks retain their own cancellation/journal owner. Browser
+    // interruption consent does not invent a terminal result for those tasks.
+    if (this.updateAdmission || this.opening || this.taskInFlight)
+      return { ok: false, code: "UPDATE_BROWSER_BUSY" };
+    this.updateAdmission = true;
+    const surface = this.routeWindow;
+    const popups = [...this.popupWindows];
+    try {
+      this.stopTaskActivityWatch();
+      if (surface && !surface.isDestroyed()) {
+        this.entryUrl =
+          this.captureConversationUrl(surface.webContents) ?? this.entryUrl;
+      }
+      const contents = [
+        ...(surface ? [surface.webContents] : []),
+        ...popups.map((popup) => popup.webContents),
+      ];
+      // Suppress ordinary window-close navigation while the update owns input.
+      this.disposing = true;
+      for (const popup of popups) if (!popup.isDestroyed()) popup.destroy();
+      if (surface && !surface.isDestroyed()) surface.destroy();
+      // WebContents.close may complete on a later native event-loop turn.
+      // Observe the same close; never send it again after a lost result.
+      await Promise.all(
+        contents.map(async (contents) => {
+          if (contents.isDestroyed()) return;
+          await new Promise<void>((resolve, reject) => {
+            const closed = () => {
+              clearTimeout(timer);
+              resolve();
+            };
+            const timer = setTimeout(() => {
+              contents.removeListener("destroyed", closed);
+              reject(new Error("UPDATE_BROWSER_CLOSE_UNCONFIRMED"));
+            }, 2000);
+            contents.once("destroyed", closed);
+          });
+        }),
+      );
+      if (
+        (surface && !surface.isDestroyed()) ||
+        popups.some((popup) => !popup.isDestroyed())
+      )
+        throw new Error("UPDATE_BROWSER_CLOSE_UNCONFIRMED");
+      this.routeWindow = null;
+      this.popupWindows.clear();
+      this.readyPopupWindows.clear();
+      this.submissionGatedPopupWindows.clear();
+    } catch {
+      // An uncertain native close holds the reservation, never retries destroy.
+      return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
+    } finally {
+      this.disposing = false;
+    }
+    let released = false;
+    return {
+      ok: true,
+      recheck: async () =>
+        released || !this.updateAdmission || this.hasOpenUpdateSurface()
+          ? { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" }
+          : { ok: true },
+      release: async () => {
+        if (released) return;
+        released = true;
+        this.updateAdmission = false;
+      },
+    };
+  }
+
   async acquireUpdateIdle(
     guard?: ChatGptUpdateIdleEffectGuard,
   ): Promise<BrowserUpdateAdmission> {

@@ -71,3 +71,29 @@ describe("Farol Next build identity", () => {
     ).toThrow("BUILD_IDENTITY_INVALID");
   });
 });
+
+it("keeps stable versions and valid numeric build numbers bound", () => {
+  const stable = createBuildIdentity({
+    ...input,
+    version: "0.2.1",
+    updateChannel: "github-stable",
+    buildVersion: "30",
+  });
+  expect(assertBuildIdentity(stable)).toEqual(stable);
+  for (const change of [
+    { version: "0.2.1-owner.beta.1" },
+    { version: "01.2.1" },
+    { buildVersion: undefined },
+    { updateChannel: "github-owner-beta" },
+  ]) {
+    expect(() =>
+      createBuildIdentity({
+        ...input,
+        version: "0.2.1",
+        updateChannel: "github-stable",
+        buildVersion: "30",
+        ...change,
+      }),
+    ).toThrow("BUILD_IDENTITY_INVALID");
+  }
+});

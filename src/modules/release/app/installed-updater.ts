@@ -23,6 +23,19 @@ const recheckableAdmissionBlocks = new Set([
   "UPDATE_WORK_PENDING",
 ]);
 
+const confirmedBrowserBlocks = new Set([
+  "UPDATE_BROWSER_OPEN",
+  "UPDATE_BROWSER_BUSY",
+  "UPDATE_BROWSER_DRAFT",
+  "UPDATE_BROWSER_STATE_UNKNOWN",
+]);
+// A tick observes readiness; only discovery uses the longer network interval.
+export const UPDATE_IDLE_CHECK_MS = 60_000;
+export type ConfirmedUpdateRestart = Readonly<{
+  kind: "interrupt-browser";
+  version: string;
+}>;
+
 export const UPDATE_RECHECK_MS = 6 * 60 * 60 * 1_000;
 
 export type ReadyUpdate = Readonly<{
@@ -51,6 +64,7 @@ export type InstalledUpdaterPorts = Readonly<{
   readAutomaticUpdatePreference?(): Promise<AutomaticUpdatePreference>;
   writeAutomaticUpdatePreference?(
     enabled: boolean,
+    scope?: "download-and-install",
   ): Promise<AutomaticUpdatePreferenceResult>;
   // Missing ports mean OFF/unsupported. The host must load a separately scoped
   // durable choice; the existing auto-download record cannot supply this ACK.
@@ -105,7 +119,10 @@ export type InstalledUpdaterPorts = Readonly<{
   retain(update: ReadyUpdate): Promise<void | KnownFailure>;
   // The composition holds existing admission fences, checks real obligations,
   // and hands off to the helper before it requests the application's normal quit.
-  restart(update: ReadyUpdate): Promise<UpdateHandoff>;
+  restart(
+    update: ReadyUpdate,
+    confirmation?: ConfirmedUpdateRestart,
+  ): Promise<UpdateHandoff>;
   // Adapter into the SAME restart/apply engine, called before destructive Quit
   // drain. Acquire its original admission before stopping clients, use this
   // absolute deadline through preparation/rechecks/helper readiness, and refuse
@@ -146,6 +163,7 @@ export class InstalledUpdater {
   private initialized = false;
   private busy = false;
   private scheduledChecking = false;
+  private automaticDeferred = false;
   private lastCheck: number | null = null;
   private closed = false;
   private rollbackVersion: string | undefined;
@@ -323,7 +341,18 @@ export class InstalledUpdater {
   ): Promise<NormalQuitUpdateReceipt> {
     if (wasClosing || !this.initialized || this.busy || this.preferenceWriting)
       return { status: "skipped", code: "UPDATE_QUIT_OWNER_UNAVAILABLE" };
-    const preference = this.quitPreference;
+    // The unified choice supersedes the legacy separate Quit checkbox.
+    const automatic = this.automaticPreference;
+    if (
+      this.ports.readAutomaticUpdatePreference &&
+      automatic.status !== "confirmed"
+    )
+      return { status: automatic.status, code: automatic.code };
+    const preference =
+      automatic.status === "confirmed" &&
+      automatic.scope === "download-and-install"
+        ? automatic
+        : this.quitPreference;
     if (preference.status !== "confirmed")
       return { status: preference.status, code: preference.code };
     if (!preference.enabled)
@@ -410,11 +439,20 @@ export class InstalledUpdater {
   // Only an explicit command changes the choice. No release effect is dispatched.
   async setAutomaticUpdatePreference(
     enabled: boolean,
+    scope?: "download-and-install",
   ): Promise<AutomaticUpdatePreferenceResult> {
     if (this.automaticPreference.status === "unknown")
       return { status: "unknown", code: this.automaticPreference.code };
-    if (typeof enabled !== "boolean")
+    if (
+      typeof enabled !== "boolean" ||
+      (scope !== undefined && scope !== "download-and-install")
+    )
       return { status: "refused", code: "UPDATE_AUTOMATIC_PREFERENCE_INVALID" };
+    if (this.view.phase === "applying")
+      return {
+        status: "refused",
+        code: "UPDATE_AUTOMATIC_PREFERENCE_UNAVAILABLE",
+      };
     if (this.isClosing() || !this.initialized || this.preferenceWriting)
       return {
         status: "refused",
@@ -439,8 +477,11 @@ export class InstalledUpdater {
     };
     let result: AutomaticUpdatePreferenceResult;
     try {
-      result = await this.ports.writeAutomaticUpdatePreference(enabled);
-      if (result.status === "confirmed" && result.enabled !== enabled)
+      result = await this.ports.writeAutomaticUpdatePreference(enabled, scope);
+      if (
+        result.status === "confirmed" &&
+        (result.enabled !== enabled || result.scope !== scope)
+      )
         result = {
           status: "unknown",
           code: "UPDATE_AUTOMATIC_PREFERENCE_ACK_MISMATCH",
@@ -737,7 +778,18 @@ export class InstalledUpdater {
 
   /** Timer entry point: discover, then retain an eligible update when opted in. */
   async scheduledCheck(): Promise<void> {
-    if (this.scheduledChecking || !this.canPrepare()) return;
+    if (
+      this.scheduledChecking ||
+      this.isClosing() ||
+      this.busy ||
+      this.preferenceWriting
+    )
+      return;
+    if (this.view.phase === "ready") {
+      await this.installWhenIdle();
+      return;
+    }
+    if (!this.canPrepare()) return;
     this.scheduledChecking = true;
     const preference = this.automaticPreference;
     const previousCandidate = this.available;
@@ -756,9 +808,35 @@ export class InstalledUpdater {
         !this.view.deferred
       )
         await this.download();
+      await this.installWhenIdle();
     } finally {
       this.scheduledChecking = false;
     }
+  }
+
+  private async installWhenIdle(): Promise<void> {
+    const preference = this.automaticPreference;
+    if (
+      this.automaticDeferred ||
+      this.preferenceWriting ||
+      this.busy ||
+      this.isClosing() ||
+      preference.status !== "confirmed" ||
+      !preference.enabled ||
+      preference.scope !== "download-and-install" ||
+      this.view.phase !== "ready"
+    )
+      return;
+    // These refusals precede installer dispatch. Unknown handoff/release states
+    // never enter this branch and are never repeated by the timer.
+    if (
+      this.view.blockedBy !== null &&
+      !recheckableAdmissionBlocks.has(this.view.blockedBy) &&
+      !confirmedBrowserBlocks.has(this.view.blockedBy)
+    )
+      return;
+    this.view = { ...this.view, blockedBy: null };
+    await this.restart();
   }
 
   async check(manual = false): Promise<void> {
@@ -1073,6 +1151,7 @@ export class InstalledUpdater {
     )
       return;
     if (this.view.phase === "ready") {
+      this.automaticDeferred = true;
       this.begin();
       try {
         await this.publish({ ...this.view, deferred: true });
@@ -1106,13 +1185,22 @@ export class InstalledUpdater {
     }
   }
 
-  async restart(): Promise<void> {
+  async restartConfirmed(version: string): Promise<void> {
+    await this.restart({ kind: "interrupt-browser", version });
+  }
+
+  async restart(confirmation?: ConfirmedUpdateRestart): Promise<void> {
     if (
       this.isClosing() ||
       this.busy ||
       this.view.phase !== "ready" ||
-      this.view.blockedBy !== null ||
-      !this.ready
+      (this.view.blockedBy !== null &&
+        !(confirmation && confirmedBrowserBlocks.has(this.view.blockedBy))) ||
+      !this.ready ||
+      (confirmation !== undefined &&
+        (confirmation.kind !== "interrupt-browser" ||
+          confirmation.version !== this.ready.manifest.version ||
+          confirmation.version !== this.view.version))
     )
       return;
     const previous = this.view;
@@ -1123,7 +1211,9 @@ export class InstalledUpdater {
       await this.publish({ phase: "applying", version });
       if (this.isClosing()) return;
       restartStarted = true;
-      const outcome = await this.ports.restart(this.ready);
+      const outcome = confirmation
+        ? await this.ports.restart(this.ready, confirmation)
+        : await this.ports.restart(this.ready);
       if (outcome.status === "blocked") {
         await this.publish({
           phase: "ready",

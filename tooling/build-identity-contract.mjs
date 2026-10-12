@@ -61,13 +61,19 @@ function validShape(value) {
     /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u.test(value.version) &&
     value.bundleId === bundleId &&
     (value.updateChannel === previewChannel ||
-      value.updateChannel === "github-owner-beta") &&
+      value.updateChannel === "github-owner-beta" ||
+      value.updateChannel === "github-stable") &&
     (value.buildVersion === undefined ||
       (typeof value.buildVersion === "string" &&
         /^[1-9][0-9]{0,8}$/u.test(value.buildVersion))) &&
     (value.updateChannel !== "github-owner-beta" ||
       (value.buildVersion !== undefined &&
         /^[0-9]+\.[0-9]+\.[0-9]+-owner\.beta\.(0|[1-9][0-9]*)$/u.test(
+          value.version,
+        ))) &&
+    (value.updateChannel !== "github-stable" ||
+      (value.buildVersion !== undefined &&
+        /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u.test(
           value.version,
         ))) &&
     canonicalTimestamp(value.builtAt) &&

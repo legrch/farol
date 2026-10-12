@@ -284,14 +284,12 @@ describe("supervised resources (native FS, mocked package verifier)", () => {
   });
 
   it.each([
-    "stable-version",
     "noncanonical-version",
     "numeric-build",
     "invalid-sha",
     "extra-claim",
   ])("refuses %s expectations", async (kind) => {
     const f = await fixture();
-    if (kind === "stable-version") f.expected.version = "0.2.0";
     if (kind === "noncanonical-version")
       f.expected.version = "00.2.0-owner.beta.1";
     if (kind === "numeric-build") f.expected.buildVersion = 15;
@@ -404,4 +402,29 @@ describe("supervised resources (native FS, mocked package verifier)", () => {
     expect(await result.verify()).toBe(false);
     expect(verifyPackageContent).toHaveBeenCalledTimes(2);
   });
+});
+
+it("binds an ordinary stable version to the stable channel", async () => {
+  const f = await fixture();
+  f.expected.version = "0.2.1";
+  f.artifact.version = "0.2.1";
+  f.artifact.updateChannel = "github-stable";
+  f.artifact.signing.reason = "stable-distribution";
+  await writeArtifact(f, f.artifact);
+  const result = await capture(f);
+  expect(await result.verify()).toBe(true);
+  expect(verifyPackageContent).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      expectedChannel: "github-stable",
+      expectedVersion: "0.2.1",
+    }),
+  );
+});
+it("refuses a stable version bound to an owner-beta artifact", async () => {
+  const f = await fixture();
+  f.expected.version = "0.2.1";
+  f.artifact.version = "0.2.1";
+  await writeArtifact(f, f.artifact);
+  await expect(capture(f)).rejects.toThrow("ARTIFACT_CLAIMS");
+  expect(verifyPackageContent).not.toHaveBeenCalled();
 });

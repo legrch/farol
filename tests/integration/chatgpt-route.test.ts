@@ -7692,3 +7692,66 @@ describe("saved conversation physical binding (mock Electron only)", () => {
     expect(execute).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("confirmed update browser closure (native surfaces mocked)", () => {
+  it("closes the browser without claiming a DOM idle observation", async () => {
+    const candidate = route();
+    let destroyed = false;
+    const surface = {
+      kind: "embedded",
+      isDestroyed: () => destroyed,
+      destroy: vi.fn(() => {
+        destroyed = true;
+      }),
+      webContents: {
+        isDestroyed: () => destroyed,
+        getURL: () => "https://chatgpt.com/c/retained-conversation",
+        executeJavaScript: vi.fn(),
+      },
+    };
+    Reflect.set(candidate, "routeWindow", surface);
+    const admission = await candidate.acquireUpdateClose();
+    expect(admission.ok).toBe(true);
+    if (!admission.ok) throw new Error(admission.code);
+    expect(surface.destroy).toHaveBeenCalledTimes(1);
+    expect(surface.webContents.executeJavaScript).not.toHaveBeenCalled();
+    expect(await admission.recheck()).toEqual({ ok: true });
+    expect(await candidate.open()).toEqual({ status: "unreachable" });
+    expect(Reflect.get(candidate, "entryUrl")).toBe(
+      "https://chatgpt.com/c/retained-conversation",
+    );
+    await admission.release();
+    expect(Reflect.get(candidate, "updateAdmission")).toBe(false);
+  });
+  it("retains the admission if native closure cannot be confirmed", async () => {
+    const candidate = route();
+    const destroy = vi.fn(() => {
+      throw new Error("fixture native close failure");
+    });
+    Reflect.set(candidate, "routeWindow", {
+      isDestroyed: () => false,
+      destroy,
+      webContents: {
+        isDestroyed: () => false,
+        getURL: () => "https://chatgpt.com/",
+      },
+    });
+    expect(await candidate.acquireUpdateClose()).toEqual({
+      ok: false,
+      code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+    });
+    expect(await candidate.acquireUpdateClose()).toEqual({
+      ok: false,
+      code: "UPDATE_BROWSER_BUSY",
+    });
+    expect(destroy).toHaveBeenCalledTimes(1);
+  });
+  it("does not turn browser interruption into a completed programmatic task", async () => {
+    const candidate = route();
+    Reflect.set(candidate, "taskInFlight", true);
+    expect(await candidate.acquireUpdateClose()).toEqual({
+      ok: false,
+      code: "UPDATE_BROWSER_BUSY",
+    });
+  });
+});

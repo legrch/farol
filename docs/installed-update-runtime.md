@@ -363,3 +363,33 @@ unknown enabled actions and absent positive voice readiness still block updates.
 `node tests/e2e/chatgpt-update-idle.e2e.mjs` checks real Electron hidden and
 detached viewport behavior with a disposable public-DOM fixture. It does not
 qualify live provider state, installed admission or a completed OTA.
+
+## Confirmed interruption and unified automatic updates
+
+The normal update window has one download-and-install choice. Its new versioned
+record carries the explicit scope `download-and-install`; a legacy download-only
+boolean does not authorize installation. OFF supersedes the old install-on-quit
+choice. A durable write fence preserves an unknown preference write across app
+lifetimes. The existing independent install-on-quit API remains readable for
+compatibility, but is not exposed as a second ordinary setting.
+
+A one-minute readiness tick uses the existing six-hour discovery throttle. With
+confirmed unified consent it downloads eligible updates and attempts the normal
+idle admission. Known pre-dispatch busy/unknown-browser observations may be
+checked on a later tick. Unknown installation, release or package effects remain
+retained for recovery and are never repeated. Remind Me Later defers automatic
+installation for the current app lifetime.
+
+`restart-confirmed` carries the exact version shown by the confirmation dialog.
+It permits closing owned ChatGPT windows without inferring DOM idle, preserves
+the conversation address and keeps new input fenced through handoff. A native
+close must be observed; a failed close keeps the admission reserved. Internal
+programmatic tasks and Computer obligations retain their existing cancellation
+and drain owners. Manual consent never turns an unknown operation into success.
+
+Starting with 0.2.1 the public release version uses ordinary semantic versions
+and the stable GitHub channel. Build numbers still increase, while existing
+bundle IDs, product identity, process names and profile paths remain compatible.
+The old beta readers stay available for predecessor/recovery evidence. The beta
+to stable transition requires a qualified closed replacement because older
+installed builds discover only the beta feed; subsequent stable updates use OTA.

@@ -7,7 +7,9 @@ import { GO_PACKAGE_SCHEMA, PRODUCT_APP_NAME } from "./package-layout.mjs";
 import { verifyPackageContent } from "./verify-package-content.mjs";
 
 const MAX_ARTIFACT_BYTES = 64 * 1024;
-const CHANNEL = "github-owner-beta";
+const channelForVersion = (version) =>
+  OWNER_BETA.test(version) ? "github-owner-beta" : "github-stable";
+const STABLE = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u;
 const CLAIMS = Object.freeze([
   "version",
   "buildVersion",
@@ -55,7 +57,7 @@ function expectedClaims(value) {
   const expected = Object.fromEntries(CLAIMS.map((key) => [key, value[key]]));
   requireValue(
     expected.version.length <= 128 &&
-      OWNER_BETA.test(expected.version) &&
+      (OWNER_BETA.test(expected.version) || STABLE.test(expected.version)) &&
       /^[1-9][0-9]{0,8}$/u.test(expected.buildVersion) &&
       /^[a-f0-9]{40}$/u.test(expected.sourceCommit) &&
       ["buildId", "sourceTreeDigest", "artifactSha256"].every((key) =>
@@ -254,7 +256,7 @@ export async function captureSupervisedUpdateResources({
         matchesClaims(artifact, claims) &&
           artifact.schema === GO_PACKAGE_SCHEMA &&
           artifact.sourceDirty === false &&
-          artifact.updateChannel === CHANNEL,
+          artifact.updateChannel === channelForVersion(claims.version),
         "ARTIFACT_CLAIMS",
       );
       const identity = await verifyPackageContent({
@@ -262,13 +264,13 @@ export async function captureSupervisedUpdateResources({
         appPath: app,
         expectedVersion: claims.version,
         expectedBuildVersion: claims.buildVersion,
-        expectedChannel: CHANNEL,
+        expectedChannel: channelForVersion(claims.version),
       });
       requireValue(
         matchesClaims(identity, claims) &&
           identity.product === "Farol Next Preview" &&
           identity.bundleId === "local.farol.next.preview" &&
-          identity.updateChannel === CHANNEL &&
+          identity.updateChannel === channelForVersion(claims.version) &&
           identity.signing === "unsigned" &&
           identity.notarized === false,
         "PACKAGE_IDENTITY",
