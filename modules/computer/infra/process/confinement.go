@@ -364,9 +364,16 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		}
 	}
 	var parameters, reads, writes, execs, denies, parents, executableWrites, rootAnchors, mountDenies, volumeRoots []string
+	parameterKeys := map[string]string{}
 	add := func(kind, path string, rules *[]string) {
-		key := fmt.Sprintf("FAROL_%d", len(parameters)/2)
-		parameters = append(parameters, "-D", key+"="+path)
+		key, exists := parameterKeys[path]
+		if s.GitRuntimeResources == nil || !exists {
+			key = fmt.Sprintf("FAROL_%d", len(parameters)/2)
+			parameterKeys[path] = key
+			parameters = append(parameters, "-D", key+"="+path)
+		}
+		// Keep retained no-resource fingerprints unchanged. The Git data
+		// closure shares only identical paths; all allow/deny rules remain.
 		*rules = append(*rules, fmt.Sprintf("(%s (param %q))", kind, key))
 	}
 	for _, selected := range selectedScopes {

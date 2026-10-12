@@ -298,3 +298,71 @@ func TestGitRuntimeRetainedDescriptorsConsumeOnResourceDrift(t *testing.T) {
 		})
 	}
 }
+
+// Literal declaration fixtures only; packaged native preparation is separate.
+func TestGitRuntimePackagedProfileReusesPathParameters(t *testing.T) {
+	raw, err := os.ReadFile("../../../../tooling/shell-platform.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var declaration struct {
+		GitRuntimeResources *GitRuntimeResources
+		Executables         []ExecutablePin
+	}
+	if err := json.Unmarshal(raw, &declaration); err != nil || declaration.GitRuntimeResources == nil {
+		t.Fatal("missing declared resources", err)
+	}
+	s, command := rootScopedFixture(t)
+	s.GitRuntimeResources = declaration.GitRuntimeResources
+	s.Executables = declaration.Executables
+	const bundle = "/Users/fixture/.codex/worktrees/qualified-computer/farol/_output/package/Farol.app"
+	s.ProtectedBundle = &ProtectedBundle{Path: bundle, Identity: authority.RootIdentity{Device: "1", Inode: "55"}}
+	s.ProtectedImages = []ExecutablePin{
+		{Path: bundle + "/Contents/Resources/app/farol-backend", SHA256: strings.Repeat("d", 64)},
+		{Path: bundle + "/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron", SHA256: strings.Repeat("e", 64)},
+	}
+	s.RootVolumeOnly = true
+	command.Executable = "/bin/bash"
+	for _, pin := range s.Executables {
+		if pin.Path == command.Executable {
+			command.ExecutableSHA256 = pin.SHA256
+		}
+	}
+	command.Args = []string{"--noprofile", "--norc", "-c", "builtin printf fixture"}
+	command.Environment = seatbeltEnvironment(s, command.Write)
+	plan, err := compileSeatbelt(s, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]bool{}
+	for i := 0; i+1 < len(plan.arguments) && plan.arguments[i] == "-D"; i += 2 {
+		_, value, ok := strings.Cut(plan.arguments[i+1], "=")
+		if !ok || values[value] {
+			t.Fatal("duplicate or malformed path parameter", value)
+		}
+		values[value] = true
+	}
+	policy, err := NewSeatbelt(s, &confinementEvidenceDouble{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := policy.bind(command)
+	if err != nil {
+		t.Fatal("packaged profile does not fit unchanged native command limit", err)
+	}
+	if _, err := selectedLaunch(policy, bound); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range s.GitRuntimeResources.Files {
+		for _, rule := range []string{"allow file-read*", "deny file-write*", "deny process-exec"} {
+			if !hasParameterRule(plan, rule, "literal", file.Path) {
+				t.Fatal("lost data rule", rule, file.Path)
+			}
+		}
+	}
+	if !hasParameterRule(plan, "deny file-write*", "subpath", bundle) ||
+		!hasParameterRule(plan, "allow process-exec", "literal", command.Executable) ||
+		!hasParameterRule(plan, "deny file-write*", "literal", command.Executable) {
+		t.Fatal("lost bundle or executable protection")
+	}
+}
