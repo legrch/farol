@@ -38,6 +38,121 @@ async function controller(update: InstalledUpdateView = ready) {
   return { f, c };
 }
 
+it.each<InstalledUpdateView>([
+  { phase: "ready", version: "0.2.4", deferred: false, blockedBy: null },
+  { phase: "failed", code: "UPDATE_HANDOFF_UNKNOWN", recoveryRequired: true },
+  { phase: "applying", version: "0.2.4" },
+])(
+  "preserves newer $phase progress when the check reply arrives late",
+  async (newer) => {
+    const { c, f } = await controller({ phase: "idle", checkedAt: null });
+    let reply!: (view: InstalledUpdateView) => void;
+    vi.mocked(f.api.installedUpdate).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          reply = resolve;
+        }),
+    );
+    const checking = c.update("check");
+    await vi.waitFor(() =>
+      expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+        kind: "check",
+      }),
+    );
+    f.emit("update", newer);
+    reply({ phase: "downloading" });
+    await checking;
+    expect(c.getSnapshot().update).toEqual(newer);
+    expect(f.api.installedUpdate).toHaveBeenCalledTimes(1);
+  },
+);
+
+it("does not replace a newer invalid update projection with a stale valid check reply", async () => {
+  const { c, f } = await controller({ phase: "idle", checkedAt: null });
+  let reply!: (view: InstalledUpdateView) => void;
+  vi.mocked(f.api.installedUpdate).mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        reply = resolve;
+      }),
+  );
+  const checking = c.update("check");
+  await vi.waitFor(() =>
+    expect(f.api.installedUpdate).toHaveBeenCalledTimes(1),
+  );
+  f.emit("update", {
+    phase: "ready",
+    version: "0.2.4",
+    deferred: "invalid",
+    blockedBy: null,
+  });
+  expect(c.getSnapshot().update).toMatchObject({
+    phase: "unavailable",
+    code: "UPDATE_STATE_INVALID",
+  });
+  reply({ phase: "available", version: "0.2.4", deferred: false });
+  await checking;
+  expect(c.getSnapshot().update).toMatchObject({
+    phase: "unavailable",
+    code: "UPDATE_STATE_INVALID",
+  });
+});
+
+it("keeps the original command UNKNOWN even when a newer ready event is visible", async () => {
+  const { c, f } = await controller({ phase: "idle", checkedAt: null });
+  let reply!: (view: InstalledUpdateView) => void;
+  vi.mocked(f.api.installedUpdate).mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        reply = resolve;
+      }),
+  );
+  const checking = c.update("check");
+  await vi.waitFor(() =>
+    expect(f.api.installedUpdate).toHaveBeenCalledTimes(1),
+  );
+  f.emit("update", ready);
+  reply({
+    phase: "failed",
+    code: "UPDATE_HANDOFF_UNKNOWN",
+    recoveryRequired: true,
+  });
+  expect(await checking).toMatchObject({
+    state: "unknown",
+    code: "UPDATE_HANDOFF_UNKNOWN",
+  });
+  expect(c.getSnapshot().update).toEqual(ready);
+  expect(c.getSnapshot().intents.update?.state).toBe("unknown");
+  expect(await c.update("check")).toMatchObject({
+    state: "unknown",
+    code: "UPDATE_HANDOFF_UNKNOWN",
+  });
+  expect(f.api.installedUpdate).toHaveBeenCalledTimes(1);
+});
+
+it("keeps applying through a malformed event and an older ready command reply", async () => {
+  const { c, f } = await controller({ phase: "idle", checkedAt: null });
+  let reply!: (view: InstalledUpdateView) => void;
+  vi.mocked(f.api.installedUpdate).mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        reply = resolve;
+      }),
+  );
+  const checking = c.update("check");
+  await vi.waitFor(() =>
+    expect(f.api.installedUpdate).toHaveBeenCalledTimes(1),
+  );
+  f.emit("update", { phase: "applying", version: "0.2.4" });
+  f.emit("update", { phase: "invalid" });
+  reply(ready);
+  await checking;
+  expect(c.getSnapshot().update).toEqual({
+    phase: "applying",
+    version: "0.2.4",
+  });
+});
+
 it.each([
   "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
   "UPDATE_STATE_UNREADABLE",

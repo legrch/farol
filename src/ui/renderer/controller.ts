@@ -610,9 +610,11 @@ export class WindowController implements RendererFacade {
       this.patch({ activity: [...this.state.activity, entry].slice(-256) });
   }
   private adoptUpdate(value: unknown): void {
+    // A newer invalid observation also fences older replies; it cannot revive
+    // their status or release an already applying update.
+    this.updateRevision++;
     const parsed = InstalledUpdateViewSchema.safeParse(value);
     if (parsed.success) {
-      this.updateRevision++;
       if (parsed.data.phase === "failed" || parsed.data.phase === "unavailable")
         parsed.data.code = displayCode(parsed.data.code);
       this.patch({ update: parsed.data });
@@ -1572,6 +1574,7 @@ export class WindowController implements RendererFacade {
         code: "UPDATE_NOT_READY",
       });
     return this.dispatch("update", { action, version: noticeKey }, async () => {
+      const revision = this.updateRevision;
       const value = InstalledUpdateViewSchema.safeParse(
         await this.api.installedUpdate(
           action === "restart-confirmed"
@@ -1585,7 +1588,8 @@ export class WindowController implements RendererFacade {
           state: "unknown",
           code: "UPDATE_OUTCOME_UNKNOWN",
         };
-      this.patch({ update: value.data });
+      // The reply settles this command, not a more recent progress observation.
+      if (this.updateRevision === revision) this.adoptUpdate(value.data);
       return {
         id: "update",
         state:
