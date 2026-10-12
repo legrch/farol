@@ -59,7 +59,30 @@ has a shared-writable `/Applications` ancestor; neither satisfies this image
 class. Selecting the Command Line Tools image does not widen its filesystem
 access or establish a successful ordinary Git journey.
 
-## Installed beta.9 evidence
+## Local candidate Bash and Git evidence
+
+On 12 October, clean package `cbd4cf31` passed separate disposable-profile
+journeys through the actual desktop Go host, connector socket and process bridge.
+Bash wrote and read back a file; Git completed init, add, commit, status and log.
+Both returned exact output with exit code zero, followed by acknowledged host
+retirement and original backend exit zero without forced termination. The
+selected native result was `exited`, with descendant cleanup still `unverified`.
+Git used synthetic identity, empty templates, and disabled global/system
+configuration and system attributes. These checks do not establish ordinary
+developer configuration, linked-worktree, network, external MCP or OTA parity.
+Approval/settings were controlled fixtures, not the normal Setup journey.
+
+The publication fix waits outside owner gates for the one original in-flight
+publication, bounded by the existing READ lease and request context. It then
+rechecks the same authority. A finished attempt with a lost acknowledgement
+remains unknown; reading never repeats execution or publication. A subsequent
+source checkpoint, `fb9d95f9`, also keeps a known root exit observable as
+`running` while its original supervisor finishes. Root exit/output facts remain
+visible, completion is not claimed early, and actual uncertainty remains sticky.
+The latter transition has controlled Go/watchdog/TypeScript evidence; the
+`cbd4cf31` native package does not qualify that later source change.
+
+## Historical installed beta.9 evidence
 
 On 11 October, one real OTA installed unsigned macOS ARM64 beta.9, build `23`,
 from source `299f823e56bbfbecb1b70d2e7ee97b6a63403a8f`. External Computer
@@ -71,18 +94,18 @@ root-scoped policy grant, and it does not establish hardware sleep, soak, Copy
 response, Shell, Git, Model, Agent, or broad installed parity. The beta.8
 outcome-unknown request remains historical and was not replayed.
 
-The Go route does not advertise shell/Git or coding-task tools. Its process
+That installed checkpoint did not advertise shell/Git or coding-task tools. Its process
 reservation, anchored measurement, held control, watchdog and retained observation
 remain separate implementation/qualification slices. The actual native Seatbelt
 alias test denied direct protected paths, symlinks and outside-root reads but
 allowed a hardlink alias to synthetic protected bytes. That failed stronger
-confinement claim remains open; it has not been waived or fixed by source-only
-tests. The selected contract is strict object protection: an excluded file must
-remain inaccessible through another hardlink in an allowed subtree, for both
-reading and writing throughout execution. Path-only rules and a passing finite
-fixture do not establish that invariant. Current Seatbelt selection has no
-continuous object-level enforcement, so normal Shell activation stays refused;
-read-only access or a smaller subtree is not a demonstrated safe exception.
+confinement experiment is retained; later root-scoped work does not change its
+result. That older contract required strict object protection: an excluded file had to
+remain inaccessible through another hardlink in an allowed subtree. Path-only
+rules did not establish that invariant. The later owner-selected
+[`approved-roots-v1` contract](sandbox-approvals.md) explicitly replaced this
+requirement with coarse root access; it does not relabel the old hardlink
+experiment as passed or promise object-level confidentiality.
 HOME/scratch semantics, ordinary linked-worktree Git and descendant cleanup
 also remain gates. The historical shell table below describes the earlier
 TypeScript route and does not qualify Go shell.
@@ -125,7 +148,8 @@ execution-result contract, not proof of process-tree revocation. Unknown helper
 Wait, IPC failure, uncertain cancellation or publication ACK still fence the
 operation and retirement. Stored bytes cannot clear those fences. Production
 Shell activation and any stronger descendant-lifetime guarantee remain separate
-qualification gates; this change does not register a normal-startup producer.
+qualification gates; the result-format change alone did not register a
+normal-startup producer.
 
 Controlled regressions in `process/supervision_test.go`,
 `mutation/processsupervision_test.go` and
@@ -149,8 +173,10 @@ native shell activation and actual Quit with a running command remain unqualifie
 The prepared connector transport maps `computer.process.start/read/cancel` to
 the existing process owner, and the thin MCP adapter maps those methods to
 `computer_shell_start/read/cancel` only when the exact Go handshake advertises
-all three. Normal startup still supplies no qualified shell producer and does
-not advertise these methods. Request data cannot select an executable,
+all three. The current build-selected candidate supplies that producer only
+after its resource, platform and launch checks pass; unsupported selections
+withhold the slice. The local socket fixture exercised the complete advertised
+slice. Installed external Shell acceptance remains open. Request data cannot select an executable,
 environment, root, deadline or authority. A start binds the original operation
 once; reads use its exact handle and bounded base64 byte windows. A new connector
 lifetime can observe under current access, but cannot restore a control handle.
@@ -168,8 +194,9 @@ control acknowledgement also fences the existing operation and retirement.
 
 These source and storage results do not establish real process closure, crash or
 power-loss recovery, normal-startup Shell admission, public MCP Shell/Git,
-installed behavior or accepted whole-range cutover. The active Go route still
-withholds those tools while confinement and lifecycle qualification remain open.
+installed behavior or accepted whole-range cutover. The build-selected candidate
+and its bounded local native evidence above are separate from these earlier
+source/storage results and from installed external qualification.
 
 Actual external `computer_mutation_read` is now qualified separately from its
 source registration. Dev `67d8af51` observed the original completed edit after a
@@ -228,7 +255,7 @@ any later Legacy-replacement decision.
 ## Historical TypeScript workspace-shell command mode
 
 This section records the earlier executor's contract and qualification limits.
-The active Go Dev connector does not expose these shell tools. Do not follow
+The older Go Dev checkpoints did not expose these shell tools. Do not follow
 these settings as instructions for enabling an unqualified Go process route.
 
 The owner must select **Workspace shell** in Computer settings and verify the
