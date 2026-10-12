@@ -9,6 +9,7 @@ import {
 } from "vitest";
 import {
   DesktopGoCore,
+  desktopShellSelection,
   startDesktopGoCore,
   type DesktopCoreSelection,
 } from "../../apps/desktop/go-core-host.ts";
@@ -609,6 +610,58 @@ describe("normal Go host startup", () => {
     ).rejects.toThrow("shell_host_layout_mismatch");
     expect(ports.runtime).not.toHaveBeenCalled();
     expect(ports.provision).not.toHaveBeenCalled();
+  });
+
+  it("starts source Dev with its Go File route and no packaged Shell selection", async () => {
+    const input = shellSelection();
+    const artifactRoot = "/synthetic/repo/_output/build/app";
+    const f = transport();
+    start.mockResolvedValue(f.client);
+    const host = await startDesktopGoCore({
+      ...input,
+      artifactRoot,
+      compiledShell: desktopShellSelection(
+        input.compiledShell,
+        "dev",
+        artifactRoot,
+      ),
+    });
+    expect(ports.resources).toHaveBeenCalledTimes(1);
+    expect(ports.runtime).not.toHaveBeenCalled();
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(start.mock.calls[0]![1]!.shellMetadata).toBeUndefined();
+    await host.close();
+  });
+
+  it.each(["dev", "preview"] as const)(
+    "keeps packaged %s Shell checks mandatory with no failure fallback",
+    async (environment) => {
+      const input = shellSelection();
+      const compiledShell = desktopShellSelection(
+        input.compiledShell,
+        environment,
+        input.artifactRoot,
+      );
+      expect(compiledShell).toBe(input.compiledShell);
+      const failure = new BridgeError("refused", "shell_runtime_unqualified");
+      ports.runtime.mockRejectedValueOnce(failure);
+      await expect(
+        startDesktopGoCore({ ...input, compiledShell }),
+      ).rejects.toBe(failure);
+      expect(ports.provision).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not silently remove Shell from an unpackaged preview", () => {
+    const input = shellSelection();
+    expect(
+      desktopShellSelection(
+        input.compiledShell,
+        "preview",
+        "/synthetic/artifact",
+      ),
+    ).toBe(input.compiledShell);
   });
 
   it("preserves runtime qualification refusal without launching a fallback", async () => {

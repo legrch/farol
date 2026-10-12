@@ -5,6 +5,7 @@ import {
   runAdmittedConnectorSetup,
 } from "../../../apps/desktop/connector-setup-host";
 import {
+  desktopShellSelection,
   startDesktopGoCore,
   type DesktopGoCore,
 } from "../../../apps/desktop/go-core-host";
@@ -11213,7 +11214,11 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       startDesktopGoCore({
         compiledArtifact: compiledGoCore,
         compiledResources: compiledGoResources,
-        ...(compiledGoShell ? { compiledShell: compiledGoShell } : {}),
+        compiledShell: desktopShellSelection(
+          compiledGoShell,
+          runtimeEnvironment,
+          directory,
+        ),
         previousHostDrainConfirmed: previousRunClean,
         build: buildIdentity,
         artifactRoot: directory,

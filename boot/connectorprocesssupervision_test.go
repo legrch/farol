@@ -116,3 +116,53 @@ func TestConnectorSupervisedResultWireKeepsIndependentStates(t *testing.T) {
 		}
 	}
 }
+
+func TestConnectorSupervisedProgressTraversesWire(t *testing.T) {
+	s, _, child, _ := processWireFixture(t)
+	processWireStarted(t, s)
+	child.terminal, child.supervisor = true, processsvc.SupervisorRunning
+	response := connectorMutationInvoke(t, s, "computer.process.read", "", processWireRead(s))
+	var value wire.ComputerConnectorProcessResult
+	if response.Status != "ok" || json.Unmarshal(response.Data, &value) != nil || value.State != "running" || value.RootState != "exited" || value.SupervisorState == nil || *value.SupervisorState != "running" || value.GroupCleanup != "unverified" || value.DescendantCleanup != "unverified" {
+		t.Fatalf("known supervisor progress did not cross the actual Go adapter: status=%s code=%s", response.Status, response.Code)
+	}
+}
+
+func TestConnectorSupervisedProgressWireStillRejectsContradictions(t *testing.T) {
+	s, _, child, _ := processWireFixture(t)
+	processWireStarted(t, s)
+	child.terminal, child.supervisor = true, processsvc.SupervisorRunning
+	read, err := s.observeProcess(context.Background(), s.current, "wire-process", processct.ReadRequest{Handle: child.Handle()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range []func(*processct.ReadResponse){
+		func(r *processct.ReadResponse) { r.Supervisor = "" },
+		func(r *processct.ReadResponse) { r.Supervisor = processct.SupervisorUnknown },
+		func(r *processct.ReadResponse) { r.Supervisor = processct.SupervisorExited },
+		func(r *processct.ReadResponse) { r.RootWaited = false },
+		func(r *processct.ReadResponse) { r.ExitCode = nil },
+		func(r *processct.ReadResponse) { r.ExitSignal = 9 },
+		func(r *processct.ReadResponse) { r.GroupCleanup = processct.CleanupPending },
+		func(r *processct.ReadResponse) { r.DescendantCleanup = processct.CleanupPending },
+		func(r *processct.ReadResponse) {
+			r.RootState = processct.RootRunning
+			r.RootWaited = false
+			r.ExitCode = nil
+		},
+	} {
+		bad := *read
+		change(&bad)
+		if out, err := processReadWire(s.current, processWireRead(s), &bad); out != nil || err == nil {
+			t.Fatal("contradictory supervisor progress accepted", bad)
+		}
+	}
+	for _, drained := range []bool{false, true} {
+		progress := *read
+		progress.OutputDrained = drained
+		out, err := processReadWire(s.current, processWireRead(s), &progress)
+		if err != nil || out == nil || out.State != "running" || out.OutputDrained != drained {
+			t.Fatal("drain progress did not survive the original supervisor wait", out, err)
+		}
+	}
+}

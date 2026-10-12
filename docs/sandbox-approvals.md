@@ -217,9 +217,12 @@ layout. This inherited channel supplies correlation, not release authority.
 
 Native startup selects the factory only with explicit host metadata and mutation
 storage. Unsupported native support withholds Shell while preserving the existing
-file route. The normal desktop host does not yet supply this optional selection:
-authenticated build support, complete package attestation and native external
-qualification remain required before product activation.
+file route. The normal packaged desktop host now supplies the build-selected
+declaration after checking its resource and runtime bindings. Source Dev has no
+protected application bundle and selects the existing Go File route without Shell.
+A packaged Dev launch retains the same mandatory Shell checks as the preview;
+an attestation failure does not fall back to File-only startup. Native external
+qualification and release acceptance remain separate from this source wiring.
 
 The desktop Shell runtime attestor compares the complete nested Electron tree
 with the independent support declaration using the existing package v2 digest,
@@ -229,8 +232,9 @@ runtime. Bounded streaming reads and a final identity/metadata sweep detect
 changes during observation. The original monotonic deadline is checked between
 filesystem operations; an already pending kernel operation is not interruptible
 by this check. This attests vendor runtime bytes and containing directory
-identities only. Farol-owned resource bytes, the trusted running host, release
-qualification and normal startup selection remain separate requirements.
+identities only. Normal startup checks Farol-owned resources separately; the
+running host remains the trusted loader covered by build/package attestations.
+Release qualification remains a separate gate.
 
 New Go builds compile `farol-core-resources/1` into the trusted desktop host
 after producing the backend and other build entries. The builder rechecks that
@@ -244,10 +248,14 @@ behavior; they do not gain Shell qualification.
 
 Remaining qualification and integration:
 
-1. The normal native Shell producer remains withheld. Before exposing it, select
-   the same policy from an immutable current owner/task snapshot and qualify each
-   root, executable, scratch area, network choice and process boundary. The old
-   fixture-only qualifier is not a certificate for arbitrary owner HOME access.
+1. The normal packaged host conditionally selects the native Shell producer.
+   Each admitted invocation still captures the current owner/task policy and
+   qualifies its root, executable, scratch area, network choice and process
+   boundary. This candidate's disposable native Bash/Git and MCP reconnect checks
+   do not certify arbitrary owner HOME access, ordinary Git configuration/hooks,
+   external tunnel execution or a production release. Native cancellation and
+   subsequent retirement remain unqualified: a stop ACK can precede supervisor
+   loss, leaving the original command outcome unknown.
 2. Present any scope escalation through the existing owner-facing settings and
    approval machinery, with exact requested roots, read/write/network scope and
    operation identity. Seatbelt is enforcement, not an approval dialog. A denial

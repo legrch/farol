@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
 import { parse } from "@babel/parser";
@@ -179,4 +180,47 @@ it("omits an absent optional observer from the actual native launch object", () 
     shellMetadata: undefined,
   });
   expect(Object.hasOwn(options, "onLifecycleObservation")).toBe(false);
+});
+
+it("selects Shell for the actual desktop caller only in its supported layout", () => {
+  const call = selected(
+    main,
+    mainTree,
+    (node) =>
+      node.type === "CallExpression" &&
+      (node.callee as { name?: string }).name === "startDesktopGoCore",
+  );
+  const tree = parse(call, { sourceType: "module", plugins: ["typescript"] });
+  const property = selected(
+    call,
+    tree,
+    (node) =>
+      node.type === "ObjectProperty" &&
+      (node.key as { name?: string }).name === "compiledShell",
+  );
+  const selector = selected(
+    host,
+    hostTree,
+    (node) =>
+      node.type === "FunctionDeclaration" &&
+      (node.id as { name?: string }).name === "desktopShellSelection",
+  );
+  const compiledGoShell = {
+    support: "controlled",
+    watchdogSource: new Uint8Array(),
+  };
+  for (const runtimeEnvironment of ["dev", "preview"]) {
+    for (const packaged of [false, true]) {
+      const directory = packaged
+        ? "/synthetic/Farol.app/Contents/Resources/app"
+        : "/synthetic/repo/_output/build/app";
+      const actual = vm.runInNewContext(
+        `${stripTypeScriptTypes(selector)}; ({${stripTypeScriptTypes(property)}}).compiledShell`,
+        { path, compiledGoShell, runtimeEnvironment, directory },
+      );
+      expect(actual).toBe(
+        runtimeEnvironment === "dev" && !packaged ? undefined : compiledGoShell,
+      );
+    }
+  }
 });

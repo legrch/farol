@@ -102,7 +102,10 @@ func processReadWire(slot *connectorSlot, in wire.ComputerConnectorProcessRead, 
 	if out.State != processct.Unknown && out.Supervisor == processct.SupervisorUnknown {
 		return invalid()
 	}
-	if out.State == processct.Running && (out.GroupCleanup == processct.CleanupUnverified || out.DescendantCleanup == processct.CleanupUnverified) {
+	// Root exit can precede the original supervisor Wait. Preserve that live
+	// observation without promoting its independent, unverified cleanup facts.
+	supervisorPending := out.RootState == processct.RootExited && out.Supervisor == processct.SupervisorRunning
+	if out.State == processct.Running && !supervisorPending && (out.GroupCleanup == processct.CleanupUnverified || out.DescendantCleanup == processct.CleanupUnverified) {
 		return invalid()
 	}
 	if out.ExitCode != nil {
@@ -117,7 +120,7 @@ func processReadWire(slot *connectorSlot, in wire.ComputerConnectorProcessRead, 
 			return invalid()
 		}
 	} else if out.RootState == processct.RootExited {
-		if !out.RootWaited || (out.ExitCode == nil) == (out.ExitSignal == 0) || out.GroupCleanup == processct.CleanupPending || out.DescendantCleanup == processct.CleanupPending || out.State == processct.Running {
+		if !out.RootWaited || (out.ExitCode == nil) == (out.ExitSignal == 0) || out.GroupCleanup == processct.CleanupPending || out.DescendantCleanup == processct.CleanupPending || (out.State == processct.Running && !supervisorPending) {
 			return invalid()
 		}
 	}

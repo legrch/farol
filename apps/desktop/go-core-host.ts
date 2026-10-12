@@ -60,10 +60,12 @@ export type DesktopCoreSelection = Readonly<{
   compiledResources?: unknown;
   // Optional, independently qualified builder input. A runtime file, renderer
   // value, or successful measurement cannot supply this release selection.
-  compiledShell?: Readonly<{
-    support: unknown;
-    watchdogSource: Uint8Array;
-  }>;
+  compiledShell?:
+    | Readonly<{
+        support: unknown;
+        watchdogSource: Uint8Array;
+      }>
+    | undefined;
   // Captured before the new host writes its run marker. Only the exact prior
   // host's confirmed drain can clear that marker; Go terminal bytes cannot.
   previousHostDrainConfirmed: boolean;
@@ -482,6 +484,23 @@ export class DesktopGoCore {
     if (retirementError !== undefined) throw retirementError;
     if (withdrawalError !== undefined) throw withdrawalError;
   }
+}
+
+// Source Dev has no protected application bundle. Select its existing File
+// route before startup; a selected package still must pass every Shell check.
+// This is not recovery from a failed attestation and never enables execution.
+export function desktopShellSelection(
+  compiledShell: DesktopCoreSelection["compiledShell"],
+  environment: "dev" | "preview",
+  artifactRoot: string,
+): DesktopCoreSelection["compiledShell"] {
+  const packageResources = path.join(
+    path.resolve(artifactRoot, "../../.."),
+    "Contents/Resources/app",
+  );
+  return environment === "dev" && packageResources !== artifactRoot
+    ? undefined
+    : compiledShell;
 }
 
 export async function startDesktopGoCore(
