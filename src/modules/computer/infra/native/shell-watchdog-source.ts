@@ -49,7 +49,12 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
     pending.length = 0;
     pendingBytes = 0;
     if (timer) clearTimeout(timer);
-    if (rootStopRefused) return; // No alternate signal after a refused original stop.
+    if (rootStopRefused) {
+      // Retire only this observer. A refused root signal remains unknown and
+      // never authorizes another signal; helper exit is not root completion.
+      process.exit(84); // SHELL_WATCHDOG_SIGNAL_REFUSED_EXIT_CODE
+      return;
+    }
     if (!command) { process.exit(0); return; }
     if (signalAttempted) return;
     signalAttempted = true;

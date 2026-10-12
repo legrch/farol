@@ -246,11 +246,42 @@ describe("explicitly selected prepared watchdog without native effects", () => {
       f.child.emit("exit", 0, null);
       f.child.emit("close", 0, null);
       expect(f.child.kill).toHaveBeenCalledTimes(1);
+      expect(f.process.exit).toHaveBeenCalledExactlyOnceWith(84);
+      expect(f.timers.size).toBe(0);
       expect(f.signals).toEqual([]);
       expect(
         f.messages.filter((message) => message.type === "signal-refused"),
       ).toHaveLength(1);
       expect(JSON.stringify(f.messages)).not.toContain("PRIVATE_NATIVE_ERROR");
+    },
+  );
+
+  it.each(["deadline", "disconnect", "callback-error"])(
+    "retires only the refused-stop helper when its report is held: %s",
+    (boundary) => {
+      const f = fixture();
+      f.prepare();
+      f.start();
+      f.child.kill.mockReturnValueOnce(false);
+      f.hold("signal-refused");
+      f.stop();
+      expect(f.process.exit).not.toHaveBeenCalled();
+      expect(f.timers.size).toBe(1);
+      if (boundary === "deadline") f.tick(16000);
+      if (boundary === "disconnect") f.process.emit("disconnect");
+      f.deliver(
+        boundary === "callback-error" ? Error("PRIVATE_ACK") : undefined,
+      );
+      f.process.emit("SIGTERM");
+      f.stop();
+      expect(f.process.exit).toHaveBeenCalledExactlyOnceWith(84);
+      expect(f.child.kill).toHaveBeenCalledTimes(1);
+      expect(f.signals).toEqual([]);
+      expect(f.timers.size).toBe(0);
+      expect(f.messages.some((message) => message.type === "close")).toBe(
+        false,
+      );
+      expect(JSON.stringify(f.messages)).not.toContain("PRIVATE_ACK");
     },
   );
 
