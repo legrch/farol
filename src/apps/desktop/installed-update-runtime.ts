@@ -2030,6 +2030,17 @@ async function createRuntime(
     readAutomaticUpdatePreference: async () => {
       try {
         const preference = await readAutomaticPreference();
+        // The stable UI has one choice. A legacy download-only record cannot
+        // leave hidden download/Quit effects enabled while that choice is OFF.
+        if (
+          options.build.updateChannel === "github-stable" &&
+          preference.schema === "farol.installed-automatic-update-preference/1"
+        )
+          return {
+            status: "confirmed",
+            enabled: false,
+            scope: "download-and-install",
+          };
         return {
           status: "confirmed",
           enabled: preference.enabled,
@@ -2070,7 +2081,8 @@ async function createRuntime(
       try {
         const prior = await readAutomaticPreference();
         if (
-          prior.schema === "farol.installed-automatic-update-preference/2" &&
+          (options.build.updateChannel === "github-stable" ||
+            prior.schema === "farol.installed-automatic-update-preference/2") &&
           scope === undefined
         )
           return {

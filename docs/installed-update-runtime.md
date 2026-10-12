@@ -368,8 +368,9 @@ qualify live provider state, installed admission or a completed OTA.
 
 The normal update window has one download-and-install choice. Its new versioned
 record carries the explicit scope `download-and-install`; a legacy download-only
-boolean does not authorize installation. OFF supersedes the old install-on-quit
-choice. A durable write fence preserves an unknown preference write across app
+boolean does not authorize installation. On the stable UI, legacy choices are
+projected OFF without rewriting the historical records. OFF supersedes the old
+install-on-quit choice. A durable write fence preserves an unknown preference write across app
 lifetimes. The existing independent install-on-quit API remains readable for
 compatibility, but is not exposed as a second ordinary setting.
 

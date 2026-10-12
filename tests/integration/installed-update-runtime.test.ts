@@ -5865,3 +5865,41 @@ describe("confirmed updates and unified preference (disposable state, native por
     await reopened.close();
   });
 });
+
+it("projects legacy choices OFF for the unified stable UI without rewriting them", async () => {
+  const old = (await createInstalledUpdateRuntime(options()))!;
+  await old.initialize();
+  await old.setAutomaticUpdatePreference(true);
+  await old.setInstallOnQuitPreference(true);
+  await old.close();
+  const file = path.join(
+    userData,
+    "installed-updates/automatic-update-preference.json",
+  );
+  const before = await fs.readFile(file, "utf8");
+  const selected = options();
+  const controller = (await createInstalledUpdateRuntime({
+    ...selected,
+    build: {
+      ...selected.build,
+      version: "0.2.1",
+      updateChannel: "github-stable",
+      buildVersion: "30",
+    },
+  }))!;
+  await controller.initialize();
+  expect(controller.automaticUpdatePreference()).toEqual({
+    status: "confirmed",
+    enabled: false,
+    scope: "download-and-install",
+  });
+  expect(await fs.readFile(file, "utf8")).toBe(before);
+  expect(
+    await controller.applyOnNormalQuit({
+      kind: "ordinary-quit",
+      deadlineAt: Date.now() + 10000,
+    }),
+  ).toMatchObject({ status: "skipped", code: "UPDATE_QUIT_NOT_OPTED_IN" });
+  expect(mocks.helper).not.toHaveBeenCalled();
+  await controller.close();
+});
