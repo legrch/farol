@@ -11,7 +11,24 @@ Source implementation, packaged fixture evidence and installed/live behavior are
 separate qualification layers. A capability present in source or a fixture is not
 an installed capability unless an installed witness is recorded below.
 
-## Installed beta.13 status — 12 October 2026
+## Installed beta.14 status — 12 October 2026
+
+The installed beta.13 instance completed a real OTA to beta.14, build `28`, from
+source `6d5b5a9cedf3d63661f63eac4b02b7cedfb9cfb9`. Automatic download, one
+ordinary restart action, original process exit/close, completed journal and exact
+target/predecessor digests were observed. Existing workspaces, credential and
+update preferences were preserved. The target runtime became ready and a fresh
+external catalogue call returned both approved roots. This proves one upgrade
+and the reconnected catalogue route. It does not extend the earlier file-write
+witnesses to beta.14 or qualify external Shell/Git, hardware sleep or provider
+continuation. Post-upgrade native UI selection timed out before an action; the
+owner-approved broader file policy has not been activated by this verification.
+
+Beta.14 separates optional rollback into Diagnostics and clarifies installed,
+available and checked update states. Source/renderer and package qualification
+remain distinct from live UI interaction and owner acceptance.
+
+## Earlier installed beta.13 evidence — 12 October 2026
 
 One installed unsigned macOS ARM64 beta.13, build `27`, from source
 `4e0a6e19ed8fae383990bb50f28431d558cbc487` completed a real OTA from beta.12.

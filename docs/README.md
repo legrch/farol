@@ -24,12 +24,32 @@ integration notes must not be read as current product acceptance.
   shell/Git grants, attachments and evidence boundaries.
 
 Computer-only use does not require embedded login or Model/Agent. Review broader
-file and Git permissions explicitly. Installed beta.13 has one fresh external
-catalogue, bootstrap, create and read witnesses; Shell/Git, persistent Chat continuation after restart, Models,
+file and Git permissions explicitly. Installed beta.14 has a fresh external
+catalogue witness after OTA; beta.13 also has bootstrap, create and read witnesses.
+Shell/Git, persistent Chat continuation after restart, Models,
 Agent and workflows remain unqualified. Source and packaged fixtures do not prove
 those installed/live routes.
 
 ## Installation and updates
+
+On 12 October, the installed beta.13 instance completed a real OTA to
+[beta.14](https://github.com/legrch/farol/releases/tag/v0.2.0-owner.beta.14),
+build `28`, source `6d5b5a9cedf3d63661f63eac4b02b7cedfb9cfb9`.
+Farol automatically downloaded the public archive. One ordinary restart action
+completed with the original process exiting normally, a completed update journal,
+and matching installed-target and retained-predecessor digests. Both saved
+workspaces, the connection credential and update preferences were preserved.
+The new runtime became ready and a fresh external catalogue returned both roots.
+This qualifies one installed upgrade and subsequent catalogue call. Hardware
+sleep, external Shell/Git and post-upgrade GUI interaction remain unqualified;
+native UI selection timed out before any action.
+
+Beta.14 shows the installed version, available update and last completed check.
+Check for Updates becomes available again after a known completed check; pending
+or unconfirmed checks retain their safeguards. Optional rollback is separate under
+Settings > Diagnostics > Update recovery. Ordinary Updates no longer offers an
+idle View update action or optional rollback. Renderer state tests and visual
+fixtures cover this presentation; they do not imply owner visual acceptance.
 
 On 12 October, one installed unsigned macOS ARM64 beta.12 instance completed a
 real OTA to [beta.13](https://github.com/legrch/farol/releases/tag/v0.2.0-owner.beta.13),
