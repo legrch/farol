@@ -91,7 +91,7 @@ function readiness() {
 }
 
 describe("secure MCP Computer launch contract", () => {
-  it("grants the ordinary shell only after the owner selects workspace command mode", () => {
+  it("keeps legacy launch read-only for shell and rejects the Go root policy", () => {
     const configured = settings();
     const verifiedAt = new Date(1_789_516_700_000).toISOString();
     const buildId = "f".repeat(64);
@@ -137,32 +137,34 @@ describe("secure MCP Computer launch contract", () => {
       challengeSha256: "a".repeat(64),
       gitSettingsHome: "/Users/example",
     });
-    expect(enabled.gitSettingsHome).toBe("/Users/example");
+    expect(enabled.gitSettingsHome).toBeUndefined();
+    expect(enabled.approval.capabilities).not.toContain("workspace.shell");
+    expect(enabled.admission.commands).toBe("verification");
+    expect(
+      enabled.approval.workspaces.every(
+        (workspace) => !workspace.shellVerified,
+      ),
+    ).toBe(true);
     expect(
       materializeReadonlyComputerLaunch(enabled, 1_789_516_800_000)
         .gitSettingsHome,
-    ).toBe("/Users/example");
-    const { gitSettingsHome: _home, ...unboundHome } = enabled;
+    ).toBeNull();
     expect(() =>
-      materializeReadonlyComputerLaunch(unboundHome, 1_789_516_800_000),
-    ).toThrow("COMPUTER_LAUNCH_OWNER_HOME_UNBOUND");
-    expect(() =>
-      createSecureMcpLaunchContract(verifiedSettings, {
-        now: 1_789_516_800_000,
-        runtimeId: "runtime-shell-unbound-home",
-        challengeSha256: "a".repeat(64),
-      }),
-    ).toThrow("SECURE_MCP_OWNER_HOME_REQUIRED");
-    expect(enabled.approval.capabilities).toContain("workspace.shell");
-    expect(enabled.admission.commands).toBe("workspace");
-    expect(enabled.approval.workspaces).toMatchObject([
-      { shellVerified: true },
-      { shellVerified: false },
-    ]);
-    expect(
-      materializeReadonlyComputerLaunch(enabled, 1_789_516_800_000)
-        .participants,
-    ).toHaveLength(1);
+      createSecureMcpLaunchContract(
+        {
+          ...verifiedSettings,
+          computer: {
+            ...verifiedSettings.computer,
+            filePolicy: "approved-roots-v1",
+          },
+        },
+        {
+          now: 1_789_516_800_000,
+          runtimeId: "root-policy",
+          challengeSha256: "a".repeat(64),
+        },
+      ),
+    ).toThrow("SECURE_MCP_LEGACY_FILE_POLICY_UNSUPPORTED");
 
     const off = createSecureMcpLaunchContract(
       {

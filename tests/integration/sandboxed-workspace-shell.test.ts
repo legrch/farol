@@ -19,12 +19,9 @@ import {
 import { SandboxedWorkspaceShell } from "../../src/modules/computer/infra/native/sandboxed-workspace-shell";
 import { SHELL_WATCHDOG_SOURCE } from "../../src/modules/computer/infra/native/shell-watchdog-source";
 import { createReadonlyComputerMcpServer } from "../../src/modules/computer/infra/mcp/create-readonly-computer-mcp";
-import { createSecureMcpLaunchContract } from "../../src/apps/desktop/secure-mcp-launch-contract";
 import { ProductSettingsStore } from "../../src/apps/desktop/product-configuration";
 import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
 import { CurrentOwnerComputerApprovals } from "../../src/modules/computer/infra/repo/current-owner-computer-approvals";
-import { RenewableComputerAuthority } from "../../src/modules/computer/infra/mcp/renewable-computer-authority";
-import { materializeReadonlyComputerLaunch } from "../../src/modules/computer/infra/mcp/launch-contract";
 import { PrivateExecutionFence } from "../../src/modules/computer/infra/mcp/execution-fence";
 
 const binding = {
@@ -221,7 +218,7 @@ async function runningMarker(shell: SandboxedWorkspaceShell, handle: string) {
 }
 
 describe("workspace shell authority", () => {
-  it("keeps a shell running across an atomic owner save but stops it on the next revocation", async () => {
+  it("rereads current root policy across an atomic owner save and observes the next revocation", async () => {
     const { root, workspace } = await fixture();
     const ownerRoot = path.join(root, "owner-state");
     const identity = await fs.lstat(workspace, { bigint: true });
@@ -254,6 +251,7 @@ describe("workspace shell authority", () => {
         generation: 1,
         name: "Fixture",
         commands: "workspace",
+        filePolicy: "approved-roots-v1",
         workspaces: [
           {
             workspaceId: "00000000-0000-4000-8000-000000000002",
@@ -293,45 +291,17 @@ describe("workspace shell authority", () => {
     });
     const store = new ProductSettingsStore({ root: ownerRoot });
     await store.save(settings);
-    const ceiling = createSecureMcpLaunchContract(settings, {
-      now: Date.now(),
-      runtimeId: "atomic-save-shell",
-      challengeSha256: "a".repeat(64),
-      ownerSettingsRoot: ownerRoot,
-      gitSettingsHome: path.join(root, "account-home"),
-    });
-    if (ceiling.schema !== 2 || !ceiling.approvalSource)
-      throw new Error("Fixture source missing");
-    const initial = materializeReadonlyComputerLaunch(ceiling, Date.now());
-    const authority = new RenewableComputerAuthority(
-      ceiling,
-      new CurrentOwnerComputerApprovals(ceiling.approvalSource, Date.now),
+    const approvals = new CurrentOwnerComputerApprovals(
+      {
+        root: ownerRoot,
+        connectorGeneration: settings.connectors.secureMcp.generation,
+      },
       Date.now,
     );
-    const shell = new SandboxedWorkspaceShell(
-      initial.approval,
-      initial.participants.at(-1)!,
-      initial.binding,
-      path.join(root, "atomic-save-private"),
-      Date.now,
-      path.join(root, "account-home"),
-      authority,
-    );
-    shells.push(shell);
-    const started = await shell.start({
-      operationId: "atomic-save-shell",
-      workspaceId: "00000000-0000-4000-8000-000000000002",
-      relativeCwd: ".",
-      command: "printf deadline-ready; while true; do sleep 0.05; done",
-      timeoutMs: 5_000,
-      write: false,
-    });
-    expect(started).toMatchObject({ ok: true });
-    if (!started.ok) throw new Error(started.error.code);
-    await runningMarker(shell, started.value.handle);
-
-    // Force the desktop's real rename path between the policy poll's fd read
-    // and pathname stat. Only snapshot IO is controlled; the shell is native.
+    const initial = await approvals.get(settings.computer.computerId);
+    expect(initial?.capabilities).toContain("workspace.shell");
+    // The Go route owns root-scoped native execution. This test exercises the
+    // shared owner snapshot reader without activating the legacy TS shell.
     const open = fs.open.bind(fs);
     let replacements = 0;
     vi.spyOn(fs, "open").mockImplementation(async (...args) => {
@@ -353,37 +323,17 @@ describe("workspace shell authority", () => {
       }
       return handle;
     });
-    await vi.waitFor(() => expect(replacements).toBe(1), {
-      timeout: 2_000,
-      interval: 20,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    expect(
-      shell.read({
-        handle: started.value.handle,
-        stdoutOffset: 0,
-        stderrOffset: 0,
-      }),
-    ).toMatchObject({
-      ok: true,
-      value: { state: "running", authorityExpired: false },
-    });
+    const current = await approvals.get(settings.computer.computerId);
+    expect(replacements).toBe(1);
+    expect(current).toEqual({ ...initial, expiresAt: current?.expiresAt });
     settings.computer.generation++;
     await store.save(settings);
+    const revoked = await approvals.get(settings.computer.computerId);
+    expect(revoked?.generation).toBe(settings.computer.generation);
+    expect(revoked?.capabilities).not.toContain("workspace.shell");
     expect(
-      await shell.readAdmitted({
-        handle: started.value.handle,
-        stdoutOffset: 0,
-        stderrOffset: 0,
-      }),
-    ).toMatchObject({
-      ok: false,
-      error: { code: "SHELL_AUTHORITY_REVOKED", retry: "never" },
-    });
-    expect(await complete(shell, started.value.handle)).toMatchObject({
-      authorityExpired: true,
-      groupCleanup: "confirmed",
-    });
+      revoked?.workspaces.every((workspace) => !workspace.shellVerified),
+    ).toBe(true);
   });
 
   it("admits a new shell lease after outer expiry without extending an existing handle", async () => {

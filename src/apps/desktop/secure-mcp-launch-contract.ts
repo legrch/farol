@@ -142,6 +142,11 @@ export function createSecureMcpLaunchContract(
     }
   }
 
+  // Root-scoped Shell is implemented by the Go Computer route. The retained
+  // TypeScript launcher cannot enforce that policy and must not downgrade it.
+  if (settings.computer.filePolicy === "approved-roots-v1") {
+    launchError("SECURE_MCP_LEGACY_FILE_POLICY_UNSUPPORTED");
+  }
   const approval = ownerSettingsComputerApproval(settings, input.now);
   const {
     capabilities,
