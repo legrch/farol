@@ -2744,6 +2744,28 @@ describe("bounded Settings writer", () => {
     expect(h.c.getSnapshot().overlay).toBe("update-recovery");
     expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
   });
+  it("does not present an older successful check as a pending or unknown result", async () => {
+    const h = await mount("updates", settings(), "preview", {
+      phase: "idle",
+      checkedAt: 1000,
+    });
+    expect(activePage(h.host).textContent).toContain("No updates available.");
+    const pending = deferred<unknown>();
+    vi.mocked(h.f.api.installedUpdate).mockReturnValueOnce(pending.promise);
+    await h.click("Check for Updates");
+    expect(activePage(h.host).textContent).toContain("Checking update status…");
+    expect(activePage(h.host).textContent).not.toContain(
+      "No updates available.",
+    );
+    await act(async () => pending.reject(new Error("lost response")));
+    expect(activePage(h.host).textContent).toContain(
+      "Update status could not be confirmed.",
+    );
+    expect(activePage(h.host).textContent).not.toContain(
+      "No updates available.",
+    );
+    expect(h.button("Check for Updates").disabled).toBe(true);
+  });
   it("retains an unknown check and never invites a repeat", async () => {
     const h = await mount("updates");
     vi.mocked(h.f.api.installedUpdate).mockClear();

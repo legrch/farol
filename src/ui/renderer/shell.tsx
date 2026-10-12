@@ -632,9 +632,13 @@ function Update({
                     ? "Checking for updates…"
                     : update.phase === "downloading"
                       ? updateDownloadMessage(update)
-                      : update.checkedAt === null
-                        ? "Check for updates to see if a new version is available."
-                        : "No updates available.";
+                      : intent?.state === "unknown"
+                        ? "Update status could not be confirmed."
+                        : intent?.state === "pending"
+                          ? "Checking update status…"
+                          : update.checkedAt === null
+                            ? "Check for updates to see if a new version is available."
+                            : "No updates available.";
   useEffect(() => {
     const active = document.activeElement;
     const target = safeAction.current;

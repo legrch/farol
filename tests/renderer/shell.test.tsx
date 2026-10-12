@@ -2400,6 +2400,33 @@ it.each([null, Date.UTC(2026, 9, 12, 10, 30)])(
     expect(f.api.installedUpdate).not.toHaveBeenCalled();
   },
 );
+it("does not show the previous no-update result during a new pending or unknown dialog check", async () => {
+  const { host, c, f } = await mount();
+  await act(async () => {
+    f.emit("update", { phase: "idle", checkedAt: 1000 });
+    c.overlay("update");
+  });
+  expect(host.querySelector("dialog")?.textContent).toContain(
+    "No updates available.",
+  );
+  const pending = deferred<unknown>();
+  vi.mocked(f.api.installedUpdate).mockReturnValueOnce(pending.promise);
+  await act(async () => button(host, "Check for Updates").click());
+  expect(host.querySelector("dialog")?.textContent).toContain(
+    "Checking update status…",
+  );
+  expect(host.querySelector("dialog")?.textContent).not.toContain(
+    "No updates available.",
+  );
+  await act(async () => pending.reject(new Error("lost response")));
+  expect(host.querySelector("dialog")?.textContent).toContain(
+    "Update status could not be confirmed.",
+  );
+  expect(host.querySelector("dialog")?.textContent).not.toContain(
+    "No updates available.",
+  );
+  expect(button(host, "Check for Updates").disabled).toBe(true);
+});
 it("normal failed Updates omits optional rollback and keeps update checking", async () => {
   const { host, c, f } = await mount();
   await act(async () => {

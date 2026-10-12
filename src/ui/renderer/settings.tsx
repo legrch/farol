@@ -3338,9 +3338,13 @@ function Updates({ snapshot, facade, actions }: PageProps) {
                   : update.phase === "applying"
                     ? "Installing the update…"
                     : update.phase === "idle"
-                      ? update.checkedAt === null
-                        ? "Check for updates to see if a new version is available."
-                        : "No updates available."
+                      ? snapshot.intents.update?.state === "unknown"
+                        ? "Update status could not be confirmed."
+                        : snapshot.intents.update?.state === "pending"
+                          ? "Checking update status…"
+                          : update.checkedAt === null
+                            ? "Check for updates to see if a new version is available."
+                            : "No updates available."
                       : update.phase === "recovery"
                         ? "The update needs recovery."
                         : "The update needs attention."}
