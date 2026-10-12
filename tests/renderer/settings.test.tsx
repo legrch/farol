@@ -1945,6 +1945,105 @@ describe("bounded Settings writer", () => {
     },
   );
 
+  it.each([
+    "success",
+    "unknown-edit",
+    "refused-edit",
+    "unknown-start",
+    "refused-start",
+    "task-host",
+    "unconfigured",
+    "changed-connection",
+  ] as const)(
+    "restores connection-only after the last acknowledged workspace removal without replay: %s",
+    async (outcome) => {
+      let value = connectionSettings();
+      if (outcome === "task-host")
+        value.nativeHosts.taskRoute = {
+          transport: "codex-shared-proxy/v1",
+          socketPath: "/fixture/codex.sock",
+          expectedCodexHome: "/fixture/codex",
+          workspaceId,
+          projectId: selectionId,
+          projectRoot: "/approved/project",
+          projectIdentity: { device: "1", inode: "2" },
+          gitCommonDirectory: "/approved/project/.git",
+          execution: {
+            sandbox: "workspace-write",
+            approvalPolicy: "on-request",
+          },
+          harness: "codex",
+          computerGeneration: value.computer.generation,
+          hostGeneration: value.nativeHosts.generation,
+          approvedAt: "2026-10-12T08:00:00.000Z",
+          expiresAt: 1800000000000,
+        };
+      if (outcome === "unconfigured")
+        value.connectors.secureMcp.credential = "missing";
+      const h = await mount("folders", value);
+      vi.mocked(h.f.api.configure).mockImplementation(async (command) => {
+        if (
+          command.kind === "computer.remove-workspace" &&
+          outcome === "unknown-edit"
+        )
+          throw new Error("removal reply lost");
+        if (
+          (command.kind === "computer.remove-workspace" &&
+            outcome === "refused-edit") ||
+          (command.kind === "connector.start" && outcome === "refused-start")
+        )
+          return {
+            ok: false,
+            error: "CONNECTOR_STOP_UNCONFIRMED",
+            snapshot: { status: "ready", settings: value },
+          };
+        if (command.kind === "connector.start" && outcome === "unknown-start")
+          throw new Error("connection reply lost");
+        value = structuredClone(value);
+        value.revision++;
+        if (command.kind === "computer.remove-workspace") {
+          value.computer.generation++;
+          value.computer.workspaces = [];
+          value.connectors.secureMcp.runtime = null;
+          value.connectors.secureMcp.attachment = null;
+          value.connectors.secureMcp.challenge = null;
+          value.setup.computer.verified = null;
+          value.setup.computer.reachable = "unknown";
+          value.setup.connect.verified = null;
+          if (outcome === "changed-connection")
+            value.connectors.secureMcp.tunnelId = "changed-tunnel";
+        } else if (command.kind === "connector.start") {
+          expect(value.computer.workspaces).toEqual([]);
+          value.connectors.secureMcp.runtime = {
+            ...connectionSettings().connectors.secureMcp.runtime!,
+            computerGeneration: value.computer.generation,
+            runtimeGeneration: "e".repeat(64),
+          };
+        } else throw new Error(`Unexpected command: ${command.kind}`);
+        return { ok: true, snapshot: { status: "ready", settings: value } };
+      });
+      await h.click("Remove");
+      await h.click("Confirm removal");
+      expect(h.calls().map((command) => command.kind)).toEqual(
+        ["success", "unknown-start", "refused-start"].includes(outcome)
+          ? ["computer.remove-workspace", "connector.start"]
+          : ["computer.remove-workspace"],
+      );
+      const dispatched = h.calls().length;
+      await h.remount();
+      await h.pageTo("connection");
+      expect(h.calls()).toHaveLength(dispatched);
+      if (outcome === "success") {
+        expect(h.c.getSnapshot().configuration).toMatchObject({
+          status: "ready",
+          settings: {
+            computer: { workspaces: [] },
+            connectors: { secureMcp: { runtime: { state: "ready" } } },
+          },
+        });
+      }
+    },
+  );
   it("renders all eight remaining pages in StrictMode without effects or saves", async () => {
     const h = await mount();
     for (const page of [

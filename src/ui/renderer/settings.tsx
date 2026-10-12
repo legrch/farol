@@ -21,7 +21,7 @@ import {
 } from "../../pkg/product-settings/contract";
 import { folderAccessChecked, folderDisplayName } from "../folder-access-state";
 import { GuidedWorkspaceAccess } from "../guided-workspace-access";
-import { onboardingFacts } from "../guided-onboarding";
+import { GuidedActivation, onboardingFacts } from "../guided-onboarding";
 import { signInPresentation } from "./sign-in-presentation";
 import { computerSetup } from "./computer-setup";
 import { visibleSetupSection, type SetupSection } from "./setup-checklist";
@@ -957,8 +957,13 @@ async function continueWorkspaceSetup(
       (item) => item.workspaceId === prior.setup.computer.verified?.workspaceId,
     ) ??
     workspaces[0];
-  // Removing the last grant must never recreate it or broaden local access.
-  if (!workspace?.rootIdentity) return;
+  const connectionOnly =
+    command.kind === "computer.remove-workspace" &&
+    workspaces.length === 0 &&
+    prior.computer.workspaces.length === 1 &&
+    prior.computer.workspaces[0]?.workspaceId === command.workspaceId;
+  // An empty selection restores only the configured service, never a grant.
+  if (!connectionOnly && !workspace?.rootIdentity) return;
   let flow = folderSetupByWindow.get(facade);
   if (!flow) {
     flow = { access: new GuidedWorkspaceAccess(), busy: false };
@@ -967,6 +972,56 @@ async function continueWorkspaceSetup(
   if (flow.busy || flow.access.requiresReadback()) return;
   flow.busy = true;
   try {
+    if (connectionOnly) {
+      const facts = onboardingFacts(settings, after.buildId);
+      if (
+        settings.nativeHosts.taskRoute !== null ||
+        !facts.client ||
+        !facts.credentialStored ||
+        facts.tunnelId === null ||
+        facts.connectionIdentity !==
+          onboardingFacts(prior, before.buildId ?? "").connectionIdentity
+      )
+        return;
+      await new GuidedActivation().run(
+        {
+          read: () => {
+            const current = facade.getSnapshot();
+            return onboardingFacts(
+              current.configuration?.status === "ready"
+                ? current.configuration.settings
+                : null,
+              current.buildId ?? "",
+            );
+          },
+          run: async (next) => {
+            const dispatch = await actions.runClassified(next, (current) => {
+              const saved =
+                current.configuration?.status === "ready"
+                  ? current.configuration.settings
+                  : null;
+              return (
+                current.buildId === after.buildId &&
+                saved !== null &&
+                saved.computer.generation === settings.computer.generation &&
+                saved.computer.workspaces.length === 0 &&
+                saved.nativeHosts.taskRoute === null &&
+                onboardingFacts(saved, current.buildId ?? "")
+                  .connectionIdentity === facts.connectionIdentity
+              );
+            });
+            return (
+              dispatch.state === "attempted" &&
+              dispatch.result?.state === "applied"
+            );
+          },
+        },
+        { tunnelId: facts.tunnelId, runtimeKey: "" },
+        "external",
+      );
+      return;
+    }
+    if (!workspace?.rootIdentity) return;
     await flow.access.run(
       {
         settings: () => {
