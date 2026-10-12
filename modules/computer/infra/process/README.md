@@ -16,13 +16,19 @@ cover bounded Bash, synthetic Git and observation of an original result after
 MCP reconnect. Ordinary Git configuration/hooks, external Shell, cancellation and
 subsequent retirement remain unqualified. A stop ACK can precede loss of the
 supervisor's command-exit observation; the unknown original operation must remain
-preserved without replay. A requested stop now targets the original retained root
-while the watchdog observes its actual exit and drains output. The supervisor
+preserved without replay. A requested stop targets the original retained root,
+then sends TERM once to the watchdog's own anchored group so ordinary descendants
+close inherited pipes.
+The observer survives that TERM to collect actual root exit and drain output.
+An already observed root is not signalled again; its anchored group can still
+receive the original stop while pipes remain open. The supervisor
 finishes only after final observations and already queued control ACKs have been
 written. Acknowledged control can settle with independently observed root/output
-and supervisor completion; refused or lost control remains unknown. Open pipes
-held by descendants remain bounded by the original deadline, and no descendant
-cleanup guarantee follows from root-only cancellation. See [current approval boundaries](../../../../docs/sandbox-approvals.md)
+and supervisor completion; refused or lost control remains unknown. A refused
+root or group stop retires only the observer with a failure status, without an
+alternate signal. Detached or TERM-resistant descendants can still
+retain pipes until the original deadline; neither accepted group TERM nor
+observed pipe EOF establishes complete descendant cleanup. See [current approval boundaries](../../../../docs/sandbox-approvals.md)
 and [Computer parity](../../../../docs/computer-parity.md) for the selected contract
 and the separate native, source and installed evidence.
 

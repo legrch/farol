@@ -136,6 +136,69 @@ function fixture(mode: string | null = "go-prepared-v1", selected = true) {
 }
 
 describe("explicitly selected prepared watchdog without native effects", () => {
+  it("stops same-group descendants while the observer retains final output", () => {
+    const f = fixture();
+    f.prepare();
+    f.start();
+    f.stop();
+    expect(f.child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+    expect(f.signals).toEqual([[-4242, "SIGTERM"]]);
+    f.process.emit("SIGTERM"); // Delivery of the observer's own group signal.
+    expect(f.process.exit).not.toHaveBeenCalled();
+    expect(f.signals).toEqual([[-4242, "SIGTERM"]]);
+    f.child.emit("exit", null, "SIGKILL");
+    f.child.stdout.emit("data", Buffer.from("descendant tail"));
+    f.child.emit("close", null, "SIGKILL");
+    expect(f.messages.some((message) => message.type === "stdout")).toBe(true);
+    expect(f.messages.at(-1)?.type).toBe("close");
+    expect(f.signals).toEqual([
+      [-4242, "SIGTERM"],
+      [-4242, "SIGKILL"],
+    ]);
+  });
+
+  it("signals the anchored group after observed root exit without another root signal", () => {
+    const f = fixture();
+    f.prepare();
+    f.start();
+    f.child.emit("exit", 7, null);
+    f.stop();
+    f.stop();
+    expect(f.child.kill).not.toHaveBeenCalled();
+    expect(f.signals).toEqual([[-4242, "SIGTERM"]]);
+    f.process.emit("SIGTERM");
+    f.child.stderr.emit("data", Buffer.from("descendant tail"));
+    f.child.emit("close", 7, null);
+    expect(f.messages.at(-1)).toEqual({
+      type: "close",
+      id: f.id,
+      code: 7,
+      signal: null,
+    });
+    expect(f.signals).toEqual([
+      [-4242, "SIGTERM"],
+      [-4242, "SIGKILL"],
+    ]);
+  });
+
+  it("does not signal again after the owned group refuses its stop", () => {
+    const f = fixture();
+    f.prepare();
+    f.start();
+    f.refuseSignal();
+    f.stop();
+    f.stop();
+    f.process.emit("SIGTERM");
+    f.process.emit("disconnect");
+    f.tick(16000);
+    expect(f.child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+    expect(f.signals).toEqual([[-4242, "SIGTERM"]]);
+    expect(f.process.exit).toHaveBeenCalledExactlyOnceWith(84);
+    expect(
+      f.messages.filter((message) => message.type === "signal-refused"),
+    ).toHaveLength(1);
+  });
+
   it("observes the cancelled original root and final output before supervisor shutdown", () => {
     const f = fixture();
     f.prepare();
@@ -149,12 +212,12 @@ describe("explicitly selected prepared watchdog without native effects", () => {
     expect(f.signals).toEqual([]);
     f.deliver();
     expect(f.child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-    expect(f.signals).toEqual([]);
+    expect(f.signals).toEqual([[-4242, "SIGTERM"]]);
     expect(f.child.stdout.resume).toHaveBeenCalled();
     expect(f.child.stderr.resume).toHaveBeenCalled();
     f.child.stdout.emit("data", Buffer.from([0, 1, 255]));
     f.child.emit("exit", null, "SIGKILL");
-    expect(f.signals).toEqual([]);
+    expect(f.signals).toEqual([[-4242, "SIGTERM"]]);
     f.hold("close");
     f.child.emit("close", null, "SIGKILL");
     expect(f.messages.map((message) => message.type)).toEqual([
@@ -166,9 +229,12 @@ describe("explicitly selected prepared watchdog without native effects", () => {
       "close",
     ]);
     expect(f.messages[3]?.data).toBe("AAH/");
-    expect(f.signals).toEqual([]);
+    expect(f.signals).toEqual([[-4242, "SIGTERM"]]);
     f.deliver();
-    expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+    expect(f.signals).toEqual([
+      [-4242, "SIGTERM"],
+      [-4242, "SIGKILL"],
+    ]);
     expect(f.spawn).toHaveBeenCalledTimes(1);
     expect(f.child.kill).toHaveBeenCalledTimes(1);
   });
@@ -180,7 +246,7 @@ describe("explicitly selected prepared watchdog without native effects", () => {
     f.child.emit("exit", 7, null);
     f.stop();
     expect(f.child.kill).not.toHaveBeenCalled();
-    expect(f.signals).toEqual([]);
+    expect(f.signals).toEqual([[-4242, "SIGTERM"]]);
     f.child.stderr.emit("data", Buffer.from("tail"));
     f.child.emit("close", 7, null);
     expect(f.messages.at(-1)).toEqual({
@@ -189,7 +255,10 @@ describe("explicitly selected prepared watchdog without native effects", () => {
       code: 7,
       signal: null,
     });
-    expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+    expect(f.signals).toEqual([
+      [-4242, "SIGTERM"],
+      [-4242, "SIGKILL"],
+    ]);
   });
 
   it("delivers an already queued stop ACK before final supervisor shutdown", () => {
@@ -222,7 +291,10 @@ describe("explicitly selected prepared watchdog without native effects", () => {
     expect(f.messages.some((message) => message.type === "close")).toBe(false);
     f.tick(16000);
     expect(f.child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-    expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+    expect(f.signals).toEqual([
+      [-4242, "SIGTERM"],
+      [-4242, "SIGKILL"],
+    ]);
     expect(f.messages.some((message) => message.type === "close")).toBe(false);
   });
 
@@ -731,7 +803,7 @@ describe("explicitly selected prepared watchdog without native effects", () => {
       expect(f.spawn).toHaveBeenCalledTimes(1);
       if (type === "stop-requested") {
         expect(f.child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-        expect(f.signals).toEqual([]);
+        expect(f.signals).toEqual([[-4242, "SIGTERM"]]);
       } else expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
       expect(
         f.messages.filter((message) => message.type === type),
@@ -841,7 +913,10 @@ describe("explicitly selected prepared watchdog without native effects", () => {
     f.tick(16000);
     f.process.emit("disconnect");
     f.child.emit("close", 0, null);
-    expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+    expect(f.signals).toEqual([
+      [-4242, "SIGTERM"],
+      [-4242, "SIGKILL"],
+    ]);
   });
 
   it.each(["stop", "deadline", "disconnect", "error", "root-close"])(
@@ -866,7 +941,9 @@ describe("explicitly selected prepared watchdog without native effects", () => {
       f.tick(17000);
       f.child.emit("close", 0, null);
       expect(f.spawn).toHaveBeenCalledTimes(1);
-      expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+      expect(f.signals).toEqual([
+        [-4242, trigger === "stop" ? "SIGTERM" : "SIGKILL"],
+      ]);
     },
   );
 

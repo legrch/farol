@@ -30,7 +30,8 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
   let closeDelivered = false;
   let rootExited = false;
   let rootStopAttempted = false;
-  let rootStopRefused = false;
+  let groupStopAttempted = false;
+  let stopRefused = false;
   let stopped = false;
   let signalAttempted = false;
   let stopRequested = false;
@@ -49,8 +50,8 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
     pending.length = 0;
     pendingBytes = 0;
     if (timer) clearTimeout(timer);
-    if (rootStopRefused) {
-      // Retire only this observer. A refused root signal remains unknown and
+    if (stopRefused) {
+      // Retire only this observer. A refused signal remains unknown and
       // never authorizes another signal; helper exit is not root completion.
       process.exit(84); // SHELL_WATCHDOG_SIGNAL_REFUSED_EXIT_CODE
       return;
@@ -66,27 +67,33 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
       }
     }
   }
-  function refuseRootStop() {
-    if (rootStopRefused) return;
-    rootStopRefused = true;
+  function refuseStop() {
+    if (stopRefused) return;
+    stopRefused = true;
     // ChildProcess.kill may synchronously emit an error before returning false.
     // Fence before callbacks can select any alternate shutdown signal.
     emit("signal-refused", {}, stopNow);
   }
-  function stopRoot() {
-    if (stopped || channelFailed || rootStopAttempted || rootStopRefused) return;
+  function stopCommand() {
+    if (stopped || channelFailed || groupStopAttempted || stopRefused) return;
     if (!command) { stopNow(); return; }
-    // Exit is observed on this retained child, never inferred from a PID probe.
-    // Its remaining pipes may still drain. Keep the original deadline unchanged.
-    if (rootExited || closed) return;
-    rootStopAttempted = true;
-    try {
-      // Keep the observer alive for the original exit/close and final output.
-      // This stops only the root; neither signal acceptance nor later close
-      // proves descendant cleanup. The original deadline still bounds drain.
-      if (command.kill("SIGKILL")) return;
-    } catch {}
-    refuseRootStop();
+    if (closed) return;
+    // The retained root and this still-live group leader are the only signal
+    // identities. A known root exit does not mean inherited pipes have closed.
+    if (!rootExited) {
+      if (rootStopAttempted) return;
+      rootStopAttempted = true;
+      try {
+        if (!command.kill("SIGKILL")) { refuseStop(); return; }
+      } catch { refuseStop(); return; }
+      if (stopped || channelFailed || stopRefused) return;
+    }
+    // Keep the observer alive while ordinary same-group descendants receive
+    // TERM and close inherited output. The original deadline still bounds this
+    // drain; signal acceptance proves neither process-tree nor group cleanup.
+    groupStopAttempted = true;
+    try { process.kill(-process.pid, "SIGTERM"); }
+    catch { refuseStop(); }
   }
   function pump() {
     if (pumping) return;
@@ -154,7 +161,11 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
   }
   process.on("disconnect", stopNow);
   process.on("error", () => { channelFailed = true; stopNow(); });
-  process.on("SIGTERM", stopNow);
+  process.on("SIGTERM", () => {
+    // Our own anchored-group TERM also reaches the observer. Remain alive to
+    // receive the retained child exit/EOF; the original timer is still armed.
+    if (!groupStopAttempted) stopNow();
+  });
   process.on("SIGINT", stopNow);
   process.on("message", (message) => {
     if (stopped || channelFailed) return;
@@ -188,7 +199,7 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
       stopRequested = true;
       // ACK remains intent only. Observe the original root stop through exit
       // and pipe EOF before the supervisor performs its own final shutdown.
-      emit("stop-requested", {}, stopRoot);
+      emit("stop-requested", {}, stopCommand);
       return;
     }
     if (message.type !== "start" || started || stopRequested || Date.now() >= selected.deadlineAt) { refuse(errorReason.invalidStart); return; }
@@ -206,7 +217,7 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
       command.stdout.on("data", (chunk) => output("stdout", chunk));
       command.stderr.on("data", (chunk) => output("stderr", chunk));
       command.on("error", () => {
-        if (rootStopAttempted) refuseRootStop();
+        if (rootStopAttempted) refuseStop();
         else refuse(errorReason.commandError);
       });
       command.once("exit", (code, signal) => {

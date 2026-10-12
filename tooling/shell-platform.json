@@ -158,8 +158,8 @@
   ],
   "watchdogSource": {
     "path": "src/modules/computer/infra/native/shell-watchdog-source.ts",
-    "fileSHA256": "4800f95022d0fe5479d059e7c8078505c70644615eb7433e983db3298e2adc1d",
-    "sourceSHA256": "95adcc893ab005e412b11ff8ad8be84f4465edddedb69e79be899d6c0b48136d"
+    "fileSHA256": "9fc135d8eec38a23517c509cb8544aed7644d75d36046d77b2ffa9ccf47355b3",
+    "sourceSHA256": "17edd194ddafd3b548407a00377196f951cd7524d6b7138ca6b0ea7442041406"
   },
   "mechanism": {
     "path": "/usr/bin/sandbox-exec",
