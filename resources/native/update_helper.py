@@ -690,12 +690,16 @@ def reconcile(apps, op, request, fence):
     failed = entry(op, "failed.app")
     staged = entry(op, "staged.app")
     if phase in ("rollback_started", "rolled_back", "rollback_launch_requested", "rollback_completed"):
+        # Every unfinished rollback needs the same state-reader admission,
+        # including pairs whose exchange or quarantine rename already happened.
+        # A terminal historical receipt remains observational below.
+        if phase == "rollback_started":
+            require_predecessor_state(request)
         if staged is not None:
             fail("rollback_uncertain", phase)
         if phase == "rollback_started" and app is not None and previous is not None and failed is None:
             if matches_tree(apps, APP, target) and matches_tree(op, "previous.app", source):
-                # Exact pre-exchange pair: finish the journaled rollback once.
-                require_predecessor_state(request)
+                # Exact pre-exchange pair: finish the admitted rollback once.
                 fence()
                 exchange_checked(apps, APP, op, "previous.app", identity(app), identity(previous))
             # Post-exchange pair must also match both accepted digests. A crash
@@ -709,7 +713,6 @@ def reconcile(apps, op, request, fence):
         if previous is not None and app is None and failed is not None and phase == "rollback_started":
             # An older journal may have crashed in the former two-rename gap.
             checked_tree(op, "previous.app", source["digest"], source["version"], source["buildId"])
-            require_predecessor_state(request)
             fence()
             rename_checked(op, "previous.app", apps, APP, identity(previous))
             write_record(op, "journal.json", record_for(request, "rolled_back"))

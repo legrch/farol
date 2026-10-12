@@ -40,7 +40,8 @@ describe("predecessor state compatibility refusal", () => {
     // Import only: no helper launch, app/profile IO or native rename. The real
     // admission/reconcile functions run against explicit process/file doubles.
     const script = `
-import importlib.util, json, sys
+import importlib.util, json, os, stat, sys
+from types import SimpleNamespace
 spec = importlib.util.spec_from_file_location("helper", sys.argv[1])
 helper = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(helper)
@@ -64,7 +65,6 @@ helper.exchange_checked = forbidden
 helper.rename_checked = forbidden
 helper.write_record = forbidden
 helper.checked_tree = lambda *args: None
-helper.matches_tree = lambda *args: True
 helper.identity = lambda value: value
 
 def refuses(call):
@@ -82,15 +82,21 @@ for source, target, refused in json.loads(sys.argv[2]):
     request["source"]["version"] = source
     request["target"]["version"] = target
     refuses(lambda: helper.run(request))
-    for phase, entries in [
-        ("rollback_started", {helper.APP: "app", "previous.app": "previous"}),
-        ("rollback_started", {"previous.app": "previous", "failed.app": "failed"}),
-        ("predecessor_saved", {"previous.app": "previous", "staged.app": "staged"}),
+    failed = SimpleNamespace(st_mode=stat.S_IFDIR, st_uid=os.geteuid())
+    for phase, entries, target_in_slot in [
+        ("rollback_started", {helper.APP: "app", "previous.app": "previous"}, True),
+        ("rollback_started", {helper.APP: "app", "previous.app": "previous"}, False),
+        ("rollback_started", {"previous.app": "previous", "failed.app": failed}, False),
+        ("rollback_started", {helper.APP: "app", "failed.app": failed}, False),
+        ("predecessor_saved", {"previous.app": "previous", "staged.app": "staged"}, False),
     ]:
         helper.read_phase = lambda *args: phase
         helper.entry = lambda parent, name: entries.get(name)
+        tree_digests = {("apps", helper.APP): "target" if target_in_slot else "source",
+                        ("operation", "previous.app"): "source" if target_in_slot else "target"}
+        helper.matches_tree = lambda parent, name, build: tree_digests.get((parent, name)) == build["digest"]
         refuses(lambda: helper.reconcile("apps", "operation", request, forbidden))
-print("guard + rollback + three recovery paths refused before effects")
+print("guard + rollback + five recovery pairs refused before effects")
 `;
     const result = spawnSync(
       "python3",
@@ -106,7 +112,7 @@ print("guard + rollback + three recovery paths refused before effects")
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe(
-      "guard + rollback + three recovery paths refused before effects",
+      "guard + rollback + five recovery pairs refused before effects",
     );
   });
 });
