@@ -668,11 +668,55 @@ function zeroAuthority(profile, access, computerId) {
   assert.equal(access.profileId, profile.profileId);
   assert.equal(access.ownerId, "owner-desktop");
   assert.equal(access.computerId, computerId);
-  assert.equal(access.revision, "0", "UNEXPECTED_AUTHORITY_PUBLICATION");
-  assert.equal(access.generation, "0");
-  assert.equal(access.seenApproval, false);
-  assert.equal(access.approval, null, "EMPTY_OR_NONEMPTY_APPROVAL_FORBIDDEN");
   assert.deepEqual(access.participants, {}, "FRESH_PROFILE_HAS_ADMISSION");
+  if (access.approval === null) {
+    assert.equal(access.revision, "0", "UNEXPECTED_AUTHORITY_PUBLICATION");
+    assert.equal(access.generation, "0");
+    assert.equal(access.seenApproval, false);
+    return;
+  }
+  // Optional-workspace Setup deliberately publishes connection consent even
+  // before a folder is selected. An empty publication is not file/command
+  // authority: verify all capabilities and roots independently, never accept
+  // arbitrary approval merely because its workspace array happens to be empty.
+  for (const value of [access.revision, access.generation]) {
+    assert.equal(typeof value, "string");
+    assert.equal(/^[1-9][0-9]{0,19}$/u.exec(value)?.[0], value);
+    assert.ok(BigInt(value) <= 18446744073709551615n);
+  }
+  assert.equal(access.seenApproval, true);
+  const approval = access.approval;
+  assert.deepEqual(
+    Object.keys(approval).sort(),
+    [
+      "ownerId",
+      "computerId",
+      "generation",
+      "workspaces",
+      "excludedPaths",
+      "capabilities",
+      "network",
+      "commands",
+      "expiresAt",
+      ...(Object.hasOwn(approval, "filePolicy") ? ["filePolicy"] : []),
+    ].sort(),
+  );
+  assert.equal(approval.ownerId, access.ownerId);
+  assert.equal(approval.computerId, computerId);
+  assert.equal(approval.generation, access.generation);
+  assert.deepEqual(approval.workspaces, []);
+  assert.deepEqual(approval.excludedPaths, []);
+  assert.ok(
+    approval.capabilities === null ||
+      (Array.isArray(approval.capabilities) &&
+        approval.capabilities.length === 0),
+    "EMPTY_CONSENT_HAS_CAPABILITIES",
+  );
+  assert.equal(approval.network, "none");
+  assert.equal(approval.commands, "none");
+  assert.ok(Number.isSafeInteger(approval.expiresAt) && approval.expiresAt > 0);
+  if (Object.hasOwn(approval, "filePolicy"))
+    assert.equal(approval.filePolicy, "approved-roots-v1");
 }
 function zeroSends(ledger) {
   assert.equal(ledger.attemptedSends, 0, "STARTUP_ATTEMPTED_SEND");
@@ -1118,6 +1162,9 @@ async function native(selected, inputs, report, save) {
       path.join(stateRoot, "go-core/computer/computer-access.json"),
       1024 * 1024,
     );
+    // Preserve the original observations even when a following assertion fails.
+    report.snapshots.push({ launch: launch.ordinal, label, profile, access });
+    await save();
     if (selected.readDiscard && report.readDiscard.binding) {
       assert.equal(computerId, report.readDiscard.settings.computer.computerId);
       readAccessWitness(
@@ -1169,7 +1216,6 @@ async function native(selected, inputs, report, save) {
         configuration,
       });
     }
-    report.snapshots.push({ launch: launch.ordinal, label, profile, access });
     ledgerWitness(site.driver.snapshot());
     await save();
   };
@@ -1339,6 +1385,7 @@ async function native(selected, inputs, report, save) {
         retired,
       );
     if (retired) {
+      assert.ok(launch.readyJournal, "READY_JOURNAL_NOT_OBSERVED");
       assert.deepEqual(
         journal.value.scope,
         launch.readyJournal.value.scope,
@@ -1743,9 +1790,9 @@ async function native(selected, inputs, report, save) {
     };
     const { window, settings, hidden } = await start(1);
     await hidden();
-    await capture("fresh-ready", settings.computer.computerId);
     if (selected.reopen || selected.chatTwoTurn)
       await captureJournal("fresh-ready");
+    await capture("fresh-ready", settings.computer.computerId);
     // Ordinary preload/configuration IPC, one bounded mutation of disposable
     // settings. A Computer-generation change exercises withdrawal/publication
     // without granting a folder or manufacturing a Go admission.
@@ -2972,6 +3019,92 @@ function selfTest() {
     participants: {},
   };
   pass(() => zeroAuthority(profile, access, profile.computerId));
+  const emptyConsent = {
+    ...access,
+    revision: "1",
+    generation: "1",
+    seenApproval: true,
+    approval: {
+      ownerId: access.ownerId,
+      computerId: profile.computerId,
+      generation: "1",
+      workspaces: [],
+      excludedPaths: [],
+      capabilities: null,
+      network: "none",
+      commands: "none",
+      expiresAt: 1791800000000,
+    },
+  };
+  pass(() => zeroAuthority(profile, emptyConsent, profile.computerId));
+  pass(() =>
+    zeroAuthority(
+      profile,
+      {
+        ...emptyConsent,
+        approval: {
+          ...emptyConsent.approval,
+          capabilities: [],
+          filePolicy: "approved-roots-v1",
+        },
+      },
+      profile.computerId,
+    ),
+  );
+  for (const change of [
+    (v) => {
+      v.approval.workspaces = [{ root: "/synthetic" }];
+    },
+    (v) => {
+      v.approval.excludedPaths = [{ path: "/synthetic" }];
+    },
+    (v) => {
+      v.approval.capabilities = ["workspace.read"];
+    },
+    (v) => {
+      v.approval.capabilities = { length: 0 };
+    },
+    (v) => {
+      v.approval.commands = "workspace";
+    },
+    (v) => {
+      v.approval.network = "approved";
+    },
+    (v) => {
+      v.approval.ownerId = "other";
+    },
+    (v) => {
+      v.approval.computerId = "other";
+    },
+    (v) => {
+      v.approval.generation = "2";
+    },
+    (v) => {
+      v.approval.filePolicy = "unknown";
+    },
+    (v) => {
+      v.approval.extra = true;
+    },
+    (v) => {
+      v.approval.expiresAt = Infinity;
+    },
+    (v) => {
+      v.participants = { unexpected: {} };
+    },
+    (v) => {
+      v.seenApproval = false;
+    },
+    (v) => {
+      v.revision = "0";
+    },
+    (v) => {
+      v.generation = "18446744073709551616";
+    },
+  ]) {
+    const changed = structuredClone(emptyConsent);
+    change(changed);
+    reject(() => zeroAuthority(profile, changed, profile.computerId));
+  }
   pass(() =>
     zeroAuthority(
       { ...profile, schema: "farol-native-profile/1" },
