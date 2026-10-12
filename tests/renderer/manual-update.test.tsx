@@ -144,12 +144,12 @@ it.each([
     expect(checkbox.checked).toBe(checked);
     expect(host.querySelectorAll('input[type="checkbox"]')).toHaveLength(1);
     expect(checkbox.closest("label")?.textContent).toContain(
-      "Automatically update Farol",
+      "Automatically install updates",
     );
     expect(
       document.getElementById(checkbox.getAttribute("aria-describedby")!)
         ?.textContent,
-    ).toBe("Download and install updates when Farol is idle.");
+    ).toBe("Download and install updates when idle.");
   },
 );
 it.each(["pending", "unknown"] as const)(

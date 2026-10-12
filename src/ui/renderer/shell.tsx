@@ -558,10 +558,10 @@ const updateSheetTitles: Record<WindowSnapshot["update"]["phase"], string> = {
   ready: "Ready to install",
   failed: "The update did not finish",
   recovery: "Update needs attention",
-  checking: "Checking for Farol updates",
-  downloading: "Downloading Farol update",
-  applying: "Restarting to update Farol",
-  unavailable: "Farol updates unavailable",
+  checking: "Checking for updates",
+  downloading: "Downloading update",
+  applying: "Restarting to update",
+  unavailable: "Updates unavailable",
   idle: "Update status",
 };
 function Update({
@@ -612,9 +612,9 @@ function Update({
           ? `Restore previous version ${rollbackVersion}.`
           : "No previous version is available to restore in the current update state."
         : update.phase === "ready"
-          ? `Farol ${updateVersionLabel(update.version)} is ready to install.`
+          ? `Version ${updateVersionLabel(update.version)} is ready to install.`
           : update.phase === "available"
-            ? `Farol ${updateVersionLabel(update.version)} is available to download.`
+            ? `Version ${updateVersionLabel(update.version)} is available to download.`
             : update.phase === "failed"
               ? updateResultMessage(
                   "failed",
@@ -637,7 +637,7 @@ function Update({
                             ? "Checking update status…"
                             : update.checkedAt === null
                               ? "Update availability has not been checked."
-                              : "You’re using the latest version of Farol.";
+                              : null;
   useEffect(() => {
     const active = document.activeElement;
     const target = safeAction.current;
@@ -655,18 +655,18 @@ function Update({
     <Overlay
       title={
         recoveryMode
-          ? "Farol update recovery"
+          ? "Update recovery"
           : update.phase === "downloading" &&
               update.progress?.stage === "verifying"
-            ? "Checking Farol update"
+            ? "Checking update"
             : intent?.state === "unknown"
               ? "Update status unconfirmed"
               : intent?.state === "pending" && update.phase === "idle"
-                ? "Checking for Farol updates"
+                ? "Checking for updates"
                 : snapshot.status !== "current"
                   ? "Update status unconfirmed"
                   : update.phase === "idle" && update.checkedAt !== null
-                    ? "Farol is up to date"
+                    ? "You’re up to date"
                     : updateSheetTitles[update.phase]
       }
       onClose={() => facade.overlay("none")}
@@ -682,19 +682,21 @@ function Update({
           : "download"
       }
       headingDescription={
-        <>
-          <p
-            className="update-state"
-            role="status"
-            ref={progressStatus}
-            tabIndex={-1}
-          >
-            {stateCopy}
-          </p>
-          {!recoveryMode && update.phase === "downloading" && (
-            <UpdateDownloadProgress update={update} />
-          )}
-        </>
+        stateCopy !== null ? (
+          <>
+            <p
+              className="update-state"
+              role="status"
+              ref={progressStatus}
+              tabIndex={-1}
+            >
+              {stateCopy}
+            </p>
+            {!recoveryMode && update.phase === "downloading" && (
+              <UpdateDownloadProgress update={update} />
+            )}
+          </>
+        ) : undefined
       }
     >
       {!recoveryMode &&
@@ -702,7 +704,7 @@ function Update({
         update.notes && (
           <details className="update-release">
             <summary>
-              What’s new in Farol {updateVersionLabel(update.version)}
+              What’s new in {updateVersionLabel(update.version)}
             </summary>
             <p className="update-notes">{update.notes}</p>
           </details>

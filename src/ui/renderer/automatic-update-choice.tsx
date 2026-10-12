@@ -24,14 +24,14 @@ export function AutomaticUpdateChoice({
     <div className="automatic-update-choice">
       <label>
         <span>
-          <strong>Automatically update Farol</strong>
+          <strong>Automatically install updates</strong>
           <span id={descriptionId} className="description">
-            Download and install updates when Farol is idle.
+            Download and install updates when idle.
           </span>
         </span>
         <input
           type="checkbox"
-          aria-label="Automatically update Farol"
+          aria-label="Automatically install updates"
           checked={
             snapshot.environment === "preview" &&
             automaticUpdateEnabled(snapshot.update)

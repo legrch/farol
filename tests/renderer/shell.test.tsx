@@ -91,7 +91,7 @@ it("shows measured transfer progress and then verification without offering inst
     }),
   );
   expect(dialog.textContent).toContain("Checking the downloaded update");
-  expect(dialog.getAttribute("aria-label")).toBe("Checking Farol update");
+  expect(dialog.getAttribute("aria-label")).toBe("Checking update");
   expect(dialog.querySelector("progress")).toBeNull();
   expect(dialog.textContent).not.toContain("Install and Relaunch");
 });
@@ -1113,19 +1113,19 @@ it.each([
   ],
   [
     { phase: "checking" },
-    "Checking for Farol updates",
+    "Checking for updates",
     "Checking for updates…",
     ["Continue working"],
   ],
   [
     { phase: "downloading" },
-    "Downloading Farol update",
+    "Downloading update",
     "Downloading update in the background. Keep working.",
     ["Continue working"],
   ],
   [
     { phase: "applying", version: "1.0" },
-    "Restarting to update Farol",
+    "Restarting to update",
     "Applying version 1.0…",
     [],
   ],
@@ -1137,7 +1137,7 @@ it.each([
   ],
   [
     { phase: "unavailable", code: "UPDATE_STATUS_UNAVAILABLE" },
-    "Farol updates unavailable",
+    "Updates unavailable",
     "cannot confirm update availability",
     ["Dismiss", "Review Diagnostics"],
   ],
@@ -1411,7 +1411,7 @@ it("Updates uses only supplied notes and confirmed installed version", async () 
   expect(host.querySelector("dialog .update-release")).toBeNull();
   expect(
     host.querySelector("dialog .automatic-update-choice strong")?.textContent,
-  ).toBe("Automatically update Farol");
+  ).toBe("Automatically install updates");
   expect(
     host.querySelector<HTMLInputElement>(
       "dialog .automatic-update-choice input",
@@ -2448,13 +2448,15 @@ it.each([null, Date.UTC(2026, 9, 12, 10, 30)])(
     });
     const dialog = host.querySelector("dialog")!;
     expect(dialog.getAttribute("aria-label")).toBe(
-      checkedAt === null ? "Update status" : "Farol is up to date",
+      checkedAt === null ? "Update status" : "You’re up to date",
     );
     expect(dialog.textContent).toContain(
       checkedAt === null
         ? "Update availability has not been checked."
-        : "You’re using the latest version of Farol.",
+        : "You’re up to date",
     );
+    if (checkedAt !== null)
+      expect(dialog.querySelector(".update-state")).toBeNull();
     expect(dialog.textContent).not.toContain("Last checked:");
     expect(dialog.textContent).not.toMatch(
       /Roll Back|roll back|restore|0\.9|WORK_PENDING/i,
@@ -2471,7 +2473,7 @@ it("does not show the previous no-update result during a new pending or unknown 
     c.overlay("update");
   });
   expect(host.querySelector("dialog")?.textContent).toContain(
-    "You’re using the latest version of Farol.",
+    "You’re up to date",
   );
   const pending = deferred<unknown>();
   vi.mocked(f.api.installedUpdate).mockReturnValueOnce(pending.promise);
@@ -2480,17 +2482,17 @@ it("does not show the previous no-update result during a new pending or unknown 
     "Checking update status…",
   );
   expect(host.querySelector("dialog")?.textContent).not.toContain(
-    "You’re using the latest version of Farol.",
+    "You’re up to date",
   );
   expect(host.querySelector("dialog")?.getAttribute("aria-label")).toBe(
-    "Checking for Farol updates",
+    "Checking for updates",
   );
   await act(async () => pending.reject(new Error("lost response")));
   expect(host.querySelector("dialog")?.textContent).toContain(
     "Update status could not be confirmed.",
   );
   expect(host.querySelector("dialog")?.textContent).not.toContain(
-    "You’re using the latest version of Farol.",
+    "You’re up to date",
   );
   expect(host.querySelector("dialog")?.getAttribute("aria-label")).toBe(
     "Update status unconfirmed",
@@ -2612,7 +2614,7 @@ it("Diagnostics recovery stays isolated from Updates and closes without dispatch
   await act(async () => trigger.click());
   expect(c.getSnapshot().overlay).toBe("update-recovery");
   const dialog = host.querySelector("dialog")!;
-  expect(dialog.getAttribute("aria-label")).toBe("Farol update recovery");
+  expect(dialog.getAttribute("aria-label")).toBe("Update recovery");
   expect(dialog.textContent).toContain("Restore previous version 0.9.");
   expect(button(dialog, "Roll Back").disabled).toBe(false);
   expect(dialog.textContent).not.toContain("No updates available");
@@ -2656,7 +2658,7 @@ it.each([
       c.overlay("update-recovery");
     });
     const dialog = host.querySelector("dialog")!;
-    expect(dialog.getAttribute("aria-label")).toBe("Farol update recovery");
+    expect(dialog.getAttribute("aria-label")).toBe("Update recovery");
     expect(dialog.textContent).toContain(
       "No previous version is available to restore",
     );
@@ -2732,7 +2734,7 @@ it("B04 an ordinary successful target update explains restart with its available
     c.overlay("update");
   });
   const copy = host.querySelector("dialog")!.textContent!.replace(/\s+/gu, " ");
-  expect(copy).toContain("Farol 1.0 is ready to install.");
+  expect(copy).toContain("Version 1.0 is ready to install.");
   expect(copy).not.toContain("stays closed");
   expect(button(host, "Install and Relaunch").disabled).toBe(false);
   await act(async () => button(host, "Install and Relaunch").click());
@@ -2754,7 +2756,7 @@ it("B04 distinguishes installed and downloaded versions and refuses an unknown-s
   });
   const text = host.querySelector("dialog")!.textContent!;
   expect(text).not.toContain("Current version:");
-  expect(text).toContain("Farol 0.2.0 beta 4 is ready to install.");
+  expect(text).toContain("Version 0.2.0 beta 4 is ready to install.");
   expect(text).toContain("close open ChatGPT sessions and interrupt work");
   expect(text).not.toContain("UPDATE_BROWSER_STATE_UNKNOWN");
   expect(text).not.toContain("Restart is blocked");
@@ -3472,11 +3474,11 @@ it("menu checks once immediately and suppresses concurrent checks", async () => 
     kind: "check",
   });
   expect(host.querySelector("dialog")?.getAttribute("aria-label")).toBe(
-    "Checking for Farol updates",
+    "Checking for updates",
   );
   await act(async () => pending.resolve({ phase: "idle", checkedAt: 1000 }));
   expect(host.querySelector("dialog")?.getAttribute("aria-label")).toBe(
-    "Farol is up to date",
+    "You’re up to date",
   );
   await act(async () => openUpdates(f));
   expect(f.api.installedUpdate).toHaveBeenCalledTimes(2);
@@ -3624,6 +3626,6 @@ it("native menu rechecks an available release while its rail opens the saved off
     kind: "check",
   });
   expect(host.querySelector("dialog")?.getAttribute("aria-label")).toBe(
-    "Farol is up to date",
+    "You’re up to date",
   );
 });

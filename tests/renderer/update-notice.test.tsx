@@ -96,11 +96,11 @@ it.each(["available", "ready"] as const)(
       1,
     );
     expect(checkbox().closest("label")?.textContent).toContain(
-      "Automatically update Farol",
+      "Automatically install updates",
     );
     expect(checkbox().checked).toBe(false);
     expect(host.textContent).toContain(
-      "Download and install updates when Farol is idle.",
+      "Download and install updates when idle.",
     );
     expect(host.textContent).not.toContain(
       "Install downloaded updates when I quit Farol",
