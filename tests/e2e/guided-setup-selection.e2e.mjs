@@ -60,12 +60,18 @@ const packaged = process.argv.includes("--packaged");
 const devOnly = process.argv.includes("--dev-only");
 const behavior = process.argv.includes("--behavior");
 const resumeRefusal = process.argv.includes("--resume-refusal");
+const shell = process.argv.includes("--shell");
 assert.deepEqual(process.argv.slice(2), [
   ...(packaged ? ["--packaged"] : devOnly ? ["--dev-only"] : []),
   ...(behavior ? ["--behavior"] : []),
   ...(resumeRefusal ? ["--resume-refusal"] : []),
+  ...(shell ? ["--shell"] : []),
 ]);
 assert.ok(!resumeRefusal || (packaged && behavior));
+assert.ok(
+  !shell || (packaged && behavior && !resumeRefusal),
+  "SHELL_REQUIRES_PACKAGED_BEHAVIOR_WITHOUT_RESUME_REFUSAL",
+);
 assert.ok(!(behavior && devOnly));
 const root = process.cwd();
 const appRoot = path.join(root, "_output/package/Farol.app");
@@ -121,6 +127,8 @@ await fs.mkdir(workspace, { mode: 0o700 });
 const observations = [];
 let nonReadRequests = 0;
 let fixtureVerifications = 0;
+let shellStarts = 0;
+let shellEvidence;
 let activeFixtureProfile;
 let activeFixtureLaunch;
 const backgroundChildren = [];
@@ -248,6 +256,9 @@ async function fixtureVerification(challenge, settings) {
       kind: "owned-mcp-fixture-verification",
       fixtureVerifications,
     });
+    if (shell && fixtureVerifications === 1)
+      await verifyShellOnce(client, challenge, settings, launch);
+    else if (shell) assert.equal(shellStarts, 1, "SHELL_START_REPLAYED");
   } finally {
     const failures = [];
     try {
@@ -284,6 +295,178 @@ async function fixtureVerification(challenge, settings) {
     cleanupFailures.push(...failures);
     if (failures.length)
       throw new AggregateError(failures, "FIXTURE_MCP_CLEANUP_FAILED");
+  }
+}
+async function verifyShellOnce(client, challenge, settings, launch) {
+  const selected = settings.computer.workspaces.find(
+    (item) => item.workspaceId === challenge.workspaceId,
+  );
+  assert.ok(selected, "SHELL_SELECTED_WORKSPACE_MISSING");
+  assert.equal(selected.root, await fs.realpath(workspace));
+  assert.equal(selected.access, "write");
+  assert.equal(selected.gitHistoryApproved, false);
+  assert.equal(settings.computer.filePolicy, "approved-roots-v1");
+  assert.equal(settings.computer.commands, "workspace");
+  assert.equal(
+    settings.setup.computer.verified.workspaceId,
+    selected.workspaceId,
+  );
+  assert.equal(
+    settings.setup.computer.verified.configRevision,
+    settings.computer.generation,
+  );
+  assert.equal(
+    selected.accessCheck.computerGeneration,
+    settings.computer.generation,
+  );
+  assert.equal(
+    selected.accessCheck.buildId,
+    settings.setup.computer.verified.buildId,
+  );
+  assert.deepEqual(selected.accessCheck.rootIdentity, selected.rootIdentity);
+  const catalogue = await bounded(client.listTools(), "SHELL_TOOLS_TIMEOUT");
+  const tools = catalogue.tools.map((tool) => tool.name);
+  for (const name of [
+    "computer_shell_start",
+    "computer_shell_read",
+    "computer_shell_cancel",
+  ])
+    assert.ok(tools.includes(name), `SHELL_TOOL_MISSING:${name}`);
+  assert.equal(shellStarts, 0, "SHELL_ALREADY_SUBMITTED");
+  const operationId = randomUUID();
+  const filename = `farol-shell-${operationId}.txt`;
+  const marker = `farol-shell-readback-${operationId}`;
+  // Trusted literals contain only UUID characters. No external executable,
+  // substitution, pipeline, background job, descendant or cancellation probe.
+  const command = `builtin printf '%s\\n' '${marker}' > '${filename}' && IFS= builtin read -r value < '${filename}' && [[ "$value" == '${marker}' ]] && builtin printf '%s\\n' "$value"`;
+  shellEvidence = {
+    operationId,
+    workspaceId: selected.workspaceId,
+    filename,
+    marker,
+    tools,
+    outcome: "unknown",
+    reads: [],
+    retainedRoot: temporaryRoot,
+  };
+  observations.push({ kind: "owned-mcp-shell", evidence: shellEvidence });
+  shellStarts += 1;
+  let settled = false;
+  try {
+    const started = await bounded(
+      client.callTool({
+        name: "computer_shell_start",
+        arguments: {
+          operationId,
+          workspaceId: selected.workspaceId,
+          relativeCwd: ".",
+          write: true,
+          command,
+        },
+      }),
+      "SHELL_START_TIMEOUT",
+    );
+    shellEvidence.start = started;
+    if (started.structuredContent?.status === "refused") {
+      shellEvidence.outcome = "refused";
+      settled = true;
+    }
+    assert.equal(started.isError ?? false, false, JSON.stringify(started));
+    const start = started.structuredContent;
+    assert.equal(start?.status, "ok", JSON.stringify(started));
+    assert.equal(start.operationId, operationId);
+    assert.equal(start.data.operationId, operationId);
+    assert.deepEqual(start.data.execution, launch.opened.execution);
+    const handle = start.data.handle;
+    assert.ok(handle, "SHELL_HANDLE_MISSING");
+    shellEvidence.handle = handle;
+    let stdoutOffset = 0;
+    let stderrOffset = 0;
+    let stdout = "";
+    let stderr = "";
+    const deadline = Date.now() + 15000;
+    for (;;) {
+      assert.ok(Date.now() < deadline, "SHELL_EXIT_NOT_OBSERVED");
+      const result = await bounded(
+        client.callTool({
+          name: "computer_shell_read",
+          arguments: { operationId, handle, stdoutOffset, stderrOffset },
+        }),
+        "SHELL_READ_TIMEOUT",
+        Math.max(1, deadline - Date.now()),
+      );
+      // Keep the actual original result, including unknown/failed read data.
+      shellEvidence.reads.push(result);
+      assert.equal(result.isError ?? false, false, JSON.stringify(result));
+      const read = result.structuredContent;
+      assert.equal(read?.status, "ok", JSON.stringify(result));
+      assert.equal(read.operationId, operationId);
+      const value = read.data;
+      assert.equal(value.operationId, operationId);
+      assert.equal(value.handle, handle);
+      assert.deepEqual(value.execution, launch.opened.execution);
+      assert.notEqual(value.state, "unknown", "SHELL_OBSERVATION_UNKNOWN");
+      for (const stream of ["stdout", "stderr"]) {
+        const offset = stream === "stdout" ? stdoutOffset : stderrOffset;
+        const bytes = Buffer.from(value[`${stream}Base64`], "base64");
+        assert.equal(bytes.toString("base64"), value[`${stream}Base64`]);
+        assert.equal(value[`${stream}Offset`], String(offset));
+        assert.equal(value[`${stream}Next`], String(offset + bytes.length));
+        assert.ok(
+          BigInt(value[`${stream}Next`]) <= BigInt(value[`${stream}Bytes`]),
+        );
+        if (stream === "stdout") {
+          stdout += bytes.toString("utf8");
+          stdoutOffset += bytes.length;
+        } else {
+          stderr += bytes.toString("utf8");
+          stderrOffset += bytes.length;
+        }
+      }
+      if (value.state !== "running") {
+        assert.ok(["exited", "terminal"].includes(value.state));
+        assert.equal(value.rootState, "exited");
+        assert.equal(value.rootWaited, true);
+        assert.equal(value.supervisorState, "exited");
+        assert.equal(value.outputDrained, true);
+        assert.equal(value.stdoutNext, value.stdoutBytes);
+        assert.equal(value.stderrNext, value.stderrBytes);
+        // Root exit/output drain does not establish generic group/descendant
+        // cleanup. Retain both independent observations without upgrading them.
+        assert.ok(["confirmed", "unverified"].includes(value.groupCleanup));
+        assert.ok(
+          ["confirmed", "unverified"].includes(value.descendantCleanup),
+        );
+        settled = true;
+        shellEvidence.outcome = "observed-exit-and-output-drain";
+        shellEvidence.stdout = stdout;
+        shellEvidence.stderr = stderr;
+        assert.equal(value.exitCode, 0);
+        assert.equal(value.exitSignal, 0);
+        for (const flag of [
+          "cancelRequested",
+          "timedOut",
+          "authorityLost",
+          "outputLimitReached",
+        ])
+          assert.equal(value[flag], false, flag);
+        assert.equal(stderr, "");
+        assert.equal(
+          stdout,
+          `${marker}\n`,
+          "SHELL_FILE_READBACK_OUTPUT_MISMATCH",
+        );
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  } catch (error) {
+    shellEvidence.failure = String(error);
+    throw error;
+  } finally {
+    // Never submit another start/cancel or send a fallback signal. Keep the
+    // disposable root and original operation even if MCP/app cleanup succeeds.
+    if (!settled) cleanupUnknown = true;
   }
 }
 // The browser document remains local and read-only. External attachment is
@@ -1014,21 +1197,25 @@ try {
           await new Promise((resolve) => setTimeout(resolve, 50));
         }
         // Proof/runtime publication advances Settings revision separately; the
-        // permission edit itself advances Computer authority exactly once.
-        // Git checks only does not activate workspace-shell authority.
+        // permission edit advances Computer authority once. Only the Shell
+        // variant's fresh verification changes effective shellVerified policy,
+        // so advanceComputerApprovalGeneration seals it once more (+2 total).
+        const enablesShell = shell && field === "commands";
         assert.ok(after.revision > before.revision);
         assert.deepEqual(after.computer, {
           ...before.computer,
           [field]: value,
-          generation: before.computer.generation + 1,
+          generation: before.computer.generation + (enablesShell ? 2 : 1),
           workspaces: after.computer.workspaces,
         });
         assert.deepEqual(
           after.computer.workspaces.map(
             ({ accessCheck, ...workspace }) => workspace,
           ),
-          before.computer.workspaces.map(
-            ({ accessCheck, ...workspace }) => workspace,
+          before.computer.workspaces.map(({ accessCheck, ...workspace }) =>
+            enablesShell
+              ? { ...workspace, gitHistoryApproved: false }
+              : workspace,
           ),
         );
         for (const [index, workspace] of after.computer.workspaces.entries()) {
@@ -1133,7 +1320,7 @@ try {
         "Terminal & Git",
         "Save permissions",
         "commands",
-        "verification",
+        shell ? "workspace" : "verification",
       );
       retainedWorkspaces = saved.computer.workspaces;
       verifiedWorkspaces = retainedWorkspaces;
@@ -1234,7 +1421,10 @@ try {
       assert.deepEqual(partial.computer, saved.computer);
       assert.equal(partial.computer.filePolicy, "approved-roots-v1");
       assert.deepEqual(partial.setup.computer, saved.setup.computer);
-      assert.equal(partial.computer.commands, "verification");
+      assert.equal(
+        partial.computer.commands,
+        shell ? "workspace" : "verification",
+      );
       assert.equal(
         createHash("sha256")
           .update(await fs.readFile(configFile))
@@ -1369,6 +1559,7 @@ try {
     });
     const completed = await readSetupSettings(window);
     assert.equal(completed.computer.filePolicy, "approved-roots-v1");
+    if (shell) assert.equal(shellStarts, 1, "SHELL_START_COUNT_INVALID");
     await closeOwned();
     if (resumeRefusal) {
       // Preserve the existing optional changed-client refusal case. Only our
@@ -1428,6 +1619,7 @@ try {
     assert.equal(resumed.setup.connect.verified, null);
     await reviewSetupWithoutChanges(window, connectedOverview);
     assert.equal(fixtureVerifications, 1, "REOPEN_REPLAYED_MCP_VERIFICATION");
+    if (shell) assert.equal(shellStarts, 1, "REOPEN_REPLAYED_SHELL");
     assert.equal(nonReadRequests, 0, "REOPEN_SENT_TO_BROWSER_FIXTURE");
     // Historical completion survives quit; current readiness requires the new
     // displayed challenge, answered once by the owned MCP peer, then Check.
@@ -1435,6 +1627,7 @@ try {
     await assertSetupOverview(window, readyOverview);
     await reviewSetupWithoutChanges(window, readyOverview);
     assert.equal(fixtureVerifications, 2);
+    if (shell) assert.equal(shellStarts, 1, "ATTACHMENT_REPLAYED_SHELL");
     assert.equal(nonReadRequests, 0);
     observations.push({
       kind: "completed-quit-reopen-retains-history-fresh-receipt-restores-readiness",
@@ -1562,17 +1755,19 @@ try {
   const destination = path.join(
     root,
     "_output/evidence/guided-setup-selection",
-    resumeRefusal
-      ? "resume-refusal-package.json"
-      : behavior
-        ? packaged
-          ? "behavior-package.json"
-          : "behavior-development.json"
-        : packaged
-          ? "package.json"
-          : devOnly
-            ? "dev-only.json"
-            : "development.json",
+    shell
+      ? "shell-behavior-package.json"
+      : resumeRefusal
+        ? "resume-refusal-package.json"
+        : behavior
+          ? packaged
+            ? "behavior-package.json"
+            : "behavior-development.json"
+          : packaged
+            ? "package.json"
+            : devOnly
+              ? "dev-only.json"
+              : "development.json",
   );
   await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
   await fs.writeFile(
@@ -1584,6 +1779,7 @@ try {
         devOnly,
         behavior,
         resumeRefusal,
+        ...(shell ? { shell, shellStarts, shellEvidence } : {}),
         observations,
         fixtureVerifications,
         primaryFailure: primaryFailure ? String(primaryFailure) : null,
@@ -1597,6 +1793,15 @@ try {
           "Native folder picker is replaced by the explicit E2E selection",
           "No live account, provider Send, model inference or real external attachment",
           "Predecessor reader, helper rollback and post-start rollback NOT RUN; new-format save/reopen is not B06 recovery acceptance",
+          ...(shell
+            ? [
+                "Shell permission is saved through actual React Settings; no constructed approvals",
+                "Exactly one packaged MCP Shell start writes and reads a synthetic file using trusted Bash builtins only",
+                "Root wait/exit, supervisor exit, group cleanup, descendant cleanup and output drain are independent recorded facts; no generic cleanup claim",
+                "No external commands, Git/hooks, network, background/escaped descendants, cancellation or signal-fallback qualification",
+                "Original Shell operation, output and disposable fixture roots are retained on failure/unknown; no replay",
+              ]
+            : []),
         ],
       },
       null,
