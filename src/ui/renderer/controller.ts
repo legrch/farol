@@ -2120,7 +2120,6 @@ export class WindowController implements RendererFacade {
     if (
       intents.update?.state === "pending" ||
       intents.update?.state === "unknown" ||
-      update.phase === "ready" ||
       (update.phase === "failed" && update.code.includes("UNKNOWN")) ||
       !updateCheckAllowed(update)
     )

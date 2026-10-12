@@ -3629,3 +3629,76 @@ it("native menu rechecks an available release while its rail opens the saved off
     "You’re up to date",
   );
 });
+
+it.each([
+  "UPDATE_WORK_PENDING",
+  "UPDATE_CONNECTOR_ACTIVE",
+  "UPDATE_TASK_ROUTE_NEEDS_DRAIN",
+])(
+  "menu safely rechecks %s with automatic installation off and restores manual installation",
+  async (blockedBy) => {
+    const { host, f, c } = await mount();
+    const ready: WindowSnapshot["update"] = {
+      phase: "ready",
+      version: "0.2.3",
+      deferred: false,
+      blockedBy,
+      automaticUpdatePreference: {
+        status: "confirmed",
+        scope: "download-and-install",
+        enabled: false,
+      },
+    };
+    await act(async () => {
+      f.emit("update", ready);
+      c.overlay("update");
+    });
+    expect(button(host, "Install and Relaunch").disabled).toBe(true);
+    const pending = deferred<unknown>();
+    vi.mocked(f.api.installedUpdate)
+      .mockClear()
+      .mockReturnValueOnce(pending.promise);
+    await act(async () => {
+      openUpdates(f);
+      openUpdates(f);
+    });
+    expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+      kind: "check",
+    });
+    await act(async () => pending.resolve({ ...ready, blockedBy: null }));
+    expect(c.getSnapshot().update).toMatchObject({
+      phase: "ready",
+      version: "0.2.3",
+      blockedBy: null,
+    });
+    expect(button(host, "Install and Relaunch").disabled).toBe(false);
+    expect(
+      host.querySelector<HTMLInputElement>('dialog input[type="checkbox"]')
+        ?.checked,
+    ).toBe(false);
+    expect(f.api.installedUpdate).toHaveBeenCalledTimes(1);
+  },
+);
+it.each([
+  null,
+  "TASK_OUTCOME_UNKNOWN",
+  "UPDATE_BROWSER_STATE_UNKNOWN",
+  "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+  "UPDATE_UNCLASSIFIED",
+])(
+  "menu keeps ready %s without clearing a retained or unqualified state",
+  async (blockedBy) => {
+    const { f, c } = await mount();
+    const ready: WindowSnapshot["update"] = {
+      phase: "ready",
+      version: "0.2.3",
+      deferred: false,
+      blockedBy,
+    };
+    await act(async () => f.emit("update", ready));
+    vi.mocked(f.api.installedUpdate).mockClear();
+    await act(async () => openUpdates(f));
+    expect(f.api.installedUpdate).not.toHaveBeenCalled();
+    expect(c.getSnapshot().update).toEqual(ready);
+  },
+);
