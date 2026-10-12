@@ -86,6 +86,7 @@ export type UpdateAction =
   | "skip"
   | "later"
   | "restart"
+  | "restart-confirmed"
   | "recover"
   | "rollback"
   | "notice-seen";

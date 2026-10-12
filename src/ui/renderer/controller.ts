@@ -1483,10 +1483,7 @@ export class WindowController implements RendererFacade {
       return { id: intention, state: "applied", code: null };
     });
   }
-  update(
-    action: UpdateAction | "restart-confirmed",
-    noticeKey?: string,
-  ): Promise<Intent> {
+  update(action: UpdateAction, noticeKey?: string): Promise<Intent> {
     if (action === "notice-seen") {
       const current = this.state.update;
       const notice = "notice" in current ? current.notice : undefined;

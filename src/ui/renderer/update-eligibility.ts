@@ -74,6 +74,10 @@ export function automaticUpdateAvailable(snapshot: WindowSnapshot): boolean {
     update.phase !== "applying" &&
     update.phase !== "recovery" &&
     !(update.phase === "failed" && update.code.includes("UNKNOWN")) &&
-    !(update.phase === "ready" && update.blockedBy?.includes("UNKNOWN"))
+    !(
+      update.phase === "ready" &&
+      update.blockedBy?.includes("UNKNOWN") &&
+      !isConfirmedBrowserBlock(update.blockedBy)
+    )
   );
 }
