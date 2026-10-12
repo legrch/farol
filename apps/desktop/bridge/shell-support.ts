@@ -17,7 +17,9 @@ export interface ShellSupportDeclaration {
     osBuild: string;
     compilerSHA256: string;
     compiler: "approved-roots-seatbelt-v1";
-    filesystemClass: "local-apfs-no-nested-mounts-v1";
+    filesystemClass:
+      | "local-apfs-no-nested-mounts-v1"
+      | "system-apfs-kernel-mount-boundaries-v1";
     hostTrust: "protected-host-pathnames-v1";
     network: "none";
   }>;
@@ -220,7 +222,9 @@ export function parseShellSupportDeclaration(
     if (
       support.schema !== "farol-shell-support/1" ||
       qualification.compiler !== "approved-roots-seatbelt-v1" ||
-      qualification.filesystemClass !== "local-apfs-no-nested-mounts-v1" ||
+      (qualification.filesystemClass !== "local-apfs-no-nested-mounts-v1" &&
+        qualification.filesystemClass !==
+          "system-apfs-kernel-mount-boundaries-v1") ||
       qualification.hostTrust !== "protected-host-pathnames-v1" ||
       qualification.network !== "none" ||
       mechanism.path !== "/usr/bin/sandbox-exec" ||

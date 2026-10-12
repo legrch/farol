@@ -20,18 +20,21 @@ import (
 )
 
 const (
-	RootScopedPlatformAssurance = "root-scoped-trusted-platform-v1"
-	rootScopedPlatformCompiler  = "approved-roots-seatbelt-v1"
-	rootScopedPlatformClass     = "local-apfs-no-nested-mounts-v1"
-	rootScopedPlatformTrust     = "protected-host-pathnames-v1"
+	RootScopedPlatformAssurance  = "root-scoped-trusted-platform-v1"
+	rootScopedPlatformCompiler   = "approved-roots-seatbelt-v1"
+	rootScopedPlatformClass      = "local-apfs-no-nested-mounts-v1"
+	rootScopedMountBoundaryClass = "system-apfs-kernel-mount-boundaries-v1"
+	rootScopedPlatformTrust      = "protected-host-pathnames-v1"
 )
 
 // RootScopedPlatformSupport is trusted boot input from future authenticated
 // build/release metadata. No loader, default support entry, observed-hash approval
 // or public fact callback exists. Hashes identify qualified bytes; they are not
 // kernel-installation evidence. Boot MUST authenticate their issuer separately.
-// The first class is exact native macOS build/architecture, NoNetwork, local APFS
-// without nested mounts. Host integrity and protected image parents are assumed.
+// Classes are exact native macOS build/architecture and NoNetwork. The original
+// class refuses nested mounts. The system APFS class seals known mount denials
+// and continuously denies non-root mounts in the kernel. Host integrity and
+// protected image parents remain assumptions.
 type RootScopedPlatformSupport struct {
 	ReleaseID, QualificationSHA256, CompilerSHA256                  string
 	OS, OSBuild, Architecture, Compiler, FilesystemClass, HostTrust string
@@ -61,6 +64,8 @@ type platformDirectoryFacts struct {
 	path, filesystem, mount string
 	identity                authority.RootIdentity
 	local, nested           bool
+	// Sorted native mount names; control characters are forbidden in each name.
+	mounts string
 }
 
 // Private native fact port returns measurements, never a permissive Qualify
@@ -123,7 +128,7 @@ func validPlatformSupport(s RootScopedPlatformSupport) bool {
 	if !bindingID(s.ReleaseID) || !nonzero(s.QualificationSHA256) || !nonzero(s.CompilerSHA256) ||
 		s.OS != "darwin" || !platformBuildPattern.MatchString(s.OSBuild) ||
 		(s.Architecture != "arm64" && s.Architecture != "amd64") ||
-		s.Compiler != rootScopedPlatformCompiler || s.FilesystemClass != rootScopedPlatformClass || s.HostTrust != rootScopedPlatformTrust ||
+		s.Compiler != rootScopedPlatformCompiler || (s.FilesystemClass != rootScopedPlatformClass && s.FilesystemClass != rootScopedMountBoundaryClass) || s.HostTrust != rootScopedPlatformTrust ||
 		s.Mechanism.Path != seatbeltExecutable || !nonzero(s.WatchdogSourceSHA256) ||
 		len(s.Imports) < 1 || len(s.Imports) > 16 || len(s.Executables) < 1 || len(s.Executables) > 16 {
 		return false
@@ -301,6 +306,10 @@ func (s *RootScopedPlatformStrategy) Select(ctx context.Context, policy Seatbelt
 	policy.Executables = slices.Clone(policy.Executables)
 	policy.ProtectedImages = slices.Clone(policy.ProtectedImages)
 	policy.ProtectedBundle = cloneProtectedBundle(policy.ProtectedBundle)
+	policy.MountDenials = slices.Clone(policy.MountDenials)
+	if !s.mountBoundariesCurrent(ctx, policy, original) {
+		return refuse()
+	}
 	original = copyCommand(original)
 	wrapped, err := platformWrappedCommand(policy, original)
 	if err != nil {
@@ -320,8 +329,8 @@ func (s *RootScopedPlatformStrategy) Select(ctx context.Context, policy Seatbelt
 	binding := s.Binding()
 	binding.SelectionSHA256 = digest
 	selected := &RootScopedPlatformSelection{&platformSelection{strategy: *s, policy: policy, original: original, wrapped: wrapped, binding: binding}}
-	// Reject unsupported roots before reserving an execution. StartLease repeats
-	// these checks against the same selection and its original deadline.
+	// Reject unsupported roots during preparation, before the caller reserves an
+	// execution. The original StartLease still repeats all native checks.
 	if _, err := selected.frozen.inspectDirectories(ctx); err != nil {
 		return nil, err
 	}
@@ -413,13 +422,14 @@ func (s *platformSelection) current(ctx context.Context, deadline time.Time) boo
 
 type platformDirectoryBinding struct {
 	Path, Mount string
+	Mounts      string `json:",omitempty"`
 	Identity    authority.RootIdentity
 }
 
 func (s *platformSelection) inspectDirectories(ctx context.Context) ([]platformDirectoryBinding, error) {
 	refuse := func() ([]platformDirectoryBinding, error) { return nil, &processsvc.NativeFailure{} }
 	plan, err := compileSeatbelt(s.policy, s.original)
-	if err != nil {
+	if err != nil || !s.strategy.mountBoundariesCurrent(ctx, s.policy, s.original) {
 		return refuse()
 	}
 	type directory struct {
@@ -444,7 +454,7 @@ func (s *platformSelection) inspectDirectories(ctx context.Context) ([]platformD
 			return refuse()
 		}
 		f, err := s.strategy.frozen.facts.directory(ctx, d.path)
-		if err == nil && f.path == d.path && (f.filesystem != "apfs" || !f.local || f.nested) {
+		if err == nil && f.path == d.path && (f.filesystem != "apfs" || !f.local || (s.policy.RootVolumeOnly && f.mount != "/" && f.mount != dataVolumePath) || (f.nested && !s.strategy.deniedMountFacts(f, s.policy.MountDenials))) {
 			return nil, &processsvc.NativeFailure{FilesystemUnsupported: true}
 		}
 		if err != nil || f.path != d.path ||
@@ -452,7 +462,7 @@ func (s *platformSelection) inspectDirectories(ctx context.Context) ([]platformD
 			f.identity.Device != d.device || f.identity.Inode == "" || (d.identity != (authority.RootIdentity{}) && f.identity != d.identity) {
 			return refuse()
 		}
-		out = append(out, platformDirectoryBinding{d.path, f.mount, f.identity})
+		out = append(out, platformDirectoryBinding{d.path, f.mount, f.mounts, f.identity})
 	}
 	return out, nil
 }

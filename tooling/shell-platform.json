@@ -1,9 +1,9 @@
 {
   "schema": "farol-shell-platform/1",
-  "id": "macos-26A434-arm64-roots-v1",
+  "id": "macos-26A434-arm64-root-volume-v2",
   "osBuild": "26A434",
   "compiler": "approved-roots-seatbelt-v1",
-  "filesystemClass": "local-apfs-no-nested-mounts-v1",
+  "filesystemClass": "system-apfs-kernel-mount-boundaries-v1",
   "hostTrust": "protected-host-pathnames-v1",
   "network": "none",
   "compilerInputs": [
@@ -25,7 +25,7 @@
     },
     {
       "path": "modules/computer/infra/process/confinement.go",
-      "sha256": "c20d32f772eff9bfd83ad5a378f23831757bc32982087e6bc898aa04601195fd"
+      "sha256": "9fa1a37f0421bb17a607a010f61423f541b652d77f7d97bea7b77552b74b73c4"
     },
     {
       "path": "modules/computer/infra/process/darwin.go",
@@ -64,6 +64,10 @@
       "sha256": "44c4a03a8ad6b1fbc928db04d20766a2abf7c345f7f95a5ef5fa8b99783aaa8a"
     },
     {
+      "path": "modules/computer/infra/process/mountboundaries.go",
+      "sha256": "60514b5df7093ac63a232ff89837f69b1b36f0e85c17aac7b884fc03e0bf4cf1"
+    },
+    {
       "path": "modules/computer/infra/process/observe.go",
       "sha256": "60b4907986f4ba4125e6f3669174aada4502d578a981bb3a4d2415bd98046a1e"
     },
@@ -89,11 +93,11 @@
     },
     {
       "path": "modules/computer/infra/process/platformqualification.go",
-      "sha256": "fcceb53bfcfb6018d7ec1cdf7a6dfdf3a7b43cf1463d52cea9d50f6bb821dce4"
+      "sha256": "5a6f30f64bf871eb2988f1126b1b10af4b9ca1937bd68615fd464708b9bfcd83"
     },
     {
       "path": "modules/computer/infra/process/platformqualificationdarwin.go",
-      "sha256": "7abddf8028bf58381b7434728cf4aae802cba79a76200cecb7c0fc804c5c2c5b"
+      "sha256": "864092d1d53b368938434d9bf3234202660d14ac7f651cd801ce6f38697ff4e9"
     },
     {
       "path": "modules/computer/infra/process/platformqualificationother.go",
@@ -101,7 +105,7 @@
     },
     {
       "path": "modules/computer/infra/process/platformwatchdog.go",
-      "sha256": "15f6f15d1f3a6059854c0b6c91bdd299595b32c755a2556cb8e0c065f0f7d006"
+      "sha256": "2862e6e03527df1d69464838e1e58d4610af2bd9eab3fff1b352cd2592e1cffe"
     },
     {
       "path": "modules/computer/infra/process/prepare.go",

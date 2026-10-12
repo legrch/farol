@@ -87,9 +87,12 @@ type SeatbeltSelection struct {
 	// ProtectedImages are measured and write-protected without read/exec grants.
 	ProtectedImages []ExecutablePin
 	ProtectedBundle *ProtectedBundle `json:",omitempty"`
-	Network         authority.Network
-	Git             GitPolicy
-	GitRead         *GitReadSelection
+	// Measured mount boundaries only restrict existing roots; they never grant access.
+	MountDenials   []string `json:",omitempty"`
+	RootVolumeOnly bool     `json:",omitempty"`
+	Network        authority.Network
+	Git            GitPolicy
+	GitRead        *GitReadSelection
 }
 
 // Seatbelt builds the actual restrictive launch. The injected existing native
@@ -135,6 +138,7 @@ func NewSeatbelt(selection SeatbeltSelection, qualification Qualification) (*Sea
 	selection.Executables = append([]ExecutablePin(nil), selection.Executables...)
 	selection.ProtectedImages = append([]ExecutablePin(nil), selection.ProtectedImages...)
 	selection.ProtectedBundle = cloneProtectedBundle(selection.ProtectedBundle)
+	selection.MountDenials = slices.Clone(selection.MountDenials)
 	if selection.GitRead != nil {
 		binding := *selection.GitRead
 		selection.GitRead = &binding
@@ -353,7 +357,7 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 			return refuse()
 		}
 	}
-	var parameters, reads, writes, execs, denies, parents, executableWrites, rootAnchors []string
+	var parameters, reads, writes, execs, denies, parents, executableWrites, rootAnchors, mountDenies, volumeRoots []string
 	add := func(kind, path string, rules *[]string) {
 		key := fmt.Sprintf("FAROL_%d", len(parameters)/2)
 		parameters = append(parameters, "-D", key+"="+path)
@@ -368,6 +372,21 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 			// Runtime dependencies outside these approved roots need a grant too.
 			add("subpath", selected.ScopeRoot, &execs)
 			add("literal", selected.ScopeRoot, &rootAnchors)
+		}
+	}
+	if err := validateMountDenials(s, command, selectedScopes); err != nil {
+		return refuse()
+	}
+	for _, path := range s.MountDenials {
+		for _, alias := range mountDenialAliases(path) {
+			add("subpath", alias, &mountDenies)
+		}
+	}
+	if s.RootVolumeOnly {
+		for _, root := range append(slices.Clone(selectedScopes), rootScopeBinding{ScopeRoot: s.Scratch}) {
+			for _, alias := range mountDenialAliases(root.ScopeRoot) {
+				add("subpath", alias, &volumeRoots)
+			}
 		}
 	}
 	add("subpath", s.Scratch, &reads)
@@ -451,6 +470,15 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 (allow process-exec ` + strings.Join(execs, " ") + `)
 (allow file-write* (literal "/dev/null") (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$") ` + strings.Join(writes, " ") + `)
 (deny file-write* ` + strings.Join(executableWrites, " ") + `)`
+	if s.RootVolumeOnly {
+		// The kernel evaluates the mount root on every access, including volumes
+		// attached after execution starts. Data firmlinks have logical mount root /.
+		// This is deliberately narrower than admitting arbitrary local APFS volumes.
+		source += "\n(deny file-read* file-write* process-exec (require-all (require-any " + strings.Join(volumeRoots, " ") + ") (require-not (require-all (mount-root-literal \"/\") (filesystem-name \"apfs\")))))"
+	}
+	if len(mountDenies) > 0 {
+		source += "\n(deny file-read* file-write* process-exec " + strings.Join(mountDenies, " ") + ")"
+	}
 	if len(secrets) > 0 {
 		source += "\n(deny file-read* file-write* " + strings.Join(secrets, " ") + ")"
 	}

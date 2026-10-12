@@ -17,6 +17,10 @@ func NewRootScopedSupervisedPreparer(runtimeID string, template Command, selecti
 	if strategy == nil || strategy.frozen == nil || selection.FilePolicy != authority.RootScopedFiles {
 		return nil, &processsvc.NativeFailure{}
 	}
+	selection, err := strategy.selectMountBoundaries(execution, selection, template)
+	if err != nil {
+		return nil, err
+	}
 	policy, err := NewSeatbelt(selection, platformPendingQualification{})
 	if err != nil {
 		return nil, err

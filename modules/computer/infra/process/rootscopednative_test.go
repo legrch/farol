@@ -186,6 +186,7 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool, prot
 	image, err = filepath.EvalSymlinks(image)
 	must(err)
 	s, command := rootScopedFixture(t)
+	s.RootVolumeOnly = true
 	s.Home, s.Scratch, s.ScratchIdentity = home, scratch, identity(scratch)
 	s.MechanismSHA256 = hash(seatbeltExecutable)
 	s.Executables = []ExecutablePin{{Path: image, SHA256: hash(image)}}

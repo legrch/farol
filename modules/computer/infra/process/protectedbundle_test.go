@@ -32,7 +32,7 @@ func bundleFixtureCPU(t *testing.T) platformFixture {
 	f.policy.ProtectedImages = []ExecutablePin{f.descriptor.Backend, f.descriptor.Watchdog}
 	f.descriptor.ProtectedBundle = cloneProtectedBundle(&bundle)
 	f.policy.ProtectedBundle = cloneProtectedBundle(&bundle)
-	f.facts.directories[bundle.Path] = platformDirectoryFacts{bundle.Path, "apfs", dataVolumePath, bundle.Identity, true, false}
+	f.facts.directories[bundle.Path] = platformDirectoryFacts{bundle.Path, "apfs", dataVolumePath, bundle.Identity, true, false, ""}
 	f.original.Confinement = nil
 	bound, err := (&Seatbelt{selection: f.policy}).bind(f.original)
 	if err != nil {
@@ -451,8 +451,8 @@ func TestProtectedBundleSelectionDigestAndOriginalDeadline(t *testing.T) {
 	}
 }
 
-// Values captured by the baseline-only overlay from frozen f8570457; this checks
-// nil compatibility against original bytes, not another new implementation.
+// Legacy class fingerprints include the deliberate ordinary-Git optional config
+// metadata fix. Nil bundle and disabled mount-boundary fields stay omitted.
 func TestProtectedBundleNilPreservesFrozenBaselineDigests(t *testing.T) {
 	f := platformFixtureCPU(t)
 	strategy := f.strategy(t)
@@ -464,9 +464,9 @@ func TestProtectedBundleNilPreservesFrozenBaselineDigests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.digest != "b207c287f6f5e6055f4ca70f9dbce8104d1d0835a4beda52e053ffe2fcf4d5c7" ||
+	if plan.digest != "642c52f56b2d367b8b61137cff2cd28e0ac30557ef7c6dcb8ae2372874367f9c" ||
 		strategy.Binding().SupportSHA256 != "d4fedcdb8be2faef765b57e849add5738d2e6299b462634ef1d4d4ea2169e84b" ||
-		selected.Binding().SelectionSHA256 != "8dbe52bb645a99f52a84686b78680d17f00a1597ff1fb2faf7a4fc1f98d45d67" {
-		t.Fatal("nil bundle altered frozen baseline digests")
+		selected.Binding().SelectionSHA256 != "98a58ebd62af53bb8a08db26775ca8f830f30ae9f3f9a44cc9a3eb26a9b084ba" {
+		t.Fatalf("nil bundle altered frozen baseline digests: profile=%s support=%s selection=%s", plan.digest, strategy.Binding().SupportSHA256, selected.Binding().SelectionSHA256)
 	}
 }

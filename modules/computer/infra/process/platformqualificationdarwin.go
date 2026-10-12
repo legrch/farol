@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -207,7 +208,7 @@ func (nativePlatformFacts) directory(ctx context.Context, path string) (platform
 	if err != nil || n != count {
 		return refuse()
 	}
-	nested := false
+	var nestedMounts []string
 	// Compare both APFS namespace spellings without broadening root grants.
 	for _, candidate := range mounts[:n] {
 		p := text(candidate.Mntonname[:])
@@ -215,12 +216,14 @@ func (nativePlatformFacts) directory(ctx context.Context, path string) (platform
 			return refuse()
 		}
 		if platformNestedMount(path, mount, p) {
-			nested = true
+			nestedMounts = append(nestedMounts, logicalMountPath(path, mount, p))
 		}
 	}
 	again, err := dir.inspect(path)
 	if err != nil || again.identity != measured.identity || ctx.Err() != nil {
 		return refuse()
 	}
-	return platformDirectoryFacts{path, text(fs.Fstypename[:]), mount, measured.identity, fs.Flags&unix.MNT_LOCAL != 0, nested}, nil
+	slices.Sort(nestedMounts)
+	nestedMounts = slices.Compact(nestedMounts)
+	return platformDirectoryFacts{path, text(fs.Fstypename[:]), mount, measured.identity, fs.Flags&unix.MNT_LOCAL != 0, len(nestedMounts) > 0, strings.Join(nestedMounts, "\n")}, nil
 }

@@ -112,6 +112,18 @@ const digestPaths = [
 ];
 
 describe("strict Shell support value parsing", () => {
+  it("accepts the qualified kernel mount class but does not substitute it for legacy support", () => {
+    const next = changed(
+      "qualification.filesystemClass",
+      "system-apfs-kernel-mount-boundaries-v1",
+    );
+    expect(parseShellSupportDeclaration(next)).toEqual(next);
+    expect(() =>
+      bindShellSupportDeclaration(next, fixture(), fixture().core),
+    ).toThrow();
+    invalid(changed("qualification.filesystemClass", "any-local-filesystem"));
+  });
+
   it("copies and deeply freezes every record and array", () => {
     const input = fixture();
     const parsed = parseShellSupportDeclaration(input);

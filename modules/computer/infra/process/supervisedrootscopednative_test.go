@@ -96,6 +96,7 @@ func TestNativeRootScopedSupervisorBash(t *testing.T) {
 		must(os.Mkdir(dir, 0700))
 	}
 	s, command := rootScopedFixture(t)
+	s.RootVolumeOnly = true
 	s.Home, s.Scratch, s.ScratchIdentity = home, scratch, identity(scratch)
 	s.MechanismSHA256 = hash(seatbeltExecutable)
 	s.Executables = []ExecutablePin{{Path: "/bin/bash", SHA256: hash("/bin/bash")}}

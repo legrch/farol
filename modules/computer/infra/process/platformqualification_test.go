@@ -108,7 +108,7 @@ func platformFixtureCPU(t *testing.T) platformFixture {
 		if path == policy.Scratch {
 			identity = policy.ScratchIdentity
 		}
-		facts.directories[path] = platformDirectoryFacts{path, "apfs", "/System/Volumes/Data", identity, true, false}
+		facts.directories[path] = platformDirectoryFacts{path, "apfs", "/System/Volumes/Data", identity, true, false, ""}
 	}
 	return platformFixture{descriptor, facts, &testClock{time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)}, policy, bound,
 		WatchdogSelection{descriptor.Watchdog, source, descriptor.WatchdogSourceSHA256}}
@@ -304,7 +304,7 @@ func TestRootScopedPlatformOwnerInstallationHomeFirmlinksAndSharedRoles(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.facts.directories[home] = platformDirectoryFacts{home, "apfs", "/System/Volumes/Data", f.original.RootIdentity, true, false}
+	f.facts.directories[home] = platformDirectoryFacts{home, "apfs", "/System/Volumes/Data", f.original.RootIdentity, true, false, ""}
 	s, q, deadline := f.qualify(t)
 	if err := q.ValidateBound(context.Background(), f.original, s.WrappedCommand(), deadline); err != nil {
 		t.Fatal("owner-owned HOME/Farol installation refused", err)
