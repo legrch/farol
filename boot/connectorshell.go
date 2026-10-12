@@ -86,15 +86,29 @@ func connectorBash(support nativeprocess.RootScopedPlatformSupport) (nativeproce
 // outside snapshot callbacks and within its original deadline. It neither
 // reserves nor dispatches; the existing connector process owner does both.
 func (f *connectorShellFactory) selectShell(ctx context.Context, lease *execution.Lease, request connectorShellRequest) (processsvc.Prepared, processsvc.ObservationWorkspace, error) {
-	refuse := func() (processsvc.Prepared, processsvc.ObservationWorkspace, error) {
-		return nil, nil, connectorProcessRefusal("PROCESS_PREPARATION_UNAVAILABLE")
+	refuse := func(err error) (processsvc.Prepared, processsvc.ObservationWorkspace, error) {
+		return nil, nil, connectorPreparationFailure(err)
 	}
-	if f == nil || f.clock == nil || f.lifetime == nil || f.lifetime.Err() != nil || f.scratch == nil || f.prepare == nil ||
-		ctx == nil || ctx.Err() != nil || lease == nil || !f.clock.Now().Before(lease.Deadline()) ||
-		!validIngressID(request.WorkspaceID) || !shellRelativeCwd(request.RelativeCwd) || len(request.RelativeCwd) > 4096 ||
+	if f == nil || f.clock == nil || f.lifetime == nil || f.scratch == nil || f.prepare == nil || ctx == nil || lease == nil {
+		return refuse(nil)
+	}
+	// These are pre-dispatch facts, not guesses about an attempted child effect.
+	timingFailure := func(current context.Context) error {
+		if !f.clock.Now().Before(lease.Deadline()) || current.Err() == context.DeadlineExceeded {
+			return authority.Fail("PROCESS_PREPARATION_DEADLINE", "computer-policy")
+		}
+		if current.Err() != nil || f.lifetime.Err() != nil {
+			return authority.Fail("PROCESS_CANCELLED", "computer-policy")
+		}
+		return nil
+	}
+	if err := timingFailure(ctx); err != nil {
+		return refuse(err)
+	}
+	if !validIngressID(request.WorkspaceID) || !shellRelativeCwd(request.RelativeCwd) || len(request.RelativeCwd) > 4096 ||
 		len(request.Command) == 0 || len(request.Command) > 65536 || strings.ContainsRune(request.Command, 0) || !utf8.ValidString(request.Command) ||
 		len(request.Stdin) > 262144 || !utf8.ValidString(request.Stdin) {
-		return refuse()
+		return refuse(connectorProcessRefusal("PROCESS_PREPARATION_SCOPE_REFUSED"))
 	}
 	preparation, cancel := context.WithDeadline(ctx, lease.Deadline())
 	defer cancel()
@@ -104,13 +118,18 @@ func (f *connectorShellFactory) selectShell(ctx context.Context, lease *executio
 	var workspace authority.ApprovedWorkspace
 	var cwd string
 	err := lease.WithSnapshot(preparation, lease.Binding().ParticipantID, func(current port.AccessSnapshot) error {
-		if current.Participant == nil || current.Approval == nil || current.Approval.FilePolicy != authority.RootScopedFiles ||
-			current.Participant.Grant.FilePolicy != authority.RootScopedFiles {
-			return connectorProcessRefusal("PROCESS_PREPARATION_UNAVAILABLE")
+		if current.Participant == nil || current.Approval == nil {
+			return authority.Fail("PROCESS_PREPARATION_AUTHORIZATION_CHANGED", "computer-policy")
+		}
+		if current.Approval.FilePolicy != authority.RootScopedFiles || current.Participant.Grant.FilePolicy != authority.RootScopedFiles {
+			return authority.Fail("PROCESS_PREPARATION_POLICY_MISMATCH", "computer-policy")
 		}
 		approved, ok := authority.FindApproved(*current.Approval, request.WorkspaceID)
-		if !ok || !approved.ShellVerified || !validProfilePath(approved.Root) {
-			return connectorProcessRefusal("PROCESS_PREPARATION_UNAVAILABLE")
+		if !ok {
+			return authority.Fail("PROCESS_PREPARATION_SCOPE_REFUSED", "computer-policy")
+		}
+		if !approved.ShellVerified || !validProfilePath(approved.Root) {
+			return authority.Fail("PROCESS_PREPARATION_WORKSPACE_STALE", "computer-policy")
 		}
 		cwd = filepath.Join(approved.Root, request.RelativeCwd)
 		action := authority.Action{Identity: lease.Binding().Identity, Operation: authority.Operation{
@@ -124,16 +143,25 @@ func (f *connectorShellFactory) selectShell(ctx context.Context, lease *executio
 		workspace = approved
 		return nil
 	})
-	if err != nil || snapshot.Participant == nil || !f.clock.Now().Before(lease.Deadline()) || preparation.Err() != nil {
-		return refuse()
+	if err != nil {
+		return refuse(err)
+	}
+	if err := timingFailure(preparation); err != nil {
+		return refuse(err)
+	}
+	if snapshot.Participant == nil {
+		return refuse(nil)
 	}
 	scratch, err := f.scratch(preparation)
-	if err != nil || preparation.Err() != nil || !f.clock.Now().Before(lease.Deadline()) {
-		return refuse()
+	if err != nil {
+		return refuse(err)
+	}
+	if err := timingFailure(preparation); err != nil {
+		return refuse(err)
 	}
 	bash, ok := connectorBash(f.config.support)
 	if !ok {
-		return refuse()
+		return refuse(nil)
 	}
 	command := nativeprocess.Command{WorkspaceID: workspace.WorkspaceID, Root: workspace.Root, Cwd: cwd,
 		RootIdentity: workspace.RootIdentity, Executable: bash.Path, ExecutableSHA256: bash.SHA256, Write: request.Write}
@@ -145,31 +173,40 @@ func (f *connectorShellFactory) selectShell(ctx context.Context, lease *executio
 	invocation := processsvc.Invocation{RuntimeID: f.config.runtimeID, SessionID: lease.Binding().SessionID, ModelID: "chatgpt",
 		AdmissionID: snapshot.Participant.Grant.AuthorityID, Arguments: []string{"--noprofile", "--norc", "-c", request.Command}, Input: []byte(request.Stdin)}
 	selected, err := f.prepare(preparation, command, policy, invocation)
-	if err != nil || selected == nil || preparation.Err() != nil || !f.clock.Now().Before(lease.Deadline()) {
-		return refuse()
+	if err != nil {
+		return refuse(err)
+	}
+	if err := timingFailure(preparation); err != nil {
+		return refuse(err)
+	}
+	if selected == nil {
+		return refuse(nil)
 	}
 	bound, ok := selected.(processsvc.PolicyBound)
 	if !ok {
-		return refuse()
+		return refuse(nil)
 	}
 	// Revalidate the original lease after all native yields. Start performs its
 	// own later check and owns the only reservation and child lifetime.
 	if err := lease.WithSnapshot(preparation, lease.Binding().ParticipantID, func(current port.AccessSnapshot) error {
-		if !bound.MatchesPolicy(current) || !f.clock.Now().Before(lease.Deadline()) {
-			return connectorProcessRefusal("PROCESS_PREPARATION_UNAVAILABLE")
+		if err := timingFailure(preparation); err != nil {
+			return err
+		}
+		if !bound.MatchesPolicy(current) {
+			return authority.Fail("PROCESS_PREPARATION_AUTHORIZATION_CHANGED", "computer-policy")
 		}
 		return nil
 	}); err != nil {
-		return refuse()
+		return refuse(err)
 	}
 	seal := selected.Seal()
 	if seal.WorkspaceID != command.WorkspaceID || seal.Root != command.Root || seal.Cwd != command.Cwd || seal.RootIdentity != command.RootIdentity || seal.Write != command.Write {
-		return refuse()
+		return refuse(connectorProcessRefusal("PROCESS_PREPARATION_SCOPE_REFUSED"))
 	}
 	observer, err := nativeprocess.NewObservationWorkspace(processsvc.ObservedWorkspace{
 		WorkspaceID: seal.WorkspaceID, Root: seal.Root, RootIdentity: seal.RootIdentity})
 	if err != nil {
-		return refuse()
+		return refuse(err)
 	}
 	return selected, observer, nil
 }

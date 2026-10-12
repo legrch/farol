@@ -10,6 +10,7 @@ import (
 
 	"github.com/legrch/farol/modules/computer/app/services/execution"
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
+	processct "github.com/legrch/farol/modules/computer/contracts/process"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	nativeprocess "github.com/legrch/farol/modules/computer/infra/process"
 )
@@ -39,8 +40,16 @@ type shellFactoryFixture struct {
 
 func newShellFactoryFixture(t *testing.T) *shellFactoryFixture {
 	t.Helper()
+	return newShellFactoryFixtureWithApproval(t, nil)
+}
+
+func newShellFactoryFixtureWithApproval(t *testing.T, configure func(*authority.Approval)) *shellFactoryFixture {
+	t.Helper()
 	s, access, _, native, launch := connectorProcessFixture(t)
 	access.approval.FilePolicy = authority.RootScopedFiles
+	if configure != nil {
+		configure(&access.approval)
+	}
 	access.PutApproval(access.approval)
 	s.root.publication.approval = access.approval.Clone()
 	selectConnectorProcessSlot(t, s, access, launch, "shell")
@@ -203,5 +212,53 @@ func TestConnectorShellFactoryDoesNotReplaceMissingSupport(t *testing.T) {
 	cancel()
 	if scratch, err := newConnectorShellScratch(ctx); err == nil || scratch.path != "" {
 		t.Fatal("cancelled lifetime allocated scratch")
+	}
+}
+
+func TestConnectorShellPreparationClassifiesPredispatchFacts(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		configure func(*authority.Approval)
+		change    func(*shellFactoryFixture, *connectorShellRequest)
+		code      string
+	}{
+		{name: "legacy-policy", configure: func(a *authority.Approval) { a.FilePolicy = authority.FilePolicy("") }, code: "PROCESS_PREPARATION_POLICY_MISMATCH"},
+		{name: "stale-workspace", configure: func(a *authority.Approval) { a.Workspaces[0].ShellVerified = false }, code: "PROCESS_PREPARATION_WORKSPACE_STALE"},
+		{name: "scope", change: func(_ *shellFactoryFixture, r *connectorShellRequest) { r.WorkspaceID = "unapproved" }, code: "PROCESS_PREPARATION_SCOPE_REFUSED"},
+		{name: "deadline", change: func(f *shellFactoryFixture, _ *connectorShellRequest) { f.access.clock.now = f.lease.Deadline() }, code: "PROCESS_PREPARATION_DEADLINE"},
+		{name: "changed-authorization", change: func(f *shellFactoryFixture, _ *connectorShellRequest) {
+			f.beforePrepare = func() {
+				f.access.approval.Workspaces[0].RootIdentity.Inode = "replacement"
+				f.access.PutApproval(f.access.approval)
+			}
+		}, code: "AUTHORITY_COMPUTER_MISMATCH"},
+		{name: "write-ownership", change: func(_ *shellFactoryFixture, r *connectorShellRequest) { r.Write = true }, code: "AUTHORITY_MUTATION_OWNERSHIP_DENIED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newShellFactoryFixtureWithApproval(t, tc.configure)
+			request := shellFactoryRequest()
+			if tc.change != nil {
+				tc.change(f, &request)
+			}
+			selected, observer, err := f.factory.selectShell(context.Background(), f.lease, request)
+			var failure *processct.Failure
+			if selected != nil || observer != nil || !errors.As(err, &failure) || failure.Code != tc.code || failure.Outcome != "refused" || failure.Retry != "never" || f.native.spawns != 0 || f.native.journal.reserves != 0 {
+				t.Fatal("pre-dispatch fact lost or execution attempted", err)
+			}
+		})
+	}
+}
+
+func TestConnectorShellPreparationSanitizesScratchErrors(t *testing.T) {
+	for _, tc := range connectorPreparationCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newShellFactoryFixture(t)
+			f.factory.scratch = func(context.Context) (connectorShellScratch, error) { return connectorShellScratch{}, tc.err }
+			selected, observer, err := f.factory.selectShell(context.Background(), f.lease, shellFactoryRequest())
+			var failure *processct.Failure
+			if selected != nil || observer != nil || !errors.As(err, &failure) || failure.Code != tc.code || failure.Outcome != tc.outcome || failure.Retry != "never" || err.Error() != tc.code || f.preparations != 0 {
+				t.Fatal("scratch classification was lost or leaked")
+			}
+		})
 	}
 }

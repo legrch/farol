@@ -11,6 +11,8 @@ import (
 	"github.com/legrch/farol/modules/computer/app/services/execution"
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	processct "github.com/legrch/farol/modules/computer/contracts/process"
+	"github.com/legrch/farol/modules/computer/domain/authority"
+	nativeprocess "github.com/legrch/farol/modules/computer/infra/process"
 )
 
 // Real registered connector methods and Computer/process owners. The endpoint,
@@ -22,10 +24,14 @@ type processWireNative struct {
 	cancels   int
 	cancelIO  func()
 	cancelErr error
+	selection connectorShellSelection
 }
 
 func (n *processWireNative) selectShell(ctx context.Context, lease *execution.Lease, request connectorShellRequest) (processsvc.Prepared, processsvc.ObservationWorkspace, error) {
 	n.requests = append(n.requests, request)
+	if n.selection != nil {
+		return n.selection(ctx, lease, request)
+	}
 	_, _, err := n.selectLaunch(ctx, lease)
 	return n, n, err
 }
@@ -50,7 +56,14 @@ func (n *processWireNative) Cancel(context.Context) (*processsvc.CancelReceipt, 
 }
 func processWireFixture(t *testing.T) (*computerConnector, *connectorProcessJournalDouble, *processWireNative, wire.ComputerConnectorOpen) {
 	t.Helper()
-	s, _, journal, native, launch := connectorProcessFixture(t)
+	return processWireFixtureWithPolicy(t, authority.FilePolicy(""))
+}
+func processWireFixtureWithPolicy(t *testing.T, policy authority.FilePolicy) (*computerConnector, *connectorProcessJournalDouble, *processWireNative, wire.ComputerConnectorOpen) {
+	t.Helper()
+	s, access, journal, native, launch := connectorProcessFixture(t)
+	access.approval.FilePolicy = policy
+	access.PutApproval(access.approval)
+	s.root.publication.approval = access.approval.Clone()
 	if err := s.closeSlot(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -321,5 +334,35 @@ func TestConnectorProcessWireReadOffsetsAndEffectKind(t *testing.T) {
 	}
 	if out := connectorMutationInvoke(t, s, "computer.process.cancel", "", processWireCancel(s)); out.Status == "ok" || n.cancels != 0 {
 		t.Fatal("cancel missing effect identity")
+	}
+}
+
+func TestConnectorProcessWirePreservesPreparationAcrossAllWrappers(t *testing.T) {
+	for _, tc := range connectorPreparationCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			s, journal, native, _ := processWireFixtureWithPolicy(t, authority.RootScopedFiles)
+			f := newShellFactoryFixture(t)
+			f.factory.clock, f.factory.lifetime = s.clock, s.lifetime
+			f.factory.scratch = func(context.Context) (connectorShellScratch, error) {
+				return connectorShellScratch{path: "/private/tmp/farol-shell-cpu", identity: authority.RootIdentity{Device: "1", Inode: "9"}}, nil
+			}
+			preparations := 0
+			f.factory.prepare = func(context.Context, nativeprocess.Command, nativeprocess.SeatbeltSelection, processsvc.Invocation) (processsvc.Selected, error) {
+				preparations++
+				return nil, tc.err
+			}
+			native.selection = f.factory.selectShell
+			out := connectorMutationInvoke(t, s, "computer.process.start", "preparation-operation", processWireStart(s))
+			status := "refused"
+			if tc.outcome == "outcome_unknown" {
+				status = "unknown"
+			}
+			if out.Status != status || out.Code != tc.code || len(out.Data) != 0 || preparations != 1 || journal.reserves != 0 || native.spawns != 0 {
+				t.Fatal("wire preparation classification was lost or leaked", out.Status, out.Code, preparations)
+			}
+			if out := connectorMutationInvoke(t, s, "computer.process.start", "preparation-operation", processWireStart(s)); out.Status != "unknown" || preparations != 1 {
+				t.Fatal("preparation outcome permitted replay")
+			}
+		})
 	}
 }

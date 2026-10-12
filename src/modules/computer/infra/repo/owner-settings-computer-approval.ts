@@ -14,6 +14,7 @@ export function ownerSettingsComputerApproval(
   );
   const computerVerification = settings.setup.computer.verified;
   const freshShellWorkspace = (workspace: (typeof workspaces)[number]) =>
+    settings.computer.filePolicy === "approved-roots-v1" &&
     settings.computer.commands === "workspace" &&
     settings.setup.computer.reachable === "reachable" &&
     !settings.setup.computer.outcomeUnknown &&

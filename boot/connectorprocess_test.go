@@ -3,6 +3,7 @@ package boot
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -386,5 +387,54 @@ func TestConnectorProcessRootNormalOpenStillRefusesShell(t *testing.T) {
 	}
 	if s.mutations.freezeForRetirement() != nil {
 		t.Fatal("pure pre-start refusal blocked retirement")
+	}
+}
+
+// Synthetic messages deliberately carry secret-like content. These cases prove
+// the closed code boundary, not any native or live-provider behavior.
+func connectorPreparationCases() []struct {
+	name          string
+	err           error
+	code, outcome string
+} {
+	return []struct {
+		name          string
+		err           error
+		code, outcome string
+	}{
+		{"policy", fmt.Errorf("synthetic token=fixture-private /private/fixture: %w", connectorProcessRefusal("PROCESS_PREPARATION_POLICY_MISMATCH")), "PROCESS_PREPARATION_POLICY_MISMATCH", "refused"},
+		{"workspace", &processsvc.Failure{Code: "PROCESS_PREPARATION_WORKSPACE_STALE"}, "PROCESS_PREPARATION_WORKSPACE_STALE", "refused"},
+		{"scope", connectorProcessRefusal("PROCESS_PREPARATION_SCOPE_REFUSED"), "PROCESS_PREPARATION_SCOPE_REFUSED", "refused"},
+		{"changed-policy", connectorProcessRefusal("PROCESS_PREPARATION_AUTHORIZATION_CHANGED"), "PROCESS_PREPARATION_AUTHORIZATION_CHANGED", "refused"},
+		{"deadline", fmt.Errorf("synthetic token=fixture-private: %w", context.DeadlineExceeded), "PROCESS_PREPARATION_DEADLINE", "refused"},
+		{"cancelled", context.Canceled, "PROCESS_CANCELLED", "refused"},
+		{"authorization", authority.Fail("AUTHORITY_COMPUTER_MISMATCH", "/private/fixture token=fixture-private"), "AUTHORITY_COMPUTER_MISMATCH", "refused"},
+		{"native-refused", &processsvc.Failure{Code: "PROCESS_NATIVE_REFUSED"}, "PROCESS_NATIVE_REFUSED", "refused"},
+		{"unknown", &processct.Failure{Code: "PROCESS_PREPARATION_UNKNOWN", Outcome: "outcome_unknown", Retry: "automatic"}, "PROCESS_PREPARATION_UNKNOWN", "outcome_unknown"},
+		{"native-unknown", &processsvc.NativeFailure{Unknown: true}, "PROCESS_OUTCOME_UNKNOWN", "outcome_unknown"},
+		{"raw-secret", errors.New("synthetic token=fixture-private command=private /private/fixture"), "PROCESS_PREPARATION_UNAVAILABLE", "refused"},
+		{"contract-secret", &processct.Failure{Code: "SECRET_TOKEN_FIXTURE_PRIVATE", Outcome: "refused", Retry: "automatic"}, "PROCESS_PREPARATION_UNAVAILABLE", "refused"},
+		{"service-secret", &processsvc.Failure{Code: "/private/fixture token=fixture-private"}, "PROCESS_PREPARATION_UNAVAILABLE", "refused"},
+		{"authority-secret", authority.Fail("SECRET_TOKEN_FIXTURE_PRIVATE", "computer-policy"), "PROCESS_PREPARATION_UNAVAILABLE", "refused"},
+		{"unlisted-unknown", &processsvc.Failure{Code: "SECRET_TOKEN_FIXTURE_PRIVATE", Unknown: true}, "PROCESS_OUTCOME_UNKNOWN", "outcome_unknown"},
+	}
+}
+
+func TestConnectorProcessPreparationPreservesOnlyClosedCodes(t *testing.T) {
+	for _, tc := range connectorPreparationCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, journal, native, _ := connectorProcessFixture(t)
+			selection := func(context.Context, *execution.Lease) (processsvc.Prepared, processsvc.ObservationWorkspace, error) {
+				return nil, nil, tc.err
+			}
+			out, err := s.startProcess(context.Background(), s.current, "preparation-operation", "preparation-call", selection)
+			var failure *processct.Failure
+			if out != nil || !errors.As(err, &failure) || failure.Code != tc.code || failure.Outcome != tc.outcome || failure.Retry != "never" || err.Error() != tc.code || journal.reserves != 0 || native.spawns != 0 {
+				t.Fatal("preparation classification was lost or leaked")
+			}
+			if out, err := s.startProcess(context.Background(), s.current, "preparation-operation", "another-call", selection); out != nil || err == nil {
+				t.Fatal("preparation failure permitted replay")
+			}
+		})
 	}
 }

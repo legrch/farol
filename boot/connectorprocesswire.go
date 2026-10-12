@@ -246,7 +246,7 @@ func (s *computerConnector) processMethods(slot *connectorSlot, selectLaunch con
 			out, err := s.startProcess(ctx, slot, r.OperationID, in.CallId, func(ctx context.Context, lease *execution.Lease) (processsvc.Prepared, processsvc.ObservationWorkspace, error) {
 				prepared, workspace, err := selectLaunch(ctx, lease, request)
 				if err != nil || prepared == nil || workspace == nil {
-					return nil, nil, connectorProcessRefusal("PROCESS_PREPARATION_UNAVAILABLE")
+					return nil, nil, connectorPreparationFailure(err)
 				}
 				seal := prepared.Seal()
 				cwd := seal.Root
@@ -254,7 +254,7 @@ func (s *computerConnector) processMethods(slot *connectorSlot, selectLaunch con
 					cwd += "/" + request.RelativeCwd
 				}
 				if seal.WorkspaceID != request.WorkspaceID || seal.Cwd != cwd || seal.Write != request.Write {
-					return nil, nil, connectorProcessRefusal("PROCESS_PREPARATION_UNAVAILABLE")
+					return nil, nil, connectorProcessRefusal("PROCESS_PREPARATION_SCOPE_REFUSED")
 				}
 				return prepared, workspace, nil
 			})

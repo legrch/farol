@@ -2,6 +2,7 @@ package boot
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync"
 
@@ -52,6 +53,55 @@ func connectorProcessRefusal(code string) error {
 
 func connectorProcessUnknown() error {
 	return &processct.Failure{Code: "PROCESS_OUTCOME_UNKNOWN", Outcome: "outcome_unknown", Retry: "never"}
+}
+
+// Preparation never discloses an underlying message, command, path or source.
+// Only these closed facts can cross the selection wrappers. Uncertain outcomes
+// remain uncertain, and no classification grants permission to retry.
+func connectorPreparationFailure(err error) error {
+	code, unknown := "PROCESS_PREPARATION_UNAVAILABLE", false
+	var contract *processct.Failure
+	var service *processsvc.Failure
+	var denied *authority.Failure
+	var native *processsvc.NativeFailure
+	switch {
+	case errors.As(err, &contract) && contract != nil:
+		code, unknown = contract.Code, contract.Outcome == "outcome_unknown"
+	case errors.As(err, &service) && service != nil:
+		code, unknown = service.Code, service.Unknown
+	case errors.As(err, &denied) && denied != nil:
+		code = denied.Code
+	case errors.As(err, &native) && native != nil:
+		unknown = native.Unknown
+		if unknown {
+			code = "PROCESS_OUTCOME_UNKNOWN"
+		}
+	case errors.Is(err, context.DeadlineExceeded):
+		code = "PROCESS_PREPARATION_DEADLINE"
+	case errors.Is(err, context.Canceled):
+		code = "PROCESS_CANCELLED"
+	}
+	switch code {
+	case "PROCESS_PREPARATION_UNAVAILABLE", "PROCESS_PREPARATION_POLICY_MISMATCH",
+		"PROCESS_PREPARATION_WORKSPACE_STALE", "PROCESS_PREPARATION_SCOPE_REFUSED",
+		"PROCESS_PREPARATION_DEADLINE", "PROCESS_PREPARATION_AUTHORIZATION_CHANGED",
+		"PROCESS_CANCELLED", "PROCESS_NATIVE_REFUSED", "PROCESS_PREPARATION_UNKNOWN", "PROCESS_OUTCOME_UNKNOWN",
+		"AUTHORITY_EXPIRED", "AUTHORITY_OWNER_MISMATCH", "AUTHORITY_TASK_MISMATCH",
+		"AUTHORITY_COMPUTER_MISMATCH", "AUTHORITY_INFLATION_DENIED", "AUTHORITY_NETWORK_DENIED",
+		"AUTHORITY_CAPABILITY_DENIED", "AUTHORITY_COMMAND_DENIED", "AUTHORITY_PATH_DENIED",
+		"AUTHORITY_MUTATION_OWNERSHIP_DENIED", "COMPUTER_AUTHORITY_STORE_UNAVAILABLE",
+		"COMPUTER_PARTICIPANT_NOT_FOUND", "COMPUTER_APPROVAL_NOT_FOUND", "WORKSPACE_REQUEST_CANCELLED":
+	default:
+		code = "PROCESS_PREPARATION_UNAVAILABLE"
+		if unknown {
+			code = "PROCESS_OUTCOME_UNKNOWN"
+		}
+	}
+	outcome := "refused"
+	if unknown {
+		outcome = "outcome_unknown"
+	}
+	return &processct.Failure{Code: code, Outcome: outcome, Retry: "never"}
 }
 
 func (s *computerConnector) processSlot(slot *connectorSlot) bool {
@@ -121,7 +171,7 @@ func (s *computerConnector) startProcess(ctx context.Context, slot *connectorSlo
 	}
 	prepared, workspace, err := selectLaunch(ctx, lease)
 	if err != nil || prepared == nil || workspace == nil {
-		err = connectorProcessRefusal("PROCESS_PREPARATION_UNAVAILABLE")
+		err = connectorPreparationFailure(err)
 		finish(err, true)
 		return nil, err
 	}
