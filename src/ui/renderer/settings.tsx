@@ -3248,7 +3248,7 @@ export function InstallOnQuitChoice({ snapshot, facade }: SettingsProps) {
             : confirmed
               ? preference.enabled
                 ? "On. Eligible downloaded updates may install when you quit Farol normally, after safety checks. Farol stays closed."
-                : "Off. Quitting Farol does not install updates. Use Restart & Update to install when you choose."
+                : "Off. Quitting Farol does not install updates. Use Install and Relaunch to install when you choose."
               : "Off. Quit installation preference cannot be confirmed in this session."}
       </p>
       {preference?.status !== "confirmed" && preference?.code && (
@@ -3317,7 +3317,17 @@ function Updates({ snapshot, facade, actions }: PageProps) {
             ? `Downloaded: Farol ${update.version}. Ready to install; this version is not installed yet.`
             : update.phase === "available"
               ? `Available: Farol ${update.version}. Download it when you choose; this version is not installed.`
-              : `${update.phase}${"version" in update ? ` · ${update.version}` : ""}`}
+              : update.phase === "checking"
+                ? "Checking for updates…"
+                : update.phase === "downloading"
+                  ? "Downloading your update. You can keep working."
+                  : update.phase === "applying"
+                    ? "Installing the update…"
+                    : update.phase === "idle"
+                      ? "Farol is ready. Check for a new version whenever you like."
+                      : update.phase === "recovery"
+                        ? "The update needs recovery."
+                        : "The update needs attention."}
         </p>
         {(update.phase === "failed" || update.phase === "unavailable") && (
           <>
@@ -3351,7 +3361,7 @@ function Updates({ snapshot, facade, actions }: PageProps) {
             className="primary"
             onClick={() => facade.overlay("update")}
           >
-            Review update
+            View update
           </button>
           <button
             type="button"
@@ -3375,58 +3385,64 @@ function Updates({ snapshot, facade, actions }: PageProps) {
               void facade.update("check").catch(() => {});
             }}
           >
-            Check for updates once
+            Check for Updates
           </button>
         </div>
-        <p className="description">
-          Review opens the update sheet. Installation, recovery and rollback use
-          its existing integrity and work-admission checks.
-        </p>
       </Group>
-      <Group title="Automatic downloads">
-        <p className="description" role="status">
-          {preference?.status === "confirmed"
-            ? preference.enabled
-              ? "On. Farol downloads eligible updates during scheduled checks. Installation requires Restart & Update or separate consent to install on normal Quit."
-              : "Off. Farol checks for updates, but downloads only when you choose."
-            : "Download preference cannot be confirmed in this session."}
-        </p>
-        {preference?.status !== "confirmed" && preference?.code && (
-          <p className="notice" role="status">
-            {preference.code}
+      <details
+        className="update-options"
+        open={
+          preferenceIntent?.state === "unknown" ||
+          snapshot.intents["update-install-on-quit"]?.state === "unknown"
+        }
+      >
+        <summary>Automatic update settings</summary>
+        <Group title="Automatic downloads">
+          <p className="description" role="status">
+            {preference?.status === "confirmed"
+              ? preference.enabled
+                ? "On. Farol downloads eligible updates during scheduled checks. Installation requires Install and Relaunch or separate consent to install on normal Quit."
+                : "Off. Farol checks for updates, but downloads only when you choose."
+              : "Download preference cannot be confirmed in this session."}
           </p>
-        )}
-        {preferenceIntent?.state === "unknown" && (
-          <p className="notice" role="status">
-            Preference outcome is unknown. Do not repeat this change; review
-            Diagnostics.
-          </p>
-        )}
-        <button
-          type="button"
-          className="subtle"
-          disabled={!preferenceAvailable}
-          onClick={() => {
-            const latest = facade.getSnapshot();
-            const choice = latest.update.automaticUpdatePreference;
-            if (
-              choice?.status !== "confirmed" ||
-              latest.intents["update-automatic-downloads"]?.state ===
-                "pending" ||
-              latest.intents["update-automatic-downloads"]?.state === "unknown"
-            )
-              return;
-            void facade.setAutomaticDownloads(!choice.enabled);
-          }}
-        >
-          {preference?.status === "confirmed" && preference.enabled
-            ? "Turn off automatic downloads"
-            : "Turn on automatic downloads"}
-        </button>
-      </Group>
-      <Group title="Installation on Quit">
-        <InstallOnQuitChoice snapshot={snapshot} facade={facade} />
-      </Group>
+          {preference?.status !== "confirmed" && preference?.code && (
+            <p className="notice" role="status">
+              {preference.code}
+            </p>
+          )}
+          {preferenceIntent?.state === "unknown" && (
+            <p className="notice" role="status">
+              Preference outcome is unknown. Do not repeat this change; review
+              Diagnostics.
+            </p>
+          )}
+          <button
+            type="button"
+            className="subtle"
+            disabled={!preferenceAvailable}
+            onClick={() => {
+              const latest = facade.getSnapshot();
+              const choice = latest.update.automaticUpdatePreference;
+              if (
+                choice?.status !== "confirmed" ||
+                latest.intents["update-automatic-downloads"]?.state ===
+                  "pending" ||
+                latest.intents["update-automatic-downloads"]?.state ===
+                  "unknown"
+              )
+                return;
+              void facade.setAutomaticDownloads(!choice.enabled);
+            }}
+          >
+            {preference?.status === "confirmed" && preference.enabled
+              ? "Turn off automatic downloads"
+              : "Turn on automatic downloads"}
+          </button>
+        </Group>
+        <Group title="Installation on Quit">
+          <InstallOnQuitChoice snapshot={snapshot} facade={facade} />
+        </Group>
+      </details>
     </>
   );
 }

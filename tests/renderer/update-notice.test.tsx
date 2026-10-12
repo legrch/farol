@@ -100,7 +100,7 @@ it("offers only confirmed automatic downloads in the update sheet", async () => 
     "applied",
   );
   expect(host.textContent).toContain(
-    "Installation requires Restart & Update or separate consent",
+    "Installation requires Install and Relaunch or separate consent",
   );
   expect(f.api.installedUpdate).not.toHaveBeenCalledWith({ kind: "restart" });
 });
@@ -237,7 +237,7 @@ it.each([
       view.phase === "available"
         ? "A new version of Farol is available"
         : view.phase === "ready"
-          ? "Ready to update Farol"
+          ? "Update Farol?"
           : "The update did not finish",
     );
     expect(f.api.installedUpdate).toHaveBeenCalledTimes(1);

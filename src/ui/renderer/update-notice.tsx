@@ -62,7 +62,7 @@ export function UpdateNotice({
             : update.phase === "ready"
               ? update.blockedBy
                 ? `Installation has not started. ${updateBlockMessage(update.blockedBy)}`
-                : "Downloaded, not installed. Restart & Update when you choose; your work continues."
+                : "Ready to install. Farol will restart when you choose."
               : "A new version is available when you’re ready."}
         </p>
         <button onClick={() => facade.overlay("update")}>View update</button>

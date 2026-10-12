@@ -551,7 +551,7 @@ function Search({
 }
 const updateSheetTitles: Record<WindowSnapshot["update"]["phase"], string> = {
   available: "A new version of Farol is available",
-  ready: "Ready to update Farol",
+  ready: "Update Farol?",
   failed: "The update did not finish",
   recovery: "Farol update recovery",
   checking: "Checking for Farol updates",
@@ -595,9 +595,9 @@ function Update({
   const localDismiss = !release || disabled || update.deferred;
   const stateCopy =
     update.phase === "ready"
-      ? `Farol ${update.version} is downloaded and ready; it is not installed yet.`
+      ? `Version ${update.version} is ready. Farol will close briefly and reopen after installation.`
       : update.phase === "available"
-        ? `Farol ${update.version} is available; it is not downloaded or installed yet.`
+        ? `Version ${update.version} is available to download.`
         : update.phase === "failed"
           ? updateResultMessage("failed", update.recoveryRequired, update.code)
           : update.phase === "unavailable"
@@ -671,59 +671,71 @@ function Update({
           <code>{update.code}</code>
         </details>
       )}
-      {(update.phase === "available" || update.phase === "ready") && (
-        <div className="update-preference">
-          <div className="copy">
-            <strong>Automatic downloads</strong>
-            <p className="description" role="status">
-              {preference?.status === "confirmed"
-                ? preference.enabled
-                  ? "Future eligible updates download during scheduled checks. Installation requires Restart & Update or separate consent to install on normal Quit."
-                  : "Future updates download only when you choose."
-                : "Automatic download preference cannot be confirmed in this session."}
-            </p>
-          </div>
-          <button
-            type="button"
-            disabled={
-              disabled ||
-              preference?.status !== "confirmed" ||
-              preferenceIntent?.state === "pending" ||
-              preferenceIntent?.state === "unknown" ||
-              snapshot.intents["update-install-on-quit"]?.state === "pending" ||
-              (update.phase === "ready" &&
-                Boolean(update.blockedBy?.includes("UNKNOWN")))
-            }
-            onClick={() => {
-              const latest = facade.getSnapshot();
-              const choice = latest.update.automaticUpdatePreference;
-              if (
-                latest.status !== "current" ||
-                choice?.status !== "confirmed" ||
-                latest.intents["update-automatic-downloads"]?.state ===
-                  "pending" ||
-                latest.intents["update-automatic-downloads"]?.state ===
-                  "unknown"
-              )
-                return;
-              void facade.setAutomaticDownloads(!choice.enabled);
-            }}
-          >
-            {preference?.status === "confirmed" && preference.enabled
-              ? "Turn off automatic downloads"
-              : "Turn on automatic downloads"}
-          </button>
-          {preferenceIntent?.state === "unknown" && (
-            <p role="alert">Preference outcome unknown. Do not retry.</p>
+      {release && (
+        <details
+          className="update-options"
+          open={
+            preferenceIntent?.state === "unknown" ||
+            snapshot.intents["update-install-on-quit"]?.state === "unknown"
+          }
+        >
+          <summary>Update settings</summary>
+          {(update.phase === "available" || update.phase === "ready") && (
+            <div className="update-preference">
+              <div className="copy">
+                <strong>Automatic downloads</strong>
+                <p className="description" role="status">
+                  {preference?.status === "confirmed"
+                    ? preference.enabled
+                      ? "Future eligible updates download during scheduled checks. Installation requires Install and Relaunch or separate consent to install on normal Quit."
+                      : "Future updates download only when you choose."
+                    : "Automatic download preference cannot be confirmed in this session."}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={
+                  disabled ||
+                  preference?.status !== "confirmed" ||
+                  preferenceIntent?.state === "pending" ||
+                  preferenceIntent?.state === "unknown" ||
+                  snapshot.intents["update-install-on-quit"]?.state ===
+                    "pending" ||
+                  (update.phase === "ready" &&
+                    Boolean(update.blockedBy?.includes("UNKNOWN")))
+                }
+                onClick={() => {
+                  const latest = facade.getSnapshot();
+                  const choice = latest.update.automaticUpdatePreference;
+                  if (
+                    latest.status !== "current" ||
+                    choice?.status !== "confirmed" ||
+                    latest.intents["update-automatic-downloads"]?.state ===
+                      "pending" ||
+                    latest.intents["update-automatic-downloads"]?.state ===
+                      "unknown"
+                  )
+                    return;
+                  void facade.setAutomaticDownloads(!choice.enabled);
+                }}
+              >
+                {preference?.status === "confirmed" && preference.enabled
+                  ? "Turn off automatic downloads"
+                  : "Turn on automatic downloads"}
+              </button>
+              {preferenceIntent?.state === "unknown" && (
+                <p role="alert">Preference outcome unknown. Do not retry.</p>
+              )}
+            </div>
           )}
-        </div>
-      )}
-      {(update.phase === "available" || update.phase === "ready") && (
-        <div className="update-preference">
-          <div className="copy">
-            <InstallOnQuitChoice snapshot={snapshot} facade={facade} />
-          </div>
-        </div>
+          {(update.phase === "available" || update.phase === "ready") && (
+            <div className="update-preference">
+              <div className="copy">
+                <InstallOnQuitChoice snapshot={snapshot} facade={facade} />
+              </div>
+            </div>
+          )}
+        </details>
       )}
       {recovery ? (
         <p className="description">
@@ -744,11 +756,6 @@ function Update({
           Download the verified package when you choose. This does not restart
           Farol or interrupt current work.
         </p>
-      ) : update.phase === "ready" ? (
-        <p className="description">
-          Restart &amp; Update will quit Farol, install version {update.version}{" "}
-          and restart into the new version after a successful update.
-        </p>
       ) : null}
       {blockedBy && (
         <div className="update-block" role="alert">
@@ -766,7 +773,7 @@ function Update({
           </details>
         </div>
       )}
-      <div className="update-check">
+      <div className="update-check" hidden={!canCheck}>
         <button
           disabled={disabled || !canCheck}
           onClick={() => {
@@ -862,7 +869,7 @@ function Update({
               disabled={disabled || update.blockedBy !== null}
               onClick={() => void facade.update("restart")}
             >
-              Restart &amp; Update
+              Install and Relaunch
             </button>
           </>
         )}
@@ -892,10 +899,6 @@ function Update({
             </button>
           )}
       </div>
-      <p className="update-policy-strip">
-        Automatic installation and interruption are unavailable. Review current
-        work before restarting or restoring the previous version.
-      </p>
       {(("notice" in update && update.notice?.blockedBy) ||
         snapshot.intents["update-notice"]?.state === "unknown") && (
         <p role="alert">
@@ -1286,39 +1289,41 @@ export function Shell() {
             <Icon name="attention" />
           </button>
         )}
-        {updateRailLabel && (
+        <div className="rail-footer">
+          {updateRailLabel && (
+            <button
+              className="update-action"
+              aria-label={updateRailLabel}
+              title={updateRailLabel}
+              onClick={() => facade.overlay("update")}
+            >
+              <Icon
+                name={
+                  state.update.phase === "failed" ||
+                  state.update.phase === "recovery"
+                    ? "attention"
+                    : "download"
+                }
+              />
+              {"notice" in state.update &&
+                state.update.notice &&
+                !state.update.notice.seen && (
+                  <span className="update-dot" aria-hidden="true" />
+                )}
+            </button>
+          )}
           <button
-            className="update-action"
-            aria-label={updateRailLabel}
-            title={updateRailLabel}
-            onClick={() => facade.overlay("update")}
+            className="rail-bottom"
+            aria-label="Settings"
+            title="Settings"
+            aria-current={settings ? "page" : undefined}
+            onClick={() =>
+              facade.navigate({ area: "settings", page: "appearance" })
+            }
           >
-            <Icon
-              name={
-                state.update.phase === "failed" ||
-                state.update.phase === "recovery"
-                  ? "attention"
-                  : "download"
-              }
-            />
-            {"notice" in state.update &&
-              state.update.notice &&
-              !state.update.notice.seen && (
-                <span className="update-dot" aria-hidden="true" />
-              )}
+            <Icon name="settings" />
           </button>
-        )}
-        <button
-          className="rail-bottom"
-          aria-label="Settings"
-          title="Settings"
-          aria-current={settings ? "page" : undefined}
-          onClick={() =>
-            facade.navigate({ area: "settings", page: "appearance" })
-          }
-        >
-          <Icon name="settings" />
-        </button>
+        </div>
       </nav>
       {sideVisible && (
         <aside

@@ -893,7 +893,7 @@ it("R24 refused/unavailable update remains honest and review is dismissible", as
     });
     c.overlay("update");
   });
-  expect(button(host, "Restart & Update").disabled).toBe(true);
+  expect(button(host, "Install and Relaunch").disabled).toBe(true);
   expect(host.textContent).toContain("WORK_PENDING");
   await act(async () => button(host, "Close").click());
   expect(c.getSnapshot().overlay).toBe("none");
@@ -968,7 +968,7 @@ it("R16 R23 R24 distinct update controls preserve exact operations and pending f
     blockedBy: null,
   };
   await act(async () => f.emit("update", ready));
-  await act(async () => button(host, "Restart & Update").click());
+  await act(async () => button(host, "Install and Relaunch").click());
   expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "restart" });
   await act(async () => {
     f.emit("update", ready);
@@ -1003,7 +1003,7 @@ it("offers Download only for a current available release", async () => {
     });
     c.overlay("update");
   });
-  expect(host.textContent).toContain("not downloaded or installed yet");
+  expect(host.textContent).toContain("is available to download");
   expect(document.activeElement).toBe(button(host, "Remind Me Later"));
   await act(async () => button(host, "Download Update").click());
   expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "download" });
@@ -1029,6 +1029,8 @@ it("keeps the update indicator in the rail only while an update needs attention"
   const rail = button(host.querySelector(".rail")!, "Update available");
   await act(async () => rail.click());
   expect(c.getSnapshot().overlay).toBe("update");
+  expect(rail.parentElement).toBe(host.querySelector(".rail-footer"));
+  expect(rail.nextElementSibling?.getAttribute("aria-label")).toBe("Settings");
   await act(async () => {
     c.overlay("none");
     f.emit("update", { phase: "idle", checkedAt: 42 });
@@ -1056,14 +1058,14 @@ it.each([
   [
     { phase: "available", version: "1.0", deferred: false },
     "A new version of Farol is available",
-    "is available; it is not downloaded or installed yet",
+    "is available to download",
     ["Skip This Version", "Remind Me Later", "Download Update"],
   ],
   [
     { phase: "ready", version: "1.0", deferred: false, blockedBy: null },
-    "Ready to update Farol",
-    "is downloaded and ready; it is not installed yet",
-    ["Remind Me Later", "Restart & Update"],
+    "Update Farol?",
+    "is ready. Farol will close briefly and reopen after installation.",
+    ["Remind Me Later", "Install and Relaunch"],
   ],
   [
     { phase: "checking" },
@@ -1153,6 +1155,17 @@ it.each([
       "Check for Updates",
     );
     expect(dialog.querySelector(".update-actions .update-check")).toBeNull();
+    if (update.phase === "available" || update.phase === "ready") {
+      expect(
+        dialog.querySelector<HTMLDetailsElement>(".update-options")?.open,
+      ).toBe(false);
+      expect(dialog.querySelector(".update-policy-strip")).toBeNull();
+    }
+    if (update.phase === "ready" || update.phase === "downloading") {
+      expect(dialog.querySelector<HTMLElement>(".update-check")?.hidden).toBe(
+        true,
+      );
+    }
     if (update.phase === "applying") {
       expect(dialog.querySelector('[aria-label="Close"]')).toBeNull();
       expect(document.activeElement).toBe(
@@ -1232,7 +1245,7 @@ it.each([
     expect(block.querySelector("details")?.hasAttribute("open")).toBe(false);
     const action = button(
       host,
-      phase === "ready" ? "Restart & Update" : "Recover",
+      phase === "ready" ? "Install and Relaunch" : "Recover",
     );
     expect(action.disabled).toBe(true);
     expect(button(host, "Check for Updates").disabled).toBe(!canCheck);
@@ -2383,11 +2396,11 @@ it("B04 an ordinary successful target update explains restart with its available
   });
   const copy = host.querySelector("dialog")!.textContent!.replace(/\s+/gu, " ");
   expect(copy).toContain(
-    "install version 1.0 and restart into the new version after a successful update",
+    "Version 1.0 is ready. Farol will close briefly and reopen after installation.",
   );
   expect(copy).not.toContain("stays closed");
-  expect(button(host, "Restart & Update").disabled).toBe(false);
-  await act(async () => button(host, "Restart & Update").click());
+  expect(button(host, "Install and Relaunch").disabled).toBe(false);
+  await act(async () => button(host, "Install and Relaunch").click());
   expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "restart" });
 });
 it("B04 distinguishes installed and downloaded versions and refuses an unknown-state Check", async () => {
@@ -2404,13 +2417,13 @@ it("B04 distinguishes installed and downloaded versions and refuses an unknown-s
   const text = host.querySelector("dialog")!.textContent!;
   expect(text).toContain("Installed: Farol 0.1.8-owner.beta.1 (build 10)");
   expect(text).toContain(
-    "Farol 0.2.0-owner.beta.4 is downloaded and ready; it is not installed yet.",
+    "Version 0.2.0-owner.beta.4 is ready. Farol will close briefly and reopen after installation.",
   );
   expect(text).toContain("Installation has not started");
   expect(text).toContain("Do not retry this update action");
   expect(text).toContain("Technical code");
   expect(button(host, "Check for Updates").disabled).toBe(true);
-  expect(button(host, "Restart & Update").disabled).toBe(true);
+  expect(button(host, "Install and Relaunch").disabled).toBe(true);
   vi.mocked(f.api.installedUpdate).mockClear();
   await act(async () => button(host, "Check for Updates").click());
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
@@ -2447,7 +2460,7 @@ const boundedUpdateActions = [
   ],
   [
     { phase: "ready", version: "1.0", deferred: false, blockedBy: null },
-    "Restart & Update",
+    "Install and Relaunch",
     "restart",
   ],
 ] satisfies [

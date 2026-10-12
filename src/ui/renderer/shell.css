@@ -309,8 +309,19 @@ kbd {
   border-radius: 0 3px 3px 0;
   background: var(--accent);
 }
-.rail .rail-bottom {
+.rail-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   margin-top: auto;
+}
+.update-options {
+  margin: 16px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.update-options > summary {
+  cursor: pointer;
 }
 .rail .attention-action {
   color: var(--warn);
@@ -1176,12 +1187,6 @@ kbd {
   font-size: 12px;
   white-space: normal;
   overflow-wrap: anywhere;
-}
-.update-policy-strip {
-  font-size: 12px;
-  color: var(--muted);
-  margin: 17px 0 0;
-  line-height: 1.55;
 }
 .update-sheet .update-state:focus-visible {
   outline: 2px solid var(--accent);
