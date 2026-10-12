@@ -1865,6 +1865,159 @@ describe("automatic update preference (ports only; no automatic release acceptan
     },
   );
 
+  it.each([false, true])(
+    "manual discovery with automatic=%s returns without waiting for transfer",
+    async (enabled) => {
+      const { updater, ports } = preferenceFixture(enabled);
+      let finish!: (
+        value: Awaited<ReturnType<InstalledUpdaterPorts["download"]>>,
+      ) => void;
+      ports.download.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
+      await updater.initialize();
+      await updater.manualCheck();
+      if (!enabled) {
+        expect(updater.snapshot().phase).toBe("available");
+        expect(ports.download).not.toHaveBeenCalled();
+        return;
+      }
+      await vi.waitFor(() => expect(ports.download).toHaveBeenCalledTimes(1));
+      expect(updater.snapshot().phase).toBe("downloading");
+      await updater.scheduledCheck();
+      await updater.manualCheck();
+      expect(ports.discover).toHaveBeenCalledTimes(1);
+      expect(ports.download).toHaveBeenCalledTimes(1);
+      finish({ ok: true, update: staged });
+      await vi.waitFor(() => expect(updater.snapshot().phase).toBe("ready"));
+      expect(ports.retain).toHaveBeenCalledExactlyOnceWith(staged);
+      expect(ports.restart).not.toHaveBeenCalled();
+      await updater.close();
+    },
+  );
+
+  it("manual discovery respects postponement and an opt-out during discovery", async () => {
+    const deferred = preferenceFixture(true);
+    deferred.ports.discover.mockResolvedValue({
+      ok: true,
+      available: true,
+      version: staged.manifest.version,
+      buildId: staged.manifest.buildId,
+      deferred: true,
+    });
+    await deferred.updater.initialize();
+    await deferred.updater.manualCheck();
+    expect(deferred.ports.download).not.toHaveBeenCalled();
+    const f = preferenceFixture(true);
+    let finish!: (
+      value: Awaited<ReturnType<InstalledUpdaterPorts["discover"]>>,
+    ) => void;
+    f.ports.discover.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await f.updater.initialize();
+    const checking = f.updater.manualCheck();
+    await vi.waitFor(() => expect(f.ports.discover).toHaveBeenCalledTimes(1));
+    await f.updater.setAutomaticUpdatePreference(false);
+    finish({
+      ok: true,
+      available: true,
+      version: staged.manifest.version,
+      buildId: staged.manifest.buildId,
+      deferred: false,
+    });
+    await checking;
+    expect(f.ports.download).not.toHaveBeenCalled();
+    expect(f.ports.restart).not.toHaveBeenCalled();
+    await f.updater.close();
+  });
+
+  it("manual discovery uses the existing idle admission for full automatic opt-in", async () => {
+    const { updater, ports } = preferenceFixture(true);
+    ports.readAutomaticUpdatePreference.mockResolvedValue({
+      status: "confirmed",
+      enabled: true,
+      scope: "download-and-install",
+    });
+    ports.restart.mockResolvedValue({
+      status: "blocked",
+      code: "UPDATE_BROWSER_BUSY",
+    });
+    await updater.initialize();
+    await updater.manualCheck();
+    await vi.waitFor(() => expect(ports.restart).toHaveBeenCalledTimes(1));
+    expect(updater.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: "UPDATE_BROWSER_BUSY",
+    });
+    expect(ports.retain).toHaveBeenCalledExactlyOnceWith(staged);
+    await updater.close();
+  });
+
+  it("Close drains the original manual automatic transfer and prevents a late restart", async () => {
+    const { updater, ports } = preferenceFixture(true);
+    ports.readAutomaticUpdatePreference.mockResolvedValue({
+      status: "confirmed",
+      enabled: true,
+      scope: "download-and-install",
+    });
+    let finish!: (
+      value: Awaited<ReturnType<InstalledUpdaterPorts["download"]>>,
+    ) => void;
+    ports.download.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await updater.initialize();
+    await updater.manualCheck();
+    await vi.waitFor(() => expect(ports.download).toHaveBeenCalledTimes(1));
+    let drained = false;
+    const closing = updater.close().then(() => {
+      drained = true;
+    });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    finish({ ok: true, update: staged });
+    await closing;
+    expect(ports.download).toHaveBeenCalledTimes(1);
+    expect(ports.restart).not.toHaveBeenCalled();
+    expect(
+      ports.publish.mock.calls.filter(([view]) => view.phase === "ready"),
+    ).toHaveLength(0);
+  });
+
+  it("manual preparation preserves an unknown transfer without automatic replay", async () => {
+    const { updater, ports, advance } = preferenceFixture(true);
+    ports.download.mockResolvedValue({
+      ok: false,
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      recoveryRequired: true,
+    });
+    await updater.initialize();
+    await updater.manualCheck();
+    await vi.waitFor(() =>
+      expect(updater.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: true,
+      }),
+    );
+    advance(UPDATE_RECHECK_MS);
+    await updater.manualCheck();
+    await updater.scheduledCheck();
+    expect(ports.discover).toHaveBeenCalledTimes(1);
+    expect(ports.download).toHaveBeenCalledTimes(1);
+    expect(ports.restart).not.toHaveBeenCalled();
+    await updater.close();
+  });
+
   it("keeps transitional callers without a preference port check-only", async () => {
     const { updater, ports } = fixture();
     await updater.initialize();

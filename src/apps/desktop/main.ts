@@ -840,7 +840,7 @@ async function installedUpdateCommand(
   const command = InstalledUpdateCommandSchema.safeParse(value);
   if (!command.success || !installedUpdater || quitInProgress)
     return installedUpdateView;
-  if (command.data.kind === "check") await installedUpdater.check(true);
+  if (command.data.kind === "check") await installedUpdater.manualCheck();
   else if (command.data.kind === "download") await installedUpdater.download();
   else if (command.data.kind === "skip") await installedUpdater.skip();
   else if (command.data.kind === "later") await installedUpdater.later();

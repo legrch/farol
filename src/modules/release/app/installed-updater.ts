@@ -839,6 +839,41 @@ export class InstalledUpdater {
     await this.restart();
   }
 
+  /** Discover explicitly; an existing opt-in also prepares this fresh candidate. */
+  async manualCheck(): Promise<void> {
+    const preference = this.automaticPreference;
+    const previousCandidate = this.available;
+    await this.check(true);
+    const candidate = this.available;
+    if (
+      preference.status === "confirmed" &&
+      preference.enabled &&
+      candidate !== null &&
+      candidate !== previousCandidate
+    ) {
+      // The check reply must not wait for a large transfer. download() owns its
+      // existing busy/drain lifetime, progress, retained result and Quit fence.
+      void this.prepareManualCandidate(candidate);
+    }
+  }
+
+  private async prepareManualCandidate(
+    candidate: Readonly<{ version: string; buildId: string }>,
+  ): Promise<void> {
+    if (
+      this.isClosing() ||
+      this.preferenceWriting ||
+      this.automaticPreference.status !== "confirmed" ||
+      !this.automaticPreference.enabled ||
+      this.available !== candidate ||
+      this.view.phase !== "available" ||
+      this.view.deferred
+    )
+      return;
+    await this.download();
+    await this.installWhenIdle();
+  }
+
   async check(manual = false): Promise<void> {
     // A known admission refusal launched no helper. Let an explicit check
     // restore the restart action; restart must still acquire every live fence.
