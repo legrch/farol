@@ -707,7 +707,7 @@ function Update({
             <p className="update-notes">{update.notes}</p>
           </details>
         )}
-      {(!recoveryMode || recovery) &&
+      {recoveryMode &&
         (update.phase === "failed" || update.phase === "unavailable") &&
         (recovery || !isConfirmedBrowserBlock(update.code)) && (
           <details className="update-technical-code">
@@ -763,10 +763,12 @@ function Update({
                 ? updateBlockMessage(blockedBy)
                 : "Review Diagnostics before restarting."}
             </p>
-            <details>
-              <summary>Technical code</summary>
-              <code>{blockedBy}</code>
-            </details>
+            {recoveryMode && (
+              <details>
+                <summary>Technical code</summary>
+                <code>{blockedBy}</code>
+              </details>
+            )}
           </div>
         )}
       <div
@@ -829,7 +831,7 @@ function Update({
                   void facade.update("download");
               }}
             >
-              Download and Install
+              Download Update
             </button>
           </>
         )}
@@ -870,15 +872,19 @@ function Update({
               Recover
             </button>
           )}
-        {!recoveryMode && recovery && (
-          <button
-            onClick={() =>
-              facade.navigate({ area: "settings", page: "diagnostics" })
-            }
-          >
-            Review Diagnostics
-          </button>
-        )}
+        {!recoveryMode &&
+          (recovery ||
+            !!blockedBy ||
+            update.phase === "failed" ||
+            update.phase === "unavailable") && (
+            <button
+              onClick={() =>
+                facade.navigate({ area: "settings", page: "diagnostics" })
+              }
+            >
+              Review Diagnostics
+            </button>
+          )}
         {recoveryMode &&
           (update.phase === "idle" ||
             (update.phase === "failed" && !update.recoveryRequired)) &&

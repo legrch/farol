@@ -933,7 +933,8 @@ it("R24 refused/unavailable update remains honest and review is dismissible", as
     c.overlay("update");
   });
   expect(button(host, "Install and Relaunch").disabled).toBe(true);
-  expect(host.textContent).toContain("WORK_PENDING");
+  expect(host.textContent).not.toContain("WORK_PENDING");
+  expect(button(host, "Review Diagnostics").disabled).toBe(false);
   await act(async () => button(host, "Close").click());
   expect(c.getSnapshot().overlay).toBe("none");
 });
@@ -1048,7 +1049,7 @@ it("offers Download only for a current available release", async () => {
   });
   expect(host.textContent).toContain("is available to download");
   expect(document.activeElement).toBe(button(host, "Remind Me Later"));
-  await act(async () => button(host, "Download and Install").click());
+  await act(async () => button(host, "Download Update").click());
   expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "download" });
   await act(async () => f.emit("update", { phase: "idle", checkedAt: 10 }));
   expect((await c.update("download")).state).toBe("refused");
@@ -1102,7 +1103,7 @@ it.each([
     { phase: "available", version: "1.0", deferred: false },
     "Update available",
     "is available to download",
-    ["Skip This Version", "Remind Me Later", "Download and Install"],
+    ["Skip This Version", "Remind Me Later", "Download Update"],
   ],
   [
     { phase: "ready", version: "1.0", deferred: false, blockedBy: null },
@@ -1138,13 +1139,13 @@ it.each([
     { phase: "unavailable", code: "UPDATE_STATUS_UNAVAILABLE" },
     "Farol updates unavailable",
     "cannot confirm update availability",
-    ["Dismiss"],
+    ["Dismiss", "Review Diagnostics"],
   ],
   [
     { phase: "failed", code: "UPDATE_FAILED", recoveryRequired: false },
     "The update did not finish",
     "The update did not finish",
-    ["Dismiss"],
+    ["Dismiss", "Review Diagnostics"],
   ],
   [
     {
@@ -1183,8 +1184,8 @@ it.each([
       const technical = dialog.querySelector<HTMLDetailsElement>(
         ".update-technical-code",
       );
-      expect(technical?.open).toBe(false);
-      expect(technical?.querySelector("code")?.textContent).toBe(update.code);
+      expect(technical).toBeNull();
+      expect(c.getSnapshot().update).toMatchObject({ code: update.code });
     }
     expect(dialog.querySelector(".update-installed")).toBeNull();
     expect(
@@ -1239,9 +1240,13 @@ it("describes an uncertain update as requiring recovery without claiming the ins
   expect(dialog.querySelector(".update-state")?.textContent).not.toContain(
     "UPDATE_HANDOFF_UNKNOWN",
   );
-  expect(dialog.querySelector(".update-technical-code code")?.textContent).toBe(
-    "UPDATE_HANDOFF_UNKNOWN",
-  );
+  expect(dialog.querySelector(".update-technical-code")).toBeNull();
+  await act(async () => button(dialog, "Review Diagnostics").click());
+  expect(c.getSnapshot().destination.page).toBe("diagnostics");
+  await act(async () => button(host, "Review recovery options").click());
+  expect(
+    host.querySelector("dialog .update-technical-code code")?.textContent,
+  ).toBe("UPDATE_HANDOFF_UNKNOWN");
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
 });
 it("keeps real recovery refusals visible and fenced", async () => {
@@ -1340,9 +1345,8 @@ it.each(["UPDATE_BROWSER_RELEASE_UNCONFIRMED", "UPDATE_STATE_UNREADABLE"])(
     expect(dialog.querySelector(".update-issue p")?.textContent).toContain(
       "Review Diagnostics before restarting.",
     );
-    expect(
-      dialog.querySelector(".update-issue details code")?.textContent,
-    ).toBe(blockedBy);
+    expect(dialog.querySelector(".update-issue details")).toBeNull();
+    expect(c.getSnapshot().update).toMatchObject({ blockedBy });
     const install = button(dialog, "Install and Relaunch");
     expect(install.disabled).toBe(true);
     await act(async () => install.click());
@@ -1385,7 +1389,7 @@ it("Updates moves focus to local dismissal when a focused release action becomes
     f.emit("update", { phase: "available", version: "1.0", deferred: false });
     c.overlay("update");
   });
-  const download = button(host, "Download and Install");
+  const download = button(host, "Download Update");
   download.focus();
   await act(async () => download.click());
   expect(download.disabled).toBe(true);
@@ -1394,7 +1398,7 @@ it("Updates moves focus to local dismissal when a focused release action becomes
   expect(c.getSnapshot().intents.update?.state).toBe("unknown");
   await act(async () => button(host, "Continue working").click());
   await act(async () => c.overlay("update"));
-  expect(button(host, "Download and Install").disabled).toBe(true);
+  expect(button(host, "Download Update").disabled).toBe(true);
   expect(document.activeElement).toBe(button(host, "Continue working"));
   expect(f.api.installedUpdate).toHaveBeenCalledTimes(1);
 });
@@ -2657,7 +2661,7 @@ it.each([
       "No previous version is available to restore",
     );
     expect(dialog.textContent).not.toMatch(
-      /Roll Back|Check for Updates|Download and Install|Install and Relaunch|Skip This Version|Remind Me Later|Update settings|What’s new|WORK_PENDING/,
+      /Roll Back|Check for Updates|Download Update|Install and Relaunch|Skip This Version|Remind Me Later|Update settings|What’s new|WORK_PENDING/,
     );
     expect(dialog.querySelector(".update-check")).toBeNull();
     await act(async () => button(dialog, "Done").click());

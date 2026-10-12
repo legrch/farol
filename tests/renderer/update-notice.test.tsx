@@ -301,7 +301,7 @@ it("a known preference refusal keeps the notice visible and remains inspectable 
   expect(host.querySelector("dialog")?.textContent).not.toContain(
     "Update actions are paused",
   );
-  expect(button(host, "Download and Install").disabled).toBe(false);
+  expect(button(host, "Download Update").disabled).toBe(false);
   expect(f.api.installedUpdate).toHaveBeenCalledTimes(1);
 });
 it("acknowledging a notice never clears an unknown update intention even after a fresh status event", async () => {
@@ -348,9 +348,13 @@ it("unknown release state remains inspectable and cannot be acknowledged", async
   const { host, c, f } = await mount(failed);
   expect(button(host, "Dismiss update notice").disabled).toBe(true);
   await act(async () => button(host, "View update").click());
-  expect(host.querySelector("dialog")?.textContent).toContain(
+  expect(host.querySelector("dialog")?.textContent).not.toContain(
     "UPDATE_HANDOFF_UNKNOWN",
   );
+  expect(button(host, "Review Diagnostics").disabled).toBe(false);
+  expect(c.getSnapshot().update).toMatchObject({
+    code: "UPDATE_HANDOFF_UNKNOWN",
+  });
   expect((await c.update("notice-seen", failed.notice!.key)).state).toBe(
     "refused",
   );
