@@ -31,7 +31,10 @@ export type ReadyUpdate = Readonly<{
   notes?: string;
 }>;
 export type { InstalledUpdateView as UpdateView } from "../domain/installed-update";
-import type { InstalledUpdateView as UpdateView } from "../domain/installed-update";
+import type {
+  InstalledUpdateView as UpdateView,
+  UpdateDownloadProgress,
+} from "../domain/installed-update";
 
 type KnownFailure = Readonly<{
   ok: false;
@@ -88,9 +91,9 @@ export type InstalledUpdaterPorts = Readonly<{
       }>
     | KnownFailure
   >;
-  download(): Promise<
-    Readonly<{ ok: true; update: ReadyUpdate }> | KnownFailure
-  >;
+  download(
+    onProgress?: (progress: UpdateDownloadProgress) => void,
+  ): Promise<Readonly<{ ok: true; update: ReadyUpdate }> | KnownFailure>;
   skip(buildId: string): Promise<Readonly<{ ok: true }> | KnownFailure>;
   defer(buildId: string): Promise<Readonly<{ ok: true }> | KnownFailure>;
   // A supervised transition may select one local archive in composition. This
@@ -850,11 +853,57 @@ export class InstalledUpdater {
     this.available = null;
     this.begin();
     let downloadStarted = false;
+    let observing = true;
+    let lastBytes = -1;
+    let totalBytes: number | undefined;
+    let verifying = false;
+    let lastPublishedAt = -Infinity;
+    const reportProgress = (progress: UpdateDownloadProgress): void => {
+      if (
+        !observing ||
+        this.isClosing() ||
+        this.view.phase !== "downloading" ||
+        verifying
+      )
+        return;
+      if (progress.stage === "transferring") {
+        if (
+          !Number.isSafeInteger(progress.receivedBytes) ||
+          !Number.isSafeInteger(progress.totalBytes) ||
+          progress.receivedBytes < 0 ||
+          progress.receivedBytes > progress.totalBytes ||
+          progress.totalBytes <= 0 ||
+          progress.totalBytes > 2_147_483_648 ||
+          progress.receivedBytes < lastBytes ||
+          (totalBytes !== undefined && progress.totalBytes !== totalBytes)
+        )
+          return;
+        lastBytes = progress.receivedBytes;
+        totalBytes = progress.totalBytes;
+        const now = this.ports.now();
+        if (
+          now >= lastPublishedAt &&
+          now - lastPublishedAt < 250 &&
+          lastBytes !== totalBytes
+        )
+          return;
+        lastPublishedAt = now;
+      } else if (progress.stage === "verifying") {
+        verifying = true;
+      } else return;
+      this.view = { phase: "downloading", progress: { ...progress } };
+      try {
+        this.ports.publish(this.snapshot());
+      } catch {
+        /* Status can be read again. */
+      }
+    };
     try {
       await this.publish({ phase: "downloading" });
       if (this.isClosing()) return;
       downloadStarted = true;
-      const downloaded = await this.ports.download();
+      const downloaded = await this.ports.download(reportProgress);
+      observing = false;
       if (
         downloaded.ok &&
         (downloaded.update.manifest.version !== expected.version ||
@@ -882,6 +931,7 @@ export class InstalledUpdater {
         recoveryRequired: true,
       });
     } finally {
+      observing = false;
       this.finish();
     }
   }

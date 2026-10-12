@@ -56,6 +56,37 @@ function button(host: Element, label: string) {
   if (!found) throw new Error(`BUTTON_MISSING:${label}`);
   return found;
 }
+it("shows measured transfer progress and then verification without offering installation", async () => {
+  const { host, c, f } = await mount();
+  await act(async () => {
+    c.overlay("update");
+    f.emit("update", {
+      phase: "downloading",
+      progress: {
+        stage: "transferring",
+        receivedBytes: 150_000_000,
+        totalBytes: 300_000_000,
+      },
+    });
+  });
+  const dialog = host.querySelector<HTMLDialogElement>("dialog")!;
+  const progress = dialog.querySelector<HTMLProgressElement>("progress")!;
+  expect(progress.value).toBe(150_000_000);
+  expect(progress.max).toBe(300_000_000);
+  expect(progress.getAttribute("aria-label")).toBe("Update download");
+  expect(dialog.textContent).toContain("50% · 150.0 of 300.0 MB");
+  expect(dialog.textContent).not.toContain("Install and Relaunch");
+  await act(async () =>
+    f.emit("update", {
+      phase: "downloading",
+      progress: { stage: "verifying" },
+    }),
+  );
+  expect(dialog.textContent).toContain("Checking the downloaded update");
+  expect(dialog.getAttribute("aria-label")).toBe("Checking Farol update");
+  expect(dialog.querySelector("progress")).toBeNull();
+  expect(dialog.textContent).not.toContain("Install and Relaunch");
+});
 function agentTask(id = "task-1") {
   return {
     ...task(id),

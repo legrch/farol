@@ -78,6 +78,113 @@ function fixture() {
 }
 
 describe("installed update orchestration (port fixture, no native or GitHub acceptance)", () => {
+  it("bounds and throttles original transfer observations without making a package ready", async () => {
+    const f = fixture();
+    let report!: NonNullable<Parameters<InstalledUpdaterPorts["download"]>[0]>;
+    let finish!: (
+      value: Awaited<ReturnType<InstalledUpdaterPorts["download"]>>,
+    ) => void;
+    f.ports.download.mockImplementation((observer) => {
+      report = observer!;
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    });
+    await f.updater.initialize();
+    await f.updater.check(true);
+    const work = f.updater.download();
+    await vi.waitFor(() => expect(report).toBeTypeOf("function"));
+    const emit = (receivedBytes: number, totalBytes = 100) =>
+      report({ stage: "transferring", receivedBytes, totalBytes });
+    emit(10);
+    expect(f.updater.snapshot()).toMatchObject({
+      phase: "downloading",
+      progress: { receivedBytes: 10, totalBytes: 100 },
+    });
+    const publications = f.ports.publish.mock.calls.length;
+    emit(20);
+    expect(f.ports.publish).toHaveBeenCalledTimes(publications);
+    f.advance(250);
+    for (const bytes of [-1, NaN, Infinity, 1.5, 101, 9]) emit(bytes);
+    emit(30, 200);
+    expect(f.ports.publish).toHaveBeenCalledTimes(publications);
+    emit(30);
+    expect(f.updater.snapshot()).toMatchObject({
+      progress: { receivedBytes: 30 },
+    });
+    emit(100);
+    expect(f.updater.snapshot()).toMatchObject({
+      phase: "downloading",
+      progress: { receivedBytes: 100 },
+    });
+    expect(f.ports.retain).not.toHaveBeenCalled();
+    report({ stage: "verifying" });
+    emit(100);
+    expect(f.updater.snapshot()).toMatchObject({
+      phase: "downloading",
+      progress: { stage: "verifying" },
+    });
+    finish({ ok: true, update: staged });
+    await work;
+    report({ stage: "verifying" });
+    emit(100);
+    expect(f.updater.snapshot()).toMatchObject({ phase: "ready" });
+    expect(f.ports.download).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores progress after Quit and isolates observation failures from the transfer", async () => {
+    const f = fixture();
+    let report!: NonNullable<Parameters<InstalledUpdaterPorts["download"]>[0]>;
+    let finish!: (
+      value: Awaited<ReturnType<InstalledUpdaterPorts["download"]>>,
+    ) => void;
+    f.ports.download.mockImplementation((observer) => {
+      report = observer!;
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    });
+    await f.updater.initialize();
+    await f.updater.check(true);
+    const work = f.updater.download();
+    await vi.waitFor(() => expect(report).toBeTypeOf("function"));
+    f.ports.publish.mockImplementationOnce(() => {
+      throw new Error("window closed");
+    });
+    expect(() =>
+      report({ stage: "transferring", receivedBytes: 1, totalBytes: 10 }),
+    ).not.toThrow();
+    const before = f.updater.snapshot();
+    const close = f.updater.close();
+    report({ stage: "verifying" });
+    expect(f.updater.snapshot()).toEqual(before);
+    finish({ ok: false, code: "UPDATE_INTERRUPTED" });
+    await Promise.all([work, close]);
+    const settled = f.updater.snapshot();
+    report({ stage: "verifying" });
+    expect(f.updater.snapshot()).toEqual(settled);
+    expect(f.ports.restart).not.toHaveBeenCalled();
+  });
+
+  it("validates byte progress on the IPC boundary", () => {
+    const view = (progress: unknown) =>
+      InstalledUpdateViewSchema.safeParse({ phase: "downloading", progress })
+        .success;
+    expect(
+      view({ stage: "transferring", receivedBytes: 50, totalBytes: 100 }),
+    ).toBe(true);
+    expect(view({ stage: "verifying" })).toBe(true);
+    for (const progress of [
+      { stage: "transferring", receivedBytes: 101, totalBytes: 100 },
+      { stage: "transferring", receivedBytes: 0, totalBytes: 0 },
+      { stage: "transferring", receivedBytes: -1, totalBytes: 100 },
+      { stage: "transferring", receivedBytes: 1.5, totalBytes: 100 },
+      { stage: "transferring", receivedBytes: 1, totalBytes: 2_147_483_649 },
+      { stage: "verifying", receivedBytes: 100 },
+    ])
+      expect(view(progress)).toBe(false);
+  });
+
   it("does not dispatch release effects after Quit closes a pending status publication", async () => {
     const check = fixture();
     await check.updater.initialize();

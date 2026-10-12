@@ -144,6 +144,7 @@ export type GithubReleasePorts = Readonly<{
   download(
     url: string,
     maxBytes: number,
+    onProgress?: (receivedBytes: number) => void,
   ): Promise<Readonly<{ ok: true; value: DownloadedArchive }> | PortFailure>;
   // Must rehash the staged bytes and verify the extracted package with the existing package verifier.
   verifyPackage(

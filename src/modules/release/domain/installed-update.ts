@@ -4,6 +4,15 @@ export type UpdateNotice = Readonly<{
   blockedBy: string | null;
 }>;
 
+// Observational only: transferred bytes never establish a verified package.
+export type UpdateDownloadProgress =
+  | Readonly<{
+      stage: "transferring";
+      receivedBytes: number;
+      totalBytes: number;
+    }>
+  | Readonly<{ stage: "verifying" }>;
+
 type UpdatePhaseView =
   | Readonly<{ phase: "unavailable"; code: string }>
   | Readonly<{
@@ -13,7 +22,8 @@ type UpdatePhaseView =
       blockedBy?: string;
     }>
   | Readonly<{ phase: "recovery"; version: string; blockedBy: string | null }>
-  | Readonly<{ phase: "checking" | "downloading" }>
+  | Readonly<{ phase: "checking" }>
+  | Readonly<{ phase: "downloading"; progress?: UpdateDownloadProgress }>
   | Readonly<{
       phase: "available";
       version: string;

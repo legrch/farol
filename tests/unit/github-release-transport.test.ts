@@ -191,6 +191,41 @@ function transport(root: string, openHttps: OpenHttps) {
 }
 
 describe("GitHub release feed URL policy (pure scripted responses)", () => {
+  it("reports staged bytes and keeps a throwing observer outside transfer authority", async () => {
+    const root = await privateRoot();
+    const { instance } = transport(
+      root,
+      scripted(response(200, [Buffer.from("ab"), Buffer.from("cde")])),
+    );
+    const observed: number[] = [];
+    const downloaded = await instance.download(asset, 5, (bytes) => {
+      observed.push(bytes);
+      throw new Error("status observer failed");
+    });
+    expect(observed).toEqual([2, 5]);
+    expect(downloaded).toMatchObject({
+      ok: true,
+      value: {
+        size: 5,
+        sha256: createHash("sha256").update("abcde").digest("hex"),
+      },
+    });
+  });
+
+  it("does not report rejected oversized chunks as staged progress", async () => {
+    const root = await privateRoot();
+    const { instance } = transport(
+      root,
+      scripted(response(200, [Buffer.from("ab"), Buffer.from("cdef")])),
+    );
+    const progress = vi.fn();
+    expect(await instance.download(asset, 5, progress)).toMatchObject({
+      ok: false,
+      kind: "oversize",
+    });
+    expect(progress.mock.calls).toEqual([[2]]);
+  });
+
   it("reads only the new catalogue and its pinned manifest redirect", async () => {
     const openHttps = scripted(
       response(200, [Buffer.from("[]")]),

@@ -27,6 +27,10 @@ import { computerSetup } from "./computer-setup";
 import { visibleSetupSection, type SetupSection } from "./setup-checklist";
 import { commandAllowed, dependencyFences } from "./command-eligibility";
 import { updateCheckAllowed } from "./update-eligibility";
+import {
+  UpdateDownloadProgress,
+  updateDownloadMessage,
+} from "./update-download";
 import { canSetInstallOnQuitPreference } from "./controller";
 import {
   updateBlockMessage,
@@ -3320,7 +3324,7 @@ function Updates({ snapshot, facade, actions }: PageProps) {
               : update.phase === "checking"
                 ? "Checking for updates…"
                 : update.phase === "downloading"
-                  ? "Downloading your update. You can keep working."
+                  ? updateDownloadMessage(update)
                   : update.phase === "applying"
                     ? "Installing the update…"
                     : update.phase === "idle"
@@ -3329,6 +3333,9 @@ function Updates({ snapshot, facade, actions }: PageProps) {
                         ? "The update needs recovery."
                         : "The update needs attention."}
         </p>
+        {update.phase === "downloading" && (
+          <UpdateDownloadProgress update={update} />
+        )}
         {(update.phase === "failed" || update.phase === "unavailable") && (
           <>
             <p className="notice" role="status">

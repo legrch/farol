@@ -96,6 +96,16 @@ export const UpdateNoticeSchema = z.strictObject({
   seen: z.boolean(),
   blockedBy: Code.nullable(),
 });
+export const UpdateDownloadProgressSchema = z.discriminatedUnion("stage", [
+  z
+    .strictObject({
+      stage: z.literal("transferring"),
+      receivedBytes: z.number().int().nonnegative().max(2_147_483_648),
+      totalBytes: z.number().int().positive().max(2_147_483_648),
+    })
+    .refine((value) => value.receivedBytes <= value.totalBytes),
+  z.strictObject({ stage: z.literal("verifying") }),
+]);
 export const InstalledUpdateViewSchema = z.discriminatedUnion("phase", [
   z.strictObject({
     ...PreferenceProjection,
@@ -122,6 +132,7 @@ export const InstalledUpdateViewSchema = z.discriminatedUnion("phase", [
   z.strictObject({
     ...PreferenceProjection,
     phase: z.literal("downloading"),
+    progress: UpdateDownloadProgressSchema.optional(),
   }),
   z.strictObject({
     ...PreferenceProjection,

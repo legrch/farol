@@ -1655,3 +1655,16 @@ kbd {
   border-radius: 50%;
   background: var(--accent);
 }
+
+.update-download-progress {
+  display: grid;
+  gap: 6px;
+  margin-block: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.update-download-progress progress {
+  width: 100%;
+  height: 6px;
+  accent-color: var(--accent);
+}

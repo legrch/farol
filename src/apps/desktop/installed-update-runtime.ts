@@ -1340,8 +1340,12 @@ async function createRuntime(
   const checkedTransport = {
     fetchJson: (url: string, maximum: number) =>
       transport.fetchJson(url, maximum),
-    download: async (url: string, maximum: number) => {
-      const result = await transport.download(url, maximum);
+    download: async (
+      url: string,
+      maximum: number,
+      onProgress?: (receivedBytes: number) => void,
+    ) => {
+      const result = await transport.download(url, maximum, onProgress);
       if (result.ok) stagedDownloadHandle = result.value.handle;
       if (!result.ok && "certainty" in result && result.certainty === "unknown")
         transportOutcomeUnknown = true;
@@ -2570,7 +2574,7 @@ async function createRuntime(
           }
         : { ok: true, available: false };
     },
-    download: async () => {
+    download: async (onProgress) => {
       if (!candidate) return known("UPDATE_CANDIDATE_MISSING");
       const selected = candidate;
       const staged = await stageSelectedUpdate(
@@ -2578,7 +2582,18 @@ async function createRuntime(
         (verifyPackage) =>
           downloadAndVerifyGithubUpdate(selected, {
             ...checkedTransport,
-            verifyPackage,
+            download: (url, maximum) =>
+              checkedTransport.download(url, maximum, (receivedBytes) =>
+                onProgress?.({
+                  stage: "transferring",
+                  receivedBytes,
+                  totalBytes: selected.manifest.archiveSize,
+                }),
+              ),
+            verifyPackage: (handle, manifest) => {
+              onProgress?.({ stage: "verifying" });
+              return verifyPackage(handle, manifest);
+            },
           }),
       );
       return staged.ok && selected.notes

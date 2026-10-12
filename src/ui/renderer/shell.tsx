@@ -28,6 +28,10 @@ import { designIconPath, designIconViewBox } from "./design-icons";
 import { UpdateNotice, acknowledgeUpdateNotice } from "./update-notice";
 import { updateCheckAllowed } from "./update-eligibility";
 import {
+  UpdateDownloadProgress,
+  updateDownloadMessage,
+} from "./update-download";
+import {
   updateBlockMessage,
   updateResultMessage,
 } from "../update-block-message";
@@ -609,7 +613,7 @@ function Update({
                 : update.phase === "checking"
                   ? "Checking for updates…"
                   : update.phase === "downloading"
-                    ? "Downloading update in the background. Keep working."
+                    ? updateDownloadMessage(update)
                     : update.checkedAt === null
                       ? "No update check yet."
                       : "You can check for updates.";
@@ -628,7 +632,11 @@ function Update({
   }, [localDismiss, update.phase]);
   return (
     <Overlay
-      title={updateSheetTitles[update.phase]}
+      title={
+        update.phase === "downloading" && update.progress?.stage === "verifying"
+          ? "Checking Farol update"
+          : updateSheetTitles[update.phase]
+      }
       onClose={() => facade.overlay("none")}
       dismissible={update.phase !== "applying"}
       className="update-sheet"
@@ -650,6 +658,9 @@ function Update({
           >
             {stateCopy}
           </p>
+          {update.phase === "downloading" && (
+            <UpdateDownloadProgress update={update} />
+          )}
           <p className="update-installed">
             {snapshot.status === "current" && snapshot.installedVersion
               ? `Installed: Farol ${snapshot.installedVersion.version}${snapshot.installedVersion.buildVersion ? ` (build ${snapshot.installedVersion.buildVersion})` : ""}.`

@@ -1713,6 +1713,44 @@ describe("installed updater composition (disposable filesystem and mocked native
     },
   );
 
+  it("projects measured bytes through the installed runtime and marks verification separately", async () => {
+    const completed = await mocks.download();
+    const opts = options();
+    mocks.archiveDownload.mockImplementation(async (_url, _maximum, report) => {
+      report(50);
+      return { ok: true, value: { handle: path.join(root, "archive.zip") } };
+    });
+    mocks.download.mockImplementation(async (_candidate, ports) => {
+      await ports.download("fixture-url", manifest.archiveSize);
+      expect(opts.publish).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          phase: "downloading",
+          progress: {
+            stage: "transferring",
+            receivedBytes: 50,
+            totalBytes: 100,
+          },
+        }),
+      );
+      await ports.verifyPackage(path.join(root, "archive.zip"), manifest);
+      expect(opts.publish).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          phase: "downloading",
+          progress: { stage: "verifying" },
+        }),
+      );
+      return completed;
+    });
+    const controller = await createInstalledUpdateRuntime(opts);
+    await controller!.initialize();
+    await controller!.check();
+    await controller!.download();
+    expect(controller!.snapshot()).toMatchObject({ phase: "ready" });
+    expect(mocks.archiveDownload).toHaveBeenCalledTimes(1);
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await controller!.close();
+  });
+
   it("keeps an unconfirmed native verification fenced after the producer exits", async () => {
     mocks.download.mockImplementation(async (_candidate, ports) => {
       await ports.verifyPackage(path.join(root, "archive.zip"), manifest);

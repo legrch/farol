@@ -84,6 +84,7 @@ export type GithubUpdateTransport = GithubReleasePorts &
     download(
       url: string,
       maxBytes: number,
+      onProgress?: (receivedBytes: number) => void,
     ): Promise<TransportResult<DownloadedArchive>>;
     // Local selection is not a GitHub download or package acceptance. The
     // returned handle uses this transport's normal verification/cleanup owner.
@@ -432,7 +433,7 @@ export function createGithubUpdateTransport(
         response.destroy();
       }
     },
-    async download(url, maxBytes) {
+    async download(url, maxBytes, onProgress) {
       if (
         initialKind(url) !== "asset" ||
         !validLimit(maxBytes, MAX_ARCHIVE_BYTES)
@@ -505,6 +506,12 @@ export function createGithubUpdateTransport(
             offset += written.bytesWritten;
           }
           digest.update(chunk);
+          // Renderer/observer failure cannot change the original transfer outcome.
+          try {
+            onProgress?.(bytes);
+          } catch {
+            /* Progress is best effort. */
+          }
         }
         if (result === null) {
           signal.throwIfAborted();
