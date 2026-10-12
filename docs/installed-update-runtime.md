@@ -346,3 +346,20 @@ can reconcile the already-published terminal receipt after a later genuine
 normal Quit, only with the same measured installed/predecessor inode/build pair
 and quarantine. It performs no second copy or swap. Earlier unresolved phases
 retain their original Quit binding.
+
+## Hidden browser idle observation
+
+Retained ChatGPT views receive the current shell viewport before their first
+load, including when Settings or Home conceals them. Layout changes keep that
+viewport current without attaching, showing or focusing the view. A zero-sized
+viewport remains unknown to the idle probe; it is never interpreted as idle.
+
+The exact attachment-entry labels `Add files` and `Add files and more` belong
+to one structural control identity. A simultaneous pair is ambiguous, including
+a disabled duplicate. Either single native button must remain unexpanded,
+unpressed and owned by the composer form. Drafts, attachments, generation,
+unknown enabled actions and absent positive voice readiness still block updates.
+
+`node tests/e2e/chatgpt-update-idle.e2e.mjs` checks real Electron hidden and
+detached viewport behavior with a disposable public-DOM fixture. It does not
+qualify live provider state, installed admission or a completed OTA.

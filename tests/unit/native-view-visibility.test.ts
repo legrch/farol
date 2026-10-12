@@ -288,6 +288,7 @@ const callbackNames = [
   "attachTaskViews",
   "detachTaskViews",
   "disposeTaskView",
+  "currentSurfaceLayout",
   "applyLayout",
   "applyRendererLayout",
   "focusForLayout",
@@ -443,6 +444,23 @@ function desktopFixture() {
 // Integration of the actual main.ts callbacks with the shared layout function.
 // No Electron module, native process, window, filesystem profile, or provider runs.
 describe("desktop layout attachment integration (source callbacks + fake host)", () => {
+  it("sizes a first hidden ChatGPT document without attaching or focusing it", () => {
+    const f = desktopFixture();
+    f.context.section = "settings";
+    f.api.liveChatGptSurfaceFactory("background")({ webPreferences: {} });
+    const view = f.taskViews.get("background")!;
+    expect(view.bounds?.width).toBeGreaterThan(0);
+    expect(view.bounds?.height).toBeGreaterThan(0);
+    expect(view.visible).toBe(false);
+    expect(f.host.children).toEqual([]);
+    expect(f.events.some((event) => event.endsWith(":focus"))).toBe(false);
+    const previous = view.bounds;
+    f.context.sidebarWidth = 240;
+    f.api.applyLayout();
+    expect(view.bounds).not.toEqual(previous);
+    expect(view.visible).toBe(false);
+    expect(f.host.children).toEqual([]);
+  });
   it.each(["computer", "activity", "settings"])(
     "retains a late first load while %s conceals it and shows the same view on return",
     (section) => {
@@ -818,6 +836,7 @@ describe("desktop layout attachment integration (source callbacks + fake host)",
       surface.destroy();
       f.api.applyLayout();
     }).not.toThrow();
-    expect(f.events).toEqual([]);
+    // The other live hidden page is resized; the destroyed view is untouched.
+    expect(f.events).toEqual(["page:bounds"]);
   });
 });

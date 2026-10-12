@@ -129,7 +129,12 @@ function fixture() {
 }
 
 describe("update idle observation on synthetic public DOM", () => {
-  const structuralLabels = ["Add files", "Select ChatGPT model", "Dictate"];
+  const structuralLabels = [
+    "Add files",
+    "Add files and more",
+    "Select ChatGPT model",
+    "Dictate",
+  ];
   const addStructuralControl = (
     f: ReturnType<typeof fixture>,
     label: string,
@@ -149,7 +154,19 @@ describe("update idle observation on synthetic public DOM", () => {
   );
   it("allows all three ordinary structural controls together", () => {
     const f = fixture();
-    structuralLabels.forEach((label) => addStructuralControl(f, label));
+    structuralLabels
+      .filter((label) => label !== "Add files")
+      .forEach((label) => addStructuralControl(f, label));
+    expect(f.run()).toEqual({ state: "idle" });
+  });
+  it("refuses simultaneous old and new attachment entry identities", () => {
+    const f = fixture();
+    addStructuralControl(f, "Add files");
+    const renamed = addStructuralControl(f, "Add files and more");
+    expect(f.run()).toEqual({ state: "unknown" });
+    renamed.disabled = true;
+    expect(f.run()).toEqual({ state: "unknown" });
+    renamed.visible = false;
     expect(f.run()).toEqual({ state: "idle" });
   });
   describe.each(structuralLabels)("exact %s structural identity", (label) => {
@@ -236,7 +253,9 @@ describe("update idle observation on synthetic public DOM", () => {
     "enabled-send",
   ])("retains the %s refusal with all structural controls present", (state) => {
     const f = fixture();
-    structuralLabels.forEach((label) => addStructuralControl(f, label));
+    structuralLabels
+      .filter((label) => label !== "Add files")
+      .forEach((label) => addStructuralControl(f, label));
     let expected = "unknown";
     if (state === "draft") {
       f.composer.value = "opaque fixture draft";

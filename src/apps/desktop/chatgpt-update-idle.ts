@@ -49,10 +49,12 @@ export const chatGptUpdateIdleProbe = `(() => {
   const voice = [...form.querySelectorAll('button[aria-label="Start Voice"],button[aria-label="Start voice mode"],button[aria-label="Start Voice Mode"]')].filter(visible);
   // Exact structural identities only, scoped to this composer form. These
   // controls do not prove idle; expanded/pressed or duplicate entries are unknown.
-  const structural = ['Add files', 'Select ChatGPT model', 'Dictate'].flatMap(label =>
-    [...form.querySelectorAll('button')].filter(e => e.getAttribute('aria-label') === label && visible(e)));
+  const structuralGroups = [['Add files', 'Add files and more'], ['Select ChatGPT model'], ['Dictate']];
+  const structuralByGroup = structuralGroups.map(labels =>
+    [...form.querySelectorAll('button')].filter(e => labels.includes(e.getAttribute('aria-label')) && visible(e)));
+  if (structuralByGroup.some(group => group.length > 1)) return { state: "unknown" };
+  const structural = structuralByGroup.flat();
   if (structural.some(e => !(e instanceof HTMLButtonElement) || e.type !== 'button' || e.form !== form ||
-      structural.filter(other => other.getAttribute('aria-label') === e.getAttribute('aria-label')).length !== 1 ||
       ['aria-expanded', 'aria-pressed'].some(attribute =>
         e.getAttribute(attribute) !== null && e.getAttribute(attribute) !== 'false')))
     return { state: "unknown" };

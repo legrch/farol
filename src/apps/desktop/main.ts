@@ -9990,6 +9990,10 @@ function liveChatGptSurfaceFactory(taskId: string): ChatGptRouteSurfaceFactory {
       for (const listener of closedListeners) listener();
     };
     view.setVisible(false);
+    // A background document needs a real viewport before its first load. This
+    // does not attach, reveal or focus the retained browser surface.
+    const layout = currentSurfaceLayout();
+    if (layout) view.setBounds(layout.pageBounds);
     taskViews.set(taskId, view);
     taskViewKinds.set(taskId, "chatgpt");
     contents.on("before-input-event", (event, input) => {
@@ -10321,8 +10325,8 @@ function applyRendererLayout(value: unknown): void {
   if (focusTargetChanged) focusForLayoutAfterRendererCommit();
 }
 
-function applyLayout(): void {
-  if (!window || window.isDestroyed()) return;
+function currentSurfaceLayout() {
+  if (!window || window.isDestroyed()) return null;
   const [width = 1, height = 1] = window.getContentSize();
   const showBrowserHome =
     signInSurfaceOpen ||
@@ -10349,9 +10353,15 @@ function applyLayout(): void {
     }),
     checkFeedbackVisible,
   });
+  return { ...layout, showBrowserHome };
+}
+
+function applyLayout(): void {
+  const layout = currentSurfaceLayout();
+  if (!layout) return;
   const visibleTaskId =
     !installedUpdateAdmission && layout.pageVisible
-      ? showBrowserHome
+      ? layout.showBrowserHome
         ? SIGN_IN_SURFACE_ID
         : selectedTaskId
       : null;
@@ -10360,6 +10370,10 @@ function applyLayout(): void {
   for (const [taskId, view] of taskViews) {
     if (taskId !== visibleTaskId || view.webContents?.isDestroyed() !== false) {
       nativeViewVisibility.hide(view);
+      // Keep hidden documents responsive to the current host geometry without
+      // making their native input or accessibility subtree visible.
+      if (view.webContents?.isDestroyed() === false)
+        view.setBounds(layout.pageBounds);
     }
   }
   if (visibleTaskId !== null) {
