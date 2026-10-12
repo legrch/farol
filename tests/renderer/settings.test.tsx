@@ -4272,6 +4272,46 @@ describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
       { kind: "computer.update-file-policy", filePolicy: "approved-roots-v1" },
     ]);
   });
+  it.each(["verification", "workspace"] as const)(
+    "explains the saved file-policy blocker for %s without treating a draft as permission",
+    async (commands) => {
+      const value = withFolder();
+      value.computer.commands = commands;
+      const h = await mount("computer", value);
+      const status = () =>
+        h.host
+          .querySelector('section[aria-label="Terminal & Git"] [role="status"]')
+          ?.textContent?.replace(/\s+/gu, " ");
+      expect(status()).toContain(
+        "unavailable with protected-file restrictions",
+      );
+      expect(status()).toContain("hidden and sensitive files");
+      await change(h.field("File access"), "approved-roots-v1");
+      expect(status()).toContain(
+        "unavailable with protected-file restrictions",
+      );
+      expect(h.calls()).toEqual([]);
+    },
+  );
+  it.each([
+    { commands: "none", filePolicy: "" },
+    { commands: "workspace", filePolicy: "approved-roots-v1" },
+  ] as const)(
+    "does not invent a file-policy blocker for $commands/$filePolicy",
+    async (choice) => {
+      const value = withFolder();
+      Object.assign(value.computer, choice);
+      const h = await mount("computer", value);
+      const group = h.host.querySelector(
+        'section[aria-label="Terminal & Git"]',
+      )!;
+      expect(group.textContent).not.toContain(
+        "unavailable with protected-file restrictions",
+      );
+      expect(group.textContent).toContain("Shell requires a supported build");
+      expect(h.calls()).toEqual([]);
+    },
+  );
 });
 
 describe("review regressions: retained action origins and exact edit delivery", () => {

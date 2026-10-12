@@ -2179,6 +2179,16 @@ function ThisMac({ settings, snapshot, facade, actions }: PageProps) {
               : "Saved command permission: Terminal in approved folders."}{" "}
           Farol checks workspace access again after saving.
         </p>
+        {settings.computer.commands !== "none" &&
+          settings.computer.filePolicy !== "approved-roots-v1" && (
+            <p className="description" role="status">
+              Terminal &amp; Git is unavailable with protected-file
+              restrictions. Review File access above: commands require “Allow
+              all names in approved folders”. This includes hidden and sensitive
+              files inside those folders. Review your workspaces before changing
+              access.
+            </p>
+          )}
         <p className="description">
           Shell requires a supported build and verified workspace access. File
           and connection checks do not verify command execution. File Computer
