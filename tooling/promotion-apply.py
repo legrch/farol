@@ -4,11 +4,13 @@ The reviewed Node launcher sends these exact bytes to ``/usr/bin/python3 -``
 and one bounded JSON request on descriptor 3. Descriptor 6 inherits the original
 exclusive kernel lease and stays open through cleanup and process exit, including
 when its parent dies. The helper opens the owner's
-home and Applications directories component by component, changes directory
-through the verified Applications descriptor, and performs every mutation
-relative to that pinned directory.  Failures are content-free exit statuses.
+home, Applications and lease-state directories component by component. It
+copies only beneath the owner-private lease-state parent, then atomically places
+the verified image through the pinned Applications descriptor without overwrite.
+It never recursively cleans the shared namespace. Failures use content-free statuses.
 """
 
+import ctypes
 import errno
 import hashlib
 import json
@@ -613,6 +615,54 @@ def recheck_receipt(parent_fd, expected, payload):
             os.close(descriptor)
 
 
+def create_private_stage(request, parent_fd):
+    # The inherited lease's owner-private parent excludes shared-slot writers.
+    stage_parent = open_absolute_directory(os.path.dirname(request["lease"]["file"]))
+    stage_fd = None
+    try:
+        info = os.fstat(stage_parent)
+        if info.st_mode & 0o077 or info.st_dev != os.fstat(parent_fd).st_dev:
+            refuse(EXIT_PATH)
+        name = ".promotion-stage-" + os.urandom(16).hex()
+        os.mkdir(name, 0o700, dir_fd=stage_parent)
+        stage_fd = open_directory(stage_parent, name)
+        os.fsync(stage_parent)
+        return stage_parent, name, stage_fd
+    except BaseException:
+        if stage_fd is not None:
+            os.close(stage_fd)
+        os.close(stage_parent)
+        raise
+
+
+def publish_stage(request, home_fd, parent_fd, stage_parent, name, stage_fd):
+    verify_inherited_lease(request)
+    recheck_parent(request, home_fd, parent_fd)
+    current = open_absolute_directory(os.path.dirname(request["lease"]["file"]))
+    try:
+        if identity(os.fstat(current)) != identity(os.fstat(stage_parent)):
+            refuse(EXIT_PATH)
+    finally:
+        os.close(current)
+    named = os.stat(name, dir_fd=stage_parent, follow_symlinks=False)
+    if identity(named) != identity(os.fstat(stage_fd)):
+        refuse(EXIT_PATH)
+    # RENAME_EXCL places only this verified private image; never overwrite.
+    libc = ctypes.CDLL(None, use_errno=True)
+    rename = libc.renameatx_np
+    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int,
+                       ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    if rename(stage_parent, os.fsencode(name), parent_fd, os.fsencode(APP_NAME), 4) != 0:
+        code = ctypes.get_errno()
+        if code == errno.EEXIST:
+            refuse(EXIT_EXISTS)
+        refuse(EXIT_PATH)
+    os.fsync(stage_parent)
+    os.fsync(parent_fd)
+    recheck_destination(request, home_fd, parent_fd, identity(os.fstat(stage_fd)))
+
+
 def run(request):
     verify_inherited_lease(request)
     home_fd = open_absolute_directory(request["home"])
@@ -620,9 +670,7 @@ def run(request):
     source_fd = None
     destination_fd = None
     destination_identity = None
-    destination_created = False
-    completed = False
-    receipt_publication_started = False
+    stage_parent = None
     try:
         verify_inherited_lease(request)
         if request.get("installLocation", "legacy") == "legacy":
@@ -645,14 +693,7 @@ def run(request):
             refuse(EXIT_EXISTS)
         source_fd = open_absolute_directory(request["source"])
         verify_inherited_lease(request)
-        try:
-            os.mkdir(APP_NAME, 0o700, dir_fd=parent_fd)
-        except OSError as error:
-            if error.errno == errno.EEXIST:
-                refuse(EXIT_EXISTS)
-            refuse(EXIT_COPY)
-        destination_created = True
-        destination_fd = open_directory(parent_fd, APP_NAME)
+        stage_parent, stage_name, destination_fd = create_private_stage(request, parent_fd)
         destination_identity = identity(os.fstat(destination_fd))
         verify_inherited_lease(request)
         copy_tree(source_fd, destination_fd, {"entries": 0, "bytes": 0})
@@ -661,27 +702,18 @@ def run(request):
         if digest_tree(destination_fd) != request["artifactSha256"]:
             refuse(EXIT_DIGEST)
         os.fsync(destination_fd)
+        publish_stage(request, home_fd, parent_fd, stage_parent, stage_name, destination_fd)
         verify_inherited_lease(request)
         recheck_destination(request, home_fd, parent_fd, destination_identity)
-        # Publication is a custody boundary even when its durability fails.
-        receipt_publication_started = True
         receipt_identity = write_receipt(parent_fd, request["receiptBytes"])
         recheck_destination(request, home_fd, parent_fd, destination_identity)
         recheck_receipt(parent_fd, receipt_identity, request["receiptBytes"])
         recheck_destination(request, home_fd, parent_fd, destination_identity)
-        completed = True
         os.write(1, MAGIC)
     finally:
-        if (destination_created and not completed and not receipt_publication_started
-                and destination_fd is not None):
-            try:
-                current = os.stat(APP_NAME, dir_fd=parent_fd, follow_symlinks=False)
-                if identity(current) == destination_identity:
-                    clear_directory(destination_fd)
-                    os.rmdir(APP_NAME, dir_fd=parent_fd)
-            except OSError:
-                pass
-        for descriptor in (destination_fd, source_fd, parent_fd, home_fd):
+        # Never recursively clean through a shared namespace, even on refusal.
+        # A failed private stage or displaced placed image remains for custody.
+        for descriptor in (destination_fd, source_fd, stage_parent, parent_fd, home_fd):
             if descriptor is not None:
                 try:
                     os.close(descriptor)

@@ -76,10 +76,13 @@ async function runWithNativeFault({
   lease,
   onChildStarted,
   fault = "receipt-failure",
+  helperPathOverride,
 }) {
   const transfer = await createPromotionLeaseTransfer(lease);
   if (!(await transfer.verify())) throw new Error("PROMOTION_LEASE_LOST");
-  const helperPath = path.join(process.cwd(), "tooling", "promotion-apply.py");
+  const helperPath =
+    helperPathOverride ??
+    path.join(process.cwd(), "tooling", "promotion-apply.py");
   const program = `
 import errno
 import importlib.util
@@ -106,12 +109,11 @@ def displace():
         with open(os.path.join(replacement, "sentinel"), "w") as stream:
             stream.write("foreign replacement")
 
-original_copy = helper.copy_tree
+original_publish = getattr(helper, "publish_stage", None)
 original_receipt = helper.write_receipt
-def copy_then_displace(source_fd, destination_fd, state, depth=0):
-    original_copy(source_fd, destination_fd, state, depth)
-    if depth == 0:
-        displace()
+def publish_then_displace(*args):
+    original_publish(*args)
+    displace()
 def receipt_then_displace(parent_fd, payload):
     published_identity = original_receipt(parent_fd, payload)
     if fault.startswith("receipt-only-"):
@@ -145,6 +147,23 @@ def fail_after_competing_receipt(name, *, dir_fd):
         raise OSError(errno.EIO, "injected post-link failure")
     original_unlink(name, dir_fd=dir_fd)
 
+original_mkdir = helper.os.mkdir
+namespace_interference = False
+def mkdir_with_namespace_interference(name, mode=0o777, *, dir_fd=None):
+    global namespace_interference
+    original_mkdir(name, mode, dir_fd=dir_fd)
+    if not namespace_interference and (name == "Farol.app" or name.startswith(".promotion-stage-")):
+        namespace_interference = True
+        apps = os.path.join(sys.argv[2], "Applications")
+        slot = os.path.join(apps, "Farol.app")
+        foreign = os.path.join(sys.argv[2], "foreign-Farol.app")
+        if os.path.lexists(slot):
+            os.rename(slot, os.path.join(apps, "Farol.created-retained.app"))
+        if fault == "mkdir-foreign-symlink":
+            os.symlink(foreign, slot)
+        else:
+            os.rename(foreign, slot)
+
 original_fsync = helper.os.fsync
 def fail_receipt_directory_fsync(fd):
     if stat.S_ISDIR(os.fstat(fd).st_mode):
@@ -156,14 +175,16 @@ def fail_receipt_directory_fsync(fd):
             raise OSError(errno.EIO, "injected receipt directory fsync failure")
     original_fsync(fd)
 
-if fault == "receipt-failure":
+if fault.startswith("mkdir-foreign-"):
+    helper.os.mkdir = mkdir_with_namespace_interference
+elif fault == "receipt-failure":
     helper.write_receipt = fail_receipt
 elif fault == "publication-fsync":
     helper.os.fsync = fail_receipt_directory_fsync
 elif fault == "publication-competing-receipt":
     helper.os.unlink = fail_after_competing_receipt
 elif fault.startswith("after-copy-"):
-    helper.copy_tree = copy_then_displace
+    helper.publish_stage = publish_then_displace
 elif fault.startswith("after-receipt-") or fault.startswith("receipt-only-"):
     helper.write_receipt = receipt_then_displace
 else:
@@ -410,6 +431,61 @@ describe("descriptor-bound promotion apply", () => {
       fs.readFile(path.join(applications, "Farol.app.receipt.json"), "utf8"),
     ).resolves.toBe('{"operation":"applied"}\n');
   });
+
+  async function foreignApplicationFixture() {
+    const f = await fixture();
+    const foreign = path.join(f.home, "foreign-Farol.app");
+    await fs.mkdir(path.join(foreign, "Contents"), {
+      recursive: true,
+      mode: 0o755,
+    });
+    await fs.writeFile(
+      path.join(foreign, "Contents", "foreign-marker"),
+      "preserve foreign bytes\n",
+      { mode: 0o600 },
+    );
+    return {
+      ...f,
+      foreign,
+      foreignDigest: await treeDigest(foreign),
+      foreignInode: (await fs.lstat(foreign)).ino,
+    };
+  }
+
+  // Same-UID fixture injects only public namespace interference; no second-account claim.
+  it.each(["app", "symlink"])(
+    "never adopts or cleans a competing entry after stage mkdir: %s",
+    async (variant) => {
+      const f = await foreignApplicationFixture();
+      const outcome = await applyWithLease(
+        {
+          home: f.home,
+          source: f.source,
+          artifactSha256: await treeDigest(f.source),
+          fault: `mkdir-foreign-${variant}`,
+        },
+        runWithNativeFault,
+      );
+      expect(outcome).toEqual({
+        code: 72,
+        signal: null,
+        stderr: "",
+        stdout: "",
+      });
+      const slot = path.join(f.applications, "Farol.app");
+      const foreign = variant === "symlink" ? f.foreign : slot;
+      expect(await treeDigest(foreign)).toBe(f.foreignDigest);
+      expect((await fs.lstat(foreign)).ino).toBe(f.foreignInode);
+      await expect(
+        fs.readFile(path.join(foreign, "Contents", "foreign-marker"), "utf8"),
+      ).resolves.toBe("preserve foreign bytes\n");
+      if (variant === "symlink")
+        expect((await fs.lstat(slot)).isSymbolicLink()).toBe(true);
+      await expect(
+        fs.lstat(path.join(f.applications, "Farol.app.receipt.json")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
   it("refuses an existing destination without changing it", async () => {
     const { source, home, applications } = await fixture();

@@ -161,3 +161,13 @@ matched to its original inode, exact bytes, regular-file mode and single-link
 identity before the success response. Removal, replacement with identical
 bytes, symlink and hardlink aliases produce no success response and preserve
 already published resources for reconciliation.
+
+Promotion copies and hashes only inside a newly created directory beneath the
+inherited lease's owner-private state parent. It checks the held stage identity,
+same device and pinned parents, then publishes that complete image using macOS
+`renameatx_np(RENAME_EXCL)` with no overwrite. It never creates and adopts a
+copy destination in the shared application namespace, and never recursively
+cleans there. Failed private stages and displaced placed images are retained
+for custody; no failed publication is replayed. The private parent excludes
+other-account namespace writers; it does not protect against a malicious local
+owner with access to that owner's state.

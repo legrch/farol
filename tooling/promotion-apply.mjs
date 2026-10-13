@@ -11,7 +11,7 @@ const DEFAULT_HELPER = fileURLToPath(
   new URL("./promotion-apply.py", import.meta.url),
 );
 const HELPER_SHA256 =
-  "616cff7b7227e1bb09c1ebcbf03e798f9fcf34cbe21b7b8c02c45e539fefa991";
+  "80db9842e81e3adf8c09e1adcc16ae6462ffd752ec389acfc084cb1a07e25e0f";
 const MAX_HELPER_BYTES = 64 * 1024;
 const MAX_OUTPUT_BYTES = 4 * 1024;
 const SUCCESS = "FAROL_PROMOTION_OK\n";
