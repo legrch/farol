@@ -16,6 +16,12 @@ func TestPreservedProcessResultsNativeRetainOutputAndWriterExclusion(t *testing.
 	calls := 0
 	observed, err := InspectPreserved(context.Background(), root, selection, expected, func(meta PreservedInspection) error {
 		calls++
+		selected := preservedPureSelection(t, selection, expected)
+		for n, record := range meta.Retained {
+			if record.Key != selected[n].Key || record.SHA256 != selected[n].SHA256 {
+				t.Fatal("receipt pairs the wrong filename with preserved bytes")
+			}
+		}
 		if len(meta.Retained) != len(entries) || meta.ReservedProcesses != 1 {
 			t.Fatal("incomplete observation")
 		}

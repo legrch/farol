@@ -48,6 +48,11 @@ func TestPreservedProcessResultsKeepExactBytesWithoutClaimingCleanup(t *testing.
 		calls := 0
 		result, err := observePreserved(context.Background(), closed, o, func(meta PreservedInspection) error {
 			calls++
+			for n, record := range meta.Retained {
+				if record.Key != closed[n].Key || record.SHA256 != closed[n].SHA256 {
+					t.Fatal("receipt pairs the wrong filename with preserved bytes")
+				}
+			}
 			if meta.ReservedProcesses != 1 || len(meta.Retained) != len(entries) {
 				t.Fatal("incomplete inventory")
 			}

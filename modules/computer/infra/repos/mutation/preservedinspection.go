@@ -170,7 +170,7 @@ func qualifyPreservedRecord(entry settledBytes, expected ExpectedPreservedRecord
 	if err != nil || identity != expected.Identity || identity.Scope != domain.ScopeConnector || (output && key != expected.OutputParent || !output && (key != entry.key || expected.OutputParent != "")) {
 		return refuse()
 	}
-	return SettledRetainedRecord{Key: key, SHA256: observed, Identity: identity}, reserved, nil
+	return SettledRetainedRecord{Key: entry.key, SHA256: observed, Identity: identity}, reserved, nil
 }
 
 func qualifyPreserved(entries []settledBytes, expected []ExpectedPreservedRecord) ([]SettledRetainedRecord, int, error) {
