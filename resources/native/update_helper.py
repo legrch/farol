@@ -1116,6 +1116,10 @@ def run(request):
                 fail("app_missing")
             checked_tree(apps, APP, request["source"]["digest"], request["source"]["version"], request["source"]["buildId"])
             checked_tree(op, "staged.app", request["target"]["digest"], request["target"]["version"], request["target"]["buildId"])
+            # Atomic exchange cannot cross filesystems. Refuse before readiness
+            # can authorize Desktop Quit or a durable prepared journal.
+            if os.fstat(apps).st_dev != os.fstat(op).st_dev:
+                fail("exchange_unsupported")
             if closed:
                 fence()
                 confirmed_closed(state, request)

@@ -430,14 +430,17 @@ async function cli() {
   );
   const stdout = [];
   const stderr = [];
-  const operation = runPromotionCli(["--apply"], {
-    home,
-    candidateRoot,
-    sourceIdentity: () => identity,
-    verify: async () => ({ status: 0, output: "controlled verifier" }),
-    stdout: { write: (text) => stdout.push(text) },
-    stderr: { write: (text) => stderr.push(text) },
-  });
+  const operation = runPromotionCli(
+    ["--apply", "--destination", path.join(home, "Applications/Farol.app")],
+    {
+      home,
+      candidateRoot,
+      sourceIdentity: () => identity,
+      verify: async () => ({ status: 0, output: "controlled verifier" }),
+      stdout: { write: (text) => stdout.push(text) },
+      stderr: { write: (text) => stderr.push(text) },
+    },
+  );
   return { operation, stdout, stderr };
 }
 

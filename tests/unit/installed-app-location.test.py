@@ -8,6 +8,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from contextlib import ExitStack
 
 ROOT = Path(__file__).resolve().parents[2]
 def load(name, path):
@@ -43,6 +44,30 @@ class LocationTests(unittest.TestCase):
                              SimpleNamespace(**{**vars(info()), "st_mode": stat.S_IFLNK | 0o775})):
                 with self.assertRaises(module.Refusal):
                     module.require_shared_parent(metadata)
+
+    def test_cross_device_apply_refuses_before_ready_quit_or_journal(self):
+        # Pure adapter fixture: real run ordering, synthetic descriptor devices.
+        for location in ("shared", "legacy"):
+            with ExitStack() as stack:
+                for name, result in (("open_home", 10), ("open_applications", 20),
+                                     ("open_owner_state", 30), ("open_dir", 40),
+                                     ("update_lock", 50), ("initial_marker", "fixture"),
+                                     ("verify_slot_binding", None), ("checked_tree", None)):
+                    stack.enter_context(patch.object(update, name, return_value=result))
+                stack.enter_context(patch.object(update, "entry", side_effect=lambda fd, name: info() if fd == 20 and name == update.APP else None))
+                stack.enter_context(patch.object(update.os, "fstat", side_effect=lambda fd: SimpleNamespace(st_dev=1 if fd == 20 else 2)))
+                stack.enter_context(patch.object(update.os, "close"))
+                ready = stack.enter_context(patch.object(update, "emit_handoff"))
+                journal = stack.enter_context(patch.object(update, "write_operation_journal"))
+                wait = stack.enter_context(patch.object(update, "wait_exit"))
+                swap = stack.enter_context(patch.object(update, "exchange_checked"))
+                with self.assertRaises(update.Refusal) as refused:
+                    update.run(request(location))
+                self.assertEqual(refused.exception.code, "exchange_unsupported")
+                ready.assert_not_called()
+                journal.assert_not_called()
+                wait.assert_not_called()
+                swap.assert_not_called()
 
     def test_updater_request_legacy_and_explicit_selection(self):
         for location in (None, "legacy", "shared"):
