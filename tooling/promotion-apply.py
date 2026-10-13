@@ -472,7 +472,7 @@ def clear_directory(descriptor, depth=0):
             os.unlink(name, dir_fd=descriptor)
 
 
-def write_receipt(parent_fd, payload):
+def write_receipt(parent_fd, payload, private_parent):
     temporary = f".{RECEIPT_NAME}.{os.urandom(8).hex()}.tmp"
     descriptor = None
     try:
@@ -480,7 +480,7 @@ def write_receipt(parent_fd, payload):
             temporary,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
             0o600,
-            dir_fd=parent_fd,
+            dir_fd=private_parent,
         )
         offset = 0
         while offset < len(payload):
@@ -490,16 +490,8 @@ def write_receipt(parent_fd, payload):
             offset += written
         os.fsync(descriptor)
         published_identity = identity(os.fstat(descriptor))
-        os.close(descriptor)
-        descriptor = None
-        os.link(
-            temporary,
-            RECEIPT_NAME,
-            src_dir_fd=parent_fd,
-            dst_dir_fd=parent_fd,
-            follow_symlinks=False,
-        )
-        os.unlink(temporary, dir_fd=parent_fd)
+        rename_exclusive(private_parent, temporary, parent_fd, RECEIPT_NAME, EXIT_RECEIPT)
+        os.fsync(private_parent)
         os.fsync(parent_fd)
         return published_identity
     except OSError as error:
@@ -509,9 +501,8 @@ def write_receipt(parent_fd, payload):
     finally:
         if descriptor is not None:
             os.close(descriptor)
-        # A shared-parent writer can replace either name after publication.
-        # Retain failed publication entries; path-based rollback could remove
-        # another writer's receipt or temporary file.
+        # Retain any private failed preparation or uncertain public receipt.
+        # Never create, link or unlink a temporary in the shared namespace.
 
 
 def test_hook(enabled):
@@ -615,6 +606,19 @@ def recheck_receipt(parent_fd, expected, payload):
             os.close(descriptor)
 
 
+def rename_exclusive(source_parent, source, target_parent, target, failure_status):
+    # Both publishers hold their owner-private source; no overwrite fallback.
+    libc = ctypes.CDLL(None, use_errno=True)
+    rename = libc.renameatx_np
+    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int,
+                       ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    if rename(source_parent, os.fsencode(source), target_parent, os.fsencode(target), 4) != 0:
+        if ctypes.get_errno() == errno.EEXIST:
+            refuse(EXIT_EXISTS)
+        refuse(failure_status)
+
+
 def create_private_stage(request, parent_fd):
     # The inherited lease's owner-private parent excludes shared-slot writers.
     stage_parent = open_absolute_directory(os.path.dirname(request["lease"]["file"]))
@@ -647,17 +651,7 @@ def publish_stage(request, home_fd, parent_fd, stage_parent, name, stage_fd):
     named = os.stat(name, dir_fd=stage_parent, follow_symlinks=False)
     if identity(named) != identity(os.fstat(stage_fd)):
         refuse(EXIT_PATH)
-    # RENAME_EXCL places only this verified private image; never overwrite.
-    libc = ctypes.CDLL(None, use_errno=True)
-    rename = libc.renameatx_np
-    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int,
-                       ctypes.c_char_p, ctypes.c_uint]
-    rename.restype = ctypes.c_int
-    if rename(stage_parent, os.fsencode(name), parent_fd, os.fsencode(APP_NAME), 4) != 0:
-        code = ctypes.get_errno()
-        if code == errno.EEXIST:
-            refuse(EXIT_EXISTS)
-        refuse(EXIT_PATH)
+    rename_exclusive(stage_parent, name, parent_fd, APP_NAME, EXIT_PATH)
     os.fsync(stage_parent)
     os.fsync(parent_fd)
     recheck_destination(request, home_fd, parent_fd, identity(os.fstat(stage_fd)))
@@ -705,7 +699,7 @@ def run(request):
         publish_stage(request, home_fd, parent_fd, stage_parent, stage_name, destination_fd)
         verify_inherited_lease(request)
         recheck_destination(request, home_fd, parent_fd, destination_identity)
-        receipt_identity = write_receipt(parent_fd, request["receiptBytes"])
+        receipt_identity = write_receipt(parent_fd, request["receiptBytes"], stage_parent)
         recheck_destination(request, home_fd, parent_fd, destination_identity)
         recheck_receipt(parent_fd, receipt_identity, request["receiptBytes"])
         recheck_destination(request, home_fd, parent_fd, destination_identity)

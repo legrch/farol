@@ -32,9 +32,9 @@ import { compareReleaseVersions } from "../src/modules/release/domain/github-ver
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const HELPER_SHA256 =
-  "0464780f91e61df1a113fe283e32cfa6a848f018e7a38928e041b4d68c61e8ca";
+  "09874ad5da09f93f8a6746cfc731be5746441ff2b6feec429307b963d31452d3";
 const LIBRARY_SHA256 =
-  "80db9842e81e3adf8c09e1adcc16ae6462ffd752ec389acfc084cb1a07e25e0f";
+  "739ff487dbffbd3e232c3b90e22c234cebd4f735b226101187ea60a1f62691ce";
 const sha = (raw) => createHash("sha256").update(raw).digest("hex");
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 // Same normal receipt DTO as the installed-update owner; keep strict shape parity.

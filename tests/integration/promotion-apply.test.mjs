@@ -95,7 +95,7 @@ spec = importlib.util.spec_from_file_location("farol_promotion_apply", sys.argv[
 helper = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(helper)
 
-def fail_receipt(_parent_fd, _payload):
+def fail_receipt(_parent_fd, _payload, _private_parent):
     helper.refuse(helper.EXIT_RECEIPT)
 
 fault = sys.argv[6]
@@ -114,8 +114,8 @@ original_receipt = helper.write_receipt
 def publish_then_displace(*args):
     original_publish(*args)
     displace()
-def receipt_then_displace(parent_fd, payload):
-    published_identity = original_receipt(parent_fd, payload)
+def receipt_then_displace(parent_fd, payload, private_parent):
+    published_identity = original_receipt(parent_fd, payload, private_parent)
     if fault.startswith("receipt-only-"):
         applications = os.path.join(sys.argv[2], "Applications")
         receipt = os.path.join(applications, "Farol.app.receipt.json")
@@ -132,20 +132,17 @@ def receipt_then_displace(parent_fd, payload):
         displace()
     return published_identity
 
-original_unlink = helper.os.unlink
-def fail_after_competing_receipt(name, *, dir_fd):
-    if name.startswith(".Farol.app.receipt.json."):
-        os.rename("Farol.app.receipt.json", "Farol.retained.receipt.json",
-                  src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
-        foreign = os.open("Farol.app.receipt.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                          0o600, dir_fd=dir_fd)
+original_rename = helper.rename_exclusive
+def rename_then_competing_receipt(source_parent, source, target_parent, target, failure_status):
+    original_rename(source_parent, source, target_parent, target, failure_status)
+    if target == "Farol.app.receipt.json":
+        os.rename(target, "Farol.retained.receipt.json", src_dir_fd=target_parent, dst_dir_fd=target_parent)
+        foreign = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=target_parent)
         try:
             os.write(foreign, b"foreign receipt")
         finally:
             os.close(foreign)
-        original_unlink(name, dir_fd=dir_fd)
-        raise OSError(errno.EIO, "injected post-link failure")
-    original_unlink(name, dir_fd=dir_fd)
+        raise OSError(errno.EIO, "injected post-publication failure")
 
 original_mkdir = helper.os.mkdir
 namespace_interference = False
@@ -182,7 +179,16 @@ elif fault == "receipt-failure":
 elif fault == "publication-fsync":
     helper.os.fsync = fail_receipt_directory_fsync
 elif fault == "publication-competing-receipt":
-    helper.os.unlink = fail_after_competing_receipt
+    helper.rename_exclusive = rename_then_competing_receipt
+elif fault == "shared-temporary-sentinel":
+    def preserve_shared_temporary_sentinel(source_parent, source, target_parent, target, failure_status):
+        if target == "Farol.app.receipt.json":
+            apps = os.path.join(sys.argv[2], "Applications")
+            # A colliding public temporary stays foreign; the private source is not there.
+            with open(os.path.join(apps, source), "w") as stream:
+                stream.write("foreign temporary bytes")
+        original_rename(source_parent, source, target_parent, target, failure_status)
+    helper.rename_exclusive = preserve_shared_temporary_sentinel
 elif fault.startswith("after-copy-"):
     helper.publish_stage = publish_then_displace
 elif fault.startswith("after-receipt-") or fault.startswith("receipt-only-"):
@@ -486,6 +492,35 @@ describe("descriptor-bound promotion apply", () => {
       ).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
+
+  it("never removes a competing public temporary while publishing its private receipt", async () => {
+    const { source, home, applications } = await fixture();
+    const outcome = await applyWithLease(
+      {
+        home,
+        source,
+        artifactSha256: await treeDigest(source),
+        fault: "shared-temporary-sentinel",
+      },
+      runWithNativeFault,
+    );
+    expect(outcome).toEqual({
+      code: 0,
+      signal: null,
+      stderr: "",
+      stdout: "FAROL_PROMOTION_OK\n",
+    });
+    const temporary = (await fs.readdir(applications)).filter((name) =>
+      name.startsWith(".Farol.app.receipt.json."),
+    );
+    expect(temporary).toHaveLength(1);
+    await expect(
+      fs.readFile(path.join(applications, temporary[0]), "utf8"),
+    ).resolves.toBe("foreign temporary bytes");
+    await expect(
+      fs.readFile(path.join(applications, "Farol.app.receipt.json"), "utf8"),
+    ).resolves.toBe('{"operation":"applied"}\n');
+  });
 
   it("refuses an existing destination without changing it", async () => {
     const { source, home, applications } = await fixture();
