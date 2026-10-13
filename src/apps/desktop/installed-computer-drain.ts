@@ -49,6 +49,7 @@ export async function drainInstalledComputerWork(
         if (!ports.stillCurrent())
           return { ok: false, code: "UPDATE_STATE_UNREADABLE" };
         let idle = true;
+        let readerClosed = false;
         const reader = await ports.openTaskReader();
         try {
           for (const key of keys) {
@@ -69,8 +70,12 @@ export async function drainInstalledComputerWork(
             }
           }
         } finally {
-          if (!(await reader.close())) idle = false;
+          readerClosed = await reader.close();
         }
+        // Failed shutdown is not a busy task. Keep the original proxy outcome
+        // uncertain; a later admission must not create a replacement reader.
+        if (!readerClosed)
+          return { ok: false, code: "UPDATE_WORK_DRAIN_UNCONFIRMED" };
         if (!idle) return { ok: false, code: "UPDATE_TASK_ROUTE_NEEDS_DRAIN" };
       }
       if (!ports.stillCurrent())
