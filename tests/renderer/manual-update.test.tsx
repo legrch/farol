@@ -153,6 +153,71 @@ it("keeps applying through a malformed event and an older ready command reply", 
   });
 });
 
+it("fences a late command reply after the current startup status read fails", async () => {
+  const f = fixture();
+  let rejectStatus!: (error: Error) => void;
+  let replyCheck!: (view: InstalledUpdateView) => void;
+  vi.mocked(f.api.installedUpdate).mockImplementation((request) => {
+    if (request.kind === "status")
+      return new Promise((_, reject) => {
+        rejectStatus = reject;
+      });
+    if (request.kind === "check")
+      return new Promise((resolve) => {
+        replyCheck = resolve;
+      });
+    throw new Error("unexpected fixture command");
+  });
+  const c = new WindowController(f.api);
+  cleanups.push(async () => c.dispose());
+  const starting = c.start();
+  await vi.waitFor(() =>
+    expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "status" }),
+  );
+  const checking = c.update("check");
+  await vi.waitFor(() =>
+    expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "check" }),
+  );
+  rejectStatus(new Error("controlled status read failure"));
+  await starting;
+  replyCheck({ phase: "available", version: "0.2.4", deferred: false });
+  await checking;
+  expect(c.getSnapshot().update).toMatchObject({
+    phase: "unavailable",
+    code: "UPDATE_STATUS_UNAVAILABLE",
+  });
+  expect(f.api.installedUpdate).toHaveBeenCalledTimes(2);
+});
+
+it("does not release applying when its startup status read fails", async () => {
+  const f = fixture();
+  const bootstrap = vi.mocked(f.api.bootstrap).getMockImplementation()!;
+  vi.mocked(f.api.bootstrap).mockImplementation(async () => {
+    f.emit("update", { phase: "applying", version: "0.2.4" });
+    return await bootstrap();
+  });
+  let rejectStatus!: (error: Error) => void;
+  vi.mocked(f.api.installedUpdate).mockImplementation((request) => {
+    if (request.kind !== "status")
+      throw new Error("unexpected fixture command");
+    return new Promise((_, reject) => {
+      rejectStatus = reject;
+    });
+  });
+  const c = new WindowController(f.api);
+  cleanups.push(async () => c.dispose());
+  const starting = c.start();
+  await vi.waitFor(() =>
+    expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "status" }),
+  );
+  rejectStatus(new Error("controlled status read failure"));
+  await starting;
+  expect(c.getSnapshot().update).toEqual({
+    phase: "applying",
+    version: "0.2.4",
+  });
+});
+
 it.each([
   "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
   "UPDATE_STATE_UNREADABLE",

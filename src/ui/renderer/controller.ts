@@ -499,10 +499,18 @@ export class WindowController implements RendererFacade {
         const value = await this.api.installedUpdate({ kind: "status" });
         if (this.updateRevision === revision) this.adoptUpdate(value);
       } catch {
-        if (this.updateRevision === revision)
-          this.patch({
-            update: { phase: "unavailable", code: "UPDATE_STATUS_UNAVAILABLE" },
-          });
+        if (this.updateRevision === revision) {
+          // Failed readback is a newer negative observation, not a settlement
+          // of an already applying update or permission for an older reply.
+          this.updateRevision++;
+          if (this.state.update.phase !== "applying")
+            this.patch({
+              update: {
+                phase: "unavailable",
+                code: "UPDATE_STATUS_UNAVAILABLE",
+              },
+            });
+        }
       }
       if (this.refreshPending || this.overflow) await this.refresh();
       if (this.pendingUpdateCheck && !this.disposed) {
