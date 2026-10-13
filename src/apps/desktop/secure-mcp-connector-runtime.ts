@@ -243,6 +243,8 @@ type Options = Readonly<{
   homePath: string;
   tempPath: string;
   readinessTimeoutMs?: number;
+  electronPath?: string;
+  recheckExecution?: () => Promise<void>;
 }>;
 
 type Dependencies = Readonly<{
@@ -622,7 +624,11 @@ process.stdin.once("end", terminate);
 process.stdin.resume();
 `;
 
-const startProcess: ConnectorProcessStarter = async (command) => {
+const startProcess = async (
+  command: ConnectorCommand,
+  electronPath: string,
+  recheckExecution?: () => Promise<void>,
+): Promise<ConnectorChild> => {
   if (process.platform !== "darwin")
     throw new ConnectorProcessNotStarted("CONNECTOR_PROCESS_GROUP_UNSUPPORTED");
   try {
@@ -630,8 +636,15 @@ const startProcess: ConnectorProcessStarter = async (command) => {
   } catch {
     throw new ConnectorProcessNotStarted("CONNECTOR_EXECUTABLE_UNAVAILABLE");
   }
+  try {
+    await recheckExecution?.();
+  } catch {
+    throw new ConnectorProcessNotStarted(
+      "CONNECTOR_EXECUTION_RESOURCES_UNCONFIRMED",
+    );
+  }
   const child = spawn(
-    process.execPath,
+    electronPath,
     [
       "-e",
       CONNECTOR_GROUP_ANCHOR,
@@ -714,6 +727,8 @@ export class SecureMcpConnectorRuntime {
       !absolutePath(options.root) ||
       !absolutePath(options.homePath) ||
       !absolutePath(options.tempPath) ||
+      (options.electronPath !== undefined &&
+        !absolutePath(options.electronPath)) ||
       (options.readinessTimeoutMs !== undefined &&
         (!Number.isInteger(options.readinessTimeoutMs) ||
           options.readinessTimeoutMs < 100 ||
@@ -722,7 +737,14 @@ export class SecureMcpConnectorRuntime {
       throw new Error("CONNECTOR_RUNTIME_OPTIONS_INVALID");
     }
     this.run = dependencies.run ?? runCommand;
-    this.startProcess = dependencies.start ?? startProcess;
+    this.startProcess =
+      dependencies.start ??
+      ((command) =>
+        startProcess(
+          command,
+          options.electronPath ?? process.execPath,
+          options.recheckExecution,
+        ));
     this.get = dependencies.get ?? getReady;
     this.wait = dependencies.wait ?? wait;
     this.now = dependencies.now ?? Date.now;
@@ -736,6 +758,7 @@ export class SecureMcpConnectorRuntime {
       throw new ConnectorRuntimeEffectUnknown(
         "CONNECTOR_CONFIGURE_OUTCOME_UNKNOWN",
       );
+    await this.options.recheckExecution?.();
     this.validateExecutable(input.executablePath);
     if (!/^[0-9A-Za-z._:-]{1,160}$/u.test(input.tunnelId)) {
       runtimeError("CONNECTOR_TUNNEL_ID_INVALID");

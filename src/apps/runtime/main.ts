@@ -2,9 +2,22 @@ import type { ParentPort } from "electron";
 import { z } from "zod";
 import { startPreviewRuntime } from "../../boot/runtime-server";
 
-const runtimeParentPort = (
+const utilityParentPort = (
   process as typeof process & { parentPort?: ParentPort }
 ).parentPort;
+const runtimeParentPort =
+  utilityParentPort ??
+  (process.send
+    ? {
+        postMessage: (message: unknown) =>
+          process.send!(
+            message as Parameters<NonNullable<typeof process.send>>[0],
+            () => {},
+          ),
+        on: (_event: "message", handler: (event: { data: unknown }) => void) =>
+          process.on("message", (message) => handler({ data: message })),
+      }
+    : undefined);
 if (!runtimeParentPort) throw new Error("RUNTIME_PARENT_PORT_MISSING");
 
 async function main(): Promise<void> {

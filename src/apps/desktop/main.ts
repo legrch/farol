@@ -91,12 +91,10 @@ import {
   screen,
   session,
   shell,
-  utilityProcess,
   WebContentsView,
   type Input,
   type MenuItemConstructorOptions,
   type SaveDialogOptions,
-  type UtilityProcess,
 } from "electron";
 import {
   chmod,
@@ -119,6 +117,7 @@ import {
   unlinkSync,
   writeSync,
 } from "node:fs";
+import { spawn, type ChildProcess } from "node:child_process";
 import os from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
@@ -616,7 +615,12 @@ const launchIdentity = readBuildLaunchIdentity(
   buildIdentity,
 );
 const nativeWorkspace = new NativeReadonlyWorkspace({
-  helperPath: path.join(directory, "computer-safe-open.py"),
+  get helperPath() {
+    return path.join(
+      desktopExecutionResources().directory,
+      "computer-safe-open.py",
+    );
+  },
   helper: NEXT_SAFE_OPEN_HELPER,
 });
 const ownerBackgroundOnly = process.argv.includes("--owner-background-only");
@@ -789,7 +793,7 @@ if (process.platform === "darwin") {
 let window: BrowserWindow | null = null;
 let aboutOpen = false;
 let aboutPanel: DesktopAboutPanel | null = null;
-let runtimeChild: UtilityProcess | null = null;
+let runtimeChild: ChildProcess | null = null;
 let runtime: RuntimeReady | null = null;
 let runtimeState: "starting" | "ready" | "offline" | "failed" = "starting";
 let runtimeError: string | null = null;
@@ -820,6 +824,17 @@ let connectorTransportTimer: NodeJS.Timeout | null = null;
 const authorityTransitions = new AuthorityTransitionReservation();
 let installedUpdater: InstalledUpdater | null = null;
 let installedResourcesOrigin: InstalledUpdateResourcesOrigin | undefined;
+
+// Every delayed bundled execution keeps the independently authenticated image.
+function desktopExecutionResources() {
+  return {
+    directory: installedResourcesOrigin?.execution.directory ?? directory,
+    executable:
+      installedResourcesOrigin?.execution.executable ?? process.execPath,
+    recheck: installedResourcesOrigin?.recheck ?? (async () => undefined),
+  };
+}
+
 const quitUpdatePreparation = createQuitUpdatePreparation(
   () => installedUpdater,
 );
@@ -4872,13 +4887,15 @@ async function startAdmittedSecureMcpConnector(
     });
   if (!recoveryPermitted()) return transitionRefusal();
   try {
+    const resources = desktopExecutionResources();
+    await resources.recheck();
     await secureMcpConnectorRuntime.configure({
       executablePath: connector.tunnelClient.executablePath,
       tunnelId: connector.tunnelId,
       credentialReference,
       mcp: {
-        electronPath: process.execPath,
-        entryPath: path.join(directory, "computer-mcp.cjs"),
+        electronPath: resources.executable,
+        entryPath: path.join(resources.directory, "computer-mcp.cjs"),
         launchContractPath: launchFile,
       },
     });
@@ -10151,25 +10168,33 @@ function handleRuntimeExit(code: number | null): void {
 
 async function startRuntime(): Promise<void> {
   runtimeStopping = false;
-  const child = utilityProcess.fork(path.join(directory, "runtime.cjs"), [], {
-    env: {
-      LANG: process.env.LANG ?? "en_US.UTF-8",
-      FAROL_NEXT_RUNTIME_IDENTITY: activeDesktopIdentity.runtimeIdentity,
-      FAROL_NEXT_PREVIEW_SCENARIO: process.argv.includes(
-        "--preview-stream-failure",
-      )
-        ? "stream-failure"
-        : process.env.FAROL_NEXT_E2E === "1" &&
-            process.argv.includes("--preview-runtime-start-failure")
-          ? "startup-failure"
-          : process.argv.includes("--preview-failure")
-            ? "failure"
-            : "normal",
-      FAROL_NEXT_PREVIEW_MODE: demoMode ? "demo" : "empty",
+  const resources = desktopExecutionResources();
+  await resources.recheck();
+  const child = spawn(
+    resources.executable,
+    [path.join(resources.directory, "runtime.cjs")],
+    {
+      env: {
+        ELECTRON_RUN_AS_NODE: "1",
+        LANG: process.env.LANG ?? "en_US.UTF-8",
+        FAROL_NEXT_RUNTIME_IDENTITY: activeDesktopIdentity.runtimeIdentity,
+        FAROL_NEXT_PREVIEW_SCENARIO: process.argv.includes(
+          "--preview-stream-failure",
+        )
+          ? "stream-failure"
+          : process.env.FAROL_NEXT_E2E === "1" &&
+              process.argv.includes("--preview-runtime-start-failure")
+            ? "startup-failure"
+            : process.argv.includes("--preview-failure")
+              ? "failure"
+              : "normal",
+        FAROL_NEXT_PREVIEW_MODE: demoMode ? "demo" : "empty",
+      },
+      stdio: ["ignore", "ignore", "ignore", "ipc"],
+      serialization: "advanced",
+      windowsHide: true,
     },
-    serviceName: activeDesktopIdentity.runtimeServiceName,
-    stdio: "ignore",
-  });
+  );
   runtimeChild = child;
   try {
     runtime = await new Promise<RuntimeReady>((resolve, reject) => {
@@ -10179,6 +10204,12 @@ async function startRuntime(): Promise<void> {
         settled = true;
         reject(new Error("RUNTIME_START_TIMEOUT"));
       }, 10_000);
+      child.once("error", () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(new Error("RUNTIME_PROCESS_NOT_STARTED"));
+      });
       child.once("exit", (code) => {
         clearTimeout(timer);
         if (settled) {
@@ -10847,7 +10878,7 @@ async function createWindow(): Promise<void> {
       : {}),
     show: false,
     webPreferences: {
-      preload: path.join(directory, "preload.cjs"),
+      preload: path.join(desktopExecutionResources().directory, "preload.cjs"),
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
@@ -10893,7 +10924,9 @@ async function createWindow(): Promise<void> {
     windowPresentationReady = false;
   });
   if (!startupIsCurrent()) return;
-  await taskViewHost.loadFile(path.join(directory, "shell.html"));
+  await taskViewHost.loadFile(
+    path.join(desktopExecutionResources().directory, "shell.html"),
+  );
   // Keep the admitted load's outcome, but a withdrawn host cannot dispatch
   // another startup stage or publish readiness for its replacement.
   if (!startupIsCurrent()) return;
@@ -11103,7 +11136,7 @@ function stopRuntime(): void {
   stopStreams();
   pendingComputer.clear();
   taskSurfaceFailures.clear();
-  runtimeChild?.postMessage("shutdown");
+  runtimeChild?.send("shutdown", () => {});
 }
 
 function disposeChatGptRoutes(): void {
@@ -11378,6 +11411,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       root: secureMcpConnectorRoot(),
       homePath: await codexHostProcessHomePath(),
       tempPath: app.getPath("temp"),
+      electronPath: desktopExecutionResources().executable,
+      recheckExecution: desktopExecutionResources().recheck,
     },
     { onLifecycleObservation: reportOwnedBackendLifecycle },
   );
