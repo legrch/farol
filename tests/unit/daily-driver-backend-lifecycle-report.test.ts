@@ -216,11 +216,67 @@ it("selects Shell for the actual desktop caller only in its supported layout", (
         : "/synthetic/repo/_output/build/app";
       const actual = vm.runInNewContext(
         `${stripTypeScriptTypes(selector)}; ({${stripTypeScriptTypes(property)}}).compiledShell`,
-        { path, compiledGoShell, runtimeEnvironment, directory },
+        {
+          path,
+          compiledGoShell,
+          runtimeEnvironment,
+          directory,
+          installedResourcesOrigin: undefined,
+        },
       );
       expect(actual).toBe(
         runtimeEnvironment === "dev" && !packaged ? undefined : compiledGoShell,
       );
     }
   }
+});
+
+it("uses the authenticated private image for the actual Go and Shell caller", () => {
+  const call = selected(
+    main,
+    mainTree,
+    (node) =>
+      node.type === "CallExpression" &&
+      (node.callee as { name?: string }).name === "startDesktopGoCore",
+  );
+  const tree = parse(call, { sourceType: "module", plugins: ["typescript"] });
+  const root = selected(
+    call,
+    tree,
+    (node) =>
+      node.type === "ObjectProperty" &&
+      (node.key as { name?: string }).name === "artifactRoot",
+  );
+  const shell = selected(
+    call,
+    tree,
+    (node) =>
+      node.type === "ObjectProperty" &&
+      (node.key as { name?: string }).name === "compiledShell",
+  );
+  const selector = selected(
+    host,
+    hostTree,
+    (node) =>
+      node.type === "FunctionDeclaration" &&
+      (node.id as { name?: string } | undefined)?.name ===
+        "desktopShellSelection",
+  );
+  const privateRoot = "/owner-private/Farol.app/Contents/Resources/app";
+  const compiledGoShell = {
+    support: "controlled",
+    watchdogSource: new Uint8Array(),
+  };
+  const value = vm.runInNewContext(
+    `${stripTypeScriptTypes(selector)}; ({${stripTypeScriptTypes(root)},${stripTypeScriptTypes(shell)}})`,
+    {
+      path,
+      compiledGoShell,
+      runtimeEnvironment: "preview",
+      directory: "/Applications/Farol.app/Contents/Resources/app",
+      installedResourcesOrigin: { execution: { directory: privateRoot } },
+    },
+  );
+  expect(value.artifactRoot).toBe(privateRoot);
+  expect(value.compiledShell).toBe(compiledGoShell);
 });

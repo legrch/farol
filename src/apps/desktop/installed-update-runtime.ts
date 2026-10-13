@@ -1223,26 +1223,32 @@ export async function waitForInstalledUpdateRelaunch(
   };
   await observe(true);
   // The caller invokes this under its existing lease before readiness/marker.
-  if (privateLaunch) {
+  if (slot === "/Applications/Farol.app") {
     if (!pinned || !options.copyApp || !options.physicalFiles)
       throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
     const operation = pinned;
+    const expected =
+      hint.phase === "completed" ? operation.target : operation.source;
     execution ??= captureInstalledExecutionSnapshot({
       sourceApp: actualApp,
       sourceExecutable: process.execPath,
       privateParent: root,
-      expectedDigest: operation.target.digest,
+      expectedDigest: expected.digest,
       copyApp: options.copyApp,
       physicalFiles: options.physicalFiles,
     });
     const captured = await execution;
-    if (captured.digest !== operation.target.digest)
+    if (captured.digest !== expected.digest)
       throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
     const resourcesOrigin: InstalledUpdateResourcesOrigin = Object.freeze({
-      kind: "private-launch",
+      ...(privateLaunch
+        ? {
+            kind: "private-launch" as const,
+            operationId: operation.operationId,
+          }
+        : { kind: "shared-slot" as const }),
       slot: "/Applications/Farol.app",
       app: actualApp,
-      operationId: operation.operationId,
       execution: captured,
       recheck: async () => {
         // The Ready receipt is consumed by initialization. Executable authority

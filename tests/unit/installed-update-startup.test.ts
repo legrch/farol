@@ -346,6 +346,44 @@ describe("installed updater startup correlation (pure ports only)", () => {
     ).rejects.toThrow();
     expect(captureMock).not.toHaveBeenCalled();
   });
+  it("carries an accepted public shared relaunch hint into immutable backend resources", async () => {
+    const f = fixture();
+    const publicDirectory = "/Applications/Farol.app/Contents/Resources/app";
+    f.records.set(
+      path.join(opRoot, "slot-binding.json"),
+      JSON.parse(installedSlotBindingBytes(operation, "shared").toString()),
+    );
+    f.records.set(
+      path.join(publicDirectory, "build-identity.json"),
+      targetBuild,
+    );
+    f.builds.set("/Applications/Farol.app", target);
+    const recheck = vi.fn().mockResolvedValue(undefined);
+    captureMock.mockResolvedValue({
+      app: "/owner-private/Farol.app",
+      directory: "/owner-private/Farol.app/Contents/Resources/app",
+      executable: "/owner-private/Electron",
+      digest: target.digest,
+      recheck,
+    });
+    const guard = await waitForInstalledUpdateRelaunch({
+      ...f.options,
+      directory: publicDirectory,
+      physicalFiles: fs,
+      copyApp: vi.fn().mockResolvedValue(undefined),
+    });
+    expect(guard!.resourcesOrigin).toMatchObject({
+      kind: "shared-slot",
+      app: "/Applications/Farol.app",
+      execution: {
+        directory: "/owner-private/Farol.app/Contents/Resources/app",
+      },
+    });
+    expect(captureMock.mock.calls[0]![0]).toMatchObject({
+      sourceApp: "/Applications/Farol.app",
+      expectedDigest: target.digest,
+    });
+  });
   it("carries a correlated private shared launch into updater execution after Ready is consumed", async () => {
     const f = fixture();
     const privateApp = path.join(opRoot, "launch-Farol.app");
