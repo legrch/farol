@@ -583,6 +583,16 @@ def recheck_parent(request, home_fd, parent_fd):
         os.close(current)
 
 
+def recheck_destination(request, home_fd, parent_fd, expected):
+    recheck_parent(request, home_fd, parent_fd)
+    try:
+        named = os.stat(APP_NAME, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError:
+        refuse(EXIT_PATH)
+    if identity(named) != expected:
+        refuse(EXIT_PATH)
+
+
 def run(request):
     verify_inherited_lease(request)
     home_fd = open_absolute_directory(request["home"])
@@ -592,6 +602,7 @@ def run(request):
     destination_identity = None
     destination_created = False
     completed = False
+    receipt_published = False
     try:
         verify_inherited_lease(request)
         if request.get("installLocation", "legacy") == "legacy":
@@ -631,12 +642,15 @@ def run(request):
             refuse(EXIT_DIGEST)
         os.fsync(destination_fd)
         verify_inherited_lease(request)
-        recheck_parent(request, home_fd, parent_fd)
+        recheck_destination(request, home_fd, parent_fd, destination_identity)
         write_receipt(parent_fd, request["receiptBytes"])
+        receipt_published = True
+        recheck_destination(request, home_fd, parent_fd, destination_identity)
         completed = True
         os.write(1, MAGIC)
     finally:
-        if destination_created and not completed and destination_fd is not None:
+        if (destination_created and not completed and not receipt_published
+                and destination_fd is not None):
             try:
                 current = os.stat(APP_NAME, dir_fd=parent_fd, follow_symlinks=False)
                 if identity(current) == destination_identity:

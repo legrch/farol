@@ -69,12 +69,13 @@ async function applyWithLease(options, apply = runPromotionApply) {
   }
 }
 
-async function runWithReceiptFailure({
+async function runWithNativeFault({
   home,
   source,
   artifactSha256,
   lease,
   onChildStarted,
+  fault = "receipt-failure",
 }) {
   const transfer = await createPromotionLeaseTransfer(lease);
   if (!(await transfer.verify())) throw new Error("PROMOTION_LEASE_LOST");
@@ -82,6 +83,7 @@ async function runWithReceiptFailure({
   const program = `
 import importlib.util
 import json
+import os
 import sys
 
 spec = importlib.util.spec_from_file_location("farol_promotion_apply", sys.argv[1])
@@ -91,7 +93,35 @@ spec.loader.exec_module(helper)
 def fail_receipt(_parent_fd, _payload):
     helper.refuse(helper.EXIT_RECEIPT)
 
-helper.write_receipt = fail_receipt
+fault = sys.argv[6]
+def displace():
+    applications = os.path.join(sys.argv[2], "Applications")
+    os.rename(os.path.join(applications, "Farol.app"),
+              os.path.join(applications, "Farol.retained.app"))
+    if fault.endswith("replaced"):
+        replacement = os.path.join(applications, "Farol.app")
+        os.mkdir(replacement, 0o755)
+        with open(os.path.join(replacement, "sentinel"), "w") as stream:
+            stream.write("foreign replacement")
+
+original_copy = helper.copy_tree
+original_receipt = helper.write_receipt
+def copy_then_displace(source_fd, destination_fd, state, depth=0):
+    original_copy(source_fd, destination_fd, state, depth)
+    if depth == 0:
+        displace()
+def receipt_then_displace(parent_fd, payload):
+    original_receipt(parent_fd, payload)
+    displace()
+
+if fault == "receipt-failure":
+    helper.write_receipt = fail_receipt
+elif fault.startswith("after-copy-"):
+    helper.copy_tree = copy_then_displace
+elif fault.startswith("after-receipt-"):
+    helper.write_receipt = receipt_then_displace
+else:
+    raise RuntimeError("INVALID_FIXTURE_FAULT")
 request = {
     "home": sys.argv[2],
     "source": sys.argv[3],
@@ -119,6 +149,7 @@ raise SystemExit(0)
       source,
       artifactSha256,
       JSON.stringify({ file: lease.file, ...transfer.identity }),
+      fault,
     ],
     {
       stdio: [
@@ -133,6 +164,8 @@ raise SystemExit(0)
     },
   );
   const stderr = [];
+  const stdout = [];
+  child.stdout.on("data", (chunk) => stdout.push(chunk));
   child.stderr.on("data", (chunk) => stderr.push(chunk));
   let failure;
   child.once("error", (error) => {
@@ -140,7 +173,12 @@ raise SystemExit(0)
   });
   const closed = new Promise((resolve) => {
     child.once("close", (code, signal) =>
-      resolve({ code, signal, stderr: Buffer.concat(stderr).toString("utf8") }),
+      resolve({
+        code,
+        signal,
+        stderr: Buffer.concat(stderr).toString("utf8"),
+        stdout: Buffer.concat(stdout).toString("utf8"),
+      }),
     );
   });
   onChildStarted?.(closed);
@@ -179,6 +217,59 @@ describe("descriptor-bound promotion apply", () => {
       fs.lstat(path.join(legacy, "Farol.app")),
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it.each([
+    "after-copy-missing",
+    "after-copy-replaced",
+    "after-receipt-missing",
+    "after-receipt-replaced",
+  ])(
+    "never reports promotion success after named app displacement: %s",
+    async (fault) => {
+      const { source, home, applications } = await fixture();
+      const destination = path.join(applications, "Farol.app");
+      const receipt = `${destination}.receipt.json`;
+      const outcome = await applyWithLease(
+        {
+          home,
+          source,
+          artifactSha256: await treeDigest(source),
+          fault,
+        },
+        runWithNativeFault,
+      );
+      expect(outcome).toEqual({
+        code: 71,
+        signal: null,
+        stderr: "",
+        stdout: "",
+      });
+      await expect(
+        fs.readFile(
+          path.join(applications, "Farol.retained.app", "Contents", "payload"),
+          "utf8",
+        ),
+      ).resolves.toBe("exact\n");
+      if (fault.endsWith("replaced")) {
+        await expect(
+          fs.readFile(path.join(destination, "sentinel"), "utf8"),
+        ).resolves.toBe("foreign replacement");
+      } else {
+        await expect(fs.lstat(destination)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
+      if (fault.startsWith("after-receipt-")) {
+        await expect(fs.readFile(receipt, "utf8")).resolves.toBe(
+          '{"operation":"applied"}\n',
+        );
+      } else {
+        await expect(fs.lstat(receipt)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
+    },
+  );
 
   it("refuses an existing destination without changing it", async () => {
     const { source, home, applications } = await fixture();
@@ -274,10 +365,10 @@ describe("descriptor-bound promotion apply", () => {
         source,
         artifactSha256: await treeDigest(source),
       },
-      runWithReceiptFailure,
+      runWithNativeFault,
     );
 
-    expect(outcome).toEqual({ code: 75, signal: null, stderr: "" });
+    expect(outcome).toEqual({ code: 75, signal: null, stderr: "", stdout: "" });
     await expect(fs.lstat(destination)).rejects.toMatchObject({
       code: "ENOENT",
     });

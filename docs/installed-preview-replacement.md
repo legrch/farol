@@ -147,3 +147,11 @@ Parent integration, a new clean committed candidate, package verification,
 independent review and the explicitly selected production step remain separate
 acceptance boundaries. No existing artifact at the prior source identity gains
 this fence merely because the source tests pass.
+
+Ordinary promotion rechecks the selected application entry against the held
+copied directory before receipt publication and immediately before its success
+response. Application displacement within an unchanged Applications directory
+never yields a successful helper response. If displacement is observed after
+receipt publication, the receipt and copied/displaced resources remain retained
+for reconciliation; their presence alone is not confirmed placement. These are
+bounded point-in-time checks, not a claim of permanent namespace exclusion.
