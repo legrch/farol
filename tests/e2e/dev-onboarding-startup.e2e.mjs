@@ -443,11 +443,44 @@ try {
     "This Mac",
     "Connection",
     "Shortcuts",
-    "Updates",
     "Diagnostics",
   ]) {
     await settingsPage(window, name);
   }
+  assert.deepEqual(
+    await window
+      .locator('nav[aria-label="Settings navigation"] button')
+      .allTextContents(),
+    [
+      "General",
+      "Appearance",
+      "Workspaces",
+      "This Mac",
+      "Connection",
+      "Keyboard shortcuts",
+      "Diagnostics",
+    ],
+    "SETTINGS_NAVIGATION_MUST_NOT_RESTORE_UPDATES_PAGE",
+  );
+  assert.equal(
+    await application.evaluate(({ Menu }) => {
+      let count = 0;
+      const visit = (items) => {
+        for (const item of items) {
+          if (item.label === "Check for Updates…") count++;
+          if (item.submenu) visit(item.submenu.items);
+        }
+      };
+      visit(Menu.getApplicationMenu()?.items ?? []);
+      return count;
+    }),
+    1,
+    "NATIVE_CHECK_FOR_UPDATES_ENTRY_REQUIRED",
+  );
+  report.checks.push(
+    "current-Settings-navigation-with-native-update-menu-and-no-Updates-page",
+  );
+  await save();
   await settingsPage(window, "Appearance");
   await window.getByRole("button", { name: "Graphite", exact: true }).click();
   await window
