@@ -3,6 +3,11 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+const captureMock = vi.hoisted(() => vi.fn());
+vi.mock("../../src/apps/desktop/installed-execution-snapshot", () => ({
+  captureInstalledExecutionSnapshot: captureMock,
+}));
+import fs from "node:fs/promises";
 import {
   waitForInstalledUpdateRelaunch,
   type InstalledUpdateRelaunchOptions,
@@ -264,6 +269,7 @@ function rejectedFixture() {
 }
 
 beforeEach(() => {
+  captureMock.mockReset();
   vi.spyOn(process, "getuid").mockReturnValue(501);
   vi.spyOn(os, "userInfo").mockReturnValue({
     username: "fixture",
@@ -276,6 +282,141 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("installed updater startup correlation (pure ports only)", () => {
+  it("carries a correlated private shared launch into updater execution after Ready is consumed", async () => {
+    const f = fixture();
+    const privateApp = path.join(opRoot, "launch-Farol.app");
+    const privateDirectory = path.join(privateApp, "Contents/Resources/app");
+    f.records.set(
+      path.join(opRoot, "slot-binding.json"),
+      JSON.parse(installedSlotBindingBytes(operation, "shared").toString()),
+    );
+    f.records.set(
+      path.join(privateDirectory, "build-identity.json"),
+      targetBuild,
+    );
+    f.builds.set("/Applications/Farol.app", target);
+    const recheck = vi.fn().mockResolvedValue(undefined);
+    captureMock.mockResolvedValue({
+      app: "/fixture-private/image",
+      directory: "/fixture-private/resources",
+      executable: "/fixture-private/executable",
+      digest: target.digest,
+      recheck,
+    });
+    const guard = await waitForInstalledUpdateRelaunch({
+      ...f.options,
+      directory: privateDirectory,
+      physicalFiles: fs,
+      copyApp: vi.fn().mockResolvedValue(undefined),
+    });
+    expect(guard!.resourcesOrigin).toMatchObject({
+      slot: "/Applications/Farol.app",
+      app: privateApp,
+      operationId,
+    });
+    expect(captureMock.mock.calls[0]![0]).toMatchObject({
+      sourceApp: privateApp,
+      expectedDigest: target.digest,
+    });
+    f.records.delete(f.receiptFile);
+    await guard!.resourcesOrigin!.recheck();
+    expect(recheck).toHaveBeenCalledTimes(1);
+    f.records.set(
+      path.join(opRoot, "slot-binding.json"),
+      JSON.parse(installedSlotBindingBytes(operation, "legacy").toString()),
+    );
+    await expect(guard!.resourcesOrigin!.recheck()).rejects.toThrow(
+      "UPDATE_SLOT_BINDING_UNCONFIRMED",
+    );
+  });
+  it("reopens a settled private target without repeating the original helper hint", async () => {
+    const f = fixture();
+    const privateApp = path.join(opRoot, "launch-Farol.app");
+    f.records.set(
+      path.join(opRoot, "slot-binding.json"),
+      JSON.parse(installedSlotBindingBytes(operation, "shared").toString()),
+    );
+    f.records.set(path.join(root, "last-update.json"), {
+      ...f.receipt,
+      operation,
+      observedAt: "2026-10-06T13:00:00.000Z",
+      phase: "completed",
+      runningBuildId: targetBuild.buildId,
+      manifest: {
+        schema: "farol.github-release/1",
+        repository: "legrch/farol",
+        channel: "owner-beta",
+        product: "Farol Next Preview",
+        bundleId: "local.farol.next.preview",
+        version: targetBuild.version,
+        buildVersion: targetBuild.buildVersion,
+        sourceCommit: targetBuild.sourceCommit,
+        sourceTreeDigest: targetBuild.sourceTreeDigest,
+        buildId: targetBuild.buildId,
+        artifactSha256: target.digest,
+        archiveSha256: "a".repeat(64),
+        archiveName: "Farol-" + targetBuild.version + "-darwin-arm64.zip",
+        archiveSize: 100,
+        platform: "darwin",
+        arch: "arm64",
+        signing: "unsigned",
+        notarized: false,
+        sourceDirty: false,
+      },
+    });
+    f.records.delete(f.receiptFile);
+    f.builds.set("/Applications/Farol.app", target);
+    const recheck = vi.fn().mockResolvedValue(undefined);
+    captureMock.mockResolvedValue({
+      app: "/fixture-private/image",
+      directory: "/fixture-private/resources",
+      executable: "/fixture-private/executable",
+      digest: target.digest,
+      recheck,
+    });
+    const guard = await waitForInstalledUpdateRelaunch({
+      ...f.options,
+      args: [],
+      directory: path.join(privateApp, "Contents/Resources/app"),
+      physicalFiles: fs,
+      copyApp: vi.fn().mockResolvedValue(undefined),
+    });
+    expect(guard!.resourcesOrigin!.app).toBe(privateApp);
+    await guard!.recheck();
+    expect(f.observation.readProcess).not.toHaveBeenCalled();
+    expect(f.options.pause).not.toHaveBeenCalled();
+    expect(captureMock).toHaveBeenCalledTimes(1);
+  });
+  it("refuses normal private reopen without a settled current receipt", async () => {
+    const f = fixture();
+    f.records.set(
+      path.join(opRoot, "slot-binding.json"),
+      JSON.parse(installedSlotBindingBytes(operation, "shared").toString()),
+    );
+    await expect(
+      waitForInstalledUpdateRelaunch({
+        ...f.options,
+        args: [],
+        directory: path.join(opRoot, "launch-Farol.app/Contents/Resources/app"),
+        physicalFiles: fs,
+        copyApp: vi.fn().mockResolvedValue(undefined),
+      }),
+    ).rejects.toThrow();
+    expect(captureMock).not.toHaveBeenCalled();
+    expect(f.observation.readProcess).not.toHaveBeenCalled();
+  });
+  it("rejects a private launch bound to the legacy slot before capture", async () => {
+    const f = fixture();
+    await expect(
+      waitForInstalledUpdateRelaunch({
+        ...f.options,
+        directory: path.join(opRoot, "launch-Farol.app/Contents/Resources/app"),
+        physicalFiles: fs,
+        copyApp: vi.fn().mockResolvedValue(undefined),
+      }),
+    ).rejects.toThrow("UPDATE_SLOT_BINDING_UNCONFIRMED");
+    expect(captureMock).not.toHaveBeenCalled();
+  });
   it("admits the healthy source with exact rejected-corrupt proof without verifying rejected bytes", async () => {
     const f = rejectedFixture();
     const admission = await waitForInstalledUpdateRelaunch(f.options);

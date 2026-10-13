@@ -1035,7 +1035,120 @@ def closed_rollback_pair(apps, op, request):
     return (phase, journal, *pair)
 
 
-def relaunch_arguments(request, completion):
+PRIVATE_LAUNCH_APP = "launch-Farol.app"
+
+
+def private_launch_path(request):
+    return os.path.join(request["home"], *ROOT_PARTS, request["operationId"], PRIVATE_LAUNCH_APP)
+
+
+def copy_launch_tree(source, destination, budget, depth=0):
+    """Copy authenticated executable resources through held directory handles.
+
+    No source symlink is followed. The independently expected complete tree is
+    verified after copying; unknown/partial copies remain private and unadopted.
+    """
+    if depth > MAX_DEPTH:
+        fail("launch_copy_limit")
+    for name in sorted(os.listdir(source)):
+        if name in ("", ".", "..") or "/" in name:
+            fail("launch_copy_name")
+        budget["entries"] += 1
+        if budget["entries"] > MAX_ENTRIES:
+            fail("launch_copy_limit")
+        listed = os.stat(name, dir_fd=source, follow_symlinks=False)
+        mode = stat.S_IMODE(listed.st_mode)
+        if listed.st_uid != os.geteuid() or mode & 0o022:
+            # Framework links commonly carry 0777; only their text is copied.
+            if not stat.S_ISLNK(listed.st_mode):
+                fail("launch_copy_mode")
+        if stat.S_ISDIR(listed.st_mode):
+            os.mkdir(name, 0o700, dir_fd=destination)
+            reader, writer = open_dir(source, name), open_dir(destination, name)
+            try:
+                copy_launch_tree(reader, writer, budget, depth + 1)
+                os.fchmod(writer, mode)
+                os.fsync(writer)
+            finally:
+                os.close(writer)
+                os.close(reader)
+        elif stat.S_ISLNK(listed.st_mode):
+            link = os.readlink(name, dir_fd=source)
+            if not link or posixpath.isabs(link) or len(os.fsencode(link)) > 4096:
+                fail("launch_copy_link")
+            os.symlink(link, name, dir_fd=destination)
+        elif stat.S_ISREG(listed.st_mode):
+            if listed.st_nlink != 1:
+                fail("launch_copy_file")
+            reader = os.open(name, FILE_FLAGS, dir_fd=source)
+            writer = None
+            try:
+                opened = os.fstat(reader)
+                if identity(opened) != identity(listed) or opened.st_nlink != 1:
+                    fail("launch_copy_changed")
+                writer = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                                 0o600, dir_fd=destination)
+                size = 0
+                while True:
+                    data = os.read(reader, 1024 * 1024)
+                    if not data:
+                        break
+                    size += len(data)
+                    budget["bytes"] += len(data)
+                    if budget["bytes"] > MAX_BYTES:
+                        fail("launch_copy_limit")
+                    offset = 0
+                    while offset < len(data):
+                        written = os.write(writer, data[offset:])
+                        if written <= 0:
+                            fail("launch_copy_write")
+                        offset += written
+                after = os.fstat(reader)
+                if (identity(after) != identity(opened) or after.st_size != opened.st_size
+                        or size != opened.st_size or after.st_mtime_ns != opened.st_mtime_ns
+                        or after.st_ctime_ns != opened.st_ctime_ns):
+                    fail("launch_copy_changed")
+                os.fchmod(writer, mode)
+                os.fsync(writer)
+            finally:
+                if writer is not None:
+                    os.close(writer)
+                os.close(reader)
+        else:
+            fail("launch_copy_type")
+
+
+def capture_private_launch(apps, op, request):
+    """One private target for automatic shared-slot execution, never the slot."""
+    binding_directory(op)
+    verify_slot_binding(op, request)
+    expected = request["target"]
+    checked_tree(apps, APP, expected["digest"], expected["version"], expected["buildId"])
+    source = open_dir(apps, APP)
+    source_identity = identity(os.fstat(source))
+    temporary = ".launch-capture-" + os.urandom(12).hex()
+    os.mkdir(temporary, 0o700, dir_fd=op)
+    destination = open_dir(op, temporary)
+    try:
+        copy_launch_tree(source, destination, {"entries": 0, "bytes": 0})
+        if identity(entry(apps, APP)) != source_identity:
+            fail("launch_source_changed")
+        checked_tree(op, temporary, expected["digest"], expected["version"], expected["buildId"])
+        os.fsync(destination)
+        verify_slot_binding(op, request)
+        # Never overwrite or adopt an existing launch image from an unknown run.
+        if entry(op, PRIVATE_LAUNCH_APP) is not None:
+            fail("launch_image_exists")
+        rename_checked(op, temporary, op, PRIVATE_LAUNCH_APP, identity(os.fstat(destination)))
+        os.fsync(op)
+        checked_tree(op, PRIVATE_LAUNCH_APP, expected["digest"], expected["version"], expected["buildId"])
+        return private_launch_path(request)
+    finally:
+        os.close(destination)
+        os.close(source)
+
+
+def relaunch_arguments(request, completion, launch_path=None):
     """Correlate this single launch while the existing owner lease remains held.
 
     The target observes this exact helper's completion before its first startup
@@ -1060,7 +1173,15 @@ def relaunch_arguments(request, completion):
     }, separators=(",", ":"))
     if len(hint.encode("utf-8")) > 2048:
         fail("launch_hint_bound")
-    return ("/usr/bin/open", "-a", selected_slot(request),
+    if request.get("installLocation") == "shared":
+        if launch_path != private_launch_path(request):
+            fail("launch_image_unconfirmed")
+        selected = launch_path
+    else:
+        if launch_path is not None:
+            fail("launch_image_unexpected")
+        selected = selected_slot(request)
+    return ("/usr/bin/open", "-a", selected,
             "--args", "--farol-installed-update-relaunch=" + hint)
 
 
@@ -1266,11 +1387,12 @@ def run(request):
         # launch-requested records are still observational and never retried.
         if request["relaunch"] and phase == "verified":
             launch_requested, completed = "launch_requested", "completed"
+            launch_path = capture_private_launch(apps, op, request) if location == "shared" else None
             fence()
             write_operation_journal(op, request, launch_requested)
             # One request only. A failed/unknown launch remains explicit for caller reconciliation.
             assert_parent_path(request["home"], home, apps, location)
-            result = subprocess.run(relaunch_arguments(request, completed), timeout=10, check=False)
+            result = subprocess.run(relaunch_arguments(request, completed, launch_path), timeout=10, check=False)
             if result.returncode != 0:
                 fail("launch_failed", launch_requested)
             write_operation_journal(op, request, completed)

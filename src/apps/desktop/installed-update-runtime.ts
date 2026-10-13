@@ -62,6 +62,7 @@ import type {
   InstalledPredecessorControl,
 } from "./installed-predecessor";
 import { originalPredecessorSettingsReadable } from "./beta3-state-readability";
+import { treeDigest } from "../../pkg/artifact-tree-digest/digest";
 
 import {
   captureInstalledExecutionSnapshot,
@@ -532,6 +533,18 @@ async function confirmRejectedTarget(
   return witness;
 }
 
+export type InstalledUpdateResourcesOrigin = Readonly<{
+  slot: "/Applications/Farol.app";
+  app: string;
+  operationId: string;
+  execution: InstalledExecutionSnapshot;
+  recheck(): Promise<void>;
+}>;
+export type InstalledUpdateRelaunchGuard = Readonly<{
+  recheck(): Promise<void>;
+  resourcesOrigin?: InstalledUpdateResourcesOrigin;
+}>;
+
 export type InstalledUpdateRelaunchOptions = Readonly<{
   args: readonly string[];
   directory: string;
@@ -561,15 +574,159 @@ export type InstalledUpdateRelaunchOptions = Readonly<{
   }>;
 }>;
 
+// LaunchServices can reopen the last private image without its one-shot hint.
+// Such a reopen still requires the genuine settled generation and slot binding.
+async function observeCompletedPrivateLaunch(
+  options: InstalledUpdateRelaunchOptions,
+): Promise<InstalledUpdateRelaunchGuard | null> {
+  const profile = path.join(
+    os.userInfo().homedir,
+    "Library/Application Support/Farol Next Preview",
+  );
+  const root = path.join(profile, "installed-updates");
+  const app = path.resolve(options.directory, "../../..");
+  const relative = path.relative(root, app).split(path.sep);
+  if (
+    relative.length !== 2 ||
+    !/^[a-f0-9]{32}$/u.test(relative[0]!) ||
+    relative[1] !== "launch-Farol.app"
+  )
+    return null;
+  if (
+    options.userData !== profile ||
+    !options.copyApp ||
+    !options.physicalFiles ||
+    options.directory !== path.join(app, "Contents/Resources/app")
+  )
+    throw new Error("UPDATE_RELAUNCH_IDENTITY_MISMATCH");
+  const build = BuildIdentitySchema.parse(options.build);
+  if (
+    build.sourceDirty ||
+    !build.buildVersion ||
+    !["github-owner-beta", "github-stable"].includes(build.updateChannel) ||
+    createHash("sha256")
+      .update(canonicalBuildIdentityPayload(build))
+      .digest("hex") !== build.buildId
+  )
+    throw new Error("UPDATE_RELAUNCH_IDENTITY_MISMATCH");
+  const read = options.observation?.readRecord ?? readRecord;
+  const canonical =
+    options.observation?.canonicalOwnedDirectory ?? canonicalOwnedDirectory;
+  const binding = Operation.extend({
+    schema: z.literal("farol.installed-operation-slot/1"),
+    installLocation: z.literal("shared"),
+  }).parse(
+    await read(path.join(root, relative[0]!, INSTALLED_SLOT_BINDING_FILE)),
+  );
+  const operation = Operation.parse({
+    operationId: binding.operationId,
+    source: binding.source,
+    target: binding.target,
+  });
+  if (
+    operation.operationId !== relative[0] ||
+    operation.target.buildId !== build.buildId ||
+    operation.target.version !== build.version
+  )
+    throw new Error("UPDATE_RELAUNCH_IDENTITY_MISMATCH");
+  await readOperationBinding(root, operation, "shared", read);
+  const settled = async () => {
+    for (const [directory, privateMode] of [
+      [profile, true],
+      [root, true],
+      [path.join(root, operation.operationId), true],
+      [app, true],
+      ["/Applications/Farol.app", false],
+    ] as const)
+      await canonical(directory, privateMode);
+    const receipt = SavedReceipt.parse(
+      await read(path.join(root, "last-update.json")),
+    );
+    const parsed = parseRetainedGithubReleaseManifest(receipt);
+    if (
+      !receipt.operation ||
+      !parsed.ok ||
+      !sameBuild(receipt.operation.target, {
+        digest: parsed.value.artifactSha256,
+        version: parsed.value.version,
+        buildId: parsed.value.buildId,
+      })
+    )
+      throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+    await readOperationBinding(root, receipt.operation, "shared", read);
+    const expected =
+      receipt.phase === "completed"
+        ? receipt.operation.target
+        : [
+              "cancelled",
+              "rolled_back",
+              "cancel_completed",
+              "rollback_completed",
+            ].includes(receipt.phase)
+          ? receipt.operation.source
+          : null;
+    if (
+      !expected ||
+      !sameBuild(expected, operation.target) ||
+      receipt.runningBuildId !== build.buildId
+    )
+      throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+    const measured = options.observation
+      ? AcceptedBuild.parse(
+          await options.observation.readBuild(
+            options.directory,
+            "/Applications/Farol.app",
+            30000,
+          ),
+        )
+      : {
+          ...expected,
+          digest: await treeDigest(
+            "/Applications/Farol.app",
+            options.physicalFiles,
+          ),
+        };
+    if (!sameBuild(measured, expected))
+      throw new Error("UPDATE_ACCEPTED_SOURCE_CHANGED");
+    await canonical("/Applications/Farol.app", false);
+  };
+  await settled();
+  const execution = await captureInstalledExecutionSnapshot({
+    sourceApp: app,
+    sourceExecutable: process.execPath,
+    privateParent: root,
+    expectedDigest: operation.target.digest,
+    copyApp: options.copyApp,
+    physicalFiles: options.physicalFiles,
+  });
+  const resourcesOrigin: InstalledUpdateResourcesOrigin = Object.freeze({
+    slot: "/Applications/Farol.app",
+    app,
+    operationId: operation.operationId,
+    execution,
+    recheck: async () => {
+      await readOperationBinding(root, operation, "shared", read);
+      await execution.recheck();
+    },
+  });
+  return Object.freeze({
+    resourcesOrigin,
+    recheck: async () => {
+      await settled();
+      await resourcesOrigin.recheck();
+    },
+  });
+}
+
 /** Observe one explicit updater relaunch before the first startup lease acquire. */
 export async function waitForInstalledUpdateRelaunch(
   options: InstalledUpdateRelaunchOptions,
-): Promise<Readonly<{ recheck(): Promise<void> }> | null> {
+): Promise<InstalledUpdateRelaunchGuard | null> {
   const hints = options.args.filter(
     (arg) =>
       arg === RELAUNCH_ARGUMENT || arg.startsWith(RELAUNCH_ARGUMENT + "="),
   );
-  if (hints.length === 0) return null;
+  if (hints.length === 0) return observeCompletedPrivateLaunch(options);
   const argument = hints[0]!;
   if (hints.length !== 1 || !argument.startsWith(RELAUNCH_ARGUMENT + "="))
     throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
@@ -583,13 +740,23 @@ export async function waitForInstalledUpdateRelaunch(
     throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
   }
   const build = BuildIdentitySchema.parse(options.build);
-  const slot = installedFarolSlot(options.directory);
   const profile = path.join(
     os.userInfo().homedir,
     "Library/Application Support/Farol Next Preview",
   );
-  const directory = path.join(slot, "Contents/Resources/app");
   const root = path.join(profile, "installed-updates");
+  const actualApp = path.resolve(options.directory, "../../..");
+  const privateApp = path.join(root, hint.operationId, "launch-Farol.app");
+  const privateLaunch = actualApp === privateApp;
+  if (privateLaunch && hint.phase !== "completed")
+    throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
+  const slot = privateLaunch
+    ? "/Applications/Farol.app"
+    : installedFarolSlot(options.directory);
+  const directory = path.join(
+    privateLaunch ? privateApp : slot,
+    "Contents/Resources/app",
+  );
   if (
     options.userData !== profile ||
     options.directory !== directory ||
@@ -638,7 +805,7 @@ export async function waitForInstalledUpdateRelaunch(
           const expected =
             hint.phase === "completed" ? pinned.target : pinned.source;
           execution ??= captureInstalledExecutionSnapshot({
-            sourceApp: slot,
+            sourceApp: actualApp,
             sourceExecutable: process.execPath,
             privateParent: root,
             expectedDigest: expected.digest,
@@ -921,6 +1088,36 @@ export async function waitForInstalledUpdateRelaunch(
   };
   await observe(true);
   // The caller invokes this under its existing lease before readiness/marker.
+  if (privateLaunch) {
+    if (!pinned || !options.copyApp || !options.physicalFiles)
+      throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
+    const operation = pinned;
+    execution ??= captureInstalledExecutionSnapshot({
+      sourceApp: actualApp,
+      sourceExecutable: process.execPath,
+      privateParent: root,
+      expectedDigest: operation.target.digest,
+      copyApp: options.copyApp,
+      physicalFiles: options.physicalFiles,
+    });
+    const captured = await execution;
+    if (captured.digest !== operation.target.digest)
+      throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
+    const resourcesOrigin: InstalledUpdateResourcesOrigin = Object.freeze({
+      slot: "/Applications/Farol.app",
+      app: actualApp,
+      operationId: operation.operationId,
+      execution: captured,
+      recheck: async () => {
+        // The Ready receipt is consumed by initialization. Executable authority
+        // subsequently binds the immutable original operation and private bytes,
+        // not that mutable receipt or another public-slot pathname.
+        await readOperationBinding(root, operation, "shared", reads.readRecord);
+        await captured.recheck();
+      },
+    });
+    return Object.freeze({ recheck: () => observe(false), resourcesOrigin });
+  }
   return Object.freeze({ recheck: () => observe(false) });
 }
 
@@ -1179,6 +1376,8 @@ export type InstalledUpdateRuntimeOptions = Readonly<{
   // Electron must copy physical ASAR files, not its virtual archive filesystem.
   copyApp(source: string, destination: string): Promise<void>;
   physicalFiles?: typeof fs;
+  // Only the host's fully correlated private relaunch can supply this origin.
+  resourcesOrigin?: InstalledUpdateResourcesOrigin;
   // Removal has the same physical ASAR boundary as copying a package.
   removeDirectory(directory: string, force: boolean): Promise<void>;
   // Evaluate this existing durable report while admission is held, before
@@ -1436,16 +1635,38 @@ async function createRuntime(
     return null;
   let slot: string;
   try {
-    slot = supervised?.slot ?? installedFarolSlot(options.directory);
+    slot =
+      supervised?.slot ??
+      options.resourcesOrigin?.slot ??
+      installedFarolSlot(options.directory);
   } catch {
     return null;
   }
   const actualApp = path.resolve(options.directory, "../../..");
+  const origin = options.resourcesOrigin;
+  if (origin) {
+    if (
+      supervised ||
+      origin.slot !== "/Applications/Farol.app" ||
+      !/^[a-f0-9]{32}$/u.test(origin.operationId) ||
+      origin.app !==
+        path.join(
+          options.userData,
+          "installed-updates",
+          origin.operationId,
+          "launch-Farol.app",
+        ) ||
+      origin.app !== actualApp
+    )
+      return null;
+    await origin.recheck();
+  }
   // Ordinary checkouts cannot mutate the slot. Only the separate supervisory
   // entry can supply verified controller resources and confirmed closure.
   if (
-    actualApp !== (supervised?.app ?? slot) ||
-    (await fs.realpath(actualApp)) !== (supervised?.app ?? slot) ||
+    actualApp !== (supervised?.app ?? origin?.app ?? slot) ||
+    (await fs.realpath(actualApp)) !==
+      (supervised?.app ?? origin?.app ?? slot) ||
     options.userData !==
       path.join(
         os.userInfo().homedir,
@@ -1474,14 +1695,17 @@ async function createRuntime(
       throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
     beforeEffect();
     // A rejected/unknown capture remains rejected. Never fall back to the slot.
-    execution ??= captureInstalledExecutionSnapshot({
-      sourceApp: slot,
-      sourceExecutable: process.execPath,
-      privateParent: root,
-      expectedDigest: expected.digest,
-      copyApp: options.copyApp,
-      physicalFiles: options.physicalFiles,
-    });
+    if (origin) await origin.recheck();
+    execution ??= origin
+      ? Promise.resolve(origin.execution)
+      : captureInstalledExecutionSnapshot({
+          sourceApp: actualApp,
+          sourceExecutable: process.execPath,
+          privateParent: root,
+          expectedDigest: expected.digest,
+          copyApp: options.copyApp,
+          physicalFiles: options.physicalFiles,
+        });
     const captured = await execution;
     if (captured.digest !== expected.digest)
       throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
@@ -2563,6 +2787,32 @@ async function createRuntime(
       await selectDownload(retained.downloadId);
       const parsed = parseRetainedGithubReleaseManifest(retained);
       if (!parsed.ok) return known("UPDATE_RETAINED_MANIFEST_INVALID");
+      // A newly installed generation has not settled last-update.json yet.
+      // Authenticate observer code from this independently correlated operation,
+      // then leave all physical-pair and terminal checks to recovery below.
+      const executionOperation =
+        retained.operation ?? retained.preparation ?? pending?.operation;
+      if (executionOperation) {
+        if (
+          !sameBuild(executionOperation.target, {
+            digest: parsed.value.artifactSha256,
+            version: parsed.value.version,
+            buildId: parsed.value.buildId,
+          })
+        )
+          return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+        const expected = [
+          executionOperation.source,
+          executionOperation.target,
+        ].find(
+          (value) =>
+            value.buildId === options.build.buildId &&
+            value.version === options.build.version,
+        );
+        if (!expected) return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+        await captureExecution(expected, () => undefined);
+      }
+
       if (
         downloadIntent &&
         (retained.operation !== null ||

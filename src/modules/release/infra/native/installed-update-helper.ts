@@ -9,8 +9,9 @@ import { promisify } from "node:util";
 import { legacyPredecessorRequiresStateRecovery } from "../../domain/predecessor-state";
 
 const HELPER_SHA256 =
-  "49fc9ca7a0d779af97b37ee1d18540107e737807fcefe5a7e6ac0d27fe8a9baa";
-const MAX_HELPER_BYTES = 64 * 1024;
+  "f2f864871ed29536f345f5d9e13e8e74d59a3b4be6f7b7028ef915743b167f85";
+// Bound the pinned helper including private descriptor-copy relaunch support.
+const MAX_HELPER_BYTES = 96 * 1024;
 const APP_NAME = "Farol.app";
 const execFileAsync = promisify(execFile);
 const sha = /^[0-9a-f]{64}$/u;

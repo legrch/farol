@@ -62,6 +62,7 @@ import { promises as rawFs } from "original-fs";
 import {
   createInstalledUpdateRuntime,
   waitForInstalledUpdateRelaunch,
+  type InstalledUpdateResourcesOrigin,
 } from "./installed-update-runtime";
 import { drainInstalledComputer } from "./installed-computer-drain";
 import {
@@ -818,6 +819,7 @@ let connectorTransportTimer: NodeJS.Timeout | null = null;
 // start with authority that a concurrent change is about to replace.
 const authorityTransitions = new AuthorityTransitionReservation();
 let installedUpdater: InstalledUpdater | null = null;
+let installedResourcesOrigin: InstalledUpdateResourcesOrigin | undefined;
 const quitUpdatePreparation = createQuitUpdatePreparation(
   () => installedUpdater,
 );
@@ -869,6 +871,9 @@ async function initializeInstalledUpdater(): Promise<void> {
       userData: app.getPath("userData"),
       build: buildIdentity,
       physicalFiles: rawFs,
+      ...(installedResourcesOrigin
+        ? { resourcesOrigin: installedResourcesOrigin }
+        : {}),
       copyApp: (source, destination) =>
         rawFs.cp(source, destination, {
           recursive: true,
@@ -11129,6 +11134,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         preserveTimestamps: true,
       }),
   });
+  installedResourcesOrigin = updateRelaunch?.resourcesOrigin;
   const stateRoot = path.join(app.getPath("userData"), "farol-next-state");
   const previousRunClean = await withStartupPromotionLease(
     app.getPath("userData"),

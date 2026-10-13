@@ -6063,6 +6063,70 @@ describe("selected shared slot (redirected disposable filesystem, mocked helper)
     expect(mocks.exec).not.toHaveBeenCalled();
     expect(mocks.helper).not.toHaveBeenCalled();
   });
+  it("authenticates a completed shared target before settling the predecessor receipt", async () => {
+    await shared();
+    const controller = await prepared();
+    await controller.restart();
+    const retained = JSON.parse(await fs.readFile(ready, "utf8"));
+    const op = retained.operation;
+    const opRoot = path.join(userData, "installed-updates", op.operationId);
+    await fs.mkdir(path.join(opRoot, "previous.app"));
+    await fs.writeFile(
+      path.join(opRoot, "journal.json"),
+      JSON.stringify({
+        schema: "farol.installed-update-journal/1",
+        ...op,
+        phase: "completed",
+      }),
+      { mode: 0o600 },
+    );
+    mocks.exec.mockImplementation(async (file: string, args: string[]) => {
+      if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+      return {
+        stdout: JSON.stringify(
+          args[0]!.endsWith("update-obligations.mjs")
+            ? {
+                drained: true,
+                obligationCount: 0,
+                unreadableCount: 0,
+                changedCount: 0,
+                obligations: [],
+              }
+            : args[1] === slot
+              ? target
+              : source,
+        ),
+      };
+    });
+    const updated = await createInstalledUpdateRuntime({
+      ...options(),
+      build: {
+        ...build,
+        version: target.version,
+        buildId: target.buildId,
+      },
+    });
+    await updated!.initialize();
+    expect(updated!.snapshot()).toMatchObject({
+      phase: "idle",
+      rollbackVersion: source.version,
+    });
+    const receipt = JSON.parse(
+      await fs.readFile(
+        path.join(userData, "installed-updates/last-update.json"),
+        "utf8",
+      ),
+    );
+    expect(receipt.runningBuildId).toBe(target.buildId);
+    expect(mocks.captureExecution.mock.calls.at(-1)![0].expectedDigest).toBe(
+      target.digest,
+    );
+    await expect(fs.stat(ready)).rejects.toMatchObject({ code: "ENOENT" });
+    mocks.discover.mockResolvedValueOnce({ ok: true, value: null });
+    await updated!.check(true);
+    expect(updated!.snapshot().phase).toBe("idle");
+    expect(mocks.helper).toHaveBeenCalledTimes(1);
+  });
   it("does not consume a shared operation after reopening the legacy copy with identical builds", async () => {
     const fixture = await shared();
     const first = await prepared();

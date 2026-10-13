@@ -31,6 +31,27 @@ legacy-only wire behavior and app/build validation. Receipt and journal schemas 
 unchanged. App content/build digests, user ownership, promotion and updater locks,
 atomic swaps, descriptor-bound mutation and unknown-outcome fences still apply.
 
+Shared-slot tool execution is authenticated before any bundled observer or
+package verifier starts. The accepted promotion, settled update, correlated
+pending operation or closed-repair generation supplies the expected full tree
+digest. A private complete image under `installed-updates/installed-execution/`
+binds the executable and scripts; physical ASAR copying and hashing use
+`original-fs`. Invalid, displaced or incomplete images never fall back to public
+slot code. A target generation can authenticate from its pending operation
+before recovery writes its new settled receipt.
+
+Automatic shared-slot relaunch uses a descriptor-copied, independently verified
+`<operation>/launch-Farol.app`, retained inside the private operation directory.
+The helper publishes its launch intent only after this image is complete and
+opens that private application exactly once. It never opens the replaceable
+`/Applications/Farol.app` pathname. Correlated startup verifies the private
+image, immutable shared-slot operation, helper completion and physical accepted
+pair, then supplies its resource origin to the same updater owner. Normal reopen
+of this image without the one-shot hint requires the current settled generation
+and unchanged public target. Consumed Ready receipts do not invalidate private
+executable authority. Private launch images remain retained; this packet adds no
+background image garbage collection or replay of an unknown launch.
+
 The shared `/Applications` parent must be canonical, root-owned and not world
 writable. Group write is allowed only for the standard macOS administrator group
 (GID 80). Neither launcher nor helper changes permissions or elevates. This

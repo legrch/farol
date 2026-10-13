@@ -248,12 +248,24 @@ helper.main()
   child.stdio[3].end(JSON.stringify(request));
   return result;
 }
-function invokeWithFakeOpen(request, log, captureArguments = false) {
+function invokeWithFakeOpen(
+  request,
+  log,
+  captureArguments = false,
+  sharedFixture = false,
+) {
   const program = `
 import importlib.util, json, os, sys
 spec = importlib.util.spec_from_file_location("update_helper", sys.argv[1])
 helper = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(helper)
+# Shared-slot parent lookup is redirected to the disposable owner fixture.
+# This qualifies the helper flow, not the real /Applications parent ACL.
+if sys.argv[4] == "shared-fixture":
+    applications = helper.open_applications
+    parent_path = helper.assert_parent_path
+    helper.open_applications = lambda home, location="legacy": applications(home, "legacy")
+    helper.assert_parent_path = lambda value, home, apps, location="legacy": parent_path(value, home, apps, "legacy")
 original = helper.subprocess.run
 def run(command, *args, **kwargs):
     if command[0] == "/usr/bin/open":
@@ -275,6 +287,7 @@ helper.main()
       helper,
       log,
       captureArguments ? "arguments" : "count",
+      sharedFixture ? "shared-fixture" : "legacy-fixture",
     ],
     {
       cwd: "/",
@@ -964,5 +977,156 @@ describe("installed update helper", () => {
     expect(
       await fs.readFile(path.join(f.app, "Contents/payload"), "utf8"),
     ).toBe("N");
+  });
+});
+
+// Disposable descriptor-copy fixtures only; /usr/bin/open is never called.
+// The namespace displacement is simulated by this same test account.
+describe("shared relaunch executable custody", () => {
+  it("completes a bound shared apply with one private relaunch (redirected disposable parent)", async () => {
+    const f = await fixture();
+    await fs.chmod(f.op, 0o700);
+    await fs.chmod(path.dirname(f.op), 0o700);
+    const request = { ...f.request, installLocation: "shared", relaunch: true };
+    const binding = execFileSync("/usr/bin/python3", [
+      "-I",
+      "-B",
+      "-c",
+      'import importlib.util,json,sys; s=importlib.util.spec_from_file_location("h",sys.argv[1]); h=importlib.util.module_from_spec(s); s.loader.exec_module(h); sys.stdout.buffer.write(h.slot_binding_bytes(json.loads(sys.argv[2])))',
+      helper,
+      JSON.stringify(request),
+    ]);
+    await fs.writeFile(path.join(f.op, "slot-binding.json"), binding, {
+      mode: 0o600,
+    });
+    const log = path.join(f.root, "shared-launch.jsonl");
+    const pending = invokeWithFakeOpen(request, log, true, true);
+    await pending.ready;
+    await confirmQuit(f);
+    f.child.kill("SIGTERM");
+    expect((await pending).result.phase).toBe("completed");
+    const args = JSON.parse((await fs.readFile(log, "utf8")).trim());
+    expect(args[2]).toBe(path.join(f.op, "launch-Farol.app"));
+    expect(await treeDigest(args[2])).toBe(request.target.digest);
+    expect(
+      JSON.parse(await fs.readFile(path.join(f.op, "journal.json"), "utf8"))
+        .phase,
+    ).toBe("completed");
+  });
+
+  it("launches only the authenticated private image after the public target is displaced", async () => {
+    const f = await fixture();
+    await fs.rename(f.app, f.app + ".source");
+    await fs.rename(path.join(f.op, "staged.app"), f.app);
+    await fs.chmod(f.op, 0o700);
+    const request = { ...f.request, installLocation: "shared", relaunch: true };
+    const program = `
+import importlib.util, json, os, sys
+spec = importlib.util.spec_from_file_location("helper", sys.argv[1])
+h = importlib.util.module_from_spec(spec); spec.loader.exec_module(h)
+r = json.loads(sys.argv[2]); apps = os.open(sys.argv[3], h.DIR_FLAGS); op = os.open(sys.argv[4], h.DIR_FLAGS)
+try:
+    fd = os.open(h.SLOT_BINDING, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=op)
+    os.write(fd, h.slot_binding_bytes(r)); os.close(fd)
+    private = h.capture_private_launch(apps, op, r)
+    os.rename(h.APP, "displaced.app", src_dir_fd=apps, dst_dir_fd=apps)
+    os.mkdir(h.APP, 0o755, dir_fd=apps)
+    h.process_start = lambda pid: "exact fixture start"
+    args = h.relaunch_arguments(r, "completed", private)
+    h.checked_tree(op, h.PRIVATE_LAUNCH_APP, r["target"]["digest"], r["target"]["version"], r["target"]["buildId"])
+    with open(os.path.join(private, "Contents/payload")) as f: payload = f.read()
+    print(json.dumps({"args": args, "payload": payload, "private": private}))
+finally:
+    os.close(op); os.close(apps)
+`;
+    const value = JSON.parse(
+      execFileSync(
+        "/usr/bin/python3",
+        [
+          "-I",
+          "-B",
+          "-c",
+          program,
+          helper,
+          JSON.stringify(request),
+          f.applications,
+          f.op,
+        ],
+        { encoding: "utf8", timeout: 10000 },
+      ),
+    );
+    expect(value.payload).toBe("N+1");
+    expect(value.args.slice(0, 4)).toEqual([
+      "/usr/bin/open",
+      "-a",
+      path.join(f.op, "launch-Farol.app"),
+      "--args",
+    ]);
+    expect(value.args[2]).not.toBe("/Applications/Farol.app");
+    expect(await treeDigest(value.private)).toBe(request.target.digest);
+  });
+  it("refuses namespace displacement during copying without publishing a launch image", async () => {
+    const f = await fixture();
+    await fs.rename(f.app, f.app + ".source");
+    await fs.rename(path.join(f.op, "staged.app"), f.app);
+    await fs.chmod(f.op, 0o700);
+    const request = { ...f.request, installLocation: "shared" };
+    const program = `
+import importlib.util,json,os,sys
+s=importlib.util.spec_from_file_location("h",sys.argv[1]); h=importlib.util.module_from_spec(s); s.loader.exec_module(h)
+r=json.loads(sys.argv[2]); apps=os.open(sys.argv[3],h.DIR_FLAGS); op=os.open(sys.argv[4],h.DIR_FLAGS)
+f=os.open(h.SLOT_BINDING,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600,dir_fd=op); os.write(f,h.slot_binding_bytes(r)); os.close(f)
+original=h.copy_launch_tree
+def copy(source,destination,budget,depth=0):
+    original(source,destination,budget,depth)
+    if depth==0:
+        os.rename(h.APP,"displaced.app",src_dir_fd=apps,dst_dir_fd=apps)
+        os.mkdir(h.APP,0o755,dir_fd=apps)
+h.copy_launch_tree=copy
+try:
+    h.capture_private_launch(apps,op,r)
+    raise AssertionError("accepted displaced image")
+except h.Refusal as e:
+    print(json.dumps({"code":e.code,"published":h.entry(op,h.PRIVATE_LAUNCH_APP) is not None}))
+finally: os.close(apps);os.close(op)
+`;
+    const result = JSON.parse(
+      execFileSync(
+        "/usr/bin/python3",
+        [
+          "-I",
+          "-B",
+          "-c",
+          program,
+          helper,
+          JSON.stringify(request),
+          f.applications,
+          f.op,
+        ],
+        { encoding: "utf8", timeout: 10000 },
+      ),
+    );
+    expect(result).toEqual({ code: "launch_source_changed", published: false });
+  });
+  it("refuses shared relaunch encoding without a privately captured target", () => {
+    const program = `
+import importlib.util,json,sys
+spec=importlib.util.spec_from_file_location("h",sys.argv[1]); h=importlib.util.module_from_spec(spec); spec.loader.exec_module(h)
+h.process_start=lambda pid:"fixture"
+r={"home":"/synthetic/home","operationId":"a"*32,"installLocation":"shared","action":"apply","target":{"buildId":"b"*64}}
+codes=[]
+for value in (None,"/Applications/Farol.app","/elsewhere/Farol.app"):
+    try: h.relaunch_arguments(r,"completed",value)
+    except h.Refusal as e: codes.append(e.code)
+print(json.dumps(codes))
+`;
+    expect(
+      JSON.parse(
+        execFileSync("/usr/bin/python3", ["-I", "-B", "-c", program, helper], {
+          encoding: "utf8",
+          timeout: 3000,
+        }),
+      ),
+    ).toEqual(Array(3).fill("launch_image_unconfirmed"));
   });
 });
