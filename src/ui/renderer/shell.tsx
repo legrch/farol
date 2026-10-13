@@ -747,24 +747,28 @@ function Update({
         </p>
       ) : null}
       {blockedBy &&
-        (recoveryMode || recovery || !confirmedRestartAllowed(update)) && (
+        (recoveryMode || recovery || !isConfirmedBrowserBlock(blockedBy)) && (
           <div
             className={
               recoveryMode || recovery ? "update-block" : "update-issue"
             }
-            role="alert"
+            role={confirmedRestartAllowed(update) ? "status" : "alert"}
           >
             <strong>
               {recovery
                 ? "Recovery is blocked"
                 : rollbackVersion
                   ? "Roll back is blocked"
-                  : "Update needs attention"}
+                  : confirmedRestartAllowed(update)
+                    ? "Restart postponed"
+                    : "Update needs attention"}
             </strong>
             <p>
               {recoveryMode || recovery
                 ? updateBlockMessage(blockedBy)
-                : "Review Diagnostics before restarting."}
+                : confirmedRestartAllowed(update)
+                  ? "The last restart did not begin. You can try again or review the current work."
+                  : "Review Diagnostics before restarting."}
             </p>
             {recoveryMode && (
               <details>
@@ -877,7 +881,7 @@ function Update({
           )}
         {!recoveryMode &&
           (recovery ||
-            (!!blockedBy && !confirmedRestartAllowed(update)) ||
+            (!!blockedBy && !isConfirmedBrowserBlock(blockedBy)) ||
             update.phase === "failed" ||
             update.phase === "unavailable") && (
             <button

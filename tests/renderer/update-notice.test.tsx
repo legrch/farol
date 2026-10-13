@@ -435,11 +435,10 @@ it("offers one manual admission check for a ready update despite a separate save
   expect(host.querySelector("dialog")?.textContent).not.toContain(
     "Saved update notices could not be confirmed",
   );
-  expect(
-    [...host.querySelectorAll("dialog button")].some(
-      (button) => button.textContent === "Review Diagnostics",
-    ),
-  ).toBe(false);
+  expect(button(host, "Review Diagnostics").disabled).toBe(false);
+  expect(host.querySelector("dialog")?.textContent).toContain(
+    "Restart postponed",
+  );
   expect(c.getSnapshot().update).toEqual(ready);
   vi.mocked(f.api.installedUpdate).mockResolvedValue({
     phase: "applying",
@@ -479,4 +478,32 @@ it("shows the separate admission and notice reasons directly in Diagnostics with
   );
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
   expect(c.getSnapshot().update).toEqual(ready);
+});
+
+it("keeps confirmation available with truthful feedback when its fresh admission remains busy", async () => {
+  const ready: InstalledUpdateView = {
+    phase: "ready",
+    version: available.version,
+    deferred: false,
+    blockedBy: null,
+    notice: { ...available.notice!, seen: true },
+  };
+  const { host, c, f } = await mount(ready);
+  await act(async () => c.overlay("update"));
+  vi.mocked(f.api.installedUpdate).mockResolvedValue({
+    ...ready,
+    deferred: true,
+    blockedBy: "UPDATE_WORK_PENDING",
+  });
+  await act(async () => button(host, "Install and Relaunch").click());
+  expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+    kind: "restart-confirmed",
+    version: ready.version,
+  });
+  const dialog = host.querySelector("dialog")!;
+  expect(dialog.textContent).toContain("Restart postponed");
+  expect(dialog.textContent).toContain("The last restart did not begin");
+  expect(button(dialog, "Install and Relaunch").disabled).toBe(false);
+  expect(button(dialog, "Review Diagnostics").disabled).toBe(false);
+  expect(c.getSnapshot().update.phase).toBe("ready");
 });
