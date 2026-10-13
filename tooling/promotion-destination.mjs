@@ -22,12 +22,21 @@ export function trustedOwnerHome(userInfo, effectiveUid) {
   return home;
 }
 
-export function assertPromotionDestination({ home, source, destination }) {
+export function assertPromotionDestination({
+  home,
+  source,
+  destination = "/Applications/Farol.app",
+}) {
   const resolvedHome = path.resolve(home);
   const resolvedSource = path.resolve(source);
-  const resolvedDestination = path.resolve(destination);
-  const parent = path.join(resolvedHome, "Applications");
+  const resolvedDestination = destination;
+  const parent =
+    destination === "/Applications/Farol.app"
+      ? "/Applications"
+      : path.join(resolvedHome, "Applications");
   if (
+    !path.isAbsolute(resolvedDestination) ||
+    path.normalize(resolvedDestination) !== resolvedDestination ||
     path.basename(resolvedDestination) !== APP_NAME ||
     path.dirname(resolvedDestination) !== parent
   ) {
@@ -45,6 +54,20 @@ export function assertPromotionDestination({ home, source, destination }) {
 
 export async function preparePromotionParent(home, parent) {
   const resolvedHome = path.resolve(home);
+  if (parent === "/Applications") {
+    const before = await fs.lstat(parent);
+    assertSharedApplicationsParent(before, await fs.realpath(parent));
+    const after = await fs.lstat(parent);
+    if (
+      before.dev !== after.dev ||
+      before.ino !== after.ino ||
+      before.mode !== after.mode ||
+      before.uid !== after.uid ||
+      before.gid !== after.gid
+    )
+      throw new Error("PROMOTION_PARENT_TYPE_INVALID");
+    return parent;
+  }
   const expectedParent = path.join(resolvedHome, "Applications");
   if (path.resolve(parent) !== expectedParent) {
     throw new Error("PROMOTION_PARENT_OUTSIDE_OWNER_APPLICATIONS");
@@ -108,4 +131,18 @@ export async function preparePromotionParent(home, parent) {
     throw new Error("PROMOTION_PARENT_TYPE_INVALID");
   }
   return realParent;
+}
+
+// macOS's standard administrator group has the stable numeric ID 80.
+// This exception applies only to the canonical shared parent, never owned files.
+export function assertSharedApplicationsParent(info, realParent) {
+  if (
+    realParent !== "/Applications" ||
+    !info.isDirectory() ||
+    info.isSymbolicLink() ||
+    info.uid !== 0 ||
+    (info.mode & 0o002) !== 0 ||
+    ((info.mode & 0o020) !== 0 && info.gid !== 80)
+  )
+    throw new Error("PROMOTION_PARENT_TYPE_INVALID");
 }

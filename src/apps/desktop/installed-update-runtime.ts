@@ -38,6 +38,10 @@ import { createUpdatePackageVerifier } from "../../modules/release/infra/native/
 import {
   captureInstalledProcessStart,
   installedFarolSlot,
+  installedSlotBindingBytes,
+  INSTALLED_SLOT_BINDING_FILE,
+  publishInstalledOperationBinding,
+  type InstalledAppLocation,
   startInstalledUpdateHelper,
   type InstalledUpdateOperation,
   type InstalledUpdateLaunch,
@@ -309,11 +313,65 @@ function sameOperation(
   );
 }
 
+async function readOperationBinding(
+  root: string,
+  op: z.infer<typeof Operation>,
+  location: InstalledAppLocation,
+  read: typeof readRecord = readRecord,
+): Promise<void> {
+  const directory = path.join(root, op.operationId);
+  const physical = read === readRecord;
+  if (physical) {
+    await canonicalOwnedDirectory(root, true);
+    await canonicalOwnedDirectory(directory, true);
+  }
+  const before = physical ? await fs.lstat(directory) : null;
+  const parent = physical ? await fs.lstat(root) : null;
+  let digest: string | null = null;
+  const expected = installedSlotBindingBytes(op, location);
+  const raw = await read(
+    path.join(root, op.operationId, INSTALLED_SLOT_BINDING_FILE),
+    true,
+    (value) => {
+      digest = value;
+    },
+    8192,
+  );
+  if (before) {
+    await canonicalOwnedDirectory(directory, true);
+    const after = await fs.lstat(directory);
+    await canonicalOwnedDirectory(root, true);
+    const liveParent = await fs.lstat(root);
+    if (
+      !parent ||
+      liveParent.dev !== parent.dev ||
+      liveParent.ino !== parent.ino ||
+      liveParent.mode !== parent.mode ||
+      liveParent.uid !== parent.uid
+    )
+      throw new Error("UPDATE_SLOT_BINDING_UNCONFIRMED");
+    if (
+      after.dev !== before.dev ||
+      after.ino !== before.ino ||
+      after.mode !== before.mode ||
+      after.uid !== before.uid
+    )
+      throw new Error("UPDATE_SLOT_BINDING_UNCONFIRMED");
+  }
+  if (
+    raw === null ||
+    digest !== createHash("sha256").update(expected).digest("hex")
+  )
+    throw new Error("UPDATE_SLOT_BINDING_UNCONFIRMED");
+}
+
 async function readOperationJournal(
   root: string,
   op: z.infer<typeof Operation>,
+  location: InstalledAppLocation,
   read: typeof readRecord = readRecord,
 ): Promise<z.infer<typeof Journal>> {
+  await readOperationBinding(root, op, location, read);
   const journal = Journal.parse(
     await read(path.join(root, op.operationId, "journal.json")),
   );
@@ -515,7 +573,7 @@ export async function waitForInstalledUpdateRelaunch(
     throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
   }
   const build = BuildIdentitySchema.parse(options.build);
-  const slot = installedFarolSlot();
+  const slot = installedFarolSlot(options.directory);
   const profile = path.join(
     os.userInfo().homedir,
     "Library/Application Support/Farol Next Preview",
@@ -686,6 +744,14 @@ export async function waitForInstalledUpdateRelaunch(
           true,
         ),
       );
+      await bounded(() =>
+        readOperationBinding(
+          root,
+          pinned!,
+          slot === "/Applications/Farol.app" ? "shared" : "legacy",
+          reads.readRecord,
+        ),
+      );
       const expected =
         hint.phase === "completed" ? pinned.target : pinned.source;
       if (
@@ -701,7 +767,12 @@ export async function waitForInstalledUpdateRelaunch(
         observeInstalledHelper(hint.helper, reads.readProcess),
       );
       const journal = await bounded(() =>
-        readOperationJournal(root, pinned!, reads.readRecord),
+        readOperationJournal(
+          root,
+          pinned!,
+          slot === "/Applications/Farol.app" ? "shared" : "legacy",
+          reads.readRecord,
+        ),
       );
       if (
         journal.phase !== hint.phase &&
@@ -826,6 +897,27 @@ async function canonicalOwnedDirectory(
   privateMode: boolean,
 ): Promise<void> {
   const stat = await fs.lstat(directory);
+  if (directory === "/Applications" && !privateMode) {
+    if (
+      !stat.isDirectory() ||
+      stat.isSymbolicLink() ||
+      stat.uid !== 0 ||
+      (stat.mode & 0o002) !== 0 ||
+      ((stat.mode & 0o020) !== 0 && stat.gid !== 80) ||
+      (await fs.realpath(directory)) !== directory
+    )
+      throw new Error("UPDATE_PRIVATE_STATE_INVALID");
+    const current = await fs.lstat(directory);
+    if (
+      current.dev !== stat.dev ||
+      current.ino !== stat.ino ||
+      current.mode !== stat.mode ||
+      current.uid !== stat.uid ||
+      current.gid !== stat.gid
+    )
+      throw new Error("UPDATE_PRIVATE_STATE_INVALID");
+    return;
+  }
   if (
     !stat.isDirectory() ||
     stat.isSymbolicLink() ||
@@ -1088,6 +1180,8 @@ export type SupervisedInstalledUpdateOptions = Omit<
   "build" | "acquireAdmission" | "quit"
 > &
   Readonly<{
+    // Trusted controller selection of the captured installed slot; no discovery.
+    installedResourcesDirectory?: string;
     predecessor: InstalledPredecessorControl;
     lease: PromotionLeaseHandle;
     // Exact original bytes copied by the existing closed-pair preservation owner.
@@ -1104,6 +1198,7 @@ export type SupervisedInstalledUpdateOptions = Omit<
 
 type SupervisedExecution = Readonly<{
   app: string;
+  slot: string;
   predecessor: ClosedInstalledPredecessor;
   transfer: PromotionLeaseTransfer;
   verifyResources(): Promise<boolean>;
@@ -1154,7 +1249,10 @@ export async function observeSupervisedReadyUpdate(
 export async function createSupervisedInstalledUpdateRuntime(
   options: SupervisedInstalledUpdateOptions,
 ): Promise<InstalledUpdater | null> {
-  const slot = installedFarolSlot();
+  const slot =
+    options.installedResourcesDirectory === undefined
+      ? installedFarolSlot()
+      : installedFarolSlot(options.installedResourcesDirectory);
   const profile = path.join(
     os.userInfo().homedir,
     "Library/Application Support/Farol Next Preview",
@@ -1269,6 +1367,7 @@ export async function createSupervisedInstalledUpdateRuntime(
     },
     {
       app: resources.app,
+      slot,
       predecessor,
       transfer,
       verifyResources: resources.verify,
@@ -1302,7 +1401,12 @@ async function createRuntime(
     options.build.sourceDirty
   )
     return null;
-  const slot = installedFarolSlot();
+  let slot: string;
+  try {
+    slot = supervised?.slot ?? installedFarolSlot(options.directory);
+  } catch {
+    return null;
+  }
   const actualApp = path.resolve(options.directory, "../../..");
   // Ordinary checkouts cannot mutate the slot. Only the separate supervisory
   // entry can supply verified controller resources and confirmed closure.
@@ -1317,6 +1421,11 @@ async function createRuntime(
   )
     return null;
   const root = path.join(options.userData, "installed-updates");
+  const installLocation: InstalledAppLocation =
+    slot === "/Applications/Farol.app" ? "shared" : "legacy";
+  const bindingHelper = path.join(options.directory, "update-helper.py");
+  const verifyBinding = (op: z.infer<typeof Operation>) =>
+    readOperationBinding(root, op, installLocation);
   await privateDirectory(root);
   const context = (directory: string) => {
     const verifier = createUpdatePackageVerifier({
@@ -1638,6 +1747,7 @@ async function createRuntime(
         })
       )
         throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+      await verifyBinding(op);
       if (TARGET_PHASES.includes(receipt.phase)) expected = op.target;
       else if (
         [...ROLLED_BACK_PHASES, ...CANCELLED_PHASES].includes(receipt.phase)
@@ -1761,8 +1871,9 @@ async function createRuntime(
     return measured;
   };
   const readJournal = (op: z.infer<typeof Operation>) =>
-    readOperationJournal(root, op);
+    readOperationJournal(root, op, installLocation);
   const optionalBuild = async (op: z.infer<typeof Operation>, name: string) => {
+    await verifyBinding(op);
     const file = path.join(root, op.operationId, name);
     try {
       await fs.lstat(file);
@@ -1781,10 +1892,14 @@ async function createRuntime(
   const confirmedRejectedTarget = async (
     op: z.infer<typeof Operation>,
     record: z.infer<typeof Retained>,
-  ) =>
-    (await confirmRejectedTarget(root, op, () =>
-      originalHelperEnded(record),
-    )) !== null;
+  ) => {
+    await verifyBinding(op);
+    return (
+      (await confirmRejectedTarget(root, op, () =>
+        originalHelperEnded(record),
+      )) !== null
+    );
+  };
   const removeDownloadStage = async (
     download: z.infer<typeof DownloadStage>,
   ) => {
@@ -1902,16 +2017,23 @@ async function createRuntime(
       (metadata.mode & 0o077) !== 0
     )
       throw new Error("UPDATE_PREPARATION_UNRECONCILED");
-    // A pre-dispatch directory can contain only its unfinished copy. Never
+    await verifyBinding(op);
+    // A pre-dispatch directory can contain only its unfinished copy and binding. Never
     // reclaim a journal, predecessor or unexpected entry as preparation debris.
     for await (const entry of await fs.opendir(directory)) {
-      if (entry.name !== "staged.app")
+      if (
+        entry.name !== "staged.app" &&
+        entry.name !== INSTALLED_SLOT_BINDING_FILE
+      )
         throw new Error("UPDATE_PREPARATION_UNRECONCILED");
     }
     beforeEffect();
     await options.removeDirectory(path.join(directory, "staged.app"), true);
     beforeEffect();
-    await fs.rmdir(directory);
+    // Retain the immutable binding even after pre-dispatch cleanup. A lost
+    // final Ready write can then recheck this same slot without adopting an
+    // unbound operation or recreating authority from missing files.
+    await verifyBinding(op);
     beforeEffect();
   };
   const clearRestoreIntent = async (): Promise<void> => {
@@ -2336,6 +2458,16 @@ async function createRuntime(
               ...record
             }) => record)(SavedReceipt.parse(previous)),
           );
+      try {
+        for (const op of [
+          retained.operation,
+          retained.preparation,
+          pending?.operation,
+        ])
+          if (op) await verifyBinding(op);
+      } catch {
+        return known("UPDATE_SLOT_BINDING_UNCONFIRMED");
+      }
       await selectDownload(retained.downloadId);
       const parsed = parseRetainedGithubReleaseManifest(retained);
       if (!parsed.ok) return known("UPDATE_RETAINED_MANIFEST_INVALID");
@@ -2922,6 +3054,8 @@ async function createRuntime(
             {
               action,
               ...op,
+              installLocation:
+                slot === "/Applications/Farol.app" ? "shared" : "legacy",
               drain: {
                 status: "reconciled",
                 acceptedSource: op.source.buildId,
@@ -3053,6 +3187,7 @@ async function createRuntime(
     )
       return { status: "blocked", code: "UPDATE_CONFIRMATION_STALE" };
     let keepAdmission = false;
+    let bindingPublicationUnknown = false;
     const expired = () =>
       quitContext !== undefined &&
       (!Number.isFinite(Date.now()) ||
@@ -3194,6 +3329,23 @@ async function createRuntime(
         const operationId = randomBytes(16).toString("hex");
         const operationRoot = path.join(root, operationId);
         const preparing = { operationId, source, target };
+        // Immutable slot identity precedes durable dispatch/preparation. A lost
+        // publication reply stays fenced; never repair an authoritative old op.
+        ensureActive();
+        await wait(() => fs.mkdir(operationRoot, { mode: 0o700 }));
+        const priorAdmission = keepAdmission;
+        keepAdmission = true;
+        bindingPublicationUnknown = true;
+        await wait(() =>
+          publishInstalledOperationBinding(
+            bindingHelper,
+            preparing,
+            installLocation,
+            ensureActive,
+          ),
+        );
+        bindingPublicationUnknown = false;
+        keepAdmission = priorAdmission;
         // Record allocation before copying. This phase proves no helper was
         // dispatched; startup may reconcile only this exact unfinished copy.
         ensureActive();
@@ -3212,7 +3364,6 @@ async function createRuntime(
               ensureActive,
             ),
           );
-        await wait(() => fs.mkdir(operationRoot, { mode: 0o700 }));
         let copied = false;
         try {
           await wait(() =>
@@ -3279,6 +3430,12 @@ async function createRuntime(
           keepAdmission = false;
           return { status: "blocked", code: finalRecheck.code };
         }
+        try {
+          await wait(() => verifyBinding(preparing));
+        } catch {
+          keepAdmission = true;
+          return { status: "unknown", code: "UPDATE_SLOT_BINDING_UNCONFIRMED" };
+        }
         // Durable dispatch intent precedes launch. A failed commit may already
         // have persisted dispatch, so keep admission even when its sync fails.
         keepAdmission = true;
@@ -3288,6 +3445,8 @@ async function createRuntime(
             path.join(options.directory, "update-helper.py"),
             {
               action: "apply",
+              installLocation:
+                slot === "/Applications/Farol.app" ? "shared" : "legacy",
               operationId,
               source,
               target,
@@ -3444,6 +3603,8 @@ async function createRuntime(
         if (!supervised && !quitContext) options.quit();
         return { status: "accepted" };
       } catch {
+        if (bindingPublicationUnknown)
+          return { status: "unknown", code: "UPDATE_SLOT_BINDING_UNCONFIRMED" };
         if (quitContext && expired())
           return {
             status: keepAdmission ? "unknown" : "blocked",

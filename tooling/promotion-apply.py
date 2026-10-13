@@ -85,7 +85,12 @@ def read_request():
         request = json.loads(raw.decode("utf-8"))
     except (UnicodeError, ValueError):
         refuse(EXIT_INVALID)
-    if not isinstance(request, dict) or set(request) != {
+    if not isinstance(request, dict):
+        refuse(EXIT_INVALID)
+    location_fields = {"installLocation"} if "installLocation" in request else set()
+    if request.get("installLocation", "legacy") not in ("shared", "legacy"):
+        refuse(EXIT_INVALID)
+    if set(request) != location_fields | {
         "schema",
         "home",
         "source",
@@ -527,6 +532,57 @@ def test_hook(enabled):
         refuse(EXIT_INTERNAL)
 
 
+def require_shared_parent(info):
+    # Standard macOS administrator group (80); no permissions are changed.
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
+            or info.st_mode & 0o002
+            or (info.st_mode & 0o020 and info.st_gid != 80)):
+        refuse(EXIT_PATH)
+
+
+def open_applications(request, home_fd):
+    location = request.get("installLocation", "legacy")
+    if location not in ("shared", "legacy"):
+        refuse(EXIT_INVALID)
+    if location == "legacy":
+        descriptor = open_directory(home_fd, "Applications")
+        try:
+            require_safe_directory(os.fstat(descriptor), final=True)
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+    root = os.open("/", DIRECTORY_FLAGS)
+    try:
+        require_safe_directory(os.fstat(root), final=False)
+        if os.fstat(root).st_uid != 0:
+            refuse(EXIT_PATH)
+        descriptor = open_directory(root, "Applications")
+        try:
+            require_shared_parent(os.fstat(descriptor))
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+    finally:
+        os.close(root)
+
+
+def recheck_parent(request, home_fd, parent_fd):
+    current_home = open_absolute_directory(request["home"])
+    try:
+        if identity(os.fstat(current_home)) != identity(os.fstat(home_fd)):
+            refuse(EXIT_PATH)
+    finally:
+        os.close(current_home)
+    current = open_applications(request, home_fd)
+    try:
+        if identity(os.fstat(current)) != identity(os.fstat(parent_fd)):
+            refuse(EXIT_PATH)
+    finally:
+        os.close(current)
+
+
 def run(request):
     verify_inherited_lease(request)
     home_fd = open_absolute_directory(request["home"])
@@ -538,14 +594,15 @@ def run(request):
     completed = False
     try:
         verify_inherited_lease(request)
-        try:
-            os.mkdir("Applications", 0o755, dir_fd=home_fd)
-        except OSError as error:
-            if error.errno != errno.EEXIST:
-                refuse(EXIT_PATH)
-        parent_fd = open_directory(home_fd, "Applications")
-        require_safe_directory(os.fstat(parent_fd), final=True)
+        if request.get("installLocation", "legacy") == "legacy":
+            try:
+                os.mkdir("Applications", 0o755, dir_fd=home_fd)
+            except OSError as error:
+                if error.errno != errno.EEXIST:
+                    refuse(EXIT_PATH)
+        parent_fd = open_applications(request, home_fd)
         test_hook(request["testHook"])
+        recheck_parent(request, home_fd, parent_fd)
         os.fchdir(parent_fd)
         for name in (APP_NAME, RECEIPT_NAME):
             try:
@@ -574,6 +631,7 @@ def run(request):
             refuse(EXIT_DIGEST)
         os.fsync(destination_fd)
         verify_inherited_lease(request)
+        recheck_parent(request, home_fd, parent_fd)
         write_receipt(parent_fd, request["receiptBytes"])
         completed = True
         os.write(1, MAGIC)

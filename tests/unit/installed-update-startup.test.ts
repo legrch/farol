@@ -1,3 +1,4 @@
+import { installedSlotBindingBytes } from "../../src/modules/release/infra/native/installed-update-helper";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -105,6 +106,10 @@ function fixture(phase: Phase = "completed", action: Action = "apply") {
   const records = new Map<string, unknown>([
     [receiptFile, receipt],
     [path.join(opRoot, "journal.json"), journal],
+    [
+      path.join(opRoot, "slot-binding.json"),
+      JSON.parse(installedSlotBindingBytes(operation, "legacy").toString()),
+    ],
     [path.join(directory, "build-identity.json"), build],
   ]);
   const builds = new Map<string, unknown>([
@@ -129,10 +134,23 @@ function fixture(phase: Phase = "completed", action: Action = "apply") {
     canonicalOwnedDirectory: vi.fn(
       async (_file: string, _privateMode: boolean) => undefined,
     ),
-    readRecord: vi.fn(async (file: string, _privateMode?: boolean) => {
-      events.push("record:" + path.basename(file));
-      return structuredClone(records.get(file) ?? null);
-    }),
+    readRecord: vi.fn(
+      async (
+        file: string,
+        _privateMode?: boolean,
+        observeDigest?: (digest: string) => void,
+      ) => {
+        events.push("record:" + path.basename(file));
+        const value = structuredClone(records.get(file) ?? null);
+        if (value !== null)
+          observeDigest?.(
+            createHash("sha256")
+              .update(JSON.stringify(value) + "\n")
+              .digest("hex"),
+          );
+        return value;
+      },
+    ),
     readBuild: vi.fn(
       async (_directory: string, file: string, _timeoutMs: number) =>
         structuredClone(builds.get(file)),
@@ -209,6 +227,10 @@ function forwardRecoveryFixture(
     },
   };
   f.receipt.operation = pair;
+  f.records.set(
+    path.join(opRoot, "slot-binding.json"),
+    JSON.parse(installedSlotBindingBytes(pair, "legacy").toString()),
+  );
   f.receipt.priorPhase = "rollback_started";
   f.receipt.installedBefore = pair.target;
   Object.assign(f.journal, pair);
@@ -750,3 +772,35 @@ describe("installed updater startup correlation (pure ports only)", () => {
     },
   );
 });
+
+it.each(["missing", "other-slot", "other-pair", "noncanonical"])(
+  "rejects %s relaunch binding before observing a helper",
+  async (variant) => {
+    const f = fixture();
+    const file = path.join(opRoot, "slot-binding.json");
+    if (variant === "missing") f.records.delete(file);
+    if (variant === "other-slot")
+      f.records.set(
+        file,
+        JSON.parse(installedSlotBindingBytes(operation, "shared").toString()),
+      );
+    if (variant === "other-pair")
+      f.records.set(
+        file,
+        JSON.parse(
+          installedSlotBindingBytes(
+            { ...operation, source: { ...source, digest: "f".repeat(64) } },
+            "legacy",
+          ).toString(),
+        ),
+      );
+    if (variant === "noncanonical") {
+      const binding = f.records.get(file) as Record<string, unknown>;
+      f.records.set(file, { schema: binding.schema, ...binding });
+    }
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_SLOT_BINDING_UNCONFIRMED",
+    );
+    expect(f.observation.readProcess).not.toHaveBeenCalled();
+  },
+);

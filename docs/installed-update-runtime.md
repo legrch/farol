@@ -1,6 +1,45 @@
 # Installed updater lifecycle
 
-The updater is enabled only for the exact installed Farol Next Preview slot and
+The supported installed slots are exactly `/Applications/Farol.app` and the
+trusted OS-account home followed by `/Applications/Farol.app`. First installation
+with `tooling/promote-preview.mjs` defaults to `/Applications/Farol.app`; an explicit
+`--destination` accepts either canonical slot. It never overwrites an existing app
+or receipt. The native promotion launcher retains a legacy default for existing
+maintenance callers.
+
+Ordinary Desktop updates select the slot from the exact attested running
+`Contents/Resources/app` directory. They do not probe for another copy, normalize
+arbitrary paths, trust `HOME`, or fall back after an observation failure. A trusted
+standalone controller can explicitly supply `installedResourcesDirectory`; omission
+retains its legacy selection. Native updater requests carry the closed
+`installLocation` enum (`shared` or `legacy`); omission remains legacy-compatible.
+The helper mutates and relaunches that same slot. Each modern operation has an
+immutable private `installed-updates/<operationId>/slot-binding.json` record,
+using `farol.installed-operation-slot/1`. Its canonical ASCII JSON bytes bind the
+operation ID, `installLocation`, and exact source/target build pair. Desktop
+publishes it through a pinned directory descriptor with atomic no-overwrite
+placement before durable preparation or helper dispatch. Every explicit-slot
+helper request verifies it before handoff, journal writes and mutation fences.
+Runtime journal/recovery/relaunch readback also verifies the exact slot binding.
+Missing, noncanonical, displaced, unsafe or differently bound records stay fenced.
+No existing journal/handoff is opportunistically repaired. An old unbound
+operation requires a separately designed maintenance migration; this packet
+implements none. Pre-dispatch cleanup retains the immutable binding after
+removing staged bytes, so a lost final Ready write cannot erase slot authority.
+Old helper requests without `installLocation` retain the
+legacy-only wire behavior and app/build validation. Receipt and journal schemas remain
+unchanged. App content/build digests, user ownership, promotion and updater locks,
+atomic swaps, descriptor-bound mutation and unknown-outcome fences still apply.
+
+The shared `/Applications` parent must be canonical, root-owned and not world
+writable. Group write is allowed only for the standard macOS administrator group
+(GID 80). Neither launcher nor helper changes permissions or elevates. This
+exception applies only to that shared parent: app, state and staging ownership
+checks remain strict. Parent identity is rechecked before placement/publication
+and update mutations. UserData remains the OS-account
+`Library/Application Support/Farol Next Preview` directory.
+
+The updater is enabled only for the selected installed slot and
 its existing owner data directory. Temporary `task run` copies do not update the
 installed app. The GitHub channel and package identity are fixed by the release
 contract; no source checkout, credentials or local diagnostics are published.

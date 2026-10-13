@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { legacyPredecessorRequiresStateRecovery } from "../../domain/predecessor-state";
 
 const HELPER_SHA256 =
-  "8682d894c7d84e6cde8fa8673a1c6bd7ab2be6f1c0098ccf59a8873e9c9d45e4";
+  "5d369684676c1630fd416bc284c4e0308f38bcfe793f9547917bd1b515fa79f3";
 const MAX_HELPER_BYTES = 64 * 1024;
 const APP_NAME = "Farol.app";
 const execFileAsync = promisify(execFile);
@@ -43,7 +43,10 @@ export interface PromotionLeaseTransfer {
   release(): Promise<void>;
 }
 
+export type InstalledAppLocation = "shared" | "legacy";
+
 interface InstalledUpdateFields {
+  readonly installLocation?: InstalledAppLocation;
   readonly operationId: string;
   readonly source: AcceptedInstalledBuild;
   readonly target: AcceptedInstalledBuild;
@@ -94,6 +97,8 @@ function assertInput(input: InstalledUpdateRequest): void {
     sha.test(value.buildId) &&
     /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u.test(value.version);
   if (
+    ("installLocation" in input &&
+      !["shared", "legacy"].includes(input.installLocation as string)) ||
     !["apply", "recover", "rollback"].includes(input.action) ||
     !/^[0-9a-f]{32}$/u.test(input.operationId) ||
     !validBuild(input.source) ||
@@ -493,6 +498,9 @@ export async function startInstalledUpdateHelper(
   // Pin the request before asynchronous preflight; later caller mutation cannot
   // change either the bytes sent or the identity expected in the acknowledgment.
   const fields: InstalledUpdateFields = {
+    ...(input.installLocation !== undefined
+      ? { installLocation: input.installLocation }
+      : {}),
     operationId: input.operationId,
     source: { ...input.source },
     target: { ...input.target },
@@ -948,7 +956,215 @@ export async function startInstalledUpdateHelper(
   return launched;
 }
 
-/** Fixed path for the caller's installed-slot readback; never take it from a workspace. */
-export function installedFarolSlot(): string {
-  return path.join(os.userInfo().homedir, "Applications", APP_NAME);
+/** Select only the trusted running resources directory, without filesystem guessing. */
+export function installedFarolSlot(resourcesDirectory?: string): string {
+  const user = os.userInfo();
+  if (
+    user.uid !== process.geteuid?.() ||
+    !path.isAbsolute(user.homedir) ||
+    path.normalize(user.homedir) !== user.homedir ||
+    user.homedir === "/"
+  )
+    throw new Error("INSTALLED_UPDATE_SLOT_INVALID");
+  const legacy = path.join(user.homedir, "Applications", APP_NAME);
+  if (resourcesDirectory === undefined) return legacy;
+  for (const slot of ["/Applications/Farol.app", legacy])
+    if (resourcesDirectory === path.join(slot, "Contents/Resources/app"))
+      return slot;
+  throw new Error("INSTALLED_UPDATE_SLOT_INVALID");
+}
+
+export const INSTALLED_SLOT_BINDING_FILE = "slot-binding.json";
+export type InstalledBoundOperation = Pick<
+  InstalledUpdateRequest,
+  "operationId" | "source" | "target"
+>;
+
+/** Identical ASCII canonical bytes in desktop and the attested native helper. */
+export function installedSlotBindingBytes(
+  operation: InstalledBoundOperation,
+  installLocation: InstalledAppLocation,
+): Buffer {
+  const build = (value: AcceptedInstalledBuild) => {
+    if (
+      !value ||
+      !sha.test(value.digest) ||
+      !sha.test(value.buildId) ||
+      !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u.test(value.version) ||
+      value.version.length > 128
+    )
+      throw new Error("UPDATE_SLOT_BINDING_INVALID");
+    return {
+      buildId: value.buildId,
+      digest: value.digest,
+      version: value.version,
+    };
+  };
+  if (
+    !["shared", "legacy"].includes(installLocation) ||
+    !/^[0-9a-f]{32}$/u.test(operation.operationId)
+  )
+    throw new Error("UPDATE_SLOT_BINDING_INVALID");
+  return Buffer.from(
+    JSON.stringify({
+      installLocation,
+      operationId: operation.operationId,
+      schema: "farol.installed-operation-slot/1",
+      source: build(operation.source),
+      target: build(operation.target),
+    }) + "\n",
+    "ascii",
+  );
+}
+
+export async function publishInstalledOperationBinding(
+  helperPath: string,
+  operation: InstalledBoundOperation,
+  installLocation: InstalledAppLocation,
+  beforeEffect: () => void = () => undefined,
+): Promise<void> {
+  const bytes = installedSlotBindingBytes(operation, installLocation);
+  const home = os.userInfo();
+  if (
+    home.uid !== process.geteuid?.() ||
+    !path.isAbsolute(home.homedir) ||
+    path.normalize(home.homedir) !== home.homedir
+  )
+    throw new Error("UPDATE_SLOT_BINDING_INVALID");
+  const root = path.join(
+    home.homedir,
+    "Library/Application Support/Farol Next Preview/installed-updates",
+  );
+  const directory = path.join(root, operation.operationId);
+  const safeDirectory = async (file: string) => {
+    const info = await fs.lstat(file, { bigint: true });
+    if (
+      !info.isDirectory() ||
+      info.uid !== BigInt(home.uid) ||
+      (info.mode & 0o077n) !== 0n ||
+      (await fs.realpath(file)) !== file
+    )
+      throw new Error("UPDATE_SLOT_BINDING_INVALID");
+    return info;
+  };
+  beforeEffect();
+  const parent = await safeDirectory(root);
+  const before = await safeDirectory(directory);
+  const fd = await fs.open(
+    directory,
+    constants.O_RDONLY |
+      constants.O_DIRECTORY |
+      constants.O_NOFOLLOW |
+      constants.O_NONBLOCK,
+  );
+  try {
+    const opened = await fd.stat({ bigint: true });
+    if (
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino ||
+      opened.mode !== before.mode ||
+      opened.uid !== before.uid
+    )
+      throw new Error("UPDATE_SLOT_BINDING_INVALID");
+    const recheck = async () => {
+      const named = await safeDirectory(directory);
+      const liveParent = await safeDirectory(root);
+      if (
+        named.dev !== opened.dev ||
+        named.ino !== opened.ino ||
+        named.mode !== opened.mode ||
+        liveParent.dev !== parent.dev ||
+        liveParent.ino !== parent.ino ||
+        liveParent.mode !== parent.mode
+      )
+        throw new Error("UPDATE_SLOT_BINDING_CHANGED");
+    };
+    const helper = await helperBytes(helperPath, beforeEffect);
+    await recheck();
+    beforeEffect();
+    // Inherit only the pinned operation directory; all writes occur relative to fd4.
+    const program = `import os,sys
+namespace={"__name__":"slot_binding"}
+exec(compile(sys.stdin.buffer.read(),"<attested-helper>","exec"),namespace)
+data=bytearray()
+while len(data)<=8192:
+ chunk=os.read(3,8193-len(data))
+ if not chunk: break
+ data.extend(chunk)
+try:
+ namespace["publish_slot_binding"](4,bytes(data))
+ os.write(1,b"SLOT_BINDING_OK\\n")
+except namespace["Refusal"]:
+ sys.exit(70)
+`;
+    const child = spawn("/usr/bin/python3", ["-I", "-S", "-B", "-c", program], {
+      cwd: "/",
+      env: { LANG: "C.UTF-8", PATH: "/usr/bin:/bin" },
+      stdio: ["pipe", "pipe", "pipe", "pipe", fd.fd],
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let failure: unknown;
+    let outputBytes = 0;
+    const closed = new Promise<{
+      code: number | null;
+      signal: NodeJS.Signals | null;
+    }>((resolve) => {
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    });
+    let stopRequested = false;
+    const stop = (error: unknown) => {
+      failure ??= error;
+      if (stopRequested) return;
+      stopRequested = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* retain original close */
+      }
+    };
+    child.once("error", stop);
+    for (const stream of [
+      child.stdin,
+      child.stdout,
+      child.stderr,
+      child.stdio[3],
+    ])
+      stream?.on("error", stop);
+    for (const [stream, chunks] of [
+      [child.stdout, stdout],
+      [child.stderr, stderr],
+    ] as const)
+      stream?.on("data", (chunk: Buffer) => {
+        outputBytes += chunk.length;
+        if (outputBytes > 4096)
+          stop(new Error("UPDATE_SLOT_BINDING_UNCONFIRMED"));
+        else chunks.push(chunk);
+      });
+    const deadline = setTimeout(
+      () => stop(new Error("UPDATE_SLOT_BINDING_UNCONFIRMED")),
+      5000,
+    );
+    try {
+      beforeEffect();
+      child.stdin!.end(helper);
+      (child.stdio[3] as Writable).end(bytes);
+    } catch (error) {
+      stop(error);
+    }
+    // A timeout/kill request never substitutes for this exact child's terminal proof.
+    const result = await closed.finally(() => clearTimeout(deadline));
+    if (
+      failure ||
+      result.code !== 0 ||
+      result.signal !== null ||
+      Buffer.concat(stderr).length !== 0 ||
+      Buffer.concat(stdout).toString() !== "SLOT_BINDING_OK\n"
+    )
+      throw new Error("UPDATE_SLOT_BINDING_UNCONFIRMED");
+    await recheck();
+    beforeEffect();
+  } finally {
+    await fd.close();
+  }
 }

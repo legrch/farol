@@ -127,6 +127,30 @@ function close(code = 0, signal = null) {
 }
 
 describe("promotion inherits the original lease and owns the original child lifetime", () => {
+  it.each([
+    ["/Applications/Farol.app", "shared"],
+    ["/controlled/no-install-home/Applications/Farol.app", "legacy"],
+    [undefined, "legacy"],
+  ])(
+    "sends explicit location for %s without native installation",
+    async (destination, expected) => {
+      const operation = runPromotionApply(request({ destination }));
+      await started();
+      expect(
+        JSON.parse(Buffer.concat(requestBytes).toString()).installLocation,
+      ).toBe(expected);
+      child.stdout.write("FAROL_PROMOTION_OK\n");
+      close();
+      await operation;
+    },
+  );
+  it("refuses an arbitrary promotion path before transferring the original lease", async () => {
+    await expect(
+      runPromotionApply(request({ destination: "/workspace/Farol.app" })),
+    ).rejects.toThrow("PROMOTION_DESTINATION_OUTSIDE_OWNER_APPLICATIONS");
+    expect(fake.transfer).not.toHaveBeenCalled();
+    expect(fake.spawn).not.toHaveBeenCalled();
+  });
   it.each([false, true])(
     "inherits exact fd6 and preserves fd0..5 with fd7 ignored (test hook %s)",
     async (testHook) => {

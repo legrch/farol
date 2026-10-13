@@ -56,6 +56,156 @@ def open_dir(parent, name):
     return fd
 
 
+SLOT_BINDING = "slot-binding.json"
+SLOT_SCHEMA = "farol.installed-operation-slot/1"
+
+
+def slot_binding_bytes(request):
+    location = request.get("installLocation")
+    op = request.get("operationId")
+    if (location not in ("shared", "legacy") or not isinstance(op, str)
+            or len(op) != 32 or any(c not in "0123456789abcdef" for c in op)):
+        fail("slot_binding_invalid")
+    for key in ("source", "target"):
+        build = request.get(key)
+        if (not isinstance(build, dict) or set(build) != {"digest", "version", "buildId"}
+                or not isinstance(build["version"], str) or not 1 <= len(build["version"]) <= 128
+                or any(not isinstance(build[k], str) or len(build[k]) != 64
+                       or any(c not in "0123456789abcdef" for c in build[k]) for k in ("digest", "buildId"))):
+            fail("slot_binding_invalid")
+    value = {"schema": SLOT_SCHEMA, "operationId": op, "installLocation": location,
+             "source": request["source"], "target": request["target"]}
+    return (json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n").encode("ascii")
+
+
+def binding_directory(fd):
+    st = os.fstat(fd)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid() or st.st_mode & 0o077:
+        fail("slot_binding_directory")
+
+
+def read_slot_binding(fd):
+    binding_directory(fd)
+    before = entry(fd, SLOT_BINDING)
+    if before is None:
+        fail("slot_binding_missing")
+    if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid()
+            or before.st_mode & 0o077 or before.st_nlink != 1 or not 1 <= before.st_size <= MAX_RECORD):
+        fail("slot_binding_type")
+    opened = os.open(SLOT_BINDING, FILE_FLAGS, dir_fd=fd)
+    def fingerprint(st):
+        return identity(st) + (st.st_nlink, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+    try:
+        if fingerprint(os.fstat(opened)) != fingerprint(before):
+            fail("slot_binding_changed")
+        data = bytearray()
+        while len(data) <= MAX_RECORD:
+            chunk = os.read(opened, MAX_RECORD + 1 - len(data))
+            if not chunk:
+                break
+            data.extend(chunk)
+        named = entry(fd, SLOT_BINDING)
+        if (len(data) != before.st_size or named is None
+                or fingerprint(os.fstat(opened)) != fingerprint(before)
+                or fingerprint(named) != fingerprint(before)):
+            fail("slot_binding_changed")
+        return bytes(data)
+    finally:
+        os.close(opened)
+
+
+def verify_slot_binding(fd, request):
+    # Only old requests without this field retain the legacy wire behavior.
+    if "installLocation" in request and read_slot_binding(fd) != slot_binding_bytes(request):
+        fail("slot_binding_mismatch")
+
+
+def canonical_slot_binding(data):
+    if not 1 <= len(data) <= MAX_RECORD:
+        fail("slot_binding_invalid")
+    try:
+        value = json.loads(data)
+    except (ValueError, UnicodeError):
+        fail("slot_binding_invalid")
+    if (not isinstance(value, dict)
+            or set(value) != {"schema", "operationId", "installLocation", "source", "target"}
+            or value["schema"] != SLOT_SCHEMA or slot_binding_bytes(value) != data):
+        fail("slot_binding_invalid")
+    return value
+
+
+def publish_slot_binding(fd, data):
+    binding_directory(fd)
+    canonical_slot_binding(data)
+    if entry(fd, SLOT_BINDING) is not None:
+        if read_slot_binding(fd) != data:
+            fail("slot_binding_mismatch")
+        return
+    if os.listdir(fd):
+        fail("slot_binding_publication_unconfirmed")
+    temporary = ".slot-binding-" + os.urandom(12).hex()
+    opened = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=fd)
+    try:
+        offset = 0
+        while offset < len(data):
+            offset += os.write(opened, data[offset:])
+        os.fsync(opened)
+    finally:
+        os.close(opened)
+    try:
+        if sorted(os.listdir(fd)) != [temporary]:
+            fail("slot_binding_publication_unconfirmed")
+        # Atomic no-overwrite publication. The final record is never rewritten.
+        try:
+            os.link(temporary, SLOT_BINDING, src_dir_fd=fd, dst_dir_fd=fd, follow_symlinks=False)
+        except FileExistsError:
+            pass
+    finally:
+        os.unlink(temporary, dir_fd=fd)
+    os.fsync(fd)
+    if read_slot_binding(fd) != data:
+        fail("slot_binding_mismatch")
+
+
+def write_operation_journal(fd, request, phase):
+    verify_slot_binding(fd, request)
+    write_record(fd, "journal.json", record_for(request, phase))
+
+
+def require_shared_parent(st):
+    if (not stat.S_ISDIR(st.st_mode) or st.st_uid != 0
+            or st.st_mode & 0o002 or (st.st_mode & 0o020 and st.st_gid != 80)):
+        fail("path_type")
+
+
+def selected_slot(request):
+    location = request.get("installLocation", "legacy")
+    if location not in ("shared", "legacy"):
+        fail("input")
+    return "/Applications/" + APP if location == "shared" else request["home"] + "/Applications/" + APP
+
+
+def open_applications(home, location):
+    if location == "legacy":
+        return open_dir(home, "Applications")
+    if location != "shared":
+        fail("input")
+    root = os.open("/", DIR_FLAGS)
+    try:
+        st = os.fstat(root)
+        if st.st_uid != 0 or st.st_mode & 0o022:
+            fail("path_type")
+        before = os.stat("Applications", dir_fd=root, follow_symlinks=False)
+        require_shared_parent(before)
+        fd = os.open("Applications", DIR_FLAGS, dir_fd=root)
+        if identity(os.fstat(fd)) != identity(before):
+            os.close(fd)
+            fail("path_replaced")
+        return fd
+    finally:
+        os.close(root)
+
+
 def components(value):
     if not isinstance(value, str) or not value.startswith("/") or value == "/" or os.path.normpath(value) != value or "\x00" in value:
         fail("input")
@@ -530,6 +680,10 @@ def parse_request():
     except (ValueError, UnicodeError):
         fail("input")
     required = {"schema", "action", "home", "operationId", "source", "target", "drain", "pid", "processStart", "waitSeconds", "relaunch"}
+    if isinstance(request, dict) and "installLocation" in request:
+        required.add("installLocation")
+        if request["installLocation"] not in ("shared", "legacy"):
+            fail("input")
     if isinstance(request, dict) and "predecessor" in request:
         required.update(("predecessor", "leaseIdentity"))
         proof = request["predecessor"]
@@ -556,6 +710,7 @@ def record_for(request, phase):
 
 
 def read_phase(op, request):
+    verify_slot_binding(op, request)
     try:
         record = json.loads(read_file(op, "journal.json"))
     except (ValueError, UnicodeError):
@@ -566,14 +721,14 @@ def read_phase(op, request):
     return record["phase"]
 
 
-def assert_parent_path(home_value, home, apps):
+def assert_parent_path(home_value, home, apps, location="legacy"):
     live_home = open_home(home_value)
     try:
         if identity(os.fstat(live_home)) != identity(os.fstat(home)):
             fail("home_replaced")
     finally:
         os.close(live_home)
-    current = open_dir(home, "Applications")
+    current = open_applications(home, location)
     try:
         if identity(os.fstat(current)) != identity(os.fstat(apps)):
             fail("parent_replaced")
@@ -726,7 +881,7 @@ def reconcile(apps, op, request, fence):
             fence()
             if not recovery_keeps_verified_target(apps, op, request, phase):
                 fail("recovery_pair", phase)
-            write_record(op, "journal.json", record_for(request, "verified"))
+            write_operation_journal(op, request, "verified")
             return "verified"
         if staged is not None:
             fail("rollback_uncertain", phase)
@@ -741,14 +896,14 @@ def reconcile(apps, op, request, fence):
             checked_tree(op, "previous.app", target["digest"], target["version"], target["buildId"])
             fence()
             rename_checked(op, "previous.app", op, "failed.app", identity(entry(op, "previous.app")))
-            write_record(op, "journal.json", record_for(request, "rolled_back"))
+            write_operation_journal(op, request, "rolled_back")
             return "rolled_back"
         if previous is not None and app is None and failed is not None and phase == "rollback_started":
             # An older journal may have crashed in the former two-rename gap.
             checked_tree(op, "previous.app", source["digest"], source["version"], source["buildId"])
             fence()
             rename_checked(op, "previous.app", apps, APP, identity(previous))
-            write_record(op, "journal.json", record_for(request, "rolled_back"))
+            write_operation_journal(op, request, "rolled_back")
             return "rolled_back"
         if app is not None and previous is None and failed is not None:
             checked_tree(apps, APP, source["digest"], source["version"], source["buildId"])
@@ -757,7 +912,7 @@ def reconcile(apps, op, request, fence):
                 fail("failed_type", phase)
             if phase == "rollback_started":
                 fence()
-                write_record(op, "journal.json", record_for(request, "rolled_back"))
+                write_operation_journal(op, request, "rolled_back")
                 return "rolled_back"
             return phase
         fail("rollback_uncertain", phase)
@@ -769,7 +924,7 @@ def reconcile(apps, op, request, fence):
                 # The exchange has not happened; do not start it in recovery.
                 if phase == "prepared":
                     fence()
-                    write_record(op, "journal.json", record_for(request, "cancelled"))
+                    write_operation_journal(op, request, "cancelled")
                     return "cancelled"
                 return phase
             if phase == "prepared":
@@ -778,7 +933,7 @@ def reconcile(apps, op, request, fence):
                 checked_tree(op, "staged.app", source["digest"], source["version"], source["buildId"])
                 fence()
                 rename_checked(op, "staged.app", op, "previous.app", identity(staged))
-                write_record(op, "journal.json", record_for(request, "verified"))
+                write_operation_journal(op, request, "verified")
                 return "verified"
         fail("predecessor_missing", phase)
     if previous is None:
@@ -791,7 +946,7 @@ def reconcile(apps, op, request, fence):
             require_predecessor_state(request)
             fence()
             rename_checked(op, "previous.app", apps, APP, identity(previous))
-            write_record(op, "journal.json", record_for(request, "rolled_back"))
+            write_operation_journal(op, request, "rolled_back")
             return "rolled_back"
         fail("app_missing", phase)
     if staged is not None:
@@ -799,7 +954,7 @@ def reconcile(apps, op, request, fence):
     checked_tree(apps, APP, target["digest"], target["version"], target["buildId"])
     if phase in ("prepared", "predecessor_saved", "new_installed"):
         fence()
-        write_record(op, "journal.json", record_for(request, "verified"))
+        write_operation_journal(op, request, "verified")
         return "verified"
     return phase
 
@@ -905,7 +1060,7 @@ def relaunch_arguments(request, completion):
     }, separators=(",", ":"))
     if len(hint.encode("utf-8")) > 2048:
         fail("launch_hint_bound")
-    return ("/usr/bin/open", "-a", request["home"] + "/Applications/" + APP,
+    return ("/usr/bin/open", "-a", selected_slot(request),
             "--args", "--farol-installed-update-relaunch=" + hint)
 
 
@@ -914,6 +1069,8 @@ def run(request):
         fail("input")
     if request["action"] == "rollback":
         require_predecessor_state(request)
+    selected_slot(request)
+    location = request.get("installLocation", "legacy")
     home = open_home(request["home"])
     apps = None
     update = None
@@ -930,9 +1087,10 @@ def run(request):
             verify_staging_route(home, update, op, request)
         else:
             verify_owner_lease(state, lease_fd)
-        assert_parent_path(request["home"], home, apps)
+        verify_slot_binding(op, request)
+        assert_parent_path(request["home"], home, apps, location)
     try:
-        apps = open_dir(home, "Applications")
+        apps = open_applications(home, location)
         state = open_owner_state(home)
         if closed:
             lease_fd = 5
@@ -941,14 +1099,15 @@ def run(request):
             confirmed_closed(state, request)
         current = home
         for part in ROOT_PARTS:
-            child = ensure_dir(current, part) if request["action"] == "apply" and not closed else open_dir(current, part)
+            child = ensure_dir(current, part) if request["action"] == "apply" and not closed and "installLocation" not in request else open_dir(current, part)
             if current != home:
                 os.close(current)
             current = child
         update = current
         if not closed:
             lock_fd = update_lock(update)
-        op = ensure_dir(update, request["operationId"]) if request["action"] == "apply" and not closed else open_dir(update, request["operationId"])
+        op = ensure_dir(update, request["operationId"]) if request["action"] == "apply" and not closed and "installLocation" not in request else open_dir(update, request["operationId"])
+        verify_slot_binding(op, request)
         if request["action"] == "apply":
             started_at = None if closed else initial_marker(state, request)
             if entry(op, "journal.json") is not None or entry(op, "previous.app") is not None or entry(op, "failed.app") is not None:
@@ -961,6 +1120,7 @@ def run(request):
                 fence()
                 confirmed_closed(state, request)
                 continue_channel()
+                verify_slot_binding(op, request)
                 emit_handoff(request, "closed_predecessor_ready")
                 await_continue(request)
                 fence()
@@ -972,6 +1132,7 @@ def run(request):
                 # Establish process identity before it may exit; never infer it from an absent PID.
                 if process_start(request["pid"]) != request["processStart"]:
                     fail("process_identity")
+                verify_slot_binding(op, request)
                 emit_handoff(request, "waiting_for_exit")
                 wait_exit(request["pid"], request["processStart"], request["waitSeconds"], observed=True)
                 lease_fd = owner_lease(state)
@@ -985,15 +1146,15 @@ def run(request):
                 confirmed_closed(state, request)
                 if any(entry(op, name) is not None for name in ("journal.json", "previous.app", "failed.app")):
                     fail("operation_exists")
-            assert_parent_path(request["home"], home, apps)
-            write_record(op, "journal.json", record_for(request, "prepared"))
+            assert_parent_path(request["home"], home, apps, location)
+            write_operation_journal(op, request, "prepared")
             verify_owner_lease(state, lease_fd)
-            assert_parent_path(request["home"], home, apps)
+            assert_parent_path(request["home"], home, apps, location)
             exchange_checked(apps, APP, op, "staged.app", predecessor_inode, staged_inode)
             checked_tree(op, "staged.app", request["source"]["digest"], request["source"]["version"], request["source"]["buildId"])
             fence()
             rename_checked(op, "staged.app", op, "previous.app", predecessor_inode)
-            write_record(op, "journal.json", record_for(request, "new_installed"))
+            write_operation_journal(op, request, "new_installed")
             try:
                 checked_tree(apps, APP, request["target"]["digest"], request["target"]["version"], request["target"]["buildId"])
             except Refusal:
@@ -1002,8 +1163,8 @@ def run(request):
                     fail("target_uncertain", "new_installed")
                 checked_tree(op, "previous.app", request["source"]["digest"], request["source"]["version"], request["source"]["buildId"])
                 verify_owner_lease(state, lease_fd)
-                assert_parent_path(request["home"], home, apps)
-                write_record(op, "journal.json", record_for(request, "rollback_started"))
+                assert_parent_path(request["home"], home, apps, location)
+                write_operation_journal(op, request, "rollback_started")
                 fence()
                 exchange_checked(apps, APP, op, "previous.app", staged_inode, predecessor_inode)
                 fence()
@@ -1019,7 +1180,7 @@ def run(request):
                     "source": request["source"], "target": request["target"],
                     "directoryIdentity": {"device": str(rejected.st_dev), "inode": str(rejected.st_ino)},
                 })
-                write_record(op, "journal.json", record_for(request, "rolled_back"))
+                write_operation_journal(op, request, "rolled_back")
                 fail("target_verification", "rolled_back")
         elif request["action"] == "rollback":
             if closed:
@@ -1029,6 +1190,7 @@ def run(request):
                 confirmed_closed(state, request)
                 pair = closed_rollback_pair(apps, op, request)
                 continue_channel()
+                verify_slot_binding(op, request)
                 emit_handoff(request, "closed_predecessor_ready")
                 await_continue(request)
                 fence()
@@ -1049,11 +1211,12 @@ def run(request):
                     fail("failed_exists")
                 if process_start(request["pid"]) != request["processStart"]:
                     fail("process_identity")
+                verify_slot_binding(op, request)
                 emit_handoff(request, "waiting_for_exit")
                 wait_exit(request["pid"], request["processStart"], request["waitSeconds"], observed=True)
                 lease_fd = owner_lease(state)
                 confirmed_quit(state, started_at)
-                assert_parent_path(request["home"], home, apps)
+                assert_parent_path(request["home"], home, apps, location)
                 phase = reconcile(apps, op, request, fence)
                 if phase not in ("verified", "completed", "launch_requested"):
                     fail("rollback_phase", phase)
@@ -1061,7 +1224,7 @@ def run(request):
                 checked_tree(op, "previous.app", request["source"]["digest"], request["source"]["version"], request["source"]["buildId"])
                 if entry(op, "failed.app") is not None:
                     fail("failed_exists")
-            write_record(op, "journal.json", record_for(request, "rollback_started"))
+            write_operation_journal(op, request, "rollback_started")
             if closed:
                 fence()
                 confirmed_closed(state, request)
@@ -1071,16 +1234,17 @@ def run(request):
                 rename_checked(op, "previous.app", op, "failed.app", target_inode)
             else:
                 verify_owner_lease(state, lease_fd)
-                assert_parent_path(request["home"], home, apps)
+                assert_parent_path(request["home"], home, apps, location)
                 exchange_checked(apps, APP, op, "previous.app", identity(entry(apps, APP)), identity(entry(op, "previous.app")))
                 fence()
                 rename_checked(op, "previous.app", op, "failed.app", identity(entry(op, "previous.app")))
         elif request["action"] == "recover" and request["relaunch"]:
             started_at = initial_marker(state, request)
-            assert_parent_path(request["home"], home, apps)
+            assert_parent_path(request["home"], home, apps, location)
             inspect_recovery(apps, op, request)
             if process_start(request["pid"]) != request["processStart"]:
                 fail("process_identity")
+            verify_slot_binding(op, request)
             emit_handoff(request, "waiting_for_exit")
             wait_exit(request["pid"], request["processStart"], request["waitSeconds"], observed=True)
             lease_fd = owner_lease(state)
@@ -1089,7 +1253,7 @@ def run(request):
             lease_fd = owner_lease(state)
             confirmed_quit(state)
         verify_owner_lease(state, lease_fd)
-        assert_parent_path(request["home"], home, apps)
+        assert_parent_path(request["home"], home, apps, location)
         phase = reconcile(apps, op, request, fence)
         # Only the verified new target participates in correlated startup.
         # Cancellation/rollback keeps the predecessor closed, including older
@@ -1099,13 +1263,13 @@ def run(request):
         if request["relaunch"] and phase == "verified":
             launch_requested, completed = "launch_requested", "completed"
             fence()
-            write_record(op, "journal.json", record_for(request, launch_requested))
+            write_operation_journal(op, request, launch_requested)
             # One request only. A failed/unknown launch remains explicit for caller reconciliation.
-            assert_parent_path(request["home"], home, apps)
+            assert_parent_path(request["home"], home, apps, location)
             result = subprocess.run(relaunch_arguments(request, completed), timeout=10, check=False)
             if result.returncode != 0:
                 fail("launch_failed", launch_requested)
-            write_record(op, "journal.json", record_for(request, completed))
+            write_operation_journal(op, request, completed)
             phase = completed
         return phase
     finally:

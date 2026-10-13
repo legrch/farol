@@ -150,32 +150,31 @@ raise SystemExit(0)
 }
 
 describe("descriptor-bound promotion apply", () => {
-  it("keeps all writes in the opened Applications directory after a path swap", async () => {
+  it("refuses placement when the pinned Applications parent is displaced", async () => {
     const { root, source, home, applications } = await fixture();
     const pinned = path.join(home, "Applications.pinned");
     const legacy = path.join(root, "legacy");
     await fs.mkdir(legacy, { mode: 0o700 });
 
-    await applyWithLease({
-      home,
-      source,
-      artifactSha256: await treeDigest(source),
-      receiptText: '{"operation":"applied"}\n',
-      afterParentOpened: async () => {
-        await fs.rename(applications, pinned);
-        await fs.symlink(legacy, applications);
-      },
-    });
+    await expect(
+      applyWithLease({
+        home,
+        source,
+        artifactSha256: await treeDigest(source),
+        receiptText: '{"operation":"applied"}\n',
+        afterParentOpened: async () => {
+          await fs.rename(applications, pinned);
+          await fs.symlink(legacy, applications);
+        },
+      }),
+    ).rejects.toThrow("PROMOTION_APPLY_REFUSED:71");
 
     await expect(
-      fs.readFile(
-        path.join(pinned, "Farol.app", "Contents", "payload"),
-        "utf8",
-      ),
-    ).resolves.toBe("exact\n");
+      fs.lstat(path.join(pinned, "Farol.app")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
-      fs.readFile(path.join(pinned, "Farol.app.receipt.json"), "utf8"),
-    ).resolves.toBe('{"operation":"applied"}\n');
+      fs.lstat(path.join(pinned, "Farol.app.receipt.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
       fs.lstat(path.join(legacy, "Farol.app")),
     ).rejects.toMatchObject({ code: "ENOENT" });

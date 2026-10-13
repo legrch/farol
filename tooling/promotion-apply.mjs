@@ -4,13 +4,14 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertPromotionDestination } from "./promotion-destination.mjs";
 import { createPromotionLeaseTransfer } from "./promotion-lease.mjs";
 
 const DEFAULT_HELPER = fileURLToPath(
   new URL("./promotion-apply.py", import.meta.url),
 );
 const HELPER_SHA256 =
-  "53eee38236103b140d95ab27342c522b7a9a1f4fc8fe8442b2cdd44f07be32db";
+  "50fce62376d8244c13efbbfc602d0e8a99159044dbd7c9e854cc5e6f90232c25";
 const MAX_HELPER_BYTES = 64 * 1024;
 const MAX_OUTPUT_BYTES = 4 * 1024;
 const SUCCESS = "FAROL_PROMOTION_OK\n";
@@ -62,6 +63,7 @@ function appendBounded(chunks, chunk, state) {
 
 export async function runPromotionApply({
   home,
+  destination = path.join(home, "Applications/Farol.app"),
   source,
   artifactSha256,
   receiptText,
@@ -88,6 +90,9 @@ export async function runPromotionApply({
   ) {
     throw new Error("PROMOTION_APPLY_INPUT_INVALID");
   }
+  assertPromotionDestination({ home, source, destination });
+  const installLocation =
+    destination === "/Applications/Farol.app" ? "shared" : "legacy";
   // This is the original owner's held kernel lock, selected once. Passing a
   // descriptor from a receipt or acquiring another lock cannot authorize it.
   const transfer = await createPromotionLeaseTransfer(lease);
@@ -177,6 +182,7 @@ export async function runPromotionApply({
   const request = {
     schema: "farol.next.promotion-apply/1",
     home,
+    installLocation,
     source,
     artifactSha256,
     receiptText,

@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   captureStart: vi.fn(),
   exec: vi.fn(),
   copyApp: vi.fn(),
+  publishBinding: vi.fn(),
 }));
 vi.mock("node:child_process", async (original) => ({
   ...(await original<typeof import("node:child_process")>()),
@@ -75,6 +76,7 @@ vi.mock(
     >()),
     captureInstalledProcessStart: mocks.captureStart,
     startInstalledUpdateHelper: mocks.helper,
+    publishInstalledOperationBinding: mocks.publishBinding,
   }),
 );
 import {
@@ -83,6 +85,7 @@ import {
   observeSupervisedReadyUpdate,
   type InstalledUpdateRuntimeOptions,
 } from "../../src/apps/desktop/installed-update-runtime";
+import { installedSlotBindingBytes } from "../../src/modules/release/infra/native/installed-update-helper";
 import { drainInstalledComputerWork } from "../../src/apps/desktop/installed-computer-drain";
 import { ProductSettingsStore } from "../../src/apps/desktop/product-configuration";
 import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
@@ -177,6 +180,24 @@ async function prepared(selectedBuild = build) {
 beforeEach(async () => {
   vi.resetAllMocks();
   mocks.captureStart.mockResolvedValue("fixture-start");
+  // Runtime composition seams; native no-overwrite publication is independently
+  // exercised by disposable Python fixtures, not by this mocked transport.
+  mocks.publishBinding.mockImplementation(
+    async (_helper, op, location, before) => {
+      before();
+      await fs.writeFile(
+        path.join(
+          userData,
+          "installed-updates",
+          op.operationId,
+          "slot-binding.json",
+        ),
+        installedSlotBindingBytes(op, location),
+        { flag: "wx", mode: 0o600 },
+      );
+      before();
+    },
+  );
   root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-update-composition-"));
   root = await fs.realpath(root);
   vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: root });
@@ -1326,9 +1347,14 @@ describe("installed updater composition (disposable filesystem and mocked native
       const stateFiles = await fs.readdir(
         path.join(userData, "installed-updates"),
       );
-      expect(stateFiles.some((name) => /^[a-f0-9]{32}$/u.test(name))).toBe(
-        false,
+      const allocations = stateFiles.filter((name) =>
+        /^[a-f0-9]{32}$/u.test(name),
       );
+      expect(allocations).toHaveLength(boundary === "before-copy" ? 0 : 1);
+      for (const id of allocations)
+        expect(
+          await fs.readdir(path.join(userData, "installed-updates", id)),
+        ).toEqual(["slot-binding.json"]);
       if (boundary === "before-copy")
         expect(mocks.copyApp).not.toHaveBeenCalled();
       else expect(mocks.copyApp).toHaveBeenCalledOnce();
@@ -2688,6 +2714,18 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
         }),
         { mode: 0o600 },
       );
+      const invalid = JSON.parse(await fs.readFile(ready, "utf8")).operation;
+      const boundRoot = path.join(
+        userData,
+        "installed-updates",
+        invalid.operationId,
+      );
+      await fs.mkdir(boundRoot, { mode: 0o700 });
+      await fs.writeFile(
+        path.join(boundRoot, "slot-binding.json"),
+        installedSlotBindingBytes(invalid, "legacy"),
+        { mode: 0o600 },
+      );
       const retainedBytes = await fs.readFile(ready);
       mocks.discover.mockClear();
       mocks.download.mockClear();
@@ -2766,9 +2804,14 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
         phase: "ready",
         deferred: true,
       });
-      await expect(fs.lstat(path.dirname(destination))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      expect(await fs.readdir(path.dirname(destination))).toEqual([
+        "slot-binding.json",
+      ]);
+      expect(
+        await fs.readFile(
+          path.join(path.dirname(destination), "slot-binding.json"),
+        ),
+      ).toEqual(installedSlotBindingBytes(recorded.preparation, "legacy"));
       expect(
         JSON.parse(await fs.readFile(ready, "utf8")).preparation,
       ).toBeUndefined();
@@ -2792,6 +2835,11 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       });
       await fs.chmod(opRoot, 0o700);
       await fs.writeFile(path.join(opRoot, "staged.app/payload"), "keep");
+      await fs.writeFile(
+        path.join(opRoot, "slot-binding.json"),
+        installedSlotBindingBytes({ operationId, source, target }, "legacy"),
+        { mode: 0o600 },
+      );
       const record = JSON.parse(await fs.readFile(ready, "utf8"));
       await fs.writeFile(
         ready,
@@ -5902,4 +5950,272 @@ it("projects legacy choices OFF for the unified stable UI without rewriting them
   ).toMatchObject({ status: "skipped", code: "UPDATE_QUIT_NOT_OPTED_IN" });
   expect(mocks.helper).not.toHaveBeenCalled();
   await controller.close();
+});
+
+describe("selected shared slot (redirected disposable filesystem, mocked helper)", () => {
+  async function shared() {
+    const physical = slot;
+    const globalSlot = "/Applications/Farol.app";
+    const receipt = JSON.parse(
+      await fs.readFile(physical + ".receipt.json", "utf8"),
+    );
+    receipt.destination = globalSlot;
+    receipt.receipt = globalSlot + ".receipt.json";
+    await fs.writeFile(physical + ".receipt.json", JSON.stringify(receipt), {
+      mode: 0o600,
+    });
+    const lstat = fs.lstat.bind(fs);
+    const realpath = fs.realpath.bind(fs);
+    const open = fs.open.bind(fs);
+    const map = (file: unknown) =>
+      typeof file === "string" && file.startsWith("/Applications/")
+        ? file.replace("/Applications/Farol.app", physical)
+        : file;
+    const stat = vi
+      .spyOn(fs, "lstat")
+      .mockImplementation(async (file, ...args) => {
+        if (file === "/Applications") {
+          const original = await lstat(path.dirname(physical));
+          return Object.assign(original, { uid: 0, gid: 80, mode: 0o40775 });
+        }
+        return lstat(map(file) as string, ...args);
+      });
+    vi.spyOn(fs, "realpath").mockImplementation(async (file, ...args) =>
+      typeof file === "string" &&
+      (file === "/Applications" || file.startsWith("/Applications/"))
+        ? file
+        : realpath(file, ...args),
+    );
+    vi.spyOn(fs, "open").mockImplementation((file, ...args) =>
+      open(map(file) as string, ...args),
+    );
+    slot = globalSlot;
+    return { stat, physical };
+  }
+  it("hands off the selected shared slot and never observes the legacy app instead", async () => {
+    const fixture = await shared();
+    const controller = await prepared();
+    await controller.restart();
+    expect(mocks.helper).toHaveBeenCalledTimes(1);
+    expect(mocks.helper.mock.calls[0]![1]).toMatchObject({
+      action: "apply",
+      installLocation: "shared",
+    });
+    expect(
+      fixture.stat.mock.calls.some(([file]) => file === fixture.physical),
+    ).toBe(false);
+    await controller.close();
+  });
+  it("does not consume a shared operation after reopening the legacy copy with identical builds", async () => {
+    const fixture = await shared();
+    const first = await prepared();
+    await first.restart();
+    await first.close();
+    const bytes = await fs.readFile(ready);
+    const op = JSON.parse(bytes.toString()).operation;
+    const opRoot = path.join(userData, "installed-updates", op.operationId);
+    await fs.writeFile(
+      path.join(opRoot, "journal.json"),
+      JSON.stringify({
+        schema: "farol.installed-update-journal/1",
+        ...op,
+        phase: "prepared",
+      }),
+      { mode: 0o600 },
+    );
+    slot = fixture.physical;
+    const legacy = await createInstalledUpdateRuntime(options());
+    await legacy!.initialize();
+    expect(legacy!.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_SLOT_BINDING_UNCONFIRMED",
+      recoveryRequired: true,
+    });
+    expect(mocks.helper).toHaveBeenCalledTimes(1);
+    expect(mocks.reclaimArchive).not.toHaveBeenCalled();
+    expect(await fs.readFile(ready)).toEqual(bytes);
+    await legacy!.close();
+  });
+  it("does not fall back to a valid legacy copy after selected resources displacement", async () => {
+    await shared();
+    vi.mocked(fs.realpath).mockResolvedValueOnce("/displaced/Farol.app");
+    expect(await createInstalledUpdateRuntime(options())).toBeNull();
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(mocks.download).not.toHaveBeenCalled();
+  });
+  it.each([
+    [0o40777, 80],
+    [0o40775, 20],
+  ])(
+    "blocks a shared parent with mode %s and group %s without fallback",
+    async (mode, gid) => {
+      const fixture = await shared();
+      const original = fixture.stat.getMockImplementation()!;
+      fixture.stat.mockImplementation(async (file, ...args) => {
+        const value = await original(file, ...args);
+        if (file === "/Applications") Object.assign(value, { mode, gid });
+        return value;
+      });
+      const controller = await createInstalledUpdateRuntime(options());
+      await controller!.initialize();
+      await controller!.check();
+      await controller!.download();
+      await controller!.restart();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      expect(
+        fixture.stat.mock.calls.some(([file]) => file === fixture.physical),
+      ).toBe(false);
+      await controller!.close();
+    },
+  );
+});
+
+describe("immutable operation binding recovery (disposable bytes, mocked effects)", () => {
+  it.each([
+    "missing",
+    "different-slot",
+    "different-source",
+    "different-target",
+    "noncanonical",
+    "symlink",
+    "hardlink",
+    "public",
+    "oversized",
+  ])(
+    "fences authoritative %s binding without adopting, rewriting or dispatching",
+    async (variant) => {
+      const first = await prepared();
+      await first.restart();
+      await first.close();
+      const retainedBytes = await fs.readFile(ready);
+      const record = JSON.parse(retainedBytes.toString());
+      const op = record.operation;
+      const directory = path.join(
+        userData,
+        "installed-updates",
+        op.operationId,
+      );
+      const file = path.join(directory, "slot-binding.json");
+      const journal = path.join(directory, "journal.json");
+      await fs.writeFile(
+        journal,
+        JSON.stringify({
+          schema: "farol.installed-update-journal/1",
+          ...op,
+          phase: "prepared",
+        }),
+        { mode: 0o600 },
+      );
+      const journalBytes = await fs.readFile(journal);
+      const binding = await fs.readFile(file);
+      if (variant === "missing") await fs.unlink(file);
+      if (variant === "different-slot")
+        await fs.writeFile(file, installedSlotBindingBytes(op, "shared"));
+      if (variant === "different-source" || variant === "different-target") {
+        const part = variant === "different-source" ? "source" : "target";
+        await fs.writeFile(
+          file,
+          installedSlotBindingBytes(
+            { ...op, [part]: { ...op[part], digest: "e".repeat(64) } },
+            "legacy",
+          ),
+        );
+      }
+      if (variant === "noncanonical")
+        await fs.writeFile(
+          file,
+          JSON.stringify(JSON.parse(binding.toString()), null, 2),
+        );
+      if (variant === "symlink") {
+        await fs.rename(file, file + ".original");
+        await fs.symlink(file + ".original", file);
+      }
+      if (variant === "hardlink") await fs.link(file, file + ".alias");
+      if (variant === "public") await fs.chmod(file, 0o644);
+      if (variant === "oversized")
+        await fs.writeFile(file, Buffer.alloc(8193, 120));
+      const next = await createInstalledUpdateRuntime(options());
+      await next!.initialize();
+      expect(next!.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_SLOT_BINDING_UNCONFIRMED",
+        recoveryRequired: true,
+      });
+      await next!.restore("recover");
+      await next!.restore("rollback");
+      expect(mocks.helper).toHaveBeenCalledTimes(1);
+      expect(mocks.publishBinding).toHaveBeenCalledTimes(1);
+      expect(await fs.readFile(ready)).toEqual(retainedBytes);
+      expect(await fs.readFile(journal)).toEqual(journalBytes);
+      if (variant === "missing")
+        await expect(fs.lstat(file)).rejects.toMatchObject({ code: "ENOENT" });
+      await next!.close();
+    },
+  );
+  it("publishes canonical binding before copy and helper dispatch", async () => {
+    const controller = await prepared();
+    const copy = mocks.copyApp.getMockImplementation()!;
+    mocks.copyApp.mockImplementation(async (from, to) => {
+      const directory = path.dirname(to);
+      const record = JSON.parse(await fs.readFile(ready, "utf8"));
+      expect(
+        await fs.readFile(path.join(directory, "slot-binding.json")),
+      ).toEqual(installedSlotBindingBytes(record.preparation, "legacy"));
+      return copy(from, to);
+    });
+    await controller.restart();
+    expect(mocks.publishBinding).toHaveBeenCalledTimes(1);
+    expect(mocks.helper).toHaveBeenCalledTimes(1);
+    const request = mocks.helper.mock.calls[0]![1];
+    expect(
+      await fs.readFile(
+        path.join(
+          userData,
+          "installed-updates",
+          request.operationId,
+          "slot-binding.json",
+        ),
+      ),
+    ).toEqual(installedSlotBindingBytes(request, "legacy"));
+    await controller.close();
+  });
+  it("fences a binding changed during copy before helper dispatch", async () => {
+    const controller = await prepared();
+    const copy = mocks.copyApp.getMockImplementation()!;
+    mocks.copyApp.mockImplementation(async (from, to) => {
+      await copy(from, to);
+      const op = JSON.parse(await fs.readFile(ready, "utf8")).preparation;
+      await fs.writeFile(
+        path.join(path.dirname(to), "slot-binding.json"),
+        installedSlotBindingBytes(op, "shared"),
+      );
+    });
+    await controller.restart();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_SLOT_BINDING_UNCONFIRMED",
+      recoveryRequired: true,
+    });
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await controller.close();
+  });
+  it("keeps a lost publication reply fenced without publishing again or dispatching", async () => {
+    const controller = await prepared();
+    const publish = mocks.publishBinding.getMockImplementation()!;
+    mocks.publishBinding.mockImplementation(async (...args) => {
+      await publish(...args);
+      throw new Error("fixture lost publication ACK");
+    });
+    await controller.restart();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_SLOT_BINDING_UNCONFIRMED",
+      recoveryRequired: true,
+    });
+    await controller.restart();
+    expect(mocks.publishBinding).toHaveBeenCalledTimes(1);
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
+    await controller.close();
+  });
 });

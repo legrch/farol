@@ -34,7 +34,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const HELPER_SHA256 =
   "479edb96545dc2ba30938aed7af3ba22f3098b8c3cc8dbac17176c891dbefcb5";
 const LIBRARY_SHA256 =
-  "53eee38236103b140d95ab27342c522b7a9a1f4fc8fe8442b2cdd44f07be32db";
+  "50fce62376d8244c13efbbfc602d0e8a99159044dbd7c9e854cc5e6f90232c25";
 const sha = (raw) => createHash("sha256").update(raw).digest("hex");
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 // Same normal receipt DTO as the installed-update owner; keep strict shape parity.
