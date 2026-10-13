@@ -868,6 +868,7 @@ async function initializeInstalledUpdater(): Promise<void> {
       directory,
       userData: app.getPath("userData"),
       build: buildIdentity,
+      physicalFiles: rawFs,
       copyApp: (source, destination) =>
         rawFs.cp(source, destination, {
           recursive: true,
@@ -11118,6 +11119,15 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     directory,
     userData: app.getPath("userData"),
     build: buildIdentity,
+    physicalFiles: rawFs,
+    copyApp: (source, destination) =>
+      rawFs.cp(source, destination, {
+        recursive: true,
+        force: false,
+        errorOnExist: true,
+        verbatimSymlinks: true,
+        preserveTimestamps: true,
+      }),
   });
   const stateRoot = path.join(app.getPath("userData"), "farol-next-state");
   const previousRunClean = await withStartupPromotionLease(

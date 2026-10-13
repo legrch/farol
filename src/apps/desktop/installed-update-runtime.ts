@@ -63,6 +63,11 @@ import type {
 } from "./installed-predecessor";
 import { originalPredecessorSettingsReadable } from "./beta3-state-readability";
 
+import {
+  captureInstalledExecutionSnapshot,
+  type InstalledExecutionSnapshot,
+} from "./installed-execution-snapshot";
+
 const execute = promisify(execFile);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const UpdatePreferences = z.strictObject({
@@ -385,10 +390,12 @@ async function runInstalledTrusted(
   entry: string,
   args: string[],
   timeout = 180000,
+  execution?: InstalledExecutionSnapshot,
 ): Promise<unknown> {
+  await execution?.recheck();
   const { stdout } = await execute(
-    process.execPath,
-    [path.join(directory, entry), ...args],
+    execution?.executable ?? process.execPath,
+    [path.join(execution?.directory ?? directory, entry), ...args],
     {
       env: {
         PATH: "/usr/bin:/bin",
@@ -530,6 +537,9 @@ export type InstalledUpdateRelaunchOptions = Readonly<{
   directory: string;
   userData: string;
   build: BuildIdentity;
+  // Production Electron supplies its physical, non-ASAR filesystem and copier.
+  physicalFiles?: typeof fs;
+  copyApp?(source: string, destination: string): Promise<void>;
   timeoutMs?: number;
   intervalMs?: number;
   now?: () => number;
@@ -612,6 +622,7 @@ export async function waitForInstalledUpdateRelaunch(
   const pause =
     options.pause ??
     ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let execution: Promise<InstalledExecutionSnapshot> | undefined;
   const reads: NonNullable<InstalledUpdateRelaunchOptions["observation"]> =
     options.observation ?? {
       canonicalOwnedDirectory,
@@ -620,8 +631,29 @@ export async function waitForInstalledUpdateRelaunch(
         appDirectory: string,
         file: string,
         remaining: number,
-      ) =>
-        runInstalledTrusted(appDirectory, "update-slot.mjs", [file], remaining),
+      ) => {
+        if (slot === "/Applications/Farol.app") {
+          if (!pinned || !options.copyApp || !options.physicalFiles)
+            throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
+          const expected =
+            hint.phase === "completed" ? pinned.target : pinned.source;
+          execution ??= captureInstalledExecutionSnapshot({
+            sourceApp: slot,
+            sourceExecutable: process.execPath,
+            privateParent: root,
+            expectedDigest: expected.digest,
+            copyApp: options.copyApp,
+            physicalFiles: options.physicalFiles,
+          });
+        }
+        return runInstalledTrusted(
+          appDirectory,
+          "update-slot.mjs",
+          [file],
+          remaining,
+          execution ? await execution : undefined,
+        );
+      },
       readProcess: readInstalledProcess,
     };
   const pendingPhase = {
@@ -1146,6 +1178,7 @@ export type InstalledUpdateRuntimeOptions = Readonly<{
   localArchive?: Readonly<{ path: string; manifest: unknown }>;
   // Electron must copy physical ASAR files, not its virtual archive filesystem.
   copyApp(source: string, destination: string): Promise<void>;
+  physicalFiles?: typeof fs;
   // Removal has the same physical ASAR boundary as copying a package.
   removeDirectory(directory: string, force: boolean): Promise<void>;
   // Evaluate this existing durable report while admission is held, before
@@ -1427,6 +1460,39 @@ async function createRuntime(
   const verifyBinding = (op: z.infer<typeof Operation>) =>
     readOperationBinding(root, op, installLocation);
   await privateDirectory(root);
+  let execution: Promise<InstalledExecutionSnapshot> | undefined;
+  const captureExecution = async (
+    expected: z.infer<typeof AcceptedBuild>,
+    beforeEffect: () => void,
+  ) => {
+    if (installLocation !== "shared" || supervised) return;
+    if (
+      expected.buildId !== options.build.buildId ||
+      expected.version !== options.build.version ||
+      !options.physicalFiles
+    )
+      throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
+    beforeEffect();
+    // A rejected/unknown capture remains rejected. Never fall back to the slot.
+    execution ??= captureInstalledExecutionSnapshot({
+      sourceApp: slot,
+      sourceExecutable: process.execPath,
+      privateParent: root,
+      expectedDigest: expected.digest,
+      copyApp: options.copyApp,
+      physicalFiles: options.physicalFiles,
+    });
+    const captured = await execution;
+    if (captured.digest !== expected.digest)
+      throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
+    beforeEffect();
+  };
+  const requireExecution = async () => {
+    if (installLocation !== "shared" || supervised) return undefined;
+    if (!execution) await readAcceptedSource();
+    if (!execution) throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
+    return execution;
+  };
   const context = (directory: string) => {
     const verifier = createUpdatePackageVerifier({
       archivePathForHandle: async (handle) => handle,
@@ -1434,6 +1500,17 @@ async function createRuntime(
       extractorPath: path.join(options.directory, "update-archive.py"),
       verifierPath: path.join(options.directory, "update-package.mjs"),
       removeDirectory: options.removeDirectory,
+      executionResources: async () => {
+        const captured = await requireExecution();
+        if (!captured) return null;
+        await captured.recheck();
+        return {
+          extractorPath: path.join(captured.directory, "update-archive.py"),
+          verifierPath: path.join(captured.directory, "update-package.mjs"),
+          nodeExecutable: captured.executable,
+          recheck: captured.recheck,
+        };
+      },
     });
     const transport = createGithubUpdateTransport({
       privateStateDirectory: directory,
@@ -1698,7 +1775,15 @@ async function createRuntime(
     if (supervised && (await supervised.verifyResources()) !== true)
       throw new Error("UPDATE_SUPERVISOR_RESOURCES_CHANGED");
     beforeEffect();
-    const value = await runInstalledTrusted(options.directory, entry, args);
+    const captured = await requireExecution();
+    beforeEffect();
+    const value = await runInstalledTrusted(
+      options.directory,
+      entry,
+      args,
+      180000,
+      captured,
+    );
     beforeEffect();
     return value;
   };
@@ -1813,6 +1898,12 @@ async function createRuntime(
           }
         };
         await checkRepairPair();
+        // Select the current accepted image before invoking even a companion
+        // measurement helper from the shared application slot.
+        await captureExecution(
+          repair.phase === "installed" ? repair.target : repair.source,
+          beforeEffect,
+        );
         const companion = await readBuild(previous, beforeEffect);
         if (
           !sameBuild(
@@ -1865,6 +1956,7 @@ async function createRuntime(
       expected.version !== options.build.version
     )
       throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+    await captureExecution(expected, beforeEffect);
     const measured = await readBuild(slot, beforeEffect);
     if (!sameBuild(measured, expected))
       throw new Error("UPDATE_ACCEPTED_SOURCE_CHANGED");

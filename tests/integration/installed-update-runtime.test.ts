@@ -34,6 +34,11 @@ const mocks = vi.hoisted(() => ({
   exec: vi.fn(),
   copyApp: vi.fn(),
   publishBinding: vi.fn(),
+  captureExecution: vi.fn(),
+  recheckExecution: vi.fn(),
+}));
+vi.mock("../../src/apps/desktop/installed-execution-snapshot", () => ({
+  captureInstalledExecutionSnapshot: mocks.captureExecution,
 }));
 vi.mock("node:child_process", async (original) => ({
   ...(await original<typeof import("node:child_process")>()),
@@ -157,6 +162,7 @@ function options() {
     userData,
     build,
     copyApp: mocks.copyApp,
+    physicalFiles: fs,
     removeDirectory: (directory: string, force: boolean) =>
       fs.rm(directory, { recursive: true, force }),
     acquireAdmission: async () => ({ ok: true as const, release }),
@@ -180,6 +186,20 @@ async function prepared(selectedBuild = build) {
 beforeEach(async () => {
   vi.resetAllMocks();
   mocks.captureStart.mockResolvedValue("fixture-start");
+  mocks.recheckExecution.mockResolvedValue(undefined);
+  mocks.captureExecution.mockImplementation(async (input) => ({
+    app: path.join(userData, "private-execution/Farol.app"),
+    directory: path.join(
+      userData,
+      "private-execution/Farol.app/Contents/Resources/app",
+    ),
+    executable: path.join(
+      userData,
+      "private-execution/Farol.app/Contents/MacOS/test-runtime",
+    ),
+    digest: input.expectedDigest,
+    recheck: mocks.recheckExecution,
+  }));
   // Runtime composition seams; native no-overwrite publication is independently
   // exercised by disposable Python fixtures, not by this mocked transport.
   mocks.publishBinding.mockImplementation(
@@ -6005,6 +6025,43 @@ describe("selected shared slot (redirected disposable filesystem, mocked helper)
       fixture.stat.mock.calls.some(([file]) => file === fixture.physical),
     ).toBe(false);
     await controller.close();
+  });
+  it("executes shared-slot observations only from the independently anchored private image", async () => {
+    await shared();
+    const controller = await prepared();
+    await controller.restart();
+    expect(mocks.captureExecution).toHaveBeenCalledTimes(1);
+    expect(mocks.captureExecution.mock.calls[0]![0]).toMatchObject({
+      sourceApp: "/Applications/Farol.app",
+      expectedDigest: source.digest,
+      privateParent: path.join(userData, "installed-updates"),
+    });
+    const invocations = mocks.exec.mock.calls.filter(
+      ([, args]) =>
+        args[0]?.endsWith("update-slot.mjs") ||
+        args[0]?.endsWith("update-obligations.mjs"),
+    );
+    expect(invocations.length).toBeGreaterThan(0);
+    for (const [executable, args] of invocations) {
+      expect(executable).toContain("/private-execution/Farol.app/");
+      expect(args[0]).toContain("/private-execution/Farol.app/");
+      expect(executable).not.toContain("/Applications/");
+    }
+    expect(mocks.recheckExecution).toHaveBeenCalled();
+  });
+  it("refuses an unauthenticated shared image without running a slot helper or recapturing", async () => {
+    await shared();
+    mocks.captureExecution.mockRejectedValue(
+      new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED"),
+    );
+    const controller = await createInstalledUpdateRuntime(options());
+    await controller!.initialize();
+    await controller!.check();
+    await controller!.download();
+    await controller!.restart();
+    expect(mocks.captureExecution).toHaveBeenCalledTimes(1);
+    expect(mocks.exec).not.toHaveBeenCalled();
+    expect(mocks.helper).not.toHaveBeenCalled();
   });
   it("does not consume a shared operation after reopening the legacy copy with identical builds", async () => {
     const fixture = await shared();

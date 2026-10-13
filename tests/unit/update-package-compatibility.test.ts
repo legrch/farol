@@ -187,7 +187,12 @@ function documents() {
   return { core, embedded, artifact };
 }
 type Documents = ReturnType<typeof documents>;
-function prepare(edit?: (docs: Documents) => void) {
+function prepare(
+  edit?: (docs: Documents) => void,
+  executionResources?: Parameters<
+    typeof createUpdatePackageVerifier
+  >[0]["executionResources"],
+) {
   const docs = documents();
   const originalCoreHash = docs.embedded.entrySha256["core-artifact.json"];
   edit?.(docs);
@@ -214,6 +219,7 @@ function prepare(edit?: (docs: Documents) => void) {
     extractorPath: helper,
     verifierPath: contentVerifier,
     nodeExecutable: "/fixture-node",
+    ...(executionResources ? { executionResources } : {}),
     archivePathForHandle: async () => "/fixture-download/owned.zip",
   });
 }
@@ -254,6 +260,53 @@ async function expectRefusal(
 }
 
 describe("explicit update package generations", () => {
+  it("selects authenticated private verifier paths before starting any package tool", async () => {
+    const privateHelper = "/fixture-private/extractor";
+    const privateVerifier = "/fixture-private/content.mjs";
+    const recheck = vi.fn().mockResolvedValue(undefined);
+    const select = vi.fn().mockResolvedValue({
+      extractorPath: privateHelper,
+      verifierPath: privateVerifier,
+      nodeExecutable: "/fixture-node",
+      recheck,
+    });
+    const verifier = prepare(undefined, select);
+    fixture.files.set(privateHelper, helperBytes);
+    fixture.files.delete(helper);
+    await verifier.verifyPackage("opaque", expected);
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(recheck).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(fs.open).mock.calls[0]![0]).toBe(privateHelper);
+    expect(contentCalls()[0]![1]).toEqual(
+      expect.arrayContaining([privateVerifier]),
+    );
+  });
+  it("never falls back to ambient package tools after private resource refusal", async () => {
+    const verifier = prepare(undefined, async () => {
+      throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
+    });
+    await expect(verifier.verifyPackage("opaque", expected)).rejects.toThrow(
+      "UPDATE_EXECUTION_RESOURCES_UNCONFIRMED",
+    );
+    expect(execFile).not.toHaveBeenCalled();
+    expect(fs.open).not.toHaveBeenCalled();
+    expect(fs.mkdtemp).not.toHaveBeenCalled();
+  });
+  it("rechecks private code immediately before invoking the content verifier", async () => {
+    const recheck = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("changed"));
+    const verifier = prepare(undefined, async () => ({
+      extractorPath: helper,
+      verifierPath: contentVerifier,
+      nodeExecutable: "/fixture-node",
+      recheck,
+    }));
+    await expectRefusal(verifier);
+    expect(contentCalls()).toHaveLength(0);
+    expect(execFile).toHaveBeenCalledTimes(1);
+  });
   it.each([6, 7])(
     "locally reverifies an unchanged retained old-feed schema %s package",
     async (schema) => {

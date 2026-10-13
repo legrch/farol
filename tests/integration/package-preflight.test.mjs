@@ -40,6 +40,13 @@ it("refuses a core-less 0.2 candidate before changing the retained package", asy
         path.join(fixtureTooling, name),
       );
 
+    const digestDirectory = path.join(root, "src/pkg/artifact-tree-digest");
+    await fs.mkdir(digestDirectory, { recursive: true });
+    await fs.copyFile(
+      path.join(tooling, "../src/pkg/artifact-tree-digest/digest.ts"),
+      path.join(digestDirectory, "digest.ts"),
+    );
+
     const document = {
       version: "0.2.0-owner.beta.3",
       farolRelease: {

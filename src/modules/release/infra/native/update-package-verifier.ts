@@ -297,6 +297,14 @@ export function createUpdatePackageVerifier(
     extractorPath: string;
     verifierPath: string;
     nodeExecutable?: string;
+    // Composition may supply authenticated private executable resources.
+    // This must settle before any package tool starts; a refusal has no fallback.
+    executionResources?(): Promise<Readonly<{
+      extractorPath: string;
+      verifierPath: string;
+      nodeExecutable: string;
+      recheck(): Promise<void>;
+    }> | null>;
     // Electron callers supply physical removal; ASAR files are not directories.
     removeDirectory?(directory: string, force: boolean): Promise<void>;
   }>,
@@ -313,6 +321,8 @@ export function createUpdatePackageVerifier(
     ): Promise<VerifiedStagedPackage> {
       if (!handle || verified.has(handle))
         throw new PackageVerificationError("invalid_handle");
+      const execution = await options.executionResources?.();
+      await execution?.recheck();
       await privateParent(options.stagingParent);
       // Normal callers discard an extraction after use. A crash may leave its
       // owned directory behind; bound those obligations without deleting a
@@ -325,7 +335,9 @@ export function createUpdatePackageVerifier(
         if (stages >= 2 || entries > 1024)
           throw new PackageVerificationError("stage_capacity");
       }
-      const extractorBytes = await pinnedHelper(options.extractorPath);
+      const extractorBytes = await pinnedHelper(
+        execution?.extractorPath ?? options.extractorPath,
+      );
       const archivePath = await options.archivePathForHandle(handle);
       if (!path.isAbsolute(archivePath))
         throw new PackageVerificationError("invalid_handle");
@@ -403,10 +415,13 @@ export function createUpdatePackageVerifier(
         }
         let identity: MeasuredIdentity;
         try {
+          await execution?.recheck();
           const { stdout: verifiedJson } = await execFileAsync(
-            options.nodeExecutable ?? process.execPath,
+            execution?.nodeExecutable ??
+              options.nodeExecutable ??
+              process.execPath,
             [
-              options.verifierPath,
+              execution?.verifierPath ?? options.verifierPath,
               path.join(stagingRoot, "artifact.json"),
               stagedAppPath,
               expected.version,
