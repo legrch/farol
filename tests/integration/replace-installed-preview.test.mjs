@@ -12,6 +12,8 @@ import { createBuildIdentity } from "../../tooling/build-identity-contract.mjs";
 import { promotionUserData } from "../../tooling/promotion-obligations.mjs";
 import {
   replaceInstalledPreview,
+  prepareCleanReplacementLock,
+  replacementApplications,
   snapshotInstalledReplacement,
 } from "../../tooling/replace-installed-preview.mjs";
 import { isPromotionLeaseHeld } from "../../tooling/promotion-lease.mjs";
@@ -195,6 +197,115 @@ async function fixture() {
 }
 
 describe("one-shot installed replacement", () => {
+  it("prepares only an empty real updater mutex after confirmed closed-app admission", async () => {
+    const f = await fixture();
+    for (const item of await fs.readdir(f.updates))
+      await fs.rm(path.join(f.updates, item), { recursive: true });
+    const result = await prepareCleanReplacementLock(
+      f.home,
+      f.artifact.buildId,
+      "legacy",
+      { processProof: () => {} },
+    );
+    expect(result.status).toBe("created");
+    expect(await fs.readFile(path.join(f.updates, "lock"), "utf8")).toBe("");
+    expect(await kernelLockHeld(path.join(f.updates, "lock"))).toBe(false);
+    expect(await isPromotionLeaseHeld(f.userData)).toBe(false);
+    expect(await fs.readFile(f.oldApp + ".receipt.json", "utf8")).toBe(
+      f.oldReceipt,
+    );
+  });
+  it("refuses to initialize an absent updater mutex over historical records", async () => {
+    const f = await fixture();
+    await fs.rm(path.join(f.updates, "lock"));
+    await expect(
+      prepareCleanReplacementLock(f.home, f.artifact.buildId, "legacy", {
+        processProof: () => {},
+      }),
+    ).rejects.toThrow();
+    await expect(fs.lstat(path.join(f.updates, "lock"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await isPromotionLeaseHeld(f.userData)).toBe(false);
+  });
+  it("selects only an explicit shared installation while retaining the legacy default", () => {
+    expect(replacementApplications("/Users/owner")).toBe(
+      "/Users/owner/Applications",
+    );
+    expect(replacementApplications("/Users/owner", "shared")).toBe(
+      "/Applications",
+    );
+    expect(() => replacementApplications("/Users/owner", "/foreign")).toThrow(
+      "REPLACEMENT_LOCATION_INVALID",
+    );
+  });
+  it("refuses a shared selector on the frozen version 1 selection before effects", async () => {
+    const f = await fixture();
+    await expect(
+      replaceInstalledPreview(
+        { ...f.selection, installLocation: "shared" },
+        false,
+        f.deps,
+      ),
+    ).rejects.toThrow();
+    expect(await fs.readFile(f.oldApp + ".receipt.json", "utf8")).toBe(
+      f.oldReceipt,
+    );
+    await expect(fs.lstat(f.custody)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it("accepts a version 2 legacy selection and retains accepted execution images with a clean updater", async () => {
+    const f = await fixture();
+    await fs.rm(path.join(f.updates, "ready.json"));
+    await fs.rm(path.join(f.updates, "last-update.json"));
+    await fs.rm(path.join(f.updates, "a".repeat(32)), { recursive: true });
+    const image = path.join(f.updates, "installed-execution", "c".repeat(64));
+    await fs.mkdir(image, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      path.join(image, "fixture.txt"),
+      "synthetic execution image\n",
+      { mode: 0o600 },
+    );
+    f.selection = {
+      ...f.selection,
+      schema: "farol.installed-replacement-selection/2",
+      installLocation: "legacy",
+      snapshot: await snapshotInstalledReplacement(f.home),
+    };
+    const result = await replaceInstalledPreview(f.selection, true, f.deps);
+    expect(result.operation).toBe("completed");
+    expect(
+      await fs.readFile(
+        path.join(
+          f.custody,
+          "installed-updates/installed-execution",
+          "c".repeat(64),
+          "fixture.txt",
+        ),
+        "utf8",
+      ),
+    ).toBe("synthetic execution image\n");
+    expect(result.receipt.destination).toBe(f.oldApp);
+  });
+  it.each(["ready.json", "last-update.json", "both-with-history"])(
+    "refuses missing update records (%s) while historical work remains",
+    async (missing) => {
+      const f = await fixture();
+      for (const name of missing === "both-with-history"
+        ? ["ready.json", "last-update.json"]
+        : [missing])
+        await fs.rm(path.join(f.updates, name));
+      f.selection.snapshot = await snapshotInstalledReplacement(f.home);
+      await expect(
+        replaceInstalledPreview(f.selection, false, f.deps),
+      ).rejects.toThrow("REPLACEMENT_UPDATE_RECEIPT_UNCONFIRMED");
+      await expect(fs.lstat(f.custody)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(await fs.readFile(f.oldApp + ".receipt.json", "utf8")).toBe(
+        f.oldReceipt,
+      );
+    },
+  );
   it("keeps the complete local normal receipt schema identical to its runtime owner", async () => {
     const owner = await fs.readFile(
       new URL(
@@ -821,7 +932,7 @@ deps.native = async (request, lease, updater, register) => {
     return runReplacementNative(request, lease, updater, register);
   const helper = await fs.readFile(${JSON.stringify(helperFile)});
   const library = await fs.readFile(${JSON.stringify(libraryFile)});
-  if (sha(helper) !== "09874ad5da09f93f8a6746cfc731be5746441ff2b6feec429307b963d31452d3" ||
+  if (sha(helper) !== "70adf25e940d918627cadf83f1ea6b4cb54de192424df703245ca508908bf102" ||
       sha(library) !== "739ff487dbffbd3e232c3b90e22c234cebd4f735b226101187ea60a1f62691ce")
     throw Error("FIXTURE_HELPER_ATTESTATION_FAILED");
   const child = spawn("/usr/bin/python3", ["-I", "-S", "-B", "-"], {

@@ -71,3 +71,28 @@ representative checks, exact installation result, and first successful live
 operation. Each incident should add regression coverage for its actual cause.
 Track broader acceptance and deferred findings after restoration instead of
 holding the user's working installation behind another complete review ladder.
+
+## Explicit global replacement maintenance
+
+The existing replacement owner accepts the frozen version 1 selection for the
+user Applications installation. Version 2 additionally requires an explicit
+`installLocation` of `shared` or `legacy`; `shared` selects only
+`/Applications/Farol.app`. Both Node preflight and the inherited-descriptor native
+owner use the ordinary promotion library's shared-parent checks. No arbitrary
+destination or legacy bundle identity is admitted.
+
+Replacement retains the previous bundle, promotion receipt and updater tree,
+including accepted private execution images, without claiming old operations
+settled. A fresh updater with no update/download history can have no ready or
+last-update records. A missing half or historical work without its records
+remains unconfirmed and refuses replacement.
+
+If that untouched updater has never created its mutex, the separately selected
+`prepareCleanReplacementLock` maintenance action may create only its empty lock
+after confirmed closed-app admission under the promotion lease. Its attested
+native child uses held private directory descriptors, exclusive creation, file
+and directory sync, and independent named-file readback. It writes no update
+result, journal, old ACK or cleanup receipt. An unknown child/publication retains
+the original owner and lease. Select a fresh replacement snapshot only after
+this preparation completes; a visible lock file alone cannot settle an unknown
+preparation. Ordinary plan-only replacement does not initialize that lock.
