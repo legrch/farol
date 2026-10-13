@@ -250,7 +250,8 @@ const signInStatus = {
   authenticated: { state: "verified", status: "Signed in" },
   signed_out: { state: "needed", status: "Signed out" },
   pending: { state: "pending", status: "Checking sign-in…" },
-  unknown: { state: "unknown", status: "Current sign-in is unknown" },
+  unknown: { state: "needed", status: "Sign-in not checked" },
+  unavailable: { state: "unavailable", status: "Sign-in not checked" },
   outcome_unknown: { state: "unknown", status: "Outcome unknown" },
 };
 

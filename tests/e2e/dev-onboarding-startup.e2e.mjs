@@ -31,7 +31,7 @@ const uncheckedOverview = {
   hasWorkspaces: false,
   signIn: "unknown",
   states: {
-    signin: "unknown",
+    signin: "needed",
     folders: "needed",
     connection: "needed",
     attachment: "needed",

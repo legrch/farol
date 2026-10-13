@@ -138,7 +138,7 @@ describe("current Computer setup projection", () => {
     const setup = computerSetup(await snapshot());
     expect(setup.ready).toBe(true);
     expect(setup.label).toBe("Computer ready");
-    expect(setup.embeddedChatGPT).toBe("Current sign-in is unknown");
+    expect(setup.embeddedChatGPT).toBe("Sign-in not checked");
     expect(setup.canStart).toBe(false);
     expect(setup.canReconnect).toBe(true);
   });
@@ -147,7 +147,7 @@ describe("current Computer setup projection", () => {
     value.setup.chatgpt.verified = configured().setup.computer.verified;
     const setup = computerSetup(await snapshot(value));
     expect(setup.ready).toBe(false);
-    expect(setup.embeddedChatGPT).toBe("Current sign-in is unknown");
+    expect(setup.embeddedChatGPT).toBe("Sign-in not checked");
   });
   it.each([
     "folder-build",
@@ -446,7 +446,7 @@ describe("embedded sign-in and external Computer are independent", () => {
             ? "Signed in"
             : state === "signed_out"
               ? "Signed out"
-              : "Current sign-in is unknown",
+              : "Sign-in not checked",
         );
         expect(after.ready).toBe(true);
         expect(after.externalAccessVerified).toBe(true);

@@ -176,7 +176,7 @@ async function mount(
   };
   return { f, c, evidence, observe, overview };
 }
-function expected(signIn = "unknown", state = "unknown", ready = false) {
+function expected(signIn = "unknown", state = "needed", ready = false) {
   return {
     ready,
     hasWorkspaces: ready,
@@ -201,7 +201,7 @@ describe("current Setup renderer and native observation helper contract", () => 
     value.setup.connect.verified!.workspaceId = null;
     value.connectors.secureMcp.attachment!.workspaceId = null;
     const h = await mount(configuration);
-    const expectedReady = expected("unknown", "unknown", true);
+    const expectedReady = expected("unknown", "needed", true);
     assertSetupOverviewEvidence(h.evidence(), {
       ...expectedReady,
       hasWorkspaces: false,
@@ -216,7 +216,7 @@ describe("current Setup renderer and native observation helper contract", () => 
     assertSetupOverviewEvidence(h.evidence(), expected());
   });
   it.each([
-    ["unknown", "unknown"],
+    ["unknown", "needed"],
     ["signed_out", "needed"],
     ["authenticated", "verified"],
   ] as const)(
@@ -267,16 +267,16 @@ describe("current Setup renderer and native observation helper contract", () => 
     const h = await mount(readyConfiguration());
     assertSetupOverviewEvidence(
       h.evidence(),
-      expected("unknown", "unknown", true),
+      expected("unknown", "needed", true),
     );
     expect(h.f.api.configure).not.toHaveBeenCalled();
   });
   it("keeps unavailable configuration honest without claiming an optional sign-in check", async () => {
     const h = await mount({ status: "error", error: "SETTINGS_CORRUPT" });
     assertSetupOverviewEvidence(h.evidence(), {
-      ...expected(),
+      ...expected("unavailable", "unavailable"),
       states: {
-        signin: "unknown",
+        signin: "unavailable",
         folders: "unavailable",
         connection: "unavailable",
         attachment: "unavailable",

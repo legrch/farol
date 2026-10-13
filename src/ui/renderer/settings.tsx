@@ -2293,6 +2293,12 @@ function Connection({
   );
   const embeddedStatus = feedback.unretained ? "Outcome unknown" : signIn.label;
   const embeddedSignedIn = signIn.signedIn && !feedback.unretained;
+  const openExistingSession =
+    setupStep === "signin" &&
+    signIn.unknown &&
+    !signIn.outcomeUnknown &&
+    !signIn.pending &&
+    !feedback.unretained;
   const attachmentReady = setup.ready && !actions.computerPauseReason;
   const externalChallenge = actions.computerPauseReason
     ? null
@@ -2835,9 +2841,13 @@ function Connection({
               <Command
                 actions={actions}
                 className={setupStep === "signin" ? "primary" : "subtle"}
-                command={{ kind: "chatgpt.open-sign-in" }}
+                command={{
+                  kind: openExistingSession
+                    ? "chatgpt.open-browser"
+                    : "chatgpt.open-sign-in",
+                }}
               >
-                Sign in
+                {openExistingSession ? "Open ChatGPT" : "Sign in"}
               </Command>
               {!setupStep && (
                 <>

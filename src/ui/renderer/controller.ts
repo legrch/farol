@@ -362,7 +362,12 @@ export class WindowController implements RendererFacade {
       this.api.onBrowserRouteState((value) => {
         this.invalidateSignInObservation();
         const parsed = BrowserRouteStatusSchema.safeParse(value);
-        if (parsed.success) this.patch({ route: parsed.data.state });
+        if (parsed.success) {
+          this.patch({ route: parsed.data.state });
+          // Page load retires the old sample. Read the newly loaded document
+          // while this step is open; the event itself is never sign-in proof.
+          if (parsed.data.state === "loaded") this.observeSignIn();
+        }
       }),
       this.api.onTaskSurfaceState((value) => {
         const parsed = TaskSurfaceStatusSchema.safeParse(value);

@@ -11,7 +11,7 @@ const expected = {
   hasWorkspaces: true,
   signIn: "unknown",
   states: {
-    signin: "unknown",
+    signin: "needed",
     folders: "verified",
     connection: "verified",
     attachment: "verified",
@@ -27,10 +27,10 @@ function readyEvidence() {
         step: "signin",
         label: "Sign in",
         optional: true,
-        state: "unknown",
-        status: "Current sign-in is unknown",
-        navigationState: "unknown",
-        navigationStatus: "Current sign-in is unknown",
+        state: "needed",
+        status: "Sign-in not checked",
+        navigationState: "needed",
+        navigationStatus: "Sign-in not checked",
       },
       ...[
         ["connection", "Connection"],
@@ -118,7 +118,8 @@ describe("native Setup overview observation guards (synthetic records only)", ()
     ["authenticated", "verified", "Signed in"],
     ["signed_out", "needed", "Signed out"],
     ["pending", "pending", "Checking sign-in…"],
-    ["unknown", "unknown", "Current sign-in is unknown"],
+    ["unknown", "needed", "Sign-in not checked"],
+    ["unavailable", "unavailable", "Sign-in not checked"],
     ["outcome_unknown", "unknown", "Outcome unknown"],
   ])(
     "requires the exact %s Sign in state and caption",
@@ -169,7 +170,7 @@ describe("native Setup overview observation guards (synthetic records only)", ()
       () =>
         assertSetupOverviewEvidence(readyEvidence(), {
           ...expected,
-          states: { ...expected.states, signin: "needed" },
+          states: { ...expected.states, signin: "unknown" },
         }),
       /SETUP_SIGNIN_STATE_MISMATCH/,
     );
@@ -228,7 +229,7 @@ describe("native Setup overview observation guards (synthetic records only)", ()
         ready: true,
         signIn: expected.signIn,
         states: {
-          signin: "unknown",
+          signin: "needed",
           folders: "verified",
           connection: "verified",
         },
@@ -281,7 +282,7 @@ describe("native Setup overview observation guards (synthetic records only)", ()
       hasWorkspaces: true,
       signIn: "unknown",
       states: {
-        signin: "unknown",
+        signin: "needed",
         folders: "unavailable",
         connection: "unavailable",
         attachment: "unavailable",

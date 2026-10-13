@@ -679,7 +679,7 @@ describe("reference-aligned Setup wizard", () => {
     expect(
       h.host.querySelector('[data-setup-check="signin"] .setup-check-status')
         ?.textContent,
-    ).toBe("Current sign-in is unknown");
+    ).toBe("Sign-in not checked");
     expect(
       h.host.querySelector(
         '[aria-label="Sign in"] [data-check-state="verified"]',

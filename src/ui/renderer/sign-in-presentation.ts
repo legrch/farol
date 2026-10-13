@@ -44,7 +44,7 @@ export function signInPresentation(
         : signedIn
           ? "Signed in"
           : unknown
-            ? "Current sign-in is unknown"
+            ? "Sign-in not checked"
             : "Signed out",
   } as const;
 }

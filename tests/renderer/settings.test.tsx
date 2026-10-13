@@ -5478,15 +5478,17 @@ describe("fresh and returning Setup journey", () => {
       const h = await mountSetup("signin", value, state);
       expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
       const label =
-        state === "signed_out" ? "Signed out" : "Current sign-in is unknown";
+        state === "signed_out" ? "Signed out" : "Sign-in not checked";
       expect(visibleText(h.host)).toContain(label);
       expect(visibleText(h.host)).not.toContain("Current sign-in was observed");
       expect(h.button("Skip for now")).toBeTruthy();
       if (state === "signed_out")
         expect(h.button("Sign in").disabled).toBe(false);
-      else expect(h.button("Sign in").disabled).toBe(false);
-      for (const control of ["Open ChatGPT", "Check sign-in"])
-        expect(() => h.button(control)).toThrow();
+      else expect(h.button("Open ChatGPT").disabled).toBe(false);
+      expect(() => h.button("Check sign-in")).toThrow();
+      expect(() =>
+        h.button(state === "signed_out" ? "Open ChatGPT" : "Sign in"),
+      ).toThrow();
       const read = h.c.getSnapshot().signInObservation;
       await refreshSetup(h, connectionSettings());
       await h.remount();
@@ -5555,11 +5557,11 @@ describe("fresh and returning Setup journey", () => {
     await act(async () =>
       wait.resolve(signInReply(command, "unknown", h.configuration)),
     );
-    expect(visibleText(h.host)).toContain("Current sign-in is unknown");
+    expect(visibleText(h.host)).toContain("Sign-in not checked");
     expect(h.button("Skip for now")).toBeTruthy();
     expect(h.calls()).toHaveLength(2);
   });
-  it("fresh profile without a retained document offers the first explicit Sign in and Skip without any automatic effect", async () => {
+  it("fresh profile without a retained document offers the explicit Open ChatGPT and Skip without any automatic effect", async () => {
     const h = await mountSetup("signin", settings(), "unknown");
     expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
     expect(h.c.getSnapshot().signInObservation).toMatchObject({
@@ -5567,27 +5569,27 @@ describe("fresh and returning Setup journey", () => {
       binding: null,
       pending: false,
     });
-    expect(visibleText(h.host)).toContain("Current sign-in is unknown");
-    expect(h.button("Sign in").disabled).toBe(false);
-    expect(h.button("Sign in").classList.contains("primary")).toBe(true);
+    expect(visibleText(h.host)).toContain("Sign-in not checked");
+    expect(h.button("Open ChatGPT").disabled).toBe(false);
+    expect(h.button("Open ChatGPT").classList.contains("primary")).toBe(true);
     expect(
       [...h.host.querySelectorAll("button.primary")].filter(
         (button) =>
-          button.textContent === "Sign in" && !button.closest("[hidden]"),
+          button.textContent === "Open ChatGPT" && !button.closest("[hidden]"),
       ).length,
     ).toBe(1);
     expect(h.button("Skip for now").disabled).toBe(false);
-    for (const control of ["Open ChatGPT", "Check sign-in"])
+    for (const control of ["Sign in", "Check sign-in"])
       expect(() => h.button(control)).toThrow();
     await h.remount();
     expect(h.calls().map((command) => command.kind)).toEqual([
       "chatgpt.observe-sign-in",
     ]);
     expect(h.c.getSnapshot().intents).toEqual({});
-    await h.click("Sign in");
+    await h.click("Open ChatGPT");
     expect(h.calls().map((command) => command.kind)).toEqual([
       "chatgpt.observe-sign-in",
-      "chatgpt.open-sign-in",
+      "chatgpt.open-browser",
     ]);
     expect(h.c.getSnapshot().signInObservation?.state).toBe("unknown");
     await h.click("Skip for now");

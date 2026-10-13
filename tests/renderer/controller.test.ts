@@ -3390,7 +3390,7 @@ describe("bounded Setup sign-in observation", () => {
             ? "Signed in"
             : state === "signed_out"
               ? "Signed out"
-              : "Current sign-in is unknown",
+              : "Sign-in not checked",
         );
         expect(setupChecklist(after).entries[0]?.status).toBe(
           signInPresentation(after).label,
@@ -3574,10 +3574,17 @@ describe("bounded Setup sign-in observation", () => {
         const after = h.c.getSnapshot();
         h.wait.resolve(signInReply(h.command, "authenticated"));
         await Promise.resolve();
-        expect(h.c.getSnapshot()).toBe(after);
-        expect(after.signInObservation).toBeNull();
-        expect(signInPresentation(after).signedIn).toBe(false);
-        expect(h.f.api.configure).toHaveBeenCalledTimes(1);
+        if (reason === "route") {
+          const newer = h.c.getSnapshot().signInObservation;
+          expect(newer?.observationId).not.toBe(h.command.observationId);
+          expect(newer?.state).toBe("unknown"); // The crossed old reply cannot answer the fresh read.
+          expect(h.f.api.configure).toHaveBeenCalledTimes(2);
+        } else {
+          expect(h.c.getSnapshot()).toBe(after);
+          expect(after.signInObservation).toBeNull();
+          expect(h.f.api.configure).toHaveBeenCalledTimes(1);
+        }
+        expect(signInPresentation(h.c.getSnapshot()).signedIn).toBe(false);
       } finally {
         h.c.dispose();
       }
@@ -3668,6 +3675,10 @@ describe("bounded Setup sign-in observation", () => {
         await Promise.resolve();
         expect(c.getSnapshot().signInObservation?.state).toBe("authenticated");
         expect(c.getSnapshot().intents[original!.id]).toBe(original);
+        f.emit("route", { state: "loaded" });
+        await Promise.resolve();
+        expect(c.getSnapshot().intents[original!.id]).toBe(original);
+        expect(signInPresentation(c.getSnapshot()).signedIn).toBe(false);
         expect(commandAllowed(c.getSnapshot(), "chatgpt.open-sign-in")).toBe(
           false,
         );
@@ -3699,13 +3710,13 @@ describe("bounded Setup sign-in observation", () => {
       c.navigate({ area: "setup", setupStep: "signin" });
       await Promise.resolve();
       expect(signInPresentation(c.getSnapshot()).signedIn).toBe(true);
-      f.emit("route", { state: "loaded" });
-      expect(c.getSnapshot().route).toBe("loaded");
+      f.emit("route", { state: "loading" });
+      expect(c.getSnapshot().route).toBe("loading");
       expect(signInPresentation(c.getSnapshot()).signedIn).toBe(false);
       await c.refresh();
       expect(c.getSnapshot().configuration?.status).toBe("ready");
       expect(signInPresentation(c.getSnapshot()).label).toBe(
-        "Current sign-in is unknown",
+        "Sign-in not checked",
       );
       expect(f.api.configure).toHaveBeenCalledTimes(1);
     } finally {
@@ -4031,4 +4042,84 @@ it("does not admit a stale divider drag on the full-width Home overview", async 
   expect(c.getSnapshot()).toBe(before);
   expect(f.api.layout).not.toHaveBeenCalled();
   c.dispose();
+});
+
+it("samples a newly loaded ChatGPT page while Sign in is open without publishing saved readiness", async () => {
+  const f = fixture();
+  let reads = 0;
+  vi.mocked(f.api.configure).mockImplementation(async (command) => {
+    if (command.kind !== "chatgpt.observe-sign-in")
+      throw Error("Unexpected writer");
+    return signInReply(command, ++reads === 1 ? "unknown" : "authenticated");
+  });
+  const c = new WindowController(f.api);
+  await c.start();
+  try {
+    const configuration = c.getSnapshot().configuration;
+    c.navigate({ area: "setup", setupStep: "signin" });
+    await Promise.resolve();
+    expect(signInPresentation(c.getSnapshot()).signedIn).toBe(false);
+    const first = c.getSnapshot().signInObservation;
+    f.emit("route", { state: "loaded" });
+    await Promise.resolve();
+    expect(signInPresentation(c.getSnapshot()).signedIn).toBe(true);
+    expect(c.getSnapshot().signInObservation?.observationId).not.toBe(
+      first?.observationId,
+    );
+    expect(c.getSnapshot().configuration).toBe(configuration);
+    expect(c.getSnapshot().intents).toEqual({});
+    expect(f.api.task).not.toHaveBeenCalled();
+    expect(reads).toBe(2);
+  } finally {
+    c.dispose();
+  }
+});
+it("new loaded-page observation ignores the previous document's late reply", async () => {
+  const f = fixture();
+  const older = deferred<unknown>();
+  let firstCommand:
+    ReturnType<typeof ProductConfigurationCommandSchema.parse> | undefined;
+  vi.mocked(f.api.configure).mockImplementation((command) => {
+    if (command.kind !== "chatgpt.observe-sign-in")
+      throw Error("Unexpected writer");
+    if (!firstCommand) {
+      firstCommand = command;
+      return older.promise;
+    }
+    return Promise.resolve(signInReply(command, "authenticated"));
+  });
+  const c = new WindowController(f.api);
+  await c.start();
+  try {
+    c.navigate({ area: "setup", setupStep: "signin" });
+    f.emit("route", { state: "loaded" });
+    await Promise.resolve();
+    expect(signInPresentation(c.getSnapshot()).signedIn).toBe(true);
+    const fresh = c.getSnapshot().signInObservation;
+    if (!firstCommand || firstCommand.kind !== "chatgpt.observe-sign-in")
+      throw Error("Missing original read");
+    older.resolve(signInReply(firstCommand, "signed_out"));
+    await Promise.resolve();
+    expect(c.getSnapshot().signInObservation).toBe(fresh);
+    expect(signInPresentation(c.getSnapshot()).signedIn).toBe(true);
+    expect(c.getSnapshot().intents).toEqual({});
+  } finally {
+    c.dispose();
+  }
+});
+it("an ordinary unobserved sign-in has a neutral checklist marker, unlike an unknown effect", async () => {
+  const f = fixture();
+  const c = new WindowController(f.api);
+  await c.start();
+  try {
+    expect(setupChecklist(c.getSnapshot()).entries[0]?.state).toBe("needed");
+    expect(setupChecklist(c.getSnapshot()).entries[0]?.status).toBe(
+      "Sign-in not checked",
+    );
+    f.emit("route", { state: "loaded" });
+    expect(f.api.configure).not.toHaveBeenCalled();
+    expect(c.getSnapshot().signInObservation).toBeNull();
+  } finally {
+    c.dispose();
+  }
 });

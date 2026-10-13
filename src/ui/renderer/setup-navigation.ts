@@ -33,7 +33,7 @@ export function setupChecklist(snapshot: WindowSnapshot) {
     localConnectionCurrent: setup.localConnectionCurrent,
     externalAccessVerified: setup.externalAccessVerified,
     computerReady: setup.ready,
-    signInActivity: signIn.unknown
+    signInActivity: signIn.outcomeUnknown
       ? "unknown"
       : signIn.pending
         ? "pending"

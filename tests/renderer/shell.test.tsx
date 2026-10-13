@@ -2269,7 +2269,7 @@ it("Home projects Computer readiness separately from optional embedded login", a
   await act(async () => c.navigate({ area: "home", homeView: "access" }));
   expect(host.querySelector("main")?.textContent).toContain("Computer ready");
   expect(host.querySelector("main")?.textContent).toContain(
-    "Current sign-in is unknown",
+    "Sign-in not checked",
   );
   for (const page of ["folders", "computer", "connection"] as const) {
     await act(async () => c.navigate({ area: "settings", page }));
