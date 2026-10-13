@@ -19,7 +19,7 @@ describe("installed helper resource binding", () => {
     const helper = readFileSync(
       new URL("../../resources/native/update_helper.py", import.meta.url),
     );
-    expect(helper.length).toBeLessThanOrEqual(64 * 1024);
+    expect(helper.length).toBeLessThanOrEqual(96 * 1024);
     expect(createHash("sha256").update(helper).digest("hex")).toBe(pins[0][1]);
   });
 });

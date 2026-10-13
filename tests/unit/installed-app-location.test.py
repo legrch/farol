@@ -77,7 +77,13 @@ class LocationTests(unittest.TestCase):
             expected = "/Applications/Farol.app" if location == "shared" else "/Users/fixture/Applications/Farol.app"
             self.assertEqual(update.selected_slot(value), expected)
             with patch.object(update, "process_start", return_value="fixture"):
-                self.assertEqual(update.relaunch_arguments(value, "completed")[2], expected)
+                private = update.private_launch_path(value) if location == "shared" else None
+                self.assertEqual(update.relaunch_arguments(value, "completed", private)[2], private or expected)
+                if location == "shared":
+                    for unsafe in (None, expected, "/elsewhere/Farol.app"):
+                        with self.assertRaises(update.Refusal) as refused:
+                            update.relaunch_arguments(value, "completed", unsafe)
+                        self.assertEqual(refused.exception.code, "launch_image_unconfirmed")
 
     def test_malformed_selection_never_becomes_legacy(self):
         for location in (None, False, 0, "SHARED", "/Applications/Farol.app", {}, []):
