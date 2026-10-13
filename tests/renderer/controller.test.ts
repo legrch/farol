@@ -2576,6 +2576,7 @@ it("ends a drag during update admission without resuming native browser input", 
   const f = fixture();
   const c = new WindowController(f.api);
   await c.start();
+  c.navigate({ area: "home", homeView: "work" });
   c.resizeSidebar(224, true);
   f.emit("update", { phase: "applying", version: "1.0" });
   vi.mocked(f.api.layout).mockClear();
@@ -4018,4 +4019,16 @@ describe("request-owned native workspace readback", () => {
       c.dispose();
     },
   );
+});
+
+it("does not admit a stale divider drag on the full-width Home overview", async () => {
+  const f = fixture();
+  const c = new WindowController(f.api);
+  await c.start();
+  const before = c.getSnapshot();
+  vi.mocked(f.api.layout).mockClear();
+  c.resizeSidebar(280, true);
+  expect(c.getSnapshot()).toBe(before);
+  expect(f.api.layout).not.toHaveBeenCalled();
+  c.dispose();
 });

@@ -475,3 +475,59 @@
     padding: 22px;
   }
 }
+
+.home-candidate-status {
+  border-block: 1px solid var(--line);
+  margin-bottom: 30px;
+}
+.home-candidate-status-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 17px 8px;
+  text-align: left;
+  background: transparent;
+  border-radius: 5px;
+}
+.home-candidate-status-row + .home-candidate-status-row {
+  border-top: 1px solid var(--line);
+}
+.home-candidate-status-icon {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  width: 24px;
+  flex: none;
+}
+.home-candidate-status-icon.is-ready {
+  color: var(--good);
+}
+.home-candidate-status-action {
+  color: var(--accent);
+  font-size: 12px;
+  flex: none;
+}
+.home-candidate-status-row > svg:last-child {
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+.home-candidate-attention {
+  margin-bottom: 30px;
+}
+@container home (max-width: 548px) {
+  .home-candidate-status-row {
+    flex-wrap: wrap;
+  }
+  .home-candidate-status-row .home-candidate-label {
+    flex-basis: calc(100% - 40px);
+  }
+  .home-candidate-status-action {
+    margin-left: 36px;
+  }
+}
+
+.home-candidate-setup-action {
+  margin: 0 0 24px;
+}

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { ProductTask } from "../../modules/chat/contract/product-task";
 import { folderAccessChecked, folderDisplayName } from "../folder-access-state";
 import { computerSetup } from "./computer-setup";
+import { signInPresentation } from "./sign-in-presentation";
 import { designIconPath, designIconViewBox } from "./design-icons";
 import type {
   ActivityEntry,
@@ -18,7 +19,6 @@ const views: readonly [HomeView, string, string][] = [
   ["work", "Current work", "chat"],
   ["attention", "Needs attention", "attention"],
   ["activity", "Recent activity", "activity"],
-  ["access", "Connection & access", "connection"],
 ];
 type Issue = {
   id: string;
@@ -113,22 +113,18 @@ function projection(snapshot: WindowSnapshot) {
       target: "access",
     });
   else {
-    if (
-      setup.embeddedChatGPT === "Outcome unknown" ||
-      settings.setup.chatgpt.unavailable ||
-      settings.setup.chatgpt.reachable === "unreachable"
-    )
+    if (setup.embeddedChatGPT === "Outcome unknown")
       issues.push({
         id: "embedded-chatgpt",
-        title: "Embedded ChatGPT sign-in is not confirmed",
+        title: "A ChatGPT action needs review",
         state: setup.embeddedChatGPT,
         copy: "Embedded sign-in is optional and independent of Computer access. Review its available evidence before using an embedded conversation.",
-        target: "access",
+        target: "diagnostics",
       });
-    if (!setup.ready)
+    if (!setup.localConnectionCurrent)
       issues.push({
         id: "connection",
-        title: "Review connection evidence",
+        title: "Check the local connection",
         state: setup.label,
         copy: setup.next,
         target: "access",
@@ -196,7 +192,11 @@ function projection(snapshot: WindowSnapshot) {
     ? "Evidence unavailable"
     : !settings
       ? "Evidence unavailable"
-      : setup.label;
+      : setup.ready
+        ? "Computer ready"
+        : setup.localConnectionCurrent
+          ? "Local connection running"
+          : setup.label;
   return {
     settings,
     setup,
@@ -253,6 +253,7 @@ export function homeTitle(snapshot: WindowSnapshot) {
       data.issues.find((issue) => issue.id === selection.id)?.title ??
       "Attention details"
     );
+  if (snapshot.destination.homeView === "access") return "Connection & access";
   return (
     views.find(
       ([id]) => id === (snapshot.destination.homeView ?? "overview"),
@@ -299,20 +300,24 @@ export function HomeNavigation({ snapshot, facade }: Props) {
       <button
         type="button"
         className="home-candidate-connection-link"
-        onClick={() => go(facade, "access")}
+        onClick={() =>
+          facade.navigate({ area: "settings", page: "connection" })
+        }
       >
         <span
-          className={`home-candidate-connection-symbol${current(snapshot) && data.setup.ready ? " is-ready" : ""}`}
+          className={`home-candidate-connection-symbol${current(snapshot) && data.setup.localConnectionCurrent ? " is-ready" : ""}`}
         >
           <Glyph
             name={
-              current(snapshot) && data.setup.ready ? "check" : "connection"
+              current(snapshot) && data.setup.localConnectionCurrent
+                ? "check"
+                : "connection"
             }
           />
         </span>
         <span className="home-candidate-label">
           <strong>{data.connection}</strong>
-          <small>View connection &amp; access</small>
+          <small>Connection settings</small>
         </span>
         <Glyph name="forward" />
       </button>
@@ -412,14 +417,33 @@ function EventRow({
     </button>
   );
 }
+function openIssue(facade: RendererFacade, issue: Issue) {
+  if (issue.target === "folders")
+    facade.navigate({
+      area: "settings",
+      page: "folders",
+      workspaceId: issue.workspaceId,
+    });
+  else if (
+    issue.target === "diagnostics" ||
+    issue.id === "snapshot" ||
+    issue.id === "configuration"
+  )
+    facade.navigate({ area: "settings", page: "diagnostics" });
+  else if (issue.target === "work" && issue.task)
+    go(facade, "work", {
+      kind: "task",
+      id: issue.task.taskId,
+      turnId: issue.task.turnId,
+    });
+  else facade.navigate({ area: "setup", setupStep: "connection" });
+}
 function IssueRow({ issue, facade }: { issue: Issue; facade: RendererFacade }) {
   return (
     <button
       type="button"
       className="home-candidate-record home-candidate-issue"
-      onClick={() =>
-        go(facade, "attention", { kind: "attention", id: issue.id })
-      }
+      onClick={() => openIssue(facade, issue)}
     >
       <Glyph
         name={
@@ -739,172 +763,181 @@ function Access({ snapshot, facade }: Props) {
     </>
   );
 }
+function Readiness({ snapshot, facade }: Props) {
+  const data = projection(snapshot);
+  const signIn = signInPresentation(snapshot);
+  const localReady = current(snapshot) && data.setup.localConnectionCurrent;
+  const connectionAction =
+    localReady && !data.setup.externalAccessVerified
+      ? "Check connection"
+      : "Connection settings";
+  return (
+    <section
+      className="home-candidate-status"
+      aria-label="Connection and access"
+    >
+      <button
+        type="button"
+        className="home-candidate-status-row"
+        onClick={() =>
+          facade.navigate(
+            localReady && !data.setup.externalAccessVerified
+              ? { area: "setup", setupStep: "attachment" }
+              : { area: "settings", page: "connection" },
+          )
+        }
+      >
+        <span
+          className={`home-candidate-status-icon${localReady ? " is-ready" : ""}`}
+        >
+          <Glyph name={localReady ? "check" : "connection"} />
+        </span>
+        <span className="home-candidate-label">
+          <strong>{data.connection}</strong>
+          <small>
+            {data.setup.externalAccessVerified
+              ? "Connection verified from ChatGPT."
+              : localReady
+                ? "The local tunnel is running. A ChatGPT connection check is not recorded."
+                : data.setup.next}
+          </small>
+        </span>
+        <span className="home-candidate-status-action">{connectionAction}</span>
+        <Glyph name="forward" />
+      </button>
+      <button
+        type="button"
+        className="home-candidate-status-row"
+        onClick={() => facade.navigate({ area: "settings", page: "folders" })}
+      >
+        <span
+          className={`home-candidate-status-icon${data.folders.length > 0 && data.folders.every((item) => item.state === "Verified") ? " is-ready" : ""}`}
+        >
+          <Glyph name="folders" />
+        </span>
+        <span className="home-candidate-label">
+          <strong>Workspaces</strong>
+          <small>
+            {!data.settings
+              ? "Access status unavailable"
+              : data.folders.length
+                ? data.folders
+                    .map((item) => `${item.name} · ${item.state}`)
+                    .join("; ")
+                : "No workspace access enabled"}
+          </small>
+        </span>
+        <span className="home-candidate-status-action">Manage access</span>
+        <Glyph name="forward" />
+      </button>
+      <button
+        type="button"
+        className="home-candidate-status-row"
+        onClick={() => facade.navigate({ area: "setup", setupStep: "signin" })}
+      >
+        <span
+          className={`home-candidate-status-icon${signIn.signedIn ? " is-ready" : ""}`}
+        >
+          <Glyph name="chat" />
+        </span>
+        <span className="home-candidate-label">
+          <strong>ChatGPT</strong>
+          <small>
+            {signIn.unknown && !signIn.outcomeUnknown
+              ? "Sign-in not checked · optional for external Computer access"
+              : signIn.label}
+          </small>
+        </span>
+        <span className="home-candidate-status-action">
+          {signIn.signedIn ? "Review sign-in" : "Check sign-in"}
+        </span>
+        <Glyph name="forward" />
+      </button>
+    </section>
+  );
+}
 function Overview({ snapshot, facade }: Props) {
   const data = projection(snapshot);
   const focus = data.running.length
     ? data.running
     : data.work.filter((task) => taskState(task) !== "Done");
-  if (
-    data.work.length === 0 &&
-    data.recent.length === 0 &&
-    !(current(snapshot) && data.setup.ready)
-  )
-    return (
-      <>
-        <p className="home-candidate-intro">
-          A starting point for your ChatGPT work on this Mac.
-        </p>
-        <Empty title="Your workspace starts here">
-          Work and recent records will appear here as they become available.
-          Connection and workspace checks stay independent.
-        </Empty>
-        <div className="home-candidate-actions">
+  return (
+    <>
+      <div className="home-candidate-overview-heading">
+        <span className="home-candidate-mark">
+          <Glyph name="home" />
+        </span>
+        <div>
+          <h2>Home</h2>
+          <p>Connection, work and recent activity.</p>
+        </div>
+      </div>
+      {(!data.settings ||
+        !data.setup.facts.client ||
+        !data.setup.facts.credentialStored ||
+        !data.setup.facts.tunnelId) && (
+        <div className="home-candidate-actions home-candidate-setup-action">
           <button
             type="button"
             onClick={() => facade.navigate({ area: "setup" })}
           >
-            {data.setup.ready ? "Review setup" : "Continue setup"}
-          </button>
-          <button type="button" onClick={() => go(facade, "access")}>
-            Review setup status
+            Continue setup
           </button>
         </div>
-        {data.issues.length > 0 && (
-          <section className="home-candidate-section">
-            <h2>Worth a look</h2>
-            <IssueRow issue={data.issues[0]!} facade={facade} />
-          </section>
+      )}
+      <Readiness snapshot={snapshot} facade={facade} />
+      {data.issues.length > 0 && (
+        <section className="home-candidate-section home-candidate-attention">
+          <div className="home-candidate-section-title">
+            <h2>Needs attention</h2>
+          </div>
+          {data.issues.map((issue) => (
+            <IssueRow key={issue.id} issue={issue} facade={facade} />
+          ))}
+        </section>
+      )}
+      <section className="home-candidate-section">
+        <div className="home-candidate-section-title">
+          <h2>Current work</h2>
+          <button type="button" onClick={() => go(facade, "work")}>
+            View work <Glyph name="forward" />
+          </button>
+        </div>
+        {focus.length ? (
+          focus.map((task) => (
+            <TaskRow
+              key={`${task.taskId}:${task.turnId}`}
+              task={task}
+              number={data.work.indexOf(task) + 1}
+              facade={facade}
+            />
+          ))
+        ) : (
+          <p className="home-candidate-copy">
+            {current(snapshot)
+              ? "No active window records."
+              : "Current work cannot be confirmed."}
+          </p>
         )}
-      </>
-    );
-  return (
-    <>
-      <p className="home-candidate-intro">
-        Check what is happening, then inspect anything here without leaving
-        Home.
-      </p>
-      <div className="home-candidate-overview-heading">
-        <span className="home-candidate-mark">
-          <Glyph
-            name={
-              data.running.length
-                ? "activity"
-                : data.issues.length
-                  ? "attention"
-                  : "check"
-            }
-          />
-        </span>
-        <div>
-          <h2>
-            {!current(snapshot)
-              ? "Current state needs review"
-              : data.running.length
-                ? "Work is moving"
-                : data.issues.length
-                  ? "A few things to review"
-                  : "Ready when you are"}
-          </h2>
-          <p>
-            {current(snapshot)
-              ? `${data.running.length} windows working.`
-              : "Current work cannot be confirmed."}{" "}
-            {data.issues.length} items to review.
-          </p>
+      </section>
+      <section className="home-candidate-section home-candidate-latest">
+        <div className="home-candidate-section-title">
+          <h2>Recent activity</h2>
+          <button
+            type="button"
+            onClick={() => facade.navigate({ area: "activity" })}
+          >
+            View all activity <Glyph name="forward" />
+          </button>
         </div>
-      </div>
-      <div className="home-candidate-summaries">
-        <button type="button" onClick={() => go(facade, "work")}>
-          <span>Current work</span>
-          <strong>
-            {current(snapshot)
-              ? data.running.length
-                ? `${data.running.length} working`
-                : "All quiet"
-              : "Not confirmed"}
-          </strong>
-          <small>
-            {data.work.filter((task) => taskState(task) === "Done").length}{" "}
-            completed window records retained
-          </small>
-        </button>
-        <button type="button" onClick={() => go(facade, "attention")}>
-          <span>Needs attention</span>
-          <strong>
-            {data.issues.length
-              ? `${data.issues.length} to review`
-              : "All clear"}
-          </strong>
-          <small>Review the available evidence</small>
-        </button>
-        <button type="button" onClick={() => go(facade, "access")}>
-          <span>Connection</span>
-          <strong>{data.connection}</strong>
-          <small>Workspace access is checked separately</small>
-        </button>
-      </div>
-      <div className="home-candidate-columns">
-        <section className="home-candidate-section">
-          <div className="home-candidate-section-title">
-            <h2>{data.running.length ? "In progress" : "Current work"}</h2>
-            <button type="button" onClick={() => go(facade, "work")}>
-              View work <Glyph name="forward" />
-            </button>
-          </div>
-          {focus.length ? (
-            focus.map((task) => (
-              <TaskRow
-                key={`${task.taskId}:${task.turnId}`}
-                task={task}
-                number={data.work.indexOf(task) + 1}
-                facade={facade}
-              />
-            ))
-          ) : (
-            <p className="home-candidate-copy">
-              Completed windows remain available in Current work.
-            </p>
-          )}
-          {data.recent[0] && (
-            <section className="home-candidate-latest">
-              <div className="home-candidate-section-title">
-                <h2>Latest event</h2>
-                <button type="button" onClick={() => go(facade, "activity")}>
-                  View recent <Glyph name="forward" />
-                </button>
-              </div>
-              <EventRow event={data.recent[0]} facade={facade} />
-            </section>
-          )}
-        </section>
-        <section className="home-candidate-section">
-          <div className="home-candidate-section-title">
-            <h2>Worth a look</h2>
-            <span>
-              {data.issues.length ? "Available evidence" : "All clear"}
-            </span>
-          </div>
-          {data.issues[0] ? (
-            <IssueRow issue={data.issues[0]} facade={facade} />
-          ) : (
-            <p className="home-candidate-copy">
-              No unresolved items in the available evidence.
-            </p>
-          )}
-          {data.issues.length > 1 && (
-            <button
-              type="button"
-              className="home-candidate-link"
-              onClick={() => go(facade, "attention")}
-            >
-              Review all {data.issues.length} items
-            </button>
-          )}
-          <p className="home-candidate-section-note">
-            Select a row to inspect it inside Home.
-          </p>
-        </section>
-      </div>
+        {data.recent.length ? (
+          data.recent.map((event) => (
+            <EventRow key={event.id} event={event} facade={facade} />
+          ))
+        ) : (
+          <p className="home-candidate-copy">No recent events recorded.</p>
+        )}
+      </section>
     </>
   );
 }

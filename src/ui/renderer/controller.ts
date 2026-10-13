@@ -33,6 +33,7 @@ import {
 import { adoptReadConversation } from "./read-conversation-state";
 import { computerSetup } from "./computer-setup";
 import { setupPage } from "./setup-navigation";
+import { isHomeOverview, pageListMode } from "./sidebar-presentation";
 import {
   ProductConfigurationSnapshotSchema,
   ProductConfigurationCommandSchema,
@@ -1987,13 +1988,14 @@ export class WindowController implements RendererFacade {
     if (this.disposed || this.state.update.phase === "applying") return;
     this.presentationRevision++;
     this.patch({
-      sidebar: compact
-        ? this.state.sidebar === "overlay"
-          ? "rail"
-          : "overlay"
-        : this.state.sidebar === "full"
-          ? "rail"
-          : "full",
+      sidebar:
+        compact || isHomeOverview(this.state.destination)
+          ? this.state.sidebar === "overlay"
+            ? "rail"
+            : "overlay"
+          : this.state.sidebar === "full"
+            ? "rail"
+            : "full",
     });
     this.presentation();
   }
@@ -2018,7 +2020,8 @@ export class WindowController implements RendererFacade {
     }
     if (
       active &&
-      (this.state.overlay !== "none" || this.state.sidebar === "rail")
+      (this.state.overlay !== "none" ||
+        pageListMode(this.state.destination, this.state.sidebar) === "rail")
     )
       return;
     const sidebarWidth = clampPageListWidth(width);
@@ -2062,7 +2065,7 @@ export class WindowController implements RendererFacade {
       return;
     }
     this.presentationDeferred = false;
-    const sidebar = state.sidebar;
+    const sidebar = pageListMode(state.destination, state.sidebar);
     this.api.layout(
       state.destination.area === "chatgpt"
         ? "browser"

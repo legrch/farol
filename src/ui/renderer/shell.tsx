@@ -12,6 +12,7 @@ import {
   shellRailWidth,
 } from "../../pkg/shell-layout/geometry";
 import { useRenderer } from "./services";
+import { pageListMode } from "./sidebar-presentation";
 import { PanelBoundary } from "./boundary";
 import { Settings, useSettingsAttention } from "./settings";
 import type { RendererFacade, SettingsPage, WindowSnapshot } from "./contract";
@@ -1091,9 +1092,10 @@ export function Shell() {
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
   }, []);
+  const pageList = pageListMode(destination, state.sidebar);
   const sideVisible =
-    state.sidebar === "overlay" || (state.sidebar === "full" && !compactWindow);
-  const sidebarOverlay = sideVisible && state.sidebar === "overlay";
+    pageList === "overlay" || (pageList === "full" && !compactWindow);
+  const sidebarOverlay = sideVisible && pageList === "overlay";
   useLayoutEffect(() => {
     const previous = previousSidebar.current;
     previousSidebar.current = { open: sidebarOverlay, destination };

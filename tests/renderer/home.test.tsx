@@ -184,17 +184,18 @@ function noEffects(f: ReturnType<typeof fixture>) {
   expect(f.api.snapshot).not.toHaveBeenCalled();
 }
 
-it("defaults to Overview and projects all five sidebar views without effects", async () => {
+it("defaults to the unified overview and keeps four detail destinations without effects", async () => {
   const h = await mount();
   expect(h.content().getAttribute("data-home-view")).toBe("overview");
   expect(homeTitle(h.c.getSnapshot())).toBe("Overview");
-  expect(h.content().textContent).toContain("Your workspace starts here");
+  expect(h.content().textContent).toContain(
+    "Connection, work and recent activity.",
+  );
   for (const [label, view, text] of [
     ["Current work", "work", "No current work"],
     ["Needs attention", "attention", "To review"],
     ["Recent activity", "activity", "No recent events"],
-    ["Connection & access", "access", "No workspaces added"],
-    ["Overview", "overview", "Your workspace starts here"],
+    ["Overview", "overview", "Connection, work and recent activity."],
   ]) {
     // Count badges are intentionally omitted by the semantic label lookup.
     const navButton = [
@@ -342,7 +343,7 @@ it("shows only three recent records, while retained selected events remain inspe
     event("four", 4),
   ];
   const h = await mount([running], { activity: records });
-  await h.click("View recent");
+  await act(async () => h.c.navigate({ area: "home", homeView: "activity" }));
   expect(
     [...h.content().querySelectorAll(".home-candidate-record strong")].map(
       (node) => node.textContent,
@@ -435,8 +436,10 @@ it("shows all-clear only from current Computer evidence, independently of option
   const h = await mount([completed], {
     configuration: { status: "ready", settings: value },
   });
-  expect(h.content().textContent).toContain("Ready when you are");
-  expect(h.content().textContent).toContain("All clear");
+  expect(
+    h.content().querySelector(".home-candidate-status-row")?.textContent,
+  ).toContain("Computer ready");
+  expect(h.content().querySelector(".home-candidate-attention")).toBeNull();
   await act(async () => h.c.navigate({ area: "home", homeView: "attention" }));
   expect(h.content().textContent).toContain(
     "There are no unresolved items in the available evidence",
@@ -447,17 +450,22 @@ it("shows a ready empty Home from verified Computer evidence without inventing w
   const h = await mount([], {
     configuration: { status: "ready", settings: readySettings() },
   });
-  expect(h.content().textContent).toContain("Ready when you are");
-  expect(h.content().textContent).toContain("All quiet");
+  expect(
+    h.content().querySelector(".home-candidate-status-row")?.textContent,
+  ).toContain("Computer ready");
+  expect(h.content().textContent).toContain("No active window records.");
   expect(h.content().textContent).toContain("Computer ready");
   expect(h.content().textContent).not.toContain("Your workspace starts here");
   expect(h.content().textContent).not.toContain("Review setup status");
   expect(h.c.getSnapshot().tasks.tasks).toEqual([]);
   expect(h.c.getSnapshot().activity).toEqual([]);
-  await h.click("Connection & access");
+  const connection = h
+    .content()
+    .querySelector<HTMLButtonElement>(".home-candidate-status-row")!;
+  await act(async () => connection.click());
   expect(h.c.getSnapshot().destination).toMatchObject({
-    area: "home",
-    homeView: "access",
+    area: "settings",
+    page: "connection",
   });
   noEffects(h.f);
 });
@@ -468,15 +476,19 @@ it("does not promote an empty Home to ready from stale or withdrawn Computer evi
     status: "stale",
   });
   expect(h.content().textContent).not.toContain("Ready when you are");
-  expect(h.content().textContent).toContain("Your workspace starts here");
-  expect(h.content().textContent).not.toContain("All quiet");
+  expect(h.content().textContent).toContain(
+    "Connection, work and recent activity.",
+  );
+  expect(h.content().textContent).not.toContain("No active window records.");
   value.setup.computer.outcomeUnknown = true;
   await h.set({
     status: "current",
     configuration: { status: "ready", settings: value },
   });
   expect(h.content().textContent).not.toContain("Ready when you are");
-  expect(h.content().textContent).toContain("Your workspace starts here");
+  expect(h.content().textContent).toContain(
+    "Connection, work and recent activity.",
+  );
   expect(h.content().textContent).toContain("Outcome unknown");
   noEffects(h.f);
 });
@@ -497,9 +509,7 @@ it("keeps optional embedded unknown evidence distinct from confirmed Computer re
   expect(h.content().textContent).toContain("Computer ready");
   expect(h.content().textContent).toContain("Outcome unknown");
   await act(async () => h.c.navigate({ area: "home", homeView: "attention" }));
-  expect(h.content().textContent).toContain(
-    "Embedded ChatGPT sign-in is not confirmed",
-  );
+  expect(h.content().textContent).toContain("A ChatGPT action needs review");
   expect(h.content().textContent).not.toContain("Review connection evidence");
   noEffects(h.f);
 });
@@ -551,7 +561,7 @@ it("does not treat missing configuration as zero folders or verified access", as
   await act(async () => h.c.navigate({ area: "home", homeView: "attention" }));
   expect(h.content().textContent).toContain("Setup evidence is unavailable");
   await act(async () => h.c.navigate({ area: "home", homeView: "overview" }));
-  await h.click("Review setup status");
+  await act(async () => h.c.navigate({ area: "home", homeView: "access" }));
   expect(h.content().textContent).toContain("Evidence unavailable");
   expect(h.content().textContent).not.toContain("No workspaces added");
   noEffects(h.f);
@@ -572,14 +582,7 @@ it("derives unknown and refused attention without rerunning operations", async (
       .querySelectorAll<HTMLButtonElement>(".home-candidate-record"),
   ].find((row) => row.textContent?.includes("Refused"))!;
   await act(async () => row.click());
-  expect(h.c.getSnapshot().destination.homeSelection).toEqual({
-    kind: "attention",
-    id: "intent:refused",
-  });
-  expect(h.content().textContent).toContain("does not retry");
-  expect(h.content().textContent).toContain("refused");
-  expect(h.content().textContent).toContain("REFUSED");
-  await h.click("Inspect action details");
+  expect(h.c.getSnapshot().destination.homeSelection).toBeNull();
   expect(h.c.getSnapshot().destination).toMatchObject({
     area: "settings",
     page: "diagnostics",
@@ -686,7 +689,7 @@ it.each([
   "leaves Home only through the named %s destination",
   async (label, area, page) => {
     const h = await mount();
-    await h.click("Review setup status");
+    await act(async () => h.c.navigate({ area: "home", homeView: "access" }));
     await h.click(label);
     expect(h.c.getSnapshot().destination.area).toBe(area);
     if (page) expect(h.c.getSnapshot().destination.page).toBe(page);
@@ -699,13 +702,12 @@ it("uses the approved icon vocabulary for Home views and explicit ChatGPT action
   const glyphs = [
     ...h.host.querySelectorAll('nav[aria-label="Home views"] svg'),
   ];
-  expect(glyphs).toHaveLength(5);
+  expect(glyphs).toHaveLength(4);
   for (const [index, name] of [
     "home",
     "chat",
     "attention",
     "activity",
-    "connection",
   ].entries()) {
     expect(glyphs[index]?.getAttribute("viewBox")).toBe(designIconViewBox);
     expect(glyphs[index]?.querySelector("path")?.getAttribute("d")).toBe(
@@ -783,6 +785,94 @@ it("preserves the Home view and stable inspector selection across Back and Forwa
   expect(h.c.getSnapshot().destination).toMatchObject({
     area: "chatgpt",
     taskId: running.taskId,
+  });
+  noEffects(h.f);
+});
+
+it("keeps an unrecorded attachment neutral beside a current local tunnel, with one direct check destination", async () => {
+  const value = readySettings();
+  value.connectors.secureMcp.attachment = null;
+  value.setup.connect.verified = null;
+  const h = await mount([], {
+    configuration: { status: "ready", settings: value },
+  });
+  const row = h
+    .content()
+    .querySelector<HTMLButtonElement>(".home-candidate-status-row")!;
+  expect(row.textContent).toContain("Local connection running");
+  expect(row.textContent).toContain(
+    "A ChatGPT connection check is not recorded",
+  );
+  expect(row.querySelector(".is-ready")).not.toBeNull();
+  expect(h.content().textContent).not.toContain("Computer ready");
+  expect(h.content().querySelector(".home-candidate-attention")).toBeNull();
+  await act(async () => row.click());
+  expect(h.c.getSnapshot().destination).toMatchObject({
+    area: "setup",
+    setupStep: "attachment",
+  });
+  noEffects(h.f);
+});
+it.each(["build", "generation", "stopped", "pending", "unknown"] as const)(
+  "never marks the local connection healthy when its %s evidence changes",
+  async (cause) => {
+    const value = readySettings();
+    if (cause === "build")
+      value.connectors.secureMcp.runtime!.buildId = "f".repeat(64);
+    if (cause === "generation") value.connectors.secureMcp.generation++;
+    if (cause === "stopped") value.connectors.secureMcp.runtime = null;
+    if (cause === "unknown") value.setup.connect.outcomeUnknown = true;
+    const h = await mount([], {
+      configuration: { status: "ready", settings: value },
+      ...(cause === "pending"
+        ? {
+            intents: {
+              "settings:connector.start:": {
+                id: "settings:connector.start:",
+                state: "pending",
+                code: null,
+              },
+            },
+          }
+        : {}),
+    });
+    const row = h.content().querySelector(".home-candidate-status-row")!;
+    expect(row.querySelector(".is-ready")).toBeNull();
+    expect(row.textContent).not.toContain("Local connection running");
+    expect(row.textContent).not.toContain("Connection verified from ChatGPT");
+    expect(
+      h.content().querySelector(".home-candidate-attention"),
+    ).not.toBeNull();
+    noEffects(h.f);
+  },
+);
+it("does not turn an optional unavailable embedded observation into an external connection failure", async () => {
+  const value = readySettings();
+  value.setup.chatgpt.unavailable = "CHATGPT_OBSERVATION_UNAVAILABLE";
+  value.setup.chatgpt.reachable = "unreachable";
+  const h = await mount([], {
+    configuration: { status: "ready", settings: value },
+  });
+  expect(h.content().textContent).toContain("Sign-in not checked · optional");
+  expect(h.content().textContent).toContain("Computer ready");
+  expect(h.content().querySelector(".home-candidate-attention")).toBeNull();
+  noEffects(h.f);
+});
+it("opens the exact unchecked workspace directly from Home without a review-page chain", async () => {
+  const value = readySettings();
+  value.computer.workspaces[0]!.accessCheck = null;
+  value.setup.computer.verified = null;
+  const h = await mount([], {
+    configuration: { status: "ready", settings: value },
+  });
+  const row = [
+    ...h.content().querySelectorAll<HTMLButtonElement>(".home-candidate-issue"),
+  ].find((row) => row.textContent?.includes("Atlas needs an access check"))!;
+  await act(async () => row.click());
+  expect(h.c.getSnapshot().destination).toMatchObject({
+    area: "settings",
+    page: "folders",
+    workspaceId: folder.workspaceId,
   });
   noEffects(h.f);
 });

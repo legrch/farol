@@ -405,9 +405,9 @@ it.each([
     expect(f.api.configure).not.toHaveBeenCalled();
   },
 );
-it("Home retains the approved rail and context sidebar and compact overlays keep the existing host layout reporting", async () => {
+it("Home keeps the rail and full-width overview while an explicitly opened page list reports the actual host layout", async () => {
   const { host, c, f } = await mount();
-  expect(host.querySelectorAll(".sidebar")).toHaveLength(1);
+  expect(host.querySelectorAll(".sidebar")).toHaveLength(0);
   expect(host.querySelectorAll(".rail")).toHaveLength(1);
   expect(
     host.querySelector(".rail button:first-child")?.getAttribute("aria-label"),
@@ -415,12 +415,19 @@ it("Home retains the approved rail and context sidebar and compact overlays keep
   expect(
     host.querySelector(".rail button:last-child")?.getAttribute("aria-label"),
   ).toBe("Settings");
-  expect(host.querySelector(".contextual-sidebar")).not.toBeNull();
+  expect(host.querySelector(".contextual-sidebar")).toBeNull();
+  expect(c.getSnapshot().sidebar).toBe("full");
+  expect(f.api.layout).toHaveBeenLastCalledWith(
+    "activity",
+    "",
+    false,
+    false,
+    "rail",
+    "none",
+    232,
+  );
   expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
   await act(async () => c.toggleSidebar(false));
-  expect(host.querySelector(".contextual-sidebar")).toBeNull();
-  expect(host.querySelector(".sidebar-scrim")).toBeNull();
-  await act(async () => c.toggleSidebar(true));
   expect(host.querySelector(".sidebar-scrim")).not.toBeNull();
   expect(host.querySelector("main")?.hasAttribute("inert")).toBe(true);
   expect(f.api.layout).toHaveBeenLastCalledWith(
@@ -471,6 +478,7 @@ it.each([
     const { host, c, f } = await mount(bootstrap(), () =>
       isCompactShell(window.innerWidth),
     );
+    await act(async () => c.navigate({ area: "home", homeView: "work" }));
     const desktop = host.querySelector<HTMLElement>(".desktop")!;
     expect(desktop.style.getPropertyValue("--rail-width")).toBe(rail);
     expect(desktop.style.getPropertyValue("--page-list-width")).toBe("232px");
@@ -597,6 +605,7 @@ it("compact sidebar focus does not restore its toggle after destination navigati
 });
 it("compact sidebar focus leaves desktop toggle focus unchanged", async () => {
   const { host, c } = await mount();
+  await act(async () => c.navigate({ area: "home", homeView: "work" }));
   const trigger = button(host, "Toggle sidebar");
   trigger.focus();
   await act(async () => c.toggleSidebar(false));
@@ -606,6 +615,7 @@ it("compact sidebar focus leaves desktop toggle focus unchanged", async () => {
 });
 it("resizes the page list with keyboard bounds and remembers its width only in this window", async () => {
   const { host, c, f } = await mount();
+  await act(async () => c.navigate({ area: "home", homeView: "work" }));
   const divider = host.querySelector<HTMLElement>('[role="separator"]')!;
   const key = async (value: string) =>
     act(async () => {
@@ -781,6 +791,7 @@ it.each(["Setup", "Home", "Back"] as const)(
 
 it("automatically uses the rail at narrow widths and opens a bounded page-list overlay", async () => {
   const { host, c, f } = await mount();
+  await act(async () => c.navigate({ area: "home", homeView: "work" }));
   const originalWidth = window.innerWidth;
   try {
     await act(async () => {
@@ -3729,3 +3740,50 @@ it.each([
     expect(c.getSnapshot().update).toEqual(ready);
   },
 );
+
+it("Home overview hides the default page list without changing detail or Settings preferences", async () => {
+  const { host, c, f } = await mount();
+  expect(c.getSnapshot().sidebar).toBe("full");
+  expect(host.querySelector("aside")).toBeNull();
+  expect(
+    host
+      .querySelector<HTMLElement>(".desktop")!
+      .style.getPropertyValue("--side-width"),
+  ).toBe("0px");
+  await act(async () => c.navigate({ area: "home", homeView: "work" }));
+  expect(host.querySelector("aside")).not.toBeNull();
+  expect(f.api.layout).toHaveBeenLastCalledWith(
+    "activity",
+    "",
+    false,
+    false,
+    "full",
+    "none",
+    232,
+  );
+  await act(async () =>
+    c.navigate({ area: "home", homeView: "overview", homeSelection: null }),
+  );
+  expect(host.querySelector("aside")).toBeNull();
+  await act(async () => c.navigate({ area: "settings", page: "appearance" }));
+  expect(host.querySelector("aside")).not.toBeNull();
+  expect(c.getSnapshot().sidebar).toBe("full");
+});
+it("Home page-list keyboard opening and dismissal retain usable focus at desktop width", async () => {
+  const { host, c, f } = await mount();
+  const trigger = button(host, "Toggle sidebar");
+  trigger.focus();
+  await act(async () =>
+    f.emit("action", {
+      action: "toggle-sidebar",
+      source: "sidebar-command",
+      eventId: crypto.randomUUID(),
+      authWindowGeneration: null,
+    }),
+  );
+  expect(host.querySelector(".sidebar-overlay")).not.toBeNull();
+  expect(document.activeElement?.closest("aside")).not.toBeNull();
+  await act(async () => c.dismissOverlay());
+  expect(host.querySelector("aside")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+});
