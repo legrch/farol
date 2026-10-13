@@ -652,8 +652,33 @@ async function observeSharedSlotStartup(
       !accepted ||
       !sameBuild(accepted, expected) ||
       receipt.runningBuildId !== build.buildId
-    )
-      throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+    ) {
+      // A finished explicit rollback leaves last-update at the old target
+      // until the restored source can start its ordinary recovery reader.
+      const op = receipt.operation!;
+      const pending = RestoreIntent.parse(
+        await read(path.join(root, "restore-pending.json")),
+      );
+      const journal = await readOperationJournal(root, op, "shared", read);
+      const helper = await observeInstalledHelper(
+        pending.helper,
+        options.observation?.readProcess ?? readInstalledProcess,
+      );
+      if (
+        pending.action !== "rollback" ||
+        pending.notStartedAt !== undefined ||
+        !sameOperation(pending.operation, op) ||
+        !pending.installedBefore ||
+        !sameBuild(pending.installedBefore, op.target) ||
+        pending.priorPhase !== receipt.phase ||
+        !TARGET_PHASES.includes(receipt.phase) ||
+        receipt.runningBuildId !== op.target.buildId ||
+        !["rolled_back", "rollback_completed"].includes(journal.phase) ||
+        !sameBuild(expected, op.source) ||
+        !["ended", "changed"].includes(helper)
+      )
+        throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+    }
   } else if (repair !== null || repairJournal !== null) {
     const receipt = ClosedRepairReceipt.parse(repair);
     const journal = ClosedRepairJournal.parse(repairJournal);

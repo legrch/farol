@@ -332,6 +332,134 @@ describe("installed updater startup correlation (pure ports only)", () => {
     expect(recheck).toHaveBeenCalledTimes(1);
     expect(f.observation.readProcess).not.toHaveBeenCalled();
   });
+  function sharedRollbackFixture() {
+    const f = fixture("rollback_completed", "rollback");
+    f.records.set(
+      path.join(opRoot, "slot-binding.json"),
+      JSON.parse(installedSlotBindingBytes(operation, "shared").toString()),
+    );
+    f.records.set(path.join(opRoot, "journal.json"), {
+      schema: "farol.installed-update-journal/1",
+      ...operation,
+      phase: "rolled_back",
+    });
+    f.records.set(path.join(root, "restore-pending.json"), {
+      ...f.receipt,
+      installedBefore: target,
+    });
+    f.records.set(path.join(root, "last-update.json"), {
+      schema: "farol.ready-update/1",
+      handle: "/private/retained.zip",
+      operation,
+      helper: { ...helper },
+      observedAt: "2026-10-06T13:00:00.000Z",
+      phase: "completed",
+      runningBuildId: target.buildId,
+      manifest: {
+        schema: "farol.github-release/1",
+        repository: "legrch/farol",
+        channel: "owner-beta",
+        product: "Farol Next Preview",
+        bundleId: "local.farol.next.preview",
+        version: targetBuild.version,
+        buildVersion: targetBuild.buildVersion,
+        sourceCommit: targetBuild.sourceCommit,
+        sourceTreeDigest: targetBuild.sourceTreeDigest,
+        buildId: targetBuild.buildId,
+        artifactSha256: target.digest,
+        archiveSha256: "a".repeat(64),
+        archiveName: "Farol-" + targetBuild.version + "-darwin-arm64.zip",
+        archiveSize: 100,
+        platform: "darwin",
+        arch: "arm64",
+        signing: "unsigned",
+        notarized: false,
+        sourceDirty: false,
+      },
+    });
+    captureMock.mockResolvedValue({
+      app: "/owner-private/Farol.app",
+      directory: "/owner-private/resources",
+      executable: "/owner-private/Electron",
+      digest: source.digest,
+      recheck: vi.fn().mockResolvedValue(undefined),
+    });
+    return {
+      ...f,
+      options: {
+        ...f.options,
+        args: [],
+        directory: "/Applications/Farol.app/Contents/Resources/app",
+        physicalFiles: fs,
+        copyApp: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+  }
+
+  it("authenticates no-hint shared startup after terminal rollback before receipt reconciliation", async () => {
+    const f = sharedRollbackFixture();
+    const before = structuredClone(
+      f.records.get(path.join(root, "last-update.json")),
+    );
+    const guard = await waitForInstalledUpdateRelaunch(f.options);
+    expect(guard!.resourcesOrigin?.kind).toBe("shared-slot");
+    expect(captureMock.mock.calls[0]![0].expectedDigest).toBe(source.digest);
+    expect(f.records.get(path.join(root, "last-update.json"))).toEqual(before);
+    expect(f.observation.readBuild).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "missing-intent",
+    "different-operation",
+    "not-started",
+    "wrong-before",
+    "nonterminal-journal",
+    "live-helper",
+    "unknown-helper",
+    "wrong-saved-build",
+  ])(
+    "refuses no-hint restored startup with unconfirmed rollback: %s",
+    async (variant) => {
+      const f = sharedRollbackFixture();
+      const intent = f.records.get(
+        path.join(root, "restore-pending.json"),
+      ) as Record<string, unknown>;
+      if (variant === "missing-intent")
+        f.records.delete(path.join(root, "restore-pending.json"));
+      if (variant === "different-operation")
+        intent.operation = { ...operation, operationId: "b".repeat(32) };
+      if (variant === "not-started") intent.notStartedAt = source;
+      if (variant === "wrong-before") intent.installedBefore = source;
+      if (variant === "nonterminal-journal")
+        (
+          f.records.get(path.join(opRoot, "journal.json")) as Record<
+            string,
+            unknown
+          >
+        ).phase = "rollback_started";
+      if (variant === "live-helper")
+        f.observation.readProcess.mockResolvedValue({
+          stdout: helper.processStart + "\n",
+          stderr: "",
+        });
+      if (variant === "wrong-saved-build")
+        (
+          f.records.get(path.join(root, "last-update.json")) as Record<
+            string,
+            unknown
+          >
+        ).runningBuildId = "f".repeat(64);
+      if (variant === "unknown-helper")
+        f.observation.readProcess.mockRejectedValue({
+          code: 2,
+          stdout: "",
+          stderr: "refused",
+        });
+      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow();
+      expect(captureMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("refuses ordinary shared startup before capture without an independent baseline", async () => {
     const f = fixture();
     f.records.delete(f.receiptFile);
