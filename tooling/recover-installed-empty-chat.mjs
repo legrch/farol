@@ -33,6 +33,8 @@ export function parseInstalledEmptyRecoveryOptions(args) {
     "--expected-run",
     "--expected-config",
     "--expected-quit",
+    "--cold-restart-plan",
+    "--cold-restart-plan-sha",
   ]);
   for (let n = 0; n < args.length; n++) {
     const name = args[n];
@@ -50,6 +52,16 @@ export function parseInstalledEmptyRecoveryOptions(args) {
     !/^[a-f0-9]{64}$/u.test(values["--expected-quit"] ?? "")
   )
     throw Error("EMPTY_CHAT_RECOVERY_EXACT_EVIDENCE_REQUIRED");
+  if (
+    Object.hasOwn(values, "--cold-restart-plan") ||
+    Object.hasOwn(values, "--cold-restart-plan-sha")
+  ) {
+    if (
+      !path.isAbsolute(values["--cold-restart-plan"] ?? "") ||
+      !/^[a-f0-9]{64}$/u.test(values["--cold-restart-plan-sha"] ?? "")
+    )
+      throw Error("COLD_MACHINE_PLAN_EXACT_EVIDENCE_REQUIRED");
+  }
   return values;
 }
 
@@ -106,6 +118,8 @@ export async function runInstalledRecovery(preserved = false) {
     compilerProblems(root).length
   )
     throw Error("EMPTY_CHAT_RECOVERY_TOOLCHAIN_UNTRUSTED");
+  if (!preserved && options["--cold-restart-plan"])
+    throw Error("COLD_MACHINE_PLAN_REQUIRES_PRESERVED_MAINTENANCE");
   const current = sourceIdentity(root);
   if (current.dirty || current.commit !== options["--expected-source"])
     throw Error("EMPTY_CHAT_RECOVERY_SOURCE_MISMATCH");
@@ -156,7 +170,7 @@ export async function runInstalledRecovery(preserved = false) {
     await build({
       stdin: {
         contents:
-          'export { recoverInstalledEmptyChat, recoverInstalledPreservedChat } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts"; export { parseJSON } from "./apps/desktop/bridge/frame.ts";',
+          'export { recoverInstalledEmptyChat, recoverInstalledPreservedChat } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts"; export { parseJSON } from "./apps/desktop/bridge/frame.ts"; export { qualifyColdMachineRecoveryPlan } from "./src/apps/desktop/cold-machine-recovery-plan.ts";',
         resolveDir: root,
         sourcefile: "empty-chat-host-entry.ts",
         loader: "ts",
@@ -173,9 +187,44 @@ export async function runInstalledRecovery(preserved = false) {
       recoverInstalledPreservedChat,
       assertClosedConnectorProcesses,
       parseJSON,
+      qualifyColdMachineRecoveryPlan,
     } = createRequire(import.meta.url)(output);
     const metadata = parseJSON(marker.toString("utf8"));
-    const selected = parseJSON(selection.toString("utf8"));
+    let selected = parseJSON(selection.toString("utf8"));
+    // A raw selection cannot assert the privileged before-boot observation.
+    if (Object.hasOwn(selected, "ColdRestartBeforeBootSession"))
+      throw Error("COLD_MACHINE_PLAN_RAW_SELECTION_REFUSED");
+    let coldPlan = null;
+    if (options["--cold-restart-plan"]) {
+      coldPlan = await qualifyColdMachineRecoveryPlan({
+        planPath: options["--cold-restart-plan"],
+        expectedPlanSHA256: options["--cold-restart-plan-sha"],
+        stateRoot: path.join(userData, "farol-next-state"),
+        expectedRunSHA256: options["--expected-run"],
+        expectedQuitSHA256: options["--expected-quit"],
+        expectedConfigSHA256: options["--expected-config"],
+        selectedRecords: selected.Preserved,
+        currentBootSession: async () => {
+          const result = spawnSync(
+            "/usr/sbin/sysctl",
+            ["-n", "kern.bootsessionuuid"],
+            {
+              encoding: "utf8",
+              timeout: 5000,
+              maxBuffer: 1024,
+              env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+            },
+          );
+          if (result.error || result.status !== 0 || result.signal)
+            throw Error("COLD_MACHINE_SESSION_UNAVAILABLE");
+          return result.stdout.trim().toLowerCase();
+        },
+      });
+      selected = {
+        ...selected,
+        ColdRestartBeforeBootSession: coldPlan.beforeBootSession,
+      };
+    }
     if (
       (preserved
         ? selected.InstalledPreserved !== true ||
@@ -210,6 +259,7 @@ export async function runInstalledRecovery(preserved = false) {
       backendGeneration: selected.Selection.Next.BackendGeneration,
     };
     const attest = async () => {
+      await coldPlan?.recheck();
       const fresh = await verifyClosedRecoveryDevBuild(
         root,
         sourceIdentity(root),

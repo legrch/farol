@@ -26,6 +26,8 @@ type emptyRecoveryInspectionInput struct {
 	InstalledEmpty      bool                                   `json:",omitempty"`
 	InstalledPreserved  bool                                   `json:",omitempty"`
 	Preserved           []mutationrepo.ExpectedPreservedRecord `json:",omitempty"`
+	// Trusted owner maintenance only; the host verifies its pinned before-boot plan.
+	ColdRestartBeforeBootSession string `json:",omitempty"`
 }
 
 type interruptedRetirementInput struct {
@@ -72,6 +74,9 @@ type emptyRecoveryChatClaims struct {
 
 func withEmptyRecoveryClaims(ctx context.Context, in emptyRecoveryInspectionInput, visit func(emptyRecoveryInspection, *emptyRecoveryChatClaims) error) (resultErr error) {
 	if in.InstalledPreserved && (in.InstalledEmpty || in.UnacknowledgedDev || in.Interrupted != nil || !emptyRecoveryInstalledRoot(in.Profile.Root) || len(in.Mutations) != 0 || len(in.Preserved) == 0) {
+		return emptyrecovery.Refused
+	}
+	if in.ColdRestartBeforeBootSession != "" && !in.InstalledPreserved {
 		return emptyrecovery.Refused
 	}
 	if !in.InstalledPreserved && len(in.Preserved) != 0 {
@@ -177,7 +182,13 @@ func withEmptyRecoveryClaims(ctx context.Context, in emptyRecoveryInspectionInpu
 				return err
 			}
 			if in.InstalledPreserved {
-				_, err = mutationrepo.InspectPreserved(ctx, mutationrepo.Root{Path: computer.Path, Device: computer.Device, Inode: computer.Inode, OwnerUID: computer.OwnerUID}, mutationrepo.SettledSelection{OwnerID: in.OwnerID, ProfileID: in.Profile.ProfileID, ComputerID: in.ComputerID}, in.Preserved, func(retained mutationrepo.PreservedInspection) error {
+				inspect := mutationrepo.InspectPreserved
+				if in.ColdRestartBeforeBootSession != "" {
+					inspect = func(ctx context.Context, root mutationrepo.Root, selection mutationrepo.SettledSelection, expected []mutationrepo.ExpectedPreservedRecord, visitor func(mutationrepo.PreservedInspection) error) (*mutationrepo.PreservedInspection, error) {
+						return mutationrepo.InspectPreservedAfterMachineRestart(ctx, root, selection, expected, in.ColdRestartBeforeBootSession, visitor)
+					}
+				}
+				_, err = inspect(ctx, mutationrepo.Root{Path: computer.Path, Device: computer.Device, Inode: computer.Inode, OwnerUID: computer.OwnerUID}, mutationrepo.SettledSelection{OwnerID: in.OwnerID, ProfileID: in.Profile.ProfileID, ComputerID: in.ComputerID}, in.Preserved, func(retained mutationrepo.PreservedInspection) error {
 					if err := verify(); err != nil {
 						return err
 					}

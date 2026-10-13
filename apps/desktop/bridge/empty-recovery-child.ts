@@ -44,6 +44,8 @@ export interface EmptyRecoverySelectionInput {
   readonly InstalledEmpty?: true;
   readonly InstalledPreserved?: true;
   readonly Preserved?: readonly unknown[];
+  // Injected only by the qualified local owner maintenance host.
+  readonly ColdRestartBeforeBootSession?: string;
   readonly Interrupted?: {
     readonly OriginalHandoffID: string;
     readonly ExpectedACKDigest: readonly number[];
@@ -209,6 +211,9 @@ export function prepareEmptyRecoveryChild(
       ...(fields.includes("InstalledEmpty") ? ["InstalledEmpty"] : []),
       ...(fields.includes("InstalledPreserved") ? ["InstalledPreserved"] : []),
       ...(fields.includes("Preserved") ? ["Preserved"] : []),
+      ...(fields.includes("ColdRestartBeforeBootSession")
+        ? ["ColdRestartBeforeBootSession"]
+        : []),
     ]);
     if (
       fields.includes("UnacknowledgedDev") &&
@@ -240,6 +245,15 @@ export function prepareEmptyRecoveryChild(
     } else if (fields.includes("Preserved")) {
       throw Error("preserved records require explicit maintenance selection");
     }
+    if (
+      fields.includes("ColdRestartBeforeBootSession") &&
+      (v.InstalledPreserved !== true ||
+        typeof v.ColdRestartBeforeBootSession !== "string" ||
+        !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(
+          v.ColdRestartBeforeBootSession,
+        ))
+    )
+      throw Error("invalid owner machine restart selection");
     if (fields.includes("Interrupted")) {
       const interrupted = object(v.Interrupted, [
         "OriginalHandoffID",

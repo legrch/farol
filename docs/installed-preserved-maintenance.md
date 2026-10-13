@@ -48,3 +48,35 @@ Qualification uses disposable native stores and a built Go child, real pipe
 ACK/terminal observation, exact journal retention and subsequent cold startup.
 Those tests do not establish installed recovery or external Shell acceptance;
 record both separately against the exact committed package before release.
+
+## Explicit recovery after a machine restart
+
+A known write-capable result with unverified descendant cleanup remains refused
+by ordinary maintenance. An explicit owner-selected cold-machine plan is a
+separate path. Its genuine before-session observation is selected by an
+independently pinned SHA-256; the local owner controller is trusted for that
+selection. This is not an authentication mechanism against a malicious local
+owner, and the path is not exposed through runtime Computer tools.
+
+The plan binds the failed run, Quit, configuration, profile and access hashes and
+the complete selected record inventory. The host refuses a raw selection that
+tries to supply the privileged before-session value. It checks the private
+plan's exact bytes, original state and inventory, then requires a different
+actual `kern.bootsessionuuid`. The Go inspector independently reads the current
+native session and rechecks it while the original storage claims remain held.
+Neither a caller-supplied current UUID, an app restart nor elapsed time qualifies.
+The kernel property is read-only in [Apple's XNU source](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sysctl.c).
+
+Use `--cold-restart-plan PATH --cold-restart-plan-sha SHA256` only with explicit
+installed preserved maintenance and the owner-selected plan prepared before the
+machine restart. This path permits preservation of known supervisor-exit write
+results after exclusion of processes from that prior machine session. It does
+not alter their historical cleanup fields, settle reserved operations, admit
+unknown write reservations, replay commands or replace the original failed Quit
+with a successful one. The new maintenance owner still needs its own observed
+ACK and terminal and the ordinary exact-source/package/process/lease gates.
+
+Disposable native-store tests with a synthetic boot transition are storage and
+policy evidence. The real same-session test proves refusal. Neither establishes
+a successful live machine restart or installed recovery; those remain separate
+owner-controlled qualification steps.

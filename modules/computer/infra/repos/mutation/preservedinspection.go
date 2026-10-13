@@ -91,6 +91,10 @@ func selectPreserved(selection SettledSelection, expected []ExpectedPreservedRec
 }
 
 func qualifyPreservedRecord(entry settledBytes, expected ExpectedPreservedRecord) (SettledRetainedRecord, bool, error) {
+	return qualifyPreservedRecordPolicy(entry, expected, false)
+}
+
+func qualifyPreservedRecordPolicy(entry settledBytes, expected ExpectedPreservedRecord, machineRestartObserved bool) (SettledRetainedRecord, bool, error) {
 	refuse := func() (SettledRetainedRecord, bool, error) { return SettledRetainedRecord{}, false, preservedRefusal() }
 	if entry.key != expected.Key || len(entry.raw) < 1 || len(entry.raw) > maxRecordBytes {
 		return refuse()
@@ -144,12 +148,12 @@ func qualifyPreservedRecord(entry settledBytes, expected ExpectedPreservedRecord
 	case header.Version == 6 && header.Kind == "workspace_connector_process_terminal":
 		result, _, err := decodeProcessTerminal(entry.raw)
 		if err != nil || result == nil || result.Observation.Supervisor != processsvc.SupervisorExited ||
-			result.Intent.Seal.Write && (result.Observation.GroupCleanup != processsvc.CleanupConfirmed || result.Observation.DescendantCleanup != processsvc.CleanupConfirmed) {
+			result.Intent.Seal.Write && !machineRestartObserved && (result.Observation.GroupCleanup != processsvc.CleanupConfirmed || result.Observation.DescendantCleanup != processsvc.CleanupConfirmed) {
 			return refuse()
 		}
 		// Read-only root results retain cleanup uncertainty. Write-capable
-		// results need positive group and descendant cleanup before maintenance;
-		// an exited supervisor alone cannot exclude concurrent old writes.
+		// results need positive group/descendant cleanup or independently observed
+		// machine exclusion. An exited supervisor alone does not exclude old writes.
 		identity = processIdentity(result.Scope, result.Intent.OperationID)
 	case header.Version == 5 && header.Kind == "workspace_connector_process_output":
 		var envelope processOutputEnvelope
@@ -176,6 +180,10 @@ func qualifyPreservedRecord(entry settledBytes, expected ExpectedPreservedRecord
 }
 
 func qualifyPreserved(entries []settledBytes, expected []ExpectedPreservedRecord) ([]SettledRetainedRecord, int, error) {
+	return qualifyPreservedPolicy(entries, expected, false)
+}
+
+func qualifyPreservedPolicy(entries []settledBytes, expected []ExpectedPreservedRecord, machineRestartObserved bool) ([]SettledRetainedRecord, int, error) {
 	if len(expected) < 1 || len(expected) > maxPreservedRecords || len(entries) != len(expected) {
 		return nil, 0, preservedRefusal()
 	}
@@ -187,7 +195,7 @@ func qualifyPreserved(entries []settledBytes, expected []ExpectedPreservedRecord
 		if n > 0 && entries[n-1].key == entry.key {
 			return nil, 0, preservedRefusal()
 		}
-		observed, process, err := qualifyPreservedRecord(entry, expected[n])
+		observed, process, err := qualifyPreservedRecordPolicy(entry, expected[n], machineRestartObserved)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -206,16 +214,30 @@ func observePreserved(ctx context.Context, expected []ExpectedPreservedRecord, o
 	if visit == nil {
 		return nil, unavailable()
 	}
+	return observePreservedPolicy(ctx, expected, observation, visit, nil)
+}
+
+func observePreservedPolicy(ctx context.Context, expected []ExpectedPreservedRecord, observation settledObservation, visit func(PreservedInspection) error, verifyMachineRestart func() error) (*PreservedInspection, error) {
+	if verifyMachineRestart != nil && verifyMachineRestart() != nil {
+		return nil, unavailable()
+	}
 	var result PreservedInspection
 	err := observeSettledRecords(ctx, observation, func(entries []settledBytes) (err error) {
-		result.Retained, result.ReservedProcesses, err = qualifyPreserved(entries, expected)
+		result.Retained, result.ReservedProcesses, err = qualifyPreservedPolicy(entries, expected, verifyMachineRestart != nil)
 		return err
 	}, func(meta SettledInspection) error {
+		if verifyMachineRestart != nil && verifyMachineRestart() != nil {
+			return unavailable()
+		}
 		result.Root, result.MutationsDevice, result.MutationsInode = meta.Root, meta.MutationsDevice, meta.MutationsInode
 		result.LockDevice, result.LockInode = meta.LockDevice, meta.LockInode
 		copied := result
 		copied.Retained = append([]SettledRetainedRecord(nil), result.Retained...)
-		return visit(copied)
+		visitErr := visit(copied)
+		if verifyMachineRestart != nil && verifyMachineRestart() != nil {
+			return unavailable()
+		}
+		return visitErr
 	})
 	if err != nil {
 		return nil, err
