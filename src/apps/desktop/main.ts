@@ -11275,11 +11275,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         compiledShell: desktopShellSelection(
           compiledGoShell,
           runtimeEnvironment,
-          directory,
+          installedResourcesOrigin?.execution.directory ?? directory,
         ),
         previousHostDrainConfirmed: previousRunClean,
         build: buildIdentity,
-        artifactRoot: directory,
+        // The attested path must remain immutable through spawn and lifetime.
+        // Shared installation paths are writable by other administrator accounts.
+        artifactRoot:
+          installedResourcesOrigin?.execution.directory ?? directory,
         stateRoot,
         home: app.getPath("home"),
         settings: currentSettings,

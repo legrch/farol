@@ -129,6 +129,8 @@ export type InstalledUpdaterPorts = Readonly<{
   // late dispatch. Do not call quit(), relaunch, force work to stop, drop an
   // unknown admission/lock/journal, or substitute a helper. Accepted requires
   // the exact live helper's readiness ACK. The host's original Quit continues.
+  // A private launch entry needs a successor relaunch to stay usable.
+  canInstallOnNormalQuit?(): boolean;
   applyOnQuit?(
     update: ReadyUpdate,
     context: NormalQuitApplyContext,
@@ -341,6 +343,15 @@ export class InstalledUpdater {
   ): Promise<NormalQuitUpdateReceipt> {
     if (wasClosing || !this.initialized || this.busy || this.preferenceWriting)
       return { status: "skipped", code: "UPDATE_QUIT_OWNER_UNAVAILABLE" };
+    try {
+      if (this.ports.canInstallOnNormalQuit?.() === false)
+        return {
+          status: "skipped",
+          code: "UPDATE_QUIT_INSTALL_REQUIRES_RELAUNCH",
+        };
+    } catch {
+      return { status: "blocked", code: "UPDATE_QUIT_ELIGIBILITY_UNCONFIRMED" };
+    }
     // The unified choice supersedes the legacy separate Quit checkbox.
     const automatic = this.automaticPreference;
     if (

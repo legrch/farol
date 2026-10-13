@@ -31,6 +31,12 @@ legacy-only wire behavior and app/build validation. Receipt and journal schemas 
 unchanged. App content/build digests, user ownership, promotion and updater locks,
 atomic swaps, descriptor-bound mutation and unknown-outcome fences still apply.
 
+Ordinary shared-slot startup authenticates the complete executable image from
+its independently accepted promotion, settled/pending operation or closed-repair
+baseline before Go starts. The Go artifact and Shell support roots come from
+this owner-private immutable image, satisfying attestation through the child
+lifetime even if another administrator replaces the public app pathname.
+
 Shared-slot tool execution is authenticated before any bundled observer or
 package verifier starts. The accepted promotion, settled update, correlated
 pending operation or closed-repair generation supplies the expected full tree
@@ -50,7 +56,11 @@ pair, then supplies its resource origin to the same updater owner. Normal reopen
 of this image without the one-shot hint requires the current settled generation
 and unchanged public target. Consumed Ready receipts do not invalidate private
 executable authority. Private launch images remain retained; this packet adds no
-background image garbage collection or replay of an unknown launch.
+background image garbage collection or replay of an unknown launch. While
+running from a retained private launch entry, normal Quit skips installation;
+the retained update remains ready without a restart blocker. Idle automatic
+installation and explicit installation use their existing successor relaunch.
+This prevents a no-relaunch Quit update from stranding that launch entry.
 
 The shared `/Applications` parent must be canonical, root-owned and not world
 writable. Group write is allowed only for the standard macOS administrator group

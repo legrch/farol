@@ -282,6 +282,70 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("installed updater startup correlation (pure ports only)", () => {
+  it("authenticates ordinary shared startup resources before Go can use them", async () => {
+    const f = fixture();
+    f.records.delete(f.receiptFile);
+    f.records.set("/Applications/Farol.app.receipt.json", {
+      schema: "farol.next.promotion-plan/1",
+      operation: "applied",
+      product: "Farol Next Preview",
+      version: targetBuild.version,
+      sourceCommit: targetBuild.sourceCommit,
+      sourceTreeDigest: targetBuild.sourceTreeDigest,
+      sourceDirty: false,
+      artifactSha256: target.digest,
+      verifiedDestinationSha256: target.digest,
+      source: "/qualified/Farol.app",
+      destination: "/Applications/Farol.app",
+      receipt: "/Applications/Farol.app.receipt.json",
+      overwrite: false,
+      legacyMutation: false,
+      activation: { userData: profile, drained: true, obligations: [] },
+    });
+    const recheck = vi.fn().mockResolvedValue(undefined);
+    captureMock.mockResolvedValue({
+      app: "/owner-private/Farol.app",
+      directory: "/owner-private/Farol.app/Contents/Resources/app",
+      executable: "/owner-private/Electron",
+      digest: target.digest,
+      recheck,
+    });
+    const guard = await waitForInstalledUpdateRelaunch({
+      ...f.options,
+      args: [],
+      directory: "/Applications/Farol.app/Contents/Resources/app",
+      physicalFiles: fs,
+      copyApp: vi.fn().mockResolvedValue(undefined),
+    });
+    expect(guard!.resourcesOrigin).toMatchObject({
+      kind: "shared-slot",
+      app: "/Applications/Farol.app",
+      execution: {
+        directory: "/owner-private/Farol.app/Contents/Resources/app",
+      },
+    });
+    expect(captureMock.mock.calls[0]![0]).toMatchObject({
+      sourceApp: "/Applications/Farol.app",
+      expectedDigest: target.digest,
+    });
+    await guard!.recheck();
+    expect(recheck).toHaveBeenCalledTimes(1);
+    expect(f.observation.readProcess).not.toHaveBeenCalled();
+  });
+  it("refuses ordinary shared startup before capture without an independent baseline", async () => {
+    const f = fixture();
+    f.records.delete(f.receiptFile);
+    await expect(
+      waitForInstalledUpdateRelaunch({
+        ...f.options,
+        args: [],
+        directory: "/Applications/Farol.app/Contents/Resources/app",
+        physicalFiles: fs,
+        copyApp: vi.fn().mockResolvedValue(undefined),
+      }),
+    ).rejects.toThrow();
+    expect(captureMock).not.toHaveBeenCalled();
+  });
   it("carries a correlated private shared launch into updater execution after Ready is consumed", async () => {
     const f = fixture();
     const privateApp = path.join(opRoot, "launch-Farol.app");

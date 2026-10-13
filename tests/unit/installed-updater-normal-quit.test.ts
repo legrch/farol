@@ -100,6 +100,7 @@ function fixture(choice: unknown = consent) {
     restart: vi
       .fn<InstalledUpdaterPorts["restart"]>()
       .mockResolvedValue({ status: "accepted" }),
+    canInstallOnNormalQuit: vi.fn().mockReturnValue(true),
     applyOnQuit: vi
       .fn<NonNullable<InstalledUpdaterPorts["applyOnQuit"]>>()
       .mockResolvedValue({ status: "accepted" }),
@@ -119,6 +120,27 @@ function fixture(choice: unknown = consent) {
 }
 
 describe("normal-Quit release contracts (pure consent, no persistent format change)", () => {
+  it("keeps a private launch entry usable and the update ready until a successor relaunch", async () => {
+    const f = fixture();
+    await f.updater.initialize();
+    await f.updater.check();
+    await f.updater.download();
+    const before = f.updater.snapshot();
+    f.ports.canInstallOnNormalQuit.mockReturnValue(false);
+    expect(await f.updater.applyOnNormalQuit(request)).toEqual({
+      status: "skipped",
+      code: "UPDATE_QUIT_INSTALL_REQUIRES_RELAUNCH",
+    });
+    expect(f.ports.applyOnQuit).not.toHaveBeenCalled();
+    expect(f.updater.snapshot()).toEqual(before);
+    // Normal Quit seals that owner. A fresh owner keeps the same retained
+    // ready package and can perform the normal authenticated relaunch.
+    const reopened = new InstalledUpdater(f.ports);
+    await reopened.initialize();
+    await reopened.restart();
+    expect(f.ports.restart).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     undefined,
     null,
