@@ -219,12 +219,29 @@ it("does not release applying when its startup status read fails", async () => {
 });
 
 it.each([
+  "UPDATE_CONNECTOR_ACTIVE",
+  "UPDATE_TASK_ROUTE_NEEDS_DRAIN",
+  "UPDATE_WORK_PENDING",
+])(
+  "allows a new version-bound admission check after known pre-dispatch refusal %s",
+  async (blockedBy) => {
+    const update = { ...ready, blockedBy };
+    const { c, f } = await controller(update);
+    expect(confirmedRestartAllowed(update)).toBe(true);
+    await c.update("restart-confirmed", ready.version);
+    expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+      kind: "restart-confirmed",
+      version: ready.version,
+    });
+    expect(c.getSnapshot().update).toEqual(update);
+  },
+);
+it.each([
   "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
   "UPDATE_STATE_UNREADABLE",
   "UPDATE_WORK_DRAIN_UNCONFIRMED",
   "UPDATE_HANDOFF_UNKNOWN",
   "UPDATE_VERIFICATION_RECOVERY_REQUIRED",
-  "UPDATE_CONNECTOR_ACTIVE",
   "UNCLASSIFIED",
 ])("never authorizes confirmed installation through %s", async (blockedBy) => {
   const update = { ...ready, blockedBy };

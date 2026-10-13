@@ -3514,11 +3514,25 @@ function Diagnostics({ snapshot, settings, facade, actions }: PageProps) {
         </p>
       </Group>
       <details
-        open={Object.values(snapshot.intents).some(
-          (intent) => intent.state === "pending" || intent.state === "unknown",
-        )}
+        open={
+          Object.values(snapshot.intents).some(
+            (intent) =>
+              intent.state === "pending" || intent.state === "unknown",
+          ) ||
+          ("blockedBy" in snapshot.update && Boolean(snapshot.update.blockedBy))
+        }
       >
         <summary>Action details</summary>
+        {"blockedBy" in snapshot.update && snapshot.update.blockedBy && (
+          <p>
+            Update admission: <code>{snapshot.update.blockedBy}</code>
+          </p>
+        )}
+        {"notice" in snapshot.update && snapshot.update.notice?.blockedBy && (
+          <p>
+            Saved update notice: <code>{snapshot.update.notice.blockedBy}</code>
+          </p>
+        )}
         <ul aria-label="Retained actions">
           {Object.values(snapshot.intents).map((intent) => (
             <li key={intent.id}>

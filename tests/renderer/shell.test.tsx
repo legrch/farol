@@ -3691,7 +3691,7 @@ it.each([
       f.emit("update", ready);
       c.overlay("update");
     });
-    expect(button(host, "Install and Relaunch").disabled).toBe(true);
+    expect(button(host, "Install and Relaunch").disabled).toBe(false);
     const pending = deferred<unknown>();
     vi.mocked(f.api.installedUpdate)
       .mockClear()

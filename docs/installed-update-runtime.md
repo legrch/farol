@@ -387,7 +387,14 @@ It permits closing owned ChatGPT windows without inferring DOM idle, preserves
 the conversation address and keeps new input fenced through handoff. A native
 close must be observed; a failed close keeps the admission reserved. Internal
 programmatic tasks and Computer obligations retain their existing cancellation
-and drain owners. Manual consent never turns an unknown operation into success.
+and drain owners. Manual consent never turns an unknown operation into success. A prior known
+pre-dispatch refusal (`UPDATE_WORK_PENDING`, `UPDATE_CONNECTOR_ACTIVE` or
+`UPDATE_TASK_ROUTE_NEEDS_DRAIN`) does not permanently disable the confirmation
+button. A fresh version-bound click may acquire the current host admission again;
+it still rechecks and drains the same owned work before installer dispatch. A
+later uncertain drain, package failure or unknown handoff remains fenced. Saved
+notice failures retain their original metadata and acknowledgement fence in
+Diagnostics; they do not add technical warnings to the ordinary update dialog.
 
 Starting with 0.2.1 the public release version uses ordinary semantic versions
 and the stable GitHub channel. Build numbers still increase, while existing

@@ -1233,7 +1233,11 @@ export class InstalledUpdater {
       this.busy ||
       this.view.phase !== "ready" ||
       (this.view.blockedBy !== null &&
-        !(confirmation && confirmedBrowserBlocks.has(this.view.blockedBy))) ||
+        !(
+          confirmation &&
+          (confirmedBrowserBlocks.has(this.view.blockedBy) ||
+            recheckableAdmissionBlocks.has(this.view.blockedBy))
+        )) ||
       !this.ready ||
       (confirmation !== undefined &&
         (confirmation.kind !== "interrupt-browser" ||

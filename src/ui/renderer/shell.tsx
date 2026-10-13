@@ -747,7 +747,7 @@ function Update({
         </p>
       ) : null}
       {blockedBy &&
-        (recoveryMode || recovery || !isConfirmedBrowserBlock(blockedBy)) && (
+        (recoveryMode || recovery || !confirmedRestartAllowed(update)) && (
           <div
             className={
               recoveryMode || recovery ? "update-block" : "update-issue"
@@ -877,7 +877,7 @@ function Update({
           )}
         {!recoveryMode &&
           (recovery ||
-            !!blockedBy ||
+            (!!blockedBy && !confirmedRestartAllowed(update)) ||
             update.phase === "failed" ||
             update.phase === "unavailable") && (
             <button
@@ -903,13 +903,14 @@ function Update({
             </button>
           )}
       </div>
-      {(("notice" in update && update.notice?.blockedBy) ||
-        snapshot.intents["update-notice"]?.state === "unknown") && (
-        <p role="alert">
-          Saved update notices could not be confirmed. Do not retry the notice
-          acknowledgement. Update actions retain their separate safety checks.
-        </p>
-      )}
+      {recoveryMode &&
+        (("notice" in update && update.notice?.blockedBy) ||
+          snapshot.intents["update-notice"]?.state === "unknown") && (
+          <p role="alert">
+            Saved update notices could not be confirmed. Do not retry the notice
+            acknowledgement. Update actions retain their separate safety checks.
+          </p>
+        )}
       {intent?.state === "unknown" && (
         <p role="alert">
           Outcome unknown. Inspect the retained operation; do not submit another
