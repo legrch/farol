@@ -622,7 +622,7 @@ def run(request):
     destination_identity = None
     destination_created = False
     completed = False
-    receipt_published = False
+    receipt_publication_started = False
     try:
         verify_inherited_lease(request)
         if request.get("installLocation", "legacy") == "legacy":
@@ -663,15 +663,16 @@ def run(request):
         os.fsync(destination_fd)
         verify_inherited_lease(request)
         recheck_destination(request, home_fd, parent_fd, destination_identity)
+        # Publication is a custody boundary even when its durability fails.
+        receipt_publication_started = True
         receipt_identity = write_receipt(parent_fd, request["receiptBytes"])
-        receipt_published = True
         recheck_destination(request, home_fd, parent_fd, destination_identity)
         recheck_receipt(parent_fd, receipt_identity, request["receiptBytes"])
         recheck_destination(request, home_fd, parent_fd, destination_identity)
         completed = True
         os.write(1, MAGIC)
     finally:
-        if (destination_created and not completed and not receipt_published
+        if (destination_created and not completed and not receipt_publication_started
                 and destination_fd is not None):
             try:
                 current = os.stat(APP_NAME, dir_fd=parent_fd, follow_symlinks=False)

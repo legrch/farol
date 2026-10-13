@@ -821,8 +821,8 @@ deps.native = async (request, lease, updater, register) => {
     return runReplacementNative(request, lease, updater, register);
   const helper = await fs.readFile(${JSON.stringify(helperFile)});
   const library = await fs.readFile(${JSON.stringify(libraryFile)});
-  if (sha(helper) !== "748f3975397ad25c457e0d26db64ea8e60e1899343dadd7b475cc51cd86dd020" ||
-      sha(library) !== "ca7871cf359faecc0ecba035ce1e49a2a689c964d50c6c27b36e9f519246aed2")
+  if (sha(helper) !== "a520b832f023d08745075629ef1f93d7d98ab06abcd8bc081e0e525a7436807b" ||
+      sha(library) !== "616cff7b7227e1bb09c1ebcbf03e798f9fcf34cbe21b7b8c02c45e539fefa991")
     throw Error("FIXTURE_HELPER_ATTESTATION_FAILED");
   const child = spawn("/usr/bin/python3", ["-I", "-S", "-B", "-"], {
     cwd: "/", env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" },

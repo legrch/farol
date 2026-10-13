@@ -85,6 +85,7 @@ import errno
 import importlib.util
 import json
 import os
+import stat
 import sys
 
 spec = importlib.util.spec_from_file_location("farol_promotion_apply", sys.argv[1])
@@ -144,8 +145,21 @@ def fail_after_competing_receipt(name, *, dir_fd):
         raise OSError(errno.EIO, "injected post-link failure")
     original_unlink(name, dir_fd=dir_fd)
 
+original_fsync = helper.os.fsync
+def fail_receipt_directory_fsync(fd):
+    if stat.S_ISDIR(os.fstat(fd).st_mode):
+        try:
+            os.stat("Farol.app.receipt.json", dir_fd=fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise OSError(errno.EIO, "injected receipt directory fsync failure")
+    original_fsync(fd)
+
 if fault == "receipt-failure":
     helper.write_receipt = fail_receipt
+elif fault == "publication-fsync":
+    helper.os.fsync = fail_receipt_directory_fsync
 elif fault == "publication-competing-receipt":
     helper.os.unlink = fail_after_competing_receipt
 elif fault.startswith("after-copy-"):
@@ -362,6 +376,9 @@ describe("descriptor-bound promotion apply", () => {
       runWithNativeFault,
     );
     expect(outcome).toEqual({ code: 75, signal: null, stderr: "", stdout: "" });
+    expect(await treeDigest(path.join(applications, "Farol.app"))).toBe(
+      await treeDigest(source),
+    );
     await expect(
       fs.readFile(path.join(applications, "Farol.app.receipt.json"), "utf8"),
     ).resolves.toBe("foreign receipt");
@@ -370,6 +387,27 @@ describe("descriptor-bound promotion apply", () => {
         path.join(applications, "Farol.retained.receipt.json"),
         "utf8",
       ),
+    ).resolves.toBe('{"operation":"applied"}\n');
+  });
+
+  it("retains the candidate and receipt after post-link directory fsync fails", async () => {
+    const { source, home, applications } = await fixture();
+    const expected = await treeDigest(source);
+    const outcome = await applyWithLease(
+      {
+        home,
+        source,
+        artifactSha256: expected,
+        fault: "publication-fsync",
+      },
+      runWithNativeFault,
+    );
+    expect(outcome).toEqual({ code: 75, signal: null, stderr: "", stdout: "" });
+    expect(await treeDigest(path.join(applications, "Farol.app"))).toBe(
+      expected,
+    );
+    await expect(
+      fs.readFile(path.join(applications, "Farol.app.receipt.json"), "utf8"),
     ).resolves.toBe('{"operation":"applied"}\n');
   });
 
@@ -457,7 +495,7 @@ describe("descriptor-bound promotion apply", () => {
     await expect(fs.lstat(receipt)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("removes its destination after receipt publication fails", async () => {
+  it("retains its destination after receipt publication fails", async () => {
     const { source, home, applications } = await fixture();
     const destination = path.join(applications, "Farol.app");
     const receipt = `${destination}.receipt.json`;
@@ -471,9 +509,7 @@ describe("descriptor-bound promotion apply", () => {
     );
 
     expect(outcome).toEqual({ code: 75, signal: null, stderr: "", stdout: "" });
-    await expect(fs.lstat(destination)).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    expect(await treeDigest(destination)).toBe(await treeDigest(source));
     await expect(fs.lstat(receipt)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
