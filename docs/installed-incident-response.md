@@ -32,6 +32,28 @@ The Lead should use existing owner grants for diagnostics and installation rathe
 than repeatedly asking for them. A machine restart interrupts other applications
 and requires an explicit owner decision when it is necessary.
 
+## Select the exact installation
+
+Resolve an installed incident by the canonical bundle path, not the display
+name. Historical build bundles can also be named Farol, and macOS may select
+one of them when asked to open an application by name. For the owner's global
+installation, launch only `/Applications/Farol.app` through its outer launcher.
+Never launch a historical bundle or its embedded vendor executable as a fallback.
+
+Before interaction or replacement, compare the installed version and source/build
+receipt with the actual process paths and the running UI's accepted resource
+identity. A visible window or a matching display name alone does not identify
+the installed build. Binding to an already running native window is distinct
+from executing an embedded vendor runtime directly.
+
+When the owner retires an old installation, stop only its positively identified
+processes and remove that exact bundle from the active installation path using
+recoverable custody. Unregister the retired bundle's path. Preserve its source,
+profile and uncertain-operation evidence. Keep one canonical installed path;
+retain replacement custody outside ordinary application launch locations.
+Do not alter unrelated Dock entries or choose between identically named icons
+without confirming their target identity.
+
 ## Preserve uncertain work
 
 Recovery must not replay an operation with an unknown outcome, invent process
