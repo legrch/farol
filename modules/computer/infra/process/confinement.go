@@ -541,6 +541,11 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		// Metadata makes absence observable; configuration contents and includes
 		// still need an explicit approved root, with no environment override.
 		if s.Git == RootScopedGit {
+			// Git's untracked cache calls Darwin uname, which reads these five
+			// exact nodes. Keep ordinary Git configuration; grant neither other
+			// sysctl reads nor any sysctl writes.
+			source += `
+(allow sysctl-read (sysctl-name "kern.ostype") (sysctl-name "kern.hostname") (sysctl-name "kern.osrelease") (sysctl-name "kern.version") (sysctl-name "hw.machine"))`
 			source += "\n(allow file-read-metadata file-test-existence (literal \"/etc\") (literal \"/private/etc\") (literal \"/etc/gitconfig\") (literal \"/private/etc/gitconfig\"))"
 		}
 		for _, anchor := range rootAnchors {

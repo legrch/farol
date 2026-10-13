@@ -99,7 +99,7 @@ func TestNativeCLTGitRuntimeResources(t *testing.T) {
 	for _, p := range []string{project, home, linked, filepath.Join(project, ".git"), filepath.Join(project, ".git/hooks")} {
 		must(os.Mkdir(p, 0700))
 	}
-	must(os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[user]\n\tname = Farol fixture\n\temail = fixture@example.invalid\n"), 0600))
+	must(os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[user]\n\tname = Farol fixture\n\temail = fixture@example.invalid\n[core]\n\tuntrackedCache = true\n"), 0600))
 	must(os.WriteFile(filepath.Join(project, "source.txt"), []byte("fixture\n"), 0600))
 	must(os.WriteFile(filepath.Join(project, ".git/hooks/pre-commit"), []byte("#!/bin/sh\nset -eu\nproof=$(git rev-parse --git-path hook-proof)\nprintf 'hook-ran\\n' > \"$proof\"\n"), 0700))
 	s, command := rootScopedFixture(t)
@@ -113,7 +113,7 @@ func TestNativeCLTGitRuntimeResources(t *testing.T) {
 	s.Snapshot.Approval.Workspaces[0].RootIdentity = identity(base)
 	command.Root, command.Cwd, command.RootIdentity = base, project, identity(base)
 	command.Executable, command.ExecutableSHA256 = "/bin/bash", s.Executables[0].SHA256
-	const script = "set -eu\ngit=\"$1\"\nlinked=\"$2\"\n\"$git\" init -q\ntest \"$(\"$git\" config --get init.defaultBranch)\" = main\ntest -f .git/hooks/pre-push.sample\n\"$git\" add source.txt\n\"$git\" commit -qm 'fixture: verify CLT runtime resources'\ntest \"$(cat .git/hook-proof)\" = hook-ran\ntest \"$(\"$git\" log -1 --format=%s)\" = 'fixture: verify CLT runtime resources'\ntest -z \"$(\"$git\" status --porcelain)\"\n\"$git\" worktree add -q -b linked \"$linked\"\nprintf 'linked\\n' > \"$linked/linked.txt\"\n\"$git\" -C \"$linked\" add linked.txt\n\"$git\" -C \"$linked\" commit -qm 'fixture: verify CLT linked worktree'\ntest -z \"$(\"$git\" -C \"$linked\" status --porcelain)\"\ntest \"$(cat .git/worktrees/linked/hook-proof)\" = hook-ran\nprintf 'git-resource-journey-completed\\n'\n"
+	const script = "set -eu\ngit=\"$1\"\nlinked=\"$2\"\n\"$git\" init -q\ntest \"$(\"$git\" config --get init.defaultBranch)\" = main\ntest -f .git/hooks/pre-push.sample\n\"$git\" add source.txt\n\"$git\" commit -qm 'fixture: verify CLT runtime resources'\ntest \"$(cat .git/hook-proof)\" = hook-ran\ntest \"$(\"$git\" log -1 --format=%s)\" = 'fixture: verify CLT runtime resources'\nstatus=$(\"$git\" status --porcelain)\ntest -z \"$status\"\n\"$git\" worktree add -q -b linked \"$linked\"\nprintf 'linked\\n' > \"$linked/linked.txt\"\n\"$git\" -C \"$linked\" add linked.txt\n\"$git\" -C \"$linked\" commit -qm 'fixture: verify CLT linked worktree'\nstatus=$(\"$git\" -C \"$linked\" status --porcelain)\ntest -z \"$status\"\ntest \"$(cat .git/worktrees/linked/hook-proof)\" = hook-ran\nprintf 'git-resource-journey-completed\\n'\n"
 	command.Args, command.Write = []string{"-c", script, "fixture", r.Git.Path, linked}, true
 	command.Environment = seatbeltEnvironment(s, true)
 	plan, err := compileSeatbelt(s, command)

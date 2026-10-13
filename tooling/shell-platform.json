@@ -1,6 +1,6 @@
 {
   "schema": "farol-shell-platform/1",
-  "id": "macos-26A434-arm64-root-volume-git-data-v4",
+  "id": "macos-26A434-arm64-root-volume-git-uname-v5",
   "osBuild": "26A434",
   "compiler": "approved-roots-seatbelt-v1",
   "filesystemClass": "system-apfs-kernel-mount-boundaries-v1",
@@ -25,7 +25,7 @@
     },
     {
       "path": "modules/computer/infra/process/confinement.go",
-      "sha256": "6ed4b8db570875eafa82381fe2d3339894256bab769f16025791d04e57c960ef"
+      "sha256": "4e04856f54553093832fc623aba72adacb9bb7f10f6432f4a91270838efe9830"
     },
     {
       "path": "modules/computer/infra/process/darwin.go",

@@ -586,3 +586,29 @@ Independent file/ref readback, root exit and stdout/stderr EOF were verified.
 This is native compiler/fixture evidence, not external ChatGPT or installed Shell
 acceptance, arbitrary signing support, or complete descendant settlement.
 The separate [mount-boundary limitation](computer-mount-boundaries.md) remains open.
+
+## Git untracked-cache native regression, 14 October 2026
+
+An installed read-only `git status` reached the selected Command Line Tools
+image but exited 128: its untracked-cache identity calls Darwin `uname`, and
+the root-scoped profile denied the required sysctl reads. A disposable native
+Git fixture with ordinary synthetic HOME configuration and
+`core.untrackedCache = true` reproduced that same failure before the correction.
+
+The root-scoped Git profile now admits only the five reads used by Darwin
+`uname`: `kern.ostype`, `kern.hostname`, `kern.osrelease`, `kern.version` and
+`hw.machine`. It grants no other sysctl reads or any writes. Existing file,
+network, executable, protected-image and mount boundaries remain effective.
+Git configuration and its cache are not disabled to conceal the failure.
+
+The corrected native fixture passed init/add/commit/log/status, actual
+pre-commit hooks, templates and a linked worktree with the cache enabled.
+Status assignments now propagate a nonzero Git exit instead of accepting an
+empty command substitution. A separate actual Seatbelt fixture verified all
+five reads, denied a readable `kern.boottime` node, and retained its positive
+workspace/scratch controls and negative file, image and IPv4/IPv6 controls.
+These checks establish native policy behavior, not a new installed package,
+external connector acceptance or complete descendant cleanup.
+
+Sources: [Git untracked-cache identity](https://github.com/git/git/blob/master/dir.c)
+and [Darwin uname implementation](https://github.com/apple-oss-distributions/Libc/blob/main/gen/uname.c).

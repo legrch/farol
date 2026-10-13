@@ -451,8 +451,8 @@ func TestProtectedBundleSelectionDigestAndOriginalDeadline(t *testing.T) {
 	}
 }
 
-// Legacy class fingerprints include the deliberate ordinary-Git optional config
-// metadata fix. Nil bundle and disabled mount-boundary fields stay omitted.
+// The no-bundle root-scoped class includes ordinary-Git config metadata and
+// the exact uname reads. Nil bundle and disabled mount-boundary fields stay omitted.
 func TestProtectedBundleNilPreservesFrozenBaselineDigests(t *testing.T) {
 	f := platformFixtureCPU(t)
 	strategy := f.strategy(t)
@@ -464,9 +464,9 @@ func TestProtectedBundleNilPreservesFrozenBaselineDigests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.digest != "642c52f56b2d367b8b61137cff2cd28e0ac30557ef7c6dcb8ae2372874367f9c" ||
+	if plan.digest != "3aee32564e93dfe3948599bf93a5cf7ce105f9622a5111e02a238f8b15c55e9a" ||
 		strategy.Binding().SupportSHA256 != "d4fedcdb8be2faef765b57e849add5738d2e6299b462634ef1d4d4ea2169e84b" ||
-		selected.Binding().SelectionSHA256 != "98a58ebd62af53bb8a08db26775ca8f830f30ae9f3f9a44cc9a3eb26a9b084ba" {
+		selected.Binding().SelectionSHA256 != "64a12d98a655d67aba35f60d4971cbddaf9a577e446d54cd15da131ff3adca57" {
 		t.Fatalf("nil bundle altered frozen baseline digests: profile=%s support=%s selection=%s", plan.digest, strategy.Binding().SupportSHA256, selected.Binding().SelectionSHA256)
 	}
 }

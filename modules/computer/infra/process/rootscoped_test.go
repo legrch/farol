@@ -66,15 +66,21 @@ func TestRootScopedSeatbeltHasNoImplicitCredentialOrGitNames(t *testing.T) {
 	}
 }
 
-func TestRootScopedSeatbeltAllowsOnlyRuntimeSizingSysctls(t *testing.T) {
+func TestRootScopedSeatbeltAllowsOnlyRuntimeSizingAndUnameSysctls(t *testing.T) {
 	s, command := rootScopedFixture(t)
 	plan, err := compileSeatbelt(s, command)
 	if err != nil {
 		t.Fatal(err)
 	}
 	const sizing = `(allow sysctl-read (sysctl-name "hw.pagesize_compat") (sysctl-name "hw.ncpu"))`
-	if !strings.Contains(plan.source, sizing) || strings.Count(plan.source, "sysctl") != 3 {
-		t.Fatal("runtime sizing reads missing or broader sysctl permission emitted")
+	if !strings.Contains(plan.source, sizing) || strings.Count(plan.source, "(allow sysctl-read ") != 2 ||
+		strings.Count(plan.source, "(sysctl-name ") != 7 || strings.Contains(plan.source, "sysctl-write") {
+		t.Fatal("runtime sizing/uname reads missing or broader sysctl permission emitted")
+	}
+	for _, name := range []string{"kern.ostype", "kern.hostname", "kern.osrelease", "kern.version", "hw.machine"} {
+		if strings.Count(plan.source, `(sysctl-name "`+name+`")`) != 1 {
+			t.Fatal("missing exact uname read", name)
+		}
 	}
 	_, legacy, legacyCommand, _ := confinementFixture(t)
 	old, err := compileSeatbelt(legacy, legacyCommand)
