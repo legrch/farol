@@ -18,6 +18,10 @@ func preservedResultFixture(t *testing.T, write bool) (SettledSelection, []Expec
 	value.Observation.Supervisor = processsvc.SupervisorExited
 	value.Observation.GroupCleanup = processsvc.CleanupUnverified
 	value.Observation.DescendantCleanup = processsvc.CleanupUnverified
+	if write {
+		value.Observation.GroupCleanup = processsvc.CleanupConfirmed
+		value.Observation.DescendantCleanup = processsvc.CleanupConfirmed
+	}
 	raw, chunks, err := encodeProcessTerminal(value)
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +83,11 @@ func TestPreservedProcessResultsKeepExactBytesWithoutClaimingCleanup(t *testing.
 				continue
 			}
 			v, _, err := decodeProcessTerminal(e.raw)
-			if err != nil || v.Observation.GroupCleanup != processsvc.CleanupUnverified || v.Observation.DescendantCleanup != processsvc.CleanupUnverified {
+			expectedCleanup := processsvc.CleanupUnverified
+			if write {
+				expectedCleanup = processsvc.CleanupConfirmed
+			}
+			if err != nil || v.Observation.GroupCleanup != expectedCleanup || v.Observation.DescendantCleanup != expectedCleanup {
 				t.Fatal("cleanup was upgraded")
 			}
 		}
@@ -131,6 +139,39 @@ func TestPreservedProcessResultsRefuseIncompleteOrCrossedOutput(t *testing.T) {
 			value, err := observePreserved(context.Background(), closed, &settledPureObservation{entries: entries}, func(PreservedInspection) error { calls++; return nil })
 			if err == nil || value != nil || calls != 0 {
 				t.Fatal("invalid result reached visitor")
+			}
+		})
+	}
+}
+
+func TestPreservedProcessResultsRefuseWriteWithoutCompleteCleanup(t *testing.T) {
+	for _, cleanup := range []struct {
+		name               string
+		group, descendants processsvc.Cleanup
+	}{
+		{"both-unverified", processsvc.CleanupUnverified, processsvc.CleanupUnverified},
+		{"descendants-unverified", processsvc.CleanupConfirmed, processsvc.CleanupUnverified},
+		{"group-unverified", processsvc.CleanupUnverified, processsvc.CleanupConfirmed},
+	} {
+		t.Run(cleanup.name, func(t *testing.T) {
+			selection, expected, entries := preservedResultFixture(t, true)
+			value := terminalValue(nil, nil)
+			value.Intent.OperationID = "known-result"
+			value.Intent.Seal.Write = true
+			value.Observation.Supervisor = processsvc.SupervisorExited
+			value.Observation.GroupCleanup, value.Observation.DescendantCleanup = cleanup.group, cleanup.descendants
+			raw, _, err := encodeProcessTerminal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries, expected = entries[:5], expected[:5]
+			entries[4].raw = raw
+			expected[4].SHA256 = preservedDigest(raw)
+			closed := preservedPureSelection(t, selection, expected)
+			calls := 0
+			result, err := observePreserved(context.Background(), closed, &settledPureObservation{entries: entries}, func(PreservedInspection) error { calls++; return nil })
+			if err == nil || result != nil || calls != 0 {
+				t.Fatal("unverified writer reached maintenance visitor")
 			}
 		})
 	}

@@ -143,11 +143,13 @@ func qualifyPreservedRecord(entry settledBytes, expected ExpectedPreservedRecord
 		reserved = true
 	case header.Version == 6 && header.Kind == "workspace_connector_process_terminal":
 		result, _, err := decodeProcessTerminal(entry.raw)
-		if err != nil || result == nil || result.Observation.Supervisor != processsvc.SupervisorExited {
+		if err != nil || result == nil || result.Observation.Supervisor != processsvc.SupervisorExited ||
+			result.Intent.Seal.Write && (result.Observation.GroupCleanup != processsvc.CleanupConfirmed || result.Observation.DescendantCleanup != processsvc.CleanupConfirmed) {
 			return refuse()
 		}
-		// Known root results and output stay available, including write-capable
-		// commands. Their original cleanup fields remain unchanged.
+		// Read-only root results retain cleanup uncertainty. Write-capable
+		// results need positive group and descendant cleanup before maintenance;
+		// an exited supervisor alone cannot exclude concurrent old writes.
 		identity = processIdentity(result.Scope, result.Intent.OperationID)
 	case header.Version == 5 && header.Kind == "workspace_connector_process_output":
 		var envelope processOutputEnvelope

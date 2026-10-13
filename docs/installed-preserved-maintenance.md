@@ -15,8 +15,10 @@ optional `connector`. Other failed components refuse maintenance.
 
 Retained Computer records may include canonical completed or known failed v3
 connector file outcomes, canonical v4 **read-only** reservations, and canonical
-v6 results with observed supervisor exit. Known results retain their original
-write permission, exit code, output and cleanup uncertainty. Every referenced v5
+v6 results with observed supervisor exit. Read-only results retain cleanup
+uncertainty. Write-capable results qualify only with positive group and descendant
+cleanup; root or supervisor exit alone cannot exclude continuing workspace writes.
+Accepted results retain their original exit code, output and cleanup fields. Every referenced v5
 output chunk must be independently selected and match its exact selected parent,
 stream, offset and digest; orphan or missing chunks refuse inspection. Every
 identity, filename and full-byte SHA-256 is independently selected, with an exact
