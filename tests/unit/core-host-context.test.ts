@@ -1,18 +1,19 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   Client,
   RequestNotSentError,
 } from "../../apps/desktop/bridge/client.ts";
+import { DESKTOP_CORE_STARTUP_TIMEOUT_MS } from "../../apps/desktop/go-core-host.ts";
 import { SettingsDeliveryBridge } from "../../apps/desktop/bridge/settings-delivery.ts";
 import { Decoder, frame } from "../../apps/desktop/bridge/frame.ts";
 import type { Request } from "../../apps/desktop/bridge/wire.ts";
 
 // Serialized in-memory child pipes test host composition correlation, not a
 // native child, profile, provider or product journey.
-function fixture(wrongGeneration = false) {
+function fixture(wrongGeneration = false, responseDelayMs = 0) {
   const child = Object.assign(new EventEmitter(), {
     stdin: new PassThrough(),
     stdout: new PassThrough(),
@@ -26,29 +27,32 @@ function fixture(wrongGeneration = false) {
     decoder.push(bytes, (raw) => {
       const request = raw as Request;
       calls.push(request);
-      child.stdout.write(
-        frame({
-          jsonrpc: "2.0",
-          id: request.id,
-          result: {
-            status: "ok",
-            requestId: request.id,
-            context: {
-              profileId: "22222222-2222-4222-8222-222222222222",
-              backendGeneration: "generation",
+      const respond = () =>
+        child.stdout.write(
+          frame({
+            jsonrpc: "2.0",
+            id: request.id,
+            result: {
+              status: "ok",
+              requestId: request.id,
+              context: {
+                profileId: "22222222-2222-4222-8222-222222222222",
+                backendGeneration: "generation",
+              },
+              data: {
+                protocolMajor: 1,
+                protocolMinor: 0,
+                buildId: "build",
+                profileId: "22222222-2222-4222-8222-222222222222",
+                backendGeneration: wrongGeneration ? "crossed" : "generation",
+                capabilities: [],
+                maxFrameBytes: 1048576,
+              },
             },
-            data: {
-              protocolMajor: 1,
-              protocolMinor: 0,
-              buildId: "build",
-              profileId: "22222222-2222-4222-8222-222222222222",
-              backendGeneration: wrongGeneration ? "crossed" : "generation",
-              capabilities: [],
-              maxFrameBytes: 1048576,
-            },
-          },
-        }),
-      );
+          }),
+        );
+      if (responseDelayMs > 0) setTimeout(respond, responseDelayMs);
+      else respond();
     }),
   );
   return {
@@ -64,6 +68,41 @@ const hello = {
   profileId: "22222222-2222-4222-8222-222222222222",
 };
 describe("verified core context for normal host composition", () => {
+  it("accepts one cold handshake after the ordinary RPC deadline without replay", async () => {
+    vi.useFakeTimers();
+    const f = fixture(false, 2500);
+    try {
+      const ready = f.client.handshake(hello, DESKTOP_CORE_STARTUP_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(2500);
+      await expect(ready).resolves.toMatchObject({ buildId: "build" });
+      expect(f.calls.map((call) => call.method)).toEqual(["core.handshake"]);
+    } finally {
+      await f.client.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a startup deadline failure unknown and never sends a second handshake", async () => {
+    vi.useFakeTimers();
+    const f = fixture(false, DESKTOP_CORE_STARTUP_TIMEOUT_MS + 1);
+    try {
+      const failed = f.client
+        .handshake(hello, DESKTOP_CORE_STARTUP_TIMEOUT_MS)
+        .catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(DESKTOP_CORE_STARTUP_TIMEOUT_MS);
+      expect(await failed).toMatchObject({
+        state: "unknown",
+        code: "response_timeout",
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(f.calls.map((call) => call.method)).toEqual(["core.handshake"]);
+      expect(() => f.client.verifiedContext).toThrow();
+    } finally {
+      await f.client.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("proves physical non-dispatch and never fabricates an offer from missing observation", async () => {
     const f = fixture();
     await f.client.handshake(hello, 1000);

@@ -96,3 +96,12 @@ result, journal, old ACK or cleanup receipt. An unknown child/publication retain
 the original owner and lease. Select a fresh replacement snapshot only after
 this preparation completes; a visible lock file alone cannot settle an unknown
 preparation. Ordinary plan-only replacement does not initialize that lock.
+
+## Cold backend startup deadline
+
+The desktop uses a bounded 15-second budget for the original Go startup,
+including Shell metadata delivery and the first handshake. Runtime attestation
+and retained journal initialization can exceed the ordinary two-second RPC
+budget on a cold launch. Ordinary operation deadlines remain unchanged. A late
+or missing startup response stays outcome-unknown; increasing the budget never
+retries a failed startup or settles its retained run marker.
