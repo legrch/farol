@@ -111,14 +111,28 @@ def copy_then_displace(source_fd, destination_fd, state, depth=0):
     if depth == 0:
         displace()
 def receipt_then_displace(parent_fd, payload):
-    original_receipt(parent_fd, payload)
-    displace()
+    published_identity = original_receipt(parent_fd, payload)
+    if fault.startswith("receipt-only-"):
+        applications = os.path.join(sys.argv[2], "Applications")
+        receipt = os.path.join(applications, "Farol.app.receipt.json")
+        retained = os.path.join(applications, "Farol.retained.receipt.json")
+        os.rename(receipt, retained)
+        if fault.endswith("replaced"):
+            with open(receipt, "wb") as stream:
+                stream.write(payload)
+        elif fault.endswith("symlink"):
+            os.symlink(retained, receipt)
+        elif fault.endswith("hardlink"):
+            os.link(retained, receipt)
+    else:
+        displace()
+    return published_identity
 
 if fault == "receipt-failure":
     helper.write_receipt = fail_receipt
 elif fault.startswith("after-copy-"):
     helper.copy_tree = copy_then_displace
-elif fault.startswith("after-receipt-"):
+elif fault.startswith("after-receipt-") or fault.startswith("receipt-only-"):
     helper.write_receipt = receipt_then_displace
 else:
     raise RuntimeError("INVALID_FIXTURE_FAULT")
@@ -267,6 +281,53 @@ describe("descriptor-bound promotion apply", () => {
         await expect(fs.lstat(receipt)).rejects.toMatchObject({
           code: "ENOENT",
         });
+      }
+    },
+  );
+
+  it.each(["missing", "replaced", "symlink", "hardlink"])(
+    "never reports promotion success after receipt-only displacement: %s",
+    async (variant) => {
+      const { source, home, applications } = await fixture();
+      const expected = await treeDigest(source);
+      const outcome = await applyWithLease(
+        {
+          home,
+          source,
+          artifactSha256: expected,
+          fault: `receipt-only-${variant}`,
+        },
+        runWithNativeFault,
+      );
+      expect(outcome).toEqual({
+        code: 75,
+        signal: null,
+        stderr: "",
+        stdout: "",
+      });
+      expect(await treeDigest(path.join(applications, "Farol.app"))).toBe(
+        expected,
+      );
+      await expect(
+        fs.readFile(
+          path.join(applications, "Farol.retained.receipt.json"),
+          "utf8",
+        ),
+      ).resolves.toBe('{"operation":"applied"}\n');
+      const receipt = path.join(applications, "Farol.app.receipt.json");
+      if (variant === "missing") {
+        await expect(fs.lstat(receipt)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      } else if (variant === "symlink") {
+        expect((await fs.lstat(receipt)).isSymbolicLink()).toBe(true);
+      } else {
+        await expect(fs.readFile(receipt, "utf8")).resolves.toBe(
+          '{"operation":"applied"}\n',
+        );
+        expect((await fs.lstat(receipt)).nlink).toBe(
+          variant === "hardlink" ? 2 : 1,
+        );
       }
     },
   );

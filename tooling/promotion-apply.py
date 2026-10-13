@@ -489,6 +489,7 @@ def write_receipt(parent_fd, payload):
                 refuse(EXIT_RECEIPT)
             offset += written
         os.fsync(descriptor)
+        published_identity = identity(os.fstat(descriptor))
         os.close(descriptor)
         descriptor = None
         os.link(
@@ -502,6 +503,7 @@ def write_receipt(parent_fd, payload):
         os.unlink(temporary, dir_fd=parent_fd)
         os.fsync(parent_fd)
         published = True
+        return published_identity
     except OSError as error:
         if error.errno == errno.EEXIST:
             refuse(EXIT_EXISTS)
@@ -593,6 +595,35 @@ def recheck_destination(request, home_fd, parent_fd, expected):
         refuse(EXIT_PATH)
 
 
+def recheck_receipt(parent_fd, expected, payload):
+    descriptor = None
+    try:
+        descriptor = os.open(RECEIPT_NAME, FILE_FLAGS, dir_fd=parent_fd)
+        opened = os.fstat(descriptor)
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                or identity(opened) != expected or opened.st_size != len(payload)):
+            refuse(EXIT_RECEIPT)
+        raw = bytearray()
+        while len(raw) <= len(payload):
+            part = os.read(descriptor, len(payload) + 1 - len(raw))
+            if not part:
+                break
+            raw.extend(part)
+        after = os.fstat(descriptor)
+        named = os.stat(RECEIPT_NAME, dir_fd=parent_fd, follow_symlinks=False)
+        if (bytes(raw) != payload or identity(after) != expected
+                or identity(named) != expected or after.st_nlink != 1
+                or named.st_nlink != 1 or after.st_size != opened.st_size
+                or after.st_mtime_ns != opened.st_mtime_ns
+                or after.st_ctime_ns != opened.st_ctime_ns):
+            refuse(EXIT_RECEIPT)
+    except OSError:
+        refuse(EXIT_RECEIPT)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def run(request):
     verify_inherited_lease(request)
     home_fd = open_absolute_directory(request["home"])
@@ -643,8 +674,10 @@ def run(request):
         os.fsync(destination_fd)
         verify_inherited_lease(request)
         recheck_destination(request, home_fd, parent_fd, destination_identity)
-        write_receipt(parent_fd, request["receiptBytes"])
+        receipt_identity = write_receipt(parent_fd, request["receiptBytes"])
         receipt_published = True
+        recheck_destination(request, home_fd, parent_fd, destination_identity)
+        recheck_receipt(parent_fd, receipt_identity, request["receiptBytes"])
         recheck_destination(request, home_fd, parent_fd, destination_identity)
         completed = True
         os.write(1, MAGIC)

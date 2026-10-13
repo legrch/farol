@@ -155,3 +155,9 @@ never yields a successful helper response. If displacement is observed after
 receipt publication, the receipt and copied/displaced resources remain retained
 for reconciliation; their presence alone is not confirmed placement. These are
 bounded point-in-time checks, not a claim of permanent namespace exclusion.
+
+The published receipt is also read back through a no-follow descriptor and
+matched to its original inode, exact bytes, regular-file mode and single-link
+identity before the success response. Removal, replacement with identical
+bytes, symlink and hardlink aliases produce no success response and preserve
+already published resources for reconciliation.
