@@ -81,6 +81,7 @@ async function runWithNativeFault({
   if (!(await transfer.verify())) throw new Error("PROMOTION_LEASE_LOST");
   const helperPath = path.join(process.cwd(), "tooling", "promotion-apply.py");
   const program = `
+import errno
 import importlib.util
 import json
 import os
@@ -128,8 +129,25 @@ def receipt_then_displace(parent_fd, payload):
         displace()
     return published_identity
 
+original_unlink = helper.os.unlink
+def fail_after_competing_receipt(name, *, dir_fd):
+    if name.startswith(".Farol.app.receipt.json."):
+        os.rename("Farol.app.receipt.json", "Farol.retained.receipt.json",
+                  src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        foreign = os.open("Farol.app.receipt.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                          0o600, dir_fd=dir_fd)
+        try:
+            os.write(foreign, b"foreign receipt")
+        finally:
+            os.close(foreign)
+        original_unlink(name, dir_fd=dir_fd)
+        raise OSError(errno.EIO, "injected post-link failure")
+    original_unlink(name, dir_fd=dir_fd)
+
 if fault == "receipt-failure":
     helper.write_receipt = fail_receipt
+elif fault == "publication-competing-receipt":
+    helper.os.unlink = fail_after_competing_receipt
 elif fault.startswith("after-copy-"):
     helper.copy_tree = copy_then_displace
 elif fault.startswith("after-receipt-") or fault.startswith("receipt-only-"):
@@ -331,6 +349,29 @@ describe("descriptor-bound promotion apply", () => {
       }
     },
   );
+
+  it("preserves a competing receipt after its own post-link publication failure", async () => {
+    const { source, home, applications } = await fixture();
+    const outcome = await applyWithLease(
+      {
+        home,
+        source,
+        artifactSha256: await treeDigest(source),
+        fault: "publication-competing-receipt",
+      },
+      runWithNativeFault,
+    );
+    expect(outcome).toEqual({ code: 75, signal: null, stderr: "", stdout: "" });
+    await expect(
+      fs.readFile(path.join(applications, "Farol.app.receipt.json"), "utf8"),
+    ).resolves.toBe("foreign receipt");
+    await expect(
+      fs.readFile(
+        path.join(applications, "Farol.retained.receipt.json"),
+        "utf8",
+      ),
+    ).resolves.toBe('{"operation":"applied"}\n');
+  });
 
   it("refuses an existing destination without changing it", async () => {
     const { source, home, applications } = await fixture();

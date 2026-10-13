@@ -26,7 +26,7 @@ def bounded(fd, limit):
 
 
 library = bounded(8, 65536)
-if hashlib.sha256(library).hexdigest() != "7ac7177449537ed70a86d4e9cd09efcc518e5bf3af1b842f164389657538854b":
+if hashlib.sha256(library).hexdigest() != "ca7871cf359faecc0ecba035ce1e49a2a689c964d50c6c27b36e9f519246aed2":
     raise RuntimeError("REPLACEMENT_LIBRARY_INVALID")
 b = {"__name__": "attested_promotion_library"}
 exec(compile(library, "<attested-promotion-library>", "exec"), b)

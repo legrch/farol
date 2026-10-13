@@ -473,8 +473,6 @@ def clear_directory(descriptor, depth=0):
 def write_receipt(parent_fd, payload):
     temporary = f".{RECEIPT_NAME}.{os.urandom(8).hex()}.tmp"
     descriptor = None
-    linked = False
-    published = False
     try:
         descriptor = os.open(
             temporary,
@@ -499,10 +497,8 @@ def write_receipt(parent_fd, payload):
             dst_dir_fd=parent_fd,
             follow_symlinks=False,
         )
-        linked = True
         os.unlink(temporary, dir_fd=parent_fd)
         os.fsync(parent_fd)
-        published = True
         return published_identity
     except OSError as error:
         if error.errno == errno.EEXIST:
@@ -511,16 +507,9 @@ def write_receipt(parent_fd, payload):
     finally:
         if descriptor is not None:
             os.close(descriptor)
-        if linked and not published:
-            try:
-                os.unlink(RECEIPT_NAME, dir_fd=parent_fd)
-            except OSError:
-                pass
-        if not published:
-            try:
-                os.unlink(temporary, dir_fd=parent_fd)
-            except OSError:
-                pass
+        # A shared-parent writer can replace either name after publication.
+        # Retain failed publication entries; path-based rollback could remove
+        # another writer's receipt or temporary file.
 
 
 def test_hook(enabled):
