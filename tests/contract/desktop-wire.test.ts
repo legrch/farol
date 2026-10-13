@@ -10,7 +10,11 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
-import { Client, spawnCore } from "../../apps/desktop/bridge/client.ts";
+import {
+  BridgeError,
+  Client,
+  spawnCore,
+} from "../../apps/desktop/bridge/client.ts";
 import { Decoder, frame, parseJSON } from "../../apps/desktop/bridge/frame.ts";
 import {
   maxFrameBytes,
@@ -45,8 +49,11 @@ afterAll(() => rmSync(directory, { recursive: true, force: true }));
 describe("K0 real inherited-pipe process", () => {
   it("returns a measured exact process identity and explicit missing capabilities", async () => {
     const started = performance.now();
-    const client = await spawnCore(executable, "disposable-profile", "k0-test");
+    let client: Client | undefined;
+    let phase = "spawn-and-handshake";
     try {
+      client = await spawnCore(executable, "disposable-profile", "k0-test");
+      phase = "status";
       const result = await client.request(
         "core.status",
         {},
@@ -71,6 +78,7 @@ describe("K0 real inherited-pipe process", () => {
           schemaSHA256,
         }),
       );
+      phase = "capability-checks";
       expect((await client.request("computer.workspace.read", {})).status).toBe(
         "unavailable",
       );
@@ -84,10 +92,25 @@ describe("K0 real inherited-pipe process", () => {
         code: "duplicate_request_id",
       });
       expect(client.diagnosticByteCount).toBe(0);
+    } catch (error) {
+      // Content-free phase evidence; preserve the original error and budgets.
+      console.info(
+        JSON.stringify({
+          evidence: "K0 process/status failure",
+          phase,
+          elapsedMs: performance.now() - started,
+          failure:
+            error instanceof BridgeError && error.code === "response_timeout"
+              ? "response_timeout"
+              : "other_failure",
+          cleanup: client?.cleanupState ?? "spawnCore-owned",
+        }),
+      );
+      throw error;
     } finally {
-      await client.close();
+      await client?.close();
     }
-    expect(await client.closeAndObserve()).toEqual({
+    expect(await client!.closeAndObserve()).toEqual({
       exitCode: 0,
       signal: null,
       forced: false,
