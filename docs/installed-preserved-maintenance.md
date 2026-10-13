@@ -13,19 +13,26 @@ Chat must have no turns, results or retirement, and Task must remain empty. The
 failed Quit must be newer than the selected run and contain only `go-core`, with
 optional `connector`. Other failed components refuse maintenance.
 
-The only retained Computer records accepted are canonical completed or known
-failed v3 connector file outcomes, and canonical v4 **read-only** process
-reservations. Every identity, filename and full-byte SHA-256 is independently
-selected, with an exact bounded inventory of 1 to 128 records. Unresolved
-write-capable processes, unknown schemas, partial file operations, changed bytes,
-missing/extra entries, aliases, unsafe modes and reused generations refuse.
+Retained Computer records may include canonical completed or known failed v3
+connector file outcomes, canonical v4 **read-only** reservations, and canonical
+v6 results with observed supervisor exit. Known results retain their original
+write permission, exit code, output and cleanup uncertainty. Every referenced v5
+output chunk must be independently selected and match its exact selected parent,
+stream, offset and digest; orphan or missing chunks refuse inspection. Every
+identity, filename and full-byte SHA-256 is independently selected, with an exact
+bounded inventory of 1 to 128 records. Unresolved write-capable reservations,
+unknown schemas, partial file operations, changed bytes, missing/extra entries,
+aliases, unsafe modes and reused generations refuse.
 
 No Computer record is deleted, rewritten, retried or promoted to a terminal
 outcome. Original reserved operation IDs remain durably reserved in the same
 repository; maintenance does not create a replacement operation journal or grant
-execution. Historical process terminal and descendant cleanup remain unconfirmed.
-This does not prove absence of arbitrary detached descendants; the selected
-unresolved executions are read-only and retain their original confinement.
+execution. Historical reserved processes remain unresolved; known process results keep
+their original cleanup classifications. Preservation does not establish cleanup
+of arbitrary detached descendants, completion of any reserved operation or a
+clean original Quit. Selected unresolved reservations are read-only and retain
+their original confinement. Known write-capable results are not permission to
+repeat their commands or to upgrade their cleanup observations.
 
 The complete empty Chat history and original failed run/Quit are preserved in
 `chat-retired-<operation-id>`. A new maintenance owner receives its own ACK and

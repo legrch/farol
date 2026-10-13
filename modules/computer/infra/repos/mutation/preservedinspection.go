@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"sort"
 
+	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	domain "github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
@@ -16,7 +17,10 @@ const maxPreservedRecords = 128
 // canonical filename and digest of all stored bytes. The journal never expands it.
 type ExpectedPreservedRecord struct {
 	Key, SHA256 string
-	Identity    domain.Identity
+	// OutputParent binds a chunk to an independently selected process result.
+	// Empty preserves the original per-operation selection contract.
+	OutputParent string `json:",omitempty"`
+	Identity     domain.Identity
 }
 
 // PreservedInspection contains storage observations only. ReservedProcesses
@@ -33,9 +37,10 @@ type PreservedInspection struct {
 
 // InspectPreserved observes an existing exact independently selected 1..128
 // record namespace. Only canonical v3 connector file Completed (valid receipt)
-// or Failed (known failure codec) records and canonical v4 connector process
-// read-only reservations (Seal.Write == false) qualify. Prepared, outcome-unknown
-// file mutations, v1/v2/v5, staging, unknown files and mismatched identity or bytes
+// or Failed (known failure codec) records, canonical v4 read-only reservations,
+// and canonical v6 known supervisor-exit results with their complete v5 output
+// publications qualify. Cleanup uncertainty remains unchanged. Prepared, unknown
+// file mutations, write-capable reservations, staging and mismatched identity or bytes
 // refuse. Preserving reservations supplies no terminal or cleanup claim.
 //
 // This is storage observation only, NEVER settlement or recovery authority.
@@ -69,10 +74,12 @@ func selectPreserved(selection SettledSelection, expected []ExpectedPreservedRec
 	for _, e := range closed {
 		i := e.Identity
 		key, err := recordKey(i)
-		if err != nil || i.Scope != domain.ScopeConnector || i.OwnerID != selection.OwnerID || i.ProfileID != selection.ProfileID || i.ComputerID != selection.ComputerID || key != e.Key || !domain.SHA256(e.SHA256) || identities[i] {
+		if err != nil || i.Scope != domain.ScopeConnector || i.OwnerID != selection.OwnerID || i.ProfileID != selection.ProfileID || i.ComputerID != selection.ComputerID || !domain.SHA256(e.SHA256) || e.OutputParent == "" && (key != e.Key || identities[i]) || e.OutputParent != "" && (key != e.OutputParent || !validProcessParent(e.Key)) {
 			return nil, preservedRefusal()
 		}
-		identities[i] = true
+		if e.OutputParent == "" {
+			identities[i] = true
+		}
 	}
 	sort.Slice(closed, func(i, j int) bool { return closed[i].Key < closed[j].Key })
 	for n := 1; n < len(closed); n++ {
@@ -93,7 +100,8 @@ func qualifyPreservedRecord(entry settledBytes, expected ExpectedPreservedRecord
 	if observed != expected.SHA256 {
 		return refuse()
 	}
-	// Explicit closed schema dispatch: no historical or terminal-process fallback.
+	// Explicit canonical dispatch. Stored process results are preserved as results,
+	// never upgraded to descendant cleanup or settlement authority.
 	var header struct {
 		Version uint8           `json:"schemaVersion"`
 		Kind    string          `json:"kind"`
@@ -104,6 +112,7 @@ func qualifyPreservedRecord(entry settledBytes, expected ExpectedPreservedRecord
 	}
 	var identity domain.Identity
 	reserved := false
+	output := false
 	switch {
 	case header.Version == 3 && header.Kind == "workspace_connector_mutation":
 		state, err := decode(entry.raw)
@@ -132,11 +141,33 @@ func qualifyPreservedRecord(entry settledBytes, expected ExpectedPreservedRecord
 		}
 		identity = processIdentity(scope, intent.OperationID)
 		reserved = true
+	case header.Version == 6 && header.Kind == "workspace_connector_process_terminal":
+		result, _, err := decodeProcessTerminal(entry.raw)
+		if err != nil || result == nil || result.Observation.Supervisor != processsvc.SupervisorExited {
+			return refuse()
+		}
+		// Known root results and output stay available, including write-capable
+		// commands. Their original cleanup fields remain unchanged.
+		identity = processIdentity(result.Scope, result.Intent.OperationID)
+	case header.Version == 5 && header.Kind == "workspace_connector_process_output":
+		var envelope processOutputEnvelope
+		if decodeStrict(entry.raw, &envelope) != nil || expected.OutputParent == "" {
+			return refuse()
+		}
+		r := envelope.Record
+		d := processOutputDigest{Offset: r.Offset, Bytes: uint32(len(r.Data)), SHA256: r.SHA256}
+		if r.Parent != expected.OutputParent || processOutputKey(r.Parent, r.Stream, d) != entry.key {
+			return refuse()
+		}
+		if _, err := decodeProcessOutput(entry.raw, r.Parent, r.Stream, d); err != nil {
+			return refuse()
+		}
+		identity, output = expected.Identity, true
 	default:
 		return refuse()
 	}
 	key, err := recordKey(identity)
-	if err != nil || identity != expected.Identity || identity.Scope != domain.ScopeConnector || key != entry.key {
+	if err != nil || identity != expected.Identity || identity.Scope != domain.ScopeConnector || (output && key != expected.OutputParent || !output && (key != entry.key || expected.OutputParent != "")) {
 		return refuse()
 	}
 	return SettledRetainedRecord{Key: key, SHA256: observed, Identity: identity}, reserved, nil
@@ -163,6 +194,9 @@ func qualifyPreserved(entries []settledBytes, expected []ExpectedPreservedRecord
 			reserved++
 		}
 	}
+	if err := qualifyPreservedProcessOutputs(entries, expected); err != nil {
+		return nil, 0, err
+	}
 	return retained, reserved, nil
 }
 
@@ -185,4 +219,60 @@ func observePreserved(ctx context.Context, expected []ExpectedPreservedRecord, o
 		return nil, err
 	}
 	return &result, nil
+}
+
+// Every chunk must be named by exactly one selected result, and every named
+// chunk must be selected. Orphans and partial terminal publications refuse.
+func qualifyPreservedProcessOutputs(entries []settledBytes, expected []ExpectedPreservedRecord) error {
+	named := make(map[string]string)
+	selected := make(map[string]ExpectedPreservedRecord, len(expected))
+	for _, e := range expected {
+		selected[e.Key] = e
+	}
+	for _, entry := range entries {
+		var header struct {
+			Version uint8           `json:"schemaVersion"`
+			Kind    string          `json:"kind"`
+			Record  json.RawMessage `json:"record"`
+		}
+		if decodeStrict(entry.raw, &header) != nil {
+			return preservedRefusal()
+		}
+		if header.Version != 6 || header.Kind != "workspace_connector_process_terminal" {
+			continue
+		}
+		_, terminal, err := decodeProcessTerminal(entry.raw)
+		if err != nil {
+			return preservedRefusal()
+		}
+		for _, stream := range []struct {
+			name   string
+			chunks []processOutputDigest
+		}{{"stdout", terminal.Record.Stdout}, {"stderr", terminal.Record.Stderr}} {
+			for _, chunk := range stream.chunks {
+				key := processOutputKey(entry.key, stream.name, chunk)
+				e, ok := selected[key]
+				if !ok || e.OutputParent != entry.key || e.Identity != selected[entry.key].Identity || named[key] != "" {
+					return preservedRefusal()
+				}
+				named[key] = entry.key
+				var raw []byte
+				for _, candidate := range entries {
+					if candidate.key == key {
+						raw = candidate.raw
+						break
+					}
+				}
+				if _, err := decodeProcessOutput(raw, entry.key, stream.name, chunk); err != nil {
+					return preservedRefusal()
+				}
+			}
+		}
+	}
+	for _, e := range expected {
+		if e.OutputParent != "" && named[e.Key] != e.OutputParent {
+			return preservedRefusal()
+		}
+	}
+	return nil
 }
