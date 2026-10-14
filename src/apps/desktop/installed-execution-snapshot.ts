@@ -176,6 +176,55 @@ export async function captureInstalledExecutionSnapshot(
     } finally {
       await copiedHandle.close();
     }
+    // Persist copied data and directory entries before publishing the cache.
+    // Symlink bytes belong to their containing directory; never follow them.
+    const syncCopiedTree = async (name: string): Promise<void> => {
+      const before = await files.lstat(name, { bigint: true });
+      if (before.isSymbolicLink()) return;
+      if (
+        before.uid !== BigInt(uid!) ||
+        (!before.isDirectory() && !before.isFile())
+      )
+        refuse();
+      const handle = await files.open(
+        name,
+        constants.O_RDONLY |
+          constants.O_NOFOLLOW |
+          constants.O_NONBLOCK |
+          (before.isDirectory() ? constants.O_DIRECTORY : 0),
+      );
+      try {
+        if (!same(before, await handle.stat({ bigint: true }))) refuse();
+        if (before.isDirectory()) {
+          for (const entry of await files.readdir(name)) {
+            await syncCopiedTree(path.join(name, entry));
+          }
+        }
+        await handle.sync();
+        if (
+          !same(before, await handle.stat({ bigint: true })) ||
+          !same(before, await files.lstat(name, { bigint: true }))
+        )
+          refuse();
+      } finally {
+        await handle.close();
+      }
+    };
+    await syncCopiedTree(copied);
+    const temporaryHandle = await files.open(
+      temporary,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+    );
+    try {
+      if (
+        !same(temporaryIdentity, await temporaryHandle.stat({ bigint: true }))
+      )
+        refuse();
+      await temporaryHandle.sync();
+      if (!same(temporaryIdentity, await directory(temporary, true))) refuse();
+    } finally {
+      await temporaryHandle.close();
+    }
     if ((await treeDigest(copied, files)) !== input.expectedDigest) refuse();
     await sourceStable();
     if (!same(rootIdentity, await directory(root, true))) refuse();

@@ -56,6 +56,7 @@ beforeEach(async () => {
   );
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -74,6 +75,79 @@ describe("authenticated private installed execution image", () => {
     });
     expect(stdout).toBe("accepted");
   });
+  it("syncs copied data and containing directories before cache publication", async () => {
+    let copied = "";
+    const synced = new Set<string>();
+    const open = fs.open.bind(fs);
+    const rename = fs.rename.bind(fs);
+    copy.mockImplementationOnce(async (source, destination) => {
+      copied = destination;
+      await fs.cp(source, destination, {
+        recursive: true,
+        verbatimSymlinks: true,
+      });
+    });
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      const sync = handle.sync.bind(handle);
+      handle.sync = async () => {
+        await sync();
+        synced.add(String(args[0]));
+      };
+      return handle;
+    });
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (String(from).includes("/.capture-")) {
+        for (const file of [
+          "Contents/MacOS/runtime",
+          "Contents/Resources/app/payload",
+          "Contents/MacOS",
+          "Contents/Resources/app",
+          "Contents/Resources",
+          "Contents",
+          "",
+        ]) {
+          expect(synced.has(path.join(copied, file))).toBe(true);
+        }
+        expect(synced.has(path.dirname(copied))).toBe(true);
+      }
+      await rename(from, to);
+    });
+    await capture();
+  });
+  it.each(["Contents/Resources/app/payload", "Contents/Resources/app"])(
+    "retains an unpublished capture when syncing %s fails",
+    async (failed) => {
+      let copied = "";
+      const open = fs.open.bind(fs);
+      copy.mockImplementationOnce(async (source, destination) => {
+        copied = destination;
+        await fs.cp(source, destination, {
+          recursive: true,
+          verbatimSymlinks: true,
+        });
+      });
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (copied && String(args[0]) === path.join(copied, failed)) {
+          handle.sync = async () => {
+            throw Object.assign(new Error("sync failed"), { code: "EIO" });
+          };
+        }
+        return handle;
+      });
+      await expect(capture()).rejects.toMatchObject({ code: "EIO" });
+      await expect(
+        fs.lstat(path.join(parent, "installed-execution", digest)),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(
+        (await fs.readdir(path.join(parent, "installed-execution"))).filter(
+          (name) => name.startsWith(".capture-"),
+        ),
+      ).toHaveLength(1);
+      expect(await treeDigest(app)).toBe(digest);
+    },
+  );
   it("reuses only a fully authenticated private image", async () => {
     const first = await capture();
     const second = await capture();
