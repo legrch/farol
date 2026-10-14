@@ -36,7 +36,7 @@ These are checked paths through the written documentation and inspected implemen
 
 ## Checks performed
 
-- `python3 docs/tools/check.py`: PASS for 23 reader pages, 254 local links/anchors, 31 command references and 7 inbound README links at this checkpoint.
+- `python3 docs/tools/check.py`: PASS for 23 reader pages, 254 local links/anchors, 34 command references and 7 inbound README links at this checkpoint.
 - Prettier **3.9.6**: PASS on all 26 owned Markdown files, using the existing local pinned dependency installation. This worktree did not install dependencies.
 - `git diff --check`: PASS. Owned changes are Markdown and the offline documentation checker only.
 - `python3 scripts/scan-working-tree.py`: PASS, no leaks found in tracked and nonignored source bytes.
