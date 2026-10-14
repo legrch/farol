@@ -5,6 +5,65 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Peer } from "./go-computer-mcp.diagnostics.ts";
 
+// Test-only sequential use of the normal Settings listing and evidence owner.
+export async function verifyGitWorkspaceScopes(input: {
+  configuration: import("../../src/apps/desktop/product-configuration.ts").ProductConfigurationService;
+  host: {
+    publishCurrent(): Promise<unknown>;
+    listSettingsWorkspace(
+      generation: number,
+      workspaceId: string,
+      relativePath: string,
+    ): Promise<unknown>;
+  };
+  workspaceIds: readonly string[];
+  buildId: string;
+  observe: (value: {
+    stage: string;
+    workspaceId: string;
+    generation: number;
+    ok: boolean;
+    code: string | null;
+  }) => Promise<void>;
+}) {
+  await input.host.publishCurrent();
+  for (const workspaceId of input.workspaceIds) {
+    const snapshot = input.configuration.snapshot();
+    assert.equal(snapshot.status, "ready");
+    if (snapshot.status !== "ready") throw Error("SETTINGS_UNAVAILABLE");
+    // Every successful check advances policy; carry only freshly read authority.
+    const generation = snapshot.settings.computer.generation;
+    const selected = snapshot.settings.computer.workspaces.find(
+      (w) => w.workspaceId === workspaceId,
+    );
+    assert.ok(selected?.rootIdentity);
+    await input.host.listSettingsWorkspace(generation, workspaceId, ".");
+    const recorded = await input.configuration.recordComputerVerification(
+      workspaceId,
+      {
+        profile: "computer.local.write/1",
+        runtimeGeneration: `fixture:${input.buildId}`,
+        buildId: input.buildId,
+        protocol: "mutable-workspace/1",
+      },
+      {
+        rootIdentity: selected.rootIdentity,
+        expectedGeneration: generation,
+        expectedRoot: selected.root,
+      },
+    );
+    await input.observe({
+      stage: "workspace-verification",
+      workspaceId,
+      generation,
+      ok: recorded.ok,
+      code: recorded.ok ? null : recorded.error,
+    });
+    assert.equal(recorded.ok, true);
+    await input.host.publishCurrent();
+  }
+}
+
 export async function runGitShellJourney(input: {
   peer: Pick<Peer, "request" | "call">;
   fixture: {
