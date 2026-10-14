@@ -32,7 +32,7 @@ The supported macOS versions and clean-machine prerequisites still need first-in
 
 [**View the latest public release →**](https://github.com/legrch/farol/releases/latest)
 
-The latest public release checked on **14 October 2026** is [v0.2.3](https://github.com/legrch/farol/releases/tag/v0.2.3), with an Apple Silicon ZIP and checksums.
+Download the Apple Silicon ZIP and checksums from the release page.
 
 > **New installation:** downloading the ZIP is available, but first installation and setup for trusted updates are not yet a supported, tested end-to-end path. Read [First installation](docs/start/installation.md) before opening or copying the app. Existing users should keep their accepted installation and use its updater.
 
