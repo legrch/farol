@@ -19,7 +19,7 @@ const expected = {
 };
 function readyEvidence() {
   return {
-    steps: ["Overview", "Sign in", "Connection", "Workspaces", "Check"],
+    steps: ["Overview", "Sign in", "Folders", "Connection", "Add to ChatGPT"],
     currentSteps: ["Overview"],
     obsoleteCount: 0,
     rows: [
@@ -33,9 +33,9 @@ function readyEvidence() {
         navigationStatus: "Sign-in not checked",
       },
       ...[
+        ["folders", "Folders"],
         ["connection", "Connection"],
-        ["folders", "Workspaces"],
-        ["attachment", "Check"],
+        ["attachment", "Add to ChatGPT"],
       ].map(([step, label]) => ({
         step,
         label,
@@ -264,7 +264,8 @@ describe("native Setup overview observation guards (synthetic records only)", ()
       { ...observed, currentSteps: ["Connection"] },
     ])
       assert.throws(() => assertSetupOverviewEvidence(changed, expected));
-    observed.rows[1]!.navigationState = "unknown";
+    observed.rows.find((row) => row.step === "connection")!.navigationState =
+      "unknown";
     assert.throws(() => assertSetupOverviewEvidence(observed, expected));
   });
   it("accepts explicit unavailable evidence only with Open Home absent", () => {

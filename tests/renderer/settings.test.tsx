@@ -1279,7 +1279,8 @@ describe("combined connection partial receipts", () => {
       await h.click("Save & connect");
       expect(h.calls()).toHaveLength(1);
       expect(
-        h.host.querySelector('.settings-page > [role="status"]')?.textContent,
+        h.host.querySelector('.connection-action-feedback[role="status"]')
+          ?.textContent,
       ).toContain(
         state === "unknown"
           ? "Credentials saved; connection result unconfirmed"
@@ -1289,7 +1290,7 @@ describe("combined connection partial receipts", () => {
         activePage(h.host).querySelector('input[type="password"]'),
       ).toBeNull();
       const connectionBadge = activePage(h.host).querySelector(
-        'section[aria-label="This Mac connection"] .badges',
+        'section[aria-label="Tunnel"] .badges',
       );
       expect(connectionBadge).not.toBeNull();
       expect(connectionBadge!.textContent).toBe(
@@ -1306,7 +1307,8 @@ describe("combined connection partial receipts", () => {
       await h.pageTo("folders");
       await h.pageTo("connection");
       expect(
-        h.host.querySelector('.settings-page > [role="status"]')?.textContent,
+        h.host.querySelector('.connection-action-feedback[role="status"]')
+          ?.textContent,
       ).toContain("Credentials saved");
       expect(h.calls()).toHaveLength(1);
       expect(JSON.stringify(h.c.getSnapshot())).not.toContain(secret);
@@ -2460,8 +2462,7 @@ describe("bounded Settings writer", () => {
     const h = await mount("connection", withFolder());
     expect(h.c.getSnapshot().runtime).toBe("ready");
     expect(
-      h.host.querySelector('section[aria-label="This Mac connection"] .badges')
-        ?.textContent,
+      h.host.querySelector('section[aria-label="Tunnel"] .badges')?.textContent,
     ).not.toBe("Computer ready");
     expect(() => h.button("Connect this Mac")).toThrow();
     await h.pageTo("diagnostics");
@@ -2481,9 +2482,8 @@ describe("bounded Settings writer", () => {
       const value = connectionSettings();
       const h = await mount("connection", value, environment);
       const badge = () =>
-        h.host.querySelector(
-          'section[aria-label="This Mac connection"] .badges',
-        )?.textContent;
+        h.host.querySelector('section[aria-label="Tunnel"] .badges')
+          ?.textContent;
       expect(badge()).toBe("Computer ready");
       await h.click("Check attachment");
       await h.click("Check connection");
@@ -3603,8 +3603,7 @@ describe("Computer-first setup and explicit reconnect", () => {
     expect(h.field("Tunnel ID")).toBe(tunnel);
     expect(tunnel.value).toBe("unsaved-tunnel");
     expect(
-      h.host.querySelector('section[aria-label="This Mac connection"] .badges')
-        ?.textContent,
+      h.host.querySelector('section[aria-label="Tunnel"] .badges')?.textContent,
     ).toBe("Workspace verification needed");
     expect(() => h.button("Connect this Mac")).toThrow();
     expect(() => h.button("Reconnect")).toThrow();
@@ -3639,20 +3638,22 @@ describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
       );
       const group = (title: string) =>
         h.host.querySelector(`[aria-label="${title}"]`)!;
-      expect(group("This Mac connection").closest("div[hidden]") !== null).toBe(
+      expect(group("Tunnel").closest("div[hidden]") !== null).toBe(
         step !== "connection",
       );
       expect(group("Add to ChatGPT").closest("div[hidden]") !== null).toBe(
-        step !== "attachment" && step !== "connection",
+        step !== "attachment",
       );
       expect(
         group("Embedded ChatGPT · optional").closest("div[hidden]"),
       ).not.toBeNull();
       expect(
-        group("This Mac connection").querySelector('input[type="password"]'),
+        group("Tunnel").querySelector('input[type="password"]'),
       ).not.toBeNull();
-      expect(group("This Mac connection").querySelector("h3")).toBeNull();
-      expect(group("Add to ChatGPT").querySelector("h3")).toBeNull();
+      expect(group("Tunnel").querySelector("h3")?.textContent).toBe("Tunnel");
+      expect(group("Add to ChatGPT").querySelector("h3")?.textContent).toBe(
+        "Add to ChatGPT",
+      );
       expect(
         h.host.querySelector<HTMLDetailsElement>(".setup-help")?.open,
       ).toBe(false);
@@ -3854,7 +3855,8 @@ describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
         ?.textContent,
     ).toBe("Credential replacement unconfirmed");
     expect(
-      h.host.querySelector('.settings-page > [role="status"]')?.textContent,
+      h.host.querySelector('.connection-action-feedback[role="status"]')
+        ?.textContent,
     ).toContain("Outcome unknown");
     await h.pageTo("folders");
     await h.pageTo("connection");
@@ -4520,7 +4522,7 @@ it.each(["none", "verification", "workspace"] as const)(
       expect(h.calls()).toEqual([]);
       await h.pageTo("connection");
       const badge = h.host.querySelector(
-        'section[aria-label="This Mac connection"] .badges',
+        'section[aria-label="Tunnel"] .badges',
       )!.textContent;
       expect(badge === "Computer ready").toBe(current);
       expect(h.calls()).toEqual([]);
@@ -4601,7 +4603,7 @@ describe("fresh and returning Setup journey", () => {
     await h.click("Continue");
     expect(h.c.getSnapshot().destination).toMatchObject({
       area: "setup",
-      setupStep: "attachment",
+      setupStep: "connection",
     });
     expect(h.calls()).toEqual([]);
   });
@@ -5232,15 +5234,14 @@ describe("fresh and returning Setup journey", () => {
     },
   );
 
-  it("offers Copy only for the unfinished current challenge and keeps the existing footer", async () => {
+  it("offers automatic checking without a copy request in Setup", async () => {
     const value = connectionSettings();
     value.connectors.secureMcp.attachment = null;
     value.setup.connect.verified = null;
     const h = await mountSetup("attachment", value);
-    expect(visibleText(h.host)).toContain(
-      "Copy the current verification request",
-    );
-    expect(h.button("Copy verification request").disabled).toBe(false);
+    expect(visibleText(h.host)).toContain("check the connection below");
+    expect(() => h.button("Copy verification request")).toThrow();
+    expect(h.button("Check in ChatGPT once")).toBeTruthy();
     expect(h.button("Back to overview")).toBeTruthy();
     expect(h.calls()).toEqual([]);
   });
@@ -5414,7 +5415,7 @@ describe("fresh and returning Setup journey", () => {
     await h.click("Continue");
     expect(h.c.getSnapshot().destination).toMatchObject({
       area: "setup",
-      setupStep: "connection",
+      setupStep: "folders",
     });
     await h.stepTo("signin");
     expect(() => h.button("Sign in")).toThrow();
@@ -5434,7 +5435,7 @@ describe("fresh and returning Setup journey", () => {
     await h.click("Skip for now");
     expect(navigate).toHaveBeenCalledExactlyOnceWith({
       area: "setup",
-      setupStep: "connection",
+      setupStep: "folders",
     });
     expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
     await h.stepTo("signin");
@@ -5593,6 +5594,20 @@ describe("fresh and returning Setup journey", () => {
     ]);
     expect(h.c.getSnapshot().signInObservation?.state).toBe("unknown");
     await h.click("Skip for now");
-    expect(h.c.getSnapshot().destination.setupStep).toBe("connection");
+    expect(h.c.getSnapshot().destination.setupStep).toBe("folders");
   });
+});
+
+it("shows a fixed saved-key mask without reading or resubmitting the saved credential", async () => {
+  const h = await mount("connection", connectionSettings());
+  await h.click("Edit connection");
+  const input = h.field("Runtime key") as HTMLInputElement;
+  expect(input.value).toBe("");
+  expect(input.placeholder).toBe("••••••••••••");
+  expect(input.type).toBe("password");
+  expect(input.getAttribute("aria-description")).toContain(
+    "Enter a new key to replace it",
+  );
+  expect(h.button("Save & connect").disabled).toBe(true);
+  expect(h.calls()).toEqual([]);
 });
