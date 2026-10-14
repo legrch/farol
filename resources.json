@@ -2,7 +2,7 @@
   "schema": "farol.next.resource-manifest/1",
   "product": {
     "name": "Farol Next Preview",
-    "version": "0.2.6",
+    "version": "0.2.7",
     "bundleId": "local.farol.next.preview",
     "updateChannel": "github-stable"
   },
@@ -34,7 +34,7 @@
     },
     {
       "name": "Farol Next Runtime",
-      "kind": "electron-utility-process",
+      "kind": "electron-node-ipc-runtime",
       "ownedBy": "Farol Next Preview"
     },
     {

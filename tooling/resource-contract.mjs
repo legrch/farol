@@ -37,7 +37,7 @@ export const EXPECTED_RESOURCE_MANIFEST = Object.freeze({
     },
     {
       name: "Farol Next Runtime",
-      kind: "electron-utility-process",
+      kind: "electron-node-ipc-runtime",
       ownedBy: "Farol Next Preview",
     },
     {
