@@ -189,7 +189,8 @@ async function complete(
     if (read.value.state === "exited") return read.value;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  throw new Error("SHELL_TEST_TIMEOUT");
+  const last = shell.read({ handle, stdoutOffset: 0, stderrOffset: 0 });
+  throw new Error(`SHELL_TEST_TIMEOUT: ${JSON.stringify(last)}`);
 }
 
 async function runningMarker(shell: SandboxedWorkspaceShell, handle: string) {
@@ -1035,7 +1036,8 @@ describe.skipIf(process.platform !== "darwin")(
         ok: true,
         value: { handle: started.value.handle },
       });
-      const result = await complete(shell, started.value.handle);
+      // Observe the original 10 s command plus its 4 s cleanup budget.
+      const result = await complete(shell, started.value.handle, 750);
       expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stdout).toMatch(/[a-f0-9]{40}/u);
       expect(await fs.readFile(path.join(workspace, "owned.txt"), "utf8")).toBe(
@@ -1051,7 +1053,7 @@ describe.skipIf(process.platform !== "darwin")(
         write: false,
       });
       if (!denied.ok) throw new Error(denied.error.code);
-      const deniedResult = await complete(shell, denied.value.handle);
+      const deniedResult = await complete(shell, denied.value.handle, 450);
       expect(deniedResult.exitCode).not.toBe(0);
       expect(deniedResult.stdout).not.toContain("OUTSIDE_SECRET_CANARY");
       expect(deniedResult.stdout).not.toContain("DENIED_SECRET_CANARY");
@@ -1107,7 +1109,8 @@ describe.skipIf(process.platform !== "darwin")(
         write: true,
       });
       if (!started.ok) throw new Error(started.error.code);
-      const result = await complete(shell, started.value.handle);
+      // This multi-command Git workflow has the same 10 s execution budget.
+      const result = await complete(shell, started.value.handle, 750);
       expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stdout).toContain("M  foreign.txt");
       expect(
