@@ -1,73 +1,78 @@
 # Farol
 
-Farol connects ChatGPT to folders you choose on your Mac. Ask questions about a project, find information in local files, or make approved file changes while keeping control of folder access in a desktop app.
+<img align="right" src="resources/brand/sunrise-dock/farol-sunrise.png" alt="Farol app icon" width="96">
 
-[Start here](docs/start/README.md) · [User guides](docs/guides/README.md) · [Current status](docs/reference/status.md) · [Development](docs/development/README.md)
+**Connect ChatGPT to folders you choose on your Mac.**
+
+Find information in local files, understand a project, or make approved edits. Choose what ChatGPT can access and manage those permissions in the Farol desktop app.
+
+[Download](#download-and-installation) · [Get started](docs/start/README.md) · [User guides](docs/guides/README.md) · [Current status](docs/reference/status.md)
 
 ## What is Farol?
 
-Farol is a Mac app that gives a connected ChatGPT app access to selected local folders, called **workspaces**. Farol runs on your Mac; ChatGPT reaches it through a Secure MCP Tunnel that you configure for your ChatGPT workspace. You decide which folders are available and what access they allow.
-
-You can use ChatGPT in your usual browser. Signing in to ChatGPT inside Farol is optional for this connection.
+Farol is a Mac app that connects your chosen folders to ChatGPT. Each approved folder is a **workspace**. You can use ChatGPT in your usual browser; signing in inside Farol is optional.
 
 ## What can I do with it?
 
-- Let ChatGPT list, search and read files within approved workspaces.
-- Permit guarded file changes for a workspace when you choose **Read & write**, with approval still required for changes.
-- Review connection checks, folder access and operation results in Farol.
-- Update an existing installation that already has a verified update baseline.
+- **Understand a project:** ask ChatGPT to read and explain files in an approved folder.
+- **Find information:** list and search local files through the connected ChatGPT app.
+- **Make approved changes:** enable guarded edits for the folders you choose.
 
-File access has installed beta evidence. The public [v0.2.3 release notes](https://github.com/legrch/farol/releases/tag/v0.2.3) describe packaged Shell/Git preparation fixes and native tests; they do not establish an accepted external Shell/Git journey. Tasks, Agent workflows, Git SSH and PDF/binary transfer are not advertised as shipped capabilities. See [capability status](docs/reference/status.md) and [File and Shell operations](docs/guides/file-and-shell.md).
+File access is the current user journey. Shell/Git, Tasks, Agent workflows and PDF transfer have separate [availability and acceptance limits](docs/reference/status.md).
 
-## Supported Macs and beta limitations
+## Supported Macs
 
-Farol is an **unsigned, non-notarized beta for Apple Silicon Macs**. Intel Macs, Windows and Linux are not supported by the current package. A minimum macOS version and a clean-machine prerequisite matrix have not yet been qualified for public first installation.
+Farol is a beta for **Apple Silicon Macs**. The current app is **unsigned and not notarized**. You also need a ChatGPT workspace offering Developer mode and Tunnel connections.
 
-You need a ChatGPT account and workspace that actually offer Developer mode and Tunnel connections. Availability depends on your account; a Farol download does not establish that access. Keep this Mac running and connected for local tools to be reachable. Hardware sleep and broad network recovery remain acceptance work.
+The supported macOS versions and clean-machine prerequisites still need first-install acceptance. See [requirements and beta limitations](docs/start/installation.md#requirements-and-limits).
 
-## Download and installation status
+<a id="use-and-installation"></a>
 
-The latest public release checked on **14 October 2026** is [v0.2.3](https://github.com/legrch/farol/releases/tag/v0.2.3). Its assets are an Apple Silicon ZIP, `farol-release.json` and `SHA256SUMS`. Newer installed builds or source candidates are separate from that public release.
+## Download and installation
 
-**First installation from the ZIP, including adoption into the updater, is not yet a qualified supported workflow.** Download availability does not mean you can drag the app into Applications and obtain a working update baseline. Read [First installation](docs/start/installation.md) before proceeding. Developers can use the separate [source setup](docs/development/setup.md).
+[**View the latest public release →**](https://github.com/legrch/farol/releases/latest)
+
+The latest public release checked on **14 October 2026** is [v0.2.3](https://github.com/legrch/farol/releases/tag/v0.2.3), with an Apple Silicon ZIP and checksums.
+
+> **New installation:** downloading the ZIP is available, but first installation and setup for trusted updates are not yet a supported, tested end-to-end path. Read [First installation](docs/start/installation.md) before opening or copying the app. Existing users should keep their accepted installation and use its updater.
 
 ## Connect Farol to ChatGPT
 
-Once you have an accepted running installation, open **Setup**. Review **Overview → Sign in → Connection → Workspaces → Check**. Create or select the tunnel for your intended ChatGPT workspace, save its restricted runtime key in Farol, and attach that tunnel as a ChatGPT app.
+With an accepted installation running:
 
-Follow [First connection](docs/start/first-connection.md) and [ChatGPT app connection](docs/guides/chatgpt-connection.md). A local connection is only one part of setup: the matching check from ChatGPT must also succeed. Moving through Setup does not grant access or repeat a check.
+1. Open **Setup → Connection**. Follow the guide to create or select a tunnel for your ChatGPT workspace and save its restricted runtime key in Farol.
+2. Add or select the ChatGPT app attached to that tunnel. Choose a folder in **Workspaces** if you want file access.
+3. Complete **Check** to confirm that ChatGPT can reach this Mac.
 
-## Grant folder access safely
+[Follow the connection guide →](docs/start/first-connection.md) · [Try a sample folder →](docs/start/first-workspace.md)
 
-Use a small folder with non-sensitive sample files for your first trial. **Add workspace… currently saves Read & write access**, so review **Saved access** and change **Workspace access** to **Read-only** before asking ChatGPT to use a folder you only want it to read. File changes still require approval; command access is separate.
+## Choose folder access
 
-[Your first workspace](docs/start/first-workspace.md) walks through a read-only exercise. [Folder access](docs/guides/folder-access.md) explains changing and removing grants. Removing a workspace revokes access and keeps your files on disk.
+Start with a small folder containing non-sensitive sample files. **Add workspace… currently saves Read & write access.** For a read-only trial, change **Workspace access** to **Read-only** and save before asking ChatGPT to use it. File changes still require approval.
+
+[Folder permissions](docs/guides/folder-access.md) explains checking, changing and removing access. Removing a workspace keeps your files on disk.
 
 ## Updates and recovery
 
-For an installation with an accepted update baseline, open **Check for Updates…** from Farol's menu. Review the version and release notes; **Install and Relaunch** restarts the app. See [Updating Farol](docs/guides/updates.md).
+For an installation already set up for trusted updates, choose **Check for Updates…** from Farol's menu, then **Install and Relaunch** when ready. Closing the window leaves Farol running; **Command+Q** quits it.
 
-Closing a window leaves Farol running; **Command+Q** quits it. If a setup, edit or update result is **Outcome unknown**, the action may already have taken effect. Inspect the original result before another action. [Recovery](docs/guides/recovery.md) explains how to resume setup without erasing the evidence needed to recover safely.
+Follow [Updating Farol](docs/guides/updates.md) or [Recovery](docs/guides/recovery.md). If an action has an unknown result, inspect that result before repeating it.
 
 ## Privacy and security
 
-Approving a folder allows requested data from that folder to be returned to ChatGPT. This is not an entirely offline workflow. Choose folders and access levels accordingly; Git history and command access can expose more than ordinary file reads.
+Requested files and tool results are returned to ChatGPT, so approve only the folders you intend to share. Read and write access are explicit, and command access is separate. Keep the runtime key private.
 
-The runtime key is stored in a private local file; the current implementation does not claim Keychain storage. Activity and the support export are designed to omit prompts, answers, file contents and credentials. The app remains unsigned and not notarized. Read [Privacy and security](docs/guides/privacy.md) for the boundaries and limits.
+Read [Privacy and security](docs/guides/privacy.md) for local storage, diagnostics and the unsigned-beta limits.
 
-## Troubleshooting
+## Need help?
 
-Start with [Common connection failures](docs/guides/troubleshooting.md) for a missing helper, unavailable tunnel, incomplete attachment check or refused folder access. Use [Recovery](docs/guides/recovery.md) for an interrupted setup and [Safe uninstall](docs/guides/uninstall.md) to disconnect and remove the app.
+Use [Connection troubleshooting](docs/guides/troubleshooting.md) for helper, tunnel or folder errors; [Recovery](docs/guides/recovery.md) for interrupted setup; and [Safe uninstall](docs/guides/uninstall.md) to disconnect and remove the app.
 
 <a id="develop-from-source"></a>
 <a id="declared-go-backend-inputs"></a>
+<a id="source-architecture"></a>
+<a id="status-and-scope"></a>
 
 ## Development and contributing
 
-Use the [development guide](docs/development/README.md) for toolchains, declared Go inputs, checks, packaging and contributions. Source, package, installed and live-provider acceptance are separate gates. The Lead owns integration and release decisions.
-
-<a id="source-architecture"></a>
-<a id="status-and-scope"></a>
-<a id="use-and-installation"></a>
-
-Architecture, detailed acceptance narratives and the previous README remain in the [technical references](docs/reference/README.md). The [first-install checklist](docs/reference/install-readiness.md) tracks the product work required before a general installation guide can be published.
+The [development guide](docs/development/README.md) covers source setup, checks and contributions. [Technical references](docs/reference/README.md) retain architecture and historical evidence. The [install-readiness checklist](docs/reference/install-readiness.md) tracks the work needed for a supported first installation.
