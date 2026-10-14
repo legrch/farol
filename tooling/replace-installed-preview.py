@@ -232,15 +232,22 @@ def run(r):
             else:
                 raise RuntimeError("REPLACEMENT_CUSTODY_OCCUPIED")
             b["recheck_parent"](r, home, apps)
-            publish(state, "installed-replacement.pending", r["intentText"].encode())
-            os.mkdir(name, 0o700, dir_fd=apps)
-            os.fsync(apps)
-            custody = b["open_directory"](apps, name)
+            # Allocate beneath the pinned owner-private profile. A shared
+            # parent must never supply the directory we write our intent into.
+            os.mkdir(name, 0o700, dir_fd=profile)
+            os.fsync(profile)
+            custody = b["open_directory"](profile, name)
             opened.append(custody)
             private(custody)
             if os.fstat(custody).st_dev != os.fstat(updates).st_dev or os.fstat(custody).st_dev != os.fstat(app).st_dev:
                 raise RuntimeError("REPLACEMENT_CROSS_DEVICE")
             publish(custody, "intent.json", r["intentText"].encode())
+            custody_identity = ident(os.fstat(custody))
+            check(profile, name, custody_identity)
+            b["recheck_parent"](r, home, apps)
+            publish(state, "installed-replacement.pending", r["intentText"].encode())
+            exclusive(profile, name, apps, name)
+            check(apps, name, custody_identity)
             locks(updates)
             check(apps, "Farol.app", s["appIdentity"])
             exclusive(apps, "Farol.app", custody, "previous.app")

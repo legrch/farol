@@ -33,7 +33,7 @@ import { compareReleaseVersions } from "../src/modules/release/domain/github-ver
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const HELPER_SHA256 =
-  "a4563b567c6bcf269d40325f96dd35135c5a4e9babfa50b081875a83ffdd2a73";
+  "e5c37e394392fcdf657b90ed5204abb45aa1504e4a8891c4721cef3a6517ed28";
 const LIBRARY_SHA256 =
   "739ff487dbffbd3e232c3b90e22c234cebd4f735b226101187ea60a1f62691ce";
 const sha = (raw) => createHash("sha256").update(raw).digest("hex");

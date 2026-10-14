@@ -880,6 +880,7 @@ os.write(1, b"EXIT\n")
   });
   it.each([
     "partial-intent",
+    "custody-substituted-before-open",
     "retirement-and-uncertainty",
     "placement-lost-result",
     "completion-lost-result",
@@ -891,6 +892,8 @@ os.write(1, b"EXIT\n")
     "retains both original locks and live owner after %s, regardless of pending presence after original child close",
     async (fault) => {
       const f = await fixture();
+      if (fault === "custody-substituted-before-open")
+        await fs.chmod(f.oldApp, 0o700);
       const packet = path.join(f.r, "fault-fixture.json");
       await fs.writeFile(
         packet,
@@ -924,19 +927,27 @@ os.write(1, b"EXIT\n")
 import errno, os, stat
 real_sync = os.fsync
 retirement_failed = False
+custody_substituted = False
 state = STATE_PATH
 pending = os.path.join(state, "installed-replacement.pending")
 retired = RETIRED_PATH
 fault = FAULT_KIND
 def fault_sync(fd):
-    global retirement_failed
+    global retirement_failed, custody_substituted
     info = os.fstat(fd)
+    if fault == "custody-substituted-before-open" and not custody_substituted and stat.S_ISDIR(info.st_mode) and os.path.exists(custody_path) and os.path.exists(installed_app) and os.path.exists(pending):
+        named_apps = os.stat(os.path.dirname(installed_app), follow_symlinks=False)
+        if (info.st_dev, info.st_ino) == (named_apps.st_dev, named_apps.st_ino):
+            custody_substituted = True
+            os.rename(custody_path, custody_path + ".allocated")
+            os.rename(installed_app, custody_path)
+            os.write(9, b"PUBLIC_CUSTODY_SUBSTITUTED\n")
     if fault == "app-displaced-after-retirement" and stat.S_ISDIR(info.st_mode) and os.path.exists(retired):
         named_state = os.stat(state, follow_symlinks=False)
         if (info.st_dev, info.st_ino) == (named_state.st_dev, named_state.st_ino) and os.path.exists(installed_app):
             os.rename(installed_app, installed_app + ".displaced")
             os.write(9, b"NAMED_APP_DISPLACED_AFTER_RETIREMENT\n")
-    if fault == "partial-intent" and stat.S_ISREG(info.st_mode):
+    if fault == "partial-intent" and stat.S_ISREG(info.st_mode) and os.path.exists(pending):
         named = os.stat(pending, follow_symlinks=False)
         if (info.st_dev, info.st_ino) == (named.st_dev, named.st_ino):
             os.write(9, b"INITIAL_INTENT_FILE_FSYNC_FAILED\n")
@@ -1021,13 +1032,13 @@ deps.native = async (request, lease, updater, register) => {
     }
     return result;
   }
-  if ((fault === "partial-intent" && request.action !== "custody") ||
-      (fault !== "partial-intent" && request.action !== "complete") ||
+  if ((["partial-intent", "custody-substituted-before-open"].includes(fault) && request.action !== "custody") ||
+      (!["partial-intent", "custody-substituted-before-open"].includes(fault) && request.action !== "complete") ||
       fault === "placement-lost-result")
     return runReplacementNative(request, lease, updater, register);
   const helper = await fs.readFile(${JSON.stringify(helperFile)});
   const library = await fs.readFile(${JSON.stringify(libraryFile)});
-  if (sha(helper) !== "a4563b567c6bcf269d40325f96dd35135c5a4e9babfa50b081875a83ffdd2a73" ||
+  if (sha(helper) !== "e5c37e394392fcdf657b90ed5204abb45aa1504e4a8891c4721cef3a6517ed28" ||
       sha(library) !== "739ff487dbffbd3e232c3b90e22c234cebd4f735b226101187ea60a1f62691ce")
     throw Error("FIXTURE_HELPER_ATTESTATION_FAILED");
   const child = spawn("/usr/bin/python3", ["-I", "-S", "-B", "-"], {
@@ -1109,6 +1120,19 @@ catch (error) { process.send({ kind: "replacement-failed", message: error.messag
           await expect(fs.lstat(f.custody)).rejects.toMatchObject({
             code: "ENOENT",
           });
+        } else if (fault === "custody-substituted-before-open") {
+          expect(text).toBe("PUBLIC_CUSTODY_SUBSTITUTED\n");
+          expect(await treeDigest(f.custody)).toBe(
+            f.selection.snapshot.appSha256,
+          );
+          await expect(
+            fs.lstat(path.join(f.custody, "intent.json")),
+          ).rejects.toMatchObject({ code: "ENOENT" });
+          expect(
+            (
+              await fs.lstat(path.join(f.custody + ".allocated", "intent.json"))
+            ).isFile(),
+          ).toBe(true);
         } else if (
           fault === "app-displaced-during-digest" ||
           fault === "receipt-displaced-during-digest" ||
@@ -1187,7 +1211,7 @@ catch (error) { process.send({ kind: "replacement-failed", message: error.messag
           expect(closed.stderr).toMatch(/^REPLACEMENT_[A-Z_]+\n$/u);
         }
         const lockFile = path.join(
-          fault === "partial-intent"
+          ["partial-intent", "custody-substituted-before-open"].includes(fault)
             ? f.updates
             : path.join(
                 fault === "custody-displaced-during-digest"

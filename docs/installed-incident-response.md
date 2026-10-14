@@ -176,3 +176,18 @@ executable/resource validation and immediately before spawn. Quit, update or
 withdrawal of the original recovery observation therefore refuses a late native
 dispatch even when the accepted image remains intact. A pre-dispatch withdrawal
 is classified as not started, never an unknown spawn or profile-write result.
+
+
+## Shared custody preparation and copied roots
+
+Replacement prepares and opens its custody directory beneath the pinned private
+profile before publishing that same inode into Applications with exclusive
+rename. Intent writes use the held private descriptor; an unrelated directory
+substituted at the shared name is never adopted as custody. Failed preparation
+stays retained and is not reused or retried. Named identity checks remain bounded
+observations, not permanent exclusion of another administrator.
+
+Execution capture rejects a copied root symlink before changing permissions and
+uses a no-follow directory descriptor for the mode change. The connection guide
+loads its document from the same authenticated private origin as the renderer,
+so delayed guide loads do not consult a replaceable public bundle.
