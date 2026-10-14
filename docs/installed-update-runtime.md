@@ -35,7 +35,21 @@ Ordinary shared-slot startup authenticates the complete executable image from
 its independently accepted promotion, settled/pending operation or closed-repair
 baseline before Go starts. The Go artifact and Shell support roots come from
 this owner-private immutable image, satisfying attestation through the child
-lifetime even if another administrator replaces the public app pathname.
+lifetime even if the public app pathname is replaced after this trusted startup.
+
+The unsigned preview starts from an owner-selected, trusted installation. Its
+outer launcher, embedded Electron runtime and first `main.cjs` execute before
+Farol can capture the private image. Snapshot authentication covers the resources
+selected by that genuine main process and later child launches; it is not a
+pre-execution authenticity check for the first program opened from Applications.
+A different administrator replacing the public bundle before a Finder, Dock or
+LaunchServices open is outside this preview's initial-code trust boundary. The
+host's OS and filesystem permissions govern that initial launch. No Developer ID,
+notarization or Gatekeeper admission guarantee is implemented by this snapshot.
+A correlated update relaunch uses the retained owner-private `launch-Farol.app`;
+that private launch origin differs from an ordinary initial public-slot open.
+Changing the distribution trust anchor requires a separate owner decision and
+its own platform qualification, not another self-attestation inside replaced code.
 
 Shared-slot tool execution is authenticated before any bundled observer or
 package verifier starts. The accepted promotion, settled update, correlated

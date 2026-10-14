@@ -177,7 +177,6 @@ withdrawal of the original recovery observation therefore refuses a late native
 dispatch even when the accepted image remains intact. A pre-dispatch withdrawal
 is classified as not started, never an unknown spawn or profile-write result.
 
-
 ## Shared custody preparation and copied roots
 
 Replacement prepares and opens its custody directory beneath the pinned private

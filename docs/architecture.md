@@ -50,6 +50,25 @@ outer bundle owns the Farol Next product and launch identity; the nested Electro
 bundle remains a verified runtime dependency rather than rewritten, stripped, or
 newly signed executable code.
 
+## Initial host trust and resource lifetime
+
+The local unsigned preview assumes that the owner launches a trusted installed
+outer launcher, Electron runtime and desktop main process. Farol's in-process
+checks cannot authenticate those first executing bytes against a prior malicious
+replacement of the entire public bundle. The shared Applications parent is a
+supported installation location, not an external code-signing trust anchor.
+
+After that trusted startup, the accepted independent image digest and private
+resource capture constrain later resources and child launches. Those guards
+still reject copied root aliases, displaced private images, wrong ownership and
+unconfirmed update/custody outcomes; initial host trust does not waive any of
+these checks. Private correlated update relaunch and ordinary public-slot launch
+have distinct origins. Developer ID signing, notarization and an externally
+qualified first-code admission policy remain separate distribution decisions.
+See [the installed resource boundary](installed-update-runtime.md) for the exact
+snapshot scope and [release limitations](github-release-contract.md) for the
+current unsigned package contract.
+
 ## Native surface composition
 
 The Browser task page is a native `WebContentsView`; the Watch Rail, task tabs,
