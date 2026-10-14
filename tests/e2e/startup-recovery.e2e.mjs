@@ -16,6 +16,7 @@ import {
   assertRuntimeObservation,
 } from "../../tooling/runtime-contract.mjs";
 import { _electron as electron } from "playwright-core";
+import { isPromotionLeaseHeld } from "../../tooling/promotion-lease.mjs";
 
 assert.deepEqual(
   process.argv.slice(2),
@@ -178,6 +179,11 @@ try {
     );
     assert.equal(lease.pid, child.pid);
     assert.equal(lease.role, "admission");
+    assert.equal(
+      await isPromotionLeaseHeld(userData),
+      true,
+      "RECOVERY_LEASE_NOT_HELD",
+    );
     launch.children = children(child.pid);
     assert.equal(
       launch.children.some(({ command }) =>
@@ -207,9 +213,18 @@ try {
     launch.exitCode = code;
     launch.signal = signal;
     launch.afterQuit = await preserved();
-    await assert.rejects(fs.lstat(path.join(stateRoot, "promotion.lease")), {
-      code: "ENOENT",
-    });
+    // The existing lease protocol retains its inode and clears its record.
+    // Kernel lock release, not pathname absence, permits the next generation.
+    assert.equal(
+      await isPromotionLeaseHeld(userData),
+      false,
+      "RECOVERY_LEASE_RETAINED",
+    );
+    assert.equal(
+      (await fs.readFile(path.join(stateRoot, "promotion.lease"))).length,
+      0,
+      "RECOVERY_LEASE_RECORD_RETAINED",
+    );
     assert.equal(children(child.pid).length, 0, "RECOVERY_CHILDREN_RETAINED");
     launch.cleanupConfirmed = true;
     app = null;
