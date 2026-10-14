@@ -40,9 +40,12 @@ Download the Apple Silicon ZIP and checksums from the release page.
 
 With an accepted installation running:
 
-1. Open **Setup → Connection**. Follow the guide to create or select a tunnel for your ChatGPT workspace and save its restricted runtime key in Farol.
-2. Add or select the ChatGPT app attached to that tunnel. Choose a folder in **Workspaces** if you want file access.
-3. Complete **Check** to confirm that ChatGPT can reach this Mac.
+1. Open **Setup → Sign in** and sign in to your ChatGPT account. If you are already signed in, choose **Continue**.
+2. In **Connection**, follow the guide to create or select a tunnel, save its restricted runtime key in Farol, and add or select the matching ChatGPT app.
+3. In **Workspaces**, choose a folder if you want file access.
+4. Complete **Check** to confirm that ChatGPT can reach this Mac.
+
+Sign-in inside Farol is optional when you use ChatGPT in another browser: choose **Skip for now** in **Sign in**. It is needed for the built-in ChatGPT connection check.
 
 [Follow the connection guide →](docs/start/first-connection.md) · [Try a sample folder →](docs/start/first-workspace.md)
 

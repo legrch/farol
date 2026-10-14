@@ -6,7 +6,7 @@ Start from an accepted running Farol installation. New users should read [instal
 
 Open **Setup** and review **Overview → Sign in → Connection → Workspaces → Check**. **Continue**, **Previous** and **Back to overview** move between sections. Navigation does not save settings, grant access or submit a verification message.
 
-**Sign in** is optional when you use ChatGPT in another browser. Use **Skip for now** for that path. Signing in inside Farol is needed for the embedded ChatGPT check; it does not establish local folder access or an external connection.
+Start with **Sign in**: use the offered **Sign in** or **Open ChatGPT** button to sign in with your own ChatGPT account. If Farol already shows **Signed in**, choose **Continue**. When you use ChatGPT in another browser, you can choose **Skip for now** instead. Signing in inside Farol is needed for the embedded ChatGPT check; it does not establish local folder access or an external connection.
 
 ## Configure the tunnel
 
