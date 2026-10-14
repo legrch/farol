@@ -158,3 +158,11 @@ namespace, including operation-owned `launch-Farol.app` images and authenticated
 `installed-execution` snapshots. A process using either location blocks custody
 before publication of the replacement intent. The canonical slot and native Go
 and connector state roots keep their separate process checks.
+
+## Resource manifest wire compatibility
+
+Schema 1 retains the historical `electron-utility-process` discriminator because
+installed package verifiers compare the complete resource contract. The active
+implementation uses Node IPC as documented above. Renaming that wire value would
+make existing installed verifiers reject the next package; a future discriminator
+change needs a separately qualified versioned consumer transition.

@@ -37,7 +37,9 @@ export const EXPECTED_RESOURCE_MANIFEST = Object.freeze({
     },
     {
       name: "Farol Next Runtime",
-      kind: "electron-node-ipc-runtime",
+      // Schema-1 wire tag retained for previously installed package verifiers.
+      // The active implementation uses the owned Node IPC runtime.
+      kind: "electron-utility-process",
       ownedBy: "Farol Next Preview",
     },
     {

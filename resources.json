@@ -34,7 +34,7 @@
     },
     {
       "name": "Farol Next Runtime",
-      "kind": "electron-node-ipc-runtime",
+      "kind": "electron-utility-process",
       "ownedBy": "Farol Next Preview"
     },
     {
