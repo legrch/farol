@@ -101,6 +101,12 @@ try {
       timeout: 15000,
     });
     launch.pid = application.process().pid;
+    // Renderer bootstrap can precede the owner's Quit handlers. Observe the
+    // fixed startup token before asking for Quit; no sleep implies readiness.
+    let startupTokens = "";
+    application.process().stderr.on("data", (chunk) => {
+      startupTokens = (startupTokens + chunk.toString()).slice(-8192);
+    });
     const exit = once(application.process(), "exit");
     void exit.catch(() => undefined);
     const page = await application.firstWindow({ timeout: 15000 });
@@ -135,13 +141,39 @@ try {
           !w.url.includes("#farol-startup-recovery"),
       ),
     );
+    await bounded(
+      new Promise((resolve, reject) => {
+        let observations = 0;
+        const inspect = () => {
+          if (++observations > 700) {
+            reject(Error("ORIGINAL_STARTUP_COMPLETION_UNKNOWN"));
+            return;
+          }
+          if (
+            startupTokens.includes("FAROL_NEXT_STARTUP_STAGE:startup-complete")
+          ) {
+            resolve();
+            return;
+          }
+          if (application.process().exitCode !== null) {
+            reject(Error("ORIGINAL_STARTUP_TERMINAL_BEFORE_QUIT_READY"));
+            return;
+          }
+          setTimeout(inspect, 20);
+        };
+        inspect();
+      }),
+      "ORIGINAL_STARTUP_COMPLETION_UNKNOWN",
+    );
+    launch.startupComplete = true;
     launch.closeRequested = true;
     await save();
     await application.evaluate(({ app }) => app.quit());
     const [code, signal] = await bounded(exit, "ORIGINAL_QUIT_UNKNOWN");
+    launch.exit = { code, signal };
+    await save();
     assert.equal(code, 0);
     assert.equal(signal, null);
-    launch.exit = { code, signal };
     const quit = QuitReceiptSchema.parse(
       JSON.parse(
         await fs.readFile(path.join(stateRoot, "last-quit.json"), "utf8"),
