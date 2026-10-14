@@ -16,9 +16,20 @@ import (
 // no process, native storage, application launch or external caller is exercised.
 func awaitProcessCollection(t *testing.T, s *computerConnector, operation string) {
 	t.Helper()
+	awaitProcessCollectionDone(t, processCollectionDone(s, operation))
+}
+
+// Snapshot before releasing a controlled child so the wait cannot contend with
+// the publisher's out-of-gate checks after completion or an original cancel ACK.
+func processCollectionDone(s *computerConnector, operation string) <-chan struct{} {
 	s.mutations.mu.Lock()
 	done := s.mutations.operations[operation].process.collectionDone
 	s.mutations.mu.Unlock()
+	return done
+}
+
+func awaitProcessCollectionDone(t *testing.T, done <-chan struct{}) {
+	t.Helper()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
@@ -192,6 +203,41 @@ func TestConnectorProcessLifecycleUncompletedQuitRemainsFenced(t *testing.T) {
 	}
 }
 
+// Isolate the test waiter's notification selection and gate behavior. The
+// completion channel is controlled here; no collector or native child runs.
+func TestConnectorProcessLifecycleCollectionWaitUsesOriginalNotification(t *testing.T) {
+	originalDone := make(chan struct{})
+	s := &computerConnector{mutations: &SettingsMutationIngress{
+		operations: map[string]*settingsMutationOperation{
+			"process-operation": {process: &connectorProcessOperation{collectionDone: originalDone}},
+		},
+	}}
+	done := processCollectionDone(s, "process-operation")
+	if done != originalDone {
+		t.Fatal("waiter did not select the original collection notification")
+	}
+	select {
+	case <-done:
+		t.Fatal("collection notification completed before selection")
+	default:
+	}
+	// Keep the ledger gate held through the entire wait and completion. A late
+	// ledger acquisition by the waiter would prevent it from returning.
+	s.mutations.mu.Lock()
+	defer s.mutations.mu.Unlock()
+	waited := make(chan struct{})
+	go func() {
+		defer close(waited)
+		awaitProcessCollectionDone(t, done)
+	}()
+	close(originalDone)
+	select {
+	case <-waited:
+	case <-time.After(2 * time.Second):
+		t.Fatal("collection waiter acquired the ledger gate")
+	}
+}
+
 func TestConnectorProcessLifecycleWaitsForOriginalCancelACK(t *testing.T) {
 	for _, unknown := range []bool{false, true} {
 		t.Run(map[bool]string{false: "known", true: "unknown"}[unknown], func(t *testing.T) {
@@ -199,6 +245,7 @@ func TestConnectorProcessLifecycleWaitsForOriginalCancelACK(t *testing.T) {
 			publisher := &connectorProcessPublisherDouble{connectorProcessJournalDouble: journal, s: s, digest: strings.Repeat("a", 64)}
 			s.mutations.dependencies.repository = publisher
 			start := processWireStarted(t, s)
+			done := processCollectionDone(s, start.OperationId)
 			entered, release := make(chan struct{}), make(chan struct{})
 			child.cancelIO = func() { close(entered); <-release }
 			if unknown {
@@ -218,7 +265,7 @@ func TestConnectorProcessLifecycleWaitsForOriginalCancelACK(t *testing.T) {
 			close(child.completed)
 			close(release)
 			result := <-cancelled
-			awaitProcessCollection(t, s, start.OperationId)
+			awaitProcessCollectionDone(t, done)
 			if (result.err != nil) != unknown || child.cancels != 1 || child.spawns != 1 || journal.reserves != 1 {
 				t.Fatal("original control outcome changed or repeated", result.err)
 			}
