@@ -463,7 +463,9 @@ func nativeConnectorRejectedPipeline(t *testing.T, client net.Conn, hello wire.C
 	bound := wire.Context{ProfileId: binding.ProfileId, BackendGeneration: binding.BackendGeneration}
 	writeConnectorJSON(t, &packet, wire.Request{Jsonrpc: "2.0", Id: "queued", Method: "computer.workspace.list", Params: wire.Call{Context: &bound, Body: json.RawMessage(`{}`)}})
 	nativeConnectorDeadline(t, client)
-	if _, err := io.Copy(client, &packet); err != nil && !errors.Is(err, syscall.EPIPE) && !errors.Is(err, syscall.ECONNRESET) {
+	// A refused Darwin peer may disconnect before this write (ENOTCONN).
+	// Readback must prove closure; callers independently assert zero dispatch.
+	if _, err := io.Copy(client, &packet); err != nil && !errors.Is(err, syscall.EPIPE) && !errors.Is(err, syscall.ECONNRESET) && !errors.Is(err, syscall.ENOTCONN) {
 		t.Fatal("unexpected pipeline write failure:", err)
 	}
 	nativeConnectorClosed(t, client)
