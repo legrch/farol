@@ -127,3 +127,16 @@ it does not invalidate the still-running private resources. Hint-based, settled
 private and ordinary shared origins supply this check. The native helper retains
 its final source check because another administrator is not excluded by the
 application's private lease.
+
+## Local runtime shutdown ownership
+
+The Node IPC runtime retains its original child lifetime until `close` confirms
+exit 0 without a signal, or the original exit and IPC disconnection are both
+observed with no parent-owned stdio streams remaining. Node can omit `close`
+when the parent disconnects IPC. Quit includes that lifetime in the same
+bounded drain as other owned services. A shutdown message, its send callback,
+IPC disconnection, or an `exit` event alone does not confirm closure. Failed or
+forced termination remains an unconfirmed Quit obligation. The child installs
+shutdown, disconnect and SIGTERM handlers before its asynchronous initialization;
+a late startup result is closed rather than published after parent loss. This
+root-process observation does not qualify arbitrary descendant cleanup.

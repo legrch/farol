@@ -5,6 +5,7 @@ import { stripTypeScriptTypes } from "node:module";
 import { EventEmitter } from "node:events";
 import { parse } from "@babel/parser";
 import { expect, it, vi } from "vitest";
+import { observeLocalRuntime } from "../../src/apps/desktop/local-runtime-lifetime";
 
 // Actual source composition with controlled IPC/process producers, not a native host.
 const main = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
@@ -48,6 +49,10 @@ function resources(
   return {
     quitInProgress: false,
     installedUpdateAdmission: false,
+    ownedLocalRuntimes: new Map(),
+    localRuntimeGeneration: 0,
+    runtimeChild: null,
+    observeLocalRuntime,
     directory: "/Applications/Farol.app/Contents/Resources/app",
     process: { execPath: "/Applications/replaced/Electron", argv: [], env: {} },
     installedResourcesOrigin: {

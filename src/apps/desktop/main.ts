@@ -118,6 +118,10 @@ import {
   writeSync,
 } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
+import {
+  observeLocalRuntime,
+  type LocalRuntimeLifetime,
+} from "./local-runtime-lifetime";
 import os from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
@@ -794,6 +798,8 @@ let window: BrowserWindow | null = null;
 let aboutOpen = false;
 let aboutPanel: DesktopAboutPanel | null = null;
 let runtimeChild: ChildProcess | null = null;
+let localRuntimeGeneration = 0;
+const ownedLocalRuntimes = new Map<LocalRuntimeLifetime, string>();
 let runtime: RuntimeReady | null = null;
 let runtimeState: "starting" | "ready" | "offline" | "failed" = "starting";
 let runtimeError: string | null = null;
@@ -10170,6 +10176,9 @@ function handleRuntimeExit(code: number | null): void {
 
 async function startRuntime(): Promise<void> {
   if (quitInProgress || installedUpdateAdmission) return;
+  if (runtimeChild !== null || ownedLocalRuntimes.size !== 0) {
+    throw new Error("LOCAL_RUNTIME_ALREADY_OWNED");
+  }
   runtimeStopping = false;
   const resources = desktopExecutionResources();
   await resources.recheck();
@@ -10200,6 +10209,14 @@ async function startRuntime(): Promise<void> {
     },
   );
   runtimeChild = child;
+  const lifetime = observeLocalRuntime(child);
+  ownedLocalRuntimes.set(lifetime, `local-runtime-${++localRuntimeGeneration}`);
+  void lifetime.closed.then(
+    () => ownedLocalRuntimes.delete(lifetime),
+    () => {
+      /* A failed shutdown remains an unconfirmed Quit obligation. */
+    },
+  );
   try {
     runtime = await new Promise<RuntimeReady>((resolve, reject) => {
       let settled = false;
@@ -11140,7 +11157,7 @@ function stopRuntime(): void {
   stopStreams();
   pendingComputer.clear();
   taskSurfaceFailures.clear();
-  runtimeChild?.send("shutdown", () => {});
+  for (const lifetime of ownedLocalRuntimes.keys()) lifetime.requestStop();
 }
 
 function disposeChatGptRoutes(): void {
@@ -11753,6 +11770,9 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         closers.push({ name: "caller-relay", close: () => relay.close() });
       disposeChatGptRoutes();
       disposeTaskViews("runtime");
+      for (const [lifetime, name] of ownedLocalRuntimes) {
+        closers.push({ name, close: () => lifetime.close() });
+      }
       stopRuntime();
       return closers;
     },

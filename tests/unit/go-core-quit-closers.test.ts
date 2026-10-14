@@ -336,6 +336,7 @@ describe("actual MCP stop retains its admitted saved-chat lifetime", () => {
       callerRelayRuntime: null,
       disposeChatGptRoutes() {},
       disposeTaskViews() {},
+      ownedLocalRuntimes: new Map(),
       stopRuntime() {},
     });
     vm.runInContext(
@@ -529,6 +530,7 @@ describe("actual desktop Quit collection", () => {
       stopAndConfirmComputerMcp: stop,
       disposeChatGptRoutes() {},
       disposeTaskViews() {},
+      ownedLocalRuntimes: new Map(),
       stopRuntime() {},
     });
     const collect = vm.runInContext(
@@ -548,6 +550,28 @@ describe("actual desktop Quit collection", () => {
       events,
     };
   }
+
+  it("retains the exact local runtime lifetime in the actual Quit collection", async () => {
+    const h = harness(false);
+    const original = deferred<void>();
+    const close = vi.fn(() => original.promise);
+    h.context.ownedLocalRuntimes.set({ close }, "local-runtime-1");
+    const closers = h.collect({ deadlineAt: Date.now() + 1000 });
+    h.saved.resolve();
+    const runtimeCloser = closers.find(
+      (closer) => closer.name === "local-runtime-1",
+    )!;
+    expect(runtimeCloser).toBeDefined();
+    h.context.ownedLocalRuntimes.clear();
+    const receipt = drainOwnedChildren(closers, 5);
+    expect(await receipt).toEqual({
+      drained: false,
+      unconfirmed: ["local-runtime-1"],
+    });
+    expect(close).toHaveBeenCalledOnce();
+    original.resolve();
+    await original.promise;
+  });
 
   it.each([false, true])(
     "keeps original core through dependent closure (connector=%s)",
