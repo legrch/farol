@@ -284,6 +284,7 @@ afterEach(() => vi.restoreAllMocks());
 describe("installed updater startup correlation (pure ports only)", () => {
   it("authenticates ordinary shared startup resources before Go can use them", async () => {
     const f = fixture();
+    f.builds.set("/Applications/Farol.app", target);
     f.records.delete(f.receiptFile);
     f.records.set("/Applications/Farol.app.receipt.json", {
       schema: "farol.next.promotion-plan/1",
@@ -330,6 +331,12 @@ describe("installed updater startup correlation (pure ports only)", () => {
     });
     await guard!.recheck();
     expect(recheck).toHaveBeenCalledTimes(1);
+    await guard!.resourcesOrigin!.recheckUpdateSource();
+    f.builds.set("/Applications/Farol.app", source);
+    await guard!.resourcesOrigin!.recheck();
+    await expect(guard!.resourcesOrigin!.recheckUpdateSource()).rejects.toThrow(
+      "UPDATE_ACCEPTED_SOURCE_CHANGED",
+    );
     expect(f.observation.readProcess).not.toHaveBeenCalled();
   });
   function sharedRollbackFixture() {
@@ -551,6 +558,14 @@ describe("installed updater startup correlation (pure ports only)", () => {
     f.records.delete(f.receiptFile);
     await guard!.resourcesOrigin!.recheck();
     expect(recheck).toHaveBeenCalledTimes(1);
+    await guard!.resourcesOrigin!.recheckUpdateSource();
+    f.builds.set("/Applications/Farol.app", source);
+    // The retained runtime remains valid; only a new updater admission refuses.
+    await guard!.resourcesOrigin!.recheck();
+    await expect(guard!.resourcesOrigin!.recheckUpdateSource()).rejects.toThrow(
+      "UPDATE_ACCEPTED_SOURCE_CHANGED",
+    );
+    f.builds.set("/Applications/Farol.app", target);
     f.records.set(
       path.join(opRoot, "slot-binding.json"),
       JSON.parse(installedSlotBindingBytes(operation, "legacy").toString()),
@@ -613,6 +628,12 @@ describe("installed updater startup correlation (pure ports only)", () => {
     });
     expect(guard!.resourcesOrigin!.app).toBe(privateApp);
     await guard!.recheck();
+    await guard!.resourcesOrigin!.recheckUpdateSource();
+    f.builds.set("/Applications/Farol.app", source);
+    await guard!.resourcesOrigin!.recheck();
+    await expect(guard!.resourcesOrigin!.recheckUpdateSource()).rejects.toThrow(
+      "UPDATE_ACCEPTED_SOURCE_CHANGED",
+    );
     expect(f.observation.readProcess).not.toHaveBeenCalled();
     expect(f.options.pause).not.toHaveBeenCalled();
     expect(captureMock).toHaveBeenCalledTimes(1);

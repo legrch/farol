@@ -6026,6 +6026,43 @@ describe("selected shared slot (redirected disposable filesystem, mocked helper)
     ).toBe(false);
     await controller.close();
   });
+  it("refuses a changed mutable public source before helper or Quit while preserving private runtime resources", async () => {
+    await shared();
+    const execution = await mocks.captureExecution({
+      expectedDigest: source.digest,
+    });
+    mocks.captureExecution.mockClear();
+    let changed = false;
+    const runtimeRecheck = vi.fn(async () => undefined);
+    const updateRecheck = vi.fn(async () => {
+      if (changed) throw new Error("UPDATE_ACCEPTED_SOURCE_CHANGED");
+    });
+    const controller = await createInstalledUpdateRuntime({
+      ...options(),
+      resourcesOrigin: {
+        kind: "shared-slot",
+        slot: "/Applications/Farol.app",
+        app: "/Applications/Farol.app",
+        execution,
+        recheck: runtimeRecheck,
+        recheckUpdateSource: updateRecheck,
+      },
+    });
+    expect(controller).not.toBeNull();
+    await controller!.initialize();
+    await controller!.check();
+    await controller!.download();
+    expect(controller!.snapshot().phase).toBe("ready");
+    changed = true;
+    await runtimeRecheck();
+    await controller!.restart();
+    expect(updateRecheck).toHaveBeenCalled();
+    expect(mocks.captureExecution).not.toHaveBeenCalled();
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    await controller!.close();
+  });
+
   it("executes shared-slot observations only from the independently anchored private image", async () => {
     await shared();
     const controller = await prepared();

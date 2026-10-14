@@ -115,3 +115,15 @@ Stop or Quit while that filesystem check is pending must produce no later
 native launch. Resource validity does not establish current admission. The
 source-level host fixtures exercise this pending phase separately from real
 resource attestation and installed process evidence.
+
+## Public source changes while a private runtime is running
+
+Execution resource validation and updater source validation are separate ports.
+An accepted private image remains executable when the public application slot is
+replaced. Before a new update can capture execution and reach Quit, its origin
+also checks the current `/Applications/Farol.app` against the accepted source
+build/digest. A changed public source refuses that update before helper or Quit;
+it does not invalidate the still-running private resources. Hint-based, settled
+private and ordinary shared origins supply this check. The native helper retains
+its final source check because another administrator is not excluded by the
+application's private lease.

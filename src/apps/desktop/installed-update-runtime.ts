@@ -538,6 +538,7 @@ export type InstalledUpdateResourcesOrigin = Readonly<{
   app: string;
   execution: InstalledExecutionSnapshot;
   recheck(): Promise<void>;
+  recheckUpdateSource(): Promise<void>;
 }> &
   (
     | Readonly<{ kind: "shared-slot" }>
@@ -576,6 +577,26 @@ export type InstalledUpdateRelaunchOptions = Readonly<{
     }>;
   }>;
 }>;
+
+// Runtime resources keep their own immutable private authority. Only an
+// updater admission checks that the mutable public source still matches it.
+async function recheckSharedUpdateSource(
+  options: InstalledUpdateRelaunchOptions,
+  expected: z.infer<typeof AcceptedBuild>,
+): Promise<void> {
+  const slot = "/Applications/Farol.app";
+  const canonical =
+    options.observation?.canonicalOwnedDirectory ?? canonicalOwnedDirectory;
+  await canonical(slot, false);
+  const measured = options.observation
+    ? AcceptedBuild.parse(
+        await options.observation.readBuild(options.directory, slot, 30000),
+      )
+    : { ...expected, digest: await treeDigest(slot, options.physicalFiles) };
+  if (!sameBuild(measured, expected))
+    throw new Error("UPDATE_ACCEPTED_SOURCE_CHANGED");
+  await canonical(slot, false);
+}
 
 // Ordinary public-slot startup must satisfy AttestedCore's immutable-tree
 // contract before any backend binary is spawned. Baselines authenticate code;
@@ -725,6 +746,7 @@ async function observeSharedSlotStartup(
     app,
     execution,
     recheck: execution.recheck,
+    recheckUpdateSource: () => recheckSharedUpdateSource(options, expected),
   });
   return Object.freeze({ resourcesOrigin, recheck: execution.recheck });
 }
@@ -860,6 +882,8 @@ async function observeCompletedPrivateLaunch(
     app,
     operationId: operation.operationId,
     execution,
+    recheckUpdateSource: () =>
+      recheckSharedUpdateSource(options, operation.target),
     recheck: async () => {
       await readOperationBinding(root, operation, "shared", read);
       await execution.recheck();
@@ -1275,6 +1299,7 @@ export async function waitForInstalledUpdateRelaunch(
       slot: "/Applications/Farol.app",
       app: actualApp,
       execution: captured,
+      recheckUpdateSource: () => recheckSharedUpdateSource(options, expected),
       recheck: async () => {
         // The Ready receipt is consumed by initialization. Executable authority
         // subsequently binds the immutable original operation and private bytes,
@@ -1865,7 +1890,11 @@ async function createRuntime(
       throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
     beforeEffect();
     // A rejected/unknown capture remains rejected. Never fall back to the slot.
-    if (origin) await origin.recheck();
+    if (origin) {
+      await origin.recheck();
+      await origin.recheckUpdateSource();
+      beforeEffect();
+    }
     execution ??= origin
       ? Promise.resolve(origin.execution)
       : captureInstalledExecutionSnapshot({
