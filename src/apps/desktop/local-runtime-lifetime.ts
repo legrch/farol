@@ -7,7 +7,10 @@ export type LocalRuntimeLifetime = Readonly<{
 }>;
 
 /** Sending shutdown is not completion; retain this exact child's close event. */
-export function observeLocalRuntime(child: ChildProcess): LocalRuntimeLifetime {
+export function observeLocalRuntime(
+  child: ChildProcess,
+  scope: "strict-shutdown" | "in-memory-preview" = "strict-shutdown",
+): LocalRuntimeLifetime {
   let terminal = false;
   let requested = false;
   let exited: Readonly<{
@@ -19,7 +22,17 @@ export function observeLocalRuntime(child: ChildProcess): LocalRuntimeLifetime {
     const complete = (code: number | null, signal: NodeJS.Signals | null) => {
       if (terminal) return;
       terminal = true;
-      if (code === 0 && signal === null) resolve();
+      // Only the build-qualified in-memory fixture owns no host file or process
+      // effects. Its original terminal closes the ownership obligation even
+      // when the runtime failed; it does not turn that failure into success.
+      const observedStatus =
+        (code !== null && Number.isInteger(code) && signal === null) ||
+        (code === null && signal !== null);
+      if (
+        (scope === "in-memory-preview" && observedStatus) ||
+        (code === 0 && signal === null)
+      )
+        resolve();
       else reject(new Error("LOCAL_RUNTIME_SHUTDOWN_UNCONFIRMED"));
     };
     const disconnectedExit = () => {

@@ -103,3 +103,44 @@ describe("local runtime original-child ownership", () => {
     await closed;
   });
 });
+
+it.each([
+  [1, null],
+  [null, "SIGKILL"],
+] as const)(
+  "settles only the explicitly qualified preview root after observed terminal (%s, %s)",
+  async (code, signal) => {
+    const { child } = fixture();
+    const preview = observeLocalRuntime(
+      child as unknown as ChildProcess,
+      "in-memory-preview",
+    );
+    expect(
+      await drainOwnedChildren(
+        [{ name: "preview", close: () => preview.closed }],
+        5,
+      ),
+    ).toEqual({ drained: false, unconfirmed: ["preview"] });
+    child.emit("close", code, signal);
+    await preview.closed;
+    expect(
+      await drainOwnedChildren(
+        [{ name: "preview", close: () => preview.close() }],
+        50,
+      ),
+    ).toEqual({ drained: true, unconfirmed: [] });
+    expect(child.send).not.toHaveBeenCalled();
+  },
+);
+
+it("does not settle an unclassified terminal even for the qualified preview", async () => {
+  const { child } = fixture();
+  const preview = observeLocalRuntime(
+    child as unknown as ChildProcess,
+    "in-memory-preview",
+  );
+  child.emit("close", null, null);
+  await expect(preview.closed).rejects.toThrow(
+    "LOCAL_RUNTIME_SHUTDOWN_UNCONFIRMED",
+  );
+});

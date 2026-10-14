@@ -10224,7 +10224,9 @@ async function startRuntime(): Promise<void> {
     },
   );
   runtimeChild = child;
-  const lifetime = observeLocalRuntime(child);
+  // runtime.cjs is the build-qualified in-memory preview service. Real Go,
+  // connector and command owners keep their independent shutdown obligations.
+  const lifetime = observeLocalRuntime(child, "in-memory-preview");
   ownedLocalRuntimes.set(lifetime, `local-runtime-${++localRuntimeGeneration}`);
   void lifetime.closed.then(
     () => ownedLocalRuntimes.delete(lifetime),

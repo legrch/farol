@@ -47,8 +47,12 @@ execution paths; Electron's `getAppMetrics()` does not list Node IPC children.
 Historical utility-process fixtures retain their explicit metrics witness, bound
 to the same native parent PID. Fault injection rechecks the original process
 identity before signaling. This bounded fixture witness does not prove arbitrary
-descendant cleanup. Forced-runtime fixtures inspect and preserve the resulting
-unconfirmed Quit receipt and run marker instead of claiming normal clean Quit.
+descendant cleanup. The build-qualified in-memory preview runtime has only HTTP, crypto and event
+host dependencies, no filesystem or process-execution owners. Its observed
+original terminal settles that helper's ownership even after a failed exit;
+the failed runtime state is not recast as successful service operation. Missing
+terminal observations remain unconfirmed. Real Go, connector and Shell owners
+retain their independent drain and unknown-effect fences.
 
 The local package is an unsigned outer Farol Next bundle with a fixed, argument-safe
 launcher. It embeds the pinned vendor `Electron.app` byte-for-byte under its own

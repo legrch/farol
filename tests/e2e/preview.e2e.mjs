@@ -1964,7 +1964,7 @@ async function proveSecondLaunchRejectsFailedStartup() {
     assert.equal(bootstrap.runtimeState, "failed");
     assert.equal((await taskSurfaces(application)).length, 0);
   } finally {
-    await close(instance, { expectedUnconfirmed: ["local-runtime-1"] });
+    await close(instance);
   }
 }
 
@@ -3009,10 +3009,7 @@ async function proveStartupRuntimeDeath(stage) {
     );
     assert.equal(remainingTaskViews, 0);
   } finally {
-    await close(
-      instance,
-      runtimeKilled ? { expectedUnconfirmed: ["local-runtime-1"] } : {},
-    );
+    await close(instance);
   }
 }
 
@@ -9503,12 +9500,7 @@ processDeathSegment: try {
   );
 } finally {
   if (nextFirstLegacy) await closeLegacyAppFixture(nextFirstLegacy);
-  await close(
-    processDeath,
-    processDeath.runtimeKilled
-      ? { expectedUnconfirmed: ["local-runtime-1"] }
-      : {},
-  );
+  await close(processDeath);
 }
 
 if (segmentSelected("process-death")) {
