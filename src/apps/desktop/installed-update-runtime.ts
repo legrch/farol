@@ -324,7 +324,10 @@ async function readOperationBinding(
   op: z.infer<typeof Operation>,
   location: InstalledAppLocation,
   read: typeof readRecord = readRecord,
+  purpose: "update" | "ordinary-shared-execution" = "update",
 ): Promise<void> {
+  if (purpose === "ordinary-shared-execution" && location !== "shared")
+    throw new Error("UPDATE_SLOT_BINDING_UNCONFIRMED");
   const directory = path.join(root, op.operationId);
   const physical = read === readRecord;
   if (physical) {
@@ -364,6 +367,11 @@ async function readOperationBinding(
     )
       throw new Error("UPDATE_SLOT_BINDING_UNCONFIRMED");
   }
+  // A historical record can authenticate the exact current executable image
+  // without gaining authority to continue or mutate its unbound update. Keep
+  // private-file/parent checks and every present binding strict. All helper,
+  // recovery and correlated relaunch callers retain the default update purpose.
+  if (raw === null && purpose === "ordinary-shared-execution") return;
   if (
     raw === null ||
     digest !== createHash("sha256").update(expected).digest("hex")
@@ -643,7 +651,13 @@ async function observeSharedSlotStartup(
       })
     )
       throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-    await readOperationBinding(root, op, "shared", read);
+    await readOperationBinding(
+      root,
+      op,
+      "shared",
+      read,
+      "ordinary-shared-execution",
+    );
     const expected = [op.source, op.target].find(
       (value) =>
         value.buildId === build.buildId && value.version === build.version,

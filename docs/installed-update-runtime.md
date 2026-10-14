@@ -21,10 +21,16 @@ publishes it through a pinned directory descriptor with atomic no-overwrite
 placement before durable preparation or helper dispatch. Every explicit-slot
 helper request verifies it before handoff, journal writes and mutation fences.
 Runtime journal/recovery/relaunch readback also verifies the exact slot binding.
-Missing, noncanonical, displaced, unsafe or differently bound records stay fenced.
-No existing journal/handoff is opportunistically repaired. An old unbound
-operation requires a separately designed maintenance migration; this packet
-implements none. Pre-dispatch cleanup retains the immutable binding after
+Missing, noncanonical, displaced, unsafe or differently bound records stay fenced
+from updater recovery, correlated relaunch and mutation. No existing
+journal/handoff is opportunistically repaired. An old unbound operation still
+requires separately designed maintenance before it can continue; this packet
+implements no migration. Ordinary public shared-slot startup alone can use a
+historical pending, preparation or settled receipt as an execution baseline
+when the retained release/build pair and complete current executable digest
+match. It does not create a slot binding, dispatch a helper, change receipts or
+admit the old update. Every present binding remains strict, and an unreadable
+record is never treated as missing. Pre-dispatch cleanup retains the immutable binding after
 removing staged bytes, so a lost final Ready write cannot erase slot authority.
 Old helper requests without `installLocation` retain the
 legacy-only wire behavior and app/build validation. Receipt and journal schemas remain
