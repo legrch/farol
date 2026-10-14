@@ -1,4 +1,9 @@
 import assert from "node:assert/strict";
+import {
+  runtimeProcessId,
+  runtimeProcessSnapshots,
+  killRuntimeProcess,
+} from "./runtime-process.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fsSync from "node:fs";
@@ -8,6 +13,7 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { pathToFileURL } from "node:url";
 import { _electron as electron } from "playwright-core";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
 import { openEvidenceAttempt } from "../../tooling/evidence-attempt.mjs";
@@ -1958,7 +1964,7 @@ async function proveSecondLaunchRejectsFailedStartup() {
     assert.equal(bootstrap.runtimeState, "failed");
     assert.equal((await taskSurfaces(application)).length, 0);
   } finally {
-    await close(instance);
+    await close(instance, { expectedUnconfirmed: ["local-runtime-1"] });
   }
 }
 
@@ -2238,23 +2244,6 @@ async function waitForWindowCount(application, count) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error(`E2E_WINDOW_COUNT_TIMEOUT:${count}`);
-}
-
-async function runtimeProcessId(application) {
-  return application.evaluate(({ app }) => {
-    const matches = app
-      .getAppMetrics()
-      .filter(
-        (metric) =>
-          metric.type === "Utility" &&
-          metric.name === "Farol Next Runtime" &&
-          metric.serviceName === "node.mojom.NodeService",
-      );
-    if (matches.length !== 1) {
-      throw new Error(`UTILITY_PROCESS_IDENTITY_INVALID:${matches.length}`);
-    }
-    return matches[0].pid;
-  });
 }
 
 async function startLegacyAppFixture() {
@@ -2628,26 +2617,17 @@ async function close(instance, options = {}) {
   }
   const mainPid = instance.application.process().pid;
   const metrics = await phases.step(
-    `${label}.utilityMetrics`,
+    `${label}.runtimeProcesses`,
     CLOSE_PHASE_BUDGET_MS,
     () =>
-      ifApplicationLive(instance, "utility-metrics", () =>
-        instance.application.evaluate(({ app }) =>
-          app
-            .getAppMetrics()
-            .filter(
-              (metric) =>
-                metric.type === "Utility" &&
-                ["Farol Next Runtime", "Farol Dev Runtime"].includes(
-                  metric.name,
-                ),
-            )
-            .map((metric) => metric.pid),
+      ifApplicationLive(instance, "runtime-processes", () =>
+        runtimeProcessSnapshots(instance.application).then((rows) =>
+          rows.map((row) => row.pid),
         ),
       ),
   );
   if (metrics === null) provedQuit = false;
-  const utilityPids = metrics?.value ?? [];
+  const runtimePids = metrics?.value ?? [];
   let closeReturnedAfterEarlyExit = false;
   // Confirm the exact owned PID first; an early exit stays a recorded
   // failure and never counts as a successful quit proof.
@@ -2760,7 +2740,7 @@ async function close(instance, options = {}) {
       } catch (cleanupError) {
         cleanupFailures.push(cleanupError);
       }
-      for (const pid of utilityPids) {
+      for (const pid of runtimePids) {
         try {
           if (!(await waitOwnedPidGone(pid))) {
             cleanupFailures.push(
@@ -2798,7 +2778,7 @@ async function close(instance, options = {}) {
   if (groupSurvivedQuit) {
     await stopOwnedTestGroup(instance, `${label}.abort-surviving-group`);
   }
-  const exactPids = [mainPid, ...utilityPids].filter(
+  const exactPids = [mainPid, ...runtimePids].filter(
     (pid) => Number.isSafeInteger(pid) && pid > 0,
   );
   for (const pid of exactPids) {
@@ -2839,9 +2819,9 @@ async function close(instance, options = {}) {
   if (metrics === null) {
     evidenceAttempt.recordFailure(
       "cleanup",
-      `E2E_UTILITY_IDENTITIES_UNAVAILABLE:${label}`,
+      `E2E_RUNTIME_IDENTITIES_UNAVAILABLE:${label}`,
     );
-    throw new Error(`E2E_UTILITY_IDENTITIES_UNAVAILABLE:${label}`);
+    throw new Error(`E2E_RUNTIME_IDENTITIES_UNAVAILABLE:${label}`);
   }
   if (closeReturnedAfterEarlyExit) {
     phases.note(`${label}.profileRetained`, "early-exit-during-close");
@@ -2937,47 +2917,64 @@ async function proveStartupRuntimeDeath(stage) {
     isolatedHome,
     userData,
   };
+  let runtimeKilled = false;
   try {
     const killed = await instance.application.evaluate(
-      async ({ app, BrowserWindow }, targetStage) => {
-        for (let attempt = 0; attempt < 5_000; attempt += 1) {
+      async ({ app, BrowserWindow }, input) => {
+        const { readRuntimeProcessSnapshots, killRuntimeProcess } =
+          await import(input.observerModule);
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
           const targetWindow = BrowserWindow.getAllWindows().find(
-            (candidate) => {
-              const url = candidate.webContents.getURL();
-              return (
-                url ===
-                new URL("shell.html", `file://${app.getAppPath()}/`).href
-              );
-            },
+            (candidate) =>
+              candidate.webContents.getURL() ===
+              new URL("shell.html", `file://${app.getAppPath()}/`).href,
           );
           const viewCount =
             targetWindow?.contentView.children.filter(
               (view) => "webContents" in view,
-            ).length ?? 0;
-          const utility = app
-            .getAppMetrics()
-            .find(
-              (metric) =>
-                metric.type === "Utility" &&
-                metric.name === "Farol Next Runtime" &&
-                metric.serviceName === "node.mojom.NodeService",
-            );
+            ).length ?? null;
           const reached =
-            targetStage === "after-runtime-ready"
-              ? targetWindow !== undefined && viewCount === 0
-              : targetStage === "during-first-view-load"
+            input.stage === "after-runtime-ready"
+              ? viewCount === 0
+              : input.stage === "during-first-view-load"
                 ? viewCount === 1
                 : viewCount >= 2;
-          if (utility && reached) {
-            process.kill(utility.pid, "SIGKILL");
-            return { pid: utility.pid, viewCount };
+          if (reached) {
+            const utilityPids = app
+              .getAppMetrics()
+              .filter(
+                (metric) =>
+                  metric.type === "Utility" &&
+                  ["Farol Next Runtime", "Farol Dev Runtime"].includes(
+                    metric.name,
+                  ) &&
+                  metric.serviceName === "node.mojom.NodeService",
+              )
+              .map((metric) => metric.pid);
+            const matches = readRuntimeProcessSnapshots(
+              process.pid,
+              utilityPids,
+            );
+            if (matches.length > 1)
+              throw new Error("E2E_RUNTIME_PROCESS_AMBIGUOUS");
+            if (matches.length === 1) {
+              killRuntimeProcess(matches[0]);
+              return { pid: matches[0].pid, viewCount };
+            }
           }
           await new Promise((resolve) => setTimeout(resolve, 1));
         }
-        throw new Error(`STARTUP_FAULT_POINT_TIMEOUT:${targetStage}`);
+        throw new Error(`STARTUP_FAULT_POINT_TIMEOUT:${input.stage}`);
       },
-      stage,
+      {
+        stage,
+        observerModule: pathToFileURL(
+          path.join(root, "tests/e2e/runtime-process.mjs"),
+        ).href,
+      },
     );
+    runtimeKilled = true;
     assert.ok(killed.pid > 0);
     const startupWindow = await application.firstWindow({ timeout: 15_000 });
     await startupWindow
@@ -3012,7 +3009,10 @@ async function proveStartupRuntimeDeath(stage) {
     );
     assert.equal(remainingTaskViews, 0);
   } finally {
-    await close(instance);
+    await close(
+      instance,
+      runtimeKilled ? { expectedUnconfirmed: ["local-runtime-1"] } : {},
+    );
   }
 }
 
@@ -4593,12 +4593,6 @@ async function lifecycleMetrics(instance) {
           .listenerCount("will-download"),
         processMetrics,
         processCount: processMetrics.length,
-        runtimePids: processMetrics
-          .filter(
-            (metric) =>
-              metric.type === "Utility" && metric.name === "Farol Next Runtime",
-          )
-          .map((metric) => metric.pid),
         workingSetSizeKiB: processMetrics.reduce(
           (total, metric) => total + metric.workingSetSizeKiB,
           0,
@@ -4613,6 +4607,23 @@ async function lifecycleMetrics(instance) {
     },
     providerOrigin,
   );
+  const nativeRuntimes = await runtimeProcessSnapshots(instance.application);
+  measured.runtimePids = nativeRuntimes.map((row) => row.pid);
+  measured.nativeRuntimeWorkingSetKiB = nativeRuntimes.reduce(
+    (total, row) => total + row.rssKiB,
+    0,
+  );
+  measured.processCount += nativeRuntimes.filter(
+    (row) => !measured.processMetrics.some((metric) => metric.pid === row.pid),
+  ).length;
+  measured.workingSetSizeKiB += nativeRuntimes
+    .filter(
+      (row) =>
+        !measured.processMetrics.some((metric) => metric.pid === row.pid),
+    )
+    .reduce((total, row) => total + row.rssKiB, 0);
+  measured.privateBytesScope =
+    "Electron metrics only; Node IPC private bytes are not observed";
   const measuredPids = [
     instance.application.process().pid,
     ...measured.runtimePids,
@@ -5420,9 +5431,14 @@ async function runTwoGenerationStateProof() {
       revision: beforeCrash.revision,
       turnLifecycle: "running",
     };
-    const crashPids = await instance.application.evaluate(({ app }) =>
-      app.getAppMetrics().map((metric) => metric.pid),
-    );
+    const crashPids = [
+      ...(await instance.application.evaluate(({ app }) =>
+        app.getAppMetrics().map((metric) => metric.pid),
+      )),
+      ...(await runtimeProcessSnapshots(instance.application).then((rows) =>
+        rows.map((row) => row.pid),
+      )),
+    ];
     observations.crashedGenerationProcesses = await killGeneration(
       instance.application,
       crashPids,
@@ -9445,21 +9461,10 @@ processDeathSegment: try {
   await completeSetup(processDeath);
   nextFirstLegacy = await startLegacyAppFixture();
   await probeLegacyAppFixture(nextFirstLegacy);
-  const utilityPid = await processDeath.application.evaluate(({ app }) => {
-    const matches = app
-      .getAppMetrics()
-      .filter(
-        (metric) =>
-          metric.type === "Utility" &&
-          metric.name === "Farol Next Runtime" &&
-          metric.serviceName === "node.mojom.NodeService",
-      );
-    if (matches.length !== 1) {
-      throw new Error(`UTILITY_PROCESS_IDENTITY_INVALID:${matches.length}`);
-    }
-    return matches[0].pid;
-  });
-  process.kill(utilityPid, "SIGKILL");
+  const deathRuntimes = await runtimeProcessSnapshots(processDeath.application);
+  assert.equal(deathRuntimes.length, 1, "E2E_RUNTIME_PROCESS_IDENTITY_INVALID");
+  killRuntimeProcess(deathRuntimes[0]);
+  processDeath.runtimeKilled = true;
   await processDeath.window
     .locator("#runtime-pill")
     .getByText("failed", { exact: true })
@@ -9498,7 +9503,12 @@ processDeathSegment: try {
   );
 } finally {
   if (nextFirstLegacy) await closeLegacyAppFixture(nextFirstLegacy);
-  await close(processDeath);
+  await close(
+    processDeath,
+    processDeath.runtimeKilled
+      ? { expectedUnconfirmed: ["local-runtime-1"] }
+      : {},
+  );
 }
 
 if (segmentSelected("process-death")) {
@@ -9543,13 +9553,17 @@ function secureMcpLaunchRootEntries(userData) {
   );
 }
 
-function ownedProcessFingerprint(application) {
-  return application.evaluate(({ app }) =>
+async function ownedProcessFingerprint(application) {
+  const electronProcesses = await application.evaluate(({ app }) =>
     app
       .getAppMetrics()
-      .map((metric) => `${metric.type}:${metric.name ?? ""}:${metric.pid}`)
-      .sort(),
+      .map((metric) => `${metric.type}:${metric.name ?? ""}:${metric.pid}`),
   );
+  const runtimes = await runtimeProcessSnapshots(application);
+  return [
+    ...electronProcesses,
+    ...runtimes.map((row) => `${row.kind}:${row.pid}:${row.processStart}`),
+  ].sort();
 }
 
 const heldFalseFence = await launch([], "hidden", "ordinary", {

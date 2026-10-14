@@ -25,23 +25,30 @@ socket clients live under `apps/desktop/computer-mcp`; the Go launch route uses
 the adjacent bridge without constructing a second Computer owner. Its packaged
 entry remains `computer-mcp.cjs`. The explicit legacy launch route remains
 transitional and is never selected after a failed Go launch.
-`src/apps/runtime` owns the separate utility-process entrypoint. The Chat-owned preview
+`src/apps/runtime` owns the separate parent-owned Node IPC entrypoint. The Chat-owned preview
 server adapter lives under `modules/chat/infra/server`; it receives Computer and
 UI capabilities at composition rather than importing their implementations.
 `src/boot/runtime-server.ts` only wires those concrete dependencies.
 
-The production utility process is launched with Electron's `utilityProcess.fork`.
-This deliberately uses the runtime shipped inside the exact Electron artifact, so a
-tester does not need Homebrew, Python, Node, npm, or Bun. Bun FFI is not used as a
-security boundary. The Electron main process owns child lifetime. On macOS, closing
-the last window disposes its views and streams but keeps the application and utility
-runtime alive; a Dock activation or second launch recreates one window against the
-same runtime. Explicit Quit requests bounded runtime shutdown. An unexpected
-utility-process exit becomes an explicit failed state while keeping an open shell
-available. Startup coverage
-kills that exact utility after runtime readiness, during the first task-view load,
-and during the second task-view load; every case removes the partial task surfaces
-without terminating the shell.
+The production local runtime is launched as a Node child with IPC, using
+`ELECTRON_RUN_AS_NODE=1` and the exact embedded Electron executable. It requires
+no ambient Node, npm, Bun or Python runtime. The main process owns its original
+exit, IPC disconnection and stream-drain observations; a shutdown ACK or root
+exit alone cannot confirm cleanup. Nonzero or forced termination remains an
+unconfirmed Quit obligation and must not be recast as a clean drain.
+
+On macOS, closing the last window disposes views and streams while keeping the
+application and local runtime alive. Dock activation or a matching second launch
+recreates one window against that runtime. Explicit Quit requests bounded runtime
+shutdown. Unexpected runtime exit becomes an explicit failed state while keeping
+an already open shell available. Lifecycle fixtures select the exact direct child
+of their owned main process from native process observations, including private
+execution paths; Electron's `getAppMetrics()` does not list Node IPC children.
+Historical utility-process fixtures retain their explicit metrics witness, bound
+to the same native parent PID. Fault injection rechecks the original process
+identity before signaling. This bounded fixture witness does not prove arbitrary
+descendant cleanup. Forced-runtime fixtures inspect and preserve the resulting
+unconfirmed Quit receipt and run marker instead of claiming normal clean Quit.
 
 The local package is an unsigned outer Farol Next bundle with a fixed, argument-safe
 launcher. It embeds the pinned vendor `Electron.app` byte-for-byte under its own
