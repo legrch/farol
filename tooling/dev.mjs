@@ -330,6 +330,13 @@ export function exitCodeForOwnerStop(stopLabel) {
 
 /** What to tell the owner once the launched process has announced itself. */
 export function describeLaunchResult(outcome) {
+  if (outcome === "primary-recovery") {
+    return {
+      exitCode: null,
+      message:
+        "Farol opened in recovery mode. Previous work records are retained; Computer access is paused.",
+    };
+  }
   if (outcome === "primary-started") {
     return { exitCode: null, message: null };
   }

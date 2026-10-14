@@ -168,6 +168,7 @@ async function main() {
     const ownerLaunchResult = resultCollector.finish();
     if (
       ownerLaunchResult !== "primary-started" &&
+      ownerLaunchResult !== "primary-recovery" &&
       ownerLaunchResult !== "reopened"
     ) {
       throw new Error(

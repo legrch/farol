@@ -27,7 +27,14 @@ describe("the executable architecture boundary", () => {
     expect(JSON.parse(result.stdout).files).toBe(3);
   });
 
+  it("accepts React only in the new desktop renderer boundary", () => {
+    const result = check(path.join(fixtures, "new-desktop-renderer"));
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+  });
+
   const denied = [
+    ["new-renderer-host-import", "ARCH_RENDERER_HOST_IMPORT"],
+    ["new-desktop-react-host", "ARCH_REACT_OUTSIDE_RENDERER"],
     ["module-to-new-desktop", "ARCH_INNER_TO_APP"],
     ["new-desktop-to-runtime", "ARCH_APP_CROSS_ENTRY"],
     ["new-desktop-source-escape", "ARCH_SOURCE_ESCAPE"],

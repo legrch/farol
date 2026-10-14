@@ -38,7 +38,10 @@ async function walk(dir) {
   ).flat();
 }
 let errors = 0;
-for (const file of await walk("src/ui/renderer")) {
+for (const file of [
+  ...(await walk("src/ui/renderer")),
+  ...(await walk("apps/desktop/renderer")),
+]) {
   const { code } = await transform(await fs.readFile(file, "utf8"), {
     loader: file.endsWith(".tsx") ? "tsx" : "ts",
     jsx: "preserve",

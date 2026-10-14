@@ -264,6 +264,7 @@ await Promise.all([
     readBuildInput("src/ui/renderer/shell.css"),
     readBuildInput("src/ui/renderer/home.css"),
     readBuildInput("src/ui/renderer/setup.css"),
+    readBuildInput("apps/desktop/renderer/recovery/view.css"),
   ]).then((parts) =>
     fs.writeFile(
       "_output/build/app/shell.css",

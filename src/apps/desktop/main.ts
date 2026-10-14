@@ -1,4 +1,8 @@
 import {
+  openStartupRecoveryWindow,
+  type StartupRecoveryWindow,
+} from "../../../apps/desktop/recovery/host";
+import {
   ABOUT_PANEL_SIZE,
   DesktopAboutPanel,
 } from "../../../apps/desktop/about-panel";
@@ -11099,6 +11103,7 @@ function reopenWindow(): void {
 
 // Set when a quit begins; a quit drain always ends in the real quit.
 let quitInProgress = false;
+let startupRecovery: StartupRecoveryWindow | null = null;
 
 function isPrimaryReady(): boolean {
   return primaryStartupReady({
@@ -11122,6 +11127,15 @@ async function handleSecondInstance(candidate: unknown): Promise<void> {
   ) {
     // Quit/update owns admission: acknowledge that it cannot take this launch
     // instead of reopening a window that is about to close.
+    status = "reopen-failed";
+  }
+  if (status === "reopened" && startupRecovery !== null) {
+    try {
+      await startupRecovery.reopen();
+    } catch {
+      /* The primary owns failure cleanup. */
+    }
+    // A recovery window is available, but normal runtime readiness is not.
     status = "reopen-failed";
   }
   if (status === "reopened") {
@@ -11220,9 +11234,31 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT",
       );
       if (compiledGoCore !== null && !clean) {
-        // Reloading complete-looking handoff bytes cannot settle a lost
-        // recorder response or an unconfirmed host drain.
-        throw new Error("DESKTOP_PREVIOUS_QUIT_UNCONFIRMED");
+        // Keep exclusion for the entire UI-only recovery lifetime. No new
+        // run marker, configuration, Go/runtime, provider, MCP or updater is
+        // started, and this window cannot publish a clean predecessor Quit.
+        await updateRelaunch?.recheck();
+        if (!(await verify())) throw new Error("STARTUP_PROMOTION_LEASE_LOST");
+        startupRecovery = openStartupRecoveryWindow({
+          directory: desktopExecutionResources().directory,
+          mode: windowMode,
+          placement: () =>
+            selectedVisibleTestPlacement({ width: 640, height: 520 }).bounds,
+          quitSignals,
+          onQuitting: () => {
+            quitInProgress = true;
+          },
+        });
+        try {
+          await startupRecovery.ready;
+          process.stderr.write(
+            `${secondInstanceResultPrefix}primary-recovery\n`,
+          );
+          await startupRecovery.quitRequested;
+        } finally {
+          startupRecovery.dispose();
+        }
+        return false;
       }
       if (compiledGoCore !== null) {
         // The previous host removed its run marker only after a confirmed Quit.
@@ -11244,6 +11280,12 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       return clean;
     },
   );
+  if (startupRecovery !== null) {
+    // Only the UI's startup lease was released. The predecessor remains
+    // unconfirmed, so normal Quit receipts and marker removal are forbidden.
+    app.quit();
+    return;
+  }
   if (process.platform === "darwin") {
     app.dock?.setIcon(desktopBrandImage());
   }
@@ -11896,6 +11938,7 @@ if (!primaryInstanceLock) {
   primaryStartup.begin(readiness);
   void initialization
     .then(() => {
+      if (startupRecovery !== null) return;
       startupStage("startup-complete");
       process.stderr.write(
         `${secondInstanceResultPrefix}${isPrimaryReady() ? "primary-started" : "reopen-failed"}\n`,
