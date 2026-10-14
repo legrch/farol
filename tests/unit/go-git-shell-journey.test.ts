@@ -16,7 +16,7 @@ describe("package Git witness original admission evidence", () => {
       "PROCESS_OUTCOME_UNKNOWN",
       "original-start-unconfirmed-never-retry",
     ],
-  ]) {
+  ] as const) {
     it(`retains ${status} before throwing and never replays or observes an absent handle`, async () => {
       const root = await fs.mkdtemp(
         path.join(os.tmpdir(), "farol-git-witness-contract-"),
