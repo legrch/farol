@@ -2553,6 +2553,39 @@ describe("explicit browser interruption and scoped automatic installation", () =
     expect(f.updater.snapshot().phase).toBe("applying");
   });
   it.each([
+    "UPDATE_CONNECTOR_ACTIVE",
+    "UPDATE_TASK_ROUTE_NEEDS_DRAIN",
+    "UPDATE_WORK_PENDING",
+  ])(
+    "rechecks known pre-dispatch %s after fresh confirmation, preserving a later drain fence",
+    async (code) => {
+      const f = fixture();
+      await f.updater.initialize();
+      await f.updater.check(true);
+      await f.updater.download();
+      f.ports.restart.mockResolvedValueOnce({ status: "blocked", code });
+      await f.updater.restart();
+      await f.updater.restartConfirmed("0.0.0");
+      expect(f.ports.restart).toHaveBeenCalledTimes(1);
+      f.ports.restart.mockResolvedValueOnce({
+        status: "blocked",
+        code: "UPDATE_WORK_DRAIN_UNCONFIRMED",
+      });
+      await f.updater.restartConfirmed(staged.manifest.version);
+      expect(f.ports.restart).toHaveBeenCalledTimes(2);
+      expect(f.ports.restart).toHaveBeenLastCalledWith(staged, {
+        kind: "interrupt-browser",
+        version: staged.manifest.version,
+      });
+      expect(f.updater.snapshot()).toMatchObject({
+        phase: "ready",
+        blockedBy: "UPDATE_WORK_DRAIN_UNCONFIRMED",
+      });
+      await f.updater.restartConfirmed(staged.manifest.version);
+      expect(f.ports.restart).toHaveBeenCalledTimes(2);
+    },
+  );
+  it.each([
     "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
     "UPDATE_RETAINED_PACKAGE_INVALID",
   ])("does not override %s", async (code) => {

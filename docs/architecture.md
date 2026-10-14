@@ -25,23 +25,34 @@ socket clients live under `apps/desktop/computer-mcp`; the Go launch route uses
 the adjacent bridge without constructing a second Computer owner. Its packaged
 entry remains `computer-mcp.cjs`. The explicit legacy launch route remains
 transitional and is never selected after a failed Go launch.
-`src/apps/runtime` owns the separate utility-process entrypoint. The Chat-owned preview
+`src/apps/runtime` owns the separate parent-owned Node IPC entrypoint. The Chat-owned preview
 server adapter lives under `modules/chat/infra/server`; it receives Computer and
 UI capabilities at composition rather than importing their implementations.
 `src/boot/runtime-server.ts` only wires those concrete dependencies.
 
-The production utility process is launched with Electron's `utilityProcess.fork`.
-This deliberately uses the runtime shipped inside the exact Electron artifact, so a
-tester does not need Homebrew, Python, Node, npm, or Bun. Bun FFI is not used as a
-security boundary. The Electron main process owns child lifetime. On macOS, closing
-the last window disposes its views and streams but keeps the application and utility
-runtime alive; a Dock activation or second launch recreates one window against the
-same runtime. Explicit Quit requests bounded runtime shutdown. An unexpected
-utility-process exit becomes an explicit failed state while keeping an open shell
-available. Startup coverage
-kills that exact utility after runtime readiness, during the first task-view load,
-and during the second task-view load; every case removes the partial task surfaces
-without terminating the shell.
+The production local runtime is launched as a Node child with IPC, using
+`ELECTRON_RUN_AS_NODE=1` and the exact embedded Electron executable. It requires
+no ambient Node, npm, Bun or Python runtime. The main process owns its original
+exit, IPC disconnection and stream-drain observations; a shutdown ACK or root
+exit alone cannot confirm cleanup. Nonzero or forced termination remains an
+unconfirmed Quit obligation and must not be recast as a clean drain.
+
+On macOS, closing the last window disposes views and streams while keeping the
+application and local runtime alive. Dock activation or a matching second launch
+recreates one window against that runtime. Explicit Quit requests bounded runtime
+shutdown. Unexpected runtime exit becomes an explicit failed state while keeping
+an already open shell available. Lifecycle fixtures select the exact direct child
+of their owned main process from native process observations, including private
+execution paths; Electron's `getAppMetrics()` does not list Node IPC children.
+Historical utility-process fixtures retain their explicit metrics witness, bound
+to the same native parent PID. Fault injection rechecks the original process
+identity before signaling. This bounded fixture witness does not prove arbitrary
+descendant cleanup. The build-qualified in-memory preview runtime has only HTTP, crypto and event
+host dependencies, no filesystem or process-execution owners. Its observed
+original terminal settles that helper's ownership even after a failed exit;
+the failed runtime state is not recast as successful service operation. Missing
+terminal observations remain unconfirmed. Real Go, connector and Shell owners
+retain their independent drain and unknown-effect fences.
 
 The local package is an unsigned outer Farol Next bundle with a fixed, argument-safe
 launcher. It embeds the pinned vendor `Electron.app` byte-for-byte under its own
@@ -49,6 +60,25 @@ Frameworks directory and passes the embedded application directory explicitly. T
 outer bundle owns the Farol Next product and launch identity; the nested Electron
 bundle remains a verified runtime dependency rather than rewritten, stripped, or
 newly signed executable code.
+
+## Initial host trust and resource lifetime
+
+The local unsigned preview assumes that the owner launches a trusted installed
+outer launcher, Electron runtime and desktop main process. Farol's in-process
+checks cannot authenticate those first executing bytes against a prior malicious
+replacement of the entire public bundle. The shared Applications parent is a
+supported installation location, not an external code-signing trust anchor.
+
+After that trusted startup, the accepted independent image digest and private
+resource capture constrain later resources and child launches. Those guards
+still reject copied root aliases, displaced private images, wrong ownership and
+unconfirmed update/custody outcomes; initial host trust does not waive any of
+these checks. Private correlated update relaunch and ordinary public-slot launch
+have distinct origins. Developer ID signing, notarization and an externally
+qualified first-code admission policy remain separate distribution decisions.
+See [the installed resource boundary](installed-update-runtime.md) for the exact
+snapshot scope and [release limitations](github-release-contract.md) for the
+current unsigned package contract.
 
 ## Native surface composition
 

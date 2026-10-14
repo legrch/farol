@@ -46,6 +46,10 @@ import { GoComputerAuthority } from "./go-computer-authority.ts";
 import type { BuildIdentity } from "../../src/pkg/build-info/identity";
 import type { ProductSettings } from "../../src/pkg/product-settings/contract";
 
+// Cold startup validates the selected runtime and opens retained journals before
+// answering the first handshake. Ordinary RPC deadlines stay unchanged.
+export const DESKTOP_CORE_STARTUP_TIMEOUT_MS = 15_000;
+
 export type DesktopBrowserConnection = Readonly<{
   driver: BrowserDriver;
   // Synchronously revoke the exact host assignments before closing the pipe.
@@ -624,7 +628,7 @@ export async function startDesktopGoCore(
             watchdogSource: shell.source,
           })
         : undefined;
-    client = await attested.start(2000, {
+    client = await attested.start(DESKTOP_CORE_STARTUP_TIMEOUT_MS, {
       profile,
       ownerId: "owner-desktop",
       computerId: settings.computer.computerId,

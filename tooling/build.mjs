@@ -1,3 +1,4 @@
+import { assertPreviewRuntimeHostScope } from "./preview-runtime-scope.mjs";
 import { buildGoBackend } from "./go-backend-build.mjs";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { embedBuiltCore, GO_CORE_ENTRIES } from "./go-core-artifact.mjs";
@@ -206,7 +207,7 @@ await Promise.all([
     platform: "node",
     format: "cjs",
     external: ["electron"],
-  }),
+  }).then((result) => assertPreviewRuntimeHostScope(result.metafile)),
   build({
     ...common,
     entryPoints: ["apps/desktop/computer-mcp/main.ts"],
@@ -264,6 +265,7 @@ await Promise.all([
     readBuildInput("src/ui/renderer/shell.css"),
     readBuildInput("src/ui/renderer/home.css"),
     readBuildInput("src/ui/renderer/setup.css"),
+    readBuildInput("apps/desktop/renderer/recovery/view.css"),
   ]).then((parts) =>
     fs.writeFile(
       "_output/build/app/shell.css",

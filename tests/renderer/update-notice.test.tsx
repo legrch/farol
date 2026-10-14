@@ -279,7 +279,7 @@ it("lost notice replies stay unknown and cannot be retried or used to release an
   expect(f.api.installedUpdate).toHaveBeenCalledTimes(2);
   expect(f.api.installedUpdate).toHaveBeenLastCalledWith({ kind: "download" });
 });
-it("a known preference refusal keeps the notice visible and remains inspectable without blocking update actions", async () => {
+it("a known notice preference refusal remains retained without adding technical warnings to the update dialog", async () => {
   const { host, f } = await mount();
   vi.mocked(f.api.installedUpdate).mockResolvedValue({
     ...available,
@@ -292,10 +292,10 @@ it("a known preference refusal keeps the notice visible and remains inspectable 
   expect(host.querySelector('[aria-label="Update notice"]')).not.toBeNull();
   expect(button(host, "Dismiss update notice").disabled).toBe(true);
   await act(async () => button(host, "View update").click());
-  expect(host.querySelector("dialog")?.textContent).toContain(
+  expect(host.querySelector("dialog")?.textContent).not.toContain(
     "Saved update notices could not be confirmed",
   );
-  expect(host.querySelector("dialog")?.textContent).toContain(
+  expect(host.querySelector("dialog")?.textContent).not.toContain(
     "Update actions retain their separate safety checks",
   );
   expect(host.querySelector("dialog")?.textContent).not.toContain(
@@ -413,4 +413,97 @@ it("keeps the quiet notice out of the sidebar overlay without acknowledging it",
   await act(async () => c.toggleSidebar(false));
   expect(host.querySelector('[aria-label="Update notice"]')).not.toBeNull();
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
+});
+
+it("offers one manual admission check for a ready update despite a separate saved-notice failure", async () => {
+  const ready: InstalledUpdateView = {
+    phase: "ready",
+    version: available.version,
+    deferred: false,
+    blockedBy: "UPDATE_WORK_PENDING",
+    notice: {
+      ...available.notice!,
+      blockedBy: "UPDATE_NOTICE_OUTCOME_UNKNOWN",
+    },
+  };
+  const { host, c, f } = await mount(ready);
+  await act(async () => button(host, "View update").click());
+  expect(button(host, "Install and Relaunch").disabled).toBe(false);
+  expect(host.querySelector("dialog")?.textContent).not.toContain(
+    "Update needs attention",
+  );
+  expect(host.querySelector("dialog")?.textContent).not.toContain(
+    "Saved update notices could not be confirmed",
+  );
+  expect(button(host, "Review Diagnostics").disabled).toBe(false);
+  expect(host.querySelector("dialog")?.textContent).toContain(
+    "Restart postponed",
+  );
+  expect(c.getSnapshot().update).toEqual(ready);
+  vi.mocked(f.api.installedUpdate).mockResolvedValue({
+    phase: "applying",
+    version: ready.version,
+  });
+  await act(async () => button(host, "Install and Relaunch").click());
+  expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+    kind: "restart-confirmed",
+    version: ready.version,
+  });
+  expect(c.getSnapshot().update.phase).toBe("applying");
+});
+
+it("shows the separate admission and notice reasons directly in Diagnostics without executing either action", async () => {
+  const ready: InstalledUpdateView = {
+    phase: "ready",
+    version: available.version,
+    deferred: false,
+    blockedBy: "UPDATE_WORK_DRAIN_UNCONFIRMED",
+    notice: {
+      ...available.notice!,
+      blockedBy: "UPDATE_NOTICE_OUTCOME_UNKNOWN",
+    },
+  };
+  const { host, c, f } = await mount(ready);
+  await act(async () => c.navigate({ area: "settings", page: "diagnostics" }));
+  const details = [...host.querySelectorAll("details")].find(
+    (element) =>
+      element.querySelector("summary")?.textContent === "Action details",
+  )!;
+  expect(details.open).toBe(true);
+  expect(details.textContent).toContain(
+    "Update admission: UPDATE_WORK_DRAIN_UNCONFIRMED",
+  );
+  expect(details.textContent).toContain(
+    "Saved update notice: UPDATE_NOTICE_OUTCOME_UNKNOWN",
+  );
+  expect(f.api.installedUpdate).not.toHaveBeenCalled();
+  expect(c.getSnapshot().update).toEqual(ready);
+});
+
+it("keeps confirmation available with truthful feedback when its fresh admission remains busy", async () => {
+  const ready: InstalledUpdateView = {
+    phase: "ready",
+    version: available.version,
+    deferred: false,
+    blockedBy: null,
+    notice: { ...available.notice!, seen: true },
+  };
+  const { host, c, f } = await mount(ready);
+  await act(async () => c.overlay("update"));
+  vi.mocked(f.api.installedUpdate).mockResolvedValue({
+    ...ready,
+    deferred: true,
+    blockedBy: "UPDATE_WORK_PENDING",
+  });
+  await act(async () => button(host, "Install and Relaunch").click());
+  expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+    kind: "restart-confirmed",
+    version: ready.version,
+  });
+  const dialog = host.querySelector("dialog")!;
+  expect(dialog.textContent).toContain("Restart postponed");
+  expect(dialog.textContent).toContain("The last restart did not begin");
+  expect(button(dialog, "Install and Relaunch").disabled).toBe(false);
+  expect(button(dialog, "Review Diagnostics").disabled).toBe(false);
+  expect(c.getSnapshot().update.phase).toBe("ready");
 });

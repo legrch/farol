@@ -68,6 +68,7 @@ function host({
   const context = {
     path,
     directory: "/controlled-only",
+    desktopExecutionResources: () => ({ directory: "/controlled-only" }),
     windowMode: "default",
     displayWindowTitle: "Controlled host",
     initialWindowSize: { width: 800, height: 600 },

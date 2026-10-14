@@ -1,4 +1,4 @@
-"""Version 1: descriptor-bound one-shot custody, never placement or rollback.
+"""Version 2: descriptor-bound one-shot custody, never placement or rollback.
 
 Descriptors 6/7 inherit the owner's promotion/updater locks; 8 supplies the
 hash-attested ordinary promotion descriptor library. No installed code executes.
@@ -26,7 +26,7 @@ def bounded(fd, limit):
 
 
 library = bounded(8, 65536)
-if hashlib.sha256(library).hexdigest() != "53eee38236103b140d95ab27342c522b7a9a1f4fc8fe8442b2cdd44f07be32db":
+if hashlib.sha256(library).hexdigest() != "739ff487dbffbd3e232c3b90e22c234cebd4f735b226101187ea60a1f62691ce":
     raise RuntimeError("REPLACEMENT_LIBRARY_INVALID")
 b = {"__name__": "attested_promotion_library"}
 exec(compile(library, "<attested-promotion-library>", "exec"), b)
@@ -72,7 +72,7 @@ def stamp(info):
 
 def updater(fd):
     result = []
-    known = {"ready.json", "last-update.json", "lock", "notice-preferences.json", "preferences.json", "automatic-update-preference.json", "install-on-quit-preference.json"}
+    known = {"ready.json", "last-update.json", "lock", "notice-preferences.json", "preferences.json", "automatic-update-preference.json", "install-on-quit-preference.json", "installed-execution"}
     for name in sorted(os.listdir(fd)):
         if name not in known and not re.fullmatch(r"(?:download-)?[a-f0-9]{32}", name):
             raise RuntimeError("REPLACEMENT_UPDATER_UNEXPECTED")
@@ -130,7 +130,13 @@ def exclusive(src, name, dst, target):
 
 
 def run(r):
-    if r.get("schema") != "farol.installed-replacement-native/1" or r.get("action") not in ("custody", "complete") or not re.fullmatch("[a-f0-9]{32}", r.get("operationId", "")):
+    schema = r.get("schema")
+    if schema not in ("farol.installed-replacement-native/1", "farol.installed-replacement-native/2") or r.get("action") not in ("custody", "complete", "initialize-clean-lock") or not re.fullmatch("[a-f0-9]{32}", r.get("operationId", "")):
+        raise RuntimeError("REPLACEMENT_INPUT_INVALID")
+    if schema == "farol.installed-replacement-native/1":
+        if "installLocation" in r or r.get("action") == "initialize-clean-lock":
+            raise RuntimeError("REPLACEMENT_INPUT_INVALID")
+    elif r.get("installLocation") not in ("legacy", "shared"):
         raise RuntimeError("REPLACEMENT_INPUT_INVALID")
     opened = []
     def directory(target):
@@ -139,7 +145,7 @@ def run(r):
         return fd
     try:
         home = directory(r["home"])
-        apps = b["open_directory"](home, "Applications")
+        apps = b["open_applications"](r, home)
         opened.append(apps)
         profile = directory(r["userData"])
         private(profile)
@@ -167,6 +173,44 @@ def run(r):
                     fcntl.flock(inherited, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 finally:
                     os.close(probe)
+        if r["action"] == "initialize-clean-lock":
+            updates = b["open_directory"](profile, "installed-updates")
+            opened.append(updates)
+            private(updates)
+            if ident(os.fstat(updates)) != s["updaterIdentity"] or updater(updates) != s["updater"]:
+                raise RuntimeError("REPLACEMENT_UPDATER_CHANGED")
+            if any(item["name"] in ("lock", "ready.json", "last-update.json") or re.fullmatch(r"(?:download-)?[a-f0-9]{32}", item["name"]) for item in s["updater"]):
+                raise RuntimeError("REPLACEMENT_UPDATE_RECEIPT_UNCONFIRMED")
+            info = check(state, "promotion.lease", r["promotionIdentity"])
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_mode & 0o077 or ident(os.fstat(6)) != r["promotionIdentity"]:
+                raise RuntimeError("REPLACEMENT_LOCK_CHANGED")
+            probe = os.open("promotion.lease", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=state)
+            try:
+                try:
+                    fcntl.flock(probe, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    pass
+                else:
+                    raise RuntimeError("REPLACEMENT_LOCK_NOT_HELD")
+                fcntl.flock(6, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                os.close(probe)
+            b["recheck_parent"](r, home, apps)
+            check(profile, "installed-updates", s["updaterIdentity"])
+            lock = os.open("lock", os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=updates)
+            opened.append(lock)
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.fsync(lock)
+            os.fsync(updates)
+            held = os.fstat(lock)
+            named = check(updates, "lock", ident(held))
+            if not stat.S_ISREG(held.st_mode) or held.st_nlink != 1 or held.st_mode & 0o077 or held.st_size != 0 or stamp(held) != stamp(named) or bytes_at(updates,"lock") != b"":
+                raise RuntimeError("REPLACEMENT_UPDATER_LOCK_UNSAFE")
+            if [item for item in updater(updates) if item["name"] != "lock"] != s["updater"]:
+                raise RuntimeError("REPLACEMENT_UPDATER_CHANGED")
+            b["recheck_parent"](r, home, apps)
+            check(profile,"installed-updates",s["updaterIdentity"])
+            return {"status":"created","identity":ident(held)}
         if r["action"] == "custody":
             updates = b["open_directory"](profile, "installed-updates")
             opened.append(updates)
@@ -187,15 +231,23 @@ def run(r):
                 pass
             else:
                 raise RuntimeError("REPLACEMENT_CUSTODY_OCCUPIED")
-            publish(state, "installed-replacement.pending", r["intentText"].encode())
-            os.mkdir(name, 0o700, dir_fd=apps)
-            os.fsync(apps)
-            custody = b["open_directory"](apps, name)
+            b["recheck_parent"](r, home, apps)
+            # Allocate beneath the pinned owner-private profile. A shared
+            # parent must never supply the directory we write our intent into.
+            os.mkdir(name, 0o700, dir_fd=profile)
+            os.fsync(profile)
+            custody = b["open_directory"](profile, name)
             opened.append(custody)
             private(custody)
             if os.fstat(custody).st_dev != os.fstat(updates).st_dev or os.fstat(custody).st_dev != os.fstat(app).st_dev:
                 raise RuntimeError("REPLACEMENT_CROSS_DEVICE")
             publish(custody, "intent.json", r["intentText"].encode())
+            custody_identity = ident(os.fstat(custody))
+            check(profile, name, custody_identity)
+            b["recheck_parent"](r, home, apps)
+            publish(state, "installed-replacement.pending", r["intentText"].encode())
+            exclusive(profile, name, apps, name)
+            check(apps, name, custody_identity)
             locks(updates)
             check(apps, "Farol.app", s["appIdentity"])
             exclusive(apps, "Farol.app", custody, "previous.app")
@@ -213,6 +265,7 @@ def run(r):
             if updater(updates) != s["updater"]:
                 raise RuntimeError("REPLACEMENT_UPDATER_CHANGED")
             return {"custodyIdentity": ident(os.fstat(custody)), "pendingIdentity": ident(os.stat("installed-replacement.pending", dir_fd=state, follow_symlinks=False))}
+        b["recheck_parent"](r, home, apps)
         custody = b["open_directory"](apps, name)
         opened.append(custody)
         private(custody)
@@ -229,14 +282,33 @@ def run(r):
         check(custody, "installed-updates", s["updaterIdentity"])
         if updater(updates) != s["updater"] or hashlib.sha256(bytes_at(custody, "previous.receipt.json")).hexdigest() != s["receiptSha256"] or bytes_at(state, "installed-replacement.pending") != r["intentText"].encode():
             raise RuntimeError("REPLACEMENT_CUSTODY_CHANGED")
+        new_receipt = ident(os.stat("Farol.app.receipt.json", dir_fd=apps, follow_symlinks=False))
         if hashlib.sha256(bytes_at(apps, "Farol.app.receipt.json")).hexdigest() != r["newReceiptSha256"]:
             raise RuntimeError("REPLACEMENT_NEW_RECEIPT_CHANGED")
         app = b["open_directory"](apps, "Farol.app")
         opened.append(app)
+        new_app = ident(os.fstat(app))
         if b["digest_tree"](app) != r["candidateSha256"]:
             raise RuntimeError("REPLACEMENT_NEW_APP_CHANGED")
+
+        def recheck_completion_names():
+            # A held digest is not proof that the shared named slot stayed put.
+            b["recheck_parent"](r, home, apps)
+            check(apps, name, r["custodyIdentity"])
+            check(custody, "previous.app", s["appIdentity"])
+            check(custody, "previous.receipt.json", s["receiptIdentity"])
+            check(custody, "installed-updates", s["updaterIdentity"])
+            check(apps, "Farol.app", new_app)
+            check(apps, "Farol.app.receipt.json", new_receipt)
+            if hashlib.sha256(bytes_at(apps, "Farol.app.receipt.json")).hexdigest() != r["newReceiptSha256"]:
+                raise RuntimeError("REPLACEMENT_NEW_RECEIPT_CHANGED")
+            if hashlib.sha256(bytes_at(custody, "previous.receipt.json")).hexdigest() != s["receiptSha256"] or updater(updates) != s["updater"]:
+                raise RuntimeError("REPLACEMENT_CUSTODY_CHANGED")
+
+        recheck_completion_names()
         publish(custody, "completed.json", r["completionText"].encode())
         locks(updates)
+        recheck_completion_names()
         check(state, "installed-replacement.pending", r["pendingIdentity"])
         # Retirement is last. An unknown post-rename fsync/readback is fenced
         # by one exclusive NEW marker, never rollback or retry of the transition.
@@ -244,6 +316,7 @@ def run(r):
             exclusive(state, "installed-replacement.pending", custody, "completed-intent.json")
             if bytes_at(custody, "completed-intent.json") != r["intentText"].encode():
                 raise RuntimeError("REPLACEMENT_COMPLETION_UNKNOWN")
+            recheck_completion_names()
         except BaseException as original:
             try:
                 publish(state, "installed-replacement.pending", b'{"schema":"farol.installed-replacement-unknown/1"}\n')

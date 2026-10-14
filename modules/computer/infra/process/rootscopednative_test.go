@@ -35,6 +35,7 @@ func TestNativeRootScopedSeatbelt(t *testing.T) {
 }
 
 type rootScopedProbe struct {
+	Sysctls       []string
 	Reads, Writes map[string]string
 	Listeners     map[string]string
 	Renames       map[string][2]string
@@ -42,6 +43,7 @@ type rootScopedProbe struct {
 }
 
 type rootScopedProbeResult struct {
+	Sysctls                map[string]string
 	Reads, Writes, Network map[string]string
 	Renames                map[string]string
 	Links, AliasWrites     map[string]string
@@ -66,7 +68,11 @@ func TestNativeRootScopedProbeHelper(t *testing.T) {
 	if json.Unmarshal([]byte(os.Args[len(os.Args)-1]), &probe) != nil {
 		os.Exit(90)
 	}
-	out := rootScopedProbeResult{Reads: map[string]string{}, Writes: map[string]string{}, Network: map[string]string{}, Renames: map[string]string{}, Links: map[string]string{}, AliasWrites: map[string]string{}}
+	out := rootScopedProbeResult{Sysctls: map[string]string{}, Reads: map[string]string{}, Writes: map[string]string{}, Network: map[string]string{}, Renames: map[string]string{}, Links: map[string]string{}, AliasWrites: map[string]string{}}
+	for _, name := range probe.Sysctls {
+		_, err := syscall.Sysctl(name)
+		out.Sysctls[name] = probeFailure(err) // Never emit kernel/host values.
+	}
 	for name, path := range probe.Reads {
 		data, err := os.ReadFile(path)
 		out.Reads[name] = probeFailure(err)
@@ -147,7 +153,12 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool, prot
 	for _, dir := range []string{root, home, secondary, filepath.Join(root, ".git"), filepath.Join(root, ".codex")} {
 		must(os.Mkdir(dir, 0700))
 	}
-	probe := rootScopedProbe{Reads: map[string]string{}, Writes: map[string]string{}, Listeners: map[string]string{}}
+	probe := rootScopedProbe{Reads: map[string]string{}, Writes: map[string]string{}, Listeners: map[string]string{},
+		Sysctls: []string{"kern.ostype", "kern.hostname", "kern.osrelease", "kern.version", "hw.machine", "kern.boottime"}}
+	for _, name := range probe.Sysctls {
+		_, err := syscall.Sysctl(name)
+		must(err) // Same nodes are readable before the native boundary.
+	}
 	for name, path := range map[string]string{
 		"env": filepath.Join(root, ".env"), "git": filepath.Join(root, ".git/config"),
 		"npm": filepath.Join(root, ".npmrc"), "agent": filepath.Join(root, ".codex/config.toml"),
@@ -269,6 +280,15 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool, prot
 	var out rootScopedProbeResult
 	must(json.Unmarshal(stdout.Bytes(), &out))
 	must(os.WriteFile(filepath.Join(base, "probe-observation.json"), stdout.Bytes(), 0600))
+	for _, name := range probe.Sysctls {
+		expected := "allowed"
+		if name == "kern.boottime" {
+			expected = "denied"
+		}
+		if out.Sysctls[name] != expected {
+			t.Fatalf("sysctl %s: got %q want %q", name, out.Sysctls[name], expected)
+		}
+	}
 	for name, expected := range baseline {
 		if name == "outside" || name == "outside-symlink" || name == "home" {
 			expected = "denied"

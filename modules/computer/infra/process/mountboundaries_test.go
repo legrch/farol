@@ -2,12 +2,14 @@ package process
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
+	"github.com/legrch/farol/modules/computer/domain/authority"
 )
 
 func mountedPlatformFixture(t *testing.T) platformFixture {
@@ -183,5 +185,35 @@ func TestMountBoundaryKernelConditionCannotBeOmittedOrClaimAnotherVolume(t *test
 	plan, err := compileSeatbelt(policy, f.original)
 	if err != nil || !strings.Contains(plan.source, `(mount-root-literal "/")`) || !strings.Contains(plan.source, `(filesystem-name "apfs")`) {
 		t.Fatal("kernel predicate missing", err)
+	}
+}
+
+// Regression for the package Go/MCP fixture: an unverified sibling is a
+// current authorization problem, not an observed unsupported filesystem.
+func TestMountBoundaryPreservesUnverifiedWorkspaceRefusal(t *testing.T) {
+	f := platformFixtureCPU(t)
+	f.descriptor.FilesystemClass = rootScopedMountBoundaryClass
+	addRootScope(&f.policy, "unchecked-sibling", "/approved/unchecked", authority.WriteAccess)
+	f.policy.Snapshot.Approval.Workspaces[len(f.policy.Snapshot.Approval.Workspaces)-1].ShellVerified = false
+	paths, err := f.strategy(t).mountBoundaryPaths(context.Background(), f.policy, f.original)
+	var failure *processsvc.Failure
+	if paths != nil || !errors.As(err, &failure) || failure.Code != "PROCESS_PREPARATION_WORKSPACE_STALE" {
+		t.Fatalf("unverified scope lost its refusal classification: %T", err)
+	}
+	if f.policy.Snapshot.Approval.Workspaces[len(f.policy.Snapshot.Approval.Workspaces)-1].ShellVerified {
+		t.Fatal("inspection manufactured verification")
+	}
+}
+func TestMountBoundaryStillRefusesNonAPFSFacts(t *testing.T) {
+	f := platformFixtureCPU(t)
+	f.descriptor.FilesystemClass = rootScopedMountBoundaryClass
+	root := f.policy.Snapshot.Participant.Grant.Workspaces[0].Root
+	facts := f.facts.directories[root]
+	facts.filesystem = "hfs"
+	f.facts.directories[root] = facts
+	paths, err := f.strategy(t).mountBoundaryPaths(context.Background(), f.policy, f.original)
+	var failure *processsvc.NativeFailure
+	if paths != nil || !errors.As(err, &failure) || !failure.FilesystemUnsupported {
+		t.Fatalf("unsupported filesystem was not refused: %T", err)
 	}
 }

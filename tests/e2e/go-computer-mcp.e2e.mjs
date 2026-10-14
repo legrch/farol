@@ -33,6 +33,8 @@ const hash = (value) => createHash("sha256").update(value).digest("hex");
 const args = process.argv.slice(2),
   mode = args.shift();
 assert.ok(["--check", "--run-native"].includes(mode));
+const shellGit = args[0] === "--shell-git";
+if (shellGit) args.shift();
 const pins = {};
 while (args.length) {
   const key = args.shift(),
@@ -146,9 +148,12 @@ try {
               // Only these test-owned harness inputs sit outside the sealed
               // production ledger; all joined production/dependency bytes still match.
               if (
-                ![entry, "tests/e2e/go-computer-mcp.diagnostics.ts"].includes(
-                  relative,
-                )
+                ![
+                  entry,
+                  "tests/e2e/go-computer-mcp.diagnostics.ts",
+                  "tests/e2e/go-git-shell-journey.ts",
+                  "tests/fixtures/ordinary-git-environment.mjs",
+                ].includes(relative)
               )
                 assert.equal(
                   sha256,
@@ -197,14 +202,73 @@ try {
       path.join(output, "report.json"),
       JSON.stringify(report, null, 2) + "\n",
     );
+    let shell;
+    if (shellGit) {
+      assert.equal(
+        path.join(
+          path.resolve(artifactRoot, "../../.."),
+          "Contents/Resources/app",
+        ),
+        artifactRoot,
+        "SHELL_REQUIRES_PACKAGE",
+      );
+      // Trusted source tooling, checked against this candidate's committed bytes;
+      // normal host constructors repeat runtime and native support qualification.
+      const { execFileSync } = await import("node:child_process");
+      for (const name of [
+        "tooling/shell-support.mjs",
+        "tooling/shell-platform.json",
+        "tooling/core-resources.mjs",
+      ])
+        assert.equal(
+          hash(await fs.readFile(path.join(root, name))),
+          hash(
+            execFileSync("git", ["show", `${identity.sourceCommit}:${name}`], {
+              cwd: root,
+              maxBuffer: 1024 * 1024,
+            }),
+          ),
+          "SHELL_PRODUCER_SOURCE_MISMATCH",
+        );
+      const { declareShellSupport } =
+        await import("../../tooling/shell-support.mjs");
+      const { declareCoreResources } =
+        await import("../../tooling/core-resources.mjs");
+      const declaration = await declareShellSupport(
+        root,
+        manifest.core,
+        identity,
+      );
+      const resources = await declareCoreResources(
+        artifactRoot,
+        manifest.core,
+        identity,
+      );
+      for (const file of resources.files)
+        assert.equal(file.sha256, manifest.entrySha256[file.path]);
+      shell = {
+        support: declaration.support,
+        watchdogSource: Buffer.from(declaration.watchdogSourceBase64, "base64"),
+        resources,
+      };
+      report.limits = report.limits.filter(
+        (v) => !v.startsWith("Not installed, shell/Git"),
+      );
+      report.limits.push(
+        "Package Go Shell with disposable HOME/repository; not Electron/tunnel/ChatGPT/installed or universal descendant proof",
+      );
+    }
     await run({
+      ...(shell ? { shell } : {}),
       artifactRoot,
       build: identity,
       artifact: manifest.core,
       output,
       report,
     });
-    report.status = "passed-native-mcp-go-adapter";
+    report.status = shellGit
+      ? "passed-native-package-go-shell-git"
+      : "passed-native-mcp-go-adapter";
   }
 } catch {
   report.status = "failed";

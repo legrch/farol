@@ -1,6 +1,96 @@
 # Installed updater lifecycle
 
-The updater is enabled only for the exact installed Farol Next Preview slot and
+The supported installed slots are exactly `/Applications/Farol.app` and the
+trusted OS-account home followed by `/Applications/Farol.app`. First installation
+with `tooling/promote-preview.mjs` defaults to `/Applications/Farol.app`; an explicit
+`--destination` accepts either canonical slot. It never overwrites an existing app
+or receipt. The native promotion launcher retains a legacy default for existing
+maintenance callers.
+
+Ordinary Desktop updates select the slot from the exact attested running
+`Contents/Resources/app` directory. They do not probe for another copy, normalize
+arbitrary paths, trust `HOME`, or fall back after an observation failure. A trusted
+standalone controller can explicitly supply `installedResourcesDirectory`; omission
+retains its legacy selection. Native updater requests carry the closed
+`installLocation` enum (`shared` or `legacy`); omission remains legacy-compatible.
+The helper mutates and relaunches that same slot. Each modern operation has an
+immutable private `installed-updates/<operationId>/slot-binding.json` record,
+using `farol.installed-operation-slot/1`. Its canonical ASCII JSON bytes bind the
+operation ID, `installLocation`, and exact source/target build pair. Desktop
+publishes it through a pinned directory descriptor with atomic no-overwrite
+placement before durable preparation or helper dispatch. Every explicit-slot
+helper request verifies it before handoff, journal writes and mutation fences.
+Runtime journal/recovery/relaunch readback also verifies the exact slot binding.
+Missing, noncanonical, displaced, unsafe or differently bound records stay fenced
+from updater recovery, correlated relaunch and mutation. No existing
+journal/handoff is opportunistically repaired. An old unbound operation still
+requires separately designed maintenance before it can continue; this packet
+implements no migration. Ordinary public shared-slot startup alone can use a
+historical pending, preparation or settled receipt as an execution baseline
+when the retained release/build pair and complete current executable digest
+match. It does not create a slot binding, dispatch a helper, change receipts or
+admit the old update. Every present binding remains strict, and an unreadable
+record is never treated as missing. Pre-dispatch cleanup retains the immutable binding after
+removing staged bytes, so a lost final Ready write cannot erase slot authority.
+Old helper requests without `installLocation` retain the
+legacy-only wire behavior and app/build validation. Receipt and journal schemas remain
+unchanged. App content/build digests, user ownership, promotion and updater locks,
+atomic swaps, descriptor-bound mutation and unknown-outcome fences still apply.
+
+Ordinary shared-slot startup authenticates the complete executable image from
+its independently accepted promotion, settled/pending operation or closed-repair
+baseline before Go starts. The Go artifact and Shell support roots come from
+this owner-private immutable image, satisfying attestation through the child
+lifetime even if the public app pathname is replaced after this trusted startup.
+
+The unsigned preview starts from an owner-selected, trusted installation. Its
+outer launcher, embedded Electron runtime and first `main.cjs` execute before
+Farol can capture the private image. Snapshot authentication covers the resources
+selected by that genuine main process and later child launches; it is not a
+pre-execution authenticity check for the first program opened from Applications.
+A different administrator replacing the public bundle before a Finder, Dock or
+LaunchServices open is outside this preview's initial-code trust boundary. The
+host's OS and filesystem permissions govern that initial launch. No Developer ID,
+notarization or Gatekeeper admission guarantee is implemented by this snapshot.
+A correlated update relaunch uses the retained owner-private `launch-Farol.app`;
+that private launch origin differs from an ordinary initial public-slot open.
+Changing the distribution trust anchor requires a separate owner decision and
+its own platform qualification, not another self-attestation inside replaced code.
+
+Shared-slot tool execution is authenticated before any bundled observer or
+package verifier starts. The accepted promotion, settled update, correlated
+pending operation or closed-repair generation supplies the expected full tree
+digest. A private complete image under `installed-updates/installed-execution/`
+binds the executable and scripts; physical ASAR copying and hashing use
+`original-fs`. Invalid, displaced or incomplete images never fall back to public
+slot code. A target generation can authenticate from its pending operation
+before recovery writes its new settled receipt.
+
+Automatic shared-slot relaunch uses a descriptor-copied, independently verified
+`<operation>/launch-Farol.app`, retained inside the private operation directory.
+The helper publishes its launch intent only after this image is complete and
+opens that private application exactly once. It never opens the replaceable
+`/Applications/Farol.app` pathname. Correlated startup verifies the private
+image, immutable shared-slot operation, helper completion and physical accepted
+pair, then supplies its resource origin to the same updater owner. Normal reopen
+of this image without the one-shot hint requires the current settled generation
+and unchanged public target. Consumed Ready receipts do not invalidate private
+executable authority. Private launch images remain retained; this packet adds no
+background image garbage collection or replay of an unknown launch. While
+running from a retained private launch entry, normal Quit skips installation;
+the retained update remains ready without a restart blocker. Idle automatic
+installation and explicit installation use their existing successor relaunch.
+This prevents a no-relaunch Quit update from stranding that launch entry.
+
+The shared `/Applications` parent must be canonical, root-owned and not world
+writable. Group write is allowed only for the standard macOS administrator group
+(GID 80). Neither launcher nor helper changes permissions or elevates. This
+exception applies only to that shared parent: app, state and staging ownership
+checks remain strict. Parent identity is rechecked before placement/publication
+and update mutations. UserData remains the OS-account
+`Library/Application Support/Farol Next Preview` directory.
+
+The updater is enabled only for the selected installed slot and
 its existing owner data directory. Temporary `task run` copies do not update the
 installed app. The GitHub channel and package identity are fixed by the release
 contract; no source checkout, credentials or local diagnostics are published.
@@ -387,7 +477,14 @@ It permits closing owned ChatGPT windows without inferring DOM idle, preserves
 the conversation address and keeps new input fenced through handoff. A native
 close must be observed; a failed close keeps the admission reserved. Internal
 programmatic tasks and Computer obligations retain their existing cancellation
-and drain owners. Manual consent never turns an unknown operation into success.
+and drain owners. Manual consent never turns an unknown operation into success. A prior known
+pre-dispatch refusal (`UPDATE_WORK_PENDING`, `UPDATE_CONNECTOR_ACTIVE` or
+`UPDATE_TASK_ROUTE_NEEDS_DRAIN`) does not permanently disable the confirmation
+button. A fresh version-bound click may acquire the current host admission again;
+it still rechecks and drains the same owned work before installer dispatch. A
+later uncertain drain, package failure or unknown handoff remains fenced. Saved
+notice failures retain their original metadata and acknowledgement fence in
+Diagnostics; they do not add technical warnings to the ordinary update dialog.
 
 Starting with 0.2.1 the public release version uses ordinary semantic versions
 and the stable GitHub channel. Build numbers still increase, while existing

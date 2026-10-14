@@ -202,6 +202,25 @@ describe("installed Computer drain (injected clients, no live provider)", () => 
     expect((await drainInstalledComputerWork(f.ports)).ok).toBe(false);
     expect(f.ports.stopOwnedClients).not.toHaveBeenCalled();
   });
+  it.each(["idle", "busy"])(
+    "keeps unconfirmed reader shutdown separate from %s task admission",
+    async (state) => {
+      const f = fixture();
+      vi.mocked(f.ports.taskKeys).mockResolvedValue(["dispatch"]);
+      f.reader.status.mockResolvedValue({
+        ...settled,
+        turnStatus: state === "idle" ? "completed" : "inProgress",
+      });
+      f.reader.close.mockResolvedValue(false);
+      expect(await drainInstalledComputerWork(f.ports)).toEqual({
+        ok: false,
+        code: "UPDATE_WORK_DRAIN_UNCONFIRMED",
+      });
+      expect(f.ports.openTaskReader).toHaveBeenCalledOnce();
+      expect(f.reader.close).toHaveBeenCalledOnce();
+      expect(f.ports.stopOwnedClients).not.toHaveBeenCalled();
+    },
+  );
   it("rechecks binding after awaited reads and preserves unknown drain failure", async () => {
     const f = fixture();
     vi.mocked(f.ports.stillCurrent).mockReturnValue(false);

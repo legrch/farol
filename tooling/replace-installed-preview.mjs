@@ -1,6 +1,6 @@
 // Owner maintenance only. No launch, rollback, retry, profile copy or repair receipt.
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants as C } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -28,13 +28,14 @@ import {
   promotionLeaseDescriptor,
 } from "./promotion-lease.mjs";
 import { runPromotionApply } from "./promotion-apply.mjs";
+import { preparePromotionParent } from "./promotion-destination.mjs";
 import { compareReleaseVersions } from "../src/modules/release/domain/github-version.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const HELPER_SHA256 =
-  "479edb96545dc2ba30938aed7af3ba22f3098b8c3cc8dbac17176c891dbefcb5";
+  "e5c37e394392fcdf657b90ed5204abb45aa1504e4a8891c4721cef3a6517ed28";
 const LIBRARY_SHA256 =
-  "53eee38236103b140d95ab27342c522b7a9a1f4fc8fe8442b2cdd44f07be32db";
+  "739ff487dbffbd3e232c3b90e22c234cebd4f735b226101187ea60a1f62691ce";
 const sha = (raw) => createHash("sha256").update(raw).digest("hex");
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 // Same normal receipt DTO as the installed-update owner; keep strict shape parity.
@@ -114,7 +115,7 @@ const SavedReceipt = Retained.extend({
   phase: Journal.shape.phase,
   runningBuildId: Digest,
 });
-const Selection = z.strictObject({
+const LegacySelection = z.strictObject({
   schema: z.literal("farol.installed-replacement-selection/1"),
   sourceCommit: z.string().regex(/^[a-f0-9]{40}$/u),
   operationId: z.string().regex(/^[a-f0-9]{32}$/u),
@@ -128,6 +129,29 @@ const Selection = z.strictObject({
     )
     .max(32),
 });
+const Selection = z.discriminatedUnion("schema", [
+  LegacySelection,
+  LegacySelection.extend({
+    schema: z.literal("farol.installed-replacement-selection/2"),
+    installLocation: z.enum(["legacy", "shared"]),
+  }),
+]);
+
+// Explicit new selections admit only the two already supported installations.
+// Version 1 stays permanently bound to the original user installation.
+export function replacementApplications(home, installLocation = "legacy") {
+  if (installLocation === "legacy") return path.join(home, "Applications");
+  if (installLocation === "shared") return "/Applications";
+  throw Error("REPLACEMENT_LOCATION_INVALID");
+}
+
+async function applicationsDirectory(home, installLocation) {
+  const directory = replacementApplications(home, installLocation);
+  if (installLocation === "legacy") return safeDirectory(directory);
+  await preparePromotionParent(home, directory);
+  return fs.lstat(directory, { bigint: true });
+}
+
 const fail = (code) => {
   throw Error(code);
 };
@@ -203,6 +227,7 @@ async function updaterSnapshot(updates) {
     "preferences.json",
     "automatic-update-preference.json",
     "install-on-quit-preference.json",
+    "installed-execution",
   ]);
   const items = [];
   for (const name of names.sort()) {
@@ -320,12 +345,16 @@ async function confirmCompletedUpdate(updates, appSha256, build) {
     fail("REPLACEMENT_UPDATE_PREDECESSOR_CHANGED");
 }
 
-export async function snapshotInstalledReplacement(home) {
+export async function snapshotInstalledReplacement(
+  home,
+  installLocation = "legacy",
+) {
   const userData = promotionUserData(home);
-  const apps = path.join(home, "Applications");
+  const apps = replacementApplications(home, installLocation);
   const state = path.join(userData, "farol-next-state");
   const updates = path.join(userData, "installed-updates");
   await safeDirectory(home);
+  const applications = await applicationsDirectory(home, installLocation);
   const app = path.join(apps, "Farol.app");
   await absent(path.join(state, "installed-replacement.pending"));
   await absent(path.join(apps, "Farol.app.repair.json"));
@@ -364,7 +393,7 @@ export async function snapshotInstalledReplacement(home) {
     r.version === build.version;
   if (!initialInstall) await confirmCompletedUpdate(updates, appSha256, build);
   return {
-    applicationsIdentity: identity(await safeDirectory(apps)),
+    applicationsIdentity: identity(applications),
     profileIdentity: identity(await safeDirectory(userData, true)),
     stateIdentity: identity(await safeDirectory(state, true)),
     appIdentity: identity(await safeDirectory(app)),
@@ -382,7 +411,7 @@ export async function snapshotInstalledReplacement(home) {
   };
 }
 
-function processProof(home, helpers) {
+function processProof(home, helpers, installLocation = "legacy") {
   const env = { PATH: "/usr/bin:/bin", LANG: "C" };
   const table = spawnSync("/bin/ps", ["-ww", "-axo", "pid=,command="], {
     env,
@@ -393,7 +422,8 @@ function processProof(home, helpers) {
   if (table.error || table.status !== 0 || table.stderr)
     fail("REPLACEMENT_PROCESS_PROBE_UNKNOWN");
   const scopes = [
-    path.join(home, "Applications/Farol.app/"),
+    path.join(replacementApplications(home, installLocation), "Farol.app/"),
+    path.join(promotionUserData(home), "installed-updates") + path.sep,
     path.join(promotionUserData(home), "farol-next-state/go-core"),
     path.join(promotionUserData(home), "farol-next-state/secure-mcp-connector"),
   ];
@@ -417,6 +447,113 @@ function processProof(home, helpers) {
       result.stderr !== ""
     )
       fail("REPLACEMENT_HELPER_NOT_CONFIRMED_ENDED");
+  }
+}
+
+// Explicit maintenance preparation for an untouched updater that has never
+// needed its native lock. It runs only under confirmed closed-app admission;
+// it does not synthesize a journal, update result, or old process cleanup.
+export async function prepareCleanReplacementLock(
+  home,
+  buildId,
+  installLocation,
+  dependencies = {},
+) {
+  if (!Digest.safeParse(buildId).success)
+    fail("REPLACEMENT_LOCK_INPUT_INVALID");
+  await safeDirectory(home);
+  const userData = promotionUserData(home);
+  const appsInfo = await applicationsDirectory(home, installLocation);
+  const profileInfo = await safeDirectory(userData, true);
+  const stateInfo = await safeDirectory(
+    path.join(userData, "farol-next-state"),
+    true,
+  );
+  const updates = path.join(userData, "installed-updates");
+  const updaterInfo = await safeDirectory(updates, true);
+  const lease = await acquirePromotionLease(userData, buildId, "promotion");
+  if (!lease) fail("REPLACEMENT_PROMOTION_BUSY");
+  const children = new Set();
+  let dispatched = false,
+    completed = false;
+  const register = (closed) => {
+    children.add(closed);
+    void closed.then(() => children.delete(closed));
+  };
+  try {
+    (dependencies.processProof ?? processProof)(home, [], installLocation);
+    assertActivationDrained(
+      await (dependencies.activation ?? activationObligations)(userData),
+    );
+    const before = await updaterSnapshot(updates);
+    if (before.some((item) => item.name === "lock")) {
+      if ((await bytes(path.join(updates, "lock"))).length !== 0)
+        fail("REPLACEMENT_UPDATER_LOCK_UNSAFE");
+      completed = true;
+      return { status: "present" };
+    }
+    if (
+      before.some(
+        (item) =>
+          item.name === "ready.json" ||
+          item.name === "last-update.json" ||
+          /^(?:download-)?[a-f0-9]{32}$/u.test(item.name),
+      )
+    )
+      fail("REPLACEMENT_UPDATE_RECEIPT_UNCONFIRMED");
+    if (!(await verifyPromotionLease(lease))) fail("REPLACEMENT_LEASE_LOST");
+    dispatched = true;
+    const result = await (dependencies.native ?? runReplacementNative)(
+      {
+        schema: "farol.installed-replacement-native/2",
+        action: "initialize-clean-lock",
+        installLocation,
+        home,
+        userData,
+        operationId: randomUUID().replaceAll("-", ""),
+        snapshot: {
+          applicationsIdentity: identity(appsInfo),
+          profileIdentity: identity(profileInfo),
+          stateIdentity: identity(stateInfo),
+          updaterIdentity: identity(updaterInfo),
+          updater: before,
+        },
+        promotionIdentity: identity(
+          await fs.lstat(lease.file, { bigint: true }),
+        ),
+      },
+      lease,
+      null,
+      register,
+    );
+    if (
+      result?.status !== "created" ||
+      !Array.isArray(result.identity) ||
+      result.identity.length !== 2 ||
+      !(await bytes(path.join(updates, "lock"))).equals(Buffer.alloc(0)) ||
+      !same(
+        identity(await fs.lstat(path.join(updates, "lock"), { bigint: true })),
+        result.identity,
+      ) ||
+      !same(
+        (await updaterSnapshot(updates)).filter((item) => item.name !== "lock"),
+        before,
+      ) ||
+      !(await verifyPromotionLease(lease))
+    )
+      fail("REPLACEMENT_SNAPSHOT_CHANGED");
+    completed = true;
+    return result;
+  } finally {
+    await Promise.all([...children]);
+    if (dispatched && !completed) {
+      // The same descriptor-bound child owns creation. A failed/unknown native
+      // publication cannot be settled from complete-looking file bytes.
+      setInterval(() => {}, 60000);
+      process.stderr.write(
+        "REPLACEMENT_UNKNOWN_RETAINS_LOCKS_OWNER_REQUIRED\n",
+      );
+    } else await releasePromotionLease(lease);
   }
 }
 
@@ -468,7 +605,7 @@ export async function runReplacementNative(
       "ignore",
       "ignore",
       promotionLeaseDescriptor(lease),
-      updaterLock.fd,
+      updaterLock?.fd ?? "ignore",
       "pipe",
     ],
   });
@@ -545,8 +682,12 @@ export async function replaceInstalledPreview(
       process.execArgv.length)
   )
     fail("REPLACEMENT_HOST_UNTRUSTED");
+  const installLocation =
+    selection.schema === "farol.installed-replacement-selection/2"
+      ? selection.installLocation
+      : "legacy";
   const userData = promotionUserData(home),
-    apps = path.join(home, "Applications"),
+    apps = replacementApplications(home, installLocation),
     custody = path.join(apps, `.farol-replacement-${selection.operationId}`);
   const current = dependencies.sourceIdentity ?? (() => sourceIdentity(root));
   const candidate = dependencies.candidate ?? candidatePaths(root);
@@ -611,13 +752,29 @@ export async function replaceInstalledPreview(
       )
         fail("REPLACEMENT_UPDATER_LOCK_UNSAFE");
     }
-    const fresh = await snapshotInstalledReplacement(home);
+    const fresh = await snapshotInstalledReplacement(home, installLocation);
     if (!same(fresh, selection.snapshot)) fail("REPLACEMENT_SNAPSHOT_CHANGED");
     await absent(custody);
     const checkProcesses = dependencies.processProof ?? processProof;
-    checkProcesses(home, selection.helpers);
+    checkProcesses(home, selection.helpers, installLocation);
     // Every recorded helper must be selected; its phase is never made terminal.
-    for (const name of ["ready.json", "last-update.json"]) {
+    const updateRecords = fresh.updater.filter(
+      (item) => item.name === "ready.json" || item.name === "last-update.json",
+    );
+    // A fresh updater may have only preferences and accepted execution images.
+    // A missing half or any historical operation/download without its records
+    // remains unconfirmed; absence must not conceal a possibly started helper.
+    if (
+      updateRecords.length === 1 ||
+      (updateRecords.length === 0 &&
+        fresh.updater.some((item) =>
+          /^(?:download-)?[a-f0-9]{32}$/u.test(item.name),
+        ))
+    )
+      fail("REPLACEMENT_UPDATE_RECEIPT_UNCONFIRMED");
+    for (const name of updateRecords
+      .map((item) => item.name)
+      .filter((name) => name === "ready.json" || name === "last-update.json")) {
       const record = JSON.parse(
         await bytes(path.join(userData, "installed-updates", name)),
       );
@@ -647,9 +804,9 @@ export async function replaceInstalledPreview(
         1
     )
       fail("REPLACEMENT_NOT_INCREASING");
-    if (!same(await snapshotInstalledReplacement(home), fresh))
+    if (!same(await snapshotInstalledReplacement(home, installLocation), fresh))
       fail("REPLACEMENT_SNAPSHOT_CHANGED");
-    checkProcesses(home, selection.helpers);
+    checkProcesses(home, selection.helpers, installLocation);
     assertActivationDrained(
       await (dependencies.activation ?? activationObligations)(userData),
     );
@@ -676,7 +833,8 @@ export async function replaceInstalledPreview(
     if (!(await verifyPromotionLease(lease))) fail("REPLACEMENT_LEASE_LOST");
     const leaseInfo = await fs.lstat(lease.file, { bigint: true });
     const request = {
-      schema: "farol.installed-replacement-native/1",
+      schema: "farol.installed-replacement-native/2",
+      installLocation,
       action: "custody",
       home,
       userData,
@@ -721,7 +879,7 @@ export async function replaceInstalledPreview(
     const assertParents = async () => {
       if (
         !same(
-          identity(await safeDirectory(apps)),
+          identity(await applicationsDirectory(home, installLocation)),
           fresh.applicationsIdentity,
         ) ||
         !same(
@@ -739,6 +897,7 @@ export async function replaceInstalledPreview(
     await assertParents();
     await (dependencies.promotion ?? runPromotionApply)({
       home,
+      destination: receipt.destination,
       source: candidate.appPath,
       artifactSha256: artifact.artifactSha256,
       receiptText,

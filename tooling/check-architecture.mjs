@@ -51,6 +51,13 @@ function relative(file) {
 
 function classify(file) {
   const parts = relative(file).split("/");
+  if (
+    parts[0] === "apps" &&
+    parts[1] === "desktop" &&
+    parts[2] === "renderer" &&
+    parts.length > 3
+  )
+    return { kind: "ui" };
   if (parts[0] === "apps" && parts[1] === "desktop" && parts.length > 2)
     return { kind: "application", application: "desktop" };
   if (parts[0] !== "src") return { kind: "outside" };

@@ -160,7 +160,23 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 		if !ok {
 			return refuse()
 		}
-		for _, selected := range launch.gitRuntimeResources.Files {
+		if launch.gitRuntimeResources.Python != nil {
+			reader, ok := fs.(interface {
+				pinPythonAlias(context.Context) (executableMeasurement, error)
+			})
+			if !ok {
+				return refuse()
+			}
+			pin, err := reader.pinPythonAlias(ctx)
+			if pin != nil {
+				measurement.pins = append(measurement.pins, pin)
+			}
+			if err != nil || pin == nil {
+				return refuse()
+			}
+			measurement.executables = append(measurement.executables, pin)
+		}
+		for _, selected := range launch.gitRuntimeResources.resourceFiles() {
 			pin, err := reader.pinGitRuntimeFile(ctx, selected)
 			if pin != nil {
 				measurement.pins = append(measurement.pins, pin)
@@ -232,7 +248,7 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 		}
 	}
 	if launch.gitRuntimeResources != nil {
-		for _, selected := range launch.gitRuntimeResources.Directories {
+		for _, selected := range launch.gitRuntimeResources.resourceDirectories() {
 			pin := add(selected.Path, authority.RootIdentity{}, false, nil, "")
 			if pin == nil {
 				return refuse()

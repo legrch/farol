@@ -1,3 +1,7 @@
+import {
+  isStartupRecoveryDocument,
+  startStartupRecovery,
+} from "../../../apps/desktop/renderer/recovery/entry";
 import { isCompactShell } from "../../pkg/shell-layout/geometry";
 import { parseNavigationShortcuts } from "../../pkg/ipc/navigation-shortcuts";
 import { StrictMode, useLayoutEffect, useRef } from "react";
@@ -122,7 +126,9 @@ function startApplication(): void {
 }
 
 const documentUrl = new URL(window.location.href);
-if (documentUrl.hash !== "") {
+if (isStartupRecoveryDocument(documentUrl)) {
+  startStartupRecovery();
+} else if (documentUrl.hash !== "") {
   if (!isGuideDocument(documentUrl)) {
     throw new Error("GUIDE_DOCUMENT_MODE_INVALID");
   }

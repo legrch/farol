@@ -66,15 +66,21 @@ func TestRootScopedSeatbeltHasNoImplicitCredentialOrGitNames(t *testing.T) {
 	}
 }
 
-func TestRootScopedSeatbeltAllowsOnlyRuntimeSizingSysctls(t *testing.T) {
+func TestRootScopedSeatbeltAllowsOnlyRuntimeSizingAndUnameSysctls(t *testing.T) {
 	s, command := rootScopedFixture(t)
 	plan, err := compileSeatbelt(s, command)
 	if err != nil {
 		t.Fatal(err)
 	}
 	const sizing = `(allow sysctl-read (sysctl-name "hw.pagesize_compat") (sysctl-name "hw.ncpu"))`
-	if !strings.Contains(plan.source, sizing) || strings.Count(plan.source, "sysctl") != 3 {
-		t.Fatal("runtime sizing reads missing or broader sysctl permission emitted")
+	if !strings.Contains(plan.source, sizing) || strings.Count(plan.source, "(allow sysctl-read ") != 2 ||
+		strings.Count(plan.source, "(sysctl-name ") != 7 || strings.Contains(plan.source, "sysctl-write") {
+		t.Fatal("runtime sizing/uname reads missing or broader sysctl permission emitted")
+	}
+	for _, name := range []string{"kern.ostype", "kern.hostname", "kern.osrelease", "kern.version", "hw.machine"} {
+		if strings.Count(plan.source, `(sysctl-name "`+name+`")`) != 1 {
+			t.Fatal("missing exact uname read", name)
+		}
 	}
 	_, legacy, legacyCommand, _ := confinementFixture(t)
 	old, err := compileSeatbelt(legacy, legacyCommand)
@@ -275,6 +281,35 @@ func TestRootScopedGitSystemConfigChecksGrantNoContents(t *testing.T) {
 	_, legacy, legacyCommand, _ := confinementFixture(t)
 	old, err := compileSeatbelt(legacy, legacyCommand)
 	if err != nil || strings.Contains(old.source, "gitconfig") {
+		t.Fatal("legacy policy changed", err)
+	}
+}
+
+func TestRootScopedShSelectorMetadataRequiresSelectedShell(t *testing.T) {
+	s, command := rootScopedFixture(t)
+	const metadata = `(allow file-read-metadata file-test-existence (literal "/private") (literal "/private/var") (literal "/private/var/select") (literal "/private/var/select/sh"))`
+	s.Executables = append(s.Executables, ExecutablePin{"/bin/sh", strings.Repeat("d", 64)})
+	command.Environment = seatbeltEnvironment(s, command.Write)
+	plan, err := compileSeatbelt(s, command)
+	if err != nil || !strings.Contains(plan.source, metadata) {
+		t.Fatal("selected sh cannot inspect selector", err)
+	}
+	for _, line := range strings.Split(plan.source, "\n") {
+		if strings.Contains(line, "/private/var/select") && line != metadata {
+			t.Fatal("selector received another grant", line)
+		}
+	}
+	without := s
+	without.Executables = without.Executables[:len(without.Executables)-1]
+	withoutCommand := command
+	withoutCommand.Environment = seatbeltEnvironment(without, command.Write)
+	plain, err := compileSeatbelt(without, withoutCommand)
+	if err != nil || strings.Contains(plain.source, "/private/var/select") {
+		t.Fatal("unselected sh acquired selector metadata", err)
+	}
+	_, legacy, legacyCommand, _ := confinementFixture(t)
+	old, err := compileSeatbelt(legacy, legacyCommand)
+	if err != nil || strings.Contains(old.source, "/private/var/select") {
 		t.Fatal("legacy policy changed", err)
 	}
 }

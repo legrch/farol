@@ -52,7 +52,15 @@ describe("K0 real inherited-pipe process", () => {
     let client: Client | undefined;
     let phase = "spawn-and-handshake";
     try {
-      client = await spawnCore(executable, "disposable-profile", "k0-test");
+      // This first request includes a cold native process start, matching the
+      // desktop's bounded startup budget. Later RPCs keep their ordinary
+      // two-second deadlines. A timeout still owns cleanup of this one child.
+      client = await spawnCore(
+        executable,
+        "disposable-profile",
+        "k0-test",
+        15_000,
+      );
       phase = "status";
       const result = await client.request(
         "core.status",

@@ -4,11 +4,13 @@ The reviewed Node launcher sends these exact bytes to ``/usr/bin/python3 -``
 and one bounded JSON request on descriptor 3. Descriptor 6 inherits the original
 exclusive kernel lease and stays open through cleanup and process exit, including
 when its parent dies. The helper opens the owner's
-home and Applications directories component by component, changes directory
-through the verified Applications descriptor, and performs every mutation
-relative to that pinned directory.  Failures are content-free exit statuses.
+home, Applications and lease-state directories component by component. It
+copies only beneath the owner-private lease-state parent, then atomically places
+the verified image through the pinned Applications descriptor without overwrite.
+It never recursively cleans the shared namespace. Failures use content-free statuses.
 """
 
+import ctypes
 import errno
 import hashlib
 import json
@@ -85,7 +87,12 @@ def read_request():
         request = json.loads(raw.decode("utf-8"))
     except (UnicodeError, ValueError):
         refuse(EXIT_INVALID)
-    if not isinstance(request, dict) or set(request) != {
+    if not isinstance(request, dict):
+        refuse(EXIT_INVALID)
+    location_fields = {"installLocation"} if "installLocation" in request else set()
+    if request.get("installLocation", "legacy") not in ("shared", "legacy"):
+        refuse(EXIT_INVALID)
+    if set(request) != location_fields | {
         "schema",
         "home",
         "source",
@@ -465,17 +472,15 @@ def clear_directory(descriptor, depth=0):
             os.unlink(name, dir_fd=descriptor)
 
 
-def write_receipt(parent_fd, payload):
+def write_receipt(parent_fd, payload, private_parent):
     temporary = f".{RECEIPT_NAME}.{os.urandom(8).hex()}.tmp"
     descriptor = None
-    linked = False
-    published = False
     try:
         descriptor = os.open(
             temporary,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
             0o600,
-            dir_fd=parent_fd,
+            dir_fd=private_parent,
         )
         offset = 0
         while offset < len(payload):
@@ -484,19 +489,11 @@ def write_receipt(parent_fd, payload):
                 refuse(EXIT_RECEIPT)
             offset += written
         os.fsync(descriptor)
-        os.close(descriptor)
-        descriptor = None
-        os.link(
-            temporary,
-            RECEIPT_NAME,
-            src_dir_fd=parent_fd,
-            dst_dir_fd=parent_fd,
-            follow_symlinks=False,
-        )
-        linked = True
-        os.unlink(temporary, dir_fd=parent_fd)
+        published_identity = identity(os.fstat(descriptor))
+        rename_exclusive(private_parent, temporary, parent_fd, RECEIPT_NAME, EXIT_RECEIPT)
+        os.fsync(private_parent)
         os.fsync(parent_fd)
-        published = True
+        return published_identity
     except OSError as error:
         if error.errno == errno.EEXIST:
             refuse(EXIT_EXISTS)
@@ -504,16 +501,8 @@ def write_receipt(parent_fd, payload):
     finally:
         if descriptor is not None:
             os.close(descriptor)
-        if linked and not published:
-            try:
-                os.unlink(RECEIPT_NAME, dir_fd=parent_fd)
-            except OSError:
-                pass
-        if not published:
-            try:
-                os.unlink(temporary, dir_fd=parent_fd)
-            except OSError:
-                pass
+        # Retain any private failed preparation or uncertain public receipt.
+        # Never create, link or unlink a temporary in the shared namespace.
 
 
 def test_hook(enabled):
@@ -527,6 +516,147 @@ def test_hook(enabled):
         refuse(EXIT_INTERNAL)
 
 
+def require_shared_parent(info):
+    # Standard macOS administrator group (80); no permissions are changed.
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
+            or info.st_mode & 0o002
+            or (info.st_mode & 0o020 and info.st_gid != 80)):
+        refuse(EXIT_PATH)
+
+
+def open_applications(request, home_fd):
+    location = request.get("installLocation", "legacy")
+    if location not in ("shared", "legacy"):
+        refuse(EXIT_INVALID)
+    if location == "legacy":
+        descriptor = open_directory(home_fd, "Applications")
+        try:
+            require_safe_directory(os.fstat(descriptor), final=True)
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+    root = os.open("/", DIRECTORY_FLAGS)
+    try:
+        require_safe_directory(os.fstat(root), final=False)
+        if os.fstat(root).st_uid != 0:
+            refuse(EXIT_PATH)
+        descriptor = open_directory(root, "Applications")
+        try:
+            require_shared_parent(os.fstat(descriptor))
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+    finally:
+        os.close(root)
+
+
+def recheck_parent(request, home_fd, parent_fd):
+    current_home = open_absolute_directory(request["home"])
+    try:
+        if identity(os.fstat(current_home)) != identity(os.fstat(home_fd)):
+            refuse(EXIT_PATH)
+    finally:
+        os.close(current_home)
+    current = open_applications(request, home_fd)
+    try:
+        if identity(os.fstat(current)) != identity(os.fstat(parent_fd)):
+            refuse(EXIT_PATH)
+    finally:
+        os.close(current)
+
+
+def recheck_destination(request, home_fd, parent_fd, expected):
+    recheck_parent(request, home_fd, parent_fd)
+    try:
+        named = os.stat(APP_NAME, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError:
+        refuse(EXIT_PATH)
+    if identity(named) != expected:
+        refuse(EXIT_PATH)
+
+
+def recheck_receipt(parent_fd, expected, payload):
+    descriptor = None
+    try:
+        descriptor = os.open(RECEIPT_NAME, FILE_FLAGS, dir_fd=parent_fd)
+        opened = os.fstat(descriptor)
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                or identity(opened) != expected or opened.st_size != len(payload)):
+            refuse(EXIT_RECEIPT)
+        raw = bytearray()
+        while len(raw) <= len(payload):
+            part = os.read(descriptor, len(payload) + 1 - len(raw))
+            if not part:
+                break
+            raw.extend(part)
+        after = os.fstat(descriptor)
+        named = os.stat(RECEIPT_NAME, dir_fd=parent_fd, follow_symlinks=False)
+        if (bytes(raw) != payload or identity(after) != expected
+                or identity(named) != expected or after.st_nlink != 1
+                or named.st_nlink != 1 or after.st_size != opened.st_size
+                or after.st_mtime_ns != opened.st_mtime_ns
+                or after.st_ctime_ns != opened.st_ctime_ns):
+            refuse(EXIT_RECEIPT)
+    except OSError:
+        refuse(EXIT_RECEIPT)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def rename_exclusive(source_parent, source, target_parent, target, failure_status):
+    # Both publishers hold their owner-private source; no overwrite fallback.
+    libc = ctypes.CDLL(None, use_errno=True)
+    rename = libc.renameatx_np
+    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int,
+                       ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    if rename(source_parent, os.fsencode(source), target_parent, os.fsencode(target), 4) != 0:
+        if ctypes.get_errno() == errno.EEXIST:
+            refuse(EXIT_EXISTS)
+        refuse(failure_status)
+
+
+def create_private_stage(request, parent_fd):
+    # The inherited lease's owner-private parent excludes shared-slot writers.
+    stage_parent = open_absolute_directory(os.path.dirname(request["lease"]["file"]))
+    stage_fd = None
+    try:
+        info = os.fstat(stage_parent)
+        if info.st_mode & 0o077 or info.st_dev != os.fstat(parent_fd).st_dev:
+            refuse(EXIT_PATH)
+        name = ".promotion-stage-" + os.urandom(16).hex()
+        os.mkdir(name, 0o700, dir_fd=stage_parent)
+        stage_fd = open_directory(stage_parent, name)
+        os.fsync(stage_parent)
+        return stage_parent, name, stage_fd
+    except BaseException:
+        if stage_fd is not None:
+            os.close(stage_fd)
+        os.close(stage_parent)
+        raise
+
+
+def publish_stage(request, home_fd, parent_fd, stage_parent, name, stage_fd):
+    verify_inherited_lease(request)
+    recheck_parent(request, home_fd, parent_fd)
+    current = open_absolute_directory(os.path.dirname(request["lease"]["file"]))
+    try:
+        if identity(os.fstat(current)) != identity(os.fstat(stage_parent)):
+            refuse(EXIT_PATH)
+    finally:
+        os.close(current)
+    named = os.stat(name, dir_fd=stage_parent, follow_symlinks=False)
+    if identity(named) != identity(os.fstat(stage_fd)):
+        refuse(EXIT_PATH)
+    rename_exclusive(stage_parent, name, parent_fd, APP_NAME, EXIT_PATH)
+    os.fsync(stage_parent)
+    os.fsync(parent_fd)
+    recheck_destination(request, home_fd, parent_fd, identity(os.fstat(stage_fd)))
+
+
 def run(request):
     verify_inherited_lease(request)
     home_fd = open_absolute_directory(request["home"])
@@ -534,18 +664,18 @@ def run(request):
     source_fd = None
     destination_fd = None
     destination_identity = None
-    destination_created = False
-    completed = False
+    stage_parent = None
     try:
         verify_inherited_lease(request)
-        try:
-            os.mkdir("Applications", 0o755, dir_fd=home_fd)
-        except OSError as error:
-            if error.errno != errno.EEXIST:
-                refuse(EXIT_PATH)
-        parent_fd = open_directory(home_fd, "Applications")
-        require_safe_directory(os.fstat(parent_fd), final=True)
+        if request.get("installLocation", "legacy") == "legacy":
+            try:
+                os.mkdir("Applications", 0o755, dir_fd=home_fd)
+            except OSError as error:
+                if error.errno != errno.EEXIST:
+                    refuse(EXIT_PATH)
+        parent_fd = open_applications(request, home_fd)
         test_hook(request["testHook"])
+        recheck_parent(request, home_fd, parent_fd)
         os.fchdir(parent_fd)
         for name in (APP_NAME, RECEIPT_NAME):
             try:
@@ -557,14 +687,7 @@ def run(request):
             refuse(EXIT_EXISTS)
         source_fd = open_absolute_directory(request["source"])
         verify_inherited_lease(request)
-        try:
-            os.mkdir(APP_NAME, 0o700, dir_fd=parent_fd)
-        except OSError as error:
-            if error.errno == errno.EEXIST:
-                refuse(EXIT_EXISTS)
-            refuse(EXIT_COPY)
-        destination_created = True
-        destination_fd = open_directory(parent_fd, APP_NAME)
+        stage_parent, stage_name, destination_fd = create_private_stage(request, parent_fd)
         destination_identity = identity(os.fstat(destination_fd))
         verify_inherited_lease(request)
         copy_tree(source_fd, destination_fd, {"entries": 0, "bytes": 0})
@@ -573,20 +696,18 @@ def run(request):
         if digest_tree(destination_fd) != request["artifactSha256"]:
             refuse(EXIT_DIGEST)
         os.fsync(destination_fd)
+        publish_stage(request, home_fd, parent_fd, stage_parent, stage_name, destination_fd)
         verify_inherited_lease(request)
-        write_receipt(parent_fd, request["receiptBytes"])
-        completed = True
+        recheck_destination(request, home_fd, parent_fd, destination_identity)
+        receipt_identity = write_receipt(parent_fd, request["receiptBytes"], stage_parent)
+        recheck_destination(request, home_fd, parent_fd, destination_identity)
+        recheck_receipt(parent_fd, receipt_identity, request["receiptBytes"])
+        recheck_destination(request, home_fd, parent_fd, destination_identity)
         os.write(1, MAGIC)
     finally:
-        if destination_created and not completed and destination_fd is not None:
-            try:
-                current = os.stat(APP_NAME, dir_fd=parent_fd, follow_symlinks=False)
-                if identity(current) == destination_identity:
-                    clear_directory(destination_fd)
-                    os.rmdir(APP_NAME, dir_fd=parent_fd)
-            except OSError:
-                pass
-        for descriptor in (destination_fd, source_fd, parent_fd, home_fd):
+        # Never recursively clean through a shared namespace, even on refusal.
+        # A failed private stage or displaced placed image remains for custody.
+        for descriptor in (destination_fd, source_fd, stage_parent, parent_fd, home_fd):
             if descriptor is not None:
                 try:
                     os.close(descriptor)

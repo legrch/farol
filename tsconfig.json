@@ -27,6 +27,7 @@
   },
   "include": [
     "apps/desktop/**/*.ts",
+    "apps/desktop/**/*.tsx",
     "src/**/*.ts",
     "tests/**/*.ts",
     "vitest.config.ts",

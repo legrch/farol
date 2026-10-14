@@ -235,3 +235,66 @@
 .setup-wizard .control-row[hidden] {
   display: none;
 }
+
+.workspace-folder-icon {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+.setup-wizard .workspace-choice {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  column-gap: 10px;
+  text-align: left;
+  padding: 14px;
+}
+.setup-wizard .workspace-choice .workspace-folder-icon {
+  grid-row: 1 / 3;
+}
+.setup-wizard .workspace-choice > span {
+  grid-column: 2;
+}
+.setup-wizard .workspace-heading h3 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.connection-check-return {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.connection-check-return svg {
+  width: 16px;
+  height: 16px;
+}
+
+.setup-wizard .settings-group .settings-group {
+  margin: 18px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.connection-app-target {
+  margin: 16px 0;
+}
+.connection-app-target > summary,
+.attachment-result > summary {
+  padding: 8px 0;
+  color: var(--muted);
+  cursor: pointer;
+}
+.connection-app-target form {
+  margin-top: 8px;
+}
+.connection-app-target form > button {
+  margin-top: 12px;
+}
+.attachment-result {
+  margin-top: 20px;
+}

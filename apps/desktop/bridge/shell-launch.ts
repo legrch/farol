@@ -104,6 +104,18 @@ export function encodeShellLaunch(
               GitRuntimeResources: {
                 Git: pin(support.gitRuntimeResources.git),
                 Files: support.gitRuntimeResources.files.map(pin),
+                ...(support.gitRuntimeResources.python
+                  ? {
+                      Python: {
+                        Files:
+                          support.gitRuntimeResources.python.files.map(pin),
+                        Directories:
+                          support.gitRuntimeResources.python.directories.map(
+                            (d) => ({ Path: d.path, Entries: [...d.entries] }),
+                          ),
+                      },
+                    }
+                  : {}),
                 Directories: support.gitRuntimeResources.directories.map(
                   (d) => ({ Path: d.path, Entries: [...d.entries] }),
                 ),

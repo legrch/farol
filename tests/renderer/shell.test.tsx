@@ -2018,7 +2018,7 @@ it("fresh Setup navigation never writes, verifies, clears credentials or invents
   expect(
     host.querySelector('[aria-label="Setup overview"]')?.textContent,
   ).toContain("Not checked");
-  for (const step of ["Sign in", "Workspaces", "Connection", "Check"]) {
+  for (const step of ["Sign in", "Folders", "Connection", "Add to ChatGPT"]) {
     await act(async () => button(host, step).click());
     expect(c.getSnapshot().destination.area).toBe("setup");
   }
@@ -2055,32 +2055,30 @@ it("Setup presents a guided Overview and contextual steps with navigation-only c
   expect(page.querySelectorAll(".setup-checklist-row")).toHaveLength(4);
   expect(
     page.querySelector('[data-setup-check="folders"]')?.textContent,
-  ).toContain("Choose workspaces and access for each one.");
+  ).toContain("Choose folders and access for each one.");
   expect(page.querySelector(".setup-wizard-footer")).toBeNull();
-  await act(async () => button(page, "Set up Workspaces").click());
-  expect(page.querySelector("h1")?.textContent).toBe("Workspaces");
+  await act(async () => button(page, "Set up Folders").click());
+  expect(page.querySelector("h1")?.textContent).toBe("Folders");
   expect(page.querySelector(".setup-wizard-intro")?.textContent).toContain(
     "Choose what ChatGPT can read and change.",
   );
-  expect(
-    visibleHeadings().filter((title) => title === "Workspaces"),
-  ).toHaveLength(1);
+  expect(visibleHeadings().filter((title) => title === "Folders")).toHaveLength(
+    1,
+  );
   await act(async () => button(page, "Previous").click());
+  expect(c.getSnapshot().destination.setupStep).toBe("signin");
+  await act(async () => button(page, "Continue").click());
+  expect(c.getSnapshot().destination.setupStep).toBe("folders");
+  await act(async () => button(page, "Continue").click());
   expect(c.getSnapshot().destination.setupStep).toBe("connection");
-  expect(visibleHeadings()).toEqual(["Connection"]);
   const help = page.querySelector<HTMLDetailsElement>(".setup-help")!;
   expect(help.open).toBe(false);
   expect(help.textContent).toContain("Connection diagnostics");
-  await act(async () => {
-    help.open = true;
-  });
-  await act(async () => button(page, "Continue").click());
-  expect(c.getSnapshot().destination.setupStep).toBe("folders");
   await act(async () => button(page, "Continue").click());
   expect(c.getSnapshot().destination.setupStep).toBe("attachment");
-  expect(visibleHeadings()).toEqual(["Check"]);
+  expect(visibleHeadings()).toContain("Add to ChatGPT");
   await act(async () => button(page, "Previous").click());
-  expect(c.getSnapshot().destination.setupStep).toBe("folders");
+  expect(c.getSnapshot().destination.setupStep).toBe("connection");
   await act(async () => button(page, "Continue").click());
   await act(async () => button(page, "Back to overview").click());
   expect(c.getSnapshot().destination.setupStep).toBe("overview");
@@ -2090,7 +2088,9 @@ it("Setup presents a guided Overview and contextual steps with navigation-only c
     ),
   ).toBe(false);
   expect(c.getSnapshot().configuration).toBe(saved);
-  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.configure).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ kind: "chatgpt.observe-sign-in" }),
+  );
   expect(f.api.task).not.toHaveBeenCalled();
   expect(f.api.bootstrap).toHaveBeenCalledTimes(1);
   expect(f.api.installedUpdate).toHaveBeenCalledTimes(1);
@@ -2251,7 +2251,7 @@ it("Setup overview resumes the first incomplete step and ready review stays nond
     review.c.navigate({ area: "settings", page: "general" }),
   );
   await act(async () => button(review.host, "Review Setup").click());
-  await act(async () => button(review.host, "Review Workspaces").click());
+  await act(async () => button(review.host, "Review Folders").click());
   expect(review.c.getSnapshot().destination.setupStep).toBe("folders");
   await act(async () => button(review.host, "Overview").click());
   expect(
@@ -2318,13 +2318,13 @@ it("Setup owns a separate guided rail destination and shares existing Settings w
       ?.hasAttribute("aria-current"),
   ).toBe(false);
   expect(host.querySelector('[aria-label="Setup steps"]')).not.toBeNull();
-  await act(async () => button(host, "Workspaces").click());
+  await act(async () => button(host, "Folders").click());
   expect(c.getSnapshot().destination).toMatchObject({
     area: "setup",
     page: "folders",
   });
   expect(host.querySelector(".toolbar-title")?.textContent).toContain(
-    "Workspaces",
+    "Folders",
   );
   await act(async () => button(host, "Settings").click());
   expect(c.getSnapshot().destination.page).toBe("appearance");
@@ -3691,7 +3691,7 @@ it.each([
       f.emit("update", ready);
       c.overlay("update");
     });
-    expect(button(host, "Install and Relaunch").disabled).toBe(true);
+    expect(button(host, "Install and Relaunch").disabled).toBe(false);
     const pending = deferred<unknown>();
     vi.mocked(f.api.installedUpdate)
       .mockClear()

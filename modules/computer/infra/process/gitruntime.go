@@ -12,14 +12,16 @@ import (
 
 const gitRuntimeImage = "/Library/Developer/CommandLineTools/usr/bin/git"
 const gitRuntimeData = "/Library/Developer/CommandLineTools/usr/share/git-core"
+const gitRuntimeAttributes = gitRuntimeData + "/gitattributes"
 const gitRuntimeTemplates = gitRuntimeData + "/templates"
 
 // GitRuntimeResources is trusted build input, not a command or workspace grant.
-// Only the selected CLT Git's ordinary config/template data is supported here.
+// Selected CLT Git data and optional finite CLT Python dependencies only.
 type GitRuntimeResources struct {
 	Git         ExecutablePin
 	Files       []ExecutablePin
 	Directories []GitRuntimeDirectory
+	Python      *PythonRuntimeResources `json:",omitempty"`
 }
 type GitRuntimeDirectory struct {
 	Path    string
@@ -31,6 +33,7 @@ func cloneGitRuntime(r *GitRuntimeResources) *GitRuntimeResources {
 		return nil
 	}
 	c := *r
+	c.Python = clonePythonRuntime(r.Python)
 	c.Files = slices.Clone(r.Files)
 	c.Directories = slices.Clone(r.Directories)
 	for i := range c.Directories {
@@ -42,7 +45,7 @@ func sameGitRuntime(a, b *GitRuntimeResources) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return a.Git == b.Git && slices.Equal(a.Files, b.Files) &&
+	return a.Git == b.Git && samePythonRuntime(a.Python, b.Python) && slices.Equal(a.Files, b.Files) &&
 		slices.EqualFunc(a.Directories, b.Directories, func(x, y GitRuntimeDirectory) bool {
 			return x.Path == y.Path && slices.Equal(x.Entries, y.Entries)
 		})
@@ -51,7 +54,7 @@ func validGitRuntime(r *GitRuntimeResources, executables []ExecutablePin) bool {
 	if r == nil {
 		return true
 	}
-	if r.Git.Path != gitRuntimeImage || !digestValue(r.Git.SHA256) || r.Git.SHA256 == strings.Repeat("0", 64) || !slices.Contains(executables, r.Git) ||
+	if !validPythonRuntime(r.Python, executables) || r.Git.Path != gitRuntimeImage || !digestValue(r.Git.SHA256) || r.Git.SHA256 == strings.Repeat("0", 64) || !slices.Contains(executables, r.Git) ||
 		len(r.Files) < 2 || len(r.Files) > 32 || len(r.Directories) < 1 || len(r.Directories) > 8 {
 		return false
 	}
@@ -60,7 +63,7 @@ func validGitRuntime(r *GitRuntimeResources, executables []ExecutablePin) bool {
 	for _, file := range r.Files {
 		if !absolutePolicyPath(file.Path) || !digestValue(file.SHA256) ||
 			file.SHA256 == strings.Repeat("0", 64) || file.Path <= last ||
-			(file.Path != gitRuntimeData+"/gitconfig" && !insidePolicy(gitRuntimeTemplates, file.Path)) {
+			(file.Path != gitRuntimeData+"/gitconfig" && file.Path != gitRuntimeAttributes && !insidePolicy(gitRuntimeTemplates, file.Path)) {
 			return false
 		}
 		paths[file.Path], last = true, file.Path
@@ -101,7 +104,7 @@ func validGitRuntime(r *GitRuntimeResources, executables []ExecutablePin) bool {
 		}
 	}
 	for path := range paths {
-		if path == gitRuntimeData+"/gitconfig" || path == gitRuntimeTemplates {
+		if path == gitRuntimeData+"/gitconfig" || path == gitRuntimeAttributes || path == gitRuntimeTemplates {
 			continue
 		}
 		parent := filepath.Dir(path)
@@ -133,13 +136,14 @@ type gitRuntimeFactPort interface {
 type gitRuntimeObservation struct {
 	files       []platformFileFacts
 	directories []gitRuntimeDirectoryFacts
+	alias       *pythonAliasFacts
 }
 
 func sameGitRuntimeObservation(a, b *gitRuntimeObservation) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return slices.Equal(a.files, b.files) && slices.Equal(a.directories, b.directories)
+	return slices.Equal(a.files, b.files) && slices.Equal(a.directories, b.directories) && samePythonAlias(a.alias, b.alias)
 }
 func (s *RootScopedPlatformStrategy) observeGitRuntime(ctx context.Context) (*gitRuntimeObservation, error) {
 	refuse := func() (*gitRuntimeObservation, error) { return nil, &processsvc.NativeFailure{} }
@@ -155,16 +159,16 @@ func (s *RootScopedPlatformStrategy) observeGitRuntime(ctx context.Context) (*gi
 		return refuse()
 	}
 	out := &gitRuntimeObservation{}
-	for _, file := range r.Files {
+	for _, file := range r.resourceFiles() {
 		f, err := reader.gitRuntimeFile(ctx, file.Path)
 		if err != nil || f.path != file.Path || f.sha256 != file.SHA256 || f.uid != 0 ||
 			!f.mode.IsRegular() || f.mode.Perm()&0022 != 0 || f.links != 1 ||
-			f.size < 0 || f.size > 256*1024 || f.identity.Device == "" || f.identity.Inode == "" {
+			f.size < 0 || f.size > gitResourceMaximum(file.Path) || f.identity.Device == "" || f.identity.Inode == "" {
 			return refuse()
 		}
 		out.files = append(out.files, f)
 	}
-	for _, dir := range r.Directories {
+	for _, dir := range r.resourceDirectories() {
 		f, err := reader.gitRuntimeDirectory(ctx, dir.Path)
 		p := f.platform
 		if err != nil || p.path != dir.Path || p.filesystem != "apfs" || !p.local || p.nested ||
@@ -174,6 +178,19 @@ func (s *RootScopedPlatformStrategy) observeGitRuntime(ctx context.Context) (*gi
 			return refuse()
 		}
 		out.directories = append(out.directories, f)
+	}
+	if r.Python != nil {
+		reader, ok := s.frozen.facts.(interface {
+			pythonAlias(context.Context) (pythonAliasFacts, error)
+		})
+		if !ok {
+			return refuse()
+		}
+		alias, err := reader.pythonAlias(ctx)
+		if err != nil {
+			return refuse()
+		}
+		out.alias = &alias
 	}
 	if ctx.Err() != nil {
 		return refuse()

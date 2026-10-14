@@ -12,6 +12,8 @@ import { createBuildIdentity } from "../../tooling/build-identity-contract.mjs";
 import { promotionUserData } from "../../tooling/promotion-obligations.mjs";
 import {
   replaceInstalledPreview,
+  prepareCleanReplacementLock,
+  replacementApplications,
   snapshotInstalledReplacement,
 } from "../../tooling/replace-installed-preview.mjs";
 import { isPromotionLeaseHeld } from "../../tooling/promotion-lease.mjs";
@@ -195,6 +197,168 @@ async function fixture() {
 }
 
 describe("one-shot installed replacement", () => {
+  it("prepares only an empty real updater mutex after confirmed closed-app admission", async () => {
+    const f = await fixture();
+    for (const item of await fs.readdir(f.updates))
+      await fs.rm(path.join(f.updates, item), { recursive: true });
+    const result = await prepareCleanReplacementLock(
+      f.home,
+      f.artifact.buildId,
+      "legacy",
+      { processProof: () => {} },
+    );
+    expect(result.status).toBe("created");
+    expect(await fs.readFile(path.join(f.updates, "lock"), "utf8")).toBe("");
+    expect(await kernelLockHeld(path.join(f.updates, "lock"))).toBe(false);
+    expect(await isPromotionLeaseHeld(f.userData)).toBe(false);
+    expect(await fs.readFile(f.oldApp + ".receipt.json", "utf8")).toBe(
+      f.oldReceipt,
+    );
+  });
+  it("refuses to initialize an absent updater mutex over historical records", async () => {
+    const f = await fixture();
+    await fs.rm(path.join(f.updates, "lock"));
+    await expect(
+      prepareCleanReplacementLock(f.home, f.artifact.buildId, "legacy", {
+        processProof: () => {},
+      }),
+    ).rejects.toThrow();
+    await expect(fs.lstat(path.join(f.updates, "lock"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await isPromotionLeaseHeld(f.userData)).toBe(false);
+  });
+  it("selects only an explicit shared installation while retaining the legacy default", () => {
+    expect(replacementApplications("/Users/owner")).toBe(
+      "/Users/owner/Applications",
+    );
+    expect(replacementApplications("/Users/owner", "shared")).toBe(
+      "/Applications",
+    );
+    expect(() => replacementApplications("/Users/owner", "/foreign")).toThrow(
+      "REPLACEMENT_LOCATION_INVALID",
+    );
+  });
+  it("refuses a shared selector on the frozen version 1 selection before effects", async () => {
+    const f = await fixture();
+    await expect(
+      replaceInstalledPreview(
+        { ...f.selection, installLocation: "shared" },
+        false,
+        f.deps,
+      ),
+    ).rejects.toThrow();
+    expect(await fs.readFile(f.oldApp + ".receipt.json", "utf8")).toBe(
+      f.oldReceipt,
+    );
+    await expect(fs.lstat(f.custody)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it("accepts a version 2 legacy selection and retains accepted execution images with a clean updater", async () => {
+    const f = await fixture();
+    await fs.rm(path.join(f.updates, "ready.json"));
+    await fs.rm(path.join(f.updates, "last-update.json"));
+    await fs.rm(path.join(f.updates, "a".repeat(32)), { recursive: true });
+    const image = path.join(f.updates, "installed-execution", "c".repeat(64));
+    await fs.mkdir(image, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      path.join(image, "fixture.txt"),
+      "synthetic execution image\n",
+      { mode: 0o600 },
+    );
+    f.selection = {
+      ...f.selection,
+      schema: "farol.installed-replacement-selection/2",
+      installLocation: "legacy",
+      snapshot: await snapshotInstalledReplacement(f.home),
+    };
+    const result = await replaceInstalledPreview(f.selection, true, f.deps);
+    expect(result.operation).toBe("completed");
+    expect(
+      await fs.readFile(
+        path.join(
+          f.custody,
+          "installed-updates/installed-execution",
+          "c".repeat(64),
+          "fixture.txt",
+        ),
+        "utf8",
+      ),
+    ).toBe("synthetic execution image\n");
+    expect(result.receipt.destination).toBe(f.oldApp);
+  });
+  it.each(["launch-Farol.app", "installed-execution"])(
+    "refuses custody while an original process uses retained %s resources",
+    async (kind) => {
+      const f = await fixture();
+      const retained =
+        kind === "launch-Farol.app"
+          ? path.join(f.updates, "d".repeat(32), kind)
+          : path.join(f.updates, kind, "c".repeat(64), "Farol.app");
+      await fs.mkdir(retained, { recursive: true, mode: 0o700 });
+      const entry = path.join(retained, "probe.cjs");
+      await fs.writeFile(
+        entry,
+        'process.stdout.write("READY"); setInterval(() => {}, 1000);',
+        { mode: 0o600 },
+      );
+      f.selection.snapshot = await snapshotInstalledReplacement(f.home);
+      delete f.deps.processProof;
+      const original = observe(
+        spawn(process.execPath, [entry], {
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" },
+        }),
+      );
+      try {
+        await waitFor(() => original.output().includes("READY"));
+        await expect(
+          replaceInstalledPreview(f.selection, true, f.deps),
+        ).rejects.toThrow("REPLACEMENT_PROCESS_ACTIVE");
+        expect(await fs.readFile(f.oldApp + ".receipt.json", "utf8")).toBe(
+          f.oldReceipt,
+        );
+        await expect(fs.lstat(f.custody)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(
+          fs.lstat(
+            path.join(
+              f.userData,
+              "farol-next-state/installed-replacement.pending",
+            ),
+          ),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        if (
+          original.child.exitCode === null &&
+          original.child.signalCode === null
+        )
+          original.child.kill("SIGTERM");
+        await original.closed;
+      }
+    },
+  );
+
+  it.each(["ready.json", "last-update.json", "both-with-history"])(
+    "refuses missing update records (%s) while historical work remains",
+    async (missing) => {
+      const f = await fixture();
+      for (const name of missing === "both-with-history"
+        ? ["ready.json", "last-update.json"]
+        : [missing])
+        await fs.rm(path.join(f.updates, name));
+      f.selection.snapshot = await snapshotInstalledReplacement(f.home);
+      await expect(
+        replaceInstalledPreview(f.selection, false, f.deps),
+      ).rejects.toThrow("REPLACEMENT_UPDATE_RECEIPT_UNCONFIRMED");
+      await expect(fs.lstat(f.custody)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(await fs.readFile(f.oldApp + ".receipt.json", "utf8")).toBe(
+        f.oldReceipt,
+      );
+    },
+  );
   it("keeps the complete local normal receipt schema identical to its runtime owner", async () => {
     const owner = await fs.readFile(
       new URL(
@@ -716,13 +880,20 @@ os.write(1, b"EXIT\n")
   });
   it.each([
     "partial-intent",
+    "custody-substituted-before-open",
     "retirement-and-uncertainty",
     "placement-lost-result",
     "completion-lost-result",
+    "app-displaced-during-digest",
+    "receipt-displaced-during-digest",
+    "custody-displaced-during-digest",
+    "app-displaced-after-retirement",
   ])(
     "retains both original locks and live owner after %s, regardless of pending presence after original child close",
     async (fault) => {
       const f = await fixture();
+      if (fault === "custody-substituted-before-open")
+        await fs.chmod(f.oldApp, 0o700);
       const packet = path.join(f.r, "fault-fixture.json");
       await fs.writeFile(
         packet,
@@ -756,14 +927,27 @@ os.write(1, b"EXIT\n")
 import errno, os, stat
 real_sync = os.fsync
 retirement_failed = False
+custody_substituted = False
 state = STATE_PATH
 pending = os.path.join(state, "installed-replacement.pending")
 retired = RETIRED_PATH
 fault = FAULT_KIND
 def fault_sync(fd):
-    global retirement_failed
+    global retirement_failed, custody_substituted
     info = os.fstat(fd)
-    if fault == "partial-intent" and stat.S_ISREG(info.st_mode):
+    if fault == "custody-substituted-before-open" and not custody_substituted and stat.S_ISDIR(info.st_mode) and os.path.exists(custody_path) and os.path.exists(installed_app) and os.path.exists(pending):
+        named_apps = os.stat(os.path.dirname(installed_app), follow_symlinks=False)
+        if (info.st_dev, info.st_ino) == (named_apps.st_dev, named_apps.st_ino):
+            custody_substituted = True
+            os.rename(custody_path, custody_path + ".allocated")
+            os.rename(installed_app, custody_path)
+            os.write(9, b"PUBLIC_CUSTODY_SUBSTITUTED\n")
+    if fault == "app-displaced-after-retirement" and stat.S_ISDIR(info.st_mode) and os.path.exists(retired):
+        named_state = os.stat(state, follow_symlinks=False)
+        if (info.st_dev, info.st_ino) == (named_state.st_dev, named_state.st_ino) and os.path.exists(installed_app):
+            os.rename(installed_app, installed_app + ".displaced")
+            os.write(9, b"NAMED_APP_DISPLACED_AFTER_RETIREMENT\n")
+    if fault == "partial-intent" and stat.S_ISREG(info.st_mode) and os.path.exists(pending):
         named = os.stat(pending, follow_symlinks=False)
         if (info.st_dev, info.st_ino) == (named.st_dev, named.st_ino):
             os.write(9, b"INITIAL_INTENT_FILE_FSYNC_FAILED\n")
@@ -780,6 +964,37 @@ def fault_sync(fd):
                 raise OSError(errno.EIO, "fixture uncertainty fsync")
     return real_sync(fd)
 os.fsync = fault_sync
+real_listdir = os.listdir
+displaced = False
+installed_app = INSTALLED_APP
+custody_path = CUSTODY_PATH
+installed_receipt = installed_app + ".receipt.json"
+def fault_listdir(fd):
+    global displaced
+    if not displaced and isinstance(fd, int) and fault in ("app-displaced-during-digest", "receipt-displaced-during-digest", "custody-displaced-during-digest"):
+        info = os.fstat(fd)
+        named = os.stat(installed_app, follow_symlinks=False)
+        if (info.st_dev, info.st_ino) == (named.st_dev, named.st_ino):
+            displaced = True
+            if fault == "app-displaced-during-digest":
+                os.rename(installed_app, installed_app + ".displaced")
+                os.write(9, b"NAMED_APP_DISPLACED\n")
+            elif fault == "custody-displaced-during-digest":
+                os.rename(custody_path, custody_path + ".displaced")
+                os.write(9, b"NAMED_CUSTODY_DISPLACED\n")
+            else:
+                with open(installed_receipt, "rb") as original:
+                    raw = original.read()
+                os.rename(installed_receipt, installed_receipt + ".displaced")
+                replacement = os.open(installed_receipt, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                try:
+                    os.write(replacement, raw)
+                    os.fsync(replacement)
+                finally:
+                    os.close(replacement)
+                os.write(9, b"NEW_RECEIPT_DISPLACED\n")
+    return real_listdir(fd)
+os.listdir = fault_listdir
 `;
       const nativePrefix = prefix
         .replace(
@@ -790,7 +1005,9 @@ os.fsync = fault_sync
           "RETIRED_PATH",
           JSON.stringify(path.join(f.custody, "completed-intent.json")),
         )
-        .replace("FAULT_KIND", JSON.stringify(fault));
+        .replace("FAULT_KIND", JSON.stringify(fault))
+        .replace("INSTALLED_APP", JSON.stringify(f.oldApp))
+        .replace("CUSTODY_PATH", JSON.stringify(f.custody));
       await fs.writeFile(
         runner,
         `
@@ -815,14 +1032,14 @@ deps.native = async (request, lease, updater, register) => {
     }
     return result;
   }
-  if ((fault === "partial-intent" && request.action !== "custody") ||
-      (fault !== "partial-intent" && request.action !== "complete") ||
+  if ((["partial-intent", "custody-substituted-before-open"].includes(fault) && request.action !== "custody") ||
+      (!["partial-intent", "custody-substituted-before-open"].includes(fault) && request.action !== "complete") ||
       fault === "placement-lost-result")
     return runReplacementNative(request, lease, updater, register);
   const helper = await fs.readFile(${JSON.stringify(helperFile)});
   const library = await fs.readFile(${JSON.stringify(libraryFile)});
-  if (sha(helper) !== "479edb96545dc2ba30938aed7af3ba22f3098b8c3cc8dbac17176c891dbefcb5" ||
-      sha(library) !== "53eee38236103b140d95ab27342c522b7a9a1f4fc8fe8442b2cdd44f07be32db")
+  if (sha(helper) !== "e5c37e394392fcdf657b90ed5204abb45aa1504e4a8891c4721cef3a6517ed28" ||
+      sha(library) !== "739ff487dbffbd3e232c3b90e22c234cebd4f735b226101187ea60a1f62691ce")
     throw Error("FIXTURE_HELPER_ATTESTATION_FAILED");
   const child = spawn("/usr/bin/python3", ["-I", "-S", "-B", "-"], {
     cwd: "/", env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" },
@@ -903,6 +1120,62 @@ catch (error) { process.send({ kind: "replacement-failed", message: error.messag
           await expect(fs.lstat(f.custody)).rejects.toMatchObject({
             code: "ENOENT",
           });
+        } else if (fault === "custody-substituted-before-open") {
+          expect(text).toBe("PUBLIC_CUSTODY_SUBSTITUTED\n");
+          expect(await treeDigest(f.custody)).toBe(
+            f.selection.snapshot.appSha256,
+          );
+          await expect(
+            fs.lstat(path.join(f.custody, "intent.json")),
+          ).rejects.toMatchObject({ code: "ENOENT" });
+          expect(
+            (
+              await fs.lstat(path.join(f.custody + ".allocated", "intent.json"))
+            ).isFile(),
+          ).toBe(true);
+        } else if (
+          fault === "app-displaced-during-digest" ||
+          fault === "receipt-displaced-during-digest" ||
+          fault === "custody-displaced-during-digest" ||
+          fault === "app-displaced-after-retirement"
+        ) {
+          const displacedApp =
+            fault === "app-displaced-during-digest" ||
+            fault === "app-displaced-after-retirement";
+          expect(
+            await treeDigest(displacedApp ? f.oldApp + ".displaced" : f.oldApp),
+          ).toBe(f.artifact.artifactSha256);
+          const tokens = {
+            "app-displaced-during-digest": "NAMED_APP_DISPLACED\n",
+            "receipt-displaced-during-digest": "NEW_RECEIPT_DISPLACED\n",
+            "custody-displaced-during-digest": "NAMED_CUSTODY_DISPLACED\n",
+            "app-displaced-after-retirement":
+              "NAMED_APP_DISPLACED_AFTER_RETIREMENT\n",
+          };
+          expect(text).toBe(tokens[fault]);
+          const pendingRecord = JSON.parse(await fs.readFile(pending, "utf8"));
+          if (fault === "app-displaced-after-retirement") {
+            expect(pendingRecord.schema).toBe(
+              "farol.installed-replacement-unknown/1",
+            );
+            expect(
+              (
+                await fs.lstat(path.join(f.custody, "completed-intent.json"))
+              ).isFile(),
+            ).toBe(true);
+          } else {
+            expect(pendingRecord.operationId).toBe(f.selection.operationId);
+            await expect(
+              fs.lstat(
+                path.join(
+                  fault === "custody-displaced-during-digest"
+                    ? f.custody + ".displaced"
+                    : f.custody,
+                  "completed-intent.json",
+                ),
+              ),
+            ).rejects.toMatchObject({ code: "ENOENT" });
+          }
         } else {
           expect(await treeDigest(f.oldApp)).toBe(f.artifact.artifactSha256);
           if (fault === "retirement-and-uncertainty") {
@@ -938,9 +1211,14 @@ catch (error) { process.send({ kind: "replacement-failed", message: error.messag
           expect(closed.stderr).toMatch(/^REPLACEMENT_[A-Z_]+\n$/u);
         }
         const lockFile = path.join(
-          fault === "partial-intent"
+          ["partial-intent", "custody-substituted-before-open"].includes(fault)
             ? f.updates
-            : path.join(f.custody, "installed-updates"),
+            : path.join(
+                fault === "custody-displaced-during-digest"
+                  ? f.custody + ".displaced"
+                  : f.custody,
+                "installed-updates",
+              ),
           "lock",
         );
         const named = await fs.lstat(lockFile, { bigint: true });

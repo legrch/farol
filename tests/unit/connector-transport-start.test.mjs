@@ -48,6 +48,7 @@ const phases = [
   "receipt-clear",
   "open",
   "prepare",
+  "resources",
   "configure",
   "doctor",
   "start",
@@ -242,6 +243,11 @@ function fixture({ pause, startResult = originalStart, openError } = {}) {
     path,
     process: { execPath: "/controlled/electron" },
     directory: "/controlled/app",
+    desktopExecutionResources: () => ({
+      directory: "/controlled/app",
+      executable: "/controlled/electron",
+      recheck: port("resources"),
+    }),
   };
   const actual = vm.runInNewContext(compiled, context);
   let recoveryResult;
@@ -312,6 +318,24 @@ function assertNoReadiness(f, result) {
 }
 
 describe("actual admitted transport start with controlled IO", () => {
+  it.each(["quitInProgress", "installedUpdateAdmission"])(
+    "%s during resources recheck prevents Configure/Doctor/Start",
+    async (flag) => {
+      const f = fixture({ pause: "resources" });
+      const original = f.watch.check();
+      await f.reached;
+      f.context[flag] = true;
+      f.resume();
+      await original;
+      assertNoReadiness(f, f.result());
+      expect(f.core.openComputerConnector).toHaveBeenCalledTimes(1);
+      expect(f.runtime.configure).not.toHaveBeenCalled();
+      expect(f.runtime.doctor).not.toHaveBeenCalled();
+      expect(f.runtime.start).not.toHaveBeenCalled();
+      assertFinishedOwner(f);
+    },
+  );
+
   it("joins the exact original Close/stopped prerequisite and carries recoveryFrom through one healthy start", async () => {
     const f = fixture();
     await f.watch.check();

@@ -211,7 +211,7 @@ describe("reference-aligned Setup wizard", () => {
     expect(folders.querySelector('[data-check-state="verified"]')).toBeNull();
     expect(
       h
-        .button("Workspaces")
+        .button("Folders")
         .querySelector("[data-check-state]")
         ?.getAttribute("data-check-state"),
     ).toBe("needed");
@@ -279,7 +279,7 @@ describe("reference-aligned Setup wizard", () => {
       );
       expect(
         h
-          .button("Workspaces")
+          .button("Folders")
           .querySelector("[data-check-state]")
           ?.getAttribute("data-check-state"),
       ).toBe(state);
@@ -316,26 +316,72 @@ describe("reference-aligned Setup wizard", () => {
       expect(h.f.api.configure).not.toHaveBeenCalled();
     },
   );
-  it("offers the empty-catalogue request without a fabricated workspace or sign-in", async () => {
-    const value = attachmentSettings();
-    value.computer.workspaces = [];
-    value.setup.computer.verified = null;
-    const h = await mount("attachment", false, value);
-    expect(h.button("Copy verification request").disabled).toBe(false);
-    expect(h.button("Check attachment").disabled).toBe(false);
-    const request = h.host.querySelector(".attachment-request")?.textContent;
-    expect(request).toContain(
-      "farol_next_connector_verify_catalogue exactly once",
-    );
-    expect(request).toContain(value.connectors.secureMcp.challenge!.value);
-    expect(request).not.toContain("workspaceId");
-    expect(h.host.textContent).toContain("No workspace access is enabled.");
-    expect(h.f.api.configure).not.toHaveBeenCalled();
-    await h.click("Check attachment");
-    expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
-      kind: "connector.check-attachment",
-    });
-  });
+  it.each([false, true])(
+    "offers external verification without embedded sign-in (empty catalogue: %s)",
+    async (empty) => {
+      const value = attachmentSettings();
+      if (empty) {
+        value.computer.workspaces = [];
+        value.setup.computer.verified = null;
+      }
+      const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+      try {
+        const h = await mount("attachment", false, value);
+        expect(h.button("Copy verification request")).toBeUndefined();
+        expect(h.button("Check in ChatGPT once").disabled).toBe(true);
+        expect(h.host.querySelector(".attachment-request")).toBeNull();
+        await h.click("Use ChatGPT outside Farol");
+        expect(
+          h.button("Use ChatGPT outside Farol").getAttribute("aria-expanded"),
+        ).toBe("true");
+        expect(h.button("Copy verification request").disabled).toBe(false);
+        await h.click("Copy verification request");
+        expect(writeText).toHaveBeenCalledTimes(1);
+        const request = writeText.mock.calls[0]![0] as string;
+        expect(request).toContain(value.connectors.secureMcp.challenge!.value);
+        if (empty) {
+          expect(h.host.textContent).toContain(
+            "No workspace access is enabled.",
+          );
+          expect(request).not.toContain("workspaceId");
+        } else {
+          expect(request).toContain(value.computer.workspaces[0]!.workspaceId);
+        }
+        expect(h.host.textContent).toContain("Farol has not sent it");
+        expect(h.f.api.configure).not.toHaveBeenCalled();
+        await h.click("Use ChatGPT outside Farol");
+        expect(h.button("Copy verification request")).toBeUndefined();
+        expect(writeText).toHaveBeenCalledTimes(1);
+        await h.click("Check attachment");
+        expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
+          kind: "connector.check-attachment",
+        });
+      } finally {
+        if (original) Object.defineProperty(navigator, "clipboard", original);
+        else Reflect.deleteProperty(navigator, "clipboard");
+      }
+    },
+  );
+  it.each(["missing", "stale", "unknown"] as const)(
+    "withholds the external Setup alternative for a %s challenge",
+    async (condition) => {
+      const value = attachmentSettings();
+      if (condition === "missing") value.connectors.secureMcp.challenge = null;
+      if (condition === "stale")
+        value.connectors.secureMcp.challenge!.buildId = "4".repeat(64);
+      if (condition === "unknown") value.setup.connect.outcomeUnknown = true;
+      const h = await mount("attachment", false, value);
+      expect(h.button("Use ChatGPT outside Farol")).toBeUndefined();
+      expect(h.button("Copy verification request")).toBeUndefined();
+      expect(h.host.querySelector(".attachment-request")).toBeNull();
+      expect(h.f.api.configure).not.toHaveBeenCalled();
+    },
+  );
   it.each(["refused", "unknown"] as const)(
     "keeps pending and late attachment %s feedback on its Setup origin across Shell navigation and remount",
     async (outcome) => {
@@ -343,9 +389,11 @@ describe("reference-aligned Setup wizard", () => {
       const id = "settings:connector.check-attachment:";
       const wait = deferred<unknown>();
       const notice = () =>
-        [...h.host.querySelectorAll('.settings-page > [role="status"]')].find(
-          h.visible,
-        )?.textContent;
+        [
+          ...h.host.querySelectorAll(
+            '.connection-action-feedback[role="status"], .settings-page > [role="status"]',
+          ),
+        ].find(h.visible)?.textContent;
       const stepTo = async (label: string) => {
         const button = h.host.querySelector<HTMLButtonElement>(
           `nav[aria-label="Setup steps"] button[aria-label="${label}"]`,
@@ -354,7 +402,7 @@ describe("reference-aligned Setup wizard", () => {
         await act(async () => button.click());
       };
       expect(h.button("Check attachment").disabled).toBe(false);
-      expect(h.button("Copy verification request").disabled).toBe(false);
+      expect(h.button("Copy verification request")).toBeUndefined();
       vi.mocked(h.f.api.configure).mockReturnValueOnce(wait.promise);
       await h.click("Check attachment");
       expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
@@ -374,7 +422,7 @@ describe("reference-aligned Setup wizard", () => {
       // the original pending/UNKNOWN fences on optional sign-in.
       expect(h.button("Sign in").disabled).toBe(true);
       await h.click("Sign in");
-      await stepTo("Check");
+      await stepTo("Add to ChatGPT");
       expect(notice()).toContain("Saving or checking");
       await h.remount();
       expect(notice()).toContain("Saving or checking");
@@ -404,7 +452,7 @@ describe("reference-aligned Setup wizard", () => {
       await h.remount();
       expect(notice()).toBeUndefined();
       expect(h.button("Sign in").disabled).toBe(outcome === "unknown");
-      await stepTo("Check");
+      await stepTo("Add to ChatGPT");
       const originalNotice = notice();
       expect(originalNotice).toContain(
         outcome === "unknown"
@@ -452,7 +500,7 @@ describe("reference-aligned Setup wizard", () => {
         expect(notice()).toContain(
           "opening it does not confirm an authenticated account",
         );
-        await stepTo("Check");
+        await stepTo("Add to ChatGPT");
         expect(notice()).toBe(originalNotice);
         expect(h.c.getSnapshot().intents[id]).toEqual(receipt);
       }
@@ -535,9 +583,9 @@ describe("reference-aligned Setup wizard", () => {
     for (const label of [
       "Overview",
       "Sign in",
+      "Folders",
       "Connection",
-      "Workspaces",
-      "Check",
+      "Add to ChatGPT",
     ]) {
       const button = h.host.querySelector<HTMLButtonElement>(
         `nav[aria-label="Setup steps"] button[aria-label="${label}"]`,
@@ -566,7 +614,13 @@ describe("reference-aligned Setup wizard", () => {
       [...nav.querySelectorAll("button")].map((x) =>
         x.getAttribute("aria-label"),
       ),
-    ).toEqual(["Overview", "Sign in", "Connection", "Workspaces", "Check"]);
+    ).toEqual([
+      "Overview",
+      "Sign in",
+      "Folders",
+      "Connection",
+      "Add to ChatGPT",
+    ]);
     expect(
       h.host.querySelectorAll(
         ".setup-step-number,.setup-overview-number,.setup-eyebrow",
@@ -576,7 +630,7 @@ describe("reference-aligned Setup wizard", () => {
       [...h.host.querySelectorAll("[data-setup-check]")].map((x) =>
         x.getAttribute("data-setup-check"),
       ),
-    ).toEqual(["signin", "connection", "folders", "attachment"]);
+    ).toEqual(["signin", "folders", "connection", "attachment"]);
     expect(h.f.api.configure).not.toHaveBeenCalled();
   });
   it("shows Sign in as a real Setup route, not a Settings or ChatGPT redirect", async () => {
@@ -606,7 +660,7 @@ describe("reference-aligned Setup wizard", () => {
   it("leaves embedded sign-in optional and navigation effect-free", async () => {
     const h = await mount("signin");
     await h.click("Continue");
-    expect(h.c.getSnapshot().destination.setupStep).toBe("connection");
+    expect(h.c.getSnapshot().destination.setupStep).toBe("folders");
     expect(
       vi.mocked(h.f.api.configure).mock.calls.map(([command]) => command.kind),
     ).toEqual(["chatgpt.observe-sign-in"]);
@@ -728,4 +782,42 @@ describe("reference-aligned Setup wizard", () => {
     expect(h.c.getSnapshot().intents).toEqual({});
     expect(h.f.api.task).not.toHaveBeenCalled();
   });
+});
+
+// Scripted reply; this proves navigation and one-shot guards, not provider access.
+it("shows an explicit return from an admitted connection check without replaying it", async () => {
+  const value = attachmentSettings();
+  value.setup.chatgpt.verified = value.setup.computer.verified;
+  value.connectors.secureMcp.chatgptApp = {
+    name: "Farol",
+    tunnelId: "synthetic-tunnel",
+    connectorGeneration: 1,
+  };
+  const h = await mount("attachment", true, value);
+  const wait = deferred<unknown>();
+  vi.mocked(h.f.api.configure).mockReturnValueOnce(wait.promise);
+  expect(h.button("Check in ChatGPT once").disabled).toBe(false);
+  await h.click("Check in ChatGPT once");
+  expect(h.c.getSnapshot().destination).toMatchObject({
+    area: "chatgpt",
+    taskId: "",
+    connectionCheckReturn: true,
+  });
+  expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
+    kind: "connector.verify-app",
+  });
+  await h.click("Back to setup");
+  expect(h.c.getSnapshot().destination.setupStep).toBe("attachment");
+  expect(h.c.getSnapshot().destination.connectionCheckReturn).toBeUndefined();
+  expect(h.button("Check in ChatGPT once").disabled).toBe(true);
+  await act(async () =>
+    wait.resolve({
+      ok: false,
+      code: "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN",
+      snapshot: h.configuration,
+    }),
+  );
+  expect(h.button("Check in ChatGPT once").disabled).toBe(true);
+  expect(h.f.api.configure).toHaveBeenCalledTimes(1);
+  expect(h.f.api.task).not.toHaveBeenCalled();
 });

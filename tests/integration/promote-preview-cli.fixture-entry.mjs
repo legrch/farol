@@ -1,3 +1,4 @@
+import path from "node:path";
 // The promotion CLI as a child process, for promote-preview-cli.test.mjs.
 //
 // Runs `runPromotionCli` exactly as the script entry in
@@ -29,6 +30,13 @@ const cliArguments = [
   ...process.argv.slice(2, fixtureIndex),
   ...process.argv.slice(fixtureIndex + 2),
 ];
+
+// Omitted CLI destinations stay in this fixture home, never the real shared slot.
+if (!cliArguments.includes("--destination"))
+  cliArguments.push(
+    "--destination",
+    path.join(fixture.home, "Applications/Farol.app"),
+  );
 
 process.exitCode = await runPromotionCli(cliArguments, {
   home: fixture.home,

@@ -72,6 +72,9 @@ function harness(
     screen,
     windowMode: mode,
     directory: "/controlled/Farol Dev.app/Contents/Resources/app",
+    desktopExecutionResources: () => ({
+      directory: "/controlled/private/Farol.app/Contents/Resources/app",
+    }),
     BrowserWindow: Guide,
     selectedVisibleTestPlacement: vi.fn(() => ({ bounds })),
     presentationAction,
@@ -108,7 +111,10 @@ describe("local guide host composition", () => {
       expect(guide.options.show).toBe(false);
       expect(guide.options.parent).toBe(h.parent);
       expect(guide.loadURL).toHaveBeenCalledExactlyOnceWith(
-        onboardingHelpUrl("setup-guide", h.context.directory),
+        onboardingHelpUrl(
+          "setup-guide",
+          h.context.desktopExecutionResources().directory,
+        ),
       );
       expect(h.context.shell.openExternal).not.toHaveBeenCalled();
       expect(guide.show).toHaveBeenCalledTimes(mode === "default" ? 1 : 0);

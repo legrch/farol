@@ -34,7 +34,7 @@ describe("closing an application that is already gone", () => {
       /ifApplicationLive\(\s*instance,\s*"window-presentation"/u,
     );
     expect(body).toMatch(
-      /ifApplicationLive\(\s*instance,\s*"utility-metrics"/u,
+      /ifApplicationLive\(\s*instance,\s*"[^"\n]+",\s*\(\) =>\s*runtimeProcessSnapshots\(instance\.application\)/u,
     );
     expect(body).toMatch(
       /ifApplicationLive\(\s*instance,\s*"application-close"/u,

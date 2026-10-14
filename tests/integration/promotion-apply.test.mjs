@@ -69,29 +69,132 @@ async function applyWithLease(options, apply = runPromotionApply) {
   }
 }
 
-async function runWithReceiptFailure({
+async function runWithNativeFault({
   home,
   source,
   artifactSha256,
   lease,
   onChildStarted,
+  fault = "receipt-failure",
+  helperPathOverride,
 }) {
   const transfer = await createPromotionLeaseTransfer(lease);
   if (!(await transfer.verify())) throw new Error("PROMOTION_LEASE_LOST");
-  const helperPath = path.join(process.cwd(), "tooling", "promotion-apply.py");
+  const helperPath =
+    helperPathOverride ??
+    path.join(process.cwd(), "tooling", "promotion-apply.py");
   const program = `
+import errno
 import importlib.util
 import json
+import os
+import stat
 import sys
 
 spec = importlib.util.spec_from_file_location("farol_promotion_apply", sys.argv[1])
 helper = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(helper)
 
-def fail_receipt(_parent_fd, _payload):
+def fail_receipt(_parent_fd, _payload, _private_parent):
     helper.refuse(helper.EXIT_RECEIPT)
 
-helper.write_receipt = fail_receipt
+fault = sys.argv[6]
+def displace():
+    applications = os.path.join(sys.argv[2], "Applications")
+    os.rename(os.path.join(applications, "Farol.app"),
+              os.path.join(applications, "Farol.retained.app"))
+    if fault.endswith("replaced"):
+        replacement = os.path.join(applications, "Farol.app")
+        os.mkdir(replacement, 0o755)
+        with open(os.path.join(replacement, "sentinel"), "w") as stream:
+            stream.write("foreign replacement")
+
+original_publish = getattr(helper, "publish_stage", None)
+original_receipt = helper.write_receipt
+def publish_then_displace(*args):
+    original_publish(*args)
+    displace()
+def receipt_then_displace(parent_fd, payload, private_parent):
+    published_identity = original_receipt(parent_fd, payload, private_parent)
+    if fault.startswith("receipt-only-"):
+        applications = os.path.join(sys.argv[2], "Applications")
+        receipt = os.path.join(applications, "Farol.app.receipt.json")
+        retained = os.path.join(applications, "Farol.retained.receipt.json")
+        os.rename(receipt, retained)
+        if fault.endswith("replaced"):
+            with open(receipt, "wb") as stream:
+                stream.write(payload)
+        elif fault.endswith("symlink"):
+            os.symlink(retained, receipt)
+        elif fault.endswith("hardlink"):
+            os.link(retained, receipt)
+    else:
+        displace()
+    return published_identity
+
+original_rename = helper.rename_exclusive
+def rename_then_competing_receipt(source_parent, source, target_parent, target, failure_status):
+    original_rename(source_parent, source, target_parent, target, failure_status)
+    if target == "Farol.app.receipt.json":
+        os.rename(target, "Farol.retained.receipt.json", src_dir_fd=target_parent, dst_dir_fd=target_parent)
+        foreign = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=target_parent)
+        try:
+            os.write(foreign, b"foreign receipt")
+        finally:
+            os.close(foreign)
+        raise OSError(errno.EIO, "injected post-publication failure")
+
+original_mkdir = helper.os.mkdir
+namespace_interference = False
+def mkdir_with_namespace_interference(name, mode=0o777, *, dir_fd=None):
+    global namespace_interference
+    original_mkdir(name, mode, dir_fd=dir_fd)
+    if not namespace_interference and (name == "Farol.app" or name.startswith(".promotion-stage-")):
+        namespace_interference = True
+        apps = os.path.join(sys.argv[2], "Applications")
+        slot = os.path.join(apps, "Farol.app")
+        foreign = os.path.join(sys.argv[2], "foreign-Farol.app")
+        if os.path.lexists(slot):
+            os.rename(slot, os.path.join(apps, "Farol.created-retained.app"))
+        if fault == "mkdir-foreign-symlink":
+            os.symlink(foreign, slot)
+        else:
+            os.rename(foreign, slot)
+
+original_fsync = helper.os.fsync
+def fail_receipt_directory_fsync(fd):
+    if stat.S_ISDIR(os.fstat(fd).st_mode):
+        try:
+            os.stat("Farol.app.receipt.json", dir_fd=fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise OSError(errno.EIO, "injected receipt directory fsync failure")
+    original_fsync(fd)
+
+if fault.startswith("mkdir-foreign-"):
+    helper.os.mkdir = mkdir_with_namespace_interference
+elif fault == "receipt-failure":
+    helper.write_receipt = fail_receipt
+elif fault == "publication-fsync":
+    helper.os.fsync = fail_receipt_directory_fsync
+elif fault == "publication-competing-receipt":
+    helper.rename_exclusive = rename_then_competing_receipt
+elif fault == "shared-temporary-sentinel":
+    def preserve_shared_temporary_sentinel(source_parent, source, target_parent, target, failure_status):
+        if target == "Farol.app.receipt.json":
+            apps = os.path.join(sys.argv[2], "Applications")
+            # A colliding public temporary stays foreign; the private source is not there.
+            with open(os.path.join(apps, source), "w") as stream:
+                stream.write("foreign temporary bytes")
+        original_rename(source_parent, source, target_parent, target, failure_status)
+    helper.rename_exclusive = preserve_shared_temporary_sentinel
+elif fault.startswith("after-copy-"):
+    helper.publish_stage = publish_then_displace
+elif fault.startswith("after-receipt-") or fault.startswith("receipt-only-"):
+    helper.write_receipt = receipt_then_displace
+else:
+    raise RuntimeError("INVALID_FIXTURE_FAULT")
 request = {
     "home": sys.argv[2],
     "source": sys.argv[3],
@@ -119,6 +222,7 @@ raise SystemExit(0)
       source,
       artifactSha256,
       JSON.stringify({ file: lease.file, ...transfer.identity }),
+      fault,
     ],
     {
       stdio: [
@@ -133,6 +237,8 @@ raise SystemExit(0)
     },
   );
   const stderr = [];
+  const stdout = [];
+  child.stdout.on("data", (chunk) => stdout.push(chunk));
   child.stderr.on("data", (chunk) => stderr.push(chunk));
   let failure;
   child.once("error", (error) => {
@@ -140,7 +246,12 @@ raise SystemExit(0)
   });
   const closed = new Promise((resolve) => {
     child.once("close", (code, signal) =>
-      resolve({ code, signal, stderr: Buffer.concat(stderr).toString("utf8") }),
+      resolve({
+        code,
+        signal,
+        stderr: Buffer.concat(stderr).toString("utf8"),
+        stdout: Buffer.concat(stdout).toString("utf8"),
+      }),
     );
   });
   onChildStarted?.(closed);
@@ -150,35 +261,265 @@ raise SystemExit(0)
 }
 
 describe("descriptor-bound promotion apply", () => {
-  it("keeps all writes in the opened Applications directory after a path swap", async () => {
+  it("refuses placement when the pinned Applications parent is displaced", async () => {
     const { root, source, home, applications } = await fixture();
     const pinned = path.join(home, "Applications.pinned");
     const legacy = path.join(root, "legacy");
     await fs.mkdir(legacy, { mode: 0o700 });
 
-    await applyWithLease({
-      home,
-      source,
-      artifactSha256: await treeDigest(source),
-      receiptText: '{"operation":"applied"}\n',
-      afterParentOpened: async () => {
-        await fs.rename(applications, pinned);
-        await fs.symlink(legacy, applications);
-      },
-    });
+    await expect(
+      applyWithLease({
+        home,
+        source,
+        artifactSha256: await treeDigest(source),
+        receiptText: '{"operation":"applied"}\n',
+        afterParentOpened: async () => {
+          await fs.rename(applications, pinned);
+          await fs.symlink(legacy, applications);
+        },
+      }),
+    ).rejects.toThrow("PROMOTION_APPLY_REFUSED:71");
 
     await expect(
-      fs.readFile(
-        path.join(pinned, "Farol.app", "Contents", "payload"),
-        "utf8",
-      ),
-    ).resolves.toBe("exact\n");
+      fs.lstat(path.join(pinned, "Farol.app")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
-      fs.readFile(path.join(pinned, "Farol.app.receipt.json"), "utf8"),
-    ).resolves.toBe('{"operation":"applied"}\n');
+      fs.lstat(path.join(pinned, "Farol.app.receipt.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
       fs.lstat(path.join(legacy, "Farol.app")),
     ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each([
+    "after-copy-missing",
+    "after-copy-replaced",
+    "after-receipt-missing",
+    "after-receipt-replaced",
+  ])(
+    "never reports promotion success after named app displacement: %s",
+    async (fault) => {
+      const { source, home, applications } = await fixture();
+      const destination = path.join(applications, "Farol.app");
+      const receipt = `${destination}.receipt.json`;
+      const outcome = await applyWithLease(
+        {
+          home,
+          source,
+          artifactSha256: await treeDigest(source),
+          fault,
+        },
+        runWithNativeFault,
+      );
+      expect(outcome).toEqual({
+        code: 71,
+        signal: null,
+        stderr: "",
+        stdout: "",
+      });
+      await expect(
+        fs.readFile(
+          path.join(applications, "Farol.retained.app", "Contents", "payload"),
+          "utf8",
+        ),
+      ).resolves.toBe("exact\n");
+      if (fault.endsWith("replaced")) {
+        await expect(
+          fs.readFile(path.join(destination, "sentinel"), "utf8"),
+        ).resolves.toBe("foreign replacement");
+      } else {
+        await expect(fs.lstat(destination)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
+      if (fault.startsWith("after-receipt-")) {
+        await expect(fs.readFile(receipt, "utf8")).resolves.toBe(
+          '{"operation":"applied"}\n',
+        );
+      } else {
+        await expect(fs.lstat(receipt)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
+    },
+  );
+
+  it.each(["missing", "replaced", "symlink", "hardlink"])(
+    "never reports promotion success after receipt-only displacement: %s",
+    async (variant) => {
+      const { source, home, applications } = await fixture();
+      const expected = await treeDigest(source);
+      const outcome = await applyWithLease(
+        {
+          home,
+          source,
+          artifactSha256: expected,
+          fault: `receipt-only-${variant}`,
+        },
+        runWithNativeFault,
+      );
+      expect(outcome).toEqual({
+        code: 75,
+        signal: null,
+        stderr: "",
+        stdout: "",
+      });
+      expect(await treeDigest(path.join(applications, "Farol.app"))).toBe(
+        expected,
+      );
+      await expect(
+        fs.readFile(
+          path.join(applications, "Farol.retained.receipt.json"),
+          "utf8",
+        ),
+      ).resolves.toBe('{"operation":"applied"}\n');
+      const receipt = path.join(applications, "Farol.app.receipt.json");
+      if (variant === "missing") {
+        await expect(fs.lstat(receipt)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      } else if (variant === "symlink") {
+        expect((await fs.lstat(receipt)).isSymbolicLink()).toBe(true);
+      } else {
+        await expect(fs.readFile(receipt, "utf8")).resolves.toBe(
+          '{"operation":"applied"}\n',
+        );
+        expect((await fs.lstat(receipt)).nlink).toBe(
+          variant === "hardlink" ? 2 : 1,
+        );
+      }
+    },
+  );
+
+  it("preserves a competing receipt after its own post-link publication failure", async () => {
+    const { source, home, applications } = await fixture();
+    const outcome = await applyWithLease(
+      {
+        home,
+        source,
+        artifactSha256: await treeDigest(source),
+        fault: "publication-competing-receipt",
+      },
+      runWithNativeFault,
+    );
+    expect(outcome).toEqual({ code: 75, signal: null, stderr: "", stdout: "" });
+    expect(await treeDigest(path.join(applications, "Farol.app"))).toBe(
+      await treeDigest(source),
+    );
+    await expect(
+      fs.readFile(path.join(applications, "Farol.app.receipt.json"), "utf8"),
+    ).resolves.toBe("foreign receipt");
+    await expect(
+      fs.readFile(
+        path.join(applications, "Farol.retained.receipt.json"),
+        "utf8",
+      ),
+    ).resolves.toBe('{"operation":"applied"}\n');
+  });
+
+  it("retains the candidate and receipt after post-link directory fsync fails", async () => {
+    const { source, home, applications } = await fixture();
+    const expected = await treeDigest(source);
+    const outcome = await applyWithLease(
+      {
+        home,
+        source,
+        artifactSha256: expected,
+        fault: "publication-fsync",
+      },
+      runWithNativeFault,
+    );
+    expect(outcome).toEqual({ code: 75, signal: null, stderr: "", stdout: "" });
+    expect(await treeDigest(path.join(applications, "Farol.app"))).toBe(
+      expected,
+    );
+    await expect(
+      fs.readFile(path.join(applications, "Farol.app.receipt.json"), "utf8"),
+    ).resolves.toBe('{"operation":"applied"}\n');
+  });
+
+  async function foreignApplicationFixture() {
+    const f = await fixture();
+    const foreign = path.join(f.home, "foreign-Farol.app");
+    await fs.mkdir(path.join(foreign, "Contents"), {
+      recursive: true,
+      mode: 0o755,
+    });
+    await fs.writeFile(
+      path.join(foreign, "Contents", "foreign-marker"),
+      "preserve foreign bytes\n",
+      { mode: 0o600 },
+    );
+    return {
+      ...f,
+      foreign,
+      foreignDigest: await treeDigest(foreign),
+      foreignInode: (await fs.lstat(foreign)).ino,
+    };
+  }
+
+  // Same-UID fixture injects only public namespace interference; no second-account claim.
+  it.each(["app", "symlink"])(
+    "never adopts or cleans a competing entry after stage mkdir: %s",
+    async (variant) => {
+      const f = await foreignApplicationFixture();
+      const outcome = await applyWithLease(
+        {
+          home: f.home,
+          source: f.source,
+          artifactSha256: await treeDigest(f.source),
+          fault: `mkdir-foreign-${variant}`,
+        },
+        runWithNativeFault,
+      );
+      expect(outcome).toEqual({
+        code: 72,
+        signal: null,
+        stderr: "",
+        stdout: "",
+      });
+      const slot = path.join(f.applications, "Farol.app");
+      const foreign = variant === "symlink" ? f.foreign : slot;
+      expect(await treeDigest(foreign)).toBe(f.foreignDigest);
+      expect((await fs.lstat(foreign)).ino).toBe(f.foreignInode);
+      await expect(
+        fs.readFile(path.join(foreign, "Contents", "foreign-marker"), "utf8"),
+      ).resolves.toBe("preserve foreign bytes\n");
+      if (variant === "symlink")
+        expect((await fs.lstat(slot)).isSymbolicLink()).toBe(true);
+      await expect(
+        fs.lstat(path.join(f.applications, "Farol.app.receipt.json")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it("never removes a competing public temporary while publishing its private receipt", async () => {
+    const { source, home, applications } = await fixture();
+    const outcome = await applyWithLease(
+      {
+        home,
+        source,
+        artifactSha256: await treeDigest(source),
+        fault: "shared-temporary-sentinel",
+      },
+      runWithNativeFault,
+    );
+    expect(outcome).toEqual({
+      code: 0,
+      signal: null,
+      stderr: "",
+      stdout: "FAROL_PROMOTION_OK\n",
+    });
+    const temporary = (await fs.readdir(applications)).filter((name) =>
+      name.startsWith(".Farol.app.receipt.json."),
+    );
+    expect(temporary).toHaveLength(1);
+    await expect(
+      fs.readFile(path.join(applications, temporary[0]), "utf8"),
+    ).resolves.toBe("foreign temporary bytes");
+    await expect(
+      fs.readFile(path.join(applications, "Farol.app.receipt.json"), "utf8"),
+    ).resolves.toBe('{"operation":"applied"}\n');
   });
 
   it("refuses an existing destination without changing it", async () => {
@@ -265,7 +606,7 @@ describe("descriptor-bound promotion apply", () => {
     await expect(fs.lstat(receipt)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("removes its destination after receipt publication fails", async () => {
+  it("retains its destination after receipt publication fails", async () => {
     const { source, home, applications } = await fixture();
     const destination = path.join(applications, "Farol.app");
     const receipt = `${destination}.receipt.json`;
@@ -275,13 +616,11 @@ describe("descriptor-bound promotion apply", () => {
         source,
         artifactSha256: await treeDigest(source),
       },
-      runWithReceiptFailure,
+      runWithNativeFault,
     );
 
-    expect(outcome).toEqual({ code: 75, signal: null, stderr: "" });
-    await expect(fs.lstat(destination)).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    expect(outcome).toEqual({ code: 75, signal: null, stderr: "", stdout: "" });
+    expect(await treeDigest(destination)).toBe(await treeDigest(source));
     await expect(fs.lstat(receipt)).rejects.toMatchObject({ code: "ENOENT" });
   });
 

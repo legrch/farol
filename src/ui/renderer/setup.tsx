@@ -17,17 +17,16 @@ const context: Record<SetupSection, { title: string; description: string }> = {
       "Use your own ChatGPT account inside Farol. This step is optional for an external ChatGPT connection.",
   },
   folders: {
-    title: "Workspaces",
+    title: "Folders",
     description: "Choose what ChatGPT can read and change.",
   },
   connection: {
     title: "Connection",
-    description: "Connect this Mac and add Farol to ChatGPT.",
+    description: "Create a tunnel and connect this Mac.",
   },
   attachment: {
-    title: "Check",
-    description:
-      "Check that ChatGPT can reach this Mac. A local connection alone is not a complete test.",
+    title: "Add to ChatGPT",
+    description: "Add the app, then check the full connection.",
   },
 };
 function CheckMark({ state }: { state: SetupCheckState | "overview" }) {

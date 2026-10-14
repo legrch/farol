@@ -366,6 +366,13 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 	var parameters, reads, writes, execs, denies, parents, executableWrites, rootAnchors, mountDenies, volumeRoots []string
 	parameterKeys := map[string]string{}
 	add := func(kind, path string, rules *[]string) {
+		// Fixed platform paths are quoted policy data, never caller fragments.
+		// This avoids turning the finite Python closure into hundreds of argv
+		// parameters; command input limits remain unchanged.
+		if s.GitRuntimeResources != nil && s.GitRuntimeResources.Python != nil && insidePolicy(pythonRuntimeRoot, path) {
+			*rules = append(*rules, fmt.Sprintf("(%s %s)", kind, strconv.Quote(path)))
+			return
+		}
 		key, exists := parameterKeys[path]
 		if s.GitRuntimeResources == nil || !exists {
 			key = fmt.Sprintf("FAROL_%d", len(parameters)/2)
@@ -404,20 +411,33 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 	}
 	add("subpath", s.Scratch, &reads)
 	add("subpath", s.Scratch, &writes)
-	var resourceVolume []string
+	var resourceVolume, pythonRules []string
 	if r := s.GitRuntimeResources; r != nil {
-		for _, file := range r.Files {
+		for _, file := range r.resourceFiles() {
+			if insidePolicy(pythonRuntimeRoot, file.Path) {
+				add("literal", file.Path, &pythonRules)
+				continue
+			}
 			add("literal", file.Path, &reads)
 			add("literal", file.Path, &executableWrites)
 			add("literal", file.Path, &resourceVolume)
 		}
-		for _, dir := range r.Directories {
+		for _, dir := range r.resourceDirectories() {
+			if insidePolicy(pythonRuntimeRoot, dir.Path) {
+				add("literal", dir.Path, &pythonRules)
+				continue
+			}
 			add("literal", dir.Path, &reads)
 			add("literal", dir.Path, &executableWrites)
 			add("literal", dir.Path, &resourceVolume)
 		}
+		if r.Python != nil {
+			add("literal", pythonRuntimeAlias, &parents)
+			add("literal", pythonRuntimeAlias, &executableWrites)
+			add("literal", pythonRuntimeAlias, &resourceVolume)
+		}
 		seenParents := map[string]bool{}
-		for _, file := range r.Files {
+		for _, file := range r.resourceFiles() {
 			for ancestor := filepath.Dir(file.Path); ancestor != "/"; ancestor = filepath.Dir(ancestor) {
 				if !seenParents[ancestor] {
 					seenParents[ancestor] = true
@@ -446,7 +466,7 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		seen := map[string]bool{}
 		protected := slices.Concat(s.Executables, s.ProtectedImages)
 		if s.GitRuntimeResources != nil {
-			protected = append(protected, s.GitRuntimeResources.Files...)
+			protected = append(protected, s.GitRuntimeResources.resourceFiles()...)
 		}
 		if s.ProtectedBundle != nil {
 			protected = append(protected, ExecutablePin{Path: s.ProtectedBundle.Path})
@@ -499,9 +519,16 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 	if !slices.Equal(command.Environment, seatbeltEnvironment(s, command.Write)) {
 		return refuse()
 	}
+	pythonDeclaration := ""
+	if len(pythonRules) > 0 {
+		pythonDeclaration = "\n(define farol-python-data (require-any " + strings.Join(pythonRules, " ") + "))"
+		reads = append(reads, "farol-python-data")
+		executableWrites = append(executableWrites, "farol-python-data")
+		resourceVolume = append(resourceVolume, "farol-python-data")
+	}
 	source := `(version 1)
 (import "dyld-support.sb")
-(deny default)
+(deny default)` + pythonDeclaration + `
 (allow process-fork)
 (allow signal (target self))
 (allow file-read* (subpath "/System/Library") (subpath "/usr/lib") (literal "/dev/null") (literal "/dev/urandom") ` + strings.Join(reads, " ") + `)
@@ -541,7 +568,21 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		// Metadata makes absence observable; configuration contents and includes
 		// still need an explicit approved root, with no environment override.
 		if s.Git == RootScopedGit {
+			// Git's untracked cache calls Darwin uname, which reads these five
+			// exact nodes. Keep ordinary Git configuration; grant neither other
+			// sysctl reads nor any sysctl writes.
+			source += `
+(allow sysctl-read (sysctl-name "kern.ostype") (sysctl-name "kern.hostname") (sysctl-name "kern.osrelease") (sysctl-name "kern.version") (sysctl-name "hw.machine"))`
 			source += "\n(allow file-read-metadata file-test-existence (literal \"/etc\") (literal \"/private/etc\") (literal \"/etc/gitconfig\") (literal \"/private/etc/gitconfig\"))"
+			// /bin/sh inspects its system selector before re-executing an
+			// already selected shell. This grants link/parent metadata only;
+			// data and execution remain governed by the pinned image list.
+			for _, image := range s.Executables {
+				if image.Path == "/bin/sh" {
+					source += "\n(allow file-read-metadata file-test-existence (literal \"/private\") (literal \"/private/var\") (literal \"/private/var/select\") (literal \"/private/var/select/sh\"))"
+					break
+				}
+			}
 		}
 		for _, anchor := range rootAnchors {
 			// Preserve the named root across operations; this is not a filename ban.

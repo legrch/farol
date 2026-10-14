@@ -8,14 +8,19 @@ import path from "node:path";
  * This is test setup, NOT a Farol execution adapter or an authority grant.
  * It never reads the actual owner's HOME, Git config, auth or repositories.
  */
-export async function createOrdinaryGitEnvironment() {
+export async function createOrdinaryGitEnvironment({
+  parent = os.tmpdir(),
+  managedWriter = true,
+} = {}) {
   const root = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "farol-git-environment-")),
+    await fs.mkdtemp(path.join(parent, "farol-git-environment-")),
   );
   const identity = await fs.lstat(root);
   const home = path.join(root, "home");
   const repository = path.join(home, "code", "fixture");
-  const writer = path.join(home, ".codex", "worktrees", "fixture", "repo");
+  const writer = managedWriter
+    ? path.join(home, ".codex", "worktrees", "fixture", "repo")
+    : path.join(home, "code", "linked");
   const scratch = path.join(root, "scratch");
   const deniedRoot = path.join(root, "outside-approval");
   const canary = path.join(deniedRoot, "canary.txt");
@@ -50,6 +55,7 @@ export async function createOrdinaryGitEnvironment() {
     GIT_TERMINAL_PROMPT: "0",
   });
 
+  let executionUnconfirmed = false;
   function runGit(args, { cwd = writer, env = environment } = {}) {
     if (
       !Array.isArray(args) ||
@@ -73,7 +79,12 @@ export async function createOrdinaryGitEnvironment() {
       maxBuffer: 1024 * 1024,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    if (result.error) throw result.error;
+    if (result.error || result.signal !== null) {
+      executionUnconfirmed = true;
+      throw (
+        result.error ?? new Error("Fixture Git terminal cleanup unconfirmed")
+      );
+    }
     return {
       code: result.status,
       signal: result.signal,
@@ -93,6 +104,10 @@ export async function createOrdinaryGitEnvironment() {
   let disposed = false;
   async function dispose() {
     if (disposed) return;
+    if (executionUnconfirmed)
+      throw new Error(
+        "Fixture Git execution unconfirmed; preserve original root",
+      );
     const current = await fs.lstat(root);
     if (
       !current.isDirectory() ||
@@ -224,7 +239,7 @@ export async function createOrdinaryGitEnvironment() {
       dispose,
     });
   } catch (error) {
-    await dispose();
+    if (!executionUnconfirmed) await dispose();
     throw error;
   }
 }

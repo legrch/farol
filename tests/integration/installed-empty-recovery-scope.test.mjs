@@ -121,3 +121,31 @@ describe("installed consumed-empty maintenance scope", () => {
     expect(refused).toEqual([root]);
   });
 });
+
+describe("explicit owner cold-machine plan options", () => {
+  it("requires both exact plan path and independent hash", () => {
+    expect(
+      parseInstalledEmptyRecoveryOptions([
+        ...exact,
+        "--cold-restart-plan",
+        "/private/tmp/plan.json",
+        "--cold-restart-plan-sha",
+        "f".repeat(64),
+      ])["--cold-restart-plan"],
+    ).toBe("/private/tmp/plan.json");
+    expect(() =>
+      parseInstalledEmptyRecoveryOptions([
+        ...exact,
+        "--cold-restart-plan",
+        "/private/tmp/plan.json",
+      ]),
+    ).toThrow("COLD_MACHINE_PLAN_EXACT_EVIDENCE_REQUIRED");
+    expect(() =>
+      parseInstalledEmptyRecoveryOptions([
+        ...exact,
+        "--cold-restart-plan-sha",
+        "f".repeat(64),
+      ]),
+    ).toThrow("COLD_MACHINE_PLAN_EXACT_EVIDENCE_REQUIRED");
+  });
+});

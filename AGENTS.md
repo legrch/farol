@@ -74,6 +74,9 @@ schemas are compatibility boundaries. Do not rename them as a source-layout fix.
   GPT-6.1 Sol High, and Frontier/R4 uses GPT-6 Astra Max after accepted Strong.
   Claude review is optional for a specific unresolved question; it is not a
   required R3/R4 gate.
+- Owner-reported installed launch, connection, or update failures are incidents.
+  Prioritize restoring a usable installation under the current owner grant; follow
+  `docs/installed-incident-response.md` before resuming broad acceptance reviews.
 - Build candidates only with `task package` from clean committed bytes. Compiler,
   dependency, source, resource, and package attestation must remain fail closed.
 - Native tests use disposable state and exact owned process cleanup. **Farol Dev is

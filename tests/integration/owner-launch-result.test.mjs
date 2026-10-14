@@ -8,6 +8,7 @@ import {
 describe("owner launch result protocol", () => {
   it.each([
     "primary-started",
+    "primary-recovery",
     "reopened",
     "identity-mismatch",
     "reopen-failed",

@@ -1,4 +1,8 @@
 import {
+  openStartupRecoveryWindow,
+  type StartupRecoveryWindow,
+} from "../../../apps/desktop/recovery/host";
+import {
   ABOUT_PANEL_SIZE,
   DesktopAboutPanel,
 } from "../../../apps/desktop/about-panel";
@@ -62,6 +66,7 @@ import { promises as rawFs } from "original-fs";
 import {
   createInstalledUpdateRuntime,
   waitForInstalledUpdateRelaunch,
+  type InstalledUpdateResourcesOrigin,
 } from "./installed-update-runtime";
 import { drainInstalledComputer } from "./installed-computer-drain";
 import {
@@ -90,12 +95,10 @@ import {
   screen,
   session,
   shell,
-  utilityProcess,
   WebContentsView,
   type Input,
   type MenuItemConstructorOptions,
   type SaveDialogOptions,
-  type UtilityProcess,
 } from "electron";
 import {
   chmod,
@@ -118,6 +121,11 @@ import {
   unlinkSync,
   writeSync,
 } from "node:fs";
+import { spawn, type ChildProcess } from "node:child_process";
+import {
+  observeLocalRuntime,
+  type LocalRuntimeLifetime,
+} from "./local-runtime-lifetime";
 import os from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
@@ -615,7 +623,12 @@ const launchIdentity = readBuildLaunchIdentity(
   buildIdentity,
 );
 const nativeWorkspace = new NativeReadonlyWorkspace({
-  helperPath: path.join(directory, "computer-safe-open.py"),
+  get helperPath() {
+    return path.join(
+      desktopExecutionResources().directory,
+      "computer-safe-open.py",
+    );
+  },
   helper: NEXT_SAFE_OPEN_HELPER,
 });
 const ownerBackgroundOnly = process.argv.includes("--owner-background-only");
@@ -788,7 +801,9 @@ if (process.platform === "darwin") {
 let window: BrowserWindow | null = null;
 let aboutOpen = false;
 let aboutPanel: DesktopAboutPanel | null = null;
-let runtimeChild: UtilityProcess | null = null;
+let runtimeChild: ChildProcess | null = null;
+let localRuntimeGeneration = 0;
+const ownedLocalRuntimes = new Map<LocalRuntimeLifetime, string>();
 let runtime: RuntimeReady | null = null;
 let runtimeState: "starting" | "ready" | "offline" | "failed" = "starting";
 let runtimeError: string | null = null;
@@ -818,6 +833,18 @@ let connectorTransportTimer: NodeJS.Timeout | null = null;
 // start with authority that a concurrent change is about to replace.
 const authorityTransitions = new AuthorityTransitionReservation();
 let installedUpdater: InstalledUpdater | null = null;
+let installedResourcesOrigin: InstalledUpdateResourcesOrigin | undefined;
+
+// Every delayed bundled execution keeps the independently authenticated image.
+function desktopExecutionResources() {
+  return {
+    directory: installedResourcesOrigin?.execution.directory ?? directory,
+    executable:
+      installedResourcesOrigin?.execution.executable ?? process.execPath,
+    recheck: installedResourcesOrigin?.recheck ?? (async () => undefined),
+  };
+}
+
 const quitUpdatePreparation = createQuitUpdatePreparation(
   () => installedUpdater,
 );
@@ -868,6 +895,10 @@ async function initializeInstalledUpdater(): Promise<void> {
       directory,
       userData: app.getPath("userData"),
       build: buildIdentity,
+      physicalFiles: rawFs,
+      ...(installedResourcesOrigin
+        ? { resourcesOrigin: installedResourcesOrigin }
+        : {}),
       copyApp: (source, destination) =>
         rawFs.cp(source, destination, {
           recursive: true,
@@ -4857,6 +4888,11 @@ async function startAdmittedSecureMcpConnector(
     return configurationFailure("CONNECTOR_START_FAILED");
   }
 
+  const beforeConnectorEffect = () => {
+    if (quitInProgress || installedUpdateAdmission || !recoveryPermitted()) {
+      throw new Error("CONNECTOR_ADMISSION_WITHDRAWN");
+    }
+  };
   const attempt = (phase: string) =>
     connectorAttemptGeneration({
       connectorGeneration: connector.generation,
@@ -4866,13 +4902,18 @@ async function startAdmittedSecureMcpConnector(
     });
   if (!recoveryPermitted()) return transitionRefusal();
   try {
+    const resources = desktopExecutionResources();
+    await resources.recheck();
+    if (quitInProgress || installedUpdateAdmission || !recoveryPermitted())
+      return configurationFailure("CONNECTOR_START_FAILED");
     await secureMcpConnectorRuntime.configure({
+      beforeEffect: beforeConnectorEffect,
       executablePath: connector.tunnelClient.executablePath,
       tunnelId: connector.tunnelId,
       credentialReference,
       mcp: {
-        electronPath: process.execPath,
-        entryPath: path.join(directory, "computer-mcp.cjs"),
+        electronPath: resources.executable,
+        entryPath: path.join(resources.directory, "computer-mcp.cjs"),
         launchContractPath: launchFile,
       },
     });
@@ -4893,6 +4934,7 @@ async function startAdmittedSecureMcpConnector(
   if (!recoveryPermitted()) return transitionRefusal();
   try {
     await secureMcpConnectorRuntime.doctor({
+      beforeEffect: beforeConnectorEffect,
       executablePath: connector.tunnelClient.executablePath,
     });
   } catch {
@@ -4912,6 +4954,7 @@ async function startAdmittedSecureMcpConnector(
     return configurationFailure("CONNECTOR_START_FAILED");
   try {
     started = await secureMcpConnectorRuntime.start({
+      beforeEffect: beforeConnectorEffect,
       executablePath: connector.tunnelClient.executablePath,
       executableSha256: connector.tunnelClient.executableSha256,
       connectorGeneration: connector.generation,
@@ -6509,7 +6552,10 @@ async function configureAdmittedProduct(
           });
           try {
             await guide.loadURL(
-              onboardingHelpUrl(command.destination, directory),
+              onboardingHelpUrl(
+                command.destination,
+                desktopExecutionResources().directory,
+              ),
             );
             if (guide.isDestroyed() || parent.isDestroyed()) {
               throw new Error("ONBOARDING_GUIDE_CLOSED");
@@ -10144,27 +10190,50 @@ function handleRuntimeExit(code: number | null): void {
 }
 
 async function startRuntime(): Promise<void> {
+  if (quitInProgress || installedUpdateAdmission) return;
+  if (runtimeChild !== null || ownedLocalRuntimes.size !== 0) {
+    throw new Error("LOCAL_RUNTIME_ALREADY_OWNED");
+  }
   runtimeStopping = false;
-  const child = utilityProcess.fork(path.join(directory, "runtime.cjs"), [], {
-    env: {
-      LANG: process.env.LANG ?? "en_US.UTF-8",
-      FAROL_NEXT_RUNTIME_IDENTITY: activeDesktopIdentity.runtimeIdentity,
-      FAROL_NEXT_PREVIEW_SCENARIO: process.argv.includes(
-        "--preview-stream-failure",
-      )
-        ? "stream-failure"
-        : process.env.FAROL_NEXT_E2E === "1" &&
-            process.argv.includes("--preview-runtime-start-failure")
-          ? "startup-failure"
-          : process.argv.includes("--preview-failure")
-            ? "failure"
-            : "normal",
-      FAROL_NEXT_PREVIEW_MODE: demoMode ? "demo" : "empty",
+  const resources = desktopExecutionResources();
+  await resources.recheck();
+  if (runtimeStopping || quitInProgress || installedUpdateAdmission) return;
+  const child = spawn(
+    resources.executable,
+    [path.join(resources.directory, "runtime.cjs")],
+    {
+      env: {
+        ELECTRON_RUN_AS_NODE: "1",
+        LANG: process.env.LANG ?? "en_US.UTF-8",
+        FAROL_NEXT_RUNTIME_IDENTITY: activeDesktopIdentity.runtimeIdentity,
+        FAROL_NEXT_PREVIEW_SCENARIO: process.argv.includes(
+          "--preview-stream-failure",
+        )
+          ? "stream-failure"
+          : process.env.FAROL_NEXT_E2E === "1" &&
+              process.argv.includes("--preview-runtime-start-failure")
+            ? "startup-failure"
+            : process.argv.includes("--preview-failure")
+              ? "failure"
+              : "normal",
+        FAROL_NEXT_PREVIEW_MODE: demoMode ? "demo" : "empty",
+      },
+      stdio: ["ignore", "ignore", "ignore", "ipc"],
+      serialization: "advanced",
+      windowsHide: true,
     },
-    serviceName: activeDesktopIdentity.runtimeServiceName,
-    stdio: "ignore",
-  });
+  );
   runtimeChild = child;
+  // runtime.cjs is the build-qualified in-memory preview service. Real Go,
+  // connector and command owners keep their independent shutdown obligations.
+  const lifetime = observeLocalRuntime(child, "in-memory-preview");
+  ownedLocalRuntimes.set(lifetime, `local-runtime-${++localRuntimeGeneration}`);
+  void lifetime.closed.then(
+    () => ownedLocalRuntimes.delete(lifetime),
+    () => {
+      /* A failed shutdown remains an unconfirmed Quit obligation. */
+    },
+  );
   try {
     runtime = await new Promise<RuntimeReady>((resolve, reject) => {
       let settled = false;
@@ -10173,6 +10242,12 @@ async function startRuntime(): Promise<void> {
         settled = true;
         reject(new Error("RUNTIME_START_TIMEOUT"));
       }, 10_000);
+      child.once("error", () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(new Error("RUNTIME_PROCESS_NOT_STARTED"));
+      });
       child.once("exit", (code) => {
         clearTimeout(timer);
         if (settled) {
@@ -10841,7 +10916,7 @@ async function createWindow(): Promise<void> {
       : {}),
     show: false,
     webPreferences: {
-      preload: path.join(directory, "preload.cjs"),
+      preload: path.join(desktopExecutionResources().directory, "preload.cjs"),
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
@@ -10887,7 +10962,9 @@ async function createWindow(): Promise<void> {
     windowPresentationReady = false;
   });
   if (!startupIsCurrent()) return;
-  await taskViewHost.loadFile(path.join(directory, "shell.html"));
+  await taskViewHost.loadFile(
+    path.join(desktopExecutionResources().directory, "shell.html"),
+  );
   // Keep the admitted load's outcome, but a withdrawn host cannot dispatch
   // another startup stage or publish readiness for its replacement.
   if (!startupIsCurrent()) return;
@@ -11028,6 +11105,7 @@ function reopenWindow(): void {
 
 // Set when a quit begins; a quit drain always ends in the real quit.
 let quitInProgress = false;
+let startupRecovery: StartupRecoveryWindow | null = null;
 
 function isPrimaryReady(): boolean {
   return primaryStartupReady({
@@ -11051,6 +11129,15 @@ async function handleSecondInstance(candidate: unknown): Promise<void> {
   ) {
     // Quit/update owns admission: acknowledge that it cannot take this launch
     // instead of reopening a window that is about to close.
+    status = "reopen-failed";
+  }
+  if (status === "reopened" && startupRecovery !== null) {
+    try {
+      await startupRecovery.reopen();
+    } catch {
+      /* The primary owns failure cleanup. */
+    }
+    // A recovery window is available, but normal runtime readiness is not.
     status = "reopen-failed";
   }
   if (status === "reopened") {
@@ -11097,7 +11184,7 @@ function stopRuntime(): void {
   stopStreams();
   pendingComputer.clear();
   taskSurfaceFailures.clear();
-  runtimeChild?.postMessage("shutdown");
+  for (const lifetime of ownedLocalRuntimes.keys()) lifetime.requestStop();
 }
 
 function disposeChatGptRoutes(): void {
@@ -11118,7 +11205,17 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     directory,
     userData: app.getPath("userData"),
     build: buildIdentity,
+    physicalFiles: rawFs,
+    copyApp: (source, destination) =>
+      rawFs.cp(source, destination, {
+        recursive: true,
+        force: false,
+        errorOnExist: true,
+        verbatimSymlinks: true,
+        preserveTimestamps: true,
+      }),
   });
+  installedResourcesOrigin = updateRelaunch?.resourcesOrigin;
   const stateRoot = path.join(app.getPath("userData"), "farol-next-state");
   const previousRunClean = await withStartupPromotionLease(
     app.getPath("userData"),
@@ -11139,9 +11236,31 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT",
       );
       if (compiledGoCore !== null && !clean) {
-        // Reloading complete-looking handoff bytes cannot settle a lost
-        // recorder response or an unconfirmed host drain.
-        throw new Error("DESKTOP_PREVIOUS_QUIT_UNCONFIRMED");
+        // Keep exclusion for the entire UI-only recovery lifetime. No new
+        // run marker, configuration, Go/runtime, provider, MCP or updater is
+        // started, and this window cannot publish a clean predecessor Quit.
+        await updateRelaunch?.recheck();
+        if (!(await verify())) throw new Error("STARTUP_PROMOTION_LEASE_LOST");
+        startupRecovery = openStartupRecoveryWindow({
+          directory: desktopExecutionResources().directory,
+          mode: windowMode,
+          placement: () =>
+            selectedVisibleTestPlacement({ width: 640, height: 520 }).bounds,
+          quitSignals,
+          onQuitting: () => {
+            quitInProgress = true;
+          },
+        });
+        try {
+          await startupRecovery.ready;
+          process.stderr.write(
+            `${secondInstanceResultPrefix}primary-recovery\n`,
+          );
+          await startupRecovery.quitRequested;
+        } finally {
+          startupRecovery.dispose();
+        }
+        return false;
       }
       if (compiledGoCore !== null) {
         // The previous host removed its run marker only after a confirmed Quit.
@@ -11163,6 +11282,12 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       return clean;
     },
   );
+  if (startupRecovery !== null) {
+    // Only the UI's startup lease was released. The predecessor remains
+    // unconfirmed, so normal Quit receipts and marker removal are forbidden.
+    app.quit();
+    return;
+  }
   if (process.platform === "darwin") {
     app.dock?.setIcon(desktopBrandImage());
   }
@@ -11259,11 +11384,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         compiledShell: desktopShellSelection(
           compiledGoShell,
           runtimeEnvironment,
-          directory,
+          installedResourcesOrigin?.execution.directory ?? directory,
         ),
         previousHostDrainConfirmed: previousRunClean,
         build: buildIdentity,
-        artifactRoot: directory,
+        // The attested path must remain immutable through spawn and lifetime.
+        // Shared installation paths are writable by other administrator accounts.
+        artifactRoot:
+          installedResourcesOrigin?.execution.directory ?? directory,
         stateRoot,
         home: app.getPath("home"),
         settings: currentSettings,
@@ -11359,6 +11487,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       root: secureMcpConnectorRoot(),
       homePath: await codexHostProcessHomePath(),
       tempPath: app.getPath("temp"),
+      electronPath: desktopExecutionResources().executable,
+      recheckExecution: desktopExecutionResources().recheck,
     },
     { onLifecycleObservation: reportOwnedBackendLifecycle },
   );
@@ -11695,6 +11825,9 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         closers.push({ name: "caller-relay", close: () => relay.close() });
       disposeChatGptRoutes();
       disposeTaskViews("runtime");
+      for (const [lifetime, name] of ownedLocalRuntimes) {
+        closers.push({ name, close: () => lifetime.close() });
+      }
       stopRuntime();
       return closers;
     },
@@ -11807,6 +11940,7 @@ if (!primaryInstanceLock) {
   primaryStartup.begin(readiness);
   void initialization
     .then(() => {
+      if (startupRecovery !== null) return;
       startupStage("startup-complete");
       process.stderr.write(
         `${secondInstanceResultPrefix}${isPrimaryReady() ? "primary-started" : "reopen-failed"}\n`,

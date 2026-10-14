@@ -18,10 +18,13 @@ export function isConfirmedBrowserBlock(
   return typeof code === "string" && confirmedBrowserBlocks.has(code);
 }
 
+/** Known pre-dispatch refusals permit fresh admission, never a guard bypass. */
 export function confirmedRestartAllowed(update: InstalledUpdateView): boolean {
   return (
     update.phase === "ready" &&
-    (update.blockedBy === null || isConfirmedBrowserBlock(update.blockedBy))
+    (update.blockedBy === null ||
+      isConfirmedBrowserBlock(update.blockedBy) ||
+      canRecheckUpdateAdmission(update.blockedBy))
   );
 }
 

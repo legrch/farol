@@ -147,3 +147,27 @@ Parent integration, a new clean committed candidate, package verification,
 independent review and the explicitly selected production step remain separate
 acceptance boundaries. No existing artifact at the prior source identity gains
 this fence merely because the source tests pass.
+
+Ordinary promotion rechecks the selected application entry against the held
+copied directory before receipt publication and immediately before its success
+response. Application displacement within an unchanged Applications directory
+never yields a successful helper response. If displacement is observed after
+receipt publication, the receipt and copied/displaced resources remain retained
+for reconciliation; their presence alone is not confirmed placement. These are
+bounded point-in-time checks, not a claim of permanent namespace exclusion.
+
+The published receipt is also read back through a no-follow descriptor and
+matched to its original inode, exact bytes, regular-file mode and single-link
+identity before the success response. Removal, replacement with identical
+bytes, symlink and hardlink aliases produce no success response and preserve
+already published resources for reconciliation.
+
+Promotion copies and hashes only inside a newly created directory beneath the
+inherited lease's owner-private state parent. It checks the held stage identity,
+same device and pinned parents, then publishes that complete image using macOS
+`renameatx_np(RENAME_EXCL)` with no overwrite. It never creates and adopts a
+copy destination in the shared application namespace, and never recursively
+cleans there. Failed private stages and displaced placed images are retained
+for custody; no failed publication is replayed. The private parent excludes
+other-account namespace writers; it does not protect against a malicious local
+owner with access to that owner's state.

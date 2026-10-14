@@ -523,6 +523,7 @@ describe("normal Go host startup", () => {
       start.mockRejectedValue(failure);
       await expect(startDesktopGoCore(selection)).rejects.toBe(failure);
       expect(start).toHaveBeenCalledTimes(1);
+      expect(start.mock.calls[0]![0]).toBe(15_000);
       expect(ports.provision).toHaveBeenCalledTimes(1);
       expect(profileClose).toHaveBeenCalledTimes(1);
     },
@@ -803,7 +804,7 @@ describe("normal Go host startup", () => {
       home: selection.home,
     });
     expect(start).toHaveBeenCalledWith(
-      2000,
+      15_000,
       expect.objectContaining({
         ownerId: "owner-desktop",
         computerId: settings.computer.computerId,

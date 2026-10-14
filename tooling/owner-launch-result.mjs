@@ -3,6 +3,7 @@ export const SECOND_INSTANCE_RESULT_PREFIX =
 
 const OUTCOMES = new Set([
   "primary-started",
+  "primary-recovery",
   "reopened",
   "identity-mismatch",
   "reopen-failed",

@@ -71,6 +71,8 @@ export type Destination = Readonly<{
     turnId?: string;
   }> | null;
   setupStep?: SetupStep;
+  /** Window-local return path for the explicitly started connection check. */
+  connectionCheckReturn?: true;
   activityId?: string | null;
   /** Workspace presentation selection only; never an active Computer binding. */
   workspaceId?: string | null;

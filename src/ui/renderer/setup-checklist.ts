@@ -2,9 +2,9 @@
 export const setupSections = [
   ["overview", "Overview"],
   ["signin", "Sign in"],
+  ["folders", "Folders"],
   ["connection", "Connection"],
-  ["folders", "Workspaces"],
-  ["attachment", "Check"],
+  ["attachment", "Add to ChatGPT"],
 ] as const;
 export type SetupSection = (typeof setupSections)[number][0];
 export type SetupCheckpoint = Exclude<SetupSection, "overview">;
@@ -63,47 +63,54 @@ export function projectSetupChecklist(input: SetupChecklistInput) {
       [
         "connection",
         "Connection",
-        "Start the local tunnel and add Farol in ChatGPT.",
+        "Create a tunnel and connect this Mac.",
         false,
         input.localConnectionCurrent,
         input.computerActivity,
       ],
       [
         "folders",
-        "Workspaces",
-        "Choose workspaces and access for each one.",
+        "Folders",
+        "Choose folders and access for each one.",
         !input.hasWorkspaces,
         input.hasWorkspaces && input.workspacesVerified,
         input.computerActivity,
       ],
       [
         "attachment",
-        "Check",
-        "Check the complete connection from ChatGPT.",
+        "Add to ChatGPT",
+        "Add the app and check the full connection.",
         false,
         input.externalAccessVerified,
         input.computerActivity,
       ],
     ] as const
-  ).map(([step, label, description, optional, verified, activity]) => {
-    const state = checkState(input.current, verified, activity);
-    return {
-      step,
-      label,
-      description,
-      optional,
-      state,
-      status:
-        state === "verified" && step === "connection"
-          ? "Local connection ready"
-          : state === "verified" && step === "attachment"
-            ? "Verified from ChatGPT"
-            : state === "needed" && step === "folders" && optional
-              ? "No workspace access enabled"
-              : status[state],
-      action: state === "needed" ? "Set up" : "Review",
-    };
-  });
+  )
+    .slice()
+    .sort(
+      (left, right) =>
+        setupSections.findIndex(([step]) => step === left[0]) -
+        setupSections.findIndex(([step]) => step === right[0]),
+    )
+    .map(([step, label, description, optional, verified, activity]) => {
+      const state = checkState(input.current, verified, activity);
+      return {
+        step,
+        label,
+        description,
+        optional,
+        state,
+        status:
+          state === "verified" && step === "connection"
+            ? "Local connection ready"
+            : state === "verified" && step === "attachment"
+              ? "Verified from ChatGPT"
+              : state === "needed" && step === "folders" && optional
+                ? "No workspace access enabled"
+                : status[state],
+        action: state === "needed" ? "Set up" : "Review",
+      };
+    });
   // Embedded sign-in is optional; configured workspaces still require file proof.
   const ready =
     input.current &&

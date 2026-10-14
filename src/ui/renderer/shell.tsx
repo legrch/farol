@@ -752,19 +752,23 @@ function Update({
             className={
               recoveryMode || recovery ? "update-block" : "update-issue"
             }
-            role="alert"
+            role={confirmedRestartAllowed(update) ? "status" : "alert"}
           >
             <strong>
               {recovery
                 ? "Recovery is blocked"
                 : rollbackVersion
                   ? "Roll back is blocked"
-                  : "Update needs attention"}
+                  : confirmedRestartAllowed(update)
+                    ? "Restart postponed"
+                    : "Update needs attention"}
             </strong>
             <p>
               {recoveryMode || recovery
                 ? updateBlockMessage(blockedBy)
-                : "Review Diagnostics before restarting."}
+                : confirmedRestartAllowed(update)
+                  ? "The last restart did not begin. You can try again or review the current work."
+                  : "Review Diagnostics before restarting."}
             </p>
             {recoveryMode && (
               <details>
@@ -877,7 +881,7 @@ function Update({
           )}
         {!recoveryMode &&
           (recovery ||
-            !!blockedBy ||
+            (!!blockedBy && !isConfirmedBrowserBlock(blockedBy)) ||
             update.phase === "failed" ||
             update.phase === "unavailable") && (
             <button
@@ -903,13 +907,14 @@ function Update({
             </button>
           )}
       </div>
-      {(("notice" in update && update.notice?.blockedBy) ||
-        snapshot.intents["update-notice"]?.state === "unknown") && (
-        <p role="alert">
-          Saved update notices could not be confirmed. Do not retry the notice
-          acknowledgement. Update actions retain their separate safety checks.
-        </p>
-      )}
+      {recoveryMode &&
+        (("notice" in update && update.notice?.blockedBy) ||
+          snapshot.intents["update-notice"]?.state === "unknown") && (
+          <p role="alert">
+            Saved update notices could not be confirmed. Do not retry the notice
+            acknowledgement. Update actions retain their separate safety checks.
+          </p>
+        )}
       {intent?.state === "unknown" && (
         <p role="alert">
           Outcome unknown. Inspect the retained operation; do not submit another
@@ -1230,6 +1235,17 @@ export function Shell() {
           )}
           {state.environment === "dev" && <small>Development</small>}
         </div>
+        {destination.area === "chatgpt" &&
+          destination.connectionCheckReturn && (
+            <button
+              className="connection-check-return"
+              onClick={() =>
+                facade.navigate({ area: "setup", setupStep: "attachment" })
+              }
+            >
+              <Icon name="back" /> Back to setup
+            </button>
+          )}
         <button
           aria-label="Find a page"
           className="search-trigger"

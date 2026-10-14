@@ -643,6 +643,18 @@ function gitResourceFixture() {
   };
 }
 describe("finite build-selected Git runtime data", () => {
+  it("admits only the exact independently pinned optional system attributes file", () => {
+    const input = gitResourceFixture();
+    const path =
+      "/Library/Developer/CommandLineTools/usr/share/git-core/gitattributes";
+    input.gitRuntimeResources.files.unshift({ path, sha256: "d".repeat(64) });
+    expect(
+      parseShellSupportDeclaration(input).gitRuntimeResources!.files[0],
+    ).toEqual({ path, sha256: "d".repeat(64) });
+    input.gitRuntimeResources.files[0]!.path = path + ".backup";
+    invalid(input);
+  });
+
   it("freezes the selected files and directory listings", () => {
     const input = gitResourceFixture();
     const result = parseShellSupportDeclaration(input);
@@ -691,5 +703,83 @@ describe("finite build-selected Git runtime data", () => {
       invalid(input);
       expect(get).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe("finite CLT Python resource boundary", () => {
+  const root =
+    "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9";
+  function pythonFixture(): ShellSupportDeclaration {
+    const value: ShellSupportDeclaration = gitResourceFixture();
+    const library = root + "/lib/python3.9";
+    return {
+      ...value,
+      executables: [
+        ...value.executables,
+        { path: root + "/bin/python3.9", sha256: "a".repeat(64) },
+        {
+          path: root + "/Resources/Python.app/Contents/MacOS/Python",
+          sha256: "b".repeat(64),
+        },
+      ],
+      gitRuntimeResources: {
+        ...value.gitRuntimeResources!,
+        python: {
+          files: [
+            root + "/Python3",
+            library + "/codecs.py",
+            library + "/encodings/__init__.py",
+            library + "/encodings/utf_8.py",
+            library + "/os.py",
+          ].map((path) => ({ path, sha256: "c".repeat(64) })),
+          directories: [
+            { path: root + "/bin", entries: ["python3", "python3.9"] },
+            { path: library, entries: ["codecs.py", "encodings", "os.py"] },
+            {
+              path: library + "/encodings",
+              entries: ["__init__.py", "utf_8.py"],
+            },
+          ],
+        },
+      },
+    };
+  }
+  it("freezes a finite standard library while retaining separate executable selection", () => {
+    const input = pythonFixture();
+    const parsed = parseShellSupportDeclaration(input);
+    expect(parsed).toEqual(input);
+    expect(Object.isFrozen(parsed.gitRuntimeResources!.python!.files[0])).toBe(
+      true,
+    );
+  });
+  it.each([
+    "external-file",
+    "external-dir",
+    "external-interpreter",
+    "site-packages",
+    "missing-runtime",
+    "missing-encoding",
+    "getter",
+  ])("refuses %s without broadening roots", (kind) => {
+    const input = structuredClone(pythonFixture());
+    const python = input.gitRuntimeResources!.python!;
+    if (kind === "external-file")
+      (python.files[0] as { path: string }).path = "/Users/foreign/lib.py";
+    if (kind === "external-dir")
+      (python.directories[0] as { path: string }).path = "/opt/homebrew/lib";
+    if (kind === "external-interpreter")
+      (
+        input.executables[input.executables.length - 1] as { path: string }
+      ).path = "/opt/homebrew/bin/python3";
+    if (kind === "site-packages")
+      (python.files[0] as { path: string }).path =
+        root + "/lib/python3.9/site-packages/foreign.py";
+    if (kind === "missing-runtime") (python.files as unknown[]).shift();
+    if (kind === "missing-encoding") (python.files as unknown[]).splice(3, 1);
+    const get = vi.fn();
+    if (kind === "getter")
+      Object.defineProperty(python, "files", { get, enumerable: true });
+    invalid(input);
+    expect(get).not.toHaveBeenCalled();
   });
 });

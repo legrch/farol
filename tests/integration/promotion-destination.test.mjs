@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   assertPromotionDestination,
+  assertSharedApplicationsParent,
   preparePromotionParent,
   trustedOwnerHome,
 } from "../../tooling/promotion-destination.mjs";
@@ -50,7 +51,56 @@ describe("Farol Next promotion destination", () => {
     }
   });
 
-  it("admits only the fixed app directly below the owner's Applications", () => {
+  it("defaults first installation to the shared canonical slot", () => {
+    expect(
+      assertPromotionDestination({
+        home: "/Users/owner",
+        source: "/candidate/Farol.app",
+      }),
+    ).toEqual({
+      destination: "/Applications/Farol.app",
+      parent: "/Applications",
+      receipt: "/Applications/Farol.app.receipt.json",
+    });
+  });
+
+  it.each([
+    [0, 80, 0o775, true],
+    [0, 0, 0o755, true],
+    [501, 80, 0o775, false],
+    [0, 80, 0o777, false],
+    [0, 20, 0o775, false],
+  ])(
+    "shared parent owner=%s group=%s mode=%s admitted=%s (pure metadata)",
+    (uid, gid, mode, admitted) => {
+      const info = {
+        uid,
+        gid,
+        mode,
+        isDirectory: () => true,
+        isSymbolicLink: () => false,
+      };
+      if (admitted)
+        expect(() =>
+          assertSharedApplicationsParent(info, "/Applications"),
+        ).not.toThrow();
+      else
+        expect(() =>
+          assertSharedApplicationsParent(info, "/Applications"),
+        ).toThrow("PROMOTION_PARENT_TYPE_INVALID");
+      expect(() =>
+        assertSharedApplicationsParent(info, "/displaced/Applications"),
+      ).toThrow();
+      expect(() =>
+        assertSharedApplicationsParent(
+          { ...info, isSymbolicLink: () => true },
+          "/Applications",
+        ),
+      ).toThrow();
+    },
+  );
+
+  it("admits the legacy fixed app directly below the owner's Applications", () => {
     const home = "/Users/owner";
     const source = "/checkout/_output/package/Farol.app";
     expect(
@@ -71,6 +121,9 @@ describe("Farol Next promotion destination", () => {
     "/Users/owner/Applications/Legacy.app/Contents/Farol.app",
     "/Users/owner/Applications/nested/Farol.app",
     "/tmp/Farol.app",
+    "/Applications/../Applications/Farol.app",
+    "/Applications/Farol.app/",
+    "Applications/Farol.app",
   ])(
     "rejects a destination outside the direct Next-only slot: %s",
     (destination) => {
