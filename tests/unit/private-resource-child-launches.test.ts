@@ -46,6 +46,8 @@ function resources(
   recheck: () => Promise<void> = vi.fn(async () => undefined),
 ) {
   return {
+    quitInProgress: false,
+    installedUpdateAdmission: false,
     directory: "/Applications/Farol.app/Contents/Resources/app",
     process: { execPath: "/Applications/replaced/Electron", argv: [], env: {} },
     installedResourcesOrigin: {
@@ -278,5 +280,64 @@ it.each([false, true])(
         "run",
       ]);
     }
+  },
+);
+
+function deferredVoid() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+it.each(["runtimeStopping", "quitInProgress", "installedUpdateAdmission"])(
+  "does not spawn after %s during original resource recheck",
+  async (flag) => {
+    const reached = deferredVoid();
+    const release = deferredVoid();
+    const spawn = vi.fn();
+    const context = {
+      ...resources(
+        vi.fn(async () => {
+          reached.resolve();
+          await release.promise;
+        }),
+      ),
+      spawn,
+      runtimeStopping: false,
+      runtimeChild: null,
+    };
+    const original = vm.runInNewContext(
+      `${stripTypeScriptTypes(declaration("desktopExecutionResources"))}; ${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
+      context,
+    );
+    await reached.promise;
+    Object.assign(context, { [flag]: true });
+    release.resolve();
+    await original;
+    expect(spawn).not.toHaveBeenCalled();
+    expect(context.runtimeChild).toBeNull();
+  },
+);
+
+it.each(["quitInProgress", "installedUpdateAdmission"])(
+  "does not reset stop or recheck resources when %s already owns admission",
+  async (flag) => {
+    const recheck = vi.fn();
+    const spawn = vi.fn();
+    const context = {
+      ...resources(recheck),
+      [flag]: true,
+      runtimeStopping: true,
+      spawn,
+    };
+    await vm.runInNewContext(
+      `${stripTypeScriptTypes(declaration("desktopExecutionResources"))}; ${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
+      context,
+    );
+    expect(recheck).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(context.runtimeStopping).toBe(true);
   },
 );

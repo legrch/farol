@@ -105,3 +105,13 @@ and retained journal initialization can exceed the ordinary two-second RPC
 budget on a cold launch. Ordinary operation deadlines remain unchanged. A late
 or missing startup response stays outcome-unknown; increasing the budget never
 retries a failed startup or settles its retained run marker.
+
+## Withdrawal during execution resource recheck
+
+The original asynchronous resource recheck remains part of the admitted startup.
+After it returns, connector Configure and local runtime spawn must recheck
+Quit/update/stop and the original transport observation epoch before dispatch.
+Stop or Quit while that filesystem check is pending must produce no later
+native launch. Resource validity does not establish current admission. The
+source-level host fixtures exercise this pending phase separately from real
+resource attestation and installed process evidence.

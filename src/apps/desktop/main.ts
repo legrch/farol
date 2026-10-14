@@ -4889,6 +4889,8 @@ async function startAdmittedSecureMcpConnector(
   try {
     const resources = desktopExecutionResources();
     await resources.recheck();
+    if (quitInProgress || installedUpdateAdmission || !recoveryPermitted())
+      return configurationFailure("CONNECTOR_START_FAILED");
     await secureMcpConnectorRuntime.configure({
       executablePath: connector.tunnelClient.executablePath,
       tunnelId: connector.tunnelId,
@@ -10167,9 +10169,11 @@ function handleRuntimeExit(code: number | null): void {
 }
 
 async function startRuntime(): Promise<void> {
+  if (quitInProgress || installedUpdateAdmission) return;
   runtimeStopping = false;
   const resources = desktopExecutionResources();
   await resources.recheck();
+  if (runtimeStopping || quitInProgress || installedUpdateAdmission) return;
   const child = spawn(
     resources.executable,
     [path.join(resources.directory, "runtime.cjs")],

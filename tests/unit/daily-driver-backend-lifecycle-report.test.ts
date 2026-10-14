@@ -169,7 +169,20 @@ it("omits an absent optional observer from the actual native launch object", () 
       callee.property?.name === "start"
     );
   });
+  const budgetDeclaration = selected(
+    host,
+    hostTree,
+    (node) =>
+      node.type === "VariableDeclaration" &&
+      (node.declarations as { id?: { name?: string } }[]).some(
+        (value) => value.id?.name === "DESKTOP_CORE_STARTUP_TIMEOUT_MS",
+      ),
+  );
+  const budget = vm.runInNewContext(
+    `${stripTypeScriptTypes(budgetDeclaration)}; DESKTOP_CORE_STARTUP_TIMEOUT_MS`,
+  );
   const options = vm.runInNewContext(stripTypeScriptTypes(call), {
+    DESKTOP_CORE_STARTUP_TIMEOUT_MS: budget,
     attested: { start: (_budget: number, options: object) => options },
     profile: {},
     settings: { computer: { computerId: "controlled-only" } },
