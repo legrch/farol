@@ -299,29 +299,34 @@ export async function run(input: {
     if (gitWorkspaceId) {
       await host.publishCurrent();
       const generation = settings().computer.generation;
-      await host.listSettingsWorkspace(generation, gitWorkspaceId, ".");
-      const identity = settings().computer.workspaces.find(
-        (w) => w.workspaceId === gitWorkspaceId,
-      )!.rootIdentity!;
-      assert.equal(
-        (
-          await configuration.recordComputerVerification(
-            gitWorkspaceId,
-            {
-              profile: "computer.local.write/1",
-              runtimeGeneration: `fixture:${input.build.buildId}`,
-              buildId: input.build.buildId,
-              protocol: "mutable-workspace/1",
-            },
-            {
-              rootIdentity: identity,
-              expectedGeneration: generation,
-              expectedRoot: home,
-            },
-          )
-        ).ok,
-        true,
-      );
+      // Native confinement includes every admitted root. Use the ordinary Go
+      // Settings check for BOTH fixture workspaces, not a synthetic verification
+      // flag or a grant that silently omits an unchecked sibling.
+      for (const checkedId of [workspaceId, gitWorkspaceId]) {
+        const selected = settings().computer.workspaces.find(
+          (w) => w.workspaceId === checkedId,
+        )!;
+        await host.listSettingsWorkspace(generation, checkedId, ".");
+        assert.equal(
+          (
+            await configuration.recordComputerVerification(
+              checkedId,
+              {
+                profile: "computer.local.write/1",
+                runtimeGeneration: `fixture:${input.build.buildId}`,
+                buildId: input.build.buildId,
+                protocol: "mutable-workspace/1",
+              },
+              {
+                rootIdentity: selected.rootIdentity!,
+                expectedGeneration: generation,
+                expectedRoot: selected.root,
+              },
+            )
+          ).ok,
+          true,
+        );
+      }
       // Publish the now-verified evidence through the normal host owner. The
       // pre-check publication deliberately exposes no active write authority.
       await host.publishCurrent();

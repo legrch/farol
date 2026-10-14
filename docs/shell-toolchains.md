@@ -50,3 +50,10 @@ that execution or data access refuses. They are separate from a real admitted
 hook rejecting Git commit. Git can skip a hook that its executable-access check
 cannot see; confinement alone does not certify mandatory hook discovery for an
 unapproved hook path. Do not report that case as successful hook enforcement.
+
+Native Shell preparation requires current checks for every root in the admitted
+scope. An unchecked sibling workspace stays refused; it must not be omitted or
+silently approved. That refusal is `PROCESS_PREPARATION_WORKSPACE_STALE`, not
+`PROCESS_FILESYSTEM_UNSUPPORTED`. The latter reports measured native filesystem
+or mount limitations. A preparation refusal creates no command handle and never
+authorizes automatic replay.

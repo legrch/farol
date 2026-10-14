@@ -1,6 +1,6 @@
 {
   "schema": "farol-shell-platform/1",
-  "id": "macos-26A434-arm64-root-volume-git-python-metadata-v9",
+  "id": "macos-26A434-arm64-root-volume-git-python-metadata-v10",
   "osBuild": "26A434",
   "compiler": "approved-roots-seatbelt-v1",
   "filesystemClass": "system-apfs-kernel-mount-boundaries-v1",
@@ -73,7 +73,7 @@
     },
     {
       "path": "modules/computer/infra/process/mountboundaries.go",
-      "sha256": "60514b5df7093ac63a232ff89837f69b1b36f0e85c17aac7b884fc03e0bf4cf1"
+      "sha256": "f42e19b109572d9dceebfb6941939a05d12b06d20ec05ee2aeecd575a6af2f22"
     },
     {
       "path": "modules/computer/infra/process/observe.go",
@@ -149,7 +149,7 @@
     },
     {
       "path": "modules/computer/infra/process/rootscoped.go",
-      "sha256": "6f11ced8c1ccf4474e0fb506e0ab4aac47933ef1c92c401d1f64fc71be2535ab"
+      "sha256": "8e9fdc20a11b6bebbb250063fc8ffd419b09314444eb912b728f76dd835959d3"
     },
     {
       "path": "modules/computer/infra/process/spawn.go",

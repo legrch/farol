@@ -72,7 +72,8 @@ func (s *RootScopedPlatformStrategy) mountBoundaryPaths(ctx context.Context, pol
 	}
 	roots, err := rootScopedScopes(policy, command)
 	if err != nil {
-		return refuse()
+		// Preserve policy provenance; no native filesystem fact was observed.
+		return nil, err
 	}
 	var paths []string
 	for _, root := range roots {

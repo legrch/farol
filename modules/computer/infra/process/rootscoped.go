@@ -39,12 +39,15 @@ func rootScopedScopes(s SeatbeltSelection, command Command) ([]rootScopeBinding,
 				matches++
 			}
 		}
-		if matches != 1 || !approved.ShellVerified || !absolutePolicyPath(approved.Root) || !absolutePolicyPath(scope.Root) ||
+		if matches != 1 || !absolutePolicyPath(approved.Root) || !absolutePolicyPath(scope.Root) ||
 			approved.RootIdentity.Device == "" || approved.RootIdentity.Inode == "" || !insidePolicy(approved.Root, scope.Root) ||
 			scope.Mode != authority.Subtree || len(scope.Paths) != 0 || comparableOverlap(scope.Root, s.Scratch) ||
 			(scope.Access != authority.ReadAccess && scope.Access != authority.WriteAccess) ||
 			(approved.Access != authority.ReadAccess && approved.Access != authority.WriteAccess) {
 			return refuse()
+		}
+		if !approved.ShellVerified {
+			return nil, &processsvc.Failure{Code: "PROCESS_PREPARATION_WORKSPACE_STALE"}
 		}
 		// An invocation's read-only selection narrows EVERY root, not only cwd.
 		if !command.Write || scope.Access != authority.WriteAccess || approved.Access != authority.WriteAccess {
