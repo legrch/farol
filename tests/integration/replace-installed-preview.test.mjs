@@ -286,6 +286,59 @@ describe("one-shot installed replacement", () => {
     ).toBe("synthetic execution image\n");
     expect(result.receipt.destination).toBe(f.oldApp);
   });
+  it.each(["launch-Farol.app", "installed-execution"])(
+    "refuses custody while an original process uses retained %s resources",
+    async (kind) => {
+      const f = await fixture();
+      const retained =
+        kind === "launch-Farol.app"
+          ? path.join(f.updates, "d".repeat(32), kind)
+          : path.join(f.updates, kind, "c".repeat(64), "Farol.app");
+      await fs.mkdir(retained, { recursive: true, mode: 0o700 });
+      const entry = path.join(retained, "probe.cjs");
+      await fs.writeFile(
+        entry,
+        'process.stdout.write("READY"); setInterval(() => {}, 1000);',
+        { mode: 0o600 },
+      );
+      f.selection.snapshot = await snapshotInstalledReplacement(f.home);
+      delete f.deps.processProof;
+      const original = observe(
+        spawn(process.execPath, [entry], {
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" },
+        }),
+      );
+      try {
+        await waitFor(() => original.output().includes("READY"));
+        await expect(
+          replaceInstalledPreview(f.selection, true, f.deps),
+        ).rejects.toThrow("REPLACEMENT_PROCESS_ACTIVE");
+        expect(await fs.readFile(f.oldApp + ".receipt.json", "utf8")).toBe(
+          f.oldReceipt,
+        );
+        await expect(fs.lstat(f.custody)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(
+          fs.lstat(
+            path.join(
+              f.userData,
+              "farol-next-state/installed-replacement.pending",
+            ),
+          ),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        if (
+          original.child.exitCode === null &&
+          original.child.signalCode === null
+        )
+          original.child.kill("SIGTERM");
+        await original.closed;
+      }
+    },
+  );
+
   it.each(["ready.json", "last-update.json", "both-with-history"])(
     "refuses missing update records (%s) while historical work remains",
     async (missing) => {

@@ -423,7 +423,7 @@ function processProof(home, helpers, installLocation = "legacy") {
     fail("REPLACEMENT_PROCESS_PROBE_UNKNOWN");
   const scopes = [
     path.join(replacementApplications(home, installLocation), "Farol.app/"),
-    path.join(promotionUserData(home), "installed-updates/installed-execution"),
+    path.join(promotionUserData(home), "installed-updates") + path.sep,
     path.join(promotionUserData(home), "farol-next-state/go-core"),
     path.join(promotionUserData(home), "farol-next-state/secure-mcp-connector"),
   ];

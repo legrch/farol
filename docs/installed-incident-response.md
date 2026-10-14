@@ -150,3 +150,11 @@ readback. A displacement during verification retains the original pending fence;
 a failed post-retirement observation publishes the existing uncertainty fence.
 Completion is a bounded observation, not permanent exclusion of later changes
 by another administrator. No displaced operation is repeated or rolled back.
+
+## Retained private launch processes
+
+Closed-app replacement checks the entire selected profile's `installed-updates`
+namespace, including operation-owned `launch-Farol.app` images and authenticated
+`installed-execution` snapshots. A process using either location blocks custody
+before publication of the replacement intent. The canonical slot and native Go
+and connector state roots keep their separate process checks.
