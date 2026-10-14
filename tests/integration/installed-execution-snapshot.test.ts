@@ -129,10 +129,38 @@ describe("authenticated private installed execution image", () => {
     );
     expect(copy).toHaveBeenCalledTimes(1);
   });
-  it("refuses a replaced source root before executing the captured image", async () => {
+  it("keeps accepted execution available after the public bundle is replaced", async () => {
     const image = await capture();
     await fs.rename(app, app + ".displaced");
     await fs.cp(app + ".displaced", app, { recursive: true });
+    await fs.writeFile(
+      path.join(app, "Contents/Resources/app/payload"),
+      "replacement",
+    );
+    await image.recheck();
+    const { stdout } = await promisify(execFile)(image.executable, [], {
+      env: { PATH: "/usr/bin:/bin" },
+    });
+    expect(stdout).toBe("accepted");
+    await expect(capture()).rejects.toThrow(
+      "UPDATE_EXECUTION_RESOURCES_UNCONFIRMED",
+    );
+    expect(copy).toHaveBeenCalledTimes(1);
+  });
+  it("keeps accepted execution available after the public bundle is removed", async () => {
+    const image = await capture();
+    await fs.rename(app, app + ".displaced");
+    await image.recheck();
+    const { stdout } = await promisify(execFile)(image.executable, [], {
+      env: { PATH: "/usr/bin:/bin" },
+    });
+    expect(stdout).toBe("accepted");
+    expect(copy).toHaveBeenCalledTimes(1);
+  });
+  it("still refuses displacement of the private parent after capture", async () => {
+    const image = await capture();
+    await fs.rename(parent, parent + ".displaced");
+    await fs.cp(parent + ".displaced", parent, { recursive: true });
     await expect(image.recheck()).rejects.toThrow(
       "UPDATE_EXECUTION_RESOURCES_UNCONFIRMED",
     );

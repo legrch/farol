@@ -101,14 +101,14 @@ export async function captureInstalledExecutionSnapshot(
   const source = await directory(input.sourceApp, false);
   const sourceExecutable = await regularExecutable(input.sourceExecutable);
   const parent = await directory(input.privateParent, true);
+  const parentStable = async () => {
+    if (!same(parent, await directory(input.privateParent, true))) refuse();
+  };
   const sourceStable = async () => {
+    await parentStable();
     if (
       !same(source, await directory(input.sourceApp, false)) ||
-      !same(
-        sourceExecutable,
-        await regularExecutable(input.sourceExecutable),
-      ) ||
-      !same(parent, await directory(input.privateParent, true))
+      !same(sourceExecutable, await regularExecutable(input.sourceExecutable))
     )
       refuse();
   };
@@ -192,8 +192,11 @@ export async function captureInstalledExecutionSnapshot(
     executable,
     digest: input.expectedDigest,
     recheck: async () => {
-      await sourceStable();
+      // Capture authenticates the public source once. This lifetime belongs
+      // to the accepted private image; updater admission checks its own source.
+      await parentStable();
       const current = await candidate();
+      await parentStable();
       if (
         !same(pinned.cacheIdentity, current.cacheIdentity) ||
         !same(pinned.appIdentity, current.appIdentity) ||
