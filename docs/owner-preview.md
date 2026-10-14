@@ -1,5 +1,7 @@
 # Farol owner beta
 
+> Engineering reference with historical UI and fixture descriptions. For current ordinary setup, use [First connection](start/first-connection.md) and [Folder access](guides/folder-access.md). In particular, the current Add workspace action saves Read & write, and no Tasks/Shell/Agent activation is implied by older control descriptions below. The local-promotion section remains a developer/owner path, not a public ZIP installer.
+
 ## Open it
 
 From the repository root:
