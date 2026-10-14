@@ -371,7 +371,12 @@ async function readOperationBinding(
   // without gaining authority to continue or mutate its unbound update. Keep
   // private-file/parent checks and every present binding strict. All helper,
   // recovery and correlated relaunch callers retain the default update purpose.
-  if (raw === null && purpose === "ordinary-shared-execution") return;
+  if (
+    raw === null &&
+    digest === null &&
+    purpose === "ordinary-shared-execution"
+  )
+    return;
   if (
     raw === null ||
     digest !== createHash("sha256").update(expected).digest("hex")

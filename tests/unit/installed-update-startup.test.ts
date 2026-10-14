@@ -147,7 +147,7 @@ function fixture(phase: Phase = "completed", action: Action = "apply") {
       ) => {
         events.push("record:" + path.basename(file));
         const value = structuredClone(records.get(file) ?? null);
-        if (value !== null)
+        if (records.has(file))
           observeDigest?.(
             createHash("sha256")
               .update(JSON.stringify(value) + "\n")
@@ -873,6 +873,22 @@ describe("installed updater startup correlation (pure ports only)", () => {
       await expect(
         guard!.resourcesOrigin!.recheckUpdateSource(),
       ).rejects.toThrow("UPDATE_ACCEPTED_SOURCE_CHANGED");
+    },
+  );
+
+  it.each(["operation", "preparation", "completed", "rollback"] as const)(
+    "refuses a present JSON-null binding for an ordinary %s baseline",
+    async (kind) => {
+      const f = unboundSharedFixture(kind);
+      f.records.set(path.join(opRoot, "slot-binding.json"), null);
+      const before = structuredClone([...f.records]);
+      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+        "UPDATE_SLOT_BINDING_UNCONFIRMED",
+      );
+      expect(captureMock).not.toHaveBeenCalled();
+      expect([...f.records]).toEqual(before);
+      expect(f.options.copyApp).not.toHaveBeenCalled();
+      expect(f.observation.readProcess).not.toHaveBeenCalled();
     },
   );
 
