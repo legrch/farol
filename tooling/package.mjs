@@ -14,6 +14,7 @@ import {
   runtimeClosure,
 } from "./runtime-contract.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
+import { packageInfoPlist } from "./package-platform.mjs";
 import {
   PACKAGE_SCHEMA,
   GO_PACKAGE_SCHEMA,
@@ -49,40 +50,6 @@ contents_dir=\${macos_dir%/*}
 export ELECTRON_FORCE_IS_PACKAGED=true
 exec "$contents_dir/Frameworks/Electron Runtime.app/Contents/MacOS/Electron" \\
   "$contents_dir/Resources/app" "$@"
-`;
-
-const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleDevelopmentRegion</key>
-  <string>en</string>
-  <key>CFBundleDisplayName</key>
-  <string>Farol</string>
-  <key>CFBundleIconFile</key>
-  <string>farol.icns</string>
-  <key>CFBundleExecutable</key>
-  <string>Farol Next Preview</string>
-  <key>CFBundleIdentifier</key>
-  <string>local.farol.next.preview</string>
-  <key>CFBundleInfoDictionaryVersion</key>
-  <string>6.0</string>
-  <key>CFBundleName</key>
-  <string>Farol</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>CFBundleShortVersionString</key>
-  <string>${bundleVersion}</string>
-  <key>CFBundleVersion</key>
-  <string>${releaseFields.buildVersion ?? "1"}</string>
-  <key>LSMinimumSystemVersion</key>
-  <string>12.0</string>
-  <key>NSHighResolutionCapable</key>
-  <true/>
-  <key>NSHumanReadableCopyright</key>
-  <string>Local development preview</string>
-</dict>
-</plist>
 `;
 
 const manifest = JSON.parse(
@@ -153,6 +120,12 @@ const vendorRuntime = await observeElectronRuntime(
 );
 assertRuntimeObservation(vendorRuntime);
 const electronSourceSha256 = vendorRuntime.extractedTreeDigest;
+// Render only after all preflight authentication, before replacing retained bytes.
+const infoPlist = packageInfoPlist({
+  runtimePlist: path.join(electronApp, "Contents/Info.plist"),
+  bundleVersion,
+  buildVersion: releaseFields.buildVersion ?? "1",
+});
 
 await fs.rm(packageRoot, { recursive: true, force: true });
 await fs.mkdir(path.join(appPath, "Contents/MacOS"), { recursive: true });

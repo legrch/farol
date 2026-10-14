@@ -24,6 +24,7 @@ it("refuses a core-less 0.2 candidate before changing the retained package", asy
     // Complete static .mjs import closure for package.mjs, copied unchanged.
     for (const name of [
       "package.mjs",
+      "package-platform.mjs",
       "go-core-artifact.mjs",
       "release-identity.mjs",
       "artifact-digest.mjs",
