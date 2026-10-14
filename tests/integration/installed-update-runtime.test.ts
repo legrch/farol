@@ -6012,6 +6012,70 @@ describe("selected shared slot (redirected disposable filesystem, mocked helper)
     slot = globalSlot;
     return { stat, physical };
   }
+
+  it.each(["deadline", "host-withdrawal"] as const)(
+    "does not launch an observer after %s during private resource validation",
+    async (mode) => {
+      await shared();
+      let allowed = true;
+      const controller = (await createInstalledUpdateRuntime({
+        ...options(),
+        canStartNormalQuitEffect: () => allowed,
+      }))!;
+      await controller.initialize();
+      await controller.check();
+      await controller.download();
+      expect(await controller.setInstallOnQuitPreference(true)).toEqual({
+        status: "confirmed",
+        enabled: true,
+        scope: "install-on-normal-quit",
+      });
+      let reached!: () => void;
+      let resume!: () => void;
+      const entered = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      mocks.recheckExecution.mockImplementationOnce(async () => {
+        reached();
+        await gate;
+      });
+      const before = mocks.exec.mock.calls.length;
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const pending = controller.applyOnNormalQuit({
+        kind: "ordinary-quit",
+        deadlineAt: Date.now() + 250,
+      });
+      try {
+        await Promise.race([
+          entered,
+          pending.then(() => {
+            throw new Error("FIXTURE_ENDED_BEFORE_RECHECK");
+          }),
+        ]);
+        if (mode === "deadline") {
+          await vi.advanceTimersByTimeAsync(251);
+          expect((await pending).status).toBe("blocked");
+        } else {
+          allowed = false;
+        }
+        resume();
+        expect((await pending).status).toBe("blocked");
+        await nextTurn();
+        expect(mocks.exec).toHaveBeenCalledTimes(before);
+        expect(mocks.helper).not.toHaveBeenCalled();
+        expect(mocks.copyApp).not.toHaveBeenCalled();
+        expect(quit).not.toHaveBeenCalled();
+        await controller.close();
+      } finally {
+        resume();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("hands off the selected shared slot and never observes the legacy app instead", async () => {
     const fixture = await shared();
     const controller = await prepared();

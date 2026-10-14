@@ -405,8 +405,10 @@ async function runInstalledTrusted(
   args: string[],
   timeout = 180000,
   execution?: InstalledExecutionSnapshot,
+  beforeEffect: () => void = () => undefined,
 ): Promise<unknown> {
   await execution?.recheck();
+  beforeEffect();
   const { stdout } = await execute(
     execution?.executable ?? process.execPath,
     [path.join(execution?.directory ?? directory, entry), ...args],
@@ -2225,6 +2227,7 @@ async function createRuntime(
       args,
       180000,
       captured,
+      beforeEffect,
     );
     beforeEffect();
     return value;
