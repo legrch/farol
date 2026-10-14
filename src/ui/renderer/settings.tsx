@@ -2340,6 +2340,11 @@ function Connection({
     null,
   );
   const [copyError, setCopyError] = useState<string | null>(null);
+  const [externalVerificationOpen, setExternalVerificationOpen] =
+    useState(false);
+  const showExternalVerification =
+    externalChallenge &&
+    (!setupStep || (setupStep === "attachment" && externalVerificationOpen));
   const verificationIdentity = externalChallenge
     ? JSON.stringify([
         externalChallenge.tunnelId,
@@ -2804,11 +2809,27 @@ function Connection({
               setupStep={setupStep}
             />
           )}
-          {externalChallenge && !setupStep && (
+          {setupStep === "attachment" && externalChallenge && (
+            <button
+              type="button"
+              className="text-button"
+              aria-expanded={externalVerificationOpen}
+              onClick={() => setExternalVerificationOpen((open) => !open)}
+            >
+              Use ChatGPT outside Farol
+            </button>
+          )}
+          {showExternalVerification && (
             <div
               className="connector-challenge"
               data-connector-challenge="pending"
             >
+              {setupStep === "attachment" && (
+                <p className="description">
+                  Use your own ChatGPT window, then return here to check
+                  attachment. Sign-in inside Farol is optional.
+                </p>
+              )}
               <button
                 type="button"
                 className="primary"

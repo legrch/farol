@@ -316,24 +316,72 @@ describe("reference-aligned Setup wizard", () => {
       expect(h.f.api.configure).not.toHaveBeenCalled();
     },
   );
-  it("offers the empty-catalogue request without a fabricated workspace or sign-in", async () => {
-    const value = attachmentSettings();
-    value.computer.workspaces = [];
-    value.setup.computer.verified = null;
-    const h = await mount("attachment", false, value);
-    expect(h.button("Copy verification request")).toBeUndefined();
-    expect(h.button("Check attachment").disabled).toBe(false);
-    expect(h.button("Check in ChatGPT once")).toBeTruthy();
-    expect(h.host.querySelector(".attachment-request")).toBeNull();
-    expect(h.host.textContent).not.toContain(
-      value.connectors.secureMcp.challenge!.value,
-    );
-    expect(h.f.api.configure).not.toHaveBeenCalled();
-    await h.click("Check attachment");
-    expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
-      kind: "connector.check-attachment",
-    });
-  });
+  it.each([false, true])(
+    "offers external verification without embedded sign-in (empty catalogue: %s)",
+    async (empty) => {
+      const value = attachmentSettings();
+      if (empty) {
+        value.computer.workspaces = [];
+        value.setup.computer.verified = null;
+      }
+      const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+      try {
+        const h = await mount("attachment", false, value);
+        expect(h.button("Copy verification request")).toBeUndefined();
+        expect(h.button("Check in ChatGPT once").disabled).toBe(true);
+        expect(h.host.querySelector(".attachment-request")).toBeNull();
+        await h.click("Use ChatGPT outside Farol");
+        expect(
+          h.button("Use ChatGPT outside Farol").getAttribute("aria-expanded"),
+        ).toBe("true");
+        expect(h.button("Copy verification request").disabled).toBe(false);
+        await h.click("Copy verification request");
+        expect(writeText).toHaveBeenCalledTimes(1);
+        const request = writeText.mock.calls[0]![0] as string;
+        expect(request).toContain(value.connectors.secureMcp.challenge!.value);
+        if (empty) {
+          expect(h.host.textContent).toContain(
+            "No workspace access is enabled.",
+          );
+          expect(request).not.toContain("workspaceId");
+        } else {
+          expect(request).toContain(value.computer.workspaces[0]!.workspaceId);
+        }
+        expect(h.host.textContent).toContain("Farol has not sent it");
+        expect(h.f.api.configure).not.toHaveBeenCalled();
+        await h.click("Use ChatGPT outside Farol");
+        expect(h.button("Copy verification request")).toBeUndefined();
+        expect(writeText).toHaveBeenCalledTimes(1);
+        await h.click("Check attachment");
+        expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
+          kind: "connector.check-attachment",
+        });
+      } finally {
+        if (original) Object.defineProperty(navigator, "clipboard", original);
+        else Reflect.deleteProperty(navigator, "clipboard");
+      }
+    },
+  );
+  it.each(["missing", "stale", "unknown"] as const)(
+    "withholds the external Setup alternative for a %s challenge",
+    async (condition) => {
+      const value = attachmentSettings();
+      if (condition === "missing") value.connectors.secureMcp.challenge = null;
+      if (condition === "stale")
+        value.connectors.secureMcp.challenge!.buildId = "4".repeat(64);
+      if (condition === "unknown") value.setup.connect.outcomeUnknown = true;
+      const h = await mount("attachment", false, value);
+      expect(h.button("Use ChatGPT outside Farol")).toBeUndefined();
+      expect(h.button("Copy verification request")).toBeUndefined();
+      expect(h.host.querySelector(".attachment-request")).toBeNull();
+      expect(h.f.api.configure).not.toHaveBeenCalled();
+    },
+  );
   it.each(["refused", "unknown"] as const)(
     "keeps pending and late attachment %s feedback on its Setup origin across Shell navigation and remount",
     async (outcome) => {
