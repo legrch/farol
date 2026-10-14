@@ -192,6 +192,13 @@ export interface ShellGitRuntimeResources {
     path: string;
     entries: readonly string[];
   }>[];
+  readonly python?: Readonly<{
+    files: readonly ShellSupportPin[];
+    directories: readonly Readonly<{
+      path: string;
+      entries: readonly string[];
+    }>[];
+  }>;
 }
 const gitImage = "/Library/Developer/CommandLineTools/usr/bin/git";
 const gitData = "/Library/Developer/CommandLineTools/usr/share/git-core";
@@ -230,7 +237,13 @@ function gitRuntimeResources(
   value: unknown,
   executables: readonly ShellSupportPin[],
 ): ShellGitRuntimeResources {
-  const r = record(value, ["git", "files", "directories"]);
+  const pythonKey =
+    value !== null &&
+    typeof value === "object" &&
+    Object.hasOwn(value, "python")
+      ? ["python"]
+      : [];
+  const r = record(value, ["git", "files", "directories", ...pythonKey]);
   const rawGit = record(r.git, ["path", "sha256"]);
   const git = Object.freeze({
     path: absolutePath(rawGit.path),
@@ -299,7 +312,93 @@ function gitRuntimeResources(
     )
       return refuse();
   }
-  return Object.freeze({ git, files, directories: Object.freeze(directories) });
+  const python = pythonKey.length
+    ? pythonRuntimeResources(r.python, executables)
+    : undefined;
+  return Object.freeze({
+    git,
+    files,
+    directories: Object.freeze(directories),
+    ...(python ? { python } : {}),
+  });
+}
+
+const pythonRoot =
+  "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9";
+const pythonLibrary = pythonRoot + "/lib/python3.9";
+function pythonRuntimeResources(
+  value: unknown,
+  executables: readonly ShellSupportPin[],
+): NonNullable<ShellGitRuntimeResources["python"]> {
+  const p = record(value, ["files", "directories"]);
+  for (const path of [
+    pythonRoot + "/bin/python3.9",
+    pythonRoot + "/Resources/Python.app/Contents/MacOS/Python",
+  ])
+    if (!executables.some((pin) => pin.path === path)) return refuse();
+  const files = pins(p.files, false, 128);
+  if (files.length < 5) return refuse();
+  const paths = new Set<string>();
+  let previous = "";
+  for (const f of files) {
+    if (
+      f.path <= previous ||
+      (f.path !== pythonRoot + "/Python3" &&
+        (!f.path.startsWith(pythonLibrary + "/") ||
+          f.path.startsWith(pythonLibrary + "/site-packages/") ||
+          f.path.startsWith(pythonLibrary + "/__pycache__/") ||
+          (!f.path.endsWith(".py") && !f.path.endsWith(".so"))))
+    )
+      return refuse();
+    previous = f.path;
+    paths.add(f.path);
+  }
+  for (const path of [
+    pythonRoot + "/Python3",
+    pythonLibrary + "/encodings/__init__.py",
+    pythonLibrary + "/encodings/utf_8.py",
+    pythonLibrary + "/codecs.py",
+    pythonLibrary + "/os.py",
+  ])
+    if (!paths.has(path)) return refuse();
+  previous = "";
+  const directories = finiteValues(p.directories, 16).map((raw) => {
+    const d = record(raw, ["path", "entries"]);
+    const path = absolutePath(d.path);
+    if (
+      path <= previous ||
+      (path !== pythonRoot + "/bin" &&
+        path !== pythonLibrary &&
+        !path.startsWith(pythonLibrary + "/")) ||
+      path === pythonLibrary + "/site-packages" ||
+      path.startsWith(pythonLibrary + "/site-packages/")
+    )
+      return refuse();
+    previous = path;
+    let last = "";
+    const entries = finiteValues(d.entries, 512).map((entry) => {
+      const name = text(entry, /^[A-Za-z0-9._-]+$/u, 128);
+      if (name === "." || name === ".." || name <= last) return refuse();
+      last = name;
+      return name;
+    });
+    return Object.freeze({ path, entries: Object.freeze(entries) });
+  });
+  if (
+    directories.length < 2 ||
+    !directories.some((d) => d.path === pythonRoot + "/bin") ||
+    !directories.some((d) => d.path === pythonLibrary)
+  )
+    return refuse();
+  for (const f of files)
+    if (
+      f.path !== pythonRoot + "/Python3" &&
+      !directories.some(
+        (d) => d.path === f.path.slice(0, f.path.lastIndexOf("/")),
+      )
+    )
+      return refuse();
+  return Object.freeze({ files, directories: Object.freeze(directories) });
 }
 
 // A consumed value projection, not a qualification issuer or launch capability.

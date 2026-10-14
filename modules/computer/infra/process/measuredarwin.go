@@ -87,7 +87,7 @@ type darwinExecutableMeasurement struct {
 func (p *darwinExecutableMeasurement) Close() error { return p.file.Close() }
 func (p *darwinExecutableMeasurement) unchanged(info os.FileInfo) bool {
 	if info == nil || p.original == nil || !info.Mode().IsRegular() || (!p.dataOnly && info.Mode().Perm()&0111 == 0) ||
-		info.Mode().Perm()&0022 != 0 || info.Size() < 0 || info.Size() > 128*1024*1024 || (p.dataOnly && info.Size() > 256*1024) ||
+		info.Mode().Perm()&0022 != 0 || info.Size() < 0 || info.Size() > 128*1024*1024 || (p.dataOnly && info.Size() > gitResourceMaximum(p.selected.Path)) ||
 		info.Mode() != p.original.Mode() ||
 		info.Size() != p.original.Size() || !info.ModTime().Equal(p.original.ModTime()) {
 		return false

@@ -20,3 +20,33 @@ and the real installed workflow remain separate acceptance checks.
 
 The declared platform assurance remains protected host pathnames and pinned
 bytes. A code-signing trust-chain claim is not made by these fixtures.
+
+The CLT Python declaration is a finite standard-library subset, separate from
+workspace authorization. The physical Python executable and its framework
+launcher are pinned in the existing executable selection. The protected
+`bin/python3` alias must resolve exactly to `python3.9`; its identity, target and
+metadata are rechecked. Selected library files retain checked descriptors;
+root-owned directory listings are verified for import discovery. Listing a
+module does not grant its file data. Unselected modules, third-party packages,
+external runtimes and redirected aliases remain outside this platform support.
+Project dependencies still require their ordinary approved workspace scope.
+
+The finite resource predicate is compiled once so the existing native argv and
+byte budgets remain unchanged. Files remain data-only and write-protected;
+network, mount and credential rules are unchanged. This relies on the existing
+protected-host-pathname trust assumption, not an atomic pathname-exec or signing
+claim. Qualification checks compare checked-in expectations; they never adopt
+new host bytes because an installed toolchain changed.
+
+`TestNativePinnedPythonGitHooks` uses the product declaration with no CLT
+workspace grant. It covers real symlinked Python commit-msg, Python pre-commit,
+intentional hook rejection with unchanged HEAD, system attributes and linked
+worktree commits. Its disposable synthetic HOME is host-composition test state;
+there is no command-level Git HOME/config suppression. Native policy success is
+separate from built Go Shell, Dev, production installation and owner acceptance.
+
+Outside-scope native controls invoke the hook/interpreter directly and verify
+that execution or data access refuses. They are separate from a real admitted
+hook rejecting Git commit. Git can skip a hook that its executable-access check
+cannot see; confinement alone does not certify mandatory hook discovery for an
+unapproved hook path. Do not report that case as successful hook enforcement.

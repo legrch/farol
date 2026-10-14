@@ -13,11 +13,12 @@ import (
 	"syscall"
 
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
+	"github.com/legrch/farol/modules/computer/domain/authority"
 	"golang.org/x/sys/unix"
 )
 
 func (nativePlatformFacts) gitRuntimeFile(ctx context.Context, path string) (platformFileFacts, error) {
-	return platformMeasuredFile(ctx, path, 0, 256*1024)
+	return platformMeasuredFile(ctx, path, 0, gitResourceMaximum(path))
 }
 func (nativePlatformFacts) gitRuntimeDirectory(ctx context.Context, path string) (gitRuntimeDirectoryFacts, error) {
 	refuse := func() (gitRuntimeDirectoryFacts, error) {
@@ -41,8 +42,12 @@ func (nativePlatformFacts) gitRuntimeDirectory(ctx context.Context, path string)
 	if !ok || st.Uid != 0 || before.Mode().Perm()&0022 != 0 {
 		return refuse()
 	}
-	names, err := dir.Readdirnames(33)
-	if err != nil && err != io.EOF || len(names) > 32 {
+	maximum := 32
+	if insidePolicy(pythonRuntimeRoot, path) {
+		maximum = 512
+	}
+	names, err := dir.Readdirnames(maximum + 1)
+	if err != nil && err != io.EOF || len(names) > maximum {
 		return refuse()
 	}
 	slices.Sort(names)
@@ -101,4 +106,67 @@ func (darwinLaunchFilesystem) pinGitRuntimeFile(ctx context.Context, pin Executa
 		return held, &processsvc.NativeFailure{}
 	}
 	return held, held.recheck(ctx)
+}
+
+// The one protected CLT alias is measured, not accepted as a caller symlink.
+// Kernel execution remains limited to the separately pinned physical images.
+func (nativePlatformFacts) pythonAlias(ctx context.Context) (pythonAliasFacts, error) {
+	refuse := func() (pythonAliasFacts, error) { return pythonAliasFacts{}, &processsvc.NativeFailure{} }
+	if ctx == nil || ctx.Err() != nil {
+		return refuse()
+	}
+	parent, err := platformProtectedParent(pythonRuntimeAlias)
+	if err != nil {
+		return refuse()
+	}
+	defer parent.Close()
+	pi, err := parent.Stat()
+	if err != nil {
+		return refuse()
+	}
+	ps, ok := pi.Sys().(*syscall.Stat_t)
+	if !ok || ps.Uid != 0 || pi.Mode().Perm()&0022 != 0 {
+		return refuse()
+	}
+	before, err := os.Lstat(pythonRuntimeAlias)
+	if err != nil || before.Mode()&os.ModeSymlink == 0 {
+		return refuse()
+	}
+	target, err := os.Readlink(pythonRuntimeAlias)
+	if err != nil || target != "python3.9" {
+		return refuse()
+	}
+	resolved, err := filepath.EvalSymlinks(pythonRuntimeAlias)
+	if err != nil || resolved != pythonRuntimeImage {
+		return refuse()
+	}
+	after, err := os.Lstat(pythonRuntimeAlias)
+	if err != nil || !os.SameFile(before, after) || before.ModTime() != after.ModTime() {
+		return refuse()
+	}
+	b, ok := before.Sys().(*syscall.Stat_t)
+	a, aok := after.Sys().(*syscall.Stat_t)
+	if !ok || !aok || b.Uid != 0 || b.Nlink != 1 || b.Dev != a.Dev || b.Ino != a.Ino || b.Uid != a.Uid || b.Gid != a.Gid || b.Mode != a.Mode || b.Nlink != a.Nlink || b.Mtimespec != a.Mtimespec || b.Ctimespec != a.Ctimespec || ctx.Err() != nil {
+		return refuse()
+	}
+	return pythonAliasFacts{identity: authority.RootIdentity{Device: strconv.FormatUint(uint64(a.Dev), 10), Inode: strconv.FormatUint(a.Ino, 10)}, target: target, uid: a.Uid,
+		modified: strconv.FormatInt(a.Mtimespec.Sec, 10) + ":" + strconv.FormatInt(a.Mtimespec.Nsec, 10),
+		changed:  strconv.FormatInt(a.Ctimespec.Sec, 10) + ":" + strconv.FormatInt(a.Ctimespec.Nsec, 10)}, nil
+}
+func (darwinLaunchFilesystem) pinPythonAlias(ctx context.Context) (executableMeasurement, error) {
+	observed, err := (nativePlatformFacts{}).pythonAlias(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &pythonAliasMeasurement{original: observed}, nil
+}
+func recheckPythonAlias(ctx context.Context, m *pythonAliasMeasurement) error {
+	if m == nil || m.closed {
+		return &processsvc.NativeFailure{}
+	}
+	next, err := (nativePlatformFacts{}).pythonAlias(ctx)
+	if err != nil || next != m.original {
+		return &processsvc.NativeFailure{}
+	}
+	return nil
 }

@@ -20,7 +20,13 @@ function freeze(value) {
 export const SHELL_PLATFORM = freeze(platform);
 const processDirectory = "modules/computer/infra/process";
 
-async function readPinned(root, relative, expected, minimum = 1n) {
+async function readPinned(
+  root,
+  relative,
+  expected,
+  minimum = 1n,
+  maximum = 256n * 1024n,
+) {
   const file = path.join(root, relative);
   if ((await fs.realpath(file)) !== file)
     throw new Error("SHELL_SUPPORT_INPUT_REDIRECTED");
@@ -34,7 +40,7 @@ async function readPinned(root, relative, expected, minimum = 1n) {
       !before.isFile() ||
       before.nlink !== 1n ||
       before.size < minimum ||
-      before.size > 256n * 1024n
+      before.size > maximum
     )
       throw new Error("SHELL_SUPPORT_INPUT_INVALID");
     const bytes = Buffer.alloc(Number(before.size) + 1);
@@ -99,8 +105,27 @@ function watchdogLiteral(bytes) {
 export async function verifyHostShellResources() {
   const resources = SHELL_PLATFORM.gitRuntimeResources;
   if (!resources) return;
+  const files = [...resources.files, ...(resources.python?.files ?? [])];
+  const directories = [
+    ...resources.directories,
+    ...(resources.python?.directories ?? []),
+  ];
+  if (resources.python) {
+    const base =
+      "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9";
+    const alias = base + "/bin/python3";
+    const info = await fs.lstat(alias);
+    if (
+      !info.isSymbolicLink() ||
+      info.uid !== 0 ||
+      info.nlink !== 1 ||
+      (await fs.readlink(alias)) !== "python3.9" ||
+      (await fs.realpath(alias)) !== base + "/bin/python3.9"
+    )
+      throw new Error("SHELL_SUPPORT_PYTHON_ALIAS_INVALID");
+  }
   const parents = new Set();
-  for (const item of [...resources.files, ...resources.directories]) {
+  for (const item of [...files, ...directories]) {
     for (
       let dir = path.dirname(item.path);
       dir !== "/";
@@ -108,7 +133,7 @@ export async function verifyHostShellResources() {
     )
       parents.add(dir);
   }
-  for (const dir of [...parents, ...resources.directories.map((d) => d.path)]) {
+  for (const dir of [...parents, ...directories.map((d) => d.path)]) {
     const info = await fs.lstat(dir);
     if (
       !info.isDirectory() ||
@@ -119,7 +144,7 @@ export async function verifyHostShellResources() {
     )
       throw new Error("SHELL_SUPPORT_RESOURCE_PARENT_INVALID");
   }
-  for (const file of resources.files) {
+  for (const file of files) {
     const info = await fs.lstat(file.path);
     if (
       !info.isFile() ||
@@ -128,9 +153,17 @@ export async function verifyHostShellResources() {
       (info.mode & 0o022) !== 0
     )
       throw new Error("SHELL_SUPPORT_RESOURCE_INVALID");
-    await readPinned("/", file.path, file.sha256, 0n);
+    await readPinned(
+      "/",
+      file.path,
+      file.sha256,
+      0n,
+      file.path.endsWith("/Versions/3.9/Python3")
+        ? 32n * 1024n * 1024n
+        : 256n * 1024n,
+    );
   }
-  for (const dir of resources.directories) {
+  for (const dir of directories) {
     const before = await fs.lstat(dir.path, { bigint: true });
     const entries = (await fs.readdir(dir.path)).sort();
     const after = await fs.lstat(dir.path, { bigint: true });
