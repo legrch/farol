@@ -21,6 +21,9 @@ import {
 import { PrivateMcpLifecycle } from "../../src/modules/computer/infra/mcp/private-mcp-lifecycle.ts";
 import type { BuildIdentity } from "../../src/pkg/build-info/identity.ts";
 
+import { createOrdinaryGitEnvironment } from "../fixtures/ordinary-git-environment.mjs";
+import { runGitShellJourney } from "./go-git-shell-journey.ts";
+
 type JSONValue =
   null | boolean | number | string | JSONValue[] | { [key: string]: JSONValue };
 type RecordValue = { [key: string]: JSONValue };
@@ -37,6 +40,7 @@ export async function run(input: {
   artifact: unknown;
   output: string;
   report: Record<string, unknown>;
+  shell?: { support: unknown; watchdogSource: Uint8Array; resources: unknown };
 }) {
   assert.equal(process.platform, "darwin");
   assert.equal(process.arch, "arm64");
@@ -58,12 +62,18 @@ export async function run(input: {
     await fs.mkdtemp(path.join(parent, "go-mcp-journey-")),
   );
   await fs.chmod(temporary, 0o700);
-  const home = path.join(temporary, "home"),
+  const gitFixture = input.shell
+    ? await createOrdinaryGitEnvironment({
+        parent: temporary,
+        managedWriter: false,
+      })
+    : null;
+  const home = gitFixture?.home ?? path.join(temporary, "home"),
     stateRoot = path.join(temporary, "state"),
     workspace = path.join(temporary, "workspace"),
     lifecycleRoot = path.join(temporary, "connector");
   for (const root of [home, stateRoot, workspace, lifecycleRoot])
-    await fs.mkdir(root, { mode: 0o700 });
+    await fs.mkdir(root, { mode: 0o700, recursive: true });
   const initialRoot = await fs.lstat(temporary, { bigint: true });
   const peers: Peer[] = [];
   let host: DesktopGoCore | undefined,
@@ -201,6 +211,35 @@ export async function run(input: {
       (await configuration.updateWorkspaceAccess(workspaceId, "write")).ok,
       true,
     );
+    let gitWorkspaceId: string | undefined;
+    if (gitFixture) {
+      const info = await fs.lstat(home, { bigint: true });
+      assert.equal(
+        (await configuration.updateComputerFilePolicy("approved-roots-v1")).ok,
+        true,
+      );
+      assert.equal(
+        (await configuration.updateComputerCommands("workspace")).ok,
+        true,
+      );
+      assert.equal(
+        (
+          await configuration.addReadonlyWorkspace({
+            root: home,
+            label: "Synthetic ordinary Git HOME",
+            rootIdentity: { device: String(info.dev), inode: String(info.ino) },
+          })
+        ).ok,
+        true,
+      );
+      gitWorkspaceId = settings().computer.workspaces.find(
+        (w) => w.root === home,
+      )!.workspaceId;
+      assert.equal(
+        (await configuration.updateWorkspaceAccess(gitWorkspaceId, "write")).ok,
+        true,
+      );
+    }
     const forbidden = async (): Promise<never> => {
       providerCalls++;
       throw new Error("PROVIDER_FORBIDDEN");
@@ -224,6 +263,15 @@ export async function run(input: {
           previousHostDrainConfirmed: true,
           artifactRoot: input.artifactRoot,
           compiledArtifact: input.artifact,
+          ...(input.shell
+            ? {
+                compiledResources: input.shell.resources,
+                compiledShell: {
+                  support: input.shell.support,
+                  watchdogSource: input.shell.watchdogSource,
+                },
+              }
+            : {}),
           build: input.build,
           stateRoot,
           home,
@@ -248,6 +296,36 @@ export async function run(input: {
         fence: () => store.fence(),
       };
     });
+    if (gitWorkspaceId) {
+      await host.publishCurrent();
+      const generation = settings().computer.generation;
+      await host.listSettingsWorkspace(generation, gitWorkspaceId, ".");
+      const identity = settings().computer.workspaces.find(
+        (w) => w.workspaceId === gitWorkspaceId,
+      )!.rootIdentity!;
+      assert.equal(
+        (
+          await configuration.recordComputerVerification(
+            gitWorkspaceId,
+            {
+              profile: "computer.local.write/1",
+              runtimeGeneration: `fixture:${input.build.buildId}`,
+              buildId: input.build.buildId,
+              protocol: "mutable-workspace/1",
+            },
+            {
+              rootIdentity: identity,
+              expectedGeneration: generation,
+              expectedRoot: home,
+            },
+          )
+        ).ok,
+        true,
+      );
+      // Publish the now-verified evidence through the normal host owner. The
+      // pre-check publication deliberately exposes no active write authority.
+      await host.publishCurrent();
+    }
     const challenge = randomUUID();
     const opened = await diagnostics.stage(
       "go-connector-open",
@@ -305,6 +383,16 @@ export async function run(input: {
     ])
       assert.ok(names.includes(name), name);
     assert.ok(!names.includes("computer_workspace_shell_start"));
+    if (gitFixture && gitWorkspaceId) {
+      assert.ok(names.includes("computer_shell_start"));
+      await runGitShellJourney({
+        peer,
+        fixture: gitFixture,
+        workspaceId: gitWorkspaceId,
+        report: input.report,
+        checkpoint: () => diagnostics.checkpoint("git-shell-progress"),
+      });
+    }
     const catalogue = await peer.call("computer_workspace_catalogue", {});
     assert.equal(catalogue.status, "ok");
     assert.deepEqual(catalogue.context, {
