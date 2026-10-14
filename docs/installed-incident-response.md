@@ -166,3 +166,13 @@ installed package verifiers compare the complete resource contract. The active
 implementation uses Node IPC as documented above. Renaming that wire value would
 make existing installed verifiers reject the next package; a future discriminator
 change needs a separately qualified versioned consumer transition.
+
+## Connector internal preparation withdrawal
+
+Configure, Doctor and Start carry the caller's original synchronous admission
+check. Configure checks it after resource validation and directory preparation,
+then immediately before init. The production anchor starter checks it after
+executable/resource validation and immediately before spawn. Quit, update or
+withdrawal of the original recovery observation therefore refuses a late native
+dispatch even when the accepted image remains intact. A pre-dispatch withdrawal
+is classified as not started, never an unknown spawn or profile-write result.

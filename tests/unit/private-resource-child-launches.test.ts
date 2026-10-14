@@ -53,6 +53,7 @@ function resources(
     localRuntimeGeneration: 0,
     runtimeChild: null,
     observeLocalRuntime,
+    beforeConnectorEffect: vi.fn(),
     directory: "/Applications/Farol.app/Contents/Resources/app",
     process: { execPath: "/Applications/replaced/Electron", argv: [], env: {} },
     installedResourcesOrigin: {
@@ -246,7 +247,7 @@ it.each([false, true])(
     });
     class Refusal extends Error {}
     const start = vm.runInNewContext(
-      `const ${stripTypeScriptTypes(code)}; startProcess`,
+      `${stripTypeScriptTypes(select(connector, (node) => node.type === "FunctionDeclaration" && (node.id as { name?: string })?.name === "assertConnectorDispatch"))}; const ${stripTypeScriptTypes(code)}; startProcess`,
       {
         process: {
           platform: "darwin",
@@ -344,5 +345,82 @@ it.each(["quitInProgress", "installedUpdateAdmission"])(
     expect(recheck).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
     expect(context.runtimeStopping).toBe(true);
+  },
+);
+
+it("refuses the actual connector anchor after withdrawal during its inner recheck", async () => {
+  const code = select(
+    connector,
+    (node) =>
+      node.type === "VariableDeclarator" &&
+      (node.id as { name?: string })?.name === "startProcess",
+  );
+  const guard = select(
+    connector,
+    (node) =>
+      node.type === "FunctionDeclaration" &&
+      (node.id as { name?: string })?.name === "assertConnectorDispatch",
+  );
+  const reached = deferredVoid();
+  const released = deferredVoid();
+  let admitted = true;
+  const spawn = vi.fn();
+  class NotStarted extends Error {}
+  const start = vm.runInNewContext(
+    `${stripTypeScriptTypes(guard)}; const ${stripTypeScriptTypes(code)}; startProcess`,
+    {
+      process: { platform: "darwin" },
+      fs: { access: vi.fn(async () => undefined), constants: { X_OK: 1 } },
+      spawn,
+      ConnectorProcessNotStarted: NotStarted,
+    },
+  );
+  const original = start(
+    {
+      executablePath: "/selected/tunnel-client",
+      arguments: ["run"],
+      cwd: "/private/cwd",
+      environment: {},
+    },
+    privateExecutable,
+    async () => {
+      reached.resolve();
+      await released.promise;
+    },
+    () => {
+      if (!admitted) throw Error("WITHDRAWN");
+    },
+  );
+  await reached.promise;
+  admitted = false;
+  released.resolve();
+  await expect(original).rejects.toThrow("CONNECTOR_ADMISSION_WITHDRAWN");
+  expect(spawn).not.toHaveBeenCalled();
+});
+
+it.each(["quit", "update", "recovery"])(
+  "uses the caller's actual synchronous guard for %s withdrawal",
+  (kind) => {
+    const declaration = select(
+      main,
+      (node) =>
+        node.type === "VariableDeclarator" &&
+        (node.id as { name?: string })?.name === "beforeConnectorEffect",
+    );
+    let recovery = true;
+    const context = {
+      quitInProgress: false,
+      installedUpdateAdmission: false,
+      recoveryPermitted: () => recovery,
+    };
+    const guard = vm.runInNewContext(
+      `const ${stripTypeScriptTypes(declaration)}; beforeConnectorEffect`,
+      context,
+    );
+    expect(() => guard()).not.toThrow();
+    if (kind === "quit") context.quitInProgress = true;
+    else if (kind === "update") context.installedUpdateAdmission = true;
+    else recovery = false;
+    expect(() => guard()).toThrow("CONNECTOR_ADMISSION_WITHDRAWN");
   },
 );

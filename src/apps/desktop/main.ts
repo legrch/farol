@@ -4884,6 +4884,11 @@ async function startAdmittedSecureMcpConnector(
     return configurationFailure("CONNECTOR_START_FAILED");
   }
 
+  const beforeConnectorEffect = () => {
+    if (quitInProgress || installedUpdateAdmission || !recoveryPermitted()) {
+      throw new Error("CONNECTOR_ADMISSION_WITHDRAWN");
+    }
+  };
   const attempt = (phase: string) =>
     connectorAttemptGeneration({
       connectorGeneration: connector.generation,
@@ -4898,6 +4903,7 @@ async function startAdmittedSecureMcpConnector(
     if (quitInProgress || installedUpdateAdmission || !recoveryPermitted())
       return configurationFailure("CONNECTOR_START_FAILED");
     await secureMcpConnectorRuntime.configure({
+      beforeEffect: beforeConnectorEffect,
       executablePath: connector.tunnelClient.executablePath,
       tunnelId: connector.tunnelId,
       credentialReference,
@@ -4924,6 +4930,7 @@ async function startAdmittedSecureMcpConnector(
   if (!recoveryPermitted()) return transitionRefusal();
   try {
     await secureMcpConnectorRuntime.doctor({
+      beforeEffect: beforeConnectorEffect,
       executablePath: connector.tunnelClient.executablePath,
     });
   } catch {
@@ -4943,6 +4950,7 @@ async function startAdmittedSecureMcpConnector(
     return configurationFailure("CONNECTOR_START_FAILED");
   try {
     started = await secureMcpConnectorRuntime.start({
+      beforeEffect: beforeConnectorEffect,
       executablePath: connector.tunnelClient.executablePath,
       executableSha256: connector.tunnelClient.executableSha256,
       connectorGeneration: connector.generation,

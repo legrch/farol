@@ -236,6 +236,8 @@ export type ConnectorChild = Readonly<{
 
 export type ConnectorProcessStarter = (
   command: ConnectorCommand,
+  // Call synchronously after asynchronous preparation, before native dispatch.
+  beforeEffect?: () => void,
 ) => Promise<ConnectorChild>;
 
 type Options = Readonly<{
@@ -260,6 +262,7 @@ type Dependencies = Readonly<{
 }>;
 
 type ConfigureInput = Readonly<{
+  beforeEffect?: () => void;
   executablePath: string;
   tunnelId: string;
   credentialReference: string;
@@ -271,6 +274,7 @@ type ConfigureInput = Readonly<{
 }>;
 
 type StartInput = Readonly<{
+  beforeEffect?: () => void;
   executablePath: string;
   executableSha256: string;
   connectorGeneration: number;
@@ -624,10 +628,19 @@ process.stdin.once("end", terminate);
 process.stdin.resume();
 `;
 
+function assertConnectorDispatch(beforeEffect?: () => void): void {
+  try {
+    beforeEffect?.();
+  } catch {
+    throw new ConnectorProcessNotStarted("CONNECTOR_ADMISSION_WITHDRAWN");
+  }
+}
+
 const startProcess = async (
   command: ConnectorCommand,
   electronPath: string,
   recheckExecution?: () => Promise<void>,
+  beforeEffect?: () => void,
 ): Promise<ConnectorChild> => {
   if (process.platform !== "darwin")
     throw new ConnectorProcessNotStarted("CONNECTOR_PROCESS_GROUP_UNSUPPORTED");
@@ -643,6 +656,7 @@ const startProcess = async (
       "CONNECTOR_EXECUTION_RESOURCES_UNCONFIRMED",
     );
   }
+  assertConnectorDispatch(beforeEffect);
   const child = spawn(
     electronPath,
     [
@@ -739,11 +753,12 @@ export class SecureMcpConnectorRuntime {
     this.run = dependencies.run ?? runCommand;
     this.startProcess =
       dependencies.start ??
-      ((command) =>
+      ((command, beforeEffect) =>
         startProcess(
           command,
           options.electronPath ?? process.execPath,
           options.recheckExecution,
+          beforeEffect,
         ));
     this.get = dependencies.get ?? getReady;
     this.wait = dependencies.wait ?? wait;
@@ -758,7 +773,9 @@ export class SecureMcpConnectorRuntime {
       throw new ConnectorRuntimeEffectUnknown(
         "CONNECTOR_CONFIGURE_OUTCOME_UNKNOWN",
       );
+    assertConnectorDispatch(input.beforeEffect);
     await this.options.recheckExecution?.();
+    assertConnectorDispatch(input.beforeEffect);
     this.validateExecutable(input.executablePath);
     if (!/^[0-9A-Za-z._:-]{1,160}$/u.test(input.tunnelId)) {
       runtimeError("CONNECTOR_TUNNEL_ID_INVALID");
@@ -792,6 +809,7 @@ export class SecureMcpConnectorRuntime {
       ],
       timeoutMs: 15_000,
     };
+    assertConnectorDispatch(input.beforeEffect);
     try {
       await this.run(command);
     } catch (error) {
@@ -812,9 +830,13 @@ export class SecureMcpConnectorRuntime {
     return this.uncertainConfigure || this.uncertainStart !== null;
   }
 
-  async doctor(input: Readonly<{ executablePath: string }>): Promise<void> {
+  async doctor(
+    input: Readonly<{ executablePath: string; beforeEffect?: () => void }>,
+  ): Promise<void> {
+    assertConnectorDispatch(input.beforeEffect);
     this.validateExecutable(input.executablePath);
     await this.ensureRoots();
+    assertConnectorDispatch(input.beforeEffect);
     try {
       await this.run({
         ...this.commandBase(input.executablePath),
@@ -838,6 +860,7 @@ export class SecureMcpConnectorRuntime {
     // A lost spawn acknowledgement is not authority to launch another child.
     // Return the original identity even when a later caller supplies new input.
     if (this.uncertainStart) return this.uncertainStart;
+    assertConnectorDispatch(input.beforeEffect);
     this.validateStartInput(input);
     if (this.child?.exitCode === null) {
       runtimeError("CONNECTOR_ALREADY_RUNNING");
@@ -859,28 +882,32 @@ export class SecureMcpConnectorRuntime {
       )
       .digest("hex");
     let child: ConnectorChild;
+    assertConnectorDispatch(input.beforeEffect);
     try {
-      child = await this.startProcess({
-        ...this.commandBase(input.executablePath),
-        arguments: [
-          "run",
-          "--profile",
-          PROFILE,
-          "--profile-dir",
-          this.profileRoot(),
-          "--health.listen-addr",
-          "127.0.0.1:0",
-          "--health.url-file",
-          this.healthUrlFile(),
-          "--pid.file",
-          this.pidFile(),
-          "--log.format",
-          "json",
-          "--log.level",
-          "info",
-        ],
-        timeoutMs: 0,
-      });
+      child = await this.startProcess(
+        {
+          ...this.commandBase(input.executablePath),
+          arguments: [
+            "run",
+            "--profile",
+            PROFILE,
+            "--profile-dir",
+            this.profileRoot(),
+            "--health.listen-addr",
+            "127.0.0.1:0",
+            "--health.url-file",
+            this.healthUrlFile(),
+            "--pid.file",
+            this.pidFile(),
+            "--log.format",
+            "json",
+            "--log.level",
+            "info",
+          ],
+          timeoutMs: 0,
+        },
+        () => assertConnectorDispatch(input.beforeEffect),
+      );
     } catch (error) {
       const result: ConnectorStartResult = {
         state:

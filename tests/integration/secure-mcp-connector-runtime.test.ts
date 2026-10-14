@@ -1524,3 +1524,100 @@ describe("secure MCP connector runtime", () => {
     expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
   });
 });
+
+// Real adapter with controlled resource-validation and command ports; no native
+// init, account or installed profile is executed by these withdrawal witnesses.
+describe("connector original dispatch admission", () => {
+  it("does not initialize a profile after withdrawal during internal resource validation", async () => {
+    const selected = await fixture();
+    let reached!: () => void;
+    let release!: () => void;
+    const checked = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let admitted = true;
+    const run = vi.fn<ConnectorCommandRunner>(async () => ({
+      stdout: "",
+      stderr: "",
+    }));
+    const runtime = new SecureMcpConnectorRuntime(
+      {
+        root: selected.runtimeRoot,
+        homePath: selected.root,
+        tempPath: selected.root,
+        recheckExecution: async () => {
+          reached();
+          await held;
+        },
+      },
+      { run },
+    );
+    const original = runtime.configure({
+      executablePath: selected.executablePath,
+      tunnelId: "controlled",
+      credentialReference: `file:${selected.credentialPath}`,
+      mcp: {
+        electronPath: selected.electronPath,
+        entryPath: selected.mcpEntry,
+        launchContractPath: selected.launchContract,
+      },
+      beforeEffect: () => {
+        if (!admitted) throw Error("WITHDRAWN");
+      },
+    });
+    await checked;
+    admitted = false;
+    release();
+    await expect(original).rejects.toThrow("CONNECTOR_ADMISSION_WITHDRAWN");
+    expect(run).not.toHaveBeenCalled();
+    await expect(fs.lstat(selected.runtimeRoot)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+  it("classifies a withdrawn start at the producer boundary as not started", async () => {
+    const selected = await fixture();
+    let reached!: () => void;
+    let release!: () => void;
+    const checked = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let admitted = true;
+    const dispatch = vi.fn();
+    const start: ConnectorProcessStarter = async (_command, beforeEffect) => {
+      reached();
+      await held;
+      beforeEffect?.();
+      dispatch();
+      return new FakeChild();
+    };
+    const runtime = new SecureMcpConnectorRuntime(
+      {
+        root: selected.runtimeRoot,
+        homePath: selected.root,
+        tempPath: selected.root,
+      },
+      { start },
+    );
+    const original = runtime.start({
+      ...startInput,
+      beforeEffect: () => {
+        if (!admitted) throw Error("WITHDRAWN");
+      },
+    });
+    await checked;
+    admitted = false;
+    release();
+    expect(await original).toMatchObject({
+      state: "unreachable",
+      code: "CONNECTOR_START_FAILED",
+    });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(runtime.isRunning()).toBe(false);
+  });
+});
