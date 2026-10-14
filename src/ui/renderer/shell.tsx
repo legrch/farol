@@ -1235,6 +1235,17 @@ export function Shell() {
           )}
           {state.environment === "dev" && <small>Development</small>}
         </div>
+        {destination.area === "chatgpt" &&
+          destination.connectionCheckReturn && (
+            <button
+              className="connection-check-return"
+              onClick={() =>
+                facade.navigate({ area: "setup", setupStep: "attachment" })
+              }
+            >
+              <Icon name="back" /> Back to setup
+            </button>
+          )}
         <button
           aria-label="Find a page"
           className="search-trigger"

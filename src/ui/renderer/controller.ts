@@ -1776,6 +1776,8 @@ export class WindowController implements RendererFacade {
       page: destination.page ?? this.state.destination.page,
       taskId: destination.taskId ?? this.state.destination.taskId,
     };
+    if (next.area === "chatgpt" && destination.connectionCheckReturn === true)
+      Object.assign(next, { connectionCheckReturn: true });
     const homeView = destination.homeView ?? this.state.destination.homeView;
     const activityId = Object.hasOwn(destination, "activityId")
       ? destination.activityId
@@ -1974,6 +1976,8 @@ export class WindowController implements RendererFacade {
       state.runtime !== "ready" ||
       state.update.phase === "applying" ||
       state.destination.area !== "chatgpt" ||
+      (state.destination.connectionCheckReturn === true &&
+        state.intents["settings:connector.verify-app:"]?.state === "pending") ||
       state.route === "loaded" ||
       state.tasks.tasks.length > 0 ||
       state.destination.taskId !== "" ||
