@@ -113,7 +113,7 @@ func TestNativeCLTGitRuntimeResources(t *testing.T) {
 	s.Snapshot.Approval.Workspaces[0].RootIdentity = identity(base)
 	command.Root, command.Cwd, command.RootIdentity = base, project, identity(base)
 	command.Executable, command.ExecutableSHA256 = "/bin/bash", s.Executables[0].SHA256
-	const script = "set -eu\ngit=\"$1\"\nlinked=\"$2\"\n\"$git\" init -q\ntest \"$(\"$git\" config --get init.defaultBranch)\" = main\ntest -f .git/hooks/pre-push.sample\n\"$git\" add source.txt\n\"$git\" commit -qm 'fixture: verify CLT runtime resources'\ntest \"$(cat .git/hook-proof)\" = hook-ran\ntest \"$(\"$git\" log -1 --format=%s)\" = 'fixture: verify CLT runtime resources'\nstatus=$(\"$git\" status --porcelain)\ntest -z \"$status\"\n\"$git\" worktree add -q -b linked \"$linked\"\nprintf 'linked\\n' > \"$linked/linked.txt\"\n\"$git\" -C \"$linked\" add linked.txt\n\"$git\" -C \"$linked\" commit -qm 'fixture: verify CLT linked worktree'\nstatus=$(\"$git\" -C \"$linked\" status --porcelain)\ntest -z \"$status\"\ntest \"$(cat .git/worktrees/linked/hook-proof)\" = hook-ran\nprintf 'git-resource-journey-completed\\n'\n"
+	const script = "set -eu\ngit=\"$1\"\nlinked=\"$2\"\n\"$git\" init -q\nattributes=$(\"$git\" check-attr diff -- fixture.swift)\ntest \"$attributes\" = \"fixture.swift: diff: swift\"\ntest \"$(\"$git\" config --get init.defaultBranch)\" = main\ntest -f .git/hooks/pre-push.sample\n\"$git\" add source.txt\n\"$git\" commit -qm 'fixture: verify CLT runtime resources'\ntest \"$(cat .git/hook-proof)\" = hook-ran\ntest \"$(\"$git\" log -1 --format=%s)\" = 'fixture: verify CLT runtime resources'\nstatus=$(\"$git\" status --porcelain)\ntest -z \"$status\"\n\"$git\" worktree add -q -b linked \"$linked\"\nprintf 'linked\\n' > \"$linked/linked.txt\"\n\"$git\" -C \"$linked\" add linked.txt\n\"$git\" -C \"$linked\" commit -qm 'fixture: verify CLT linked worktree'\nstatus=$(\"$git\" -C \"$linked\" status --porcelain)\ntest -z \"$status\"\ntest \"$(cat .git/worktrees/linked/hook-proof)\" = hook-ran\nprintf 'git-resource-journey-completed\\n'\n"
 	command.Args, command.Write = []string{"-c", script, "fixture", r.Git.Path, linked}, true
 	command.Environment = seatbeltEnvironment(s, true)
 	plan, err := compileSeatbelt(s, command)
@@ -152,7 +152,7 @@ func TestNativeCLTGitRuntimeResources(t *testing.T) {
 		}
 		t.Fatalf("original child unconfirmed; exact-root stop=%v; retain fixture", stop)
 	}
-	if !out.drained() || !diagnostic.drained() || stdout.String() != "git-resource-journey-completed\n" {
+	if !out.drained() || !diagnostic.drained() || stdout.String() != "git-resource-journey-completed\n" || stderr.Len() != 0 {
 		t.Fatal("terminal/output mismatch", stdout.String(), stderr.String())
 	}
 	ref, err := os.ReadFile(filepath.Join(project, ".git/refs/heads/main"))

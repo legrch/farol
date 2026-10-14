@@ -612,3 +612,23 @@ external connector acceptance or complete descendant cleanup.
 
 Sources: [Git untracked-cache identity](https://github.com/git/git/blob/master/dir.c)
 and [Darwin uname implementation](https://github.com/apple-oss-distributions/Libc/blob/main/gen/uname.c).
+
+## Git attributes and ordinary hook shell regression, 14 October 2026
+
+Installed 0.2.6 executed ordinary CLT Git status with the untracked cache enabled,
+but warned that its system `git-core/gitattributes` could not be read. The
+build-selected finite resource list now admits that exact optional root-owned
+file with its independent hash. Both Go and TypeScript reject neighboring or
+unqualified paths. Runtime file identity/hash/ownership rechecks, data-only
+execution denial and root-volume boundaries still apply.
+
+A native disposable HOME/project witness now verifies the default Swift diff
+attribute and requires empty stderr through init, actual pre-commit hooks,
+commit, log, status and linked worktree operations. Before the correction, it
+failed with the original attributes warning. The attributes change then exposed
+`/bin/sh` warnings when hooks inspected `/private/var/select/sh`. The root-scoped
+Git profile grants only metadata/existence for that link and its three parents,
+and only when `/bin/sh` is already selected. The shell's target data and execution
+still require the existing pinned image list; no new executable is selected.
+The final native witness passed with empty stderr. No system selector was changed.
+These results are source/native evidence; installed 0.2.6 does not include them.

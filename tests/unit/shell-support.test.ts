@@ -643,6 +643,18 @@ function gitResourceFixture() {
   };
 }
 describe("finite build-selected Git runtime data", () => {
+  it("admits only the exact independently pinned optional system attributes file", () => {
+    const input = gitResourceFixture();
+    const path =
+      "/Library/Developer/CommandLineTools/usr/share/git-core/gitattributes";
+    input.gitRuntimeResources.files.unshift({ path, sha256: "d".repeat(64) });
+    expect(
+      parseShellSupportDeclaration(input).gitRuntimeResources!.files[0],
+    ).toEqual({ path, sha256: "d".repeat(64) });
+    input.gitRuntimeResources.files[0]!.path = path + ".backup";
+    invalid(input);
+  });
+
   it("freezes the selected files and directory listings", () => {
     const input = gitResourceFixture();
     const result = parseShellSupportDeclaration(input);

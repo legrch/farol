@@ -547,6 +547,15 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 			source += `
 (allow sysctl-read (sysctl-name "kern.ostype") (sysctl-name "kern.hostname") (sysctl-name "kern.osrelease") (sysctl-name "kern.version") (sysctl-name "hw.machine"))`
 			source += "\n(allow file-read-metadata file-test-existence (literal \"/etc\") (literal \"/private/etc\") (literal \"/etc/gitconfig\") (literal \"/private/etc/gitconfig\"))"
+			// /bin/sh inspects its system selector before re-executing an
+			// already selected shell. This grants link/parent metadata only;
+			// data and execution remain governed by the pinned image list.
+			for _, image := range s.Executables {
+				if image.Path == "/bin/sh" {
+					source += "\n(allow file-read-metadata file-test-existence (literal \"/private\") (literal \"/private/var\") (literal \"/private/var/select\") (literal \"/private/var/select/sh\"))"
+					break
+				}
+			}
 		}
 		for _, anchor := range rootAnchors {
 			// Preserve the named root across operations; this is not a filename ban.

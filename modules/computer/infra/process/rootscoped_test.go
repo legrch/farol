@@ -284,3 +284,32 @@ func TestRootScopedGitSystemConfigChecksGrantNoContents(t *testing.T) {
 		t.Fatal("legacy policy changed", err)
 	}
 }
+
+func TestRootScopedShSelectorMetadataRequiresSelectedShell(t *testing.T) {
+	s, command := rootScopedFixture(t)
+	const metadata = `(allow file-read-metadata file-test-existence (literal "/private") (literal "/private/var") (literal "/private/var/select") (literal "/private/var/select/sh"))`
+	s.Executables = append(s.Executables, ExecutablePin{"/bin/sh", strings.Repeat("d", 64)})
+	command.Environment = seatbeltEnvironment(s, command.Write)
+	plan, err := compileSeatbelt(s, command)
+	if err != nil || !strings.Contains(plan.source, metadata) {
+		t.Fatal("selected sh cannot inspect selector", err)
+	}
+	for _, line := range strings.Split(plan.source, "\n") {
+		if strings.Contains(line, "/private/var/select") && line != metadata {
+			t.Fatal("selector received another grant", line)
+		}
+	}
+	without := s
+	without.Executables = without.Executables[:len(without.Executables)-1]
+	withoutCommand := command
+	withoutCommand.Environment = seatbeltEnvironment(without, command.Write)
+	plain, err := compileSeatbelt(without, withoutCommand)
+	if err != nil || strings.Contains(plain.source, "/private/var/select") {
+		t.Fatal("unselected sh acquired selector metadata", err)
+	}
+	_, legacy, legacyCommand, _ := confinementFixture(t)
+	old, err := compileSeatbelt(legacy, legacyCommand)
+	if err != nil || strings.Contains(old.source, "/private/var/select") {
+		t.Fatal("legacy policy changed", err)
+	}
+}

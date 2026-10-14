@@ -12,10 +12,11 @@ import (
 
 const gitRuntimeImage = "/Library/Developer/CommandLineTools/usr/bin/git"
 const gitRuntimeData = "/Library/Developer/CommandLineTools/usr/share/git-core"
+const gitRuntimeAttributes = gitRuntimeData + "/gitattributes"
 const gitRuntimeTemplates = gitRuntimeData + "/templates"
 
 // GitRuntimeResources is trusted build input, not a command or workspace grant.
-// Only the selected CLT Git's ordinary config/template data is supported here.
+// Only the selected CLT Git's ordinary config/attribute/template data is supported here.
 type GitRuntimeResources struct {
 	Git         ExecutablePin
 	Files       []ExecutablePin
@@ -60,7 +61,7 @@ func validGitRuntime(r *GitRuntimeResources, executables []ExecutablePin) bool {
 	for _, file := range r.Files {
 		if !absolutePolicyPath(file.Path) || !digestValue(file.SHA256) ||
 			file.SHA256 == strings.Repeat("0", 64) || file.Path <= last ||
-			(file.Path != gitRuntimeData+"/gitconfig" && !insidePolicy(gitRuntimeTemplates, file.Path)) {
+			(file.Path != gitRuntimeData+"/gitconfig" && file.Path != gitRuntimeAttributes && !insidePolicy(gitRuntimeTemplates, file.Path)) {
 			return false
 		}
 		paths[file.Path], last = true, file.Path
@@ -101,7 +102,7 @@ func validGitRuntime(r *GitRuntimeResources, executables []ExecutablePin) bool {
 		}
 	}
 	for path := range paths {
-		if path == gitRuntimeData+"/gitconfig" || path == gitRuntimeTemplates {
+		if path == gitRuntimeData+"/gitconfig" || path == gitRuntimeAttributes || path == gitRuntimeTemplates {
 			continue
 		}
 		parent := filepath.Dir(path)

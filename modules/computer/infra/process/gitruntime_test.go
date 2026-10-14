@@ -18,6 +18,33 @@ func gitRuntimeFixture() *GitRuntimeResources {
 		Directories: []GitRuntimeDirectory{{gitRuntimeTemplates, []string{"description"}}},
 	}
 }
+func TestGitRuntimeOptionalPinnedSystemAttributes(t *testing.T) {
+	r := gitRuntimeFixture()
+	r.Files = append([]ExecutablePin{{gitRuntimeAttributes, strings.Repeat("d", 64)}}, r.Files...)
+	if !validGitRuntime(r, []ExecutablePin{r.Git}) {
+		t.Fatal("selected attributes refused")
+	}
+	for _, path := range []string{gitRuntimeAttributes + ".backup", gitRuntimeData + "/private"} {
+		crossed := cloneGitRuntime(r)
+		crossed.Files[0].Path = path
+		if validGitRuntime(crossed, []ExecutablePin{r.Git}) {
+			t.Fatal("non-selected data admitted", path)
+		}
+	}
+	s, command := rootScopedFixture(t)
+	s.Executables = append(s.Executables, r.Git)
+	s.GitRuntimeResources = r
+	command.Environment = seatbeltEnvironment(s, command.Write)
+	plan, err := compileSeatbelt(s, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(plan.arguments, "\n"), "="+gitRuntimeAttributes) ||
+		!strings.Contains(plan.source, "(deny process-exec ") {
+		t.Fatal("attributes lack literal data-only confinement")
+	}
+}
+
 func TestGitRuntimeFiniteDeclarationAndClone(t *testing.T) {
 	r := gitRuntimeFixture()
 	if !validGitRuntime(r, []ExecutablePin{r.Git}) {

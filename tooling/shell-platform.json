@@ -1,6 +1,6 @@
 {
   "schema": "farol-shell-platform/1",
-  "id": "macos-26A434-arm64-root-volume-git-uname-v5",
+  "id": "macos-26A434-arm64-root-volume-git-sh-metadata-v7",
   "osBuild": "26A434",
   "compiler": "approved-roots-seatbelt-v1",
   "filesystemClass": "system-apfs-kernel-mount-boundaries-v1",
@@ -25,7 +25,7 @@
     },
     {
       "path": "modules/computer/infra/process/confinement.go",
-      "sha256": "4e04856f54553093832fc623aba72adacb9bb7f10f6432f4a91270838efe9830"
+      "sha256": "a660fe46c57090290fa509b5e04cf7a65fef790da0907d2e9ba3929ac4155665"
     },
     {
       "path": "modules/computer/infra/process/darwin.go",
@@ -41,7 +41,7 @@
     },
     {
       "path": "modules/computer/infra/process/gitruntime.go",
-      "sha256": "5246a7b0f30cf89ec6eacec446d3fd5c1d78f7f8547b5abb24a896c1e6573f9f"
+      "sha256": "3cf16345947a16af77377e36dcc524563f5a7e1a04971c244789d18b740a28d3"
     },
     {
       "path": "modules/computer/infra/process/gitruntimedarwin.go",
@@ -218,6 +218,10 @@
       "sha256": "74b90b9f97ec79bfe7886a4fc6132533b3e1014ef4195d28abd1ca9bf321f34a"
     },
     "files": [
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/gitattributes",
+        "sha256": "be5058bd7a1ee3fc284eda8670f33a30d19e626abb3d495d4aa908c0f9ef27a8"
+      },
       {
         "path": "/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig",
         "sha256": "d9edd909b86735d18b57095355e8f16a67f2a557d02431bb223854291eb6e653"

@@ -249,6 +249,7 @@ function gitRuntimeResources(
     if (
       f.path <= last ||
       (f.path !== gitData + "/gitconfig" &&
+        f.path !== gitData + "/gitattributes" &&
         !f.path.startsWith(gitTemplates + "/"))
     )
       return refuse();
@@ -282,7 +283,12 @@ function gitRuntimeResources(
     for (const name of d.entries)
       if (!paths.has(d.path + "/" + name)) return refuse();
   for (const path of paths) {
-    if (path === gitData + "/gitconfig" || path === gitTemplates) continue;
+    if (
+      path === gitData + "/gitconfig" ||
+      path === gitData + "/gitattributes" ||
+      path === gitTemplates
+    )
+      continue;
     const slash = path.lastIndexOf("/");
     if (
       !directories.some(
