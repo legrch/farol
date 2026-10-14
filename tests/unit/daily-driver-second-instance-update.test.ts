@@ -80,6 +80,7 @@ function host({
   const context: Record<string, unknown> = {
     launchIdentity,
     primaryStartup: startup,
+    startupRecovery: null,
     primaryStartupReady,
     decideSecondInstance,
     containWindowOpenFailure,
@@ -225,4 +226,28 @@ it("keeps an unavailable runtime classified without hiding its diagnostic window
   await h.handle(h.candidate);
   expectAck(h, "reopen-failed");
   expect(h.reveal).toHaveBeenCalledTimes(1);
+});
+
+it("reveals only the recovery window without acknowledging normal runtime readiness", async () => {
+  const h = host({ holdReady: true });
+  const reopen = vi.fn(async () => undefined);
+  h.context.startupRecovery = { reopen };
+  await h.handle(h.candidate);
+  expect(reopen).toHaveBeenCalledOnce();
+  expect(h.waitReady).not.toHaveBeenCalled();
+  expect(h.create).not.toHaveBeenCalled();
+  expect(h.reveal).not.toHaveBeenCalled();
+  expectAck(h, "reopen-failed");
+});
+
+it("does not open recovery for foreign or background-only launches", async () => {
+  for (const options of [{ foreign: true }, { backgroundOnly: true }]) {
+    const h = host(options),
+      reopen = vi.fn(async () => undefined);
+    h.context.startupRecovery = { reopen };
+    await h.handle(h.candidate);
+    expect(reopen).not.toHaveBeenCalled();
+    expect(h.waitReady).not.toHaveBeenCalled();
+    expectAck(h, options.foreign ? "identity-mismatch" : "reopen-failed");
+  }
 });
