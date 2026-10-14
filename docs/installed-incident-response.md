@@ -140,3 +140,13 @@ forced termination remains an unconfirmed Quit obligation. The child installs
 shutdown, disconnect and SIGTERM handlers before its asynchronous initialization;
 a late startup result is closed rather than published after parent loss. This
 root-process observation does not qualify arbitrary descendant cleanup.
+
+## Shared replacement completion observation
+
+After hashing the held candidate descriptor, replacement rechecks the named
+application, new receipt and retained custody against their captured identities.
+The same checks run before intent retirement and after the original retirement
+readback. A displacement during verification retains the original pending fence;
+a failed post-retirement observation publishes the existing uncertainty fence.
+Completion is a bounded observation, not permanent exclusion of later changes
+by another administrator. No displaced operation is repeated or rolled back.

@@ -275,14 +275,33 @@ def run(r):
         check(custody, "installed-updates", s["updaterIdentity"])
         if updater(updates) != s["updater"] or hashlib.sha256(bytes_at(custody, "previous.receipt.json")).hexdigest() != s["receiptSha256"] or bytes_at(state, "installed-replacement.pending") != r["intentText"].encode():
             raise RuntimeError("REPLACEMENT_CUSTODY_CHANGED")
+        new_receipt = ident(os.stat("Farol.app.receipt.json", dir_fd=apps, follow_symlinks=False))
         if hashlib.sha256(bytes_at(apps, "Farol.app.receipt.json")).hexdigest() != r["newReceiptSha256"]:
             raise RuntimeError("REPLACEMENT_NEW_RECEIPT_CHANGED")
         app = b["open_directory"](apps, "Farol.app")
         opened.append(app)
+        new_app = ident(os.fstat(app))
         if b["digest_tree"](app) != r["candidateSha256"]:
             raise RuntimeError("REPLACEMENT_NEW_APP_CHANGED")
+
+        def recheck_completion_names():
+            # A held digest is not proof that the shared named slot stayed put.
+            b["recheck_parent"](r, home, apps)
+            check(apps, name, r["custodyIdentity"])
+            check(custody, "previous.app", s["appIdentity"])
+            check(custody, "previous.receipt.json", s["receiptIdentity"])
+            check(custody, "installed-updates", s["updaterIdentity"])
+            check(apps, "Farol.app", new_app)
+            check(apps, "Farol.app.receipt.json", new_receipt)
+            if hashlib.sha256(bytes_at(apps, "Farol.app.receipt.json")).hexdigest() != r["newReceiptSha256"]:
+                raise RuntimeError("REPLACEMENT_NEW_RECEIPT_CHANGED")
+            if hashlib.sha256(bytes_at(custody, "previous.receipt.json")).hexdigest() != s["receiptSha256"] or updater(updates) != s["updater"]:
+                raise RuntimeError("REPLACEMENT_CUSTODY_CHANGED")
+
+        recheck_completion_names()
         publish(custody, "completed.json", r["completionText"].encode())
         locks(updates)
+        recheck_completion_names()
         check(state, "installed-replacement.pending", r["pendingIdentity"])
         # Retirement is last. An unknown post-rename fsync/readback is fenced
         # by one exclusive NEW marker, never rollback or retry of the transition.
@@ -290,6 +309,7 @@ def run(r):
             exclusive(state, "installed-replacement.pending", custody, "completed-intent.json")
             if bytes_at(custody, "completed-intent.json") != r["intentText"].encode():
                 raise RuntimeError("REPLACEMENT_COMPLETION_UNKNOWN")
+            recheck_completion_names()
         except BaseException as original:
             try:
                 publish(state, "installed-replacement.pending", b'{"schema":"farol.installed-replacement-unknown/1"}\n')

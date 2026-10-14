@@ -830,6 +830,10 @@ os.write(1, b"EXIT\n")
     "retirement-and-uncertainty",
     "placement-lost-result",
     "completion-lost-result",
+    "app-displaced-during-digest",
+    "receipt-displaced-during-digest",
+    "custody-displaced-during-digest",
+    "app-displaced-after-retirement",
   ])(
     "retains both original locks and live owner after %s, regardless of pending presence after original child close",
     async (fault) => {
@@ -874,6 +878,11 @@ fault = FAULT_KIND
 def fault_sync(fd):
     global retirement_failed
     info = os.fstat(fd)
+    if fault == "app-displaced-after-retirement" and stat.S_ISDIR(info.st_mode) and os.path.exists(retired):
+        named_state = os.stat(state, follow_symlinks=False)
+        if (info.st_dev, info.st_ino) == (named_state.st_dev, named_state.st_ino) and os.path.exists(installed_app):
+            os.rename(installed_app, installed_app + ".displaced")
+            os.write(9, b"NAMED_APP_DISPLACED_AFTER_RETIREMENT\n")
     if fault == "partial-intent" and stat.S_ISREG(info.st_mode):
         named = os.stat(pending, follow_symlinks=False)
         if (info.st_dev, info.st_ino) == (named.st_dev, named.st_ino):
@@ -891,6 +900,37 @@ def fault_sync(fd):
                 raise OSError(errno.EIO, "fixture uncertainty fsync")
     return real_sync(fd)
 os.fsync = fault_sync
+real_listdir = os.listdir
+displaced = False
+installed_app = INSTALLED_APP
+custody_path = CUSTODY_PATH
+installed_receipt = installed_app + ".receipt.json"
+def fault_listdir(fd):
+    global displaced
+    if not displaced and isinstance(fd, int) and fault in ("app-displaced-during-digest", "receipt-displaced-during-digest", "custody-displaced-during-digest"):
+        info = os.fstat(fd)
+        named = os.stat(installed_app, follow_symlinks=False)
+        if (info.st_dev, info.st_ino) == (named.st_dev, named.st_ino):
+            displaced = True
+            if fault == "app-displaced-during-digest":
+                os.rename(installed_app, installed_app + ".displaced")
+                os.write(9, b"NAMED_APP_DISPLACED\n")
+            elif fault == "custody-displaced-during-digest":
+                os.rename(custody_path, custody_path + ".displaced")
+                os.write(9, b"NAMED_CUSTODY_DISPLACED\n")
+            else:
+                with open(installed_receipt, "rb") as original:
+                    raw = original.read()
+                os.rename(installed_receipt, installed_receipt + ".displaced")
+                replacement = os.open(installed_receipt, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                try:
+                    os.write(replacement, raw)
+                    os.fsync(replacement)
+                finally:
+                    os.close(replacement)
+                os.write(9, b"NEW_RECEIPT_DISPLACED\n")
+    return real_listdir(fd)
+os.listdir = fault_listdir
 `;
       const nativePrefix = prefix
         .replace(
@@ -901,7 +941,9 @@ os.fsync = fault_sync
           "RETIRED_PATH",
           JSON.stringify(path.join(f.custody, "completed-intent.json")),
         )
-        .replace("FAULT_KIND", JSON.stringify(fault));
+        .replace("FAULT_KIND", JSON.stringify(fault))
+        .replace("INSTALLED_APP", JSON.stringify(f.oldApp))
+        .replace("CUSTODY_PATH", JSON.stringify(f.custody));
       await fs.writeFile(
         runner,
         `
@@ -932,7 +974,7 @@ deps.native = async (request, lease, updater, register) => {
     return runReplacementNative(request, lease, updater, register);
   const helper = await fs.readFile(${JSON.stringify(helperFile)});
   const library = await fs.readFile(${JSON.stringify(libraryFile)});
-  if (sha(helper) !== "70adf25e940d918627cadf83f1ea6b4cb54de192424df703245ca508908bf102" ||
+  if (sha(helper) !== "a4563b567c6bcf269d40325f96dd35135c5a4e9babfa50b081875a83ffdd2a73" ||
       sha(library) !== "739ff487dbffbd3e232c3b90e22c234cebd4f735b226101187ea60a1f62691ce")
     throw Error("FIXTURE_HELPER_ATTESTATION_FAILED");
   const child = spawn("/usr/bin/python3", ["-I", "-S", "-B", "-"], {
@@ -1014,6 +1056,49 @@ catch (error) { process.send({ kind: "replacement-failed", message: error.messag
           await expect(fs.lstat(f.custody)).rejects.toMatchObject({
             code: "ENOENT",
           });
+        } else if (
+          fault === "app-displaced-during-digest" ||
+          fault === "receipt-displaced-during-digest" ||
+          fault === "custody-displaced-during-digest" ||
+          fault === "app-displaced-after-retirement"
+        ) {
+          const displacedApp =
+            fault === "app-displaced-during-digest" ||
+            fault === "app-displaced-after-retirement";
+          expect(
+            await treeDigest(displacedApp ? f.oldApp + ".displaced" : f.oldApp),
+          ).toBe(f.artifact.artifactSha256);
+          const tokens = {
+            "app-displaced-during-digest": "NAMED_APP_DISPLACED\n",
+            "receipt-displaced-during-digest": "NEW_RECEIPT_DISPLACED\n",
+            "custody-displaced-during-digest": "NAMED_CUSTODY_DISPLACED\n",
+            "app-displaced-after-retirement":
+              "NAMED_APP_DISPLACED_AFTER_RETIREMENT\n",
+          };
+          expect(text).toBe(tokens[fault]);
+          const pendingRecord = JSON.parse(await fs.readFile(pending, "utf8"));
+          if (fault === "app-displaced-after-retirement") {
+            expect(pendingRecord.schema).toBe(
+              "farol.installed-replacement-unknown/1",
+            );
+            expect(
+              (
+                await fs.lstat(path.join(f.custody, "completed-intent.json"))
+              ).isFile(),
+            ).toBe(true);
+          } else {
+            expect(pendingRecord.operationId).toBe(f.selection.operationId);
+            await expect(
+              fs.lstat(
+                path.join(
+                  fault === "custody-displaced-during-digest"
+                    ? f.custody + ".displaced"
+                    : f.custody,
+                  "completed-intent.json",
+                ),
+              ),
+            ).rejects.toMatchObject({ code: "ENOENT" });
+          }
         } else {
           expect(await treeDigest(f.oldApp)).toBe(f.artifact.artifactSha256);
           if (fault === "retirement-and-uncertainty") {
@@ -1051,7 +1136,12 @@ catch (error) { process.send({ kind: "replacement-failed", message: error.messag
         const lockFile = path.join(
           fault === "partial-intent"
             ? f.updates
-            : path.join(f.custody, "installed-updates"),
+            : path.join(
+                fault === "custody-displaced-during-digest"
+                  ? f.custody + ".displaced"
+                  : f.custody,
+                "installed-updates",
+              ),
           "lock",
         );
         const named = await fs.lstat(lockFile, { bigint: true });
