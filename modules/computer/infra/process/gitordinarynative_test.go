@@ -23,6 +23,14 @@ import (
 // config includes and real template hooks. No owner HOME, config override,
 // signing bypass, connector, installed acceptance or process-tree claim.
 func TestNativeRootScopedOrdinaryGitWorkflow(t *testing.T) {
+	nativeRootScopedOrdinaryGitWorkflow(t, false)
+}
+
+func TestNativeRootScopedPythonSymlinkGitHook(t *testing.T) {
+	nativeRootScopedOrdinaryGitWorkflow(t, true)
+}
+
+func nativeRootScopedOrdinaryGitWorkflow(t *testing.T, pythonHook bool) {
 	const gitRoot = "/Library/Developer/CommandLineTools"
 	const gitPath = gitRoot + "/usr/bin/git"
 	base, err := os.MkdirTemp("/private/tmp", "farol-ordinary-git-")
@@ -97,6 +105,23 @@ printf 'commit-msg\n' >> "$(git rev-parse --git-path hook-proof)"
 set -eu
 printf 'post-commit\n' >> "$(git rev-parse --git-path hook-proof)"
 `, 0700)
+	if pythonHook {
+		// A synthetic equivalent of the symlinked env/Python hook. CLT is
+		// explicitly read-approved by this fixture below; no implicit grant
+		// of an installed owner's system interpreter is asserted.
+		must(os.MkdirAll(filepath.Join(root, ".git/hooks"), 0700))
+		must(os.MkdirAll(filepath.Join(root, ".git/policies"), 0700))
+		write(filepath.Join(root, ".git/policies/commit-msg"), `#!/usr/bin/env python3
+import sys
+from pathlib import Path
+subject = Path(sys.argv[1]).read_text().splitlines()[0]
+if subject != 'fixture: ordinary native Git workflow':
+    raise SystemExit(1)
+with Path('.git/hook-proof').open('a') as proof:
+    proof.write('commit-msg\n')
+`, 0700)
+		must(os.Symlink("../policies/commit-msg", filepath.Join(root, ".git/hooks/commit-msg")))
+	}
 	write(filepath.Join(root, "source.txt"), "before\n", 0600)
 	write(filepath.Join(root, "test.sh"), `#!/bin/sh
 set -eu
@@ -113,7 +138,7 @@ printf 'project-PASS\n'
 	s.Home, s.Scratch, s.ScratchIdentity = home, scratch, identity(scratch)
 	s.MechanismSHA256 = hash(seatbeltExecutable)
 	s.Executables = nil
-	for _, path := range []string{"/bin/bash", "/bin/sh", "/bin/cat", gitPath} {
+	for _, path := range []string{"/bin/bash", "/bin/sh", "/bin/cat", gitPath, "/usr/bin/env"} {
 		s.Executables = append(s.Executables, ExecutablePin{Path: path, SHA256: hash(path)})
 	}
 	s.Snapshot.Participant.Grant.Workspaces[0].Root = root
@@ -269,6 +294,14 @@ printf 'ordinary-git-workflow-completed\n'
 		path := filepath.Join(root, ".git/hooks", name)
 		info, err := os.Lstat(path)
 		must(err)
+		if pythonHook && name == "commit-msg" {
+			target, err := os.Readlink(path)
+			must(err)
+			if target != "../policies/commit-msg" || hash(path) != hash(filepath.Join(root, ".git/policies/commit-msg")) {
+				t.Fatal("Python hook link or target differs")
+			}
+			continue
+		}
 		if !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 || hash(path) != hash(filepath.Join(template, "hooks", name)) {
 			t.Fatalf("actual Git hook differs from executable synthetic template: %s", name)
 		}

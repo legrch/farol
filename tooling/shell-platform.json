@@ -1,6 +1,6 @@
 {
   "schema": "farol-shell-platform/1",
-  "id": "macos-26A434-arm64-root-volume-git-sh-metadata-v7",
+  "id": "macos-26A434-arm64-root-volume-git-env-metadata-v8",
   "osBuild": "26A434",
   "compiler": "approved-roots-seatbelt-v1",
   "filesystemClass": "system-apfs-kernel-mount-boundaries-v1",
@@ -203,6 +203,10 @@
     {
       "path": "/Library/Developer/CommandLineTools/usr/bin/git",
       "sha256": "74b90b9f97ec79bfe7886a4fc6132533b3e1014ef4195d28abd1ca9bf321f34a"
+    },
+    {
+      "path": "/usr/bin/env",
+      "sha256": "2b2a1145527f00e8369fda0d2ffc523b520201bb08dbaf4b0bded837f7652ce0"
     }
   ],
   "watchdogSHA256": "ad321e34b2795d1910ff1a24f2b4249269f556dc7184ea64f353a851339f1582",
