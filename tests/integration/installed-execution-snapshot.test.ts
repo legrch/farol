@@ -106,6 +106,40 @@ describe("authenticated private installed execution image", () => {
       ),
     ).toBe(true);
   });
+  it("refuses a transiently copied root symlink without changing its target", async () => {
+    const outside = path.join(root, "unrelated-directory");
+    await fs.mkdir(outside, { mode: 0o755 });
+    await fs.writeFile(path.join(outside, "canary"), "unchanged");
+    const before = await fs.lstat(outside, { bigint: true });
+    let copied = "";
+    copy.mockImplementationOnce(async (source: string, destination: string) => {
+      const retained = source + ".retained";
+      await fs.rename(source, retained);
+      await fs.symlink(outside, source);
+      try {
+        await fs.cp(source, destination, {
+          recursive: true,
+          verbatimSymlinks: true,
+        });
+        copied = destination;
+      } finally {
+        await fs.unlink(source);
+        await fs.rename(retained, source);
+      }
+    });
+    await expect(capture()).rejects.toThrow(
+      "UPDATE_EXECUTION_RESOURCES_UNCONFIRMED",
+    );
+    expect((await fs.lstat(copied)).isSymbolicLink()).toBe(true);
+    expect(await fs.readlink(copied)).toBe(outside);
+    const after = await fs.lstat(outside, { bigint: true });
+    expect(after.mode).toBe(before.mode);
+    expect(after.ctimeNs).toBe(before.ctimeNs);
+    expect(await fs.readFile(path.join(outside, "canary"), "utf8")).toBe(
+      "unchanged",
+    );
+    expect(await treeDigest(app)).toBe(digest);
+  });
   it("rejects copying different bytes even when the source stays unchanged", async () => {
     copy.mockImplementationOnce(async (source: string, destination: string) => {
       await fs.cp(source, destination, { recursive: true });

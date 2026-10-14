@@ -155,8 +155,27 @@ export async function captureInstalledExecutionSnapshot(
     await input.copyApp(input.sourceApp, copied);
     await sourceStable();
     if (!same(temporaryIdentity, await directory(temporary, true))) refuse();
-    await files.chmod(copied, 0o700);
-    await directory(copied, true);
+    // A public source can briefly become a symlink during cp and be restored
+    // before sourceStable. Never chmod a copied pathname before qualifying it.
+    const copiedIdentity = await directory(copied, false);
+    const copiedHandle = await files.open(
+      copied,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+    );
+    try {
+      if (!same(copiedIdentity, await copiedHandle.stat({ bigint: true })))
+        refuse();
+      await copiedHandle.chmod(0o700);
+      if (
+        !same(
+          await copiedHandle.stat({ bigint: true }),
+          await directory(copied, true),
+        )
+      )
+        refuse();
+    } finally {
+      await copiedHandle.close();
+    }
     if ((await treeDigest(copied, files)) !== input.expectedDigest) refuse();
     await sourceStable();
     if (!same(rootIdentity, await directory(root, true))) refuse();

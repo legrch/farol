@@ -6548,7 +6548,10 @@ async function configureAdmittedProduct(
           });
           try {
             await guide.loadURL(
-              onboardingHelpUrl(command.destination, directory),
+              onboardingHelpUrl(
+                command.destination,
+                desktopExecutionResources().directory,
+              ),
             );
             if (guide.isDestroyed() || parent.isDestroyed()) {
               throw new Error("ONBOARDING_GUIDE_CLOSED");
