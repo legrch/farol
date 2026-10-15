@@ -19,6 +19,12 @@ func AuthorizeOwnerRead(a Approval, workspaceID, path string, now time.Time) err
 	return authorizeOwner(a, workspaceID, path, now, Read)
 }
 
+// AuthorizeOwnerSearch requires explicit Search capability under the current
+// owner Settings approval. Read/List authority never grants search authority.
+func AuthorizeOwnerSearch(a Approval, workspaceID, path string, now time.Time) error {
+	return authorizeOwner(a, workspaceID, path, now, Search)
+}
+
 // AuthorizeOwnerWrite requires both the explicit write capability and write
 // workspace access. Read/List authority never implies permission to mutate.
 func AuthorizeOwnerWrite(a Approval, workspaceID, path string, now time.Time) error {
