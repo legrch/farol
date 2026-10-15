@@ -1,0 +1,55 @@
+# Go installed-helper recovery policy
+
+`app/services/helperrecovery` prepares the existing helper's `inspect_recovery`
+and `reconcile` behavior in Go. The selected updater still invokes
+`resources/native/update_helper.py`. This service has no CLI, selected runtime
+adapter, new journal, background recovery loop or relaunch route.
+
+The existing input application owner parses one independently captured request
+through a consumer-owned port. Recovery then uses the same operation's verified
+journal, complete no-follow entry observations, expected app-tree checks, native
+namespace effects and durable journal publication through its runtime port.
+Trusted composition must bind that runtime to the same request and retain the
+existing lease, slot, routes and admission until actual native return. Input
+validation and an observed pair grant no effect authority.
+
+`Inspect` is repeatable read-only preflight. `Reconcile` consumes one attempt
+before any I/O or cancellation check, shared across copied wrappers. It never
+retries a failed port, starts a prepared exchange in recovery, removes retained
+state or replays a historical launch. A pre-exchange prepared pair records
+`cancelled`; an already exchanged pair can finish naming its predecessor and
+record `verified`. Repairs for the former two-rename crash gaps preserve their
+existing exact-pair checks and predecessor-state refusal.
+
+`domain.PredecessorStateUnqualified` retains the narrow measured-version guard
+for 0.1, beta-3, beta-1-through-9 state readers and beta-1-through-11 completed
+process readers. A false result makes no general state-compatibility claim.
+Forward recovery of an incompatible predecessor is limited to `recover` at
+`rollback_started`, with an intact exact target and predecessor and no staged,
+failed or rejected-target entry. The pair is checked again after the owner
+fence. Settled rollback retains the original distinction between an authenticated
+source app and merely owned failed directory bytes.
+
+Dependency failures retain their exact causes behind closed outer text.
+Opaque or malformed errors remain internal; wrapping a refusal beside an I/O
+failure cannot downgrade it. Concurrent cancellation keeps both causes. Every
+possibly effective namespace or journal call retains uncertainty through later
+failures, including inspected refusals. Bounded traversal of joined error causes
+conservatively retains uncertainty for oversized or cyclic graphs. No failure
+offers another dispatch.
+
+The pure application checks its context around ports and final success. Native
+ports must independently enforce the original absolute budget and earlier caller
+deadline, including when cancellation delivery lags. They retain synchronous
+process and descriptor custody; application context checks cannot prove native
+cleanup. Final helper exit-70/exit-79 classification remains composition work.
+
+Static outcomes from the original Python AST cover 4,354 phase/pair rows and
+1,024 predecessor-version pairs, with the original source digest checked by Go
+tests. Instrumented port tests cover effect/journal order, fence replacement,
+one-shot consumption, cancellation and internal/unknown provenance. A separate
+composition uses the actual Go input decoder and application owner, including
+refused inputs that cannot reach a runtime. These fixtures do not verify native
+trees, mutate an installation or establish Darwin, packaged, clean-Mac or OTA
+acceptance. The existing `domain/recovery.go` startup assessment remains a
+separate observational subset; it is unchanged by this preparation.
