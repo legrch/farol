@@ -1,22 +1,22 @@
 # First-install and adoption release blockers
 
-This checklist gates a claim that a new recipient can install Farol and obtain a trusted update baseline. It does not add unrelated work to the Lead's current Computer/Git delivery. Status is from source `75b15c789b7c5c0dd83bf4bd38eb6d2c8520a3eb` on **14 October 2026**; unchecked items are not acceptance receipts.
+This checklist gates a claim that a new recipient can install Farol and obtain a trusted update baseline. It does not add unrelated work to the Lead's current Computer/Git delivery. Refreshed **15 October 2026** against runtime source `5dc8fbbc940c17f30f2b3364d7e5e119252c648e` and the exact installed/package observations in [current status](status.md). Unchecked items are not acceptance receipts.
 
 ## Available artifacts and paths
 
-| Path or mechanism                                   | Audited state                                                                                                                                                                                   |
-| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Public v0.2.3 ZIP + release manifest + `SHA256SUMS` | Asset names, sizes and publication checked through GitHub API. The archive was not downloaded, extracted, opened or installed in this task. No public DMG/installer is listed for this release. |
-| `task package` → `task run`                         | Developer candidate build and verified temporary launch. `task run` does not install. Packaging requires exact clean committed source and declared inputs.                                      |
-| `task promote` and explicit `--apply`               | Controlled owner source-promotion path at the fixed alpha slot with a private receipt. Refuses occupied destinations. Not a recipient ZIP installer.                                            |
-| Existing installed updater                          | Fixed alpha installation identity, accepted baseline and operation journals. Historical exact OTA transitions exist; fresh-copy adoption is not inferred.                                       |
-| Replacement / maintenance tools                     | Scoped owner maintenance and recovery, not general first installation, uninstall or a second baseline authority.                                                                                |
-| `/Applications/Farol.app`                           | Proposed production destination in [Release adoption](../../modules/release/adoption.md). No accepted executable first-install/adoption method or desktop wire contract is supplied there.      |
-| Archived DMG/bootstrap                              | [Frozen nonshipping proposal](../archive/distribution-20261010/README.md). Ends at prepared bytes; does not install, adopt, launch or qualify OTA.                                              |
+| Path or mechanism                                   | Audited state                                                                                                                                                                                              |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Public v0.2.3 ZIP + release manifest + `SHA256SUMS` | GitHub metadata and the existing downloaded ZIP agree on size/digest. Disposable-copy native assessment rejects the unsigned app. The old app was not launched; no public DMG is listed.                   |
+| `task package` → `task run`                         | Developer candidate build and verified temporary launch. `task run` does not install. Packaging requires exact clean committed source and declared inputs.                                                 |
+| `task promote` and explicit `--apply`               | Controlled owner source-promotion path at the fixed alpha slot with a private receipt. Refuses occupied destinations. Not a recipient ZIP installer.                                                       |
+| Existing installed updater                          | Exact installation identity, accepted baseline and operation journals. Internal replacement and historical OTA witnesses are scoped separately; fresh-copy adoption is not inferred.                       |
+| Replacement / maintenance tools                     | Scoped owner maintenance and recovery, not general first installation, uninstall or a second baseline authority.                                                                                           |
+| `/Applications/Farol.app`                           | Actual qualified internal installation, with controlled replacement, relaunch and live Git evidence. A recipient first-install/adoption procedure is still absent; internal replacement does not close it. |
+| Archived DMG/bootstrap                              | [Frozen nonshipping proposal](../archive/distribution-20261010/README.md). Ends at prepared bytes; does not install, adopt, launch or qualify OTA.                                                         |
 
 ## Product implementation gates
 
-- [ ] **Core / Identity / Release / Lead:** accept the final identity/profile, fixed destination and native parent ownership/permissions contract. Reconcile proposed `/Applications/Farol.app` with the distinct alpha `~/Applications/Farol.app`; do not redirect an old helper or infer path authority from a display name.
+- [ ] **Core / Identity / Release / Lead:** accept the final identity/profile, fixed destination and native parent ownership/permissions contract. Preserve the verified internal `/Applications/Farol.app` identity and reconcile legacy `~/Applications/Farol.app` explicitly. Recipient adoption must not infer authority from a display name or an internal replacement receipt.
 - [ ] **Release:** expose the one install/verify/adopt contract through accepted composition, with one operation ID and an immutable trusted descriptor binding archive/package manifest, source/build/channel, measured app tree, resources and helpers. A DMG name, sidecar checksum or private promotion receipt must not synthesize that descriptor.
 - [ ] **Release:** implement pre-effect admission and durable intent. Physically observe both slots and active profile/work exclusions. Denied, changing or unreadable observations remain unknown; an absent receipt or closed window must not be interpreted as an absent/idle install.
 - [ ] **Release:** implement first-launch adoption of an already copied exact app through physical measurement and durable binding to that same build, tree and fixed path. Do not recopy it or reuse another generation/path's evidence.
@@ -26,11 +26,19 @@ This checklist gates a claim that a new recipient can install Farol and obtain a
 
 ## Distribution and first-run gates
 
-- [ ] **Lead / Distribution:** accept the support matrix, including minimum macOS for the actual bundled Electron/native bytes, Apple Silicon coverage and clean-machine prerequisites. Plist `12.0` is metadata, not an OS acceptance result.
-- [ ] **Computer / Distribution:** supply and qualify the connection helper installation/discovery path. The current UI can request a missing helper, but the guides cannot invent a supported helper download. Resolve native Python/Command Line Tools prerequisites without requiring unrelated source-build tools from end users.
-- [ ] **Owner / Distribution:** decide the accepted unsigned-beta distribution policy or separately authorize signing/notarization work. Publish the actual status and an accepted macOS opening path; never silently remove quarantine or disable protections. This documentation task grants no signing/release authority.
+- [ ] **Lead / Distribution:** accept the support matrix, including minimum macOS for the actual bundled Electron/native bytes, Apple Silicon coverage and clean-machine prerequisites. Source and the separate source package now derive `13.0` from authenticated Electron metadata. The installed outer plist still advertises `12.0`; neither is a clean-Mac acceptance result.
+- [ ] **Computer / Distribution:** supply and qualify the connection helper installation/discovery path. Electron/Node and Go are bundled, but update/handoff helpers and workspace search still have external Python/Command Line Tools paths. Retire or explicitly qualify these dependencies and the tunnel-helper journey without requiring unrelated developer tools from end users.
+- [ ] **Owner / Distribution:** complete owner-managed Apple enrollment and signing credentials before real Developer ID/notary qualification. No usable signing identity is present. Source work on signed-artifact verification and packaging can proceed independently; do not remove quarantine or disable protections. Public release remains a separate decision.
 - [ ] **Desktop:** reconcile stale in-app help. `connection-guide.tsx` still says the Computer check requires a workspace, while the current Setup/state guide supports an explicit empty-workspace connection. Older `owner-preview.md` descriptions also differ from current picker defaults; user docs now describe the actual **Read & write** default.
 - [ ] **Lead / Desktop:** accept exact current labels, native picker, clipboard, helper and live ChatGPT/tunnel attachment on the installed release. Source/renderer fixtures alone do not close this journey.
+
+## Qualified internal progress and remaining distribution work
+
+- The internal app at `/Applications/Farol.app` passed actual relaunch, Go/connector readiness and a normal Git commit with the existing hook. Its predecessor and profile were preserved. This closes that scoped internal delivery, not recipient installation.
+- Clean committed packaging of the newer source passed and corrected the advertised runtime floor. That separate package is not installed or signed; its identity differs despite the same app version/build numbers.
+- Package/release verification still expects unsigned artifacts. A versioned raw-to-signed derivative contract must bind authenticated vendor inputs, signed native resources, signer and entitlements before signing can be integrated safely.
+- The outer launcher is a shell script and installed Python paths remain active. Resolve their signature transport/runtime contracts through the existing Release authority before claiming a developer-tool-free app.
+- Additive DMG production, accepted notarization/stapling, clean-Mac first launch, unsigned-install migration, successor update and rollback still need their own exact-byte witnesses. No public assets were replaced.
 
 ## Required acceptance matrix
 

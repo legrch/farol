@@ -18,9 +18,13 @@ Installed beta evidence covers catalogue/bootstrap, reads and specific guarded c
 
 ## Shell and ordinary Git
 
-The public [v0.2.3 notes](https://github.com/legrch/farol/releases/tag/v0.2.3) describe packaged Shell preparation fixes and native tests for ordinary Git. Current source includes a build-selected Shell route. A successful external ChatGPT-to-installed-Shell/Git journey remains unqualified in this audit, so this guide provides no claimed supported command exercise.
+A qualified internal installation has completed real ChatGPT → Farol → native Git commits with an unchanged symlinked `commit-msg` hook using an `env`/Python shebang. Controlled fixtures separately verify accepted and rejected commits, normal configuration, system attributes and linked worktrees. Check [the exact installed build and limits](../reference/status.md); the older public download does not inherit this evidence.
 
-For a future accepted route, review the selected workspace's command access and full Git/user-settings approval before use. Those grants can expose repository history, linked Git metadata, hooks and ordinary user Git configuration. They are separate from file read/write access. Networking is a separate authority boundary; neither a folder grant nor ordinary local Git establishes Git SSH or remote push support.
+Before using commands, review the selected workspace's command access and Git/user-settings approval. Those grants can expose repository history, linked Git metadata, hooks and ordinary user Git configuration. Command access is separate from file read/write access, and executable/interpreter resources must be qualified.
+
+For an authorized repository, begin by asking ChatGPT to run `git status` through Farol. Before a commit, inspect staging again, identify the exact intended paths, and retain the normal hooks and configuration. A hook rejection is a real failure to correct, not permission to bypass the hook. A successful selected Python hook does not authorize arbitrary interpreters or every project's toolchain.
+
+The current generic Shell has no network authority and does not select SSH. Fetch, pull and push require a separate explicitly authorized transport capability; local command grants do not provide it.
 
 Command output, cancellation and root-process exit must be interpreted through the exact operation status. Sending a cancellation signal alone does not prove that all descendants stopped. If a command outcome is unknown, preserve its original identity and inspect it; do not start a replacement executor.
 

@@ -18,7 +18,7 @@ Farol is a Mac app that connects your chosen folders to ChatGPT. Each approved f
 - **Find information:** list and search local files through the connected ChatGPT app.
 - **Make approved changes:** enable guarded edits for the folders you choose.
 
-File access is the current user journey. Shell/Git, Tasks, Agent workflows and PDF transfer have separate [availability and acceptance limits](docs/reference/status.md).
+Local Shell and ordinary Git, including enforced Python hooks, have also been verified through a qualified internal installation. Those results apply to that exact build and approved toolchain; check [current availability](docs/reference/status.md) before using commands. Tasks, Agent workflows, Git SSH and PDF transfer still require separate acceptance.
 
 ## Supported Macs
 
@@ -32,7 +32,7 @@ The supported macOS versions and clean-machine prerequisites still need first-in
 
 [**View the latest public release →**](https://github.com/legrch/farol/releases/latest)
 
-Download the Apple Silicon ZIP and checksums from the release page.
+Use the latest release page for the current download and its checksums. Public downloads and qualified internal installations can have different capabilities; see [current distribution status](docs/reference/status.md).
 
 > **New installation:** downloading the ZIP is available, but first installation and setup for trusted updates are not yet a supported, tested end-to-end path. Read [First installation](docs/start/installation.md) before opening or copying the app. Existing users should keep their accepted installation and use its updater.
 
@@ -40,7 +40,7 @@ Download the Apple Silicon ZIP and checksums from the release page.
 
 With an accepted installation running:
 
-1. Open **Setup → Sign in** and sign in to your ChatGPT account. If you are already signed in, choose **Continue**.
+1. Review **Setup → Sign in**. Use **Continue** if already signed in, or **Skip for now** when using ChatGPT in another browser.
 2. In **Connection**, follow the guide to create or select a tunnel, save its restricted runtime key in Farol, and add or select the matching ChatGPT app.
 3. In **Workspaces**, choose a folder if you want file access.
 4. Complete **Check** to confirm that ChatGPT can reach this Mac.
@@ -56,6 +56,8 @@ Start with a small folder containing non-sensitive sample files. **Add workspace
 [Folder permissions](docs/guides/folder-access.md) explains checking, changing and removing access. Removing a workspace keeps your files on disk.
 
 ## Updates and recovery
+
+Open the installed **Farol.app** in **Applications**. The nested **Electron Runtime.app** is an internal component, not a separate app to launch or keep in the Dock.
 
 For an installation already set up for trusted updates, choose **Check for Updates…** from Farol's menu, then **Install and Relaunch** when ready. Closing the window leaves Farol running; **Command+Q** quits it.
 

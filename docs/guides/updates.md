@@ -25,6 +25,6 @@ Open **Settings → Diagnostics → Update recovery** when recovery is needed. U
 
 A restored previous version can remain closed until recovery completion is confirmed. Start it separately afterward and verify its version and connection before resuming work. See [Recovery](recovery.md) and the developer [installed updater contract](../installed-update-runtime.md).
 
-The retained installed beta OTA observations establish specific transitions only. This documentation change performs no update, installation or rollback and does not qualify a successor journey.
+The current internal installation was restored and verified through a controlled replacement, including Quit/relaunch and connector reconnection. That is separate from an OTA successor update or rollback. The retained older OTA observations establish their specific transitions only; a separate native Updates window is still planned. See [current status](../reference/status.md) for exact identities and coverage.
 
 [User guides](README.md) · [Current status](../reference/status.md)
