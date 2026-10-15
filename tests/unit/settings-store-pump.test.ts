@@ -179,6 +179,43 @@ afterEach(() => {
 });
 
 describe("sequential one-shot Settings storage pump", () => {
+  it("reconciles the original late empty poll without fencing storage", async () => {
+    const f = fixture();
+    f.pump.start();
+    // Model a blocked desktop callback: wall time advances while timer and
+    // stdout callbacks cannot run. Only Go's validated empty answer is safe.
+    vi.setSystemTime(Date.now() + 16000);
+    f.quiesce();
+    await flush();
+    expect(f.pump.state).toBe("running");
+    expect(f.fenceIO).not.toHaveBeenCalled();
+    expect(f.replaceCalls).toBe(0);
+    expect(f.polls).toHaveLength(2);
+    f.deliver(command());
+    await flush();
+    expect(f.replaceCalls).toBe(1);
+    await cleanStop(f);
+  });
+
+  it.each(["read", "replace"] as const)(
+    "never executes an original %s command returned after the poll deadline",
+    async (kind) => {
+      const f = fixture();
+      f.pump.start();
+      const original = command(kind, "expired", 20000);
+      vi.setSystemTime(Date.now() + 16000);
+      f.deliver(original);
+      await flush();
+      expect(f.pump.state).toBe("unknown");
+      expect(f.readIO).not.toHaveBeenCalled();
+      expect(f.replaceCalls).toBe(0);
+      expect(f.replies).toHaveLength(0);
+      expect(f.polls).toHaveLength(1);
+      expect(f.fenceIO).toHaveBeenCalledTimes(1);
+      await f.pump.stop();
+    },
+  );
+
   it.each(["read", "replace"] as const)(
     "exchanges the exact %s DTO and reciprocal IDs",
     async (kind) => {
@@ -820,7 +857,8 @@ describe("sequential one-shot Settings storage pump", () => {
     const f = fixture();
     f.pump.start();
     const stop = f.pump.stop();
-    await vi.advanceTimersByTimeAsync(15000);
+    // Include the final IO observation turn; no second poll is sent.
+    await vi.advanceTimersByTimeAsync(15001);
     await stop;
     expect(f.pump.state).toBe("unknown");
     f.quiesce();
