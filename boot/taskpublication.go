@@ -15,7 +15,7 @@ import (
 	codexclient "github.com/legrch/farol/modules/task/infra/clients/codex"
 )
 
-// parsePublishedCodex maps the trusted desktop's parsed source-witness projection.
+// parsePublishedCodex joins the Task owner's derived source-witness projection.
 // It issues no Task admission or physical qualification. The selected metadata is
 // tied to this SAME Computer publication; restricted native scopes which the
 // existing Codex Selection cannot enforce stay unavailable instead of widening.

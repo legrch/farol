@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   codexTaskCurrentSource,
   codexTaskReadCurrentSource,
-} from "../../apps/desktop/task-current-settings.ts";
+} from "../fixtures/task-current-source-oracle.ts";
 import { validate } from "../../apps/desktop/bridge/wire.ts";
 import { resolveOwnerTaskModel } from "../../src/apps/desktop/owner-config.ts";
 import { TaskExecutionSettingsSchema } from "../../src/pkg/owner-config/contract.ts";

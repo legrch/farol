@@ -636,13 +636,18 @@ physical verification. Each follow-up retains the same current reader and a
 separate actual parent peer. Controlled aggregate tests cover same-Chat follow-up
 and grant/parent withdrawal during provider qualification.
 
-The existing Settings publication now carries a closed optional `TaskCodexSource`
-projection. The desktop reads the saved host witness and explicit model policy;
-it retains the original grant dates and policy digest. Missing/stale provenance
-stays unavailable. Settings changes compare the final Computer and Task projections
-and await the existing negative Go fence before saving. Only an exact successful
-readback is published. Failed host writes retain the desktop's in-process source
-withdrawal across recovery reads; this is not a durable restart reconciliation.
+The existing Settings publication carries raw parsed settings facts and the
+sampled clock through `TaskCurrentSourceFacts`. The Go Task
+[current-source owner](reference/modules/task/contracts/currentsource.md) derives
+the saved host/model source and optional exact-read reference inside that same
+publication. The former positive `taskCodex`/`taskCodexRead` ingress and active
+TypeScript eligibility projection are retired. Original grant dates and policy
+digest remain exact; missing/stale provenance stays absent and derivation errors
+refuse publication. Settings changes use the Go Task comparison and existing
+Computer projection, then await the negative fence before saving. Only exact
+successful readback is published. Failed host writes retain the desktop's
+in-process withdrawal across recovery reads; durable restart reconciliation
+remains separate.
 
 `BeginPublishedCodex` reads the actual known Root publication on every authority
 check, under the existing negative fence. A withdrawn, missing or poisoned source

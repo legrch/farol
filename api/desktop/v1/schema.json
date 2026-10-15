@@ -1051,16 +1051,12 @@
         "approval": {
           "type": "json"
         },
-        "taskCodex": {
-          "type": "TaskCodexSource",
-          "optional": true
-        },
-        "taskCodexRead": {
-          "type": "TaskCodexReadSelection",
-          "optional": true
-        },
         "renewableOwnerConsent": {
           "type": "boolean",
+          "optional": true
+        },
+        "taskCurrentSettings": {
+          "type": "TaskCurrentSourceFacts",
           "optional": true
         }
       }
@@ -5237,6 +5233,22 @@
         },
         "changed": {
           "type": "boolean"
+        }
+      }
+    },
+    "TaskCurrentSourceFacts": {
+      "type": "object",
+      "fields": {
+        "snapshot": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 1048576
+        },
+        "nowMillis": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 17,
+          "pattern": "^(0|-?[1-9][0-9]{0,15})$"
         }
       }
     }

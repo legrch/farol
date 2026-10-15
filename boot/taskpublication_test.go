@@ -16,6 +16,7 @@ import (
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	accessrepo "github.com/legrch/farol/modules/computer/infra/repos/access"
 	controlct "github.com/legrch/farol/modules/task/contracts/control"
+	sourcect "github.com/legrch/farol/modules/task/contracts/currentsource"
 	"github.com/legrch/farol/modules/task/domain"
 	codexclient "github.com/legrch/farol/modules/task/infra/clients/codex"
 )
@@ -85,6 +86,33 @@ func newTaskPublicationFixture(t *testing.T) *taskPublicationFixture {
 	p.input = PublishedCodexTaskSource{Current: i, HostID: x.Binding.HostID, ScratchRoot: x.ScratchRoot, Verifier: f.task.pipe, Now: func() time.Time { return x.GrantedAt.Add(time.Minute) }, ChatHandle: f.input.ChatHandle, Parent: f.input.Parent}
 	return p
 }
+
+// These low-level publication/authority fixtures deliberately use controlled
+// derived DTOs (including non-Settings IDs). Real owning-service derivation and
+// closed raw-facts ingress are covered separately in taskcurrentsource_test.go.
+type fixtureTaskSource struct{ result *sourcect.Response }
+
+func (f fixtureTaskSource) Resolve(context.Context, sourcect.Request) (*sourcect.Response, error) {
+	return f.result, nil
+}
+func (p *taskPublicationFixture) sourceFacts(t *testing.T, source *wire.TaskCodexSource, read *wire.TaskCodexReadSelection) *wire.TaskCurrentSourceFacts {
+	t.Helper()
+	status := "absent"
+	if source != nil || read != nil {
+		status = "available"
+	}
+	raw, err := json.Marshal(map[string]any{"status": status, "source": source, "read": read})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result sourcect.Response
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	p.ingress.taskCurrentSource = fixtureTaskSource{&result}
+	return &wire.TaskCurrentSourceFacts{Snapshot: "{}", NowMillis: "0"}
+}
+
 func (p *taskPublicationFixture) publish(t *testing.T, m *wire.TaskCodexSource) *wire.ComputerAuthorityPublication {
 	t.Helper()
 	p.sequence++
@@ -92,7 +120,7 @@ func (p *taskPublicationFixture) publish(t *testing.T, m *wire.TaskCodexSource) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := p.ingress.Publish(context.Background(), fmt.Sprintf("publish-%d", p.sequence), wire.ComputerAuthorityPublishRequest{Fence: d.Fence, ExpectedStoreRevision: d.StoreRevision, SettingsRevision: fmt.Sprint(p.sequence), Approval: p.approval, TaskCodex: m})
+	r, err := p.ingress.Publish(context.Background(), fmt.Sprintf("publish-%d", p.sequence), wire.ComputerAuthorityPublishRequest{Fence: d.Fence, ExpectedStoreRevision: d.StoreRevision, SettingsRevision: fmt.Sprint(p.sequence), Approval: p.approval, TaskCurrentSettings: p.sourceFacts(t, m, nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +318,7 @@ func TestTaskPublicationRejectsMissingChangedRestrictedAndUnknownSource(t *testi
 				if e != nil {
 					t.Fatal(e)
 				}
-				_, e = p.ingress.Publish(context.Background(), "restricted-publish", wire.ComputerAuthorityPublishRequest{Fence: d.Fence, ExpectedStoreRevision: d.StoreRevision, SettingsRevision: "2", Approval: p.approval, TaskCodex: &p.metadata})
+				_, e = p.ingress.Publish(context.Background(), "restricted-publish", wire.ComputerAuthorityPublishRequest{Fence: d.Fence, ExpectedStoreRevision: d.StoreRevision, SettingsRevision: "2", Approval: p.approval, TaskCurrentSettings: p.sourceFacts(t, &p.metadata, nil)})
 				if e == nil || p.store.updates != 1 {
 					t.Fatal("unsupported restriction published", e)
 				}
@@ -299,7 +327,7 @@ func TestTaskPublicationRejectsMissingChangedRestrictedAndUnknownSource(t *testi
 				p.ingress.guard.revision++
 				p.ingress.guard.mu.Unlock()
 			case "same-fence":
-				_, e := p.ingress.Publish(context.Background(), "second-publish", wire.ComputerAuthorityPublishRequest{Fence: receipt.Fence, ExpectedStoreRevision: receipt.StoreRevision, SettingsRevision: "2", Approval: p.approval, TaskCodex: &p.metadata})
+				_, e := p.ingress.Publish(context.Background(), "second-publish", wire.ComputerAuthorityPublishRequest{Fence: receipt.Fence, ExpectedStoreRevision: receipt.StoreRevision, SettingsRevision: "2", Approval: p.approval, TaskCurrentSettings: p.sourceFacts(t, &p.metadata, nil)})
 				if e == nil || p.store.updates != 1 {
 					t.Fatal("same fence republished", e)
 				}
@@ -332,7 +360,7 @@ func TestTaskPublicationCopiesCallerMetadataAndPoisonsUnknownCommit(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = p.ingress.Publish(context.Background(), "unknown-publish", wire.ComputerAuthorityPublishRequest{Fence: d.Fence, ExpectedStoreRevision: d.StoreRevision, SettingsRevision: "2", Approval: p.approval, TaskCodex: &p.metadata})
+	_, err = p.ingress.Publish(context.Background(), "unknown-publish", wire.ComputerAuthorityPublishRequest{Fence: d.Fence, ExpectedStoreRevision: d.StoreRevision, SettingsRevision: "2", Approval: p.approval, TaskCurrentSettings: p.sourceFacts(t, &p.metadata, nil)})
 	if err == nil {
 		t.Fatal("controlled lost storage ACK accepted")
 	}

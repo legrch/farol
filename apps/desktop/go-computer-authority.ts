@@ -1,8 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  codexTaskCurrentSource,
-  codexTaskReadCurrentSource,
-} from "./task-current-settings";
+import { taskSettingsFacts } from "./bridge/task-current-settings";
 import { BridgeError, type Client } from "./bridge/client";
 import { parseComputerSearchMatches } from "./bridge/computer";
 import {
@@ -83,6 +80,12 @@ export class GoComputerAuthority {
         consumed = true;
         try {
           const now = this.now();
+          // Capture raw/defaulted facts before any publication await. Go owns
+          // saved-source eligibility and exact read selection in the same call.
+          const taskCurrentSettings = {
+            snapshot: JSON.stringify(taskSettingsFacts(settings)),
+            nowMillis: String(now),
+          };
           const approval = ownerSettingsComputerApproval(settings, now);
           // Configured but unbound folders are not an explicit empty selection.
           // Keep them inactive until their physical identities are verified.
@@ -93,9 +96,6 @@ export class GoComputerAuthority {
             this.pending = false;
             return;
           }
-          const taskRead = codexTaskReadCurrentSource(settings, now);
-          const taskCodex =
-            taskRead?.source ?? codexTaskCurrentSource(settings, now);
           const request = {
             fence: receipt.fence,
             expectedStoreRevision: receipt.storeRevision,
@@ -104,10 +104,7 @@ export class GoComputerAuthority {
             // This producer projects persisted owner settings until their
             // explicit withdrawal; unrelated bounded grants remain finite.
             renewableOwnerConsent: true,
-            ...(taskCodex === undefined ? {} : { taskCodex }),
-            ...(taskRead === undefined
-              ? {}
-              : { taskCodexRead: taskRead.reference }),
+            taskCurrentSettings,
           };
           if (!validate("ComputerAuthorityPublishRequest", request))
             throw new BridgeError("refused", "invalid_computer_publication");

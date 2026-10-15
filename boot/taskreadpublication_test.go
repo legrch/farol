@@ -25,7 +25,7 @@ func publishTaskReadMetadata(t *testing.T, p *taskPublicationFixture, source *wi
 	}
 	_, err = p.ingress.Publish(context.Background(), fmt.Sprintf("read-publish-%d", p.sequence), wire.ComputerAuthorityPublishRequest{
 		Fence: d.Fence, ExpectedStoreRevision: d.StoreRevision, SettingsRevision: fmt.Sprint(p.sequence),
-		Approval: p.approval, TaskCodex: source, TaskCodexRead: read,
+		Approval: p.approval, TaskCurrentSettings: p.sourceFacts(t, source, read),
 	})
 	return err
 }
