@@ -14,3 +14,5 @@ This is the engineering entrypoint. Ordinary users should start with [installati
 Follow [AGENTS.md](../../AGENTS.md). A checkpoint preserves verified work; integration, package creation, installation, live use and release each require their applicable gates. Developer promotion is not a supported public first-install mechanism.
 
 [Documentation](../README.md)
+
+- [Cloud source integration](cloud-source-integration.md): portable checks, deferred native evidence and autonomous source merge.

@@ -1,0 +1,70 @@
+# Cloud source integration
+
+Use `task ci:cloud` for the owner-authorized Linux source integration boundary.
+It runs toolchain, types, lint, formatting, architecture, runtime inventory,
+documentation, selected source tests, renderer tests, Hunt, full Go Core and
+secret checks under the existing owner guard. After independent review and
+these checks pass, the Lead merges the existing source PR and verifies main.
+
+This does not replace `task ci:fast`, its full native coverage thresholds, a
+package build or installed acceptance. Darwin/Seatbelt, Apple tools, APFS,
+reviewed compiler/runtime resources, clean-Mac setup, live providers and
+OTA/rollback remain separate gates. Missing Mac hardware does not prevent
+portable implementation or reviewed source integration.
+
+## Selection and evidence
+
+The existing scope runner accepts `--scope=cloud`. It includes new ordinary
+test files by default and records exact deferred files and mixed-case selectors
+from `tooling/cloud-test-prerequisites.mjs`. Stale declarations fail planning.
+Run `task test:cloud -- --list` to inspect the complete plan. Results are under
+`_output/evidence/test-scopes/`, including selected files, source-selection hash,
+commands, original-child observations, assertion counts and the NOT RUN list.
+Root and nested Go race/vet and protocol checks run separately in `test:core`.
+
+Some deferred integration files mix portable policy with physical host
+requirements. Their portable cases are also NOT RUN in this profile unless a
+mixed-file selector explicitly includes them. The selected build-provenance,
+Computer drain, saved bridge, Task lifecycle and response-schema cases remain
+in Cloud. Do not describe this partial selection as full native coverage or as
+proof that every deferred failure is native. Existing full CI still runs those
+files without these selectors.
+
+Required resources differ: Darwin APIs, strict physical ancestor ownership,
+the fixed `/private/tmp` connector route, the release producer's fixed trusted
+Node paths, and the legacy helper's supported Python3.9 are distinct conditions.
+Shell activation does not authenticate those resources. In particular, Python3.13
+emits a deprecation warning for the legacy helper's `sre_parse` import, while
+the production adapter deliberately refuses unexpected stderr. Do not suppress
+stderr, relax interpreter attestation or widen supported product dependencies
+to make a fixture pass. Go-aware normal file/search operations do not select
+that legacy helper.
+
+## Independent Shell qualification
+
+`tests/fixtures/shell-qualified-process.go.txt` is an immutable, non-executed
+copy of the public baseline6e8ddbd process source. Its SHA-256 is
+`0e6f7488df2753cbdf2fa3440bf7b6f44a9e94bda3d6a8965087a804da8aeaaa`,
+the existing independent platform pin. Producer/consumer contract tests use
+that fixture, so negative tests reach their intended changed/missing/link
+conditions instead of failing early on unrelated live-source drift.
+
+A separate test compares actual current process bytes to the independent pin:
+an unqualified source must refuse with `SHELL_SUPPORT_INPUT_CHANGED`. A passing
+refusal test does not qualify current Shell source, enable its declaration or
+make packaging available. Native qualification and reviewed pin updates remain
+required before current-source Shell/package acceptance. Never replace a pin
+with an observed hash solely to pass a check.
+
+## Review and delivery
+
+Use fresh, read-only independent native reviewers with the configured role and
+model/effort ladder. A host driver integration failure is distinct from actual
+agent availability. When its formal lifecycle API is unavailable, retain actual
+native review outcomes and explicit limits; do not manufacture formal-driver,
+close or usage receipts. The Lead inspects findings, closes relevant checks and
+owns source acceptance and merge.
+
+Keep source, packaged, installed, live and owner-accepted states separate in the
+private re-entry handover. Preserve failed aggregates and unknown outcomes;
+never replay effects or weaken hooks/confinement to claim completion.

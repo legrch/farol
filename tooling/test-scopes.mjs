@@ -112,6 +112,9 @@ export function suiteCommand(
       "run",
       ...suite.files,
       ...(suite.config ? ["--config", suite.config] : []),
+      ...(suite.testNamePattern
+        ? ["--testNamePattern", suite.testNamePattern]
+        : []),
       "--pool=threads",
       "--maxWorkers=1",
       "--no-file-parallelism",
@@ -286,6 +289,7 @@ export function selectionDigest(
       ...files,
       "tooling/test-scopes.mjs",
       "tooling/test-scope-plan.mjs",
+      "tooling/cloud-test-prerequisites.mjs",
       "tests/e2e/owned-background-secondary.mjs",
       "vitest.config.ts",
       "vitest.renderer.config.ts",
