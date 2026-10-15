@@ -7062,6 +7062,10 @@ async function configureAdmittedProduct(
       ) {
         return refuseRoute("workspace_identity");
       }
+      // Go policy awaited above. Claim the host lane synchronously so a later
+      // reply cannot enter alongside an admitted setup or a newly active Agent.
+      if (codexHostTaskAdmission || codexAgentOperationActive())
+        return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
       codexHostTaskAdmission = true;
       let proxy: SharedCodexProxyHost | null = null;
       let scratch: string | null = null;

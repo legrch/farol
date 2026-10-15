@@ -179,6 +179,70 @@ function harness(
 }
 
 describe("host exact Codex read selection", () => {
+  it("admits only one configure after concurrent Go policy replies and preserves its latch", async () => {
+    const h = harness();
+    const policies = [];
+    h.context.configuration.resolveTaskModel.mockImplementation(
+      () => new Promise((resolve) => policies.push(resolve)),
+    );
+    let entered;
+    let release;
+    const entering = new Promise((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    h.context.SharedCodexProxyHost.attach.mockImplementation(async () => {
+      entered();
+      await gate;
+      return h.proxy;
+    });
+    const first = h.handle();
+    const second = h.handle();
+    try {
+      expect(policies).toHaveLength(2);
+      policies[0]({ status: "ready" });
+      await entering;
+      policies[1]({ status: "ready" });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(h.context.SharedCodexProxyHost.attach).toHaveBeenCalledOnce();
+      await expect(second).resolves.toMatchObject({
+        ok: false,
+        error: "CODEX_HOST_TASK_IN_PROGRESS",
+      });
+      expect(h.context.codexHostTaskAdmission).toBe(true);
+      expect(
+        h.context.configuration.recordCodexTaskRoute,
+      ).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await Promise.allSettled([first, second]);
+    }
+    expect(h.context.configuration.recordCodexTaskRoute).toHaveBeenCalledOnce();
+    expect(h.proxy.close).toHaveBeenCalledOnce();
+    expect(h.context.codexHostTaskAdmission).toBe(false);
+  });
+
+  it("refuses an Agent that became active while Go policy was pending", async () => {
+    const h = harness();
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    h.context.configuration.resolveTaskModel.mockImplementation(() => gate);
+    const pending = h.handle();
+    expect(h.context.configuration.resolveTaskModel).toHaveBeenCalledOnce();
+    h.context.codexAgentOperationActive.mockReturnValue(true);
+    release({ status: "ready" });
+    await expect(pending).resolves.toMatchObject({
+      ok: false,
+      error: "CODEX_HOST_TASK_IN_PROGRESS",
+    });
+    expect(h.context.SharedCodexProxyHost.attach).not.toHaveBeenCalled();
+    expect(h.context.configuration.recordCodexTaskRoute).not.toHaveBeenCalled();
+    expect(h.context.codexHostTaskAdmission).toBe(false);
+  });
   it("retains the exact turn through the actual host save without inferring provider history", async () => {
     const h = harness();
     expect(await h.handle()).toMatchObject({ ok: true });
