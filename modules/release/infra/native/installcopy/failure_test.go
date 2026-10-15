@@ -240,3 +240,55 @@ func TestPostFenceInternalClassificationSurvivesCancellationCause(t *testing.T) 
 		t.Fatal("fence's internal classification or cancellation cause lost")
 	}
 }
+
+func TestFenceOpaqueCancellationCausesStayInternal(t *testing.T) {
+	native := &os.PathError{Op: "private", Path: "/never/leak/fence/path", Err: unix.EIO}
+	for _, tc := range []struct {
+		name                   string
+		original, cancellation error
+		code                   string
+		internal, native       bool
+	}{
+		{"exact-canceled", context.Canceled, context.Canceled, "canceled", false, false},
+		{"exact-deadline", context.DeadlineExceeded, context.DeadlineExceeded, "deadline", false, false},
+		{"joined-canceled", errors.Join(native, context.Canceled), context.Canceled, "fence", true, true},
+		{"joined-deadline", errors.Join(native, context.DeadlineExceeded), context.DeadlineExceeded, "fence", true, true},
+		{"wrapped-owner", fmt.Errorf("private unknown owner: %w", context.Canceled), context.Canceled, "fence", true, false},
+	} {
+		for _, post := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/post=%v", tc.name, post), func(t *testing.T) {
+				f := setup(t)
+				put(t, filepath.Join(f.source, "a"), "data", 0600)
+				calls := 0
+				op := f.prepare(t, func(context.Context) error {
+					calls++
+					if !post || calls == 2 {
+						return tc.original
+					}
+					return nil
+				})
+				err := op.Run(context.Background())
+				if !post {
+					if err != tc.original {
+						t.Fatal("pre-effect fence error changed")
+					}
+					entries, e := os.ReadDir(f.destination)
+					if e != nil || len(entries) != 0 {
+						t.Fatal("pre-effect fence refusal created destination entries")
+					}
+					return
+				}
+				x := failure(t, err, tc.code, true, tc.internal)
+				if !errors.Is(x, tc.original) || !errors.Is(x, tc.cancellation) {
+					t.Fatal("owner or cancellation cause lost")
+				}
+				if tc.native && (!errors.Is(x, native) || !errors.Is(x, unix.EIO)) {
+					t.Fatal("joined native cause lost")
+				}
+				if strings.Contains(x.Error(), "private") || strings.Contains(x.Error(), "never") {
+					t.Fatal("outer fence error leaked opaque text")
+				}
+			})
+		}
+	}
+}

@@ -435,10 +435,13 @@ func (r *runner) fenceFailure(err error) error {
 		copy.cause = err
 		return &copy
 	}
-	if errors.Is(err, context.Canceled) {
+	// Only exact sentinels establish pure cancellation. An opaque owner error
+	// may join or wrap cancellation alongside an infrastructure failure; retain
+	// its internal classification and all causes for the release owner to compose.
+	if err == context.Canceled {
 		return &Failure{Code: "launch_copy_canceled", Uncertain: true, cause: err}
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
+	if err == context.DeadlineExceeded {
 		return &Failure{Code: "launch_copy_deadline", Uncertain: true, cause: err}
 	}
 	return &Failure{Code: "launch_copy_fence", Internal: true, Uncertain: true, cause: err}
