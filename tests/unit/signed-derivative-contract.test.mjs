@@ -503,6 +503,35 @@ const badPaths = [
   `Contents/${"a".repeat(1024)}`,
 ];
 describe("closed bounded data schema", () => {
+  it.each(["\n", "\r", "\r\n", "\u2028", "\u2029"])(
+    "refuses terminal controls %j in hashes, Team IDs, ASCII fields and paths",
+    (control) => {
+      for (const mutate of [
+        (d) => {
+          d.raw.inputLedgerSha256 += control;
+        },
+        (d) => {
+          d.signed.outerSignature.teamId += control;
+        },
+        (d) => {
+          d.signed.outerSignature.identifier += control;
+        },
+        (d) => {
+          d.signed.outerSignature.designatedRequirement += control;
+        },
+        (d) => {
+          d.signed.outerSignature.entitlements.values[`key${control}`] = true;
+        },
+        (d) => {
+          d.raw.components[0].path += control;
+        },
+      ]) {
+        const input = declaration();
+        mutate(input);
+        refuses(() => parseSignedDerivativeProvenance(input));
+      }
+    },
+  );
   it.each(badPaths)("refuses path alias or unsupported name %j", (path) => {
     const input = declaration();
     input.raw.components[0].path = path;
