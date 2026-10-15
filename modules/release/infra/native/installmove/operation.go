@@ -16,9 +16,21 @@ import (
 )
 
 type Identity struct{ Device, Inode string }
+
+// ParentKind is selected only by trusted native composition after verifying the
+// physical root/Applications route and Release Fence. It grants no authority and
+// must never be decoded from wire input. The zero value retains private custody.
+type ParentKind uint8
+
+const (
+	OwnedParent ParentKind = iota
+	SharedApplicationsParent
+)
+
 type Directory struct {
 	File     *os.File
 	Identity Identity
+	Kind     ParentKind
 }
 type Location struct {
 	Parent Directory
@@ -86,6 +98,15 @@ func canonical(s string) bool {
 }
 func validLocation(l Location) bool {
 	if l.Parent.File == nil || !validIdentity(l.Parent.Identity) {
+		return false
+	}
+	switch l.Parent.Kind {
+	case OwnedParent:
+	case SharedApplicationsParent:
+		if l.Name != "Farol.app" {
+			return false
+		}
+	default:
 		return false
 	}
 	switch l.Name {
@@ -183,6 +204,23 @@ type metadata struct {
 	mode, uid, gid              uint32
 	directory, owner, protected bool
 }
+
+func (m metadata) acceptsParent(kind ParentKind) bool {
+	if !m.directory {
+		return false
+	}
+	switch kind {
+	case OwnedParent:
+		return m.owner && m.protected
+	case SharedApplicationsParent:
+		// Exact update_helper.py require_shared_parent predicate. This role is
+		// restricted to Farol.app by prepare; it never relaxes entry ownership.
+		return m.uid == 0 && m.mode&0002 == 0 && (m.mode&0020 == 0 || m.gid == 80)
+	default:
+		return false
+	}
+}
+
 type snapshot struct {
 	parents     [2]metadata
 	left, right metadata
@@ -310,7 +348,8 @@ func (o *Operation) check(ctx context.Context, left, right int, after bool, befo
 	for i, p := range []struct {
 		fd       int
 		expected Identity
-	}{{left, o.left.Parent.Identity}, {right, o.right.Parent.Identity}} {
+		kind     ParentKind
+	}{{left, o.left.Parent.Identity, o.left.Parent.Kind}, {right, o.right.Parent.Identity, o.right.Parent.Kind}} {
 		m, err := o.backend.held(p.fd)
 		if c := canceled(ctx); c != nil {
 			return fail("parent_replaced", err != nil, c)
@@ -318,7 +357,7 @@ func (o *Operation) check(ctx context.Context, left, right int, after bool, befo
 		if err != nil {
 			return fail("parent_replaced", true, nil)
 		}
-		if !m.directory || !m.owner || !m.protected || m.identity != p.expected {
+		if !m.acceptsParent(p.kind) || m.identity != p.expected {
 			return fail("parent_replaced", false, nil)
 		}
 		if before.captured && m != before.parents[i] {
