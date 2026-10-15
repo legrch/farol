@@ -442,7 +442,11 @@ func TestRejectedObjects(t *testing.T) {
 				os.Symlink(string([]byte{0xff}), filepath.Join(f.source, "a"))
 				code = "link"
 			case "badutf8name":
-				put(t, filepath.Join(f.source, string([]byte{0xff})), "bad", 0600)
+				name := filepath.Join(f.source, string([]byte{0xff}))
+				if err := os.WriteFile(name, []byte("bad"), 0600); errors.Is(err, unix.EILSEQ) {
+					t.Skip("APFS refuses non-UTF-8 names, so this refusal cannot be fixtured here")
+				}
+				put(t, name, "bad", 0600)
 				code = "name"
 			}
 			op := f.prepare(t, nil)

@@ -32,6 +32,9 @@ func pipe(t *testing.T) (*os.File, *os.File) {
 func socketPair(t *testing.T, kind int) (*os.File, *os.File) {
 	t.Helper()
 	fds, err := unix.Socketpair(unix.AF_UNIX, kind, 0)
+	if errors.Is(err, unix.EPROTONOSUPPORT) {
+		t.Skip("this host has no AF_UNIX socket of this type")
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

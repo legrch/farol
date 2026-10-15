@@ -302,6 +302,10 @@ func TestNoMutationAndBorrowedDescriptionState(t *testing.T) {
 	must(t, err)
 	must(t, unix.Flock(n.fd, unix.LOCK_EX|unix.LOCK_NB))
 	defer unix.Flock(n.fd, unix.LOCK_UN)
+	// Darwin reports a sticky FHASLOCK status bit once a description has been
+	// flocked, so the baseline must include the fixture's own lock.
+	flags, err = unix.FcntlInt(uintptr(n.fd), unix.F_GETFL, 0)
+	must(t, err)
 	probe, err := os.Open(f.operation)
 	must(t, err)
 	defer probe.Close()

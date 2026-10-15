@@ -1034,6 +1034,11 @@ func TestBorrowedLocksAndFlagsRemain(t *testing.T) {
 		if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
 			t.Fatal(err)
 		}
+		// Darwin reports a sticky FHASLOCK status bit once a description has
+		// been flocked, so the baseline must include the fixture's own lock.
+		if before, err = unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0); err != nil {
+			t.Fatal(err)
+		}
 	})
 	if err := f.operation(false, testNative(), nil).Run(context.Background()); err != nil {
 		t.Fatal(err)
