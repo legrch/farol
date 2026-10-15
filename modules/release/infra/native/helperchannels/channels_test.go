@@ -195,7 +195,7 @@ func TestContinueRequiresBoundedNonemptyEOF(t *testing.T) {
 		seal bool
 		want string
 	}{
-		{"empty", 0, true, "continue_size"},
+		{"empty", 0, true, "continue_empty"},
 		{"overflow", maxFrame + 1, false, "continue_size"},
 		{"withheld EOF", maxFrame, false, "deadline"},
 		{"no data", 0, false, "deadline"},

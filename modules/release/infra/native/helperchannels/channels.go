@@ -398,7 +398,9 @@ func (c *channelState) awaitContinue(ctx context.Context, until time.Time) (fram
 			}
 		} else if nativeErr == nil {
 			if size == 0 {
-				return nil, failure("continue_size", false)
+				// Preserve an empty sealed frame separately from overflow so
+				// the helper owner can retain its continue_invalid classification.
+				return nil, failure("continue_empty", false)
 			}
 			return append([]byte(nil), data[:size]...), nil
 		}
