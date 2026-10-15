@@ -112,6 +112,8 @@ A delayed desktop event loop can make an expired timer run before an original se
 
 The native pipe regression blocks the Node event loop for 16 seconds with a controlled empty peer response. It proves queued-IO recovery for that boundary, together with deterministic expired-command and missing-response cases. It does not establish the cause of a historical incident, Electron file-picker behavior, Go state reconciliation, startup-marker recovery or installed application acceptance; those require their own disposable native witnesses.
 
+The Go storage exchange treats readiness as a wake-up, retaining the original command in its pending slot until a valid poll acquires it. It checks the poll's cancellation and deadline together with the command's original deadline under the delivery lock. Expiration before this admission returns an empty poll without consuming, replacing or renewing that command; a subsequent valid poll may receive it once. A command already issued to the host still retains the existing lost-reply and unknown-write fences. Go regression tests cover expiry and cancellation during lock contention, unchanged command identity/bytes/deadline, and concurrent poll delivery followed by quiescence. They exercise the reciprocal storage port, without physical configuration writes or proof of Electron or installed recovery.
+
 ## Withdrawal during execution resource recheck
 
 The original asynchronous resource recheck remains part of the admitted startup.
