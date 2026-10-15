@@ -50,6 +50,9 @@ func serve(ctx context.Context, profileID string, launch *NativeLaunch, in io.Re
 
 // Run parses only currently implemented command modes; diagnostics never use stdout.
 func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Writer) int {
+	if len(args) > 0 && args[0] == "publish-installed-slot-binding" {
+		return runInstalledSlotBinding(args[1:], out, diagnostics)
+	}
 	if len(args) > 0 && args[0] == "prepare-empty-recovery" {
 		return runEmptyRecoveryPreparation(args[1:], in, out, diagnostics)
 	}
@@ -90,10 +93,18 @@ func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Wri
 	previousDrain := flags.Bool("previous-host-drain-confirmed", false, "trusted exact-profile previous host drain witness; never inferred from journal")
 	childLaunch := flags.String("child-launch", "", "exact child launch identity")
 	shellFD := flags.Int("shell-support-fd", 0, "optional inherited trusted Shell metadata descriptor; only 3 is supported")
+	var codexReadHost, codexReadTemp codexReadLaunchFlag
+	flags.Var(&codexReadHost, "codex-read-host", "optional trusted selected Codex host slot; requires codex-read-temp")
+	flags.Var(&codexReadTemp, "codex-read-temp", "exact canonical trusted temp parent for the optional Codex read selection")
 	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || *profile == "" {
 		return 2
 	}
 	if *shellFD != 0 && *shellFD != 3 {
+		return 2
+	}
+	codexRead, err := decodeCodexReadLaunch(codexReadHost, codexReadTemp, *root != "")
+	if err != nil {
+		fmt.Fprintln(diagnostics, err)
 		return 2
 	}
 	var launch *NativeLaunch
@@ -106,7 +117,7 @@ func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Wri
 		if err != nil || strconv.FormatUint(ino, 10) != *inode || ino == 0 {
 			return 2
 		}
-		launch = &NativeLaunch{Profile: ProfileBinding{ProfileID: *profile, Root: *root, Device: dev, Inode: ino}, OwnerID: *owner, ComputerID: *computer, Home: *home, StoreMode: *storeMode, HostLifetimeID: *hostLifetime, ChildLaunchID: *childLaunch, PreviousHostDrainConfirmed: *previousDrain, SettingsMutations: *settingsMutations}
+		launch = &NativeLaunch{Profile: ProfileBinding{ProfileID: *profile, Root: *root, Device: dev, Inode: ino}, OwnerID: *owner, ComputerID: *computer, Home: *home, StoreMode: *storeMode, HostLifetimeID: *hostLifetime, ChildLaunchID: *childLaunch, PreviousHostDrainConfirmed: *previousDrain, SettingsMutations: *settingsMutations, CodexRead: codexRead}
 	} else if *device != "" || *inode != "" || *owner != "" || *computer != "" || *home != "" || *storeMode != "" || *hostLifetime != "" || *childLaunch != "" || *previousDrain || *settingsMutations || *shellFD != 0 {
 		return 2
 	}

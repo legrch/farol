@@ -97,6 +97,14 @@ func TestConnectorProcessLifecycleLostStartDisclosureRetainsOriginal(t *testing.
 	if start != nil || err == nil || child.spawns != 1 {
 		t.Fatal("fixture did not lose original disclosure")
 	}
+	var failure *processct.Failure
+	if !errors.As(err, &failure) || failure.Code != "PROCESS_OUTCOME_UNKNOWN" || failure.Outcome != "outcome_unknown" || failure.Retry != "never" {
+		t.Fatal("dispatched process was classified as refused", err)
+	}
+	outcome, outcomeErr := connectorProcessOutcome(nil, err)
+	if outcomeErr != nil || outcome.Status != "unknown" || outcome.Code != "PROCESS_OUTCOME_UNKNOWN" {
+		t.Fatal("wire lost the original execution uncertainty", outcome, outcomeErr)
+	}
 	child.terminal = true
 	close(child.completed)
 	awaitProcessCollection(t, s, "process-operation")

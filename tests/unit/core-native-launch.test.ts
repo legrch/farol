@@ -110,6 +110,26 @@ describe("inherited Shell startup metadata", () => {
     expect(f.profile.close).toHaveBeenCalledTimes(1);
     expect(spawn).toHaveBeenCalledTimes(1);
   });
+  it("preserves Shell descriptor 3 with the optional selected-read arguments", async () => {
+    const f = setup();
+    const client = await spawnCore("/owned/backend", "profile", "test", 1000, {
+      ...f.native,
+      codexRead: { hostId: "codex", trustedTemp: "/app/tmp" },
+    });
+    const args = vi.mocked(spawn).mock.calls[0]![1]!;
+    expect(args.slice(-6)).toEqual([
+      "--codex-read-host",
+      "codex",
+      "--codex-read-temp",
+      "/app/tmp",
+      "--shell-support-fd",
+      "3",
+    ]);
+    expect(vi.mocked(spawn).mock.calls[0]![2]).toEqual({
+      stdio: ["pipe", "pipe", "pipe", "pipe"],
+    });
+    await client.close();
+  });
   it("rejects missing storage, lifetime or oversized metadata before spawn", async () => {
     for (const override of [
       { settingsMutations: false },
@@ -620,4 +640,103 @@ it("refuses malformed mutation storage selection before spawning", async () => {
     }),
   ).rejects.toMatchObject({ code: "invalid_native_launch" });
   expect(spawn).not.toHaveBeenCalled();
+});
+
+describe("optional trusted Codex read launch", () => {
+  it.each([undefined, { hostId: "codex" as const, trustedTemp: "/app/tmp" }])(
+    "maps only the explicit pair %j without another pipe",
+    async (codexRead) => {
+      const f = fixture();
+      const client = await spawnCore(
+        "/owned/backend",
+        "profile",
+        "test",
+        1000,
+        {
+          ...f.native,
+          ...(codexRead ? { codexRead } : {}),
+        },
+      );
+      const args = vi.mocked(spawn).mock.calls[0]![1]!;
+      expect(args.includes("--codex-read-host")).toBe(codexRead !== undefined);
+      expect(args.includes("--codex-read-temp")).toBe(codexRead !== undefined);
+      if (codexRead)
+        expect(args.slice(-4)).toEqual([
+          "--codex-read-host",
+          "codex",
+          "--codex-read-temp",
+          "/app/tmp",
+        ]);
+      expect(vi.mocked(spawn).mock.calls[0]![2]).toEqual({
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      await client.close();
+    },
+  );
+
+  it.each([
+    null,
+    true,
+    {},
+    { hostId: "other", trustedTemp: "/app/tmp" },
+    { hostId: "codex" },
+    { hostId: "codex", trustedTemp: 7 },
+    { hostId: "codex", trustedTemp: "/app/tmp", threadId: "other" },
+    { hostId: "codex", trustedTemp: "/app/tmp", [Symbol("extra")]: true },
+  ])(
+    "refuses malformed adapter input before spawning: %j",
+    async (codexRead) => {
+      const f = fixture();
+      await expect(
+        spawnCore("/owned/backend", "profile", "test", 1000, {
+          ...f.native,
+          codexRead,
+        } as NativeCoreLaunch),
+      ).rejects.toMatchObject({ code: "invalid_codex_read_launch" });
+      expect(spawn).not.toHaveBeenCalled();
+      expect(f.profile.beforeSpawn).not.toHaveBeenCalled();
+      expect(f.profile.close).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["selection", "hostId", "trustedTemp"])(
+    "refuses %s accessors without invoking them",
+    async (field) => {
+      const f = fixture();
+      const get = vi.fn(() => {
+        throw new Error("Accessor must remain uncalled");
+      });
+      const codexRead = { hostId: "codex", trustedTemp: "/app/tmp" };
+      const native = { ...f.native, codexRead };
+      Object.defineProperty(
+        field === "selection" ? native : codexRead,
+        field === "selection" ? "codexRead" : field,
+        { get },
+      );
+      await expect(
+        spawnCore(
+          "/owned/backend",
+          "profile",
+          "test",
+          1000,
+          native as NativeCoreLaunch,
+        ),
+      ).rejects.toMatchObject({ code: "invalid_codex_read_launch" });
+      expect(get).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps Go path validation on the backend boundary", async () => {
+    const f = fixture();
+    const client = await spawnCore("/owned/backend", "profile", "test", 1000, {
+      ...f.native,
+      codexRead: { hostId: "codex", trustedTemp: "relative" },
+    });
+    expect(vi.mocked(spawn).mock.calls[0]![1]!.slice(-2)).toEqual([
+      "--codex-read-temp",
+      "relative",
+    ]);
+    await client.close();
+  });
 });

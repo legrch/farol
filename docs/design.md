@@ -39,7 +39,7 @@ Geist typeface. Production uses the same graphite hierarchy:
   lifecycle state.
 
 Geist 1.7.2 and Geist Mono are shipped from the design-lab's pinned SIL OFL sources.
-Their SHA-256 values stay in `design-lab/fonts/PROVENANCE.md`, the OFL text is a
+Their SHA-256 values stay in [font provenance](reference/font-provenance.md), the OFL text is a
 digest-bound packaged resource, and the packaged third-party notice names the version,
 license, and hashes. Coverage outside the verified Latin set falls back to SF Pro or
 the system sans-serif; no broader script coverage is claimed.

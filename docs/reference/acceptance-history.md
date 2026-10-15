@@ -128,7 +128,7 @@ accepted clean bytes, explicit owner promotion and onboarding:
   its configuration during the documented alpha transition.
 - [Installed updater lifecycle](../installed-update-runtime.md) — staging, restart,
   reconciliation and rollback; its source contracts do not prove an installed run.
-- [First-install/adoption boundary](../../modules/release/adoption.md) — proposed
+- [First-install/adoption boundary](modules/release/adoption.md) — proposed
   backend semantics and destination decisions; no available installer is implied.
 
 ## Development and checks
@@ -192,26 +192,26 @@ The paired app was built and verified; the witness launched its attested Dev
 candidate through normal main. Production profiles, ordinary provider-used Quit,
 crash/reopen recovery, installed and live-provider qualification remain open.
 
-- Computer: [migration map](../../modules/computer/migration.md),
-  [durable access](../../modules/computer/access.md),
-  [admission](../../modules/computer/admission.md),
-  [execution leases](../../modules/computer/leases.md),
-  [workspace discovery](../../modules/computer/discovery.md),
-  [context](../../modules/computer/context.md),
-  [write/edit preparation](../../modules/computer/mutation.md), and
-  [process lifecycle](../../modules/computer/infra/process/README.md).
-- Chat: [module overview](../../modules/chat/README.md),
-  [admission](../../modules/chat/ADMISSION.md),
-  [lifecycle owner](../../modules/chat/LIFECYCLE.md), and
-  [conversation contract](../../modules/chat/contracts/conversation/CONFORMANCE.md).
-- Task: [coding-task lifecycle](../../modules/task/README.md),
-  [observation contract](../../modules/task/contracts/observation/README.md), and
-  [selected Codex client](../../modules/task/infra/clients/codex/README.md).
-- Release: [module overview](../../modules/release/README.md),
-  [native boundary](../../modules/release/native.md),
-  [journal](../../modules/release/journal.md),
-  [migration admission](../../modules/release/migration.md), and
-  [relocation](../../modules/release/relocation.md).
+- Computer: [migration map](modules/computer/migration.md),
+  [durable access](modules/computer/access.md),
+  [admission](modules/computer/admission.md),
+  [execution leases](modules/computer/leases.md),
+  [workspace discovery](modules/computer/discovery.md),
+  [context](modules/computer/context.md),
+  [write/edit preparation](modules/computer/mutation.md), and
+  [process lifecycle](modules/computer/infra/process.md).
+- Chat: [module overview](modules/chat/README.md),
+  [admission](modules/chat/admission.md),
+  [lifecycle owner](modules/chat/lifecycle.md), and
+  [conversation contract](modules/chat/contracts/conversation/conformance.md).
+- Task: [coding-task lifecycle](modules/task/README.md),
+  [observation contract](modules/task/contracts/observation.md), and
+  [selected Codex client](modules/task/infra/clients/codex.md).
+- Release: [module overview](modules/release/README.md),
+  [native boundary](modules/release/native.md),
+  [journal](modules/release/journal.md),
+  [migration admission](modules/release/migration.md), and
+  [relocation](modules/release/relocation.md).
 
 Module pages describe source contracts and remaining cutover work. They do not
 claim that all prepared verbs are registered or that the existing TypeScript and

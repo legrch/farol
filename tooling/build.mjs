@@ -3,6 +3,7 @@ import { buildGoBackend } from "./go-backend-build.mjs";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { embedBuiltCore, GO_CORE_ENTRIES } from "./go-core-artifact.mjs";
 import { declareCoreResources } from "./core-resources.mjs";
+import { verifyRuntimeExecutableClosure } from "./runtime-launch-manifest.mjs";
 import {
   declareShellSupport,
   verifyHostShellResources,
@@ -484,6 +485,11 @@ const manifest = {
   entries,
   entrySha256: await snapshotBuildEntries(output, entries),
 };
+if (core)
+  await verifyRuntimeExecutableClosure({
+    directory: output,
+    entrySha256: manifest.entrySha256,
+  });
 await fs.writeFile(
   "_output/build/app/build-manifest.json",
   `${JSON.stringify(manifest, null, 2)}\n`,

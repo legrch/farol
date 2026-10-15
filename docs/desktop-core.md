@@ -817,7 +817,7 @@ fingerprint and content-free records. A fresh permit requires this writer's
 confirmed create; an existing-name result can only observe Existing or fence
 unknown. Terminal publication is attempted once. New Go-only failure vocabulary
 that cannot fit v1 remains in memory instead of silently changing the stored
-schema. See `modules/computer/infra/repos/mutation/README.md` for the exact limits.
+schema. See [the mutation repository contract](reference/modules/computer/infra/repos/mutation.md) for the exact limits.
 
 Wire text is bounded to 256 KiB per field and existing typed arrays to 128 edits;
 empty edits are refused. Root additionally bounds the complete copied mutation

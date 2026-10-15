@@ -37,6 +37,7 @@ func invalidIngress() (*desktop.Outcome, error) {
 func (s *ComputerIngress) Methods() map[string]desktop.Method {
 	methods := map[string]desktop.Method{
 		"computer.settings.list":     s.settingsListMethod(),
+		"computer.settings.search":   s.settingsSearchMethod(),
 		"computer.settings.snapshot": s.settingsSnapshotMethod(),
 		"computer.authority.deactivate": {Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
 			if r.OperationID == "" || ipc.ValidateJSON(r.Body) != nil || wire.Validate("ComputerAuthorityDeactivateRequest", r.Body) != nil {

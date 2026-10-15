@@ -53,15 +53,21 @@ async function fixture() {
   for (const input of inputs) {
     const target = path.join(root, input.path);
     await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.copyFile(path.join(repository, input.path), target);
+    // Immutable source fixture from public baseline6e8ddbd. Its digest is the
+    // existing independent qualification pin; never learn a pin from live bytes.
+    const source =
+      input.path === "modules/computer/infra/process/process.go"
+        ? "tests/fixtures/shell-qualified-process.go.txt"
+        : input.path;
+    await fs.copyFile(path.join(repository, source), target);
   }
   return { root, ...values() };
 }
 
 describe("independent build Shell support", () => {
   it("produces the exact runtime declaration and non-executed watchdog resource", async () => {
-    const { core, identity } = values();
-    const result = await declareShellSupport(repository, core, identity);
+    const { root, core, identity } = await fixture();
+    const result = await declareShellSupport(root, core, identity);
     expect(parseShellSupportDeclaration(result.support)).toEqual(
       result.support,
     );
@@ -80,6 +86,25 @@ describe("independent build Shell support", () => {
     expect(Object.isFrozen(result.support.executables)).toBe(true);
     core.binary.sha256 = "d".repeat(64);
     expect(result.support.core.binary.sha256).toBe("c".repeat(64));
+  });
+
+  it("refuses live source while its independent process qualification pin differs", async () => {
+    const { core, identity } = values();
+    const input = SHELL_PLATFORM.compilerInputs.find(
+      (entry) => entry.path === "modules/computer/infra/process/process.go",
+    );
+    const actual = createHash("sha256")
+      .update(await fs.readFile(path.join(repository, input.path)))
+      .digest("hex");
+    if (actual === input.sha256) {
+      await expect(
+        declareShellSupport(repository, core, identity),
+      ).resolves.toHaveProperty("support");
+    } else {
+      await expect(
+        declareShellSupport(repository, core, identity),
+      ).rejects.toThrow("SHELL_SUPPORT_INPUT_CHANGED");
+    }
   });
 
   it.each(["core", "dirty", "architecture"])(

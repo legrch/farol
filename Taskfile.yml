@@ -12,6 +12,18 @@ tasks:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run ci
       - task: test:core
 
+  ci:cloud:
+    desc: Portable source integration gate; native/resource/mixed and package acceptance remain separate
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run ci:cloud
+      - task: test:core
+      - task: scan:secrets
+
+  test:cloud:
+    desc: Portable source suites with an explicit NOT RUN native-resource manifest
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/test-scopes.mjs --scope=cloud {{.CLI_ARGS}}
+
   test:core:
     desc: Verify Go modules, generated desktop bridge, protocol, and import boundaries
     cmds:

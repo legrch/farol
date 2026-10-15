@@ -192,6 +192,12 @@ func (s *Service) admit(ctx context.Context, binding port.TurnBinding, digest st
 		s.deps.Gate.Unlock()
 		return nil, turn.Conflict
 	}
+	if conversation != nil && conversation.retained != nil && conversation.previous == nil {
+		if _, exists := s.providerOwners[conversation.target.ConversationID]; exists {
+			s.deps.Gate.Unlock()
+			return nil, turn.Conflict
+		}
+	}
 	candidate := s.queue.Clone()
 	after, err := candidate.Admit(identity(binding), digest)
 	if err != nil {
@@ -485,6 +491,10 @@ func (s *Service) commit(ctx context.Context, m *mutation, publish bool) error {
 		case "admit":
 			if c := m.handle.conversation; c != nil {
 				c.root.latest = c
+				if c.retained != nil && c.previous == nil {
+					c.providerID = c.target.ConversationID
+					s.providerOwners[c.providerID] = m.handle.fixed
+				}
 			}
 		case "prepared", "accept":
 			if c := m.handle.conversation; c != nil {

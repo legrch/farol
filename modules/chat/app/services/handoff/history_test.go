@@ -12,10 +12,10 @@ import (
 // host terminal/drain, boot activation or an actual historical UI read.
 type historyStore struct {
 	memoryStore
-	match        port.HistoryMatch
-	pages, finds int
-	hook         func()
-	pageFault    string
+	match               port.HistoryMatch
+	pages, finds, tails int
+	hook                func()
+	pageFault           string
 }
 
 func (s *historyStore) HistoryPage(_ context.Context, a port.HistoryAnchor, owner string, offset uint32) (*port.HistoryPage, error) {
@@ -56,6 +56,21 @@ func (s *historyStore) HistoryFind(_ context.Context, a port.HistoryAnchor, owne
 		return nil, Refused
 	}
 	if owner != "owner" || key.OperationID == "missing" {
+		return nil, nil
+	}
+	v := s.match
+	return &v, nil
+}
+
+func (s *historyStore) HistoryTail(_ context.Context, a port.HistoryAnchor, owner, conversationID string) (*port.HistoryMatch, error) {
+	s.tails++
+	if s.hook != nil {
+		s.hook()
+	}
+	if a.HeadDigest != s.head.Digest {
+		return nil, Refused
+	}
+	if owner != "owner" || conversationID == "missing" {
 		return nil, nil
 	}
 	v := s.match
@@ -423,5 +438,129 @@ func TestHistoryReadRechecksAuthorityAfterServiceGateWait(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestHistoryLatestReturnsOnlyOriginalSummary(t *testing.T) {
+	r, store, a, results, next := historyFixture(t)
+	ctx := context.Background()
+	// Observation wall time belongs to retained metadata, never tail ordering.
+	// No result IO is needed to return this read-only original reference.
+	for _, millis := range []uint64{999999, 1} {
+		results.value.Conversation.Observed.ObservedAtMillis = millis
+		results.value.Conversation.Evidence.Observed = results.value.Conversation.Observed
+		got, err := r.Latest(ctx, "provider-conversation")
+		if err != nil || got == nil || got.Key != historyKey() || got.Binding != store.match.Turn.Binding || got.ResultID != store.match.Turn.Snapshot.Result.ID || got.ProviderConversationID != "provider-conversation" {
+			t.Fatal("wrong latest history summary", got, err)
+		}
+		got.Binding.OwnerID = "mutated"
+	}
+	if store.calls != 4 || store.pages != 0 || store.finds != 0 || store.tails != 2 || results.reads != 0 {
+		t.Fatal("tail query accessed payload or published work")
+	}
+	if err := next.Proof.WithRetirement(ctx, func(*port.RetirementReceipt) error { return nil }); err != nil {
+		t.Fatal("history query consumed execution proof", err)
+	}
+	if got, err := r.Latest(ctx, "missing"); got != nil || err != nil {
+		t.Fatal("missing tail fabricated result", err)
+	}
+	empty, err := NewEmptyHistoryReader(r.scope, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := empty.Latest(ctx, "provider-conversation"); got != nil || err != nil {
+		t.Fatal("known-first reader fabricated tail", err)
+	}
+	a.active = false
+	if got, err := empty.Latest(ctx, "provider-conversation"); got != nil || err == nil {
+		t.Fatal("empty tail bypassed current authority")
+	}
+}
+
+func TestHistoryLatestRefusesCrossedOrIncompleteMatch(t *testing.T) {
+	for name, mutate := range map[string]func(*port.HistoryMatch){
+		"anchor":          func(v *port.HistoryMatch) { v.Anchor.HeadDigest[0]++ },
+		"owner":           func(v *port.HistoryMatch) { v.Turn.Binding.OwnerID = "other" },
+		"CID":             func(v *port.HistoryMatch) { v.Turn.Snapshot.Binding.Document.ConversationID = "other" },
+		"origin":          func(v *port.HistoryMatch) { v.Origin.Binding.BackendGeneration = "other" },
+		"current-backend": func(v *port.HistoryMatch) { v.Origin.Binding.BackendGeneration = "generation-2" },
+		"build":           func(v *port.HistoryMatch) { v.Origin.Binding.BuildID = "other" },
+		"root":            func(v *port.HistoryMatch) { v.Origin.Binding.ChatRoot.Inode++ },
+		"receipt":         func(v *port.HistoryMatch) { v.Origin.ReceiptDigest = [32]byte{} },
+		"unacknowledged":  func(v *port.HistoryMatch) { v.Turn.AcknowledgedRevision = 0 },
+		"unreleased":      func(v *port.HistoryMatch) { v.Turn.ReleasedRevision = 0 },
+		"incomplete":      func(v *port.HistoryMatch) { v.Turn.Snapshot.DeliveryAcknowledged = false },
+		"missing-result":  func(v *port.HistoryMatch) { v.Turn.ResultPublication = port.ResultPublication{} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, store, _, results, _ := historyFixture(t)
+			mutate(&store.match)
+			if got, err := r.Latest(context.Background(), "provider-conversation"); got != nil || err == nil || results.reads != 0 {
+				t.Fatal("invalid tail exposed history", got, err)
+			}
+		})
+	}
+}
+
+func TestHistoryLatestRechecksOriginalLeaseAfterIOAndGuardWaits(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		for _, at := range []string{"before", "history", "reactivate-history", "scope-history", "cancel-history", "first-IO", "after-IO", "final-disclosure", "head-advance"} {
+			t.Run(at+map[bool]string{false: "/match", true: "/missing"}[missing], func(t *testing.T) {
+				r, store, a, results, _ := historyFixture(t)
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				switch at {
+				case "before":
+					a.active = false
+				case "history":
+					store.hook = func() { a.active = false }
+				case "reactivate-history":
+					store.hook = func() { a.revision++; a.active = true }
+				case "scope-history":
+					store.hook = func() { a.scope.OwnerID = "other" }
+				case "cancel-history":
+					store.hook = cancel
+				case "first-IO", "after-IO", "final-disclosure":
+					gateAt := map[string]int{"first-IO": 1, "after-IO": 2, "final-disclosure": 3}[at]
+					r.origin.owner.guard = &historyWaitGate{inner: r.origin.owner.guard, at: gateAt, revoke: func() { a.revision++; a.active = true }}
+				case "head-advance":
+					store.hook = func() { r.origin.owner.knownHead[0]++ }
+				}
+				cid := "provider-conversation"
+				if missing {
+					cid = "missing"
+				}
+				if got, err := r.Latest(ctx, cid); got != nil || err == nil {
+					t.Fatal("withdrawn/stale query disclosed history", got, err)
+				}
+				if (at == "before" || at == "first-IO") && store.tails != 0 {
+					t.Fatal("withdrawn waiter performed history IO")
+				}
+				if results.reads != 0 {
+					t.Fatal("tail lookup read payload")
+				}
+			})
+		}
+	}
+}
+
+func TestHistoryLatestInvalidCIDOrCurrentScopeDoesNoIO(t *testing.T) {
+	r, store, a, results, _ := historyFixture(t)
+	for _, cid := range []string{"", "bad id", "bad\t", string([]byte{255})} {
+		if got, err := r.Latest(context.Background(), cid); got != nil || !errors.Is(err, Invalid) {
+			t.Fatal("invalid CID accepted", err)
+		}
+	}
+	for _, scope := range []port.HistoryReadScope{
+		{ProfileID: "other", BackendGeneration: "generation-2", OwnerID: "owner"},
+		{ProfileID: "profile", BackendGeneration: "other", OwnerID: "owner"},
+	} {
+		a.scope = scope
+		if got, err := r.Latest(context.Background(), "provider-conversation"); got != nil || err == nil {
+			t.Fatal("crossed current scope accepted", err)
+		}
+	}
+	if store.tails != 0 || results.reads != 0 {
+		t.Fatal("invalid request performed IO")
 	}
 }

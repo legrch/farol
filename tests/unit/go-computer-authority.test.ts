@@ -51,6 +51,19 @@ async function fixture(fault?: (method: string, result: Outcome) => Outcome) {
           entries: ["note.md", "folder/"],
           truncated: false,
         };
+      else if (method === "computer.settings.search")
+        data = {
+          publication: input.publication!,
+          workspaceId: input.workspaceId!,
+          relativePath: input.relativePath!,
+          pattern: input.pattern!,
+          root: { path: "/synthetic/work", device: "1", inode: "2" },
+          matches: [
+            { path: "note.md", line: "1", text: "match", truncated: false },
+          ],
+          resultLimited: false,
+          scanLimited: false,
+        };
       else
         data = {
           ownerId: "owner-desktop",
@@ -637,6 +650,171 @@ describe("Go Computer host authority mapping", () => {
       expect(f.request).toHaveBeenCalledTimes(2);
     },
   );
+});
+
+describe("Go owner Settings search transport", () => {
+  it("uses the exact owner publication and decodes bounded matches without Chat admission", async () => {
+    const f = await fixture();
+    const added = await f.add();
+    if (!added.ok || added.snapshot.status !== "ready") throw Error("fixture");
+    const { generation, workspaces } = added.snapshot.settings.computer;
+    const out = await f.bridge.searchSettings(
+      generation,
+      workspaces[0]!.workspaceId,
+      ".",
+      "match",
+    );
+    expect(out.matches).toEqual([
+      { path: "note.md", line: "1", text: "match", truncated: false },
+    ]);
+    expect(Object.isFrozen(out.matches)).toBe(true);
+    expect(f.request.mock.calls.map(([method]) => method)).toEqual([
+      "computer.authority.deactivate",
+      "computer.authority.publish",
+      "computer.settings.search",
+    ]);
+    expect(f.request.mock.calls[2]![1]).toMatchObject({
+      workspaceId: workspaces[0]!.workspaceId,
+      relativePath: ".",
+      pattern: "match",
+    });
+    expect(f.request.mock.calls[2]![2]?.operationId).toBeUndefined();
+    await expect(
+      f.bridge.searchSettings(
+        generation + 1,
+        workspaces[0]!.workspaceId,
+        ".",
+        "match",
+      ),
+    ).rejects.toMatchObject({ code: "computer_publication_unavailable" });
+    expect(f.request).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    "pattern",
+    "path",
+    "workspace",
+    "publication",
+    "backend",
+    "request",
+    "operation",
+    "matches",
+    "outside-scope",
+    "line",
+    "text",
+    "match-extra",
+    "limit",
+  ])(
+    "fences crossed or malformed search %s without another native request",
+    async (fault) => {
+      const f = await fixture((method, out) => {
+        if (method !== "computer.settings.search") return out;
+        const data = out.data as Record<string, Json>;
+        if (fault === "backend")
+          return {
+            ...out,
+            context: { ...out.context, backendGeneration: "other" },
+          };
+        if (fault === "request") return { ...out, requestId: "other" };
+        if (fault === "operation") return { ...out, operationId: "unexpected" };
+        const match = {
+          path: "note.md",
+          line: "1",
+          text: "match",
+          truncated: false,
+        };
+        const change =
+          fault === "pattern"
+            ? { pattern: "other" }
+            : fault === "path"
+              ? { relativePath: "other" }
+              : fault === "workspace"
+                ? { workspaceId: "other" }
+                : fault === "publication"
+                  ? {
+                      publication: {
+                        ...(data.publication as Record<string, Json>),
+                        fence: "999",
+                      },
+                    }
+                  : fault === "matches"
+                    ? { matches: {} }
+                    : fault === "outside-scope"
+                      ? { matches: [{ ...match, path: "../private" }] }
+                      : fault === "line"
+                        ? { matches: [{ ...match, line: "9007199254740992" }] }
+                        : fault === "text"
+                          ? { matches: [{ ...match, text: "x".repeat(501) }] }
+                          : fault === "match-extra"
+                            ? { matches: [{ ...match, extra: true }] }
+                            : {
+                                matches: Array.from(
+                                  { length: 101 },
+                                  () => match,
+                                ),
+                              };
+        return { ...out, data: { ...data, ...change } as Json };
+      });
+      const added = await f.add();
+      if (!added.ok || added.snapshot.status !== "ready")
+        throw Error("fixture");
+      const { generation, workspaces } = added.snapshot.settings.computer;
+      await expect(
+        f.bridge.searchSettings(
+          generation,
+          workspaces[0]!.workspaceId,
+          ".",
+          "match",
+        ),
+      ).rejects.toMatchObject({ state: "unknown" });
+      await expect(
+        f.bridge.searchSettings(
+          generation,
+          workspaces[0]!.workspaceId,
+          ".",
+          "match",
+        ),
+      ).rejects.toMatchObject({ code: "computer_publication_unavailable" });
+      expect(f.request).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it("discards search output when withdrawal crosses the reply", async () => {
+    const f = await fixture();
+    const added = await f.add();
+    if (!added.ok || added.snapshot.status !== "ready") throw Error("fixture");
+    const { generation, workspaces } = added.snapshot.settings.computer;
+    const original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (method, body, options) => {
+      const out = await original(method, body, options);
+      if (method === "computer.settings.search") await f.bridge.withdraw();
+      return out;
+    });
+    await expect(
+      f.bridge.searchSettings(
+        generation,
+        workspaces[0]!.workspaceId,
+        ".",
+        "match",
+      ),
+    ).rejects.toMatchObject({ code: "settings_workspace_withdrawn" });
+    expect(
+      f.request.mock.calls.filter(
+        ([method]) => method === "computer.settings.search",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("refuses an invalid request before transport", async () => {
+    const f = await fixture();
+    const added = await f.add();
+    if (!added.ok || added.snapshot.status !== "ready") throw Error("fixture");
+    const { generation, workspaces } = added.snapshot.settings.computer;
+    await expect(
+      f.bridge.searchSettings(generation, workspaces[0]!.workspaceId, ".", ""),
+    ).rejects.toMatchObject({ state: "refused" });
+    expect(f.request).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("Go owner Settings snapshot transport", () => {

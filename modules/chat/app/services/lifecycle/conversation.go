@@ -26,6 +26,7 @@ type Conversation struct {
 	handle                 *Handle
 	root, previous, latest *Conversation
 	sendAuthorization      port.SendAuthorization
+	retained               *retainedContinuation
 }
 
 var _ port.ConversationOwner = (*Conversation)(nil)
@@ -59,7 +60,7 @@ func (s *Service) FollowConversation(ctx context.Context, previous *Conversation
 	target := port.ConversationTarget{Mode: port.OwnedSaved, Required: input.Required, ConversationID: previous.providerID, Selection: input.Selection, PreviousUserTurnID: h.output.UserID, PreviousReplyID: h.output.ReplyID, Resolution: input.Resolution}
 	s.deps.Gate.Unlock()
 	// Follow keeps the original disclosure guard for each newly admitted turn.
-	return s.createConversation(ctx, input, target, previous, previous.sendAuthorization)
+	return s.createConversationFrom(ctx, input, target, previous, previous.sendAuthorization, previous.retained)
 }
 
 // followSettled reads prerequisites under the owning gate. Follow keeps its
@@ -69,6 +70,10 @@ func followSettled(h *Handle, view turn.Snapshot) bool {
 }
 
 func (s *Service) createConversation(ctx context.Context, input port.ConversationInput, target port.ConversationTarget, previous *Conversation, authorization port.SendAuthorization) (*Conversation, error) {
+	return s.createConversationFrom(ctx, input, target, previous, authorization, nil)
+}
+
+func (s *Service) createConversationFrom(ctx context.Context, input port.ConversationInput, target port.ConversationTarget, previous *Conversation, authorization port.SendAuthorization, retained *retainedContinuation) (*Conversation, error) {
 	if s == nil || ctx == nil || !target.Valid() || input.Selection != target.Selection || len(input.Prompt) == 0 || len(input.Prompt) > PromptBytesLimit || !utf8.ValidString(input.Prompt) {
 		return nil, Invalid
 	}
@@ -78,7 +83,10 @@ func (s *Service) createConversation(ctx context.Context, input port.Conversatio
 	if _, ok := s.deps.Browser.(port.VerifiedBrowser); !ok {
 		return nil, Unavailable
 	}
-	digest, err := s.intentDigest(input.Binding, target, input.Prompt)
+	if err := retained.current(ctx); err != nil {
+		return nil, err
+	}
+	digest, err := s.conversationDigest(input.Binding, target, input.Prompt, retained)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +96,7 @@ func (s *Service) createConversation(ctx context.Context, input port.Conversatio
 		return nil, err
 	}
 	if h := s.handles[input.Binding.OperationID]; h != nil {
-		if h.fixed != input.Binding || h.digest != digest || h.target != target || h.conversation == nil || (h.sendAuthorization == nil) != (authorization == nil) {
+		if h.fixed != input.Binding || h.digest != digest || h.target != target || h.conversation == nil || !sameRetained(h.conversation.retained, retained) || (h.sendAuthorization == nil) != (authorization == nil) {
 			s.deps.Gate.Unlock()
 			return nil, turn.Conflict
 		}
@@ -98,7 +106,7 @@ func (s *Service) createConversation(ctx context.Context, input port.Conversatio
 		return c, nil
 	}
 	s.deps.Gate.Unlock()
-	c := &Conversation{owner: s, input: input, target: target, previous: previous, sendAuthorization: authorization}
+	c := &Conversation{owner: s, input: input, target: target, previous: previous, sendAuthorization: authorization, retained: retained}
 	if previous == nil {
 		c.root = c
 	} else {
@@ -107,6 +115,9 @@ func (s *Service) createConversation(ctx context.Context, input port.Conversatio
 	h, err := s.admit(ctx, input.Binding, digest, c)
 	if err != nil {
 		return nil, err
+	}
+	if err := retained.current(ctx); err != nil {
+		return c, err
 	}
 	_, err = s.Apply(ctx, h, Change{Action: Enqueue})
 	if err != nil {

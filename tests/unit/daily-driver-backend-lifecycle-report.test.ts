@@ -190,9 +190,11 @@ it("omits an absent optional observer from the actual native launch object", () 
     selection: { previousHostDrainConfirmed: true },
     hostLifetimeId: "controlled-host-lifetime",
     childLaunchId: "controlled-child-launch",
+    codexRead: undefined,
     shellMetadata: undefined,
   });
   expect(Object.hasOwn(options, "onLifecycleObservation")).toBe(false);
+  expect(Object.hasOwn(options, "codexRead")).toBe(false);
 });
 
 it("selects Shell for the actual desktop caller only in its supported layout", () => {

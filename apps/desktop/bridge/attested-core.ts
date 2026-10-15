@@ -335,6 +335,18 @@ function verifyBinary(expected: TrustedCoreExpectation): string {
   }
 }
 
+// Reuse the same attestation for a one-shot bundled Go capability. The trusted
+// caller still owns an immutable accepted tree through the original child close.
+// This performs no spawn, profile opening, admission or new trust production.
+export function verifyCoreExecutable(
+  artifact: unknown,
+  trusted: TrustedCoreExpectation,
+): string {
+  const expected = expectation(trusted);
+  bind(parseCoreArtifactDeclaration(artifact), expected);
+  return verifyBinary(expected);
+}
+
 // Trusted Electron host only; keep one instance for one child lifetime. A start
 // is consumed before validation, even on refusal. No renderer IPC or operation
 // body can supply these expectations. Client retains all pipe/cleanup ownership.

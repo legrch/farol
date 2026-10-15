@@ -1,0 +1,42 @@
+{
+  "design-lab/desktop-shell-2026-10/DECISIONS.md": {
+    "reason": "Frozen offline handoff content is bound by design-lab/desktop-shell-2026-10/MANIFEST.sha256; relocation would invalidate its preserved bytes and self-contained relative navigation.",
+    "index": "docs/design/README.md"
+  },
+  "design-lab/desktop-shell-2026-10/HANDOFF.md": {
+    "reason": "Frozen offline handoff content is bound by design-lab/desktop-shell-2026-10/MANIFEST.sha256; relocation would invalidate its preserved bytes and self-contained relative navigation.",
+    "index": "docs/design/README.md"
+  },
+  "design-lab/desktop-shell-2026-10/README.md": {
+    "reason": "Frozen offline handoff content is bound by design-lab/desktop-shell-2026-10/MANIFEST.sha256; relocation would invalidate its preserved bytes and self-contained relative navigation.",
+    "index": "docs/design/README.md"
+  },
+  "design-lab/desktop-shell-2026-10/assets/PROVENANCE.md": {
+    "reason": "Frozen offline handoff content is bound by design-lab/desktop-shell-2026-10/MANIFEST.sha256; relocation would invalidate its preserved bytes and self-contained relative navigation.",
+    "index": "docs/design/README.md"
+  },
+  "design-lab/desktop-shell-2026-10/assets/dock-v4/README.md": {
+    "reason": "Frozen offline handoff content is bound by design-lab/desktop-shell-2026-10/MANIFEST.sha256; relocation would invalidate its preserved bytes and self-contained relative navigation.",
+    "index": "docs/design/README.md"
+  },
+  "design-lab/desktop-shell-2026-10/design-notes-v1.md": {
+    "reason": "Frozen offline handoff content is bound by design-lab/desktop-shell-2026-10/MANIFEST.sha256; relocation would invalidate its preserved bytes and self-contained relative navigation.",
+    "index": "docs/design/README.md"
+  },
+  "design-lab/desktop-shell-2026-10/design-notes.md": {
+    "reason": "Frozen offline handoff content is bound by design-lab/desktop-shell-2026-10/MANIFEST.sha256; relocation would invalidate its preserved bytes and self-contained relative navigation.",
+    "index": "docs/design/README.md"
+  },
+  "design-lab/desktop-shell-2026-10/v2/design-notes.md": {
+    "reason": "Frozen offline handoff content is bound by design-lab/desktop-shell-2026-10/MANIFEST.sha256; relocation would invalidate its preserved bytes and self-contained relative navigation.",
+    "index": "docs/design/README.md"
+  },
+  "design-lab/desktop-shell-2026-10/v3/design-notes.md": {
+    "reason": "Frozen offline handoff content is bound by design-lab/desktop-shell-2026-10/MANIFEST.sha256; relocation would invalidate its preserved bytes and self-contained relative navigation.",
+    "index": "docs/design/README.md"
+  },
+  "design-lab/desktop-shell-2026-10/verification/original/README.md": {
+    "reason": "Frozen offline handoff content is bound by design-lab/desktop-shell-2026-10/MANIFEST.sha256; relocation would invalidate its preserved bytes and self-contained relative navigation.",
+    "index": "docs/design/README.md"
+  }
+}

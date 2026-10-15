@@ -1,8 +1,9 @@
 // Small source selection map for unit/component, integration and fast scopes.
 // Full assembled E2E and live qualification keep their existing separate gates.
 import path from "node:path";
+import { cloudSelection, cloudPattern } from "./cloud-test-prerequisites.mjs";
 
-export const scopes = Object.freeze(["unit", "integration", "fast"]);
+export const scopes = Object.freeze(["unit", "integration", "fast", "cloud"]);
 // Whole mixed files stay integration: actual OS/compiler semantics or real
 // production collaborators, despite their legacy unit-directory placement.
 export const integrationUnitFiles = Object.freeze([
@@ -185,7 +186,32 @@ export function planTests(scope, files) {
     if (!packages.length) throw Error("TEST_SCOPE_EMPTY:" + id);
     plan.push({ id, runner: "go", cwd, packages, timeoutMs: 180000 });
   };
-  if (scope === "unit" || scope === "fast") {
+  let cloud;
+  if (scope === "cloud") {
+    cloud = cloudSelection([...classified.nodeUnit, ...classified.integration]);
+    const mixed = new Map(cloud.mixedFiles.map((entry) => [entry.file, entry]));
+    const ordinary = cloud.selected.filter((file) => !mixed.has(file));
+    for (let start = 0; start < ordinary.length; start += 64) {
+      vitest(
+        "node-cloud-" + String(start / 64 + 1).padStart(2, "0"),
+        ordinary.slice(start, start + 64),
+      );
+      plan.at(-1).timeoutMs = 300000;
+      plan.at(-1).workers = 2;
+    }
+    for (const entry of cloud.mixedFiles) {
+      vitest("node-cloud-mixed-" + String(plan.length + 1), [entry.file]);
+      plan.at(-1).testNamePattern = cloudPattern(entry);
+    }
+    vitest("renderer-unit", classified.renderer, "vitest.renderer.config.ts");
+    plan.push({
+      id: "node-git-cloud",
+      runner: "node",
+      cwd: ".",
+      files: [...nodeSelftests],
+      timeoutMs: 60000,
+    });
+  } else if (scope === "unit" || scope === "fast") {
     const selected =
       scope === "fast"
         ? [...new Set([...classified.nodeUnit, ...fastIntegrationFiles])]
@@ -221,10 +247,22 @@ export function planTests(scope, files) {
       dependencies: "Already installed locally; no automatic acquisition",
       integrationHost: "Current native suites require macOS and system Git",
     },
+    ...(cloud
+      ? {
+          artifactGates:
+            "NOT RUN: build-bound Hunt report, full native coverage, package, installed/live",
+          deferredFiles: cloud.deferredFiles,
+          mixedSelections: cloud.mixedFiles,
+          goChecks:
+            "Separate task test:core includes all root/nested Go race/vet",
+        }
+      : {}),
     claim:
-      scope === "fast"
-        ? "unit/component plus explicitly fast browser-free integration"
-        : scope + " only",
+      scope === "cloud"
+        ? "Portable source selection only; deferred native/resource and mixed coverage is NOT RUN"
+        : scope === "fast"
+          ? "unit/component plus explicitly fast browser-free integration"
+          : scope + " only",
     limits: [
       "No assembled-product E2E, installed or live qualification",
       "Standalone native/browser .e2e.mjs witnesses remain separate explicit entrypoints",

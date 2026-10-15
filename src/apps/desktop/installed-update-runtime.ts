@@ -63,6 +63,7 @@ import type {
 } from "./installed-predecessor";
 import { originalPredecessorSettingsReadable } from "./beta3-state-readability";
 import { treeDigest } from "../../pkg/artifact-tree-digest/digest";
+import { installedGoSlotBindingHelper } from "../../../apps/desktop/installed-slot-binding-helper";
 
 import {
   captureInstalledExecutionSnapshot,
@@ -1583,6 +1584,9 @@ export type InstalledUpdateRuntimeOptions = Readonly<{
   directory: string;
   userData: string;
   build: BuildIdentity;
+  // Independent builder declaration from the trusted host. Absent only for
+  // explicit legacy/controller composition; a selected Go failure never falls back.
+  goCoreArtifact?: unknown;
   // Selected by the trusted supervisory caller, never renderer request data.
   // This is a source for the existing staging/retention owner, not a Ready record.
   localArchive?: Readonly<{ path: string; manifest: unknown }>;
@@ -1936,6 +1940,46 @@ async function createRuntime(
     if (!execution) await readAcceptedSource();
     if (!execution) throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
     return execution;
+  };
+  let bindingExecution: Promise<InstalledExecutionSnapshot> | undefined;
+  const selectBindingHelper = async (
+    expected: z.infer<typeof AcceptedBuild>,
+    beforeEffect: () => void,
+  ) => {
+    if (options.goCoreArtifact === undefined) return bindingHelper;
+    beforeEffect();
+    let captured = await requireExecution();
+    if (!captured && !supervised) {
+      if (!options.physicalFiles)
+        throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
+      // Legacy owned slots also need an immutable image for this Go capability.
+      // Reuse the existing image custody owner; never execute a mutable slot.
+      bindingExecution ??= captureInstalledExecutionSnapshot({
+        sourceApp: actualApp,
+        sourceExecutable: process.execPath,
+        privateParent: root,
+        expectedDigest: expected.digest,
+        copyApp: options.copyApp,
+        physicalFiles: options.physicalFiles,
+      });
+      captured = await bindingExecution;
+    }
+    if (captured && captured.digest !== expected.digest)
+      throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
+    const image = captured;
+    return installedGoSlotBindingHelper({
+      compiledArtifact: options.goCoreArtifact,
+      build: options.build,
+      directory: image?.directory ?? options.directory,
+      recheck: async () => {
+        beforeEffect();
+        if (image) await image.recheck();
+        else if (!supervised || (await supervised.verifyResources()) !== true)
+          throw new Error("UPDATE_SUPERVISOR_RESOURCES_CHANGED");
+        beforeEffect();
+      },
+      beforeEffect,
+    });
   };
   const context = (directory: string) => {
     const verifier = createUpdatePackageVerifier({
@@ -3900,9 +3944,9 @@ async function createRuntime(
         const priorAdmission = keepAdmission;
         keepAdmission = true;
         bindingPublicationUnknown = true;
-        await wait(() =>
+        await wait(async () =>
           publishInstalledOperationBinding(
-            bindingHelper,
+            await selectBindingHelper(source, ensureActive),
             preparing,
             installLocation,
             ensureActive,

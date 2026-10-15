@@ -61,6 +61,7 @@ var codes = map[string]bool{
 	"WORKSPACE_ROOT_CHANGED": true, "WORKSPACE_NOT_FOUND": true,
 	"WORKSPACE_RACE_DETECTED": true, "WORKSPACE_HELPER_FAILED": true,
 	"WORKSPACE_FILE_TOO_LARGE": true, "WORKSPACE_NOT_TEXT": true, "WORKSPACE_NOT_A_FILE": true,
+	"WORKSPACE_SEARCH_TIMEOUT": true,
 }
 var sources = map[string]bool{
 	"computer-approval": true, "authority-store": true,

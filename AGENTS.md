@@ -17,6 +17,14 @@ schemas are compatibility boundaries. Do not rename them as a source-layout fix.
 - The Go modules are `modules/{computer,task,chat,release}`. Existing TypeScript
   `agent` behavior moves to `task` only where it represents coding-task delegation.
   `Turn` belongs to `chat`; Browser, Responses/SSE, IPC, and MCP are adapters.
+- Canonical module specifications and indexes are under
+  [docs/reference/modules/](docs/reference/modules/README.md); keep ordinary
+  product, contract, design and technical documentation under `docs/`, without
+  redirect README files in source packages. Follow the
+  [documentation layout](docs/development/documentation.md) for asset-custody
+  exceptions and frozen historical material. Run `npm run docs:check` after
+  documentation or path changes; new module Markdown requires a documented
+  machine requirement, not another canonical copy.
 - Pure `domain` and `app` depend on values and consumer-owned ports, without host
   APIs, networking, filesystem, ambient clocks, or concrete infrastructure. Root
   `boot/` composes Go; `src/boot/` composes the remaining TypeScript slices.
@@ -60,6 +68,19 @@ schemas are compatibility boundaries. Do not rename them as a source-layout fix.
   coverage only where it remains applicable to the new bytes; never mark failed
   or outcome-unknown evidence as passed. Accepted-main advancement requires the
   applicable aggregate and risk-based acceptance gates to be closed.
+- **Owner-authorized Cloud source merge:** on Linux, use `task ci:cloud` plus
+  independent review of the exact source range. This source gate records deferred
+  native/resource files and mixed-case coverage as NOT RUN; it does not satisfy
+  full `ci:fast`, native coverage, packaging or installed acceptance. Missing Mac
+  hardware alone does not block reviewed portable source from reaching main.
+  Keep full native CI and all attestation, hook, confinement and unknown-effect
+  predicates unchanged. Fix actual portable failures before source integration.
+  After checks and review pass, the Lead merges the existing PR and verifies main;
+  creating a PR is an intermediate delivery step, not the completion boundary.
+  If the formal Critic host driver lacks lifecycle primitives, use fresh actual
+  native reviewers with the configured cumulative role/model/effort ladder and
+  retain their exact source coverage/findings; do not invent driver/close receipts
+  or label that evidence as a qualified formal-driver run. Lead owns acceptance.
 - **Final/package/release candidate:** run the applicable full CI, native, package,
   installation/live and release gates against exact committed bytes. Preserve
   separate evidence for source acceptance, packaging, installation and live use.

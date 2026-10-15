@@ -44,7 +44,7 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (*StartRespon
 		var response *StartResponse
 		err := s.withCurrent(ctx, func() error { response = &StartResponse{s.intent.OperationID, handle}; return nil })
 		if err != nil {
-			return nil, err
+			return nil, fail("PROCESS_OUTCOME_UNKNOWN", true)
 		}
 		return response, nil
 	}
@@ -86,11 +86,12 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (*StartRespon
 	s.child = child
 	s.handle = handle
 	s.gate.Unlock()
-	// Lost disclosure does not forget the exact owning child or replay its start.
+	// Lost disclosure cannot classify an already dispatched effect as refused.
+	// Keep the exact owning child for collection without replaying its start.
 	var response *StartResponse
 	err = s.withCurrent(ctx, func() error { response = &StartResponse{s.intent.OperationID, handle}; return nil })
 	if err != nil {
-		return nil, err
+		return nil, fail("PROCESS_OUTCOME_UNKNOWN", true)
 	}
 	return response, nil
 }

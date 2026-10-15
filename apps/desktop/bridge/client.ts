@@ -752,8 +752,49 @@ export class Client {
   }
 }
 
-// Trusted host selection only. The profile qualifier is held for the exact
-// backend lifetime; this object never comes from renderer IPC or an RPC body.
+// Trusted launcher input only, naming the existing native host slot and temp
+// parent. Neither field comes from renderer IPC or a read request.
+export type NativeCodexReadSelection = Readonly<{
+  hostId: "codex";
+  trustedTemp: string;
+}>;
+
+// Copy only this optional launcher value, without invoking caller accessors.
+// Go validates path semantics; this projection issues no Task/native authority.
+export function copyNativeCodexReadLaunch(
+  launch: object,
+): NativeCodexReadSelection | undefined {
+  const refuse = (): never => {
+    throw new BridgeError("refused", "invalid_codex_read_launch");
+  };
+  const field = Object.getOwnPropertyDescriptor(launch, "codexRead");
+  if (field === undefined) {
+    if (Reflect.has(launch, "codexRead")) refuse();
+    return undefined;
+  }
+  if (!Object.hasOwn(field, "value")) refuse();
+  const value: unknown = field.value;
+  if (value === undefined) return undefined;
+  if (typeof value !== "object" || value === null) return refuse();
+  const fields = Object.getOwnPropertyDescriptors(value);
+  const keys = Reflect.ownKeys(fields);
+  if (
+    keys.length !== 2 ||
+    !Object.hasOwn(fields, "hostId") ||
+    !Object.hasOwn(fields, "trustedTemp") ||
+    !Object.hasOwn(fields.hostId!, "value") ||
+    !Object.hasOwn(fields.trustedTemp!, "value") ||
+    fields.hostId!.value !== "codex" ||
+    typeof fields.trustedTemp!.value !== "string"
+  )
+    return refuse();
+  return Object.freeze({
+    hostId: "codex",
+    trustedTemp: fields.trustedTemp!.value as string,
+  });
+}
+
+// The profile qualifier is held for this exact trusted backend lifetime.
 export interface NativeCoreLaunch {
   readonly profile: QualifiedProfileLaunch;
   readonly ownerId: string;
@@ -763,6 +804,7 @@ export interface NativeCoreLaunch {
   readonly previousHostDrainConfirmed?: boolean;
   readonly hostLifetimeId?: string;
   readonly childLaunchId?: string;
+  readonly codexRead?: NativeCodexReadSelection;
   // Produced by the independently verified packaged host. The private Go
   // decoder binds these bytes to this exact profile/build/host/child launch.
   readonly shellMetadata?: Uint8Array;
@@ -790,6 +832,7 @@ export async function spawnCore(
   let child: ChildProcessWithoutNullStreams;
   let shellMetadata: Buffer | undefined;
   try {
+    const codexRead = native ? copyNativeCodexReadLaunch(native) : undefined;
     if (!isAbsolute(executable))
       throw new BridgeError("refused", "executable_path_required");
     if (
@@ -860,6 +903,13 @@ export async function spawnCore(
     if (native?.previousHostDrainConfirmed === true)
       args.push("--previous-host-drain-confirmed");
     if (native?.settingsMutations === true) args.push("--settings-mutations");
+    if (codexRead)
+      args.push(
+        "--codex-read-host",
+        codexRead.hostId,
+        "--codex-read-temp",
+        codexRead.trustedTemp,
+      );
     if (native?.shellMetadata !== undefined) {
       if (
         !(native.shellMetadata instanceof Uint8Array) ||

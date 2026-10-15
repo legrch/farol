@@ -895,6 +895,7 @@ async function initializeInstalledUpdater(): Promise<void> {
       directory,
       userData: app.getPath("userData"),
       build: buildIdentity,
+      ...(compiledGoCore === null ? {} : { goCoreArtifact: compiledGoCore }),
       physicalFiles: rawFs,
       ...(installedResourcesOrigin
         ? { resourcesOrigin: installedResourcesOrigin }
@@ -9139,40 +9140,56 @@ async function configureAdmittedProduct(
     }
     case "computer.search-workspace": {
       const selected = verifiedProductWorkspace(command.workspaceId);
-      if (selected.status === "not_found") {
+      if (selected.status === "not_found")
         return configurationFailure("WORKSPACE_NOT_FOUND");
-      }
-      if (selected.status === "not_verified") {
+      if (selected.status === "not_verified")
         return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
+      const snapshot = configuration.snapshot();
+      if (snapshot.status !== "ready")
+        return configurationFailure("SETTINGS_UNAVAILABLE");
+      if (!desktopGoCore) return configurationFailure("WORKSPACE_READ_FAILED");
+      try {
+        const result = await desktopGoCore.searchSettingsWorkspace(
+          snapshot.settings.computer.generation,
+          selected.workspace.workspaceId,
+          command.relativePath,
+          command.pattern,
+        );
+        const current = configuration.snapshot();
+        const identity = selected.workspace.rootIdentity;
+        if (
+          result.root.path !== selected.workspace.root ||
+          result.root.device !== identity.device ||
+          result.root.inode !== identity.inode ||
+          current.status !== "ready" ||
+          current.settings.computer.generation !==
+            snapshot.settings.computer.generation
+        )
+          return configurationFailure("WORKSPACE_ROOT_CHANGED");
+        return ProductConfigurationResultSchema.parse({
+          ok: true,
+          snapshot: current,
+          evidence: {
+            kind: "computer.workspace-search",
+            workspaceId: selected.workspace.workspaceId,
+            relativePath: command.relativePath,
+            pattern: command.pattern,
+            matches: result.matches.map((match) => ({
+              ...match,
+              line: Number(match.line),
+            })),
+            resultLimited: result.resultLimited,
+            scanLimited: result.scanLimited,
+          },
+        });
+      } catch (error) {
+        // A failed selected Go read never dispatches the legacy Python helper.
+        return workspaceReadFailure(
+          error instanceof BridgeError && error.state === "refused"
+            ? error.code
+            : "WORKSPACE_READ_FAILED",
+        );
       }
-      const result = await nativeWorkspace.execute({
-        workspace: workspaceDescriptor(
-          selected.workspace,
-          selected.workspace.rootIdentity,
-        ),
-        operation: {
-          kind: "workspace.search",
-          relativePath: command.relativePath,
-          pattern: command.pattern,
-        },
-      });
-      if (!result.ok) return workspaceReadFailure(result.error.code);
-      if (result.value.kind !== "workspace.matches") {
-        return configurationFailure("WORKSPACE_READ_FAILED");
-      }
-      return ProductConfigurationResultSchema.parse({
-        ok: true,
-        snapshot: configuration.snapshot(),
-        evidence: {
-          kind: "computer.workspace-search",
-          workspaceId: selected.workspace.workspaceId,
-          relativePath: command.relativePath,
-          pattern: command.pattern,
-          matches: result.value.matches,
-          resultLimited: result.value.resultLimited,
-          scanLimited: result.value.scanLimited,
-        },
-      });
     }
     case "computer.run-git-status":
     case "computer.run-git-head": {
