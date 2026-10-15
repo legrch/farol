@@ -5,7 +5,10 @@ import {
   ProductSettingsSchema,
   type ProductSettings,
 } from "../../src/pkg/product-settings/contract.ts";
-import { validate, type TaskCodexSource } from "../../apps/desktop/bridge/wire.ts";
+import {
+  validate,
+  type TaskCodexSource,
+} from "../../apps/desktop/bridge/wire.ts";
 
 // Trusted host mapping only. Saved source evidence issues no approval, Task
 // admission, account or native qualification. Root supplies profile/host/scratch

@@ -86,8 +86,8 @@ it("preserves the exact baseline producer with only its bridge import and origin
     .slice(2)
     .join("\n");
   const original = preserved.replace(
-    'from "../../apps/desktop/bridge/wire.ts"',
-    'from "./bridge/wire.ts"',
+    'import {\n  validate,\n  type TaskCodexSource,\n} from "../../apps/desktop/bridge/wire.ts";',
+    'import { validate, type TaskCodexSource } from "./bridge/wire.ts";',
   );
   expect(createHash("sha256").update(original).digest("hex")).toBe(
     "536d9ff6ef93c7e3cb03fc0c37c6b94c440746bb4d91a6f7b5390eb87d882bac",
