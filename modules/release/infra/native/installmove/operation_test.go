@@ -314,13 +314,18 @@ func TestFenceRechecksAndRefusal(t *testing.T) {
 	for _, exchange := range []bool{false, true} {
 		for _, scenario := range []string{"source", "target", "parent-mode", "refusal", "cancel", "deadline"} {
 			t.Run(map[bool]string{false: "rename/", true: "exchange/"}[exchange]+scenario, func(t *testing.T) {
+				if scenario == "deadline" {
+					t.Parallel()
+				}
 				f := newFixture(t, exchange, false)
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				refused := errors.New("owner fence refusal")
+				fenceEntered := false
 				calls := 0
 				b := &faultBackend{backend: testNative(), moveFn: func(int, string, int, string, bool) error { calls++; return nil }}
-				fence := func(context.Context) error {
+				fence := func(fenceCtx context.Context) error {
+					fenceEntered = true
 					switch scenario {
 					case "source":
 						if err := os.Rename(f.path(f.left), filepath.Join(f.root, "original")); err != nil {
@@ -343,14 +348,18 @@ func TestFenceRechecksAndRefusal(t *testing.T) {
 					case "cancel":
 						cancel()
 					case "deadline":
-						<-ctx.Done()
+						deadline, ok := fenceCtx.Deadline()
+						if !ok || fenceCtx.Err() != nil || !time.Now().Before(deadline) {
+							t.Fatal("fixture deadline expired before entering owner fence")
+						}
+						<-fenceCtx.Done()
 					}
 					return nil
 				}
 				o := f.operation(exchange, b, fence)
 				if scenario == "deadline" {
 					var stop context.CancelFunc
-					ctx, stop = context.WithTimeout(ctx, 10*time.Millisecond)
+					ctx, stop = context.WithDeadline(ctx, time.Now().Add(expiryFixtureBudget))
 					defer stop()
 				}
 				err := o.Run(ctx)
@@ -364,6 +373,9 @@ func TestFenceRechecksAndRefusal(t *testing.T) {
 						t.Fatal(err)
 					}
 				case "deadline":
+					if !fenceEntered {
+						t.Fatal("fixture deadline expired before entering owner fence")
+					}
 					if err != context.DeadlineExceeded {
 						t.Fatal(err)
 					}
@@ -456,7 +468,7 @@ func TestUnknownAndUnsupportedNativeErrors(t *testing.T) {
 
 func TestPostEffectFailuresAreUncertain(t *testing.T) {
 	for _, exchange := range []bool{false, true} {
-		for _, scenario := range []string{"cancel", "deadline", "readback", "readback-io", "first-sync", "second-sync", "sync-cancel", "post-sync-replaced"} {
+		for _, scenario := range []string{"cancel", "readback", "readback-io", "first-sync", "second-sync", "sync-cancel", "post-sync-replaced"} {
 			t.Run(map[bool]string{false: "rename/", true: "exchange/"}[exchange]+scenario, func(t *testing.T) {
 				f := newFixture(t, exchange, false)
 				ctx, cancel := context.WithCancel(context.Background())
@@ -472,9 +484,6 @@ func TestPostEffectFailuresAreUncertain(t *testing.T) {
 					done = true
 					if scenario == "cancel" {
 						cancel()
-					}
-					if scenario == "deadline" {
-						<-ctx.Done()
 					}
 					if scenario == "readback" {
 						if err := os.Rename(f.path(f.right), filepath.Join(f.root, "moved")); err != nil {
@@ -507,11 +516,6 @@ func TestPostEffectFailuresAreUncertain(t *testing.T) {
 					return native.sync(fd)
 				}
 				o := f.operation(exchange, b, nil)
-				if scenario == "deadline" {
-					var stop context.CancelFunc
-					ctx, stop = context.WithTimeout(ctx, 10*time.Millisecond)
-					defer stop()
-				}
 				err := o.Run(ctx)
 				code := "move_uncertain"
 				if exchange {
@@ -527,6 +531,72 @@ func TestPostEffectFailuresAreUncertain(t *testing.T) {
 				wantFailure(t, o.Run(context.Background()), "operation_consumed", true, false)
 			})
 		}
+	}
+}
+
+// Leave ample time for the physical prechecks under concurrent CI load. The
+// absolute deadline is chosen once before Run; no callback refreshes its budget.
+const expiryFixtureBudget = 5 * time.Second
+
+func TestOriginalDeadlineExpiresAfterDispatch(t *testing.T) {
+	for _, exchange := range []bool{false, true} {
+		t.Run(map[bool]string{false: "rename", true: "exchange"}[exchange], func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, exchange, false)
+			native := testNative()
+			var effective context.Context
+			var until time.Time
+			entered, succeeded := false, false
+			b := &faultBackend{backend: native, moveFn: func(l int, ln string, r int, rn string, x bool) error {
+				entered = true
+				if effective == nil || effective.Err() != nil || !time.Now().Before(until) {
+					t.Fatal("fixture deadline expired before native dispatch")
+				}
+				if err := native.move(l, ln, r, rn, x); err != nil {
+					return err
+				}
+				succeeded = true
+				// A real namespace effect has completed. Retain the synchronous
+				// backend call until its original absolute deadline actually expires.
+				<-effective.Done()
+				if effective.Err() != context.DeadlineExceeded || time.Now().Before(until) {
+					t.Fatal("original deadline did not expire inside native attempt")
+				}
+				return nil
+			}}
+			until = time.Now().Add(expiryFixtureBudget)
+			o, err := prepare(f.left, f.right, f.le, f.re, until, func(ctx context.Context) error {
+				deadline, ok := ctx.Deadline()
+				if !ok || !deadline.Equal(until) {
+					t.Fatal("original deadline changed before dispatch")
+				}
+				effective = ctx
+				return nil
+			}, exchange, b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = o.Run(context.Background())
+			if !entered || !succeeded {
+				t.Fatalf("fixture did not witness a successful native effect: entered=%v succeeded=%v error=%v", entered, succeeded, err)
+			}
+			code := "move_uncertain"
+			if exchange {
+				code = "exchange_uncertain"
+			}
+			wantFailure(t, err, code, true, false)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal("post-dispatch original deadline cause lost")
+			}
+			t.Log("witnessed native entry before original deadline, successful effect, and real deadline expiry inside native call")
+			assertEntry(t, f.right, f.le)
+			if exchange {
+				assertEntry(t, f.left, f.re)
+			} else {
+				assertAbsent(t, f.left)
+			}
+			wantFailure(t, o.Run(context.Background()), "operation_consumed", true, false)
+		})
 	}
 }
 
