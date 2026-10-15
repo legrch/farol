@@ -167,7 +167,7 @@ func (op *operation) check() error {
 // Capture cancellation alongside the exact dependency failure, never in its
 // place. The dependency's classification still decides the outer Failure.
 func dependencyCause(ctx context.Context, err error) error {
-	if canceled := ctx.Err(); canceled != nil && !errors.Is(err, canceled) {
+	if canceled := ctx.Err(); canceled != nil {
 		return errors.Join(err, canceled)
 	}
 	return err

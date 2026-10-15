@@ -467,6 +467,61 @@ func TestFinalSuccessGuardAndOpaqueClassifiedJoins(t *testing.T) {
 	}
 }
 
+type cyclicDependency struct{ unwraps int }
+
+func (*cyclicDependency) Error() string { return "private cyclic dependency" }
+func (e *cyclicDependency) Unwrap() error {
+	e.unwraps++
+	if e.unwraps > 128 {
+		panic("dependency unwrap exceeded conservative bound")
+	}
+	return e
+}
+
+// Inspect only direct children of bounded join nodes, never follow the cyclic
+// dependency's Unwrap or call errors.Is through that dependency graph.
+func hasDirectJoinedCause(err, want error) bool {
+	pending := []error{err}
+	for visited := 0; len(pending) > 0 && visited < 16; visited++ {
+		current := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if current == want {
+			return true
+		}
+		if joined, ok := current.(interface{ Unwrap() []error }); ok {
+			pending = append(pending, joined.Unwrap()...)
+		}
+	}
+	return false
+}
+
+func TestCanceledCyclicAndHugeDependencyGraphsCompleteConservatively(t *testing.T) {
+	cycle := &cyclicDependency{}
+	large := make([]error, 1024)
+	for i := range large {
+		large[i] = syscall.EIO
+	}
+	for name, cause := range map[string]error{"cycle": cycle, "huge join": errors.Join(large...)} {
+		t.Run(name, func(t *testing.T) {
+			s, runtime := fixtureCase(t, traceCases[0])
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			runtime.hook = func(string) error { cancel(); return cause }
+			phase, err := s.Reconcile(ctx)
+			failure := requireFailure(t, err, "internal", "refused", true, true)
+			if phase != "" || !reflect.DeepEqual(runtime.trace, []string{"phase"}) {
+				t.Fatal("failed dependency continued")
+			}
+			if !hasDirectJoinedCause(failure.Cause, cause) || !hasDirectJoinedCause(failure.Cause, context.Canceled) {
+				t.Fatal("exact dependency or concurrent cancellation cause lost")
+			}
+		})
+	}
+	if cycle.unwraps != 128 {
+		t.Fatal("unexpected cyclic traversal count", cycle.unwraps)
+	}
+}
+
 func TestEveryHistoricalLaunchPhasePreservesPhaseWithoutReplay(t *testing.T) {
 	for _, c := range []struct{ phase, pair string }{
 		{"verified", "t-s-"}, {"launch_requested", "t-s-"}, {"completed", "t-s-"},
