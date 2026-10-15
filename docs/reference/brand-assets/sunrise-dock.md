@@ -1,5 +1,7 @@
 # Sunrise Dock delivery pair
 
+Asset filenames in this record refer to [resources/brand/sunrise-dock/](../../../resources/brand/sunrise-dock/). The original asset and license files remain there; this move changes only the documentation location.
+
 Exact native Dock assets copied from the designer handoff
 `/Users/ac/code/farol-design/sunrise-dock-2026-10-06/`.
 

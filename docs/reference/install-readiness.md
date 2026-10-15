@@ -60,4 +60,4 @@ For each case, retain the exact source/package identity, destination measurement
 
 A baseline install result alone is not LaunchServices, GUI, provider or owner acceptance. After those gates close, replace the installation hold with the tested recipient procedure and update [status](status.md), [first installation](../start/installation.md) and [verification](documentation-verification.md) together.
 
-[Technical references](README.md) · [Release adoption contract](../../modules/release/adoption.md)
+[Technical references](README.md) · [Release adoption contract](modules/release/adoption.md)

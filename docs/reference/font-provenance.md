@@ -1,5 +1,7 @@
 # Design-lab font provenance
 
+Asset filenames in this record refer to [design-lab/fonts/](../../design-lab/fonts/). The original asset and license files remain there; this move changes only the documentation location.
+
 These fonts are used only by the nonshipping design lab, and only by the Watch Rail direction's
 type study. Every file is an unmodified copy from the npm registry package named below, fetched on
 2026-09-15 with `npm pack`, which verified the registry integrity hash. Each family is licensed

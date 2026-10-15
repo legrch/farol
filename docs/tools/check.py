@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Check public-reader documentation links and command references offline.
+"""Check documentation placement, local links and reader commands offline.
 
-Adapted from docs/github-guide at 1b2643cf. Historical redirect, dependency-table
-and full-tree policy checks are intentionally outside this focused scope.
+Adapted from docs/github-guide at 1b2643cf. Frozen archives retain their original
+links. Strict prose/command checks apply only to the declared reader pages.
 """
 
 import argparse
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -15,6 +16,9 @@ from urllib.parse import unquote, urlsplit
 LINK = re.compile(r"!?\[[^\]]*\]\((<[^>]+>|[^\s)]+)(?:\s+\"[^\"]*\")?\)")
 FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})(.*)$")
 HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*#*\s*$", re.M)
+HTML_LINK = re.compile(r'<(?:a|img)\b[^>]*?\b(?:href|src)="([^"]+)"', re.I)
+REFERENCE = re.compile(r'^ {0,3}\[([^\]]+)\]:\s*(<[^>]+>|\S+)', re.M)
+REFERENCE_USE = re.compile(r'!?\[([^\]\n]+)\]\[([^\]\n]*)\]')
 PRIVATE = [
     (re.compile(r"/(?:Users|home)/[^\s/]+/"), "owner-specific path"),
 ]
@@ -62,6 +66,55 @@ REFERENCES = (
     "README.md", "status.md", "install-readiness.md", "documentation-verification.md",
 )
 PROPOSED_TASKS = {"test", "qualify:live"}
+FROZEN_CONTENT = (
+    "docs/archive/distribution-20261010/originals/",
+    "docs/archive/coordinator-20261010/frozen/",
+)
+
+
+def inventory(root):
+    """Include tracked and new nonignored files; never walk dependencies/output."""
+    result = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        check=True, capture_output=True,
+    )
+    return sorted({name for name in result.stdout.decode().split("\0")
+                   if name and Path(name).suffix.lower() == ".md" and (root / name).is_file()})
+
+
+def link_targets(prose):
+    yield from (match[1].strip("<>") for match in LINK.finditer(prose))
+    yield from (match[1] for match in HTML_LINK.finditer(prose))
+    references = {match[1].casefold(): match[2].strip("<>") for match in REFERENCE.finditer(prose)}
+    # Definitions are checked even when unused. Shortcut uses resolve to the
+    # same target; explicit/collapsed uses must also name a definition.
+    yield from references.values()
+
+
+def missing_references(prose):
+    references = {match[1].casefold() for match in REFERENCE.finditer(prose)}
+    for match in REFERENCE_USE.finditer(prose):
+        label = (match[2] or match[1]).casefold()
+        if label not in references:
+            yield label
+
+
+def placement_errors(root, names, exceptions):
+    errors = []
+    for name in names:
+        if name in {"README.md", "AGENTS.md"} or name.startswith("docs/"):
+            continue
+        entry = exceptions.get(name)
+        if not isinstance(entry, dict) or not entry.get("reason") or not entry.get("index"):
+            errors.append(f"{name}: ordinary Markdown belongs under docs/; document any machine-required exception")
+            continue
+        index = (root / entry["index"]).resolve()
+        if not index.is_relative_to(root / "docs") or not index.is_file() or name not in index.read_text():
+            errors.append(f"{name}: placement exception lacks a canonical index entry")
+    for name in exceptions:
+        if name not in names:
+            errors.append(f"{name}: stale placement exception")
+    return errors
 
 
 def selected_files(root):
@@ -75,8 +128,10 @@ def selected_files(root):
 def check(root):
     root = root.resolve()
     files = selected_files(root)
-    errors = []
-    totals = {"pages": len(files), "links": 0, "commands": 0, "inbound": 0}
+    names = inventory(root)
+    exceptions = json.loads((root / "docs/tools/placement-exceptions.json").read_text())
+    errors = placement_errors(root, names, exceptions)
+    totals = {"pages": len(files), "documents": len(names), "links": 0, "commands": 0, "inbound": 0}
     package = json.loads((root / "package.json").read_text())
     tasks = set(re.findall(r"^  ([\w:-]+):\s*$", (root / "Taskfile.yml").read_text(), re.M))
     cache = {}
@@ -89,17 +144,20 @@ def check(root):
     def issue(file, message):
         errors.append(f"{file.relative_to(root)}: {message}")
 
-    def local_links(file, inbound_only=False):
-        prose = read(file)[0]
-        for match in LINK.finditer(prose):
-            target = match[1].strip("<>")
+    def local_links(file):
+        # Inline code can contain regexes such as `[A-Z][A-Z0-9_]*`; it is not
+        # a Markdown link. Keep the original prose for heading-anchor parsing.
+        prose = re.sub(r"(`+).*?\1", "", read(file)[0], flags=re.S)
+        for label in missing_references(prose):
+            issue(file, f"missing reference definition: {label}")
+        for target in link_targets(prose):
             parsed = urlsplit(target)
             if parsed.scheme or parsed.netloc:
                 continue
             destination = (file.parent / unquote(parsed.path)).resolve() if parsed.path else file
-            if inbound_only and destination != root / "README.md":
-                continue
-            totals["inbound" if inbound_only else "links"] += 1
+            totals["links"] += 1
+            if destination == root / "README.md" and file not in files:
+                totals["inbound"] += 1
             if not destination.is_relative_to(root):
                 issue(file, f"link escapes repository: {target}")
             elif not destination.exists():
@@ -117,7 +175,6 @@ def check(root):
         for pattern, reason in PRIVATE:
             if pattern.search(file.read_text()):
                 issue(file, reason)
-        local_links(file)
         for snippet in code:
             for task in re.findall(r"\btask\s+([A-Za-z][\w:-]*)", snippet):
                 totals["commands"] += 1
@@ -139,28 +196,28 @@ def check(root):
                 if not (root / script).is_file() and dependency not in declared:
                     issue(file, f"missing Node entrypoint: {script}")
 
-    for file in sorted((root / "docs").rglob("*.md")):
-        if "archive" in file.relative_to(root / "docs").parts or file in files:
+    for name in names:
+        if name.startswith(FROZEN_CONTENT):
             continue
-        local_links(file, inbound_only=True)
+        local_links(root / name)
     return errors, totals
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2],
-                        help="Repository root; checks declared reader pages and inbound README links")
+                        help="Repository root; checks placement/all non-frozen links and declared reader commands")
     args = parser.parse_args()
     try:
         errors, totals = check(args.root)
-    except (OSError, ValueError, KeyError, TypeError) as error:
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         print(f"Documentation check refused: {error}", file=sys.stderr)
         return 1
     if errors:
         print("\n".join(errors), file=sys.stderr)
         print(f"FAIL: {len(errors)} documentation issue(s)", file=sys.stderr)
         return 1
-    print(f"PASS: {totals['pages']} reader pages, {totals['links']} local links/anchors, "
+    print(f"PASS: {totals['documents']} Markdown documents, {totals['pages']} reader pages, {totals['links']} local links/anchors, "
           f"{totals['commands']} command references, {totals['inbound']} inbound README links")
     return 0
 

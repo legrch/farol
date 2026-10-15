@@ -1,5 +1,7 @@
 # Signal / Color native icon assets
 
+Asset filenames in this record refer to [resources/brand/signal-color/](../../../resources/brand/signal-color/). The original asset and license files remain there; this move changes only the documentation location.
+
 The owner selected this fixed Color identity on 2026-10-02. The approval is
 `icon-study-2026-10-02/APPROVAL.md` in the design handoff. This self-contained
 source set requires no sibling checkout to regenerate. `approved.png` is the

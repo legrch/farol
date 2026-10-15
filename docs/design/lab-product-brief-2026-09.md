@@ -1,5 +1,7 @@
 # Farol Next design-lab product brief
 
+This historical September 2026 lab record retains its original status and scope. Relative prototype paths refer to [design-lab/](../../design-lab/); use the [current renderer contract](../desktop/renderer.md) for present source behavior and acceptance limits.
+
 Status: `OWNER_DIRECTION_CHOSEN` · Watch Rail, Iris, Geist; production integration not started
 
 This brief scopes the reversible visual prototype. It does not redefine Farol Next, change

@@ -14,7 +14,7 @@ These pages explain source contracts and evidence. They are separate from the [u
 
 - [Architecture](../architecture.md), [Desktop/Core](../desktop-core.md) and [design](../design.md).
 - [Computer capabilities and evidence](../computer-parity.md), [workspace context](../computer-workspace-context.md) and [access policy](../sandbox-approvals.md).
-- [Computer module](../../modules/computer/connector.md), [Chat module](../../modules/chat/README.md), [Task module](../../modules/task/README.md) and [Release module](../../modules/release/README.md).
+- [Go module indexes](modules/README.md): [Computer](modules/computer/README.md), [Chat](modules/chat/README.md), [Task](modules/task/README.md) and [Release](modules/release/README.md).
 - [Model routing](../model-routing.md), [configuration/model discovery](../config-model-discovery.md), [persistent handoff](../persistent-chat-handoff-parity.md) and [Claude candidate](../claude-handoff-candidate.md).
 - [Agent workflow proposal](../agent-workflows/README.md), [inference](../inference/README.md) and [model capability routing](../model-capabilities/README.md). Presence in this list is not activation.
 

@@ -1,5 +1,7 @@
 # Farol Next design-lab specification
 
+This historical September 2026 lab record retains its original status and scope. Relative prototype paths refer to [design-lab/](../../design-lab/); use the [current renderer contract](../desktop/renderer.md) for present source behavior and acceptance limits.
+
 Status: `OWNER_DIRECTION_CHOSEN` · production integration not started
 
 Five preserved directions, one owner decision, now made. On 2026-09-16 the owner chose
@@ -167,7 +169,7 @@ the document text, and the Waiting, Failed, and Unavailable lamps all reach at l
 Display headings use weight 600 with tight tracking instead of the heavier, rounder 700-plus
 settings of the first lab. Monospace is reserved for identifiers, times, keys, the address, and
 the dossier state word. The bundled fonts are unmodified copies from npm packages, recorded with
-integrity hashes and licences in `fonts/PROVENANCE.md`; they load locally under the lab's
+integrity hashes and licences in [font provenance](../reference/font-provenance.md); they load locally under the lab's
 connection-blocking policy. Choosing a bundled face for the product needs the owner's decision
 and the licence notice in the shipped app.
 

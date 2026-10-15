@@ -1,12 +1,14 @@
 # Farol brand assets
 
-The current raster/Dock/package source is [Sunrise](sunrise/README.md), selected
+Asset filenames in this record refer to [resources/brand/](../../resources/brand/). The original asset and license files remain there; this move changes only the documentation location.
+
+The current raster/Dock/package source is [Sunrise](brand-assets/sunrise.md), selected
 as the owner's current direction on October 6, 2026. `tooling/brand-contract.mjs`
 maps its exact source-local master to both raster output names and its ICNS to
 the existing package resource name. Light and dark use identical artwork.
 Native/package acceptance is separate from the offline resource checks.
 
-The following lamp provenance and the [Signal / Color](signal-color/README.md)
+The following lamp provenance and the [Signal / Color](brand-assets/signal-color.md)
 record describe historical resources. They remain preserved; their original
 approval records and frozen packages are not changed by the Sunrise mapping.
 

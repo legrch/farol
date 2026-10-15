@@ -17,6 +17,14 @@ schemas are compatibility boundaries. Do not rename them as a source-layout fix.
 - The Go modules are `modules/{computer,task,chat,release}`. Existing TypeScript
   `agent` behavior moves to `task` only where it represents coding-task delegation.
   `Turn` belongs to `chat`; Browser, Responses/SSE, IPC, and MCP are adapters.
+- Canonical module specifications and indexes are under
+  [docs/reference/modules/](docs/reference/modules/README.md); keep ordinary
+  product, contract, design and technical documentation under `docs/`, without
+  redirect README files in source packages. Follow the
+  [documentation layout](docs/development/documentation.md) for asset-custody
+  exceptions and frozen historical material. Run `npm run docs:check` after
+  documentation or path changes; new module Markdown requires a documented
+  machine requirement, not another canonical copy.
 - Pure `domain` and `app` depend on values and consumer-owned ports, without host
   APIs, networking, filesystem, ambient clocks, or concrete infrastructure. Root
   `boot/` composes Go; `src/boot/` composes the remaining TypeScript slices.

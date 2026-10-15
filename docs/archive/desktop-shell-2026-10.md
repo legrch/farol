@@ -14,7 +14,7 @@ October 2 UI approval and Dock-pending statements describe that historical
 snapshot; they do not replace current implementation or asset authority.
 
 Current shipping Dock assets are the exact **Sunrise delivery pair**, governed by
-[its resource notes](../../resources/brand/sunrise-dock/README.md) and the pinned
+[its resource notes](../reference/brand-assets/sunrise-dock.md) and the pinned
 [brand contract](../../tooling/brand-contract.mjs). Restoring this archive does
 not change those assets, source mappings, bundle identities or package inputs.
 Iris Glass, Prism and Aurora Enamel in `assets/dock-v4/` remain explicitly rejected

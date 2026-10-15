@@ -24,3 +24,5 @@ Farol gives a connected ChatGPT app access to selected folders on a Mac. Start w
 [Current capability status](reference/status.md) distinguishes the public release, installed observations, source candidates and planned work. [First-install readiness](reference/install-readiness.md) is the concrete blocker checklist for the Lead.
 
 [Development](development/README.md) covers source setup, verification and contributions. [Technical references](reference/README.md) retain architecture, contracts and historical acceptance evidence. [Documentation verification](reference/documentation-verification.md) records this guide's source pins and remaining product acceptance.
+
+[Go module documentation](reference/modules/README.md) indexes Computer, Chat, Task and Release contracts. [Design records](design/README.md) distinguish current presentation from historical studies and asset provenance. Follow the [documentation layout](development/documentation.md) when adding or moving a document.

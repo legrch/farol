@@ -72,7 +72,7 @@ shell qualification currently fails its stronger hardlink-alias guard; HOME/Git
 and descendant settlement also remain open. Explicit legacy launch fixtures
 remain separate, and a failed Go launch never falls back to them. See the
 [current Computer evidence](../../docs/computer-parity.md#current-go-dev-evidence)
-and [connector contract](../../modules/computer/connector.md).
+and [connector contract](modules/computer/connector.md).
 
 Current source uses the existing authority Store and Settings publication for
 automatic renewal under unchanged owner consent. Bounded transport recovery

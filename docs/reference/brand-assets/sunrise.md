@@ -1,5 +1,7 @@
 # Sunrise source resources
 
+Asset filenames in this record refer to [resources/brand/sunrise/](../../../resources/brand/sunrise/). The original asset and license files remain there; this move changes only the documentation location.
+
 This is the current Sunrise artwork referenced by `farol-design/README.md` and
 `CURRENT-DESIGN.md`, with the owner preference recorded on 2026-10-06. It does
 not rewrite the historical Signal / Color approval. Home remains a separate

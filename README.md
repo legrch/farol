@@ -80,4 +80,4 @@ Use [Connection troubleshooting](docs/guides/troubleshooting.md) for helper, tun
 
 ## Development and contributing
 
-The [development guide](docs/development/README.md) covers source setup, checks and contributions. After `task package` builds a verified packaged candidate, `task run` opens its isolated launch snapshot; `task dev` is the separate development lane. [Technical references](docs/reference/README.md) retain architecture and historical evidence. The [install-readiness checklist](docs/reference/install-readiness.md) tracks the work needed for a supported first installation.
+The [development guide](docs/development/README.md) covers source setup, checks and contributions. After `task package` builds a verified packaged candidate, `task run` opens its isolated launch snapshot; `task dev` is the separate development lane. [Technical references](docs/reference/README.md) and the [Go module indexes](docs/reference/modules/README.md) retain architecture, contracts and historical evidence. The [install-readiness checklist](docs/reference/install-readiness.md) tracks the work needed for a supported first installation.
