@@ -1,8 +1,7 @@
-package settingsworkspace
+package browse
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -13,71 +12,6 @@ import (
 	"github.com/legrch/farol/modules/computer/domain/authority"
 )
 
-// These are pure port fixtures, not native filesystem or publication evidence.
-type testClock struct{ now time.Time }
-
-func (c *testClock) Now() time.Time { return c.now }
-
-type currentFunc func(context.Context, func(*authority.Approval) error) error
-
-func (f currentFunc) WithCurrent(ctx context.Context, cb func(*authority.Approval) error) error {
-	return f(ctx, cb)
-}
-
-type nativeFixture struct {
-	calls int
-	list  func(context.Context, port.ListRequest) (*port.ListResponse, error)
-}
-
-func (n *nativeFixture) Read(context.Context, port.ReadRequest) (*port.ReadResponse, error) {
-	panic("owner list must never read")
-}
-func (n *nativeFixture) List(ctx context.Context, r port.ListRequest) (*port.ListResponse, error) {
-	n.calls++
-	return n.list(ctx, r)
-}
-
-type fixture struct {
-	approval     authority.Approval
-	clock        *testClock
-	native       *nativeFixture
-	service      *Service
-	currentCalls int
-	afterCurrent func(int, *authority.Approval, error) error
-}
-
-func newFixture() *fixture {
-	now := time.UnixMilli(1800000000000)
-	f := &fixture{clock: &testClock{now: now}, approval: authority.Approval{
-		OwnerID: "owner", ComputerID: "computer", Generation: 7,
-		Workspaces: []authority.ApprovedWorkspace{{WorkspaceID: "work", Root: "/work", Access: authority.ReadAccess,
-			RootIdentity: authority.RootIdentity{Device: "12", Inode: "34"},
-			GitMetadata:  &authority.GitMetadata{GitDirectory: "/work/.git", CommonDirectory: "/work/.git"}}},
-		Capabilities: []authority.Capability{authority.List}, Network: authority.NoNetwork, Commands: authority.NoCommands,
-		ExpiresAt: now.Add(time.Hour),
-	}}
-	f.native = &nativeFixture{list: func(_ context.Context, r port.ListRequest) (*port.ListResponse, error) {
-		return &port.ListResponse{Binding: &port.DirectoryBinding{RelativePath: r.RelativePath, Root: r.Workspace.Root, ApprovedRoot: r.Workspace.ApprovedRoot}, Entries: []string{"file.txt", "folder/"}}, nil
-	}}
-	f.service = New(currentFunc(func(_ context.Context, cb func(*authority.Approval) error) error {
-		f.currentCalls++
-		snapshot := f.approval.Clone()
-		err := cb(&snapshot)
-		if f.afterCurrent != nil {
-			return f.afterCurrent(f.currentCalls, &snapshot, err)
-		}
-		return err
-	}), f.native, f.clock)
-	return f
-}
-func request() Request { return Request{WorkspaceID: "work", RelativePath: "."} }
-func assertFailure(t *testing.T, result *Result, err error, code string) {
-	t.Helper()
-	var failure *authority.Failure
-	if result != nil || !errors.As(err, &failure) || failure == nil || failure.Code != code {
-		t.Fatalf("result=%+v error=%v, want %s", result, err, code)
-	}
-}
 func TestBoundListAndIndependentCopies(t *testing.T) {
 	f := newFixture()
 	f.approval.ExcludedPaths = []authority.Exclusion{{WorkspaceID: "work", Path: "/work/secret"}}
@@ -116,7 +50,7 @@ func TestAdmissionRefusals(t *testing.T) {
 	cases := []struct {
 		name, code string
 		change     func(*fixture)
-		req        Request
+		req        ListQuery
 	}{
 		{"missing list", "AUTHORITY_CAPABILITY_DENIED", func(f *fixture) { f.approval.Capabilities = []authority.Capability{authority.Read} }, request()},
 		{"empty capabilities", "AUTHORITY_CAPABILITY_DENIED", func(f *fixture) { f.approval.Capabilities = nil }, request()},
@@ -124,17 +58,17 @@ func TestAdmissionRefusals(t *testing.T) {
 		{"expiry exact", "AUTHORITY_EXPIRED", func(f *fixture) { f.approval.ExpiresAt = f.clock.now }, request()},
 		{"excluded alias", "AUTHORITY_PATH_DENIED", func(f *fixture) {
 			f.approval.ExcludedPaths = []authority.Exclusion{{WorkspaceID: "work", Path: "/work/Café"}}
-		}, Request{WorkspaceID: "work", RelativePath: "CAFE\u0301/child"}},
+		}, ListQuery{WorkspaceID: "work", RelativePath: "CAFE\u0301/child"}},
 		{"excluded loose alias", "AUTHORITY_PATH_DENIED", func(f *fixture) {
 			f.approval.ExcludedPaths = []authority.Exclusion{{WorkspaceID: "work", Path: "/work/Café"}}
-		}, Request{WorkspaceID: "work", RelativePath: "CAFE"}},
-		{"traversal", "COMPUTER_INVALID_REQUEST", nil, Request{WorkspaceID: "work", RelativePath: "../private"}},
-		{"absolute", "COMPUTER_INVALID_REQUEST", nil, Request{WorkspaceID: "work", RelativePath: "/work"}},
-		{"empty path", "COMPUTER_INVALID_REQUEST", nil, Request{WorkspaceID: "work"}},
-		{"long component", "COMPUTER_INVALID_REQUEST", nil, Request{WorkspaceID: "work", RelativePath: strings.Repeat("x", 256)}},
+		}, ListQuery{WorkspaceID: "work", RelativePath: "CAFE"}},
+		{"traversal", "COMPUTER_INVALID_REQUEST", nil, ListQuery{WorkspaceID: "work", RelativePath: "../private"}},
+		{"absolute", "COMPUTER_INVALID_REQUEST", nil, ListQuery{WorkspaceID: "work", RelativePath: "/work"}},
+		{"empty path", "COMPUTER_INVALID_REQUEST", nil, ListQuery{WorkspaceID: "work"}},
+		{"long component", "COMPUTER_INVALID_REQUEST", nil, ListQuery{WorkspaceID: "work", RelativePath: strings.Repeat("x", 256)}},
 		{"root binding absent", "COMPUTER_APPROVAL_INVALID", func(f *fixture) { f.approval.Workspaces[0].RootIdentity.Inode = "" }, request()},
 		{"duplicate workspace", "COMPUTER_APPROVAL_INVALID", func(f *fixture) { f.approval.Workspaces = append(f.approval.Workspaces, f.approval.Workspaces[0]) }, request()},
-		{"unknown workspace", "AUTHORITY_PATH_DENIED", nil, Request{WorkspaceID: "other", RelativePath: "."}},
+		{"unknown workspace", "AUTHORITY_PATH_DENIED", nil, ListQuery{WorkspaceID: "other", RelativePath: "."}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -301,54 +235,6 @@ func TestMalformedNativeOutput(t *testing.T) {
 		assertFailure(t, out, err, "WORKSPACE_HELPER_FAILED")
 	})
 }
-func TestCallbackProtocol(t *testing.T) {
-	for _, phase := range []int{1, 2} {
-		for _, kind := range []string{"skipped", "repeated", "mutated", "mutated expiry", "error after success", "swallowed error"} {
-			t.Run(kind+string(rune('0'+phase)), func(t *testing.T) {
-				f := newFixture()
-				calls := 0
-				f.service.current = currentFunc(func(_ context.Context, cb func(*authority.Approval) error) error {
-					calls++
-					a := f.approval.Clone()
-					if calls != phase {
-						return cb(&a)
-					}
-					switch kind {
-					case "skipped":
-						return nil
-					case "repeated":
-						_ = cb(&a)
-						_ = cb(&a)
-						return nil
-					case "mutated":
-						err := cb(&a)
-						a.Workspaces[0].GitMetadata.CommonDirectory = "/mutated"
-						return err
-					case "mutated expiry":
-						err := cb(&a)
-						a.ExpiresAt = a.ExpiresAt.Add(time.Hour)
-						return err
-					case "error after success":
-						_ = cb(&a)
-						return errors.New("private diagnostics")
-					default:
-						_ = cb(nil)
-						return nil
-					}
-				})
-				out, err := f.service.List(context.Background(), request())
-				code := "COMPUTER_AUTHORITY_STORE_UNAVAILABLE"
-				if kind == "swallowed error" {
-					code = "COMPUTER_APPROVAL_NOT_FOUND"
-				}
-				assertFailure(t, out, err, code)
-				if phase == 1 && f.native.calls != 0 {
-					t.Fatal("native dispatch after broken callback")
-				}
-			})
-		}
-	}
-}
 func TestNilAndCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -419,35 +305,6 @@ func TestNativeBoundedCases(t *testing.T) {
 		}
 	}
 }
-func TestCurrentPortRefusalBeforeCallback(t *testing.T) {
-	for _, phase := range []int{1, 2} {
-		f := newFixture()
-		calls := 0
-		f.service.current = currentFunc(func(_ context.Context, cb func(*authority.Approval) error) error {
-			calls++
-			if calls == phase {
-				return authority.Fail("AUTHORITY_COMPUTER_MISMATCH", "computer-policy")
-			}
-			a := f.approval.Clone()
-			return cb(&a)
-		})
-		out, err := f.service.List(context.Background(), request())
-		assertFailure(t, out, err, "AUTHORITY_COMPUTER_MISMATCH")
-		if phase == 1 && f.native.calls != 0 {
-			t.Fatal("dispatched after current refusal")
-		}
-	}
-}
-func TestCallbackErrorCannotBeSwallowed(t *testing.T) {
-	f := newFixture()
-	f.approval.Capabilities = nil
-	f.afterCurrent = func(_ int, _ *authority.Approval, _ error) error { return nil }
-	out, err := f.service.List(context.Background(), request())
-	assertFailure(t, out, err, "AUTHORITY_CAPABILITY_DENIED")
-	if f.native.calls != 0 {
-		t.Fatal("swallowed policy error dispatched")
-	}
-}
 func TestNativeErrorWithOutputRefuses(t *testing.T) {
 	f := newFixture()
 	list := f.native.list
@@ -485,27 +342,6 @@ func TestCancellationDuringIOAndAfterFinalCallback(t *testing.T) {
 		assertFailure(t, out, err, "WORKSPACE_REQUEST_CANCELLED")
 	}
 }
-func TestMissingDependencies(t *testing.T) {
-	for _, replace := range []func(*fixture){func(f *fixture) { f.service.native = nil }, func(f *fixture) { f.service.clock = nil }, func(f *fixture) { f.service.current = nil }} {
-		f := newFixture()
-		replace(f)
-		out, err := f.service.List(context.Background(), request())
-		assertFailure(t, out, err, "COMPUTER_AUTHORITY_STORE_UNAVAILABLE")
-	}
-}
-func TestLateCallbackCannotExecute(t *testing.T) {
-	f := newFixture()
-	var late func(*authority.Approval) error
-	f.service.current = currentFunc(func(_ context.Context, cb func(*authority.Approval) error) error { late = cb; return nil })
-	out, err := f.service.List(context.Background(), request())
-	assertFailure(t, out, err, "COMPUTER_AUTHORITY_STORE_UNAVAILABLE")
-	if err := late(&f.approval); err == nil {
-		t.Fatal("late callback admitted")
-	}
-	if f.native.calls != 0 {
-		t.Fatal("late dispatch")
-	}
-}
 func TestSelectedDirectoryBindingAndExclusions(t *testing.T) {
 	f := newFixture()
 	f.approval.ExcludedPaths = []authority.Exclusion{{WorkspaceID: "work", Path: "/work/selected/secret"}}
@@ -516,7 +352,7 @@ func TestSelectedDirectoryBindingAndExclusions(t *testing.T) {
 		}
 		return list(ctx, r)
 	}
-	out, err := f.service.List(context.Background(), Request{WorkspaceID: "work", RelativePath: "selected"})
+	out, err := f.service.List(context.Background(), ListQuery{WorkspaceID: "work", RelativePath: "selected"})
 	if err != nil || out == nil || out.RelativePath != "selected" || out.Root.Path != "/work" {
 		t.Fatalf("%+v %v", out, err)
 	}

@@ -8,8 +8,8 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	computerport "github.com/legrch/farol/modules/computer/app/port"
-	settingssvc "github.com/legrch/farol/modules/computer/app/services/settingsworkspace"
-	settingsct "github.com/legrch/farol/modules/computer/contracts/settingsworkspace"
+	browsesvc "github.com/legrch/farol/modules/computer/app/services/browse"
+	browsect "github.com/legrch/farol/modules/computer/contracts/browse"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	accessrepo "github.com/legrch/farol/modules/computer/infra/repos/access"
 	"github.com/legrch/farol/pkg/ipc"
@@ -100,7 +100,7 @@ func (s *ComputerIngress) settingsAuthority(ctx context.Context, requested wire.
 	return &settingsApproval{root: s, store: store, publication: publication}, nil
 }
 
-func (s *ComputerIngress) settingsContract(ctx context.Context, requested wire.ComputerAuthorityPublication) (*settingsct.Contract, error) {
+func (s *ComputerIngress) settingsContract(ctx context.Context, requested wire.ComputerAuthorityPublication) (*browsect.Contract, error) {
 	current, err := s.settingsAuthority(ctx, requested)
 	if err != nil {
 		return nil, err
@@ -109,7 +109,7 @@ func (s *ComputerIngress) settingsContract(ctx context.Context, requested wire.C
 	if clock == nil {
 		clock = accessrepo.Clock{}
 	}
-	return settingsct.New(settingssvc.New(current, s.native, clock)), nil
+	return browsect.New(browsesvc.New(current, s.native, clock)), nil
 }
 
 func (s *ComputerIngress) settingsList(ctx context.Context, in wire.ComputerSettingsListRequest) (*wire.ComputerSettingsListResponse, error) {
@@ -123,7 +123,7 @@ func (s *ComputerIngress) settingsList(ctx context.Context, in wire.ComputerSett
 	if err != nil {
 		return nil, err
 	}
-	result, err := contract.List(ctx, settingsct.Request{WorkspaceID: in.WorkspaceId, RelativePath: in.RelativePath})
+	result, err := contract.List(ctx, browsect.ListRequest{WorkspaceID: in.WorkspaceId, RelativePath: in.RelativePath})
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +155,7 @@ func (s *ComputerIngress) settingsListMethod() desktop.Method {
 			return invalidIngress()
 		}
 		value, err := s.settingsList(ctx, body)
-		var failure *settingsct.Failure
+		var failure *browsect.Failure
 		if errors.As(err, &failure) {
 			return &desktop.Outcome{Status: "refused", Code: failure.Code}, nil
 		}
@@ -176,7 +176,7 @@ func (s *ComputerIngress) settingsSnapshot(ctx context.Context, in wire.Computer
 	if err != nil {
 		return nil, err
 	}
-	result, err := contract.Snapshot(ctx, settingsct.Request{WorkspaceID: in.WorkspaceId, RelativePath: in.RelativePath})
+	result, err := contract.Snapshot(ctx, browsect.SnapshotRequest{WorkspaceID: in.WorkspaceId, RelativePath: in.RelativePath})
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +197,7 @@ func (s *ComputerIngress) settingsSnapshotMethod() desktop.Method {
 			return invalidIngress()
 		}
 		value, err := s.settingsSnapshot(ctx, body)
-		var failure *settingsct.Failure
+		var failure *browsect.Failure
 		if errors.As(err, &failure) {
 			return &desktop.Outcome{Status: "refused", Code: failure.Code}, nil
 		}

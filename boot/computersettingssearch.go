@@ -7,7 +7,7 @@ import (
 	"strconv"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
-	settingsct "github.com/legrch/farol/modules/computer/contracts/settingsworkspace"
+	browsect "github.com/legrch/farol/modules/computer/contracts/browse"
 	"github.com/legrch/farol/pkg/ipc"
 	"github.com/legrch/farol/transport/desktop"
 )
@@ -23,7 +23,7 @@ func (s *ComputerIngress) settingsSearch(ctx context.Context, in wire.ComputerSe
 	if err != nil {
 		return nil, err
 	}
-	out, err := contract.Search(ctx, settingsct.SearchRequest{WorkspaceID: in.WorkspaceId, RelativePath: in.RelativePath, Pattern: in.Pattern})
+	out, err := contract.Search(ctx, browsect.SearchRequest{WorkspaceID: in.WorkspaceId, RelativePath: in.RelativePath, Pattern: in.Pattern})
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +53,7 @@ func (s *ComputerIngress) settingsSearchMethod() desktop.Method {
 			return invalidIngress()
 		}
 		value, err := s.settingsSearch(ctx, body)
-		var failure *settingsct.Failure
+		var failure *browsect.Failure
 		if errors.As(err, &failure) {
 			return &desktop.Outcome{Status: "refused", Code: failure.Code}, nil
 		}

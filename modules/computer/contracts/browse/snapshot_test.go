@@ -1,4 +1,4 @@
-package settingsworkspace
+package browse
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/legrch/farol/modules/computer/app/port"
-	app "github.com/legrch/farol/modules/computer/app/services/settingsworkspace"
+	app "github.com/legrch/farol/modules/computer/app/services/browse"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 )
 
@@ -45,7 +45,7 @@ func TestSnapshotIndependentMetadataDTO(t *testing.T) {
 	digest := sha256.Sum256([]byte(raw))
 	hash := hex.EncodeToString(digest[:])
 	n := &snapshotReader{output: &port.ReadResponse{Text: strings.TrimPrefix(raw, "\ufeff"), Bytes: uint64(len(raw)), SHA256: hash}}
-	req := Request{WorkspaceID: "work", RelativePath: "file.txt"}
+	req := SnapshotRequest{WorkspaceID: "work", RelativePath: "file.txt"}
 	out, err := snapshotContract(n).Snapshot(context.Background(), req)
 	if err != nil || out == nil || out.WorkspaceID != req.WorkspaceID || out.RelativePath != req.RelativePath || out.Root != (Root{Path: "/work", Device: "12", Inode: "34"}) || out.Bytes != uint64(len(raw)) || out.SHA256 != hash || n.calls != 1 {
 		t.Fatalf("%+v %v", out, err)
@@ -61,7 +61,7 @@ func TestSnapshotIndependentMetadataDTO(t *testing.T) {
 	if len(fields) != 5 || fields["WorkspaceID"] == nil || fields["RelativePath"] == nil || fields["Root"] == nil || fields["Bytes"] == nil || fields["SHA256"] == nil || strings.Contains(string(encoded), "private") {
 		t.Fatalf("metadata projection: %s", encoded)
 	}
-	if reflect.TypeFor[SnapshotResult]() == reflect.TypeFor[app.SnapshotResult]() || reflect.TypeFor[Request]() == reflect.TypeFor[app.Request]() || reflect.TypeFor[Root]() == reflect.TypeFor[port.Root]() {
+	if reflect.TypeFor[SnapshotResponse]() == reflect.TypeFor[app.SnapshotResult]() || reflect.TypeFor[SnapshotRequest]() == reflect.TypeFor[app.SnapshotQuery]() || reflect.TypeFor[Root]() == reflect.TypeFor[port.Root]() {
 		t.Fatal("implementation DTO escaped")
 	}
 	n.output.Bytes = 0
@@ -90,7 +90,7 @@ func TestSnapshotContractFailures(t *testing.T) {
 	for i, tc := range cases {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
 			n := &snapshotReader{err: tc.err, output: &port.ReadResponse{Text: "private"}}
-			out, err := snapshotContract(n).Snapshot(context.Background(), Request{WorkspaceID: "work", RelativePath: "file.txt"})
+			out, err := snapshotContract(n).Snapshot(context.Background(), SnapshotRequest{WorkspaceID: "work", RelativePath: "file.txt"})
 			var f *Failure
 			if out != nil || !errors.As(err, &f) || f == nil || f.Code != tc.code || f.Source != tc.source || f.Retry != "never" || strings.Contains(err.Error(), "private") || n.calls != 1 {
 				t.Fatalf("%+v %v", out, err)
@@ -98,14 +98,14 @@ func TestSnapshotContractFailures(t *testing.T) {
 		})
 	}
 	for _, c := range []*Contract{nil, New(nil)} {
-		out, err := c.Snapshot(context.Background(), Request{})
+		out, err := c.Snapshot(context.Background(), SnapshotRequest{})
 		var f *Failure
 		if out != nil || !errors.As(err, &f) || f.Code != "COMPUTER_AUTHORITY_STORE_UNAVAILABLE" || f.Source != "authority-store" || f.Retry != "never" {
 			t.Fatalf("%+v %v", out, err)
 		}
 	}
 	t.Run("nil native output", func(t *testing.T) {
-		out, err := snapshotContract(&snapshotReader{}).Snapshot(context.Background(), Request{WorkspaceID: "work", RelativePath: "file.txt"})
+		out, err := snapshotContract(&snapshotReader{}).Snapshot(context.Background(), SnapshotRequest{WorkspaceID: "work", RelativePath: "file.txt"})
 		var f *Failure
 		if out != nil || !errors.As(err, &f) || f.Code != "WORKSPACE_HELPER_FAILED" {
 			t.Fatalf("%+v %v", out, err)
