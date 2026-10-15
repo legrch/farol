@@ -359,9 +359,9 @@ func waitActive(t *testing.T, c *Channels) {
 	t.Helper()
 	until := time.Now().Add(time.Second)
 	for time.Now().Before(until) {
-		c.mu.Lock()
-		ready := c.ackUsed && c.contUsed
-		c.mu.Unlock()
+		c.state.mu.Lock()
+		ready := c.state.ackUsed && c.state.contUsed
+		c.state.mu.Unlock()
 		if ready {
 			return
 		}
@@ -380,7 +380,7 @@ func TestLateWriteAndEOFNeverSucceed(t *testing.T) {
 			_ = cw.Close()
 			entered, release := make(chan struct{}), make(chan struct{})
 			var once sync.Once
-			c.afterIO = func(point string) {
+			c.state.afterIO = func(point string) {
 				if point == mode {
 					once.Do(func() { close(entered); <-release })
 				}
@@ -424,11 +424,11 @@ func TestLateWriteAndEOFNeverSucceed(t *testing.T) {
 func TestACKCloseFailureStaysUncertain(t *testing.T) {
 	_, aw := pipe(t)
 	c := take(t, aw, nil)
-	c.afterIO = func(point string) {
+	c.state.afterIO = func(point string) {
 		if point == "write" {
 			// Inject a lost close result after closing the exact owner. No detached
 			// fd is closed, and production has no hook.
-			c.ack.once.Do(func() { _ = c.ack.file.Close(); c.ack.err = unix.EIO })
+			c.state.ack.once.Do(func() { _ = c.state.ack.file.Close(); c.state.ack.err = unix.EIO })
 		}
 	}
 	outcome(t, c.Emit(context.Background(), time.Now().Add(time.Second), []byte("ack")), "ack_close", true)

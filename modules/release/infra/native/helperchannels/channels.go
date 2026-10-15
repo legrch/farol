@@ -48,9 +48,14 @@ func (o *owned) close() error {
 	return o.err
 }
 
-// Channels must not be copied. All operations, including invalid calls, are
-// one-shot; Close cancels and joins active operations before returning.
+// Channels wrappers share private ownership state even when copied. All
+// operations, including invalid calls, are one-shot; Close cancels and joins
+// active operations before returning. Nil and zero wrappers fail closed.
 type Channels struct {
+	state *channelState
+}
+
+type channelState struct {
 	mu                sync.Mutex
 	ack, continuation *owned
 	ackUsed, contUsed bool
@@ -107,7 +112,7 @@ func Take(ack, continuation *os.File) (*Channels, error) {
 			return fail("continue_channel")
 		}
 	}
-	return &Channels{ack: a, continuation: c, stop: make(chan struct{})}, nil
+	return &Channels{state: &channelState{ack: a, continuation: c, stop: make(chan struct{})}}, nil
 }
 
 // Only a confirmed stream socket may have linger changed, including cleanup of
@@ -183,7 +188,7 @@ func configure(o *owned, write bool) error {
 	return nativeErr
 }
 
-func (c *Channels) begin(ack bool) (*owned, error) {
+func (c *channelState) begin(ack bool) (*owned, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -208,7 +213,7 @@ func (c *Channels) begin(ack bool) (*owned, error) {
 	return c.continuation, nil
 }
 
-func (c *Channels) guard(ctx context.Context, until time.Time) string {
+func (c *channelState) guard(ctx context.Context, until time.Time) string {
 	if ctx == nil || until.IsZero() {
 		return "bounds"
 	}
@@ -232,7 +237,7 @@ func (c *Channels) guard(ctx context.Context, until time.Time) string {
 	return ""
 }
 
-func (c *Channels) pause(ctx context.Context, until time.Time) {
+func (c *channelState) pause(ctx context.Context, until time.Time) {
 	delay := min(pollInterval, time.Until(until))
 	if deadline, ok := ctx.Deadline(); ok {
 		delay = min(delay, time.Until(deadline))
@@ -248,7 +253,19 @@ func (c *Channels) pause(ctx context.Context, until time.Time) {
 
 // Emit attempts exactly one 1..4096-byte frame, then closes ACK to seal EOF.
 // Any partial/late write remains uncertain. No failure permits another attempt.
-func (c *Channels) Emit(ctx context.Context, until time.Time, frame []byte) (err error) {
+// The caller must not mutate frame concurrently with initial snapshot capture.
+// Subsequent waiting and native writes use only that bounded private snapshot.
+func (c *Channels) Emit(ctx context.Context, until time.Time, frame []byte) error {
+	if c == nil || c.state == nil {
+		return failure("closed", false)
+	}
+	if len(frame) >= 1 && len(frame) <= maxFrame {
+		frame = append([]byte(nil), frame...)
+	}
+	return c.state.emit(ctx, until, frame)
+}
+
+func (c *channelState) emit(ctx context.Context, until time.Time, frame []byte) (err error) {
 	o, err := c.begin(true)
 	if err != nil {
 		return err
@@ -318,7 +335,14 @@ func retryable(err error) bool {
 
 // AwaitContinue returns only 1..4096 bytes sealed by EOF within the original
 // bounds. Byte 4097, withheld EOF and late EOF fail without returning bytes.
-func (c *Channels) AwaitContinue(ctx context.Context, until time.Time) (frame []byte, err error) {
+func (c *Channels) AwaitContinue(ctx context.Context, until time.Time) ([]byte, error) {
+	if c == nil || c.state == nil {
+		return nil, failure("closed", false)
+	}
+	return c.state.awaitContinue(ctx, until)
+}
+
+func (c *channelState) awaitContinue(ctx context.Context, until time.Time) (frame []byte, err error) {
 	o, err := c.begin(false)
 	if err != nil {
 		return nil, err
@@ -387,6 +411,13 @@ func (c *Channels) AwaitContinue(ctx context.Context, until time.Time) (frame []
 // A nil result confirms cleanup only; an interrupted Emit may have exposed ACK
 // bytes and retains its own uncertain result. Close never grants replay.
 func (c *Channels) Close() error {
+	if c == nil || c.state == nil {
+		return failure("closed", false)
+	}
+	return c.state.close()
+}
+
+func (c *channelState) close() error {
 	c.closeOnce.Do(func() {
 		c.mu.Lock()
 		c.closed = true
