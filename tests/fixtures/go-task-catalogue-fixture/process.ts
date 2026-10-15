@@ -69,18 +69,39 @@ export async function startGoTaskCatalogueFixture() {
     else diagnostic += chunk.toString("utf8");
   });
   let pending:
-    { resolve(value: Reply): void; reject(error: Error): void } | undefined;
+    | {
+        resolve(value: Reply): void;
+        reject(error: Error): void;
+        timer?: NodeJS.Timeout;
+      }
+    | undefined;
+  let failure: Error | undefined;
+  let closing: Promise<void> | undefined;
+  const fail = (error: Error, active = pending) => {
+    failure ??= error;
+    const waiter = pending;
+    pending = undefined;
+    if (waiter?.timer) clearTimeout(waiter.timer);
+    if (active) {
+      if (active !== waiter && active.timer) clearTimeout(active.timer);
+      active.reject(failure);
+    }
+  };
+  // This reader is for the bounded local fixture process, not a generic
+  // parser for untrusted streams.
   const lines = createInterface({ input: child.stdout });
   lines.on("line", (line) => {
     const waiter = pending;
-    pending = undefined;
     if (!waiter) {
       overflow = true;
+      fail(new Error("fixture_unsolicited_reply"));
       return;
     }
     try {
-      if (Buffer.byteLength(line, "utf8") > 2 << 20)
+      if (Buffer.byteLength(line, "utf8") > 2 << 20) {
+        overflow = true;
         throw new Error("fixture_reply_too_large");
+      }
       const value = JSON.parse(line) as Reply;
       if (
         !value ||
@@ -90,25 +111,30 @@ export async function startGoTaskCatalogueFixture() {
           : Object.keys(value).length !== 1 || !("view" in value))
       )
         throw new Error("fixture_reply_invalid");
+      pending = undefined;
+      if (waiter.timer) clearTimeout(waiter.timer);
       waiter.resolve(value);
     } catch (error) {
-      waiter.reject(
+      fail(
         error instanceof Error ? error : new Error("fixture_reply_invalid"),
+        waiter,
       );
     }
   });
   const terminal = new Promise<{
     code: number | null;
     signal: NodeJS.Signals | null;
-  }>((resolve, reject) => {
-    child.once("error", reject);
+    error?: Error;
+  }>((resolve) => {
+    child.once("error", (error) => {
+      fail(error);
+    });
     child.once("close", (code, signal) => {
-      pending?.reject(new Error("fixture_exited_pending_reply"));
-      pending = undefined;
-      resolve({ code, signal });
+      if (!closing) fail(new Error("fixture_child_exited_unexpectedly"));
+      else if (pending) fail(new Error("fixture_exited_pending_reply"));
+      resolve({ code, signal, ...(failure ? { error: failure } : {}) });
     });
   });
-  let closing: Promise<void> | undefined;
   return {
     async describe(
       config: string,
@@ -117,26 +143,26 @@ export async function startGoTaskCatalogueFixture() {
     ): Promise<Reply> {
       if (pending || closing)
         throw new Error("fixture_request_lifecycle_invalid");
+      if (failure) throw failure;
       const request = JSON.stringify({ config, harness, catalogue }) + "\n";
       if (Buffer.byteLength(request, "utf8") > 2 << 20)
         throw new Error("fixture_request_too_large");
       return new Promise<Reply>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          pending = undefined;
-          reject(new Error("fixture_reply_timeout"));
-        }, 5000);
-        pending = {
+        const waiter: NonNullable<typeof pending> = {
           resolve: (value) => {
-            clearTimeout(timer);
             resolve(value);
           },
           reject: (error) => {
-            clearTimeout(timer);
             reject(error);
           },
         };
+        waiter.timer = setTimeout(
+          () => fail(new Error("fixture_reply_timeout"), waiter),
+          5000,
+        );
+        pending = waiter;
         child.stdin.write(request, (error) => {
-          if (error) pending?.reject(error);
+          if (error) fail(new Error("fixture_stdin_write_failed"));
         });
       });
     },
@@ -147,6 +173,8 @@ export async function startGoTaskCatalogueFixture() {
         try {
           const ended = await terminal;
           if (
+            failure ||
+            ended.error ||
             ended.code !== 0 ||
             ended.signal !== null ||
             diagnostic !== "" ||
