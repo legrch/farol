@@ -1,5 +1,16 @@
 # Persistent coding tasks
 
+## Reference documents
+
+- [Control contract](contracts/control.md)
+- [Observation contract](contracts/observation.md)
+- [Selected thread contract](contracts/selectedthread.md)
+- [Claude client](infra/clients/claude.md)
+- [Codex client](infra/clients/codex.md)
+- [Parent Chat peer](infra/peer/parent.md)
+- [Process peer](infra/peer/process.md)
+- [Workflow runtime](infra/workflowruntime.md)
+
 The optional trusted desktop launch pair `codexRead: { hostId: "codex",
 trustedTemp }` reaches Go through `--codex-read-host` and `--codex-read-temp`.
 Go validates the atomic pair and reuses the existing selected-thread reader,
