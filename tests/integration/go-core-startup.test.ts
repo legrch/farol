@@ -19,11 +19,33 @@ import type { BuildIdentity } from "../../src/pkg/build-info/identity";
 // The build declaration is synthetic test input, not package attestation. No
 // Electron window, provider or owner profile is exercised. Empty-owner reopen
 // uses actual origin retirement and child terminal observation through the host.
+const comparisonHosts = new WeakMap<
+  ProductConfigurationService,
+  DesktopGoCore
+>();
+function settingsOwner(
+  stateRoot: string,
+  home: string,
+): ProductConfigurationService {
+  const owner = new ProductConfigurationService(
+    new ProductSettingsStore({ root: stateRoot }),
+    {
+      homeDirectory: home,
+      taskSettingsCompare: (before, candidate) => {
+        const host = comparisonHosts.get(owner);
+        if (!host) throw new Error("TASK_CURRENT_SETTINGS_UNAVAILABLE");
+        return host.compareTaskSettings(before, candidate);
+      },
+    },
+  );
+  return owner;
+}
 function connectSettings(
   host: DesktopGoCore,
   configuration: ProductConfigurationService,
 ) {
   configuration.attachComputerAuthority(() => host.withdraw());
+  comparisonHosts.set(configuration, host);
   host.connectSettingsStore((profileId) => {
     const store = configuration.attachSettingsDeliveryStore({
       profileId,
@@ -113,10 +135,7 @@ it("starts the normal host with fresh default settings before any workspace is c
   const home = path.join(root, "home");
   fs.mkdirSync(stateRoot, { mode: 0o700 });
   fs.mkdirSync(home, { mode: 0o700 });
-  const configuration = new ProductConfigurationService(
-    new ProductSettingsStore({ root: stateRoot }),
-    { homeDirectory: home },
-  );
+  const configuration = settingsOwner(stateRoot, home);
   await configuration.initialize();
   const settings = () => {
     const snapshot = configuration.snapshot();
@@ -198,10 +217,7 @@ it("reopens the exact empty profile across actual graceful child lifetimes", asy
   const home = path.join(root, "reopen-home");
   fs.mkdirSync(stateRoot, { mode: 0o700 });
   fs.mkdirSync(home, { mode: 0o700 });
-  let configuration = new ProductConfigurationService(
-    new ProductSettingsStore({ root: stateRoot }),
-    { homeDirectory: home },
-  );
+  let configuration = settingsOwner(stateRoot, home);
   await configuration.initialize();
   const settings = () => {
     const value = configuration.snapshot();
@@ -226,10 +242,7 @@ it("reopens the exact empty profile across actual graceful child lifetimes", asy
   const generations = new Set<string>();
   for (let cycle = 0; cycle < 3; cycle++) {
     if (cycle > 0) {
-      configuration = new ProductConfigurationService(
-        new ProductSettingsStore({ root: stateRoot }),
-        { homeDirectory: home },
-      );
+      configuration = settingsOwner(stateRoot, home);
       await configuration.initialize();
     }
     const host = await startDesktopGoCore({
@@ -270,10 +283,7 @@ it("cleans a post-connect startup abort without publishing a retirement", async 
   const home = path.join(root, "aborted-home");
   fs.mkdirSync(stateRoot, { mode: 0o700 });
   fs.mkdirSync(home, { mode: 0o700 });
-  const configuration = new ProductConfigurationService(
-    new ProductSettingsStore({ root: stateRoot }),
-    { homeDirectory: home },
-  );
+  const configuration = settingsOwner(stateRoot, home);
   await configuration.initialize();
   const settings = () => {
     const value = configuration.snapshot();
@@ -328,10 +338,7 @@ it("saves Go pending before one native edit and reopens to exact Go result ACK",
   fs.writeFileSync(target, "one old fragment\n", { mode: 0o600 });
   const original = fs.readFileSync(target),
     beforeHash = createHash("sha256").update(original).digest("hex");
-  let configuration = new ProductConfigurationService(
-    new ProductSettingsStore({ root: stateRoot }),
-    { homeDirectory: home },
-  );
+  let configuration = settingsOwner(stateRoot, home);
   await configuration.initialize();
   const settings = () => {
     const v = configuration.snapshot();
@@ -420,10 +427,7 @@ it("saves Go pending before one native edit and reopens to exact Go result ACK",
       await host.close(); // Known durable effect may retain unacknowledged delivery.
     }
   })();
-  configuration = new ProductConfigurationService(
-    new ProductSettingsStore({ root: stateRoot }),
-    { homeDirectory: home },
-  );
+  configuration = settingsOwner(stateRoot, home);
   await configuration.initialize();
   const next = await startDesktopGoCore(selected);
   connectSettings(next, configuration);

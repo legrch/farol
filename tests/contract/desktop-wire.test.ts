@@ -17,6 +17,12 @@ import {
 } from "../../apps/desktop/bridge/client.ts";
 import { Decoder, frame, parseJSON } from "../../apps/desktop/bridge/frame.ts";
 import { TaskModelPolicyBridge } from "../../apps/desktop/bridge/task-model-policy.ts";
+import { TaskCurrentSettingsBridge } from "../../apps/desktop/bridge/task-current-settings.ts";
+import { taskSettingsProjection } from "../fixtures/task-settings-projection.ts";
+import {
+  currentTaskSettingsFixture,
+  taskSettingsChanges,
+} from "../fixtures/task-settings-cases.ts";
 import { resolveOwnerTaskModel } from "../../src/apps/desktop/owner-config.ts";
 import {
   ProductConfigurationService,
@@ -54,6 +60,77 @@ beforeAll(() => {
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
 
 describe("K0 real inherited-pipe process", () => {
+  it("selects Go Task comparison with all retained projection change vectors", async () => {
+    const client = await spawnCore(
+      executable,
+      "task-settings-profile",
+      "k0-test",
+      15_000,
+    );
+    try {
+      const bridge = new TaskCurrentSettingsBridge(client);
+      for (const [name, change] of taskSettingsChanges) {
+        const before = currentTaskSettingsFixture();
+        const candidate = structuredClone(before);
+        change(candidate);
+        const expected =
+          JSON.stringify(taskSettingsProjection(before)) !==
+          JSON.stringify(taskSettingsProjection(candidate));
+        expect(expected, name).toBe(true);
+        expect(await bridge.compare(before, candidate), name).toBe(expected);
+      }
+      const before = currentTaskSettingsFixture();
+      const candidate = structuredClone(before);
+      candidate.revision++;
+      candidate.general.activityDetail = "technical";
+      candidate.computer.name = "Changed UI label";
+      candidate.computer.workspaces[0]!.label = "Changed workspace label";
+      candidate.setup.computer.needsAction = "Changed UI wording";
+      expect(await bridge.compare(before, candidate)).toBe(false);
+
+      const unavailable = currentTaskSettingsFixture();
+      unavailable.nativeHosts.codex!.taskSource = null;
+      const changed = structuredClone(unavailable);
+      changed.nativeHosts.taskRoute!.socketPath = "/fixture/changed.sock";
+      expect(await bridge.compare(unavailable, changed)).toBe(true);
+
+      const noCodex = currentTaskSettingsFixture();
+      noCodex.tasks = {
+        defaultHarness: "other",
+        harnesses: {
+          other: {
+            defaultModel: "small",
+            models: { small: { model: "fixture-model" } },
+          },
+        },
+      };
+      const changedOther = structuredClone(noCodex);
+      changedOther.tasks = {
+        defaultHarness: "other",
+        harnesses: {
+          other: {
+            defaultModel: "small",
+            models: { small: { model: "changed-model" } },
+          },
+        },
+      };
+      expect(await bridge.compare(noCodex, changedOther)).toBe(true);
+
+      const invalid = currentTaskSettingsFixture();
+      invalid.tasks = { invalid: true };
+      const otherInvalid = structuredClone(invalid);
+      otherInvalid.tasks = { otherInvalid: true };
+      expect(await bridge.compare(invalid, otherInvalid)).toBe(false);
+      const missing = structuredClone(invalid);
+      delete missing.tasks;
+      expect(await bridge.compare(invalid, missing)).toBe(true);
+      expect((await client.request("task.resolve", {})).status).toBe(
+        "unavailable",
+      );
+    } finally {
+      await client.close();
+    }
+  });
   it("selects Go Task model policy over the real pipe with legacy semantic parity", async () => {
     const client = await spawnCore(
       executable,
@@ -126,6 +203,72 @@ describe("K0 real inherited-pipe process", () => {
       expect((await client.request("task.resolve", {})).status).toBe(
         "unavailable",
       );
+    } finally {
+      await client.closeAndObserve();
+    }
+  });
+  it("uses the Go comparison in the actual settings writer before native publication callbacks", async () => {
+    const client = await spawnCore(
+      executable,
+      "task-settings-writer",
+      "k0-test",
+      15_000,
+    );
+    try {
+      const bridge = new TaskCurrentSettingsBridge(client);
+      const events: string[] = [];
+      const compare = vi.fn(
+        async (...args: Parameters<TaskCurrentSettingsBridge["compare"]>) => {
+          events.push("compare:requested");
+          const changed = await bridge.compare(...args);
+          events.push("compare:returned");
+          return changed;
+        },
+      );
+      const store = new ProductSettingsStore({
+        root: join(directory, "task-comparison-settings"),
+      });
+      const owner = new ProductConfigurationService(store, {
+        taskSettingsCompare: compare,
+      });
+      await owner.initialize();
+      const save = store.save.bind(store);
+      vi.spyOn(store, "save").mockImplementation(async (...args) => {
+        events.push("save");
+        await save(...args);
+      });
+      owner.attachComputerAuthority(async () => {
+        events.push("withdraw");
+        return {
+          publish: async () => {
+            events.push("publish");
+          },
+        };
+      });
+      expect(
+        (
+          await owner.recordCodexHost({
+            executablePath: "/fixture/bin/codex",
+            executableSha256: "a".repeat(64),
+            version: "0.153.4",
+            protocol: "codex-app-server/v2",
+            schemaSha256: "b".repeat(64),
+            buildId: "c".repeat(64),
+          })
+        ).ok,
+      ).toBe(true);
+      expect(compare).toHaveBeenCalledOnce();
+      expect(events).toEqual([
+        "compare:requested",
+        "compare:returned",
+        "withdraw",
+        "save",
+        "publish",
+      ]);
+      const snapshot = owner.snapshot();
+      if (snapshot.status !== "ready")
+        throw new Error("Fixture settings unavailable");
+      expect(await store.load()).toEqual(snapshot.settings);
     } finally {
       await client.closeAndObserve();
     }

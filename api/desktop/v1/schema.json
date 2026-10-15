@@ -88,7 +88,8 @@
     "computer.process.cancel": "effect",
     "computer.connector.catalogueverify": "read",
     "computer.settings.search": "read",
-    "task.model.resolve": "read"
+    "task.model.resolve": "read",
+    "task.settings.compare": "read"
   },
   "definitions": {
     "Context": {
@@ -5201,6 +5202,41 @@
           "type": "string",
           "pattern": "^[a-f0-9]{64}$",
           "optional": true
+        }
+      }
+    },
+    "TaskCurrentSettingsCompareRequest": {
+      "type": "object",
+      "fields": {
+        "beforeRevision": {
+          "type": "decimal"
+        },
+        "candidateRevision": {
+          "type": "decimal"
+        },
+        "before": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 1048576
+        },
+        "candidate": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 1048576
+        }
+      }
+    },
+    "TaskCurrentSettingsCompareResponse": {
+      "type": "object",
+      "fields": {
+        "beforeRevision": {
+          "type": "decimal"
+        },
+        "candidateRevision": {
+          "type": "decimal"
+        },
+        "changed": {
+          "type": "boolean"
         }
       }
     }

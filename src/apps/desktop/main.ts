@@ -11355,6 +11355,18 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
           );
         return result;
       },
+      taskSettingsCompare: async (before, candidate) => {
+        const core = desktopGoCore;
+        if (!core)
+          throw new BridgeError(
+            "unavailable",
+            "host_task_settings_unavailable",
+          );
+        const changed = await core.compareTaskSettings(before, candidate);
+        if (desktopGoCore !== core)
+          throw new BridgeError("unavailable", "host_task_settings_changed");
+        return changed;
+      },
       // S35-N03d: the same cross-process lease `liveTaskRegistry` takes for
       // admission (same lease file, same "admission" role — see the guard
       // above), so a guarded edit's durable critical phase excludes a live

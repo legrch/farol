@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { fixtureTaskSettingsCompare } from "../fixtures/task-settings-projection.ts";
 import {
   ProductConfigurationService,
   ProductSettingsStore,
@@ -36,6 +37,7 @@ async function fixture() {
     id: () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`,
     homeDirectory: "/synthetic/home",
     withdrawComputerAuthority: withdraw,
+    taskSettingsCompare: fixtureTaskSettingsCompare,
   });
   await service.initialize();
   expect(service.snapshot().status).toBe("ready");

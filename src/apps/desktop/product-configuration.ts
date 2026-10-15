@@ -26,7 +26,7 @@ import {
 } from "../../pkg/product-settings/contract";
 import { credentialStorePolicy } from "../../modules/computer/infra/native/home-secret-stores";
 import { ownerSettingsComputerApproval } from "../../modules/computer/infra/repo/owner-settings-computer-approval";
-import { taskSettingsProjection } from "../../../apps/desktop/task-current-settings";
+import type { TaskSettingsComparator } from "../../../apps/desktop/bridge/task-current-settings";
 import {
   SettingsStoreUnsupported,
   settingsStoreSnapshot,
@@ -124,6 +124,7 @@ export type ComputerSettingsPublication = Readonly<{
 export type ProductConfigurationDependencies = Readonly<{
   withdrawComputerAuthority?: () => Promise<ComputerSettingsPublication>;
   taskModelPolicy?: TaskModelPolicyResolver;
+  taskSettingsCompare?: TaskSettingsComparator;
   now?: () => string;
   id?: () => string;
   // The owner's home, whose credential stores can never be approved as a
@@ -863,6 +864,7 @@ export class ProductConfigurationService {
   private tail: Promise<unknown> = Promise.resolve();
   private readonly promotionLease: WorkspaceEditLeaseGuard | undefined;
   private readonly taskModelPolicy: TaskModelPolicyResolver | undefined;
+  private readonly taskSettingsCompare: TaskSettingsComparator | undefined;
   private withdrawComputerAuthority: ProductConfigurationDependencies["withdrawComputerAuthority"];
   // The typed settings writer retains each admission lease through the native
   // edit outcome. The host finally wrapper releases it; conditional pending
@@ -882,6 +884,7 @@ export class ProductConfigurationService {
     this.homeDirectory = dependencies.homeDirectory ?? os.homedir();
     this.promotionLease = dependencies.promotionLease;
     this.taskModelPolicy = dependencies.taskModelPolicy;
+    this.taskSettingsCompare = dependencies.taskSettingsCompare;
     this.withdrawComputerAuthority = dependencies.withdrawComputerAuthority;
   }
 
@@ -1000,7 +1003,8 @@ export class ProductConfigurationService {
   ): Promise<SettingsStoreReplaceResult> {
     if (this.settingsDeliveryFenced) return { status: "unknown" };
     if (!this.current) return { status: "not_written" };
-    const before = structuredClone(this.current);
+    const original = this.current;
+    const before = structuredClone(original);
     let candidate: ProductSettings | undefined;
     try {
       this.assertSettingsDeliveryDeadline(deadlineMillis);
@@ -1021,11 +1025,12 @@ export class ProductConfigurationService {
         if (!lease || (lease.verify && !(await lease.verify())))
           return { status: "not_written" };
       }
-      const changed =
-        JSON.stringify(ownerSettingsComputerApproval(before, 0)) !==
-          JSON.stringify(ownerSettingsComputerApproval(candidate, 0)) ||
-        JSON.stringify(taskSettingsProjection(before)) !==
-          JSON.stringify(taskSettingsProjection(candidate));
+      const changed = await this.computerAuthorityChanged(
+        before,
+        candidate,
+        original,
+      );
+      this.assertSettingsDeliveryDeadline(deadlineMillis);
       let publication: ComputerSettingsPublication | undefined;
       if (changed && this.withdrawComputerAuthority) {
         try {
@@ -1042,14 +1047,19 @@ export class ProductConfigurationService {
         await this.fenceSettingsDeliveryStore();
         return { status: "unknown" };
       }
+      this.assertCurrentSettings(original);
+      this.assertSettingsDeliveryDeadline(deadlineMillis);
       const verify = lease?.verify?.bind(lease);
       storeCalled = true;
       const written = await this.store.saveConditional(before, candidate, {
         beforeWrite: async () => {
           if (verify && !(await verify())) throw new WorkspaceEditLeaseLost();
+          this.assertCurrentSettings(original);
         },
-        assertBeforePublication: () =>
-          this.assertSettingsDeliveryDeadline(deadlineMillis),
+        assertBeforePublication: () => {
+          this.assertCurrentSettings(original);
+          this.assertSettingsDeliveryDeadline(deadlineMillis);
+        },
       });
       if (written.status === "not_written") return written;
       this.assertSettingsDeliveryDeadline(deadlineMillis);
@@ -1092,6 +1102,10 @@ export class ProductConfigurationService {
         snapshot: settingsStoreSnapshot(written.settings, scope),
       };
     } catch {
+      if (this.settingsDeliveryFenced) {
+        await this.fenceSettingsDeliveryStore().catch(() => undefined);
+        return { status: "unknown" };
+      }
       if (!storeCalled) return { status: "not_written" };
       await this.fenceSettingsDeliveryStore().catch(() => undefined);
       return { status: "unknown" };
@@ -3162,6 +3176,37 @@ export class ProductConfigurationService {
     });
   }
 
+  private assertCurrentSettings(expected: ProductSettings): void {
+    if (this.current !== expected || this.settingsDeliveryFenced)
+      throw new Error("TASK_SETTINGS_SOURCE_CHANGED");
+  }
+
+  private async computerAuthorityChanged(
+    before: ProductSettings,
+    candidate: ProductSettings,
+    original: ProductSettings,
+  ): Promise<boolean> {
+    this.assertCurrentSettings(original);
+    // Before the native publication owner is attached there is no serving
+    // authority to withdraw. This is startup/local persistence, not TS policy.
+    if (!this.withdrawComputerAuthority) return false;
+    if (
+      JSON.stringify(ownerSettingsComputerApproval(before, 0)) !==
+      JSON.stringify(ownerSettingsComputerApproval(candidate, 0))
+    )
+      return true;
+    if (!this.taskSettingsCompare)
+      throw new Error("TASK_CURRENT_SETTINGS_UNAVAILABLE");
+    const changed = await this.taskSettingsCompare(
+      structuredClone(before),
+      structuredClone(candidate),
+    );
+    this.assertCurrentSettings(original);
+    if (typeof changed !== "boolean")
+      throw new Error("TASK_CURRENT_SETTINGS_UNAVAILABLE");
+    return changed;
+  }
+
   private commitComputerEvidence(
     transform: (settings: ProductSettings) => ProductSettings,
   ): Promise<MutationResult> {
@@ -3177,7 +3222,8 @@ export class ProductConfigurationService {
     allowProvenAppPendingResolution = false,
   ): Promise<MutationResult> {
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-    const before = structuredClone(this.fenceTaskSource(this.current));
+    const original = this.current;
+    const before = structuredClone(this.fenceTaskSource(original));
     let candidate: ProductSettings;
     try {
       const transformed = ProductSettingsSchema.parse(transform(before));
@@ -3216,14 +3262,15 @@ export class ProductConfigurationService {
           (pendingCleared && !allowProvenAppPendingResolution)))
     )
       return this.failure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
+    let storeCalled = false;
     try {
       // Compare every final policy projection, including indirect verification
       // invalidation. Command-name lists cannot cover all authority changes.
-      const changed =
-        JSON.stringify(ownerSettingsComputerApproval(before, 0)) !==
-          JSON.stringify(ownerSettingsComputerApproval(candidate, 0)) ||
-        JSON.stringify(taskSettingsProjection(before)) !==
-          JSON.stringify(taskSettingsProjection(candidate));
+      const changed = await this.computerAuthorityChanged(
+        before,
+        candidate,
+        original,
+      );
       let publication: ComputerSettingsPublication | undefined;
       if (changed && this.withdrawComputerAuthority) {
         try {
@@ -3235,7 +3282,18 @@ export class ProductConfigurationService {
           throw error;
         }
       }
-      await this.store.save(candidate, fence);
+      this.assertCurrentSettings(original);
+      storeCalled = true;
+      await this.store.save(candidate, {
+        beforeWrite: async () => {
+          await fence.beforeWrite?.();
+          this.assertCurrentSettings(original);
+        },
+        assertBeforePublication: () => {
+          this.assertCurrentSettings(original);
+          fence.assertBeforePublication?.();
+        },
+      });
       const readBack = await this.store.load();
       if (
         readBack === null ||
@@ -3265,6 +3323,7 @@ export class ProductConfigurationService {
         this.latchSettingsDeliveryLoss();
         return this.failure("SETTINGS_WRITE_FAILED");
       }
+      if (!storeCalled) return this.failure("SETTINGS_WRITE_FAILED");
       // The save may have landed before its read-back failed; what the disk
       // holds is the truth, and the snapshot taken before is only a fallback.
       const fallback = (await this.store.load().catch(() => null)) ?? before;
