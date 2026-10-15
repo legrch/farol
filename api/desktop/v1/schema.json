@@ -86,7 +86,8 @@
     "computer.process.start": "effect",
     "computer.process.read": "read",
     "computer.process.cancel": "effect",
-    "computer.connector.catalogueverify": "read"
+    "computer.connector.catalogueverify": "read",
+    "computer.settings.search": "read"
   },
   "definitions": {
     "Context": {
@@ -5070,6 +5071,61 @@
         },
         "workspaceCount": {
           "type": "uint32"
+        }
+      }
+    },
+    "ComputerSettingsSearchRequest": {
+      "type": "object",
+      "fields": {
+        "publication": {
+          "type": "ComputerAuthorityPublication"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "pattern": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        }
+      }
+    },
+    "ComputerSettingsSearchResponse": {
+      "type": "object",
+      "fields": {
+        "publication": {
+          "type": "ComputerAuthorityPublication"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "pattern": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "root": {
+          "type": "ComputerSettingsRoot"
+        },
+        "matches": {
+          "type": "json",
+          "description": "At most 100 ComputerSearchMatch values, validated by both adapters."
+        },
+        "resultLimited": {
+          "type": "boolean"
+        },
+        "scanLimited": {
+          "type": "boolean"
         }
       }
     }

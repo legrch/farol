@@ -272,12 +272,15 @@ function searchPath(value: string, root: boolean): boolean {
   );
 }
 
-function search(value: unknown, request: Json): ComputerSearch {
-  const data = dto<ComputerSearchResponse>("ComputerSearchResponse", value);
-  const scope = (request as unknown as ComputerSearchRequest).relativePath;
-  if (!Array.isArray(data.matches) || data.matches.length > 100)
+// Shared wire decoding only; permission and search execution remain in Go.
+export function parseComputerSearchMatches(
+  value: unknown,
+  scope: string,
+): readonly ComputerSearchMatch[] {
+  const values = snapshot(value);
+  if (!Array.isArray(values) || values.length > 100)
     throw Error("invalid_computer_search");
-  const matches = data.matches.map((value: unknown) => {
+  const matches = values.map((value: unknown) => {
     const match = dto<ComputerSearchMatch>("ComputerSearchMatch", value);
     if (
       !searchPath(match.path, false) ||
@@ -292,7 +295,16 @@ function search(value: unknown, request: Json): ComputerSearch {
       throw Error("invalid_computer_search");
     return match;
   });
-  return Object.freeze({ ...data, matches: Object.freeze(matches) });
+  return Object.freeze(matches);
+}
+
+function search(value: unknown, request: Json): ComputerSearch {
+  const data = dto<ComputerSearchResponse>("ComputerSearchResponse", value);
+  const scope = (request as unknown as ComputerSearchRequest).relativePath;
+  return Object.freeze({
+    ...data,
+    matches: parseComputerSearchMatches(data.matches, scope),
+  });
 }
 
 // Caller supplies an already selected, legitimate operation and verified context.

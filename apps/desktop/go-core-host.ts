@@ -261,6 +261,21 @@ export class DesktopGoCore {
       relativePath,
     );
   }
+  searchSettingsWorkspace(
+    computerGeneration: number,
+    workspaceId: string,
+    relativePath: string,
+    pattern: string,
+  ) {
+    if (this.closeResult)
+      throw new BridgeError("unavailable", "host_computer_unavailable");
+    return this.authority.searchSettings(
+      computerGeneration,
+      workspaceId,
+      relativePath,
+      pattern,
+    );
+  }
   openComputerConnector(
     runtimeId: string,
     launchDigest: string,

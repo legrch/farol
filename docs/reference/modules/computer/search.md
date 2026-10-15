@@ -5,6 +5,19 @@ ordinary Dev, native and packaged qualification remain separate exits. This slic
 uses the existing execution lease and final authority check. It adds no approval
 store and launches no interpreter.
 
+The Settings `computer.search-workspace` command now selects
+`DesktopGoCore.searchSettingsWorkspace` → `computer.settings.search` → the
+Computer Settings service → the existing Go filesystem search. Its Go owner
+requires explicit Search capability from the current owner publication, checks
+that publication before dispatch and disclosure, and keeps the original fixed
+lease. It creates no Task, Chat participant or alternate filesystem owner.
+TypeScript retains command/IPC mapping, closed response decoding and current UI
+publication/root correlation. A missing, refused or unknown Go response never
+dispatches the legacy Python workspace helper. That helper remains in other
+compatibility paths until their separate cutovers; its resource is not yet
+retired. Source transport and portable fixtures do not prove clean-Mac,
+packaged-process or installed acceptance.
+
 Search accepts a conservative RE2 subset: Unicode literals, character classes,
 groups, alternatives, anchors, flags and standalone quantifiers. Python-only
 constructs and shorthand escapes with different Unicode meanings are refused,

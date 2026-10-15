@@ -4,6 +4,7 @@ import {
   codexTaskReadCurrentSource,
 } from "./task-current-settings";
 import { BridgeError, type Client } from "./bridge/client";
+import { parseComputerSearchMatches } from "./bridge/computer";
 import {
   validate,
   validUnicode,
@@ -15,6 +16,8 @@ import {
   type ChatComputerAdmissionResponse,
   type ComputerSettingsListResponse,
   type ComputerSettingsSnapshotResponse,
+  type ComputerSettingsSearchResponse,
+  type ComputerSearchMatch,
 } from "./bridge/wire";
 import type { ProductSettings } from "../../src/pkg/product-settings/contract";
 import { ownerSettingsComputerApproval } from "../../src/modules/computer/infra/repo/owner-settings-computer-approval";
@@ -33,6 +36,13 @@ function settingsEntry(value: unknown): value is string {
     Buffer.byteLength(name, "utf8") <= 255
   );
 }
+
+export type SettingsSearchResult = Omit<
+  ComputerSettingsSearchResponse,
+  "matches"
+> & {
+  readonly matches: readonly ComputerSearchMatch[];
+};
 
 // Trusted desktop composition only. Go owns approval, live admission and durable
 // effects. This adapter retains exact acknowledgements and never reconstructs
@@ -209,6 +219,21 @@ export class GoComputerAuthority {
     ) as Promise<ComputerSettingsSnapshotResponse>;
   }
 
+  searchSettings(
+    computerGeneration: number,
+    workspaceId: string,
+    relativePath: string,
+    pattern: string,
+  ): Promise<SettingsSearchResult> {
+    return this.settingsWorkspace(
+      "search",
+      computerGeneration,
+      workspaceId,
+      relativePath,
+      pattern,
+    ) as Promise<SettingsSearchResult>;
+  }
+
   // Exact previously acknowledged publication for the trusted host adapter.
   // This performs no renewal, admission or transport and grants nothing locally.
   settingsMutationPublication(
@@ -226,16 +251,21 @@ export class GoComputerAuthority {
   }
 
   private async settingsWorkspace(
-    kind: "list" | "snapshot",
+    kind: "list" | "snapshot" | "search",
     computerGeneration: number,
     workspaceId: string,
     relativePath: string,
+    pattern?: string,
   ): Promise<
     | (Omit<ComputerSettingsListResponse, "entries"> & { entries: string[] })
     | ComputerSettingsSnapshotResponse
+    | SettingsSearchResult
   > {
-    const schema =
-      kind === "list" ? "ComputerSettingsList" : "ComputerSettingsSnapshot";
+    const schema = {
+      list: "ComputerSettingsList",
+      snapshot: "ComputerSettingsSnapshot",
+      search: "ComputerSettingsSearch",
+    }[kind];
     const publication = this.ownerPublication;
     if (
       this.blocked ||
@@ -245,7 +275,12 @@ export class GoComputerAuthority {
       publication.generation !== String(computerGeneration)
     )
       throw new BridgeError("unavailable", "computer_publication_unavailable");
-    const body = { publication, workspaceId, relativePath };
+    const body = {
+      publication,
+      workspaceId,
+      relativePath,
+      ...(kind === "search" ? { pattern } : {}),
+    };
     if (!validate(`${schema}Request`, body))
       throw new BridgeError("refused", "invalid_settings_workspace_request");
     this.settingsInFlight = true;
@@ -275,7 +310,9 @@ export class GoComputerAuthority {
       )
         throw new BridgeError("unknown", "invalid_settings_workspace_result");
       const result = outcome.data as unknown as
-        ComputerSettingsListResponse | ComputerSettingsSnapshotResponse;
+        | ComputerSettingsListResponse
+        | ComputerSettingsSnapshotResponse
+        | ComputerSettingsSearchResponse;
       if (kind === "list") {
         const entries = (result as ComputerSettingsListResponse).entries;
         if (
@@ -293,6 +330,8 @@ export class GoComputerAuthority {
       if (
         result.workspaceId !== workspaceId ||
         result.relativePath !== relativePath ||
+        (kind === "search" &&
+          (result as ComputerSettingsSearchResponse).pattern !== pattern) ||
         (
           Object.keys(publication) as (keyof ComputerAuthorityPublication)[]
         ).some((key) => result.publication[key] !== publication[key])
@@ -307,11 +346,26 @@ export class GoComputerAuthority {
       };
       if (kind === "list")
         return {
-          ...copied,
+          ...(copied as ComputerSettingsListResponse),
           entries: [
             ...((result as ComputerSettingsListResponse).entries as string[]),
           ],
         };
+      if (kind === "search") {
+        let matches: readonly ComputerSearchMatch[];
+        try {
+          matches = parseComputerSearchMatches(
+            (result as ComputerSettingsSearchResponse).matches,
+            relativePath,
+          );
+        } catch {
+          throw new BridgeError("unknown", "invalid_settings_workspace_result");
+        }
+        return {
+          ...(copied as ComputerSettingsSearchResponse),
+          matches,
+        };
+      }
       return copied as ComputerSettingsSnapshotResponse;
     } catch (error) {
       if (!(error instanceof BridgeError) || error.state === "unknown")
