@@ -10,6 +10,7 @@ This is the engineering entrypoint. Ordinary users should start with [installati
 - [Package publication preparation](../release-publication.md) — accepted bytes and offline release assets.
 - [Documentation layout](documentation.md) and [checks](../tools/README.md) — canonical homes, placement exceptions, links, commands and formatting.
 - [Architecture and contracts](../reference/README.md) — source ownership and implementation references.
+- [Architecture decisions](../decisions/README.md) — accepted records such as application operation shapes and naming.
 
 Follow [AGENTS.md](../../AGENTS.md). A checkpoint preserves verified work; integration, package creation, installation, live use and release each require their applicable gates. Developer promotion is not a supported public first-install mechanism.
 
