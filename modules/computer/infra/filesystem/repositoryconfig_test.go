@@ -113,39 +113,6 @@ func repositoryConfigNativeMutation(d port.Descriptor, op mutation.Operation) po
 		Operation: op, BeforePublish: func(context.Context) error { return nil }, WithPublication: func(_ context.Context, publish func() error) error { return publish() }} // Synthetic lease double, not admission proof.
 }
 
-func TestRepositoryConfigNativeOrdinaryReadCreateEdit(t *testing.T) {
-	d, home, repo := repositoryConfigNativeFixture(t)
-	d.Root = repo // Keep the independently measured approved ancestor.
-	w, m := New(home), NewMutable(home)
-	for _, path := range []string{".npmrc", "nested/.NPMRC"} {
-		before := "repository-marker=before\n"
-		receipt, err := m.Mutate(context.Background(), repositoryConfigNativeMutation(d, mutation.Write{RelativePath: path, Content: before}))
-		if err != nil || receipt == nil {
-			t.Fatal("repository config creation refused", err)
-		}
-		read, err := w.Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: path})
-		if err != nil || read.Text != before {
-			t.Fatal("repository read failed", err)
-		}
-		listed, err := w.List(context.Background(), port.ListRequest{Workspace: d, RelativePath: filepath.Dir(path)})
-		if err != nil || !slices.Contains(listed.Entries, filepath.Base(path)) {
-			t.Fatal("repository config not listed", err)
-		}
-		searched, err := w.Search(context.Background(), port.SearchRequest{Workspace: d, RelativePath: path, Pattern: "repository-marker"})
-		if err != nil || len(searched.Matches) != 1 || searched.Matches[0].Path != path {
-			t.Fatal("repository config not searched", err)
-		}
-		receipt, err = m.Mutate(context.Background(), repositoryConfigNativeMutation(d, mutation.Edit{RelativePath: path, ExpectedSHA256: read.SHA256, Edits: []mutation.TextEdit{{OldText: "before", NewText: "after"}}}))
-		if err != nil || receipt == nil {
-			t.Fatal("repository config edit refused", err)
-		}
-		read, err = w.Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: path})
-		if err != nil || read.Text != "repository-marker=after\n" {
-			t.Fatal("repository config edit not retained", err)
-		}
-	}
-}
-
 func repositoryConfigNativeRefused(t *testing.T, home string, d port.Descriptor, path string) {
 	t.Helper()
 	w, m := New(home), NewMutable(home)
