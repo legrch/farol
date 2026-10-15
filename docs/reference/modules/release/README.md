@@ -8,6 +8,15 @@ installed application, package identity or resource path. The source-only archiv
 unchanged archive dependency. Runtime wiring/build closure and fresh source
 acceptance are still required before cutover.
 
+## Module documents
+
+- [First install and adoption boundary](adoption.md)
+- [Current-alpha journal persistence](journal.md)
+- [Migration admission lifetime](migration.md)
+- [Native boundary](native.md)
+- [Source relocation record](relocation.md)
+- [Archive provenance](infra/archive/provenance.md)
+
 `domain/update.go` owns the pure updater policy. `app/services/update` serializes
 one lifetime through consumer-owned ports. Domain, application and port DTOs are
 independent; the service maps them explicitly. The application performs no native
@@ -76,7 +85,7 @@ identity bytes. The existing TS schemas' optional/null and UTF-16 string bounds
 remain explicit. Promotion/closed-repair receipts and physical file access are
 still later parity work.
 
-The consuming [migration port](app/port/migration.go) supplies a read-only durable
+The consuming [migration port](../../../../modules/release/app/port/migration.go) supplies a read-only durable
 projection and an externally held authoritative admission guard to the leased
 Identity adapter. Release owns its serializer/intent/dispatch/recovery. See the
 [native boundary](native.md) and [first-install/adoption contract](adoption.md).
