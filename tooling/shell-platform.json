@@ -1,6 +1,6 @@
 {
   "schema": "farol-shell-platform/1",
-  "id": "macos-26A434-arm64-root-volume-git-python-metadata-v10",
+  "id": "macos-26A434-arm64-root-volume-git-python-metadata-v11",
   "osBuild": "26A434",
   "compiler": "approved-roots-seatbelt-v1",
   "filesystemClass": "system-apfs-kernel-mount-boundaries-v1",
@@ -129,7 +129,7 @@
     },
     {
       "path": "modules/computer/infra/process/process.go",
-      "sha256": "0e6f7488df2753cbdf2fa3440bf7b6f44a9e94bda3d6a8965087a804da8aeaaa"
+      "sha256": "2d9688918cd9216cef357ead45b99f7db2412af580d5fa85f9cacaf7e379e786"
     },
     {
       "path": "modules/computer/infra/process/pythonruntime.go",

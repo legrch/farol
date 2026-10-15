@@ -104,6 +104,13 @@ func TestGoldenDigestVectors(t *testing.T) {
 			write(t, p+"/bin/run", []byte("hello\x00world"), 0751)
 			write(t, p+"/empty", nil, 0600)
 			must(t, os.Symlink("bin/run", p+"/shortcut"))
+			// Darwin creates symlinks with umask-filtered permissions; the
+			// static vector records the Linux 0777 link mode.
+			var s unix.Stat_t
+			must(t, unix.Lstat(p+"/shortcut", &s))
+			if s.Mode&0777 != 0777 {
+				must(t, unix.Fchmodat(unix.AT_FDCWD, p+"/shortcut", 0777, unix.AT_SYMLINK_NOFOLLOW))
+			}
 		}},
 		{"unicode", "15dd0c842840bbda8d91973e3aa3d3c445df57b009b7d0936bdb07e39fb58287", func(p string) {
 			for _, n := range []string{"a", "A", "é", "e\u0301", "\ue000", "\U00010000"} {
@@ -281,7 +288,11 @@ func TestPhysicalRootAndTypes(t *testing.T) {
 			case "hardlink":
 				must(t, os.Link(app+"/Contents/Info.plist", app+"/alias"))
 			case "invalid-name":
-				write(t, app+"/"+string([]byte{0xff}), nil, 0600)
+				name := app + "/" + string([]byte{0xff})
+				if e := os.WriteFile(name, nil, 0600); errors.Is(e, unix.EILSEQ) {
+					t.Skip("APFS refuses non-UTF-8 names, so this refusal cannot be fixtured here")
+				}
+				write(t, name, nil, 0600)
 			case "invalid-link":
 				must(t, os.Symlink(string([]byte{0xff}), app+"/link"))
 			}

@@ -53,8 +53,9 @@ async function fixture() {
   for (const input of inputs) {
     const target = path.join(root, input.path);
     await fs.mkdir(path.dirname(target), { recursive: true });
-    // Immutable source fixture from public baseline6e8ddbd. Its digest is the
-    // existing independent qualification pin; never learn a pin from live bytes.
+    // Immutable copy of the natively qualified process source (platform record
+    // v11). Its digest is the independent qualification pin; never learn a pin
+    // from live bytes.
     const source =
       input.path === "modules/computer/infra/process/process.go"
         ? "tests/fixtures/shell-qualified-process.go.txt"
