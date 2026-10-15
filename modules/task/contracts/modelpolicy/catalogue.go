@@ -115,6 +115,9 @@ func (c *CatalogueContract) Describe(ctx context.Context, in CatalogueRequest) (
 		}
 		out.Configured = append(out.Configured, dto)
 	}
+	if ctx.Err() != nil {
+		return nil, &Failure{Code: app.CatalogueUnavailable}
+	}
 	return out, nil
 }
 
