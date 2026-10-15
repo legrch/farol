@@ -144,7 +144,7 @@ func (f *fixture) assertCustody() {
 }
 func wantCode(t *testing.T, err error, want Code) {
 	t.Helper()
-	if err != want {
+	if !errors.Is(err, want) {
 		t.Fatalf("got %v, want %v", err, want)
 	}
 }
@@ -343,7 +343,17 @@ func TestClosedRequiresExplicitAbsence(t *testing.T) {
 				}
 				return tc.state, tc.err
 			})
-			wantCode(t, f.v.VerifyClosed(context.Background()), tc.want)
+			err := f.v.VerifyClosed(context.Background())
+			wantCode(t, err, tc.want)
+			if err.Error() != tc.want.Error() {
+				t.Fatal("outer refusal changed")
+			}
+			if tc.err == nil && err != tc.want {
+				t.Fatal("observation without error changed simple code contract")
+			}
+			if tc.err != nil && !errors.Is(err, tc.err) {
+				t.Fatal("observer cause lost")
+			}
 			f.assertCustody()
 		})
 	}
@@ -353,6 +363,61 @@ func TestClosedRequiresExplicitAbsence(t *testing.T) {
 		wantCode(t, f.v.VerifyClosed(context.Background()), ErrRunningMarker)
 		f.assertCustody()
 	})
+}
+
+func TestObserverFailureProvenance(t *testing.T) {
+	for _, cancelDuring := range []bool{false, true} {
+		for _, state := range []ProcessState{ProcessUnknown, ProcessAbsent, ProcessPresent} {
+			t.Run(fmt.Sprintf("cancel=%t/state=%d", cancelDuring, state), func(t *testing.T) {
+				f := newFixture(t)
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				sentinel := errors.New("private original-child cleanup uncertainty")
+				cause := &os.PathError{Op: "observe", Path: "/private/process-input", Err: sentinel}
+				calls := 0
+				f.v.process = observerFunc(func(got context.Context, _ int, _ string) (ProcessState, error) {
+					calls++
+					if got != ctx {
+						t.Fatal("observer context changed")
+					}
+					if cancelDuring {
+						cancel()
+					}
+					return state, cause
+				})
+				fd := f.lease.Fd()
+				flags, e := unix.FcntlInt(fd, unix.F_GETFL, 0)
+				must(t, e)
+				descriptorFlags, e := unix.FcntlInt(fd, unix.F_GETFD, 0)
+				must(t, e)
+				_, e = f.lease.Seek(17, 0)
+				must(t, e)
+				err := f.v.VerifyClosed(ctx)
+				want := ErrProcessUnknown
+				if cancelDuring {
+					want = ErrCanceled
+				}
+				wantCode(t, err, want)
+				var typed *os.PathError
+				if calls != 1 || !errors.As(err, &typed) || typed != cause || !errors.Is(err, cause) || !errors.Is(err, sentinel) {
+					t.Fatal("exact observer failure was lost or observation retried")
+				}
+				if err.Error() != want.Error() || errors.Is(err, context.Canceled) != cancelDuring {
+					t.Fatal("outer refusal or cancellation cause changed")
+				}
+				afterFlags, e := unix.FcntlInt(fd, unix.F_GETFL, 0)
+				must(t, e)
+				afterDescriptorFlags, e := unix.FcntlInt(fd, unix.F_GETFD, 0)
+				must(t, e)
+				position, e := f.lease.Seek(0, 1)
+				must(t, e)
+				if afterFlags != flags || afterDescriptorFlags != descriptorFlags || position != 17 {
+					t.Fatal("observer refusal changed borrowed flags or offset")
+				}
+				f.assertCustody()
+			})
+		}
+	}
 }
 
 func TestQuitBoundBytesAndMetadata(t *testing.T) {
@@ -464,7 +529,9 @@ func TestCancellationAndDependencies(t *testing.T) {
 	f.v.process = observerFunc(func(ctx context.Context, _ int, _ string) (ProcessState, error) { cancel(); return ProcessAbsent, nil })
 	ctx, cancel = context.WithCancel(context.Background())
 	defer cancel()
-	wantCode(t, f.v.VerifyClosed(ctx), ErrCanceled)
+	if err := f.v.VerifyClosed(ctx); err != ErrCanceled {
+		t.Fatalf("successful observer cancellation changed simple code contract: %v", err)
+	}
 	f.assertCustody()
 	t.Run("closed_borrowed_file", func(t *testing.T) {
 		f := newFixture(t)

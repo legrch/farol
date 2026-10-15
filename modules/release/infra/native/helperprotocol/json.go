@@ -106,8 +106,12 @@ func (JSONCodec) Handoff(frame port.HelperHandoffFrame) ([]byte, error) {
 	}
 	// Python ensure_ascii=True also escapes DEL and uses UTF-16 surrogate
 	// pairs for non-BMP characters. Count the expanded bytes, including LF.
-	out := make([]byte, 0, maxFrame)
-	for _, r := range b.String() {
+	return pythonASCII(b.String(), maxFrame)
+}
+
+func pythonASCII(text string, limit int) ([]byte, error) {
+	out := make([]byte, 0, limit)
+	for _, r := range text {
 		if r < 0x7f {
 			out = append(out, byte(r))
 		} else if r <= 0xffff {
@@ -117,7 +121,7 @@ func (JSONCodec) Handoff(frame port.HelperHandoffFrame) ([]byte, error) {
 			out = appendEscape(out, uint16(0xd800+(r>>10)))
 			out = appendEscape(out, uint16(0xdc00+(r&0x3ff)))
 		}
-		if len(out) > maxFrame {
+		if len(out) > limit {
 			return nil, errSize
 		}
 	}

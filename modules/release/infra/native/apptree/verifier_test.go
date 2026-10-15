@@ -207,6 +207,25 @@ func TestVerifyBorrowedCustodyAndReentrancy(t *testing.T) {
 	if state(p) != pb || state(a) != ab {
 		t.Fatal("refusal changed borrowed state")
 	}
+	for _, cancelDuring := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(context.Background())
+		v := verifier(t, p, a, appGolden, func(context.Context, []byte, []byte, string, string) error {
+			if cancelDuring {
+				cancel()
+			}
+			return errors.New("private identity failure")
+		})
+		_, e = v.Verify(ctx)
+		cancel()
+		want := CodeIdentity
+		if cancelDuring {
+			want = CodeCanceled
+		}
+		code(t, e, want)
+		if state(p) != pb || state(a) != ab {
+			t.Fatal("identity failure changed borrowed state")
+		}
+	}
 	_, e = v.Verify(nil)
 	code(t, e, CodeInput)
 }
@@ -336,8 +355,8 @@ func TestIdentityBoundaryAndSanitizedErrors(t *testing.T) {
 	v := verifier(t, p, a, appGolden, func(context.Context, []byte, []byte, string, string) error { return secret })
 	_, e := v.Verify(context.Background())
 	code(t, e, CodeIdentity)
-	if strings.Contains(e.Error(), "secret") {
-		t.Fatal("callback error leaked")
+	if e.Error() != "app tree: identity" || !errors.Is(e, secret) {
+		t.Fatal("callback error was leaked or lost")
 	}
 	for _, size := range []int{0, 65536, 65537} {
 		write(t, app+"/Contents/Info.plist", bytes.Repeat([]byte{'x'}, size), 0644)
@@ -364,12 +383,51 @@ func TestIdentityBoundaryAndSanitizedErrors(t *testing.T) {
 	}
 }
 
+func TestIdentityFailureProvenance(t *testing.T) {
+	for _, cancelDuring := range []bool{false, true} {
+		t.Run(fmt.Sprint(cancelDuring), func(t *testing.T) {
+			_, p, a := fixture(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			sentinel := errors.New("private native failure")
+			cause := &os.PathError{Op: "identity", Path: "/private/input", Err: sentinel}
+			calls := 0
+			v := verifier(t, p, a, appGolden, func(got context.Context, _ []byte, _ []byte, _, _ string) error {
+				calls++
+				if got != ctx {
+					t.Fatal("identity context changed")
+				}
+				if cancelDuring {
+					cancel()
+				}
+				return cause
+			})
+			o, err := v.Verify(ctx)
+			want := CodeIdentity
+			if cancelDuring {
+				want = CodeCanceled
+			}
+			code(t, err, want)
+			var typed *os.PathError
+			if calls != 1 || o != (Observation{}) || !errors.As(err, &typed) || typed != cause || !errors.Is(err, cause) || !errors.Is(err, sentinel) {
+				t.Fatal("exact identity failure lost, retried or returned positive observation")
+			}
+			if err.Error() != "app tree: "+string(want) || errors.Is(err, context.Canceled) != cancelDuring {
+				t.Fatal("outer refusal or cancellation cause changed")
+			}
+		})
+	}
+}
+
 func TestCancellationAfterIdentityAndFreshVerification(t *testing.T) {
 	app, p, a := fixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	v := verifier(t, p, a, appGolden, func(context.Context, []byte, []byte, string, string) error { cancel(); return nil })
-	_, e := v.Verify(ctx)
+	o, e := v.Verify(ctx)
 	code(t, e, CodeCanceled)
+	if o != (Observation{}) {
+		t.Fatal("successful callback cancellation returned positive observation")
+	}
 	v = verifier(t, p, a, appGolden, accept)
 	_, e = v.Verify(context.Background())
 	must(t, e)

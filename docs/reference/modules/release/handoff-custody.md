@@ -1,5 +1,32 @@
 # Inherited handoff custody preparation
 
+## Relaunch argument preparation
+
+The request-bound Go helper-protocol service can also build the existing
+`/usr/bin/open` argument values through `BuildRelaunchArguments`. It accepts only
+the `completed` target phase and a separately measured identity for the helper
+itself, never the initiating parent identity from the request. The native codec
+preserves the original compact ASCII JSON hint, exact field order and 2048-byte
+encoded limit. It emits no trailing newline or extra process arguments.
+
+For a shared installation, the only accepted image string is the exact private
+`launch-Farol.app` path beneath the original home and operation. Passing the
+shared `/Applications/Farol.app` slot refuses. A legacy installation accepts no
+private-image parameter and retains its original home Applications route.
+Building these repeatable values neither proves the private copy nor authorizes
+a launch. The existing Release effect owner must still verify the complete
+target, preserve lease/slot/admission, durably write `launch_requested`, dispatch
+once and retain an unknown launch. No restored predecessor is relaunched under
+the helper's promotion lease.
+
+Eleven synthetic vectors preserve the exact original Python functions' argument
+or refusal result, including Unicode escaping, shared/private path choices,
+target and helper correlation and hint bounds. Real Go input parsing, request
+policy and encoding are composed in the test. The vectors carry the original
+helper source digest; they do not observe a native process, prove a copied image
+or qualify startup admission. The selected updater still invokes Python, and
+native/packaged/installed/recovery/OTA gates remain separate.
+
 `infra/native/handoff` prepares the Go replacement for the existing installed
 helper's inherited-lease and closed-predecessor observations. It is not selected
 by the updater yet. Normal apply/recover/rollback still uses
@@ -30,6 +57,13 @@ list. Its timezone timestamp must follow the bound start and cannot be future.
 The bounded timestamp parser accepts the actual producer's RFC3339Nano subset,
 not every form accepted by Python's wider ISO parser. Cancellation refuses and
 never renews the original caller deadline.
+
+Observer and app-identity failures retain their exact typed dependency causes
+through `errors.Is` and `errors.As`, behind the same closed outer refusal text.
+Concurrent cancellation keeps both the original cause and context error. This
+allows eventual helper composition to distinguish inspected refusals from an
+internal failure without exposing native paths or losing cleanup uncertainty.
+It does not select or implement the helper's final exit-70/exit-79 mapping.
 
 Namespace/process changes remain possible between observations; this is not an
 atomic race-exclusion claim. The parent exclusion owner and the future helper's
