@@ -211,6 +211,11 @@ func TestBorrowedParentFlagsOffsetsAndLocksUnchanged(t *testing.T) {
 	}
 	offset, seekErr := unix.Seek(fd, 0, unix.SEEK_CUR)
 	parentLocked := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB) == nil
+	// Darwin reports a sticky FHASLOCK status bit once a description has been
+	// flocked, so the baseline must include the fixture's own lock.
+	if flags, e = unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0); e != nil {
+		t.Fatal(e)
+	}
 	l := f.acquire(t, false, hooks{})
 	if e = l.Verify(context.Background()); e != nil {
 		t.Fatal(e)

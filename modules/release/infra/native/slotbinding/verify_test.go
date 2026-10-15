@@ -53,6 +53,11 @@ func TestExpectedSlotReadIsIndependentAndKeepsBorrowedCustody(t *testing.T) {
 	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		t.Fatal(err)
 	}
+	// Darwin reports a sticky FHASLOCK status bit once a description has been
+	// flocked, so the baseline must include the fixture's own lock.
+	if flags, err = unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0); err != nil {
+		t.Fatal(err)
+	}
 	for range 2 {
 		if err := v.Verify(context.Background()); err != nil {
 			t.Fatal(err)
