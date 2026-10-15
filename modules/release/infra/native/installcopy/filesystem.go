@@ -88,7 +88,11 @@ func (r *runner) check() error {
 		}
 		return &Failure{Code: "launch_copy_canceled", cause: err}
 	}
-	if !time.Now().Before(r.c.until) {
+	// Context timer/Err delivery can lag the absolute deadline. Compare both
+	// fixed bounds against one current time, without renewing either budget.
+	deadline, hasDeadline := r.ctx.Deadline()
+	now := time.Now()
+	if !now.Before(r.c.until) || (hasDeadline && !now.Before(deadline)) {
 		return &Failure{Code: "launch_copy_deadline", cause: context.DeadlineExceeded}
 	}
 	return nil
