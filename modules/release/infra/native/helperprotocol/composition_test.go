@@ -226,6 +226,49 @@ func TestCompositionRealInputHandoffACKAndContinuation(t *testing.T) {
 	compositionAppFailure(t, err, "handoff_phase")
 }
 
+func TestCompositionOrdinaryProcessHandoffStillRequiresLiveMode(t *testing.T) {
+	for _, action := range []string{"apply", "recover", "rollback"} {
+		for _, relaunch := range []bool{false, true} {
+			t.Run(action+"/"+map[bool]string{false: "closed", true: "relaunch"}[relaunch], func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				until, _ := ctx.Deadline()
+				input := compositionInput()
+				delete(input, "predecessor")
+				delete(input, "leaseIdentity")
+				input["action"], input["relaunch"] = action, relaunch
+				s, err := protocolapp.Bind(ctx, compositionJSON(t, input), inputapp.New(nativeinput.JSONDecoder{}), helperprotocol.JSONCodec{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				frame, err := s.BuildHandoff(ctx, protocolapp.WaitingForExit, nil)
+				if action == "recover" && !relaunch {
+					compositionAppFailure(t, err, "handoff_phase")
+					if frame != nil {
+						t.Fatal("offline recovery produced normal-Quit frame")
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				var observed map[string]any
+				if json.Unmarshal(frame, &observed) != nil || observed["phase"] != "waiting_for_exit" || len(observed) != 8 || observed["action"] != action {
+					t.Fatal("ordinary handoff shape changed", string(frame))
+				}
+				c, peer, _ := compositionPipes(t)
+				if err := c.Emit(ctx, until, frame); err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(compositionReadACK(t, peer), frame) {
+					t.Fatal("ordinary frame lost EOF seal")
+				}
+				compositionAppFailure(t, s.ValidateContinuation(ctx, compositionJSON(t, compositionContinue())), "continue_identity")
+			})
+		}
+	}
+}
+
 func TestCompositionEveryCrossedCorrelationRefusesAfterEOF(t *testing.T) {
 	paths := []string{
 		"schema", "operationId", "action", "pid", "processStart",
