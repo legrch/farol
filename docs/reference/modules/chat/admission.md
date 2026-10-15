@@ -3,7 +3,7 @@
 Status: source checkpoint. The published callback, projection and actual
 `app/services/lifecycle.Service` owner are implemented. The owner mints private
 handles only after its own queue admission and exact known journal commit. See
-[LIFECYCLE.md](LIFECYCLE.md) for constructor and Desktop requirements.
+[lifecycle](lifecycle.md) for constructor and Desktop requirements.
 A durable repository implementation, accepted Computer peer composition and
 ordinary boot wiring still need qualification. Tests exercise the actual owner
 and concrete Mutex gate with labelled injected journal/browser/retention ports;

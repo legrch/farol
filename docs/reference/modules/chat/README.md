@@ -4,11 +4,11 @@ The pre-K0 Turn/stream/browser-port preparation now builds under Core's accepted
 root Go module. The post-K0 admission seam publishes current-owner policy for
 ordinary Chat. `app/services/lifecycle.Service` now owns the live queue, fresh
 journal claim, private admitted handles and one-shot browser intent/settlement.
-See [ADMISSION.md](ADMISSION.md) for the published guard and
-[LIFECYCLE.md](LIFECYCLE.md) for actual owner semantics and constructor requirements.
+See [admission](admission.md) for the published guard and
+[lifecycle](lifecycle.md) for actual owner semantics and constructor requirements.
 Normal core-enabled Desktop now composes the native journal, browser exchange,
 bounded durable results and React conversation facade. The
-[controlled normal desktop witness](../../docs/desktop-core.md#controlled-normal-desktop-chat)
+[controlled normal desktop witness](../../../desktop-core.md#controlled-normal-desktop-chat)
 proves two deliberate turns, ordinary clean Quit, same-build/profile restart and
 current-authorized React reads of both original answers at `e31c636`. The
 controlled provider ledger remains at two accepted Sends across both lifetimes.
@@ -19,6 +19,18 @@ qualification remain open. Production
 control/output profiles and ordinary
 next-user-turn support in the external Responses adapter remain open. Existing
 TypeScript routes outside this accepted slice retain their separate consumers.
+
+## Reference documents
+
+- [Admission ownership](admission.md)
+- [Lifecycle owner](lifecycle.md)
+- [Conversation conformance](contracts/conversation/conformance.md)
+- [Computer relay ownership](contracts/conversation/relay.md)
+- [Browser exchange attachment](infra/browser.md)
+- [Original live Chat context source](infra/contextsource.md)
+- [Browser model runtime correlation](infra/modelruntime.md)
+- [Lifetime result retention](infra/results.md)
+- [Durable result storage adapter](infra/results/durable.md)
 
 ## Turn and five-slot scheduling
 

@@ -5,7 +5,7 @@ The Go owner uses the existing `domain/turn.Queue`; there is no new delegated ta
 engine or browser implementation. The earlier admission projection now has an
 actual handle producer. Source tests use the concrete per-owner Mutex and injected
 journal, browser and result-retention fixtures. The
-[controlled normal Desktop journey](../../docs/desktop-core.md#controlled-normal-desktop-chat)
+[controlled normal Desktop journey](../../../desktop-core.md#controlled-normal-desktop-chat)
 at `56ed3941` proves an ordinary typed first message without Computer admission,
 two React/Go turns, explicit result ACK and settlement, clean
 Quit, same-build/profile restart and current-authorized reads of both answers.
@@ -39,7 +39,7 @@ The native journal's `NewAfterRetirement` consumes the exact qualified successor
 scope and original one-shot clean-retirement proof. Current-authorized history reads
 can recover exact retained answers through that chain. They never reconstruct
 live conversation handles, current admission or Send authority. See the
-[durable result contract](infra/results/DURABLE.md) for its storage and failure
+[durable result contract](infra/results/durable.md) for its storage and failure
 boundaries; arbitrary crash or cross-build recovery is not implied.
 
 The ordinary request owner calls `Admit` using its trusted admitted owner/session/
