@@ -5,6 +5,7 @@
 - [Control contract](contracts/control.md)
 - [Observation contract](contracts/observation.md)
 - [Selected thread contract](contracts/selectedthread.md)
+- [Configured model policy](contracts/modelpolicy.md)
 - [Claude client](infra/clients/claude.md)
 - [Codex client](infra/clients/codex.md)
 - [Parent Chat peer](infra/peer/parent.md)
@@ -19,11 +20,15 @@ this adapter wiring does not activate or qualify a Task tool. Native host,
 account, packaged/installed advertisement and one-shot live-read acceptance
 remain separate gates; saved source metadata does not select this route.
 
+The pure configured-model decision is selected through Go on the desktop's
+Task setup path; see the model-policy contract above. It opens no Task or
+provider lifecycle. The lifecycle foundation below remains separate.
+
 This is a root-compatible application-policy foundation based on accepted
 K0/K1 `acb131d9e7d483296d4edac262cf881cddfb91bb`. The selected lifecycle owner
 was prepared on source-only dependency `94c2beb1e81a08f7f36656d88fb4a59885ea5992`,
-which is not an accepted main/runtime checkpoint. This module is not wired into the shipping
-backend or MCP catalogue. No production filesystem journal, native provider
+which is not an accepted main/runtime checkpoint. This Task lifecycle is not wired into the shipping
+backend or MCP catalogue by the model-policy capability. No production filesystem journal, native provider
 transport, authority issuer or parent messenger is implemented by this slice.
 
 `domain` owns coding-task identity and lifecycle. `app/services/task` owns

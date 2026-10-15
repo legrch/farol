@@ -16,7 +16,7 @@ import {
 import { materializeReadonlyComputerLaunch } from "../../src/modules/computer/infra/mcp/launch-contract";
 import { discoverWorkspaceGitMetadata } from "../../src/modules/computer/infra/native/native-verification-command";
 import { PhysicalCodexHandoffAuthority } from "../../src/modules/chat/infra/native/physical-codex-handoff-authority";
-import { taskPolicy } from "../fixtures/task-policy";
+import { taskPolicy, fixtureTaskModelPolicy } from "../fixtures/task-policy";
 
 const execute = promisify(execFile);
 const roots: string[] = [];
@@ -109,6 +109,7 @@ it("carries an explicitly approved primary checkout from folder verification to 
   });
   const service = new ProductConfigurationService(store, {
     now: () => verifiedAt,
+    taskModelPolicy: fixtureTaskModelPolicy,
   });
   await service.initialize();
   const metadata = await discoverWorkspaceGitMetadata(root, true);

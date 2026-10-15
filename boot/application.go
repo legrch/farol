@@ -11,7 +11,6 @@ import (
 	"strconv"
 
 	"github.com/legrch/farol/boot/container"
-	"github.com/legrch/farol/transport/desktop"
 )
 
 // BuildID is set by the build via -ldflags; it cannot be overridden by a client.
@@ -28,7 +27,7 @@ func serve(ctx context.Context, profileID string, launch *NativeLaunch, in io.Re
 	}
 	generation := hex.EncodeToString(bytes[:])
 	var native *NativeRuntime
-	var methods map[string]desktop.Method
+	methods := taskModelPolicyMethods()
 	if launch != nil {
 		var err error
 		native, err = NewNativeRuntime(ctx, *launch, generation)
@@ -36,9 +35,15 @@ func serve(ctx context.Context, profileID string, launch *NativeLaunch, in io.Re
 			return err
 		}
 		defer func() { result = errors.Join(result, native.Close()) }()
-		methods, err = native.Methods()
+		nativeMethods, err := native.Methods()
 		if err != nil {
 			return err
+		}
+		for name, method := range nativeMethods {
+			if _, exists := methods[name]; exists {
+				return errors.New("native_method_conflict")
+			}
+			methods[name] = method
 		}
 	}
 	server, err := container.New(BuildID, profileID, generation, methods)

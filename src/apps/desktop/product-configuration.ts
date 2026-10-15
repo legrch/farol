@@ -38,7 +38,11 @@ import type {
   SettingsStoreReplaceResult,
 } from "../../../apps/desktop/bridge/wire";
 
-import { resolveOwnerTaskModel } from "./owner-config";
+import type {
+  TaskModelPolicyResolution,
+  TaskModelPolicyResolver,
+} from "../../../apps/desktop/bridge/task-model-policy";
+import type { TaskSelectionRequest } from "../../pkg/owner-config/contract";
 
 const FILE_NAME = "config.json";
 const LEGACY_FILE_NAME = "product-settings.json";
@@ -119,6 +123,7 @@ export type ComputerSettingsPublication = Readonly<{
 
 export type ProductConfigurationDependencies = Readonly<{
   withdrawComputerAuthority?: () => Promise<ComputerSettingsPublication>;
+  taskModelPolicy?: TaskModelPolicyResolver;
   now?: () => string;
   id?: () => string;
   // The owner's home, whose credential stores can never be approved as a
@@ -857,6 +862,7 @@ export class ProductConfigurationService {
   private readonly turn = new AsyncLocalStorage<true>();
   private tail: Promise<unknown> = Promise.resolve();
   private readonly promotionLease: WorkspaceEditLeaseGuard | undefined;
+  private readonly taskModelPolicy: TaskModelPolicyResolver | undefined;
   private withdrawComputerAuthority: ProductConfigurationDependencies["withdrawComputerAuthority"];
   // The typed settings writer retains each admission lease through the native
   // edit outcome. The host finally wrapper releases it; conditional pending
@@ -875,6 +881,7 @@ export class ProductConfigurationService {
     this.id = dependencies.id ?? randomUUID;
     this.homeDirectory = dependencies.homeDirectory ?? os.homedir();
     this.promotionLease = dependencies.promotionLease;
+    this.taskModelPolicy = dependencies.taskModelPolicy;
     this.withdrawComputerAuthority = dependencies.withdrawComputerAuthority;
   }
 
@@ -2604,45 +2611,81 @@ export class ProductConfigurationService {
     });
   }
 
-  async recordCodexTaskRoute(input: unknown): Promise<MutationResult> {
+  // Keep the existing settings writer's turn across this pure Go decision.
+  // No adapter recomputes policy when Go is absent or a reply is lost/stale.
+  resolveTaskModel(
+    request: TaskSelectionRequest,
+  ): Promise<TaskModelPolicyResolution> {
+    const captured = structuredClone(request);
+    return this.exclusive(async () => {
+      const current = this.current;
+      if (!current || !this.taskModelPolicy || this.settingsDeliveryFenced)
+        return { status: "unavailable" };
+      try {
+        const result = await this.taskModelPolicy(
+          current.revision,
+          structuredClone(current.tasks ?? null),
+          captured,
+        );
+        if (this.current !== current || this.settingsDeliveryFenced)
+          return { status: "unavailable" };
+        return result;
+      } catch {
+        return { status: "unavailable" };
+      }
+    });
+  }
+
+  async recordCodexTaskRoute(
+    input: unknown,
+    expectedRevision?: number,
+  ): Promise<MutationResult> {
     const parsed = CodexTaskSelectionSchema.safeParse(input);
     if (!parsed.success) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
     const selected = parsed.data;
-    return this.mutate((current) => {
-      const model = resolveOwnerTaskModel(current, {
+    const revision = expectedRevision ?? this.current?.revision;
+    return this.exclusive(async () => {
+      if (!this.current) return this.failure("SETTINGS_UNAVAILABLE");
+      if (this.current.revision !== revision)
+        return this.failure("SETTINGS_INPUT_INVALID");
+      const model = await this.resolveTaskModel({
         harness: selected.harness,
       });
-      if (model.status !== "ready") {
-        throw new Error("CODEX_TASK_ROUTE_STALE");
-      }
-      const workspace = current.computer.workspaces.find(
-        (entry) => entry.workspaceId === selected.workspaceId,
-      );
-      const now = Date.parse(this.now());
-      if (
-        !current.nativeHosts.codex?.localVerification ||
-        selected.hostGeneration !== current.nativeHosts.generation ||
-        selected.computerGeneration !== current.computer.generation ||
-        current.setup.computer.verified?.workspaceId !== selected.workspaceId ||
-        current.setup.computer.verified.configRevision !==
-          current.computer.generation ||
-        !workspace?.rootIdentity ||
-        workspace.gitMetadata?.commonDirectory !==
-          selected.gitCommonDirectory ||
-        (selected.execution.sandbox === "workspace-write" &&
-          workspace.access !== "write") ||
-        selected.expiresAt <= now ||
-        selected.expiresAt > now + 12 * 60 * 60 * 1_000
-      ) {
-        throw new Error("CODEX_TASK_ROUTE_STALE");
-      }
-      return {
-        ...current,
-        revision: current.revision + 1,
-        nativeHosts: { ...current.nativeHosts, taskRoute: selected },
-      };
+      if (model.status !== "ready")
+        return this.failure("SETTINGS_INPUT_INVALID");
+      return this.mutate((current) => {
+        if (current.revision !== revision)
+          throw new Error("CODEX_TASK_ROUTE_STALE");
+        const workspace = current.computer.workspaces.find(
+          (entry) => entry.workspaceId === selected.workspaceId,
+        );
+        const now = Date.parse(this.now());
+        if (
+          !current.nativeHosts.codex?.localVerification ||
+          selected.hostGeneration !== current.nativeHosts.generation ||
+          selected.computerGeneration !== current.computer.generation ||
+          current.setup.computer.verified?.workspaceId !==
+            selected.workspaceId ||
+          current.setup.computer.verified.configRevision !==
+            current.computer.generation ||
+          !workspace?.rootIdentity ||
+          workspace.gitMetadata?.commonDirectory !==
+            selected.gitCommonDirectory ||
+          (selected.execution.sandbox === "workspace-write" &&
+            workspace.access !== "write") ||
+          selected.expiresAt <= now ||
+          selected.expiresAt > now + 12 * 60 * 60 * 1_000
+        ) {
+          throw new Error("CODEX_TASK_ROUTE_STALE");
+        }
+        return {
+          ...current,
+          revision: current.revision + 1,
+          nativeHosts: { ...current.nativeHosts, taskRoute: selected },
+        };
+      });
     });
   }
 

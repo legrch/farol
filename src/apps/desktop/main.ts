@@ -80,7 +80,6 @@ import {
   type InstalledUpdater,
 } from "../../modules/release/app/installed-updater";
 import { selectedConnectorApp } from "../../pkg/product-settings/connector-app-selection";
-import { resolveOwnerTaskModel } from "./owner-config";
 import { describeTaskModels } from "../../pkg/owner-config/contract";
 import { ReadCodexModelCatalogue } from "../../modules/chat/app/service/read-codex-model-catalogue";
 import type { CodexModelCatalogueResult } from "../../modules/chat/app/port/codex-model-catalogue";
@@ -7035,10 +7034,15 @@ async function configureAdmittedProduct(
         return configurationFailure("SETTINGS_UNAVAILABLE");
       }
       const settings = snapshot.settings;
-      const resolvedModel = resolveOwnerTaskModel(settings, {
+      const resolvedModel = await configuration.resolveTaskModel({
         harness: "codex",
       });
-      if (resolvedModel.status !== "ready") {
+      const afterModel = configuration.snapshot();
+      if (
+        resolvedModel.status !== "ready" ||
+        afterModel.status !== "ready" ||
+        afterModel.settings.revision !== settings.revision
+      ) {
         return refuseRoute("model_policy");
       }
       const selected = settings.nativeHosts.codex;
@@ -7058,6 +7062,10 @@ async function configureAdmittedProduct(
       ) {
         return refuseRoute("workspace_identity");
       }
+      // Go policy awaited above. Claim the host lane synchronously so a later
+      // reply cannot enter alongside an admitted setup or a newly active Agent.
+      if (codexHostTaskAdmission || codexAgentOperationActive())
+        return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
       codexHostTaskAdmission = true;
       let proxy: SharedCodexProxyHost | null = null;
       let scratch: string | null = null;
@@ -7127,34 +7135,37 @@ async function configureAdmittedProduct(
         }
         const approvedAt = new Date().toISOString();
         return ProductConfigurationResultSchema.parse(
-          await configuration.recordCodexTaskRoute({
-            transport: "codex-shared-proxy/v1",
-            socketPath: command.socketPath,
-            expectedCodexHome: command.expectedCodexHome,
-            workspaceId: command.workspaceId,
-            projectId: command.projectId,
-            ...(command.observeThreadId === undefined
-              ? {}
-              : { observeThreadId: command.observeThreadId }),
-            ...(command.observeTurnId === undefined
-              ? {}
-              : { observeTurnId: command.observeTurnId }),
-            projectRoot: command.projectRoot,
-            projectIdentity: {
-              device: String(projectStat.dev),
-              inode: String(projectStat.ino),
+          await configuration.recordCodexTaskRoute(
+            {
+              transport: "codex-shared-proxy/v1",
+              socketPath: command.socketPath,
+              expectedCodexHome: command.expectedCodexHome,
+              workspaceId: command.workspaceId,
+              projectId: command.projectId,
+              ...(command.observeThreadId === undefined
+                ? {}
+                : { observeThreadId: command.observeThreadId }),
+              ...(command.observeTurnId === undefined
+                ? {}
+                : { observeTurnId: command.observeTurnId }),
+              projectRoot: command.projectRoot,
+              projectIdentity: {
+                device: String(projectStat.dev),
+                inode: String(projectStat.ino),
+              },
+              gitCommonDirectory: workspace.gitMetadata.commonDirectory,
+              execution: {
+                sandbox: command.sandbox,
+                approvalPolicy: command.approvalPolicy,
+              },
+              harness: "codex",
+              computerGeneration: settings.computer.generation,
+              hostGeneration: settings.nativeHosts.generation,
+              approvedAt,
+              expiresAt: Date.parse(approvedAt) + 12 * 60 * 60 * 1_000,
             },
-            gitCommonDirectory: workspace.gitMetadata.commonDirectory,
-            execution: {
-              sandbox: command.sandbox,
-              approvalPolicy: command.approvalPolicy,
-            },
-            harness: "codex",
-            computerGeneration: settings.computer.generation,
-            hostGeneration: settings.nativeHosts.generation,
-            approvedAt,
-            expiresAt: Date.parse(approvedAt) + 12 * 60 * 60 * 1_000,
-          }),
+            settings.revision,
+          ),
         );
       } catch (error) {
         process.stderr.write(
@@ -11329,6 +11340,21 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       root: path.join(app.getPath("userData"), "farol-next-state"),
     }),
     {
+      taskModelPolicy: async (revision, tasks, selection) => {
+        const core = desktopGoCore;
+        if (!core)
+          throw new BridgeError(
+            "unavailable",
+            "host_task_model_policy_unavailable",
+          );
+        const result = await core.resolveTaskModel(revision, tasks, selection);
+        if (desktopGoCore !== core)
+          throw new BridgeError(
+            "unavailable",
+            "host_task_model_policy_changed",
+          );
+        return result;
+      },
       // S35-N03d: the same cross-process lease `liveTaskRegistry` takes for
       // admission (same lease file, same "admission" role — see the guard
       // above), so a guarded edit's durable critical phase excludes a live

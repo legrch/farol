@@ -16,7 +16,7 @@ import {
 import { ownerSettingsComputerApproval } from "../../src/modules/computer/infra/repo/owner-settings-computer-approval";
 import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
-import { taskPolicy } from "../fixtures/task-policy";
+import { taskPolicy, fixtureTaskModelPolicy } from "../fixtures/task-policy";
 import { resumeComputerConnector } from "../../src/apps/desktop/connector-resume-policy";
 import { GuidedWorkspaceAccess } from "../../src/ui/guided-workspace-access";
 import { onboardingFacts } from "../../src/ui/guided-onboarding";
@@ -322,6 +322,7 @@ async function stateRoot(): Promise<string> {
 function dependencies() {
   let sequence = 0;
   return {
+    taskModelPolicy: fixtureTaskModelPolicy,
     now: () => "2026-09-16T10:00:00.000Z",
     id: () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`,
   };
@@ -869,7 +870,11 @@ describe("Farol Next product configuration", () => {
         },
       },
     });
-    const service = new ProductConfigurationService(store, dependencies());
+    const modelPolicy = vi.fn(fixtureTaskModelPolicy);
+    const service = new ProductConfigurationService(store, {
+      ...dependencies(),
+      taskModelPolicy: modelPolicy,
+    });
     await service.initialize();
     const selection = {
       transport: "codex-shared-proxy/v1",
@@ -894,6 +899,28 @@ describe("Farol Next product configuration", () => {
       ok: true,
       snapshot: { settings: { nativeHosts: { taskRoute: selection } } },
     });
+    expect(modelPolicy).toHaveBeenCalledOnce();
+    const afterRoute = service.snapshot();
+    if (afterRoute.status !== "ready") throw new Error("settings missing");
+    const savedBeforeStale = saves.mock.calls.length;
+    await expect(
+      service.recordCodexTaskRoute(selection, afterRoute.settings.revision - 1),
+    ).resolves.toMatchObject({ ok: false });
+    expect(modelPolicy).toHaveBeenCalledOnce();
+    expect(saves.mock.calls.length).toBe(savedBeforeStale);
+    modelPolicy.mockResolvedValueOnce({ status: "unavailable" });
+    await expect(
+      service.recordCodexTaskRoute(selection, afterRoute.settings.revision),
+    ).resolves.toMatchObject({ ok: false });
+    expect(saves.mock.calls.length).toBe(savedBeforeStale);
+    const noGo = new ProductConfigurationService(store, {
+      now: dependencies().now,
+    });
+    await noGo.initialize();
+    await expect(noGo.recordCodexTaskRoute(selection)).resolves.toMatchObject({
+      ok: false,
+    });
+    expect(saves.mock.calls.length).toBe(savedBeforeStale);
     const command = ProductConfigurationCommandSchema.parse({
       kind: "host.configure-codex-tasks",
       socketPath: selection.socketPath,
