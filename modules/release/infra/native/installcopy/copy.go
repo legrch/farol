@@ -33,7 +33,9 @@ type Directory struct {
 // final expected-digest and application-identity verification.
 type Fence func(context.Context) error
 
-// Failure contains no paths or underlying OS error text. Uncertain means some
+// Failure.Error contains no paths or underlying OS error text. Its private cause
+// preserves native/fence classification and concurrent cancellation. Internal
+// distinguishes native errors from inspected refusals. Uncertain means some
 // private destination effect may have occurred; the operation must not be retried.
 type Failure struct {
 	Code                string

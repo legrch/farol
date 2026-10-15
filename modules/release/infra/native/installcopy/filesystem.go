@@ -59,10 +59,13 @@ type limits struct {
 	bytes          int64
 }
 type hooks struct {
-	before func(string)
-	write  func(int, []byte) (int, error)
-	fsync  func(int) error
-	close  func(int) error
+	before  func(string)
+	open    func(int, string, int, uint32) (int, error)
+	mkdir   func(int, string, uint32) error
+	symlink func(string, int, string) error
+	write   func(int, []byte) (int, error)
+	fsync   func(int) error
+	close   func(int) error
 }
 type runner struct {
 	ctx      context.Context
@@ -81,26 +84,62 @@ func (r *runner) check() error {
 	}
 	if err := r.ctx.Err(); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return refusal("deadline")
+			return &Failure{Code: "launch_copy_deadline", cause: err}
 		}
-		return refusal("canceled")
+		return &Failure{Code: "launch_copy_canceled", cause: err}
 	}
 	if !time.Now().Before(r.c.until) {
-		return refusal("deadline")
+		return &Failure{Code: "launch_copy_deadline", cause: context.DeadlineExceeded}
 	}
 	return nil
 }
 func osFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	code := "io"
 	switch {
 	case errors.Is(err, unix.EEXIST):
-		return refusal("collision")
+		code = "collision"
 	case errors.Is(err, unix.ENOENT), errors.Is(err, unix.ENOTDIR), errors.Is(err, unix.ELOOP), errors.Is(err, unix.ESTALE):
-		return refusal("changed")
+		code = "changed"
 	case errors.Is(err, unix.EACCES), errors.Is(err, unix.EPERM):
-		return refusal("mode")
-	default:
-		return &Failure{Code: "launch_copy_io", Internal: true}
+		code = "mode"
 	}
+	// Python's native OSError path is an infrastructure error even when errno
+	// also supplies a bounded diagnostic or proves an exclusive no-create result.
+	return &Failure{Code: "launch_copy_" + code, Internal: true, cause: err}
+}
+func combine(all ...error) error {
+	var causes []error
+	var selected *Failure
+	uncertain, internal := false, false
+	for _, err := range all {
+		if err == nil {
+			continue
+		}
+		causes = append(causes, err)
+		if f, ok := err.(*Failure); ok && f != nil && closedCode(f.Code) {
+			if selected == nil || (!selected.Internal && f.Internal) {
+				selected = f
+			}
+			uncertain = uncertain || f.Uncertain
+			internal = internal || f.Internal
+		} else {
+			internal = true
+		}
+	}
+	if len(causes) == 0 {
+		return nil
+	}
+	if len(causes) == 1 {
+		return causes[0]
+	}
+	code := "launch_copy_io"
+	if selected != nil && (!internal || selected.Internal) {
+		code = selected.Code
+	}
+	return &Failure{Code: code, Internal: internal, Uncertain: uncertain, cause: errors.Join(causes...)}
 }
 func (r *runner) call(event string, fn func() error) error {
 	if r.hooks.before != nil {
@@ -112,13 +151,7 @@ func (r *runner) call(event string, fn func() error) error {
 	err := fn()
 	// Observe cancellation even when a syscall returned an error. Effects are
 	// recorded inside fn before this check, including partial writes.
-	if e := r.check(); e != nil {
-		return e
-	}
-	if err != nil {
-		return osFailure(err)
-	}
-	return nil
+	return combine(osFailure(err), r.check())
 }
 func (r *runner) held(fd int) (s fingerprint, err error) {
 	var raw unix.Stat_t
@@ -151,40 +184,53 @@ func (r *runner) match(parent int, name string, fd int, want fingerprint) error 
 }
 func (r *runner) open(parent int, name string, flags int, mode uint32, effect bool) (fd int, err error) {
 	fd = -1
-	err = r.call("open", func() error {
+	dispatch := r.call
+	if effect {
+		dispatch = r.create
+	}
+	err = dispatch("open", func() error {
 		var e error
-		fd, e = unix.Openat(parent, name, flags, mode)
-		if e == nil && effect {
-			r.effected = true
+		if r.hooks.open != nil {
+			fd, e = r.hooks.open(parent, name, flags, mode)
+		} else {
+			fd, e = unix.Openat(parent, name, flags, mode)
 		}
 		return e
 	})
 	if err != nil && fd >= 0 {
-		unix.Close(fd)
+		err = combine(err, r.close(fd))
 		fd = -1
 	}
 	return
 }
+func (r *runner) create(event string, fn func() error) error {
+	return r.call(event, func() error {
+		prior := r.effected
+		// Mark before dispatch: even EINTR/EIO can follow a private mutation.
+		r.effected = true
+		err := fn()
+		// Exclusive EEXIST proves this dispatch created nothing; preserve any
+		// earlier sticky uncertainty rather than clearing it.
+		if errors.Is(err, unix.EEXIST) {
+			r.effected = prior
+		}
+		return err
+	})
+}
 func (r *runner) close(fd int) error {
 	// Close owned descriptions even after cancellation. Never retry close, since
 	// an interrupted close may already have released its numeric descriptor.
+	return r.closeWith(func() error {
+		if r.hooks.close != nil {
+			return r.hooks.close(fd)
+		}
+		return unix.Close(fd)
+	})
+}
+func (r *runner) closeWith(fn func() error) error {
 	before := r.check()
-	var err error
-	if r.hooks.close != nil {
-		err = r.hooks.close(fd)
-	} else {
-		err = unix.Close(fd)
-	}
-	if after := r.check(); after != nil {
-		return after
-	}
-	if before != nil {
-		return before
-	}
-	if err != nil {
-		return osFailure(err)
-	}
-	return r.check()
+	err := fn() // Cleanup must actually run even after cancellation.
+	return combine(osFailure(err), before, r.check())
 }
 func component(s string) bool {
 	return s != "" && s != "." && s != ".." && utf8.ValidString(s) && !strings.ContainsAny(s, "/\x00")
@@ -198,21 +244,10 @@ func (r *runner) names(fd, remaining int) (all []string, err error) {
 	}
 	f := os.NewFile(uintptr(own), "")
 	if f == nil {
-		unix.Close(own)
-		return nil, &Failure{Code: "launch_copy_io", Internal: true}
+		return nil, combine(&Failure{Code: "launch_copy_io", Internal: true}, r.close(own))
 	}
 	defer func() {
-		before := r.check()
-		e := f.Close()
-		if after := r.check(); err == nil && after != nil {
-			err = after
-		}
-		if err == nil && before != nil {
-			err = before
-		}
-		if err == nil && e != nil {
-			err = osFailure(e)
-		}
+		err = combine(err, r.closeWith(f.Close))
 	}()
 	for {
 		var batch []string
@@ -263,11 +298,11 @@ func borrowed(c *captured, fn func(int, int) error) error {
 		// fences, and final checks. No borrowed numeric fd escapes these scopes.
 		e := b.Control(func(destination uintptr) { result = fn(int(source), int(destination)) })
 		if e != nil {
-			result = osFailure(e)
+			result = combine(result, osFailure(e))
 		}
 	})
 	if err != nil {
-		return osFailure(err)
+		return combine(result, osFailure(err))
 	}
 	return result
 }
@@ -394,17 +429,17 @@ func (r *runner) fenceFailure(err error) error {
 	if !r.effected {
 		return err
 	}
-	if errors.Is(err, context.Canceled) {
-		return &Failure{Code: "launch_copy_canceled", Uncertain: true, cause: err}
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return &Failure{Code: "launch_copy_deadline", Uncertain: true, cause: err}
-	}
 	if f, ok := err.(*Failure); ok && f != nil && closedCode(f.Code) {
 		copy := *f
 		copy.Uncertain = true
 		copy.cause = err
 		return &copy
+	}
+	if errors.Is(err, context.Canceled) {
+		return &Failure{Code: "launch_copy_canceled", Uncertain: true, cause: err}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return &Failure{Code: "launch_copy_deadline", Uncertain: true, cause: err}
 	}
 	return &Failure{Code: "launch_copy_fence", Internal: true, Uncertain: true, cause: err}
 }
@@ -433,6 +468,9 @@ func (r *runner) copyDirectory(source, destination, depth int) (tree *node, err 
 	d, err := r.held(destination)
 	if err != nil {
 		return nil, err
+	}
+	if depth == 0 && (s != r.c.roots.source || d != r.c.roots.destination) {
+		return nil, refusal("changed")
 	}
 	if !s.safeDir() || !d.createdDir() {
 		return nil, refusal("mode")
@@ -464,15 +502,19 @@ func (r *runner) copyDirectory(source, destination, depth int) (tree *node, err 
 	} else if now != s {
 		return nil, refusal("changed")
 	}
-	if now, e := r.held(destination); e != nil {
+	beforeSync, e := r.held(destination)
+	if e != nil {
 		return nil, e
-	} else if !d.sameObject(now) {
+	} else if !d.sameObject(beforeSync) {
 		return nil, refusal("changed")
 	}
 	if err = r.sync(destination); err != nil {
 		return nil, err
 	}
 	tree.destination, err = r.held(destination)
+	if err == nil && tree.destination != beforeSync {
+		return nil, refusal("changed")
+	}
 	return tree, err
 }
 func (r *runner) copyEntry(source, destination int, name string, depth int) (result *node, err error) {
@@ -489,12 +531,11 @@ func (r *runner) copyEntry(source, destination int, name string, depth int) (res
 		if depth+1 > r.limit.depth {
 			return nil, refusal("limit")
 		}
-		if err = r.call("mkdir", func() error {
-			e := unix.Mkdirat(destination, name, 0700)
-			if e == nil {
-				r.effected = true
+		if err = r.create("mkdir", func() error {
+			if r.hooks.mkdir != nil {
+				return r.hooks.mkdir(destination, name, 0700)
 			}
-			return e
+			return unix.Mkdirat(destination, name, 0700)
 		}); err != nil {
 			return nil, err
 		}
@@ -504,9 +545,7 @@ func (r *runner) copyEntry(source, destination int, name string, depth int) (res
 			return nil, err
 		}
 		defer func() {
-			if e := r.close(reader); err == nil {
-				err = e
-			}
+			err = combine(err, r.close(reader))
 		}()
 		if err = r.match(source, name, reader, s); err != nil {
 			return nil, err
@@ -517,9 +556,7 @@ func (r *runner) copyEntry(source, destination int, name string, depth int) (res
 			return nil, err
 		}
 		defer func() {
-			if e := r.close(writer); err == nil {
-				err = e
-			}
+			err = combine(err, r.close(writer))
 		}()
 		var child *node
 		child, err = r.copyDirectory(reader, writer, depth+1)
@@ -557,12 +594,11 @@ func (r *runner) copyEntry(source, destination int, name string, depth int) (res
 		if err = r.match(source, name, -1, s); err != nil {
 			return nil, err
 		}
-		if err = r.call("symlink", func() error {
-			e := unix.Symlinkat(text, destination, name)
-			if e == nil {
-				r.effected = true
+		if err = r.create("symlink", func() error {
+			if r.hooks.symlink != nil {
+				return r.hooks.symlink(text, destination, name)
 			}
-			return e
+			return unix.Symlinkat(text, destination, name)
 		}); err != nil {
 			return nil, err
 		}
@@ -619,11 +655,8 @@ func linkText(raw []byte) (string, error) {
 }
 func (r *runner) mode(fd int, mode uint32) error {
 	return r.call("chmod", func() error {
-		e := unix.Fchmod(fd, mode)
-		if e == nil {
-			r.effected = true
-		}
-		return e
+		r.effected = true
+		return unix.Fchmod(fd, mode)
 	})
 }
 func (r *runner) sync(fd int) error {
@@ -640,9 +673,7 @@ func (r *runner) copyFile(source, destination int, name string, want fingerprint
 		return err
 	}
 	defer func() {
-		if e := r.close(reader); err == nil {
-			err = e
-		}
+		err = combine(err, r.close(reader))
 	}()
 	if err = r.match(source, name, reader, want); err != nil {
 		return err
@@ -652,9 +683,7 @@ func (r *runner) copyFile(source, destination int, name string, want fingerprint
 		return err
 	}
 	defer func() {
-		if e := r.close(writer); err == nil {
-			err = e
-		}
+		err = combine(err, r.close(writer))
 	}()
 	created, err := r.held(writer)
 	if err != nil {
@@ -680,14 +709,12 @@ func (r *runner) copyFile(source, destination int, name string, want fingerprint
 		for offset := 0; offset < n; {
 			var count int
 			if err = r.call("write", func() error {
+				r.effected = true
 				var e error
 				if r.hooks.write != nil {
 					count, e = r.hooks.write(writer, r.buffer[offset:n])
 				} else {
 					count, e = unix.Write(writer, r.buffer[offset:n])
-				}
-				if count > 0 {
-					r.effected = true
 				}
 				return e
 			}); err != nil {
@@ -780,18 +807,14 @@ func (r *runner) verifyChild(source, destination int, child *node) (err error) {
 		return err
 	}
 	defer func() {
-		if e := r.close(a); err == nil {
-			err = e
-		}
+		err = combine(err, r.close(a))
 	}()
 	b, err := r.open(destination, child.name, dirFlags, 0, false)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if e := r.close(b); err == nil {
-			err = e
-		}
+		err = combine(err, r.close(b))
 	}()
 	if err = r.verify(a, b, child); err != nil {
 		return err

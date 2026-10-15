@@ -41,7 +41,7 @@ func TestCollisionPreservesForeignEntries(t *testing.T) {
 					put(t, filepath.Join(f.destination, "a"), "foreign", 0600)
 				}
 			}}
-			failure(t, op.run(context.Background(), limits{maxEntries, maxDepth, maxBytes}, h), "collision", false, false)
+			failure(t, op.run(context.Background(), limits{maxEntries, maxDepth, maxBytes}, h), "collision", false, true)
 			b, err := os.ReadFile(filepath.Join(f.destination, "a"))
 			if err != nil || string(b) != "foreign" {
 				t.Fatal("collision overwrote foreign file")
@@ -87,7 +87,7 @@ func TestNoFollowRaces(t *testing.T) {
 					}
 				}
 			}}
-			failure(t, op.run(context.Background(), limits{maxEntries, maxDepth, maxBytes}, h), "changed", kind == "directory-symlink", false)
+			failure(t, op.run(context.Background(), limits{maxEntries, maxDepth, maxBytes}, h), "changed", kind == "directory-symlink", kind != "file-fifo")
 			if kind != "directory-symlink" {
 				if _, err := os.Lstat(filepath.Join(f.destination, "a")); !errors.Is(err, os.ErrNotExist) {
 					t.Fatal("created destination before source authentication")
@@ -247,5 +247,37 @@ func TestNestedDirectoryCloseErrorIsNotSuccess(t *testing.T) {
 	}
 	if _, err := f.b.File.Stat(); err != nil {
 		t.Fatal("closed borrowed destination")
+	}
+}
+
+func TestCreateErrorsRetainUnknownEffects(t *testing.T) {
+	for _, known := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unexpected-io", true: "known-refusal"}[known], func(t *testing.T) {
+			f := setup(t)
+			put(t, filepath.Join(f.source, "a"), "data", 0600)
+			op := f.prepare(t, nil)
+			h := hooks{open: func(parent int, name string, flags int, mode uint32) (int, error) {
+				fd, err := unix.Openat(parent, name, flags, mode)
+				if err == nil && flags&unix.O_CREAT != 0 {
+					if e := unix.Close(fd); e != nil {
+						t.Error(e)
+					}
+					if known {
+						return -1, unix.EACCES
+					}
+					return -1, unix.EIO
+				}
+				return fd, err
+			}}
+			err := op.run(context.Background(), limits{maxEntries, maxDepth, maxBytes}, h)
+			if known {
+				failure(t, err, "mode", true, true)
+			} else {
+				failure(t, err, "io", true, true)
+			}
+			if _, err := os.Stat(filepath.Join(f.destination, "a")); err != nil {
+				t.Fatal("fault seam did not create its private partial entry")
+			}
+		})
 	}
 }

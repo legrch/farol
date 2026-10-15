@@ -293,7 +293,7 @@ func TestOriginalAndEarlierContextDeadline(t *testing.T) {
 		t.Run(bound, func(t *testing.T) {
 			f := setup(t)
 			until := time.Now().Add(time.Minute)
-			want := time.Now().Add(20 * time.Millisecond)
+			want := time.Now().Add(100 * time.Millisecond)
 			ctx := context.Background()
 			if bound == "original" {
 				until = want
@@ -599,5 +599,57 @@ func TestRestrictiveFileUmask(t *testing.T) {
 	got, err := os.Stat(filepath.Join(f.destination, "a"))
 	if err != nil || got.Mode().Perm() != 0700 {
 		t.Fatal("source mode was not restored")
+	}
+}
+
+func TestOriginalRootPinsAtCopyBoundary(t *testing.T) {
+	for _, which := range []string{"source", "destination"} {
+		t.Run(which, func(t *testing.T) {
+			f := setup(t)
+			op := f.prepare(t, nil)
+			stats := 0
+			h := hooks{before: func(event string) {
+				if event != "fstat" {
+					return
+				}
+				stats++
+				if stats == 5 {
+					p := f.source
+					mode := os.FileMode(0750)
+					if which == "destination" {
+						p = f.destination
+						mode = 0500
+					}
+					if err := os.Chmod(p, mode); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}}
+			failure(t, op.run(context.Background(), limits{maxEntries, maxDepth, maxBytes}, h), "changed", false, false)
+		})
+	}
+}
+
+func TestRootMetadataMutationDuringSync(t *testing.T) {
+	f := setup(t)
+	put(t, filepath.Join(f.source, "a"), "data", 0600)
+	op := f.prepare(t, nil)
+	changed := false
+	h := hooks{fsync: func(fd int) error {
+		var stat unix.Stat_t
+		if err := unix.Fstat(fd, &stat); err != nil {
+			return err
+		}
+		if metadata(stat).identity() == f.b.Identity {
+			changed = true
+			if err := os.Chmod(f.destination, 0750); err != nil {
+				return err
+			}
+		}
+		return unix.Fsync(fd)
+	}}
+	failure(t, op.run(context.Background(), limits{maxEntries, maxDepth, maxBytes}, h), "changed", true, false)
+	if !changed {
+		t.Fatal("root fsync seam was not exercised")
 	}
 }
