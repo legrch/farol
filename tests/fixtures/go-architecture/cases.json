@@ -1,0 +1,517 @@
+[
+  {
+    "name": "unadmitted package contextcheckpoint",
+    "files": {
+      "modules/chat/domain/contextcheckpoint/policy.go": "package contextcheckpoint\n"
+    },
+    "reports": [
+      {
+        "code": "GO_PACKAGE_NAME",
+        "file": "modules/chat/domain/contextcheckpoint",
+        "detail": "Package token outside the explicit ADR-0001 vocabulary: contextcheckpoint"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "unadmitted package turns",
+    "files": {
+      "modules/chat/domain/turns/policy.go": "package turns\n"
+    },
+    "reports": [
+      {
+        "code": "GO_PACKAGE_NAME",
+        "file": "modules/chat/domain/turns",
+        "detail": "Package token outside the explicit ADR-0001 vocabulary: turns"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "unadmitted package turn2",
+    "files": {
+      "modules/chat/domain/turn2/policy.go": "package turn2\n"
+    },
+    "reports": [
+      {
+        "code": "GO_PACKAGE_NAME",
+        "file": "modules/chat/domain/turn2",
+        "detail": "Package token outside the explicit ADR-0001 vocabulary: turn2"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "unadmitted package turn_name",
+    "files": {
+      "modules/chat/domain/turn_name/policy.go": "package turn_name\n"
+    },
+    "reports": [
+      {
+        "code": "GO_PACKAGE_NAME",
+        "file": "modules/chat/domain/turn_name",
+        "detail": "Package token outside the explicit ADR-0001 vocabulary: turn_name"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "unadmitted package Turn",
+    "files": {
+      "modules/chat/domain/Turn/policy.go": "package Turn\n"
+    },
+    "reports": [
+      {
+        "code": "GO_PACKAGE_NAME",
+        "file": "modules/chat/domain/Turn",
+        "detail": "Package token outside the explicit ADR-0001 vocabulary: Turn"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "catch-all package util",
+    "files": {
+      "modules/chat/domain/util/policy.go": "package util\n"
+    },
+    "reports": [
+      {
+        "code": "GO_CATCH_ALL_NAME",
+        "file": "modules/chat/domain/util",
+        "detail": "Catch-all package name: util"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "catch-all file util",
+    "files": {
+      "modules/chat/app/services/turn/util.go": "package turn\n"
+    },
+    "reports": [
+      {
+        "code": "GO_CATCH_ALL_NAME",
+        "file": "modules/chat/app/services/turn/util.go",
+        "detail": "Catch-all production file name: util"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "catch-all package utils",
+    "files": {
+      "modules/chat/domain/utils/policy.go": "package utils\n"
+    },
+    "reports": [
+      {
+        "code": "GO_CATCH_ALL_NAME",
+        "file": "modules/chat/domain/utils",
+        "detail": "Catch-all package name: utils"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "catch-all file utils",
+    "files": {
+      "modules/chat/app/services/turn/utils.go": "package turn\n"
+    },
+    "reports": [
+      {
+        "code": "GO_CATCH_ALL_NAME",
+        "file": "modules/chat/app/services/turn/utils.go",
+        "detail": "Catch-all production file name: utils"
+      }
+    ],
+    "blocking": ["GO_GENERIC_NAME"]
+  },
+  {
+    "name": "catch-all package common",
+    "files": {
+      "modules/chat/domain/common/policy.go": "package common\n"
+    },
+    "reports": [
+      {
+        "code": "GO_CATCH_ALL_NAME",
+        "file": "modules/chat/domain/common",
+        "detail": "Catch-all package name: common"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "catch-all file common",
+    "files": {
+      "modules/chat/app/services/turn/common.go": "package turn\n"
+    },
+    "reports": [
+      {
+        "code": "GO_CATCH_ALL_NAME",
+        "file": "modules/chat/app/services/turn/common.go",
+        "detail": "Catch-all production file name: common"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "catch-all package helper",
+    "files": {
+      "modules/chat/domain/helper/policy.go": "package helper\n"
+    },
+    "reports": [
+      {
+        "code": "GO_CATCH_ALL_NAME",
+        "file": "modules/chat/domain/helper",
+        "detail": "Catch-all package name: helper"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "catch-all file helper",
+    "files": {
+      "modules/chat/app/services/turn/helper.go": "package turn\n"
+    },
+    "reports": [
+      {
+        "code": "GO_CATCH_ALL_NAME",
+        "file": "modules/chat/app/services/turn/helper.go",
+        "detail": "Catch-all production file name: helper"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "catch-all package helpers",
+    "files": {
+      "modules/chat/domain/helpers/policy.go": "package helpers\n"
+    },
+    "reports": [
+      {
+        "code": "GO_CATCH_ALL_NAME",
+        "file": "modules/chat/domain/helpers",
+        "detail": "Catch-all package name: helpers"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "catch-all file helpers",
+    "files": {
+      "modules/chat/app/services/turn/helpers.go": "package turn\n"
+    },
+    "reports": [
+      {
+        "code": "GO_CATCH_ALL_NAME",
+        "file": "modules/chat/app/services/turn/helpers.go",
+        "detail": "Catch-all production file name: helpers"
+      }
+    ],
+    "blocking": ["GO_GENERIC_NAME"]
+  },
+  {
+    "name": "catch-all package types",
+    "files": {
+      "modules/chat/domain/types/policy.go": "package types\n"
+    },
+    "reports": [
+      {
+        "code": "GO_CATCH_ALL_NAME",
+        "file": "modules/chat/domain/types",
+        "detail": "Catch-all package name: types"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "catch-all file types",
+    "files": {
+      "modules/chat/app/services/turn/types.go": "package turn\n"
+    },
+    "reports": [
+      {
+        "code": "GO_CATCH_ALL_NAME",
+        "file": "modules/chat/app/services/turn/types.go",
+        "detail": "Catch-all production file name: types"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "catch-all package values",
+    "files": {
+      "modules/chat/domain/values/policy.go": "package values\n"
+    },
+    "reports": [
+      {
+        "code": "GO_CATCH_ALL_NAME",
+        "file": "modules/chat/domain/values",
+        "detail": "Catch-all package name: values"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "catch-all file values",
+    "files": {
+      "modules/chat/app/services/turn/values.go": "package turn\n"
+    },
+    "reports": [
+      {
+        "code": "GO_CATCH_ALL_NAME",
+        "file": "modules/chat/app/services/turn/values.go",
+        "detail": "Catch-all production file name: values"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "catch-all package misc",
+    "files": {
+      "modules/chat/domain/misc/policy.go": "package misc\n"
+    },
+    "reports": [
+      {
+        "code": "GO_CATCH_ALL_NAME",
+        "file": "modules/chat/domain/misc",
+        "detail": "Catch-all package name: misc"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "catch-all file misc",
+    "files": {
+      "modules/chat/app/services/turn/misc.go": "package turn\n"
+    },
+    "reports": [
+      {
+        "code": "GO_CATCH_ALL_NAME",
+        "file": "modules/chat/app/services/turn/misc.go",
+        "detail": "Catch-all production file name: misc"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "catch-all package manager",
+    "files": {
+      "modules/chat/domain/manager/policy.go": "package manager\n"
+    },
+    "reports": [
+      {
+        "code": "GO_CATCH_ALL_NAME",
+        "file": "modules/chat/domain/manager",
+        "detail": "Catch-all package name: manager"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "catch-all file manager",
+    "files": {
+      "modules/chat/app/services/turn/manager.go": "package turn\n"
+    },
+    "reports": [
+      {
+        "code": "GO_CATCH_ALL_NAME",
+        "file": "modules/chat/app/services/turn/manager.go",
+        "detail": "Catch-all production file name: manager"
+      }
+    ],
+    "blocking": ["GO_GENERIC_NAME"]
+  },
+  {
+    "name": "package clauses are checked independently of directory names",
+    "files": {
+      "modules/chat/domain/turn/policy.go": "package contextcheckpoint\n"
+    },
+    "reports": [
+      {
+        "code": "GO_PACKAGE_NAME",
+        "file": "modules/chat/domain/turn",
+        "detail": "Package token outside the explicit ADR-0001 vocabulary: contextcheckpoint"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "app/capabilities/guard imports a service",
+    "files": {
+      "modules/chat/app/capabilities/guard/policy.go": "package guard\nimport _ \"github.com/legrch/farol/modules/chat/app/services/turn\"\n",
+      "modules/chat/app/services/turn/service.go": "package turn\n"
+    },
+    "reports": [
+      {
+        "code": "GO_CAPABILITY_DIRECTION",
+        "file": "modules/chat/app/capabilities/guard/policy.go",
+        "detail": "github.com/legrch/farol/modules/chat/app/services/turn"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "infra/client imports a service",
+    "files": {
+      "modules/chat/infra/client/policy.go": "package client\nimport _ \"github.com/legrch/farol/modules/chat/app/services/turn\"\n",
+      "modules/chat/app/services/turn/service.go": "package turn\n"
+    },
+    "reports": [
+      {
+        "code": "GO_INFRA_SERVICE",
+        "file": "modules/chat/infra/client/policy.go",
+        "detail": "github.com/legrch/farol/modules/chat/app/services/turn"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "allowed capability and infrastructure ports",
+    "files": {
+      "modules/chat/app/services/turn/create.go": "package turn\nimport _ \"github.com/legrch/farol/modules/chat/app/capabilities/guard\"\n",
+      "modules/chat/app/capabilities/guard/policy.go": "package guard\nimport _ \"github.com/legrch/farol/modules/chat/app/port\"\n",
+      "modules/chat/infra/client/client.go": "package client\nimport _ \"github.com/legrch/farol/modules/chat/app/port\"\n",
+      "modules/chat/app/port/clock.go": "package port\n"
+    },
+    "reports": [],
+    "blocking": []
+  },
+  {
+    "name": "direct cross-operation DTO alias",
+    "files": {
+      "modules/chat/app/services/turn/read.go": "package turn\ntype ReadRequest = CheckRequest\n"
+    },
+    "reports": [
+      {
+        "code": "GO_DTO_ALIAS",
+        "file": "modules/chat/app/services/turn/read.go",
+        "detail": "DTO alias ReadRequest = CheckRequest"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "grouped cross-operation DTO alias",
+    "files": {
+      "modules/chat/app/services/turn/read.go": "package turn\ntype (\n ReadRequest = CheckRequest\n ReadResponse = ExecuteResponse\n)\n"
+    },
+    "reports": [
+      {
+        "code": "GO_DTO_ALIAS",
+        "file": "modules/chat/app/services/turn/read.go",
+        "detail": "DTO alias ReadResponse = ExecuteResponse"
+      },
+      {
+        "code": "GO_DTO_ALIAS",
+        "file": "modules/chat/app/services/turn/read.go",
+        "detail": "DTO alias ReadRequest = CheckRequest"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "generic cross-operation DTO alias",
+    "files": {
+      "modules/chat/app/services/turn/read.go": "package turn\ntype ReadResult[T any] = CheckResult[T]\n"
+    },
+    "reports": [
+      {
+        "code": "GO_DTO_ALIAS",
+        "file": "modules/chat/app/services/turn/read.go",
+        "detail": "DTO alias ReadResult = CheckResult"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "cross-layer same-operation alias from app/services/turn",
+    "files": {
+      "modules/chat/contracts/turn/contract.go": "package turn\nimport operation \"github.com/legrch/farol/modules/chat/app/services/turn\"\ntype ReadRequest = operation.ReadRequest\n",
+      "modules/chat/app/services/turn/read.go": "package turn\ntype ReadRequest struct{}\n"
+    },
+    "reports": [
+      {
+        "code": "GO_DTO_ALIAS",
+        "file": "modules/chat/contracts/turn/contract.go",
+        "detail": "DTO alias ReadRequest = operation.ReadRequest"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "cross-layer same-operation alias from domain/turn",
+    "files": {
+      "modules/chat/contracts/turn/contract.go": "package turn\nimport operation \"github.com/legrch/farol/modules/chat/domain/turn\"\ntype ReadRequest = operation.ReadRequest\n",
+      "modules/chat/domain/turn/read.go": "package turn\ntype ReadRequest struct{}\n"
+    },
+    "reports": [
+      {
+        "code": "GO_DTO_ALIAS",
+        "file": "modules/chat/contracts/turn/contract.go",
+        "detail": "DTO alias ReadRequest = operation.ReadRequest"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "cross-service same-operation alias",
+    "files": {
+      "modules/chat/app/services/turn/read.go": "package turn\nimport \"github.com/legrch/farol/modules/chat/app/services/browse\"\ntype ReadRequest = browse.ReadRequest\n",
+      "modules/chat/app/services/browse/read.go": "package browse\ntype ReadRequest struct{}\n"
+    },
+    "reports": [
+      {
+        "code": "GO_DTO_ALIAS",
+        "file": "modules/chat/app/services/turn/read.go",
+        "detail": "DTO alias ReadRequest = browse.ReadRequest"
+      }
+    ],
+    "blocking": ["GO_SERVICE_DEPENDENCY"]
+  },
+  {
+    "name": "aliases are not defined types or comments",
+    "files": {
+      "modules/chat/app/services/turn/read.go": "package turn\n// type ReadRequest = CheckRequest\nconst text = `type ReadRequest = CheckRequest`\ntype ReadRequest CheckRequest\ntype ReadResult = ReadView\ntype Handle = Session\ntype Group struct { ReadRequest CheckRequest }\nfunc local() { type ReadRequest = CheckRequest }\n"
+    },
+    "reports": [],
+    "blocking": []
+  },
+  {
+    "name": "tests and generated schema keep existing exclusions",
+    "files": {
+      "modules/chat/app/services/turn/read_test.go": "package turn\ntype ReadRequest = CheckRequest\n",
+      "gen/desktop/v1/types.go": "// Code generated by Farol schema generator. DO NOT EDIT.\npackage v1\ntype ReadRequest = CheckRequest\n"
+    },
+    "reports": [],
+    "blocking": []
+  },
+  {
+    "name": "existing blockers stay blocking",
+    "files": {
+      "modules/chat/app/services/turn/create.go": "package turn\nimport _ \"os\"\ntype ReadRequest = CheckRequest\n"
+    },
+    "reports": [
+      {
+        "code": "GO_DTO_ALIAS",
+        "file": "modules/chat/app/services/turn/create.go",
+        "detail": "DTO alias ReadRequest = CheckRequest"
+      }
+    ],
+    "blocking": ["GO_PURE_IMPORT"]
+  },
+  {
+    "name": "same-layer independent contract DTO alias",
+    "files": {
+      "modules/chat/contracts/turn/contract.go": "package turn\nimport operation \"github.com/legrch/farol/modules/chat/contracts/browse\"\ntype ReadRequest = operation.ReadRequest\n",
+      "modules/chat/contracts/browse/contract.go": "package browse\ntype ReadRequest struct{}\n"
+    },
+    "reports": [
+      {
+        "code": "GO_DTO_ALIAS",
+        "file": "modules/chat/contracts/turn/contract.go",
+        "detail": "DTO alias ReadRequest = operation.ReadRequest"
+      }
+    ],
+    "blocking": []
+  }
+]
