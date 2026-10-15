@@ -4,10 +4,27 @@ export const SIGNED_DERIVATIVE_SCHEMA = "farol.signed-derivative/1";
 const prefix = "SIGNED_DERIVATIVE_";
 const treeVersion = "farol.next.tree-digest/v2";
 const roles = ["bootstrap", "backend", "archive-helper", "electron-code"];
+const failures = new WeakSet();
 
 function requireValue(condition, code = "SHAPE_INVALID") {
-  if (!condition)
-    throw Object.assign(new Error(prefix + code), { code: prefix + code });
+  if (!condition) {
+    const error = Object.freeze(
+      Object.assign(new Error(prefix + code), {
+        code: prefix + code,
+      }),
+    );
+    failures.add(error);
+    throw error;
+  }
+}
+function boundary(operation) {
+  try {
+    return operation();
+  } catch (error) {
+    // Identity membership preserves our failures without inspecting untrusted throws.
+    if (failures.has(error)) throw error;
+    requireValue(false);
+  }
 }
 
 // Read descriptors before values: getters, symbols and custom prototypes are refused.
@@ -285,7 +302,7 @@ function freeze(value) {
   return value;
 }
 
-export function parseSignedDerivativeProvenance(value) {
+function parseDeclaration(value) {
   const fields = data(value);
   requireValue(fields.schema === SIGNED_DERIVATIVE_SCHEMA, "SCHEMA_INVALID");
   const item = object(fields, ["schema", "stage", "raw", "signed"]);
@@ -303,8 +320,8 @@ export function parseSignedDerivativeProvenance(value) {
   return freeze(result);
 }
 
-export function assertSignedDerivativeBinding(declaration, context) {
-  const result = parseSignedDerivativeProvenance(declaration);
+function bindDeclaration(declaration, context) {
+  const result = parseDeclaration(declaration);
   const inputs = object(context, [
     "trustedRaw",
     "signaturePolicy",
@@ -355,4 +372,12 @@ export function assertSignedDerivativeBinding(declaration, context) {
     );
   });
   return result;
+}
+
+export function parseSignedDerivativeProvenance(value) {
+  return boundary(() => parseDeclaration(value));
+}
+
+export function assertSignedDerivativeBinding(declaration, context) {
+  return boundary(() => bindDeclaration(declaration, context));
 }

@@ -125,7 +125,10 @@ function context() {
 }
 function refuses(action, code = "SHAPE_INVALID") {
   expect(action).toThrow(
-    expect.objectContaining({ code: `SIGNED_DERIVATIVE_${code}` }),
+    expect.objectContaining({
+      code: `SIGNED_DERIVATIVE_${code}`,
+      message: `SIGNED_DERIVATIVE_${code}`,
+    }),
   );
 }
 function frozen(value) {
@@ -503,6 +506,137 @@ const badPaths = [
   `Contents/${"a".repeat(1024)}`,
 ];
 describe("closed bounded data schema", () => {
+  it.each(["getPrototypeOf", "ownKeys", "getOwnPropertyDescriptor"])(
+    "classifies %s reflection exceptions at both entrypoints and nested inputs",
+    (trap) => {
+      const proxy = (value) =>
+        new Proxy(value, {
+          [trap]() {
+            throw new Error("synthetic reflection detail");
+          },
+        });
+      refuses(() => parseSignedDerivativeProvenance(proxy(declaration())));
+      refuses(() =>
+        assertSignedDerivativeBinding(proxy(declaration()), context()),
+      );
+      for (const bind of [false, true]) {
+        const input = declaration();
+        input.raw.runtime = proxy(input.raw.runtime);
+        refuses(() =>
+          bind
+            ? assertSignedDerivativeBinding(input, context())
+            : parseSignedDerivativeProvenance(input),
+        );
+      }
+      refuses(() =>
+        assertSignedDerivativeBinding(declaration(), proxy(context())),
+      );
+      for (const name of ["trustedRaw", "signaturePolicy", "observedSigned"]) {
+        const inputs = context();
+        inputs[name] = proxy(inputs[name]);
+        refuses(() => assertSignedDerivativeBinding(declaration(), inputs));
+      }
+      const inputs = context();
+      inputs.signaturePolicy.outer.entitlements = proxy({ synthetic: true });
+      refuses(() => assertSignedDerivativeBinding(declaration(), inputs));
+      inputs.signaturePolicy = context().signaturePolicy;
+      inputs.observedSigned.components = proxy(
+        inputs.observedSigned.components,
+      );
+      refuses(() => assertSignedDerivativeBinding(declaration(), inputs));
+    },
+  );
+  it("classifies revoked proxy exceptions at both entrypoints and nested contexts", () => {
+    const revoked = () => {
+      const proxy = Proxy.revocable({}, {});
+      proxy.revoke();
+      return proxy.proxy;
+    };
+    refuses(() => parseSignedDerivativeProvenance(revoked()));
+    refuses(() => assertSignedDerivativeBinding(revoked(), context()));
+    for (const bind of [false, true]) {
+      const input = declaration();
+      input.signed.outerSignature = revoked();
+      refuses(() =>
+        bind
+          ? assertSignedDerivativeBinding(input, context())
+          : parseSignedDerivativeProvenance(input),
+      );
+    }
+    refuses(() => assertSignedDerivativeBinding(declaration(), revoked()));
+    for (const name of ["trustedRaw", "signaturePolicy", "observedSigned"]) {
+      const inputs = context();
+      inputs[name] = revoked();
+      refuses(() => assertSignedDerivativeBinding(declaration(), inputs));
+    }
+    const inputs = context();
+    inputs.observedSigned.components = revoked();
+    refuses(() => assertSignedDerivativeBinding(declaration(), inputs));
+  });
+  it("normalizes untrusted thrown values without inspecting or trusting their fields", () => {
+    let inspections = 0;
+    const hostile = new Proxy(
+      {},
+      {
+        get() {
+          inspections++;
+          throw new Error("unexpected thrown-value read");
+        },
+        getPrototypeOf() {
+          inspections++;
+          throw new Error("unexpected thrown-value prototype read");
+        },
+      },
+    );
+    const revoked = Proxy.revocable({}, {});
+    revoked.revoke();
+    for (const thrown of [
+      hostile,
+      revoked.proxy,
+      null,
+      "synthetic detail",
+      Object.assign(new Error("synthetic detail"), {
+        code: "SIGNED_DERIVATIVE_RAW_MISMATCH",
+      }),
+    ]) {
+      const proxy = () =>
+        new Proxy(
+          {},
+          {
+            getPrototypeOf() {
+              throw thrown;
+            },
+          },
+        );
+      refuses(() => parseSignedDerivativeProvenance(proxy()));
+      refuses(() => assertSignedDerivativeBinding(declaration(), proxy()));
+    }
+    expect(inspections).toBe(0);
+  });
+  it("keeps branded failure classification immutable if callers retain and rethrow it", () => {
+    let retained;
+    try {
+      parseSignedDerivativeProvenance({});
+    } catch (error) {
+      retained = error;
+    }
+    expect(Object.isFrozen(retained)).toBe(true);
+    expect(() => {
+      retained.code = "SIGNED_DERIVATIVE_RAW_MISMATCH";
+    }).toThrow(TypeError);
+    const proxy = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw retained;
+        },
+      },
+    );
+    refuses(
+      () => assertSignedDerivativeBinding(declaration(), proxy),
+      "SCHEMA_INVALID",
+    );
+  });
   it.each(["\n", "\r", "\r\n", "\u2028", "\u2029"])(
     "refuses terminal controls %j in hashes, Team IDs, ASCII fields and paths",
     (control) => {

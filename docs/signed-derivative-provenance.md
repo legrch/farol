@@ -135,6 +135,11 @@ properties, sparse arrays, array extensions and unsafe numbers are refused.
 Arrays must use `Array.prototype`. Property descriptors are inspected before
 reading their values, so ordinary accessors are not invoked. JavaScript proxies
 can execute traps and are not an authenticated transport or an isolation boundary.
+Both entrypoints normalize reflection exceptions and other unexpected JavaScript
+failures to `SIGNED_DERIVATIVE_SHAPE_INVALID`. A private identity brand preserves
+only contract-created classified errors; thrown values are never inspected for
+their prototype, message or code. This classification does not prevent proxy traps
+from executing or undo their effects.
 Already-parsed values cannot reveal duplicate JSON keys discarded by `JSON.parse`.
 Entitlement map insertion order is normalized; no document canonical encoding or
 hashing API is defined.
