@@ -123,13 +123,24 @@ type retainedSendCurrent struct {
 	current  port.SendCurrent
 }
 
-func (c *retainedSendCurrent) inspect(ctx context.Context, callback func() error) error {
-	if c == nil || c.retained == nil || c.current == nil || callback == nil {
+func (c *retainedSendCurrent) inspect(ctx context.Context, callback func() error) (err error) {
+	if c == nil || c.current == nil {
+		return Invalid
+	}
+	defer func() {
+		if err != nil {
+			// A refused retained check must invalidate any earlier selection,
+			// even if it never reached Chat or the consumer ignores this error.
+			// Cleanup runs after the witness releases its gates; keep the failure.
+			_ = c.current.WithCurrent(ctx, nil)
+		}
+	}()
+	if c.retained == nil || callback == nil {
 		return Invalid
 	}
 	calls := 0
 	var callbackErr error
-	err := c.retained.witness.WithCurrent(ctx, func(v port.HistoryPredecessorView) error {
+	err = c.retained.witness.WithCurrent(ctx, func(v port.HistoryPredecessorView) error {
 		calls++
 		if calls != 1 || v != c.retained.view {
 			callbackErr = Mismatch
@@ -148,9 +159,6 @@ func (c *retainedSendCurrent) inspect(ctx context.Context, callback func() error
 }
 
 func (c *retainedSendCurrent) WithCurrent(ctx context.Context, inspect func(port.TurnBinding) error) error {
-	if inspect == nil {
-		return Invalid
-	}
 	return c.inspect(ctx, func() error { return c.current.WithCurrent(ctx, inspect) })
 }
 

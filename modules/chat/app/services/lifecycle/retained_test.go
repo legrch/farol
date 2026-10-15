@@ -421,3 +421,82 @@ func TestRetainedContinuationWithdrawalAfterFinalGuardPreventsSend(t *testing.T)
 		t.Fatal("withdrawn Send was retried", err)
 	}
 }
+
+func TestRetainedAuthorizationCannotSkipOrLoseCurrentCallback(t *testing.T) {
+	for _, kind := range []string{"skip", "account-snapshot-only", "refuse", "late-refusal", "late-nil-callback", "late-nil-context", "late-nil-snapshot-context", "late-witness-failure", "late-witness-missing", "late-snapshot-witness-failure", "late-snapshot-witness-missing", "valid-snapshot"} {
+		t.Run(kind, func(t *testing.T) {
+			s, b, j, _ := conversationOwner(t)
+			ctx, witness := context.Background(), retainedFixture()
+			authorize := func(ctx context.Context, current port.SendCurrent) error {
+				if kind == "skip" {
+					return nil
+				}
+				if kind == "account-snapshot-only" {
+					_, err := current.AccountSnapshot(ctx)
+					return err
+				}
+				if kind == "refuse" {
+					return Unavailable
+				}
+				inspect := func(port.TurnBinding) error { return nil }
+				if err := current.WithCurrent(ctx, inspect); err != nil {
+					return err
+				}
+				switch kind {
+				case "late-nil-callback":
+					_ = current.WithCurrent(ctx, nil)
+				case "late-nil-context":
+					_ = current.WithCurrent(nil, inspect)
+				case "late-nil-snapshot-context":
+					_, _ = current.AccountSnapshot(nil)
+				case "late-witness-failure", "late-witness-missing", "late-snapshot-witness-failure", "late-snapshot-witness-missing":
+					witness.fault = "late-failure"
+					if strings.HasSuffix(kind, "missing") {
+						witness.fault = "missing-callback"
+					}
+					if strings.HasPrefix(kind, "late-snapshot") {
+						_, _ = current.AccountSnapshot(ctx)
+					} else {
+						_ = current.WithCurrent(ctx, inspect)
+					}
+					// Malformed fixture behavior must not leave an earlier positive
+					// selection alive, even if the final lease check succeeds again.
+					witness.fault = ""
+				case "valid-snapshot":
+					_, err := current.AccountSnapshot(ctx)
+					return err
+				default:
+					_ = current.WithCurrent(ctx, func(port.TurnBinding) error { return Unavailable })
+				}
+				return nil // Deliberately ignore the later capability refusal.
+			}
+			c, err := s.ContinueConversation(ctx, witness, input("1"), authorize)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = s.PrepareNext(ctx, 100); err != nil {
+				t.Fatal(err)
+			}
+			if err = c.Send(ctx, 100); err != nil {
+				t.Fatal(err)
+			}
+			if kind == "valid-snapshot" {
+				if len(b.sent) != 1 {
+					t.Fatal("valid account snapshot lost final authorization")
+				}
+				return
+			}
+			if len(b.sent) != 0 {
+				t.Fatal("ignored capability refusal preserved Send authority")
+			}
+			result, err := c.Result(ctx)
+			if err != nil || result.Code != "SEND_NOT_SENT" || result.Outcome != "failed" {
+				t.Fatal("known refusal missing", result, err)
+			}
+			writes := j.count()
+			if err = c.Send(ctx, 100); err == nil || len(b.sent) != 0 || j.count() != writes {
+				t.Fatal("refused Send retried", err)
+			}
+		})
+	}
+}

@@ -563,3 +563,69 @@ func TestContinueRetainedAuthorizedReplayKeepsOriginalWitness(t *testing.T) {
 		t.Fatal("withdrawn witness caused browser work")
 	}
 }
+
+func TestContinueRetainedAuthorizedCannotLoseCurrentCallback(t *testing.T) {
+	for _, kind := range []string{"skip", "account-snapshot-only", "refuse", "late-refusal", "late-nil-callback", "late-nil-context", "late-nil-snapshot-context", "valid-snapshot"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newRetainedFixture(t)
+			ctx := context.Background()
+			authorize := func(ctx context.Context, current *conversation.SendCurrent) error {
+				if kind == "skip" {
+					return nil
+				}
+				if kind == "account-snapshot-only" {
+					_, err := current.AccountSnapshot(ctx)
+					return err
+				}
+				if kind == "refuse" {
+					return errors.New("fixture authorization refused")
+				}
+				inspect := func(*conversation.Binding) error { return nil }
+				if err := current.WithCurrent(ctx, inspect); err != nil {
+					return err
+				}
+				switch kind {
+				case "late-nil-callback":
+					_ = current.WithCurrent(ctx, nil)
+				case "late-nil-context":
+					_ = current.WithCurrent(nil, inspect)
+				case "late-nil-snapshot-context":
+					_, _ = current.AccountSnapshot(nil)
+				case "valid-snapshot":
+					_, err := current.AccountSnapshot(ctx)
+					return err
+				default:
+					_ = current.WithCurrent(ctx, func(*conversation.Binding) error { return errors.New("fixture later inspection refused") })
+				}
+				return nil // Deliberately ignore the later capability refusal.
+			}
+			h, err := f.facade.ContinueRetainedAuthorized(ctx, f.history, "conversation", f.input, authorize)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = f.facade.PrepareNext(ctx, 100); err != nil {
+				t.Fatal(err)
+			}
+			if err = h.Send(ctx, 100); err != nil {
+				t.Fatal(err)
+			}
+			if kind == "valid-snapshot" {
+				if f.browser.sends != 1 {
+					t.Fatal("valid snapshot lost final authorization")
+				}
+				return
+			}
+			if f.browser.sends != 0 {
+				t.Fatal("facade preserved Send after ignored capability refusal")
+			}
+			result, err := h.Result(ctx)
+			if err != nil || result.Code != "SEND_NOT_SENT" || result.Outcome != "failed" {
+				t.Fatal("known refusal missing", result, err)
+			}
+			revision := f.journal.revision
+			if err = h.Send(ctx, 100); err == nil || f.browser.sends != 0 || f.journal.revision != revision {
+				t.Fatal("facade retried refused Send", err)
+			}
+		})
+	}
+}
