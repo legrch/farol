@@ -80,33 +80,34 @@ async function peer(heldMethods: readonly string[] = []) {
   return { client, calls, reply };
 }
 
-it("observes the original settings poll during the IO turn after its timer", async () => {
-  const f = await peer(["computer.settings.store.next"]);
-  vi.useFakeTimers();
-  try {
-    const original = f.client.request(
-      "computer.settings.store.next",
-      { deadlineMillis: String(Date.now() + 90) },
-      { timeoutMs: 100 },
-    );
-    vi.advanceTimersByTime(100);
-    expect(f.client.verifiedContext.backendGeneration).toBe("backend");
-    f.reply(f.calls.at(-1)!);
-    await expect(original).resolves.toMatchObject({ status: "ok", data: {} });
-    vi.advanceTimersByTime(1);
-    await expect(f.client.request("core.status", {})).resolves.toMatchObject({
-      status: "ok",
-    });
-    expect(
-      f.calls.filter((call) => call.method === "computer.settings.store.next"),
-    ).toHaveLength(1);
-  } finally {
-    vi.useRealTimers();
-    await f.client.close();
-  }
-});
+it.each(["computer.settings.store.next", "chat.browser.next"])(
+  "observes the original %s poll during the IO turn after its timer",
+  async (method) => {
+    const f = await peer([method]);
+    vi.useFakeTimers();
+    try {
+      const original = f.client.request(
+        method,
+        { deadlineMillis: String(Date.now() + 90) },
+        { timeoutMs: 100 },
+      );
+      vi.advanceTimersByTime(100);
+      expect(f.client.verifiedContext.backendGeneration).toBe("backend");
+      f.reply(f.calls.at(-1)!);
+      await expect(original).resolves.toMatchObject({ status: "ok", data: {} });
+      vi.advanceTimersByTime(1);
+      await expect(f.client.request("core.status", {})).resolves.toMatchObject({
+        status: "ok",
+      });
+      expect(f.calls.filter((call) => call.method === method)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+      await f.client.close();
+    }
+  },
+);
 
-it.each(["computer.settings.store.next", "core.status"])(
+it.each(["computer.settings.store.next", "chat.browser.next", "core.status"])(
   "still fences a missing original %s response without resending",
   async (method) => {
     const f = await peer([method]);
@@ -114,7 +115,7 @@ it.each(["computer.settings.store.next", "core.status"])(
     try {
       const original = f.client.request(
         method,
-        method === "computer.settings.store.next"
+        method !== "core.status"
           ? { deadlineMillis: String(Date.now() + 90) }
           : {},
         { timeoutMs: 100 },

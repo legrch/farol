@@ -960,7 +960,7 @@ async function bounded(promise, ms, code) {
     clearTimeout(timer);
   }
 }
-async function ready(window, active) {
+async function ready(window, active, observe) {
   await window
     .locator(".desktop")
     .waitFor({ state: "visible", timeout: 15000 });
@@ -971,6 +971,10 @@ async function ready(window, active) {
       3000,
       "BOOTSTRAP_READ_UNKNOWN",
     );
+    observe?.({
+      runtimeState: value.runtimeState,
+      configurationStatus: value.configuration.status,
+    });
     if (
       value.runtimeState === "ready" &&
       value.configuration.status === "ready"
@@ -1716,7 +1720,7 @@ async function native(selected, inputs, report, save) {
       child = application.process();
       launch.pid = child.pid;
       const launched = launch;
-      if (selected.chatTwoTurn) {
+      if (selected.chatTwoTurn || selected.settingsIdleDelay) {
         const diagnostics = browserFailureCollector();
         launched.browserFailures = diagnostics.failures;
         child.stderr.on("data", (chunk) => diagnostics.ingest(chunk));
@@ -1836,14 +1840,22 @@ async function native(selected, inputs, report, save) {
         );
         const after = await document(file, 1024 * 1024);
         assert.deepEqual(after, before, "GO_JOURNAL_CHANGED_DURING_IDLE_DELAY");
-        await ready(window, active);
-        await hidden();
         launch.settingsIdleDelay = {
-          status: "observed",
+          status: "delay-observed",
           before,
           after,
           ...delay,
         };
+        await ready(window, active, (observation) => {
+          launch.settingsIdleDelay.lastReadiness = observation;
+        });
+        assert.deepEqual(
+          launch.browserFailures,
+          [],
+          "BROWSER_POLL_FENCED_DURING_IDLE_DELAY",
+        );
+        await hidden();
+        launch.settingsIdleDelay.status = "observed";
       }
       await save();
       return { window, settings, hidden };

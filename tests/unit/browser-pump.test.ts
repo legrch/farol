@@ -241,6 +241,51 @@ async function fixture(onFailure?: (failure: BrowserPumpFailure) => void) {
   };
 }
 describe("one-shot typed browser pump", () => {
+  it("keeps an original late empty poll without dispatching a browser effect", async () => {
+    vi.useFakeTimers();
+    try {
+      const f = await fixture();
+      const original = f.calls.find(
+        (call) => call.method === "chat.browser.next",
+      )!;
+      vi.advanceTimersByTime(15000);
+      f.answer(original, {});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.pump.state).toBe("running");
+      expect(f.client.verifiedContext).toEqual(context);
+      expect(
+        f.calls.filter((call) => call.method === "chat.browser.next"),
+      ).toHaveLength(2);
+      for (const driver of Object.values(f.driver))
+        expect(driver).not.toHaveBeenCalled();
+      expect(f.replies).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it.each([false, true])(
+    "fences an original late command with an unexpired budget (clock rollback=%s)",
+    async (rollback) => {
+      vi.useFakeTimers();
+      try {
+        const f = await fixture();
+        vi.advanceTimersByTime(15000);
+        if (rollback) vi.setSystemTime(Date.now() - 60000);
+        await f.deliver(command("prepare"));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(f.pump.state).toBe("unknown");
+        expect(() => f.client.verifiedContext).toThrow();
+        for (const driver of Object.values(f.driver))
+          expect(driver).not.toHaveBeenCalled();
+        expect(f.replies).toHaveLength(0);
+        expect(
+          f.calls.filter((call) => call.method === "chat.browser.next"),
+        ).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
   it("distinguishes an idle poll rejected by the original client's closure", async () => {
     const report = vi.fn();
     const f = await fixture(report);

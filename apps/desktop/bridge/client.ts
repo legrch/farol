@@ -41,6 +41,10 @@ type Pending = {
   reject: (error: BridgeError) => void;
   timer: ReturnType<typeof setTimeout>;
   timeoutCheck?: ReturnType<typeof setImmediate>;
+  poll?: Readonly<{
+    deadlineMillis: number;
+    shape: "BrowserNextResult" | "SettingsStoreNextResult";
+  }>;
   operationId?: string;
   handshake?: Handshake;
   retirementHandoffId?: string;
@@ -493,6 +497,7 @@ export class Client {
       );
     if (pollLane === undefined) this.used.add(id);
     else this.polls.set(pollLane, sequence!);
+    const responseDeadline = Date.now() + remainingMs;
     return new Promise((resolve, reject) => {
       const expire = () => {
         this.pending.delete(wireId);
@@ -501,10 +506,10 @@ export class Client {
       };
       const timer = setTimeout(() => {
         // After a desktop event-loop stall, timers can precede an original
-        // reply already waiting on stdout. Give only the settings poll one
-        // IO turn to observe that reply. This sends nothing and keeps its ID;
-        // the pump still rejects every expired physical command.
-        if (pollLane === "settings") {
+        // reply already waiting on stdout. Give the two reciprocal poll lanes
+        // one IO turn to observe that reply, with the same ID and no resend.
+        // receive admits only a validated empty result after the deadline.
+        if (pollLane !== undefined) {
           const pending = this.pending.get(wireId);
           if (pending) pending.timeoutCheck = setImmediate(expire);
         } else expire();
@@ -514,6 +519,17 @@ export class Client {
         resolve,
         reject,
         timer,
+        ...(pollLane === undefined
+          ? {}
+          : {
+              poll: {
+                deadlineMillis: responseDeadline,
+                shape:
+                  pollLane === "browser"
+                    ? ("BrowserNextResult" as const)
+                    : ("SettingsStoreNextResult" as const),
+              },
+            }),
         ...(operationId !== undefined ? { operationId } : {}),
         ...(handshake ? { handshake } : {}),
         ...(method === "core.retirement.prepare" &&
@@ -578,6 +594,10 @@ export class Client {
     }
     const pending = this.pending.get(response.id);
     if (!pending) return;
+    const latePoll =
+      pending.poll !== undefined &&
+      (pending.timeoutCheck !== undefined ||
+        Date.now() >= pending.poll.deadlineMillis);
     if (response.result) {
       const result = response.result;
       if (
@@ -589,6 +609,20 @@ export class Client {
               this.context.backendGeneration))
       ) {
         this.fail("crossed_response_context");
+        return;
+      }
+      if (
+        pending.poll &&
+        latePoll &&
+        !(
+          result.status === "ok" &&
+          validate(pending.poll.shape, result.data) &&
+          (result.data as { command?: unknown }).command === undefined
+        )
+      ) {
+        // Observation of an empty original poll grants no effect authority.
+        // A late command is refused here even if its own budget is still live.
+        this.fail("response_timeout");
         return;
       }
       if (pending.handshake) {
@@ -644,6 +678,10 @@ export class Client {
           : { ...result, requestId: pending.callerId },
       );
     } else {
+      if (latePoll) {
+        this.fail("response_timeout");
+        return;
+      }
       clearTimeout(pending.timer);
       clearImmediate(pending.timeoutCheck);
       this.pending.delete(response.id);
