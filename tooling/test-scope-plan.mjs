@@ -203,6 +203,13 @@ export function planTests(scope, files) {
       plan.at(-1).testNamePattern = cloudPattern(entry);
     }
     vitest("renderer-unit", classified.renderer, "vitest.renderer.config.ts");
+    plan.push({
+      id: "node-git-cloud",
+      runner: "node",
+      cwd: ".",
+      files: [...nodeSelftests],
+      timeoutMs: 60000,
+    });
   } else if (scope === "unit" || scope === "fast") {
     const selected =
       scope === "fast"

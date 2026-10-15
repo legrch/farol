@@ -17,9 +17,7 @@ describe("Cloud source scope", () => {
   it("includes every ordinary file by default and records every deferred resource boundary", () => {
     const plan = planTests("cloud", files);
     const selected = plan.suites.flatMap((suite) => suite.files ?? []);
-    const all = files.filter(
-      (file) => !file.endsWith("_test.go") && !file.endsWith(".selftest.mjs"),
-    );
+    const all = files.filter((file) => !file.endsWith("_test.go"));
     expect(new Set(selected).size).toBe(selected.length);
     expect(
       [...selected, ...plan.deferredFiles.map((entry) => entry.file)].sort(),
@@ -85,6 +83,9 @@ describe("Cloud source scope", () => {
     const plan = planTests("cloud", files);
     expect(plan.claim).toContain("NOT RUN");
     expect(plan.deferredFiles.some((entry) => entry.mixed)).toBe(true);
-    expect(plan.suites.every((suite) => suite.runner === "vitest")).toBe(true);
+    expect(plan.suites.some((suite) => suite.runner === "go")).toBe(false);
+    expect(plan.suites.find((suite) => suite.runner === "node").files).toEqual([
+      "tests/fixtures/ordinary-git-environment.selftest.mjs",
+    ]);
   });
 });
