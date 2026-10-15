@@ -57,7 +57,7 @@ Start with a small folder containing non-sensitive sample files. **Add workspace
 
 ## Updates and recovery
 
-Open the installed **Farol.app** in **Applications**. The nested **Electron Runtime.app** is an internal component, not a separate app to launch or keep in the Dock.
+Open **Farol.app** from its existing accepted installation location; see [installation paths](docs/start/installation.md#installation-paths-and-adoption). The nested **Electron Runtime.app** is an internal component, not a separate app to launch or keep in the Dock.
 
 For an installation already set up for trusted updates, choose **Check for Updates…** from Farol's menu, then **Install and Relaunch** when ready. Closing the window leaves Farol running; **Command+Q** quits it.
 
