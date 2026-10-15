@@ -66,3 +66,43 @@ input/protocol, handoff custody, process observation, app verification, slot and
 journal owners, namespace effects, private launch capture and terminal mapping.
 The selected Python route stays in place until that capability is ready for
 source cutover; native and installed qualification remain explicit gates.
+
+## Private launch tree copying
+
+`infra/native/installcopy` prepares the descriptor-relative copy used before a
+shared-install target can be launched from a private image. The caller lends
+two exact directory handles: an accepted source and a newly created, empty,
+private destination. `Prepare` captures their complete metadata and original
+deadline. `Run` consumes one shared attempt, including cancellation or refusal;
+copies of the operation cannot dispatch another copy.
+
+Traversal never follows a link. Regular files require a single link, effective
+user ownership, safe modes and stable full metadata; destination creation is
+exclusive. Partial writes are completed, source modes are preserved, owned
+files and directories are fsynced, and complete bounded inventories are checked
+again around the owner's final fence. Symbolic links retain their literal
+relative text. The final app-tree verifier separately decides whether those
+links stay within the accepted image. Production bounds are 100,000 entries,
+1 GiB of copied file bytes, depth 128 and 4096 bytes per link.
+
+Copying is not an atomic source snapshot or a same-user exclusion boundary.
+Creating a directory or link does not atomically return a newly created handle.
+The existing owner must retain route, lease, slot, journal and admission custody,
+verify the complete independently expected target digest and app identity, and
+publish or launch only through its existing effect fences. This primitive never
+publishes, removes, rolls back, adopts or executes an image.
+
+Native call attempts retain possible private effects, including a failed call
+after partial mutation. Exclusive `EEXIST` proves no creation by that call;
+earlier possible effects stay retained. Native I/O and cleanup errors remain
+internal, with closed outer codes and exact private causes. Concurrent
+cancellation cannot hide them or authorize replay. Borrowed descriptors keep
+their offsets, flags and locks, and remain physically held until synchronous
+I/O actually returns; a deadline cannot prove a blocked kernel call stopped.
+
+Portable tests use disposable Linux files and bounded fault seams, including
+collisions, no-follow races, partial mutations, post-fsync metadata changes and
+cancellation during cleanup. Three actual UID/GID mutation cases require
+privileges and remain skipped in this Cloud environment. Darwin builds were
+cross-compiled only. Native, packaged, installed and clean-Mac qualification,
+and removal of the selected Python helper, remain open.

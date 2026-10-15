@@ -58,6 +58,13 @@ The bounded timestamp parser accepts the actual producer's RFC3339Nano subset,
 not every form accepted by Python's wider ISO parser. Cancellation refuses and
 never renews the original caller deadline.
 
+Observer and app-identity failures retain their exact typed dependency causes
+through `errors.Is` and `errors.As`, behind the same closed outer refusal text.
+Concurrent cancellation keeps both the original cause and context error. This
+allows eventual helper composition to distinguish inspected refusals from an
+internal failure without exposing native paths or losing cleanup uncertainty.
+It does not select or implement the helper's final exit-70/exit-79 mapping.
+
 Namespace/process changes remain possible between observations; this is not an
 atomic race-exclusion claim. The parent exclusion owner and the future helper's
 existing journal/effect/unknown fences remain mandatory. This package does not
