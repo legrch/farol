@@ -29,6 +29,7 @@ const (
 	ProcessProbeCanceled
 	ProcessProbeDeadline
 	ProcessProbeCleanupUnknown
+	ProcessProbeStartFailure
 )
 
 // A timeout or uncertain child cleanup remains distinct from a completed
@@ -43,6 +44,8 @@ func (f *ProcessProbeFailure) Error() string { return "release_process_observati
 // Only an explicit positively established ProcessAbsent can prove absence.
 // Implementations retain the exact original observation child, perform no
 // target-process control, and disclose only bounded validated observations.
+// Trusted composition supplies non-panicking, non-typed-nil implementations;
+// pure app constructors do not inspect runtime object identity.
 type ProcessProbe interface {
 	Observe(context.Context, time.Time) (ProcessObservation, error)
 }
