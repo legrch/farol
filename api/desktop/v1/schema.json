@@ -89,7 +89,8 @@
     "computer.connector.catalogueverify": "read",
     "computer.settings.search": "read",
     "task.model.resolve": "read",
-    "task.settings.compare": "read"
+    "task.settings.compare": "read",
+    "task.models.describe": "read"
   },
   "definitions": {
     "Context": {
@@ -5249,6 +5250,37 @@
           "minBytes": 1,
           "maxBytes": 17,
           "pattern": "^(0|-?[1-9][0-9]{0,15})$"
+        }
+      }
+    },
+    "TaskModelCatalogueRequest": {
+      "type": "object",
+      "fields": {
+        "revision": {
+          "type": "decimal"
+        },
+        "config": {
+          "type": "json"
+        },
+        "harness": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*$",
+          "minBytes": 1,
+          "maxBytes": 80
+        },
+        "catalogue": {
+          "type": "json"
+        }
+      }
+    },
+    "TaskModelCatalogueResponse": {
+      "type": "object",
+      "fields": {
+        "revision": {
+          "type": "decimal"
+        },
+        "view": {
+          "type": "json"
         }
       }
     }

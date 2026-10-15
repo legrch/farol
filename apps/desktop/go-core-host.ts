@@ -22,6 +22,7 @@ import { ChatCallerBridge } from "./bridge/chat-caller.ts";
 import { ReadIntentBridge } from "./bridge/read-intent.ts";
 import { SettingsDeliveryBridge } from "./bridge/settings-delivery.ts";
 import { TaskModelPolicyBridge } from "./bridge/task-model-policy.ts";
+import { TaskModelCatalogueBridge } from "./bridge/task-model-catalogue.ts";
 import { TaskCurrentSettingsBridge } from "./bridge/task-current-settings.ts";
 import type { TaskSelectionRequest } from "../../src/pkg/owner-config/contract";
 import {
@@ -125,6 +126,7 @@ export class DesktopGoCore {
   private readonly historyBridge: ChatHistoryBridge;
   private readonly settingsDelivery: SettingsDeliveryBridge;
   private readonly taskModelPolicy: TaskModelPolicyBridge;
+  private readonly taskModelCatalogue: TaskModelCatalogueBridge;
   private readonly taskCurrentSettings: TaskCurrentSettingsBridge;
   private settingsStorePump: SettingsStorePump | undefined;
   private readonly sessionId = randomUUID();
@@ -154,6 +156,7 @@ export class DesktopGoCore {
     this.historyBridge = new ChatHistoryBridge(client);
     this.settingsDelivery = new SettingsDeliveryBridge(client);
     this.taskModelPolicy = new TaskModelPolicyBridge(client);
+    this.taskModelCatalogue = new TaskModelCatalogueBridge(client);
     this.taskCurrentSettings = new TaskCurrentSettingsBridge(client);
   }
   connectSettingsStore(
@@ -294,6 +297,24 @@ export class DesktopGoCore {
         "host_task_model_policy_unavailable",
       );
     return this.taskModelPolicy.resolve(revision, config, selection);
+  }
+  describeTaskModels(
+    revision: number,
+    config: unknown,
+    harness: string,
+    catalogue: unknown,
+  ) {
+    if (this.closeResult)
+      throw new BridgeError(
+        "unavailable",
+        "host_task_model_catalogue_unavailable",
+      );
+    return this.taskModelCatalogue.describe(
+      revision,
+      config,
+      harness,
+      catalogue,
+    );
   }
   compareTaskSettings(before: ProductSettings, candidate: ProductSettings) {
     if (this.closeResult)

@@ -7004,16 +7004,47 @@ async function configureAdmittedProduct(
         route.expiresAt <= Date.now()
       )
         result = { status: "unavailable", code: "TASK_MODEL_CATALOG_CHANGED" };
+      const core = desktopGoCore;
+      let view;
+      if (compiledGoCore === null) {
+        // Explicit controller compatibility only. A selected Go error never
+        // invokes this legacy policy implementation.
+        view = describeTaskModels(
+          current.status === "ready" ? current.settings.tasks : undefined,
+          "codex",
+          result,
+        );
+      } else {
+        if (!core) return configurationFailure("CODEX_TASK_ROUTE_UNAVAILABLE");
+        try {
+          view = await core.describeTaskModels(
+            current.status === "ready"
+              ? current.settings.revision
+              : settings.revision,
+            current.status === "ready" ? current.settings.tasks : undefined,
+            "codex",
+            result,
+          );
+        } catch {
+          return configurationFailure("CODEX_TASK_ROUTE_UNAVAILABLE");
+        }
+        const latest = configuration.snapshot();
+        if (
+          desktopGoCore !== core ||
+          route.expiresAt <= Date.now() ||
+          latest.status !== current.status ||
+          (latest.status === "ready" &&
+            current.status === "ready" &&
+            latest.settings.revision !== current.settings.revision)
+        )
+          return configurationFailure("CODEX_TASK_ROUTE_REFUSED");
+      }
       return ProductConfigurationResultSchema.parse({
         ok: true,
         snapshot: current,
         evidence: {
           kind: "host.task-models",
-          view: describeTaskModels(
-            current.status === "ready" ? current.settings.tasks : undefined,
-            "codex",
-            result,
-          ),
+          view,
         },
       });
     }

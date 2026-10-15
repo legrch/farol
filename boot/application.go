@@ -28,6 +28,12 @@ func serve(ctx context.Context, profileID string, launch *NativeLaunch, in io.Re
 	generation := hex.EncodeToString(bytes[:])
 	var native *NativeRuntime
 	methods := taskModelPolicyMethods()
+	for name, method := range taskModelCatalogueMethods() {
+		if _, exists := methods[name]; exists {
+			return errors.New("task_method_conflict")
+		}
+		methods[name] = method
+	}
 	for name, method := range taskCurrentSettingsMethods() {
 		if _, exists := methods[name]; exists {
 			return errors.New("task_method_conflict")
