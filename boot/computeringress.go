@@ -51,6 +51,7 @@ type ComputerIngress struct {
 	publication         *knownComputerPublication
 	renewal             *connectorRenewalScope
 	route               *ComputerRoute
+	taskCurrentSource   taskCurrentSourceResolver
 }
 type knownComputerPublication struct {
 	receipt       wire.ComputerAuthorityPublication
@@ -75,7 +76,7 @@ func newComputerIngress(store *accessrepo.Store, chat *chatlifecycle.Service, na
 	if store == nil || chat == nil || native == nil || !validIngressID(ownerID) || !validIngressID(computerID) || validateIngress("Context", peer) != nil {
 		return nil, computerUnavailable()
 	}
-	return &ComputerIngress{store: store, chat: chat, native: native, peer: peer, ownerID: ownerID, computerID: computerID, used: make(map[string]bool), tasks: make(map[string]bool), turns: make(map[string]bool)}, nil
+	return &ComputerIngress{store: store, chat: chat, native: native, peer: peer, ownerID: ownerID, computerID: computerID, used: make(map[string]bool), tasks: make(map[string]bool), turns: make(map[string]bool), taskCurrentSource: newTaskCurrentSource()}, nil
 }
 func validIngressID(id string) bool { return len(id) <= 120 && validateIngress("id", id) == nil }
 func validateIngress(name string, v any) error {
@@ -136,11 +137,15 @@ func (s *ComputerIngress) Publish(ctx context.Context, operation string, in wire
 	if e != nil {
 		return nil, e
 	}
-	currentTask, e := s.parsePublishedCodex(in.TaskCodex, approval)
+	source, read, e := s.deriveTaskCurrentSource(ctx, in.TaskCurrentSettings)
 	if e != nil {
 		return nil, e
 	}
-	currentTaskRead, e := s.parsePublishedCodexRead(in.TaskCodexRead, currentTask)
+	currentTask, e := s.parsePublishedCodex(source, approval)
+	if e != nil {
+		return nil, e
+	}
+	currentTaskRead, e := s.parsePublishedCodexRead(read, currentTask)
 	if e != nil {
 		return nil, e
 	}

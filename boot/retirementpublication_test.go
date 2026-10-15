@@ -26,7 +26,7 @@ func TestRetirementPublicationCannotReopenThroughFreshWithdrawal(t *testing.T) {
 		t.Fatal("negative pump withdrawal refused", err)
 	}
 	result, err := p.ingress.Publish(context.Background(), "late-settings-publication", wire.ComputerAuthorityPublishRequest{
-		Fence: d.Fence, ExpectedStoreRevision: d.StoreRevision, SettingsRevision: "2", Approval: p.approval, TaskCodex: &p.metadata,
+		Fence: d.Fence, ExpectedStoreRevision: d.StoreRevision, SettingsRevision: "2", Approval: p.approval, TaskCurrentSettings: p.sourceFacts(t, &p.metadata, nil),
 	})
 	if result != nil || err == nil || p.store.updates != before || p.store.revision != revision || p.ingress.guard.active {
 		t.Fatal("retired owner accepted publication or changed persisted approval", result, err)

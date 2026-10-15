@@ -1,9 +1,14 @@
+// Test-only exact production oracle from a0d9b4bbc74919470166d14766726175d2177ddb.
+// Only the relative bridge import is adjusted; retire no behavior here.
 import { resolveOwnerTaskModel } from "../../src/apps/desktop/owner-config.ts";
 import {
   ProductSettingsSchema,
   type ProductSettings,
 } from "../../src/pkg/product-settings/contract.ts";
-import { validate, type TaskCodexSource } from "./bridge/wire.ts";
+import {
+  validate,
+  type TaskCodexSource,
+} from "../../apps/desktop/bridge/wire.ts";
 
 // Trusted host mapping only. Saved source evidence issues no approval, Task
 // admission, account or native qualification. Root supplies profile/host/scratch

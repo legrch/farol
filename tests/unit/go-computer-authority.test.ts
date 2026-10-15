@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { taskSettingsFacts } from "../../apps/desktop/bridge/task-current-settings.ts";
 import { GoComputerAuthority } from "../../apps/desktop/go-computer-authority";
 import {
   ProductConfigurationService,
@@ -211,8 +212,8 @@ function selectedTaskSettings(original: ProductSettings): ProductSettings {
   return ProductSettingsSchema.parse(settings);
 }
 
-describe("exact selected Task read metadata in the original Computer publication", () => {
-  it("publishes the exact reference with its source without a Task or provider read", async () => {
+describe("raw Task facts in the original Computer publication", () => {
+  it("transports raw saved facts to Go without a Task or provider read", async () => {
     const f = await fixture();
     const added = await f.add();
     if (!added.ok || added.snapshot.status !== "ready") throw Error("fixture");
@@ -224,21 +225,19 @@ describe("exact selected Task read metadata in the original Computer publication
       "computer.authority.deactivate",
       "computer.authority.publish",
     ]);
-    expect(f.request.mock.calls[1]![1]).toMatchObject({
-      taskCodexRead: {
-        threadId: "00000000-0000-4000-8000-000000000c02",
-        turnId: "turn-exact_1",
-      },
-      taskCodex: {
-        workspaceId: settings.nativeHosts.taskRoute!.workspaceId,
-        hostGeneration: String(settings.nativeHosts.generation),
-        computerGeneration: String(settings.computer.generation),
+    const body = f.request.mock.calls[1]![1];
+    expect(body).not.toHaveProperty("taskCodex");
+    expect(body).not.toHaveProperty("taskCodexRead");
+    expect(body).toMatchObject({
+      taskCurrentSettings: {
+        snapshot: JSON.stringify(taskSettingsFacts(settings)),
+        nowMillis: "1791040000000",
       },
     });
   });
 
   it.each(["thread-only", "unknown", "stale-generation"])(
-    "does not invent an exact read selection from %s settings",
+    "transports %s evidence for Go to decide without a local positive selection",
     async (loss) => {
       const f = await fixture();
       const added = await f.add();
@@ -255,9 +254,13 @@ describe("exact selected Task read metadata in the original Computer publication
       await original.publish(settings);
       const body = f.request.mock.calls[1]![1];
       expect(body).not.toHaveProperty("taskCodexRead");
-      if (loss === "thread-only") expect(body).toHaveProperty("taskCodex");
-      if (loss === "stale-generation")
-        expect(body).not.toHaveProperty("taskCodex");
+      expect(body).not.toHaveProperty("taskCodex");
+      expect(body).toMatchObject({
+        taskCurrentSettings: {
+          snapshot: JSON.stringify(taskSettingsFacts(settings)),
+          nowMillis: "1791040000000",
+        },
+      });
       expect(f.request.mock.calls.map(([method]) => method)).toEqual([
         "computer.authority.deactivate",
         "computer.authority.publish",
@@ -291,10 +294,40 @@ describe("exact selected Task read metadata in the original Computer publication
       "computer.authority.deactivate",
       "computer.authority.publish",
     ]);
-    expect(f.request.mock.calls[1]![1]).toHaveProperty(
-      "taskCodexRead.turnId",
-      "turn-exact_1",
-    );
+    expect(f.request.mock.calls[1]![1]).toMatchObject({
+      taskCurrentSettings: {
+        snapshot: JSON.stringify(taskSettingsFacts(settings)),
+      },
+    });
+  });
+
+  it("captures source facts before the original publication can reenter settings", async () => {
+    const f = await fixture();
+    const added = await f.add();
+    if (!added.ok || added.snapshot.status !== "ready") throw Error("fixture");
+    const settings = selectedTaskSettings(added.snapshot.settings);
+    const captured = JSON.stringify(taskSettingsFacts(settings));
+    f.request.mockClear();
+    const request = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === "computer.authority.publish") {
+        settings.revision += 1;
+        settings.nativeHosts.taskRoute!.observeTurnId = "successor-turn";
+        settings.nativeHosts.codex!.executableSha256 = "f".repeat(64);
+      }
+      return request(...args);
+    });
+    const publication = await f.bridge.withdraw();
+    await publication.publish(settings);
+    expect(JSON.stringify(taskSettingsFacts(settings))).not.toBe(captured);
+    expect(f.request.mock.calls[1]![1]).toMatchObject({
+      settingsRevision: String(settings.revision - 1),
+      taskCurrentSettings: { snapshot: captured },
+    });
+    expect(f.request.mock.calls.map(([method]) => method)).toEqual([
+      "computer.authority.deactivate",
+      "computer.authority.publish",
+    ]);
   });
 });
 

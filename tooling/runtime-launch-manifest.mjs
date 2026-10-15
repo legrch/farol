@@ -246,6 +246,14 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
       "legacy-system-tool",
     ),
     launch(
+      "release.go-process-observation",
+      "modules/release/infra/native/processprobe/native.go",
+      "nativeBoundary.prepare",
+      "go.Command",
+      '"/bin/ps"',
+      "legacy-system-tool",
+    ),
+    launch(
       "release.archive-go",
       release + "update-package-verifier.ts",
       "createUpdatePackageVerifier.verifyPackage",

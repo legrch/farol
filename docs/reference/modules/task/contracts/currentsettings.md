@@ -43,5 +43,7 @@ withdrawal, persistence, readback and publication retain their existing owners.
 Portable evidence includes real inherited-pipe Go parity against the retained
 projection vectors, negative/unavailable policy cases, bridge correlation and
 writer queue/deadline/fence regressions. It does not establish packaged/installed
-Task setup, native authority or provider acceptance. Source eligibility, route
-publication, catalogue selection and legacy drain still need separate cutovers.
+Task setup, native authority or provider acceptance. Saved source eligibility is
+selected separately through the [current-source contract](currentsource.md) in
+the existing Computer publication. Catalogue selection and legacy drain still
+need separate cutovers.
