@@ -395,6 +395,27 @@ async function packageFixture() {
   return { directory, entrySha256, write };
 }
 describe("bounded owned executable closure", () => {
+  it("retains package-only legal notices as data without allowing an executable there", async () => {
+    const f = await packageFixture();
+    const notices = path.join(f.directory, "THIRD_PARTY_NOTICES.txt");
+    await fs.writeFile(
+      notices,
+      "Synthetic fixture attribution; not a license attestation.\n",
+      { mode: 0o644 },
+    );
+    await expect(verifyRuntimeExecutableClosure(f)).resolves.toMatchObject({
+      nativeQualification: false,
+    });
+    await fs.chmod(notices, 0o700);
+    await expect(verifyRuntimeExecutableClosure(f)).rejects.toThrow(
+      "EXECUTABLE_UNMANIFESTED",
+    );
+    await fs.chmod(notices, 0o644);
+    await fs.writeFile(notices, Buffer.from("cffaedfe00000000", "hex"));
+    await expect(verifyRuntimeExecutableClosure(f)).rejects.toThrow(
+      "EXECUTABLE_UNMANIFESTED",
+    );
+  });
   it("treats update-archive.py as declared Go Mach-O, independent of suffix", async () => {
     const f = await packageFixture();
     await expect(verifyRuntimeExecutableClosure(f)).resolves.toMatchObject({

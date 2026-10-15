@@ -623,6 +623,9 @@ export async function verifyRuntimeExecutableClosure({
     ...GO_CORE_ENTRIES,
     "build-manifest.json",
     "package.json",
+    // Added by the existing package owner after build entry production; the
+    // package verifier checks its attribution bytes and whole-package digest.
+    "THIRD_PARTY_NOTICES.txt",
   ]);
   const names = await fs.readdir(directory);
   if (names.length > known.size) fail("PACKAGE_ENTRY_UNMANIFESTED");
