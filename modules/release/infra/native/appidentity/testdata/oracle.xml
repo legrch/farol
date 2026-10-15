@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>local.farol.next.preview</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.2.3</string>
+	<key>unknown</key>
+	<dict>
+		<key>array</key>
+		<array>
+			<true/>
+			<false/>
+			<integer>0</integer>
+			<integer>255</integer>
+			<integer>65536</integer>
+			<integer>-1</integer>
+			<integer>9223372036854775808</integer>
+			<real>1.25</real>
+			<data>
+			AP8=
+			</data>
+			<date>2026-10-15T12:34:56Z</date>
+			<string>é😀</string>
+			<string>é</string>
+			<array/>
+			<dict/>
+		</array>
+		<key>long</key>
+		<string>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</string>
+	</dict>
+</dict>
+</plist>
