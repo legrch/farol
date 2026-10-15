@@ -1,0 +1,142 @@
+package currentsource_test
+
+// Synthetic saved facts from the existing shared source vectors. This fixture
+// proves CPU value derivation only, never physical or provider authority.
+const fixtureJSON = `{
+  "status": "parsed",
+  "tasks": {
+    "defaultHarness": "other",
+    "harnesses": {
+      "other": {
+        "defaultModel": "other",
+        "models": {
+          "other": {
+            "model": "unimplemented-model"
+          }
+        }
+      },
+      "codex": {
+        "defaultModel": "preferred",
+        "models": {
+          "preferred": {
+            "model": "fixture-model-v4",
+            "defaultEffort": "high"
+          },
+          "spare": {
+            "model": "fixture-spare"
+          }
+        }
+      }
+    }
+  },
+  "nativeHosts": {
+    "generation": "7",
+    "route": {
+      "transport": "codex-shared-proxy/v1",
+      "harness": "codex",
+      "workspaceId": "10000000-0000-4000-8000-000000000001",
+      "projectId": "10000000-0000-4000-8000-000000000002",
+      "socketPath": "/fixture/proxy.sock",
+      "expectedCodexHome": "/fixture/codex-home",
+      "projectRoot": "/fixture/project",
+      "projectIdentity": {
+        "device": "1",
+        "inode": "100"
+      },
+      "gitCommonDirectory": "/fixture/project/.git",
+      "execution": {
+        "sandbox": "workspace-write",
+        "approvalPolicy": "on-request"
+      },
+      "hostGeneration": 7,
+      "computerGeneration": 11,
+      "approvedAt": "2026-10-04T09:50:00.000Z",
+      "expiresAt": 1791111000000
+    },
+    "host": {
+      "executablePath": "/fixture/bin/codex",
+      "executableSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "version": "1.2.3",
+      "protocol": "codex-app-server/v2",
+      "schemaSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "verifiedAt": "2026-10-04T09:00:00.000Z",
+      "liveVerification": null,
+      "agentVerification": null,
+      "localVerification": {
+        "executableSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "schemaSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "buildId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "verifiedAt": "2026-10-04T09:00:00.000Z"
+      },
+      "taskSource": {
+        "hostGeneration": 7,
+        "localVerification": {
+          "executableSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "schemaSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "buildId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "verifiedAt": "2026-10-04T09:00:00.000Z"
+        },
+        "evidence": {
+          "handoff": {
+            "executablePath": "/fixture/bin/codex",
+            "executableSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "baseSchemaSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "status": "supported",
+            "contract": {
+              "version": "1.2.3",
+              "protocol": "codex-app-server/v2",
+              "schemaSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "projectBoundCreateStatus": true
+            }
+          },
+          "followup": {
+            "executablePath": "/fixture/bin/codex",
+            "executableSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "baseSchemaSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "status": "supported",
+            "contract": {
+              "kind": "codex-followup-schema/v1",
+              "protocol": "codex-app-server/v2",
+              "baseSchemaSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "schemaSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+            }
+          }
+        }
+      }
+    }
+  },
+  "computer": {
+    "computerId": "10000000-0000-4000-8000-000000000003",
+    "generation": "11",
+    "workspaces": [
+      {
+        "workspaceId": "10000000-0000-4000-8000-000000000001",
+        "root": "/fixture/writer",
+        "access": "write",
+        "excludedPaths": [],
+        "gitHistoryApproved": true,
+        "rootIdentity": {
+          "device": "18446744073709551615",
+          "inode": "9007199254740993"
+        },
+        "gitMetadata": {
+          "gitDirectory": "/fixture/project/.git/worktrees/writer",
+          "commonDirectory": "/fixture/project/.git"
+        }
+      }
+    ]
+  },
+  "setup": {
+    "verified": {
+      "profile": "distinct-desktop-profile",
+      "configRevision": 11,
+      "workspaceId": "10000000-0000-4000-8000-000000000001",
+      "runtimeGeneration": "desktop-runtime",
+      "buildId": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "protocol": "desktop-computer-fixture",
+      "verifiedAt": "2026-10-04T09:00:00.000Z"
+    },
+    "reachable": "reachable",
+    "outcomeUnknown": false
+  }
+}`
