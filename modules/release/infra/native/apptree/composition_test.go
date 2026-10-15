@@ -84,11 +84,14 @@ func TestDigestSuccessCannotSkipIdentityOrFinalInventory(t *testing.T) {
 			expected := apptree.Expected{TreeSHA256: composedTrees[0].digest, Version: "1.2.3-preview.4", BuildID: strings.Repeat("a", 64)}
 			verify := appidentity.Verify
 			code := apptree.CodeIdentity
+			var identityCode appidentity.Code
 			switch change {
 			case "version":
 				expected.Version = "2.0.0"
+				identityCode = appidentity.BundleMismatch
 			case "build-id":
 				expected.BuildID = strings.Repeat("b", 64)
+				identityCode = appidentity.BuildMismatch
 			case "post-identity-mutation":
 				code = apptree.CodeChanged
 				verify = func(ctx context.Context, info, build []byte, version, buildID string) error {
@@ -98,6 +101,12 @@ func TestDigestSuccessCannotSkipIdentityOrFinalInventory(t *testing.T) {
 					return os.WriteFile(filepath.Join(path, "Contents/Info.plist"), []byte("changed"), 0600)
 				}
 			}
+			var identityCause error
+			identityVerify := verify
+			verify = func(ctx context.Context, info, build []byte, version, buildID string) error {
+				identityCause = identityVerify(ctx, info, build, version, buildID)
+				return identityCause
+			}
 			v, err := apptree.New(parent, app, "Farol.app", expected, verify)
 			if err != nil {
 				t.Fatal(err)
@@ -106,6 +115,12 @@ func TestDigestSuccessCannotSkipIdentityOrFinalInventory(t *testing.T) {
 			var refusal *apptree.Error
 			if !errors.As(err, &refusal) || refusal.Code != code || observation != (apptree.Observation{}) {
 				t.Fatalf("incomplete verification accepted: %#v %v", observation, err)
+			}
+			if identityCode != "" {
+				var identityFailure *appidentity.Error
+				if err.Error() != "app tree: identity" || !errors.As(err, &identityFailure) || identityFailure.Code != identityCode || identityFailure != identityCause || !errors.Is(err, identityCause) {
+					t.Fatal("real identity mismatch provenance lost or outer refusal changed")
+				}
 			}
 		})
 	}

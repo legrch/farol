@@ -444,11 +444,11 @@ func (v *Verifier) verify(ctx context.Context, parent, app int) (Observation, er
 	if e = canceled(ctx); e != nil {
 		return Observation{}, e
 	}
-	if v.identity(ctx, info, build, v.expected.Version, v.expected.BuildID) != nil {
+	if identityErr := v.identity(ctx, info, build, v.expected.Version, v.expected.BuildID); identityErr != nil {
 		if e = canceled(ctx); e != nil {
-			return Observation{}, e
+			return Observation{}, &observationFailure{refusal: &Error{Code: CodeCanceled}, cause: identityErr, cancellation: ctx.Err()}
 		}
-		return Observation{}, refuse(CodeIdentity)
+		return Observation{}, &observationFailure{refusal: &Error{Code: CodeIdentity}, cause: identityErr}
 	}
 	if e = canceled(ctx); e != nil {
 		return Observation{}, e

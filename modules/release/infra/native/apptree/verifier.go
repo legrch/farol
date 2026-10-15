@@ -31,6 +31,23 @@ type Error struct{ Code Code }
 
 func (e *Error) Error() string { return "app tree: " + string(e.Code) }
 func refuse(c Code) error      { return &Error{Code: c} }
+
+// observationFailure keeps the safe outer refusal while retaining dependency
+// provenance for trusted callers. Dependency text never enters Error().
+type observationFailure struct {
+	refusal             *Error
+	cause, cancellation error
+}
+
+func (e *observationFailure) Error() string { return e.refusal.Error() }
+func (e *observationFailure) Unwrap() []error {
+	causes := []error{e.refusal, e.cause}
+	if e.cancellation != nil {
+		causes = append(causes, e.cancellation)
+	}
+	return causes
+}
+
 func canceled(ctx context.Context) error {
 	if ctx == nil {
 		return refuse(CodeInput)
