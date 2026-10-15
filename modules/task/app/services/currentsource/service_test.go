@@ -632,3 +632,64 @@ func TestMaximumSafeGenerationJoinsAndNegativeClockGrant(t *testing.T) {
 	absent(t, resolve(t, f, -2))
 	absent(t, resolve(t, f, 1))
 }
+
+func TestPinnedSettingsUUIDSpecialCases(t *testing.T) {
+	for _, tc := range []struct {
+		thread    string
+		available bool
+	}{
+		{"ffffffff-ffff-ffff-ffff-ffffffffffff", true},
+		{"FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF", false},
+		{"ffffffff-ffff-ffff-ffff-fffffffffffF", false},
+		{"00000000-0000-0000-0000-000000000000", true},
+		{"ABCDEF00-ABCD-4ABC-8ABC-ABCDEFABCDEF", true},
+	} {
+		t.Run(tc.thread, func(t *testing.T) {
+			f := fixture(t)
+			set(f, "nativeHosts.route.observeThreadId", tc.thread)
+			set(f, "nativeHosts.route.observeTurnId", "turn-exact")
+			out := resolve(t, f, now)
+			if !tc.available {
+				absent(t, out)
+				return
+			}
+			positive(t, out)
+			if out.Read == nil || out.Read.ThreadID != tc.thread || out.Read.TurnID != "turn-exact" {
+				t.Fatalf("changed exact read: %+v", out.Read)
+			}
+		})
+	}
+}
+
+func TestChangedFollowupPreservesEarlierSettingsFence(t *testing.T) {
+	for _, code := range []string{"CODEX_HOST_SCHEMA_UNSAFE", "CODEX_HOST_SCHEMA_INVALID", "CODEX_HOST_HANDOFF_UNAVAILABLE", "CODEX_HOST_FOLLOWUP_UNAVAILABLE", "CODEX_HOST_TASK_SOURCE_CHANGED", "CODEX_HOST_TASK_SOURCE_UNCONFIRMED"} {
+		t.Run(code, func(t *testing.T) {
+			f := fixture(t)
+			followup := at(f, "nativeHosts.host.taskSource.evidence.followup")
+			delete(followup, "contract")
+			followup["status"] = "unavailable"
+			followup["code"] = code
+			out := resolve(t, f, now)
+			// The old source first parses ProductSettings. Its paired changed-witness
+			// refinement rejects changed followup with the still-supported handoff.
+			if code == "CODEX_HOST_TASK_SOURCE_CHANGED" {
+				absent(t, out)
+			} else {
+				positive(t, out)
+				if out.Source.Followup != nil {
+					t.Fatal("invented followup")
+				}
+			}
+		})
+	}
+	f := fixture(t)
+	for _, name := range []string{"handoff", "followup"} {
+		w := at(f, "nativeHosts.host.taskSource.evidence."+name)
+		delete(w, "contract")
+		w["status"] = "unavailable"
+		w["code"] = "CODEX_HOST_TASK_SOURCE_CHANGED"
+	}
+	// Both changed witnesses pass that paired refinement, but baseline still
+	// requires a supported handoff.
+	absent(t, resolve(t, f, now))
+}
