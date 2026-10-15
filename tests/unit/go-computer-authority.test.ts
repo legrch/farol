@@ -9,6 +9,7 @@ import {
   type ProductSettings,
 } from "../../src/pkg/product-settings/contract";
 import { taskPolicy } from "../fixtures/task-policy";
+import { fixtureTaskSettingsCompare } from "../fixtures/task-settings-projection.ts";
 import type { Client } from "../../apps/desktop/bridge/client";
 import type { Json, Outcome } from "../../apps/desktop/bridge/wire";
 
@@ -106,6 +107,7 @@ async function fixture(fault?: (method: string, result: Outcome) => Outcome) {
     id: () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`,
     homeDirectory: "/synthetic/home",
     withdrawComputerAuthority: () => bridge.withdraw(),
+    taskSettingsCompare: fixtureTaskSettingsCompare,
   });
   await service.initialize();
   const add = () =>
