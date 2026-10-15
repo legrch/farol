@@ -2,7 +2,7 @@
 
 Use `task ci:cloud` for the owner-authorized Linux source integration boundary.
 It runs toolchain, types, lint, formatting, architecture, runtime inventory,
-documentation, selected source tests, renderer tests, Hunt, full Go Core and
+documentation, selected source tests, renderer tests, Hunt source properties/mutations, full Go Core and
 secret checks under the existing owner guard. After independent review and
 these checks pass, the Lead merges the existing source PR and verifies main.
 
@@ -21,6 +21,10 @@ Run `task test:cloud -- --list` to inspect the complete plan. Results are under
 `_output/evidence/test-scopes/`, including selected files, source-selection hash,
 commands, original-child observations, assertion counts and the NOT RUN list.
 Root and nested Go race/vet and protocol checks run separately in `test:core`.
+The build-bound `hunt:report` requires an exact authenticated build and remains
+in full CI, NOT RUN in Cloud source. Its three source property/mutation suites
+are included here. Ordinary Cloud groups use two Vitest workers, matching the
+existing full runner; other scopes and their deadlines are unchanged.
 
 Some deferred integration files mix portable policy with physical host
 requirements. Their portable cases are also NOT RUN in this profile unless a

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
 import {
   cloudDeferredFiles,
   cloudMixedFiles,
@@ -28,6 +29,36 @@ describe("Cloud source scope", () => {
     expect(selected).toContain("tests/unit/installed-update-startup.test.ts");
     expect(selected).toContain("tests/integration/bounded-process.test.mjs");
     expect(plan.goChecks).toContain("test:core");
+  });
+  it("keeps source Hunt properties in Cloud and build-bound reporting in full CI", () => {
+    const plan = planTests("cloud", files);
+    const selected = plan.suites.flatMap((suite) => suite.files ?? []);
+    for (const file of [
+      "tests/hunt/model.test.ts",
+      "tests/hunt/proof.test.ts",
+      "tests/hunt/selftest.test.ts",
+    ])
+      expect(selected).toContain(file);
+    const scripts = JSON.parse(
+      fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+    ).scripts;
+    expect(scripts["ci:cloud"]).not.toContain("hunt:report");
+    expect(scripts.ci).toContain("hunt:report");
+    expect(plan.artifactGates).toContain("NOT RUN");
+    for (const suite of plan.suites.filter(
+      (item) => item.id.startsWith("node-cloud-") && !item.id.includes("mixed"),
+    )) {
+      expect(suiteCommand(suite, "/reports", "/node", "/go").args).toContain(
+        "--maxWorkers=2",
+      );
+      expect(suite.timeoutMs).toBe(300000);
+    }
+    for (const suite of planTests("unit", files).suites.filter(
+      (item) => item.runner === "vitest",
+    ))
+      expect(suiteCommand(suite, "/reports", "/node", "/go").args).toContain(
+        "--no-file-parallelism",
+      );
   });
   it("includes new portable files without a passing-test allowlist", () => {
     const added = "tests/integration/new-portable-contract.test.ts";

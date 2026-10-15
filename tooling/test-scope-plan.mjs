@@ -197,6 +197,7 @@ export function planTests(scope, files) {
         ordinary.slice(start, start + 64),
       );
       plan.at(-1).timeoutMs = 300000;
+      plan.at(-1).workers = 2;
     }
     for (const entry of cloud.mixedFiles) {
       vitest("node-cloud-mixed-" + String(plan.length + 1), [entry.file]);
@@ -248,6 +249,8 @@ export function planTests(scope, files) {
     },
     ...(cloud
       ? {
+          artifactGates:
+            "NOT RUN: build-bound Hunt report, full native coverage, package, installed/live",
           deferredFiles: cloud.deferredFiles,
           mixedSelections: cloud.mixedFiles,
           goChecks:

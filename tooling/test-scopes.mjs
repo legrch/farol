@@ -116,8 +116,8 @@ export function suiteCommand(
         ? ["--testNamePattern", suite.testNamePattern]
         : []),
       "--pool=threads",
-      "--maxWorkers=1",
-      "--no-file-parallelism",
+      `--maxWorkers=${suite.workers ?? 1}`,
+      ...(suite.workers === 2 ? [] : ["--no-file-parallelism"]),
       "--reporter=default",
       "--reporter=json",
       "--outputFile.json=" + path.join(reportDirectory, suite.id + ".json"),
