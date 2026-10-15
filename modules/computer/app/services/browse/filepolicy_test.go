@@ -1,4 +1,4 @@
-package settingsworkspace
+package browse
 
 import (
 	"context"

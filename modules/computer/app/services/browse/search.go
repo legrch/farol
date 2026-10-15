@@ -1,4 +1,4 @@
-package settingsworkspace
+package browse
 
 import (
 	"context"
@@ -12,7 +12,8 @@ import (
 	"github.com/legrch/farol/modules/computer/domain/authority"
 )
 
-type SearchRequest struct{ WorkspaceID, RelativePath, Pattern string }
+// SearchQuery searches one approved scope; it changes no state.
+type SearchQuery struct{ WorkspaceID, RelativePath, Pattern string }
 type SearchMatch struct {
 	Path      string
 	Line      uint64
@@ -29,17 +30,17 @@ type SearchResult struct {
 // Search uses the same current owner publication and fixed Settings lease as
 // List. It grants no Task/Turn authority and invokes only the selected native
 // Search capability, with no interpreter or alternate producer fallback.
-func (s *Service) Search(ctx context.Context, request SearchRequest) (*SearchResult, error) {
+func (s *Service) Search(ctx context.Context, query SearchQuery) (*SearchResult, error) {
 	if s == nil || s.current == nil || s.native == nil || s.clock == nil {
 		return nil, unavailable()
 	}
 	if err := active(ctx, s.clock.Now()); err != nil {
 		return nil, err
 	}
-	if !identifier(request.WorkspaceID) || !relative(request.RelativePath) {
+	if !identifier(query.WorkspaceID) || !relative(query.RelativePath) {
 		return nil, authority.Fail("COMPUTER_INVALID_REQUEST", "contract")
 	}
-	if !searchPattern(request.Pattern) {
+	if !searchPattern(query.Pattern) {
 		return nil, authority.Fail("WORKSPACE_INVALID_REQUEST", "contract")
 	}
 	var initial authority.Approval
@@ -51,12 +52,12 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (*SearchRes
 		if err := active(ctx, now); err != nil {
 			return err
 		}
-		w, found := authority.FindApproved(a, request.WorkspaceID)
+		w, found := authority.FindApproved(a, query.WorkspaceID)
 		if !found {
 			return authority.Fail("AUTHORITY_PATH_DENIED", "computer-approval")
 		}
-		target = join(w.Root, request.RelativePath)
-		if err := authority.AuthorizeOwnerSearch(a, request.WorkspaceID, target, now); err != nil {
+		target = join(w.Root, query.RelativePath)
+		if err := authority.AuthorizeOwnerSearch(a, query.WorkspaceID, target, now); err != nil {
 			return err
 		}
 		initial = a.Clone()
@@ -86,7 +87,7 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (*SearchRes
 	if !ok {
 		return nil, malformed()
 	}
-	nativeRequest := port.SearchRequest{Workspace: descriptor, RelativePath: request.RelativePath, Pattern: request.Pattern}
+	nativeRequest := port.SearchRequest{Workspace: descriptor, RelativePath: query.RelativePath, Pattern: query.Pattern}
 	nativeRequest.Workspace.DeniedPaths = slices.Clone(descriptor.DeniedPaths)
 	checked, err := native.Search(ctx, nativeRequest)
 	if err != nil {
@@ -100,14 +101,14 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (*SearchRes
 	binding := *checked.Binding
 	matches := append([]port.SearchMatch{}, checked.Matches...)
 	resultLimited, scanLimited := checked.ResultLimited, checked.ScanLimited
-	if binding.RelativePath != request.RelativePath || binding.Root != descriptor.Root || binding.ApprovedRoot != descriptor.ApprovedRoot {
+	if binding.RelativePath != query.RelativePath || binding.Root != descriptor.Root || binding.ApprovedRoot != descriptor.ApprovedRoot {
 		return nil, authority.Fail("WORKSPACE_ROOT_CHANGED", "native-workspace")
 	}
 	for _, match := range matches {
-		if !searchMatch(match, request.RelativePath) {
+		if !searchMatch(match, query.RelativePath) {
 			return nil, malformed()
 		}
-		if err := authority.AuthorizeOwnerSearch(initial, request.WorkspaceID, join(descriptor.Root, match.Path), s.clock.Now()); err != nil {
+		if err := authority.AuthorizeOwnerSearch(initial, query.WorkspaceID, join(descriptor.Root, match.Path), s.clock.Now()); err != nil {
 			return nil, err
 		}
 	}
@@ -120,14 +121,14 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (*SearchRes
 		if !authority.SameApprovalPolicy(initial, current) {
 			return authority.Fail("AUTHORITY_COMPUTER_MISMATCH", "computer-approval")
 		}
-		if err := authority.AuthorizeOwnerSearch(current, request.WorkspaceID, target, now); err != nil {
+		if err := authority.AuthorizeOwnerSearch(current, query.WorkspaceID, target, now); err != nil {
 			return err
 		}
 		out := make([]SearchMatch, len(matches))
 		for i, match := range matches {
 			out[i] = SearchMatch{Path: match.Path, Line: match.Line, Text: match.Text, Truncated: match.Truncated}
 		}
-		result = &SearchResult{WorkspaceID: request.WorkspaceID, RelativePath: request.RelativePath, Pattern: request.Pattern,
+		result = &SearchResult{WorkspaceID: query.WorkspaceID, RelativePath: query.RelativePath, Pattern: query.Pattern,
 			Root: binding.ApprovedRoot, Matches: out, ResultLimited: resultLimited, ScanLimited: scanLimited}
 		return nil
 	})

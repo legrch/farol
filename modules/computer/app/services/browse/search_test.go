@@ -1,4 +1,4 @@
-package settingsworkspace
+package browse
 
 import (
 	"context"
@@ -38,8 +38,8 @@ func ownerSearchOutput(_ context.Context, r port.SearchRequest) (*port.SearchRes
 	}
 	return &port.SearchResponse{Binding: &port.DirectoryBinding{Root: r.Workspace.Root, RelativePath: r.RelativePath, ApprovedRoot: r.Workspace.ApprovedRoot}, Matches: []port.SearchMatch{{Path: path, Line: 2, Text: "known 🌊\ttext", Truncated: true}}, ResultLimited: true}, nil
 }
-func ownerSearchRequest() SearchRequest {
-	return SearchRequest{WorkspaceID: "work", RelativePath: ".", Pattern: "known"}
+func ownerSearchRequest() SearchQuery {
+	return SearchQuery{WorkspaceID: "work", RelativePath: ".", Pattern: "known"}
 }
 func ownerSearchFailure(t *testing.T, out *SearchResult, err error, code string) {
 	t.Helper()
@@ -92,25 +92,25 @@ func TestOwnerSearchBindingAndIndependentValues(t *testing.T) {
 func TestOwnerSearchAdmissionRefusals(t *testing.T) {
 	for _, tc := range []struct {
 		name, code string
-		change     func(*fixture, *SearchRequest)
+		change     func(*fixture, *SearchQuery)
 	}{
-		{"read only", "AUTHORITY_CAPABILITY_DENIED", func(f *fixture, _ *SearchRequest) { f.approval.Capabilities = []authority.Capability{authority.Read} }},
-		{"list only", "AUTHORITY_CAPABILITY_DENIED", func(f *fixture, _ *SearchRequest) { f.approval.Capabilities = []authority.Capability{authority.List} }},
-		{"expired", "AUTHORITY_EXPIRED", func(f *fixture, _ *SearchRequest) { f.approval.ExpiresAt = f.clock.now }},
-		{"excluded scope", "AUTHORITY_PATH_DENIED", func(f *fixture, r *SearchRequest) {
+		{"read only", "AUTHORITY_CAPABILITY_DENIED", func(f *fixture, _ *SearchQuery) { f.approval.Capabilities = []authority.Capability{authority.Read} }},
+		{"list only", "AUTHORITY_CAPABILITY_DENIED", func(f *fixture, _ *SearchQuery) { f.approval.Capabilities = []authority.Capability{authority.List} }},
+		{"expired", "AUTHORITY_EXPIRED", func(f *fixture, _ *SearchQuery) { f.approval.ExpiresAt = f.clock.now }},
+		{"excluded scope", "AUTHORITY_PATH_DENIED", func(f *fixture, r *SearchQuery) {
 			f.approval.ExcludedPaths = []authority.Exclusion{{WorkspaceID: "work", Path: "/work/Café"}}
 			r.RelativePath = "CAFE/child"
 		}},
-		{"unknown workspace", "AUTHORITY_PATH_DENIED", func(_ *fixture, r *SearchRequest) { r.WorkspaceID = "other" }},
-		{"invalid workspace", "COMPUTER_INVALID_REQUEST", func(_ *fixture, r *SearchRequest) { r.WorkspaceID = "" }},
-		{"traversal", "COMPUTER_INVALID_REQUEST", func(_ *fixture, r *SearchRequest) { r.RelativePath = "../escape" }},
-		{"empty pattern", "WORKSPACE_INVALID_REQUEST", func(_ *fixture, r *SearchRequest) { r.Pattern = "" }},
-		{"invalid UTF8", "WORKSPACE_INVALID_REQUEST", func(_ *fixture, r *SearchRequest) { r.Pattern = "\xff" }},
-		{"pattern byte limit", "WORKSPACE_INVALID_REQUEST", func(_ *fixture, r *SearchRequest) { r.Pattern = strings.Repeat("🌊", 1025) }},
-		{"control pattern", "WORKSPACE_INVALID_REQUEST", func(_ *fixture, r *SearchRequest) { r.Pattern = "bad\npattern" }},
-		{"DEL pattern", "WORKSPACE_INVALID_REQUEST", func(_ *fixture, r *SearchRequest) { r.Pattern = "bad\x7fpattern" }},
-		{"missing search port", "WORKSPACE_HELPER_FAILED", func(f *fixture, _ *SearchRequest) { f.service.native = f.native }},
-		{"invalid root identity", "COMPUTER_APPROVAL_INVALID", func(f *fixture, _ *SearchRequest) { f.approval.Workspaces[0].RootIdentity.Inode = "" }},
+		{"unknown workspace", "AUTHORITY_PATH_DENIED", func(_ *fixture, r *SearchQuery) { r.WorkspaceID = "other" }},
+		{"invalid workspace", "COMPUTER_INVALID_REQUEST", func(_ *fixture, r *SearchQuery) { r.WorkspaceID = "" }},
+		{"traversal", "COMPUTER_INVALID_REQUEST", func(_ *fixture, r *SearchQuery) { r.RelativePath = "../escape" }},
+		{"empty pattern", "WORKSPACE_INVALID_REQUEST", func(_ *fixture, r *SearchQuery) { r.Pattern = "" }},
+		{"invalid UTF8", "WORKSPACE_INVALID_REQUEST", func(_ *fixture, r *SearchQuery) { r.Pattern = "\xff" }},
+		{"pattern byte limit", "WORKSPACE_INVALID_REQUEST", func(_ *fixture, r *SearchQuery) { r.Pattern = strings.Repeat("🌊", 1025) }},
+		{"control pattern", "WORKSPACE_INVALID_REQUEST", func(_ *fixture, r *SearchQuery) { r.Pattern = "bad\npattern" }},
+		{"DEL pattern", "WORKSPACE_INVALID_REQUEST", func(_ *fixture, r *SearchQuery) { r.Pattern = "bad\x7fpattern" }},
+		{"missing search port", "WORKSPACE_HELPER_FAILED", func(f *fixture, _ *SearchQuery) { f.service.native = f.native }},
+		{"invalid root identity", "COMPUTER_APPROVAL_INVALID", func(f *fixture, _ *SearchQuery) { f.approval.Workspaces[0].RootIdentity.Inode = "" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, n := ownerSearchFixture()

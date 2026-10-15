@@ -1,4 +1,4 @@
-package settingsworkspace
+package browse
 
 import (
 	"context"
@@ -13,6 +13,8 @@ import (
 	"github.com/legrch/farol/modules/computer/domain/authority"
 )
 
+// SnapshotQuery reads one approved file for metadata; it changes no state.
+type SnapshotQuery struct{ WorkspaceID, RelativePath string }
 type SnapshotResult struct {
 	WorkspaceID, RelativePath string
 	Root                      port.Root
@@ -23,14 +25,14 @@ type SnapshotResult struct {
 // Snapshot discloses metadata for one full native read under current owner read
 // approval and a fixed lease. The native adapter owns physical root/path checks
 // and the raw-byte digest; response validation is not independent native proof.
-func (s *Service) Snapshot(ctx context.Context, request Request) (*SnapshotResult, error) {
+func (s *Service) Snapshot(ctx context.Context, query SnapshotQuery) (*SnapshotResult, error) {
 	if s == nil || s.current == nil || s.native == nil || s.clock == nil {
 		return nil, unavailable()
 	}
 	if err := active(ctx, s.clock.Now()); err != nil {
 		return nil, err
 	}
-	if !identifier(request.WorkspaceID) || !relative(request.RelativePath) || request.RelativePath == "." {
+	if !identifier(query.WorkspaceID) || !relative(query.RelativePath) || query.RelativePath == "." {
 		return nil, authority.Fail("COMPUTER_INVALID_REQUEST", "contract")
 	}
 	var initial authority.Approval
@@ -42,12 +44,12 @@ func (s *Service) Snapshot(ctx context.Context, request Request) (*SnapshotResul
 		if err := active(ctx, now); err != nil {
 			return err
 		}
-		w, found := authority.FindApproved(a, request.WorkspaceID)
+		w, found := authority.FindApproved(a, query.WorkspaceID)
 		if !found {
 			return authority.Fail("AUTHORITY_PATH_DENIED", "computer-approval")
 		}
-		target = join(w.Root, request.RelativePath)
-		if err := authority.AuthorizeOwnerRead(a, request.WorkspaceID, target, now); err != nil {
+		target = join(w.Root, query.RelativePath)
+		if err := authority.AuthorizeOwnerRead(a, query.WorkspaceID, target, now); err != nil {
 			return err
 		}
 		initial = a.Clone()
@@ -73,7 +75,7 @@ func (s *Service) Snapshot(ctx context.Context, request Request) (*SnapshotResul
 	if err := liveLease(ctx, s.clock.Now(), deadline); err != nil {
 		return nil, err
 	}
-	readRequest := port.ReadRequest{Workspace: descriptor, RelativePath: request.RelativePath}
+	readRequest := port.ReadRequest{Workspace: descriptor, RelativePath: query.RelativePath}
 	readRequest.Workspace.DeniedPaths = slices.Clone(descriptor.DeniedPaths)
 	checked, err := s.native.Read(ctx, readRequest)
 	if err != nil {
@@ -93,10 +95,10 @@ func (s *Service) Snapshot(ctx context.Context, request Request) (*SnapshotResul
 		if !authority.SameApprovalPolicy(initial, current) {
 			return authority.Fail("AUTHORITY_COMPUTER_MISMATCH", "computer-approval")
 		}
-		if err := authority.AuthorizeOwnerRead(current, request.WorkspaceID, target, now); err != nil {
+		if err := authority.AuthorizeOwnerRead(current, query.WorkspaceID, target, now); err != nil {
 			return err
 		}
-		result = &SnapshotResult{WorkspaceID: request.WorkspaceID, RelativePath: request.RelativePath,
+		result = &SnapshotResult{WorkspaceID: query.WorkspaceID, RelativePath: query.RelativePath,
 			Root: descriptor.ApprovedRoot, Bytes: bytes, SHA256: digest}
 		return nil
 	})

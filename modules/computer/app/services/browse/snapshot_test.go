@@ -1,4 +1,4 @@
-package settingsworkspace
+package browse
 
 import (
 	"context"
@@ -56,8 +56,8 @@ func newSnapshotFixture() *snapshotFixture {
 	})
 	return f
 }
-func snapshotRequest() Request {
-	return Request{WorkspaceID: "work", RelativePath: "selected/file.txt"}
+func snapshotRequest() SnapshotQuery {
+	return SnapshotQuery{WorkspaceID: "work", RelativePath: "selected/file.txt"}
 }
 func snapshotOutput(text string, bom bool) *port.ReadResponse {
 	raw := text
@@ -132,7 +132,7 @@ func TestSnapshotAdmissionRefusals(t *testing.T) {
 	cases := []struct {
 		name, code string
 		change     func(*snapshotFixture)
-		req        Request
+		req        SnapshotQuery
 	}{
 		{"list only", "AUTHORITY_CAPABILITY_DENIED", func(f *snapshotFixture) { f.approval.Capabilities = []authority.Capability{authority.List} }, snapshotRequest()},
 		{"no caps", "AUTHORITY_CAPABILITY_DENIED", func(f *snapshotFixture) { f.approval.Capabilities = nil }, snapshotRequest()},
@@ -145,13 +145,13 @@ func TestSnapshotAdmissionRefusals(t *testing.T) {
 		{"root excluded", "AUTHORITY_PATH_DENIED", func(f *snapshotFixture) {
 			f.approval.ExcludedPaths = []authority.Exclusion{{WorkspaceID: "work", Path: "/work"}}
 		}, snapshotRequest()},
-		{"unknown workspace", "AUTHORITY_PATH_DENIED", nil, Request{WorkspaceID: "other", RelativePath: "file.txt"}},
-		{"directory root", "COMPUTER_INVALID_REQUEST", nil, request()},
-		{"empty", "COMPUTER_INVALID_REQUEST", nil, Request{WorkspaceID: "work"}},
-		{"absolute", "COMPUTER_INVALID_REQUEST", nil, Request{WorkspaceID: "work", RelativePath: "/work/file"}},
-		{"traversal", "COMPUTER_INVALID_REQUEST", nil, Request{WorkspaceID: "work", RelativePath: "../secret"}},
-		{"invalid utf8", "COMPUTER_INVALID_REQUEST", nil, Request{WorkspaceID: "work", RelativePath: "\xff"}},
-		{"long component", "COMPUTER_INVALID_REQUEST", nil, Request{WorkspaceID: "work", RelativePath: strings.Repeat("x", 256)}},
+		{"unknown workspace", "AUTHORITY_PATH_DENIED", nil, SnapshotQuery{WorkspaceID: "other", RelativePath: "file.txt"}},
+		{"directory root", "COMPUTER_INVALID_REQUEST", nil, SnapshotQuery{WorkspaceID: "work", RelativePath: "."}},
+		{"empty", "COMPUTER_INVALID_REQUEST", nil, SnapshotQuery{WorkspaceID: "work"}},
+		{"absolute", "COMPUTER_INVALID_REQUEST", nil, SnapshotQuery{WorkspaceID: "work", RelativePath: "/work/file"}},
+		{"traversal", "COMPUTER_INVALID_REQUEST", nil, SnapshotQuery{WorkspaceID: "work", RelativePath: "../secret"}},
+		{"invalid utf8", "COMPUTER_INVALID_REQUEST", nil, SnapshotQuery{WorkspaceID: "work", RelativePath: "\xff"}},
+		{"long component", "COMPUTER_INVALID_REQUEST", nil, SnapshotQuery{WorkspaceID: "work", RelativePath: strings.Repeat("x", 256)}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

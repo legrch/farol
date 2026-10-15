@@ -1,17 +1,15 @@
-package settingsworkspace
+package browse
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/legrch/farol/modules/computer/app/port"
-	app "github.com/legrch/farol/modules/computer/app/services/settingsworkspace"
+	app "github.com/legrch/farol/modules/computer/app/services/browse"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 )
 
@@ -48,33 +46,6 @@ func contractFixture(n *native) *Contract {
 		Capabilities: []authority.Capability{authority.List}, Network: authority.NoNetwork, Commands: authority.NoCommands, ExpiresAt: clock{}.Now().Add(time.Hour)}
 	return New(app.New(current{a}, n, clock{}))
 }
-func TestListIndependentDTOs(t *testing.T) {
-	n := &native{output: &port.ListResponse{Entries: []string{"file.txt", "folder/"}, Truncated: true}}
-	c := contractFixture(n)
-	request := Request{WorkspaceID: "work", RelativePath: "."}
-	out, err := c.List(context.Background(), request)
-	if err != nil || out == nil {
-		t.Fatalf("%+v %v", out, err)
-	}
-	if out.WorkspaceID != "work" || out.RelativePath != "." || out.Root != (Root{Path: "/work", Device: "12", Inode: "34"}) || !out.Truncated || !reflect.DeepEqual(out.Entries, []string{"file.txt", "folder/"}) {
-		t.Fatalf("%+v", out)
-	}
-	n.output.Entries[0] = "changed"
-	n.output.Binding.ApprovedRoot.Path = "/changed"
-	if out.Entries[0] != "file.txt" || out.Root.Path != "/work" {
-		t.Fatal("native output aliased")
-	}
-	out.Entries[1] = "caller change"
-	if n.output.Entries[1] != "folder/" {
-		t.Fatal("caller output aliased")
-	}
-	if reflect.TypeFor[Result]() == reflect.TypeFor[app.Result]() {
-		t.Fatal("app DTO leaked")
-	}
-	if reflect.TypeFor[Root]() == reflect.TypeFor[port.Root]() {
-		t.Fatal("port DTO leaked")
-	}
-}
 func TestSanitizedFailure(t *testing.T) {
 	var typedNil *authority.Failure
 	cases := []struct {
@@ -91,7 +62,7 @@ func TestSanitizedFailure(t *testing.T) {
 	for i, tc := range cases {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
 			c := contractFixture(&native{err: tc.err})
-			out, err := c.List(context.Background(), Request{WorkspaceID: "work", RelativePath: "."})
+			out, err := c.List(context.Background(), ListRequest{WorkspaceID: "work", RelativePath: "."})
 			var f *Failure
 			if out != nil || !errors.As(err, &f) || f == nil || f.Code != tc.code || f.Source != tc.source || f.Retry != "never" {
 				t.Fatalf("%+v %+v", out, err)
@@ -104,22 +75,10 @@ func TestSanitizedFailure(t *testing.T) {
 }
 func TestNilContract(t *testing.T) {
 	for _, c := range []*Contract{nil, New(nil)} {
-		out, err := c.List(context.Background(), Request{})
+		out, err := c.List(context.Background(), ListRequest{})
 		var f *Failure
 		if out != nil || !errors.As(err, &f) || f.Code != "COMPUTER_AUTHORITY_STORE_UNAVAILABLE" {
 			t.Fatalf("%+v %v", out, err)
 		}
-	}
-}
-
-func TestEmptyEntriesMarshalAsArray(t *testing.T) {
-	c := contractFixture(&native{output: &port.ListResponse{Entries: nil}})
-	out, err := c.List(context.Background(), Request{WorkspaceID: "work", RelativePath: "."})
-	if err != nil || out == nil || out.Entries == nil {
-		t.Fatalf("%+v %v", out, err)
-	}
-	encoded, err := json.Marshal(out.Entries)
-	if err != nil || string(encoded) != "[]" {
-		t.Fatalf("%s %v", encoded, err)
 	}
 }

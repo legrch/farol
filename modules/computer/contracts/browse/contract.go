@@ -1,12 +1,10 @@
-// Package settingsworkspace publishes independent owner Settings listing DTOs.
-package settingsworkspace
+// Package browse publishes independent owner Settings browsing DTOs.
+package browse
 
 import (
-	"context"
 	"errors"
-	"slices"
 
-	app "github.com/legrch/farol/modules/computer/app/services/settingsworkspace"
+	app "github.com/legrch/farol/modules/computer/app/services/browse"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 )
 
@@ -14,33 +12,11 @@ type Contract struct{ service *app.Service }
 
 func New(service *app.Service) *Contract { return &Contract{service: service} }
 
-type Request struct{ WorkspaceID, RelativePath string }
 type Root struct{ Path, Device, Inode string }
-type Result struct {
-	WorkspaceID, RelativePath string
-	Root                      Root
-	Entries                   []string
-	Truncated                 bool
-}
 type Failure struct{ Code, Source, Retry string }
 
 func (f *Failure) Error() string { return f.Code + " (" + f.Source + ")" }
 
-func (c *Contract) List(ctx context.Context, request Request) (*Result, error) {
-	if c == nil || c.service == nil {
-		return nil, failure(authority.Fail("COMPUTER_AUTHORITY_STORE_UNAVAILABLE", "authority-store"))
-	}
-	out, err := c.service.List(ctx, app.Request{WorkspaceID: request.WorkspaceID, RelativePath: request.RelativePath})
-	if err != nil {
-		return nil, failure(err)
-	}
-	if out == nil {
-		return nil, failure(nil)
-	}
-	return &Result{WorkspaceID: out.WorkspaceID, RelativePath: out.RelativePath,
-		Root:    Root{Path: out.Root.Path, Device: out.Root.Device, Inode: out.Root.Inode},
-		Entries: slices.Clone(out.Entries), Truncated: out.Truncated}, nil
-}
 func failure(err error) error {
 	var classified *authority.Failure
 	if errors.As(err, &classified) && classified != nil && codes[classified.Code] && sources[classified.Source] {

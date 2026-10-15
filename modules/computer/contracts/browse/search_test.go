@@ -1,4 +1,4 @@
-package settingsworkspace
+package browse
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/legrch/farol/modules/computer/app/port"
-	app "github.com/legrch/farol/modules/computer/app/services/settingsworkspace"
+	app "github.com/legrch/farol/modules/computer/app/services/browse"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 )
 
@@ -63,7 +63,7 @@ func TestOwnerSearchContractMappingAndFailure(t *testing.T) {
 					t.Fatal("aliased output")
 				}
 			}
-			if reflect.TypeFor[SearchMatch]() == reflect.TypeFor[port.SearchMatch]() || reflect.TypeFor[SearchResult]() == reflect.TypeFor[app.SearchResult]() {
+			if reflect.TypeFor[SearchMatch]() == reflect.TypeFor[port.SearchMatch]() || reflect.TypeFor[SearchResponse]() == reflect.TypeFor[app.SearchResult]() {
 				t.Fatal("internal DTO leaked")
 			}
 		})
