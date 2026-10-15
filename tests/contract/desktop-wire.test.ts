@@ -16,6 +16,13 @@ import {
   spawnCore,
 } from "../../apps/desktop/bridge/client.ts";
 import { Decoder, frame, parseJSON } from "../../apps/desktop/bridge/frame.ts";
+import { TaskModelPolicyBridge } from "../../apps/desktop/bridge/task-model-policy.ts";
+import { resolveOwnerTaskModel } from "../../src/apps/desktop/owner-config.ts";
+import {
+  ProductConfigurationService,
+  ProductSettingsStore,
+} from "../../src/apps/desktop/product-configuration.ts";
+import { taskPolicy } from "../fixtures/task-policy.ts";
 import {
   maxFrameBytes,
   validUnicode,
@@ -47,6 +54,82 @@ beforeAll(() => {
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
 
 describe("K0 real inherited-pipe process", () => {
+  it("selects Go Task model policy over the real pipe with legacy semantic parity", async () => {
+    const client = await spawnCore(
+      executable,
+      "task-policy-profile",
+      "k0-test",
+      15_000,
+    );
+    try {
+      const bridge = new TaskModelPolicyBridge(client);
+      const changed = taskPolicy();
+      changed.harnesses.codex!.models.simple!.model = "new-unselected-policy";
+      const unsupported = {
+        defaultHarness: "other",
+        harnesses: { other: taskPolicy().harnesses.codex! },
+      };
+      const cases = [
+        { config: taskPolicy(), selection: {} },
+        { config: taskPolicy(), selection: { model: "simple" } },
+        { config: taskPolicy(), selection: { model: "sol", effort: "max" } },
+        { config: changed, selection: {} },
+        { config: undefined, selection: {} },
+        { config: null, selection: {} },
+        { config: {}, selection: {} },
+        { config: unsupported, selection: {} },
+        { config: taskPolicy(), selection: { harness: "missing" } },
+        { config: taskPolicy(), selection: { model: "missing" } },
+      ];
+      for (const test of cases) {
+        const expected = resolveOwnerTaskModel(
+          { tasks: test.config },
+          test.selection,
+        );
+        const actual = await bridge.resolve(9, test.config, test.selection);
+        expect(actual).toEqual(
+          expected.status === "ready"
+            ? {
+                status: "ready",
+                selection: expected.selection,
+                configSha256: expected.configSha256,
+              }
+            : expected,
+        );
+      }
+      const store = new ProductSettingsStore({
+        root: join(directory, "task-model-settings"),
+      });
+      const resolve = vi.fn((revision, config, selection) =>
+        bridge.resolve(revision, config, selection),
+      );
+      const owner = new ProductConfigurationService(store, {
+        taskModelPolicy: resolve,
+      });
+      await owner.initialize();
+      const initial = owner.snapshot();
+      if (initial.status !== "ready")
+        throw new Error("settings fixture unavailable");
+      await store.save({
+        ...initial.settings,
+        revision: initial.settings.revision + 1,
+        tasks: taskPolicy(),
+      });
+      await owner.initialize();
+      await expect(
+        owner.resolveTaskModel({ harness: "codex" }),
+      ).resolves.toMatchObject({
+        status: "ready",
+        selection: { model: "gpt-6-luna", effort: "medium" },
+      });
+      expect(resolve).toHaveBeenCalledOnce();
+      expect((await client.request("task.resolve", {})).status).toBe(
+        "unavailable",
+      );
+    } finally {
+      await client.closeAndObserve();
+    }
+  });
   it("returns a measured exact process identity and explicit missing capabilities", async () => {
     const started = performance.now();
     let client: Client | undefined;

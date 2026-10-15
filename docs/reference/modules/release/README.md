@@ -21,6 +21,7 @@ acceptance are still required before cutover.
 - [Migration admission lifetime](migration.md)
 - [Native boundary](native.md)
 - [Go installed slot-binding publication](slot-binding.md)
+- [Inherited handoff custody preparation](handoff-custody.md)
 - [Source relocation record](relocation.md)
 - [Archive provenance](infra/archive/provenance.md)
 

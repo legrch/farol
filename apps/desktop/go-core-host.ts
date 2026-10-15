@@ -21,6 +21,8 @@ import { ChatComputerBridge } from "./bridge/chat-computer.ts";
 import { ChatCallerBridge } from "./bridge/chat-caller.ts";
 import { ReadIntentBridge } from "./bridge/read-intent.ts";
 import { SettingsDeliveryBridge } from "./bridge/settings-delivery.ts";
+import { TaskModelPolicyBridge } from "./bridge/task-model-policy.ts";
+import type { TaskSelectionRequest } from "../../src/pkg/owner-config/contract";
 import {
   SettingsStorePump,
   type SettingsStoreDriver,
@@ -121,6 +123,7 @@ export class DesktopGoCore {
   private readonly readIntent: ReadIntentBridge;
   private readonly historyBridge: ChatHistoryBridge;
   private readonly settingsDelivery: SettingsDeliveryBridge;
+  private readonly taskModelPolicy: TaskModelPolicyBridge;
   private settingsStorePump: SettingsStorePump | undefined;
   private readonly sessionId = randomUUID();
   private browser: DesktopBrowserConnection | undefined;
@@ -148,6 +151,7 @@ export class DesktopGoCore {
     this.readIntent = new ReadIntentBridge(client);
     this.historyBridge = new ChatHistoryBridge(client);
     this.settingsDelivery = new SettingsDeliveryBridge(client);
+    this.taskModelPolicy = new TaskModelPolicyBridge(client);
   }
   connectSettingsStore(
     driver: (profileId: string) => SettingsStoreDriver,
@@ -275,6 +279,18 @@ export class DesktopGoCore {
       relativePath,
       pattern,
     );
+  }
+  resolveTaskModel(
+    revision: number,
+    config: unknown,
+    selection: TaskSelectionRequest,
+  ) {
+    if (this.closeResult)
+      throw new BridgeError(
+        "unavailable",
+        "host_task_model_policy_unavailable",
+      );
+    return this.taskModelPolicy.resolve(revision, config, selection);
   }
   openComputerConnector(
     runtimeId: string,

@@ -140,12 +140,12 @@ function harness(
     command,
     configuration: {
       snapshot: vi.fn(() => snapshot),
+      resolveTaskModel: vi.fn(async () => ({ status: "ready" })),
       recordCodexTaskRoute: vi.fn(async () => ({ ok: true, snapshot })),
     },
     configurationFailure: vi.fn((error) => ({ ok: false, error, snapshot })),
     codexHostTaskAdmission: false,
     codexAgentOperationActive: vi.fn(() => false),
-    resolveOwnerTaskModel: vi.fn(() => ({ status: "ready" })),
     lstat: vi.fn(async () => ({
       isDirectory: () => true,
       isSymbolicLink: () => false,
@@ -194,6 +194,7 @@ describe("host exact Codex read selection", () => {
         projectRoot: "/fixture/project",
         gitCommonDirectory: "/fixture/project/.git",
       }),
+      h.snapshot.settings.revision,
     );
     expect(h.proxy.request).toHaveBeenCalledExactlyOnceWith("thread/read", {
       threadId,
@@ -206,6 +207,39 @@ describe("host exact Codex read selection", () => {
       { recursive: true, force: true },
     );
     expect(h.context.codexHostTaskAdmission).toBe(false);
+  });
+
+  it.each(["unavailable", "config-invalid"])(
+    "refuses Go model policy %s before touching the native host",
+    async (status) => {
+      const h = harness();
+      h.context.configuration.resolveTaskModel.mockResolvedValue({ status });
+      expect((await h.handle()).ok).toBe(false);
+      expect(
+        h.context.configuration.resolveTaskModel,
+      ).toHaveBeenCalledExactlyOnceWith({ harness: "codex" });
+      expect(h.context.SharedCodexProxyHost.attach).not.toHaveBeenCalled();
+      expect(
+        h.context.configuration.recordCodexTaskRoute,
+      ).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a changed settings revision after Go model resolution", async () => {
+    const h = harness();
+    h.context.configuration.resolveTaskModel.mockImplementation(async () => {
+      h.context.configuration.snapshot.mockReturnValue({
+        ...h.snapshot,
+        settings: {
+          ...h.snapshot.settings,
+          revision: h.snapshot.settings.revision + 1,
+        },
+      });
+      return { status: "ready" };
+    });
+    expect((await h.handle()).ok).toBe(false);
+    expect(h.context.SharedCodexProxyHost.attach).not.toHaveBeenCalled();
+    expect(h.context.configuration.recordCodexTaskRoute).not.toHaveBeenCalled();
   });
 
   it.each([{}, { observeThreadId: threadId }])(

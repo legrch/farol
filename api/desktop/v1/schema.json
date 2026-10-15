@@ -87,7 +87,8 @@
     "computer.process.read": "read",
     "computer.process.cancel": "effect",
     "computer.connector.catalogueverify": "read",
-    "computer.settings.search": "read"
+    "computer.settings.search": "read",
+    "task.model.resolve": "read"
   },
   "definitions": {
     "Context": {
@@ -5126,6 +5127,80 @@
         },
         "scanLimited": {
           "type": "boolean"
+        }
+      }
+    },
+    "TaskModelPolicyRequest": {
+      "type": "object",
+      "fields": {
+        "revision": {
+          "type": "decimal"
+        },
+        "config": {
+          "type": "json"
+        },
+        "selection": {
+          "type": "json"
+        }
+      }
+    },
+    "TaskModelPolicySelection": {
+      "type": "object",
+      "fields": {
+        "harness": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*$",
+          "minBytes": 1,
+          "maxBytes": 80
+        },
+        "modelAlias": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*$",
+          "minBytes": 1,
+          "maxBytes": 80
+        },
+        "model": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_./-]+$",
+          "minBytes": 1,
+          "maxBytes": 120
+        },
+        "effort": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "minBytes": 1,
+          "maxBytes": 40,
+          "optional": true
+        }
+      }
+    },
+    "TaskModelPolicyResponse": {
+      "type": "object",
+      "fields": {
+        "revision": {
+          "type": "decimal"
+        },
+        "status": {
+          "type": "string",
+          "values": [
+            "ready",
+            "config-missing",
+            "config-invalid",
+            "selection-invalid",
+            "harness-missing",
+            "harness-unsupported",
+            "model-missing",
+            "unavailable"
+          ]
+        },
+        "selection": {
+          "type": "TaskModelPolicySelection",
+          "optional": true
+        },
+        "configSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "optional": true
         }
       }
     }
