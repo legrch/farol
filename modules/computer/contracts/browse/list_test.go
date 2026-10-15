@@ -30,7 +30,7 @@ func TestListIndependentDTOs(t *testing.T) {
 	if n.output.Entries[1] != "folder/" {
 		t.Fatal("caller output aliased")
 	}
-	if reflect.TypeFor[ListResponse]() == reflect.TypeFor[app.ListResult]() {
+	if reflect.TypeFor[ListResponse]() == reflect.TypeFor[app.ListResult]() || reflect.TypeFor[ListRequest]() == reflect.TypeFor[app.ListQuery]() {
 		t.Fatal("app DTO leaked")
 	}
 	if reflect.TypeFor[Root]() == reflect.TypeFor[port.Root]() {

@@ -63,7 +63,7 @@ func TestOwnerSearchContractMappingAndFailure(t *testing.T) {
 					t.Fatal("aliased output")
 				}
 			}
-			if reflect.TypeFor[SearchMatch]() == reflect.TypeFor[port.SearchMatch]() || reflect.TypeFor[SearchResponse]() == reflect.TypeFor[app.SearchResult]() {
+			if reflect.TypeFor[SearchMatch]() == reflect.TypeFor[port.SearchMatch]() || reflect.TypeFor[SearchResponse]() == reflect.TypeFor[app.SearchResult]() || reflect.TypeFor[SearchRequest]() == reflect.TypeFor[app.SearchQuery]() {
 				t.Fatal("internal DTO leaked")
 			}
 		})

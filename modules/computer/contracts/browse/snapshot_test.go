@@ -61,7 +61,7 @@ func TestSnapshotIndependentMetadataDTO(t *testing.T) {
 	if len(fields) != 5 || fields["WorkspaceID"] == nil || fields["RelativePath"] == nil || fields["Root"] == nil || fields["Bytes"] == nil || fields["SHA256"] == nil || strings.Contains(string(encoded), "private") {
 		t.Fatalf("metadata projection: %s", encoded)
 	}
-	if reflect.TypeFor[SnapshotResponse]() == reflect.TypeFor[app.SnapshotResult]() || reflect.TypeFor[SnapshotRequest]() == reflect.TypeFor[app.ListQuery]() || reflect.TypeFor[Root]() == reflect.TypeFor[port.Root]() {
+	if reflect.TypeFor[SnapshotResponse]() == reflect.TypeFor[app.SnapshotResult]() || reflect.TypeFor[SnapshotRequest]() == reflect.TypeFor[app.SnapshotQuery]() || reflect.TypeFor[Root]() == reflect.TypeFor[port.Root]() {
 		t.Fatal("implementation DTO escaped")
 	}
 	n.output.Bytes = 0
