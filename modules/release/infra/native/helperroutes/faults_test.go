@@ -283,3 +283,62 @@ func TestUnavailableDependencyDoesNotEraseCancellation(t *testing.T) {
 		}
 	}
 }
+
+func TestTypedNilAndMalformedCallbackErrorsAreInternal(t *testing.T) {
+	var typedNil *Error
+	for _, tc := range []struct {
+		name  string
+		cause error
+	}{
+		{"typed_nil", typedNil}, {"malformed", &Error{Code: Code("private/path native message"), Internal: false}}, {"zero", &Error{}},
+	} {
+		for _, canceled := range []bool{false, true} {
+			t.Run(tc.name+"/"+map[bool]string{false: "active", true: "cancelled"}[canceled], func(t *testing.T) {
+				defer func() {
+					if recover() != nil {
+						t.Error("callback error classification panicked")
+					}
+				}()
+				f := newFixture(t)
+				r := f.open(t)
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				err := r.WithFiles(ctx, func(Files) error {
+					if canceled {
+						cancel()
+					}
+					return tc.cause
+				})
+				classified(t, err, CodeCallback, true)
+				if !errors.Is(err, tc.cause) || canceled && !errors.Is(err, context.Canceled) {
+					t.Fatal("callback/cancel cause lost")
+				}
+			})
+		}
+	}
+}
+
+func TestCombineTypedNilAndMalformedErrorsKeepsClosedInternalCode(t *testing.T) {
+	var typedNil *Error
+	for _, tc := range []struct {
+		name  string
+		cause error
+	}{
+		{"typed_nil", typedNil}, {"malformed", &Error{Code: Code("private/path native message"), Internal: false}}, {"zero", &Error{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if recover() != nil {
+					t.Error("combined error classification panicked")
+				}
+			}()
+			for _, secondary := range []error{nil, failure(CodeContext, false, context.Canceled)} {
+				err := combine(tc.cause, secondary)
+				classified(t, err, CodeNative, true)
+				if !errors.Is(err, tc.cause) || secondary != nil && !errors.Is(err, context.Canceled) {
+					t.Fatal("combined cause lost")
+				}
+			}
+		})
+	}
+}

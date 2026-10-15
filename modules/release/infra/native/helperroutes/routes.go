@@ -42,13 +42,18 @@ type Error struct {
 	cause    error
 }
 
+func closedCode(code Code) bool {
+	switch code {
+	case CodeInvalid, CodeDependency, CodeContext, CodeClosed, CodeMissing, CodeType, CodeOwner, CodeMode, CodeChanged, CodeNative, CodeCallback, CodeCleanup, CodeBorrow:
+		return true
+	}
+	return false
+}
+
 func (e *Error) Error() string {
 	code := CodeNative
-	if e != nil {
-		switch e.Code {
-		case CodeInvalid, CodeDependency, CodeContext, CodeClosed, CodeMissing, CodeType, CodeOwner, CodeMode, CodeChanged, CodeNative, CodeCallback, CodeCleanup, CodeBorrow:
-			code = e.Code
-		}
+	if e != nil && closedCode(e.Code) {
+		code = e.Code
 	}
 	return "helper routes: " + string(code)
 }
@@ -66,13 +71,20 @@ func internal(err error) bool {
 		return false
 	}
 	if e, ok := err.(*Error); ok {
-		return e.Internal
+		return e == nil || !closedCode(e.Code) || e.Internal
 	}
 	// An opaque wrapper/join that happens to match a context sentinel is still
 	// an unknown dependency error. errors.Is alone cannot downgrade it.
 	return true
 }
+func bounded(err error) error {
+	if e, ok := err.(*Error); ok && (e == nil || !closedCode(e.Code)) {
+		return failure(CodeNative, true, err)
+	}
+	return err
+}
 func combine(primary, secondary error) error {
+	primary, secondary = bounded(primary), bounded(secondary)
 	if primary == nil {
 		return secondary
 	}
@@ -80,7 +92,7 @@ func combine(primary, secondary error) error {
 		return primary
 	}
 	code := CodeNative
-	if e, ok := primary.(*Error); ok {
+	if e, ok := primary.(*Error); ok && e != nil && closedCode(e.Code) {
 		code = e.Code
 	}
 	return failure(code, internal(primary) || internal(secondary), errors.Join(primary, secondary))

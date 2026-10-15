@@ -76,21 +76,33 @@ func TestLaggingDeadlineStillBoundsGateWait(t *testing.T) {
 func TestLaggingDeadlineAfterCallbackAndNativeReturnPreservesCauses(t *testing.T) {
 	f := newFixture(t)
 	r := f.open(t)
-	deadline := time.Now().Add(200 * time.Millisecond)
+	deadline := time.Now().Add(5 * time.Second)
 	ctx := lagging(deadline)
 	cause := errors.New("exact callback failure")
 	original := r.owner.fs.rootStat
+	callbackEntered, nativeEntered := false, false
 	err := r.WithFiles(ctx, func(Files) error {
+		callbackEntered = true
+		if !time.Now().Before(deadline) {
+			t.Fatal("fixture callback entry exceeded fixed budget")
+		}
 		// Make the first postcallback native return occur after the fixed bound;
 		// Err/Done remain unsignalled even then. This also proves the native and
 		// callback causes survive the independent absolute deadline check.
 		r.owner.fs.rootStat = func(s *unix.Stat_t) error {
+			nativeEntered = true
+			if !time.Now().Before(deadline) {
+				t.Fatal("fixture native entry exceeded fixed budget")
+			}
 			<-time.After(time.Until(deadline))
 			_ = original(s)
 			return unix.EIO
 		}
 		return cause
 	})
+	if !callbackEntered || !nativeEntered {
+		t.Fatal("fixture did not establish callback/native entry before fixed expiry")
+	}
 	classified(t, err, CodeCallback, true)
 	if !errors.Is(err, cause) || !errors.Is(err, unix.EIO) || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("postreturn callback/native/deadline cause lost")
@@ -150,8 +162,13 @@ func TestScopedReverifyCannotRenewAnyCapturedBound(t *testing.T) {
 		return nil
 	}))
 
-	deadline := time.Now().Add(200 * time.Millisecond)
+	deadline := time.Now().Add(5 * time.Second)
+	callbackEntered := false
 	err := r.WithFiles(lagging(deadline), func(files Files) error {
+		callbackEntered = true
+		if !time.Now().Before(deadline) {
+			t.Fatal("fixture callback entry exceeded fixed budget")
+		}
 		if !files.scope.until.Equal(deadline) {
 			t.Fatal("scope lost earlier borrow bound")
 		}
@@ -166,6 +183,9 @@ func TestScopedReverifyCannotRenewAnyCapturedBound(t *testing.T) {
 		}
 		return err
 	})
+	if !callbackEntered {
+		t.Fatal("fixture did not establish callback entry before fixed expiry")
+	}
 	classified(t, err, CodeCallback, false)
 }
 
