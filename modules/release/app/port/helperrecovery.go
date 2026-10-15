@@ -33,8 +33,13 @@ type HelperRecoveryFailure struct {
 	Cause               error
 }
 
-func (*HelperRecoveryFailure) Error() string   { return "helper_recovery_failure" }
-func (f *HelperRecoveryFailure) Unwrap() error { return f.Cause }
+func (*HelperRecoveryFailure) Error() string { return "helper_recovery_failure" }
+func (f *HelperRecoveryFailure) Unwrap() error {
+	if f == nil {
+		return nil
+	}
+	return f.Cause
+}
 
 // HelperRecoveryRuntime borrows real serialized route/lease/slot/admission
 // custody for one immutable parsed request. The caller retains custody until

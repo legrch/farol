@@ -2,11 +2,13 @@ package helperrecovery
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -27,9 +29,9 @@ func requestFixture() port.HelperRequest {
 	return port.HelperRequest{Schema: "farol.installed-update/1", Action: "recover", Home: "/fixture/home", OperationID: strings.Repeat("a", 32),
 		Source: port.HelperBuild{Digest: strings.Repeat("b", 64), Version: "0.3.0", BuildID: strings.Repeat("c", 64)},
 		Target: port.HelperBuild{Digest: strings.Repeat("d", 64), Version: "0.4.0", BuildID: strings.Repeat("e", 64)},
+		Drain:  port.HelperDrain{Status: "reconciled", AcceptedSource: strings.Repeat("c", 64), AcceptedTarget: strings.Repeat("e", 64)},
 		PID:    2345, ProcessStart: "Thu Oct 15 12:34:56 2026", WaitSeconds: 30, Relaunch: true, InstallLocation: &location,
-		Predecessor:   &port.HelperPredecessor{Kind: "confirmed_closed", StartedAt: "2026-10-15T12:00:00Z", LastQuitSHA256: strings.Repeat("f", 64), StateIdentity: port.HelperIdentity{Device: "1", Inode: "2"}},
-		LeaseIdentity: &port.HelperIdentity{Device: "1", Inode: "3"}}
+	}
 }
 
 var entryNames = [...]string{"app", "staged", "previous", "failed", "rejected"}
@@ -183,6 +185,7 @@ var originalOracle []byte
 // checks/effects instrumented. It is not a second implementation or native test.
 func TestOriginalPythonBranchPhasePairMatrix(t *testing.T) {
 	var fixture struct {
+		SHA256   string `json:"sha256"`
 		Outcomes []string
 		Groups   []struct {
 			Phase, Action, Inspect, Reconcile string
@@ -192,6 +195,14 @@ func TestOriginalPythonBranchPhasePairMatrix(t *testing.T) {
 	}
 	if err := json.Unmarshal(originalOracle, &fixture); err != nil {
 		t.Fatal(err)
+	}
+	source, err := os.ReadFile("../../../../../resources/native/update_helper.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(source)
+	if hex.EncodeToString(digest[:]) != fixture.SHA256 {
+		t.Fatal("original helper changed; regenerate and review static oracle")
 	}
 	patterns := []string{}
 	for i := range 256 {
@@ -444,6 +455,7 @@ func TestFinalSuccessGuardAndOpaqueClassifiedJoins(t *testing.T) {
 	for _, cause := range []error{
 		&port.HelperRecoveryFailure{Code: "private\ncode", Phase: "refused", Uncertain: true, Cause: syscall.EIO},
 		errors.Join(&port.HelperRecoveryFailure{Code: "move_uncertain", Phase: "refused", Uncertain: true}, syscall.EIO, context.Canceled),
+		errors.Join(nativeRefusal("path_type"), &port.HelperRecoveryFailure{Code: "move_uncertain", Phase: "refused", Uncertain: true}, syscall.EIO),
 	} {
 		s, f := fixtureCase(t, traceCases[0])
 		f.hook = func(string) error { return cause }
@@ -676,6 +688,9 @@ func TestFailedBytesNeedOnlyOwnedDirectoryInSettledRollback(t *testing.T) {
 
 func TestBindingCopiesInputAndEveryOptionalRequestValue(t *testing.T) {
 	r := requestFixture()
+	r.Action = "apply"
+	r.Predecessor = &port.HelperPredecessor{Kind: "confirmed_closed", StartedAt: "2026-10-15T12:00:00Z", LastQuitSHA256: strings.Repeat("f", 64), StateIdentity: port.HelperIdentity{Device: "1", Inode: "2"}}
+	r.LeaseIdentity = &port.HelperIdentity{Device: "1", Inode: "3"}
 	input := []byte("captured")
 	f := newRuntime(t, r, "prepared", "st--")
 	parser := parserFunc(func(_ context.Context, b []byte) (port.HelperRequest, error) {

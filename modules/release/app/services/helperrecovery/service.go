@@ -19,8 +19,13 @@ type Failure struct {
 	Cause               error
 }
 
-func (*Failure) Error() string   { return "helper_recovery_failure" }
-func (f *Failure) Unwrap() error { return f.Cause }
+func (*Failure) Error() string { return "helper_recovery_failure" }
+func (f *Failure) Unwrap() error {
+	if f == nil {
+		return nil
+	}
+	return f.Cause
+}
 
 func refuse(code, phase string) error { return &Failure{Code: code, Phase: phase} }
 func internal(cause error, uncertain bool) error {
@@ -180,6 +185,40 @@ func (op *operation) retain(err error) error {
 	return &retained
 }
 
+// Scan every joined branch without accepting nested refusal classification.
+// An overlarge/cyclic error graph conservatively retains uncertainty.
+func dependencyUncertain(err error) bool {
+	pending := []error{err}
+	remaining := 128
+	for len(pending) > 0 {
+		if remaining == 0 {
+			return true
+		}
+		remaining--
+		current := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if current == nil {
+			continue
+		}
+		if f, classified := current.(*port.HelperRecoveryFailure); classified {
+			if f == nil || f.Uncertain {
+				return true
+			}
+		}
+		switch wrapped := current.(type) {
+		case interface{ Unwrap() []error }:
+			causes := wrapped.Unwrap()
+			if len(causes) > remaining-len(pending) {
+				return true
+			}
+			pending = append(pending, causes...)
+		case interface{ Unwrap() error }:
+			pending = append(pending, wrapped.Unwrap())
+		}
+	}
+	return false
+}
+
 // Dependency errors win over concurrent cancellation. Only typed, bounded
 // original refusals become policy refusals; unexpected errors keep their cause.
 func (op *operation) result(err error) error {
@@ -187,14 +226,10 @@ func (op *operation) result(err error) error {
 		cause := dependencyCause(op.ctx, err)
 		// Wrapped classification may retain uncertainty, but cannot turn an
 		// opaque joined syscall/internal error into an original policy refusal.
-		uncertain := op.effected
-		var retained *port.HelperRecoveryFailure
-		if errors.As(err, &retained) && retained != nil {
-			uncertain = uncertain || retained.Uncertain
-		}
+		uncertain := op.effected || dependencyUncertain(err)
 		f, classified := err.(*port.HelperRecoveryFailure)
 		if classified && f != nil && validCode(f.Code) && validPhase(f.Phase) {
-			return &Failure{Code: f.Code, Phase: f.Phase, Internal: f.Internal, Uncertain: f.Uncertain || op.effected, Cause: cause}
+			return &Failure{Code: f.Code, Phase: f.Phase, Internal: f.Internal, Uncertain: uncertain, Cause: cause}
 		}
 		if err == context.Canceled || err == context.DeadlineExceeded {
 			return canceled(cause, uncertain)
