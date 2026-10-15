@@ -212,9 +212,7 @@
       "incompatible": true,
       "action": "recover",
       "rejected": false,
-      "patterns": [
-        "-ts-"
-      ],
+      "patterns": ["-ts-"],
       "inspect": "2a",
       "reconcile": "22"
     },
@@ -223,9 +221,7 @@
       "incompatible": true,
       "action": "recover",
       "rejected": false,
-      "patterns": [
-        "-ts-"
-      ],
+      "patterns": ["-ts-"],
       "inspect": "29",
       "reconcile": "22"
     }
