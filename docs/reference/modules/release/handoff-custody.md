@@ -151,3 +151,36 @@ These components have no selected CLI/updater caller yet. Python still owns the
 normal apply/recovery/rollback helper. Complete native custody, mutation,
 recovery, relaunch, terminal supervision and installed selection remain open;
 portable composition tests do not close Darwin or installed acceptance.
+
+## Existing physical route custody
+
+`infra/native/helperroutes` opens only the existing home, Applications, owner
+state and installed-update operation routes. Every fixed component is walked
+with no-follow directory descriptors and held throughout the session. It creates
+no directory, lease, journal or admission. Missing legacy preparation directories
+remain a refusal; their creation is a separate compatibility requirement.
+
+The physical root and home ancestors retain the existing strict Go ownership
+rules; the final home and private descendants belong to the effective user.
+Shared `/Applications` uses its separate root-owned/admin-group predicate.
+Verification compares original held components with a complete fresh canonical
+walk, including device, inode, mode, UID and GID. Ordinary directory contents,
+timestamps and link counts can change without transferring route identity;
+the handoff owner still performs its tighter state/lease checks.
+
+`WithFiles` lends five exact files and identities only for its synchronous
+callback. `Files.Reverify` lets an effect fence check the same active scope
+without reacquiring the outer gate. It refuses after the scope ends and rejects
+concurrent scoped calls. Callers must not close, reconfigure or retain borrowed
+files or issue asynchronous work. Copies share one owner; Close waits for actual
+callback and scoped native return, closes each owned file once and retains any
+cleanup failure.
+
+The original opening budget, earlier opening context and subsequent earlier
+deadlines cannot be renewed. Native checks compare absolute time independently
+of cancellation delivery; gate waiting has its own bound. Native errors and
+simultaneous cancellation preserve their exact causes behind closed text.
+Production refuses this Cloud host's foreign-owned physical root. Positive Linux
+fixtures use an unexported disposable-root seam; shared ownership observations
+include synthetic predicates. These tests and Darwin compilation do not qualify
+real Mac ancestry, updater integration or installed behavior.

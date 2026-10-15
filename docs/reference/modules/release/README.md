@@ -25,6 +25,7 @@ acceptance are still required before cutover.
 - [Installed-helper verification preparation](app-verification.md)
 - [Predecessor process observation preparation](process-observation.md)
 - [Installed application namespace preparation](install-namespace.md)
+- [Go installed-helper recovery policy](helper-recovery.md)
 - [Source relocation record](relocation.md)
 - [Archive provenance](infra/archive/provenance.md)
 
