@@ -11,10 +11,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/legrch/farol/modules/task/domain"
 )
@@ -59,7 +57,7 @@ func (b *nativeBoundary) Verify(ctx context.Context, s Selection) error {
 		if err != nil || !st.IsDir() || strconv.FormatUint(uint64(n.Dev), 10) != root.Device || strconv.FormatUint(n.Ino, 10) != root.Inode {
 			return task.ErrIdentity
 		}
-		common, err := gitCommon(ctx, root.Path)
+		common, err := gitCommon(ctx, root)
 		if err != nil || common != root.GitCommonDirectory {
 			return task.ErrIdentity
 		}
@@ -132,37 +130,6 @@ func (b *nativeBoundary) Verify(ctx context.Context, s Selection) error {
 }
 func identity(n *syscall.Stat_t) string {
 	return strconv.FormatUint(uint64(n.Dev), 10) + ":" + strconv.FormatUint(n.Ino, 10)
-}
-func gitCommon(ctx context.Context, root string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "/usr/bin/git", "-C", root, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	cmd.Env = []string{"HOME=/private/tmp", "PATH=/usr/bin:/bin", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0"}
-	out := &boundedOutput{}
-	cmd.Stdout = out
-	cmd.Stderr = io.Discard
-	if cmd.Run() != nil || out.over {
-		return "", task.ErrIdentity
-	}
-	common := strings.TrimRight(string(out.data), "\r\n")
-	if !canonical(common) {
-		return "", task.ErrIdentity
-	}
-	return common, nil
-}
-
-type boundedOutput struct {
-	data []byte
-	over bool
-}
-
-func (b *boundedOutput) Write(p []byte) (int, error) {
-	if len(b.data)+len(p) > 4096 {
-		b.over = true
-		return len(p), nil
-	}
-	b.data = append(b.data, p...)
-	return len(p), nil
 }
 
 type nativeProcess struct {

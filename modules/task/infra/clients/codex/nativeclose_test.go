@@ -9,10 +9,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -76,14 +74,14 @@ func newNativeProxyFixture(t *testing.T, ctx context.Context) *nativeProxyFixtur
 			t.Fatal(err)
 		}
 	}
-	gitCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	// Fresh fixture init ONLY; no existing checkout/config/hooks/templates.
-	cmd := exec.CommandContext(gitCtx, "/usr/bin/git", "init", "--quiet", "--template=", repo)
-	cmd.Env = []string{"HOME=" + root, "PATH=/usr/bin:/bin", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0"}
-	cmd.Stdout, cmd.Stderr, cmd.WaitDelay = io.Discard, io.Discard, time.Second
-	if err := cmd.Run(); err != nil {
-		t.Fatal("fresh Git init refused/unknown; no retry", err)
+	// Hand-built unborn metadata: this fixture needs no Git/CLT installation.
+	for _, dir := range []string{filepath.Join(repo, ".git", "objects"), filepath.Join(repo, ".git", "refs")} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("ref: refs/heads/unborn\n"), 0600); err != nil {
+		t.Fatal(err)
 	}
 	_, stat, err := metadata(repo)
 	if err != nil {
