@@ -82,7 +82,7 @@ func TestExpectedSlotReadIsIndependentAndKeepsBorrowedCustody(t *testing.T) {
 }
 
 func TestSlotVerificationRefusesChangedOrUnsafeRecords(t *testing.T) {
-	for _, kind := range []string{"missing", "symlink", "hardlink", "directory", "mode", "empty", "oversized", "mismatch", "replaced", "changed-during-read", "removed-at-readback", "parent-mode", "wrong-parent"} {
+	for _, kind := range []string{"missing", "symlink", "hardlink", "directory", "mode", "empty", "oversized", "mismatch", "replaced", "changed-during-read", "removed-at-readback", "parent-mode", "parent-mode-at-readback", "wrong-parent"} {
 		t.Run(kind, func(t *testing.T) {
 			f, v := verificationFixture(t)
 			code := "type"
@@ -133,6 +133,18 @@ func TestSlotVerificationRefusesChangedOrUnsafeRecords(t *testing.T) {
 			case "wrong-parent":
 				code = "directory"
 				v.identity.Inode = "0"
+			case "parent-mode-at-readback":
+				// identity() retains mode/uid/gid, so a parent opened to other
+				// users during the observation refuses instead of confirming.
+				code = "changed"
+				v.step = func(at string) {
+					if at != "parent-readback" {
+						return
+					}
+					if err := os.Chmod(f.dir, 0777); err != nil {
+						t.Fatal(err)
+					}
+				}
 			case "replaced", "changed-during-read", "removed-at-readback":
 				code = "changed"
 				label := "open"
