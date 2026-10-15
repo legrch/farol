@@ -223,6 +223,68 @@ func (r *HistoryReader) Read(ctx context.Context, key port.HistoryKey) (*port.Co
 	if !r.match(v, scope) || v.Turn.Binding.BackendGeneration != key.BackendGeneration || v.Turn.Binding.OperationID != key.OperationID {
 		return nil, Refused
 	}
+	retained, err := r.readRetained(ctx, lease, scope, v)
+	if err != nil {
+		return nil, err
+	}
+	c := retained.Conversation
+	out := &port.ConversationResult{Binding: retained.Binding, ResultID: retained.Result.ID, ProviderConversationID: c.ProviderConversationID, ProviderUserTurnID: c.ProviderUserTurnID, ProviderReplyID: c.ProviderReplyID, Requested: c.Requested, Observed: c.Observed, Evidence: c.Evidence, Text: string(retained.Payload), Phase: string(v.Turn.Snapshot.Phase), Outcome: string(retained.Result.Outcome), Code: retained.Result.Code, Complete: true, Acknowledged: true}
+	if err := r.current(ctx, lease, scope); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Latest selects a completed retained predecessor for the current reader owner
+// and one exact provider CID. It returns the existing history reference only:
+// durable payload/anchors still require Read, and fresh Send admission must
+// independently verify current controls and the live provider tail.
+func (r *HistoryReader) Latest(ctx context.Context, conversationID string) (*HistorySummary, error) {
+	if !validID(conversationID) {
+		return nil, Invalid
+	}
+	lease, scope, err := r.admit(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if r.origin == nil {
+		if err := r.current(ctx, lease, scope); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	s := r.origin.owner
+	s.guard.Lock()
+	err = r.currentLocked(ctx, lease, scope)
+	var match *port.HistoryMatch
+	if err == nil {
+		match, err = r.store.HistoryTail(ctx, r.origin.anchor, scope.OwnerID, conversationID)
+	}
+	s.guard.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	if err := r.current(ctx, lease, scope); err != nil {
+		return nil, err
+	}
+	var out *HistorySummary
+	if match != nil {
+		v := *match
+		if !r.match(v, scope) || v.Turn.Snapshot.Binding.Document.ConversationID != conversationID {
+			return nil, Refused
+		}
+		out = &HistorySummary{Key: port.HistoryKey{BackendGeneration: v.Turn.Binding.BackendGeneration, OperationID: v.Turn.Binding.OperationID}, Binding: v.Turn.Binding, ResultID: v.Turn.Snapshot.Result.ID, ProviderConversationID: conversationID}
+	}
+	if err := r.current(ctx, lease, scope); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// readRetained is shared by Read and predecessor minting. The caller has
+// validated the match and current lease after selection. Keep result binding,
+// payload and conversation verification identical for both read surfaces.
+func (r *HistoryReader) readRetained(ctx context.Context, lease port.HistoryReadLease, scope port.HistoryReadScope, v port.HistoryMatch) (*port.RetainRequest, error) {
 	read := port.ResultRead{Binding: v.Turn.Binding, Result: v.Turn.Snapshot.Result, Publication: v.Turn.ResultPublication}
 	retained, err := r.deps.Results.Read(ctx, read)
 	if err != nil {
@@ -234,10 +296,5 @@ func (r *HistoryReader) Read(ctx context.Context, key port.HistoryKey) (*port.Co
 	if retained == nil || retained.Binding != read.Binding || retained.Result != read.Result || len(retained.Payload) > r.deps.ResultBytesLimit || !retained.Conversation.Valid(retained.Result, retained.Payload) || !retained.Conversation.Complete || retained.Conversation.ProviderConversationID != v.Turn.Snapshot.Binding.Document.ConversationID {
 		return nil, Refused
 	}
-	c := retained.Conversation
-	out := &port.ConversationResult{Binding: retained.Binding, ResultID: retained.Result.ID, ProviderConversationID: c.ProviderConversationID, ProviderUserTurnID: c.ProviderUserTurnID, ProviderReplyID: c.ProviderReplyID, Requested: c.Requested, Observed: c.Observed, Evidence: c.Evidence, Text: string(retained.Payload), Phase: string(v.Turn.Snapshot.Phase), Outcome: string(retained.Result.Outcome), Code: retained.Result.Code, Complete: true, Acknowledged: true}
-	if err := r.current(ctx, lease, scope); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return retained, nil
 }

@@ -47,6 +47,10 @@ type HistoryPage struct {
 type HandoffHistoryStore interface {
 	HistoryPage(context.Context, HistoryAnchor, string, uint32) (*HistoryPage, error)
 	HistoryFind(context.Context, HistoryAnchor, string, HistoryKey) (*HistoryMatch, error)
+	// HistoryTail selects one exact owner/provider CID: the last matching consumed
+	// ancestor, then its greatest original ReleasedRevision. Revisions are never
+	// compared across ancestors. Missing is nil,nil; ties/contradictions refuse.
+	HistoryTail(context.Context, HistoryAnchor, string, string) (*HistoryMatch, error)
 }
 
 // HistoryReadScope describes the current local reader. Its backend is the live

@@ -49,6 +49,13 @@ func (s *Service) PrepareNext(ctx context.Context, deadlineMillis uint64) (*port
 	if err := s.commit(ctx, m, false); err != nil {
 		return nil, err
 	}
+	if h.conversation != nil {
+		if err := h.conversation.retained.current(ctx); err != nil {
+			// Retain the original reservation/operation. No Prepare has run and
+			// no replacement admission may turn a withdrawn witness into work.
+			return nil, s.fail(m)
+		}
+	}
 	if err := s.effectCurrent(ctx, m); err != nil {
 		return nil, err
 	}
@@ -104,7 +111,11 @@ func (s *Service) Send(ctx context.Context, h *Handle, prompt string, deadlineMi
 		// coherent snapshot before dispatch; a pre-stage read can miss promotion.
 		target, intentDigest = h.target, h.digest
 		if target.Mode != "" {
-			digest, err := s.intentDigest(h.fixed, target, prompt)
+			var retained *retainedContinuation
+			if h.conversation != nil {
+				retained = h.conversation.retained
+			}
+			digest, err := s.conversationDigest(h.fixed, target, prompt, retained)
 			if err != nil || digest != intentDigest {
 				return port.JournalEntry{}, Mismatch
 			}

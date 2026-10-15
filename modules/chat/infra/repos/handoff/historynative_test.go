@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/legrch/farol/modules/chat/app/port"
 	"golang.org/x/sys/unix"
@@ -100,6 +101,14 @@ func TestNativeHistoryReopenEmptyCycleAndReadOnlyFiles(t *testing.T) {
 		if err != nil || match == nil || *match != want {
 			t.Fatal("native find lost exact ancestor", err)
 		}
+		if got, err := repo.HistoryTail(ctx, a, "owner", "conversation"); err != nil || got == nil || *got != want {
+			t.Fatal("native tail lost exact ancestor", err)
+		}
+		for _, pair := range [][2]string{{"other-owner", "conversation"}, {"owner", "missing"}} {
+			if got, err := repo.HistoryTail(ctx, a, pair[0], pair[1]); err != nil || got != nil {
+				t.Fatal("native crossed/missing tail leaked", err)
+			}
+		}
 		if got, err := repo.HistoryFind(ctx, a, "other-owner", key); got != nil || err != nil {
 			t.Fatal("native wrong-owner leak", err)
 		}
@@ -131,7 +140,7 @@ func TestNativeHistoryReopenEmptyCycleAndReadOnlyFiles(t *testing.T) {
 }
 
 func TestNativeHistoryPhysicalAndSuffixFencesAfterMatch(t *testing.T) {
-	for _, lookup := range []string{"page", "find"} {
+	for _, lookup := range []string{"page", "find", "tail"} {
 		for _, fault := range []string{"attempt-only", "orphan-commit", "gap", "unknown-name", "malformed-suffix", "unknown-fence",
 			"record-mode", "record-hardlink", "record-symlink", "record-fifo", "claim-mode", "claim-replaced", "claim-removed", "parent-mode", "chat-replaced"} {
 			t.Run(lookup+"/"+fault, func(t *testing.T) {
@@ -190,7 +199,11 @@ func TestNativeHistoryPhysicalAndSuffixFencesAfterMatch(t *testing.T) {
 					must(os.Rename(roots.Chat.Path, roots.Chat.Path+"-original"))
 					must(os.Mkdir(roots.Chat.Path, 0700))
 				}
-				if lookup == "page" {
+				if lookup == "tail" {
+					if got, err := repo.HistoryTail(ctx, a, "owner", "conversation"); got != nil || !errors.Is(err, Unknown) {
+						t.Fatal("native invalid tail exposed history", err)
+					}
+				} else if lookup == "page" {
 					if got, err := repo.HistoryPage(ctx, a, "owner", 0); got != nil || !errors.Is(err, Unknown) {
 						t.Fatal("native fault exposed page", got, err)
 					}
@@ -232,5 +245,40 @@ func TestNativeHistoryClaimExclusiveAndUnknownReopen(t *testing.T) {
 		if _, err := os.Lstat(filepath.Join(roots.Chat.Path, name)); err != nil {
 			t.Fatal("unknown fence removed retained evidence", err)
 		}
+	}
+}
+
+// File wall times can be restored or skewed independently of journal order.
+// Disposable native files qualify this counterexample, not live continuation.
+func TestNativeHistoryTailIgnoresReversedFileWallTimes(t *testing.T) {
+	ctx := context.Background()
+	roots := nativeRoots(t)
+	repo := openRepo(t, roots)
+	first := historyRecord(nativeBinding(roots), "history-z", historyTurnSpec{"z-operation", "owner", false})
+	a := historyNativeCycle(t, repo, first, historyNextBinding(first.Publication.Binding, 2))
+	second := historyRecord(a.Consumption.NextBinding, "history-a", historyTurnSpec{"a-operation", "owner", false})
+	a = historyNativeCycle(t, repo, second, historyNextBinding(second.Publication.Binding, 3))
+	entries, err := os.ReadDir(roots.Chat.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, entry := range entries {
+		path := filepath.Join(roots.Chat.Path, entry.Name())
+		// The record inventory names are lexical step numbers. Reverse their
+		// timestamps so the earlier publication looks newer on the wall clock.
+		stamp := time.Unix(100000-int64(index), 0)
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := historyNativeFiles(t, roots)
+	if before[stepName(4, "attempt")].modified.Sec <= before[stepName(8, "attempt")].modified.Sec {
+		t.Fatal("fixture did not reverse consumed publication wall times")
+	}
+	if got, err := repo.HistoryTail(ctx, a, "owner", "conversation"); err != nil || got == nil || got.Turn != second.Receipt.Write.Turns[0] {
+		t.Fatal("wall times/lexical IDs overrode consumed ancestry", got, err)
+	}
+	if after := historyNativeFiles(t, roots); !reflect.DeepEqual(before, after) {
+		t.Fatal("tail lookup changed native files")
 	}
 }

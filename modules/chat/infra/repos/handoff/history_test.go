@@ -343,6 +343,9 @@ func TestHistoryInvalidInputsFailBeforeIO(t *testing.T) {
 			if match, err := repo.HistoryFind(context.Background(), a, "owner", key); match != nil || !errors.Is(err, Invalid) {
 				t.Fatal("malformed anchor find", err)
 			}
+			if match, err := repo.HistoryTail(context.Background(), a, "owner", "conversation"); match != nil || !errors.Is(err, Invalid) {
+				t.Fatal("malformed anchor tail", err)
+			}
 			if d.reads != 0 || d.calls != 0 || d.fenced {
 				t.Fatal("invalid input performed IO")
 			}
@@ -357,6 +360,11 @@ func TestHistoryInvalidInputsFailBeforeIO(t *testing.T) {
 		}
 		if match, err := repo.HistoryFind(context.Background(), good, id, key); match != nil || !errors.Is(err, Invalid) {
 			t.Fatal("invalid owner find", err)
+		}
+		for _, pair := range [][2]string{{id, "conversation"}, {"owner", id}} {
+			if match, err := repo.HistoryTail(context.Background(), good, pair[0], pair[1]); match != nil || !errors.Is(err, Invalid) {
+				t.Fatal("invalid tail owner/CID", err)
+			}
 		}
 		for _, badKey := range []port.HistoryKey{{BackendGeneration: id, OperationID: key.OperationID}, {BackendGeneration: key.BackendGeneration, OperationID: id}} {
 			if match, err := repo.HistoryFind(context.Background(), good, "owner", badKey); match != nil || !errors.Is(err, Invalid) {
@@ -410,6 +418,9 @@ func TestHistoryCrossedAnchorAndUnconsumedHeadRefused(t *testing.T) {
 			if got, err := repo.HistoryFind(context.Background(), a, "owner", historyKey(r.Receipt.Write.Turns[0])); got != nil || !errors.Is(err, Refused) {
 				t.Fatal("unqualified anchor find", err)
 			}
+			if got, err := repo.HistoryTail(context.Background(), a, "owner", "conversation"); got != nil || !errors.Is(err, Refused) {
+				t.Fatal("unqualified anchor tail", err)
+			}
 			if d.calls != 0 || d.fenced {
 				t.Fatal("anchor refusal wrote storage")
 			}
@@ -418,7 +429,7 @@ func TestHistoryCrossedAnchorAndUnconsumedHeadRefused(t *testing.T) {
 }
 
 func TestHistoryWholeChainCorruptionNeverExposesEarlierMatch(t *testing.T) {
-	for _, lookup := range []string{"page", "find", "missing", "other-owner"} {
+	for _, lookup := range []string{"page", "find", "missing", "other-owner", "tail", "missing-tail", "other-owner-tail"} {
 		for _, fault := range []string{"prefix", "suffix", "partial", "unknown-field", "bad-terminal", "cross-root", "reuse", "gap-read", "unknown-read", "late-read", "late-end", "ambiguous-key", "unsafe-completed", "unsafe-cancelled"} {
 			t.Run(lookup+"/"+fault, func(t *testing.T) {
 				repo, disk, a, original := historyFixture(t)
@@ -491,12 +502,20 @@ func TestHistoryWholeChainCorruptionNeverExposesEarlierMatch(t *testing.T) {
 					})
 				}
 				key, ownerID := historyKey(original.Receipt.Write.Turns[0]), "owner"
-				if lookup == "missing" {
+				if lookup == "missing" || lookup == "missing-tail" {
 					key.OperationID = "missing"
-				} else if lookup == "other-owner" {
+				} else if lookup == "other-owner" || lookup == "other-owner-tail" {
 					ownerID = "other-owner"
 				}
-				if lookup == "page" {
+				if strings.Contains(lookup, "tail") {
+					cid := "conversation"
+					if lookup == "missing-tail" {
+						cid = "missing"
+					}
+					if got, err := repo.HistoryTail(ctx, a, ownerID, cid); got != nil || !errors.Is(err, Unknown) {
+						t.Fatal("corrupt chain exposed tail/missing", got, err)
+					}
+				} else if lookup == "page" {
 					if got, err := repo.HistoryPage(ctx, a, ownerID, 0); got != nil || !errors.Is(err, Unknown) {
 						t.Fatal("corrupt chain exposed page", got, err)
 					}
@@ -548,6 +567,10 @@ func TestHistoryGlobalCompletedBoundAcrossOwners(t *testing.T) {
 				if got, err := repoFixture(d).HistoryFind(context.Background(), a, "owner", key); got != nil || !errors.Is(err, Unknown) {
 					t.Fatal("early find skipped other-owner capacity", err)
 				}
+				d.fenced = false
+				if got, err := repoFixture(d).HistoryTail(context.Background(), a, "owner", "conversation"); got != nil || !errors.Is(err, Unknown) {
+					t.Fatal("early tail skipped other-owner capacity", err)
+				}
 			} else {
 				got, err := repo.HistoryPage(context.Background(), a, "owner", 0)
 				if err != nil || got == nil || got.Total != 1 || len(got.Entries) != 1 {
@@ -556,6 +579,9 @@ func TestHistoryGlobalCompletedBoundAcrossOwners(t *testing.T) {
 				match, err := repo.HistoryFind(context.Background(), a, "owner", key)
 				if err != nil || match == nil || match.Turn != got.Entries[0].Turn {
 					t.Fatal("exact-bound find lost", err)
+				}
+				if tail, err := repo.HistoryTail(context.Background(), a, "owner", "conversation"); err != nil || tail == nil || *tail != *match {
+					t.Fatal("exact-bound tail lost", err)
 				}
 				if d.fenced {
 					t.Fatal("bounded read fenced storage")
@@ -661,5 +687,117 @@ func TestHistoryValidIDBoundsAndNeverDispatchedExcluded(t *testing.T) {
 	}
 	if err := policy.ValidateRecord(r); err != nil {
 		t.Fatal("fixture weakened closed policy", err)
+	}
+}
+
+func historySetCID(v *port.RetirementTurn, cid string) {
+	v.Snapshot.Binding.Document.ConversationID = cid
+	v.Quiescence.Binding = v.Snapshot.Binding
+}
+
+func TestHistoryTailUsesReleaseOrderWithinLastMatchingConsumedAncestor(t *testing.T) {
+	ctx := context.Background()
+	d := &memoryDisk{}
+	repo := repoFixture(d)
+	first := historyRecord(recordFixture().Publication.Binding, "history-z",
+		historyTurnSpec{"a-operation", "owner", false}, historyTurnSpec{"z-operation", "owner", false})
+	// Sorted operations are required storage order, but a-operation completed
+	// later. These local journal revisions cannot order another incarnation.
+	first.Receipt.Write.Turns[0].AcknowledgedRevision, first.Receipt.Write.Turns[1].AcknowledgedRevision = 22, 10
+	first.Receipt.Write.Turns[0].SettledRevision, first.Receipt.Write.Turns[1].SettledRevision = 23, 11
+	first.Receipt.Write.Turns[0].ReleasedRevision, first.Receipt.Write.Turns[1].ReleasedRevision = 24, 12
+	a := historyCycle(t, d, first, historyNextBinding(first.Publication.Binding, 2))
+	check := func(want port.RetirementTurn) {
+		t.Helper()
+		got, err := repo.HistoryTail(ctx, a, "owner", "conversation")
+		if err != nil || got == nil || got.Turn != want || got.Anchor != a {
+			t.Fatal("wrong retained predecessor", got, err)
+		}
+		got.Turn.Binding.OperationID = "mutated"
+		again, err := repo.HistoryTail(ctx, a, "owner", "conversation")
+		if err != nil || again == nil || again.Turn != want {
+			t.Fatal("tail aliases returned projection", err)
+		}
+	}
+	check(first.Receipt.Write.Turns[0])
+	// The later ancestor has lower local release and TurnGeneration, and its
+	// IDs sort before the older ancestor. Chain position alone orders lifetimes.
+	second := historyRecord(a.Consumption.NextBinding, "history-a", historyTurnSpec{"a-earlier-id", "owner", false})
+	for index := range first.Receipt.Write.Turns {
+		v := &first.Receipt.Write.Turns[index]
+		v.Binding.TurnGeneration = 99
+		v.Snapshot.Identity.Generation = 99
+		v.Snapshot.Reservation.Identity.Generation = 99
+		v.Snapshot.Binding.Reservation.Identity.Generation = 99
+		v.Quiescence.Binding = v.Snapshot.Binding
+	}
+	// Rebuild the first consumed cycle with its higher generation.
+	d.records = nil
+	a = historyCycle(t, d, first, second.Publication.Binding)
+	a = historyCycle(t, d, second, historyNextBinding(second.Publication.Binding, 3))
+	check(second.Receipt.Write.Turns[0])
+	stale := a
+	// A later different CID and a cancelled turn do not replace the match.
+	unrelated := historyRecord(a.Consumption.NextBinding, "history-unrelated",
+		historyTurnSpec{"a-completed", "owner", false}, historyTurnSpec{"b-other-owner", "other", false}, historyTurnSpec{"z-cancelled", "owner", true})
+	historySetCID(&unrelated.Receipt.Write.Turns[0], "different-conversation")
+	a = historyCycle(t, d, unrelated, historyNextBinding(unrelated.Publication.Binding, 4))
+	for cycle := 4; cycle <= 5; cycle++ {
+		empty := historyRecord(a.Consumption.NextBinding, fmt.Sprintf("history-empty-%d", cycle))
+		a = historyCycle(t, d, empty, historyNextBinding(empty.Publication.Binding, cycle+1))
+	}
+	check(second.Receipt.Write.Turns[0])
+	if got, err := repo.HistoryTail(ctx, stale, "owner", "conversation"); got != nil || !errors.Is(err, Refused) {
+		t.Fatal("stale anchor exposed tail", err)
+	}
+	if d.calls != 0 || d.fenced {
+		t.Fatal("tail lookup wrote storage")
+	}
+}
+
+func TestHistoryTailRequiresExactOwnerAndCIDPair(t *testing.T) {
+	d := &memoryDisk{}
+	r := historyRecord(recordFixture().Publication.Binding, "history-pairs",
+		historyTurnSpec{"a-owned", "owner", false}, historyTurnSpec{"b-other", "other", false})
+	historySetCID(&r.Receipt.Write.Turns[1], "other-conversation")
+	a := historyCycle(t, d, r, historyNextBinding(r.Publication.Binding, 2))
+	repo := repoFixture(d)
+	for _, pair := range [][2]string{{"owner", "other-conversation"}, {"other", "conversation"}, {"missing", "conversation"}, {"owner", "missing"}} {
+		if got, err := repo.HistoryTail(context.Background(), a, pair[0], pair[1]); got != nil || err != nil {
+			t.Fatal("missing/crossed owner and CID exposed history", pair, got, err)
+		}
+	}
+	if got, err := repo.HistoryTail(context.Background(), a, "other", "other-conversation"); err != nil || got == nil || got.Turn != r.Receipt.Write.Turns[1] {
+		t.Fatal("exact other owner pair missing", err)
+	}
+}
+
+func TestHistoryTailRefusesTiesAndContradictoryCompletionEvidence(t *testing.T) {
+	for _, fault := range []string{"tie", "crossed-CID", "crossed-owner"} {
+		t.Run(fault, func(t *testing.T) {
+			d := &memoryDisk{}
+			r := historyRecord(recordFixture().Publication.Binding, "history-ambiguous",
+				historyTurnSpec{"a-operation", "owner", false}, historyTurnSpec{"b-operation", "owner", false})
+			a := historyCycle(t, d, r, historyNextBinding(r.Publication.Binding, 2))
+			bad, err := decode(d.records[3])
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch fault {
+			case "tie":
+				bad.Receipt.Write.Turns[0].ReleasedRevision = bad.Receipt.Write.Turns[1].ReleasedRevision
+			case "crossed-CID":
+				bad.Receipt.Write.Turns[1].Snapshot.Binding.Document.ConversationID = "contradictory"
+			case "crossed-owner":
+				bad.Receipt.Write.Turns[1].Binding.OwnerID = "contradictory"
+			}
+			d.records[3], err = json.Marshal(bad) // Deliberately bypass validation.
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, err := repoFixture(d).HistoryTail(context.Background(), a, "owner", "conversation"); got != nil || !errors.Is(err, Unknown) {
+				t.Fatal("ambiguous/contradictory tail exposed", got, err)
+			}
+		})
 	}
 }

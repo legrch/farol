@@ -138,3 +138,44 @@ func (r *Repository) HistoryFind(ctx context.Context, a port.HistoryAnchor, owne
 	}
 	return match, nil
 }
+
+// HistoryTail selects history only, never a live provider tail or Send authority.
+// The existing scan validates the full chain and exact current anchor before
+// exposing even a missing match. Empty/later unrelated cycles preserve the last
+// matching ancestor; release revisions are local to that ancestor's journal.
+func (r *Repository) HistoryTail(ctx context.Context, a port.HistoryAnchor, ownerID, conversationID string) (*port.HistoryMatch, error) {
+	if err := r.historyInput(ctx, a, ownerID); err != nil {
+		return nil, err
+	}
+	if !historyID(conversationID) {
+		return nil, fail(Invalid, false)
+	}
+	s := r.owner
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var match *port.HistoryMatch
+	ambiguous := false
+	_, err := s.historyScan(ctx, a, ownerID, func(m port.HistoryMatch, _ uint32) {
+		if m.Turn.Snapshot.Binding.Document.ConversationID != conversationID {
+			return
+		}
+		if match == nil || m.Origin != match.Origin {
+			match = &m
+			return
+		}
+		// ValidateRecord already rejects conflicting revision/turn evidence.
+		// Keep selection itself closed if equal releases ever reach this seam.
+		if m.Turn.ReleasedRevision == match.Turn.ReleasedRevision {
+			ambiguous = true
+		} else if m.Turn.ReleasedRevision > match.Turn.ReleasedRevision {
+			match = &m
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	if ambiguous {
+		return nil, fail(Refused, false)
+	}
+	return match, nil
+}

@@ -55,6 +55,17 @@ both sides of the final guard; the existing retirement test covers an issued
 Send settling after freeze. This is source evidence. The unlocked adapter handoff
 does not make native dispatch atomic with a later freeze.
 
+The retained-continuation API is source-only and dormant: no Desktop, Responses,
+boot or wire route activates it. Its opaque predecessor supplies read provenance,
+not Send authority. A new turn requires fresh authorization and preserves the
+original selection and exact configured resolution; absent resolution evidence
+stays unknown. Retained continuation also rechecks its original history lease
+after the consumer authorizer returns. A withdrawal observed there settles the
+known-not-sent operation. The final synchronous capability selects immutable
+request bytes; no browser IO runs under history/Chat locks. This does not promise
+atomic native dispatch against a withdrawal after final authorization. Source
+tests do not qualify packaged, installed or live-provider continuation.
+
 A request has admitted, pending, running, awaiting-owner, result-ready, delivered,
 cancelled or unknown state. Known refusal/failure remains a distinct result
 outcome. The pure `result-ready` state describes known result metadata. The
