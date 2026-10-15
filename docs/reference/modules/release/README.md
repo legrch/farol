@@ -22,6 +22,7 @@ acceptance are still required before cutover.
 - [Native boundary](native.md)
 - [Go installed slot-binding publication](slot-binding.md)
 - [Inherited handoff custody preparation](handoff-custody.md)
+- [Installed-helper verification preparation](app-verification.md)
 - [Source relocation record](relocation.md)
 - [Archive provenance](infra/archive/provenance.md)
 

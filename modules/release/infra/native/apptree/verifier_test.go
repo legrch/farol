@@ -117,6 +117,19 @@ func TestGoldenDigestVectors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := t.TempDir()
 			tc.setup(p)
+			if tc.name == "unicode" {
+				entries, e := os.ReadDir(p)
+				must(t, e)
+				// This static vector needs six distinct raw names. Default APFS
+				// may fold case/normalization; that host cannot create this fixture.
+				want := map[string]bool{"a": true, "A": true, "é": true, "e\u0301": true, "\ue000": true, "\U00010000": true}
+				for _, entry := range entries {
+					delete(want, entry.Name())
+				}
+				if len(want) != 0 || len(entries) != 6 {
+					t.Skip("raw-name digest fixture requires case/normalization-preserving filesystem")
+				}
+			}
 			if got := digest(t, p); got != tc.want {
 				t.Fatalf("got %s want %s", got, tc.want)
 			}

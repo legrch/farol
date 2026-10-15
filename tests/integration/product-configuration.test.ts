@@ -1,3 +1,4 @@
+import { fixtureTaskSettingsCompare } from "../fixtures/task-settings-projection.ts";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -323,6 +324,7 @@ function dependencies() {
   let sequence = 0;
   return {
     taskModelPolicy: fixtureTaskModelPolicy,
+    taskSettingsCompare: fixtureTaskSettingsCompare,
     now: () => "2026-09-16T10:00:00.000Z",
     id: () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`,
   };

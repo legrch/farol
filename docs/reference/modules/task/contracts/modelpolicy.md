@@ -35,8 +35,9 @@ The initial settings revision must still match at route publication. No await
 may move an old binding onto a newer revision.
 
 The old TS resolver remains for explicitly retained compatibility consumers and
-tests. Catalogue projection and remaining current-settings/Chat identity
-projections still require their own Go cutover. The selected setup/save calls no
+tests. The [current-settings comparison](currentsettings.md) separately reuses
+full policy identity. Catalogue projection and Chat identity projections still
+require their own Go cutover. The selected setup/save calls no
 longer execute that resolver. This capability does not activate Task creation,
 message, continuation or cancellation.
 

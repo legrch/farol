@@ -1,3 +1,4 @@
+import { fixtureTaskSettingsCompare } from "../fixtures/task-settings-projection.ts";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -12,6 +13,7 @@ import {
 } from "../../src/pkg/product-settings/contract";
 import { ownerSettingsComputerApproval } from "../../src/modules/computer/infra/repo/owner-settings-computer-approval";
 import { taskPolicy } from "../fixtures/task-policy";
+import type { TaskSettingsComparator } from "../../apps/desktop/bridge/task-current-settings.ts";
 
 // Application-port ordering only: memory persistence and the existing trusted
 // withdrawal/publication callback. No Go ACK, serving grant, account capability,
@@ -100,7 +102,9 @@ function changeRoute(service: ProductConfigurationService) {
     };
   });
 }
-async function fixture() {
+async function fixture(
+  compare: TaskSettingsComparator | null = fixtureTaskSettingsCompare,
+) {
   let stored: ProductSettings | null = null;
   let saveGate: ReturnType<typeof deferred> | undefined;
   let ackGate: ReturnType<typeof deferred> | undefined;
@@ -163,6 +167,7 @@ async function fixture() {
   const service = new ProductConfigurationService(store, {
     ...dependencies,
     withdrawComputerAuthority: withdraw,
+    ...(compare ? { taskSettingsCompare: compare } : {}),
   });
   await service.initialize();
   const settings = () => {
@@ -250,6 +255,118 @@ const taskChanges: {
 ];
 
 describe("Task settings negative publication before persistence", () => {
+  it("awaits one Go comparison inside the writer queue before withdrawal or save", async () => {
+    const gate = deferred();
+    const compare = vi.fn(
+      async (...args: Parameters<TaskSettingsComparator>) => {
+        await gate.promise;
+        return fixtureTaskSettingsCompare(...args);
+      },
+    );
+    const f = await fixture(compare);
+    const before = f.settings();
+    const changed = changePolicy(f.service, policyChanges[0]!.edit);
+    const later = f.service.updateGeneral({
+      ...before.general,
+      sidebarDefault: "rail",
+    });
+    try {
+      await setImmediate();
+      expect(compare).toHaveBeenCalledOnce();
+      expect(f.events).toEqual([]);
+      expect(f.save).not.toHaveBeenCalled();
+      expect(f.withdraw).not.toHaveBeenCalled();
+      expect(compare.mock.calls[0]![0]).toEqual(before);
+      gate.resolve();
+      expect((await changed).ok).toBe(true);
+      expect((await later).ok).toBe(true);
+      expect(compare).toHaveBeenCalledTimes(2);
+      expect(f.withdraw).toHaveBeenCalledOnce();
+      expect(f.events.slice(0, successfulOrder.length)).toEqual(
+        successfulOrder,
+      );
+      expect(f.settings().general.sidebarDefault).toBe("rail");
+    } finally {
+      gate.resolve();
+      await Promise.all([changed, later]);
+    }
+  });
+
+  it.each(["missing", "lost", "malformed"] as const)(
+    "does not write on a %s Go comparison",
+    async (kind) => {
+      const compare =
+        kind === "missing"
+          ? null
+          : vi.fn(async () => {
+              if (kind === "lost")
+                throw new Error("Fixture original response lost");
+              return undefined as unknown as boolean;
+            });
+      const f = await fixture(compare);
+      const before = f.settings();
+      const result = await changePolicy(f.service, policyChanges[0]!.edit);
+      expect(result.ok).toBe(false);
+      expect(f.save).not.toHaveBeenCalled();
+      expect(f.load).not.toHaveBeenCalled();
+      expect(f.withdraw).not.toHaveBeenCalled();
+      expect(f.publish).not.toHaveBeenCalled();
+      expect(f.settings()).toEqual(before);
+      if (compare) expect(compare).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("rejects a late comparison after source reload without restoring the old snapshot", async () => {
+    const gate = deferred();
+    const compare = vi.fn(async () => {
+      await gate.promise;
+      return true;
+    });
+    const f = await fixture(compare);
+    const before = f.settings();
+    const pending = changePolicy(f.service, policyChanges[0]!.edit);
+    try {
+      await setImmediate();
+      expect(compare).toHaveBeenCalledOnce();
+      await f.service.initialize();
+      f.load.mockClear();
+      gate.resolve();
+      expect((await pending).ok).toBe(false);
+      expect(f.save).not.toHaveBeenCalled();
+      expect(f.load).not.toHaveBeenCalled();
+      expect(f.withdraw).not.toHaveBeenCalled();
+      expect(f.settings()).toEqual(before);
+    } finally {
+      gate.resolve();
+      await pending;
+    }
+  });
+
+  it("retains synchronous authority loss while a comparison is pending", async () => {
+    const gate = deferred();
+    const compare = vi.fn(async () => {
+      await gate.promise;
+      return true;
+    });
+    const f = await fixture(compare);
+    const adapter = f.service.attachSettingsDeliveryStore({
+      profileId: "fixture",
+      ownerId: "owner",
+    });
+    const pending = changePolicy(f.service, policyChanges[0]!.edit);
+    await setImmediate();
+    expect(compare).toHaveBeenCalledOnce();
+    const fenced = adapter.fence();
+    expect(f.service.snapshot().status).toBe("error");
+    gate.resolve();
+    expect((await pending).ok).toBe(false);
+    await fenced;
+    expect(f.save).not.toHaveBeenCalled();
+    expect(f.publish).not.toHaveBeenCalled();
+    expect(f.withdraw).toHaveBeenCalledOnce();
+    expect(f.service.snapshot().status).toBe("error");
+  });
+
   it.each(policyChanges)(
     "withdraws for a Task-only $name change and publishes exact readback",
     async ({ edit }) => {

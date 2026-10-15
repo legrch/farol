@@ -6,6 +6,7 @@
 - [Observation contract](contracts/observation.md)
 - [Selected thread contract](contracts/selectedthread.md)
 - [Configured model policy](contracts/modelpolicy.md)
+- [Current Task settings comparison](contracts/currentsettings.md)
 - [Claude client](infra/clients/claude.md)
 - [Codex client](infra/clients/codex.md)
 - [Parent Chat peer](infra/peer/parent.md)

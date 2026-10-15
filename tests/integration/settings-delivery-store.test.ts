@@ -1,6 +1,8 @@
+import { fixtureTaskSettingsCompare } from "../fixtures/task-settings-projection.ts";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ProductConfigurationService,
@@ -36,6 +38,7 @@ async function fixture(
     beforeCommit?: () => Promise<void>;
     seed?: (settings: ProductSettings) => void;
     dependencies?: ProductConfigurationDependencies;
+    withoutTaskComparison?: boolean;
   } = {},
 ) {
   const root = await fs.mkdtemp(
@@ -51,7 +54,12 @@ async function fixture(
   const before = (await store.load())!;
   options.seed?.(before);
   await store.save(before);
-  const service = new ProductConfigurationService(store, options.dependencies);
+  const service = new ProductConfigurationService(store, {
+    ...(options.withoutTaskComparison
+      ? {}
+      : { taskSettingsCompare: fixtureTaskSettingsCompare }),
+    ...options.dependencies,
+  });
   await service.initialize();
   const adapter = service.attachSettingsDeliveryStore(scope);
   const snapshot = settingsStoreSnapshot(before, scope);
@@ -75,6 +83,131 @@ async function current(
   return result.snapshot!;
 }
 describe("typed mechanical Settings delivery store", () => {
+  it("awaits the Go Task decision before conditional persistence", async () => {
+    let resolve!: (changed: boolean) => void;
+    const answer = new Promise<boolean>((done) => {
+      resolve = done;
+    });
+    const compare = vi.fn(async () => answer);
+    const publish = vi.fn(async () => undefined);
+    const withdraw = vi.fn(async () => ({ publish }));
+    const f = await fixture({
+      dependencies: {
+        taskSettingsCompare: compare,
+        withdrawComputerAuthority: withdraw,
+      },
+    });
+    const rename = vi.spyOn(fs, "rename");
+    const pending = f.adapter.replace({
+      expected: f.snapshot,
+      next: f.pending,
+      invalidateVerification: false,
+    });
+    try {
+      await setImmediate();
+      expect(compare).toHaveBeenCalledOnce();
+      expect(rename).not.toHaveBeenCalled();
+      expect(withdraw).not.toHaveBeenCalled();
+      resolve(true);
+      expect((await pending).status).toBe("committed");
+      expect(withdraw).toHaveBeenCalledOnce();
+      expect(rename).toHaveBeenCalledOnce();
+      expect(publish).toHaveBeenCalledExactlyOnceWith(await f.store.load());
+    } finally {
+      resolve(false);
+      await pending;
+    }
+  });
+
+  it.each(["missing", "lost"] as const)(
+    "does not replace on a %s Go Task comparison",
+    async (kind) => {
+      const compare = vi.fn(async () => {
+        throw new Error("Fixture original comparison lost");
+      });
+      const withdraw = vi.fn(async () => ({ publish: async () => undefined }));
+      const f = await fixture({
+        withoutTaskComparison: kind === "missing",
+        dependencies: {
+          ...(kind === "missing" ? {} : { taskSettingsCompare: compare }),
+          withdrawComputerAuthority: withdraw,
+        },
+      });
+      const rename = vi.spyOn(fs, "rename");
+      expect(
+        await f.adapter.replace({
+          expected: f.snapshot,
+          next: f.pending,
+          invalidateVerification: false,
+        }),
+      ).toEqual({ status: "not_written" });
+      expect(rename).not.toHaveBeenCalled();
+      expect(withdraw).not.toHaveBeenCalled();
+      expect(await f.store.load()).toEqual(f.before);
+    },
+  );
+
+  it("rechecks the unchanged original deadline after an awaited Task comparison", async () => {
+    const compare = vi.fn(async () => {
+      vi.spyOn(Date, "now").mockReturnValue(2_000_000_000_100);
+      return true;
+    });
+    const withdraw = vi.fn(async () => ({ publish: async () => undefined }));
+    const f = await fixture({
+      dependencies: {
+        taskSettingsCompare: compare,
+        withdrawComputerAuthority: withdraw,
+      },
+    });
+    vi.spyOn(Date, "now").mockReturnValue(2_000_000_000_000);
+    const rename = vi.spyOn(fs, "rename");
+    expect(
+      await f.adapter.replace(
+        {
+          expected: f.snapshot,
+          next: f.pending,
+          invalidateVerification: false,
+        },
+        "2000000000100",
+      ),
+    ).toEqual({ status: "not_written" });
+    expect(compare).toHaveBeenCalledOnce();
+    expect(withdraw).not.toHaveBeenCalled();
+    expect(rename).not.toHaveBeenCalled();
+    expect(await f.store.load()).toEqual(f.before);
+  });
+
+  it("retains loss fenced during the original Go comparison without starting a write", async () => {
+    let resolve!: (changed: boolean) => void;
+    const answer = new Promise<boolean>((done) => {
+      resolve = done;
+    });
+    const compare = vi.fn(async () => answer);
+    const withdraw = vi.fn(async () => ({ publish: async () => undefined }));
+    const f = await fixture({
+      dependencies: {
+        taskSettingsCompare: compare,
+        withdrawComputerAuthority: withdraw,
+      },
+    });
+    const rename = vi.spyOn(fs, "rename");
+    const pending = f.adapter.replace({
+      expected: f.snapshot,
+      next: f.pending,
+      invalidateVerification: false,
+    });
+    await setImmediate();
+    expect(compare).toHaveBeenCalledOnce();
+    const fenced = f.adapter.fence();
+    resolve(false);
+    expect(await pending).toEqual({ status: "unknown" });
+    await fenced;
+    expect(rename).not.toHaveBeenCalled();
+    expect(withdraw).toHaveBeenCalledOnce();
+    expect(f.service.snapshot().status).toBe("error");
+    expect(await f.store.load()).toEqual(f.before);
+  });
+
   it("refuses an expired original deadline before any replacement", async () => {
     const f = await fixture();
     const rename = vi.spyOn(fs, "rename");
