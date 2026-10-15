@@ -223,7 +223,7 @@ func (p *Prepared) Spawn(ctx context.Context, request processsvc.SpawnRequest) (
 		case <-child.done:
 		}
 	}()
-	child.watchCurrent(execution, request.Check, p.schedule)
+	child.watchCurrent(execution, request.Check, p.schedule, func() bool { return !p.clock.Now().Before(request.Deadline) })
 	if limit {
 		child.stop(false)
 	}
@@ -238,7 +238,7 @@ func (p *Prepared) Spawn(ctx context.Context, request processsvc.SpawnRequest) (
 
 // A refusal/unknown owner observation stops this watch permanently. Cleanup is
 // one signal request on the already owned child, never another dispatch/renewal.
-func (c *Child) watchCurrent(ctx context.Context, check func(context.Context) error, scheduler schedule) {
+func (c *Child) watchCurrent(ctx context.Context, check func(context.Context) error, scheduler schedule, expired func() bool) {
 	c.mutex.Lock()
 	done := c.finished || c.signalAttempted
 	c.mutex.Unlock()
@@ -256,10 +256,12 @@ func (c *Child) watchCurrent(ctx context.Context, check func(context.Context) er
 			c.mutex.Lock()
 			c.authorityLost = true
 			c.mutex.Unlock()
-			c.stop(false)
+			// The current check can observe original expiry before its timer runs.
+			// Attribute this first stop without changing any later joining reason.
+			c.stop(expired())
 			return
 		}
-		c.watchCurrent(ctx, check, scheduler)
+		c.watchCurrent(ctx, check, scheduler, expired)
 	})
 	c.mutex.Lock()
 	c.watch = watch

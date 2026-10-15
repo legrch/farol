@@ -47,9 +47,11 @@ that legacy helper.
 ## Independent Shell qualification
 
 `tests/fixtures/shell-qualified-process.go.txt` is an immutable, non-executed
-copy of the public baseline6e8ddbd process source. Its SHA-256 is
-`0e6f7488df2753cbdf2fa3440bf7b6f44a9e94bda3d6a8965087a804da8aeaaa`,
-the existing independent platform pin. Producer/consumer contract tests use
+copy of the process source natively qualified by platform record
+`macos-26A434-arm64-root-volume-git-python-metadata-v11`. Its SHA-256 is
+`2d9688918cd9216cef357ead45b99f7db2412af580d5fa85f9cacaf7e379e786`,
+the independent platform pin. It changes only with a reviewed native
+requalification. Producer/consumer contract tests use
 that fixture, so negative tests reach their intended changed/missing/link
 conditions instead of failing early on unrelated live-source drift.
 

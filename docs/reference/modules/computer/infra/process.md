@@ -13,12 +13,15 @@ policy; it does not activate the separate `QualifiedGitRead` selection below.
 
 The timeout-attribution checkpoint `65d500985b091edceb7421cfb3bbd830cb736858`
 changes `process.go`, which is one of the independently pinned compiler inputs in
-`tooling/shell-platform.json`. Its portable Go regressions do not requalify the
-native platform. The existing producer therefore refuses this changed source
-with `SHELL_SUPPORT_INPUT_CHANGED`; its old pin remains unchanged. A new exact
-native qualification and source review are required before selecting this Shell
-support in a build. Do not refresh the pin from current source measurements to
-turn that refusal into acceptance.
+`tooling/shell-platform.json`. Its portable Go regressions alone did not requalify
+the native platform, so the old pin refused it with `SHELL_SUPPORT_INPUT_CHANGED`.
+Platform record `…-metadata-v11` requalifies it: on macOS 27.0.1 build `26A434`
+(arm64), the native suite (`go test -tags farol_native_process`) passed against
+the exact source, including the watchdog cancellation and transport tests with
+`FAROL_TEST_WATCHDOG_NODE` pointing at the approved Node 24.20.0. It excluded only
+`TestNativeSeatbeltCredentialAliases`, the documented failing legacy-policy
+hardlink gate, which stays unqualified. `process.go` was the only drifted pinned
+input. Never refresh a pin from source measurements without such a native run.
 
 Source registration is not release qualification. Disposable packaged MCP checks
 cover bounded Bash, synthetic Git and observation of an original result after
