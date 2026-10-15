@@ -46,3 +46,35 @@ Retirement requires the remaining physical tree/plist, original process and
 continuation, journaled mutation/recovery/rollback and authenticated launch parity,
 followed by independently verified Go source selection. Darwin inheritance,
 installed helper, clean-Mac launch and OTA/rollback acceptance remain NOT RUN.
+
+## Prepared ACK and continuation transport
+
+`infra/native/helperchannels` separately owns transferred ACK and optional
+continuation byte streams. `Take` consumes exclusive ownership even on failure;
+request and borrowed lease descriptors must never be passed to it. It performs
+no descriptor-number discovery, JSON parsing, peer authentication or application
+authorization. The eventual trusted launcher must bind those actual roles.
+
+Pipes require ACK write-only and continuation read-only access; only stream
+sockets are also accepted. Owned descriptors become nonblocking, and owned
+stream socket linger is disabled. Metadata cannot establish peer trust or the
+absence of separately duplicated descriptions; the caller must transfer unique
+owners without borrowed aliases and stop using them. Close acts on retained
+`os.File` owners through close-once state, never reconstructed descriptor numbers.
+
+Each channel has one consumed attempt, shared across copied wrappers. ACK writes
+one private snapshot of 1..4096 bytes and closes its stream to seal EOF.
+Continuation returns only 1..4096 bytes followed by observed EOF; byte 4097 or
+withheld/late EOF refuses without exposing an accepted frame. Original absolute
+deadlines, earlier context deadlines and cancellation apply before and after
+native results and before success. Close cancels and joins active nonblocking
+operations. Partial or late ACK, uncertain close and active duplicates preserve
+uncertainty; no failure permits replay. Successful cleanup is not ACK acceptance.
+
+Linux disposable pipe/socket fixtures cover backpressure, partial writes,
+deadline/cancellation, close races, copied wrappers, caller-frame reuse and
+ownership on constructor refusal. These are transport tests. The helper's
+correlation, readiness, continuation admission, terminal classification and
+journaled install/recovery remain separate application integration work. This
+package is unselected; Python retirement and Darwin, package, installed and OTA
+qualification remain NOT RUN.
