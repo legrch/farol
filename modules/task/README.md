@@ -1,5 +1,13 @@
 # Persistent coding tasks
 
+The optional trusted desktop launch pair `codexRead: { hostId: "codex",
+trustedTemp }` reaches Go through `--codex-read-host` and `--codex-read-temp`.
+Go validates the atomic pair and reuses the existing selected-thread reader,
+authority and cleanup owner. Normal Electron startup leaves it unselected, so
+this adapter wiring does not activate or qualify a Task tool. Native host,
+account, packaged/installed advertisement and one-shot live-read acceptance
+remain separate gates; saved source metadata does not select this route.
+
 This is a root-compatible application-policy foundation based on accepted
 K0/K1 `acb131d9e7d483296d4edac262cf881cddfb91bb`. The selected lifecycle owner
 was prepared on source-only dependency `94c2beb1e81a08f7f36656d88fb4a59885ea5992`,

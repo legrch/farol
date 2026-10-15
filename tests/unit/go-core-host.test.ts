@@ -547,6 +547,65 @@ describe("normal Go host startup", () => {
     expect(start).not.toHaveBeenCalled();
   });
 
+  it("keeps the selected-read source absent by default", async () => {
+    const f = transport();
+    start.mockResolvedValue(f.client);
+    const host = await startDesktopGoCore(selection);
+    expect(start.mock.calls[0]![1]).not.toHaveProperty("codexRead");
+    await host.close();
+  });
+
+  it("copies the trusted read pair before awaited qualification", async () => {
+    const codexRead = { hostId: "codex" as const, trustedTemp: "/app/tmp" };
+    const input = { ...selection, compiledResources: {}, codexRead };
+    const f = transport();
+    start.mockResolvedValue(f.client);
+    ports.resources.mockImplementationOnce(async () => {
+      codexRead.trustedTemp = "/other/tmp";
+      input.codexRead = { hostId: "codex", trustedTemp: "/replacement/tmp" };
+    });
+    const host = await startDesktopGoCore(input);
+    const native = start.mock.calls[0]![1]!;
+    expect(native.codexRead).toEqual({
+      hostId: "codex",
+      trustedTemp: "/app/tmp",
+    });
+    expect(native.codexRead).not.toBe(codexRead);
+    expect(Object.isFrozen(native.codexRead)).toBe(true);
+    await host.close();
+  });
+
+  it("refuses a trusted-read accessor before resource or profile work", async () => {
+    const get = vi.fn(() => {
+      throw new Error("Accessor must remain uncalled");
+    });
+    Object.defineProperty(selection, "codexRead", { get });
+    await expect(startDesktopGoCore(selection)).rejects.toMatchObject({
+      code: "invalid_codex_read_launch",
+    });
+    expect(get).not.toHaveBeenCalled();
+    expect(ports.resources).not.toHaveBeenCalled();
+    expect(ports.provision).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it.each(["refused", "unknown"] as const)(
+    "does not replace a selected-read launch after %s startup",
+    async (state) => {
+      const failure = new BridgeError(state, "selected_go_failed");
+      start.mockRejectedValue(failure);
+      await expect(
+        startDesktopGoCore({
+          ...selection,
+          codexRead: { hostId: "codex", trustedTemp: "/app/tmp" },
+        }),
+      ).rejects.toBe(failure);
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(profileClose).toHaveBeenCalledTimes(1);
+      expect(ports.legacyRead).not.toHaveBeenCalled();
+    },
+  );
+
   it("binds the qualified bundle and original host identifiers to one child", async () => {
     const input = shellSelection();
     const f = transport();

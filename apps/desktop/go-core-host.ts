@@ -7,8 +7,10 @@ import {
 } from "./bridge/attested-core.ts";
 import {
   BridgeError,
+  copyNativeCodexReadLaunch,
   type BackendLifecycleObservation,
   type Client,
+  type NativeCodexReadSelection,
 } from "./bridge/client.ts";
 import { ComputerBridge } from "./bridge/computer.ts";
 import { ConnectorHostBridge } from "./bridge/connector-host.ts";
@@ -58,6 +60,9 @@ export type DesktopBrowserConnection = Readonly<{
 }>;
 
 export type DesktopCoreSelection = Readonly<{
+  // Trusted opt-in only. Ordinary Electron startup leaves this unselected;
+  // saved source metadata is not native/provider qualification.
+  codexRead?: NativeCodexReadSelection;
   // Compiled into this host by the exact production builder, not environment,
   // renderer data, a runtime file's own claim or a freshly measured binary hash.
   compiledArtifact: unknown;
@@ -510,6 +515,7 @@ export function desktopShellSelection(
 export async function startDesktopGoCore(
   selection: DesktopCoreSelection,
 ): Promise<DesktopGoCore> {
+  const codexRead = copyNativeCodexReadLaunch(selection);
   if (selection.previousHostDrainConfirmed !== true)
     throw new BridgeError("refused", "previous_host_drain_unconfirmed");
   const expected = parseCoreArtifactDeclaration(selection.compiledArtifact);
@@ -637,6 +643,7 @@ export async function startDesktopGoCore(
       previousHostDrainConfirmed: selection.previousHostDrainConfirmed,
       hostLifetimeId,
       childLaunchId,
+      ...(codexRead ? { codexRead } : {}),
       ...(shellMetadata ? { shellMetadata } : {}),
       ...(selection.onLifecycleObservation
         ? { onLifecycleObservation: selection.onLifecycleObservation }
