@@ -19,7 +19,7 @@ func TestCanonicalPythonStrings(t *testing.T) {
 			t.Errorf("valid version %s", version)
 		}
 	}
-	golden, err := os.ReadFile("testdata/slot-binding.json")
+	golden, err := os.ReadFile("testdata/slot-binding.bytes")
 	if err != nil {
 		t.Fatal(err)
 	}

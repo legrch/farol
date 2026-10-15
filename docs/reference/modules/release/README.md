@@ -1,5 +1,11 @@
 # Release Go preparation
 
+The first source-selected native capability is now the
+[Go slot-binding publisher](slot-binding.md) in Go-aware desktop builds. This
+does not select the Go updater policy or replace the Python apply/recovery
+helper. The preparation history and broader cutover requirements below remain
+applicable to those separate capabilities.
+
 This additive module is preparation from accepted base
 `1eb30bd23df22c9581d277280f8e0699612786b5`. It does not change the active updater,
 installed application, package identity or resource path. The source-only archive transfer is explicitly leased from frozen
@@ -14,6 +20,7 @@ acceptance are still required before cutover.
 - [Current-alpha journal persistence](journal.md)
 - [Migration admission lifetime](migration.md)
 - [Native boundary](native.md)
+- [Go installed slot-binding publication](slot-binding.md)
 - [Source relocation record](relocation.md)
 - [Archive provenance](infra/archive/provenance.md)
 

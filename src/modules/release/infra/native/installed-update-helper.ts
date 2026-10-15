@@ -1018,8 +1018,15 @@ export function installedSlotBindingBytes(
   );
 }
 
+export interface InstalledGoSlotBindingHelper {
+  readonly buildId: string;
+  // Trusted host resource attestation, never a renderer path or fresh hash.
+  // Caller retains the accepted immutable image through original-child close.
+  qualify(): Promise<string>;
+}
+
 export async function publishInstalledOperationBinding(
-  helperPath: string,
+  helperPath: string | InstalledGoSlotBindingHelper,
   operation: InstalledBoundOperation,
   installLocation: InstalledAppLocation,
   beforeEffect: () => void = () => undefined,
@@ -1080,7 +1087,20 @@ export async function publishInstalledOperationBinding(
       )
         throw new Error("UPDATE_SLOT_BINDING_CHANGED");
     };
-    const helper = await helperBytes(helperPath, beforeEffect);
+    // A selected Go capability never falls back to Python when attestation or
+    // execution fails. The string form remains the explicit legacy consumer.
+    const go = typeof helperPath === "string" ? null : helperPath;
+    const helper = go
+      ? null
+      : await helperBytes(helperPath as string, beforeEffect);
+    const executable = go ? await go.qualify() : "/usr/bin/python3";
+    if (
+      go &&
+      (!path.isAbsolute(executable) ||
+        path.normalize(executable) !== executable ||
+        !sha.test(go.buildId))
+    )
+      throw new Error("UPDATE_SLOT_BINDING_INVALID");
     await recheck();
     beforeEffect();
     // Inherit only the pinned operation directory; all writes occur relative to fd4.
@@ -1098,11 +1118,17 @@ try:
 except namespace["Refusal"]:
  sys.exit(70)
 `;
-    const child = spawn("/usr/bin/python3", ["-I", "-S", "-B", "-c", program], {
-      cwd: "/",
-      env: { LANG: "C.UTF-8", PATH: "/usr/bin:/bin" },
-      stdio: ["pipe", "pipe", "pipe", "pipe", fd.fd],
-    });
+    const child = spawn(
+      executable,
+      go
+        ? ["publish-installed-slot-binding", "--build-id", go.buildId]
+        : ["-I", "-S", "-B", "-c", program],
+      {
+        cwd: "/",
+        env: { LANG: "C.UTF-8", PATH: "/usr/bin:/bin" },
+        stdio: ["pipe", "pipe", "pipe", "pipe", fd.fd],
+      },
+    );
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let failure: unknown;
@@ -1148,7 +1174,7 @@ except namespace["Refusal"]:
     );
     try {
       beforeEffect();
-      child.stdin!.end(helper);
+      child.stdin!.end(helper ?? undefined);
       (child.stdio[3] as Writable).end(bytes);
     } catch (error) {
       stop(error);
@@ -1162,6 +1188,8 @@ except namespace["Refusal"]:
       Buffer.concat(stderr).length !== 0 ||
       Buffer.concat(stdout).toString() !== "SLOT_BINDING_OK\n"
     )
+      throw new Error("UPDATE_SLOT_BINDING_UNCONFIRMED");
+    if (go && (await go.qualify()) !== executable)
       throw new Error("UPDATE_SLOT_BINDING_UNCONFIRMED");
     await recheck();
     beforeEffect();

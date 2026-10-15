@@ -170,10 +170,11 @@ function options() {
     publish: vi.fn(),
   };
 }
-async function prepared(selectedBuild = build) {
+async function prepared(selectedBuild = build, goCoreArtifact?: unknown) {
   const controller = await createInstalledUpdateRuntime({
     ...options(),
     build: selectedBuild,
+    ...(goCoreArtifact === undefined ? {} : { goCoreArtifact }),
   });
   expect(controller).not.toBeNull();
   await controller!.initialize();
@@ -6401,6 +6402,50 @@ describe("immutable operation binding recovery (disposable bytes, mocked effects
     ).toEqual(installedSlotBindingBytes(request, "legacy"));
     await controller.close();
   });
+  it.each(["confirmed", "lost-publication"])(
+    "selects the compiled Go slot publisher and fences %s without a legacy retry",
+    async (mode) => {
+      const compiled = {
+        schema: "farol-core-artifact/1",
+        build: {
+          buildId: build.buildId,
+          sourceSHA: build.sourceCommit,
+          sourceTreeDigest: build.sourceTreeDigest,
+          platform: { goos: "darwin", goarch: "arm64" },
+        },
+        binary: { path: "farol-backend", size: 128, sha256: "a".repeat(64) },
+      };
+      // Source composition only: capture and publication remain mocked here.
+      // Separate fixtures exercise real resource attestation and the Go publisher.
+      const controller = await prepared(build, compiled);
+      const publish = mocks.publishBinding.getMockImplementation()!;
+      mocks.publishBinding.mockImplementation(async (...args) => {
+        expect(args[0]).toMatchObject({
+          buildId: build.buildId,
+          qualify: expect.any(Function),
+        });
+        expect(typeof args[0]).toBe("object");
+        await publish(...args);
+        if (mode === "lost-publication") throw Error("lost Go publication ACK");
+      });
+      await controller.restart();
+      expect(mocks.captureExecution).toHaveBeenCalledTimes(1);
+      expect(mocks.publishBinding).toHaveBeenCalledTimes(1);
+      if (mode === "confirmed") expect(mocks.helper).toHaveBeenCalledTimes(1);
+      else {
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_SLOT_BINDING_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        await controller.restart();
+        expect(mocks.publishBinding).toHaveBeenCalledTimes(1);
+        expect(mocks.helper).not.toHaveBeenCalled();
+        expect(release).not.toHaveBeenCalled();
+      }
+      await controller.close();
+    },
+  );
   it("fences a binding changed during copy before helper dispatch", async () => {
     const controller = await prepared();
     const copy = mocks.copyApp.getMockImplementation()!;

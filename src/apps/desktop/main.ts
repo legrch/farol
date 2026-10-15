@@ -895,6 +895,7 @@ async function initializeInstalledUpdater(): Promise<void> {
       directory,
       userData: app.getPath("userData"),
       build: buildIdentity,
+      ...(compiledGoCore === null ? {} : { goCoreArtifact: compiledGoCore }),
       physicalFiles: rawFs,
       ...(installedResourcesOrigin
         ? { resourcesOrigin: installedResourcesOrigin }

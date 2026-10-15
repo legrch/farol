@@ -187,3 +187,98 @@ it("waits for the same child's close after a timeout and never retries", async (
   expect(fake.spawn).toHaveBeenCalledOnce();
   expect(close).toHaveBeenCalledOnce();
 });
+
+it("runs the qualified bundled Go capability with original fd ownership and no Python input", async () => {
+  const qualify = vi.fn(async () => "/private/accepted/farol-backend");
+  const buildId = "5".repeat(64);
+  const result = publishInstalledOperationBinding(
+    { buildId, qualify },
+    operation,
+    "shared",
+  );
+  await started();
+  const [executable, args, options] = fake.spawn.mock.calls[0]!;
+  expect(executable).toBe("/private/accepted/farol-backend");
+  expect(args).toEqual([
+    "publish-installed-slot-binding",
+    "--build-id",
+    buildId,
+  ]);
+  expect(options.stdio).toEqual(["pipe", "pipe", "pipe", "pipe", 42]);
+  expect(Buffer.concat(code)).toHaveLength(0);
+  expect(Buffer.concat(request)).toEqual(
+    installedSlotBindingBytes(operation, "shared"),
+  );
+  expect(close).not.toHaveBeenCalled();
+  finish();
+  await result;
+  expect(qualify).toHaveBeenCalledTimes(2);
+  expect(close).toHaveBeenCalledOnce();
+  expect(fake.spawn).toHaveBeenCalledOnce();
+});
+
+it("does not fall back or spawn when selected Go attestation refuses", async () => {
+  const qualify = vi.fn(async () => {
+    throw Error("CORE_RESOURCE_CHANGED");
+  });
+  await expect(
+    publishInstalledOperationBinding(
+      { buildId: "5".repeat(64), qualify },
+      operation,
+      "shared",
+    ),
+  ).rejects.toThrow("CORE_RESOURCE_CHANGED");
+  expect(fake.spawn).not.toHaveBeenCalled();
+  expect(close).toHaveBeenCalledOnce();
+});
+
+it.each(["changed-image", "lost-ack", "refused-exit"])(
+  "keeps %s Go publication unconfirmed without retry",
+  async (mode) => {
+    const qualify = vi.fn(async () => "/private/accepted/farol-backend");
+    const result = publishInstalledOperationBinding(
+      { buildId: "5".repeat(64), qualify },
+      operation,
+      "shared",
+    );
+    await started();
+    if (mode === "changed-image")
+      qualify.mockRejectedValueOnce(Error("CORE_RESOURCE_CHANGED"));
+    if (mode !== "lost-ack") child.stdout.write("SLOT_BINDING_OK\n");
+    child.emit("close", mode === "refused-exit" ? 70 : 0, null);
+    await expect(result).rejects.toThrow(
+      mode === "changed-image"
+        ? "CORE_RESOURCE_CHANGED"
+        : "UPDATE_SLOT_BINDING_UNCONFIRMED",
+    );
+    expect(fake.spawn).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+  },
+);
+
+it("waits for the original selected Go child after timeout and retains an unknown outcome", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  let settled = false;
+  const result = publishInstalledOperationBinding(
+    {
+      buildId: "5".repeat(64),
+      qualify: async () => "/private/accepted/farol-backend",
+    },
+    operation,
+    "shared",
+  ).catch((error) => {
+    settled = true;
+    return error;
+  });
+  await started();
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+  expect(settled).toBe(false);
+  expect(close).not.toHaveBeenCalled();
+  child.emit("close", null, "SIGKILL");
+  expect(await result).toMatchObject({
+    message: "UPDATE_SLOT_BINDING_UNCONFIRMED",
+  });
+  expect(fake.spawn).toHaveBeenCalledOnce();
+  expect(close).toHaveBeenCalledOnce();
+});
