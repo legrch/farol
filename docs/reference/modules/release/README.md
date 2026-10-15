@@ -24,6 +24,7 @@ acceptance are still required before cutover.
 - [Inherited handoff custody preparation](handoff-custody.md)
 - [Installed-helper verification preparation](app-verification.md)
 - [Predecessor process observation preparation](process-observation.md)
+- [Installed application namespace preparation](install-namespace.md)
 - [Source relocation record](relocation.md)
 - [Archive provenance](infra/archive/provenance.md)
 

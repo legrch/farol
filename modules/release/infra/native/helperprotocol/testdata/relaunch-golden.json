@@ -1,0 +1,422 @@
+{
+  "source": "resources/native/update_helper.py",
+  "sha256": "f2f864871ed29536f345f5d9e13e8e74d59a3b4be6f7b7028ef915743b167f85",
+  "functions": ["private_launch_path", "relaunch_arguments", "selected_slot"],
+  "limits": "Synthetic pure argument/encoding parity; no native identity, copy, journal, launch or installation evidence",
+  "cases": [
+    {
+      "name": "legacy",
+      "request": {
+        "schema": "farol.installed-update/1",
+        "action": "apply",
+        "home": "/synthetic/home",
+        "operationId": "11111111111111111111111111111111",
+        "source": {
+          "digest": "2222222222222222222222222222222222222222222222222222222222222222",
+          "version": "1.0",
+          "buildId": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "target": {
+          "digest": "4444444444444444444444444444444444444444444444444444444444444444",
+          "version": "1.1",
+          "buildId": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "drain": {
+          "status": "reconciled",
+          "acceptedSource": "3333333333333333333333333333333333333333333333333333333333333333",
+          "acceptedTarget": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "pid": 2345,
+        "processStart": "synthetic parent start",
+        "waitSeconds": 30,
+        "relaunch": true
+      },
+      "completion": "completed",
+      "helper": {
+        "pid": 5678,
+        "processStart": "Thu Oct 15 12:34:56 2026"
+      },
+      "privateLaunch": null,
+      "arguments": [
+        "/usr/bin/open",
+        "-a",
+        "/synthetic/home/Applications/Farol.app",
+        "--args",
+        "--farol-installed-update-relaunch={\"operationId\":\"11111111111111111111111111111111\",\"action\":\"apply\",\"phase\":\"completed\",\"helper\":{\"pid\":5678,\"processStart\":\"Thu Oct 15 12:34:56 2026\"},\"buildId\":\"5555555555555555555555555555555555555555555555555555555555555555\"}"
+      ]
+    },
+    {
+      "name": "explicit-legacy",
+      "request": {
+        "schema": "farol.installed-update/1",
+        "action": "apply",
+        "home": "/synthetic/home",
+        "operationId": "11111111111111111111111111111111",
+        "source": {
+          "digest": "2222222222222222222222222222222222222222222222222222222222222222",
+          "version": "1.0",
+          "buildId": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "target": {
+          "digest": "4444444444444444444444444444444444444444444444444444444444444444",
+          "version": "1.1",
+          "buildId": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "drain": {
+          "status": "reconciled",
+          "acceptedSource": "3333333333333333333333333333333333333333333333333333333333333333",
+          "acceptedTarget": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "pid": 2345,
+        "processStart": "synthetic parent start",
+        "waitSeconds": 30,
+        "relaunch": true,
+        "installLocation": "legacy"
+      },
+      "completion": "completed",
+      "helper": {
+        "pid": 5678,
+        "processStart": "Thu Oct 15 12:34:56 2026"
+      },
+      "privateLaunch": null,
+      "arguments": [
+        "/usr/bin/open",
+        "-a",
+        "/synthetic/home/Applications/Farol.app",
+        "--args",
+        "--farol-installed-update-relaunch={\"operationId\":\"11111111111111111111111111111111\",\"action\":\"apply\",\"phase\":\"completed\",\"helper\":{\"pid\":5678,\"processStart\":\"Thu Oct 15 12:34:56 2026\"},\"buildId\":\"5555555555555555555555555555555555555555555555555555555555555555\"}"
+      ]
+    },
+    {
+      "name": "shared",
+      "request": {
+        "schema": "farol.installed-update/1",
+        "action": "apply",
+        "home": "/synthetic/home",
+        "operationId": "11111111111111111111111111111111",
+        "source": {
+          "digest": "2222222222222222222222222222222222222222222222222222222222222222",
+          "version": "1.0",
+          "buildId": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "target": {
+          "digest": "4444444444444444444444444444444444444444444444444444444444444444",
+          "version": "1.1",
+          "buildId": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "drain": {
+          "status": "reconciled",
+          "acceptedSource": "3333333333333333333333333333333333333333333333333333333333333333",
+          "acceptedTarget": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "pid": 2345,
+        "processStart": "synthetic parent start",
+        "waitSeconds": 30,
+        "relaunch": true,
+        "installLocation": "shared"
+      },
+      "completion": "completed",
+      "helper": {
+        "pid": 5678,
+        "processStart": "Thu Oct 15 12:34:56 2026"
+      },
+      "privateLaunch": "/synthetic/home/Library/Application Support/Farol Next Preview/installed-updates/11111111111111111111111111111111/launch-Farol.app",
+      "arguments": [
+        "/usr/bin/open",
+        "-a",
+        "/synthetic/home/Library/Application Support/Farol Next Preview/installed-updates/11111111111111111111111111111111/launch-Farol.app",
+        "--args",
+        "--farol-installed-update-relaunch={\"operationId\":\"11111111111111111111111111111111\",\"action\":\"apply\",\"phase\":\"completed\",\"helper\":{\"pid\":5678,\"processStart\":\"Thu Oct 15 12:34:56 2026\"},\"buildId\":\"5555555555555555555555555555555555555555555555555555555555555555\"}"
+      ]
+    },
+    {
+      "name": "unicode-shared",
+      "request": {
+        "schema": "farol.installed-update/1",
+        "action": "apply",
+        "home": "/synthetic/Owner Space/\u00e9tage\ud83d\ude00",
+        "operationId": "11111111111111111111111111111111",
+        "source": {
+          "digest": "2222222222222222222222222222222222222222222222222222222222222222",
+          "version": "1.0",
+          "buildId": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "target": {
+          "digest": "4444444444444444444444444444444444444444444444444444444444444444",
+          "version": "1.1",
+          "buildId": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "drain": {
+          "status": "reconciled",
+          "acceptedSource": "3333333333333333333333333333333333333333333333333333333333333333",
+          "acceptedTarget": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "pid": 2345,
+        "processStart": "synthetic parent start",
+        "waitSeconds": 30,
+        "relaunch": true,
+        "installLocation": "shared"
+      },
+      "completion": "completed",
+      "helper": {
+        "pid": 5678,
+        "processStart": "x\u0000\n\u007f<&>\ud83d\ude00"
+      },
+      "privateLaunch": "/synthetic/Owner Space/\u00e9tage\ud83d\ude00/Library/Application Support/Farol Next Preview/installed-updates/11111111111111111111111111111111/launch-Farol.app",
+      "arguments": [
+        "/usr/bin/open",
+        "-a",
+        "/synthetic/Owner Space/\u00e9tage\ud83d\ude00/Library/Application Support/Farol Next Preview/installed-updates/11111111111111111111111111111111/launch-Farol.app",
+        "--args",
+        "--farol-installed-update-relaunch={\"operationId\":\"11111111111111111111111111111111\",\"action\":\"apply\",\"phase\":\"completed\",\"helper\":{\"pid\":5678,\"processStart\":\"x\\u0000\\n\\u007f<&>\\ud83d\\ude00\"},\"buildId\":\"5555555555555555555555555555555555555555555555555555555555555555\"}"
+      ]
+    },
+    {
+      "name": "wrong-shared-image",
+      "request": {
+        "schema": "farol.installed-update/1",
+        "action": "apply",
+        "home": "/synthetic/home",
+        "operationId": "11111111111111111111111111111111",
+        "source": {
+          "digest": "2222222222222222222222222222222222222222222222222222222222222222",
+          "version": "1.0",
+          "buildId": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "target": {
+          "digest": "4444444444444444444444444444444444444444444444444444444444444444",
+          "version": "1.1",
+          "buildId": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "drain": {
+          "status": "reconciled",
+          "acceptedSource": "3333333333333333333333333333333333333333333333333333333333333333",
+          "acceptedTarget": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "pid": 2345,
+        "processStart": "synthetic parent start",
+        "waitSeconds": 30,
+        "relaunch": true,
+        "installLocation": "shared"
+      },
+      "completion": "completed",
+      "helper": {
+        "pid": 5678,
+        "processStart": "start"
+      },
+      "privateLaunch": "/Applications/Farol.app",
+      "error": "launch_image_unconfirmed"
+    },
+    {
+      "name": "missing-shared-image",
+      "request": {
+        "schema": "farol.installed-update/1",
+        "action": "apply",
+        "home": "/synthetic/home",
+        "operationId": "11111111111111111111111111111111",
+        "source": {
+          "digest": "2222222222222222222222222222222222222222222222222222222222222222",
+          "version": "1.0",
+          "buildId": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "target": {
+          "digest": "4444444444444444444444444444444444444444444444444444444444444444",
+          "version": "1.1",
+          "buildId": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "drain": {
+          "status": "reconciled",
+          "acceptedSource": "3333333333333333333333333333333333333333333333333333333333333333",
+          "acceptedTarget": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "pid": 2345,
+        "processStart": "synthetic parent start",
+        "waitSeconds": 30,
+        "relaunch": true,
+        "installLocation": "shared"
+      },
+      "completion": "completed",
+      "helper": {
+        "pid": 5678,
+        "processStart": "start"
+      },
+      "privateLaunch": null,
+      "error": "launch_image_unconfirmed"
+    },
+    {
+      "name": "unexpected-legacy-image",
+      "request": {
+        "schema": "farol.installed-update/1",
+        "action": "apply",
+        "home": "/synthetic/home",
+        "operationId": "11111111111111111111111111111111",
+        "source": {
+          "digest": "2222222222222222222222222222222222222222222222222222222222222222",
+          "version": "1.0",
+          "buildId": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "target": {
+          "digest": "4444444444444444444444444444444444444444444444444444444444444444",
+          "version": "1.1",
+          "buildId": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "drain": {
+          "status": "reconciled",
+          "acceptedSource": "3333333333333333333333333333333333333333333333333333333333333333",
+          "acceptedTarget": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "pid": 2345,
+        "processStart": "synthetic parent start",
+        "waitSeconds": 30,
+        "relaunch": true
+      },
+      "completion": "completed",
+      "helper": {
+        "pid": 5678,
+        "processStart": "start"
+      },
+      "privateLaunch": "/synthetic/unexpected",
+      "error": "launch_image_unexpected"
+    },
+    {
+      "name": "cancel-phase",
+      "request": {
+        "schema": "farol.installed-update/1",
+        "action": "apply",
+        "home": "/synthetic/home",
+        "operationId": "11111111111111111111111111111111",
+        "source": {
+          "digest": "2222222222222222222222222222222222222222222222222222222222222222",
+          "version": "1.0",
+          "buildId": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "target": {
+          "digest": "4444444444444444444444444444444444444444444444444444444444444444",
+          "version": "1.1",
+          "buildId": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "drain": {
+          "status": "reconciled",
+          "acceptedSource": "3333333333333333333333333333333333333333333333333333333333333333",
+          "acceptedTarget": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "pid": 2345,
+        "processStart": "synthetic parent start",
+        "waitSeconds": 30,
+        "relaunch": true
+      },
+      "completion": "cancel_completed",
+      "helper": {
+        "pid": 5678,
+        "processStart": "start"
+      },
+      "privateLaunch": null,
+      "error": "launch_phase"
+    },
+    {
+      "name": "rollback-phase",
+      "request": {
+        "schema": "farol.installed-update/1",
+        "action": "apply",
+        "home": "/synthetic/home",
+        "operationId": "11111111111111111111111111111111",
+        "source": {
+          "digest": "2222222222222222222222222222222222222222222222222222222222222222",
+          "version": "1.0",
+          "buildId": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "target": {
+          "digest": "4444444444444444444444444444444444444444444444444444444444444444",
+          "version": "1.1",
+          "buildId": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "drain": {
+          "status": "reconciled",
+          "acceptedSource": "3333333333333333333333333333333333333333333333333333333333333333",
+          "acceptedTarget": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "pid": 2345,
+        "processStart": "synthetic parent start",
+        "waitSeconds": 30,
+        "relaunch": true
+      },
+      "completion": "rollback_completed",
+      "helper": {
+        "pid": 5678,
+        "processStart": "start"
+      },
+      "privateLaunch": null,
+      "error": "launch_phase"
+    },
+    {
+      "name": "missing-helper",
+      "request": {
+        "schema": "farol.installed-update/1",
+        "action": "apply",
+        "home": "/synthetic/home",
+        "operationId": "11111111111111111111111111111111",
+        "source": {
+          "digest": "2222222222222222222222222222222222222222222222222222222222222222",
+          "version": "1.0",
+          "buildId": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "target": {
+          "digest": "4444444444444444444444444444444444444444444444444444444444444444",
+          "version": "1.1",
+          "buildId": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "drain": {
+          "status": "reconciled",
+          "acceptedSource": "3333333333333333333333333333333333333333333333333333333333333333",
+          "acceptedTarget": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "pid": 2345,
+        "processStart": "synthetic parent start",
+        "waitSeconds": 30,
+        "relaunch": true
+      },
+      "completion": "completed",
+      "helper": {
+        "pid": 5678,
+        "processStart": ""
+      },
+      "privateLaunch": null,
+      "error": "launch_helper_identity"
+    },
+    {
+      "name": "hint-overflow",
+      "request": {
+        "schema": "farol.installed-update/1",
+        "action": "apply",
+        "home": "/synthetic/home",
+        "operationId": "11111111111111111111111111111111",
+        "source": {
+          "digest": "2222222222222222222222222222222222222222222222222222222222222222",
+          "version": "1.0",
+          "buildId": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "target": {
+          "digest": "4444444444444444444444444444444444444444444444444444444444444444",
+          "version": "1.1",
+          "buildId": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "drain": {
+          "status": "reconciled",
+          "acceptedSource": "3333333333333333333333333333333333333333333333333333333333333333",
+          "acceptedTarget": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "pid": 2345,
+        "processStart": "synthetic parent start",
+        "waitSeconds": 30,
+        "relaunch": true
+      },
+      "completion": "completed",
+      "helper": {
+        "pid": 5678,
+        "processStart": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "privateLaunch": null,
+      "error": "launch_hint_bound"
+    }
+  ]
+}
