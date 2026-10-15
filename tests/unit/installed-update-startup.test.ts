@@ -342,6 +342,7 @@ function rejectedFixture() {
 beforeEach(() => {
   captureMock.mockReset();
   vi.spyOn(process, "getuid").mockReturnValue(501);
+  vi.spyOn(process, "geteuid").mockReturnValue(501);
   vi.spyOn(os, "userInfo").mockReturnValue({
     username: "fixture",
     uid: 501,
@@ -353,6 +354,17 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("installed updater startup correlation (pure ports only)", () => {
+  it("refuses startup when the selected user does not match the effective UID", async () => {
+    const f = fixture();
+    vi.spyOn(process, "geteuid").mockReturnValue(502);
+
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "INSTALLED_UPDATE_SLOT_INVALID",
+    );
+    expect(f.observation.readRecord).not.toHaveBeenCalled();
+    expect(captureMock).not.toHaveBeenCalled();
+  });
+
   it("authenticates ordinary shared startup resources before Go can use them", async () => {
     const f = fixture();
     f.builds.set("/Applications/Farol.app", target);
