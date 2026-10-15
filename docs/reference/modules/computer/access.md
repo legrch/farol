@@ -1,6 +1,6 @@
 # Computer authority state owner
 
-The new opt-in root-scoped file/compiler implementation and its remaining approval/generation/native integration are described in [Root-scoped access and approvals](../../docs/sandbox-approvals.md). Existing constructors retain their legacy defaults; no caller or running profile is silently upgraded by adding the new constructors.
+The new opt-in root-scoped file/compiler implementation and its remaining approval/generation/native integration are described in [Root-scoped access and approvals](../../../../docs/sandbox-approvals.md). Existing constructors retain their legacy defaults; no caller or running profile is silently upgraded by adding the new constructors.
 
 This slice provides the Go owner for one coherent current participant/approval
 view. It implements the accepted `port.AccessRepository.WithSnapshot` without

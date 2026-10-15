@@ -87,7 +87,7 @@ connects to this exact backend. It never constructs a workspace helper, shell or
 second authority Store. Go failure is terminal; explicit legacy launch fixtures
 remain a separate entry path. Ordinary Dev now has external
 catalogue/bootstrap/read/search and guarded create/edit/conflict/readback evidence; see
-[the current evidence boundary](../../docs/computer-parity.md#current-go-dev-evidence).
+[the current evidence boundary](../../../../docs/computer-parity.md#current-go-dev-evidence).
 This does not qualify installed routing, shell or provider tasks.
 
 The Darwin transport uses a new private 0700 directory, same-user peer credentials

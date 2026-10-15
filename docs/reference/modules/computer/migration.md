@@ -10,22 +10,22 @@
 > obligations and evidence limits; it does not establish fresh execution,
 > packaging, installation or live-provider acceptance.
 
-For current source ownership, follow [Go authority](domain/authority/),
-[workspace application services](app/services/workspace/),
-[published workspace contracts](contracts/workspace/),
-[native filesystem guards](infra/filesystem/), the
-[durable authority owner](infra/repos/access/), and
-[trusted operation composition](../../boot/computer.go).
+For current source ownership, follow [Go authority](../../../../modules/computer/domain/authority/),
+[workspace application services](../../../../modules/computer/app/services/workspace/),
+[published workspace contracts](../../../../modules/computer/contracts/workspace/),
+[native filesystem guards](../../../../modules/computer/infra/filesystem/), the
+[durable authority owner](../../../../modules/computer/infra/repos/access/), and
+[trusted operation composition](../../../../boot/computer.go).
 
-Current [file-policy meanings](domain/authority/filepolicy.go) distinguish
+Current [file-policy meanings](../../../../modules/computer/domain/authority/filepolicy.go) distinguish
 trusted root-scoped `approved-roots-v1` from legacy protected-file policy.
-[Native policy](infra/filesystem/workspace.go) and
-[boot selection](../../boot/computerfilepolicy.go) must match the approved mode.
+[Native policy](../../../../modules/computer/infra/filesystem/workspace.go) and
+[boot selection](../../../../boot/computerfilepolicy.go) must match the approved mode.
 Root-scoped policy removes implicit filename bans while retaining explicit
 exclusions, exact scope, physical-root/no-follow guards, byte bounds and race
 checks. The mandatory-name description below records the historical policy.
 
-Use [AGENTS.md](../../AGENTS.md) for current review timing and the
+Use [AGENTS.md](../../../../AGENTS.md) for current review timing and the
 General/Specialists -> Strong/R3 -> Frontier/R4 ladder. The unavailable-provider
 paragraph below preserves a preparation-era constraint and does not replace
 the current review policy.

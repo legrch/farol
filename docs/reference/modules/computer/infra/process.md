@@ -28,8 +28,8 @@ and supervisor completion; refused or lost control remains unknown. A refused
 root or group stop retires only the observer with a failure status, without an
 alternate signal. Detached or TERM-resistant descendants can still
 retain pipes until the original deadline; neither accepted group TERM nor
-observed pipe EOF establishes complete descendant cleanup. See [current approval boundaries](../../../../docs/sandbox-approvals.md)
-and [Computer parity](../../../../docs/computer-parity.md) for the selected contract
+observed pipe EOF establishes complete descendant cleanup. See [current approval boundaries](../../../../../docs/sandbox-approvals.md)
+and [Computer parity](../../../../../docs/computer-parity.md) for the selected contract
 and the separate native, source and installed evidence.
 
 ## Selected Command Line Tools Git data
@@ -138,7 +138,7 @@ hooks/toolchain or external reconnect evidence. Host qualification, root wiring,
 aggregate/risk review and real GS1 acceptance remain Lead-owned. Historical
 refused/unknown operations are neither replayed nor replaced.
 
-The opt-in `approved-roots-v1` compiler is documented in [Root-scoped access and approvals](../../../../docs/sandbox-approvals.md). It preserves the existing process/lease/journal owners; the compiler alone grants no execution authority. Current conditional product wiring is described above. The strict credential-alias gate below remains historical evidence for the legacy policy, not a qualification of the new root-scoped contract.
+The opt-in `approved-roots-v1` compiler is documented in [Root-scoped access and approvals](../../../../../docs/sandbox-approvals.md). It preserves the existing process/lease/journal owners; the compiler alone grants no execution authority. Current conditional product wiring is described above. The strict credential-alias gate below remains historical evidence for the legacy policy, not a qualification of the new root-scoped contract.
 
 This source slice owns one process operation in Go. Its controlled tests do not
 qualify native execution. The root-scoped product producer reuses the existing
