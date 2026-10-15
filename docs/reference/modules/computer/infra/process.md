@@ -11,6 +11,15 @@ Package attestation failures still refuse startup rather than selecting a fallba
 The normal producer uses `RootScopedGit` under the captured `approved-roots-v1`
 policy; it does not activate the separate `QualifiedGitRead` selection below.
 
+The timeout-attribution checkpoint `65d500985b091edceb7421cfb3bbd830cb736858`
+changes `process.go`, which is one of the independently pinned compiler inputs in
+`tooling/shell-platform.json`. Its portable Go regressions do not requalify the
+native platform. The existing producer therefore refuses this changed source
+with `SHELL_SUPPORT_INPUT_CHANGED`; its old pin remains unchanged. A new exact
+native qualification and source review are required before selecting this Shell
+support in a build. Do not refresh the pin from current source measurements to
+turn that refusal into acceptance.
+
 Source registration is not release qualification. Disposable packaged MCP checks
 cover bounded Bash, synthetic Git and observation of an original result after
 MCP reconnect. Ordinary Git configuration/hooks, external Shell, cancellation and
