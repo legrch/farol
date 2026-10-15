@@ -1,4 +1,5 @@
 import { GO_CORE_ENTRIES, verifyGoCoreArtifact } from "./go-core-artifact.mjs";
+import { verifyRuntimeExecutableClosure } from "./runtime-launch-manifest.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -240,6 +241,11 @@ export async function verifyPackageContent({
     "PACKAGE_EMBEDDED_ENTRY_SET_INVALID",
   );
   await verifyBuildEntries(resources, embedded.entrySha256, entries);
+  if (layout.core)
+    await verifyRuntimeExecutableClosure({
+      directory: resources,
+      entrySha256: embedded.entrySha256,
+    });
   if (!layout.core && Object.hasOwn(embedded, "core"))
     throw new Error("PACKAGE_CORE_SCHEMA_MISMATCH");
   if (layout.branded) {

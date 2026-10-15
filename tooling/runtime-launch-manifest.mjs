@@ -3,11 +3,15 @@ import path from "node:path";
 import { BUILD_ENTRIES, verifyBuildEntries } from "./build-contract.mjs";
 import { GO_CORE_ENTRIES } from "./go-core-artifact.mjs";
 import { NATIVE_SAFE_OPEN_HELPER } from "./native-helper-contract.mjs";
-import { NATIVE_ARCHIVE_OUTPUT } from "./native-archive-build.mjs";
 import { ELECTRON_RUNTIME } from "./runtime-contract.mjs";
+
+// Resource identity only; the existing archive producer owns its bytes. Keep
+// this verifier independent of compiler/process initialization on module import.
+const nativeArchiveResource = "update-archive.py";
 
 export const RUNTIME_CLASSES = Object.freeze([
   "legacy-python-active",
+  "go-with-legacy-python",
   "legacy-system-tool",
   "app-bundled-electron",
   "optional-user-executable",
@@ -60,13 +64,13 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
       ["update-helper.py"],
     ),
     launch(
-      "release.slot-binding-python",
+      "release.slot-binding",
       release + "installed-update-helper.ts",
       "publishInstalledOperationBinding",
       "spawn",
-      '"/usr/bin/python3"',
-      "legacy-python-active",
-      ["update-helper.py"],
+      "executable",
+      "go-with-legacy-python",
+      ["farol-backend", "update-helper.py"],
     ),
     launch(
       "computer.workspace-python",
@@ -248,7 +252,7 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
       "execFile",
       "extractorCopy",
       "app-owned-go-executable",
-      [NATIVE_ARCHIVE_OUTPUT],
+      [nativeArchiveResource],
     ),
     launch(
       "release.package-verifier-runtime",
@@ -292,14 +296,6 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
       "go.Command",
       "s.ExecutablePath",
       "optional-user-executable",
-    ),
-    launch(
-      "task.go-git-compatibility",
-      "modules/task/infra/clients/codex/nativedarwin.go",
-      "gitCommon",
-      "go.CommandContext",
-      '"/usr/bin/git"',
-      "legacy-system-tool",
     ),
     launch(
       "computer.go-command",
@@ -369,7 +365,7 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
       mode: "executable",
     },
     {
-      key: NATIVE_ARCHIVE_OUTPUT,
+      key: nativeArchiveResource,
       ledger: "build",
       kind: "go-macho",
       owner: "tooling/native-archive-build.mjs",

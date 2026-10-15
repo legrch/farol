@@ -180,10 +180,23 @@ function scopeFor(statements, parent) {
   }
   return scope;
 }
-function literals(node, scope) {
+function literals(node, scope, seen = new Set()) {
+  node = unwrap(node);
   const resolved = value(node, scope);
   if (resolved?.kind === "literal") return [resolved.text];
-  return node ? children(node).flatMap((child) => literals(child, scope)) : [];
+  // An executable alias can select a literal interpreter in one branch. Keep
+  // that dependency visible instead of treating the entire alias as opaque.
+  if (node?.type === "Identifier") {
+    const binding = scope.get(node.name);
+    if (binding?.node && !seen.has(binding)) {
+      const visited = new Set(seen).add(binding);
+      return literals(binding.node, binding.scope, visited);
+    }
+    return [];
+  }
+  return node
+    ? children(node).flatMap((child) => literals(child, scope, seen))
+    : [];
 }
 function parseSource(source) {
   return parse(source, {
@@ -507,7 +520,9 @@ export function inspectRuntimeLaunches(
       );
     if (
       row.toolchain &&
-      (known?.classification !== "legacy-python-active" ||
+      (!["legacy-python-active", "go-with-legacy-python"].includes(
+        known?.classification,
+      ) ||
         row.nonPythonToolchain)
     )
       issues.push(`DIRECT_TOOLCHAIN:${row.file}:${row.symbol}`);

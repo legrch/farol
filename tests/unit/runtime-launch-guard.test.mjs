@@ -46,8 +46,10 @@ const issue = (result, prefix) =>
 
 describe("semantic runtime launch ratchet", () => {
   it("retains all four unresolved Python callsites by function, not a zero-Python assertion", () => {
-    const rows = RUNTIME_LAUNCH_MANIFEST.launches.filter(
-      (row) => row.classification === "legacy-python-active",
+    const rows = RUNTIME_LAUNCH_MANIFEST.launches.filter((row) =>
+      ["legacy-python-active", "go-with-legacy-python"].includes(
+        row.classification,
+      ),
     );
     expect(rows.map((row) => `${row.file}:${row.symbol}`).sort()).toEqual([
       "src/modules/computer/infra/native/native-readonly-workspace.ts:runHelper",
@@ -104,6 +106,22 @@ describe("semantic runtime launch ratchet", () => {
         'import {spawn} from "child_process"; function entry(spawn){spawn("python3");}',
       ).launches,
     ).toEqual([]);
+  });
+  it("does not hide a new literal toolchain inside a declared conditional executable", () => {
+    const source =
+      'import {spawn} from "node:child_process"; const executable=selected ? bundled : "/usr/bin/node"; function entry(){spawn(executable,[]);}';
+    const m = manifest({
+      launches: [
+        route({
+          executable: "executable",
+          classification: "go-with-legacy-python",
+        }),
+      ],
+    });
+    expect(issue(inspect(source, m), "DIRECT_TOOLCHAIN")).toBe(true);
+    expect(
+      inspect(source.replace("/usr/bin/node", "/usr/bin/python3"), m).ok,
+    ).toBe(true);
   });
   it.each([
     "/usr/bin/python3",
