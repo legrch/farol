@@ -78,3 +78,42 @@ correlation, readiness, continuation admission, terminal classification and
 journaled install/recovery remain separate application integration work. This
 package is unselected; Python retirement and Darwin, package, installed and OTA
 qualification remain NOT RUN.
+
+## Prepared application protocol binding
+
+`app/services/helperprotocol` binds one captured request through the existing
+helper-input application owner, using a consumer-owned parser port. It retains
+independent request values and owns readiness/refusal frame phase eligibility
+and exact continuation correlation. Operation, action, both complete builds,
+PID/start token, predecessor proof and lease identity must all match. Schema,
+missing/extra proof and malformed or crossed frames refuse. No second parser,
+updater engine, journal or effect authority is introduced.
+
+`infra/native/helperprotocol` supplies only closed structural JSON and encoding.
+It emits compact Python-compatible ASCII-safe JSON with one newline and measures
+the 4096-byte bound after Unicode escaping. Static vectors from the original
+Python producer and TypeScript observer include non-BMP characters, DEL, controls
+and exact boundary sizes. Continuation rejects duplicate/unknown fields, nulls,
+malformed Unicode, trailing frames and noninteger PID encodings; the actual
+TypeScript producer already emits closed integer fields. Golden structural
+values alone are not valid-helper-input or installation evidence.
+
+Pure frame building and validation are repeatable values. They do not prove a
+readiness ACK was delivered, that a continuation was EOF-sealed, or that an
+effect may run. The caller must retain the original context/deadline through the
+owned byte channel, validate its complete frame, and satisfy the existing
+admission/journal/unknown fences before an effect. Copied output/request values
+cannot change the binding. Cancellation before or after a port call refuses.
+
+Known parser refusal codes remain distinct from unexpected internal failures;
+handoff size, invalid continuation, crossed identity and continuation overflow
+also remain distinct. An empty native continuation EOF has its own transport
+code, `helper_channels_continue_empty`, for mapping to the original helper's
+`continue_invalid`; overflow maps to `continue_size`. The eventual helper entry
+must preserve the original terminal exit70 versus unknown/internal exit79, and
+must not interpret a value-validation success as an effect or replay permit.
+
+These components have no selected CLI/updater caller yet. Python still owns the
+normal apply/recovery/rollback helper. Complete native custody, mutation,
+recovery, relaunch, terminal supervision and installed selection remain open;
+portable composition tests do not close Darwin or installed acceptance.

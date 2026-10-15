@@ -61,7 +61,11 @@ func Bind(ctx context.Context, input []byte, parser port.HelperRequestParser, co
 			return nil, internal()
 		}
 	}
-	return &Service{request: copyRequest(request), codec: codec}, nil
+	bound := &Service{request: copyRequest(request), codec: codec}
+	if ctx.Err() != nil {
+		return nil, failure("canceled")
+	}
+	return bound, nil
 }
 
 func copyRequest(r port.HelperRequest) port.HelperRequest {
@@ -148,7 +152,11 @@ func (s *Service) BuildHandoff(ctx context.Context, phase string, code *string) 
 	if len(out) < 1 {
 		return nil, internal()
 	}
-	return append([]byte(nil), out...), nil
+	frameBytes := append([]byte(nil), out...)
+	if ctx.Err() != nil {
+		return nil, failure("canceled")
+	}
+	return frameBytes, nil
 }
 
 // ValidateContinuation compares a complete EOF-sealed channel frame to this
@@ -182,6 +190,9 @@ func (s *Service) ValidateContinuation(ctx context.Context, input []byte) error 
 	}
 	if frame.Schema != ContinueSchema || !sameCorrelation(correlation(s.request), frame.Correlation) {
 		return failure("continue_identity")
+	}
+	if ctx.Err() != nil {
+		return failure("canceled")
 	}
 	return nil
 }
