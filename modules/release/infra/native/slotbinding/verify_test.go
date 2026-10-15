@@ -238,3 +238,243 @@ func TestSlotVerifierRejectsInvalidBindingsWithoutReading(t *testing.T) {
 	}
 	verificationCode(t, v.Verify(context.Background()), "directory", true)
 }
+
+// These checks observe one borrowed open-file description, including its
+// directory cursor. The independent open is only a flock exclusion probe.
+func borrowedSlotWitness(t *testing.T, f fixtureDir) func() {
+	t.Helper()
+	fd := int(f.fd.Fd())
+	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	var entries [4096]byte
+	if n, err := unix.ReadDirent(fd, entries[:]); err != nil || n == 0 {
+		t.Fatalf("advance borrowed directory cursor: %d %v", n, err)
+	}
+	offset, err := unix.Seek(fd, 0, 1)
+	if err != nil || offset == 0 {
+		t.Fatalf("nonzero directory cursor: %d %v", offset, err)
+	}
+	flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inheritance, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := os.Open(f.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = other.Close() })
+	return func() {
+		t.Helper()
+		if got, err := unix.Seek(fd, 0, 1); err != nil || got != offset {
+			t.Fatalf("borrowed directory cursor changed: %d %v, want %d", got, err, offset)
+		}
+		if got, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0); err != nil || got != flags {
+			t.Fatalf("borrowed status flags changed: %d %v, want %d", got, err, flags)
+		}
+		if got, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0); err != nil || got != inheritance {
+			t.Fatalf("borrowed inheritance changed: %d %v, want %d", got, err, inheritance)
+		}
+		if err := unix.Flock(int(other.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != unix.EWOULDBLOCK && err != unix.EAGAIN {
+			t.Fatalf("borrowed flock lost: %v", err)
+		}
+	}
+}
+
+func TestSlotBorrowedDirectoryCursorAcrossSuccessAndRefusal(t *testing.T) {
+	f, v := verificationFixture(t)
+	check := borrowedSlotWitness(t, f)
+	for range 2 {
+		if err := v.Verify(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		check()
+	}
+	if err := os.WriteFile(f.file(), []byte(strings.Replace(string(v.expected), "shared", "legacy", 1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	verificationCode(t, v.Verify(context.Background()), "mismatch", false)
+	check()
+}
+
+func awaitSlotWitness(t *testing.T, entered <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("native seam did not enter")
+	}
+}
+
+func slotStillActive(t *testing.T, result <-chan error) {
+	t.Helper()
+	select {
+	case err := <-result:
+		t.Fatalf("returned before native/cleanup release: %v", err)
+	default:
+	}
+}
+
+func slotResult(t *testing.T, result <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("native/cleanup release did not return")
+		return nil
+	}
+}
+
+func TestSlotExpiryDuringNativeReadAndCleanupReturn(t *testing.T) {
+	for _, bound := range []string{"verifier", "earlier-lagging-context"} {
+		for _, where := range []string{"read", "close"} {
+			for _, nativeError := range []bool{false, true} {
+				t.Run(bound+"/"+where+"/error="+strconv.FormatBool(nativeError), func(t *testing.T) {
+					f, v := verificationFixture(t)
+					check := borrowedSlotWitness(t, f)
+					entered, release := make(chan struct{}), make(chan struct{})
+					deadline := time.Now().Add(time.Second)
+					ctx := context.Context(slotLaggingContext{context.Background(), deadline.Add(time.Minute)})
+					if bound == "verifier" {
+						v.until = deadline
+					} else {
+						ctx = slotLaggingContext{context.Background(), deadline}
+					}
+					entryOnTime := make(chan bool, 1)
+					block := func() error {
+						entryOnTime <- time.Now().Before(deadline)
+						close(entered)
+						<-release
+						if nativeError {
+							return unix.EIO
+						}
+						return nil
+					}
+					reads, closes, ownedFD := 0, 0, -1
+					v.read = func(fd int, data []byte) (int, error) {
+						reads++
+						ownedFD = fd
+						if where == "read" {
+							if err := block(); err != nil {
+								return 0, err
+							}
+						}
+						return unix.Read(fd, data)
+					}
+					v.closeFile = func(file *os.File) error {
+						closes++
+						var seamError error
+						if where == "close" {
+							seamError = block()
+						}
+						return errors.Join(file.Close(), seamError)
+					}
+					result, done := make(chan error, 1), make(chan struct{})
+					go func() { defer close(done); result <- v.Verify(ctx) }()
+					defer func() {
+						select {
+						case <-release:
+						default:
+							close(release)
+						}
+						awaitSlotWitness(t, done)
+					}()
+					awaitSlotWitness(t, entered)
+					if !<-entryOnTime {
+						t.Fatal("seam missed original absolute bound")
+					}
+					<-time.After(time.Until(deadline))
+					slotStillActive(t, result)
+					check()
+					close(release)
+					err := slotResult(t, result)
+					code := "deadline"
+					if nativeError {
+						code = "changed"
+					}
+					verificationCode(t, err, code, nativeError)
+					if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, unix.EIO) != nativeError {
+						t.Fatalf("deadline/native causes lost: %v", err)
+					}
+					if reads < 1 || closes != 1 || ownedFD < 0 {
+						t.Fatalf("read/cleanup counts: %d %d fd=%d", reads, closes, ownedFD)
+					}
+					if _, err := unix.FcntlInt(uintptr(ownedFD), unix.F_GETFD, 0); err != unix.EBADF {
+						t.Fatalf("owned read descriptor survived return: %v", err)
+					}
+					check()
+					if bound == "verifier" {
+						called := false
+						v.step = func(string) { called = true }
+						verificationCode(t, v.Verify(slotLaggingContext{context.Background(), deadline.Add(time.Hour)}), "deadline", false)
+						if called {
+							t.Fatal("later observation renewed original verifier budget")
+						}
+						check()
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestSlotCallerRetainsBorrowedCustodyThroughNativeAndCleanupReturn(t *testing.T) {
+	for _, where := range []string{"read", "close"} {
+		t.Run(where, func(t *testing.T) {
+			f, v := verificationFixture(t)
+			check := borrowedSlotWitness(t, f)
+			entered, release := make(chan struct{}), make(chan struct{})
+			block := func() { close(entered); <-release }
+			first := true
+			v.read = func(fd int, data []byte) (int, error) {
+				if where == "read" && first {
+					first = false
+					block()
+				}
+				return unix.Read(fd, data)
+			}
+			v.closeFile = func(file *os.File) error {
+				if where == "close" {
+					block()
+				}
+				return file.Close()
+			}
+			result, done := make(chan error, 1), make(chan struct{})
+			go func() { defer close(done); result <- v.Verify(context.Background()) }()
+			defer func() {
+				select {
+				case <-release:
+				default:
+					close(release)
+				}
+				awaitSlotWitness(t, done)
+			}()
+			awaitSlotWitness(t, entered)
+			// The caller is obligated to hold this borrowed File through actual
+			// return. os.File.Close is not an owner-scope synchronization API.
+			slotStillActive(t, result)
+			check()
+			close(release)
+			if err := slotResult(t, result); err != nil {
+				t.Fatal(err)
+			}
+			check()
+			if err := f.fd.Close(); err != nil {
+				t.Fatal(err)
+			}
+			other, err := os.Open(f.dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer other.Close()
+			if err := unix.Flock(int(other.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+				t.Fatalf("caller-owned close did not release flock after actual return: %v", err)
+			}
+		})
+	}
+}

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/legrch/farol/modules/release/app/port"
 )
@@ -77,4 +79,46 @@ func TestSlotBindingRefusalsAndFinalCancellation(t *testing.T) {
 	defer cancel()
 	_, err = s.BuildSlotBinding(ctx, slotCodecFunc(func(port.HelperSlotBinding) ([]byte, error) { cancel(); return []byte("bounded"), nil }))
 	requireFailure(t, err, "canceled", false)
+}
+
+func TestSlotBindingCodecByteBoundIsNotRequestReachability(t *testing.T) {
+	// A trusted codec port can return any bytes. This checks the application
+	// byte fence only; real request/codepoint bounds live with the input owner.
+	s := bindFixture(t, requestFixture(), codecFixture{})
+	for _, size := range []int{1, 8192, 8193} {
+		t.Run("bytes="+strconv.Itoa(size), func(t *testing.T) {
+			data := []byte(strings.Repeat("x", size))
+			out, err := s.BuildSlotBinding(context.Background(), slotCodecFunc(func(port.HelperSlotBinding) ([]byte, error) { return data, nil }))
+			if size > 8192 {
+				requireFailure(t, err, "slot_binding_invalid", false)
+				if out != nil {
+					t.Fatal("oversize codec bytes escaped refusal")
+				}
+				return
+			}
+			if err != nil || len(out) != size {
+				t.Fatalf("codec byte boundary: %d %v", len(out), err)
+			}
+			data[0] = 'y'
+			if out[0] != 'x' {
+				t.Fatal("returned codec bytes retain alias")
+			}
+		})
+	}
+}
+
+func TestSlotBindingDeadlineDeliveredDuringCodecReturn(t *testing.T) {
+	s := bindFixture(t, requestFixture(), codecFixture{})
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Second))
+	defer cancel()
+	called := false
+	out, err := s.BuildSlotBinding(ctx, slotCodecFunc(func(port.HelperSlotBinding) ([]byte, error) {
+		called = true
+		<-ctx.Done()
+		return []byte("late codec bytes"), nil
+	}))
+	requireFailure(t, err, "canceled", false)
+	if !called || out != nil || !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		t.Fatal("late codec bytes escaped delivered deadline")
+	}
 }
