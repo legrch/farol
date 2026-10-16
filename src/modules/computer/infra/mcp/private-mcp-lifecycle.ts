@@ -15,12 +15,27 @@ const PREPARED = /^prepared-([a-f0-9]{64})$/u;
 const INSTANCE = /^active-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
 const JOURNAL_TEMPORARY =
   /^\.(?:(?:prepared|completed)\.json|revoked-[a-f0-9]{64})\.[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\.tmp$/u;
-const Reconciliation = z.strictObject({
+const QuitReconciliationIdentity = z.strictObject({
   schema: z.literal(1),
   operationId: z.string().uuid(),
   failedQuitSha256: z.string().regex(DIGEST),
-  instances: z.array(z.string().regex(INSTANCE)).max(64),
 });
+const CrashReconciliationIdentity = z.strictObject({
+  schema: z.literal(2),
+  operationId: z.string().uuid(),
+  basis: z.literal("failed-run"),
+  failedRunSha256: z.string().regex(DIGEST),
+  configSha256: z.string().regex(DIGEST),
+});
+const ReconciliationIdentity = z.discriminatedUnion("schema", [
+  QuitReconciliationIdentity,
+  CrashReconciliationIdentity,
+]);
+const reconciliationInstances = z.array(z.string().regex(INSTANCE)).max(64);
+const Reconciliation = z.discriminatedUnion("schema", [
+  QuitReconciliationIdentity.extend({ instances: reconciliationInstances }),
+  CrashReconciliationIdentity.extend({ instances: reconciliationInstances }),
+]);
 
 /** One launch root, shared by Desktop and every Computer MCP it authorizes. */
 export class PrivateMcpLifecycle {
@@ -451,16 +466,50 @@ export class PrivateMcpLifecycle {
       proveIdle(): Promise<void>;
     }>,
   ): Promise<void> {
-    if (
-      !z.string().uuid().safeParse(input.operationId).success ||
-      !DIGEST.test(input.failedQuitSha256)
-    )
+    const selected = QuitReconciliationIdentity.safeParse({
+      schema: 1,
+      operationId: input.operationId,
+      failedQuitSha256: input.failedQuitSha256,
+    });
+    if (!selected.success || typeof input.proveIdle !== "function")
       throw new Error("COMPUTER_MCP_RECONCILIATION_INVALID");
+    await this.reconcileSelected(selected.data, input.proveIdle.bind(input));
+  }
+
+  /** Unselected crash-maintenance primitive. Enclosing trusted host code must
+   * retain the same promotion/Computer exclusions and canonical work proof.
+   * The run/config digests identify that observation, never a Quit or old ACK.
+   * No Desktop/CLI route selects this method until its host gates qualify.
+   */
+  async reconcileInactiveAfterCrash(
+    input: Readonly<{
+      operationId: string;
+      failedRunSha256: string;
+      configSha256: string;
+      proveIdle(): Promise<void>;
+    }>,
+  ): Promise<void> {
+    const selected = CrashReconciliationIdentity.safeParse({
+      schema: 2,
+      operationId: input.operationId,
+      basis: "failed-run",
+      failedRunSha256: input.failedRunSha256,
+      configSha256: input.configSha256,
+    });
+    if (!selected.success || typeof input.proveIdle !== "function")
+      throw new Error("COMPUTER_MCP_RECONCILIATION_INVALID");
+    await this.reconcileSelected(selected.data, input.proveIdle.bind(input));
+  }
+
+  private async reconcileSelected(
+    identity: z.infer<typeof ReconciliationIdentity>,
+    proveIdle: () => Promise<void>,
+  ): Promise<void> {
     const lease = await this.lock(true, 0);
     try {
       if (!(await this.existingMarker("stopping")))
         throw new Error("COMPUTER_MCP_LIFECYCLE_STOP_UNVERIFIED");
-      const pending = `reconciling-${input.operationId}`;
+      const pending = `reconciling-${identity.operationId}`;
       const entries = await fs.readdir(this.directory);
       if (
         entries.length > 4096 ||
@@ -478,8 +527,11 @@ export class PrivateMcpLifecycle {
       await this.shellGroupsGone();
       // All effect/state checks run while no MCP can join. No process, proxy,
       // status probe or effect is launched by this lifecycle primitive.
-      await input.proveIdle();
-      const archive = path.join(this.directory, `retired-${input.operationId}`);
+      await proveIdle();
+      const archive = path.join(
+        this.directory,
+        `retired-${identity.operationId}`,
+      );
       try {
         await this.safeRecoveryDirectory(archive);
       } catch (error) {
@@ -490,14 +542,20 @@ export class PrivateMcpLifecycle {
       const plan =
         previous ??
         Reconciliation.parse({
-          schema: 1,
-          operationId: input.operationId,
-          failedQuitSha256: input.failedQuitSha256,
+          ...identity,
           instances,
         });
+      const sameIdentity =
+        plan.operationId === identity.operationId &&
+        (plan.schema === 1 && identity.schema === 1
+          ? plan.failedQuitSha256 === identity.failedQuitSha256
+          : plan.schema === 2 &&
+            identity.schema === 2 &&
+            plan.basis === identity.basis &&
+            plan.failedRunSha256 === identity.failedRunSha256 &&
+            plan.configSha256 === identity.configSha256);
       if (
-        plan.operationId !== input.operationId ||
-        plan.failedQuitSha256 !== input.failedQuitSha256 ||
+        !sameIdentity ||
         instances.some((name) => !plan.instances.includes(name))
       )
         throw new Error("COMPUTER_MCP_RECONCILIATION_CHANGED");

@@ -129,6 +129,38 @@ Lead must still complete and qualify:
 - Normal Dev identity/build/catalogue evidence, actual external ChatGPT calls,
   native cases and package/installed/update gates against the selected bytes.
 
+## Closed MCP reconciliation provenance
+
+The transitional TypeScript `PrivateMcpLifecycle` adapter retains one native
+exclusive lifetime claim while it validates the existing stopping marker,
+bounded private instance namespace, absence of shell groups and the enclosing
+host's work proof. It journals and archives inactive markers through the
+existing pending fence and exact operation identity. This does not confirm an
+old stop, settle an effect or grant a new connector owner.
+
+`reconcileInactive` preserves the schema 1 failed-Quit identity. The separate,
+currently unselected `reconcileInactiveAfterCrash` primitive records schema 2
+with `basis: "failed-run"`, exact run/config digests and the same bounded
+instance list. Completed metadata remains `retired_unconfirmed`; it contains no
+fabricated Quit digest, drain, ACK or terminal observation. Neither entry may
+adopt the other schema's prepared plan, even when digest strings match. Changed
+run, config or operation identity refuses further relocation. Both use the same
+native exclusion, private-file checks, revocation, journal durability and
+partial-operation fences.
+
+The crash primitive requires trusted enclosing promotion/Computer exclusion and
+canonical work proof; digest values and a free lifetime claim supply neither.
+It is not selected by Desktop, MCP ingress or the closed Dev CLI. Their existing
+stale-instance refusals remain intact. Actual host selection, failed-run
+qualification, original child terminal custody, assembled writable restart and
+installed/live-provider acceptance remain separate gates.
+
+The [Darwin crash-reconciliation tests](../../../../tests/integration/private-mcp-crash-reconciliation.test.ts)
+exercise actual private files and native lifetime claims, retaining every new
+fixture root. Their run/config hashes and enclosing work proofs are synthetic;
+they qualify schema separation, marker custody and native refusal fences, not
+real failed-run provenance or application recovery.
+
 The app/root/TypeScript adapter tests use offline value or stream fixtures and
 synchronization. Four native Store suites cover journal publication, withdrawal
 and refusal. Darwin socket suites exercise private endpoint identity, same-user
