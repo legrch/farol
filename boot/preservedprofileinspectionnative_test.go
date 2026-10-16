@@ -34,6 +34,12 @@ var preservedProfileNative = flag.Bool("preserved-profile-native", false, "run r
 // exit, original host/descendant closure or installed maintenance is proved.
 // Every fixture is retained, including failed/unknown attempts.
 func preservedProfileFixture(t *testing.T, unresolved bool, withFile ...bool) (preservedProfileInspectionInput, string) {
+	return preservedProfileFixtureAt(t, "", unresolved, withFile...)
+}
+
+// A native host producer may supply its own newly created retained private
+// fixture parent. Ordinary test callers retain the original user-temp route.
+func preservedProfileFixtureAt(t *testing.T, base string, unresolved bool, withFile ...bool) (preservedProfileInspectionInput, string) {
 	t.Helper()
 	if !*preservedProfileNative {
 		t.Skip("requires -preserved-profile-native")
@@ -42,9 +48,11 @@ func preservedProfileFixture(t *testing.T, unresolved bool, withFile ...bool) (p
 	if err != nil {
 		t.Fatal(err)
 	}
-	base, err := os.MkdirTemp(parent, "farol-preserved-profile-")
-	if err != nil {
-		t.Fatal(err)
+	if base == "" {
+		base, err = os.MkdirTemp(parent, "farol-preserved-profile-")
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Log("retained fixture:", base)
 	root := filepath.Join(base, "Farol Dev", "farol-next-state", "go-core")

@@ -84,7 +84,7 @@ try {
   await build({
     stdin: {
       contents:
-        'export { recoverClosedEmptyChat, recoverInterruptedEmptyChat, recoverUnacknowledgedEmptyDev, recoverInstalledEmptyChat, recoverInstalledPreservedChat } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts";',
+        'export { recoverClosedEmptyChat, recoverInterruptedEmptyChat, recoverUnacknowledgedEmptyDev, recoverInstalledEmptyChat, recoverInstalledPreservedChat } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { recoverClosedPreservedChat } from "./apps/desktop/bridge/preserved-recovery-host.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts";',
       resolveDir: root,
       loader: "ts",
     },
@@ -101,6 +101,7 @@ try {
     recoverUnacknowledgedEmptyDev,
     recoverInstalledEmptyChat,
     recoverInstalledPreservedChat,
+    recoverClosedPreservedChat,
     assertClosedConnectorProcesses,
   } = createRequire(import.meta.url)(output);
   const s = fixture.Input.Selection;
@@ -109,7 +110,8 @@ try {
   const installed =
     fixture.Input.InstalledEmpty === true ||
     fixture.Input.InstalledPreserved === true;
-  if (unacknowledged || installed) {
+  const preservedProfile = fixture.PreservedProfile === true;
+  if (unacknowledged || installed || preservedProfile) {
     const actual = await activationObligations(userData, {
       isAlive: () => false,
     });
@@ -130,11 +132,13 @@ try {
   }
   if (
     (installed && (unacknowledged || interrupted)) ||
-    (unacknowledged && interrupted)
+    (unacknowledged && interrupted) ||
+    (preservedProfile && (installed || unacknowledged || interrupted))
   )
     throw Error("HOST_FIXTURE_MODE_INVALID");
-  const recover =
-    fixture.Input.InstalledPreserved === true
+  const recover = preservedProfile
+    ? recoverClosedPreservedChat
+    : fixture.Input.InstalledPreserved === true
       ? recoverInstalledPreservedChat
       : installed
         ? recoverInstalledEmptyChat
@@ -164,11 +168,11 @@ try {
     },
     expectedRunSha256: fixture.ExpectedRunSha256,
     expectedConfigSha256: fixture.ExpectedConfigSha256,
-    ...(interrupted || unacknowledged || installed
+    ...(interrupted || unacknowledged || installed || preservedProfile
       ? { expectedQuitSha256: fixture.ExpectedQuitSha256 }
       : {}),
     desktopState: async () =>
-      unacknowledged || installed
+      unacknowledged || installed || preservedProfile
         ? activationObligations(userData, { isAlive: () => false })
         : {
             obligations:

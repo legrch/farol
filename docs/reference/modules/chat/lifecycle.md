@@ -287,6 +287,20 @@ Disposable native observation tests retain profile/workspace hashes and physical
 metadata, including blocked Unix-pipe reads and writes. They qualify no Electron
 host, promotion/connector exclusion, terminal recorder or writable restart.
 
+The separate closed Dev host composes observation, preparation and the existing
+terminal/marker completion under the same promotion and Computer drain leases.
+`tooling/recover-empty-chat.mjs --preserve-nonempty` retains the existing exact
+source/build/profile and selected run/config/Quit checks. It preserves old ACK
+and terminal facts as unobserved, pins the original archive across relocation,
+and moves the original marker/intent only after the new child's completion.
+This current lane requires a selected historical Quit receipt; absence is
+refused. CPU port tests cover ordering and failed proofs. The explicit
+`TestNativePreservedProfileHostWithBuiltCore` gate requires an attested clean
+build and both `-ingress-native` and `-preserved-profile-native`; compilation or
+an unflagged skip is not native acceptance. First-crash behavior without a Quit,
+normal UI access to retired history, automatic startup selection and actual
+Electron writable recovery remain separate acceptance work.
+
 ## Checks and integration handoff
 
 `infra/repos/lifecycle.AcquirePreservationInspection` retains the original existing read-only claim over a complete canonical snapshot, including nonempty writes, plans, recorded retirement and UNKNOWN history. Its copied `Inspection` contains metadata only. The original caller's absolute deadline is captured once before IO and remains effective even if context timer delivery lags. Every final `Verify` re-decodes the snapshot and checks the original named physical file, claim, scope and digest; failure poisons that lease, while `Close` releases only its descriptors. This separate observation path neither relaxes empty-only inspection nor constructs a lifecycle writer, clean retirement, successor, live handle or replay authority. Whole-profile preservation, original process/Computer settlement and fresh-owner admission remain separate enclosing work. The explicit `-chat-preservation-native` fixture lane checks actual disposable files, flock, byte/metadata preservation, substitution, relocation, cancellation and deadline expiry with synthetic canonical records; it does not prove an assembled writable restart.

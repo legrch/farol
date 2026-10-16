@@ -1,0 +1,250 @@
+import { createHash } from "node:crypto";
+import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { inspectPreservedRecoveryChild } from "./preserved-inspection-child";
+import {
+  preparePreservedRecoveryChild,
+  type ExactPreservedRecoverySelection,
+  type PreservedRecoverySelectionInput,
+} from "./preserved-recovery-child";
+import {
+  closedRecoveryHostMechanics as host,
+  emptyRecoveryIntent,
+  unacknowledgedDevQuitScope,
+  type ClosedEmptyChatRecoveryInput,
+} from "../../../src/apps/desktop/closed-empty-chat-recovery";
+import {
+  acquirePromotionLease,
+  releasePromotionLease,
+  verifyPromotionLease,
+} from "../../../src/apps/desktop/promotion-lease";
+import { MAX_RUN_MARKER_BYTES } from "../../../src/apps/desktop/run-marker";
+import { retainEmptyChatForArchival } from "../../../src/apps/desktop/retained-empty-archive";
+import { PrivateExecutionFence } from "../../../src/modules/computer/infra/mcp/execution-fence";
+import { PrivateMcpLifecycle } from "../../../src/modules/computer/infra/mcp/private-mcp-lifecycle";
+
+export type ClosedPreservedRecoveryInput = Omit<
+  ClosedEmptyChatRecoveryInput,
+  "selectionInput" | "exact"
+> & {
+  readonly selectionInput: PreservedRecoverySelectionInput;
+  readonly exact: ExactPreservedRecoverySelection;
+  readonly expectedQuitSha256: string;
+};
+const sum = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+
+// Trusted closed Dev maintenance only. No installed route, old effect replay or
+// startup caller is selected here. Canonical Go and actual process observations
+// remain separate prerequisites; old ACK/terminal values stay unobserved.
+export async function recoverClosedPreservedChat(
+  input: ClosedPreservedRecoveryInput,
+): Promise<{
+  phase: "prepared_for_cold_start";
+  archive: string;
+  operationId: string;
+}> {
+  const selected = structuredClone({
+    userData: input.userData,
+    executable: input.executable,
+    profile: input.profile,
+    exact: input.exact,
+    selectionInput: input.selectionInput,
+    expectedRunSha256: input.expectedRunSha256,
+    expectedConfigSha256: input.expectedConfigSha256,
+    expectedQuitSha256: input.expectedQuitSha256,
+  });
+  const { desktopState, processesAbsent, attest } = input;
+  const { userData, executable, profile, exact } = selected;
+  const state = path.join(userData, "farol-next-state");
+  if (
+    !path.isAbsolute(userData) ||
+    !["Farol Dev", "Farol DEV"].includes(path.basename(userData)) ||
+    profile.root !== path.join(state, "go-core") ||
+    !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(exact.operationId) ||
+    ![
+      selected.expectedRunSha256,
+      selected.expectedConfigSha256,
+      selected.expectedQuitSha256,
+    ].every((value) => /^[a-f0-9]{64}$/u.test(value))
+  )
+    throw Error("PRESERVED_RECOVERY_SELECTION_INVALID");
+  await host.privateRoot(userData);
+  await host.privateRoot(state);
+  const parent = await host.privateRoot(profile.root);
+  if (
+    String(parent.dev) !== profile.device ||
+    String(parent.ino) !== profile.inode
+  )
+    throw Error("PRESERVED_RECOVERY_ROOT_CHANGED");
+  const root = path.join(state, "secure-mcp-connector", "computer-authority");
+  await host.privateRoot(path.dirname(root));
+  await host.privateRoot(root);
+  const lease = await acquirePromotionLease(
+    userData,
+    `preserved-chat-recovery-${exact.operationId}`,
+    "promotion",
+  );
+  if (!lease) throw Error("PRESERVED_RECOVERY_APP_ACTIVE");
+  try {
+    return await new PrivateExecutionFence({ root }).withClosedRecoveryDrain(
+      async () => {
+        const running = path.join(state, "running.json");
+        const configuration = path.join(state, "config.json");
+        const quit = path.join(state, "last-quit.json");
+        const pending = path.join(state, "go-core.empty-recovery.pending");
+        const archive = path.join(
+          profile.root,
+          `chat-retired-${exact.operationId}`,
+        );
+        const run = await host.snapshot(running, MAX_RUN_MARKER_BYTES);
+        const config = await host.snapshot(configuration, 256 * 1024);
+        const failedQuit = await host.snapshot(quit, 16384);
+        if (
+          sum(run.bytes) !== selected.expectedRunSha256 ||
+          sum(config.bytes) !== selected.expectedConfigSha256 ||
+          sum(failedQuit.bytes) !== selected.expectedQuitSha256
+        )
+          throw Error("PRESERVED_RECOVERY_STATE_CHANGED");
+        const runValue = JSON.parse(run.bytes.toString("utf8"));
+        const quitValue = JSON.parse(failedQuit.bytes.toString("utf8"));
+        const previousConfirmedQuit =
+          unacknowledgedDevQuitScope(runValue, quitValue) ===
+          "previous-confirmed";
+        if (
+          !previousConfirmedQuit &&
+          Date.parse(quitValue.at) <= Date.parse(runValue.startedAt)
+        )
+          throw Error("PRESERVED_RECOVERY_QUIT_SCOPE_CHANGED");
+        let preparedRoots:
+          | {
+              archive: { dev: number; ino: number };
+              chat: { dev: number; ino: number };
+            }
+          | undefined;
+        const proof = async () => {
+          if (!isDeepStrictEqual(await host.privateRoot(profile.root), parent))
+            throw Error("PRESERVED_RECOVERY_ROOT_CHANGED");
+          if (
+            preparedRoots &&
+            (!isDeepStrictEqual(
+              await host.privateRoot(archive),
+              preparedRoots.archive,
+            ) ||
+              !isDeepStrictEqual(
+                await host.privateRoot(path.join(profile.root, "chat")),
+                preparedRoots.chat,
+              ))
+          )
+            throw Error("PRESERVED_RECOVERY_ARCHIVE_CHANGED");
+          await host.unchanged(running, run);
+          await host.unchanged(configuration, config);
+          await host.unchanged(quit, failedQuit);
+          const desktop = await desktopState();
+          if (
+            desktop.changed.length ||
+            desktop.unreadable.length ||
+            !isDeepStrictEqual(
+              desktop.obligations,
+              previousConfirmedQuit
+                ? ["QUIT_UNCONFIRMED:crash"]
+                : [
+                    "QUIT_UNCONFIRMED:go-core,connector",
+                    "QUIT_UNCONFIRMED:crash",
+                  ],
+            )
+          )
+            throw Error("PRESERVED_RECOVERY_WORK_PENDING");
+          processesAbsent();
+          if (!(await verifyPromotionLease(lease)))
+            throw Error("PROMOTION_LEASE_LOST");
+        };
+        await host.absent(pending);
+        await host.absent(archive);
+        await attest();
+        await proof();
+        const movedArchive = await retainEmptyChatForArchival(
+          path.join(profile.root, "chat"),
+          archive,
+        );
+        const selectedMetadata = await inspectPreservedRecoveryChild(
+          executable,
+          profile,
+          selected.selectionInput,
+          exact,
+        );
+        await attest();
+        await proof();
+        const child = await preparePreservedRecoveryChild(
+          executable,
+          profile,
+          selectedMetadata,
+          exact,
+        );
+        preparedRoots = {
+          archive: await host.privateRoot(archive),
+          chat: {
+            dev: child.publication.Binding.ChatRoot.Device,
+            ino: child.publication.Binding.ChatRoot.Inode,
+          },
+        };
+        if (
+          preparedRoots.archive.dev !== exact.current.ChatRoot.Device ||
+          preparedRoots.archive.ino !== exact.current.ChatRoot.Inode
+        )
+          throw Error("PRESERVED_RECOVERY_ARCHIVE_CHANGED");
+        const archivePin = await movedArchive();
+        await proof();
+        const intent = await host.snapshot(pending, 65536);
+        if (
+          !isDeepStrictEqual(
+            JSON.parse(intent.bytes.toString("utf8")),
+            emptyRecoveryIntent(selectedMetadata, profile),
+          )
+        )
+          throw Error("PRESERVED_RECOVERY_INTENT_CHANGED");
+        return host.finish({
+          input: {
+            executable,
+            expectedRunSha256: selected.expectedRunSha256,
+            expectedConfigSha256: selected.expectedConfigSha256,
+            processesAbsent,
+            attest,
+            selectionInput: {},
+          },
+          child,
+          exact,
+          profile,
+          state,
+          archive,
+          run,
+          config,
+          pending,
+          intent,
+          preparedRoots,
+          lease,
+          proof,
+          failedQuit,
+          archivePin,
+          ...(previousConfirmedQuit ? { previousConfirmedQuit: true } : {}),
+          preservedHistory: {
+            scope: exact.current,
+            originalACK: "unobserved",
+            originalTerminal: "unobserved",
+          },
+          reconcileConnector: async () => {
+            const lifecycle = new PrivateMcpLifecycle(root);
+            await lifecycle.beginClosedRecoveryStop();
+            await lifecycle.reconcileInactive({
+              operationId: exact.operationId,
+              failedQuitSha256: selected.expectedQuitSha256,
+              proveIdle: proof,
+            });
+            await proof();
+          },
+        });
+      },
+    );
+  } finally {
+    await releasePromotionLease(lease);
+  }
+}

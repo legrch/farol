@@ -29,6 +29,7 @@ import {
   retainEmptyArchive,
   retainEmptyChatForArchival,
 } from "./retained-empty-archive";
+import type { PreservedRecoveryBinding } from "../../../apps/desktop/bridge/preserved-recovery-child";
 
 const FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 const sum = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
@@ -127,7 +128,10 @@ export type ClosedEmptyChatRecoveryInput = Readonly<{
 // Only those four DTO defaults are added; every supplied value remains exact.
 // This is wire comparison, not mutation settlement or recovery authority.
 export function emptyRecoveryIntent(
-  selectionInput: EmptyRecoverySelectionInput,
+  selectionInput: {
+    readonly Mutations: readonly unknown[];
+    readonly Preserved?: readonly unknown[];
+  },
   profile: ProfileLaunchBinding,
 ): unknown {
   const selected = structuredClone(selectionInput);
@@ -882,10 +886,23 @@ async function finishEmptyRecoveryHost({
   failedQuit,
   previousConfirmedQuit,
   reconcileConnector,
+  preservedHistory,
 }: {
-  input: ClosedEmptyChatRecoveryInput;
+  input: Pick<
+    ClosedEmptyChatRecoveryInput,
+    | "executable"
+    | "expectedRunSha256"
+    | "expectedConfigSha256"
+    | "processesAbsent"
+    | "attest"
+  > & {
+    selectionInput: Pick<
+      EmptyRecoverySelectionInput,
+      "Interrupted" | "InstalledPreserved" | "InstalledEmpty"
+    >;
+  };
   child: EmptyRecoveryChildResult;
-  exact: ExactEmptyRecoverySelection;
+  exact: Pick<ExactEmptyRecoverySelection, "operationId" | "buildId">;
   profile: ProfileLaunchBinding;
   state: string;
   archive: string;
@@ -904,6 +921,11 @@ async function finishEmptyRecoveryHost({
   failedQuit?: Snapshot;
   previousConfirmedQuit?: true;
   reconcileConnector?(): Promise<void>;
+  preservedHistory?: Readonly<{
+    scope: PreservedRecoveryBinding;
+    originalACK: "unobserved";
+    originalTerminal: "unobserved";
+  }>;
 }): Promise<{
   phase: "prepared_for_cold_start";
   archive: string;
@@ -932,7 +954,7 @@ async function finishEmptyRecoveryHost({
         }
       : undefined;
   const unacknowledgedDev =
-    failedQuit && !input.selectionInput.Interrupted
+    failedQuit && !input.selectionInput.Interrupted && !preservedHistory
       ? {
           originalRetirement: "absent",
           originalACK: "absent",
@@ -947,7 +969,7 @@ async function finishEmptyRecoveryHost({
         }
       : undefined;
   const receipt = Buffer.from(
-    `${JSON.stringify({ schema: "farol.closed-empty-chat-recovery/1", operationId: exact.operationId, buildId: exact.buildId, failedRunSha256: input.expectedRunSha256, configSha256: input.expectedConfigSha256, publication: child.publication, acknowledgement: child.acknowledgement, originalChildTerminal: child.terminal, recorderConfirmed: true, ...(knownFailure ? { knownFailure } : {}), ...(interruptedRetirement ? { interruptedRetirement } : {}), ...(unacknowledgedDev ? (input.selectionInput.InstalledPreserved ? { installedPreservedLifetime: unacknowledgedDev } : input.selectionInput.InstalledEmpty ? { installedEmptyLifetime: unacknowledgedDev } : { unacknowledgedDev }) : {}) })}\n`,
+    `${JSON.stringify({ schema: preservedHistory ? "farol.closed-preserved-chat-recovery/1" : "farol.closed-empty-chat-recovery/1", operationId: exact.operationId, buildId: exact.buildId, failedRunSha256: input.expectedRunSha256, configSha256: input.expectedConfigSha256, publication: child.publication, acknowledgement: child.acknowledgement, originalChildTerminal: child.terminal, recorderConfirmed: true, ...(preservedHistory ? { preservedHistory, originalQuitScope: previousConfirmedQuit ? "previous-lifetime" : "current-unconfirmed", retainedQuitSha256: failedQuit ? sum(failedQuit.bytes) : undefined } : {}), ...(knownFailure ? { knownFailure } : {}), ...(interruptedRetirement ? { interruptedRetirement } : {}), ...(unacknowledgedDev ? (input.selectionInput.InstalledPreserved ? { installedPreservedLifetime: unacknowledgedDev } : input.selectionInput.InstalledEmpty ? { installedEmptyLifetime: unacknowledgedDev } : { unacknowledgedDev }) : {}) })}\n`,
   );
   const f = await fs.open(
     completion,
@@ -1056,3 +1078,13 @@ async function finishEmptyRecoveryHost({
     operationId: exact.operationId,
   };
 }
+
+// Internal trusted host mechanics shared by the two closed-maintenance owners.
+// No IPC/MCP entry exposes these filesystem handles or grants recovery authority.
+export const closedRecoveryHostMechanics = Object.freeze({
+  snapshot,
+  unchanged,
+  absent,
+  privateRoot,
+  finish: finishEmptyRecoveryHost,
+});
