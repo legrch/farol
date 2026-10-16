@@ -147,7 +147,7 @@ const packageWords = new Set(
   catalogue checkpoint claude client clock codex connector container control
   conversation desktop domain execution farol filesystem gate guard handoff id inference
   intent ipc journal lease lifecycle main migration mutation observation output
-  parent policy port process provider release repo reservation resolver response
+  parent policy port process provider rejection release repo reservation resolver response
   result state stream task turn update workflow workspace`.split(/\s+/u),
 );
 const catchAllNames = new Set([
