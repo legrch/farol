@@ -23,6 +23,8 @@ Methods serialize actual synchronous native return, including cleanup. They capt
 
 Disposable native filesystem tests cover tree identity/digest observations, fixed entry mutation, rename/exchange identity readback and borrowed-handle preservation. Route/admission/journal seams in these adapter tests are symbolic; the production entry refuses a missing live borrow. Deadline, actual-return, scope, classification and retained-unknown tests do not prove a live lease, installed helper, real process exit, package or OTA/rollback acceptance.
 
+`WithInstallation` adds the admitted installation port under that same original scope and requires the caller's rejection repository, composed with the same operation descriptor and journal admission/gate. `Prepare` uses the bounded helper reader's confirmed-absence revision and the existing CAS to create only prepared; an existing, invalid or unreadable journal is never adopted. Subsequent phase writes retain the original revision chain. `RejectTarget` delegates the fixed failed-directory identity comparison to the borrowed repository. Each method consumes its effect attempt before cancellation or I/O; successful CAS or record acknowledgement makes a later fence refusal uncertain in the same owner. Real disposable journal tests cover absence, refusal, physical phase readback and post-write unknown retention; the rejection port in those runtime tests is symbolic. Neither entry closes a borrowed repository or selects the helper CLI.
+
 ## Application policy
 
 `Inspect` is repeatable read-only preflight. `Reconcile` consumes one attempt
