@@ -5,9 +5,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	stdruntime "runtime"
 	"testing"
 
 	"github.com/legrch/farol/modules/release/app/port"
+	"github.com/legrch/farol/modules/release/infra/repos/records"
+	"github.com/legrch/farol/modules/release/infra/repos/rejection"
 )
 
 // Journal persistence and disposable filesystem observations are real. Rejection
@@ -186,6 +189,74 @@ func TestRejectedTargetUsesCapturedPortOnceAndRetainsLaterFailure(t *testing.T) 
 			if kind == "opaque" || kind == "callback" || kind == "final-fence" {
 				if !errors.Is(err, cause) {
 					t.Fatal("record/callback/fence cause lost")
+				}
+			}
+			f.borrowed(t)
+		})
+	}
+}
+
+func TestInstallationComposesActualJournalAndRejectionWithSameOwner(t *testing.T) {
+	if stdruntime.GOOS != "darwin" {
+		t.Skip("actual rejection publication is Darwin-only; Linux production refuses")
+	}
+	for _, finalRefusal := range []bool{false, true} {
+		t.Run(map[bool]string{false: "completed-record", true: "post-record-fence"}[finalRefusal], func(t *testing.T) {
+			f := newCompositionFixture(t)
+			failed := filepath.Join(f.path, "failed.app")
+			must(t, os.Mkdir(failed, 0755))
+			must(t, os.WriteFile(filepath.Join(failed, "unverified-target"), []byte("not an accepted app tree"), 0600))
+			file, err := os.Open(failed)
+			must(t, err)
+			identity := compositionIdentity(t, file)
+			must(t, file.Close())
+			expected := port.HelperIdentity{Device: identity.Device, Inode: identity.Inode}
+			repo, err := rejection.New(context.Background(), f.config.Files.Operation, f.owner.directory, operation(f.config.Request), f.owner, f.config.Until)
+			must(t, err)
+			t.Cleanup(func() { must(t, repo.Close()) })
+			f.config.Rejection = repo
+			cause := &port.HelperRecoveryFailure{Code: "slot_changed", Phase: "refused"}
+			original := f.config.Reverify
+			f.config.Reverify = func(ctx context.Context, request port.HelperRequest) error {
+				if err := original(ctx, request); err != nil {
+					return err
+				}
+				if _, err := os.Stat(filepath.Join(f.path, "rejected-target.json")); err == nil && finalRefusal {
+					return cause
+				}
+				return nil
+			}
+			err = installScope(f, context.Background(), func(native port.HelperInstallationRuntime) error {
+				if err := native.Prepare(context.Background()); err != nil {
+					return err
+				}
+				return native.RejectTarget(context.Background(), expected)
+			})
+			if finalRefusal {
+				classified(t, err, "slot_changed", true)
+				if !errors.Is(err, cause) || f.owner.retained() == nil {
+					t.Fatal("actual record acknowledgement lost original-owner uncertainty")
+				}
+			} else {
+				must(t, err)
+				if f.owner.retained() != nil {
+					t.Fatal("completed persistence manufactured uncertainty")
+				}
+			}
+			// This is native repository composition, not apply/rollback policy:
+			// no tree is attested or exchanged and no terminal phase is invented.
+			view := f.physical(t, f.repo, "prepared")
+			data, err := os.ReadFile(filepath.Join(f.path, "rejected-target.json"))
+			must(t, err)
+			value, err := records.DecodeRejectedTarget(data, f.record("prepared").Operation)
+			must(t, err)
+			if value.Device != expected.Device || value.Inode != expected.Inode {
+				t.Fatal("record does not bind the actual failed directory")
+			}
+			if finalRefusal {
+				_, err = f.repo.CompareAndSwap(context.Background(), view.Revision, *view.Value)
+				if !errors.Is(err, port.JournalUnknown) {
+					t.Fatal("same journal owner cleared post-record uncertainty")
 				}
 			}
 			f.borrowed(t)
