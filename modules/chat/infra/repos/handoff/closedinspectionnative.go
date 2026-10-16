@@ -164,6 +164,12 @@ func acquireAcknowledgedInspection(ctx context.Context, roots Roots, expected po
 // Retain the same read-only disk and complete canonical scanner for each exact
 // predicates. The ordinary public API remains consumed-only.
 func acquireClosedInspectionChain(ctx context.Context, roots Roots, qualify func(closedInspectionChain) error) (_ closedInspectionChain, verify, close func() error, err error) {
+	return acquireInspectionChain(ctx, roots, closedInspectionEmptyChainScan, qualify)
+}
+
+// Each private caller fixes its canonical scan and qualification policy before
+// IO. Empty-only entrypoints above still use the unchanged empty-chain scanner.
+func acquireInspectionChain(ctx context.Context, roots Roots, scan func(context.Context, Roots, func(context.Context, int) ([]byte, bool, error)) (closedInspectionChain, error), qualify func(closedInspectionChain) error) (_ closedInspectionChain, verify, close func() error, err error) {
 	d, err := openClosedInspectionDisk(ctx, roots)
 	if err != nil {
 		return closedInspectionChain{}, nil, nil, err
@@ -207,7 +213,7 @@ func acquireClosedInspectionChain(ctx context.Context, roots Roots, qualify func
 		}
 		return raw, true, nil
 	}
-	value, err := closedInspectionEmptyChainScan(ctx, roots, read)
+	value, err := scan(ctx, roots, read)
 	if err != nil {
 		return closedInspectionChain{}, nil, nil, err
 	}
@@ -219,7 +225,7 @@ func acquireClosedInspectionChain(ctx context.Context, roots Roots, qualify func
 		if err := closedInspectionNoStaging(d); err != nil {
 			return err
 		}
-		current, err := closedInspectionEmptyChainScan(ctx, roots, read)
+		current, err := scan(ctx, roots, read)
 		if err != nil {
 			return err
 		}
