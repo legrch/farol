@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   Client,
   RequestNotSentError,
@@ -79,6 +79,60 @@ async function peer(heldMethods: readonly string[] = []) {
   );
   return { client, calls, reply };
 }
+
+it("observes the original settings poll during the IO turn after its timer", async () => {
+  const f = await peer(["computer.settings.store.next"]);
+  vi.useFakeTimers();
+  try {
+    const original = f.client.request(
+      "computer.settings.store.next",
+      { deadlineMillis: String(Date.now() + 90) },
+      { timeoutMs: 100 },
+    );
+    vi.advanceTimersByTime(100);
+    expect(f.client.verifiedContext.backendGeneration).toBe("backend");
+    f.reply(f.calls.at(-1)!);
+    await expect(original).resolves.toMatchObject({ status: "ok", data: {} });
+    vi.advanceTimersByTime(1);
+    await expect(f.client.request("core.status", {})).resolves.toMatchObject({
+      status: "ok",
+    });
+    expect(
+      f.calls.filter((call) => call.method === "computer.settings.store.next"),
+    ).toHaveLength(1);
+  } finally {
+    vi.useRealTimers();
+    await f.client.close();
+  }
+});
+
+it.each(["computer.settings.store.next", "core.status"])(
+  "still fences a missing original %s response without resending",
+  async (method) => {
+    const f = await peer([method]);
+    vi.useFakeTimers();
+    try {
+      const original = f.client.request(
+        method,
+        method === "computer.settings.store.next"
+          ? { deadlineMillis: String(Date.now() + 90) }
+          : {},
+        { timeoutMs: 100 },
+      );
+      const rejected = expect(original).rejects.toMatchObject({
+        state: "unknown",
+        code: "response_timeout",
+      });
+      vi.advanceTimersByTime(101);
+      await rejected;
+      expect(() => f.client.verifiedContext).toThrow();
+      expect(f.calls.filter((call) => call.method === method)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+      await f.client.close();
+    }
+  },
+);
 
 it.each([true, false])(
   "retires the running Settings pump at history saturation only after the original withdrawal ACK (valid=%s)",

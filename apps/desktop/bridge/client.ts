@@ -40,6 +40,7 @@ type Pending = {
   resolve: (outcome: Outcome) => void;
   reject: (error: BridgeError) => void;
   timer: ReturnType<typeof setTimeout>;
+  timeoutCheck?: ReturnType<typeof setImmediate>;
   operationId?: string;
   handshake?: Handshake;
   retirementHandoffId?: string;
@@ -493,10 +494,20 @@ export class Client {
     if (pollLane === undefined) this.used.add(id);
     else this.polls.set(pollLane, sequence!);
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const expire = () => {
         this.pending.delete(wireId);
         reject(new BridgeError("unknown", "response_timeout"));
         this.fail("response_timeout");
+      };
+      const timer = setTimeout(() => {
+        // After a desktop event-loop stall, timers can precede an original
+        // reply already waiting on stdout. Give only the settings poll one
+        // IO turn to observe that reply. This sends nothing and keeps its ID;
+        // the pump still rejects every expired physical command.
+        if (pollLane === "settings") {
+          const pending = this.pending.get(wireId);
+          if (pending) pending.timeoutCheck = setImmediate(expire);
+        } else expire();
       }, remainingMs);
       this.pending.set(wireId, {
         callerId: id,
@@ -604,6 +615,7 @@ export class Client {
         }
         if (code) {
           clearTimeout(pending.timer);
+          clearImmediate(pending.timeoutCheck);
           this.pending.delete(response.id);
           pending.reject(new BridgeError("refused", code));
           this.fail(code);
@@ -611,6 +623,7 @@ export class Client {
         }
       }
       clearTimeout(pending.timer);
+      clearImmediate(pending.timeoutCheck);
       this.pending.delete(response.id);
       if (
         pending.retirementHandoffId !== undefined &&
@@ -632,6 +645,7 @@ export class Client {
       );
     } else {
       clearTimeout(pending.timer);
+      clearImmediate(pending.timeoutCheck);
       this.pending.delete(response.id);
       pending.reject(
         new BridgeError(
@@ -657,6 +671,7 @@ export class Client {
     );
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
+      clearImmediate(pending.timeoutCheck);
       pending.reject(new BridgeError(state, code));
     }
     this.pending.clear();

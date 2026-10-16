@@ -130,6 +130,7 @@ export class SettingsStorePump {
   private async within<T>(
     deadline: bigint,
     call: () => Promise<T>,
+    reconcileIdle?: (result: T) => boolean,
   ): Promise<T> {
     const remaining = deadline - BigInt(Date.now());
     if (remaining <= 0n || remaining > BigInt(budgetMillis)) {
@@ -142,7 +143,13 @@ export class SettingsStorePump {
         reject(new BridgeError("unknown", "settings_store_exchange_lost"));
     });
     this.interrupt = interrupt;
-    const timer = setTimeout(() => this.lose(), Number(remaining));
+    let timeoutCheck: ReturnType<typeof setImmediate> | undefined;
+    const timer = setTimeout(() => {
+      // Reconcile only the original poll response after queued IO has run.
+      // No second poll or physical storage call is issued in this turn.
+      if (reconcileIdle) timeoutCheck = setImmediate(() => this.lose());
+      else this.lose();
+    }, Number(remaining));
     try {
       // Attach both race handlers even when host code throws synchronously.
       let work: Promise<T>;
@@ -152,13 +159,14 @@ export class SettingsStorePump {
         work = Promise.reject(error);
       }
       const result = await Promise.race([work, lost]);
-      if (BigInt(Date.now()) >= deadline) {
+      if (BigInt(Date.now()) >= deadline && !reconcileIdle?.(result)) {
         this.lose();
         throw new BridgeError("unknown", "settings_store_response_late");
       }
       return result;
     } finally {
       clearTimeout(timer);
+      clearImmediate(timeoutCheck);
       if (this.interrupt === interrupt) this.interrupt = undefined;
     }
   }
@@ -192,12 +200,19 @@ export class SettingsStorePump {
           throw new BridgeError("unknown", "settings_store_peer_changed");
         const id = randomUUID();
         const now = Date.now();
-        const result = await this.within(BigInt(now + budgetMillis), () =>
-          this.client.request(
-            "computer.settings.store.next",
-            { deadlineMillis: String(now + 14000) },
-            { id, timeoutMs: budgetMillis },
-          ),
+        const result = await this.within(
+          BigInt(now + budgetMillis),
+          () =>
+            this.client.request(
+              "computer.settings.store.next",
+              { deadlineMillis: String(now + 14000) },
+              { id, timeoutMs: budgetMillis },
+            ),
+          (result) =>
+            this.validOutcome(result, id) &&
+            validate("SettingsStoreNextResult", result.data) &&
+            (result.data as unknown as SettingsStoreNextResult).command ===
+              undefined,
         );
         if (
           !this.validOutcome(result, id) ||

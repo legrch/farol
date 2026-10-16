@@ -106,6 +106,12 @@ budget on a cold launch. Ordinary operation deadlines remain unchanged. A late
 or missing startup response stays outcome-unknown; increasing the budget never
 retries a failed startup or settles its retained run marker.
 
+## Idle settings poll after a desktop delay
+
+A delayed desktop event loop can make an expired timer run before an original settings-poll reply already waiting on stdout. The client and storage pump allow one IO observation turn for that original response, retaining its exact correlation and sending no replacement request. Only a validated empty poll response from the same Go generation can resume polling after the deadline. A late command never reaches physical storage, even when the command's own deadline would still permit it. Missing, malformed, crossed or changed-generation responses still fence delivery; ordinary RPC, storage-write and reply-ACK deadlines keep their existing unknown-outcome behavior. No fence is cleared and no write is replayed.
+
+The native pipe regression blocks the Node event loop for 16 seconds with a controlled empty peer response. It proves queued-IO recovery for that boundary, together with deterministic expired-command and missing-response cases. It does not establish the cause of a historical incident, Electron file-picker behavior, Go state reconciliation, startup-marker recovery or installed application acceptance; those require their own disposable native witnesses.
+
 ## Withdrawal during execution resource recheck
 
 The original asynchronous resource recheck remains part of the admitted startup.
