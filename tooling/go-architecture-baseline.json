@@ -1,0 +1,592 @@
+{
+  "version": 1,
+  "mode": "report",
+  "source": "df8efa37eef45ead673db071c9579a9111b67ac7",
+  "findings": [
+    {
+      "code": "GO_CATCH_ALL_NAME",
+      "file": "modules/chat/app/services/inference/types.go",
+      "detail": "Catch-all production file name: types"
+    },
+    {
+      "code": "GO_CATCH_ALL_NAME",
+      "file": "modules/chat/domain/modelselection/types.go",
+      "detail": "Catch-all production file name: types"
+    },
+    {
+      "code": "GO_CATCH_ALL_NAME",
+      "file": "modules/task/app/services/currentsource/types.go",
+      "detail": "Catch-all production file name: types"
+    },
+    {
+      "code": "GO_CATCH_ALL_NAME",
+      "file": "modules/task/app/services/currentsource/values.go",
+      "detail": "Catch-all production file name: values"
+    },
+    {
+      "code": "GO_CATCH_ALL_NAME",
+      "file": "modules/task/contracts/currentsource/types.go",
+      "detail": "Catch-all production file name: types"
+    },
+    {
+      "code": "GO_CATCH_ALL_NAME",
+      "file": "modules/task/infra/clients/codex/types.go",
+      "detail": "Catch-all production file name: types"
+    },
+    {
+      "code": "GO_DTO_ALIAS",
+      "file": "modules/computer/app/services/mutation/execute.go",
+      "detail": "DTO alias ExecuteRequest = CheckRequest"
+    },
+    {
+      "code": "GO_DTO_ALIAS",
+      "file": "modules/computer/app/services/mutation/read.go",
+      "detail": "DTO alias ReadRequest = CheckRequest"
+    },
+    {
+      "code": "GO_DTO_ALIAS",
+      "file": "modules/computer/app/services/mutation/read.go",
+      "detail": "DTO alias ReadResponse = ExecuteResponse"
+    },
+    {
+      "code": "GO_DTO_ALIAS",
+      "file": "modules/computer/contracts/mutation/execute.go",
+      "detail": "DTO alias ExecuteRequest = CheckRequest"
+    },
+    {
+      "code": "GO_DTO_ALIAS",
+      "file": "modules/computer/contracts/mutation/read.go",
+      "detail": "DTO alias ReadRequest = CheckRequest"
+    },
+    {
+      "code": "GO_DTO_ALIAS",
+      "file": "modules/computer/contracts/mutation/read.go",
+      "detail": "DTO alias ReadResponse = ExecuteResponse"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/chat/infra/catalogue/consumers.go",
+      "detail": "github.com/legrch/farol/modules/chat/app/services/modelselection"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/chat/infra/clients/planresponses/client.go",
+      "detail": "github.com/legrch/farol/modules/chat/app/services/inference"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/chat/infra/clients/planresponses/consent.go",
+      "detail": "github.com/legrch/farol/modules/chat/app/services/accountapproval"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/chat/infra/clients/planresponses/consent.go",
+      "detail": "github.com/legrch/farol/modules/chat/app/services/inference"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/chat/infra/clients/planresponses/deadline.go",
+      "detail": "github.com/legrch/farol/modules/chat/app/services/inference"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/chat/infra/clients/planresponses/followon.go",
+      "detail": "github.com/legrch/farol/modules/chat/app/services/inference"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/chat/infra/clients/planresponses/stream.go",
+      "detail": "github.com/legrch/farol/modules/chat/app/services/inference"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/chat/infra/contextsource/source.go",
+      "detail": "github.com/legrch/farol/modules/chat/app/services/contextcheckpoint"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/chat/infra/contextsource/source.go",
+      "detail": "github.com/legrch/farol/modules/chat/app/services/lifecycle"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/chat/infra/modelruntime/browser.go",
+      "detail": "github.com/legrch/farol/modules/chat/app/services/accountapproval"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/chat/infra/planledger/ledger.go",
+      "detail": "github.com/legrch/farol/modules/chat/app/services/inference"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/chat/infra/planruntime/journal.go",
+      "detail": "github.com/legrch/farol/modules/chat/app/services/inference"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/chat/infra/planruntime/prepare.go",
+      "detail": "github.com/legrch/farol/modules/chat/app/services/contextcheckpoint"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/chat/infra/planruntime/prepare.go",
+      "detail": "github.com/legrch/farol/modules/chat/app/services/inference"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/chat/infra/planruntime/runtime.go",
+      "detail": "github.com/legrch/farol/modules/chat/app/services/inference"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/chat/infra/repos/handoff/closedinspection.go",
+      "detail": "github.com/legrch/farol/modules/chat/app/services/handoff"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/chat/infra/repos/handoff/repo.go",
+      "detail": "github.com/legrch/farol/modules/chat/app/services/handoff"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/chat/infra/repos/handoff/terminatedinspection.go",
+      "detail": "github.com/legrch/farol/modules/chat/app/services/handoff"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/anchor.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/anchordarwin.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/anchorother.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/cancel.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/confinement.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/gitread.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/gitruntime.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/gitruntimedarwin.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/heldguest.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/heldguestdarwin.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/heldguestother.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/measuredarwin.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/measurement.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/measureother.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/mountboundaries.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/observe.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/parent.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/parentdarwin.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/parentother.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/platformpathdarwin.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/platformqualification.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/platformqualificationdarwin.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/platformqualificationother.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/platformwatchdog.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/prepare.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/probeother.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/process.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/pythonruntimeother.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/qualification.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/read.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/rootscoped.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/spawn.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/unsupported.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/watchdog.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/watchdogdarwin.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/watchdogipc.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/process/watchdogother.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/repos/mutation/preservedinspection.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/repos/mutation/process.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/repos/mutation/processcodec.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/repos/mutation/processresult.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/computer/infra/repos/mutation/processresultcodec.go",
+      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/task/infra/workflowruntime/runtime.go",
+      "detail": "github.com/legrch/farol/modules/task/app/services/workflow"
+    },
+    {
+      "code": "GO_INFRA_SERVICE",
+      "file": "modules/task/infra/workflowruntime/tasks.go",
+      "detail": "github.com/legrch/farol/modules/task/app/services/workflow"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "cmd/faroldevcontrol",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: faroldevcontrol"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/chat/app/services/accountapproval",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: accountapproval"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/chat/app/services/contextcheckpoint",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: contextcheckpoint"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/chat/app/services/emptyrecovery",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: emptyrecovery"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/chat/app/services/interruptedretirement",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: interruptedretirement"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/chat/app/services/modelselection",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: modelselection"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/chat/domain/contextbudget",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: contextbudget"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/chat/domain/modelselection",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: modelselection"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/chat/infra/clients/planresponses",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: planresponses"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/chat/infra/contextsource",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: contextsource"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/chat/infra/modelruntime",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: modelruntime"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/chat/infra/planledger",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: planledger"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/chat/infra/planruntime",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: planruntime"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/chat/infra/responses",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: responses"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/chat/infra/results",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: results"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/computer/app/services/settingsdelivery",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: settingsdelivery"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/release/app/services/helperinput",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: helperinput"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/release/app/services/helperprotocol",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: helperprotocol"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/release/app/services/helperrecovery",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: helperrecovery"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/release/app/services/processwait",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: processwait"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/release/app/services/slotbinding",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: slotbinding"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/release/infra/native/appidentity",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: appidentity"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/release/infra/native/apptree",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: apptree"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/release/infra/native/helperchannels",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: helperchannels"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/release/infra/native/helperinput",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: helperinput"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/release/infra/native/helperlocks",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: helperlocks"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/release/infra/native/helperprotocol",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: helperprotocol"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/release/infra/native/helperroutes",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: helperroutes"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/release/infra/native/installcopy",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: installcopy"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/release/infra/native/installmove",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: installmove"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/release/infra/native/processprobe",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: processprobe"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/release/infra/native/slotbinding",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: slotbinding"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/release/infra/repos/records",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: records"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/task/app/services/currentsettings",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: currentsettings"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/task/app/services/currentsource",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: currentsource"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/task/app/services/modelpolicy",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: modelpolicy"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/task/contracts/currentsettings",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: currentsettings"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/task/contracts/currentsource",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: currentsource"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/task/contracts/modelpolicy",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: modelpolicy"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/task/contracts/selectedthread",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: selectedthread"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/task/infra/currentsettings",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: currentsettings"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/task/infra/modelpolicy",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: modelpolicy"
+    },
+    {
+      "code": "GO_PACKAGE_NAME",
+      "file": "modules/task/infra/workflowruntime",
+      "detail": "Package token outside the explicit ADR-0001 vocabulary: workflowruntime"
+    }
+  ]
+}
