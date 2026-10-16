@@ -1613,3 +1613,17 @@ describe("explicit recovery Go host composition", () => {
     });
   });
 });
+
+it("keeps recovery reads unavailable when saved folders lack physical bindings and no publication ACK exists", async () => {
+  const f = transport();
+  start.mockResolvedValue(f.client);
+  const unbound = structuredClone(settings);
+  for (const workspace of unbound.computer.workspaces)
+    delete workspace.rootIdentity;
+  await expect(
+    startDesktopGoRecovery({ ...recoverySelection(), settings: unbound }),
+  ).rejects.toMatchObject({ code: "computer_publication_unavailable" });
+  expect(f.events).toEqual(["computer.authority.deactivate", "client.close"]);
+  expect(f.close).toHaveBeenCalledTimes(1);
+  expect(start).toHaveBeenCalledTimes(1);
+});

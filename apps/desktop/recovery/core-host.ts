@@ -148,6 +148,10 @@ export async function startDesktopGoRecovery(
     );
     const withdrawn = await authority.withdraw();
     await withdrawn.publish(settings);
+    // This pure receipt observation proves the original publication ACK. A
+    // configured but unbound folder can leave publication inactive; starting
+    // its child alone must not advertise usable owner reads.
+    authority.settingsMutationPublication(settings.computer.generation);
   } catch (error) {
     try {
       await close();

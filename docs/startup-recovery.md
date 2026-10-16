@@ -1,27 +1,16 @@
 # Startup recovery availability
 
-An unconfirmed predecessor run still fences Computer and normal host admission.
-The desktop now opens a recovery document before starting configuration, Go,
-local runtimes, provider views, MCP or update actions. It retains the existing
-startup promotion lease for the recovery window's complete lifetime.
+An unconfirmed predecessor still fences normal host admission and effects. The desktop opens a recovery document before ordinary configuration services, Browser, MCP or update actions. It holds the original startup promotion lease through the recovery view and its exact child cleanup, while preserving the predecessor run marker and operation records.
 
-The recovery document uses the existing attested shell/preload entries. Its
-fixed local document fragment selects React recovery rendering; an explicit
-host-only preload argument selects an API containing only Quit. Normal desktop
-IPC handlers are never installed in this branch. New browser UI source under
-`apps/desktop/renderer` has the same host-import restrictions as `src/ui`.
+Recovery reads only an existing stable private Settings document. Missing, corrupt, unsafe or changed Settings remain unavailable without defaults, repair, migration or a backend launch. Valid Settings remain visible even when the separately selected local read owner cannot start. Approved folder selection, directory navigation and file size/SHA-256 metadata use the existing Go authority and filesystem owners, with a fresh Computer-only publication. This does not resume Chat, mutations, commands or connection actions.
 
-Quit closes this window and releases its own startup exclusion. It never writes
-a clean predecessor receipt, removes the predecessor marker, changes saved
-configuration, or repeats an operation. A second launch can reveal the same
-window, but retains `reopen-failed` as the normal-readiness acknowledgement.
-The primary emits `primary-recovery`, distinct from `primary-started`.
+The recovery document uses the existing attested shell/preload entries. Its fixed local fragment and explicit host-only preload argument select only `state`, `read` and Quit IPC. The host validates the exact main frame before dispatch and after each result, parses closed requests, projects only folder labels/roots/revision and bounded read data, and retains publications and saved configuration internally. Normal desktop IPC handlers are absent. Renderer responses are parsed and correlated again; unknown/unavailable reads pause the controls without automatic repetition. New browser UI source under `apps/desktop/renderer` retains the same host-import restrictions as `src/ui`.
 
-This is availability and custody, not automatic retirement of unknown work.
-Previous operation outcomes and descendants still need independent recovery
-before normal Computer access resumes. No reboot-based automatic retirement
-is claimed. Native tests use synthetic predecessor records in disposable state;
-they do not prove cleanup of an arbitrary crashed process or a live provider.
+Quit stops new view requests, waits for the original pending load/start and exact child Close, then releases its own startup exclusion. A known unconfirmed child cleanup cannot become a clean UI Quit. No predecessor clean receipt is written, marker removed, saved configuration changed or old operation repeated. A second launch can reveal this window but retains `reopen-failed` as its normal-readiness acknowledgement; the primary emits `primary-recovery`, distinct from `primary-started`.
+
+This is partial startup availability and custody. Interrupted operation outcomes, retained history, automatic safe retirement, tunnel reconnection and descendants still need independent recovery before normal admission resumes. No reboot-based automatic retirement or installed acceptance is claimed.
+
+The explicit native runner is `node tests/e2e/startup-recovery.e2e.mjs --run-native`. Adding `--saved-settings` selects a disposable original-Settings fixture and a real first Go child closed without module retirement, then two same-profile hidden Electron recovery launches. It checks actual list/navigation/metadata, exact backend composition and termination, lease lifetime, retained Settings/native journal bytes/identities, narrow IPC and compact/light plus wide/dark rendering with keyboard focus styling. The ordinary mode keeps corrupt Settings and proves no backend/profile provisioning. These fixtures contain synthetic data and no interrupted workspace effect; they do not prove arbitrary crashed children, live provider recovery or production installation. Run only against exact clean Go build bytes qualified by the existing source/input/resource gates.
 
 ## Explicit Go recovery composition
 
@@ -35,6 +24,6 @@ The typed desktop launcher can select this mode once and rejects contradictory m
 
 `ProductSettingsStore.loadExisting()` reads an existing stable private `config.json` with bounded descriptor/name checks, without creating defaults, directories, permission repairs, renames or migration. Unsafe, missing, corrupt or changed inputs cannot become a usable saved Settings snapshot. Existing-only Go storage selection never provisions a profile and does not require or repair old mutation journals; base profile roots still require their original physical qualification.
 
-The recovery document above does not yet select this Go route: startup selection and UI read controls still require their own bounded integration and native acceptance. Do not classify these source adapters as automatic startup recovery or installed availability. Desktop composition conformance uses explicit attestation/transport doubles; separate disposable filesystem tests prove input custody, without proving a launched backend, Electron, provider or installed profile.
+The startup recovery document selects this route only after reading existing valid Settings under the original startup exclusion. Its session performs one Settings load and one selected child start, keeps saved Settings visible after owner refusal and withholds results after exclusion loss or Close. The original constructor/cleanup uncertainty is retained separately from this read-only projection. Desktop composition conformance uses explicit attestation/transport doubles; the separate native runner owns launched-backend/Electron evidence and its exact limits. Neither source checks nor fixture execution establish automatic retirement, installed availability or live provider recovery.
 
 The disposable `TestNativeRecovery*` tests exercise native Go stores/filesystem, an unretired Chat generation, a real retained UNKNOWN mutation record, fresh owner publication, list/search/snapshot, query/Close custody and CLI framing with an exact capability list. They preserve original file bytes, modes, identities and modification metadata, while the synthetic owner fixture deliberately permits new authority publications. They do not exercise a separate backend OS process, Electron selection, arbitrary interrupted native effects, original Settings storage, live providers, production profiles or process-group/descendant cleanup.
