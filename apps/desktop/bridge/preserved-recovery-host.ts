@@ -30,7 +30,7 @@ export type ClosedPreservedRecoveryInput = Omit<
 > & {
   readonly selectionInput: PreservedRecoverySelectionInput;
   readonly exact: ExactPreservedRecoverySelection;
-  readonly expectedQuitSha256: string;
+  readonly expectedQuitSha256?: string;
 };
 const sum = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 
@@ -80,11 +80,11 @@ export async function recoverClosedPreservedChat(
     profile.root !== path.join(state, "go-core") ||
     !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(exact.operationId) ||
     !z.string().uuid().safeParse(exact.operationId).success ||
-    ![
-      selected.expectedRunSha256,
-      selected.expectedConfigSha256,
-      selected.expectedQuitSha256,
-    ].every((value) => /^[a-f0-9]{64}$/u.test(value))
+    ![selected.expectedRunSha256, selected.expectedConfigSha256].every(
+      (value) => /^[a-f0-9]{64}$/u.test(value),
+    ) ||
+    (selected.expectedQuitSha256 !== undefined &&
+      !/^[a-f0-9]{64}$/u.test(selected.expectedQuitSha256))
   )
     throw Error("PRESERVED_RECOVERY_SELECTION_INVALID");
   await host.privateRoot(userData);
@@ -117,21 +117,28 @@ export async function recoverClosedPreservedChat(
         );
         const run = await host.snapshot(running, MAX_RUN_MARKER_BYTES);
         const config = await host.snapshot(configuration, 256 * 1024);
-        const failedQuit = await host.snapshot(quit, 16384);
+        const failedQuit =
+          selected.expectedQuitSha256 === undefined
+            ? undefined
+            : await host.snapshot(quit, 16384);
         if (
           sum(run.bytes) !== selected.expectedRunSha256 ||
           sum(config.bytes) !== selected.expectedConfigSha256 ||
-          sum(failedQuit.bytes) !== selected.expectedQuitSha256
+          (failedQuit && sum(failedQuit.bytes) !== selected.expectedQuitSha256)
         )
           throw Error("PRESERVED_RECOVERY_STATE_CHANGED");
         const runValue = JSON.parse(run.bytes.toString("utf8"));
-        const quitValue = JSON.parse(failedQuit.bytes.toString("utf8"));
+        const quitValue = failedQuit
+          ? JSON.parse(failedQuit.bytes.toString("utf8"))
+          : undefined;
         const previousConfirmedQuit =
+          failedQuit !== undefined &&
           unacknowledgedDevQuitScope(
             runValue,
             quitForScopeComparison(quitValue),
           ) === "previous-confirmed";
         if (
+          failedQuit &&
           !previousConfirmedQuit &&
           Date.parse(quitValue.at) <= Date.parse(runValue.startedAt)
         )
@@ -142,6 +149,7 @@ export async function recoverClosedPreservedChat(
               chat: { dev: number; ino: number };
             }
           | undefined;
+        let noQuitLifecycle: PrivateMcpLifecycle | undefined;
         const proof = async () => {
           if (!isDeepStrictEqual(await host.privateRoot(profile.root), parent))
             throw Error("PRESERVED_RECOVERY_ROOT_CHANGED");
@@ -159,14 +167,15 @@ export async function recoverClosedPreservedChat(
             throw Error("PRESERVED_RECOVERY_ARCHIVE_CHANGED");
           await host.unchanged(running, run);
           await host.unchanged(configuration, config);
-          await host.unchanged(quit, failedQuit);
+          if (failedQuit) await host.unchanged(quit, failedQuit);
+          else await host.absent(quit);
           const desktop = await desktopState();
           if (
             desktop.changed.length ||
             desktop.unreadable.length ||
             !isDeepStrictEqual(
               desktop.obligations,
-              previousConfirmedQuit
+              !failedQuit || previousConfirmedQuit
                 ? ["QUIT_UNCONFIRMED:crash"]
                 : [
                     `QUIT_UNCONFIRMED:${quitValue.unconfirmed.join(",")}`,
@@ -175,6 +184,7 @@ export async function recoverClosedPreservedChat(
             )
           )
             throw Error("PRESERVED_RECOVERY_WORK_PENDING");
+          if (noQuitLifecycle) await noQuitLifecycle.waitForStop(0);
           processesAbsent();
           if (!(await verifyPromotionLease(lease)))
             throw Error("PROMOTION_LEASE_LOST");
@@ -195,6 +205,16 @@ export async function recoverClosedPreservedChat(
         );
         await attest();
         await proof();
+        if (!failedQuit) {
+          // Only this maintenance lifetime confirms its own stop. A stale
+          // active instance or shell group must refuse before Chat effects;
+          // no historical Quit identity or stop acknowledgement is inferred.
+          const lifecycle = new PrivateMcpLifecycle(root);
+          await lifecycle.beginClosedRecoveryStop();
+          await lifecycle.confirmStop(0);
+          noQuitLifecycle = lifecycle;
+          await proof();
+        }
         const child = await preparePreservedRecoveryChild(
           executable,
           profile,
@@ -244,7 +264,7 @@ export async function recoverClosedPreservedChat(
           preparedRoots,
           lease,
           proof,
-          failedQuit,
+          ...(failedQuit ? { failedQuit } : {}),
           archivePin,
           ...(previousConfirmedQuit ? { previousConfirmedQuit: true } : {}),
           preservedHistory: {
@@ -253,6 +273,13 @@ export async function recoverClosedPreservedChat(
             originalTerminal: "unobserved",
           },
           reconcileConnector: async () => {
+            if (selected.expectedQuitSha256 === undefined) {
+              if (!noQuitLifecycle)
+                throw Error("PRESERVED_RECOVERY_MCP_IDLE_UNVERIFIED");
+              await noQuitLifecycle.waitForStop(0);
+              await proof();
+              return;
+            }
             const lifecycle = new PrivateMcpLifecycle(root);
             await lifecycle.beginClosedRecoveryStop();
             await lifecycle.reconcileInactive({

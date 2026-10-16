@@ -52,6 +52,8 @@ const ports = vi.hoisted(() => ({
     >(),
   lifecycle: vi.fn<(root: string) => void>(),
   stop: vi.fn<() => Promise<void>>(),
+  confirmStop: vi.fn<(timeoutMs: number) => Promise<void>>(),
+  waitForStop: vi.fn<(timeoutMs: number) => Promise<void>>(),
   reconcile: vi.fn<(input: Reconcile) => Promise<void>>(),
 }));
 vi.mock("../../src/apps/desktop/closed-empty-chat-recovery", async () => {
@@ -97,6 +99,12 @@ vi.mock("../../src/modules/computer/infra/mcp/private-mcp-lifecycle", () => ({
     }
     beginClosedRecoveryStop() {
       return ports.stop();
+    }
+    confirmStop(timeoutMs: number) {
+      return ports.confirmStop(timeoutMs);
+    }
+    waitForStop(timeoutMs: number) {
+      return ports.waitForStop(timeoutMs);
     }
     reconcileInactive(input: Reconcile) {
       return ports.reconcile(input);
@@ -416,6 +424,12 @@ function fixture(
   ports.stop.mockImplementation(async () => {
     guarded("stop");
   });
+  ports.confirmStop.mockImplementation(async () => {
+    guarded("confirm-stop");
+  });
+  ports.waitForStop.mockImplementation(async () => {
+    guarded("wait-stop");
+  });
   ports.reconcile.mockImplementation(async (input) => {
     guarded("reconcile");
     await input.proveIdle();
@@ -486,6 +500,124 @@ function released(f: ReturnType<typeof fixture>) {
   expect(ports.release).toHaveBeenCalledExactlyOnceWith(f.lease);
   expect(f.events.slice(-2)).toEqual(["fence:release", "promotion:release"]);
 }
+
+function noQuitFixture() {
+  const f = fixture();
+  const quit = path.join(f.state, "last-quit.json");
+  f.files.delete(quit);
+  delete (f.input as { expectedQuitSha256?: string }).expectedQuitSha256;
+  const originalAbsent = ports.absent.getMockImplementation()!;
+  ports.absent.mockImplementation(async (file) => {
+    await originalAbsent(file);
+    if (file === quit && f.files.has(quit))
+      throw Error("SYNTHETIC_QUIT_APPEARED");
+  });
+  return f;
+}
+
+describe("closed preserved recovery with an absent Quit (controlled ports)", () => {
+  it("proves native MCP idle before preparation without inventing a Quit", async () => {
+    const f = noQuitFixture();
+    ports.finish.mockImplementation(async (handoff) => {
+      f.model.phase = "finish";
+      await handoff.reconcileConnector!();
+      return f.result;
+    });
+    await expect(f.execute()).resolves.toEqual(f.result);
+    const handoff = finishInput();
+    expect(handoff).not.toHaveProperty("failedQuit");
+    expect(handoff).not.toHaveProperty("previousConfirmedQuit");
+    expect(handoff.preservedHistory).toEqual({
+      scope: f.input.exact.current,
+      originalACK: "unobserved",
+      originalTerminal: "unobserved",
+    });
+    expect(ports.stop).toHaveBeenCalledTimes(1);
+    expect(ports.confirmStop).toHaveBeenCalledExactlyOnceWith(0);
+    expect(ports.waitForStop.mock.calls.length).toBeGreaterThan(1);
+    for (const args of ports.waitForStop.mock.calls) expect(args).toEqual([0]);
+    expect(ports.reconcile).not.toHaveBeenCalled();
+    expect(f.events.indexOf("before-observation:observe")).toBeLessThan(
+      f.events.indexOf("before-preparation:stop"),
+    );
+    expect(f.events.indexOf("before-preparation:confirm-stop")).toBeLessThan(
+      f.events.indexOf("before-preparation:prepare"),
+    );
+    expect(
+      ports.absent.mock.calls.filter(
+        ([file]) => file === path.join(f.state, "last-quit.json"),
+      ).length,
+    ).toBeGreaterThan(2);
+    released(f);
+  });
+
+  it("refuses an existing Quit before observation or maintenance", async () => {
+    const f = noQuitFixture();
+    f.files.set(path.join(f.state, "last-quit.json"), f.quit);
+    await expect(f.execute()).rejects.toThrow("SYNTHETIC_QUIT_APPEARED");
+    expect(ports.inspect).not.toHaveBeenCalled();
+    expect(ports.prepare).not.toHaveBeenCalled();
+    expect(ports.stop).not.toHaveBeenCalled();
+    released(f);
+  });
+
+  it.each(["before-preparation", "after-preparation"] as const)(
+    "retains refusal when Quit appears at %s",
+    async (phase) => {
+      const f = noQuitFixture();
+      const appear = () =>
+        f.files.set(path.join(f.state, "last-quit.json"), f.quit);
+      if (phase === "before-preparation") {
+        const original = ports.inspect.getMockImplementation()!;
+        ports.inspect.mockImplementation(async (...args) => {
+          const value = await original(...args);
+          appear();
+          return value;
+        });
+      } else {
+        const original = ports.prepare.getMockImplementation()!;
+        ports.prepare.mockImplementation(async (...args) => {
+          const value = await original(...args);
+          appear();
+          return value;
+        });
+      }
+      await expect(f.execute()).rejects.toThrow("SYNTHETIC_QUIT_APPEARED");
+      if (phase === "before-preparation")
+        expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      expect(ports.reconcile).not.toHaveBeenCalled();
+      released(f);
+    },
+  );
+
+  it.each(["stop", "confirmStop"] as const)(
+    "refuses an unconfirmed native %s before preparation",
+    async (method) => {
+      const f = noQuitFixture();
+      ports[method].mockRejectedValueOnce(Error("SYNTHETIC_MCP_NOT_IDLE"));
+      await expect(f.execute()).rejects.toThrow("SYNTHETIC_MCP_NOT_IDLE");
+      expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      expect(ports.reconcile).not.toHaveBeenCalled();
+      released(f);
+    },
+  );
+
+  it("refuses a lost native idle proof after preparation", async () => {
+    const f = noQuitFixture();
+    const original = ports.prepare.getMockImplementation()!;
+    ports.prepare.mockImplementation(async (...args) => {
+      const value = await original(...args);
+      ports.waitForStop.mockRejectedValueOnce(Error("SYNTHETIC_MCP_NOT_IDLE"));
+      return value;
+    });
+    await expect(f.execute()).rejects.toThrow("SYNTHETIC_MCP_NOT_IDLE");
+    expect(ports.finish).not.toHaveBeenCalled();
+    expect(ports.reconcile).not.toHaveBeenCalled();
+    released(f);
+  });
+});
 
 describe("closed preserved recovery host flow (controlled ports)", () => {
   it("preserves the actual desktop writer's current unconfirmed Quit bytes", async () => {

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,8 +44,18 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 	originalBuild := BuildID
 	BuildID = manifest.BuildID
 	defer func() { BuildID = originalBuild }()
-	for _, previous := range []bool{false, true} {
-		t.Run(fmt.Sprintf("previous-quit-%t", previous), func(t *testing.T) {
+	for _, scenario := range []struct {
+		name                  string
+		previousConfirmedQuit bool
+		quitAbsent            bool
+		activeInstance        bool
+	}{
+		{name: "previous-quit-false"},
+		{name: "previous-quit-true", previousConfirmedQuit: true},
+		{name: "quit-absent", quitAbsent: true},
+		{name: "quit-absent-active-instance", quitAbsent: true, activeInstance: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
 			temp := filepath.Join(repo, "_output/tmp")
 			if err := os.MkdirAll(temp, 0700); err != nil {
 				t.Fatal(err)
@@ -66,26 +77,59 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			quit := []byte("{\"schema\":1,\"at\":\"2026-10-08T10:00:14.146Z\",\"drained\":false,\"unconfirmed\":[\"connector\",\"go-core\"]}\n")
-			if previous {
-				quit = []byte("{\"schema\":1,\"at\":\"2026-10-08T09:39:05.070Z\",\"drained\":true,\"unconfirmed\":[]}\n")
+			files := map[string][]byte{"running.json": run, "config.json": config}
+			var quit []byte
+			expectedQuitSha256 := ""
+			if !scenario.quitAbsent {
+				quit = []byte("{\"schema\":1,\"at\":\"2026-10-08T10:00:14.146Z\",\"drained\":false,\"unconfirmed\":[\"connector\",\"go-core\"]}\n")
+				if scenario.previousConfirmedQuit {
+					quit = []byte("{\"schema\":1,\"at\":\"2026-10-08T09:39:05.070Z\",\"drained\":true,\"unconfirmed\":[]}\n")
+				}
+				files["last-quit.json"] = quit
+				expectedQuitSha256 = hex.EncodeToString(sumFixture(quit))
 			}
-			for name, value := range map[string][]byte{"running.json": run, "config.json": config, "last-quit.json": quit} {
+			for name, value := range files {
 				if err := os.WriteFile(filepath.Join(state, name), value, 0600); err != nil {
 					t.Fatal(err)
 				}
 			}
+			if scenario.quitAbsent {
+				if _, err := os.Lstat(filepath.Join(state, "last-quit.json")); !os.IsNotExist(err) {
+					t.Fatal("quit-absent fixture has a Quit", err)
+				}
+			}
 			beforeWorkspace := snapshotPreservedObservationTree(t, workspace)
 			beforeArchive := snapshotPreservedObservationTree(t, filepath.Join(in.Profile.Root, "chat"))
+			var refusedProfile, refusedRun, refusedConfig, refusedMarker preservedObservationTree
+			activeMarker := ""
+			if scenario.activeInstance {
+				// A correctly named, durable stale instance marker, without a
+				// live MCP process or lease. The actual host must refuse it.
+				activeMarker = filepath.Join(connector, "mcp-lifecycle", "active-"+freshEmptyRecoveryFixtureUUID(t))
+				if err := os.WriteFile(activeMarker, []byte("1\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				refusedProfile = snapshotPreservedObservationTree(t, in.Profile.Root)
+				refusedRun = snapshotPreservedObservationTree(t, filepath.Join(state, "running.json"))
+				refusedConfig = snapshotPreservedObservationTree(t, filepath.Join(state, "config.json"))
+				refusedMarker = snapshotPreservedObservationTree(t, activeMarker)
+			}
 			profile := in.Profile
 			in.Profile = ProfileBinding{}
 			in.Selection.HandoffDigest, in.Selection.LifecycleDigest, in.Selection.ResultsDigest = [32]byte{}, [32]byte{}, [32]byte{}
 			fixture := struct {
-				Input                                                       preservedProfileInspectionInput
-				Profile                                                     ProfileBinding
-				ExpectedRunSha256, ExpectedConfigSha256, ExpectedQuitSha256 string
-				PreservedProfile, PreviousConfirmedQuit                     bool
-			}{in, profile, hex.EncodeToString(sumFixture(run)), hex.EncodeToString(sumFixture(config)), hex.EncodeToString(sumFixture(quit)), true, previous}
+				Input                                   preservedProfileInspectionInput
+				Profile                                 ProfileBinding
+				ExpectedRunSha256, ExpectedConfigSha256 string
+				ExpectedQuitSha256                      string `json:",omitempty"`
+				PreservedProfile, PreviousConfirmedQuit bool
+				QuitAbsent                              bool `json:",omitempty"`
+			}{
+				Input: in, Profile: profile,
+				ExpectedRunSha256: hex.EncodeToString(sumFixture(run)), ExpectedConfigSha256: hex.EncodeToString(sumFixture(config)),
+				ExpectedQuitSha256: expectedQuitSha256, PreservedProfile: true,
+				PreviousConfirmedQuit: scenario.previousConfirmedQuit, QuitAbsent: scenario.quitAbsent,
+			}
 			raw, err := json.Marshal(fixture)
 			if err != nil {
 				t.Fatal(err)
@@ -103,6 +147,25 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 			cmd := exec.CommandContext(ctx, node, filepath.Join(repo, "tests/e2e/closed-empty-chat-host.e2e.mjs"), inputPath)
 			cmd.Dir = repo
 			out, err := cmd.CombinedOutput()
+			archive := filepath.Join(profile.Root, "chat-retired-"+in.Selection.OperationID)
+			if scenario.activeInstance {
+				exit, exited := err.(*exec.ExitError)
+				if !exited || exit.ExitCode() <= 0 || ctx.Err() != nil || !strings.Contains(string(out), "COMPUTER_MCP_INSTANCE_CLEANUP_UNVERIFIED") {
+					t.Fatalf("original host did not refuse stale MCP instance; retain %s: %v %s", userData, err, out)
+				}
+				for _, path := range []string{archive, filepath.Join(state, "go-core.empty-recovery.pending"), filepath.Join(state, "last-quit.json")} {
+					if _, err := os.Lstat(path); !os.IsNotExist(err) {
+						t.Fatal("refused recovery created archive, pending or Quit", path, err)
+					}
+				}
+				unchangedPreservedObservationTree(t, profile.Root, refusedProfile)
+				unchangedPreservedObservationTree(t, filepath.Join(state, "running.json"), refusedRun)
+				unchangedPreservedObservationTree(t, filepath.Join(state, "config.json"), refusedConfig)
+				unchangedPreservedObservationTree(t, activeMarker, refusedMarker)
+				unchangedPreservedObservationTree(t, workspace, beforeWorkspace)
+				t.Logf("retained refused built host fixture %s; stale MCP marker intact; original run/config/Chat/UNKNOWN/workspace unchanged, no replay", userData)
+				return
+			}
 			if err != nil {
 				t.Fatalf("original preserved host failed; retain %s: %v %s", userData, err, out)
 			}
@@ -112,15 +175,36 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 			if json.Unmarshal(out, &result) != nil || result.Phase != "prepared_for_cold_start" {
 				t.Fatal("missing original host result")
 			}
-			archive := filepath.Join(profile.Root, "chat-retired-"+in.Selection.OperationID)
 			receipt, err := os.ReadFile(filepath.Join(archive, "maintenance-completed.json"))
 			var completed struct {
-				Schema            string
-				RecorderConfirmed bool
-				PreservedHistory  struct{ OriginalACK, OriginalTerminal string }
+				Schema                string
+				RecorderConfirmed     bool
+				OriginalQuitScope     string
+				RetainedQuitSha256    json.RawMessage
+				Publication           chatport.HandoffPublication
+				Acknowledgement       wire.CoreRetirementAcknowledged
+				OriginalChildTerminal wire.CoreTerminalObservation
+				PreservedHistory      struct{ OriginalACK, OriginalTerminal string }
 			}
 			if err != nil || json.Unmarshal(receipt, &completed) != nil || completed.Schema != "farol.closed-preserved-chat-recovery/1" || !completed.RecorderConfirmed || completed.PreservedHistory.OriginalACK != "unobserved" || completed.PreservedHistory.OriginalTerminal != "unobserved" {
 				t.Fatal("old historical facts upgraded", err)
+			}
+			maintenance := completed.Publication
+			binding := maintenance.Binding
+			if maintenance.HandoffID != in.Selection.OperationID || maintenance.ReceiptDigest == ([32]byte{}) || binding.ProfileID != profile.ProfileID || binding.BuildID != BuildID || binding.BackendGeneration != in.Selection.Next.BackendGeneration || binding.HostLifetimeID != in.Selection.HostLifetimeID || binding.ChildLaunchID != in.Selection.ChildLaunchID || binding.ParentRoot != in.Selection.Current.ParentRoot || binding.ChatRoot == in.Selection.Current.ChatRoot {
+				t.Fatal("maintenance publication crossed selected identity")
+			}
+			var fresh unix.Stat_t
+			if err := unix.Lstat(filepath.Join(profile.Root, "chat"), &fresh); err != nil || binding.ChatRoot != (chatport.JournalRoot{Device: uint64(fresh.Dev), Inode: fresh.Ino, OwnerUID: fresh.Uid}) {
+				t.Fatal("maintenance publication did not name actual fresh Chat root", err)
+			}
+			ack := completed.Acknowledgement
+			if ack.HandoffId != maintenance.HandoffID || ack.ReceiptDigest != hex.EncodeToString(maintenance.ReceiptDigest[:]) || len(ack.AckDigest) != 64 {
+				t.Fatal("maintenance ACK did not correlate exact publication")
+			}
+			terminal := wire.CoreTerminalObservation{HandoffId: ack.HandoffId, ReceiptDigest: ack.ReceiptDigest, AckDigest: ack.AckDigest, BackendGeneration: in.Selection.Next.BackendGeneration, HostLifetimeId: in.Selection.HostLifetimeID, ChildLaunchId: in.Selection.ChildLaunchID, ExitCode: "0"}
+			if completed.OriginalChildTerminal != terminal {
+				t.Fatal("maintenance child terminal did not correlate exact ACK and clean exit")
 			}
 			for _, name := range []string{"running.json", "last-quit.json", "go-core.empty-recovery.pending"} {
 				if _, err := os.Lstat(filepath.Join(state, name)); !os.IsNotExist(err) {
@@ -136,12 +220,34 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 					t.Fatal("original host custody missing", name, err)
 				}
 			}
-			quitName := "failed-last-quit.json"
-			if previous {
-				quitName = "previous-last-quit.json"
+			if scenario.quitAbsent {
+				if completed.OriginalQuitScope != "absent" || len(completed.RetainedQuitSha256) != 0 {
+					t.Fatal("absent original Quit was fabricated in completion")
+				}
+				for _, name := range []string{"last-quit.json", "failed-last-quit.json", "previous-last-quit.json"} {
+					if _, err := os.Lstat(filepath.Join(archive, name)); !os.IsNotExist(err) {
+						t.Fatal("quit-absent recovery fabricated retained Quit", name, err)
+					}
+				}
+			} else {
+				quitName := "failed-last-quit.json"
+				if scenario.previousConfirmedQuit {
+					quitName = "previous-last-quit.json"
+				}
+				if retained, err := os.ReadFile(filepath.Join(archive, quitName)); err != nil || string(retained) != string(quit) {
+					t.Fatal("original quit lost", err)
+				}
 			}
-			if retained, err := os.ReadFile(filepath.Join(archive, quitName)); err != nil || string(retained) != string(quit) {
-				t.Fatal("original quit lost", err)
+			if scenario.quitAbsent {
+				entries, err := os.ReadDir(filepath.Join(connector, "mcp-lifecycle"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, entry := range entries {
+					if strings.HasPrefix(entry.Name(), "retired-") || strings.HasPrefix(entry.Name(), "reconciling-") {
+						t.Fatal("quit-absent recovery invented inactive reconciliation", entry.Name())
+					}
+				}
 			}
 			// All old files retain original bytes/identity after the known root
 			// rename; only host-owned completion/marker/intent files were added.

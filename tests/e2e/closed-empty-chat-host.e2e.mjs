@@ -111,6 +111,19 @@ try {
     fixture.Input.InstalledEmpty === true ||
     fixture.Input.InstalledPreserved === true;
   const preservedProfile = fixture.PreservedProfile === true;
+  const quitAbsent = fixture.QuitAbsent === true;
+  if (
+    quitAbsent &&
+    (!preservedProfile ||
+      fixture.PreviousConfirmedQuit === true ||
+      Object.hasOwn(fixture, "ExpectedQuitSha256"))
+  )
+    throw Error("HOST_FIXTURE_QUIT_SCOPE_INVALID");
+  if (quitAbsent)
+    await assert.rejects(
+      fs.lstat(path.join(userData, "farol-next-state", "last-quit.json")),
+      { code: "ENOENT" },
+    );
   if (unacknowledged || installed || preservedProfile) {
     const actual = await activationObligations(userData, {
       isAlive: () => false,
@@ -118,7 +131,7 @@ try {
     assert.deepEqual(actual.unreadable, []);
     assert.deepEqual(actual.changed, []);
     assert.deepEqual(actual.obligations, [
-      ...(fixture.PreviousConfirmedQuit === true
+      ...(fixture.PreviousConfirmedQuit === true || quitAbsent
         ? []
         : [
             fixture.Input.InstalledPreserved === true
@@ -168,7 +181,8 @@ try {
     },
     expectedRunSha256: fixture.ExpectedRunSha256,
     expectedConfigSha256: fixture.ExpectedConfigSha256,
-    ...(interrupted || unacknowledged || installed || preservedProfile
+    ...(!quitAbsent &&
+    (interrupted || unacknowledged || installed || preservedProfile)
       ? { expectedQuitSha256: fixture.ExpectedQuitSha256 }
       : {}),
     desktopState: async () =>

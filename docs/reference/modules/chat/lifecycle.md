@@ -297,16 +297,26 @@ host, promotion/connector exclusion, terminal recorder or writable restart.
 The separate closed Dev host composes observation, preparation and the existing
 terminal/marker completion under the same promotion and Computer drain leases.
 `tooling/recover-empty-chat.mjs --preserve-nonempty` retains the existing exact
-source/build/profile and selected run/config/Quit checks. It preserves old ACK
+source/build/profile and selected run/config checks. A selected historical Quit
+remains pinned by exact bytes and digest; an omitted Quit selection instead
+requires repeated confirmed absence of `last-quit.json`. It preserves old ACK
 and terminal facts as unobserved, pins the original archive across relocation,
 and moves the original marker/intent only after the new child's completion.
-This current lane requires a selected historical Quit receipt; absence is
-refused. CPU port tests cover ordering and failed proofs. The explicit
+The absent-Quit branch first observes the canonical Go selection, then uses the
+existing native MCP stop and zero-wait confirmation before preparation can
+archive Chat. Stale active instances, retained shell groups and unavailable
+lifetime claims refuse; this branch never retires inactive markers or invents a
+failed-Quit digest. Repeated native idle checks accompany the existing proofs.
+Its completion records `originalQuitScope: "absent"`, with no retained Quit or
+upgrade of historical ACK/terminal facts. CPU port tests cover ordering,
+appearing Quit receipts and failed proofs. The explicit
 `TestNativePreservedProfileHostWithBuiltCore` gate requires an attested clean
 build and both `-ingress-native` and `-preserved-profile-native`; compilation or
-an unflagged skip is not native acceptance. First-crash behavior without a Quit,
-normal UI access to retired history, automatic startup selection and actual
-Electron writable recovery remain separate acceptance work.
+an unflagged skip is not native acceptance. It includes both historical Quit
+scopes, absent-Quit cold File/Chat and refusal of a stale MCP instance, with
+controlled browser, Settings and original desktop history. Normal UI access to
+retired history, automatic startup selection and actual Electron writable
+recovery remain separate acceptance work.
 
 ## Checks and integration handoff
 

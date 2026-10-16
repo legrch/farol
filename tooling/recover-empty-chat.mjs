@@ -57,10 +57,11 @@ export function parseEmptyRecoveryOptions(args) {
       "--preserve-nonempty",
     ].filter((name) => values[name] === true).length > 1 ||
     (values["--interrupted-retirement"] === true ||
-    values["--unacknowledged-dev"] === true ||
-    values["--preserve-nonempty"] === true
+    values["--unacknowledged-dev"] === true
       ? !/^[a-f0-9]{64}$/u.test(values["--expected-quit"] ?? "")
-      : Object.hasOwn(values, "--expected-quit"))
+      : Object.hasOwn(values, "--expected-quit") &&
+        (values["--preserve-nonempty"] !== true ||
+          !/^[a-f0-9]{64}$/u.test(values["--expected-quit"] ?? "")))
   )
     throw Error("EMPTY_CHAT_RECOVERY_EXACT_EVIDENCE_REQUIRED");
   return values;
@@ -239,9 +240,7 @@ async function run() {
       exact,
       expectedRunSha256: options["--expected-run"],
       expectedConfigSha256: options["--expected-config"],
-      ...(options["--interrupted-retirement"] === true ||
-      options["--unacknowledged-dev"] === true ||
-      options["--preserve-nonempty"] === true
+      ...(options["--expected-quit"] !== undefined
         ? { expectedQuitSha256: options["--expected-quit"] }
         : {}),
       desktopState: () => activationObligations(userData),

@@ -104,7 +104,7 @@ describe("one-shot empty Chat recovery preflight", () => {
       parseEmptyRecoveryOptions([...selected, "--unacknowledged-dev"]),
     ).toThrow();
   });
-  it("requires exact historical Quit custody for the separate nonempty Dev route", () => {
+  it("pins historical Quit custody when selected for the nonempty Dev route", () => {
     const selected = [
       ...exact,
       "--preserve-nonempty",
@@ -114,9 +114,6 @@ describe("one-shot empty Chat recovery preflight", () => {
     expect(parseEmptyRecoveryOptions(selected)["--preserve-nonempty"]).toBe(
       true,
     );
-    expect(() =>
-      parseEmptyRecoveryOptions([...exact, "--preserve-nonempty"]),
-    ).toThrow();
     for (const mode of [
       "--unacknowledged-dev",
       "--interrupted-retirement",
@@ -126,6 +123,25 @@ describe("one-shot empty Chat recovery preflight", () => {
     expect(() =>
       parseEmptyRecoveryOptions([...selected, "--production"]),
     ).toThrow();
+  });
+  it("allows exact Quit absence only in the explicit nonempty Dev route", () => {
+    const selected = parseEmptyRecoveryOptions([
+      ...exact,
+      "--preserve-nonempty",
+    ]);
+    expect(selected["--preserve-nonempty"]).toBe(true);
+    expect(selected).not.toHaveProperty("--expected-quit");
+    for (const invalid of ["", "not-a-digest", "e".repeat(63)])
+      expect(() =>
+        parseEmptyRecoveryOptions([
+          ...exact,
+          "--preserve-nonempty",
+          "--expected-quit",
+          invalid,
+        ]),
+      ).toThrow();
+    for (const mode of ["--unacknowledged-dev", "--interrupted-retirement"])
+      expect(() => parseEmptyRecoveryOptions([...exact, mode])).toThrow();
   });
   it.each([
     "--profile",
