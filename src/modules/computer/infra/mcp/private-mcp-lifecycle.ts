@@ -476,10 +476,11 @@ export class PrivateMcpLifecycle {
     await this.reconcileSelected(selected.data, input.proveIdle.bind(input));
   }
 
-  /** Unselected crash-maintenance primitive. Enclosing trusted host code must
+  /** Closed Dev crash-maintenance primitive. Enclosing trusted host code must
    * retain the same promotion/Computer exclusions and canonical work proof.
    * The run/config digests identify that observation, never a Quit or old ACK.
-   * No Desktop/CLI route selects this method until its host gates qualify.
+   * The preserved-history maintenance host selects this after canonical Go
+   * observation. Startup UI and ordinary MCP ingress never select it.
    */
   async reconcileInactiveAfterCrash(
     input: Readonly<{

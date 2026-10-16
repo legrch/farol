@@ -303,17 +303,23 @@ requires repeated confirmed absence of `last-quit.json`. It preserves old ACK
 and terminal facts as unobserved, pins the original archive across relocation,
 and moves the original marker/intent only after the new child's completion.
 The absent-Quit branch first observes the canonical Go selection, then uses the
-existing native MCP stop and zero-wait confirmation before preparation can
-archive Chat. Stale active instances, retained shell groups and unavailable
-lifetime claims refuse; this branch never retires inactive markers or invents a
-failed-Quit digest. Repeated native idle checks accompany the existing proofs.
+existing native MCP stop and schema-2 crash reconciliation before preparation
+can archive Chat. Exact retained run/config digests identify the failed run;
+the original promotion and Computer exclusions and repeated canonical host
+proofs remain prerequisites. Inactive markers retain their bytes and physical
+identity in the selected MCP journal archive, with historical stop explicitly
+unconfirmed. Unsafe markers, retained shell groups and unavailable lifetime
+claims refuse before Chat preparation. Only the current maintenance lifetime
+confirms its own stop. This branch never invents a failed-Quit digest; repeated
+native zero-wait idle checks accompany the existing proofs.
 Its completion records `originalQuitScope: "absent"`, with no retained Quit or
 upgrade of historical ACK/terminal facts. CPU port tests cover ordering,
 appearing Quit receipts and failed proofs. The explicit
 `TestNativePreservedProfileHostWithBuiltCore` gate requires an attested clean
 build and both `-ingress-native` and `-preserved-profile-native`; compilation or
 an unflagged skip is not native acceptance. It includes both historical Quit
-scopes, absent-Quit cold File/Chat and refusal of a stale MCP instance, with
+scopes, absent-Quit cold File/Chat with and without inactive MCP markers, exact
+schema-2 journal custody, and refusal of unsafe or leased MCP instances, with
 controlled browser, Settings and original desktop history. Normal UI access to
 retired history, automatic startup selection and actual Electron writable
 recovery remain separate acceptance work.

@@ -138,8 +138,8 @@ host's work proof. It journals and archives inactive markers through the
 existing pending fence and exact operation identity. This does not confirm an
 old stop, settle an effect or grant a new connector owner.
 
-`reconcileInactive` preserves the schema 1 failed-Quit identity. The separate,
-currently unselected `reconcileInactiveAfterCrash` primitive records schema 2
+`reconcileInactive` preserves the schema 1 failed-Quit identity. The separate
+`reconcileInactiveAfterCrash` primitive records schema 2
 with `basis: "failed-run"`, exact run/config digests and the same bounded
 instance list. Completed metadata remains `retired_unconfirmed`; it contains no
 fabricated Quit digest, drain, ACK or terminal observation. Neither entry may
@@ -150,10 +150,16 @@ partial-operation fences.
 
 The crash primitive requires trusted enclosing promotion/Computer exclusion and
 canonical work proof; digest values and a free lifetime claim supply neither.
-It is not selected by Desktop, MCP ingress or the closed Dev CLI. Their existing
-stale-instance refusals remain intact. Actual host selection, failed-run
-qualification, original child terminal custody, assembled writable restart and
-installed/live-provider acceptance remain separate gates.
+The explicit closed Dev preserved-history maintenance host selects it only
+after canonical Go idle observation, before Chat preparation. That host binds
+the retained run/config snapshots, holds the original promotion and Computer
+exclusions, and repeats its process, state and promotion-lease proofs inside the
+native lifetime claim. Source/build attestation is rechecked before and after
+canonical observation. After reconciliation it confirms only its own maintenance
+stop and repeats zero-wait idle checks. Unsafe markers, live lifetime claims,
+shell groups and unknown work still refuse. Startup UI and ordinary MCP ingress
+do not select it; original child terminal custody, assembled startup recovery
+and installed/live-provider acceptance remain separate gates.
 
 The [Darwin crash-reconciliation tests](../../../../tests/integration/private-mcp-crash-reconciliation.test.ts)
 exercise actual private files and native lifetime claims, retaining every new

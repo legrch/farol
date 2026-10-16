@@ -206,11 +206,20 @@ export async function recoverClosedPreservedChat(
         await attest();
         await proof();
         if (!failedQuit) {
-          // Only this maintenance lifetime confirms its own stop. A stale
-          // active instance or shell group must refuse before Chat effects;
-          // no historical Quit identity or stop acknowledgement is inferred.
+          // Canonical Go idle observation and the original promotion/Computer
+          // exclusions precede this native reconciliation. Retain stale marker
+          // custody under failed-run evidence before any Chat preparation;
+          // no historical Quit or old stop acknowledgement is inferred.
           const lifecycle = new PrivateMcpLifecycle(root);
           await lifecycle.beginClosedRecoveryStop();
+          await lifecycle.reconcileInactiveAfterCrash({
+            operationId: exact.operationId,
+            failedRunSha256: selected.expectedRunSha256,
+            configSha256: selected.expectedConfigSha256,
+            proveIdle: proof,
+          });
+          // Only this maintenance lifetime confirms its own stop. Assign after
+          // the native proof callback so proof never recursively takes its lock.
           await lifecycle.confirmStop(0);
           noQuitLifecycle = lifecycle;
           await proof();
