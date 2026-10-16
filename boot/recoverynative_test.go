@@ -176,7 +176,7 @@ func TestNativeRecoveryReadsRequireFreshPublicationAndPreserveUnknown(t *testing
 		names = append(names, name)
 	}
 	slices.Sort(names)
-	want := []string{"computer.authority.deactivate", "computer.authority.publish", "computer.settings.list", "computer.settings.search", "computer.settings.snapshot"}
+	want := []string{"chat.archive.list", "chat.archive.read", "computer.authority.deactivate", "computer.authority.publish", "computer.settings.list", "computer.settings.search", "computer.settings.snapshot"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatal("unexpected recovery surface", names)
 	}
@@ -392,7 +392,7 @@ func TestNativeRecoveryCLIHasNoEffectOrTaskRoutes(t *testing.T) {
 		t.Fatal("invalid recovery identity")
 	}
 	peer = &hello.Context
-	expected := []string{"core.status", "computer.authority.deactivate", "computer.authority.publish", "computer.settings.list", "computer.settings.search", "computer.settings.snapshot"}
+	expected := []string{"core.status", "chat.archive.list", "chat.archive.read", "computer.authority.deactivate", "computer.authority.publish", "computer.settings.list", "computer.settings.search", "computer.settings.snapshot"}
 	if !reflect.DeepEqual(identity.Capabilities, expected) {
 		t.Fatal("recovery advertised broader capabilities", identity.Capabilities)
 	}

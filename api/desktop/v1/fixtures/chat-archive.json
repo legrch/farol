@@ -1,0 +1,14 @@
+{
+  "observation": "stored_unconfirmed",
+  "summary": {
+    "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "backendGeneration": "original",
+    "operationId": "original-operation",
+    "resultId": "stored-result",
+    "conversationId": "",
+    "recordedOutcome": "completed",
+    "bytes": 28
+  },
+  "text": "Synthetic stored observation"
+}

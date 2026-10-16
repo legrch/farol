@@ -90,7 +90,9 @@
     "computer.settings.search": "read",
     "task.model.resolve": "read",
     "task.settings.compare": "read",
-    "task.models.describe": "read"
+    "task.models.describe": "read",
+    "chat.archive.list": "read",
+    "chat.archive.read": "read"
   },
   "definitions": {
     "Context": {
@@ -5281,6 +5283,105 @@
         },
         "view": {
           "type": "json"
+        }
+      }
+    },
+    "ChatArchiveListRequest": {
+      "type": "object",
+      "fields": {
+        "after": {
+          "type": "string",
+          "maxBytes": 64,
+          "pattern": "^(?:[a-f0-9]{64})?$"
+        }
+      }
+    },
+    "ChatArchiveSummary": {
+      "type": "object",
+      "fields": {
+        "key": {
+          "type": "string",
+          "maxBytes": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "digest": {
+          "type": "string",
+          "maxBytes": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "backendGeneration": {
+          "type": "id"
+        },
+        "operationId": {
+          "type": "id"
+        },
+        "resultId": {
+          "type": "id"
+        },
+        "conversationId": {
+          "type": "string",
+          "maxBytes": 256,
+          "pattern": "^[^\\x00\\r\\n]*$"
+        },
+        "recordedOutcome": {
+          "type": "text",
+          "values": ["completed", "refused", "failed", "cancelled", "unknown"]
+        },
+        "bytes": {
+          "type": "uint32",
+          "maximum": 8192
+        }
+      }
+    },
+    "ChatArchivePage": {
+      "type": "object",
+      "fields": {
+        "observation": {
+          "type": "text",
+          "values": ["stored_unconfirmed"]
+        },
+        "entries": {
+          "type": "ChatArchiveSummary[]",
+          "maxItems": 32
+        },
+        "next": {
+          "type": "string",
+          "maxBytes": 64,
+          "pattern": "^(?:[a-f0-9]{64})?$"
+        },
+        "unresolved": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ChatArchiveReadRequest": {
+      "type": "object",
+      "fields": {
+        "key": {
+          "type": "string",
+          "maxBytes": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "digest": {
+          "type": "string",
+          "maxBytes": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "ChatArchiveReply": {
+      "type": "object",
+      "fields": {
+        "observation": {
+          "type": "text",
+          "values": ["stored_unconfirmed"]
+        },
+        "summary": {
+          "type": "ChatArchiveSummary"
+        },
+        "text": {
+          "type": "text",
+          "maxBytes": 8192
         }
       }
     }

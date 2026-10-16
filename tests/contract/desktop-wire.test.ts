@@ -1044,3 +1044,56 @@ it("refuses independently varied fixed wire limits before generating either peer
     ).toThrow("unsupported wire limits");
   }
 });
+
+describe("recovery archive observations", () => {
+  const stored = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../api/desktop/v1/fixtures/chat-archive.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  it("keeps stored data separate from accepted history and effect methods", () => {
+    expect(validate("ChatArchiveReply", stored)).toBe(true);
+    expect(validate("ChatHistoryResult", stored)).toBe(false);
+    for (const method of ["chat.archive.list", "chat.archive.read"]) {
+      expect(knownMethod(method)).toBe(true);
+      expect(requiresOperationID(method)).toBe(false);
+    }
+    expect(validate("ChatArchiveListRequest", { after: "" })).toBe(true);
+    expect(
+      validate("ChatArchiveReadRequest", {
+        key: stored.summary.key,
+        digest: stored.summary.digest,
+      }),
+    ).toBe(true);
+  });
+  it("refuses promoted provenance, authority fields and oversized observations", () => {
+    for (const change of [
+      { observation: "completed" },
+      { acknowledged: true },
+      { complete: true },
+      { ownerId: "other" },
+      { summary: { ...stored.summary, recordedOutcome: "accepted" } },
+      { summary: { ...stored.summary, digest: "B".repeat(64) } },
+      { summary: { ...stored.summary, bytes: 8193 } },
+      { text: "x".repeat(8193) },
+    ])
+      expect(validate("ChatArchiveReply", { ...stored, ...change })).toBe(
+        false,
+      );
+    expect(
+      validate("ChatArchiveListRequest", { after: "", profileId: "other" }),
+    ).toBe(false);
+    expect(
+      validate("ChatArchivePage", {
+        observation: "stored_unconfirmed",
+        entries: Array.from({ length: 33 }, () => stored.summary),
+        next: stored.summary.key,
+        unresolved: true,
+      }),
+    ).toBe(false);
+  });
+});
