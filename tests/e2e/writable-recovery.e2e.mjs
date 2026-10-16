@@ -465,7 +465,7 @@ async function scenario({
             "CHAT_ACCEPTANCE_DISCLOSURE_NOT_UNIQUE",
           );
           if (!(await disclosure.evaluate((element) => element.open)))
-            await disclosure.locator("summary").click(options);
+            await disclosure.locator(":scope > summary").click(options);
           await page
             .locator('section[aria-label="Saved Chat answers"]')
             .waitFor({ state: "visible", timeout: 5000 });
