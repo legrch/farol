@@ -13,13 +13,8 @@
       "valid_inode",
       "parse_request"
     ],
-    "classes": [
-      "Refusal"
-    ],
-    "constants": [
-      "MAX_RECORD",
-      "SLOT_SCHEMA"
-    ],
+    "classes": ["Refusal"],
+    "constants": ["MAX_RECORD", "SLOT_SCHEMA"],
     "substitutions": [
       "fd3 read from in-memory bytes",
       "slot read from in-memory expected bytes"
