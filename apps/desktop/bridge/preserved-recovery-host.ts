@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { z } from "zod";
 import { inspectPreservedRecoveryChild } from "./preserved-inspection-child";
 import {
   preparePreservedRecoveryChild,
@@ -78,6 +79,7 @@ export async function recoverClosedPreservedChat(
     !["Farol Dev", "Farol DEV"].includes(path.basename(userData)) ||
     profile.root !== path.join(state, "go-core") ||
     !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(exact.operationId) ||
+    !z.string().uuid().safeParse(exact.operationId).success ||
     ![
       selected.expectedRunSha256,
       selected.expectedConfigSha256,

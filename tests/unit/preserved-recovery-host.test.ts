@@ -867,6 +867,40 @@ describe("closed preserved recovery refuses progression", () => {
     },
   );
 
+  it.each([
+    "00000000-0000-0000-0000-000000000001",
+    "835a913b-bc20-f2c6-bf56-9b83852cde3c",
+    "835a913b-bc20-42c6-0f56-9b83852cde3c",
+  ])(
+    "refuses the real reconciler's invalid UUID %s before host IO",
+    async (operationId) => {
+      const { PrivateMcpLifecycle: Reconciler } = await vi.importActual<
+        typeof import("../../src/modules/computer/infra/mcp/private-mcp-lifecycle")
+      >("../../src/modules/computer/infra/mcp/private-mcp-lifecycle");
+      const proveIdle = vi.fn(async () => {});
+      await expect(
+        new Reconciler("/synthetic/unused-mcp").reconcileInactive({
+          operationId,
+          failedQuitSha256: "a".repeat(64),
+          proveIdle,
+        }),
+      ).rejects.toThrow("COMPUTER_MCP_RECONCILIATION_INVALID");
+      expect(proveIdle).not.toHaveBeenCalled();
+      const f = fixture();
+      f.input.exact.operationId = operationId;
+      f.input.selectionInput.Selection.OperationID = operationId;
+      await expect(f.execute()).rejects.toThrow(
+        "PRESERVED_RECOVERY_SELECTION_INVALID",
+      );
+      expect(ports.privateRoot).not.toHaveBeenCalled();
+      expect(ports.acquire).not.toHaveBeenCalled();
+      expect(ports.fence).not.toHaveBeenCalled();
+      expect(ports.inspect).not.toHaveBeenCalled();
+      expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["profile", "operation", "run", "config", "quit"] as const)(
     "rejects invalid %s selection before admission",
     async (field) => {
