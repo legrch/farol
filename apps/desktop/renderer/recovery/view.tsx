@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { StoredReplies } from "./archive";
 import {
   RecoveryReadResultSchema,
   RecoveryStateSchema,
   type RecoveryState,
-  type RecoveryReadRequest,
   type RecoveryReadResult,
   type StartupRecoveryAPI,
 } from "./contract";
@@ -14,6 +14,8 @@ export function StartupRecovery({ api }: { api: StartupRecoveryAPI }) {
     status: "loading",
   });
   const [folderId, setFolderId] = useState("");
+  const [panel, setPanel] = useState<"folders" | "archive">("folders");
+  const [archiveBusy, setArchiveBusy] = useState(false);
   const [listing, setListing] = useState<Extract<
     ReadData,
     { kind: "list" }
@@ -28,32 +30,45 @@ export function StartupRecovery({ api }: { api: StartupRecoveryAPI }) {
   const epoch = useRef(0);
   useEffect(() => {
     const current = ++epoch.current;
-    void api
-      .state()
-      .then((value) => {
-        const parsed = RecoveryStateSchema.parse(value);
-        if (epoch.current === current) setState(parsed);
-      })
-      .catch(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = performance.now() + 20_000;
+    const observe = async () => {
+      try {
+        const parsed = RecoveryStateSchema.parse(await api.state());
+        if (epoch.current !== current) return;
+        const starting =
+          parsed.status === "ready" &&
+          (parsed.computer === "starting" || parsed.archive === "starting");
+        if (starting && performance.now() >= deadline) {
+          setState({
+            ...parsed,
+            computer: "unavailable",
+            archive: "unavailable",
+          });
+          return;
+        }
+        setState(parsed);
+        if (starting) timer = setTimeout(() => void observe(), 150);
+      } catch {
         if (epoch.current === current)
           setState({ status: "settings_unavailable" });
-      });
+      }
+    };
+    void observe();
     return () => {
       epoch.current = current + 1;
+      if (timer !== undefined) clearTimeout(timer);
     };
   }, [api]);
   const paused = readState === "unknown" || readState === "unavailable";
   const available =
     state.status === "ready" && state.computer === "available" && !paused;
-  const busy = readState === "running";
+  const busy = readState === "running" || archiveBusy;
   const folder =
     state.status === "ready"
       ? state.folders.find((item) => item.workspaceId === folderId)
       : undefined;
-  const read = async (
-    kind: RecoveryReadRequest["kind"],
-    relativePath: string,
-  ) => {
+  const read = async (kind: "list" | "metadata", relativePath: string) => {
     if (!available || busy || !folder) return;
     const current = epoch.current;
     setReadState("running");
@@ -68,6 +83,7 @@ export function StartupRecovery({ api }: { api: StartupRecoveryAPI }) {
         return;
       }
       if (
+        (result.data.kind !== "list" && result.data.kind !== "metadata") ||
         result.data.kind !== kind ||
         result.data.relativePath !== relativePath
       )
@@ -110,134 +126,166 @@ export function StartupRecovery({ api }: { api: StartupRecoveryAPI }) {
             Connection and commands are paused. You can inspect approved folders
             when the local read service is available.
           </p>
-          {state.computer === "unavailable" ? (
-            <p role="status">
-              Folder reads are unavailable. Your saved folder selection is still
-              shown below.
-            </p>
-          ) : null}
-          {state.folders.length === 0 ? (
-            <p>No approved folders are saved.</p>
-          ) : (
-            <>
-              <div className="recovery-folder-controls">
-                <label htmlFor="recovery-folder">Saved folder</label>
-                <div>
-                  <select
-                    id="recovery-folder"
-                    value={folderId}
-                    disabled={busy}
-                    onChange={(event) => {
-                      setFolderId(event.target.value);
-                      setListing(null);
-                      setMetadata(null);
-                      if (!paused) setReadState("idle");
-                    }}
-                  >
-                    <option value="">Choose a folder</option>
-                    {state.folders.map((item) => (
-                      <option key={item.workspaceId} value={item.workspaceId}>
-                        {item.label}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    disabled={!available || busy || !folder}
-                    onClick={() => void read("list", ".")}
-                  >
-                    Open folder
-                  </button>
+          <nav className="recovery-views" aria-label="Recovery views">
+            <button
+              type="button"
+              aria-pressed={panel === "folders"}
+              disabled={busy}
+              onClick={() => setPanel("folders")}
+            >
+              Folders
+            </button>
+            <button
+              type="button"
+              aria-pressed={panel === "archive"}
+              disabled={busy}
+              onClick={() => setPanel("archive")}
+            >
+              Stored replies
+            </button>
+          </nav>
+          <div hidden={panel !== "folders"}>
+            {state.computer === "starting" ? (
+              <p role="status">Starting folder reads…</p>
+            ) : null}
+            {state.computer === "unavailable" ? (
+              <p role="status">
+                Folder reads are unavailable. Your saved folder selection is
+                still shown below.
+              </p>
+            ) : null}
+            {state.folders.length === 0 ? (
+              <p>No approved folders are saved.</p>
+            ) : (
+              <>
+                <div className="recovery-folder-controls">
+                  <label htmlFor="recovery-folder">Saved folder</label>
+                  <div>
+                    <select
+                      id="recovery-folder"
+                      value={folderId}
+                      disabled={busy}
+                      onChange={(event) => {
+                        setFolderId(event.target.value);
+                        setListing(null);
+                        setMetadata(null);
+                        if (!paused) setReadState("idle");
+                      }}
+                    >
+                      <option value="">Choose a folder</option>
+                      {state.folders.map((item) => (
+                        <option key={item.workspaceId} value={item.workspaceId}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      disabled={!available || busy || !folder}
+                      onClick={() => void read("list", ".")}
+                    >
+                      Open folder
+                    </button>
+                  </div>
                 </div>
-              </div>
-              {folder ? <p className="recovery-path">{folder.root}</p> : null}
-            </>
-          )}
-          {busy ? <p role="status">Reading…</p> : null}
-          {readState === "refused" ? (
-            <p role="alert">
-              Access was refused. Choose an approved folder or Quit; no
-              permission was changed.
-            </p>
-          ) : null}
-          {paused ? (
-            <p role="alert">
-              This read could not be confirmed. Folder reads are paused; no
-              action was repeated.
-            </p>
-          ) : null}
-          {listing ? (
-            <div className="recovery-browser">
-              <div className="recovery-location">
-                <span>
-                  {listing.relativePath === "."
-                    ? "Folder contents"
-                    : listing.relativePath}
-                </span>
-                {listing.relativePath !== "." ? (
-                  <button
-                    type="button"
-                    disabled={!available || busy}
-                    onClick={() =>
-                      void read(
-                        "list",
-                        listing.relativePath
-                          .split("/")
-                          .slice(0, -1)
-                          .join("/") || ".",
-                      )
-                    }
-                  >
-                    Up
-                  </button>
+                {folder ? <p className="recovery-path">{folder.root}</p> : null}
+              </>
+            )}
+            {busy ? <p role="status">Reading…</p> : null}
+            {readState === "refused" ? (
+              <p role="alert">
+                Access was refused. Choose an approved folder or Quit; no
+                permission was changed.
+              </p>
+            ) : null}
+            {paused ? (
+              <p role="alert">
+                This read could not be confirmed. Folder reads are paused; no
+                action was repeated.
+              </p>
+            ) : null}
+            {listing ? (
+              <div className="recovery-browser">
+                <div className="recovery-location">
+                  <span>
+                    {listing.relativePath === "."
+                      ? "Folder contents"
+                      : listing.relativePath}
+                  </span>
+                  {listing.relativePath !== "." ? (
+                    <button
+                      type="button"
+                      disabled={!available || busy}
+                      onClick={() =>
+                        void read(
+                          "list",
+                          listing.relativePath
+                            .split("/")
+                            .slice(0, -1)
+                            .join("/") || ".",
+                        )
+                      }
+                    >
+                      Up
+                    </button>
+                  ) : null}
+                </div>
+                {listing.entries.length === 0 ? (
+                  <p>This folder is empty.</p>
+                ) : (
+                  <ul aria-label="Folder contents">
+                    {listing.entries.map((entry) => (
+                      <li key={entry}>
+                        <button
+                          type="button"
+                          disabled={!available || busy}
+                          onClick={() => {
+                            const child = entry.endsWith("/")
+                              ? entry.slice(0, -1)
+                              : entry;
+                            const relative =
+                              listing.relativePath === "."
+                                ? child
+                                : `${listing.relativePath}/${child}`;
+                            void read(
+                              entry.endsWith("/") ? "list" : "metadata",
+                              relative,
+                            );
+                          }}
+                        >
+                          <span aria-hidden="true">
+                            {entry.endsWith("/") ? "▸" : "·"}
+                          </span>
+                          {entry}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {listing.truncated ? (
+                  <p className="recovery-note">
+                    The listing reached its result limit.
+                  </p>
                 ) : null}
               </div>
-              {listing.entries.length === 0 ? (
-                <p>This folder is empty.</p>
-              ) : (
-                <ul aria-label="Folder contents">
-                  {listing.entries.map((entry) => (
-                    <li key={entry}>
-                      <button
-                        type="button"
-                        disabled={!available || busy}
-                        onClick={() => {
-                          const child = entry.endsWith("/")
-                            ? entry.slice(0, -1)
-                            : entry;
-                          const relative =
-                            listing.relativePath === "."
-                              ? child
-                              : `${listing.relativePath}/${child}`;
-                          void read(
-                            entry.endsWith("/") ? "list" : "metadata",
-                            relative,
-                          );
-                        }}
-                      >
-                        <span aria-hidden="true">
-                          {entry.endsWith("/") ? "▸" : "·"}
-                        </span>
-                        {entry}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {listing.truncated ? (
-                <p className="recovery-note">
-                  The listing reached its result limit.
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-          {metadata ? (
-            <div className="recovery-metadata" role="status">
-              <strong>{metadata.relativePath}</strong>
-              <span>{metadata.bytes} bytes</span>
-              <code>SHA-256 {metadata.sha256}</code>
-            </div>
-          ) : null}
+            ) : null}
+            {metadata ? (
+              <div className="recovery-metadata" role="status">
+                <strong>{metadata.relativePath}</strong>
+                <span>{metadata.bytes} bytes</span>
+                <code>SHA-256 {metadata.sha256}</code>
+              </div>
+            ) : null}
+          </div>
+          <div hidden={panel !== "archive"}>
+            <StoredReplies
+              api={api}
+              available={state.archive === "available"}
+              starting={state.archive === "starting"}
+              otherBusy={readState === "running"}
+              onBusy={setArchiveBusy}
+            />
+          </div>
         </section>
       )}
       <footer>

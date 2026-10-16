@@ -238,6 +238,20 @@ export class GoComputerAuthority {
     ) as Promise<SettingsSearchResult>;
   }
 
+  // Pure observation after this producer's original publish returns. A known
+  // inactive selection is distinct from pending/unknown publication; this does
+  // not authorize a query or reconstruct an ACK from saved Settings.
+  settingsReadState(computerGeneration: number): "available" | "inactive" {
+    if (this.blocked || this.pending)
+      throw new BridgeError("unknown", "computer_publication_unconfirmed");
+    if (
+      this.ownerPublication &&
+      this.ownerPublication.generation !== String(computerGeneration)
+    )
+      throw new BridgeError("unknown", "crossed_computer_publication");
+    return this.ownerPublication ? "available" : "inactive";
+  }
+
   // Exact previously acknowledged publication for the trusted host adapter.
   // This performs no renewal, admission or transport and grants nothing locally.
   settingsMutationPublication(

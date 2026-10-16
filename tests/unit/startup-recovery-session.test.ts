@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStartupRecoverySession } from "../../apps/desktop/recovery/session";
-import type { StartupRecoveryComputer } from "../../apps/desktop/recovery/core-host";
+import type { StartupRecoveryCore } from "../../apps/desktop/recovery/core-host";
 import {
   RecoveryStateSchema,
   RecoveryReadResultSchema,
 } from "../../apps/desktop/renderer/recovery/contract";
+import {
+  storedSummary,
+  storedPage,
+  storedReply,
+} from "../fixtures/recovery-archive";
 import { BridgeError } from "../../apps/desktop/bridge/client";
 import {
   ProductConfigurationService,
@@ -48,7 +53,7 @@ async function fixture() {
   };
   const root = { path: "/synthetic/work", device: "1", inode: "2" };
   const list = vi
-    .fn<StartupRecoveryComputer["list"]>()
+    .fn<StartupRecoveryCore["list"]>()
     .mockImplementation(async (_id, relativePath) => ({
       publication,
       root,
@@ -58,7 +63,7 @@ async function fixture() {
       truncated: false,
     }));
   const snapshot = vi
-    .fn<StartupRecoveryComputer["snapshot"]>()
+    .fn<StartupRecoveryCore["snapshot"]>()
     .mockImplementation(async (_id, relativePath) => ({
       publication,
       root,
@@ -67,8 +72,17 @@ async function fixture() {
       bytes: 5,
       sha256: "b".repeat(64),
     }));
-  const close = vi.fn<StartupRecoveryComputer["close"]>().mockResolvedValue();
-  const computer: StartupRecoveryComputer = {
+  const close = vi.fn<StartupRecoveryCore["close"]>().mockResolvedValue();
+  const archiveList = vi
+    .fn<StartupRecoveryCore["archiveList"]>()
+    .mockResolvedValue(storedPage());
+  const archiveRead = vi
+    .fn<StartupRecoveryCore["archiveRead"]>()
+    .mockResolvedValue(storedReply());
+  const computer: StartupRecoveryCore = {
+    folderReadsAvailable: true,
+    archiveList,
+    archiveRead,
     list,
     snapshot,
     close,
@@ -79,7 +93,7 @@ async function fixture() {
   const ports = {
     load: vi.fn(async () => saved as ProductSettings | null),
     start: vi.fn(async (_settings: ProductSettings) => computer),
-    assertCurrent: vi.fn(async () => undefined),
+    assertCurrent: vi.fn<() => Promise<void>>(async () => undefined),
   };
   return {
     saved,
@@ -90,6 +104,8 @@ async function fixture() {
     snapshot,
     close,
     computer,
+    archiveList,
+    archiveRead,
   };
 }
 const deferred = <T>() => {
@@ -100,11 +116,25 @@ const deferred = <T>() => {
   return { promise, resolve };
 };
 
+async function settledState(
+  session: ReturnType<typeof createStartupRecoverySession>,
+) {
+  return vi.waitFor(async () => {
+    const state = await session.state();
+    if (
+      state.status === "ready" &&
+      (state.computer === "starting" || state.archive === "starting")
+    )
+      throw Error("child still starting");
+    return state;
+  });
+}
+
 describe("startup recovery UI resource lifetime", () => {
   it("publishes only the saved-folder projection and strips authority from read results", async () => {
     const f = await fixture(),
       session = createStartupRecoverySession(f.ports);
-    const state = RecoveryStateSchema.parse(await session.state());
+    const state = RecoveryStateSchema.parse(await settledState(session));
     expect(state).toEqual({
       status: "ready",
       revision: f.saved.revision,
@@ -112,6 +142,7 @@ describe("startup recovery UI resource lifetime", () => {
         { workspaceId: f.workspaceId, root: "/synthetic/work", label: "Work" },
       ],
       computer: "available",
+      archive: "available",
     });
     expect(f.ports.load).toHaveBeenCalledTimes(1);
     expect(f.ports.start).toHaveBeenCalledExactlyOnceWith(f.saved);
@@ -150,7 +181,7 @@ describe("startup recovery UI resource lifetime", () => {
     await session.close();
     await session.close();
     expect(f.close).toHaveBeenCalledTimes(1);
-    expect(await session.state()).toEqual({ status: "closing" });
+    expect(await settledState(session)).toEqual({ status: "closing" });
     expect(
       await session.read({
         kind: "list",
@@ -167,7 +198,9 @@ describe("startup recovery UI resource lifetime", () => {
       else
         f.ports.load.mockRejectedValueOnce(Error("synthetic corrupt settings"));
       const session = createStartupRecoverySession(f.ports);
-      expect(await session.state()).toEqual({ status: "settings_unavailable" });
+      expect(await settledState(session)).toEqual({
+        status: "settings_unavailable",
+      });
       await session.close();
       expect(f.ports.load).toHaveBeenCalledTimes(1);
       expect(f.ports.start).not.toHaveBeenCalled();
@@ -182,7 +215,7 @@ describe("startup recovery UI resource lifetime", () => {
         new BridgeError(state, "selected_owner_unavailable"),
       );
       const session = createStartupRecoverySession(f.ports);
-      expect(await session.state()).toMatchObject({
+      expect(await settledState(session)).toMatchObject({
         status: "ready",
         computer: "unavailable",
         folders: [{ label: "Work" }],
@@ -196,7 +229,7 @@ describe("startup recovery UI resource lifetime", () => {
       unknown = new BridgeError("unknown", "original_cleanup_unknown");
     f.ports.start.mockRejectedValueOnce(unknown);
     const session = createStartupRecoverySession(f.ports);
-    expect(await session.state()).toMatchObject({
+    expect(await settledState(session)).toMatchObject({
       status: "ready",
       computer: "unavailable",
     });
@@ -218,7 +251,7 @@ describe("startup recovery UI resource lifetime", () => {
     async (body) => {
       const f = await fixture(),
         session = createStartupRecoverySession(f.ports);
-      await session.state();
+      await settledState(session);
       expect(await session.read(body)).toEqual({ status: "refused" });
       expect(f.list).not.toHaveBeenCalled();
       expect(f.snapshot).not.toHaveBeenCalled();
@@ -243,7 +276,7 @@ describe("startup recovery UI resource lifetime", () => {
   });
   it("retains closure until the original pending child launch returns and closes it once", async () => {
     const f = await fixture(),
-      pending = deferred<StartupRecoveryComputer>();
+      pending = deferred<StartupRecoveryCore>();
     f.ports.start.mockReturnValueOnce(pending.promise);
     const session = createStartupRecoverySession(f.ports);
     await vi.waitFor(() => expect(f.ports.start).toHaveBeenCalledTimes(1));
@@ -257,7 +290,7 @@ describe("startup recovery UI resource lifetime", () => {
     pending.resolve(f.computer);
     await closing;
     expect(f.close).toHaveBeenCalledTimes(1);
-    expect(await session.state()).toEqual({ status: "closing" });
+    expect(await settledState(session)).toEqual({ status: "closing" });
   });
   it("fences a lost read without retrying or creating another owner", async () => {
     const f = await fixture();
@@ -272,7 +305,9 @@ describe("startup recovery UI resource lifetime", () => {
         relativePath: ".",
       }),
     ).toEqual({ status: "unknown" });
-    expect(await session.state()).toMatchObject({ computer: "unavailable" });
+    expect(await settledState(session)).toMatchObject({
+      computer: "unavailable",
+    });
     expect(
       await session.read({
         kind: "list",
@@ -287,7 +322,7 @@ describe("startup recovery UI resource lifetime", () => {
   it("withholds a result after startup exclusion is lost", async () => {
     const f = await fixture(),
       session = createStartupRecoverySession(f.ports);
-    await session.state();
+    await settledState(session);
     const original = f.list.getMockImplementation()!;
     f.list.mockImplementationOnce(async (...args) => {
       const value = await original(...args);
@@ -303,7 +338,9 @@ describe("startup recovery UI resource lifetime", () => {
         relativePath: ".",
       }),
     ).toEqual({ status: "unknown" });
-    expect(await session.state()).toMatchObject({ computer: "unavailable" });
+    expect(await settledState(session)).toMatchObject({
+      computer: "unavailable",
+    });
     await session.close();
   });
   it("withholds late results and rejects overlapping queries", async () => {
@@ -330,4 +367,230 @@ describe("startup recovery UI resource lifetime", () => {
     expect(await result).toEqual({ status: "unavailable" });
     expect(f.snapshot).not.toHaveBeenCalled();
   });
+});
+
+it("shows saved Settings while the one original child is pending", async () => {
+  const f = await fixture(),
+    pending = deferred<StartupRecoveryCore>();
+  f.ports.start.mockReturnValueOnce(pending.promise);
+  const session = createStartupRecoverySession(f.ports);
+  expect(await session.state()).toMatchObject({
+    status: "ready",
+    computer: "starting",
+    archive: "starting",
+    folders: [{ label: "Work" }],
+  });
+  expect(f.ports.start).toHaveBeenCalledTimes(1);
+  expect(await session.state()).toMatchObject({ computer: "starting" });
+  pending.resolve(f.computer);
+  expect(await settledState(session)).toMatchObject({
+    computer: "available",
+    archive: "available",
+  });
+  await session.close();
+});
+it("keeps archive reads independent of known inactive folders and never exposes authority", async () => {
+  const f = await fixture();
+  f.ports.start.mockResolvedValueOnce({
+    ...f.computer,
+    folderReadsAvailable: false,
+  });
+  const session = createStartupRecoverySession(f.ports);
+  expect(await settledState(session)).toMatchObject({
+    computer: "unavailable",
+    archive: "available",
+  });
+  const page = await session.read({ kind: "archive-list", after: "" });
+  expect(page).toEqual({
+    status: "ok",
+    data: { kind: "archive-list", after: "", ...storedPage() },
+  });
+  expect(
+    await session.read({
+      kind: "archive-read",
+      key: storedSummary().key,
+      digest: storedSummary().digest,
+    }),
+  ).toEqual({ status: "ok", data: { kind: "archive-read", ...storedReply() } });
+  for (const key of [
+    "profileId",
+    "ownerId",
+    "publication",
+    "ackDigest",
+    "historyOrigin",
+  ])
+    expect(JSON.stringify(page)).not.toContain('"' + key + '"');
+  expect(
+    await session.read({
+      kind: "list",
+      workspaceId: f.workspaceId,
+      relativePath: ".",
+    }),
+  ).toEqual({ status: "unavailable" });
+  expect(f.list).not.toHaveBeenCalled();
+  await session.close();
+});
+it("admits only the next observed page and exact selected stored reply", async () => {
+  const f = await fixture(),
+    rows = Array.from({ length: 32 }, (_, i) => storedSummary(i + 1));
+  f.archiveList
+    .mockResolvedValueOnce(storedPage(rows, rows[31]!.key))
+    .mockResolvedValueOnce(storedPage([storedSummary(33)]));
+  const session = createStartupRecoverySession(f.ports);
+  const read = {
+    kind: "archive-read",
+    key: storedSummary().key,
+    digest: storedSummary().digest,
+  };
+  expect(await session.read(read)).toEqual({ status: "refused" });
+  expect(f.archiveRead).not.toHaveBeenCalled();
+  expect(
+    await session.read({ kind: "archive-list", after: "" }),
+  ).toHaveProperty("status", "ok");
+  expect(await session.read({ kind: "archive-list", after: "" })).toEqual({
+    status: "refused",
+  });
+  expect(await session.read({ ...read, digest: "b".repeat(64) })).toEqual({
+    status: "refused",
+  });
+  expect(
+    await session.read({ kind: "archive-list", after: rows[31]!.key }),
+  ).toHaveProperty("status", "ok");
+  expect(await session.read({ kind: "archive-list", after: "" })).toEqual({
+    status: "refused",
+  });
+  expect(f.archiveList).toHaveBeenCalledTimes(2);
+  await session.close();
+});
+it.each(["unknown", "unavailable"] as const)(
+  "pauses only the archive after its original %s read",
+  async (status) => {
+    const f = await fixture();
+    f.archiveList.mockRejectedValueOnce(
+      new BridgeError(status, "synthetic_stored_read_lost"),
+    );
+    const session = createStartupRecoverySession(f.ports);
+    expect(await session.read({ kind: "archive-list", after: "" })).toEqual({
+      status,
+    });
+    expect(await session.state()).toMatchObject({
+      archive: "unavailable",
+      computer: "available",
+    });
+    expect(await session.read({ kind: "archive-list", after: "" })).toEqual({
+      status: "unavailable",
+    });
+    expect(f.archiveList).toHaveBeenCalledTimes(1);
+    expect(
+      await session.read({
+        kind: "list",
+        workspaceId: f.workspaceId,
+        relativePath: ".",
+      }),
+    ).toHaveProperty("status", "ok");
+    expect(f.ports.start).toHaveBeenCalledTimes(1);
+    await session.close();
+  },
+);
+it.each(["generation", "bytes", "observation"])(
+  "withholds a crossed stored %s response and preserves the old selection",
+  async (crossed) => {
+    const f = await fixture(),
+      session = createStartupRecoverySession(f.ports);
+    await session.read({ kind: "archive-list", after: "" });
+    const value = { ...storedReply(), summary: { ...storedSummary() } };
+    if (crossed === "generation") value.summary.backendGeneration = "crossed";
+    if (crossed === "bytes") value.text += "!";
+    if (crossed === "observation")
+      Object.assign(value, { observation: "confirmed" });
+    f.archiveRead.mockResolvedValueOnce(value);
+    const request = {
+      kind: "archive-read",
+      key: storedSummary().key,
+      digest: storedSummary().digest,
+    };
+    expect(await session.read(request)).toEqual({ status: "unknown" });
+    expect(await session.read(request)).toEqual({ status: "unavailable" });
+    expect(f.archiveRead).toHaveBeenCalledTimes(1);
+    await session.close();
+  },
+);
+it("withholds a stored read across lost exclusion and disables both read surfaces", async () => {
+  const f = await fixture(),
+    session = createStartupRecoverySession(f.ports);
+  await session.read({ kind: "archive-list", after: "" });
+  f.archiveRead.mockImplementationOnce(async () => {
+    f.ports.assertCurrent.mockRejectedValueOnce(
+      Error("synthetic old lease lost"),
+    );
+    return storedReply();
+  });
+  expect(
+    await session.read({
+      kind: "archive-read",
+      key: storedSummary().key,
+      digest: storedSummary().digest,
+    }),
+  ).toEqual({ status: "unknown" });
+  expect(await session.state()).toMatchObject({
+    computer: "unavailable",
+    archive: "unavailable",
+  });
+  await session.close();
+});
+it("withholds a stored reply after Quit clears its selection and rejects overlapping folder reads", async () => {
+  const f = await fixture(),
+    pending = deferred<Awaited<ReturnType<typeof f.archiveRead>>>();
+  const session = createStartupRecoverySession(f.ports);
+  await session.read({ kind: "archive-list", after: "" });
+  f.archiveRead.mockReturnValueOnce(pending.promise);
+  const reading = session.read({
+    kind: "archive-read",
+    key: storedSummary().key,
+    digest: storedSummary().digest,
+  });
+  await vi.waitFor(() => expect(f.archiveRead).toHaveBeenCalledTimes(1));
+  expect(
+    await session.read({
+      kind: "list",
+      workspaceId: f.workspaceId,
+      relativePath: ".",
+    }),
+  ).toEqual({ status: "unavailable" });
+  await session.close();
+  pending.resolve(storedReply());
+  expect(await reading).toEqual({ status: "unavailable" });
+  expect(f.close).toHaveBeenCalledTimes(1);
+  expect(f.list).not.toHaveBeenCalled();
+});
+
+it("does not reactivate a pending exclusion check after another observer lost that lease", async () => {
+  const f = await fixture(),
+    session = createStartupRecoverySession(f.ports);
+  await session.read({ kind: "archive-list", after: "" });
+  const postCheck = deferred<void>();
+  f.archiveRead.mockImplementationOnce(async () => {
+    f.ports.assertCurrent.mockReturnValueOnce(postCheck.promise);
+    return storedReply();
+  });
+  const reading = session.read({
+    kind: "archive-read",
+    key: storedSummary().key,
+    digest: storedSummary().digest,
+  });
+  await vi.waitFor(() => expect(f.archiveRead).toHaveBeenCalledTimes(1));
+  f.ports.assertCurrent.mockRejectedValueOnce(
+    Error("another observer lost original lease"),
+  );
+  expect(await session.state()).toMatchObject({
+    computer: "unavailable",
+    archive: "unavailable",
+  });
+  postCheck.resolve();
+  expect(await reading).toEqual({ status: "unknown" });
+  expect(await session.state()).toMatchObject({
+    computer: "unavailable",
+    archive: "unavailable",
+  });
+  await session.close();
 });

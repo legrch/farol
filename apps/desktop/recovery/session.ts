@@ -1,7 +1,9 @@
 import { BridgeError } from "../bridge/client";
-import type { StartupRecoveryComputer } from "./core-host";
+import type { StartupRecoveryCore } from "./core-host";
 import {
   RecoveryReadRequestSchema,
+  RecoveryReadResultSchema,
+  type RecoveryArchiveEntry,
   type RecoveryState,
   type RecoveryReadResult,
 } from "../renderer/recovery/contract";
@@ -13,58 +15,93 @@ export type StartupRecoverySession = Readonly<{
   close(): Promise<void>;
 }>;
 
-// Mechanical UI lifetime over original owners. Startup exclusion remains with
-// the caller. There is one load and one selected child, never a retry or normal
-// runtime fallback. Only the allowed projection crosses to the document.
+// One original Settings load and selected child. Saved Settings do not wait for
+// child readiness. Independent read surfaces retain their own availability;
+// original startup exclusion and child cleanup remain with this UI lifetime.
 export function createStartupRecoverySession(
   ports: Readonly<{
     load(): Promise<ProductSettings | null>;
-    start(settings: ProductSettings): Promise<StartupRecoveryComputer>;
+    start(settings: ProductSettings): Promise<StartupRecoveryCore>;
     assertCurrent(): Promise<void>;
   }>,
 ): StartupRecoverySession {
   let closing = false,
-    readBusy = false;
+    readBusy = false,
+    withdrawn = false;
   let view: RecoveryState = { status: "settings_unavailable" };
-  let computer: StartupRecoveryComputer | undefined;
-  let computerClose: Promise<void> | undefined;
+  let core: StartupRecoveryCore | undefined;
+  let coreClose: Promise<void> | undefined;
   let closeResult: Promise<void> | undefined;
   let cleanupFailure: unknown;
-  const closeComputer = () => {
-    if (computer && !computerClose) computerClose = computer.close();
-    return computerClose;
+  let exclusionFailure: unknown;
+  let archiveLoaded = false,
+    archiveNext = "";
+  const entries = new Map<string, RecoveryArchiveEntry>();
+  const unavailable = (surface?: "computer" | "archive") => {
+    if (view.status !== "ready") return;
+    view = surface
+      ? { ...view, [surface]: "unavailable" }
+      : { ...view, computer: "unavailable", archive: "unavailable" };
   };
-  const initialization = (async () => {
-    let settings: ProductSettings | null;
+  const ready = (folderReadsAvailable: boolean) => {
+    if (view.status === "ready" && !withdrawn)
+      view = {
+        ...view,
+        computer: folderReadsAvailable ? "available" : "unavailable",
+        archive: "available",
+      };
+  };
+  const assertCurrent = async () => {
+    if (withdrawn) throw exclusionFailure;
     try {
       await ports.assertCurrent();
-      if (closing) return;
-      settings = await ports.load();
-      await ports.assertCurrent();
-      if (!settings || closing) return;
+      if (withdrawn) throw exclusionFailure;
+    } catch (error) {
+      withdrawn = true;
+      exclusionFailure = error ?? Error("recovery_exclusion_lost");
+      unavailable();
+      throw exclusionFailure;
+    }
+  };
+  const closeCore = () => {
+    if (core && !coreClose) coreClose = core.close();
+    return coreClose;
+  };
+  const loaded = (async () => {
+    try {
+      await assertCurrent();
+      if (closing) return null;
+      const settings = await ports.load();
+      await assertCurrent();
+      if (!settings || closing) return null;
       view = {
         status: "ready",
         revision: settings.revision,
         folders: settings.computer.workspaces.map(
           ({ workspaceId, label, root }) => ({ workspaceId, label, root }),
         ),
-        computer: "unavailable",
+        computer: "starting",
+        archive: "starting",
       };
+      return settings;
     } catch {
-      return;
+      return null;
     }
+  })();
+  const initialization = (async () => {
+    const settings = await loaded;
+    if (!settings || closing || withdrawn) return;
     try {
+      core = await ports.start(settings);
+      await assertCurrent();
       if (closing) return;
-      computer = await ports.start(settings);
-      await ports.assertCurrent();
-      if (closing) return;
-      if (view.status === "ready") view = { ...view, computer: "available" };
+      ready(core.folderReadsAvailable);
     } catch (error) {
-      // An original unknown startup/cleanup cannot become a clean UI Quit.
+      unavailable();
       if (!(error instanceof BridgeError) || error.state === "unknown")
         cleanupFailure = error;
       try {
-        await closeComputer();
+        await closeCore();
       } catch (cleanup) {
         cleanupFailure =
           cleanupFailure === undefined
@@ -78,55 +115,124 @@ export function createStartupRecoverySession(
   })();
   return Object.freeze({
     state: async (): Promise<RecoveryState> => {
-      await initialization;
+      await loaded;
+      if (!closing && !withdrawn) {
+        try {
+          await assertCurrent();
+        } catch {
+          /* Keep only the unavailable projection. */
+        }
+      }
       return closing ? { status: "closing" } : structuredClone(view);
     },
     read: async (input: unknown): Promise<RecoveryReadResult> => {
       const parsed = RecoveryReadRequestSchema.safeParse(input);
       if (!parsed.success) return { status: "refused" };
       await initialization;
-      if (
-        closing ||
-        readBusy ||
-        !computer ||
-        view.status !== "ready" ||
-        view.computer !== "available"
-      )
+      if (closing || withdrawn || readBusy || !core || view.status !== "ready")
         return { status: "unavailable" };
-      const { kind, workspaceId, relativePath } = parsed.data;
-      if (!view.folders.some((folder) => folder.workspaceId === workspaceId))
-        return { status: "refused" };
+      const request = parsed.data;
+      const surface =
+        request.kind === "archive-list" || request.kind === "archive-read"
+          ? "archive"
+          : "computer";
+      if (view[surface] !== "available") return { status: "unavailable" };
+      if (request.kind === "list" || request.kind === "metadata") {
+        if (
+          !view.folders.some(
+            (folder) => folder.workspaceId === request.workspaceId,
+          )
+        )
+          return { status: "refused" };
+      } else if (request.kind === "archive-list") {
+        if (
+          request.after !== archiveNext ||
+          (archiveLoaded && archiveNext === "")
+        )
+          return { status: "refused" };
+      } else if (request.kind === "archive-read") {
+        const selected = entries.get(request.key);
+        if (!selected || selected.digest !== request.digest)
+          return { status: "refused" };
+      }
       readBusy = true;
       try {
-        await ports.assertCurrent();
+        await assertCurrent();
         if (closing) return { status: "unavailable" };
-        const data =
-          kind === "list"
-            ? await computer.list(workspaceId, relativePath)
-            : await computer.snapshot(workspaceId, relativePath);
-        await ports.assertCurrent();
+        let result: RecoveryReadResult;
+        if (request.kind === "archive-list") {
+          const page = await core.archiveList(request.after);
+          result = RecoveryReadResultSchema.parse({
+            status: "ok",
+            data: { kind: request.kind, after: request.after, ...page },
+          });
+          if (result.status !== "ok" || result.data.kind !== "archive-list")
+            throw Error("crossed_archive_page");
+          let previous = request.after;
+          for (const entry of result.data.entries) {
+            if (entry.key <= previous || entries.has(entry.key))
+              throw Error("crossed_archive_page");
+            previous = entry.key;
+          }
+          if (
+            result.data.next !== "" &&
+            (result.data.entries.length !== 32 || result.data.next !== previous)
+          )
+            throw Error("crossed_archive_cursor");
+        } else if (request.kind === "archive-read") {
+          const selected = entries.get(request.key)!;
+          const reply = await core.archiveRead(request.key, request.digest);
+          if (closing) return { status: "unavailable" };
+          result = RecoveryReadResultSchema.parse({
+            status: "ok",
+            data: { kind: request.kind, ...reply },
+          });
+          if (result.status !== "ok" || result.data.kind !== "archive-read")
+            throw Error("crossed_archive_reply");
+          const actual = result.data.summary;
+          if (
+            (Object.keys(selected) as (keyof RecoveryArchiveEntry)[]).some(
+              (key) => selected[key] !== actual[key],
+            ) ||
+            new TextEncoder().encode(result.data.text).length !== actual.bytes
+          )
+            throw Error("crossed_archive_reply");
+        } else {
+          const data =
+            request.kind === "list"
+              ? await core.list(request.workspaceId, request.relativePath)
+              : await core.snapshot(request.workspaceId, request.relativePath);
+          if (request.kind === "list" && "entries" in data)
+            result = RecoveryReadResultSchema.parse({
+              status: "ok",
+              data: {
+                kind: request.kind,
+                relativePath: request.relativePath,
+                entries: [...data.entries],
+                truncated: data.truncated,
+              },
+            });
+          else if (request.kind === "metadata" && "sha256" in data)
+            result = RecoveryReadResultSchema.parse({
+              status: "ok",
+              data: {
+                kind: request.kind,
+                relativePath: request.relativePath,
+                bytes: data.bytes,
+                sha256: data.sha256,
+              },
+            });
+          else throw Error("crossed_recovery_result");
+        }
+        await assertCurrent();
         if (closing) return { status: "unavailable" };
-        if (kind === "list" && "entries" in data)
-          return {
-            status: "ok",
-            data: {
-              kind,
-              relativePath,
-              entries: [...data.entries],
-              truncated: data.truncated,
-            },
-          };
-        if (kind === "metadata" && "sha256" in data)
-          return {
-            status: "ok",
-            data: {
-              kind,
-              relativePath,
-              bytes: data.bytes,
-              sha256: data.sha256,
-            },
-          };
-        throw new BridgeError("unknown", "crossed_recovery_result");
+        if (result.status === "ok" && result.data.kind === "archive-list") {
+          for (const entry of result.data.entries)
+            entries.set(entry.key, structuredClone(entry));
+          archiveLoaded = true;
+          archiveNext = result.data.next;
+        }
+        return result;
       } catch (error) {
         const status =
           error instanceof BridgeError
@@ -134,10 +240,8 @@ export function createStartupRecoverySession(
               ? "unavailable"
               : error.state
             : "unknown";
-        if (status === "unknown") {
-          if (view.status === "ready")
-            view = { ...view, computer: "unavailable" };
-        }
+        if (status === "unknown" || status === "unavailable")
+          unavailable(surface);
         return { status };
       } finally {
         readBusy = false;
@@ -146,9 +250,10 @@ export function createStartupRecoverySession(
     close: () => {
       if (!closeResult) {
         closing = true;
+        entries.clear();
         closeResult = (async () => {
           await initialization;
-          await closeComputer();
+          await closeCore();
           if (cleanupFailure !== undefined) throw cleanupFailure;
         })();
       }

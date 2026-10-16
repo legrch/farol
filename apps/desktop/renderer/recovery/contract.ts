@@ -14,17 +14,64 @@ export const RecoveryStateSchema = z.discriminatedUnion("status", [
     status: z.literal("ready"),
     revision: z.number().int().nonnegative(),
     folders: z.array(folder).max(128),
-    computer: z.enum(["available", "unavailable"]),
+    computer: z.enum(["starting", "available", "unavailable"]),
+    archive: z.enum(["starting", "available", "unavailable"]),
   }),
 ]);
 export type RecoveryState = z.infer<typeof RecoveryStateSchema>;
-export const RecoveryReadRequestSchema = z.strictObject({
-  kind: z.enum(["list", "metadata"]),
-  workspaceId: z.string().uuid(),
-  relativePath: z.string().min(1).max(4096),
+const digest = z.string().regex(/^[a-f0-9]{64}$/u);
+const cursor = z.string().regex(/^(?:[a-f0-9]{64})?$/u);
+const text = (bytes: number) =>
+  z
+    .string()
+    .max(bytes)
+    .regex(/^[^\p{Cs}]*$/u)
+    .refine((value) => new TextEncoder().encode(value).length <= bytes);
+const id = text(120)
+  .min(1)
+  .regex(/^[^\x00-\x20\x7f]+$/u);
+export const RecoveryArchiveEntrySchema = z.strictObject({
+  key: digest,
+  digest,
+  backendGeneration: id,
+  operationId: id,
+  resultId: id,
+  conversationId: text(256).regex(/^[^\x00-\x20\x7f]*$/u),
+  recordedOutcome: z.enum([
+    "completed",
+    "refused",
+    "failed",
+    "cancelled",
+    "unknown",
+  ]),
+  bytes: z.number().int().min(0).max(8192),
 });
+export type RecoveryArchiveEntry = z.infer<typeof RecoveryArchiveEntrySchema>;
+export const RecoveryReadRequestSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.enum(["list", "metadata"]),
+    workspaceId: z.string().uuid(),
+    relativePath: z.string().min(1).max(4096),
+  }),
+  z.strictObject({ kind: z.literal("archive-list"), after: cursor }),
+  z.strictObject({ kind: z.literal("archive-read"), key: digest, digest }),
+]);
 export type RecoveryReadRequest = z.infer<typeof RecoveryReadRequestSchema>;
 const result = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("archive-list"),
+    observation: z.literal("stored_unconfirmed"),
+    after: cursor,
+    entries: z.array(RecoveryArchiveEntrySchema).max(32),
+    next: cursor,
+    unresolved: z.boolean(),
+  }),
+  z.strictObject({
+    kind: z.literal("archive-read"),
+    observation: z.literal("stored_unconfirmed"),
+    summary: RecoveryArchiveEntrySchema,
+    text: text(8192),
+  }),
   z.strictObject({
     kind: z.literal("list"),
     relativePath: z.string().min(1).max(4096),

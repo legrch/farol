@@ -28,6 +28,11 @@ import {
 const savedSettings = process.argv.includes("--saved-settings");
 const forceQuit = process.argv.includes("--force-quit");
 const normalHostCrash = process.argv.includes("--normal-host-crash");
+const storedReplies = process.argv.includes("--stored-replies");
+assert.ok(
+  !storedReplies || (savedSettings && !forceQuit && !normalHostCrash),
+  "SELECT_EXPLICIT_STORED_OBSERVATION_JOURNEY",
+);
 assert.ok(!(forceQuit && normalHostCrash), "SELECT_ONE_CRASH_JOURNEY");
 assert.deepEqual(
   process.argv.slice(2),
@@ -39,7 +44,9 @@ assert.deepEqual(
           ? ["--force-quit"]
           : normalHostCrash
             ? ["--normal-host-crash"]
-            : []),
+            : storedReplies
+              ? ["--stored-replies"]
+              : []),
       ]
     : ["--run-native"],
   "EXPLICIT_NATIVE_RECOVERY_LANE_REQUIRED",
@@ -96,7 +103,7 @@ const report = {
     stage: "preparing",
   },
   limits:
-    "Synthetic data only. Normal-host crash uses its actual marker, original Go owner and loopback Browser fixture. Optional recovery-host crash retains a synthetic predecessor marker. Observed direct-child absence is not arbitrary descendant settlement, interrupted workspace-effect, machine restart, installed or live provider evidence.",
+    "Synthetic data only. Stored-reply mode seeds real Go result records with an explicit UNKNOWN after the old backend exits, without original terminal/ACK or Browser Send; it is native archive/IPC/UI custody evidence only. Normal-host crash uses its actual marker, original Go owner and loopback Browser fixture. Optional recovery-host crash retains a synthetic predecessor marker. Observed direct-child absence is not arbitrary descendant settlement, interrupted workspace-effect, machine restart, installed or live provider evidence.",
 };
 const save = () =>
   fs.writeFile(evidence, JSON.stringify(report, null, 2) + "\n", {
@@ -162,6 +169,38 @@ try {
       });
       await crashNormalHost();
     } else seeded = await seedRecoveryProfile(input);
+  }
+  if (storedReplies) {
+    // Independent test setup after exact original child cleanup. The tested
+    // recovery backend remains the qualified package binary, never this tool.
+    assert.equal(seeded.originalChildCleanup, "confirmed");
+    const output = execFileSync(
+      "go",
+      [
+        "run",
+        "./tests/fixtures/recovery-archive-native",
+        profile,
+        proof,
+        seeded.profileId,
+        seeded.oldGeneration,
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 30000,
+        maxBuffer: 1024 * 1024,
+        env: { ...process.env, GOTOOLCHAIN: "local", GOPROXY: "off" },
+      },
+    );
+    seeded.stored = JSON.parse(output);
+    assert.equal(
+      seeded.stored.kind,
+      "synthetic-native-retain-then-UNKNOWN-without-terminal-or-ACK",
+    );
+    assert.equal(seeded.stored.entries.length, 33);
+    seeded.fixtureGo = execFileSync("go", ["version"], {
+      encoding: "utf8",
+    }).trim();
   }
   report.fixture = { ...report.fixture, stage: "prepared", ...seeded };
   await save();
@@ -557,6 +596,70 @@ try {
         nested: true,
         metadata: { bytes: bytes.length, sha256: hash(bytes) },
       };
+      if (storedReplies) {
+        await page
+          .getByRole("button", { name: "Stored replies", exact: true })
+          .click();
+        assert.equal(await page.getByLabel("Stored reply copies").count(), 0);
+        await page
+          .getByRole("button", { name: "Load stored replies", exact: true })
+          .click();
+        const rows = page.getByRole("button", {
+          name: /^Open stored reply \d+$/u,
+        });
+        await rows.nth(31).waitFor();
+        assert.equal(await rows.count(), 32);
+        await page
+          .getByText("Some records remain unresolved or cannot be displayed.", {
+            exact: true,
+          })
+          .waitFor();
+        await page
+          .getByRole("button", { name: "Load more replies", exact: true })
+          .click();
+        await rows.nth(32).waitFor();
+        assert.equal(await rows.count(), 33);
+        assert.equal(
+          await page
+            .getByRole("button", { name: "Load more replies", exact: true })
+            .count(),
+          0,
+        );
+        const expected = [...seeded.stored.entries].sort((a, b) =>
+          a.key.localeCompare(b.key),
+        );
+        for (const index of [0, 32]) {
+          await page
+            .getByRole("button", {
+              name: `Open stored reply ${index + 1}`,
+              exact: true,
+            })
+            .click();
+          await page
+            .getByLabel("Stored reply text")
+            .getByText(expected[index].text, { exact: true })
+            .waitFor();
+          assert.equal(
+            await page.getByLabel("Stored reply text").textContent(),
+            expected[index].text,
+          );
+        }
+        await page.getByText("Outcome unconfirmed", { exact: true }).waitFor();
+        assert.equal(
+          await page
+            .locator(
+              ".recovery-copy-text script, .recovery-copy-text a, .recovery-copy-text iframe",
+            )
+            .count(),
+          0,
+        );
+        launch.reads.archive = {
+          observation: "stored_unconfirmed",
+          pages: [32, 1],
+          readKeys: [expected[0].key, expected[32].key],
+          originalFencePreserved: true,
+        };
+      }
     } else
       await page
         .getByRole("alert")
@@ -707,11 +810,13 @@ try {
   await fs.rm(profile, { recursive: true });
   report.profileRemoved = true;
   report.status = savedSettings
-    ? normalHostCrash
-      ? "passed-normal-host-SIGKILL-real-marker-two-recovery-lifetimes-reads-originals-preserved"
-      : forceQuit
-        ? "passed-hidden-recovery-host-SIGKILL-observed-children-exit-reopen-reads-originals-preserved"
-        : "passed-hidden-saved-settings-Go-recovery-reads-quit-reopen-old-journals-preserved"
+    ? storedReplies
+      ? "passed-hidden-stored-unconfirmed-33-replies-UNKNOWN-preserved-two-recovery-lifetimes"
+      : normalHostCrash
+        ? "passed-normal-host-SIGKILL-real-marker-two-recovery-lifetimes-reads-originals-preserved"
+        : forceQuit
+          ? "passed-hidden-recovery-host-SIGKILL-observed-children-exit-reopen-reads-originals-preserved"
+          : "passed-hidden-saved-settings-Go-recovery-reads-quit-reopen-old-journals-preserved"
     : "passed-hidden-recovery-quit-reopen-predecessor-preserved-zero-runtime";
 } catch (error) {
   report.status = "failed-or-unknown";

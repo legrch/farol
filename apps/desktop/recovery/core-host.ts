@@ -1,3 +1,5 @@
+import { RecoveryArchiveReader } from "./archive";
+import type { ChatArchivePage, ChatArchiveReply } from "../bridge/wire";
 import { randomUUID } from "node:crypto";
 import { AttestedCore } from "../bridge/attested-core.ts";
 import {
@@ -30,7 +32,10 @@ export type RecoveryCoreSelection = Readonly<{
   onLifecycleObservation?: (observation: BackendLifecycleObservation) => void;
 }>;
 
-export type StartupRecoveryComputer = Readonly<{
+export type StartupRecoveryCore = Readonly<{
+  folderReadsAvailable: boolean;
+  archiveList(after: string): Promise<ChatArchivePage>;
+  archiveRead(key: string, digest: string): Promise<ChatArchiveReply>;
   list(
     workspaceId: string,
     relativePath: string,
@@ -53,7 +58,7 @@ export type StartupRecoveryComputer = Readonly<{
 // recorder; even successful Close conveys no old operation/process settlement.
 export async function startDesktopGoRecovery(
   selection: RecoveryCoreSelection,
-): Promise<StartupRecoveryComputer> {
+): Promise<StartupRecoveryCore> {
   const expected = desktopCoreExpectation(selection);
   const settings = ProductSettingsSchema.parse(
     structuredClone(selection.settings),
@@ -139,6 +144,8 @@ export async function startDesktopGoRecovery(
     return result;
   };
   let authority: GoComputerAuthority;
+  let archive: RecoveryArchiveReader;
+  let folderReadsAvailable = false;
   try {
     authority = new GoComputerAuthority(
       client,
@@ -148,10 +155,11 @@ export async function startDesktopGoRecovery(
     );
     const withdrawn = await authority.withdraw();
     await withdrawn.publish(settings);
-    // This pure receipt observation proves the original publication ACK. A
-    // configured but unbound folder can leave publication inactive; starting
-    // its child alone must not advertise usable owner reads.
-    authority.settingsMutationPublication(settings.computer.generation);
+    // A known inactive folder publication must not veto independent private
+    // archive reads. Unknown/pending publication still closes this exact child.
+    folderReadsAvailable =
+      authority.settingsReadState(settings.computer.generation) === "available";
+    archive = new RecoveryArchiveReader(client, client.verifiedContext);
   } catch (error) {
     try {
       await close();
@@ -165,6 +173,10 @@ export async function startDesktopGoRecovery(
   }
   const generation = settings.computer.generation;
   return Object.freeze({
+    folderReadsAvailable,
+    archiveList: (after: string) => query(() => archive.list(after)),
+    archiveRead: (key: string, digest: string) =>
+      query(() => archive.read(key, digest)),
     list: (workspaceId: string, relativePath: string) =>
       query(() =>
         authority.listSettings(generation, workspaceId, relativePath),

@@ -1,4 +1,9 @@
 import { act } from "react";
+import {
+  storedSummary,
+  storedPage,
+  storedReply,
+} from "../fixtures/recovery-archive";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { isStartupRecoveryDocument } from "../../apps/desktop/renderer/recovery/entry";
@@ -18,6 +23,7 @@ const ready = {
   revision: 7,
   folders: [folder],
   computer: "available",
+  archive: "available",
 };
 async function mount(state: unknown = ready) {
   const host = document.createElement("div");
@@ -200,5 +206,182 @@ it("admits recovery rendering only for its fixed local document fragment", () =>
     "file://remote/shell.html#farol-startup-recovery",
   ]) {
     expect(isStartupRecoveryDocument(new URL(url))).toBe(false);
+  }
+});
+
+it("shows saved Settings during startup and observes readiness without initiating a read", async () => {
+  const f = await mount({
+    ...ready,
+    computer: "starting",
+    archive: "starting",
+  });
+  try {
+    expect(f.host.textContent).toContain("Revision 7");
+    expect(f.host.textContent).toContain("Starting folder reads");
+    expect(button(f.host, "Load stored replies").disabled).toBe(true);
+    f.api.state.mockResolvedValue(ready);
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 180)));
+    await select(f);
+    expect(button(f.host, "Open folder").disabled).toBe(false);
+    expect(f.api.read).not.toHaveBeenCalled();
+    expect(f.api.state).toHaveBeenCalledTimes(2);
+  } finally {
+    await f.dispose();
+  }
+});
+it("loads stored copies explicitly and renders escaped text with unconfirmed provenance", async () => {
+  const f = await mount({ ...ready, computer: "unavailable" });
+  const text = "<script>not executable</script>\nSaved text ✓";
+  const summary = storedSummary(1, text);
+  f.api.read
+    .mockResolvedValueOnce({
+      status: "ok",
+      data: { kind: "archive-list", after: "", ...storedPage([summary]) },
+    })
+    .mockResolvedValueOnce({
+      status: "ok",
+      data: { kind: "archive-read", ...storedReply(summary, text) },
+    });
+  try {
+    await act(async () => button(f.host, "Stored replies").click());
+    expect(f.api.read).not.toHaveBeenCalled();
+    await act(async () => button(f.host, "Load stored replies").click());
+    expect(f.api.read).toHaveBeenLastCalledWith({
+      kind: "archive-list",
+      after: "",
+    });
+    expect(f.host.textContent).toContain("Some records remain unresolved");
+    await act(async () =>
+      (
+        f.host.querySelector(
+          '[aria-label="Open stored reply 1"]',
+        ) as HTMLButtonElement
+      ).click(),
+    );
+    expect(f.api.read).toHaveBeenLastCalledWith({
+      kind: "archive-read",
+      key: summary.key,
+      digest: summary.digest,
+    });
+    expect(
+      f.host.querySelector('[aria-label="Stored reply text"]')?.textContent,
+    ).toBe(text);
+    expect(f.host.querySelectorAll("script, iframe, a, input")).toHaveLength(0);
+    expect(f.host.textContent).toContain("Outcome unconfirmed");
+    expect(f.host.textContent).not.toContain("completed");
+    await act(async () => button(f.host, "Folders").click());
+    await act(async () => button(f.host, "Stored replies").click());
+    expect(f.api.read).toHaveBeenCalledTimes(2);
+    expect(
+      f.host.querySelector('[aria-label="Stored reply text"]')?.textContent,
+    ).toBe(text);
+  } finally {
+    await f.dispose();
+  }
+});
+it("loads each bounded page only on explicit demand and keeps the next observed cursor", async () => {
+  const f = await mount(),
+    rows = Array.from({ length: 32 }, (_, i) => storedSummary(i + 1));
+  f.api.read
+    .mockResolvedValueOnce({
+      status: "ok",
+      data: {
+        kind: "archive-list",
+        after: "",
+        ...storedPage(rows, rows[31]!.key),
+      },
+    })
+    .mockResolvedValueOnce({
+      status: "ok",
+      data: {
+        kind: "archive-list",
+        after: rows[31]!.key,
+        ...storedPage([storedSummary(33)]),
+      },
+    });
+  try {
+    await act(async () => button(f.host, "Stored replies").click());
+    await act(async () => button(f.host, "Load stored replies").click());
+    expect(f.api.read).toHaveBeenCalledTimes(1);
+    expect(
+      f.host.querySelectorAll('[aria-label^="Open stored reply"]'),
+    ).toHaveLength(32);
+    await act(async () => button(f.host, "Load more replies").click());
+    expect(f.api.read).toHaveBeenLastCalledWith({
+      kind: "archive-list",
+      after: rows[31]!.key,
+    });
+    expect(
+      f.host.querySelectorAll('[aria-label^="Open stored reply"]'),
+    ).toHaveLength(33);
+    expect(
+      [...f.host.querySelectorAll("button")].some(
+        (b) => b.textContent === "Load more replies",
+      ),
+    ).toBe(false);
+  } finally {
+    await f.dispose();
+  }
+});
+it.each(["unknown", "refused", "unavailable", "crossed cursor"])(
+  "pauses the stored reader on %s while keeping folders usable",
+  async (failure) => {
+    const f = await mount();
+    f.api.read.mockResolvedValueOnce(
+      failure === "crossed cursor"
+        ? {
+            status: "ok",
+            data: {
+              kind: "archive-list",
+              after: "f".repeat(64),
+              ...storedPage(),
+            },
+          }
+        : { status: failure },
+    );
+    try {
+      await act(async () => button(f.host, "Stored replies").click());
+      await act(async () => button(f.host, "Load stored replies").click());
+      expect(button(f.host, "Load stored replies").disabled).toBe(true);
+      expect(f.host.textContent).toContain("The reader is paused");
+      await act(async () => button(f.host, "Load stored replies").click());
+      expect(f.api.read).toHaveBeenCalledTimes(1);
+      await act(async () => button(f.host, "Folders").click());
+      await select(f);
+      expect(button(f.host, "Open folder").disabled).toBe(false);
+      expect(button(f.host, "Quit").disabled).toBe(false);
+    } finally {
+      await f.dispose();
+    }
+  },
+);
+it("withholds a changed stored summary before rendering text", async () => {
+  const f = await mount();
+  f.api.read
+    .mockResolvedValueOnce({
+      status: "ok",
+      data: { kind: "archive-list", after: "", ...storedPage() },
+    })
+    .mockResolvedValueOnce({
+      status: "ok",
+      data: {
+        kind: "archive-read",
+        ...storedReply({ ...storedSummary(), backendGeneration: "crossed" }),
+      },
+    });
+  try {
+    await act(async () => button(f.host, "Stored replies").click());
+    await act(async () => button(f.host, "Load stored replies").click());
+    await act(async () =>
+      (
+        f.host.querySelector(
+          '[aria-label="Open stored reply 1"]',
+        ) as HTMLButtonElement
+      ).click(),
+    );
+    expect(f.host.querySelector('[aria-label="Stored reply text"]')).toBeNull();
+    expect(f.host.textContent).toContain("The reader is paused");
+  } finally {
+    await f.dispose();
   }
 });

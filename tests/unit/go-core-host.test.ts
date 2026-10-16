@@ -1470,11 +1470,15 @@ describe("explicit recovery Go host composition", () => {
       "taskCurrentSettings",
     );
     expect(Object.keys(host).sort()).toEqual([
+      "archiveList",
+      "archiveRead",
       "close",
+      "folderReadsAvailable",
       "list",
       "search",
       "snapshot",
     ]);
+    expect(host.folderReadsAvailable).toBe(true);
     expect(Object.isFrozen(host)).toBe(true);
     const workspace = settings.computer.workspaces[0]!.workspaceId;
     expect((await host.list(workspace, ".")).entries).toEqual([
@@ -1614,15 +1618,38 @@ describe("explicit recovery Go host composition", () => {
   });
 });
 
-it("keeps recovery reads unavailable when saved folders lack physical bindings and no publication ACK exists", async () => {
+it("keeps the archive independent when saved folders lack physical bindings and no publication ACK exists", async () => {
   const f = transport();
   start.mockResolvedValue(f.client);
   const unbound = structuredClone(settings);
   for (const workspace of unbound.computer.workspaces)
     delete workspace.rootIdentity;
+  const host = await startDesktopGoRecovery({
+    ...recoverySelection(),
+    settings: unbound,
+  });
+  expect(host.folderReadsAvailable).toBe(false);
+  f.request.mockImplementationOnce(async (_method, _body, options) => ({
+    status: "ok",
+    requestId: options!.id!,
+    context,
+    data: {
+      observation: "stored_unconfirmed",
+      entries: [],
+      next: "",
+      unresolved: false,
+    },
+  }));
+  expect(await host.archiveList("")).toEqual({
+    observation: "stored_unconfirmed",
+    entries: [],
+    next: "",
+    unresolved: false,
+  });
   await expect(
-    startDesktopGoRecovery({ ...recoverySelection(), settings: unbound }),
+    host.list(unbound.computer.workspaces[0]!.workspaceId, "."),
   ).rejects.toMatchObject({ code: "computer_publication_unavailable" });
+  await host.close();
   expect(f.events).toEqual(["computer.authority.deactivate", "client.close"]);
   expect(f.close).toHaveBeenCalledTimes(1);
   expect(start).toHaveBeenCalledTimes(1);
