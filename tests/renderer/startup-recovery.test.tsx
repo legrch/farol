@@ -385,3 +385,55 @@ it("withholds a changed stored summary before rendering text", async () => {
     await f.dispose();
   }
 });
+
+it("observes original backend loss without another read and keeps the already displayed copy", async () => {
+  const f = await mount();
+  f.api.read
+    .mockResolvedValueOnce({
+      status: "ok",
+      data: { kind: "archive-list", after: "", ...storedPage() },
+    })
+    .mockResolvedValueOnce({
+      status: "ok",
+      data: { kind: "archive-read", ...storedReply() },
+    });
+  try {
+    await act(async () => button(f.host, "Stored replies").click());
+    await act(async () => button(f.host, "Load stored replies").click());
+    await act(async () =>
+      (
+        f.host.querySelector(
+          '[aria-label="Open stored reply 1"]',
+        ) as HTMLButtonElement
+      ).click(),
+    );
+    f.api.state.mockResolvedValue({
+      ...ready,
+      computer: "unavailable",
+      archive: "unavailable",
+    });
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 1100)));
+    expect(f.host.textContent).toContain("Stored replies are unavailable");
+    expect(
+      f.host.querySelector('[aria-label="Stored reply text"]')?.textContent,
+    ).toBe(storedReply().text);
+    expect(
+      (
+        f.host.querySelector(
+          '[aria-label="Open stored reply 1"]',
+        ) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(f.api.read).toHaveBeenCalledTimes(2);
+    const count = f.api.state.mock.calls.length;
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 1100)));
+    expect(f.api.state).toHaveBeenCalledTimes(count);
+    await act(async () => button(f.host, "Folders").click());
+    await select(f);
+    expect(button(f.host, "Open folder").disabled).toBe(true);
+    expect(f.host.textContent).toContain("Revision 7");
+    expect(button(f.host, "Quit").disabled).toBe(false);
+  } finally {
+    await f.dispose();
+  }
+});

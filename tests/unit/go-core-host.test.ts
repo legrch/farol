@@ -1474,6 +1474,7 @@ describe("explicit recovery Go host composition", () => {
       "archiveRead",
       "close",
       "folderReadsAvailable",
+      "isAvailable",
       "list",
       "search",
       "snapshot",
@@ -1653,4 +1654,28 @@ it("keeps the archive independent when saved folders lack physical bindings and 
   expect(f.events).toEqual(["computer.authority.deactivate", "client.close"]);
   expect(f.close).toHaveBeenCalledTimes(1);
   expect(start).toHaveBeenCalledTimes(1);
+});
+
+it("observes the original recovery pipe loss without a request, replacement or new cleanup", async () => {
+  const f = transport();
+  start.mockResolvedValue(f.client);
+  const host = await startDesktopGoRecovery(recoverySelection());
+  expect(host.isAvailable()).toBe(true);
+  const calls = f.request.mock.calls.length;
+  Object.defineProperty(f.client, "verifiedContext", {
+    get: () => {
+      throw new BridgeError("unavailable", "backend_unavailable");
+    },
+  });
+  expect(host.isAvailable()).toBe(false);
+  expect(host.isAvailable()).toBe(false);
+  await expect(host.archiveList("")).rejects.toMatchObject({
+    code: "backend_unavailable",
+  });
+  expect(f.request).toHaveBeenCalledTimes(calls);
+  expect(start).toHaveBeenCalledTimes(1);
+  expect(f.close).not.toHaveBeenCalled();
+  await host.close();
+  expect(host.isAvailable()).toBe(false);
+  expect(f.close).toHaveBeenCalledTimes(1);
 });

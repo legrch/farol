@@ -43,6 +43,9 @@ export function createStartupRecoverySession(
       ? { ...view, [surface]: "unavailable" }
       : { ...view, computer: "unavailable", archive: "unavailable" };
   };
+  const observeCore = () => {
+    if (core && !core.isAvailable()) unavailable();
+  };
   const ready = (folderReadsAvailable: boolean) => {
     if (view.status === "ready" && !withdrawn)
       view = {
@@ -96,6 +99,7 @@ export function createStartupRecoverySession(
       await assertCurrent();
       if (closing) return;
       ready(core.folderReadsAvailable);
+      observeCore();
     } catch (error) {
       unavailable();
       if (!(error instanceof BridgeError) || error.state === "unknown")
@@ -123,12 +127,14 @@ export function createStartupRecoverySession(
           /* Keep only the unavailable projection. */
         }
       }
+      observeCore();
       return closing ? { status: "closing" } : structuredClone(view);
     },
     read: async (input: unknown): Promise<RecoveryReadResult> => {
       const parsed = RecoveryReadRequestSchema.safeParse(input);
       if (!parsed.success) return { status: "refused" };
       await initialization;
+      observeCore();
       if (closing || withdrawn || readBusy || !core || view.status !== "ready")
         return { status: "unavailable" };
       const request = parsed.data;
@@ -225,7 +231,9 @@ export function createStartupRecoverySession(
           else throw Error("crossed_recovery_result");
         }
         await assertCurrent();
-        if (closing) return { status: "unavailable" };
+        observeCore();
+        if (closing || view[surface] !== "available")
+          return { status: "unavailable" };
         if (result.status === "ok" && result.data.kind === "archive-list") {
           for (const entry of result.data.entries)
             entries.set(entry.key, structuredClone(entry));
@@ -242,6 +250,7 @@ export function createStartupRecoverySession(
             : "unknown";
         if (status === "unknown" || status === "unavailable")
           unavailable(surface);
+        observeCore();
         return { status };
       } finally {
         readBusy = false;

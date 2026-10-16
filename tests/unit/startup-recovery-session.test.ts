@@ -80,6 +80,7 @@ async function fixture() {
     .fn<StartupRecoveryCore["archiveRead"]>()
     .mockResolvedValue(storedReply());
   const computer: StartupRecoveryCore = {
+    isAvailable: vi.fn(() => true),
     folderReadsAvailable: true,
     archiveList,
     archiveRead,
@@ -593,4 +594,78 @@ it("does not reactivate a pending exclusion check after another observer lost th
     archive: "unavailable",
   });
   await session.close();
+});
+
+it("withdraws both live read surfaces after original pipe loss while keeping saved Settings", async () => {
+  const f = await fixture(),
+    session = createStartupRecoverySession(f.ports);
+  expect(await settledState(session)).toMatchObject({
+    computer: "available",
+    archive: "available",
+  });
+  vi.mocked(f.computer.isAvailable).mockReturnValueOnce(false);
+  expect(await session.state()).toMatchObject({
+    computer: "unavailable",
+    archive: "unavailable",
+    revision: f.saved.revision,
+    folders: [{ label: "Work" }],
+  });
+  expect(await session.state()).toMatchObject({
+    computer: "unavailable",
+    archive: "unavailable",
+  });
+  expect(await session.read({ kind: "archive-list", after: "" })).toEqual({
+    status: "unavailable",
+  });
+  expect(
+    await session.read({
+      kind: "list",
+      workspaceId: f.workspaceId,
+      relativePath: ".",
+    }),
+  ).toEqual({ status: "unavailable" });
+  expect(f.list).not.toHaveBeenCalled();
+  expect(f.archiveList).not.toHaveBeenCalled();
+  expect(f.ports.start).toHaveBeenCalledTimes(1);
+  await session.close();
+  expect(f.close).toHaveBeenCalledTimes(1);
+});
+it("withholds another read after common pipe failure rather than treating it as independent storage loss", async () => {
+  const f = await fixture(),
+    session = createStartupRecoverySession(f.ports);
+  f.archiveList.mockImplementationOnce(async () => {
+    vi.mocked(f.computer.isAvailable).mockReturnValue(false);
+    throw new BridgeError("unknown", "transport_ended");
+  });
+  expect(await session.read({ kind: "archive-list", after: "" })).toEqual({
+    status: "unknown",
+  });
+  expect(await session.state()).toMatchObject({
+    computer: "unavailable",
+    archive: "unavailable",
+  });
+  expect(await session.read({ kind: "archive-list", after: "" })).toEqual({
+    status: "unavailable",
+  });
+  expect(f.archiveList).toHaveBeenCalledTimes(1);
+  await session.close();
+});
+
+it("withholds a stored query return after a state observer withdraws the original pipe", async () => {
+  const f = await fixture(),
+    pending = deferred<Awaited<ReturnType<typeof f.archiveList>>>();
+  f.archiveList.mockReturnValueOnce(pending.promise);
+  const session = createStartupRecoverySession(f.ports);
+  const reading = session.read({ kind: "archive-list", after: "" });
+  await vi.waitFor(() => expect(f.archiveList).toHaveBeenCalledTimes(1));
+  vi.mocked(f.computer.isAvailable).mockReturnValueOnce(false);
+  expect(await session.state()).toMatchObject({
+    computer: "unavailable",
+    archive: "unavailable",
+  });
+  pending.resolve(storedPage());
+  expect(await reading).toEqual({ status: "unavailable" });
+  expect(f.archiveRead).not.toHaveBeenCalled();
+  await session.close();
+  expect(f.close).toHaveBeenCalledTimes(1);
 });

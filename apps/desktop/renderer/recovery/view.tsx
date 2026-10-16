@@ -48,7 +48,14 @@ export function StartupRecovery({ api }: { api: StartupRecoveryAPI }) {
           return;
         }
         setState(parsed);
+        // Observe only local session state, never a backend query or restart.
+        // Once both read surfaces stop, preserve that state without polling.
         if (starting) timer = setTimeout(() => void observe(), 150);
+        else if (
+          parsed.status === "ready" &&
+          (parsed.computer === "available" || parsed.archive === "available")
+        )
+          timer = setTimeout(() => void observe(), 1000);
       } catch {
         if (epoch.current === current)
           setState({ status: "settings_unavailable" });

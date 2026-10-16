@@ -33,6 +33,8 @@ export type RecoveryCoreSelection = Readonly<{
 }>;
 
 export type StartupRecoveryCore = Readonly<{
+  // Pure observation of this original pipe, not old operation settlement.
+  isAvailable(): boolean;
   folderReadsAvailable: boolean;
   archiveList(after: string): Promise<ChatArchivePage>;
   archiveRead(key: string, digest: string): Promise<ChatArchiveReply>;
@@ -136,6 +138,9 @@ export async function startDesktopGoRecovery(
   const available = () => {
     if (closing)
       throw new BridgeError("unavailable", "recovery_computer_closed");
+    // The existing client never reopens a stopped pipe. This getter performs
+    // no request, renewal, child launch or cleanup action.
+    void client.verifiedContext;
   };
   const query = async <T>(perform: () => Promise<T>): Promise<T> => {
     available();
@@ -173,6 +178,14 @@ export async function startDesktopGoRecovery(
   }
   const generation = settings.computer.generation;
   return Object.freeze({
+    isAvailable: () => {
+      try {
+        available();
+        return true;
+      } catch {
+        return false;
+      }
+    },
     folderReadsAvailable,
     archiveList: (after: string) => query(() => archive.list(after)),
     archiveRead: (key: string, digest: string) =>

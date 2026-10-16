@@ -13,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { qualifyGoBuild } from "./qualified-go-build.mjs";
+import { parseRecoveryArguments } from "./fixtures/startup-recovery-arguments.ts";
 import {
   ELECTRON_RUNTIME,
   observeElectronRuntime,
@@ -25,32 +26,13 @@ import {
   stopChatGptFixture,
 } from "./fixtures/chatgpt-site.mjs";
 
-const savedSettings = process.argv.includes("--saved-settings");
-const forceQuit = process.argv.includes("--force-quit");
-const normalHostCrash = process.argv.includes("--normal-host-crash");
-const storedReplies = process.argv.includes("--stored-replies");
-assert.ok(
-  !storedReplies || (savedSettings && !forceQuit && !normalHostCrash),
-  "SELECT_EXPLICIT_STORED_OBSERVATION_JOURNEY",
-);
-assert.ok(!(forceQuit && normalHostCrash), "SELECT_ONE_CRASH_JOURNEY");
-assert.deepEqual(
-  process.argv.slice(2),
-  savedSettings
-    ? [
-        "--run-native",
-        "--saved-settings",
-        ...(forceQuit
-          ? ["--force-quit"]
-          : normalHostCrash
-            ? ["--normal-host-crash"]
-            : storedReplies
-              ? ["--stored-replies"]
-              : []),
-      ]
-    : ["--run-native"],
-  "EXPLICIT_NATIVE_RECOVERY_LANE_REQUIRED",
-);
+const {
+  savedSettings,
+  forceQuit,
+  normalHostCrash,
+  storedReplies,
+  backendCrash,
+} = parseRecoveryArguments(process.argv.slice(2));
 assert.equal(process.platform, "darwin");
 const root = process.cwd(),
   source = sourceIdentity(root),
@@ -90,7 +72,9 @@ const report = {
     ? "original-normal-host-SIGKILL"
     : forceQuit
       ? "first-recovery-host-SIGKILL"
-      : "none",
+      : backendCrash
+        ? "original-recovery-backend-SIGSTOP-pending-UI-read-SIGKILL"
+        : "none",
   profile,
   status: "running",
   launches: [],
@@ -103,7 +87,7 @@ const report = {
     stage: "preparing",
   },
   limits:
-    "Synthetic data only. Stored-reply mode seeds real Go result records with an explicit UNKNOWN after the old backend exits, without original terminal/ACK or Browser Send; it is native archive/IPC/UI custody evidence only. Normal-host crash uses its actual marker, original Go owner and loopback Browser fixture. Optional recovery-host crash retains a synthetic predecessor marker. Observed direct-child absence is not arbitrary descendant settlement, interrupted workspace-effect, machine restart, installed or live provider evidence.",
+    "Synthetic data only. Stored-reply mode seeds real Go result records with an explicit UNKNOWN after the old backend exits, without original terminal/ACK or Browser Send; it is native archive/IPC/UI custody evidence only. Normal-host crash uses its actual marker, original Go owner and loopback Browser fixture. Optional recovery-host/backend crash retains a synthetic predecessor marker. Backend-loss mode suspends only the exact observed Go child, starts one explicit UI read and then kills that same child; pending UI is not proof the backend received/processed the request. Observed direct-child absence is not arbitrary descendant settlement, interrupted workspace-effect, machine restart, installed or live provider evidence.",
 };
 const save = () =>
   fs.writeFile(evidence, JSON.stringify(report, null, 2) + "\n", {
@@ -538,6 +522,65 @@ try {
     app = await electron.launch(launchOptions());
     const child = app.process();
     launch.pid = child.pid;
+    // Keep only the original producer's bounded content-free observations.
+    // No stderr transcript or diagnostic text is archived.
+    const originalLaunch = launch;
+    originalLaunch.backendLifecycle = [];
+    let diagnostics = "";
+    child.stderr.on("data", (chunk) => {
+      diagnostics += chunk.toString("utf8");
+      if (diagnostics.length > 65536) {
+        originalLaunch.diagnosticsOverflow = true;
+        diagnostics = "";
+        return;
+      }
+      const lines = diagnostics.split("\n");
+      diagnostics = lines.pop();
+      for (const line of lines) {
+        const prefix = "FAROL_BACKEND_LIFECYCLE:";
+        if (!line.startsWith(prefix)) continue;
+        try {
+          const value = JSON.parse(line.slice(prefix.length));
+          assert.equal(value.source, "go-backend");
+          assert.ok(["startup", "active", "closing"].includes(value.phase));
+          assert.ok(
+            ["failure", "child-close", "cleanup-unknown"].includes(value.event),
+          );
+          assert.ok(
+            ["observed", "outcome_unknown", "unavailable"].includes(
+              value.state,
+            ),
+          );
+          assert.match(value.code, /^[a-z_]{1,80}$/u);
+          assert.ok(
+            value.exitCode === null || Number.isInteger(value.exitCode),
+          );
+          assert.ok(
+            value.signal === null || /^SIG[A-Z0-9]{1,12}$/u.test(value.signal),
+          );
+          assert.equal(typeof value.forced, "boolean");
+          for (const key of ["hostLifetimeId", "childLaunchId"])
+            assert.ok(
+              value[key] === null || /^[a-f0-9-]{36}$/u.test(value[key]),
+            );
+          assert.ok(originalLaunch.backendLifecycle.length < 64);
+          originalLaunch.backendLifecycle.push({
+            source: value.source,
+            phase: value.phase,
+            event: value.event,
+            code: value.code,
+            state: value.state,
+            exitCode: value.exitCode,
+            signal: value.signal,
+            forced: value.forced,
+            hostLifetimeId: value.hostLifetimeId,
+            childLaunchId: value.childLaunchId,
+          });
+        } catch {
+          originalLaunch.diagnosticsInvalid = true;
+        }
+      }
+    });
     exit = once(child, "exit");
     void exit.catch(() => undefined);
     const page = await app.firstWindow({ timeout: 15000 });
@@ -785,6 +828,155 @@ try {
       );
       assert.deepEqual(windows, [{ visible: false, focused: false }]);
     }
+    if (backendCrash && ordinal === 1) {
+      // This is the one observed child of the current test-owned Electron host.
+      // Revalidate exact PID, parent and command before each deliberate signal.
+      // No PID/name scan is used to select a replacement or signal a group.
+      const original = launch.backend;
+      const signalBackend = async (signal) => {
+        assert.ok(
+          original &&
+            original.command.startsWith(
+              path.join(buildRoot, "farol-backend") + " serve ",
+            ),
+        );
+        assert.ok(original.command.includes(` --profile ${seeded.profileId} `));
+        assert.ok(
+          original.command.includes(
+            ` --profile-root ${path.join(stateRoot, "go-core")} --profile-device `,
+          ),
+        );
+        const current = children(child.pid).find(
+          (item) => item.pid === original.pid,
+        );
+        assert.deepEqual(
+          current,
+          original,
+          "ORIGINAL_BACKEND_CHANGED_BEFORE_FAULT",
+        );
+        const intent = {
+          pid: original.pid,
+          signal,
+          commandSHA256: hash(Buffer.from(original.command)),
+          delivered: false,
+        };
+        (launch.backendSignals ??= []).push(intent);
+        await save();
+        assert.deepEqual(
+          children(child.pid).find((item) => item.pid === original.pid),
+          original,
+          "ORIGINAL_BACKEND_CHANGED_AT_SIGNAL",
+        );
+        process.kill(original.pid, signal);
+        intent.delivered = true;
+        await save();
+      };
+      const retainedText = launch.archiveViews.at(-1).text;
+      await signalBackend("SIGSTOP");
+      await page
+        .getByRole("button", { name: "Open stored reply 2", exact: true })
+        .click();
+      await page
+        .getByText("Reading the stored copy…", { exact: true })
+        .waitFor({ timeout: 5000 });
+      launch.pendingArchiveUI = {
+        ordinal: 2,
+        backendSuspended: true,
+        previousText: retainedText,
+        limits: "UI call pending; backend receipt/processing not observed",
+      };
+      await save();
+      await signalBackend("SIGKILL");
+      await waitForObservedChildrenExit([original]);
+      launch.observedKilledBackendAbsent = original.pid;
+      const hostLifetimeId = / --host-lifetime ([a-f0-9-]{36}) /u.exec(
+        original.command,
+      )?.[1];
+      const childLaunchId = / --child-launch ([a-f0-9-]{36}) /u.exec(
+        original.command,
+      )?.[1];
+      assert.ok(hostLifetimeId && childLaunchId);
+      const deadline = performance.now() + 5000;
+      let terminal;
+      do {
+        terminal = launch.backendLifecycle.find(
+          (value) =>
+            value.event === "child-close" &&
+            value.hostLifetimeId === hostLifetimeId &&
+            value.childLaunchId === childLaunchId,
+        );
+        if (terminal) break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      } while (performance.now() < deadline);
+      assert.ok(terminal, "ORIGINAL_BACKEND_TERMINAL_UNOBSERVED");
+      assert.equal(terminal.state, "observed");
+      assert.equal(terminal.exitCode, null);
+      assert.equal(terminal.signal, "SIGKILL");
+      assert.equal(terminal.forced, false);
+      launch.originalBackendTerminal = terminal;
+      assert.ok(
+        !launch.diagnosticsInvalid && !launch.diagnosticsOverflow,
+        "BACKEND_LIFECYCLE_UNQUALIFIED",
+      );
+      await page
+        .getByText(
+          "Stored replies are unavailable for this recovery session. Original records remain in place.",
+          { exact: true },
+        )
+        .waitFor({ timeout: 5000 });
+      await page
+        .locator('.recovery-archive [role="alert"]')
+        .waitFor({ timeout: 5000 });
+      const paused = await page.evaluate(async () => ({
+        state: await window.farolRecovery.state(),
+        text:
+          document.querySelector('[aria-label="Stored reply text"]')
+            ?.textContent ?? null,
+        enabledStoredReads: [
+          ...document.querySelectorAll(".recovery-reply-list button"),
+        ].filter((button) => !button.disabled).length,
+      }));
+      assert.equal(paused.state.status, "ready");
+      assert.equal(paused.state.computer, "unavailable");
+      assert.equal(paused.state.archive, "unavailable");
+      assert.equal(
+        paused.text,
+        retainedText,
+        "PENDING_READ_REPLACED_RETAINED_COPY",
+      );
+      assert.equal(paused.enabledStoredReads, 0);
+      launch.pausedAfterBackendLoss = paused;
+      launch.afterBackendFault = await preserved();
+      launch.backendAbsenceSamples = [];
+      for (let sample = 0; sample < 3; sample++) {
+        const current = children(child.pid).filter((item) =>
+          /farol-backend/u.test(item.command),
+        );
+        assert.equal(
+          current.length,
+          0,
+          "RECOVERY_BACKEND_RESTARTED_AFTER_LOSS",
+        );
+        launch.backendAbsenceSamples.push({
+          elapsedSample: sample,
+          backends: current,
+        });
+        if (sample < 2)
+          await new Promise((resolve) => setTimeout(resolve, 750));
+      }
+      const screenshot = evidence.replace(/\.json$/u, "-backend-paused.png");
+      const pixels = await captureRecoveryPage(app, page);
+      await fs.writeFile(screenshot, Buffer.from(pixels, "base64"), {
+        mode: 0o600,
+      });
+      report.screenshots.push({
+        screenshot,
+        name: "backend-paused",
+        presentation:
+          "hidden original window after original child loss; retained copy remains unconfirmed",
+      });
+      await save();
+    }
     launch.closeRequested = true;
     await save();
     const crash = forceQuit && ordinal === 1;
@@ -844,7 +1036,11 @@ try {
   report.profileRemoved = true;
   report.status = savedSettings
     ? storedReplies
-      ? "passed-hidden-stored-unconfirmed-33-replies-UNKNOWN-preserved-two-recovery-lifetimes"
+      ? backendCrash
+        ? "passed-hidden-stored-unconfirmed-backend-loss-pending-UI-read-reopen-originals-preserved"
+        : forceQuit
+          ? "passed-hidden-stored-unconfirmed-host-SIGKILL-reopen-originals-preserved"
+          : "passed-hidden-stored-unconfirmed-33-replies-UNKNOWN-preserved-two-recovery-lifetimes"
       : normalHostCrash
         ? "passed-normal-host-SIGKILL-real-marker-two-recovery-lifetimes-reads-originals-preserved"
         : forceQuit
