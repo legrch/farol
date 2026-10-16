@@ -1,3 +1,4 @@
+import { readNativePreviewEcho } from "./lib/native-preview-echo.mjs";
 // Exact attested Dev Electron/Go, synthetic loopback child and disposable roots.
 // No installed profile, live provider/control plane, actual OS sleep or effect.
 // --go-callback-delay adds one original Go SIGSTOP/SIGCONT while the real main
@@ -330,25 +331,15 @@ async function launch(ordinal) {
     return application;
   });
   await bounded(run.pending, "POLLING_LAUNCH_UNKNOWN", 20000);
-  run.page = await bounded(
-    run.application.firstWindow(),
-    "POLLING_FIRST_WINDOW_UNKNOWN",
+  const { page, actual } = await bounded(
+    readNativePreviewEcho(run.application),
+    "POLLING_NATIVE_ECHO_UNKNOWN",
     20000,
   );
-  const actual = await run.application.evaluate(({ app, BrowserWindow }) => ({
-    name: app.getName(),
-    isPackaged: app.isPackaged,
-    home: app.getPath("home"),
-    userData: app.getPath("userData"),
-    sessionData: app.getPath("sessionData"),
-    temp: app.getPath("temp"),
-    windows: BrowserWindow.getAllWindows().map((window) => ({
-      visible: window.isVisible(),
-      focused: window.isFocused(),
-    })),
-  }));
+  run.page = page;
   run.actualNative = actual;
   await save();
+  assert.equal(actual.pid, run.pid);
   assert.equal(actual.home, home);
   assert.equal(actual.userData, userData);
   assert.equal(actual.sessionData, userData);
