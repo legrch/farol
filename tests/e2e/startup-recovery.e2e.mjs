@@ -1,6 +1,7 @@
-// Explicit native lane: exact Go build, synthetic unconfirmed predecessor,
-// hidden recovery UI -> Quit or exact-host SIGKILL -> same-profile reopen. No live
-// provider, installed profile, operation replay or arbitrary descendant claim.
+// Explicit native lane: exact Go build and synthetic data, with either a
+// synthetic predecessor or an actual idle normal-host crash. Hidden recovery
+// UI -> Quit or exact-host SIGKILL -> same-profile reopen. No live provider,
+// installed profile, operation replay or arbitrary descendant claim.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomUUID, createHash } from "node:crypto";
@@ -19,16 +20,26 @@ import {
 } from "../../tooling/runtime-contract.mjs";
 import { _electron as electron } from "playwright-core";
 import { isPromotionLeaseHeld } from "../../tooling/promotion-lease.mjs";
+import {
+  startChatGptFixture,
+  stopChatGptFixture,
+} from "./fixtures/chatgpt-site.mjs";
 
 const savedSettings = process.argv.includes("--saved-settings");
 const forceQuit = process.argv.includes("--force-quit");
+const normalHostCrash = process.argv.includes("--normal-host-crash");
+assert.ok(!(forceQuit && normalHostCrash), "SELECT_ONE_CRASH_JOURNEY");
 assert.deepEqual(
   process.argv.slice(2),
   savedSettings
     ? [
         "--run-native",
         "--saved-settings",
-        ...(forceQuit ? ["--force-quit"] : []),
+        ...(forceQuit
+          ? ["--force-quit"]
+          : normalHostCrash
+            ? ["--normal-host-crash"]
+            : []),
       ]
     : ["--run-native"],
   "EXPLICIT_NATIVE_RECOVERY_LANE_REQUIRED",
@@ -68,23 +79,51 @@ await fs.mkdir(path.dirname(evidence), { recursive: true, mode: 0o700 });
 const report = {
   source,
   buildId: build.identity.buildId,
-  fault: forceQuit ? "first-recovery-host-SIGKILL" : "none",
+  fault: normalHostCrash
+    ? "original-normal-host-SIGKILL"
+    : forceQuit
+      ? "first-recovery-host-SIGKILL"
+      : "none",
   profile,
   status: "running",
   launches: [],
   fixture: {
     kind: savedSettings
-      ? "saved-settings-and-real-unretired-Go-owner"
+      ? normalHostCrash
+        ? "original-normal-Electron-host-SIGKILL"
+        : "saved-settings-and-real-unretired-Go-owner"
       : "corrupt-settings-no-backend",
     stage: "preparing",
   },
   limits:
-    "Synthetic original predecessor. Optional SIGKILL targets the first actual recovery Electron host only. Exact observed direct-child absence is not arbitrary descendant settlement, unknown-operation retirement, installed acceptance or provider evidence.",
+    "Synthetic data only. Normal-host crash uses its actual marker, original Go owner and loopback Browser fixture. Optional recovery-host crash retains a synthetic predecessor marker. Observed direct-child absence is not arbitrary descendant settlement, interrupted workspace-effect, machine restart, installed or live provider evidence.",
 };
 const save = () =>
   fs.writeFile(evidence, JSON.stringify(report, null, 2) + "\n", {
     mode: 0o600,
   });
+
+const children = (pid) =>
+  execFileSync("/bin/ps", ["-ww", "-axo", "pid=,ppid=,command="], {
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  })
+    .split("\n")
+    .flatMap((line) => {
+      const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/u.exec(line);
+      return match && Number(match[2]) === pid
+        ? [{ pid: Number(match[1]), command: match[3] }]
+        : [];
+    });
+const bounded = (promise, label) => {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(label)), 15000);
+    }),
+  ]).finally(() => clearTimeout(timer));
+};
 
 await save();
 let seeded;
@@ -100,14 +139,29 @@ try {
       format: "cjs",
       logLevel: "silent",
     });
-    const { seedRecoveryProfile } = createRequire(import.meta.url)(fixture);
-    seeded = await seedRecoveryProfile({
+    const { seedRecoveryProfile, prepareRecoverySettings } = createRequire(
+      import.meta.url,
+    )(fixture);
+    const input = {
       stateRoot,
       home,
       workspace: path.join(profile, "workspace"),
       artifactRoot: buildRoot,
       core: build.manifest.core,
-    });
+    };
+    if (normalHostCrash) {
+      const prepared = await prepareRecoverySettings(input);
+      assert.equal(prepared.settings.connectors.secureMcp.tunnelId, null);
+      assert.equal(prepared.settings.connectors.secureMcp.tunnelClient, null);
+      seeded = {
+        workspaceId: prepared.workspaceId,
+        settingsRevision: prepared.settings.revision,
+      };
+      await assert.rejects(fs.lstat(path.join(stateRoot, "go-core")), {
+        code: "ENOENT",
+      });
+      await crashNormalHost();
+    } else seeded = await seedRecoveryProfile(input);
   }
   report.fixture = { ...report.fixture, stage: "prepared", ...seeded };
   await save();
@@ -119,8 +173,15 @@ try {
 }
 
 const retained = new Map([
-  ["running.json", Buffer.from('{"synthetic":"unconfirmed predecessor"}\n')],
-  ["last-quit.json", Buffer.from('{"synthetic":"undrained Quit"}\n')],
+  [
+    "running.json",
+    normalHostCrash
+      ? await fs.readFile(path.join(stateRoot, "running.json"))
+      : Buffer.from('{"synthetic":"unconfirmed predecessor"}\n'),
+  ],
+  ...(normalHostCrash
+    ? []
+    : [["last-quit.json", Buffer.from('{"synthetic":"undrained Quit"}\n')]]),
   [
     "config.json",
     savedSettings
@@ -129,7 +190,7 @@ const retained = new Map([
   ],
 ]);
 for (const [name, bytes] of retained)
-  if (!(savedSettings && name === "config.json"))
+  if (!normalHostCrash && !(savedSettings && name === "config.json"))
     await fs.writeFile(path.join(stateRoot, name), bytes, {
       mode: 0o600,
       flag: "wx",
@@ -137,6 +198,10 @@ for (const [name, bytes] of retained)
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const preserved = async () => {
   const result = {};
+  if (normalHostCrash)
+    await assert.rejects(fs.lstat(path.join(stateRoot, "last-quit.json")), {
+      code: "ENOENT",
+    });
   for (const [name, bytes] of retained) {
     const actual = await fs.readFile(path.join(stateRoot, name));
     assert.deepEqual(actual, bytes, `PREDECESSOR_CHANGED:${name}`);
@@ -194,27 +259,6 @@ const preserved = async () => {
       "OLD_SETTINGS_OR_NATIVE_JOURNALS_CHANGED",
     );
   return result;
-};
-const children = (pid) =>
-  execFileSync("/bin/ps", ["-ww", "-axo", "pid=,ppid=,command="], {
-    encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
-  })
-    .split("\n")
-    .flatMap((line) => {
-      const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/u.exec(line);
-      return match && Number(match[2]) === pid
-        ? [{ pid: Number(match[1]), command: match[3] }]
-        : [];
-    });
-const bounded = (promise, label) => {
-  let timer;
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(label)), 15000);
-    }),
-  ]).finally(() => clearTimeout(timer));
 };
 // Wait for these exact observed PIDs only; never kill a child to make the
 // assertion pass. Timeout retains the disposable profile and original evidence.
@@ -277,6 +321,152 @@ async function captureRecoveryPage(application, page) {
   }
 }
 
+function launchOptions(extra = {}) {
+  return {
+    executablePath: path.join(
+      root,
+      "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
+    ),
+    args: [path.join(buildRoot, "main.cjs"), "--preview-window-mode=hidden"],
+    env: {
+      ...extra,
+      HOME: home,
+      TMPDIR: temp,
+      PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+      LANG: "en_US.UTF-8",
+      LC_ALL: "en_US.UTF-8",
+      FAROL_NEXT_ENVIRONMENT: "dev",
+      FAROL_NEXT_E2E: "1",
+      FAROL_NEXT_E2E_APP_DATA: appData,
+      FAROL_NEXT_E2E_TEST_ROOT: profile,
+      FAROL_NEXT_E2E_TEST_PROOF: proof,
+    },
+    timeout: 15000,
+  };
+}
+
+async function crashNormalHost() {
+  const fixture = await startChatGptFixture();
+  const original = { phase: "selected", faultRequested: false };
+  report.originalHost = original;
+  let application, ended;
+  try {
+    await save();
+    application = await electron.launch(
+      launchOptions({ FAROL_NEXT_E2E_CHATGPT_URL: fixture.url }),
+    );
+    const child = application.process();
+    original.pid = child.pid;
+    ended = once(child, "exit");
+    void ended.catch(() => undefined);
+    const page = await application.firstWindow({ timeout: 15000 });
+    await page.locator(".desktop").waitFor({ state: "visible" });
+    let ready = false;
+    for (let n = 0; n < 100; n++) {
+      const snapshot = await page.evaluate(() => window.farolNext.bootstrap());
+      if (
+        snapshot.runtimeState === "ready" &&
+        snapshot.configuration.status === "ready"
+      ) {
+        ready = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal(ready, true, "ORIGINAL_NORMAL_HOST_NOT_READY");
+    original.windows = await application.evaluate(
+      ({ BrowserWindow, webContents }) => ({
+        windows: BrowserWindow.getAllWindows().map((win) => ({
+          visible: win.isVisible(),
+          focused: win.isFocused(),
+        })),
+        urls: webContents
+          .getAllWebContents()
+          .map((contents) => contents.getURL()),
+      }),
+    );
+    assert.ok(original.windows.windows.length > 0);
+    for (const window of original.windows.windows)
+      assert.deepEqual(window, { visible: false, focused: false });
+    for (const url of original.windows.urls)
+      assert.ok(
+        url === "" ||
+          url === "about:blank" ||
+          url.startsWith("file://") ||
+          url.startsWith(new URL(fixture.url).origin + "/"),
+        "ORIGINAL_HOST_EXTERNAL_BROWSER_ROUTE",
+      );
+    const marker = await fs.readFile(path.join(stateRoot, "running.json"));
+    assert.equal(JSON.parse(marker).pid, child.pid);
+    original.runningMarkerSha256 = createHash("sha256")
+      .update(marker)
+      .digest("hex");
+    await assert.rejects(fs.lstat(path.join(stateRoot, "last-quit.json")), {
+      code: "ENOENT",
+    });
+    original.children = children(child.pid);
+    const backends = original.children.filter(({ command }) =>
+      /farol-backend/u.test(command),
+    );
+    assert.equal(backends.length, 1, "ORIGINAL_HOST_BACKEND_COUNT");
+    assert.doesNotMatch(backends[0].command, /--startup-mode recovery/u);
+    original.backend = backends[0];
+    assert.equal(
+      original.children.some(({ command }) =>
+        /(?:^|\/)runtime\.cjs(?:\s|$)/u.test(command),
+      ),
+      false,
+      "ORIGINAL_CONNECTOR_STARTED",
+    );
+    assert.equal(
+      await isPromotionLeaseHeld(userData),
+      false,
+      "NORMAL_HOST_STARTUP_EXCLUSION_NOT_RELEASED",
+    );
+    original.phase = "ready-idle-no-effect-dispatched";
+    original.faultRequested = true;
+    await save();
+    assert.equal(
+      child.kill("SIGKILL"),
+      true,
+      "ORIGINAL_HOST_FAULT_NOT_DELIVERED",
+    );
+    const [code, signal] = await bounded(ended, "ORIGINAL_HOST_EXIT_UNKNOWN");
+    original.exitCode = code;
+    original.signal = signal;
+    await save();
+    assert.equal(code, null);
+    assert.equal(signal, "SIGKILL");
+    await waitForObservedChildrenExit(original.children);
+    assert.deepEqual(
+      await fs.readFile(path.join(stateRoot, "running.json")),
+      marker,
+      "ORIGINAL_RUN_MARKER_CHANGED_AFTER_CRASH",
+    );
+    original.observedDirectChildrenAbsent = original.children.map(
+      ({ pid }) => pid,
+    );
+    original.phase = "crashed-original-marker-and-profile-retained";
+    await save();
+  } catch (error) {
+    if (application && !original.faultRequested) {
+      original.cleanupRequested = true;
+      try {
+        await application.evaluate(({ app }) => app.quit());
+        original.cleanupExit = await bounded(
+          ended,
+          "ORIGINAL_HOST_CLEANUP_UNKNOWN",
+        );
+      } catch (cleanup) {
+        original.cleanupError = String(cleanup);
+      }
+    }
+    throw error;
+  } finally {
+    await stopChatGptFixture(fixture);
+  }
+}
+
 let app, exit, launch;
 try {
   report.preservedBaseline = await preserved();
@@ -285,26 +475,7 @@ try {
     launch = { ordinal, closeRequested: false, cleanupConfirmed: false };
     report.launches.push(launch);
     await save();
-    app = await electron.launch({
-      executablePath: path.join(
-        root,
-        "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
-      ),
-      args: [path.join(buildRoot, "main.cjs"), "--preview-window-mode=hidden"],
-      env: {
-        HOME: home,
-        TMPDIR: temp,
-        PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-        LANG: "en_US.UTF-8",
-        LC_ALL: "en_US.UTF-8",
-        FAROL_NEXT_ENVIRONMENT: "dev",
-        FAROL_NEXT_E2E: "1",
-        FAROL_NEXT_E2E_APP_DATA: appData,
-        FAROL_NEXT_E2E_TEST_ROOT: profile,
-        FAROL_NEXT_E2E_TEST_PROOF: proof,
-      },
-      timeout: 15000,
-    });
+    app = await electron.launch(launchOptions());
     const child = app.process();
     launch.pid = child.pid;
     exit = once(child, "exit");
@@ -515,9 +686,11 @@ try {
   await fs.rm(profile, { recursive: true });
   report.profileRemoved = true;
   report.status = savedSettings
-    ? forceQuit
-      ? "passed-hidden-recovery-host-SIGKILL-observed-children-exit-reopen-reads-originals-preserved"
-      : "passed-hidden-saved-settings-Go-recovery-reads-quit-reopen-old-journals-preserved"
+    ? normalHostCrash
+      ? "passed-normal-host-SIGKILL-real-marker-two-recovery-lifetimes-reads-originals-preserved"
+      : forceQuit
+        ? "passed-hidden-recovery-host-SIGKILL-observed-children-exit-reopen-reads-originals-preserved"
+        : "passed-hidden-saved-settings-Go-recovery-reads-quit-reopen-old-journals-preserved"
     : "passed-hidden-recovery-quit-reopen-predecessor-preserved-zero-runtime";
 } catch (error) {
   report.status = "failed-or-unknown";

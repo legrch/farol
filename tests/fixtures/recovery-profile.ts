@@ -14,19 +14,17 @@ import {
   ProductSettingsStore,
 } from "../../src/apps/desktop/product-configuration";
 
-// Explicit disposable native E2E setup only. Uses the already qualified exact
-// test build and original owners; no test setting enables an app capability.
-// The first real backend exits without a module retirement; no file effect is
-// interrupted, no outcome is replayed and no provider/browser/Shell is selected.
-export async function seedRecoveryProfile(
-  input: Readonly<{
-    stateRoot: string;
-    home: string;
-    workspace: string;
-    artifactRoot: string;
-    core: unknown;
-  }>,
-) {
+type RecoveryFixtureInput = Readonly<{
+  stateRoot: string;
+  home: string;
+  workspace: string;
+  artifactRoot: string;
+  core: unknown;
+}>;
+
+// Creates synthetic original Settings and workspace files only. The ordinary
+// Electron host must select and create its own Go profile in the crash journey.
+export async function prepareRecoverySettings(input: RecoveryFixtureInput) {
   await fs.mkdir(path.join(input.workspace, "folder"), {
     mode: 0o700,
     recursive: true,
@@ -54,6 +52,18 @@ export async function seedRecoveryProfile(
   });
   assert.ok(added.ok && added.snapshot.status === "ready");
   const settings = added.snapshot.settings;
+  return {
+    settings,
+    workspaceId: settings.computer.workspaces[0]!.workspaceId,
+  };
+}
+
+// Explicit disposable native E2E setup only. Uses the already qualified exact
+// test build and original owners; no test setting enables an app capability.
+// The first real backend exits without a module retirement; no file effect is
+// interrupted, no outcome is replayed and no provider/browser/Shell is selected.
+export async function seedRecoveryProfile(input: RecoveryFixtureInput) {
+  const { settings } = await prepareRecoverySettings(input);
   const storage = openNativeProfileStorage(
     input.stateRoot,
     settings.computer.computerId,
