@@ -104,6 +104,29 @@ describe("one-shot empty Chat recovery preflight", () => {
       parseEmptyRecoveryOptions([...selected, "--unacknowledged-dev"]),
     ).toThrow();
   });
+  it("requires exact historical Quit custody for the separate nonempty Dev route", () => {
+    const selected = [
+      ...exact,
+      "--preserve-nonempty",
+      "--expected-quit",
+      "e".repeat(64),
+    ];
+    expect(parseEmptyRecoveryOptions(selected)["--preserve-nonempty"]).toBe(
+      true,
+    );
+    expect(() =>
+      parseEmptyRecoveryOptions([...exact, "--preserve-nonempty"]),
+    ).toThrow();
+    for (const mode of [
+      "--unacknowledged-dev",
+      "--interrupted-retirement",
+      "--preserve-nonempty",
+    ])
+      expect(() => parseEmptyRecoveryOptions([...selected, mode])).toThrow();
+    expect(() =>
+      parseEmptyRecoveryOptions([...selected, "--production"]),
+    ).toThrow();
+  });
   it.each([
     "--profile",
     "--home",

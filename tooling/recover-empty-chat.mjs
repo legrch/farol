@@ -27,6 +27,7 @@ export function parseEmptyRecoveryOptions(args) {
     "--development",
     "--interrupted-retirement",
     "--unacknowledged-dev",
+    "--preserve-nonempty",
   ]);
   const fields = new Set([
     "--selection",
@@ -50,10 +51,14 @@ export function parseEmptyRecoveryOptions(args) {
     !["--selection-sha", "--expected-run", "--expected-config"].every((name) =>
       /^[a-f0-9]{64}$/u.test(values[name] ?? ""),
     ) ||
-    (values["--interrupted-retirement"] === true &&
-      values["--unacknowledged-dev"] === true) ||
+    [
+      "--interrupted-retirement",
+      "--unacknowledged-dev",
+      "--preserve-nonempty",
+    ].filter((name) => values[name] === true).length > 1 ||
     (values["--interrupted-retirement"] === true ||
-    values["--unacknowledged-dev"] === true
+    values["--unacknowledged-dev"] === true ||
+    values["--preserve-nonempty"] === true
       ? !/^[a-f0-9]{64}$/u.test(values["--expected-quit"] ?? "")
       : Object.hasOwn(values, "--expected-quit"))
   )
@@ -148,7 +153,7 @@ async function run() {
     await build({
       stdin: {
         contents:
-          'export { recoverClosedEmptyChat, recoverInterruptedEmptyChat, recoverUnacknowledgedEmptyDev } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts"; export { parseJSON } from "./apps/desktop/bridge/frame.ts";',
+          'export { recoverClosedEmptyChat, recoverInterruptedEmptyChat, recoverUnacknowledgedEmptyDev } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { recoverClosedPreservedChat } from "./apps/desktop/bridge/preserved-recovery-host.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts"; export { parseJSON } from "./apps/desktop/bridge/frame.ts";',
         resolveDir: root,
         sourcefile: "empty-chat-host-entry.ts",
         loader: "ts",
@@ -164,6 +169,7 @@ async function run() {
       recoverClosedEmptyChat,
       recoverInterruptedEmptyChat,
       recoverUnacknowledgedEmptyDev,
+      recoverClosedPreservedChat,
       assertClosedConnectorProcesses,
       parseJSON,
     } = createRequire(import.meta.url)(output);
@@ -180,7 +186,10 @@ async function run() {
       Object.keys(metadata).sort().join(",") !==
         "computerId,profileId,schema" ||
       metadata.schema !== "farol-native-profile/2" ||
-      metadata.profileId !== selected.Selection?.Current?.ProfileID ||
+      metadata.profileId !==
+        (options["--preserve-nonempty"] === true
+          ? selected.Selection?.Current?.Scope?.ProfileID
+          : selected.Selection?.Current?.ProfileID) ||
       metadata.computerId !== selected.ComputerID ||
       selected.Selection?.BuildID !== identity.buildId
     )
@@ -209,11 +218,13 @@ async function run() {
         throw Error("EMPTY_CHAT_RECOVERY_ATTESTATION_CHANGED");
     };
     const recover =
-      options["--unacknowledged-dev"] === true
-        ? recoverUnacknowledgedEmptyDev
-        : options["--interrupted-retirement"] === true
-          ? recoverInterruptedEmptyChat
-          : recoverClosedEmptyChat;
+      options["--preserve-nonempty"] === true
+        ? recoverClosedPreservedChat
+        : options["--unacknowledged-dev"] === true
+          ? recoverUnacknowledgedEmptyDev
+          : options["--interrupted-retirement"] === true
+            ? recoverInterruptedEmptyChat
+            : recoverClosedEmptyChat;
     const result = await recover({
       userData,
       executable: path.join(root, "_output/build/app/farol-backend"),
@@ -229,7 +240,8 @@ async function run() {
       expectedRunSha256: options["--expected-run"],
       expectedConfigSha256: options["--expected-config"],
       ...(options["--interrupted-retirement"] === true ||
-      options["--unacknowledged-dev"] === true
+      options["--unacknowledged-dev"] === true ||
+      options["--preserve-nonempty"] === true
         ? { expectedQuitSha256: options["--expected-quit"] }
         : {}),
       desktopState: () => activationObligations(userData),

@@ -257,6 +257,57 @@ The adapter call counter is not a physical provider acceptance ledger. Composer
 encoding, actual transport backpressure and packaged/live-provider limits remain
 separate higher-boundary witnesses; this is not complete M10 acceptance.
 
+## Preserved nonempty recovery selection
+
+`app/capabilities/archive.Policy.Select` compares an independently preselected scope, physical roots and digests with bounded canonical observation metadata for nonempty original Chat. It selects `chat-retired-<OperationID>` and copies only the observed unresolved-results flag. A namespace with zero writes, turns, plans and results qualifies only when results remain unresolved; recorded retirement alone does not qualify. The original empty-recovery and interrupted policies retain their existing predicates.
+
+The original host and child lifetimes may be unobserved. New build, host-lifetime and child-launch IDs identify only future initiating maintenance. Recorded retirement and unresolved results are historical metadata that settle nothing. An initial handoff has zero steps and a zero digest; a nonempty handoff requires a nonzero digest. The existing canonical handoff scanner remains responsible for chain validation. Caller-supplied physical identities and digest equality do not independently prove native identity or custody.
+
+A selected plan is neither recovery, current admission nor successor authority. It manufactures no retirement, ACK, terminal or effect success. Retained locks, complete canonical scans, exact native maintenance and process exclusion, whole-profile custody, and a new real owner's ACK and terminal remain enclosing prerequisites. Deterministic pure tests cover only metadata selection and refusal; native maintenance, archival, assembled restart and live qualification remain separate Lead-owned work.
+
+## Closed nonempty profile composition
+
+The private boot preservation composition joins the existing Computer access lock, handoff, lifecycle, results and mutation claims in that order under one captured original absolute deadline. It validates canonical nonempty Chat and exact independently selected completed owner-settings records, or the separately checked empty mutation namespace. Task stays exactly empty. The full parent namespace admits only those three module roots, an optional physically retained `profile.json`, and at most eight pre-existing `chat-retired-<UUID>` archives. Unknown parent or module entries refuse. Prior archives are bounded opaque historical custody, with no effect or current-authority interpretation; every original byte and descendant physical version is rechecked. The existing archive inventory limit remains 2,052 entries, 1 MiB per file and 4 MiB total per archive. Exceeding a bound refuses without deleting or pruning history.
+
+Separately admitted closed maintenance can preserve the original Chat by one exclusive sibling rename under the permanent pending intent, then create and actually retire a fresh empty maintenance generation. The original nonempty or unresolved history receives no manufactured retirement, ACK, terminal or replay permission. One real initiating host must acknowledge the fresh publication, observe its actual child and terminal recorder, and complete the existing marker handoff before normal startup. Lost or late ACK and every effect uncertainty retain the pending fence and original archive; a normal writer remains refused. Original profile metadata and previous archives remain physically unchanged. An unchanged directory/file snapshot is an observation under cooperating locks, not atomic confinement against hostile same-user mutation.
+
+The explicit `-preserved-profile-native` lane retains every disposable fixture. Actual Go/File edit/read/ACK, Chat lifecycle/results and filesystem claims run with controlled browser, Settings/consent and initiating-ACK doubles. Tests cover all claim locks, full namespace/physical custody, final changes, fixed deadline including lagging timers, original UNKNOWN preservation, prior archives, and a withheld normal writer after lost/late ACK. These are Go/filesystem witnesses; automatic desktop selection, Electron child/terminal custody, same-profile writable restart, provider behavior and installed acceptance remain separate unqualified work.
+
+The Dev-only `observe-preserved-profile` command returns a canonical selection
+after the same composite's final rechecks and claim closes. Its request must
+leave all three Chat digests zero; only the private read-only entry discovers
+them. The preparation entry always requires independently selected exact
+digests and rechecks the repositories again. Before its first storage effect,
+the preparation command also compares every selected mutation Binding with its
+complete Go wire encoding. Only the four existing optional Identity zero fields
+may be omitted. Missing, empty or partially materialized Connector objects and
+other omitted Binding fields are invalid input; read-only inspection can still
+observe their equivalent typed values without authorizing preparation. This
+refusal happens before the permanent pending intent or archive rename. The host
+retains its strict post-write intent comparison and actual ACK/terminal gates. The inspection reply explicitly
+sets `recoveryAuthorized: false`; metadata is not a historical ACK, process
+receipt or permission to prepare. Both commands retain an original five-second
+absolute budget fixed before parsing or IO, bounded strict frames and actual
+pipe deadlines. A host must additionally observe the original successful child
+close; receiving a complete-looking frame alone does not confirm the operation.
+Disposable native observation tests retain profile/workspace hashes and physical
+metadata, including blocked Unix-pipe reads and writes. They qualify no Electron
+host, promotion/connector exclusion, terminal recorder or writable restart.
+
+The separate closed Dev host composes observation, preparation and the existing
+terminal/marker completion under the same promotion and Computer drain leases.
+`tooling/recover-empty-chat.mjs --preserve-nonempty` retains the existing exact
+source/build/profile and selected run/config/Quit checks. It preserves old ACK
+and terminal facts as unobserved, pins the original archive across relocation,
+and moves the original marker/intent only after the new child's completion.
+This current lane requires a selected historical Quit receipt; absence is
+refused. CPU port tests cover ordering and failed proofs. The explicit
+`TestNativePreservedProfileHostWithBuiltCore` gate requires an attested clean
+build and both `-ingress-native` and `-preserved-profile-native`; compilation or
+an unflagged skip is not native acceptance. First-crash behavior without a Quit,
+normal UI access to retired history, automatic startup selection and actual
+Electron writable recovery remain separate acceptance work.
+
 ## Checks and integration handoff
 
 `infra/repos/lifecycle.AcquirePreservationInspection` retains the original existing read-only claim over a complete canonical snapshot, including nonempty writes, plans, recorded retirement and UNKNOWN history. Its copied `Inspection` contains metadata only. The original caller's absolute deadline is captured once before IO and remains effective even if context timer delivery lags. Every final `Verify` re-decodes the snapshot and checks the original named physical file, claim, scope and digest; failure poisons that lease, while `Close` releases only its descriptors. This separate observation path neither relaxes empty-only inspection nor constructs a lifecycle writer, clean retirement, successor, live handle or replay authority. Whole-profile preservation, original process/Computer settlement and fresh-owner admission remain separate enclosing work. The explicit `-chat-preservation-native` fixture lane checks actual disposable files, flock, byte/metadata preservation, substitution, relocation, cancellation and deadline expiry with synthetic canonical records; it does not prove an assembled writable restart.
