@@ -60,6 +60,7 @@ const contract = {
     "Fresh normal main.cjs/Go -> same real work -> exact observed Electron host SIGKILL -> observe original direct Go child absent -> one same-profile recovery launch -> original physical history/results/workspace and actual archive UI -> report writable availability separately -> ordinary Quit",
   limits: [
     "Synthetic loopback provider/account/tasks and disposable workspace; existing admitted normal preload/UI flows, no product seam or injected journal/result",
+    "Legacy Chat/history witness labels mention Home remount; this harness records actual Home -> Settings -> Diagnostics -> ChatGPT acceptance tools navigation. No renderer mounting or Home-hosted-control claim",
     "Go owns Settings edit admission/pending/result; existing typed host storage performs conditional filesystem writes, not an autonomous model tool call",
     "Hidden windows throughout; no focus, real picker, real provider, tunnel, installed profile, sleep/reboot or interrupted-effect qualification",
     "Exact observed direct child absence is not arbitrary descendant settlement or an original Go terminal/ACK receipt after host SIGKILL",
@@ -426,6 +427,63 @@ async function scenario({
     launch.windows = state;
     await save();
   };
+  // The shared journey's pure witnesses remain useful, but its navigation
+  // predates the accepted UI move. Translate only the Home click into actual
+  // visible DOM navigation through the current Diagnostics disclosure. Never
+  // inject a controller response, source seam, fake DOM or hidden action.
+  const journeyPage = {
+    evaluate: (...args) => page.evaluate(...args),
+    locator: (...args) => page.locator(...args),
+    getByRole(role, options) {
+      const target = page.getByRole(role, options);
+      if (
+        role !== "button" ||
+        options?.name !== "Home" ||
+        options?.exact !== true
+      )
+        return target;
+      return {
+        click: async (options) => {
+          active();
+          await hidden();
+          await target.click(options);
+          await page
+            .getByRole("button", { name: "Settings", exact: true })
+            .click(options);
+          await page
+            .locator(".contextual-sidebar")
+            .getByRole("button", { name: "Diagnostics", exact: true })
+            .click(options);
+          const disclosure = page.locator("details").filter({
+            has: page
+              .locator("summary")
+              .getByText("ChatGPT acceptance tools", { exact: true }),
+          });
+          assert.equal(
+            await disclosure.count(),
+            1,
+            "CHAT_ACCEPTANCE_DISCLOSURE_NOT_UNIQUE",
+          );
+          if (!(await disclosure.evaluate((element) => element.open)))
+            await disclosure.locator("summary").click(options);
+          await page
+            .locator('section[aria-label="Saved Chat answers"]')
+            .waitFor({ state: "visible", timeout: 5000 });
+          (row.navigation ??= []).push({
+            path: [
+              "Home",
+              "Settings",
+              "Diagnostics",
+              "ChatGPT acceptance tools",
+            ],
+            hidden: true,
+          });
+          await hidden();
+          await save();
+        },
+      };
+    },
+  };
   const configure = async (command) => {
     active();
     await hidden();
@@ -717,7 +775,7 @@ async function scenario({
     assert.equal(readiness.evidence.state, "authenticated");
     row.chat = {};
     await runConversationJourney({
-      window: page,
+      window: journeyPage,
       workspace: readiness.snapshot.settings.computer.workspaces[0],
       configured: readiness.snapshot.settings,
       driver: site.driver,
@@ -770,7 +828,7 @@ async function scenario({
         originalJournal = await journal();
       row.history = {};
       await runHistoryReadJourney({
-        window: page,
+        window: journeyPage,
         originals,
         hidden,
         active,
