@@ -22,6 +22,8 @@ identity callback. It preserves borrowed descriptors, offsets, flags, locks and
 lifetimes. Callers retain parent/namespace custody; sequential observation is
 not an atomic filesystem snapshot or a substitute for an effect-boundary check.
 
+Owned descriptor cleanup is synchronous and checked for directory enumeration, tree descent, document traversal, file reads and the reopened root. A cleanup failure clears the observation and retains both the original failure and cleanup cause behind closed I/O text. Cancellation through actual cleanup return keeps its original cause and absolute deadline. Borrowed descriptors remain open. `IsVerificationRefusal` recognizes only this verifier's exact inspected negative observations and a trusted pure identity-policy refusal; an opaque wrapper, joined cleanup failure or cancellation cannot become a negative match.
+
 The verifier retains the existing v2 digest stream, UTF-16 sibling ordering,
 raw name spelling, file modes and root exclusion. Component-wise link resolution
 uses only the measured inventory, including intermediate links before `..`;
