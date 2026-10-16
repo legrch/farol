@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { openNativeProfileStorage } from "../../apps/desktop/bridge/profile-storage.ts";
+import {
+  openNativeProfileStorage,
+  openExistingNativeProfileStorage,
+} from "../../apps/desktop/bridge/profile-storage.ts";
 
 // Real disposable private filesystem only. These tests launch no Go backend,
 // browser or provider and do not establish journal retirement/reopen permission.
@@ -139,4 +142,43 @@ describe("native profile storage selection", () => {
       expect(fs.existsSync(first.root)).toBe(true);
     },
   );
+});
+
+describe("existing recovery profile selection", () => {
+  it("retains version-2 identity and files without requiring the old mutation journal", () => {
+    const root = fixture();
+    const first = openNativeProfileStorage(root, "computer");
+    const marker = path.join(first.root, "profile.json");
+    const before = fs.lstatSync(marker, { bigint: true });
+    const bytes = fs.readFileSync(marker);
+    // Lost or independently owned journal state must not be opened or repaired
+    // merely to select Computer owner reads. Go still qualifies base roots.
+    fs.rmdirSync(path.join(first.root, "computer", "mutations"));
+    const selected = openExistingNativeProfileStorage(root, "computer");
+    expect(selected).toEqual({
+      ...first,
+      storeMode: "open",
+      settingsMutations: false,
+    });
+    const after = fs.lstatSync(marker, { bigint: true });
+    for (const field of [
+      "dev",
+      "ino",
+      "mode",
+      "nlink",
+      "size",
+      "mtimeNs",
+      "ctimeNs",
+    ] as const)
+      expect(after[field]).toBe(before[field]);
+    expect(fs.readFileSync(marker)).toEqual(bytes);
+    expect(fs.existsSync(path.join(first.root, "computer", "mutations"))).toBe(
+      false,
+    );
+  });
+  it("does not create missing Go storage in an existing private state directory", () => {
+    const root = fixture();
+    expect(() => openExistingNativeProfileStorage(root, "computer")).toThrow();
+    expect(fs.readdirSync(root)).toEqual([]);
+  });
 });

@@ -1,10 +1,10 @@
-import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { AttestedCore } from "./bridge/attested-core.ts";
 import {
-  AttestedCore,
-  parseCoreArtifactDeclaration,
-} from "./bridge/attested-core.ts";
+  desktopCoreExpectation,
+  readDesktopCoreDeclaration,
+} from "./bridge/desktop-artifact.ts";
 import {
   BridgeError,
   copyNativeCodexReadLaunch,
@@ -90,31 +90,6 @@ export type DesktopCoreSelection = Readonly<{
   browser: (context: Readonly<Context>) => DesktopBrowserConnection;
   onLifecycleObservation?: (observation: BackendLifecycleObservation) => void;
 }>;
-function readDeclaration(root: string): unknown {
-  const fd = fs.openSync(
-    path.join(root, "core-artifact.json"),
-    fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
-  );
-  try {
-    const before = fs.fstatSync(fd, { bigint: true });
-    if (!before.isFile() || before.nlink !== 1n || before.size > 8192n)
-      throw new BridgeError("refused", "invalid_core_artifact");
-    const bytes = Buffer.alloc(8193);
-    const size = fs.readSync(fd, bytes, 0, bytes.length, 0);
-    const after = fs.fstatSync(fd, { bigint: true });
-    if (
-      BigInt(size) !== before.size ||
-      before.size !== after.size ||
-      before.mtimeNs !== after.mtimeNs ||
-      before.ctimeNs !== after.ctimeNs ||
-      before.nlink !== after.nlink
-    )
-      throw new BridgeError("refused", "core_artifact_changed");
-    return JSON.parse(bytes.subarray(0, size).toString("utf8")) as unknown;
-  } finally {
-    fs.closeSync(fd);
-  }
-}
 
 // One normal Electron-owned backend lifetime. This class only composes the real
 // Go authorities and typed adapters; it cannot grant permission or restart work.
@@ -578,25 +553,9 @@ export async function startDesktopGoCore(
   const codexRead = copyNativeCodexReadLaunch(selection);
   if (selection.previousHostDrainConfirmed !== true)
     throw new BridgeError("refused", "previous_host_drain_unconfirmed");
-  const expected = parseCoreArtifactDeclaration(selection.compiledArtifact);
-  if (
-    selection.build.sourceDirty ||
-    expected.build.buildId !== selection.build.buildId ||
-    expected.build.sourceSHA !== selection.build.sourceCommit ||
-    expected.build.sourceTreeDigest !== selection.build.sourceTreeDigest ||
-    expected.build.platform.goos !== process.platform ||
-    expected.build.platform.goarch !== process.arch
-  ) {
-    // Node names x64 differently from Go. This first normal host slice selects
-    // the currently packaged darwin/arm64 runtime only.
-    throw new BridgeError("refused", "core_host_build_mismatch");
-  }
+  const expected = desktopCoreExpectation(selection);
   const settings = selection.settings();
-  const artifact = parseCoreArtifactDeclaration(
-    readDeclaration(selection.artifactRoot),
-  );
-  if (JSON.stringify(artifact) !== JSON.stringify(expected))
-    throw new BridgeError("refused", "core_host_artifact_mismatch");
+  const artifact = readDesktopCoreDeclaration(selection.artifactRoot, expected);
   // Capture trusted inputs before yielding to resource IO. The support parser
   // freezes its copy; the source copy cannot be changed by the caller later.
   const selectedShell = selection.compiledShell;

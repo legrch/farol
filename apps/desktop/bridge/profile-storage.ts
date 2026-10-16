@@ -37,6 +37,23 @@ export function openNativeProfileStorage(
   stateRoot: string,
   computerId: string,
 ): NativeProfileStorage {
+  return selectNativeProfileStorage(stateRoot, computerId, false);
+}
+
+// Recovery selects an existing identity only. No provisioning, repair or journal
+// access is performed; version-2 metadata cannot enable a mutation writer here.
+export function openExistingNativeProfileStorage(
+  stateRoot: string,
+  computerId: string,
+): NativeProfileStorage {
+  return selectNativeProfileStorage(stateRoot, computerId, true);
+}
+
+function selectNativeProfileStorage(
+  stateRoot: string,
+  computerId: string,
+  existingOnly: boolean,
+): NativeProfileStorage {
   if (
     process.platform !== "darwin" ||
     typeof process.getuid !== "function" ||
@@ -49,11 +66,13 @@ export function openNativeProfileStorage(
   const parent = privateDirectory(stateRoot);
   const root = path.join(stateRoot, "go-core");
   let created = false;
-  try {
-    fs.mkdirSync(root, { mode: 0o700 });
-    created = true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  if (!existingOnly) {
+    try {
+      fs.mkdirSync(root, { mode: 0o700 });
+      created = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
   }
   unchanged(stateRoot, parent);
   const directory = privateDirectory(root);
@@ -178,7 +197,7 @@ export function openNativeProfileStorage(
   privateDirectory(path.join(root, "task"));
   // Version 1 stays readable without gaining a mutation writer or migration.
   // Version 2 never recreates a lost/invalid journal child on open.
-  if (settingsMutations)
+  if (settingsMutations && !existingOnly)
     privateDirectory(path.join(root, "computer", "mutations"));
   unchanged(root, directory);
   unchanged(stateRoot, parent);
@@ -186,6 +205,6 @@ export function openNativeProfileStorage(
     profileId,
     root,
     storeMode: created ? "create" : "open",
-    settingsMutations,
+    settingsMutations: settingsMutations && !existingOnly,
   });
 }

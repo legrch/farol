@@ -670,6 +670,106 @@ export class ProductSettingsStore {
     }
   }
 
+  // Recovery consumes only an existing stable private document. It must not
+  // create defaults, normalize permissions, migrate, save, or install writers.
+  // Physical checks retain descriptor/name identity around one bounded read;
+  // they do not establish predecessor retirement or current Go authority.
+  async loadExisting(): Promise<ProductSettings | null> {
+    const root = this.options.root;
+    const uid = process.geteuid?.();
+    const qualifyRoot = async () => {
+      const info = await fs.lstat(root, { bigint: true });
+      if (
+        uid === undefined ||
+        !info.isDirectory() ||
+        info.isSymbolicLink() ||
+        info.uid !== BigInt(uid) ||
+        (info.mode & 0o7777n) !== 0o700n ||
+        (await fs.realpath(root)) !== root
+      )
+        throw new Error("SETTINGS_UNSAFE");
+      return info;
+    };
+    const beforeRoot = await qualifyRoot();
+    const sameRoot = async () => {
+      const after = await qualifyRoot();
+      if (after.dev !== beforeRoot.dev || after.ino !== beforeRoot.ino)
+        throw new Error("SETTINGS_UNSAFE");
+    };
+    await this.assertConfigName();
+    const target = path.join(root, FILE_NAME);
+    let handle;
+    try {
+      handle = await fs.open(
+        target,
+        fsConstants.O_RDONLY |
+          NO_FOLLOW |
+          CLOSE_ON_EXEC |
+          fsConstants.O_NONBLOCK,
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        await sameRoot();
+        return null;
+      }
+      if ((error as NodeJS.ErrnoException).code === "ELOOP")
+        throw new Error("SETTINGS_UNSAFE");
+      throw error;
+    }
+    try {
+      const before = await handle.stat({ bigint: true });
+      if (
+        !before.isFile() ||
+        before.uid !== BigInt(uid!) ||
+        before.nlink !== 1n ||
+        (before.mode & 0o7777n) !== 0o600n
+      )
+        throw new Error("SETTINGS_UNSAFE");
+      if (before.size > BigInt(MAXIMUM_BYTES))
+        throw new Error("SETTINGS_CORRUPT");
+      const bytes = Buffer.alloc(MAXIMUM_BYTES + 1);
+      const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+      const after = await handle.stat({ bigint: true });
+      const named = await fs.lstat(target, { bigint: true });
+      const fields = [
+        "dev",
+        "ino",
+        "mode",
+        "uid",
+        "gid",
+        "nlink",
+        "size",
+        "mtimeNs",
+        "ctimeNs",
+      ] as const;
+      if (
+        BigInt(bytesRead) !== before.size ||
+        fields.some(
+          (field) =>
+            before[field] !== after[field] || before[field] !== named[field],
+        )
+      )
+        throw new Error("SETTINGS_UNSAFE");
+      await sameRoot();
+      await this.assertConfigName();
+      const parsed = ProductSettingsSchema.safeParse(
+        JSON.parse(
+          new TextDecoder("utf-8", { fatal: true }).decode(
+            bytes.subarray(0, bytesRead),
+          ),
+        ) as unknown,
+      );
+      if (!parsed.success) throw new Error("SETTINGS_CORRUPT");
+      return parsed.data;
+    } catch (error) {
+      if (error instanceof SyntaxError || error instanceof TypeError)
+        throw new Error("SETTINGS_CORRUPT");
+      throw error;
+    } finally {
+      await handle.close();
+    }
+  }
+
   async save(
     settings: ProductSettings,
     fence: StoreWriteFence = {},
