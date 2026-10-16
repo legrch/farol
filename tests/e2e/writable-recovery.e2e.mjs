@@ -103,7 +103,9 @@ async function bounded(promise, code, ms = 20000) {
     clearTimeout(timer);
   }
 }
-const pause = () => new Promise((resolve) => setTimeout(resolve, 100));
+function pause() {
+  return new Promise((resolve) => setTimeout(resolve, 100));
+}
 async function regular(file) {
   const fd = await fs.open(
     file,
