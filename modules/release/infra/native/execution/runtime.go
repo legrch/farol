@@ -223,6 +223,7 @@ func (r *runtime) classify(err error, effected bool) error {
 			return fail("internal", true, effected || f.Uncertain, err)
 		}
 		copy := *f
+		copy.Cause = err
 		return &copy
 	}
 	if err == context.Canceled || err == context.DeadlineExceeded {
@@ -346,6 +347,13 @@ func (r *runtime) WritePhase(ctx context.Context, phase string) error {
 		}
 		v, owned := *view, *view.Value
 		v.Value, r.view = &owned, &v
-		return r.fence(c)
+		// CAS has returned a persisted value. Any later fence refusal retains
+		// that possible effect even when the refusal itself is known and direct.
+		if err := r.classify(r.fence(c), true); err != nil {
+			f := err.(*port.HelperRecoveryFailure) // classify's closed nonnil result.
+			f.Uncertain = true
+			return f
+		}
+		return nil
 	})
 }

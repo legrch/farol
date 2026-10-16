@@ -438,3 +438,51 @@ func TestCompositionOriginalDeadlineBeforeJournalCreate(t *testing.T) {
 	f.unchanged(t, before)
 	f.physical(t, f.repo, "prepared")
 }
+
+func TestCompositionPostCASFenceRefusalRetainsUnknown(t *testing.T) {
+	for _, kind := range []string{"runtime-refusal", "route-refusal", "opaque"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newCompositionFixture(t)
+			f.put(t, f.encoded(t, "prepared"))
+			var cause error = &port.HelperRecoveryFailure{Code: "route_changed", Phase: "refused"}
+			if kind == "route-refusal" {
+				cause = &helperroutes.Error{Code: helperroutes.CodeChanged}
+			}
+			if kind == "opaque" {
+				cause = errors.Join(cause, errors.New("private fence failure"))
+			}
+			original := f.config.Reverify
+			f.config.Reverify = func(c context.Context, request port.HelperRequest) error {
+				if err := original(c, request); err != nil {
+					return err
+				}
+				// New plus CAS's two admission checks: the actual durable write
+				// and its physical readback have returned before this fence.
+				if f.owner.verified == 3 {
+					return cause
+				}
+				return nil
+			}
+			err := f.with(context.Background(), func(r port.HelperRecoveryRuntime) error {
+				_, err := r.ReadPhase(context.Background())
+				must(t, err)
+				return r.WritePhase(context.Background(), "verified")
+			})
+			var failure *port.HelperRecoveryFailure
+			if !errors.As(err, &failure) || !failure.Uncertain || !errors.Is(err, cause) || f.owner.retained() == nil || f.owner.runtimeRetained != 1 {
+				t.Fatal("post-CAS refusal lost persisted write uncertainty", err)
+			}
+			if failure.Internal != (kind == "opaque") {
+				t.Fatal("original known/internal classification lost")
+			}
+			// Physical readback is possible but cannot clear the retained owner.
+			f.physical(t, f.repo, "verified")
+			called := false
+			err = f.with(context.Background(), func(port.HelperRecoveryRuntime) error { called = true; return nil })
+			classified(t, err, "recovery_attempt_unknown", true)
+			if called || f.owner.retained() == nil {
+				t.Fatal("new runtime rearmed after post-write refusal")
+			}
+		})
+	}
+}
