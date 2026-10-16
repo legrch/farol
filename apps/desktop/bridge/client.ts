@@ -9,6 +9,8 @@ import {
   protocolMinor,
   validate,
   type Context,
+  type ComputerConnectorPollingRequest,
+  type ComputerConnectorPollingState,
   type EventData,
   type Handshake,
   type Identity,
@@ -24,6 +26,13 @@ export class BridgeError extends Error {
     readonly code: string,
   ) {
     super(code);
+  }
+}
+// The original pure observation settled after its host budget. Discarding that
+// result does not claim it was never evaluated, renew authority or permit replay.
+export class PollingObservationExpiredError extends BridgeError {
+  constructor() {
+    super("refused", "connector_polling_expired");
   }
 }
 // A local refusal before stdin.write, not a remote outcome or a pipe error.
@@ -45,6 +54,9 @@ type Pending = {
     deadlineMillis: number;
     shape: "BrowserNextResult" | "SettingsStoreNextResult";
   }>;
+  observation?: Readonly<
+    ComputerConnectorPollingRequest & { deadlineMillis: number }
+  >;
   operationId?: string;
   handshake?: Handshake;
   retirementHandoffId?: string;
@@ -424,6 +436,7 @@ export class Client {
         : method === "computer.settings.store.next"
           ? "settings"
           : undefined;
+    const pollingObservation = method === "computer.connector.polling";
     const retiring =
       method === "computer.connector.close" ||
       (this.retirementPrepared && method === "computer.authority.deactivate") ||
@@ -453,6 +466,9 @@ export class Client {
       return Promise.reject(new BridgeError("refused", "invalid_deadline"));
     if (
       !validate("id", id) ||
+      (pollingObservation &&
+        (operationId !== undefined ||
+          !validate("ComputerConnectorPollingRequest", body))) ||
       (pollLane !== undefined &&
         (operationId !== undefined ||
           !validate(
@@ -506,10 +522,10 @@ export class Client {
       };
       const timer = setTimeout(() => {
         // After a desktop event-loop stall, timers can precede an original
-        // reply already waiting on stdout. Give the two reciprocal poll lanes
-        // one IO turn to observe that reply, with the same ID and no resend.
-        // receive admits only a validated empty result after the deadline.
-        if (pollLane !== undefined) {
+        // reply already waiting on stdout. Give reciprocal polls and this one
+        // pure diagnostic one IO turn, with the same ID and no resend. A late
+        // diagnostic is discarded; only validated empty polls may be delivered.
+        if (pollLane !== undefined || pollingObservation) {
           const pending = this.pending.get(wireId);
           if (pending) pending.timeoutCheck = setImmediate(expire);
         } else expire();
@@ -530,6 +546,21 @@ export class Client {
                     : ("SettingsStoreNextResult" as const),
               },
             }),
+        ...(pollingObservation
+          ? {
+              observation: {
+                deadlineMillis: responseDeadline,
+                binding: Object.freeze({
+                  ...(body as unknown as ComputerConnectorPollingRequest)
+                    .binding,
+                }),
+                samples: Object.freeze({
+                  ...(body as unknown as ComputerConnectorPollingRequest)
+                    .samples,
+                }),
+              },
+            }
+          : {}),
         ...(operationId !== undefined ? { operationId } : {}),
         ...(handshake ? { handshake } : {}),
         ...(method === "core.retirement.prepare" &&
@@ -598,6 +629,10 @@ export class Client {
       pending.poll !== undefined &&
       (pending.timeoutCheck !== undefined ||
         Date.now() >= pending.poll.deadlineMillis);
+    const lateObservation =
+      pending.observation !== undefined &&
+      (pending.timeoutCheck !== undefined ||
+        Date.now() >= pending.observation.deadlineMillis);
     if (response.result) {
       const result = response.result;
       if (
@@ -623,6 +658,37 @@ export class Client {
         // Observation of an empty original poll grants no effect authority.
         // A late command is refused here even if its own budget is still live.
         this.fail("response_timeout");
+        return;
+      }
+      if (lateObservation) {
+        const original = pending.observation!;
+        if (
+          result.status !== "ok" ||
+          result.code !== undefined ||
+          !validate("ComputerConnectorPollingState", result.data)
+        ) {
+          this.fail("response_timeout");
+          return;
+        }
+        const observed =
+          result.data as unknown as ComputerConnectorPollingState;
+        if (
+          Object.entries(original.binding).some(
+            ([key, field]) =>
+              observed.binding[key as keyof typeof observed.binding] !== field,
+          ) ||
+          observed.cycles !== original.samples.cycles ||
+          observed.errors !== original.samples.errors ||
+          (observed.ageSeconds !== undefined) !==
+            (observed.state === "recent" || observed.state === "stale")
+        ) {
+          this.fail("response_timeout");
+          return;
+        }
+        clearTimeout(pending.timer);
+        clearImmediate(pending.timeoutCheck);
+        this.pending.delete(response.id);
+        pending.reject(new PollingObservationExpiredError());
         return;
       }
       if (pending.handshake) {
@@ -678,7 +744,7 @@ export class Client {
           : { ...result, requestId: pending.callerId },
       );
     } else {
-      if (latePoll) {
+      if (latePoll || lateObservation) {
         this.fail("response_timeout");
         return;
       }

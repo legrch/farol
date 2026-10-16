@@ -170,6 +170,12 @@ function actionFeedback(
     return "The connection outcome is unknown. Inspect its existing result in Diagnostics; Farol will not start or change it again automatically.";
   if (result.state === "unknown")
     return "Outcome unknown. Do not repeat this action; inspect the existing result in Diagnostics.";
+  if (
+    result.state === "refused" &&
+    result.id === intention("connector.check-health") &&
+    result.code === "CONNECTOR_POLLING_EXPIRED"
+  )
+    return "The connection check expired. No polling result was published.";
   if (result.id.startsWith("settings:computer.apply-workspace-edit:"))
     return result.state === "applied"
       ? "Workspace edit confirmed. Review the exact result in Diagnostics."

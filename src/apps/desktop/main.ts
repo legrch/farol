@@ -41,6 +41,7 @@ import { projectReadConversation } from "../../../apps/desktop/read-conversation
 import { ReadConversationPromptSchema } from "../../pkg/product-settings/chat-conversation";
 import {
   BridgeError,
+  PollingObservationExpiredError,
   type BackendLifecycleObservation,
 } from "../../../apps/desktop/bridge/client";
 import { ConnectorHostError } from "../../../apps/desktop/bridge/connector-host";
@@ -6851,13 +6852,18 @@ async function configureAdmittedProduct(
           return configurationFailure(
             "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
           );
-        const polling = await originalCore.observeComputerConnectorPolling(
-          metrics.samples,
-        );
+        const polling = await originalCore
+          .observeComputerConnectorPolling(metrics.samples)
+          .catch((error: unknown) => {
+            if (error instanceof PollingObservationExpiredError) return null;
+            throw error;
+          });
         if (!sameObservation())
           return configurationFailure(
             "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
           );
+        if (polling === null)
+          return configurationFailure("CONNECTOR_POLLING_EXPIRED");
         return ProductConfigurationResultSchema.parse({
           ok: true,
           snapshot: configuration.snapshot(),

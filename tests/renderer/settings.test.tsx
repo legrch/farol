@@ -5705,3 +5705,28 @@ it("retains one visible Diagnostics pending/unknown result without replay", asyn
   );
   expect(h.calls()).toEqual([{ kind: "connector.check-health" }]);
 });
+
+it("shows an expired diagnostic as a known refusal without publishing retained positive evidence", async () => {
+  const h = await mount("diagnostics", connectionSettings());
+  vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+    ok: false,
+    error: "CONNECTOR_POLLING_EXPIRED",
+    snapshot: h.configuration,
+  });
+  await h.click("Check local connection");
+  const visible = [...h.host.querySelectorAll('p[role="status"]')]
+    .filter((node) => !node.closest("[hidden]"))
+    .map((node) => node.textContent);
+  expect(visible).toContain(
+    "The connection check expired. No polling result was published.",
+  );
+  expect(visible.join(" ")).not.toContain(
+    "The helper reported a recent server poll.",
+  );
+  expect(h.c.getSnapshot().configuration?.status).toBe("ready");
+  expect(
+    h.c.getSnapshot().intents["settings:connector.check-health:"]?.state,
+  ).toBe("refused");
+  expect(h.button("Check local connection").disabled).toBe(false);
+  expect(h.calls()).toEqual([{ kind: "connector.check-health" }]);
+});

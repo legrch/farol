@@ -655,7 +655,7 @@ try {
     await check(
       first,
       "recent",
-      "The helper reported a recent server poll.",
+      "The connection check expired. No polling result was published.",
       async () => {
         await delay(100);
         const blocked = blockMain(first);
@@ -719,8 +719,9 @@ try {
     await fs.readFile(path.join(workspace, "sentinel.txt")),
     canary,
   );
-  report.status =
-    "passed-hidden-Go-polling-original-child-HTTP-delay-clean-reopen";
+  report.status = goDelay
+    ? "passed-hidden-Go-polling-expired-observation-clean-reopen"
+    : "passed-hidden-Go-polling-original-child-HTTP-delay-clean-reopen";
   await save();
 } catch (error) {
   report.status = "failed-or-unknown";
