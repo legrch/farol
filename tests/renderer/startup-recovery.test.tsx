@@ -229,56 +229,65 @@ it("shows saved Settings during startup and observes readiness without initiatin
     await f.dispose();
   }
 });
-it("loads stored copies explicitly and renders escaped text with unconfirmed provenance", async () => {
-  const f = await mount({ ...ready, computer: "unavailable" });
-  const text = "<script>not executable</script>\nSaved text ✓";
-  const summary = storedSummary(1, text);
-  f.api.read
-    .mockResolvedValueOnce({
-      status: "ok",
-      data: { kind: "archive-list", after: "", ...storedPage([summary]) },
-    })
-    .mockResolvedValueOnce({
-      status: "ok",
-      data: { kind: "archive-read", ...storedReply(summary, text) },
-    });
-  try {
-    await act(async () => button(f.host, "Stored replies").click());
-    expect(f.api.read).not.toHaveBeenCalled();
-    await act(async () => button(f.host, "Load stored replies").click());
-    expect(f.api.read).toHaveBeenLastCalledWith({
-      kind: "archive-list",
-      after: "",
-    });
-    expect(f.host.textContent).toContain("Some records remain unresolved");
-    await act(async () =>
-      (
-        f.host.querySelector(
-          '[aria-label="Open stored reply 1"]',
-        ) as HTMLButtonElement
-      ).click(),
-    );
-    expect(f.api.read).toHaveBeenLastCalledWith({
-      kind: "archive-read",
-      key: summary.key,
-      digest: summary.digest,
-    });
-    expect(
-      f.host.querySelector('[aria-label="Stored reply text"]')?.textContent,
-    ).toBe(text);
-    expect(f.host.querySelectorAll("script, iframe, a, input")).toHaveLength(0);
-    expect(f.host.textContent).toContain("Outcome unconfirmed");
-    expect(f.host.textContent).not.toContain("completed");
-    await act(async () => button(f.host, "Folders").click());
-    await act(async () => button(f.host, "Stored replies").click());
-    expect(f.api.read).toHaveBeenCalledTimes(2);
-    expect(
-      f.host.querySelector('[aria-label="Stored reply text"]')?.textContent,
-    ).toBe(text);
-  } finally {
-    await f.dispose();
-  }
-});
+it.each(["<script>not executable</script>\nSaved text ✓", "", " \n\t"])(
+  "loads stored copies explicitly and preserves %j with unconfirmed provenance",
+  async (text) => {
+    const f = await mount({ ...ready, computer: "unavailable" });
+    const summary = storedSummary(1, text);
+    f.api.read
+      .mockResolvedValueOnce({
+        status: "ok",
+        data: { kind: "archive-list", after: "", ...storedPage([summary]) },
+      })
+      .mockResolvedValueOnce({
+        status: "ok",
+        data: { kind: "archive-read", ...storedReply(summary, text) },
+      });
+    try {
+      await act(async () => button(f.host, "Stored replies").click());
+      expect(f.api.read).not.toHaveBeenCalled();
+      await act(async () => button(f.host, "Load stored replies").click());
+      expect(f.api.read).toHaveBeenLastCalledWith({
+        kind: "archive-list",
+        after: "",
+      });
+      expect(f.host.textContent).toContain("Some records remain unresolved");
+      await act(async () =>
+        (
+          f.host.querySelector(
+            '[aria-label="Open stored reply 1"]',
+          ) as HTMLButtonElement
+        ).click(),
+      );
+      expect(f.api.read).toHaveBeenLastCalledWith({
+        kind: "archive-read",
+        key: summary.key,
+        digest: summary.digest,
+      });
+      expect(
+        f.host.querySelector('[aria-label="Stored reply text"]')?.textContent,
+      ).toBe(text);
+      if (text === "") {
+        expect(f.host.textContent).toContain("This stored reply is empty.");
+      } else {
+        expect(f.host.textContent).not.toContain("This stored reply is empty.");
+      }
+      expect(f.host.querySelectorAll("script, iframe, a, input")).toHaveLength(
+        0,
+      );
+      expect(f.host.textContent).toContain("Outcome unconfirmed");
+      expect(f.host.textContent).not.toContain("completed");
+      await act(async () => button(f.host, "Folders").click());
+      await act(async () => button(f.host, "Stored replies").click());
+      expect(f.api.read).toHaveBeenCalledTimes(2);
+      expect(
+        f.host.querySelector('[aria-label="Stored reply text"]')?.textContent,
+      ).toBe(text);
+    } finally {
+      await f.dispose();
+    }
+  },
+);
 it("loads each bounded page only on explicit demand and keeps the next observed cursor", async () => {
   const f = await mount(),
     rows = Array.from({ length: 32 }, (_, i) => storedSummary(i + 1));

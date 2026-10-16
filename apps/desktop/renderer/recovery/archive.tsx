@@ -209,8 +209,11 @@ export function StoredReplies({
             aria-label="Stored reply text"
             tabIndex={0}
           >
-            <pre>{reply.text || "No text was retained in this record."}</pre>
+            <pre>{reply.text}</pre>
           </div>
+          {reply.text === "" ? (
+            <p className="recovery-note">This stored reply is empty.</p>
+          ) : null}
         </div>
       ) : null}
     </section>
