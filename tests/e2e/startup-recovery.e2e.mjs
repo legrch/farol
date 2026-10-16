@@ -208,6 +208,44 @@ const bounded = (promise, label) => {
     }),
   ]).finally(() => clearTimeout(timer));
 };
+// The renderer can otherwise hand capturePage its preceding compositor frame
+// after focus/media/size changes. Unthrottle only this test-owned document for
+// two paint frames, capture without making it visible, then restore its setting.
+async function captureRecoveryPage(application, page) {
+  const throttled = await application.evaluate(({ BrowserWindow }) => {
+    const contents = BrowserWindow.getAllWindows()[0].webContents;
+    const before = contents.getBackgroundThrottling();
+    contents.setBackgroundThrottling(false);
+    return before;
+  });
+  try {
+    await bounded(
+      page.evaluate(
+        () =>
+          new Promise((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(resolve)),
+          ),
+      ),
+      "RECOVERY_CAPTURE_PAINT_TIMEOUT",
+    );
+    return await application.evaluate(async ({ BrowserWindow }) => {
+      const contents = BrowserWindow.getAllWindows()[0].webContents;
+      contents.invalidate();
+      return (await contents.capturePage(undefined, { stayHidden: true }))
+        .toPNG()
+        .toString("base64");
+    });
+  } finally {
+    await application.evaluate(
+      ({ BrowserWindow }, before) =>
+        BrowserWindow.getAllWindows()[0].webContents.setBackgroundThrottling(
+          before,
+        ),
+      throttled,
+    );
+  }
+}
+
 let app, exit, launch;
 try {
   report.preservedBaseline = await preserved();
@@ -355,11 +393,7 @@ try {
         await page.keyboard.press("Tab");
         await page.getByRole("button", { name: "Quit", exact: true }).focus();
         const screenshot = evidence.replace(/\.json$/u, `-${name}.png`);
-        const pixels = await app.evaluate(async ({ BrowserWindow }) =>
-          (await BrowserWindow.getAllWindows()[0].capturePage())
-            .toPNG()
-            .toString("base64"),
-        );
+        const pixels = await captureRecoveryPage(app, page);
         await fs.writeFile(screenshot, Buffer.from(pixels, "base64"), {
           mode: 0o600,
         });
@@ -375,7 +409,13 @@ try {
         );
         assert.equal(layout.focus, "Quit");
         assert.equal(layout.outline, "3px");
-        report.screenshots.push({ screenshot, name, layout });
+        report.screenshots.push({
+          screenshot,
+          name,
+          layout,
+          presentation:
+            "two-paint-frames-then-stay-hidden-capture; native-window-hidden-unfocused",
+        });
       }
       const windows = await app.evaluate(({ BrowserWindow }) =>
         BrowserWindow.getAllWindows().map((win) => ({
