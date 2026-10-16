@@ -677,8 +677,12 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
         </p>
       )}
       {pageFeedback &&
-        !/^settings:connector\.(?:check-health|start|repair|save-and-connect|verify-app|check-attachment):/u.test(
-          pageFeedback.result?.id ?? "",
+        !(
+          (snapshot.destination.page === "connection" ||
+            setupStep !== undefined) &&
+          /^settings:connector\.(?:check-health|start|repair|save-and-connect|verify-app|check-attachment):/u.test(
+            pageFeedback.result?.id ?? "",
+          )
         ) &&
         !(
           snapshot.destination.page === "folders" &&

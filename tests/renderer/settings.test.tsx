@@ -5612,15 +5612,21 @@ it("shows a fixed saved-key mask without reading or resubmitting the saved crede
   expect(h.calls()).toEqual([]);
 });
 
-it.each([
-  ["recent", "The helper reported a recent server poll."],
-  ["stale", "Server polling was delayed."],
-  ["no_success", "The helper had not reported a successful server poll."],
-  ["unknown", "Server polling could not be confirmed."],
-] as const)(
-  "keeps %s polling distinct from external attachment",
-  async (state, wording) => {
-    const h = await mount("connection", connectionSettings());
+it.each(
+  (["connection", "diagnostics", "model"] as const).flatMap((page) =>
+    (
+      [
+        ["recent", "The helper reported a recent server poll."],
+        ["stale", "Server polling was delayed."],
+        ["no_success", "The helper had not reported a successful server poll."],
+        ["unknown", "Server polling could not be confirmed."],
+      ] as const
+    ).map(([state, wording]) => ({ page, state, wording })),
+  ),
+)(
+  "shows visible $state polling feedback on $page independently from attachment",
+  async ({ page, state, wording }) => {
+    const h = await mount(page, connectionSettings());
     const current = h.configuration;
     if (current.status !== "ready") throw Error("fixture settings unavailable");
     const connector = current.settings.connectors.secureMcp,
@@ -5638,8 +5644,15 @@ it.each([
         observedAtMillis: "1700000000000",
       },
     });
-    await h.click("Check connection");
-    expect(h.host.textContent).toContain(wording);
+    await h.click(
+      page === "connection" ? "Check connection" : "Check local connection",
+    );
+    expect(
+      [...h.host.querySelectorAll('p[role="status"]')].filter(
+        (node) =>
+          !node.closest("[hidden]") && node.textContent?.includes(wording),
+      ),
+    ).toHaveLength(1);
     expect(h.host.textContent).toContain(
       "Access from ChatGPT has a separate verification.",
     );
@@ -5671,5 +5684,24 @@ it("withholds polling feedback from a replaced runtime generation", async () => 
     "The helper reported a recent server poll.",
   );
   expect(h.host.textContent).toContain("Local connection checked.");
+  expect(h.calls()).toEqual([{ kind: "connector.check-health" }]);
+});
+
+it("retains one visible Diagnostics pending/unknown result without replay", async () => {
+  const h = await mount("diagnostics", connectionSettings());
+  const pending = deferred<unknown>();
+  vi.mocked(h.f.api.configure).mockReturnValueOnce(pending.promise);
+  const statuses = () =>
+    [
+      ...h.host.querySelectorAll(':scope > .settings-page > p[role="status"]'),
+    ].map((node) => node.textContent);
+  await h.click("Check local connection");
+  expect(statuses()).toContain("Saving or checking…");
+  await act(async () =>
+    pending.reject(new Error("synthetic-unknown-no-retry")),
+  );
+  expect(statuses()).toContain(
+    "Outcome unknown. Do not repeat this action; inspect the existing result in Diagnostics.",
+  );
   expect(h.calls()).toEqual([{ kind: "connector.check-health" }]);
 });

@@ -406,16 +406,27 @@ async function startCheck(run) {
     );
     if (!page) throw Error("POLLING_UI_MISSING");
     const read = () =>
-      [...page.querySelectorAll(':scope > p[role="status"]')].map(
-        (node) => node.textContent,
-      );
+      [...page.querySelectorAll(':scope > p[role="status"]')]
+        .map((node) => node.textContent?.slice(0, 2048))
+        .slice(0, 16);
     const before = JSON.stringify(read());
-    let changed = false;
-    const value = { result: null, observer: null };
+    const value = {
+      result: null,
+      observer: null,
+      latest: read(),
+      changed: false,
+      pendingSeen: false,
+    };
     value.observer = new MutationObserver(() => {
       const texts = read();
-      changed ||= JSON.stringify(texts) !== before;
-      if (changed && texts.length && !texts.includes("Saving or checking…"))
+      value.latest = texts;
+      value.changed ||= JSON.stringify(texts) !== before;
+      value.pendingSeen ||= texts.includes("Saving or checking…");
+      if (
+        value.changed &&
+        texts.length &&
+        !texts.includes("Saving or checking…")
+      )
         value.result = texts;
     });
     value.observer.observe(page, {
@@ -436,6 +447,16 @@ async function startCheck(run) {
         { timeout: 25000 },
       );
       return await observation.evaluate((value) => value.result);
+    } catch (error) {
+      run.lastUiReadback = await observation
+        .evaluate((value) => ({
+          messages: value.latest,
+          changed: value.changed,
+          pendingSeen: value.pendingSeen,
+        }))
+        .catch(() => ({ unavailable: true }));
+      await save();
+      throw error;
     } finally {
       await observation
         .evaluate((value) => value.observer.disconnect())
