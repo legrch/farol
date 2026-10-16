@@ -9,6 +9,8 @@ import {
   protocolMinor,
   validate,
   type Context,
+  type ComputerConnectorPollingRequest,
+  type ComputerConnectorPollingState,
   type EventData,
   type Handshake,
   type Identity,
@@ -26,6 +28,13 @@ export class BridgeError extends Error {
     super(code);
   }
 }
+// The original pure observation settled after its host budget. Discarding that
+// result does not claim it was never evaluated, renew authority or permit replay.
+export class PollingObservationExpiredError extends BridgeError {
+  constructor() {
+    super("refused", "connector_polling_expired");
+  }
+}
 // A local refusal before stdin.write, not a remote outcome or a pipe error.
 // Keep this distinct from an identically named provider/protocol failure.
 export class RequestNotSentError extends BridgeError {
@@ -40,6 +49,14 @@ type Pending = {
   resolve: (outcome: Outcome) => void;
   reject: (error: BridgeError) => void;
   timer: ReturnType<typeof setTimeout>;
+  timeoutCheck?: ReturnType<typeof setImmediate>;
+  poll?: Readonly<{
+    deadlineMillis: number;
+    shape: "BrowserNextResult" | "SettingsStoreNextResult";
+  }>;
+  observation?: Readonly<
+    ComputerConnectorPollingRequest & { deadlineMillis: number }
+  >;
   operationId?: string;
   handshake?: Handshake;
   retirementHandoffId?: string;
@@ -419,6 +436,7 @@ export class Client {
         : method === "computer.settings.store.next"
           ? "settings"
           : undefined;
+    const pollingObservation = method === "computer.connector.polling";
     const retiring =
       method === "computer.connector.close" ||
       (this.retirementPrepared && method === "computer.authority.deactivate") ||
@@ -448,6 +466,9 @@ export class Client {
       return Promise.reject(new BridgeError("refused", "invalid_deadline"));
     if (
       !validate("id", id) ||
+      (pollingObservation &&
+        (operationId !== undefined ||
+          !validate("ComputerConnectorPollingRequest", body))) ||
       (pollLane !== undefined &&
         (operationId !== undefined ||
           !validate(
@@ -492,17 +513,54 @@ export class Client {
       );
     if (pollLane === undefined) this.used.add(id);
     else this.polls.set(pollLane, sequence!);
+    const responseDeadline = Date.now() + remainingMs;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const expire = () => {
         this.pending.delete(wireId);
         reject(new BridgeError("unknown", "response_timeout"));
         this.fail("response_timeout");
+      };
+      const timer = setTimeout(() => {
+        // After a desktop event-loop stall, timers can precede an original
+        // reply already waiting on stdout. Give reciprocal polls and this one
+        // pure diagnostic one IO turn, with the same ID and no resend. A late
+        // diagnostic is discarded; only validated empty polls may be delivered.
+        if (pollLane !== undefined || pollingObservation) {
+          const pending = this.pending.get(wireId);
+          if (pending) pending.timeoutCheck = setImmediate(expire);
+        } else expire();
       }, remainingMs);
       this.pending.set(wireId, {
         callerId: id,
         resolve,
         reject,
         timer,
+        ...(pollLane === undefined
+          ? {}
+          : {
+              poll: {
+                deadlineMillis: responseDeadline,
+                shape:
+                  pollLane === "browser"
+                    ? ("BrowserNextResult" as const)
+                    : ("SettingsStoreNextResult" as const),
+              },
+            }),
+        ...(pollingObservation
+          ? {
+              observation: {
+                deadlineMillis: responseDeadline,
+                binding: Object.freeze({
+                  ...(body as unknown as ComputerConnectorPollingRequest)
+                    .binding,
+                }),
+                samples: Object.freeze({
+                  ...(body as unknown as ComputerConnectorPollingRequest)
+                    .samples,
+                }),
+              },
+            }
+          : {}),
         ...(operationId !== undefined ? { operationId } : {}),
         ...(handshake ? { handshake } : {}),
         ...(method === "core.retirement.prepare" &&
@@ -567,6 +625,14 @@ export class Client {
     }
     const pending = this.pending.get(response.id);
     if (!pending) return;
+    const latePoll =
+      pending.poll !== undefined &&
+      (pending.timeoutCheck !== undefined ||
+        Date.now() >= pending.poll.deadlineMillis);
+    const lateObservation =
+      pending.observation !== undefined &&
+      (pending.timeoutCheck !== undefined ||
+        Date.now() >= pending.observation.deadlineMillis);
     if (response.result) {
       const result = response.result;
       if (
@@ -578,6 +644,51 @@ export class Client {
               this.context.backendGeneration))
       ) {
         this.fail("crossed_response_context");
+        return;
+      }
+      if (
+        pending.poll &&
+        latePoll &&
+        !(
+          result.status === "ok" &&
+          validate(pending.poll.shape, result.data) &&
+          (result.data as { command?: unknown }).command === undefined
+        )
+      ) {
+        // Observation of an empty original poll grants no effect authority.
+        // A late command is refused here even if its own budget is still live.
+        this.fail("response_timeout");
+        return;
+      }
+      if (lateObservation) {
+        const original = pending.observation!;
+        if (
+          result.status !== "ok" ||
+          result.code !== undefined ||
+          !validate("ComputerConnectorPollingState", result.data)
+        ) {
+          this.fail("response_timeout");
+          return;
+        }
+        const observed =
+          result.data as unknown as ComputerConnectorPollingState;
+        if (
+          Object.entries(original.binding).some(
+            ([key, field]) =>
+              observed.binding[key as keyof typeof observed.binding] !== field,
+          ) ||
+          observed.cycles !== original.samples.cycles ||
+          observed.errors !== original.samples.errors ||
+          (observed.ageSeconds !== undefined) !==
+            (observed.state === "recent" || observed.state === "stale")
+        ) {
+          this.fail("response_timeout");
+          return;
+        }
+        clearTimeout(pending.timer);
+        clearImmediate(pending.timeoutCheck);
+        this.pending.delete(response.id);
+        pending.reject(new PollingObservationExpiredError());
         return;
       }
       if (pending.handshake) {
@@ -604,6 +715,7 @@ export class Client {
         }
         if (code) {
           clearTimeout(pending.timer);
+          clearImmediate(pending.timeoutCheck);
           this.pending.delete(response.id);
           pending.reject(new BridgeError("refused", code));
           this.fail(code);
@@ -611,6 +723,7 @@ export class Client {
         }
       }
       clearTimeout(pending.timer);
+      clearImmediate(pending.timeoutCheck);
       this.pending.delete(response.id);
       if (
         pending.retirementHandoffId !== undefined &&
@@ -631,7 +744,12 @@ export class Client {
           : { ...result, requestId: pending.callerId },
       );
     } else {
+      if (latePoll || lateObservation) {
+        this.fail("response_timeout");
+        return;
+      }
       clearTimeout(pending.timer);
+      clearImmediate(pending.timeoutCheck);
       this.pending.delete(response.id);
       pending.reject(
         new BridgeError(
@@ -657,6 +775,7 @@ export class Client {
     );
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
+      clearImmediate(pending.timeoutCheck);
       pending.reject(new BridgeError(state, code));
     }
     this.pending.clear();
@@ -800,6 +919,7 @@ export interface NativeCoreLaunch {
   readonly ownerId: string;
   readonly computerId: string;
   readonly storeMode: "create" | "open";
+  readonly startupMode?: "normal" | "recovery";
   readonly settingsMutations?: boolean;
   readonly previousHostDrainConfirmed?: boolean;
   readonly hostLifetimeId?: string;
@@ -833,6 +953,25 @@ export async function spawnCore(
   let shellMetadata: Buffer | undefined;
   try {
     const codexRead = native ? copyNativeCodexReadLaunch(native) : undefined;
+    if (
+      native?.startupMode !== undefined &&
+      native.startupMode !== "normal" &&
+      native.startupMode !== "recovery"
+    )
+      throw new BridgeError("refused", "invalid_native_launch");
+    if (
+      native?.startupMode === "recovery" &&
+      (native.storeMode !== "open" ||
+        !native.hostLifetimeId ||
+        !native.childLaunchId ||
+        (native.previousHostDrainConfirmed !== undefined &&
+          native.previousHostDrainConfirmed !== false) ||
+        (native.settingsMutations !== undefined &&
+          native.settingsMutations !== false) ||
+        codexRead !== undefined ||
+        native.shellMetadata !== undefined)
+    )
+      throw new BridgeError("refused", "invalid_recovery_launch");
     if (!isAbsolute(executable))
       throw new BridgeError("refused", "executable_path_required");
     if (
@@ -900,6 +1039,8 @@ export async function spawnCore(
           native.childLaunchId,
         );
     }
+    if (native?.startupMode !== undefined)
+      args.push("--startup-mode", native.startupMode);
     if (native?.previousHostDrainConfirmed === true)
       args.push("--previous-host-drain-confirmed");
     if (native?.settingsMutations === true) args.push("--settings-mutations");

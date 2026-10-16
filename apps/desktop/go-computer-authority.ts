@@ -55,7 +55,11 @@ export class GoComputerAuthority {
     private readonly client: Pick<Client, "request">,
     context: Context,
     private readonly now: () => number = Date.now,
+    private readonly publicationScope:
+      "computer-and-task" | "computer" = "computer-and-task",
   ) {
+    if (!["computer-and-task", "computer"].includes(publicationScope))
+      throw new BridgeError("refused", "invalid_computer_publication_scope");
     if (!validate("Context", context))
       throw new BridgeError("refused", "invalid_core_context");
     this.context = Object.freeze({ ...context });
@@ -82,10 +86,13 @@ export class GoComputerAuthority {
           const now = this.now();
           // Capture raw/defaulted facts before any publication await. Go owns
           // saved-source eligibility and exact read selection in the same call.
-          const taskCurrentSettings = {
-            snapshot: JSON.stringify(taskSettingsFacts(settings)),
-            nowMillis: String(now),
-          };
+          const taskCurrentSettings =
+            this.publicationScope === "computer-and-task"
+              ? {
+                  snapshot: JSON.stringify(taskSettingsFacts(settings)),
+                  nowMillis: String(now),
+                }
+              : undefined;
           const approval = ownerSettingsComputerApproval(settings, now);
           // Configured but unbound folders are not an explicit empty selection.
           // Keep them inactive until their physical identities are verified.
@@ -104,7 +111,7 @@ export class GoComputerAuthority {
             // This producer projects persisted owner settings until their
             // explicit withdrawal; unrelated bounded grants remain finite.
             renewableOwnerConsent: true,
-            taskCurrentSettings,
+            ...(taskCurrentSettings ? { taskCurrentSettings } : {}),
           };
           if (!validate("ComputerAuthorityPublishRequest", request))
             throw new BridgeError("refused", "invalid_computer_publication");
@@ -229,6 +236,20 @@ export class GoComputerAuthority {
       relativePath,
       pattern,
     ) as Promise<SettingsSearchResult>;
+  }
+
+  // Pure observation after this producer's original publish returns. A known
+  // inactive selection is distinct from pending/unknown publication; this does
+  // not authorize a query or reconstruct an ACK from saved Settings.
+  settingsReadState(computerGeneration: number): "available" | "inactive" {
+    if (this.blocked || this.pending)
+      throw new BridgeError("unknown", "computer_publication_unconfirmed");
+    if (
+      this.ownerPublication &&
+      this.ownerPublication.generation !== String(computerGeneration)
+    )
+      throw new BridgeError("unknown", "crossed_computer_publication");
+    return this.ownerPublication ? "available" : "inactive";
   }
 
   // Exact previously acknowledged publication for the trusted host adapter.

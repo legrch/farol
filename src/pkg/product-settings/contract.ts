@@ -979,6 +979,15 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     executableSha256: Sha256Schema,
   }),
   z.strictObject({
+    kind: z.literal("connector.polling"),
+    state: z.enum(["recent", "stale", "no_success", "unknown"]),
+    runtimeGeneration: Sha256Schema,
+    connectorGeneration: z.string().regex(/^(?:0|[1-9][0-9]{0,19})$/u),
+    computerGeneration: z.number().int().positive(),
+    buildId: Sha256Schema,
+    observedAtMillis: z.string().regex(/^[1-9][0-9]{0,19}$/u),
+  }),
+  z.strictObject({
     kind: z.literal("connector.runtime"),
     state: z.enum(["ready", "unreachable", "outcome_unknown"]),
     runtimeGeneration: Sha256Schema,
@@ -1582,6 +1591,7 @@ export const ProductConfigurationResultSchema = z
         "CONNECTOR_APP_VERIFICATION_BEFORE_SUBMIT_FAILED",
         "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN",
         "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
+        "CONNECTOR_POLLING_EXPIRED",
         "CHATGPT_APP_SELECTION_MISSING",
         "CHATGPT_APP_SELECTION_AMBIGUOUS",
         "CHATGPT_APP_SELECTION_CONFLICT",

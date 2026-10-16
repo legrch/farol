@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -276,5 +277,139 @@ func TestSettingsStoreExchangeQuiescenceWakesPoll(t *testing.T) {
 	}
 	if _, err := s.Load(context.Background()); err == nil {
 		t.Fatal("reopened quiesced transport")
+	}
+}
+
+// Observing Done synchronizes with context.WithDeadline before next waits for
+// the exchange lock. It changes no cancellation/deadline semantics.
+type settingsPollContext struct {
+	context.Context
+	once    sync.Once
+	waiting chan struct{}
+}
+
+func (c *settingsPollContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
+}
+
+func TestSettingsStoreExchangeExpiredPollKeepsOriginalCommand(t *testing.T) {
+	for _, variant := range []string{"deadline", "cancelled"} {
+		t.Run(variant, func(t *testing.T) {
+			// Repeat the competing-ready-channel case: the old select could
+			// choose a command even when the poll was already cancelled.
+			attempts := 32
+			if variant == "deadline" {
+				attempts = 4
+			}
+			for n := 0; n < attempts; n++ {
+				s, _, before, pending := settingsStoreExchangeFixture(t)
+				callCtx, cancelCall := context.WithTimeout(context.Background(), 3*time.Second)
+				t.Cleanup(cancelCall)
+				done := startSettingsSave(s, callCtx, delivery.Change{Expected: before, Next: &pending})
+				for len(s.ready) == 0 {
+					select {
+					case <-callCtx.Done():
+						t.Fatal("original command was not queued")
+					case <-time.After(time.Millisecond):
+					}
+				}
+				s.mu.Lock()
+				original := s.pending
+				pollCtx, cancelPoll := context.WithCancel(context.Background())
+				observed := &settingsPollContext{Context: pollCtx, waiting: make(chan struct{})}
+				until := time.Now().Add(time.Second)
+				if variant == "deadline" {
+					until = time.Now().Add(100 * time.Millisecond)
+				}
+				type pollResult struct {
+					command *wire.SettingsStoreCommand
+					err     error
+				}
+				polled := make(chan pollResult, 1)
+				go func() {
+					command, err := s.next(observed, uint64(until.UnixMilli()))
+					polled <- pollResult{command, err}
+				}()
+				select {
+				case <-observed.waiting:
+				case result := <-polled:
+					s.mu.Unlock()
+					cancelPoll()
+					t.Fatalf("poll did not reach exchange lock: %+v", result)
+				case <-time.After(time.Second):
+					s.mu.Unlock()
+					cancelPoll()
+					t.Fatal("poll did not start")
+				}
+				if variant == "deadline" {
+					time.Sleep(time.Until(until) + time.Millisecond)
+				} else {
+					cancelPoll()
+				}
+				s.mu.Unlock()
+				result := <-polled
+				cancelPoll()
+				if result.command != nil || (variant == "deadline" && result.err != nil) || (variant == "cancelled" && result.err == nil) {
+					cancelCall()
+					t.Fatalf("expired poll consumed original command: %+v", result)
+				}
+				// Only the subsequent valid poll may deliver this same original
+				// command, with the original command ID, bytes and deadline.
+				command := nextSettingsStoreCall(t, s)
+				if command.CommandId != original.command.CommandId || string(command.Body) != string(original.command.Body) || s.issued != 1 {
+					t.Fatal("expired poll replaced or renewed original command")
+				}
+				if err := finishSettingsStoreCall(t, s, command, wire.SettingsStoreReplaceResult{Status: "not_written"}); err != nil {
+					t.Fatal(err)
+				}
+				if out := awaitSettingsSave(t, done); out.err != nil || out.value.Publication != delivery.NotWritten {
+					t.Fatal("original result lost", out)
+				}
+				cancelCall()
+				if err := s.QuiescePolling(); err != nil {
+					t.Fatal("empty poll fenced exchange", err)
+				}
+			}
+		})
+	}
+}
+
+func TestSettingsStoreExchangeConcurrentPollsDeliverOnce(t *testing.T) {
+	s, _, before, pending := settingsStoreExchangeFixture(t)
+	type pollResult struct {
+		command *wire.SettingsStoreCommand
+		err     error
+	}
+	polled := make(chan pollResult, 8)
+	for n := 0; n < cap(polled); n++ {
+		go func() {
+			command, err := s.next(context.Background(), uint64(time.Now().Add(3*time.Second).UnixMilli()))
+			polled <- pollResult{command, err}
+		}()
+	}
+	done := startSettingsSave(s, context.Background(), delivery.Change{Expected: before, Next: &pending})
+	first := <-polled
+	if first.err != nil || first.command == nil {
+		t.Fatal("original command not delivered", first)
+	}
+	if err := finishSettingsStoreCall(t, s, first.command, wire.SettingsStoreReplaceResult{Status: "not_written"}); err != nil {
+		t.Fatal(err)
+	}
+	if out := awaitSettingsSave(t, done); out.err != nil || out.value.Publication != delivery.NotWritten {
+		t.Fatal("original result lost", out)
+	}
+	if err := s.QuiescePolling(); err != nil {
+		t.Fatal(err)
+	}
+	for n := 1; n < cap(polled); n++ {
+		select {
+		case result := <-polled:
+			if result.err != nil || result.command != nil {
+				t.Fatal("original command delivered again", result)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("poll retained after quiescence")
+		}
 	}
 }

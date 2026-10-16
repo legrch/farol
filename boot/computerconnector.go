@@ -428,6 +428,7 @@ func (s *computerConnector) Methods() map[string]desktop.Method {
 		return nil
 	}
 	return map[string]desktop.Method{
+		"computer.connector.polling":      s.pollingMethod(),
 		"computer.connector.verification": s.verificationObservationMethod(),
 		"computer.connector.open": {Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
 			if r.OperationID == "" || ipc.ValidateJSON(r.Body) != nil || wire.Validate("ComputerConnectorOpen", r.Body) != nil {

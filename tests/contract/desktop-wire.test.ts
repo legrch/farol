@@ -16,6 +16,7 @@ import {
   spawnCore,
 } from "../../apps/desktop/bridge/client.ts";
 import { Decoder, frame, parseJSON } from "../../apps/desktop/bridge/frame.ts";
+import { SettingsStorePump } from "../../apps/desktop/bridge/settings-store.ts";
 import { TaskModelPolicyBridge } from "../../apps/desktop/bridge/task-model-policy.ts";
 import { TaskCurrentSettingsBridge } from "../../apps/desktop/bridge/task-current-settings.ts";
 import { taskSettingsProjection } from "../fixtures/task-settings-projection.ts";
@@ -454,6 +455,63 @@ async function fixture(
   const client = new Client(child, true);
   return { client, child };
 }
+
+it("preserves settings delivery after a native pipe reply waits through an event-loop stall", async () => {
+  // Real child/stdout and blocked Node event loop; the peer's empty Go-style
+  // reply is controlled. This is not Electron dialog or live Go acceptance.
+  const { client } = await fixture(`
+const context={profileId:'test',backendGeneration:'verified'};
+function send(req,data){const body=Buffer.from(JSON.stringify({jsonrpc:'2.0',id:req.id,result:{status:'ok',requestId:req.id,context,data}}));const h=Buffer.alloc(4);h.writeUInt32BE(body.length);process.stdout.write(Buffer.concat([h,body]));}
+let input=Buffer.alloc(0),polls=0,held;
+process.stdin.on('data',chunk=>{input=Buffer.concat([input,chunk]);while(input.length>=4){const n=input.readUInt32BE();if(input.length<4+n)return;const req=JSON.parse(input.subarray(4,4+n));input=input.subarray(4+n);
+if(req.method==='core.handshake')send(req,{protocolMajor:1,protocolMinor:0,buildId:'k0-test',profileId:'test',backendGeneration:'verified',capabilities:[],maxFrameBytes:1048576});
+else if(req.method==='computer.settings.store.next'){if(++polls===1)send(req,{});else held=req;}
+else if(req.method==='core.status'){if(held){send(held,{});held=undefined;}send(req,{polls});}
+}});
+`);
+  let fences = 0;
+  let physicalCalls = 0;
+  const pump = new SettingsStorePump(client, {
+    read: async () => {
+      physicalCalls++;
+      return { status: "unavailable" };
+    },
+    replace: async () => {
+      physicalCalls++;
+      return { status: "unknown" };
+    },
+    fence: async () => {
+      fences++;
+    },
+  });
+  try {
+    await client.handshake(
+      {
+        protocolMajor: 1,
+        protocolMinor: 0,
+        buildId: "k0-test",
+        profileId: "test",
+      },
+      1000,
+    );
+    pump.start();
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 16000);
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    expect(pump.state).toBe("running");
+    expect(fences).toBe(0);
+    expect(physicalCalls).toBe(0);
+    const stopped = pump.stop();
+    const status = await client.request("core.status", {});
+    expect(status.data).toEqual({ polls: 2 });
+    await stopped;
+    expect(pump.state).toBe("stopped");
+    expect(fences).toBe(1);
+  } finally {
+    await client.close();
+    await pump.stop();
+  }
+}, 25000);
+
 it("never accepts a crossed response ID or retries a lost response", async () => {
   for (const mode of ["crossed", "lost"]) {
     const { client } = await fixture(
@@ -985,4 +1043,98 @@ it("refuses independently varied fixed wire limits before generating either peer
       ),
     ).toThrow("unsupported wire limits");
   }
+});
+
+describe("recovery archive observations", () => {
+  const stored = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../api/desktop/v1/fixtures/chat-archive.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  it("keeps stored data separate from accepted history and effect methods", () => {
+    expect(validate("ChatArchiveReply", stored)).toBe(true);
+    expect(validate("ChatHistoryResult", stored)).toBe(false);
+    for (const method of ["chat.archive.list", "chat.archive.read"]) {
+      expect(knownMethod(method)).toBe(true);
+      expect(requiresOperationID(method)).toBe(false);
+    }
+    expect(validate("ChatArchiveListRequest", { after: "" })).toBe(true);
+    expect(
+      validate("ChatArchiveReadRequest", {
+        key: stored.summary.key,
+        digest: stored.summary.digest,
+      }),
+    ).toBe(true);
+  });
+  it("refuses promoted provenance, authority fields and oversized observations", () => {
+    for (const change of [
+      { observation: "completed" },
+      { acknowledged: true },
+      { complete: true },
+      { ownerId: "other" },
+      { summary: { ...stored.summary, recordedOutcome: "accepted" } },
+      { summary: { ...stored.summary, digest: "B".repeat(64) } },
+      { summary: { ...stored.summary, bytes: 8193 } },
+      { text: "x".repeat(8193) },
+    ])
+      expect(validate("ChatArchiveReply", { ...stored, ...change })).toBe(
+        false,
+      );
+    expect(
+      validate("ChatArchiveListRequest", { after: "", profileId: "other" }),
+    ).toBe(false);
+    expect(
+      validate("ChatArchivePage", {
+        observation: "stored_unconfirmed",
+        entries: Array.from({ length: 33 }, () => stored.summary),
+        next: stored.summary.key,
+        unresolved: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+it("keeps numeric polling observations read-only and rejects authority/URL fields", () => {
+  const binding = {
+    buildId: "build",
+    profileId: "profile",
+    backendGeneration: "backend",
+    runtimeId: "runtime",
+    connectorGeneration: "1",
+  };
+  const request = {
+    binding,
+    samples: { cycles: "10", errors: "2", lastSuccessMillis: "1700000000000" },
+  };
+  expect(knownMethod("computer.connector.polling")).toBe(true);
+  expect(requiresOperationID("computer.connector.polling")).toBe(false);
+  expect(validate("ComputerConnectorPollingRequest", request)).toBe(true);
+  for (const samples of [
+    { ...request.samples, url: "http://example.com" },
+    { ...request.samples, attachment: true },
+    { cycles: 10 },
+    { cycles: "01" },
+  ])
+    expect(
+      validate("ComputerConnectorPollingRequest", { binding, samples }),
+    ).toBe(false);
+  for (const state of ["recent", "stale", "no_success", "unknown"])
+    expect(
+      validate("ComputerConnectorPollingState", {
+        binding,
+        state,
+        observedAtMillis: "1700000000000",
+      }),
+    ).toBe(true);
+  expect(
+    validate("ComputerConnectorPollingState", {
+      binding,
+      state: "attached",
+      observedAtMillis: "1700000000000",
+    }),
+  ).toBe(false);
 });

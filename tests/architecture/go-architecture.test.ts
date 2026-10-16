@@ -13,11 +13,22 @@ const checker = path.join(root, "tooling/check-go-architecture.mjs");
 const prefix = "github.com/legrch/farol/";
 const moduleFile = "module github.com/legrch/farol\n\ngo 1.26.2\n";
 
+type Finding = { code: string; file: string; detail: string };
+
 type Report = {
   productionFiles: number;
   testFiles: number;
   excludedModules: string[];
-  violations: { code: string; file: string; detail: string }[];
+  violations: Finding[];
+  report: {
+    mode: "report";
+    findings: (Finding & { baseline: "existing" | "new" })[];
+    baseline: {
+      source: string | null;
+      unbaselined: Finding[];
+      stale: Finding[];
+    };
+  };
 };
 
 // These are source/import-graph fixtures, not compiler, platform-selection or
@@ -639,4 +650,170 @@ var timestamp = time.Parse
       denied(result, "GO_TRANSPORT_DEPENDENCY");
     },
   );
+});
+
+// Checked-in synthetic snippets exercise lexical rules, not Go compilation,
+// runtime behavior, semantic ownership, or native-host qualification.
+const reportFixtures = JSON.parse(
+  fs.readFileSync(
+    path.join(root, "tests/fixtures/go-architecture/cases.json"),
+    "utf8",
+  ),
+) as {
+  name: string;
+  files: Record<string, string>;
+  reports: Finding[];
+  blocking: string[];
+}[];
+const baselineFile = "tooling/go-architecture-baseline.json";
+const baselineSource = "df8efa37eef45ead673db071c9579a9111b67ac7";
+const baseline = (findings: Finding[]) =>
+  JSON.stringify({
+    version: 1,
+    mode: "report",
+    source: baselineSource,
+    findings,
+  });
+const withoutStatus = (report: Report) =>
+  report.report.findings.map(({ baseline: _status, ...finding }) => finding);
+
+describe("ADR-0001 report-mode architecture guards", () => {
+  it.each(reportFixtures)("reports $name", ({ files, reports, blocking }) => {
+    const result = check(files);
+    expect(result.status, JSON.stringify(result.report)).toBe(
+      blocking.length ? 1 : 0,
+    );
+    expect(result.report.report.mode).toBe("report");
+    expect(withoutStatus(result.report)).toEqual(
+      expect.arrayContaining(reports),
+    );
+    expect(withoutStatus(result.report)).toHaveLength(reports.length);
+    expect(result.report.violations.map(({ code }) => code).sort()).toEqual(
+      [...blocking].sort(),
+    );
+    expect(result.report.report.baseline.unbaselined).toEqual(
+      withoutStatus(result.report),
+    );
+  });
+
+  it("enumerates the real baseline exactly without new or stale exceptions", () => {
+    const result = spawnSync(
+      process.execPath,
+      [checker, "--root", root, "--json"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const report = JSON.parse(result.stdout) as Report;
+    const stored = JSON.parse(
+      fs.readFileSync(path.join(root, baselineFile), "utf8"),
+    ) as { source: string; findings: Finding[] };
+    expect(stored.source).toBe(baselineSource);
+    expect(stored.findings.length).toBeGreaterThan(0);
+    expect(withoutStatus(report)).toEqual(stored.findings);
+    expect(report.report.baseline).toEqual({
+      source: baselineSource,
+      unbaselined: [],
+      stale: [],
+    });
+    expect(
+      report.report.findings.every(({ baseline }) => baseline === "existing"),
+    ).toBe(true);
+  });
+
+  it("keeps additions visible and reports stale exact exceptions deterministically", () => {
+    const file = "modules/chat/app/services/turn/read.go";
+    const files = { [file]: "package turn\ntype ReadRequest = CheckRequest\n" };
+    const original = withoutStatus(check(files).report);
+    const existing = check({ ...files, [baselineFile]: baseline(original) });
+    expect(existing.status).toBe(0);
+    expect(existing.report.report.findings[0]?.baseline).toBe("existing");
+    const changed = check({
+      ...files,
+      [file]: files[file] + "type ReadResponse = CheckResponse\n",
+      [baselineFile]: baseline(original),
+    });
+    expect(changed.status).toBe(0); // New ADR findings remain reports.
+    expect(changed.report.report.baseline.unbaselined).toEqual([
+      {
+        code: "GO_DTO_ALIAS",
+        file,
+        detail: "DTO alias ReadResponse = CheckResponse",
+      },
+    ]);
+    const removed = check({ [baselineFile]: baseline(original) });
+    expect(removed.report.report.baseline.stale).toEqual(original);
+    expect(
+      check({ ...files, [baselineFile]: baseline(original) }).report,
+    ).toEqual(existing.report);
+  });
+
+  it("cannot baseline away an existing blocking import violation", () => {
+    const file = "modules/chat/app/services/turn/read.go";
+    const files = {
+      [file]: 'package turn\nimport _ "os"\ntype ReadRequest = CheckRequest\n',
+    };
+    const reports = withoutStatus(check(files).report);
+    const result = check({ ...files, [baselineFile]: baseline(reports) });
+    denied(result, "GO_PURE_IMPORT", file);
+    expect(result.report.report.baseline.unbaselined).toEqual([]);
+  });
+
+  it.each([
+    [{ code: "GO_PURE_IMPORT", file: "policy.go", detail: "os" }],
+    [{ code: "GO_DTO_ALIAS", file: "modules/**", detail: "wildcard" }],
+    [{ code: "GO_DTO_ALIAS", file: "../escape.go", detail: "escape" }],
+    [
+      { code: "GO_DTO_ALIAS", file: "policy.go", detail: "duplicate" },
+      { code: "GO_DTO_ALIAS", file: "policy.go", detail: "duplicate" },
+    ],
+  ])("rejects malformed or blocking baseline entries %#", (...entries) => {
+    // Baseline errors go to stderr, unlike ordinary architecture findings.
+    const directory = fs.mkdtempSync(
+      path.join(os.tmpdir(), "farol-go-baseline-"),
+    );
+    try {
+      fs.mkdirSync(path.join(directory, "tooling"));
+      fs.writeFileSync(path.join(directory, baselineFile), baseline(entries));
+      const result = spawnSync(
+        process.execPath,
+        [checker, "--root", directory, "--json"],
+        { encoding: "utf8" },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "Invalid or duplicate Go architecture baseline finding",
+      );
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+  it.each([
+    null,
+    false,
+    0,
+    { version: 2, mode: "report", source: baselineSource, findings: [] },
+  ])("rejects invalid baseline envelopes %#", (envelope) => {
+    const directory = fs.mkdtempSync(
+      path.join(os.tmpdir(), "farol-go-baseline-"),
+    );
+    try {
+      fs.mkdirSync(path.join(directory, "tooling"));
+      fs.writeFileSync(
+        path.join(directory, baselineFile),
+        JSON.stringify(envelope),
+      );
+      const result = spawnSync(
+        process.execPath,
+        [checker, "--root", directory, "--json"],
+        { encoding: "utf8" },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "Invalid Go architecture report baseline",
+      );
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });

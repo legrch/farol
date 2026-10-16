@@ -140,6 +140,188 @@ const pureSelectors = new Map([
   ],
 ]);
 
+// ADR-0001 W0 rules are reports, separate from the existing blocking rules.
+// A closed vocabulary makes package admission reviewable without word splitting.
+const packageWords = new Set(
+  `access account admission approval archive authority boot browse browser
+  catalogue checkpoint claude client clock codex connector container control
+  conversation desktop domain execution farol filesystem gate guard handoff id inference
+  intent ipc journal lease lifecycle main migration mutation observation output
+  parent policy port process provider release repo reservation resolver response
+  result state stream task turn update workflow workspace`.split(/\s+/u),
+);
+const catchAllNames = new Set([
+  "util",
+  "utils",
+  "common",
+  "helper",
+  "helpers",
+  "types",
+  "values",
+  "misc",
+  "manager",
+]);
+const reportCodes = new Set([
+  "GO_PACKAGE_NAME",
+  "GO_CATCH_ALL_NAME",
+  "GO_CAPABILITY_DIRECTION",
+  "GO_INFRA_SERVICE",
+  "GO_DTO_ALIAS",
+]);
+const dtoPattern = /^(.*?)(Command|Query|Request|Response|Result|View)$/u;
+const findingKey = (finding) =>
+  JSON.stringify([finding.code, finding.file, finding.detail]);
+const compareFinding = (a, b) =>
+  findingKey(a) < findingKey(b) ? -1 : findingKey(a) > findingKey(b) ? 1 : 0;
+
+function reportBaseline(root, findings) {
+  const file = path.join(root, "tooling/go-architecture-baseline.json");
+  const exists = fs.existsSync(file);
+  const baseline = exists ? JSON.parse(fs.readFileSync(file, "utf8")) : null;
+  if (
+    exists &&
+    (!baseline ||
+      baseline.version !== 1 ||
+      baseline.mode !== "report" ||
+      !/^[a-f0-9]{40}$/u.test(baseline.source) ||
+      !Array.isArray(baseline.findings))
+  )
+    throw new Error("Invalid Go architecture report baseline");
+  const entries = new Map();
+  for (const item of baseline?.findings ?? []) {
+    if (
+      !item ||
+      !reportCodes.has(item.code) ||
+      typeof item.file !== "string" ||
+      !item.file ||
+      path.posix.isAbsolute(item.file) ||
+      /[\\*?]/u.test(item.file) ||
+      item.file.split("/").some((part) => ["", ".", ".."].includes(part)) ||
+      typeof item.detail !== "string" ||
+      !item.detail ||
+      Object.keys(item).sort().join(",") !== "code,detail,file" ||
+      entries.has(findingKey(item))
+    )
+      throw new Error("Invalid or duplicate Go architecture baseline finding");
+    entries.set(findingKey(item), item);
+  }
+  const current = new Map(findings.map((item) => [findingKey(item), item]));
+  const sorted = [...current.values()].sort(compareFinding);
+  return {
+    findings: sorted.map((item) => ({
+      ...item,
+      baseline: entries.has(findingKey(item)) ? "existing" : "new",
+    })),
+    baseline: {
+      source: baseline?.source ?? null,
+      unbaselined: sorted.filter((item) => !entries.has(findingKey(item))),
+      stale: [...entries.values()]
+        .filter((item) => !current.has(findingKey(item)))
+        .sort(compareFinding),
+    },
+  };
+}
+
+function nameReports(file, tokens, report) {
+  const directory = path.posix.dirname(file);
+  const leaf = path.posix.basename(directory);
+  const clause = tokens.findIndex(
+    (token) => token.kind === "identifier" && token.value === "package",
+  );
+  const declared = clause >= 0 ? tokens[clause + 1]?.value : undefined;
+  for (const name of new Set([leaf, declared].filter(Boolean))) {
+    if (catchAllNames.has(name))
+      report("GO_CATCH_ALL_NAME", directory, `Catch-all package name: ${name}`);
+    else if (!packageWords.has(name))
+      report(
+        "GO_PACKAGE_NAME",
+        directory,
+        `Package token outside the explicit ADR-0001 vocabulary: ${name}`,
+      );
+  }
+  const stem = path.posix.basename(file, ".go");
+  if (catchAllNames.has(stem))
+    report(
+      "GO_CATCH_ALL_NAME",
+      file,
+      `Catch-all production file name: ${stem}`,
+    );
+}
+
+function dependencyReports(from, to, specifier, file, report) {
+  if (from.layer === "app" && from.capability && to.service)
+    report("GO_CAPABILITY_DIRECTION", file, specifier);
+  if (from.layer === "infra" && to.service)
+    report("GO_INFRA_SERVICE", file, specifier);
+}
+
+// Inspect type declarations, including grouped and generic aliases. The lexer
+// removes comments/literals. Bracket/brace depth excludes nested struct fields
+// and function-local declarations; no Go type checking or alias-chain resolution.
+function aliasReports(file, tokens, dependencies, report) {
+  const directory = path.posix.dirname(file);
+  const imported = new Map(
+    dependencies.map(({ alias, specifier }) => [alias, specifier]),
+  );
+  function inspect(index) {
+    const left = tokens[index];
+    if (left?.kind !== "identifier") return;
+    let next = index + 1;
+    if (tokens[next]?.value === "[") {
+      let depth = 0;
+      do {
+        if (tokens[next]?.value === "[") depth++;
+        if (tokens[next]?.value === "]") depth--;
+        next++;
+      } while (next < tokens.length && depth);
+    }
+    if (tokens[next]?.value !== "=") return;
+    const right = tokens[next + 1];
+    if (right?.kind !== "identifier") return;
+    const qualified = tokens[next + 2]?.value === ".";
+    const rightName = qualified ? tokens[next + 3]?.value : right.value;
+    const leftDTO = dtoPattern.exec(left.value);
+    const rightDTO = dtoPattern.exec(rightName ?? "");
+    if (!leftDTO || !rightDTO) return;
+    const specifier = qualified ? imported.get(right.value) : null;
+    const target = specifier?.startsWith(`${modulePath}/`)
+      ? specifier.slice(modulePath.length + 1)
+      : null;
+    // A local import is a different package owner, even within the same layer
+    // or when operation prefixes match. Explicit mapping keeps that boundary.
+    const crossOwner = target && target !== directory;
+    if (leftDTO[1] !== rightDTO[1] || crossOwner)
+      report(
+        "GO_DTO_ALIAS",
+        file,
+        `DTO alias ${left.value} = ${qualified ? `${right.value}.` : ""}${rightName}`,
+      );
+  }
+  let braces = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    const value = tokens[i].value;
+    if (value === "{") braces++;
+    if (value === "}") braces--;
+    if (braces || value !== "type" || tokens[i].kind !== "identifier") continue;
+    if (tokens[i + 1]?.value !== "(") inspect(i + 1);
+    else {
+      let parens = 1,
+        brackets = 0,
+        nestedBraces = 0;
+      for (let j = i + 2; j < tokens.length && parens; j++) {
+        const part = tokens[j].value;
+        if (parens === 1 && !brackets && !nestedBraces) inspect(j);
+        if (part === "(") parens++;
+        if (part === ")") parens--;
+        if (part === "[") brackets++;
+        if (part === "]") brackets--;
+        if (part === "{") nestedBraces++;
+        if (part === "}") nestedBraces--;
+      }
+    }
+  }
+}
+
 function classify(directory) {
   const parts = directory.split("/");
   if (directory === "cmd/farol") return { kind: "cmd" };
@@ -174,6 +356,7 @@ function classify(directory) {
       layer: parts[2],
       peer: parts[3] === "peer",
       service: parts[2] === "app" && parts[3] === "services",
+      capability: parts[2] === "app" && parts[3] === "capabilities",
     };
   }
   return { kind: "unclassified" };
@@ -352,6 +535,8 @@ function localRule(from, to, target, source) {
 export function checkGoArchitecture(root) {
   root = path.resolve(root);
   const violations = [];
+  const reports = [];
+  const report = (code, file, detail) => reports.push({ code, file, detail });
   const files = [];
   const excludedModules = [];
   const add = (code, file, detail) => violations.push({ code, file, detail });
@@ -456,6 +641,10 @@ export function checkGoArchitecture(root) {
       add("GO_PARSE", file, error.message);
       continue;
     }
+    if (zone.kind !== "generated") {
+      nameReports(file, parsed.tokens, report);
+      aliasReports(file, parsed.tokens, dependencies, report);
+    }
     if (
       parsed.comments.some((comment) =>
         /^\/\/go:linkname(?:\s|$)/u.test(comment),
@@ -529,6 +718,7 @@ export function checkGoArchitecture(root) {
         if (!packages.has(target))
           add("GO_LOCAL_IMPORT", file, `Missing root package ${target}`);
         else graph.get(directory).add(target);
+        dependencyReports(zone, classify(target), specifier, file, report);
         const code = localRule(zone, classify(target), target, directory);
         if (code) add(code, file, specifier);
       } else if (
@@ -575,6 +765,7 @@ export function checkGoArchitecture(root) {
     testFiles: files.length - production.length,
     excludedModules,
     violations,
+    report: { mode: "report", ...reportBaseline(root, reports) },
   };
 }
 
@@ -598,6 +789,17 @@ if (
         process.stdout.write(
           `${violation.code} ${violation.file}: ${violation.detail}\n`,
         );
+      for (const finding of result.report.findings)
+        process.stdout.write(
+          `REPORT ${finding.baseline} ${finding.code} ${finding.file}: ${finding.detail}\n`,
+        );
+      for (const finding of result.report.baseline.stale)
+        process.stdout.write(
+          `REPORT stale ${finding.code} ${finding.file}: ${finding.detail}\n`,
+        );
+      process.stdout.write(
+        `ADR-0001 report mode: ${result.report.findings.length} findings; ${result.report.baseline.unbaselined.length} new; ${result.report.baseline.stale.length} stale exceptions.\n`,
+      );
       process.stdout.write(
         `Go architecture: ${result.productionFiles} production files checked; ${result.testFiles} test files named; excluded nested modules: ${result.excludedModules.join(", ") || "none"}.\n`,
       );

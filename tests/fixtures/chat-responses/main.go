@@ -27,6 +27,7 @@ import (
 )
 
 const fixtureBuild = "chat-responses-cpu"
+const fixtureReady = "FAROL_CHAT_RESPONSES_CPU_READY"
 
 type methodCount struct {
 	Attempts int `json:"attempts"`
@@ -215,6 +216,11 @@ func run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostic io.Writ
 	server, state, err := compose(ctx, args[0])
 	if err != nil {
 		fmt.Fprintln(diagnostic, "fixture_composition_failed")
+		return 2
+	}
+	// This controlled-peer startup marker is not a protocol handshake or
+	// authority proof. Serve still rejects every pre-handshake method.
+	if _, err := fmt.Fprintln(diagnostic, fixtureReady); err != nil {
 		return 2
 	}
 	err = server.Serve(ctx, in, out)

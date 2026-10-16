@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 const harness = vi.hoisted(() => ({
   windows: [] as any[],
   appEvents: new Map<string, (...args: any[]) => void>(),
+  ipcHandlers: new Map<string, (...args: any[]) => Promise<unknown>>(),
   ipcEvents: new Map<string, (...args: any[]) => void>(),
   screenEvents: new Map<string, (...args: any[]) => void>(),
   quit: vi.fn(),
@@ -18,6 +19,9 @@ vi.mock("electron", () => ({
     quit: harness.quit,
   },
   ipcMain: {
+    handle: (channel: string, action: (...args: any[]) => Promise<unknown>) =>
+      harness.ipcHandlers.set(channel, action),
+    removeHandler: (channel: string) => harness.ipcHandlers.delete(channel),
     on: (event: string, action: (...args: any[]) => void) =>
       harness.ipcEvents.set(event, action),
     removeListener: (event: string) => harness.ipcEvents.delete(event),
@@ -75,6 +79,7 @@ beforeEach(() => {
   harness.windows = [];
   harness.appEvents.clear();
   harness.ipcEvents.clear();
+  harness.ipcHandlers.clear();
   harness.screenEvents.clear();
   harness.quit.mockClear();
   harness.loadError = false;
@@ -82,13 +87,18 @@ beforeEach(() => {
 function options(mode: "hidden" | "default" | "secondary-visible" = "hidden") {
   return {
     directory: "/fixture/recovery",
+    session: {
+      state: vi.fn(async () => ({ status: "settings_unavailable" as const })),
+      read: vi.fn(async (_input: unknown) => ({ status: "refused" as const })),
+      close: vi.fn(async () => undefined),
+    },
     mode,
     placement: vi.fn(() => ({ x: -1000, y: 40, width: 640, height: 520 })),
     quitSignals: { ready: vi.fn(), dispose: vi.fn() },
     onQuitting: vi.fn(),
   };
 }
-describe("UI-only startup recovery lifetime", () => {
+describe("startup recovery window lifetime", () => {
   it("loads a dedicated isolated document without exposing normal desktop IPC", async () => {
     const input = options();
     const view = openStartupRecoveryWindow(input);
@@ -118,6 +128,7 @@ describe("UI-only startup recovery lifetime", () => {
     expect(
       harness.appEvents.size +
         harness.ipcEvents.size +
+        harness.ipcHandlers.size +
         harness.screenEvents.size,
     ).toBe(0);
     expect(input.quitSignals.dispose).toHaveBeenCalledOnce();
@@ -187,4 +198,57 @@ describe("UI-only startup recovery lifetime", () => {
     expect(harness.windows[0].destroyed).toBe(true);
     expect(harness.quit).not.toHaveBeenCalled();
   });
+});
+
+it("binds state/read IPC to the exact document and never exposes normal actions", async () => {
+  const input = options(),
+    view = openStartupRecoveryWindow(input);
+  await view.ready;
+  const win = harness.windows[0],
+    event = { sender: win.webContents, senderFrame: win.webContents.mainFrame };
+  const state = harness.ipcHandlers.get("farol:startup-recovery:state")!,
+    read = harness.ipcHandlers.get("farol:startup-recovery:read")!;
+  expect([...harness.ipcHandlers.keys()].sort()).toEqual([
+    "farol:startup-recovery:read",
+    "farol:startup-recovery:state",
+  ]);
+  await expect(
+    state({ sender: {}, senderFrame: event.senderFrame }),
+  ).rejects.toThrow("STARTUP_RECOVERY_DOCUMENT_UNAVAILABLE");
+  await expect(
+    read(
+      { sender: event.sender, senderFrame: { url: event.senderFrame.url } },
+      {},
+    ),
+  ).rejects.toThrow("STARTUP_RECOVERY_DOCUMENT_UNAVAILABLE");
+  expect(input.session.state).not.toHaveBeenCalled();
+  expect(input.session.read).not.toHaveBeenCalled();
+  expect(await state(event)).toEqual({ status: "settings_unavailable" });
+  expect(await read(event, { kind: "shell" })).toEqual({ status: "refused" });
+  expect(input.session.read).toHaveBeenCalledExactlyOnceWith({ kind: "shell" });
+  view.dispose();
+  expect(harness.ipcHandlers.size).toBe(0);
+});
+it("withholds IPC results when Quit crosses the original session read", async () => {
+  const input = options();
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  input.session.read.mockImplementationOnce(async () => {
+    await pending;
+    return { status: "refused" };
+  });
+  const view = openStartupRecoveryWindow(input);
+  await view.ready;
+  const win = harness.windows[0];
+  const result = harness.ipcHandlers.get("farol:startup-recovery:read")!(
+    { sender: win.webContents, senderFrame: win.webContents.mainFrame },
+    {},
+  );
+  harness.appEvents.get("before-quit")!({ preventDefault: vi.fn() });
+  release();
+  await expect(result).rejects.toThrow("STARTUP_RECOVERY_DOCUMENT_UNAVAILABLE");
+  expect(input.session.close).not.toHaveBeenCalled(); // The startup caller owns closure.
+  view.dispose();
 });

@@ -740,3 +740,69 @@ describe("optional trusted Codex read launch", () => {
     await client.close();
   });
 });
+
+describe("explicit existing-profile recovery launch", () => {
+  it("selects only the requested route before the same one-shot child handshake", async () => {
+    const f = fixture();
+    const client = await spawnCore("/owned/backend", "profile", "test", 1000, {
+      ...f.native,
+      startupMode: "recovery",
+      hostLifetimeId: "recovery-host",
+      childLaunchId: "recovery-child",
+    });
+    const args = vi.mocked(spawn).mock.calls[0]![1]!;
+    expect(args.slice(-2)).toEqual(["--startup-mode", "recovery"]);
+    expect(args).not.toContain("--previous-host-drain-confirmed");
+    expect(args).not.toContain("--settings-mutations");
+    expect(args).not.toContain("--shell-support-fd");
+    expect(args).not.toContain("--codex-read-host");
+    expect(spawn).toHaveBeenCalledTimes(1);
+    await client.close();
+    expect(f.profile.close).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    { startupMode: "other" },
+    { startupMode: null },
+    { storeMode: "create" },
+    { previousHostDrainConfirmed: true },
+    { previousHostDrainConfirmed: "false" },
+    { settingsMutations: true },
+    { codexRead: { hostId: "codex", trustedTemp: "/fixture/tmp" } },
+    { shellMetadata: new Uint8Array([1]) },
+    { hostLifetimeId: undefined },
+    { childLaunchId: undefined },
+  ])(
+    "refuses contradictory recovery metadata before profile consumption: %j",
+    async (override) => {
+      const f = fixture();
+      const native = {
+        ...f.native,
+        startupMode: "recovery",
+        hostLifetimeId: "recovery-host",
+        childLaunchId: "recovery-child",
+        ...override,
+      } as NativeCoreLaunch;
+      await expect(
+        spawnCore("/owned/backend", "profile", "test", 1000, native),
+      ).rejects.toMatchObject({ state: "refused" });
+      expect(spawn).not.toHaveBeenCalled();
+      expect(f.profile.beforeSpawn).not.toHaveBeenCalled();
+      expect(f.profile.close).toHaveBeenCalledTimes(1);
+    },
+  );
+  it("does not fall back to a full runtime after original recovery refusal", async () => {
+    const f = fixture();
+    const refusal = new Error("selected recovery unavailable");
+    f.handshake.mockRejectedValue(refusal);
+    await expect(
+      spawnCore("/owned/backend", "profile", "test", 1000, {
+        ...f.native,
+        startupMode: "recovery",
+        hostLifetimeId: "recovery-host",
+        childLaunchId: "recovery-child",
+      }),
+    ).rejects.toBe(refusal);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(f.profile.close).toHaveBeenCalledTimes(1);
+  });
+});

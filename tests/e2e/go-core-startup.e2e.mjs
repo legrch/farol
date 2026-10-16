@@ -37,6 +37,9 @@
  * modes: actual React Prepare/Old/New/Apply -> independent file/owner-v2 receipt
  * -> unacknowledged clean Quit -> same profile/package -> exact Observe ->
  * actual React Record result delivery through Go-owned pending/Offer/ACK.
+ * --settings-idle-delay requires packaged --reopen and excludes other journeys.
+ * Each hidden real Electron host blocks its main event loop for 16 seconds,
+ * then completes normal Settings/Go retirement without replacing the backend.
  */
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
@@ -160,6 +163,8 @@ const contract = Object.freeze({
     "Explicit --run-native; caller owns the exclusive native lane",
   reopen:
     "Packaged --reopen only: confirmed first Quit -> same sealed artifact/profile -> retained computerId/Graphite -> new journal backend generation -> second confirmed Quit; no retry after refused/unknown outcomes",
+  settingsIdleDelay:
+    "Explicit packaged --reopen --settings-idle-delay: on each of two hidden hosts, block the actual Electron main event loop for 16 seconds, verify unchanged Go lifecycle bytes and ready Settings, then require ordinary confirmed Quit. Synthetic provider only; no native picker, lost write, Force Quit, tunnel, installed-profile or descendant-cleanup qualification",
   readDiscard:
     "Explicit packaged --reopen --read-discard: normal configure add-workspace -> Verify -> check-folder -> list-workspace with independent Computer/Chat journal observations and exact canary listing, fixture chatgpt.verify readiness, Go read-preview metadata, duplicate prepare, exact Discard/cancel/ACK, duplicate discard without writes, known Quit, original handoff consumed by one same-profile/package successor; requires production handoff support for acknowledged never-reserved NOT_DISPATCHED history",
   readAccount:
@@ -207,6 +212,7 @@ function selection(args) {
     readAccount: false,
     editSnapshot: false,
     settingsEditMutation: false,
+    settingsIdleDelay: false,
     chatTwoTurn: false,
     chatTyped: false,
     chatHistoryReopen: false,
@@ -224,6 +230,16 @@ function selection(args) {
   const seen = new Set();
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
+    if (argument === "--settings-idle-delay") {
+      assert.equal(
+        seen.has("settingsIdleDelay"),
+        false,
+        "SETTINGS_IDLE_DELAY_REPEATED",
+      );
+      seen.add("settingsIdleDelay");
+      result.settingsIdleDelay = true;
+      continue;
+    }
     if (argument === "--chat-typed") {
       assert.equal(seen.has("chatTyped"), false, "CHAT_TYPED_REPEATED");
       seen.add("chatTyped");
@@ -340,6 +356,21 @@ function selection(args) {
       result.readDiscard || result.readAccount || result.editSnapshot,
       false,
       "SETTINGS_EDIT_MUTATION_EXCLUDES_READ_MODES",
+    );
+  }
+  if (result.settingsIdleDelay) {
+    assert.ok(
+      result.packaged && result.reopen,
+      "SETTINGS_IDLE_DELAY_REQUIRES_PACKAGED_REOPEN",
+    );
+    assert.equal(
+      result.readDiscard ||
+        result.readAccount ||
+        result.editSnapshot ||
+        result.settingsEditMutation ||
+        result.chatTwoTurn,
+      false,
+      "SETTINGS_IDLE_DELAY_EXCLUDES_OTHER_JOURNEYS",
     );
   }
   if (result.readAccount) {
@@ -929,7 +960,7 @@ async function bounded(promise, ms, code) {
     clearTimeout(timer);
   }
 }
-async function ready(window, active) {
+async function ready(window, active, observe) {
   await window
     .locator(".desktop")
     .waitFor({ state: "visible", timeout: 15000 });
@@ -940,6 +971,10 @@ async function ready(window, active) {
       3000,
       "BOOTSTRAP_READ_UNKNOWN",
     );
+    observe?.({
+      runtimeState: value.runtimeState,
+      configurationStatus: value.configuration.status,
+    });
     if (
       value.runtimeState === "ready" &&
       value.configuration.status === "ready"
@@ -1685,7 +1720,7 @@ async function native(selected, inputs, report, save) {
       child = application.process();
       launch.pid = child.pid;
       const launched = launch;
-      if (selected.chatTwoTurn) {
+      if (selected.chatTwoTurn || selected.settingsIdleDelay) {
         const diagnostics = browserFailureCollector();
         launched.browserFailures = diagnostics.failures;
         child.stderr.on("data", (chunk) => diagnostics.ingest(chunk));
@@ -1785,6 +1820,43 @@ async function native(selected, inputs, report, save) {
       };
       launch.status = "ready";
       await hidden();
+      if (selected.settingsIdleDelay) {
+        const file = path.join(stateRoot, "go-core/chat/chat-lifecycle.json");
+        const before = await document(file, 1024 * 1024);
+        launch.settingsIdleDelay = { status: "started", before };
+        await save();
+        const delay = await bounded(
+          application.evaluate(() => {
+            const started = Date.now();
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 16000);
+            return { started, finished: Date.now() };
+          }),
+          25000,
+          "SETTINGS_IDLE_DELAY_UNKNOWN",
+        );
+        assert.ok(
+          delay.finished - delay.started >= 16000,
+          "SETTINGS_IDLE_DELAY_TOO_SHORT",
+        );
+        const after = await document(file, 1024 * 1024);
+        assert.deepEqual(after, before, "GO_JOURNAL_CHANGED_DURING_IDLE_DELAY");
+        launch.settingsIdleDelay = {
+          status: "delay-observed",
+          before,
+          after,
+          ...delay,
+        };
+        await ready(window, active, (observation) => {
+          launch.settingsIdleDelay.lastReadiness = observation;
+        });
+        assert.deepEqual(
+          launch.browserFailures,
+          [],
+          "BROWSER_POLL_FENCED_DURING_IDLE_DELAY",
+        );
+        await hidden();
+        launch.settingsIdleDelay.status = "observed";
+      }
       await save();
       return { window, settings, hidden };
     };
@@ -3213,6 +3285,29 @@ function selfTest() {
   );
   reject(() => selection(["--reopen", ...args]));
   reject(() => selection(["--reopen", "--reopen", ...packageArgs]));
+  pass(() =>
+    assert.equal(
+      selection(["--settings-idle-delay", "--reopen", ...packageArgs])
+        .settingsIdleDelay,
+      true,
+    ),
+  );
+  for (const extra of [
+    [],
+    ["--read-discard"],
+    ["--settings-edit-mutation"],
+    ["--settings-idle-delay"],
+  ]) {
+    reject(() =>
+      selection([
+        "--settings-idle-delay",
+        ...extra,
+        ...(extra.length ? ["--reopen"] : []),
+        ...packageArgs,
+      ]),
+    );
+  }
+  reject(() => selection(["--settings-idle-delay", ...args]));
   reject(() => selection(packageArgs.slice(0, 4)));
   reject(() =>
     selection(packageArgs.filter((value, index) => index !== 4 && index !== 5)),
@@ -3699,21 +3794,23 @@ async function main(args) {
   const selected = selection(args);
   const report = {
     contract,
-    scenario: selected.chatHistoryReopen
-      ? `${selected.chatTyped ? `${contract.chatTyped}; ` : ""}${contract.chatHistoryReopen}`
-      : selected.chatTyped
-        ? contract.chatTyped
-        : selected.chatTwoTurn
-          ? contract.chatTwoTurn
-          : selected.settingsEditMutation
-            ? contract.settingsEditMutation
-            : selected.editSnapshot
-              ? `${contract.editSnapshot}; ${selected.readAccount ? contract.readAccount : contract.readDiscard}`
-              : selected.readAccount
-                ? contract.readAccount
-                : selected.readDiscard
-                  ? contract.readDiscard
-                  : contract.scenario,
+    scenario: selected.settingsIdleDelay
+      ? contract.settingsIdleDelay
+      : selected.chatHistoryReopen
+        ? `${selected.chatTyped ? `${contract.chatTyped}; ` : ""}${contract.chatHistoryReopen}`
+        : selected.chatTyped
+          ? contract.chatTyped
+          : selected.chatTwoTurn
+            ? contract.chatTwoTurn
+            : selected.settingsEditMutation
+              ? contract.settingsEditMutation
+              : selected.editSnapshot
+                ? `${contract.editSnapshot}; ${selected.readAccount ? contract.readAccount : contract.readDiscard}`
+                : selected.readAccount
+                  ? contract.readAccount
+                  : selected.readDiscard
+                    ? contract.readDiscard
+                    : contract.scenario,
     missingWitnesses: selected.chatHistoryReopen
       ? [
           ...historyLimits,

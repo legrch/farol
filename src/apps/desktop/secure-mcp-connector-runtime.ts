@@ -1,3 +1,5 @@
+import { readConnectorPollingMetrics } from "../../../apps/desktop/connector-polling";
+import type { ComputerConnectorPollingSamples } from "../../../apps/desktop/bridge/wire";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -253,6 +255,7 @@ type Dependencies = Readonly<{
   run?: ConnectorCommandRunner;
   start?: ConnectorProcessStarter;
   get?: (url: string) => Promise<boolean>;
+  polling?: (base: string) => Promise<ComputerConnectorPollingSamples>;
   wait?: (milliseconds: number) => Promise<void>;
   now?: () => number;
   id?: () => string;
@@ -716,6 +719,9 @@ export class SecureMcpConnectorRuntime {
   private readonly run: ConnectorCommandRunner;
   private readonly startProcess: ConnectorProcessStarter;
   private readonly get: (url: string) => Promise<boolean>;
+  private readonly polling: (
+    base: string,
+  ) => Promise<ComputerConnectorPollingSamples>;
   private readonly wait: (milliseconds: number) => Promise<void>;
   private readonly now: () => number;
   private readonly id: () => string;
@@ -761,6 +767,7 @@ export class SecureMcpConnectorRuntime {
           beforeEffect,
         ));
     this.get = dependencies.get ?? getReady;
+    this.polling = dependencies.polling ?? readConnectorPollingMetrics;
     this.wait = dependencies.wait ?? wait;
     this.now = dependencies.now ?? Date.now;
     this.id = dependencies.id ?? randomUUID;
@@ -1063,6 +1070,35 @@ export class SecureMcpConnectorRuntime {
     } catch {
       return false;
     }
+  }
+
+  // A read from this exact child/locator, with no effectful fallback. A stale
+  // completion is absent, never positive data borrowed by a replacement.
+  async observePolling(): Promise<Readonly<{
+    runtimeGeneration: string;
+    samples: ComputerConnectorPollingSamples;
+  }> | null> {
+    const child = this.child,
+      base = this.healthBaseUrl,
+      generation = this.runtimeGeneration;
+    if (
+      !child ||
+      child.exitCode !== null ||
+      child.tunnelObservation != null ||
+      base === null ||
+      generation === null
+    )
+      return null;
+    const samples = await this.polling(base);
+    if (
+      this.child !== child ||
+      child.exitCode !== null ||
+      child.tunnelObservation != null ||
+      this.healthBaseUrl !== base ||
+      this.runtimeGeneration !== generation
+    )
+      return null;
+    return Object.freeze({ runtimeGeneration: generation, samples });
   }
 
   // Host composition must correlate this with its current runtime generation;

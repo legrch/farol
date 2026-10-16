@@ -1,4 +1,8 @@
 import {
+  startDesktopGoRecovery,
+  type RecoveryCoreSelection,
+} from "../../apps/desktop/recovery/core-host.ts";
+import {
   afterEach,
   beforeEach,
   describe,
@@ -39,6 +43,7 @@ const ports = vi.hoisted(() => ({
   open: vi.fn(() => 41),
   close: vi.fn(),
   provision: vi.fn(),
+  existing: vi.fn(),
   qualify: vi.fn(),
   resources: vi.fn(async (..._args: unknown[]) => undefined),
   runtime: vi.fn(async (..._args: unknown[]) => ({
@@ -79,6 +84,7 @@ vi.mock("node:child_process", async (original) => ({
 }));
 vi.mock("../../apps/desktop/bridge/profile-storage.ts", () => ({
   openNativeProfileStorage: ports.provision,
+  openExistingNativeProfileStorage: ports.existing,
 }));
 vi.mock("../../apps/desktop/bridge/profile.ts", () => ({
   qualifyProfileLaunch: ports.qualify,
@@ -237,6 +243,38 @@ function transport(fault?: Fault) {
             text: "Selected file\n",
             bytes: "14",
             sha256: "f".repeat(64),
+          };
+          break;
+        case "computer.settings.list":
+          data = {
+            ...input,
+            root: { path: "/synthetic/work", device: "1", inode: "2" },
+            entries: ["note.md", "folder/"],
+            truncated: false,
+          };
+          break;
+        case "computer.settings.snapshot":
+          data = {
+            ...input,
+            root: { path: "/synthetic/work", device: "1", inode: "2" },
+            bytes: 5,
+            sha256: "b".repeat(64),
+          };
+          break;
+        case "computer.settings.search":
+          data = {
+            ...input,
+            root: { path: "/synthetic/work", device: "1", inode: "2" },
+            matches: [
+              {
+                path: "note.md",
+                line: "1",
+                text: "retained",
+                truncated: false,
+              },
+            ],
+            resultLimited: false,
+            scanLimited: false,
           };
           break;
         case "computer.settings.delivery.apply":
@@ -402,6 +440,12 @@ beforeEach(async () => {
     root: "/synthetic/state/go-core",
     storeMode: "open",
     settingsMutations: true,
+  });
+  ports.existing.mockReturnValue({
+    profileId: context.profileId,
+    root: "/synthetic/state/go-core",
+    storeMode: "open",
+    settingsMutations: false,
   });
   profileClose = vi.fn(() => ({ state: "closed" as const }));
   ports.qualify.mockReturnValue({
@@ -1378,4 +1422,260 @@ describe("normal host Go Settings mutation route", () => {
     expect(f.request).not.toHaveBeenCalled();
     await host.close();
   });
+});
+
+function recoverySelection(): RecoveryCoreSelection {
+  return {
+    compiledArtifact: selection.compiledArtifact,
+    compiledResources: { synthetic: "independent-resource-selection" },
+    build: selection.build,
+    artifactRoot: selection.artifactRoot,
+    stateRoot: selection.stateRoot,
+    home: selection.home,
+    settings,
+  };
+}
+
+describe("explicit recovery Go host composition", () => {
+  it("qualifies existing storage and one child, publishes owner-only grants and exposes only bounded reads", async () => {
+    const f = transport();
+    start.mockResolvedValue(f.client);
+    const host = await startDesktopGoRecovery(recoverySelection());
+    expect(ports.resources).toHaveBeenCalledTimes(1);
+    expect(ports.existing).toHaveBeenCalledExactlyOnceWith(
+      selection.stateRoot,
+      settings.computer.computerId,
+    );
+    expect(ports.provision).not.toHaveBeenCalled();
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(start.mock.calls[0]![1]).toMatchObject({
+      startupMode: "recovery",
+      storeMode: "open",
+      ownerId: "owner-desktop",
+      computerId: settings.computer.computerId,
+      hostLifetimeId: expect.any(String),
+      childLaunchId: expect.any(String),
+    });
+    for (const field of [
+      "previousHostDrainConfirmed",
+      "settingsMutations",
+      "codexRead",
+      "shellMetadata",
+    ])
+      expect(start.mock.calls[0]![1]).not.toHaveProperty(field);
+    expect(ports.resources.mock.invocationCallOrder[0]!).toBeLessThan(
+      ports.existing.mock.invocationCallOrder[0]!,
+    );
+    expect(f.request.mock.calls[1]![1]).not.toHaveProperty(
+      "taskCurrentSettings",
+    );
+    expect(Object.keys(host).sort()).toEqual([
+      "archiveList",
+      "archiveRead",
+      "close",
+      "folderReadsAvailable",
+      "isAvailable",
+      "list",
+      "search",
+      "snapshot",
+    ]);
+    expect(host.folderReadsAvailable).toBe(true);
+    expect(Object.isFrozen(host)).toBe(true);
+    const workspace = settings.computer.workspaces[0]!.workspaceId;
+    expect((await host.list(workspace, ".")).entries).toEqual([
+      "note.md",
+      "folder/",
+    ]);
+    expect((await host.snapshot(workspace, "note.md")).bytes).toBe(5);
+    expect(
+      (await host.search(workspace, ".", "retained")).matches[0]!.path,
+    ).toBe("note.md");
+    await host.close();
+    await host.close();
+    expect(f.close).toHaveBeenCalledTimes(1);
+    expect(f.events).toEqual([
+      "computer.authority.deactivate",
+      "computer.authority.publish",
+      "computer.settings.list",
+      "computer.settings.snapshot",
+      "computer.settings.search",
+      "client.close",
+    ]);
+    expect(selection.browser).not.toHaveBeenCalled();
+    expect(AttestedCore.prototype.completeRetirement).not.toHaveBeenCalled();
+    await expect(host.list(workspace, ".")).rejects.toMatchObject({
+      code: "recovery_computer_closed",
+    });
+  });
+  it.each([undefined, null])(
+    "requires independent compiled resources: %s",
+    async (compiledResources) => {
+      await expect(
+        startDesktopGoRecovery({ ...recoverySelection(), compiledResources }),
+      ).rejects.toMatchObject({ code: "core_host_resources_missing" });
+      expect(ports.existing).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+    },
+  );
+  it("refuses resource failure before profile consumption", async () => {
+    const error = new BridgeError("refused", "core_resources_unqualified");
+    ports.resources.mockRejectedValueOnce(error);
+    await expect(startDesktopGoRecovery(recoverySelection())).rejects.toBe(
+      error,
+    );
+    expect(ports.existing).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+  it.each([
+    { storeMode: "create", settingsMutations: false },
+    { storeMode: "open", settingsMutations: true },
+  ])("refuses broader storage before qualification: %j", async (invalid) => {
+    ports.existing.mockReturnValueOnce({
+      profileId: context.profileId,
+      root: "/synthetic/state/go-core",
+      ...invalid,
+    });
+    await expect(
+      startDesktopGoRecovery(recoverySelection()),
+    ).rejects.toMatchObject({ code: "invalid_recovery_storage" });
+    expect(ports.qualify).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+  it.each(["refused", "unknown"] as const)(
+    "preserves the one original selected launch %s without fallback",
+    async (state) => {
+      const error = new BridgeError(state, "selected_recovery_failed");
+      start.mockRejectedValue(error);
+      await expect(startDesktopGoRecovery(recoverySelection())).rejects.toBe(
+        error,
+      );
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(profileClose).toHaveBeenCalledTimes(1);
+      expect(ports.provision).not.toHaveBeenCalled();
+      expect(selection.browser).not.toHaveBeenCalled();
+    },
+  );
+  it("closes the original child if its verified context is already unavailable", async () => {
+    const f = transport();
+    const error = new BridgeError("unavailable", "backend_unavailable");
+    Object.defineProperty(f.client, "verifiedContext", {
+      get: () => {
+        throw error;
+      },
+    });
+    start.mockResolvedValue(f.client);
+    await expect(startDesktopGoRecovery(recoverySelection())).rejects.toBe(
+      error,
+    );
+    expect(f.close).toHaveBeenCalledTimes(1);
+    expect(f.request).not.toHaveBeenCalled();
+  });
+  it("keeps original publication loss and cleanup loss without another child", async () => {
+    const f = transport((method, result) => {
+      if (method !== "computer.authority.publish") return result;
+      return {
+        status: "unknown",
+        requestId: result.requestId,
+        context: result.context,
+        ...(result.operationId ? { operationId: result.operationId } : {}),
+        code: "publication_lost",
+      };
+    });
+    const cleanup = new BridgeError("unknown", "owned_cleanup_unknown");
+    f.close.mockRejectedValueOnce(cleanup);
+    start.mockResolvedValue(f.client);
+    await expect(
+      startDesktopGoRecovery(recoverySelection()),
+    ).rejects.toMatchObject({
+      message: "recovery_startup_and_cleanup_unconfirmed",
+      errors: [expect.objectContaining({ state: "unknown" }), cleanup],
+    });
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(
+      f.events.filter((event) => event === "computer.authority.publish"),
+    ).toHaveLength(1);
+    expect(f.close).toHaveBeenCalledTimes(1);
+    expect(AttestedCore.prototype.completeRetirement).not.toHaveBeenCalled();
+  });
+  it("withholds a read that finishes after this view closes", async () => {
+    const f = transport();
+    start.mockResolvedValue(f.client);
+    const host = await startDesktopGoRecovery(recoverySelection());
+    const perform = f.request.getMockImplementation()!;
+    let release!: () => void;
+    const retained = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    f.request.mockImplementationOnce(async (...args) => {
+      await retained;
+      return perform(...args);
+    });
+    const result = host.list(settings.computer.workspaces[0]!.workspaceId, ".");
+    await host.close();
+    release();
+    await expect(result).rejects.toMatchObject({
+      code: "recovery_computer_closed",
+    });
+  });
+});
+
+it("keeps the archive independent when saved folders lack physical bindings and no publication ACK exists", async () => {
+  const f = transport();
+  start.mockResolvedValue(f.client);
+  const unbound = structuredClone(settings);
+  for (const workspace of unbound.computer.workspaces)
+    delete workspace.rootIdentity;
+  const host = await startDesktopGoRecovery({
+    ...recoverySelection(),
+    settings: unbound,
+  });
+  expect(host.folderReadsAvailable).toBe(false);
+  f.request.mockImplementationOnce(async (_method, _body, options) => ({
+    status: "ok",
+    requestId: options!.id!,
+    context,
+    data: {
+      observation: "stored_unconfirmed",
+      entries: [],
+      next: "",
+      unresolved: false,
+    },
+  }));
+  expect(await host.archiveList("")).toEqual({
+    observation: "stored_unconfirmed",
+    entries: [],
+    next: "",
+    unresolved: false,
+  });
+  await expect(
+    host.list(unbound.computer.workspaces[0]!.workspaceId, "."),
+  ).rejects.toMatchObject({ code: "computer_publication_unavailable" });
+  await host.close();
+  expect(f.events).toEqual(["computer.authority.deactivate", "client.close"]);
+  expect(f.close).toHaveBeenCalledTimes(1);
+  expect(start).toHaveBeenCalledTimes(1);
+});
+
+it("observes the original recovery pipe loss without a request, replacement or new cleanup", async () => {
+  const f = transport();
+  start.mockResolvedValue(f.client);
+  const host = await startDesktopGoRecovery(recoverySelection());
+  expect(host.isAvailable()).toBe(true);
+  const calls = f.request.mock.calls.length;
+  Object.defineProperty(f.client, "verifiedContext", {
+    get: () => {
+      throw new BridgeError("unavailable", "backend_unavailable");
+    },
+  });
+  expect(host.isAvailable()).toBe(false);
+  expect(host.isAvailable()).toBe(false);
+  await expect(host.archiveList("")).rejects.toMatchObject({
+    code: "backend_unavailable",
+  });
+  expect(f.request).toHaveBeenCalledTimes(calls);
+  expect(start).toHaveBeenCalledTimes(1);
+  expect(f.close).not.toHaveBeenCalled();
+  await host.close();
+  expect(host.isAvailable()).toBe(false);
+  expect(f.close).toHaveBeenCalledTimes(1);
 });

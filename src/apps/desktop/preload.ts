@@ -1,13 +1,18 @@
 import { contextBridge, ipcRenderer } from "electron";
+import { recoveryChannels } from "../../../apps/desktop/renderer/recovery/contract";
 import { channels } from "../../pkg/ipc/channels";
 
 // Recovery uses the existing attested entry with a separately selected, narrow API.
-// The recovery host has no normal desktop handlers and never starts a runtime.
+// Recovery exposes no normal desktop handlers, publications or mutation actions.
 if (process.argv.includes("--farol-startup-recovery")) {
   contextBridge.exposeInMainWorld(
     "farolRecovery",
     Object.freeze({
-      quit: () => ipcRenderer.send("farol:startup-recovery:quit"),
+      state: () =>
+        ipcRenderer.invoke(recoveryChannels.state) as Promise<unknown>,
+      read: (request: unknown) =>
+        ipcRenderer.invoke(recoveryChannels.read, request) as Promise<unknown>,
+      quit: () => ipcRenderer.send(recoveryChannels.quit),
     }),
   );
 } else {

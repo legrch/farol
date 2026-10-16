@@ -31,11 +31,10 @@ func invalidIngress() (*desktop.Outcome, error) {
 	return &desktop.Outcome{Status: "refused", Code: "invalid_ingress_request"}, nil
 }
 
-// Register all methods once before Server.New copies the registry. The holder
-// selects only a route minted by this root's known publication+actual admission;
-// body IDs and the presence of a registered read capability create no authority.
-func (s *ComputerIngress) Methods() map[string]desktop.Method {
-	methods := map[string]desktop.Method{
+// ownerMethods is the closed owner-publication and Settings-read surface.
+// It creates no Chat, mutation, process, connector or Task capability.
+func (s *ComputerIngress) ownerMethods() map[string]desktop.Method {
+	return map[string]desktop.Method{
 		"computer.settings.list":     s.settingsListMethod(),
 		"computer.settings.search":   s.settingsSearchMethod(),
 		"computer.settings.snapshot": s.settingsSnapshotMethod(),
@@ -61,18 +60,26 @@ func (s *ComputerIngress) Methods() map[string]desktop.Method {
 			value, err := s.Publish(ctx, r.OperationID, body)
 			return ingressOutcome(value, err)
 		}},
-		"chat.turn": {Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
-			if r.OperationID == "" || ipc.ValidateJSON(r.Body) != nil || wire.Validate("ChatComputerAdmissionRequest", r.Body) != nil {
-				return invalidIngress()
-			}
-			var body wire.ChatComputerAdmissionRequest
-			if json.Unmarshal(r.Body, &body) != nil {
-				return invalidIngress()
-			}
-			value, err := s.Admit(ctx, r.OperationID, body)
-			return ingressOutcome(value, err)
-		}},
 	}
+}
+
+// Register all methods once before Server.New copies the registry. The holder
+// selects only a route minted by this root's known publication+actual admission;
+// body IDs and the presence of a registered read capability create no authority.
+func (s *ComputerIngress) Methods() map[string]desktop.Method {
+	methods := s.ownerMethods()
+
+	methods["chat.turn"] = desktop.Method{Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
+		if r.OperationID == "" || ipc.ValidateJSON(r.Body) != nil || wire.Validate("ChatComputerAdmissionRequest", r.Body) != nil {
+			return invalidIngress()
+		}
+		var body wire.ChatComputerAdmissionRequest
+		if json.Unmarshal(r.Body, &body) != nil {
+			return invalidIngress()
+		}
+		value, err := s.Admit(ctx, r.OperationID, body)
+		return ingressOutcome(value, err)
+	}}
 	// Selector closures capture the actual holder, not a nil startup route or a
 	// mutable method map; the selected route itself rechecks its immutable fence.
 	for _, name := range []string{"computer.workspace.catalogue", "computer.workspace.bootstrap", "computer.workspace.read", "computer.workspace.list", "computer.workspace.search"} {
