@@ -101,6 +101,9 @@ func check(ctx context.Context, parent int, name string, fd int, want fingerprin
 	return nil
 }
 func openDir(ctx context.Context, parent int, name string, want fingerprint) (int, error) {
+	return openDirOwned(ctx, parent, name, want, cleanup{})
+}
+func openDirOwned(ctx context.Context, parent int, name string, want fingerprint, owner cleanup) (int, error) {
 	if !want.safeDir() {
 		return -1, refuse(CodeType)
 	}
@@ -112,8 +115,7 @@ func openDir(ctx context.Context, parent int, name string, want fingerprint) (in
 		return -1, refuse(CodeIO)
 	}
 	if e = check(ctx, parent, name, fd, want); e != nil {
-		unix.Close(fd)
-		return -1, e
+		return -1, finishCleanup(ctx, e, owner.fd(fd))
 	}
 	return fd, nil
 }
@@ -128,6 +130,7 @@ type inventory struct {
 	bytes           int64
 	digest          hash.Hash
 	buffer          []byte
+	cleanup         cleanup
 }
 
 func (s *inventory) retain(n int) error {
@@ -154,13 +157,20 @@ func utf16Less(a, b string) bool {
 	return len(aa) < len(bb)
 }
 func names(ctx context.Context, fd int, remaining int) ([]string, error) {
+	return namesOwned(ctx, fd, remaining, cleanup{})
+}
+func namesOwned(ctx context.Context, fd int, remaining int, owner cleanup) (result []string, failure error) {
 	// fd is a private independently opened directory description. NewFile owns it.
 	f := os.NewFile(uintptr(fd), "")
 	if f == nil {
-		unix.Close(fd)
-		return nil, refuse(CodeIO)
+		return nil, finishCleanup(ctx, refuse(CodeIO), owner.fd(fd))
 	}
-	defer f.Close()
+	defer func() {
+		failure = finishCleanup(ctx, failure, owner.file(f))
+		if failure != nil {
+			result = nil
+		}
+	}()
 	var all []string
 	for {
 		if e := canceled(ctx); e != nil {
@@ -190,12 +200,15 @@ func names(ctx context.Context, fd int, remaining int) ([]string, error) {
 	return all, canceled(ctx)
 }
 func list(ctx context.Context, fd int, remaining int) ([]string, error) {
+	return listOwned(ctx, fd, remaining, cleanup{})
+}
+func listOwned(ctx context.Context, fd int, remaining int, owner cleanup) ([]string, error) {
 	// A dup would share offsets. Reopen dot physically and own only the new fd.
 	own, e := unix.Openat(fd, ".", dirFlags, 0)
 	if e != nil {
 		return nil, refuse(CodeIO)
 	}
-	return names(ctx, own, remaining)
+	return namesOwned(ctx, own, remaining, owner)
 }
 func readLink(ctx context.Context, fd int, name string) (string, error) {
 	if e := canceled(ctx); e != nil {
@@ -227,7 +240,7 @@ func (s *inventory) walk(ctx context.Context, fd int, prefix string, depth int, 
 		return refuse(CodeLimit)
 	}
 	remaining := maxEntries - s.count
-	children, e := list(ctx, fd, remaining)
+	children, e := listOwned(ctx, fd, remaining, s.cleanup)
 	if e != nil {
 		return e
 	}
@@ -270,7 +283,7 @@ func (s *inventory) walk(ctx context.Context, fd int, prefix string, depth int, 
 		}
 		switch st.kind() {
 		case 'd':
-			child, e := openDir(ctx, fd, name, st)
+			child, e := openDirOwned(ctx, fd, name, st, s.cleanup)
 			if e != nil {
 				return e
 			}
@@ -278,7 +291,7 @@ func (s *inventory) walk(ctx context.Context, fd int, prefix string, depth int, 
 			if e == nil {
 				e = check(ctx, fd, name, child, st)
 			}
-			unix.Close(child)
+			e = finishCleanup(ctx, e, s.cleanup.fd(child))
 			if e != nil {
 				return e
 			}
@@ -324,7 +337,7 @@ func (s *inventory) walk(ctx context.Context, fd int, prefix string, depth int, 
 	}
 	return canceled(ctx)
 }
-func (s *inventory) read(ctx context.Context, parent int, name string, want fingerprint, document *[]byte) ([]byte, error) {
+func (s *inventory) read(ctx context.Context, parent int, name string, want fingerprint, document *[]byte) (result []byte, failure error) {
 	if want.kind() != 'f' || want.links != 1 {
 		return nil, refuse(CodeType)
 	}
@@ -338,7 +351,12 @@ func (s *inventory) read(ctx context.Context, parent int, name string, want fing
 	if e != nil {
 		return nil, refuse(CodeIO)
 	}
-	defer unix.Close(fd)
+	defer func() {
+		failure = finishCleanup(ctx, failure, s.cleanup.fd(fd))
+		if failure != nil {
+			result = nil
+		}
+	}()
 	if e = check(ctx, parent, name, fd, want); e != nil {
 		return nil, e
 	}
@@ -374,12 +392,15 @@ func (s *inventory) read(ctx context.Context, parent int, name string, want fing
 	}
 	return h.Sum(nil), nil
 }
-func (s *inventory) document(ctx context.Context, root int, path string) ([]byte, error) {
+func (s *inventory) document(ctx context.Context, root int, path string) (result []byte, failure error) {
 	parts := strings.Split(path, "/")
 	parent := root
 	defer func() {
 		if parent != root {
-			unix.Close(parent)
+			failure = finishCleanup(ctx, failure, s.cleanup.fd(parent))
+			if failure != nil {
+				result = nil
+			}
 		}
 	}()
 	for i, name := range parts[:len(parts)-1] {
@@ -388,14 +409,19 @@ func (s *inventory) document(ctx context.Context, root int, path string) ([]byte
 		if !ok {
 			return nil, refuse(CodeIdentity)
 		}
-		next, e := openDir(ctx, parent, name, rec.stat)
+		next, e := openDirOwned(ctx, parent, name, rec.stat, s.cleanup)
 		if e != nil {
 			return nil, e
 		}
 		if parent != root {
-			unix.Close(parent)
+			old := parent
+			parent = next
+			if err := finishCleanup(ctx, nil, s.cleanup.fd(old)); err != nil {
+				return nil, err
+			}
+		} else {
+			parent = next
 		}
-		parent = next
 	}
 	rec, ok := s.entries[path]
 	if !ok {
@@ -405,7 +431,7 @@ func (s *inventory) document(ctx context.Context, root int, path string) ([]byte
 	_, e := s.read(ctx, parent, parts[len(parts)-1], rec.stat, &data)
 	return data, e
 }
-func (v *Verifier) verify(ctx context.Context, parent, app int) (Observation, error) {
+func (v *Verifier) verify(ctx context.Context, parent, app int) (result Observation, failure error) {
 	p, e := held(ctx, parent)
 	if e != nil {
 		return Observation{}, e
@@ -417,12 +443,17 @@ func (v *Verifier) verify(ctx context.Context, parent, app int) (Observation, er
 	if e != nil {
 		return Observation{}, e
 	}
-	root, e := openDir(ctx, parent, v.leaf, a)
+	root, e := openDirOwned(ctx, parent, v.leaf, a, v.cleanup)
 	if e != nil {
 		return Observation{}, e
 	}
-	defer unix.Close(root)
-	s := inventory{entries: make(map[string]entry), digest: sha256.New(), buffer: make([]byte, 1<<20)}
+	defer func() {
+		failure = finishCleanup(ctx, failure, v.cleanup.fd(root))
+		if failure != nil {
+			result = Observation{}
+		}
+	}()
+	s := inventory{entries: make(map[string]entry), digest: sha256.New(), buffer: make([]byte, 1<<20), cleanup: v.cleanup}
 	s.digest.Write([]byte("farol.next.tree-digest/v2\x00"))
 	if e = s.walk(ctx, root, "", 0, false); e != nil {
 		return Observation{}, e

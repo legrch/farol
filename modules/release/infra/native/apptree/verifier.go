@@ -6,7 +6,9 @@ package apptree
 
 import (
 	"context"
+	"errors"
 	"os"
+	"time"
 	"unicode/utf8"
 )
 
@@ -52,8 +54,12 @@ func canceled(ctx context.Context) error {
 	if ctx == nil {
 		return refuse(CodeInput)
 	}
-	if ctx.Err() != nil {
-		return refuse(CodeCanceled)
+	cause := ctx.Err()
+	if until, ok := ctx.Deadline(); ok && !time.Now().Before(until) {
+		cause = errors.Join(cause, context.DeadlineExceeded)
+	}
+	if cause != nil {
+		return &observationFailure{refusal: &Error{Code: CodeCanceled}, cause: cause}
 	}
 	return nil
 }
@@ -74,6 +80,7 @@ type Verifier struct {
 	leaf        string
 	expected    Expected
 	identity    IdentityVerifier
+	cleanup     cleanup
 }
 
 func New(parent, app *os.File, leaf string, expected Expected, identity IdentityVerifier) (*Verifier, error) {
@@ -143,11 +150,11 @@ func (v *Verifier) Verify(ctx context.Context) (Observation, error) {
 	err = pc.Control(func(p uintptr) {
 		e := ac.Control(func(a uintptr) { result, inner = v.verify(ctx, int(p), int(a)) })
 		if e != nil {
-			inner = refuse(CodeIO)
+			inner = &observationFailure{refusal: &Error{Code: CodeIO}, cause: errors.Join(inner, e)}
 		}
 	})
 	if err != nil {
-		inner = refuse(CodeIO)
+		inner = &observationFailure{refusal: &Error{Code: CodeIO}, cause: errors.Join(inner, err)}
 	}
 	if inner != nil {
 		return Observation{}, inner

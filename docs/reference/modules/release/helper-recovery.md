@@ -13,6 +13,18 @@ Trusted composition must bind that runtime to the same request and retain the
 existing lease, slot, routes and admission until actual native return. Input
 validation and an observed pair grant no effect authority.
 
+## Native port implementation
+
+`infra/native/execution.With` implements the runtime port inside one active `helperroutes.WithFiles` borrow. Composition supplies the same parsed request, the existing operation journal, its original absolute deadline, and the existing owner's lease/slot/admission and retained-unknown callbacks. Raw descriptors or request fields do not replace the live borrow. This adapter opens no route, acquires no lease, creates no second journal and selects no CLI route.
+
+The adapter observes the five fixed names with no-follow descriptor-relative queries and checks a complete second scan. Only `ENOENT` proves absence. Sequential mutation-sensitive scans are not an atomic namespace snapshot. `rejected-target.json` is a record-presence observation, never an app-tree or namespace-effect operand. App-tree checks compose the existing physical verifier with the pure identity policy. A negative match requires an inspected original verification refusal; opaque, cleanup, native and cancellation failures remain errors. Namespace effects delegate to the existing one-attempt rename/exchange primitive under the owner's fence.
+
+Methods serialize actual synchronous native return, including cleanup. They capture the original deadline once and enforce it independently of delayed timer notification; later caller contexts cannot renew it. Retained interfaces refuse after `With`, including after a panicking callback. Each effect consumes its attempt before I/O or cancellation; uncertainty is retained by the existing owner and survives a fresh adapter. The journal uses `ReadHelper`'s 8192-byte preparse bound and the existing revision-based CAS. Readback supplies no startup, effect, helper-exit or durability acceptance beyond the existing repository's own completed persistence contract.
+
+Disposable native filesystem tests cover tree identity/digest observations, fixed entry mutation, rename/exchange identity readback and borrowed-handle preservation. Route/admission/journal seams in these adapter tests are symbolic; the production entry refuses a missing live borrow. Deadline, actual-return, scope, classification and retained-unknown tests do not prove a live lease, installed helper, real process exit, package or OTA/rollback acceptance.
+
+## Application policy
+
 `Inspect` is repeatable read-only preflight. `Reconcile` consumes one attempt
 before any I/O or cancellation check, shared across copied wrappers. It never
 retries a failed port, starts a prepared exchange in recovery, removes retained
