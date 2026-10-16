@@ -270,6 +270,10 @@ func (r *runtime) move(ctx context.Context, left, right port.HelperRecoveryEntry
 		if err != nil {
 			return err
 		}
-		return op.Run(c)
+		err = op.Run(c)
+		if err == nil {
+			r.effected = true
+		}
+		return err
 	})
 }

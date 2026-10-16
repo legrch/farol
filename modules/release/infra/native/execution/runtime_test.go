@@ -61,6 +61,14 @@ func must(t *testing.T, err error) {
 		t.Fatal(err)
 	}
 }
+
+func requireNativeRename(t *testing.T, err error) {
+	t.Helper()
+	if f, ok := err.(*port.HelperRecoveryFailure); ok && f != nil && f.Code == "rename_unsupported" && !f.Internal && !f.Uncertain {
+		t.Skip("production native rename is unsupported on this host; no move qualification")
+	}
+	must(t, err)
+}
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	f := &fixture{apps: filepath.Join(t.TempDir(), "Applications"), operation: filepath.Join(t.TempDir(), "operation"), routes: func(c context.Context) error { return c.Err() }}
@@ -295,7 +303,7 @@ func TestNativeEntriesAndOneAttemptRename(t *testing.T) {
 		if entries.App.Present || !entries.Staged.Directory || !entries.Staged.OwnedByEffectiveUser || !entries.RejectedTarget.Present || entries.RejectedTarget.Directory {
 			t.Fatal("incorrect fixed entry observation")
 		}
-		must(t, r.Rename(context.Background(), port.Staged, port.App, entries.Staged.Identity))
+		requireNativeRename(t, r.Rename(context.Background(), port.Staged, port.App, entries.Staged.Identity))
 		again, err := r.Entries(context.Background())
 		must(t, err)
 		if again.Staged.Present || again.App.Identity != entries.Staged.Identity {
@@ -312,7 +320,7 @@ func TestUnknownEffectSurvivesNewRuntime(t *testing.T) {
 	_ = f.with(context.Background(), func(r port.HelperRecoveryRuntime) error {
 		e, err := r.Entries(context.Background())
 		must(t, err)
-		must(t, r.Rename(context.Background(), port.Staged, port.App, e.Staged.Identity))
+		requireNativeRename(t, r.Rename(context.Background(), port.Staged, port.App, e.Staged.Identity))
 		return r.Rename(context.Background(), port.Staged, port.App, e.Staged.Identity)
 	})
 	called := false

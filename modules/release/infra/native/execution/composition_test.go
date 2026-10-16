@@ -283,7 +283,7 @@ func TestCompositionMoveAndJournalShareOwner(t *testing.T) {
 		if before.App.Present || !before.Staged.Directory || !before.Staged.OwnedByEffectiveUser {
 			t.Fatal("unexpected native fixed entries")
 		}
-		must(t, r.Rename(context.Background(), port.Staged, port.App, before.Staged.Identity))
+		requireNativeRename(t, r.Rename(context.Background(), port.Staged, port.App, before.Staged.Identity))
 		after, err := r.Entries(context.Background())
 		must(t, err)
 		if after.Staged.Present || !after.App.Directory || after.App.Identity != before.Staged.Identity {
@@ -484,5 +484,94 @@ func TestCompositionPostCASFenceRefusalRetainsUnknown(t *testing.T) {
 				t.Fatal("new runtime rearmed after post-write refusal")
 			}
 		})
+	}
+}
+
+func TestCompositionFailureAfterConfirmedEffectRetainsOwner(t *testing.T) {
+	for _, kind := range []string{"move-then-fence", "journal-then-callback", "journal-then-cancel"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newCompositionFixture(t)
+			f.put(t, f.encoded(t, "prepared"))
+			cause := &port.HelperRecoveryFailure{Code: "route_changed", Phase: "refused"}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if kind == "move-then-fence" {
+				must(t, os.Mkdir(filepath.Join(f.path, "staged.app"), 0700))
+				original := f.config.Reverify
+				f.config.Reverify = func(c context.Context, request port.HelperRequest) error {
+					if err := original(c, request); err != nil {
+						return err
+					}
+					if _, err := os.Lstat(filepath.Join(f.path, "previous.app")); err == nil {
+						return cause
+					} else if !errors.Is(err, os.ErrNotExist) {
+						return err
+					}
+					return nil
+				}
+			}
+			phaseAfter := "verified"
+			err := f.with(ctx, func(r port.HelperRecoveryRuntime) error {
+				_, err := r.ReadPhase(context.Background())
+				must(t, err)
+				if kind == "move-then-fence" {
+					before, err := r.Entries(context.Background())
+					must(t, err)
+					requireNativeRename(t, r.Rename(context.Background(), port.Staged, port.Previous, before.Staged.Identity))
+					// The next method refuses before CAS: its own call has no
+					// unknown effect, but the scope already changed the namespace.
+					phaseAfter = "prepared"
+					return r.WritePhase(context.Background(), "verified")
+				}
+				must(t, r.WritePhase(context.Background(), "verified"))
+				if kind == "journal-then-cancel" {
+					cancel()
+					return nil
+				}
+				return errors.Join(cause, errors.New("opaque application callback refusal"))
+			})
+			var failure *port.HelperRecoveryFailure
+			if !errors.As(err, &failure) || !failure.Uncertain || f.owner.retained() == nil {
+				t.Fatal("completed effect escaped scope without retained owner uncertainty", err)
+			}
+			if kind != "journal-then-cancel" && !errors.Is(err, cause) {
+				t.Fatal("original scope failure lost")
+			}
+			f.physical(t, f.repo, phaseAfter)
+			called := false
+			err = f.with(context.Background(), func(port.HelperRecoveryRuntime) error { called = true; return nil })
+			classified(t, err, "recovery_attempt_unknown", true)
+			if called || f.owner.retained() == nil {
+				t.Fatal("fresh adapter entered after incomplete effect scope")
+			}
+		})
+	}
+}
+
+func TestCompositionPanicAfterEffectRetainsOwner(t *testing.T) {
+	f := newCompositionFixture(t)
+	f.put(t, f.encoded(t, "prepared"))
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("original callback panic disappeared")
+			}
+		}()
+		_ = f.with(context.Background(), func(r port.HelperRecoveryRuntime) error {
+			_, err := r.ReadPhase(context.Background())
+			must(t, err)
+			must(t, r.WritePhase(context.Background(), "verified"))
+			panic("test-owned callback panic")
+		})
+	}()
+	if f.owner.retained() == nil {
+		t.Fatal("panicking incomplete scope lost its confirmed effect")
+	}
+	f.physical(t, f.repo, "verified")
+	called := false
+	err := f.with(context.Background(), func(port.HelperRecoveryRuntime) error { called = true; return nil })
+	classified(t, err, "recovery_attempt_unknown", true)
+	if called {
+		t.Fatal("fresh adapter entered after an incomplete panicking scope")
 	}
 }

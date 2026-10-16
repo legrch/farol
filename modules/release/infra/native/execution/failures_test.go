@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -136,4 +137,28 @@ func TestOnlyPureIdentityAndVerifierRefusalsCanBeNegative(t *testing.T) {
 			t.Fatal("non-policy error accepted as identity refusal")
 		}
 	}
+}
+
+func TestProductionRenameRefusalOnUnsupportedHosts(t *testing.T) {
+	if goruntime.GOOS == "darwin" {
+		t.Skip("portable refusal requires a non-Darwin host; native Darwin success is tested separately")
+	}
+	f := newCompositionFixture(t)
+	must(t, os.Mkdir(filepath.Join(f.path, "staged.app"), 0700))
+	before := compositionSnapshot(t, f.root)
+	must(t, f.with(context.Background(), func(r port.HelperRecoveryRuntime) error {
+		entries, err := r.Entries(context.Background())
+		must(t, err)
+		err = r.Rename(context.Background(), port.Staged, port.App, entries.Staged.Identity)
+		classified(t, err, "rename_unsupported", false)
+		var failure *port.HelperRecoveryFailure
+		if !errors.As(err, &failure) || failure.Internal {
+			t.Fatal("unsupported production rename classification changed")
+		}
+		return nil
+	}))
+	if f.owner.retained() != nil {
+		t.Fatal("known unsupported call invented an effect")
+	}
+	f.unchanged(t, before)
 }

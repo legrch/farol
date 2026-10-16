@@ -43,6 +43,7 @@ type runtime struct {
 	unknown  error
 	view     *port.JournalView
 	routes   func(context.Context) error
+	effected bool
 }
 
 var _ port.HelperRecoveryRuntime = (*runtime)(nil)
@@ -100,16 +101,39 @@ func with(ctx context.Context, config Config, routes func(context.Context) error
 		until = earlier
 	}
 	r := &runtime{config: config, original: ctx, until: until, active: true, attempts: make(map[string]bool), routes: routes}
+	callbackReturned := false
 	defer func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		r.active = false
-		result = errors.Join(result, r.unknown, r.deadline(ctx, false))
+		late := r.deadline(ctx, false)
+		// A confirmed effect remains part of this scope even when a later
+		// method or the application callback fails before its own effect.
+		// Transfer that unfinished scope to the existing owner before return.
+		if r.effected && r.unknown == nil && (result != nil || late != nil || !callbackReturned) {
+			primary := result
+			if primary == nil {
+				primary = late
+			}
+			if primary == nil {
+				primary = fail("runtime_scope_incomplete", true, true, nil)
+			}
+			retained := r.classify(primary, true).(*port.HelperRecoveryFailure)
+			retained.Uncertain = true
+			retained.Cause = errors.Join(retained.Cause, late)
+			r.unknown = retained
+			r.config.RetainUnknown(retained)
+			result = retained
+			return
+		}
+		result = errors.Join(result, r.unknown, late)
 	}()
 	if err := r.invoke(ctx, "", func(effective context.Context) error { return r.fence(effective) }); err != nil {
 		return err
 	}
-	return fn(r)
+	result = fn(r)
+	callbackReturned = true
+	return result
 }
 
 func (r *runtime) deadline(ctx context.Context, effected bool) error {
@@ -342,6 +366,7 @@ func (r *runtime) WritePhase(ctx context.Context, phase string) error {
 		if err != nil {
 			return fail("internal", true, true, err)
 		}
+		r.effected = true
 		if view == nil || view.Value == nil || *view.Value != value {
 			return fail("internal", true, true, nil)
 		}
