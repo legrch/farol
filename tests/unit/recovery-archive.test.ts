@@ -172,3 +172,25 @@ describe("recovery archive private-pipe adapter", () => {
     expect(f.request).toHaveBeenCalledTimes(1);
   });
 });
+
+it.each([
+  "",
+  "first line\n<script>plain text</script> ✓",
+  "x".repeat(8192),
+  "✓".repeat(2730) + "ab",
+])("reads bounded literal stored copy case %#", async (text) => {
+  const summary = storedSummary(1, text);
+  const f = fixture((v) => ({ ...v, data: storedReply(summary, text) }));
+  expect(await f.reader.read(summary.key, summary.digest)).toEqual(
+    storedReply(summary, text),
+  );
+  expect(f.request).toHaveBeenCalledTimes(1);
+});
+it("rejects one byte beyond the stored-copy budget", async () => {
+  const text = "x".repeat(8193),
+    summary = storedSummary(1, text);
+  const f = fixture((v) => ({ ...v, data: storedReply(summary, text) }));
+  await expect(
+    f.reader.read(summary.key, summary.digest),
+  ).rejects.toMatchObject({ state: "unknown" });
+});

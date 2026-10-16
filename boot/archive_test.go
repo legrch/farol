@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -13,7 +14,10 @@ import (
 	"github.com/legrch/farol/transport/desktop"
 )
 
-type archiveStoreFixture struct{ calls int }
+type archiveStoreFixture struct {
+	calls int
+	reply *chatport.ArchivedReply
+}
 
 func (s *archiveStoreFixture) ListStoredReplies(context.Context, chatport.ArchiveListSelection) (*chatport.ArchivePage, error) {
 	s.calls++
@@ -21,6 +25,9 @@ func (s *archiveStoreFixture) ListStoredReplies(context.Context, chatport.Archiv
 }
 func (s *archiveStoreFixture) ReadStoredReply(context.Context, chatport.ArchiveReadSelection) (*chatport.ArchivedReply, error) {
 	s.calls++
+	if s.reply != nil {
+		return s.reply, nil
+	}
 	return nil, archive.Unavailable
 }
 func TestArchiveIngressRejectsEffectsAuthorityFieldsAndInvalidSelections(t *testing.T) {
@@ -87,5 +94,45 @@ func TestArchiveWireRejectsPromotedProofsInBothResponseShapes(t *testing.T) {
 	}
 	if wire.Validate("ChatHistoryResult", raw) == nil {
 		t.Fatal("archive DTO became accepted historical result")
+	}
+}
+
+func TestArchiveIngressPreservesEmptyMultilineAndMaximumStoredText(t *testing.T) {
+	for _, text := range []string{"", "first line\n<script>plain text</script> ✓", strings.Repeat("x", 8192), strings.Repeat("✓", 2730) + "ab"} {
+		t.Run(strconv.Itoa(len(text)), func(t *testing.T) {
+			digest := [32]byte{1}
+			summary := chatport.ArchiveSummary{Key: strings.Repeat("a", 64), Digest: digest, ProfileID: "profile", OwnerID: "owner", BackendGeneration: "original", OperationID: "original-operation", ResultID: "stored-result", RecordedOutcome: "completed", Bytes: len(text)}
+			store := &archiveStoreFixture{reply: &chatport.ArchivedReply{Summary: summary, Text: text}}
+			a, err := newHistoryReadAuthority(context.Background(), chatport.HistoryReadScope{ProfileID: "profile", BackendGeneration: "recovery", OwnerID: "owner"}, func() error { return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			service, err := archive.New(chatport.JournalScope{ProfileID: "profile", BackendGeneration: "recovery"}, archive.Dependencies{Authority: a, Store: store})
+			if err != nil {
+				t.Fatal(err)
+			}
+			query, _ := json.Marshal(wire.ChatArchiveReadRequest{Key: summary.Key, Digest: "01" + strings.Repeat("00", 31)})
+			out, err := chatArchiveMethods(service)["chat.archive.read"].Handle(context.Background(), desktop.Request{Body: query})
+			if err != nil || out.Status != "ok" || wire.Validate("ChatArchiveReply", out.Data) != nil {
+				t.Fatal("literal retained text rejected", out, err)
+			}
+			var reply wire.ChatArchiveReply
+			if json.Unmarshal(out.Data, &reply) != nil || reply.Text != text || int(reply.Summary.Bytes) != len(text) || reply.Observation != "stored_unconfirmed" {
+				t.Fatal("retained bytes or provenance changed")
+			}
+		})
+	}
+	raw, err := os.ReadFile("../api/desktop/v1/fixtures/chat-archive.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if json.Unmarshal(raw, &value) != nil {
+		t.Fatal("fixture decode")
+	}
+	value["text"] = strings.Repeat("x", 8193)
+	raw, err = json.Marshal(value)
+	if err != nil || wire.Validate("ChatArchiveReply", raw) == nil {
+		t.Fatal("oversized stored text accepted")
 	}
 }

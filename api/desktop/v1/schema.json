@@ -5380,7 +5380,7 @@
           "type": "ChatArchiveSummary"
         },
         "text": {
-          "type": "text",
+          "type": "string",
           "maxBytes": 8192
         }
       }

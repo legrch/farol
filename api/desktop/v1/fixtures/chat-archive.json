@@ -8,7 +8,7 @@
     "resultId": "stored-result",
     "conversationId": "",
     "recordedOutcome": "completed",
-    "bytes": 28
+    "bytes": 44
   },
-  "text": "Synthetic stored observation"
+  "text": "Synthetic stored observation\nSecond line ✓"
 }

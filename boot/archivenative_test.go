@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
@@ -30,7 +31,7 @@ func TestNativeRecoveryArchiveRetainsUnknownResultsWithoutAHandoffOrigin(t *test
 			t.Fatal("diagnostic recovery leaked into normal owner")
 		}
 	}
-	q := chatport.RetainRequest{Binding: chatport.TurnBinding{ProfileID: launch.Profile.ProfileID, BackendGeneration: "generation-1", OwnerID: launch.OwnerID, SessionID: "session", TaskID: "task", TaskEpoch: 1, ParticipantID: "participant", TurnID: "turn", OperationID: "stored-without-terminal", TurnGeneration: 1}, Result: turn.Result{ID: "stored-result", Outcome: turn.Completed, Code: "COMPLETED"}, Payload: []byte("Synthetic retained answer without terminal ACK")}
+	q := chatport.RetainRequest{Binding: chatport.TurnBinding{ProfileID: launch.Profile.ProfileID, BackendGeneration: "generation-1", OwnerID: launch.OwnerID, SessionID: "session", TaskID: "task", TaskEpoch: 1, ParticipantID: "participant", TurnID: "turn", OperationID: "stored-without-terminal", TurnGeneration: 1}, Result: turn.Result{ID: "stored-result", Outcome: turn.Completed, Code: "COMPLETED"}, Payload: []byte(strings.Repeat("Synthetic retained answer without terminal ACK\n<script>plain text</script> ✓\n", 64))}
 	if _, err := old.results.Retain(context.Background(), q); err != nil {
 		t.Fatal(err)
 	}
