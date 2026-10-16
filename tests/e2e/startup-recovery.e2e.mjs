@@ -625,6 +625,8 @@ try {
             .count(),
           0,
         );
+        launch.archivePaging = { pages: [32, 1], totalRows: 33 };
+        await save();
         const expected = [...seeded.stored.entries].sort((a, b) =>
           a.key.localeCompare(b.key),
         );
@@ -635,13 +637,44 @@ try {
               exact: true,
             })
             .click();
-          await page
-            .getByLabel("Stored reply text")
-            .getByText(expected[index].text, { exact: true })
-            .waitFor();
+          // Compare literal retained bytes, without text-selector whitespace
+          // normalization. Observe a refusal as a failure, never issue a read
+          // again; retain the actual UI projection even if waiting fails.
+          try {
+            await page.waitForFunction(
+              (text) =>
+                document.querySelector('[aria-label="Stored reply text"]')
+                  ?.textContent === text ||
+                document.querySelector('.recovery-archive [role="alert"]') !==
+                  null,
+              expected[index].text,
+              { timeout: 15000 },
+            );
+          } finally {
+            const observation = await page.evaluate(() => ({
+              text:
+                document.querySelector('[aria-label="Stored reply text"]')
+                  ?.textContent ?? null,
+              alert:
+                document.querySelector('.recovery-archive [role="alert"]')
+                  ?.textContent ?? null,
+              selected:
+                document
+                  .querySelector('.recovery-reply-list [aria-pressed="true"]')
+                  ?.getAttribute("aria-label") ?? null,
+            }));
+            (launch.archiveViews ??= []).push({
+              key: expected[index].key,
+              ...observation,
+            });
+            await save();
+          }
+          const observed = launch.archiveViews.at(-1);
+          assert.equal(observed.alert, null, "STORED_REPLY_UI_REFUSED");
           assert.equal(
-            await page.getByLabel("Stored reply text").textContent(),
+            observed.text,
             expected[index].text,
+            "STORED_REPLY_TEXT_CHANGED",
           );
         }
         await page.getByText("Outcome unconfirmed", { exact: true }).waitFor();
