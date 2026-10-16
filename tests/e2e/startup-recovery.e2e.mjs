@@ -218,6 +218,24 @@ for (const [name, bytes] of retained)
       mode: 0o600,
       flag: "wx",
     });
+// Capture before either recovery lifetime; never derive expected bytes from
+// the filesystem after the operation being checked. Access time is excluded
+// because ordinary reads may update it.
+const expectedNote = savedSettings
+  ? await fs.readFile(path.join(profile, "workspace", "note.md"))
+  : null;
+const physical = (info) =>
+  [
+    info.dev,
+    info.ino,
+    info.mode,
+    info.uid,
+    info.gid,
+    info.nlink,
+    info.size,
+    info.mtimeNs,
+    info.ctimeNs,
+  ].map(String);
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const preserved = async () => {
   const result = {};
@@ -231,16 +249,7 @@ const preserved = async () => {
     const info = await fs.lstat(path.join(stateRoot, name), { bigint: true });
     result[name] = JSON.stringify({
       bytes: hash(actual),
-      physical: [
-        info.dev,
-        info.ino,
-        info.mode,
-        info.uid,
-        info.nlink,
-        info.size,
-        info.mtimeNs,
-        info.ctimeNs,
-      ].map(String),
+      physical: physical(info),
     });
   }
   if (!savedSettings)
@@ -248,28 +257,30 @@ const preserved = async () => {
       code: "ENOENT",
     });
   else {
-    for (const name of ["profile.json", "chat", "task", "computer/mutations"]) {
-      const directory = path.join(stateRoot, "go-core", name);
+    for (const [name, directory] of [
+      ...["profile.json", "chat", "task", "computer/mutations"].map((name) => [
+        name,
+        path.join(stateRoot, "go-core", name),
+      ]),
+      ["workspace", path.join(profile, "workspace")],
+    ]) {
       const inspect = async (target) => {
         const info = await fs.lstat(target, { bigint: true });
+        const key =
+          name === "workspace"
+            ? `workspace/${path.relative(directory, target)}`
+            : path.relative(stateRoot, target);
         if (info.isDirectory()) {
+          if (name === "workspace")
+            result[key] = JSON.stringify({ physical: physical(info) });
           for (const child of (await fs.readdir(target)).sort())
             await inspect(path.join(target, child));
           return;
         }
-        const key = path.relative(stateRoot, target);
+        assert.ok(info.isFile(), `UNEXPECTED_RECOVERY_FIXTURE_ENTRY:${key}`);
         result[key] = JSON.stringify({
           bytes: hash(await fs.readFile(target)),
-          physical: [
-            info.dev,
-            info.ino,
-            info.mode,
-            info.uid,
-            info.nlink,
-            info.size,
-            info.mtimeNs,
-            info.ctimeNs,
-          ].map(String),
+          physical: physical(info),
         });
       };
       await inspect(directory);
@@ -279,7 +290,7 @@ const preserved = async () => {
     assert.deepEqual(
       result,
       report.preservedBaseline,
-      "OLD_SETTINGS_OR_NATIVE_JOURNALS_CHANGED",
+      "OLD_SETTINGS_NATIVE_JOURNALS_OR_WORKSPACE_CHANGED",
     );
   return result;
 };
@@ -630,9 +641,8 @@ try {
         .waitFor();
       await page.getByRole("button", { name: "Up", exact: true }).click();
       await page.getByRole("button", { name: "note.md", exact: true }).click();
-      const bytes = await fs.readFile(
-        path.join(profile, "workspace", "note.md"),
-      );
+      assert.ok(expectedNote);
+      const bytes = expectedNote;
       await page.getByText(`SHA-256 ${hash(bytes)}`, { exact: true }).waitFor();
       launch.reads = {
         folder: true,

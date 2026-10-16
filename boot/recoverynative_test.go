@@ -41,6 +41,9 @@ func recoveryNativeFixture(t *testing.T) (NativeLaunch, string, mutation.Binding
 	if err := os.WriteFile(filepath.Join(workspace, "note.md"), []byte("retained native recovery text\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(workspace, "untouched.txt"), []byte("unrequested recovery canary\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	nativeSettingsPublication(t, old, workspace, 1)
 	binding := mutation.Binding{Identity: mutation.Identity{Scope: mutation.ScopeOwnerSettings, OperationID: "unknown-write", OwnerID: launch.OwnerID, ProfileID: launch.Profile.ProfileID, ComputerID: launch.ComputerID}, ComputerGeneration: 1, WorkspaceID: "00000000-0000-4000-8000-000000000004", RelativePath: "note.md", RequestDigest: strings.Repeat("a", 64)}
 	prepared, err := mutation.NewPrepared(binding)
@@ -69,27 +72,41 @@ func recoveryNativeFixture(t *testing.T) (NativeLaunch, string, mutation.Binding
 func recoverySnapshot(t *testing.T, root string) map[string]string {
 	t.Helper()
 	out := map[string]string{}
-	for _, name := range []string{"chat", "task", filepath.Join("computer", "mutations")} {
+	for _, name := range []string{"chat", "task", filepath.Join("computer", "mutations"), "workspace"} {
+		if name == "workspace" {
+			if _, err := os.Lstat(filepath.Join(root, name)); os.IsNotExist(err) {
+				out[name] = "absent"
+				continue
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		}
 		err := filepath.WalkDir(filepath.Join(root, name), func(path string, entry os.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
-			if entry.IsDir() {
+			if entry.IsDir() && name != "workspace" {
 				return nil
 			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
+			var data []byte
+			if entry.Type().IsRegular() {
+				data, err = os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+			} else if !entry.IsDir() {
+				return fmt.Errorf("unexpected non-regular recovery fixture: %s", path)
 			}
 			info, err := entry.Info()
 			if err != nil {
 				return err
 			}
+			// Reads may update access time; content, identity and change times must stay intact.
 			var physical unix.Stat_t
 			if err := unix.Lstat(path, &physical); err != nil {
 				return err
 			}
-			out[strings.TrimPrefix(path, root)] = fmt.Sprintf("%o:%d:%d:%d:%d:%v:%v:%s", info.Mode(), physical.Dev, physical.Ino, physical.Uid, physical.Nlink, physical.Mtim, physical.Ctim, data)
+			out[strings.TrimPrefix(path, root)] = fmt.Sprintf("%o:%d:%d:%d:%d:%d:%d:%v:%v:%s", info.Mode(), physical.Dev, physical.Ino, physical.Uid, physical.Gid, physical.Nlink, physical.Size, physical.Mtim, physical.Ctim, data)
 			return nil
 		})
 		if err != nil {
@@ -150,6 +167,10 @@ func recoveryPublish(t *testing.T, r *NativeRecovery, workspace string, generati
 
 func TestNativeRecoveryReadsRequireFreshPublicationAndPreserveUnknown(t *testing.T) {
 	launch, workspace, binding := recoveryNativeFixture(t)
+	original, err := os.ReadFile(filepath.Join(workspace, "note.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	before := recoverySnapshot(t, launch.Profile.Root)
 	// A separate retained-mutation owner may keep its existing writer lock.
 	// Recovery must neither open it nor turn its unknown record into a result.
@@ -199,15 +220,11 @@ func TestNativeRecoveryReadsRequireFreshPublicationAndPreserveUnknown(t *testing
 	request.Publication = recoveryPublish(t, r, workspace, 1)
 	out := recoveryCall(t, r, "computer.settings.list", "", request)
 	var listed wire.ComputerSettingsListResponse
-	if out.Status != "ok" || json.Unmarshal(out.Data, &listed) != nil || string(listed.Entries) != `["note.md"]` {
+	if out.Status != "ok" || json.Unmarshal(out.Data, &listed) != nil || string(listed.Entries) != `["note.md","untouched.txt"]` {
 		t.Fatalf("native read: %#v", out)
 	}
 	snapshot := recoveryCall(t, r, "computer.settings.snapshot", "", wire.ComputerSettingsSnapshotRequest{Publication: request.Publication, WorkspaceId: binding.WorkspaceID, RelativePath: "note.md"})
 	var metadata wire.ComputerSettingsSnapshotResponse
-	original, err := os.ReadFile(filepath.Join(workspace, "note.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	digest := sha256.Sum256(original)
 	if snapshot.Status != "ok" || json.Unmarshal(snapshot.Data, &metadata) != nil || metadata.Sha256 != hex.EncodeToString(digest[:]) || int(metadata.Bytes) != len(original) {
 		t.Fatalf("native snapshot: %#v", snapshot)
@@ -236,7 +253,7 @@ func TestNativeRecoveryReadsRequireFreshPublicationAndPreserveUnknown(t *testing
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(before, recoverySnapshot(t, launch.Profile.Root)) {
-		t.Fatal("recovery changed Chat/Task/mutation bytes or modes")
+		t.Fatal("recovery changed retained stores or workspace bytes/physical metadata")
 	}
 	// Even an incorrect fresh caller assertion cannot obtain normal startup.
 	launch.StartupMode = "normal"
