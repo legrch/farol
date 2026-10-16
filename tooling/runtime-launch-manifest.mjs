@@ -289,6 +289,15 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
       ["farol-backend"],
     ),
     launch(
+      "desktop.preserved-recovery-go",
+      "apps/desktop/bridge/preserved-recovery-child.ts",
+      "preparePreservedRecoveryChild",
+      "spawn",
+      "executable",
+      "app-owned-go-executable",
+      ["farol-backend"],
+    ),
+    launch(
       "desktop.terminal-go",
       "apps/desktop/bridge/terminal-recorder.ts",
       "recordTerminal",
