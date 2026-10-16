@@ -368,6 +368,18 @@ async function crashNormalHost() {
         snapshot.runtimeState === "ready" &&
         snapshot.configuration.status === "ready"
       ) {
+        assert.equal(
+          snapshot.configuration.settings.connectors.secureMcp.tunnelId,
+          null,
+        );
+        assert.equal(
+          snapshot.configuration.settings.connectors.secureMcp.runtime,
+          null,
+        );
+        assert.equal(
+          snapshot.configuration.settings.connectors.secureMcp.credential,
+          "missing",
+        );
         ready = true;
         break;
       }
@@ -411,13 +423,19 @@ async function crashNormalHost() {
     assert.equal(backends.length, 1, "ORIGINAL_HOST_BACKEND_COUNT");
     assert.doesNotMatch(backends[0].command, /--startup-mode recovery/u);
     original.backend = backends[0];
-    assert.equal(
-      original.children.some(({ command }) =>
-        /(?:^|\/)runtime\.cjs(?:\s|$)/u.test(command),
-      ),
-      false,
-      "ORIGINAL_CONNECTOR_STARTED",
+    // Ordinary startup owns its in-memory preview service independently of
+    // Go and any connector. Identify that exact child instead of mistaking
+    // runtime.cjs for a configured tunnel or an external effect.
+    const previews = original.children.filter(({ command }) =>
+      /(?:^|\/)runtime\.cjs(?:\s|$)/u.test(command),
     );
+    assert.equal(previews.length, 1, "ORIGINAL_PREVIEW_RUNTIME_COUNT");
+    assert.equal(
+      previews[0].command,
+      `${path.join(root, "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron")} ${path.join(buildRoot, "runtime.cjs")}`,
+      "ORIGINAL_PREVIEW_RUNTIME_IDENTITY",
+    );
+    original.previewRuntime = previews[0];
     assert.equal(
       await isPromotionLeaseHeld(userData),
       false,
@@ -463,7 +481,10 @@ async function crashNormalHost() {
     }
     throw error;
   } finally {
-    await stopChatGptFixture(fixture);
+    await bounded(
+      stopChatGptFixture(fixture),
+      "ORIGINAL_LOOPBACK_FIXTURE_CLOSE_UNKNOWN",
+    );
   }
 }
 
