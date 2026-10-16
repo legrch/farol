@@ -330,6 +330,11 @@ async function launch(ordinal) {
     return application;
   });
   await bounded(run.pending, "POLLING_LAUNCH_UNKNOWN", 20000);
+  run.page = await bounded(
+    run.application.firstWindow(),
+    "POLLING_FIRST_WINDOW_UNKNOWN",
+    20000,
+  );
   const actual = await run.application.evaluate(({ app, BrowserWindow }) => ({
     name: app.getName(),
     isPackaged: app.isPackaged,
@@ -342,12 +347,19 @@ async function launch(ordinal) {
       focused: window.isFocused(),
     })),
   }));
+  run.actualNative = actual;
+  await save();
+  assert.equal(actual.home, home);
+  assert.equal(actual.userData, userData);
+  assert.equal(actual.sessionData, userData);
+  assert.equal(await fs.realpath(actual.home), home);
+  assert.equal(await fs.realpath(actual.userData), userData);
+  run.pathIdentityConfirmed = true;
   admission = await recheckNativePreviewIsolation(preflight, actual, run.child);
   run.isolated = true;
   assert.equal(actual.name, "Farol Dev");
   assert.equal(actual.isPackaged, false);
   assert.equal(actual.userData, userData);
-  run.page = await run.application.firstWindow();
   await waitForReactShell(run.page);
   await poll(
     () => run.page.evaluate(() => window.farolNext.bootstrap()),
@@ -538,7 +550,10 @@ async function blockMain(run) {
 }
 async function quit(run) {
   assert.equal(run.quitAttempted, false);
-  assert.equal(run.isolated, true);
+  assert.ok(
+    run.isolated || run.pathIdentityConfirmed,
+    "POLLING_CLEANUP_STORAGE_UNCONFIRMED",
+  );
   run.quitAttempted = true;
   const requested = Date.now();
   run.quit = { requested };
@@ -724,7 +739,7 @@ try {
   await save();
   if (
     activeRun?.application &&
-    activeRun.isolated &&
+    (activeRun.isolated || activeRun.pathIdentityConfirmed) &&
     !activeRun.quitAttempted
   ) {
     try {
