@@ -1,6 +1,10 @@
 // Real Go services/Root/framing, with controlled in-memory browser and journal.
 // This helper opens no Electron, native runtime/profile store or live provider.
-import { execFileSync, spawn } from "node:child_process";
+import {
+  execFileSync,
+  spawn,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -32,6 +36,45 @@ const receiptSchema = z.strictObject({
   serverEOF: z.literal(true),
 });
 export type GoChatResponsesReceipt = z.infer<typeof receiptSchema>;
+
+const fixtureReady = "FAROL_CHAT_RESPONSES_CPU_READY";
+
+// Separate controlled executable startup from the unchanged protocol budget.
+// This marker supplies no identity/authority; the original Client must still
+// complete its real handshake. No replacement process or retry is admitted.
+function waitForControlledPeerReady(
+  child: ChildProcessWithoutNullStreams,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let diagnostic = "";
+    const finish = (error?: Error): void => {
+      clearTimeout(timer);
+      child.stderr.off("data", onData);
+      child.off("error", onError);
+      child.off("close", onClose);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onData = (chunk: Buffer): void => {
+      if (Buffer.byteLength(diagnostic) + chunk.length > 65536) {
+        finish(new Error("fixture_startup_diagnostic_overflow"));
+        return;
+      }
+      diagnostic += chunk.toString("utf8");
+      if (diagnostic.split("\n").slice(0, -1).includes(fixtureReady)) finish();
+    };
+    const onError = (): void => finish(new Error("fixture_startup_failed"));
+    const onClose = (): void =>
+      finish(new Error("fixture_closed_before_readiness"));
+    const timer = setTimeout(
+      () => finish(new Error("fixture_startup_readiness_timeout")),
+      15000,
+    );
+    child.stderr.on("data", onData);
+    child.once("error", onError);
+    child.once("close", onClose);
+  });
+}
 
 export async function startGoChatResponsesFixture(
   scenario: GoChatResponsesScenario,
@@ -101,6 +144,11 @@ export async function startGoChatResponsesFixture(
       const ended = await terminal;
       if (ended.code !== 0 || ended.signal !== null || overflow)
         throw new Error("fixture_original_terminal_not_clean");
+      if (
+        diagnostic.split("\n").filter((line) => line === fixtureReady)
+          .length !== 1
+      )
+        throw new Error("fixture_ready_missing_or_repeated");
       const prefix = "FAROL_CHAT_RESPONSES_CPU ";
       const lines = diagnostic
         .split("\n")
@@ -116,6 +164,7 @@ export async function startGoChatResponsesFixture(
       return result;
     })());
   try {
+    await waitForControlledPeerReady(child);
     await client.handshake(
       {
         protocolMajor: 1,

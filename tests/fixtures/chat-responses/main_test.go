@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"io"
@@ -139,5 +140,104 @@ func TestControlledFixtureUsesRealGoWireAndClassifiesLostSend(t *testing.T) {
 func TestControlledFixtureRejectsUnknownScenario(t *testing.T) {
 	if server, _, err := compose(context.Background(), "live"); err == nil || server != nil {
 		t.Fatal("unknown scenario admitted")
+	}
+}
+
+// Exercise the same run entry used by the separately compiled CPU peer. READY
+// must be observable before any input, while real protocol admission stays shut.
+func TestControlledReadinessDoesNotGrantProtocolAdmission(t *testing.T) {
+	input, send := io.Pipe()
+	receive, output := io.Pipe()
+	diagnostics, diagnostic := io.Pipe()
+	finished := make(chan struct{})
+	exitCode := -1
+	go func() {
+		exitCode = run([]string{"reciprocal"}, input, output, diagnostic)
+		diagnostic.Close()
+		close(finished)
+	}()
+	closePipes := func() {
+		send.Close()
+		receive.Close()
+		diagnostics.Close()
+	}
+	watchdog := time.AfterFunc(5*time.Second, closePipes)
+	t.Cleanup(func() {
+		watchdog.Stop()
+		closePipes()
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Error("original fixture run cleanup unconfirmed")
+		}
+	})
+	reader := bufio.NewReader(diagnostics)
+	ready, err := reader.ReadString('\n')
+	if err != nil || ready != fixtureReady+"\n" {
+		t.Fatal("fixture did not declare readiness before input", ready, err)
+	}
+	sequence := 0
+	call := func(method string, body any) wire.Response {
+		t.Helper()
+		sequence++
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := wire.Request{Jsonrpc: "2.0", Id: "request-" + strconv.Itoa(sequence), Method: method, Params: wire.Call{Body: raw}}
+		if method != "core.handshake" {
+			request.Params.Context = &wire.Context{ProfileId: "profile", BackendGeneration: "backend"}
+		}
+		raw, err = json.Marshal(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = ipc.WriteFrame(send, raw); err != nil {
+			t.Fatal(err)
+		}
+		raw, err = ipc.ReadFrame(receive)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var reply wire.Response
+		if err := json.Unmarshal(raw, &reply); err != nil {
+			t.Fatal(err)
+		}
+		return reply
+	}
+	before := call("core.status", wire.Empty{})
+	if before.Error == nil || before.Error.Code != -32001 || before.Result != nil {
+		t.Fatal("readiness admitted an unauthenticated request", before)
+	}
+	handshake := call("core.handshake", wire.Handshake{ProtocolMajor: 1, ProtocolMinor: 0, BuildId: fixtureBuild, ProfileId: "profile"})
+	if handshake.Result == nil || handshake.Result.Status != "ok" {
+		t.Fatal("real handshake failed", handshake)
+	}
+	after := call("core.status", wire.Empty{})
+	if after.Result == nil || after.Result.Status != "ok" {
+		t.Fatal("handshake did not admit status", after)
+	}
+	if err := send.Close(); err != nil {
+		t.Fatal(err)
+	}
+	line, err := reader.ReadString('\n')
+	const prefix = "FAROL_CHAT_RESPONSES_CPU "
+	if err != nil || !strings.HasPrefix(line, prefix) {
+		t.Fatal("original EOF receipt missing", line, err)
+	}
+	var evidence receipt
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(line, prefix)), &evidence); err != nil {
+		t.Fatal(err)
+	}
+	if !evidence.ServerEOF || evidence.Scenario != "reciprocal" || evidence.PhysicalSendAttempts != 0 || evidence.AcceptedSubmissions != 0 || len(evidence.Methods) != 0 {
+		t.Fatal("unexpected effects or missing original EOF", evidence)
+	}
+	select {
+	case <-finished:
+		if exitCode != 0 {
+			t.Fatal("original run did not exit cleanly", exitCode)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("original run terminal unobserved")
 	}
 }
