@@ -200,3 +200,11 @@ Execution capture rejects a copied root symlink before changing permissions and
 uses a no-follow directory descriptor for the mode change. The connection guide
 loads its document from the same authenticated private origin as the renderer,
 so delayed guide loads do not consult a replaceable public bundle.
+
+## Connector polling observations
+
+The explicit Check connection action keeps local readiness, helper-reported polling and external attachment separate. Its metrics adapter reads only the original active child's private loopback `/metrics`, with a one-second abort, no redirects and a 256 KiB/4,096-line bound. It projects only unique numeric reports for `commands_poll_cycles_total`, `commands_poll_errors_total` and `commands_poll_last_successful_timestamp_seconds`; labels, raw bodies, upstream error text, credentials and caller-selected URLs are excluded. Missing, invalid, ambiguous or unsupported metrics remain unobserved.
+
+The existing Go connector owner handles `computer.connector.polling` as a read-only Query on the inherited desktop pipe. It is absent from the external connector endpoint. Original binding/current-owner guards remain required; pending, withdrawn or uncertain owners cannot be restored by a positive sample. Go uses its own injected clock to distinguish a helper-reported success within 90 seconds, an older success, an explicit zero/no-success report, and unknown or future time. This diagnostic neither changes Settings/journals nor grants attachment, permission, replay, restart or clean-retirement authority. The host and renderer recheck the original runtime and generations before displaying the observation. A delayed completion after Stop, owner replacement or terminal child observation is withheld.
+
+Metrics HTTP 503/504 or stale polling do not enter the local health watcher's recovery port. This observation adds no automatic proof refresh or reconnection behavior. Controlled Go policy/boot mapping, HTTP parsing, original-child doubles and DOM cases qualify their stated source boundaries only; actual packaged Electron/Go outage/sleep, live helper compatibility, installation and external-call acceptance remain separate gates.

@@ -708,3 +708,104 @@ it.each(["missing", "wrong-path", "known"])(
     expect(request).toHaveBeenCalledTimes(1);
   },
 );
+
+it("observes polling as a correlated read without publication, close or authority effects", async () => {
+  const { host, request } = fixture();
+  await expect(host.observePolling({})).rejects.toMatchObject({
+    code: "connector_polling_unavailable",
+  });
+  expect(request).not.toHaveBeenCalled();
+  await host.open(input);
+  request.mockClear();
+  request.mockImplementation(async (_method, _body, options = {}) => ({
+    status: "ok",
+    requestId: options.id!,
+    context,
+    data: {
+      binding,
+      state: "recent",
+      observedAtMillis: "1700000000000",
+      cycles: "10",
+      ageSeconds: "1",
+    },
+  }));
+  const observed = await host.observePolling({
+    cycles: "10",
+    lastSuccessMillis: "1699999999000",
+  });
+  expect(observed.state).toBe("recent");
+  expect(Object.isFrozen(observed.binding)).toBe(true);
+  expect(request).toHaveBeenCalledExactlyOnceWith(
+    "computer.connector.polling",
+    { binding, samples: { cycles: "10", lastSuccessMillis: "1699999999000" } },
+    { id: expect.any(String), timeoutMs: 5000 },
+  );
+});
+it("withholds original polling after close and refuses crossed result bindings", async () => {
+  const { host, request } = fixture();
+  await host.open(input);
+  request.mockImplementationOnce(async (_method, _body, options = {}) => ({
+    status: "ok",
+    requestId: options.id!,
+    context,
+    data: {
+      binding: { ...binding, runtimeId: "crossed" },
+      state: "recent",
+      observedAtMillis: "1700000000000",
+    },
+  }));
+  await expect(host.observePolling({})).rejects.toMatchObject({
+    code: "crossed_connector_polling",
+  });
+  const deferred = deferredOutcome();
+  let originalId = "";
+  // Supply the known original close result independently of the pending read.
+  request.mockImplementation(async (method, _body, options = {}) => {
+    if (method === "computer.connector.polling") {
+      originalId = options.id!;
+      return deferred.promise;
+    }
+    return {
+      status: "ok",
+      requestId: options.id!,
+      operationId: options.operationId!,
+      context,
+      data: { binding, closed: true },
+    };
+  });
+  const pending = host.observePolling({});
+  const rejected = expect(pending).rejects.toMatchObject({
+    code: "connector_polling_unavailable",
+  });
+  await host.close();
+  deferred.resolve({
+    status: "ok",
+    requestId: originalId,
+    context,
+    data: { binding, state: "recent", observedAtMillis: "1700000000000" },
+  });
+  await rejected;
+  expect(
+    request.mock.calls.filter(
+      ([method]) => method === "computer.connector.close",
+    ),
+  ).toHaveLength(1);
+});
+
+it.each([
+  { state: "recent" },
+  { state: "unknown", ageSeconds: "1" },
+  { state: "recent", ageSeconds: "1", cycles: "crossed" },
+])("refuses inconsistent polling result %j", async (data) => {
+  const { host, request } = fixture();
+  await host.open(input);
+  request.mockImplementationOnce(async (_method, _body, options = {}) => ({
+    status: "ok",
+    requestId: options.id!,
+    context,
+    data: { binding, observedAtMillis: "1700000000000", ...data },
+  }));
+  await expect(host.observePolling({})).rejects.toMatchObject({
+    code: "invalid_connector_polling",
+  });
+});

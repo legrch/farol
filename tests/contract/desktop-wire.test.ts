@@ -1097,3 +1097,44 @@ describe("recovery archive observations", () => {
     ).toBe(false);
   });
 });
+
+it("keeps numeric polling observations read-only and rejects authority/URL fields", () => {
+  const binding = {
+    buildId: "build",
+    profileId: "profile",
+    backendGeneration: "backend",
+    runtimeId: "runtime",
+    connectorGeneration: "1",
+  };
+  const request = {
+    binding,
+    samples: { cycles: "10", errors: "2", lastSuccessMillis: "1700000000000" },
+  };
+  expect(knownMethod("computer.connector.polling")).toBe(true);
+  expect(requiresOperationID("computer.connector.polling")).toBe(false);
+  expect(validate("ComputerConnectorPollingRequest", request)).toBe(true);
+  for (const samples of [
+    { ...request.samples, url: "http://example.com" },
+    { ...request.samples, attachment: true },
+    { cycles: 10 },
+    { cycles: "01" },
+  ])
+    expect(
+      validate("ComputerConnectorPollingRequest", { binding, samples }),
+    ).toBe(false);
+  for (const state of ["recent", "stale", "no_success", "unknown"])
+    expect(
+      validate("ComputerConnectorPollingState", {
+        binding,
+        state,
+        observedAtMillis: "1700000000000",
+      }),
+    ).toBe(true);
+  expect(
+    validate("ComputerConnectorPollingState", {
+      binding,
+      state: "attached",
+      observedAtMillis: "1700000000000",
+    }),
+  ).toBe(false);
+});

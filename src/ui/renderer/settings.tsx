@@ -249,8 +249,32 @@ function actionFeedback(
   if (
     result.state === "applied" &&
     result.id === intention("connector.check-health")
-  )
+  ) {
+    const evidence = evidenceReceived ? current?.evidence?.value : null;
+    const settings =
+      current?.configuration?.status === "ready"
+        ? current.configuration.settings
+        : null;
+    const connector = settings?.connectors.secureMcp;
+    const runtime = connector?.runtime;
+    if (
+      evidence?.kind === "connector.polling" &&
+      runtime?.state === "ready" &&
+      evidence.runtimeGeneration === runtime.runtimeGeneration &&
+      evidence.computerGeneration === settings?.computer.generation &&
+      evidence.connectorGeneration === String(connector?.generation) &&
+      evidence.buildId === runtime.buildId
+    ) {
+      const observation = {
+        recent: "The helper reported a recent server poll.",
+        stale: "Server polling was delayed.",
+        no_success: "The helper had not reported a successful server poll.",
+        unknown: "Server polling could not be confirmed.",
+      }[evidence.state];
+      return `Local connection checked. ${observation} Access from ChatGPT has a separate verification.`;
+    }
     return "Local connection checked. Access from ChatGPT has a separate verification.";
+  }
   if (result.state === "applied") {
     const kind = result.id.split(":")[1];
     if (

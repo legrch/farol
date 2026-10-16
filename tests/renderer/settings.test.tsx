@@ -5611,3 +5611,65 @@ it("shows a fixed saved-key mask without reading or resubmitting the saved crede
   expect(h.button("Save & connect").disabled).toBe(true);
   expect(h.calls()).toEqual([]);
 });
+
+it.each([
+  ["recent", "The helper reported a recent server poll."],
+  ["stale", "Server polling was delayed."],
+  ["no_success", "The helper had not reported a successful server poll."],
+  ["unknown", "Server polling could not be confirmed."],
+] as const)(
+  "keeps %s polling distinct from external attachment",
+  async (state, wording) => {
+    const h = await mount("connection", connectionSettings());
+    const current = h.configuration;
+    if (current.status !== "ready") throw Error("fixture settings unavailable");
+    const connector = current.settings.connectors.secureMcp,
+      runtime = connector.runtime!;
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: current,
+      evidence: {
+        kind: "connector.polling",
+        state,
+        runtimeGeneration: runtime.runtimeGeneration,
+        connectorGeneration: String(connector.generation),
+        computerGeneration: current.settings.computer.generation,
+        buildId: runtime.buildId,
+        observedAtMillis: "1700000000000",
+      },
+    });
+    await h.click("Check connection");
+    expect(h.host.textContent).toContain(wording);
+    expect(h.host.textContent).toContain(
+      "Access from ChatGPT has a separate verification.",
+    );
+    expect(h.calls()).toEqual([{ kind: "connector.check-health" }]);
+  },
+);
+
+it("withholds polling feedback from a replaced runtime generation", async () => {
+  const h = await mount("connection", connectionSettings());
+  const current = h.configuration;
+  if (current.status !== "ready") throw Error("fixture settings unavailable");
+  const connector = current.settings.connectors.secureMcp,
+    runtime = connector.runtime!;
+  vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+    ok: true,
+    snapshot: current,
+    evidence: {
+      kind: "connector.polling",
+      state: "recent",
+      runtimeGeneration: "e".repeat(64),
+      connectorGeneration: String(connector.generation),
+      computerGeneration: current.settings.computer.generation,
+      buildId: runtime.buildId,
+      observedAtMillis: "1700000000000",
+    },
+  });
+  await h.click("Check connection");
+  expect(h.host.textContent).not.toContain(
+    "The helper reported a recent server poll.",
+  );
+  expect(h.host.textContent).toContain("Local connection checked.");
+  expect(h.calls()).toEqual([{ kind: "connector.check-health" }]);
+});

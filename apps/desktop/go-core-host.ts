@@ -338,6 +338,13 @@ export class DesktopGoCore {
   closeComputerConnector(): Promise<void> {
     return this.connector?.close() ?? Promise.resolve();
   }
+  observeComputerConnectorPolling(
+    samples: import("./bridge/wire.ts").ComputerConnectorPollingSamples,
+  ) {
+    if (this.closeResult || !this.connector)
+      throw new BridgeError("unavailable", "host_connector_unavailable");
+    return this.connector.observePolling(samples);
+  }
   observeComputerConnectorVerification() {
     if (this.closeResult || !this.connector)
       throw new BridgeError("unavailable", "host_connector_unavailable");

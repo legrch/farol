@@ -6758,6 +6758,9 @@ async function configureAdmittedProduct(
       if (connectorTaskAdmission)
         return configurationFailure("CONNECTOR_ALREADY_RUNNING");
       connectorTaskAdmission = true;
+      const originalConnector = secureMcpConnectorRuntime;
+      const originalCore = desktopGoCore;
+      const originalOwner = configuration;
       try {
         const before = configuration.snapshot();
         if (before.status !== "ready")
@@ -6772,9 +6775,13 @@ async function configureAdmittedProduct(
           current.connectorGeneration !== connector.generation
         )
           return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
-        const healthy = await secureMcpConnectorRuntime.checkHealth();
-        const after = configuration.snapshot();
+        const healthy = await originalConnector.checkHealth();
+        const after = originalOwner.snapshot();
         if (
+          configuration !== originalOwner ||
+          secureMcpConnectorRuntime !== originalConnector ||
+          desktopGoCore !== originalCore ||
+          !originalCore?.backendAvailable ||
           after.status !== "ready" ||
           after.settings.computer.generation !==
             before.settings.computer.generation ||
@@ -6786,7 +6793,7 @@ async function configureAdmittedProduct(
           return configurationFailure(
             "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
           );
-        const terminal = secureMcpConnectorRuntime.getTunnelObservation();
+        const terminal = originalConnector.getTunnelObservation();
         if (
           terminal &&
           terminal.runtimeGeneration !== current.runtimeGeneration
@@ -6816,9 +6823,53 @@ async function configureAdmittedProduct(
               : "CONNECTOR_DOCTOR_FAILED",
           );
         }
+        const sameObservation = () => {
+          const latest = configuration?.snapshot();
+          return (
+            configuration === originalOwner &&
+            secureMcpConnectorRuntime === originalConnector &&
+            desktopGoCore === originalCore &&
+            originalCore?.backendAvailable &&
+            originalConnector.isRunning() &&
+            originalConnector.getTunnelObservation() === null &&
+            latest?.status === "ready" &&
+            latest.settings.computer.generation ===
+              current.computerGeneration &&
+            latest.settings.connectors.secureMcp.generation ===
+              current.connectorGeneration &&
+            latest.settings.connectors.secureMcp.runtime?.state === "ready" &&
+            latest.settings.connectors.secureMcp.runtime.runtimeGeneration ===
+              current.runtimeGeneration
+          );
+        };
+        const metrics = await originalConnector.observePolling();
+        if (
+          !metrics ||
+          metrics.runtimeGeneration !== current.runtimeGeneration ||
+          !sameObservation()
+        )
+          return configurationFailure(
+            "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
+          );
+        const polling = await originalCore.observeComputerConnectorPolling(
+          metrics.samples,
+        );
+        if (!sameObservation())
+          return configurationFailure(
+            "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
+          );
         return ProductConfigurationResultSchema.parse({
           ok: true,
-          snapshot: after,
+          snapshot: configuration.snapshot(),
+          evidence: {
+            kind: "connector.polling",
+            state: polling.state,
+            observedAtMillis: polling.observedAtMillis,
+            runtimeGeneration: current.runtimeGeneration,
+            connectorGeneration: polling.binding.connectorGeneration,
+            computerGeneration: current.computerGeneration,
+            buildId: current.buildId,
+          },
         });
       } finally {
         connectorTaskAdmission = false;

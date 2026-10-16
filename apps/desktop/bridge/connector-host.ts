@@ -9,6 +9,8 @@ import {
   type ComputerConnectorOpen,
   type ComputerConnectorOpened,
   type ComputerConnectorClosed,
+  type ComputerConnectorPollingSamples,
+  type ComputerConnectorPollingState,
 } from "./wire.ts";
 
 type ConnectorHostMethod =
@@ -210,6 +212,66 @@ export class ConnectorHostBridge {
       this.pending = false;
     }
   }
+  async observePolling(
+    samples: ComputerConnectorPollingSamples,
+  ): Promise<ComputerConnectorPollingState> {
+    const original = this.current;
+    if (
+      !original ||
+      this.blocked ||
+      this.pending ||
+      this.closeInFlight ||
+      !validate("ComputerConnectorPollingSamples", samples)
+    )
+      throw new BridgeError("unavailable", "connector_polling_unavailable");
+    const id = randomUUID();
+    const body = {
+      binding: original.endpoint.binding,
+      samples: { ...samples },
+    };
+    const outcome = await this.client.request(
+      "computer.connector.polling",
+      body as unknown as Json,
+      { id, timeoutMs: 5000 },
+    );
+    if (this.current !== original || this.blocked || this.closeInFlight)
+      throw new BridgeError("unavailable", "connector_polling_unavailable");
+    if (
+      !validate("Outcome", outcome) ||
+      outcome.requestId !== id ||
+      outcome.operationId !== undefined ||
+      outcome.context.profileId !== this.context.profileId ||
+      outcome.context.backendGeneration !== this.context.backendGeneration
+    )
+      throw new BridgeError("unknown", "crossed_connector_polling");
+    if (outcome.status !== "ok")
+      throw new BridgeError(outcome.status, "connector_polling_unavailable");
+    if (
+      outcome.code !== undefined ||
+      !validate("ComputerConnectorPollingState", outcome.data)
+    )
+      throw new BridgeError("unknown", "invalid_connector_polling");
+    const value = outcome.data as unknown as ComputerConnectorPollingState;
+    if (
+      Object.entries(original.endpoint.binding).some(
+        ([key, field]) =>
+          value.binding[key as keyof typeof value.binding] !== field,
+      )
+    )
+      throw new BridgeError("unknown", "crossed_connector_polling");
+    if (
+      value.cycles !== body.samples.cycles ||
+      value.errors !== body.samples.errors ||
+      (value.ageSeconds !== undefined) !==
+        (value.state === "recent" || value.state === "stale")
+    )
+      throw new BridgeError("unknown", "invalid_connector_polling");
+    return Object.freeze({
+      ...value,
+      binding: Object.freeze({ ...value.binding }),
+    });
+  }
+
   async verification() {
     const current = this.current;
     if (!current || !this.proof || this.pending || this.blocked)

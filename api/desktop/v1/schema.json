@@ -92,7 +92,8 @@
     "task.settings.compare": "read",
     "task.models.describe": "read",
     "chat.archive.list": "read",
-    "chat.archive.read": "read"
+    "chat.archive.read": "read",
+    "computer.connector.polling": "read"
   },
   "definitions": {
     "Context": {
@@ -5382,6 +5383,61 @@
         "text": {
           "type": "string",
           "maxBytes": 8192
+        }
+      }
+    },
+    "ComputerConnectorPollingSamples": {
+      "type": "object",
+      "fields": {
+        "cycles": {
+          "type": "decimal",
+          "optional": true
+        },
+        "errors": {
+          "type": "decimal",
+          "optional": true
+        },
+        "lastSuccessMillis": {
+          "type": "decimal",
+          "optional": true
+        }
+      }
+    },
+    "ComputerConnectorPollingRequest": {
+      "type": "object",
+      "fields": {
+        "binding": {
+          "type": "ComputerConnectorBinding"
+        },
+        "samples": {
+          "type": "ComputerConnectorPollingSamples"
+        }
+      }
+    },
+    "ComputerConnectorPollingState": {
+      "type": "object",
+      "fields": {
+        "binding": {
+          "type": "ComputerConnectorBinding"
+        },
+        "state": {
+          "type": "text",
+          "values": ["recent", "stale", "no_success", "unknown"]
+        },
+        "observedAtMillis": {
+          "type": "decimal"
+        },
+        "cycles": {
+          "type": "decimal",
+          "optional": true
+        },
+        "errors": {
+          "type": "decimal",
+          "optional": true
+        },
+        "ageSeconds": {
+          "type": "decimal",
+          "optional": true
         }
       }
     }
