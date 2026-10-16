@@ -3,7 +3,8 @@ import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, ipcMain, Menu, screen } from "electron";
 import type { GracefulQuitSignals } from "../../../src/apps/desktop/quit-signal";
 
-const quitChannel = "farol:startup-recovery:quit";
+import { recoveryChannels } from "../renderer/recovery/contract";
+import type { StartupRecoverySession } from "./session";
 
 export type StartupRecoveryWindow = Readonly<{
   ready: Promise<void>;
@@ -12,13 +13,15 @@ export type StartupRecoveryWindow = Readonly<{
   dispose(): void;
 }>;
 
-/** UI-only lifetime. The caller retains startup exclusion until this closes.
- * No configuration, runtime, Computer, provider or updater port is available.
- * The predecessor's run marker and receipts remain owned by recovery, not Quit.
+/** The caller retains startup exclusion through this view and its original
+ * recovery child closure. Only the bound projection/read session is exposed;
+ * no normal desktop, provider, updater or mutable Computer IPC is installed.
+ * The predecessor's marker and receipts remain owned by recovery, not Quit.
  */
 export function openStartupRecoveryWindow(
   options: Readonly<{
     directory: string;
+    session: StartupRecoverySession;
     mode: "default" | "hidden" | "secondary-visible";
     placement: () => Readonly<{
       x: number;
@@ -86,14 +89,36 @@ export function openStartupRecoveryWindow(
       /* Stay hidden until an eligible display returns. */
     }
   };
+  const currentSender = (
+    event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent,
+  ): boolean =>
+    !stopping &&
+    !disposed &&
+    !window.isDestroyed() &&
+    event.sender === window.webContents &&
+    event.senderFrame === window.webContents.mainFrame &&
+    event.senderFrame.url === documentURL;
+  const stateFromRenderer = async (event: Electron.IpcMainInvokeEvent) => {
+    if (!currentSender(event))
+      throw new Error("STARTUP_RECOVERY_DOCUMENT_UNAVAILABLE");
+    const state = await options.session.state();
+    if (!currentSender(event))
+      throw new Error("STARTUP_RECOVERY_DOCUMENT_UNAVAILABLE");
+    return state;
+  };
+  const readFromRenderer = async (
+    event: Electron.IpcMainInvokeEvent,
+    input: unknown,
+  ) => {
+    if (!currentSender(event))
+      throw new Error("STARTUP_RECOVERY_DOCUMENT_UNAVAILABLE");
+    const result = await options.session.read(input);
+    if (!currentSender(event))
+      throw new Error("STARTUP_RECOVERY_DOCUMENT_UNAVAILABLE");
+    return result;
+  };
   const quitFromRenderer = (event: Electron.IpcMainEvent) => {
-    if (stopping || disposed || window.isDestroyed()) return;
-    if (
-      event.sender !== window.webContents ||
-      event.senderFrame !== window.webContents.mainFrame ||
-      event.senderFrame.url !== documentURL
-    )
-      return;
+    if (!currentSender(event)) return;
     app.quit();
   };
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -103,7 +128,9 @@ export function openStartupRecoveryWindow(
   });
   app.on("before-quit", beforeQuit);
   app.on("activate", reveal);
-  ipcMain.on(quitChannel, quitFromRenderer);
+  ipcMain.on(recoveryChannels.quit, quitFromRenderer);
+  ipcMain.handle(recoveryChannels.state, stateFromRenderer);
+  ipcMain.handle(recoveryChannels.read, readFromRenderer);
   screen.on("display-added", reconcile);
   screen.on("display-removed", reconcile);
   screen.on("display-metrics-changed", reconcile);
@@ -135,7 +162,9 @@ export function openStartupRecoveryWindow(
     dispose: () => {
       if (disposed) return;
       disposed = true;
-      ipcMain.removeListener(quitChannel, quitFromRenderer);
+      ipcMain.removeListener(recoveryChannels.quit, quitFromRenderer);
+      ipcMain.removeHandler(recoveryChannels.state);
+      ipcMain.removeHandler(recoveryChannels.read);
       app.removeListener("before-quit", beforeQuit);
       app.removeListener("activate", reveal);
       screen.removeListener("display-added", reconcile);

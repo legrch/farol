@@ -170,6 +170,12 @@ function actionFeedback(
     return "The connection outcome is unknown. Inspect its existing result in Diagnostics; Farol will not start or change it again automatically.";
   if (result.state === "unknown")
     return "Outcome unknown. Do not repeat this action; inspect the existing result in Diagnostics.";
+  if (
+    result.state === "refused" &&
+    result.id === intention("connector.check-health") &&
+    result.code === "CONNECTOR_POLLING_EXPIRED"
+  )
+    return "The connection check expired. No polling result was published.";
   if (result.id.startsWith("settings:computer.apply-workspace-edit:"))
     return result.state === "applied"
       ? "Workspace edit confirmed. Review the exact result in Diagnostics."
@@ -249,8 +255,32 @@ function actionFeedback(
   if (
     result.state === "applied" &&
     result.id === intention("connector.check-health")
-  )
+  ) {
+    const evidence = evidenceReceived ? current?.evidence?.value : null;
+    const settings =
+      current?.configuration?.status === "ready"
+        ? current.configuration.settings
+        : null;
+    const connector = settings?.connectors.secureMcp;
+    const runtime = connector?.runtime;
+    if (
+      evidence?.kind === "connector.polling" &&
+      runtime?.state === "ready" &&
+      evidence.runtimeGeneration === runtime.runtimeGeneration &&
+      evidence.computerGeneration === settings?.computer.generation &&
+      evidence.connectorGeneration === String(connector?.generation) &&
+      evidence.buildId === runtime.buildId
+    ) {
+      const observation = {
+        recent: "The helper reported a recent server poll.",
+        stale: "Server polling was delayed.",
+        no_success: "The helper had not reported a successful server poll.",
+        unknown: "Server polling could not be confirmed.",
+      }[evidence.state];
+      return `Local connection checked. ${observation} Access from ChatGPT has a separate verification.`;
+    }
     return "Local connection checked. Access from ChatGPT has a separate verification.";
+  }
   if (result.state === "applied") {
     const kind = result.id.split(":")[1];
     if (
@@ -653,8 +683,12 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
         </p>
       )}
       {pageFeedback &&
-        !/^settings:connector\.(?:check-health|start|repair|save-and-connect|verify-app|check-attachment):/u.test(
-          pageFeedback.result?.id ?? "",
+        !(
+          (snapshot.destination.page === "connection" ||
+            setupStep !== undefined) &&
+          /^settings:connector\.(?:check-health|start|repair|save-and-connect|verify-app|check-attachment):/u.test(
+            pageFeedback.result?.id ?? "",
+          )
         ) &&
         !(
           snapshot.destination.page === "folders" &&

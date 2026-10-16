@@ -16,7 +16,10 @@ import type { Json, Outcome } from "../../apps/desktop/bridge/wire";
 
 // Deterministic host/transport conformance only; the separate Go native CLI test
 // proves real stores and admission. This fixture owns no native/backend process.
-async function fixture(fault?: (method: string, result: Outcome) => Outcome) {
+async function fixture(
+  fault?: (method: string, result: Outcome) => Outcome,
+  scope: "computer-and-task" | "computer" = "computer-and-task",
+) {
   const context = { profileId: "profile", backendGeneration: "backend" };
   const request = vi.fn<Client["request"]>(
     async (method, body, options = {}) => {
@@ -94,6 +97,7 @@ async function fixture(fault?: (method: string, result: Outcome) => Outcome) {
     { request },
     context,
     () => 1791040000000,
+    scope,
   );
   const store = new ProductSettingsStore({ root: "/unused/synthetic" });
   let stored: ProductSettings | null = null;
@@ -1064,4 +1068,56 @@ it("retains unknown empty publication without a retry or file admission", async 
     code: "computer_publication_unavailable",
   });
   expect(f.request).toHaveBeenCalledTimes(2);
+});
+
+describe("Computer-only recovery publication", () => {
+  it("omits saved Task metadata while requiring a fresh exact owner ACK for reads", async () => {
+    const f = await fixture(undefined, "computer");
+    const added = await f.add();
+    if (!added.ok || added.snapshot.status !== "ready") throw Error("fixture");
+    const settings = selectedTaskSettings(added.snapshot.settings);
+    f.request.mockClear();
+    const original = await f.bridge.withdraw();
+    await original.publish(settings);
+    const publication = f.request.mock.calls[1]![1];
+    expect(publication).not.toHaveProperty("taskCurrentSettings");
+    expect(publication).not.toHaveProperty("taskCodex");
+    expect(publication).not.toHaveProperty("taskCodexRead");
+    const listed = await f.bridge.listSettings(
+      settings.computer.generation,
+      settings.computer.workspaces[0]!.workspaceId,
+      ".",
+    );
+    expect(listed.entries).toEqual(["note.md", "folder/"]);
+    expect(f.request.mock.calls.map(([method]) => method)).toEqual([
+      "computer.authority.deactivate",
+      "computer.authority.publish",
+      "computer.settings.list",
+    ]);
+  });
+  it("does not retry or resume reads after a lost owner publication response", async () => {
+    const f = await fixture(undefined, "computer");
+    const added = await f.add();
+    if (!added.ok || added.snapshot.status !== "ready") throw Error("fixture");
+    f.request.mockClear();
+    const original = await f.bridge.withdraw();
+    f.request.mockRejectedValueOnce(
+      new Error("synthetic lost publication ACK"),
+    );
+    await expect(original.publish(added.snapshot.settings)).rejects.toThrow();
+    await expect(
+      f.bridge.listSettings(
+        added.snapshot.settings.computer.generation,
+        added.snapshot.settings.computer.workspaces[0]!.workspaceId,
+        ".",
+      ),
+    ).rejects.toMatchObject({ code: "computer_publication_unavailable" });
+    await expect(f.bridge.withdraw()).rejects.toMatchObject({
+      code: "computer_publication_unavailable",
+    });
+    expect(f.request.mock.calls.map(([method]) => method)).toEqual([
+      "computer.authority.deactivate",
+      "computer.authority.publish",
+    ]);
+  });
 });

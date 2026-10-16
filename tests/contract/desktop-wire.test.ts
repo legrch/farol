@@ -1044,3 +1044,97 @@ it("refuses independently varied fixed wire limits before generating either peer
     ).toThrow("unsupported wire limits");
   }
 });
+
+describe("recovery archive observations", () => {
+  const stored = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../api/desktop/v1/fixtures/chat-archive.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  it("keeps stored data separate from accepted history and effect methods", () => {
+    expect(validate("ChatArchiveReply", stored)).toBe(true);
+    expect(validate("ChatHistoryResult", stored)).toBe(false);
+    for (const method of ["chat.archive.list", "chat.archive.read"]) {
+      expect(knownMethod(method)).toBe(true);
+      expect(requiresOperationID(method)).toBe(false);
+    }
+    expect(validate("ChatArchiveListRequest", { after: "" })).toBe(true);
+    expect(
+      validate("ChatArchiveReadRequest", {
+        key: stored.summary.key,
+        digest: stored.summary.digest,
+      }),
+    ).toBe(true);
+  });
+  it("refuses promoted provenance, authority fields and oversized observations", () => {
+    for (const change of [
+      { observation: "completed" },
+      { acknowledged: true },
+      { complete: true },
+      { ownerId: "other" },
+      { summary: { ...stored.summary, recordedOutcome: "accepted" } },
+      { summary: { ...stored.summary, digest: "B".repeat(64) } },
+      { summary: { ...stored.summary, bytes: 8193 } },
+      { text: "x".repeat(8193) },
+    ])
+      expect(validate("ChatArchiveReply", { ...stored, ...change })).toBe(
+        false,
+      );
+    expect(
+      validate("ChatArchiveListRequest", { after: "", profileId: "other" }),
+    ).toBe(false);
+    expect(
+      validate("ChatArchivePage", {
+        observation: "stored_unconfirmed",
+        entries: Array.from({ length: 33 }, () => stored.summary),
+        next: stored.summary.key,
+        unresolved: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+it("keeps numeric polling observations read-only and rejects authority/URL fields", () => {
+  const binding = {
+    buildId: "build",
+    profileId: "profile",
+    backendGeneration: "backend",
+    runtimeId: "runtime",
+    connectorGeneration: "1",
+  };
+  const request = {
+    binding,
+    samples: { cycles: "10", errors: "2", lastSuccessMillis: "1700000000000" },
+  };
+  expect(knownMethod("computer.connector.polling")).toBe(true);
+  expect(requiresOperationID("computer.connector.polling")).toBe(false);
+  expect(validate("ComputerConnectorPollingRequest", request)).toBe(true);
+  for (const samples of [
+    { ...request.samples, url: "http://example.com" },
+    { ...request.samples, attachment: true },
+    { cycles: 10 },
+    { cycles: "01" },
+  ])
+    expect(
+      validate("ComputerConnectorPollingRequest", { binding, samples }),
+    ).toBe(false);
+  for (const state of ["recent", "stale", "no_success", "unknown"])
+    expect(
+      validate("ComputerConnectorPollingState", {
+        binding,
+        state,
+        observedAtMillis: "1700000000000",
+      }),
+    ).toBe(true);
+  expect(
+    validate("ComputerConnectorPollingState", {
+      binding,
+      state: "attached",
+      observedAtMillis: "1700000000000",
+    }),
+  ).toBe(false);
+});

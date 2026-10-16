@@ -36,7 +36,7 @@ type SettingsStoreExchange struct {
 	peer             wire.Context
 	mu               sync.Mutex
 	pending          *settingsStoreCall
-	ready            chan *settingsStoreCall
+	ready            chan struct{}
 	stopped          chan struct{}
 	issued           uint32
 	fenced, quiesced bool
@@ -48,7 +48,7 @@ func NewSettingsStoreExchange(ctx context.Context, peer wire.Context) (*Settings
 	if ctx == nil || ctx.Err() != nil || !validIngressID(peer.ProfileId) || !validIngressID(peer.BackendGeneration) {
 		return nil, errSettingsStoreExchange
 	}
-	return &SettingsStoreExchange{ctx: ctx, peer: peer, ready: make(chan *settingsStoreCall, 1), stopped: make(chan struct{})}, nil
+	return &SettingsStoreExchange{ctx: ctx, peer: peer, ready: make(chan struct{}, 1), stopped: make(chan struct{})}, nil
 }
 
 func (s *SettingsStoreExchange) Load(ctx context.Context) (delivery.Snapshot, error) {
@@ -130,6 +130,13 @@ func (s *SettingsStoreExchange) exchange(ctx context.Context, kind string, chang
 	}
 	s.issued++
 	s.pending = call
+	// This is a wake-up, not custody of the command. Only next's locked
+	// deadline check may deliver the original pending call. A stale wake-up
+	// cannot strand or replace it when an earlier poll expires.
+	select {
+	case s.ready <- struct{}{}:
+	default:
+	}
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
@@ -139,15 +146,6 @@ func (s *SettingsStoreExchange) exchange(ctx context.Context, kind string, chang
 		}
 		s.mu.Unlock()
 	}()
-	select {
-	case s.ready <- call:
-	case <-callCtx.Done():
-		return nil, callCtx.Err()
-	case <-s.ctx.Done():
-		return nil, s.ctx.Err()
-	default:
-		return nil, errSettingsStoreExchange
-	}
 	select {
 	case reply := <-call.answer:
 		if callCtx.Err() != nil || s.ctx.Err() != nil {
@@ -176,11 +174,35 @@ func (s *SettingsStoreExchange) next(ctx context.Context, deadline uint64) (*wir
 	defer cancel()
 	for {
 		s.mu.Lock()
-		fenced := s.fenced
-		s.mu.Unlock()
-		if fenced {
+		if ctx.Err() != nil || s.ctx.Err() != nil || s.fenced {
+			s.mu.Unlock()
 			return nil, errSettingsStoreExchange
 		}
+		// select does not prioritize cancellation over a ready command. Check
+		// both original deadlines under the same lock as delivery, including
+		// wall time when the deadline timer has not run yet. An expired empty
+		// poll leaves the pending command's ID, bytes and deadline untouched.
+		now := time.Now()
+		if s.quiesced || wait.Err() != nil || !now.Before(until) {
+			s.mu.Unlock()
+			return nil, nil
+		}
+		call := s.pending
+		if call != nil && !call.delivered && !call.completed && call.ctx.Err() == nil {
+			deadline, bounded := call.ctx.Deadline()
+			if bounded && now.Before(deadline) {
+				call.delivered = true
+				select {
+				case <-s.ready:
+				default:
+				}
+				copy := call.command
+				copy.Body = append(json.RawMessage(nil), copy.Body...)
+				s.mu.Unlock()
+				return &copy, nil
+			}
+		}
+		s.mu.Unlock()
 		select {
 		case <-s.stopped:
 			return nil, nil
@@ -191,18 +213,7 @@ func (s *SettingsStoreExchange) next(ctx context.Context, deadline uint64) (*wir
 				return nil, ctx.Err()
 			}
 			return nil, nil
-		case call := <-s.ready:
-			s.mu.Lock()
-			live := s.pending == call && !s.fenced && !s.quiesced && !call.delivered && !call.completed && call.ctx.Err() == nil && s.ctx.Err() == nil
-			if live {
-				call.delivered = true
-			}
-			s.mu.Unlock()
-			if live {
-				copy := call.command
-				copy.Body = append(json.RawMessage(nil), copy.Body...)
-				return &copy, nil
-			}
+		case <-s.ready:
 		}
 	}
 }

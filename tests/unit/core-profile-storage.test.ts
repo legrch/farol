@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { openNativeProfileStorage } from "../../apps/desktop/bridge/profile-storage.ts";
+import {
+  openNativeProfileStorage,
+  openExistingNativeProfileStorage,
+} from "../../apps/desktop/bridge/profile-storage.ts";
 
 // CPU-only provisioning double: no real files, fsync, descriptors or native
 // profile are used. This does not attest crash durability or installed startup.
@@ -389,4 +392,25 @@ it("does not infer a version 1 mutation route from an ambient directory", () => 
   ).toBe(false);
   expect(fixture.mkdirs).toEqual(["/fixture/state/go-core"]);
   expect(fixture.writes).toEqual([]);
+});
+
+it("selects existing recovery identity without any provisioning attempt", () => {
+  fixture.existing();
+  expect(
+    openExistingNativeProfileStorage("/fixture/state", "computer"),
+  ).toMatchObject({
+    storeMode: "open",
+    settingsMutations: false,
+  });
+  expect(fixture.mkdirs).toEqual([]);
+  expect(fixture.writes).toEqual([]);
+  expect(fixture.closed).toEqual(fixture.opened);
+});
+it("refuses missing recovery storage without creating or retrying", () => {
+  expect(() =>
+    openExistingNativeProfileStorage("/fixture/state", "computer"),
+  ).toThrow();
+  expect(fixture.mkdirs).toEqual([]);
+  expect(fixture.writes).toEqual([]);
+  expect([...fixture.nodes.keys()]).toEqual(["/fixture/state"]);
 });

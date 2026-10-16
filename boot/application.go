@@ -11,6 +11,7 @@ import (
 	"strconv"
 
 	"github.com/legrch/farol/boot/container"
+	"github.com/legrch/farol/transport/desktop"
 )
 
 // BuildID is set by the build via -ldflags; it cannot be overridden by a client.
@@ -26,23 +27,30 @@ func serve(ctx context.Context, profileID string, launch *NativeLaunch, in io.Re
 		return err
 	}
 	generation := hex.EncodeToString(bytes[:])
-	var native *NativeRuntime
-	methods := taskModelPolicyMethods()
-	for name, method := range taskModelCatalogueMethods() {
-		if _, exists := methods[name]; exists {
-			return errors.New("task_method_conflict")
+	var native nativeApplication
+	methods := map[string]desktop.Method{}
+	if launch == nil || launch.StartupMode != "recovery" {
+		methods = taskModelPolicyMethods()
+		for name, method := range taskModelCatalogueMethods() {
+			if _, exists := methods[name]; exists {
+				return errors.New("task_method_conflict")
+			}
+			methods[name] = method
 		}
-		methods[name] = method
-	}
-	for name, method := range taskCurrentSettingsMethods() {
-		if _, exists := methods[name]; exists {
-			return errors.New("task_method_conflict")
+		for name, method := range taskCurrentSettingsMethods() {
+			if _, exists := methods[name]; exists {
+				return errors.New("task_method_conflict")
+			}
+			methods[name] = method
 		}
-		methods[name] = method
 	}
 	if launch != nil {
 		var err error
-		native, err = NewNativeRuntime(ctx, *launch, generation)
+		if launch.StartupMode == "recovery" {
+			native, err = NewNativeRecovery(ctx, *launch, generation)
+		} else {
+			native, err = NewNativeRuntime(ctx, *launch, generation)
+		}
 		if err != nil {
 			return err
 		}
@@ -104,6 +112,7 @@ func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Wri
 	owner := flags.String("owner", "", "trusted current owner identity")
 	computer := flags.String("computer", "", "trusted current Computer identity")
 	home := flags.String("home", "", "explicit independent selected HOME")
+	startupMode := flags.String("startup-mode", "normal", "normal runtime or explicit existing-profile recovery")
 	storeMode := flags.String("store-mode", "", "known first create or existing open; no fallback")
 	settingsMutations := flags.Bool("settings-mutations", false, "qualified version 2 profile mutation storage; no migration")
 	hostLifetime := flags.String("host-lifetime", "", "trusted initiating host lifetime")
@@ -116,12 +125,15 @@ func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Wri
 	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || *profile == "" {
 		return 2
 	}
-	if *shellFD != 0 && *shellFD != 3 {
+	if (*startupMode != "normal" && *startupMode != "recovery") || (*shellFD != 0 && *shellFD != 3) {
 		return 2
 	}
 	codexRead, err := decodeCodexReadLaunch(codexReadHost, codexReadTemp, *root != "")
 	if err != nil {
 		fmt.Fprintln(diagnostics, err)
+		return 2
+	}
+	if *startupMode == "recovery" && (*root == "" || *storeMode != "open" || *hostLifetime == "" || *childLaunch == "" || *settingsMutations || *previousDrain || *shellFD != 0 || codexRead != nil) {
 		return 2
 	}
 	var launch *NativeLaunch
@@ -134,7 +146,7 @@ func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Wri
 		if err != nil || strconv.FormatUint(ino, 10) != *inode || ino == 0 {
 			return 2
 		}
-		launch = &NativeLaunch{Profile: ProfileBinding{ProfileID: *profile, Root: *root, Device: dev, Inode: ino}, OwnerID: *owner, ComputerID: *computer, Home: *home, StoreMode: *storeMode, HostLifetimeID: *hostLifetime, ChildLaunchID: *childLaunch, PreviousHostDrainConfirmed: *previousDrain, SettingsMutations: *settingsMutations, CodexRead: codexRead}
+		launch = &NativeLaunch{Profile: ProfileBinding{ProfileID: *profile, Root: *root, Device: dev, Inode: ino}, OwnerID: *owner, ComputerID: *computer, Home: *home, StoreMode: *storeMode, StartupMode: *startupMode, HostLifetimeID: *hostLifetime, ChildLaunchID: *childLaunch, PreviousHostDrainConfirmed: *previousDrain, SettingsMutations: *settingsMutations, CodexRead: codexRead}
 	} else if *device != "" || *inode != "" || *owner != "" || *computer != "" || *home != "" || *storeMode != "" || *hostLifetime != "" || *childLaunch != "" || *previousDrain || *settingsMutations || *shellFD != 0 {
 		return 2
 	}

@@ -49,6 +49,30 @@ function harness(observation, healthy = false) {
     secureMcpConnectorRuntime: {
       checkHealth: vi.fn(async () => healthy),
       getTunnelObservation: vi.fn(() => observation),
+      isRunning: vi.fn(() => true),
+      observePolling: vi.fn(async () => ({
+        runtimeGeneration: generation,
+        samples: {
+          cycles: "12",
+          errors: "1",
+          lastSuccessMillis: "123456789",
+        },
+      })),
+    },
+    desktopGoCore: {
+      backendAvailable: true,
+      observeComputerConnectorPolling: vi.fn(async (samples) => ({
+        binding: {
+          buildId: "build",
+          profileId: "profile",
+          backendGeneration: "backend-generation",
+          runtimeId: "runtime",
+          connectorGeneration: "3",
+        },
+        state: "recent",
+        observedAtMillis: "123456790",
+        ...samples,
+      })),
     },
     connectorTaskAdmission: false,
     configuration: { snapshot: vi.fn(() => snapshot) },
@@ -90,6 +114,12 @@ it("retains exact-generation terminal UNKNOWN instead of publishing unreachable"
     7,
   );
   expect(h.context.connectorTaskAdmission).toBe(false);
+  expect(
+    h.context.secureMcpConnectorRuntime.observePolling,
+  ).not.toHaveBeenCalled();
+  expect(
+    h.context.desktopGoCore.observeComputerConnectorPolling,
+  ).not.toHaveBeenCalled();
 });
 
 it("classifies the dead tunnel without asserting anchor or process-group closure", async () => {
@@ -104,6 +134,12 @@ it("classifies the dead tunnel without asserting anchor or process-group closure
     7,
   );
   expect(h.context.connectorTaskAdmission).toBe(false);
+  expect(
+    h.context.secureMcpConnectorRuntime.observePolling,
+  ).not.toHaveBeenCalled();
+  expect(
+    h.context.desktopGoCore.observeComputerConnectorPolling,
+  ).not.toHaveBeenCalled();
 });
 
 it("does not publish a different runtime's terminal observation into current Settings", async () => {
@@ -113,6 +149,12 @@ it("does not publish a different runtime's terminal observation into current Set
     error: "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
   });
   expect(h.context.recordConnectorRuntime).not.toHaveBeenCalled();
+  expect(
+    h.context.secureMcpConnectorRuntime.observePolling,
+  ).not.toHaveBeenCalled();
+  expect(
+    h.context.desktopGoCore.observeComputerConnectorPolling,
+  ).not.toHaveBeenCalled();
 });
 
 it("does not hide UNKNOWN behind a successful asynchronous health probe", async () => {
@@ -129,6 +171,12 @@ it("does not hide UNKNOWN behind a successful asynchronous health probe", async 
     generation,
     7,
   );
+  expect(
+    h.context.secureMcpConnectorRuntime.observePolling,
+  ).not.toHaveBeenCalled();
+  expect(
+    h.context.desktopGoCore.observeComputerConnectorPolling,
+  ).not.toHaveBeenCalled();
 });
 
 it("does not hide a late tunnel exit behind a successful health probe", async () => {
@@ -142,10 +190,35 @@ it("does not hide a late tunnel exit behind a successful health probe", async ()
     generation,
     7,
   );
+  expect(
+    h.context.secureMcpConnectorRuntime.observePolling,
+  ).not.toHaveBeenCalled();
+  expect(
+    h.context.desktopGoCore.observeComputerConnectorPolling,
+  ).not.toHaveBeenCalled();
 });
 
 it("does not turn a healthy current endpoint into a terminal operation", async () => {
   const h = harness(null, true);
-  expect((await h.handle()).ok).toBe(true);
+  expect(await h.handle()).toMatchObject({
+    ok: true,
+    evidence: {
+      kind: "connector.polling",
+      runtimeGeneration: generation,
+      connectorGeneration: "3",
+      computerGeneration: 7,
+      buildId: "build",
+    },
+  });
   expect(h.context.recordConnectorRuntime).not.toHaveBeenCalled();
+  expect(
+    h.context.secureMcpConnectorRuntime.observePolling,
+  ).toHaveBeenCalledExactlyOnceWith();
+  expect(
+    h.context.desktopGoCore.observeComputerConnectorPolling,
+  ).toHaveBeenCalledExactlyOnceWith({
+    cycles: "12",
+    errors: "1",
+    lastSuccessMillis: "123456789",
+  });
 });

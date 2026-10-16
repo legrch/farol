@@ -5611,3 +5611,122 @@ it("shows a fixed saved-key mask without reading or resubmitting the saved crede
   expect(h.button("Save & connect").disabled).toBe(true);
   expect(h.calls()).toEqual([]);
 });
+
+it.each(
+  (["connection", "diagnostics", "model"] as const).flatMap((page) =>
+    (
+      [
+        ["recent", "The helper reported a recent server poll."],
+        ["stale", "Server polling was delayed."],
+        ["no_success", "The helper had not reported a successful server poll."],
+        ["unknown", "Server polling could not be confirmed."],
+      ] as const
+    ).map(([state, wording]) => ({ page, state, wording })),
+  ),
+)(
+  "shows visible $state polling feedback on $page independently from attachment",
+  async ({ page, state, wording }) => {
+    const h = await mount(page, connectionSettings());
+    const current = h.configuration;
+    if (current.status !== "ready") throw Error("fixture settings unavailable");
+    const connector = current.settings.connectors.secureMcp,
+      runtime = connector.runtime!;
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: current,
+      evidence: {
+        kind: "connector.polling",
+        state,
+        runtimeGeneration: runtime.runtimeGeneration,
+        connectorGeneration: String(connector.generation),
+        computerGeneration: current.settings.computer.generation,
+        buildId: runtime.buildId,
+        observedAtMillis: "1700000000000",
+      },
+    });
+    await h.click(
+      page === "connection" ? "Check connection" : "Check local connection",
+    );
+    expect(
+      [...h.host.querySelectorAll('p[role="status"]')].filter(
+        (node) =>
+          !node.closest("[hidden]") && node.textContent?.includes(wording),
+      ),
+    ).toHaveLength(1);
+    expect(h.host.textContent).toContain(
+      "Access from ChatGPT has a separate verification.",
+    );
+    expect(h.calls()).toEqual([{ kind: "connector.check-health" }]);
+  },
+);
+
+it("withholds polling feedback from a replaced runtime generation", async () => {
+  const h = await mount("connection", connectionSettings());
+  const current = h.configuration;
+  if (current.status !== "ready") throw Error("fixture settings unavailable");
+  const connector = current.settings.connectors.secureMcp,
+    runtime = connector.runtime!;
+  vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+    ok: true,
+    snapshot: current,
+    evidence: {
+      kind: "connector.polling",
+      state: "recent",
+      runtimeGeneration: "e".repeat(64),
+      connectorGeneration: String(connector.generation),
+      computerGeneration: current.settings.computer.generation,
+      buildId: runtime.buildId,
+      observedAtMillis: "1700000000000",
+    },
+  });
+  await h.click("Check connection");
+  expect(h.host.textContent).not.toContain(
+    "The helper reported a recent server poll.",
+  );
+  expect(h.host.textContent).toContain("Local connection checked.");
+  expect(h.calls()).toEqual([{ kind: "connector.check-health" }]);
+});
+
+it("retains one visible Diagnostics pending/unknown result without replay", async () => {
+  const h = await mount("diagnostics", connectionSettings());
+  const pending = deferred<unknown>();
+  vi.mocked(h.f.api.configure).mockReturnValueOnce(pending.promise);
+  const statuses = () =>
+    [
+      ...h.host.querySelectorAll(':scope > .settings-page > p[role="status"]'),
+    ].map((node) => node.textContent);
+  await h.click("Check local connection");
+  expect(statuses()).toContain("Saving or checking…");
+  await act(async () =>
+    pending.reject(new Error("synthetic-unknown-no-retry")),
+  );
+  expect(statuses()).toContain(
+    "Outcome unknown. Do not repeat this action; inspect the existing result in Diagnostics.",
+  );
+  expect(h.calls()).toEqual([{ kind: "connector.check-health" }]);
+});
+
+it("shows an expired diagnostic as a known refusal without publishing retained positive evidence", async () => {
+  const h = await mount("diagnostics", connectionSettings());
+  vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+    ok: false,
+    error: "CONNECTOR_POLLING_EXPIRED",
+    snapshot: h.configuration,
+  });
+  await h.click("Check local connection");
+  const visible = [...h.host.querySelectorAll('p[role="status"]')]
+    .filter((node) => !node.closest("[hidden]"))
+    .map((node) => node.textContent);
+  expect(visible).toContain(
+    "The connection check expired. No polling result was published.",
+  );
+  expect(visible.join(" ")).not.toContain(
+    "The helper reported a recent server poll.",
+  );
+  expect(h.c.getSnapshot().configuration?.status).toBe("ready");
+  expect(
+    h.c.getSnapshot().intents["settings:connector.check-health:"]?.state,
+  ).toBe("refused");
+  expect(h.button("Check local connection").disabled).toBe(false);
+  expect(h.calls()).toEqual([{ kind: "connector.check-health" }]);
+});

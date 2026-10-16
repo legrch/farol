@@ -1621,3 +1621,55 @@ describe("connector original dispatch admission", () => {
     expect(runtime.isRunning()).toBe(false);
   });
 });
+
+it("observes metrics only on the original active child and withholds a late result after stop", async () => {
+  const selected = await fixture(),
+    child = new FakeChild();
+  const start = vi.fn<ConnectorProcessStarter>(async (command) => {
+    await fs.writeFile(
+      option(command, "--health.url-file"),
+      "http://127.0.0.1:43125\n",
+      { mode: 0o600 },
+    );
+    return child;
+  });
+  const polling = vi.fn(
+    async (
+      _base: string,
+    ): Promise<Readonly<{ cycles: string; lastSuccessMillis: string }>> =>
+      Object.freeze({ cycles: "10", lastSuccessMillis: "0" }),
+  );
+  const runtime = new SecureMcpConnectorRuntime(
+    {
+      root: selected.runtimeRoot,
+      homePath: selected.root,
+      tempPath: selected.root,
+    },
+    { start, get: async () => true, polling },
+  );
+  expect(await runtime.observePolling()).toBeNull();
+  expect(polling).not.toHaveBeenCalled();
+  const launched = await runtime.start(startInput);
+  expect(launched.state).toBe("ready");
+  expect(await runtime.observePolling()).toEqual({
+    runtimeGeneration: launched.runtimeGeneration,
+    samples: { cycles: "10", lastSuccessMillis: "0" },
+  });
+  expect(start).toHaveBeenCalledTimes(1);
+  expect(child.signals).toEqual([]);
+  let release!: (
+    value: Readonly<{ cycles: string; lastSuccessMillis: string }>,
+  ) => void;
+  polling.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  const pending = runtime.observePolling();
+  await runtime.stop();
+  release({ cycles: "11", lastSuccessMillis: "1700000000000" });
+  expect(await pending).toBeNull();
+  expect(await runtime.observePolling()).toBeNull();
+  expect(polling).toHaveBeenCalledTimes(2);
+});

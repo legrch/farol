@@ -73,10 +73,24 @@ func NewComputerIngress(store *accessrepo.Store, chat *chatlifecycle.Service, na
 }
 
 func newComputerIngress(store *accessrepo.Store, chat *chatlifecycle.Service, native computerport.Workspace, peer wire.Context, ownerID, computerID string) (*ComputerIngress, error) {
-	if store == nil || chat == nil || native == nil || !validIngressID(ownerID) || !validIngressID(computerID) || validateIngress("Context", peer) != nil {
+	if chat == nil {
 		return nil, computerUnavailable()
 	}
-	return &ComputerIngress{store: store, chat: chat, native: native, peer: peer, ownerID: ownerID, computerID: computerID, used: make(map[string]bool), tasks: make(map[string]bool), turns: make(map[string]bool), taskCurrentSource: newTaskCurrentSource()}, nil
+	owner, err := newOwnerIngress(store, native, peer, ownerID, computerID)
+	if err != nil {
+		return nil, err
+	}
+	owner.chat, owner.taskCurrentSource = chat, newTaskCurrentSource()
+	return owner, nil
+}
+
+// Owner Settings queries use a real current publication, independently of Chat
+// membership. Only full composition attaches Chat and Task selection here.
+func newOwnerIngress(store *accessrepo.Store, native computerport.Workspace, peer wire.Context, ownerID, computerID string) (*ComputerIngress, error) {
+	if store == nil || native == nil || !validIngressID(ownerID) || !validIngressID(computerID) || validateIngress("Context", peer) != nil {
+		return nil, computerUnavailable()
+	}
+	return &ComputerIngress{store: store, native: native, peer: peer, ownerID: ownerID, computerID: computerID, used: make(map[string]bool), tasks: make(map[string]bool), turns: make(map[string]bool)}, nil
 }
 func validIngressID(id string) bool { return len(id) <= 120 && validateIngress("id", id) == nil }
 func validateIngress(name string, v any) error {
@@ -203,7 +217,7 @@ func (s *ComputerIngress) Publish(ctx context.Context, operation string, in wire
 func (s *ComputerIngress) Admit(ctx context.Context, operation string, in wire.ChatComputerAdmissionRequest) (*wire.ChatComputerAdmissionResponse, error) {
 	s.effects.Lock()
 	defer s.effects.Unlock()
-	if s.retiring || ctx == nil || ctx.Err() != nil || validateIngress("ChatComputerAdmissionRequest", in) != nil || !validIngressID(in.SessionId) || !validIngressID(in.TaskId) || !validIngressID(in.TurnId) {
+	if s.chat == nil || s.retiring || ctx == nil || ctx.Err() != nil || validateIngress("ChatComputerAdmissionRequest", in) != nil || !validIngressID(in.SessionId) || !validIngressID(in.TaskId) || !validIngressID(in.TurnId) {
 		return nil, computerUnavailable()
 	}
 	s.mu.Lock()

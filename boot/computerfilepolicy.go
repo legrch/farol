@@ -17,12 +17,20 @@ type computerFileOwners struct {
 
 var _ port.Search = (*computerFileOwners)(nil)
 
-func newComputerFileOwners(home string) (*computerFileOwners, error) {
+func newComputerReaders(home string) (*computerFileOwners, error) {
 	legacyRead, err := filesystem.NewWithFilePolicy(home, authority.LegacyProtectedFiles)
 	if err != nil {
 		return nil, err
 	}
 	rootRead, err := filesystem.NewWithFilePolicy(home, authority.RootScopedFiles)
+	if err != nil {
+		return nil, err
+	}
+	return &computerFileOwners{legacyRead: legacyRead, rootRead: rootRead}, nil
+}
+
+func newComputerFileOwners(home string) (*computerFileOwners, error) {
+	readers, err := newComputerReaders(home)
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +42,8 @@ func newComputerFileOwners(home string) (*computerFileOwners, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &computerFileOwners{legacyRead: legacyRead, rootRead: rootRead, legacyMutation: legacyMutation, rootMutation: rootMutation}, nil
+	readers.legacyMutation, readers.rootMutation = legacyMutation, rootMutation
+	return readers, nil
 }
 
 func (o *computerFileOwners) reader(policy authority.FilePolicy) (port.Workspace, error) {

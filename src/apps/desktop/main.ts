@@ -1,3 +1,5 @@
+import { startDesktopGoRecovery } from "../../../apps/desktop/recovery/core-host";
+import { createStartupRecoverySession } from "../../../apps/desktop/recovery/session";
 import {
   openStartupRecoveryWindow,
   type StartupRecoveryWindow,
@@ -39,6 +41,7 @@ import { projectReadConversation } from "../../../apps/desktop/read-conversation
 import { ReadConversationPromptSchema } from "../../pkg/product-settings/chat-conversation";
 import {
   BridgeError,
+  PollingObservationExpiredError,
   type BackendLifecycleObservation,
 } from "../../../apps/desktop/bridge/client";
 import { ConnectorHostError } from "../../../apps/desktop/bridge/connector-host";
@@ -6756,6 +6759,9 @@ async function configureAdmittedProduct(
       if (connectorTaskAdmission)
         return configurationFailure("CONNECTOR_ALREADY_RUNNING");
       connectorTaskAdmission = true;
+      const originalConnector = secureMcpConnectorRuntime;
+      const originalCore = desktopGoCore;
+      const originalOwner = configuration;
       try {
         const before = configuration.snapshot();
         if (before.status !== "ready")
@@ -6770,9 +6776,13 @@ async function configureAdmittedProduct(
           current.connectorGeneration !== connector.generation
         )
           return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
-        const healthy = await secureMcpConnectorRuntime.checkHealth();
-        const after = configuration.snapshot();
+        const healthy = await originalConnector.checkHealth();
+        const after = originalOwner.snapshot();
         if (
+          configuration !== originalOwner ||
+          secureMcpConnectorRuntime !== originalConnector ||
+          desktopGoCore !== originalCore ||
+          !originalCore?.backendAvailable ||
           after.status !== "ready" ||
           after.settings.computer.generation !==
             before.settings.computer.generation ||
@@ -6784,7 +6794,7 @@ async function configureAdmittedProduct(
           return configurationFailure(
             "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
           );
-        const terminal = secureMcpConnectorRuntime.getTunnelObservation();
+        const terminal = originalConnector.getTunnelObservation();
         if (
           terminal &&
           terminal.runtimeGeneration !== current.runtimeGeneration
@@ -6814,9 +6824,58 @@ async function configureAdmittedProduct(
               : "CONNECTOR_DOCTOR_FAILED",
           );
         }
+        const sameObservation = () => {
+          const latest = configuration?.snapshot();
+          return (
+            configuration === originalOwner &&
+            secureMcpConnectorRuntime === originalConnector &&
+            desktopGoCore === originalCore &&
+            originalCore?.backendAvailable &&
+            originalConnector.isRunning() &&
+            originalConnector.getTunnelObservation() === null &&
+            latest?.status === "ready" &&
+            latest.settings.computer.generation ===
+              current.computerGeneration &&
+            latest.settings.connectors.secureMcp.generation ===
+              current.connectorGeneration &&
+            latest.settings.connectors.secureMcp.runtime?.state === "ready" &&
+            latest.settings.connectors.secureMcp.runtime.runtimeGeneration ===
+              current.runtimeGeneration
+          );
+        };
+        const metrics = await originalConnector.observePolling();
+        if (
+          !metrics ||
+          metrics.runtimeGeneration !== current.runtimeGeneration ||
+          !sameObservation()
+        )
+          return configurationFailure(
+            "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
+          );
+        const polling = await originalCore
+          .observeComputerConnectorPolling(metrics.samples)
+          .catch((error: unknown) => {
+            if (error instanceof PollingObservationExpiredError) return null;
+            throw error;
+          });
+        if (!sameObservation())
+          return configurationFailure(
+            "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
+          );
+        if (polling === null)
+          return configurationFailure("CONNECTOR_POLLING_EXPIRED");
         return ProductConfigurationResultSchema.parse({
           ok: true,
-          snapshot: after,
+          snapshot: configuration.snapshot(),
+          evidence: {
+            kind: "connector.polling",
+            state: polling.state,
+            observedAtMillis: polling.observedAtMillis,
+            runtimeGeneration: current.runtimeGeneration,
+            connectorGeneration: polling.binding.connectorGeneration,
+            computerGeneration: current.computerGeneration,
+            buildId: current.buildId,
+          },
         });
       } finally {
         connectorTaskAdmission = false;
@@ -11295,29 +11354,56 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT",
       );
       if (compiledGoCore !== null && !clean) {
-        // Keep exclusion for the entire UI-only recovery lifetime. No new
-        // run marker, configuration, Go/runtime, provider, MCP or updater is
-        // started, and this window cannot publish a clean predecessor Quit.
+        // Keep the original exclusion through recovery and its exact child
+        // cleanup. Existing Settings and owner reads have their own narrow
+        // composition; no old marker, operation or handoff is retired here.
         await updateRelaunch?.recheck();
         if (!(await verify())) throw new Error("STARTUP_PROMOTION_LEASE_LOST");
-        startupRecovery = openStartupRecoveryWindow({
-          directory: desktopExecutionResources().directory,
-          mode: windowMode,
-          placement: () =>
-            selectedVisibleTestPlacement({ width: 640, height: 520 }).bounds,
-          quitSignals,
-          onQuitting: () => {
-            quitInProgress = true;
-          },
+        const assertRecoveryCurrent = async () => {
+          await updateRelaunch?.recheck();
+          if (!(await verify()))
+            throw new Error("STARTUP_PROMOTION_LEASE_LOST");
+        };
+        const session = createStartupRecoverySession({
+          load: () =>
+            new ProductSettingsStore({ root: stateRoot }).loadExisting(),
+          assertCurrent: assertRecoveryCurrent,
+          start: (settings) =>
+            startDesktopGoRecovery({
+              compiledArtifact: compiledGoCore,
+              compiledResources: compiledGoResources,
+              build: buildIdentity,
+              artifactRoot:
+                installedResourcesOrigin?.execution.directory ?? directory,
+              stateRoot,
+              home: app.getPath("home"),
+              settings,
+              onLifecycleObservation: reportOwnedBackendLifecycle,
+            }),
         });
         try {
+          startupRecovery = openStartupRecoveryWindow({
+            directory: desktopExecutionResources().directory,
+            session,
+            mode: windowMode,
+            placement: () =>
+              selectedVisibleTestPlacement({ width: 640, height: 520 }).bounds,
+            quitSignals,
+            onQuitting: () => {
+              quitInProgress = true;
+            },
+          });
           await startupRecovery.ready;
           process.stderr.write(
             `${secondInstanceResultPrefix}primary-recovery\n`,
           );
           await startupRecovery.quitRequested;
         } finally {
-          startupRecovery.dispose();
+          try {
+            await session.close();
+          } finally {
+            startupRecovery?.dispose();
+          }
         }
         return false;
       }
