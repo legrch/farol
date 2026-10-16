@@ -196,6 +196,85 @@ function absent(pid) {
   }
   return false;
 }
+function captureLifecycle(run, child) {
+  run.lifecycle = [];
+  let buffered = "",
+    bytes = 0;
+  child.stderr?.on("data", (chunk) => {
+    bytes += chunk.length;
+    if (bytes > 2 * 1024 * 1024 || run.lifecycle.length >= 64) {
+      run.lifecycleBudgetExceeded = true;
+      return;
+    }
+    buffered += chunk.toString("utf8");
+    if (Buffer.byteLength(buffered) > 65536) {
+      run.lifecycleBudgetExceeded = true;
+      buffered = "";
+      return;
+    }
+    const lines = buffered.split("\n");
+    buffered = lines.pop() ?? "";
+    for (const line of lines) {
+      const prefix = "FAROL_BACKEND_LIFECYCLE:";
+      if (!line.startsWith(prefix)) continue;
+      try {
+        const value = JSON.parse(line.slice(prefix.length));
+        if (
+          !["go-backend", "connector-tunnel", "connector-anchor"].includes(
+            value.source,
+          ) ||
+          !["startup", "active", "closing"].includes(value.phase) ||
+          ![
+            "failure",
+            "child-close",
+            "cleanup-unknown",
+            "exit",
+            "close",
+            "error",
+            "disconnect",
+            "invalid-receipt",
+          ].includes(value.event) ||
+          !["observed", "outcome_unknown", "unavailable"].includes(
+            value.state,
+          ) ||
+          !/^[A-Za-z_]{1,96}$/u.test(value.code) ||
+          typeof value.forced !== "boolean"
+        )
+          continue;
+        const entry = {
+          source: value.source,
+          phase: value.phase,
+          event: value.event,
+          state: value.state,
+          code: value.code,
+          forced: value.forced,
+          exitCode: Number.isSafeInteger(value.exitCode)
+            ? value.exitCode
+            : null,
+          signal:
+            typeof value.signal === "string" &&
+            /^SIG[A-Z0-9]{1,16}$/u.test(value.signal)
+              ? value.signal
+              : null,
+        };
+        for (const key of [
+          "hostLifetimeId",
+          "childLaunchId",
+          "runtimeGeneration",
+        ])
+          if (
+            typeof value[key] === "string" &&
+            /^[a-f0-9-]{16,64}$/u.test(value[key])
+          )
+            entry[key] = value[key];
+        if (run.lifecycle.length < 64) run.lifecycle.push(entry);
+      } catch {
+        run.lifecycleInvalid = true;
+      }
+    }
+  });
+}
+
 let site, admission, activeRun;
 async function launch(ordinal) {
   const run = {
@@ -241,6 +320,7 @@ async function launch(ordinal) {
     run.application = application;
     run.child = application.process();
     run.pid = run.child.pid;
+    captureLifecycle(run, run.child);
     run.ended = new Promise((resolve) =>
       run.child.once("exit", (code, signal) => resolve({ code, signal })),
     );
@@ -516,6 +596,13 @@ try {
       },
     ],
   });
+  // The shared admission contract requires the owned origin root. Alias that
+  // exact GET to the same controlled document; no guard or origin is widened.
+  site.server.prependListener("request", (request) => {
+    if (request.method === "GET" && request.url === "/")
+      request.url = "/chatgpt";
+  });
+  site.url = site.origin + "/";
   const first = await launch(1);
   await configure(first, { kind: "connector.select-client" });
   await configure(first, {
@@ -627,7 +714,13 @@ try {
   await save();
 } catch (error) {
   report.status = "failed-or-unknown";
-  report.failure = { message: String(error.message).slice(0, 1024) };
+  report.failure = {
+    message: String(error.message).slice(0, 1024),
+    cause:
+      typeof error.cause?.message === "string"
+        ? error.cause.message.slice(0, 256)
+        : null,
+  };
   await save();
   if (
     activeRun?.application &&
