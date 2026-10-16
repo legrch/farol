@@ -20,6 +20,7 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	chatport "github.com/legrch/farol/modules/chat/app/port"
+	domain "github.com/legrch/farol/modules/computer/domain/mutation"
 	"golang.org/x/sys/unix"
 )
 
@@ -438,6 +439,98 @@ func TestPreservedProfileCommandNativeRejectsChangedIndependentSelectionsWithout
 			if _, err := os.Lstat(emptyRecoveryPendingPath(profile.Root)); !os.IsNotExist(err) {
 				t.Fatal("changed selection created pending", err)
 			}
+		})
+	}
+}
+
+// Real native command/FS with controlled browser, Settings and initiating host;
+// this is not Electron or installed proof.
+func TestPreservedProfileCommandNativeRejectsNoncanonicalOwnerBindingsBeforeEffects(t *testing.T) {
+	for _, fault := range []string{"omitted-connector", "empty-connector", "partial-connector"} {
+		t.Run(fault, func(t *testing.T) {
+			in, workspace := preservedProfileFixture(t, true)
+			if len(in.Mutations) != 1 || in.Mutations[0].Binding.Identity.Scope != domain.ScopeOwnerSettings || !reflect.DeepEqual(in.Mutations[0].Binding.Connector, domain.ConnectorOrigin{}) {
+				t.Fatal("fixture did not retain its owner-settings mutation with zero Connector")
+			}
+			profile := in.Profile
+			request := in
+			request.Profile = ProfileBinding{}
+			raw, err := json.Marshal(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &fields); err != nil {
+				t.Fatal(err)
+			}
+			var mutations []map[string]json.RawMessage
+			if err := json.Unmarshal(fields["Mutations"], &mutations); err != nil || len(mutations) != 1 {
+				t.Fatal("serialized owner mutation missing", err)
+			}
+			var binding map[string]json.RawMessage
+			if err := json.Unmarshal(mutations[0]["Binding"], &binding); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := binding["Connector"]; !ok {
+				t.Fatal("canonical Go binding omitted Connector")
+			}
+			switch fault {
+			case "omitted-connector":
+				delete(binding, "Connector")
+			case "empty-connector":
+				binding["Connector"] = json.RawMessage(`{}`)
+			case "partial-connector":
+				binding["Connector"] = json.RawMessage(`{"SessionID":""}`)
+			}
+			mutations[0]["Binding"], err = json.Marshal(binding)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fields["Mutations"], err = json.Marshal(mutations)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err = json.Marshal(fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded preservedProfileInspectionInput
+			if err := json.Unmarshal(raw, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(decoded.Mutations, in.Mutations) || !reflect.DeepEqual(decoded, request) {
+				t.Fatal("noncanonical Connector changed the actual typed selection or mutations")
+			}
+			decoded.Profile = profile
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			visits := 0
+			if err := inspectPreservedProfile(ctx, decoded, func(v preservedProfileInspection) error {
+				visits++
+				if v.Mutations == nil || len(v.Mutations.Retained) != 1 || !v.Results.Unresolved || !v.Plan.RetainsUnresolvedResults {
+					t.Fatal("typed inspection lost the retained mutation or UNKNOWN results")
+				}
+				return nil
+			}); err != nil || visits != 1 {
+				t.Fatal("canonical typed inspection refused the unchanged mutation binding", err, visits)
+			}
+			before := snapshotPreservedObservationTree(t, profile.Root)
+			workBefore := snapshotPreservedObservationTree(t, workspace)
+			p := newPreservedCommandPipe(t)
+			p.start(t, preservedCommandNativeArgs(profile), time.Now().Add(3*time.Second), true, p.output)
+			p.send(t, append(raw, '\n'))
+			p.finish(t, 2)
+			output, err := io.ReadAll(p.reader)
+			if err != nil || len(output) != 0 {
+				t.Fatal("noncanonical binding reached stdout publication", err)
+			}
+			for _, path := range []string{emptyRecoveryPendingPath(profile.Root), filepath.Join(profile.Root, "chat-retired-"+in.Selection.OperationID)} {
+				if _, err := os.Lstat(path); !os.IsNotExist(err) {
+					t.Fatal("noncanonical binding created pending intent or selected archive", path, err)
+				}
+			}
+			unchangedPreservedObservationTree(t, profile.Root, before)
+			unchangedPreservedObservationTree(t, workspace, workBefore)
 		})
 	}
 }

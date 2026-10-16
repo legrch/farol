@@ -69,6 +69,12 @@ func runPreservedProfilePreparationDeadline(args []string, in io.Reader, out, di
 	if decoder.Decode(&selected) != nil || decoder.Decode(new(any)) != io.EOF || selected.Profile != (ProfileBinding{}) {
 		return 2
 	}
+	if !preservedProfileIntentBindingsMatch(ctx, raw, selected) {
+		if ctx.Err() != nil {
+			return 1
+		}
+		return 2
+	}
 	selected.Profile = binding
 	write := func(value any) error {
 		if ctx.Err() != nil {
@@ -124,4 +130,58 @@ func runPreservedProfilePreparationDeadline(args []string, in io.Reader, out, di
 		return 1
 	}
 	return 0
+}
+
+// A native intent materializes every Go Binding field. Refuse a representation
+// the host cannot compare exactly before any pending intent or archive effect.
+// The four existing optional Identity zeros remain compatible with its codec.
+// This is wire correlation only; the retained canonical inspections still own
+// binding validity, custody and effect eligibility.
+func preservedProfileIntentBindingsMatch(ctx context.Context, raw []byte, selected preservedProfileInspectionInput) bool {
+	if ctx == nil || ctx.Err() != nil || len(selected.Mutations) > 128 {
+		return false
+	}
+	var frame struct {
+		Mutations []struct{ Binding json.RawMessage }
+	}
+	if json.Unmarshal(raw, &frame) != nil || len(frame.Mutations) != len(selected.Mutations) {
+		return false
+	}
+	decode := func(raw []byte) (map[string]any, bool) {
+		var value map[string]any
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		if decoder.Decode(&value) != nil || value == nil || decoder.Decode(new(any)) != io.EOF {
+			return nil, false
+		}
+		return value, true
+	}
+	for i, mutation := range selected.Mutations {
+		if ctx.Err() != nil {
+			return false
+		}
+		expected, err := json.Marshal(mutation.Binding)
+		if err != nil {
+			return false
+		}
+		want, wantOK := decode(expected)
+		got, gotOK := decode(frame.Mutations[i].Binding)
+		if !wantOK || !gotOK {
+			return false
+		}
+		wantIdentity, wantOK := want["Identity"].(map[string]any)
+		gotIdentity, gotOK := got["Identity"].(map[string]any)
+		if !wantOK || !gotOK {
+			return false
+		}
+		for _, field := range []string{"SessionID", "TaskID", "TaskEpoch", "ParticipantID"} {
+			if _, exists := gotIdentity[field]; !exists {
+				gotIdentity[field] = wantIdentity[field]
+			}
+		}
+		if !reflect.DeepEqual(got, want) {
+			return false
+		}
+	}
+	return ctx.Err() == nil
 }

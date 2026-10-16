@@ -277,7 +277,14 @@ The Dev-only `observe-preserved-profile` command returns a canonical selection
 after the same composite's final rechecks and claim closes. Its request must
 leave all three Chat digests zero; only the private read-only entry discovers
 them. The preparation entry always requires independently selected exact
-digests and rechecks the repositories again. The inspection reply explicitly
+digests and rechecks the repositories again. Before its first storage effect,
+the preparation command also compares every selected mutation Binding with its
+complete Go wire encoding. Only the four existing optional Identity zero fields
+may be omitted. Missing, empty or partially materialized Connector objects and
+other omitted Binding fields are invalid input; read-only inspection can still
+observe their equivalent typed values without authorizing preparation. This
+refusal happens before the permanent pending intent or archive rename. The host
+retains its strict post-write intent comparison and actual ACK/terminal gates. The inspection reply explicitly
 sets `recoveryAuthorized: false`; metadata is not a historical ACK, process
 receipt or permission to prepare. Both commands retain an original five-second
 absolute budget fixed before parsing or IO, bounded strict frames and actual

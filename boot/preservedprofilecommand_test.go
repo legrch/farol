@@ -2,6 +2,8 @@ package boot
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -151,5 +153,95 @@ func TestPreservedProfileCommandExpiredDeadlineCannotBecomeInputOrSuccess(t *tes
 		if code != 1 || out.Len() != 0 || diagnostics.String() != "PRESERVED_RECOVERY_PREPARATION_REFUSED_OR_UNKNOWN\n" {
 			t.Fatal("expired budget was not safely refused", code, diagnostics.String())
 		}
+	}
+}
+
+// Only wire correlation is exercised here. Complete zero structs do not grant
+// domain validity or native eligibility; the existing inspections still do.
+func preservedBindingWireFixture(t *testing.T) (preservedProfileInspectionInput, []byte) {
+	t.Helper()
+	var selected preservedProfileInspectionInput
+	if err := json.Unmarshal([]byte(`{"Mutations":[{"Binding":{"Identity":{"OperationID":"operation","OwnerID":"owner","Scope":"owner-settings","ProfileID":"profile","ComputerID":"computer"},"WorkspaceID":"workspace","RequestDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ComputerGeneration":1,"RelativePath":"note.md"}}]}`), &selected); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return selected, raw
+}
+
+func TestPreservedProfileIntentBindingWireComparison(t *testing.T) {
+	selected, canonical := preservedBindingWireFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if !preservedProfileIntentBindingsMatch(ctx, canonical, selected) {
+		t.Fatal("complete native binding refused")
+	}
+	var frame map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(canonical))
+	decoder.UseNumber()
+	if err := decoder.Decode(&frame); err != nil {
+		t.Fatal(err)
+	}
+	binding := frame["Mutations"].([]any)[0].(map[string]any)["Binding"].(map[string]any)
+	identity := binding["Identity"].(map[string]any)
+	for _, key := range []string{"SessionID", "TaskID", "TaskEpoch", "ParticipantID"} {
+		delete(identity, key)
+	}
+	omitted, err := json.Marshal(frame)
+	if err != nil || !preservedProfileIntentBindingsMatch(ctx, omitted, selected) {
+		t.Fatal("existing four omitted Identity zeros refused", err)
+	}
+	for _, field := range []string{"Identity", "Connector", "ComputerGeneration", "WorkspaceID", "RequestDigest", "RelativePath"} {
+		t.Run("missing-"+field, func(t *testing.T) {
+			var value map[string]any
+			if json.Unmarshal(canonical, &value) != nil {
+				t.Fatal("fixture JSON")
+			}
+			binding := value["Mutations"].([]any)[0].(map[string]any)["Binding"].(map[string]any)
+			delete(binding, field)
+			raw, err := json.Marshal(value)
+			if err != nil || preservedProfileIntentBindingsMatch(ctx, raw, selected) {
+				t.Fatal("omitted native binding field admitted", err)
+			}
+		})
+	}
+	for _, value := range []any{nil, map[string]any{}, map[string]any{"SessionID": ""}} {
+		binding["Connector"] = value
+		raw, err := json.Marshal(frame)
+		if err != nil || preservedProfileIntentBindingsMatch(ctx, raw, selected) {
+			t.Fatal("noncanonical Connector admitted", err)
+		}
+	}
+	// An explicit null is not one of the four omitted defaults accepted by the
+	// host codec, even though Go's ordinary string decoder would leave zero.
+	identity["SessionID"] = nil
+	var original map[string]any
+	if json.Unmarshal(canonical, &original) != nil {
+		t.Fatal("fixture JSON")
+	}
+	binding["Connector"] = original["Mutations"].([]any)[0].(map[string]any)["Binding"].(map[string]any)["Connector"]
+	raw, err := json.Marshal(frame)
+	if err != nil || preservedProfileIntentBindingsMatch(ctx, raw, selected) {
+		t.Fatal("explicit noncanonical value admitted", err)
+	}
+}
+
+func TestPreservedProfileIntentBindingWireKeepsExactNumbersAndBudget(t *testing.T) {
+	selected, _ := preservedBindingWireFixture(t)
+	selected.Mutations[0].Binding.Connector.Generation = 9007199254740993
+	raw, err := json.Marshal(selected)
+	if err != nil || !preservedProfileIntentBindingsMatch(context.Background(), raw, selected) {
+		t.Fatal("exact wire integer lost", err)
+	}
+	changed := bytes.Replace(raw, []byte("9007199254740993"), []byte("9007199254740992"), 1)
+	if bytes.Equal(raw, changed) || preservedProfileIntentBindingsMatch(context.Background(), changed, selected) {
+		t.Fatal("adjacent integer collapsed through float precision")
+	}
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	if preservedProfileIntentBindingsMatch(nil, raw, selected) || preservedProfileIntentBindingsMatch(expired, raw, selected) {
+		t.Fatal("missing or expired context admitted")
 	}
 }
