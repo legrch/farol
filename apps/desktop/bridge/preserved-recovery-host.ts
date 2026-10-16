@@ -33,6 +33,23 @@ export type ClosedPreservedRecoveryInput = Omit<
 };
 const sum = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 
+// Compare the two known children as a set without changing the original
+// receipt/projection order or its byte/hash custody. All schema checks still
+// belong to the existing classifier; duplicate/additional children stay refused.
+function quitForScopeComparison(quit: unknown): unknown {
+  if (typeof quit !== "object" || quit === null || Array.isArray(quit))
+    return quit;
+  const unconfirmed = (quit as Record<string, unknown>).unconfirmed;
+  if (
+    !Array.isArray(unconfirmed) ||
+    unconfirmed.length !== 2 ||
+    !unconfirmed.includes("go-core") ||
+    !unconfirmed.includes("connector")
+  )
+    return quit;
+  return { ...quit, unconfirmed: ["go-core", "connector"] };
+}
+
 // Trusted closed Dev maintenance only. No installed route, old effect replay or
 // startup caller is selected here. Canonical Go and actual process observations
 // remain separate prerequisites; old ACK/terminal values stay unobserved.
@@ -108,8 +125,10 @@ export async function recoverClosedPreservedChat(
         const runValue = JSON.parse(run.bytes.toString("utf8"));
         const quitValue = JSON.parse(failedQuit.bytes.toString("utf8"));
         const previousConfirmedQuit =
-          unacknowledgedDevQuitScope(runValue, quitValue) ===
-          "previous-confirmed";
+          unacknowledgedDevQuitScope(
+            runValue,
+            quitForScopeComparison(quitValue),
+          ) === "previous-confirmed";
         if (
           !previousConfirmedQuit &&
           Date.parse(quitValue.at) <= Date.parse(runValue.startedAt)
@@ -148,7 +167,7 @@ export async function recoverClosedPreservedChat(
               previousConfirmedQuit
                 ? ["QUIT_UNCONFIRMED:crash"]
                 : [
-                    "QUIT_UNCONFIRMED:go-core,connector",
+                    `QUIT_UNCONFIRMED:${quitValue.unconfirmed.join(",")}`,
                     "QUIT_UNCONFIRMED:crash",
                   ],
             )

@@ -123,7 +123,7 @@ try {
         : [
             fixture.Input.InstalledPreserved === true
               ? "QUIT_UNCONFIRMED:go-core"
-              : installed
+              : installed || preservedProfile
                 ? "QUIT_UNCONFIRMED:connector,go-core"
                 : "QUIT_UNCONFIRMED:go-core,connector",
           ]),

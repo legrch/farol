@@ -9,6 +9,9 @@ import type { PreservedRecoveryChildResult } from "../../apps/desktop/bridge/pre
 import type { ClosedRecoveryState } from "../../src/apps/desktop/closed-computer-recovery";
 import type { PromotionLeaseHandle } from "../../src/apps/desktop/promotion-lease";
 import { MAX_RUN_MARKER_BYTES } from "../../src/apps/desktop/run-marker";
+import { goCoreQuitClosers } from "../../apps/desktop/go-core-quit-closers";
+import { drainOwnedChildren } from "../../src/apps/desktop/quit-drain";
+import { serializeQuitReceipt } from "../../src/apps/desktop/quit-receipt";
 
 // CPU host orchestration only. Every filesystem/process/lease/child/lifecycle
 // boundary is a controlled port. The real Quit classifier and intent codec run.
@@ -125,6 +128,7 @@ type Phase =
 function fixture(
   quitScope: "previous" | "current" = "previous",
   basename: "Farol Dev" | "Farol DEV" = "Farol Dev",
+  currentUnconfirmed: readonly string[] = ["go-core", "connector"],
 ) {
   const userData = path.join("/synthetic", basename);
   const state = path.join(userData, "farol-next-state");
@@ -210,7 +214,7 @@ function fixture(
         ? "2026-10-16T11:59:59.000Z"
         : "2026-10-16T12:00:01.000Z",
     drained: quitScope === "previous",
-    unconfirmed: quitScope === "previous" ? [] : ["go-core", "connector"],
+    unconfirmed: quitScope === "previous" ? [] : [...currentUnconfirmed],
   };
   const run = snapshot(runValue, 10);
   const config = snapshot({ profile: "original", connectorEnabled: true }, 11);
@@ -306,7 +310,10 @@ function fixture(
       obligations:
         quitScope === "previous"
           ? ["QUIT_UNCONFIRMED:crash"]
-          : ["QUIT_UNCONFIRMED:go-core,connector", "QUIT_UNCONFIRMED:crash"],
+          : [
+              `QUIT_UNCONFIRMED:${currentUnconfirmed.join(",")}`,
+              "QUIT_UNCONFIRMED:crash",
+            ],
     } as ClosedRecoveryState,
   };
   const events: string[] = [];
@@ -481,6 +488,67 @@ function released(f: ReturnType<typeof fixture>) {
 }
 
 describe("closed preserved recovery host flow (controlled ports)", () => {
+  it("preserves the actual desktop writer's current unconfirmed Quit bytes", async () => {
+    const f = fixture("current");
+    const failedClose = async () => {
+      throw Error("SYNTHETIC_CLOSE_UNCONFIRMED");
+    };
+    const drained = await drainOwnedChildren(
+      goCoreQuitClosers({ name: "connector", close: failedClose }, failedClose),
+      1000,
+    );
+    expect(drained).toEqual({
+      drained: false,
+      unconfirmed: ["connector", "go-core"],
+    });
+    const originalBytes = Buffer.from(
+      serializeQuitReceipt(drained, f.quitValue.at),
+    );
+    const selectedQuit = { ...f.quit, bytes: originalBytes };
+    f.files.set(path.join(f.state, "last-quit.json"), selectedQuit);
+    f.input.expectedQuitSha256 = digest(originalBytes);
+    f.model.desktop = {
+      ...f.model.desktop,
+      obligations: [
+        "QUIT_UNCONFIRMED:connector,go-core",
+        "QUIT_UNCONFIRMED:crash",
+      ],
+    };
+    ports.finish.mockImplementation(async (handoff) => {
+      f.model.phase = "finish";
+      await handoff.reconcileConnector!();
+      return f.result;
+    });
+    await expect(f.execute()).resolves.toEqual(f.result);
+    const handoff = finishInput();
+    expect(handoff.failedQuit).toBe(selectedQuit);
+    expect(handoff.failedQuit!.bytes).toEqual(originalBytes);
+    expect(digest(handoff.failedQuit!.bytes)).toBe(f.input.expectedQuitSha256);
+    expect(ports.reconcile).toHaveBeenCalledWith(
+      expect.objectContaining({ failedQuitSha256: digest(originalBytes) }),
+    );
+    released(f);
+  });
+
+  it.each([
+    { children: ["go-core", "connector"], crossed: "connector,go-core" },
+    { children: ["connector", "go-core"], crossed: "go-core,connector" },
+  ])(
+    "refuses a projection with crossed child order $crossed",
+    async ({ children, crossed }) => {
+      const f = fixture("current", "Farol Dev", children);
+      f.model.desktop = {
+        ...f.model.desktop,
+        obligations: [`QUIT_UNCONFIRMED:${crossed}`, "QUIT_UNCONFIRMED:crash"],
+      };
+      await expect(f.execute()).rejects.toThrow(
+        "PRESERVED_RECOVERY_WORK_PENDING",
+      );
+      expect(ports.inspect).not.toHaveBeenCalled();
+      released(f);
+    },
+  );
+
   it("accepts the explicit alternate Dev basename", async () => {
     const f = fixture("previous", "Farol DEV");
     await expect(f.execute()).resolves.toEqual(f.result);
@@ -892,8 +960,23 @@ describe("closed preserved recovery refuses progression", () => {
       "INTERRUPTED_CHAT_RECOVERY_QUIT_CHANGED",
     ],
     [
-      "reversed children",
-      { unconfirmed: ["connector", "go-core"] },
+      "missing go-core",
+      { unconfirmed: ["connector"] },
+      "INTERRUPTED_CHAT_RECOVERY_QUIT_CHANGED",
+    ],
+    [
+      "duplicate connector pair",
+      { unconfirmed: ["connector", "connector"] },
+      "INTERRUPTED_CHAT_RECOVERY_QUIT_CHANGED",
+    ],
+    [
+      "duplicate core pair",
+      { unconfirmed: ["go-core", "go-core"] },
+      "INTERRUPTED_CHAT_RECOVERY_QUIT_CHANGED",
+    ],
+    [
+      "unexpected receipt field with desktop order",
+      { unconfirmed: ["connector", "go-core"], unexpected: true },
       "INTERRUPTED_CHAT_RECOVERY_QUIT_CHANGED",
     ],
     [

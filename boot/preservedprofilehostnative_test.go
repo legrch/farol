@@ -66,7 +66,7 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			quit := []byte("{\"schema\":1,\"at\":\"2026-10-08T10:00:14.146Z\",\"drained\":false,\"unconfirmed\":[\"go-core\",\"connector\"]}\n")
+			quit := []byte("{\"schema\":1,\"at\":\"2026-10-08T10:00:14.146Z\",\"drained\":false,\"unconfirmed\":[\"connector\",\"go-core\"]}\n")
 			if previous {
 				quit = []byte("{\"schema\":1,\"at\":\"2026-10-08T09:39:05.070Z\",\"drained\":true,\"unconfirmed\":[]}\n")
 			}
