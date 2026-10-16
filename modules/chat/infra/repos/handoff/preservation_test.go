@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 )
 
 // CPU canonical chain fixtures only, without native files or custody proofs.
@@ -58,6 +59,43 @@ func TestPreservationChainUsesCanonicalNonemptyTransitionAndReplayPolicy(t *test
 			original := append([][]byte(nil), changed.records...)
 			if _, err := preservationChainScan(context.Background(), roots, changed.read); err == nil || changed.fenced || changed.calls != 0 || !reflect.DeepEqual(original, changed.records) {
 				t.Fatal("invalid chain qualified or storage repaired", err)
+			}
+		})
+	}
+}
+
+// Deterministic final-IO interleaving: the injected read-only verifier returns
+// success after cancellation/absolute expiry. No real process or storage proof.
+func TestPreservationVerifyWithdrawsContextExpiredDuringFinalIO(t *testing.T) {
+	for _, kind := range []string{"cancel", "absolute-deadline"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var original context.Context = ctx
+			var expire func()
+			if kind == "cancel" {
+				expire = cancel
+			} else {
+				until := time.Now().Add(100 * time.Millisecond)
+				original = preservationContext{Context: context.Background(), until: until}
+				expire = func() { time.Sleep(time.Until(until) + time.Millisecond) }
+			}
+			calls, closes := 0, 0
+			l := &PreservationLease{ctx: original, lifetime: &ClosedLease{
+				verify: func() error { calls++; expire(); return nil },
+				close:  func() error { closes++; return nil },
+			}}
+			if l.Verify() == nil {
+				t.Fatal("late successful IO restored expired preservation")
+			}
+			if _, err := l.Observation(); err == nil {
+				t.Fatal("expired observation remained available")
+			}
+			if l.Verify() == nil || calls != 1 {
+				t.Fatal("failed original verifier was repeated")
+			}
+			if l.Close() != nil || l.Close() != nil || closes != 1 {
+				t.Fatal("cancelled lease lost owned cleanup")
 			}
 		})
 	}

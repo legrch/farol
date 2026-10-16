@@ -61,10 +61,28 @@ func (l *PreservationLease) Observation() (PreservationInspection, error) {
 }
 
 func (l *PreservationLease) Verify() error {
-	if l == nil || l.lifetime == nil {
+	if l == nil || l.lifetime == nil || l.ctx == nil {
 		return fail(Unavailable, false)
 	}
-	return l.lifetime.Verify()
+	// The bounded preservation owner checks its original context after the
+	// final filesystem call, under the same mutex that poisons the lease.
+	l.lifetime.mu.Lock()
+	defer l.lifetime.mu.Unlock()
+	if l.lifetime.closed {
+		return fail(Unavailable, false)
+	}
+	if l.lifetime.failure != nil {
+		return l.lifetime.failure
+	}
+	if l.ctx.Err() != nil {
+		l.lifetime.failure = fail(Cancelled, false)
+	} else {
+		l.lifetime.failure = l.lifetime.verify()
+		if l.lifetime.failure == nil && l.ctx.Err() != nil {
+			l.lifetime.failure = fail(Cancelled, false)
+		}
+	}
+	return l.lifetime.failure
 }
 
 func (l *PreservationLease) Close() error {

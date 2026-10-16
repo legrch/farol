@@ -575,18 +575,31 @@ async function scenario({
         })
         .waitFor();
     else {
-      await page.waitForFunction(
-        async () => {
-          const value = await window.farolNext.bootstrap();
-          return (
-            value.runtimeState === "ready" &&
-            value.configuration.status === "ready"
-          );
-        },
-        undefined,
-        { timeout: 20000 },
-      );
-      const bootstrap = await page.evaluate(() => window.farolNext.bootstrap());
+      // Await native IPC in the host, under one original readiness deadline.
+      // A page predicate is not the owner of an asynchronous bootstrap read.
+      const readyBy = performance.now() + 20000;
+      await page.locator(".desktop").waitFor({
+        state: "visible",
+        timeout: Math.max(1, readyBy - performance.now()),
+      });
+      let bootstrap;
+      for (;;) {
+        active();
+        const remaining = readyBy - performance.now();
+        assert.ok(remaining > 0, "NORMAL_BOOTSTRAP_DEADLINE");
+        bootstrap = await bounded(
+          page.evaluate(() => window.farolNext.bootstrap()),
+          "BOOTSTRAP_READ_UNKNOWN_NO_RETRY",
+          Math.min(3000, remaining),
+        );
+        assert.ok(performance.now() < readyBy, "NORMAL_BOOTSTRAP_DEADLINE");
+        if (
+          bootstrap.runtimeState === "ready" &&
+          bootstrap.configuration.status === "ready"
+        )
+          break;
+        await pause();
+      }
       assert.equal(bootstrap.environment, "dev");
       assert.equal(bootstrap.applicationId, "local.farol.dev");
       launch.marker = await json(path.join(stateRoot, "running.json"));

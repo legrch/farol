@@ -62,10 +62,28 @@ func (l *PreservationLease) Observation() (PreservationInspection, error) {
 }
 
 func (l *PreservationLease) Verify() error {
-	if l == nil || l.lifetime == nil {
+	if l == nil || l.lifetime == nil || l.ctx == nil {
 		return Unavailable
 	}
-	return l.lifetime.Verify()
+	// Serialize the original deadline with the final filesystem recheck and
+	// sticky failure; a successful late read cannot revive this lease.
+	l.lifetime.mu.Lock()
+	defer l.lifetime.mu.Unlock()
+	if l.lifetime.closed {
+		return Unavailable
+	}
+	if l.lifetime.failure != nil {
+		return l.lifetime.failure
+	}
+	if l.ctx.Err() != nil {
+		l.lifetime.failure = Unavailable
+	} else {
+		l.lifetime.failure = l.lifetime.verify()
+		if l.lifetime.failure == nil && l.ctx.Err() != nil {
+			l.lifetime.failure = Unavailable
+		}
+	}
+	return l.lifetime.failure
 }
 
 func (l *PreservationLease) Close() error {
