@@ -422,3 +422,32 @@ func TestNativeHelperReadDoesNotClearOriginalUnknown(t *testing.T) {
 		t.Fatal("helper read or Close changed original unknown retention")
 	}
 }
+
+// Preserve the generic reader's existing metadata rejection above its own
+// physical limit, including the shared CAS read path.
+func TestGenericOversizedReadKeepsInvalidClassification(t *testing.T) {
+	f := newFixture(t)
+	r := f.open(t)
+	f.put(t, "prepared")
+	p := filepath.Join(f.path, filename)
+	data, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, bytes.Repeat([]byte(" "), records.MaxRecordBytes+1-len(data))...)
+	if err := os.WriteFile(p, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	view, err := r.Read(context.Background())
+	if view != nil || !errors.Is(err, records.Invalid) || errors.Is(err, records.Oversized) {
+		t.Fatalf("generic oversized classification changed: view=%v err=%v", view, err)
+	}
+	view, err = r.ReadHelper(helperContext(t))
+	if view != nil || !errors.Is(err, records.Invalid) {
+		t.Fatalf("helper metadata limit changed: view=%v err=%v", view, err)
+	}
+	view, err = r.CompareAndSwap(context.Background(), strings.Repeat("a", 64), f.value("prepared"))
+	if view != nil || !errors.Is(err, records.Invalid) {
+		t.Fatalf("CAS metadata limit changed: view=%v err=%v", view, err)
+	}
+}
