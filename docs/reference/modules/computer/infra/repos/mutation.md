@@ -74,3 +74,57 @@ in both orders. They independently inspect the original record key, bytes and
 permissions. Host, consent and execution identities remain fixtures; these tests
 do not qualify crash recovery or a process launch. Root production registration,
 shell/process execution, Task/provider activation and packaging remain unactivated.
+
+## Preselected owner Completed observation
+
+`InspectOwnerCompleted(ctx, root, OwnerSelection, []ExpectedOwnerRecord, visit)`
+is a separately selected read-only observation of an existing private store.
+`OwnerSelection` binds owner, profile and computer. Composition independently
+selects exactly 1..128 canonical keys, complete stored-byte SHA256 digests and
+full immutable owner-settings bindings before IO. Selection is copied and
+validated with the original key and domain Prepared validator; directory contents
+never discover or expand it.
+
+Only canonical schemaVersion 2 `workspace_owner_mutation` owner-settings
+Completed records qualify, using the existing codec and record qualifier plus
+valid Write/Edit receipt shapes. Other schemas/scopes, process records,
+Prepared/Failed/OutcomeUnknown, mixed sets, crossed identities, altered bindings
+or bytes, missing/duplicate/extra records and staging refuse. The existing
+exact-empty, exact-two v3 settled, exact-five interrupted and preserved policies
+remain independent and unchanged.
+
+The caller's original absolute deadline is required and captured once before
+native observation. A fixed context checks that deadline directly as well as
+cancellation, including when the original context's timer lags. The Darwin path
+reuses `inspectBoundedNative` and `observeSettledRecords`, opening only existing
+state under the original exclusive mutation lock with retained pins. It never
+opens a mutable repository, creates a lock, writes, repairs, syncs, deletes or
+poisons a store. Other platforms return unavailable.
+
+The trusted visitor is synchronous, read-only and non-reentrant; it must honor
+the original context/deadline, return normally and launch/defer no work. The lock
+and pins remain held through the full final namespace, bytes and metadata
+recheck even after visitor error or cancellation. Expiry/cancellation or a
+recheck/close failure takes precedence; otherwise the original visitor error is
+preserved. All failure paths return no partial result. Visitor and result slices
+are independent of each other and the copied input. A stuck callback cannot be
+forcibly interrupted; cooperating locks and repeated observations do not provide
+atomic isolation from same-user writers ignoring the lock.
+
+`OwnerInspection` reports root, mutation-directory/lock device and inode, and
+sorted retained key/digest/identity values. These are recorded historical
+observations only: no mutable State or receipt body, ACK, current authority,
+original process closure or successor proof. Root composition still owns
+maintenance/process exclusion and every other profile journal. This supplies no
+recovery, admission, retirement, replay, relocation, cold-boot, cleanup or
+promotion authority and selects no normal/installed route.
+
+Pure tests cover canonical selection, bounds, identity/digest/binding/scope/phase
+refusal, slice ownership and visitor/cancellation/absolute-expiry precedence.
+Explicit Darwin flag `-owner-inspection-native` enables retained disposable
+actual filesystem fixtures for 1..128 bounds, lock retention through final checks,
+record replacement, extra inventory, relocation, metadata and cancellation
+refusal, and preservation without writes/fences/repair. Every owner-inspection
+fixture is retained under `/private/tmp/farol-owner-inspection-*`, including
+failed/unknown cases. These synthetic records are neither successful app
+publications nor process, ACK, recovery or installed-route evidence.
