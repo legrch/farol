@@ -28,9 +28,11 @@ import (
 // Root qualification owns no approval or live membership. HOME is independent
 // from the physical profile and selects only the already trusted filesystem port.
 type NativeLaunch struct {
-	Profile                       ProfileBinding
-	OwnerID, ComputerID, Home     string
-	StoreMode                     string
+	Profile                   ProfileBinding
+	OwnerID, ComputerID, Home string
+	StoreMode                 string
+	// Recovery is an explicit existing-store route, never a constructor fallback.
+	StartupMode                   string
 	HostLifetimeID, ChildLaunchID string
 	PreviousHostDrainConfirmed    bool
 	SettingsMutations             bool
@@ -64,6 +66,9 @@ type NativeRuntime struct {
 }
 
 func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation string) (*NativeRuntime, error) {
+	if launch.StartupMode != "" && launch.StartupMode != "normal" {
+		return nil, profileFailure(ProfileInvalid)
+	}
 	if launch.CodexRead != nil && !launch.CodexRead.valid() {
 		return nil, profileFailure(ProfileInvalid)
 	}

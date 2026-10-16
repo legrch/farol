@@ -853,6 +853,7 @@ export interface NativeCoreLaunch {
   readonly ownerId: string;
   readonly computerId: string;
   readonly storeMode: "create" | "open";
+  readonly startupMode?: "normal" | "recovery";
   readonly settingsMutations?: boolean;
   readonly previousHostDrainConfirmed?: boolean;
   readonly hostLifetimeId?: string;
@@ -886,6 +887,25 @@ export async function spawnCore(
   let shellMetadata: Buffer | undefined;
   try {
     const codexRead = native ? copyNativeCodexReadLaunch(native) : undefined;
+    if (
+      native?.startupMode !== undefined &&
+      native.startupMode !== "normal" &&
+      native.startupMode !== "recovery"
+    )
+      throw new BridgeError("refused", "invalid_native_launch");
+    if (
+      native?.startupMode === "recovery" &&
+      (native.storeMode !== "open" ||
+        !native.hostLifetimeId ||
+        !native.childLaunchId ||
+        (native.previousHostDrainConfirmed !== undefined &&
+          native.previousHostDrainConfirmed !== false) ||
+        (native.settingsMutations !== undefined &&
+          native.settingsMutations !== false) ||
+        codexRead !== undefined ||
+        native.shellMetadata !== undefined)
+    )
+      throw new BridgeError("refused", "invalid_recovery_launch");
     if (!isAbsolute(executable))
       throw new BridgeError("refused", "executable_path_required");
     if (
@@ -953,6 +973,8 @@ export async function spawnCore(
           native.childLaunchId,
         );
     }
+    if (native?.startupMode !== undefined)
+      args.push("--startup-mode", native.startupMode);
     if (native?.previousHostDrainConfirmed === true)
       args.push("--previous-host-drain-confirmed");
     if (native?.settingsMutations === true) args.push("--settings-mutations");
