@@ -1,5 +1,5 @@
 // Explicit native lane: exact Go build, synthetic unconfirmed predecessor,
-// hidden recovery UI -> ordinary UI Quit -> same-profile reopen. No live
+// hidden recovery UI -> Quit or exact-host SIGKILL -> same-profile reopen. No live
 // provider, installed profile, operation replay or arbitrary descendant claim.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -21,9 +21,16 @@ import { _electron as electron } from "playwright-core";
 import { isPromotionLeaseHeld } from "../../tooling/promotion-lease.mjs";
 
 const savedSettings = process.argv.includes("--saved-settings");
+const forceQuit = process.argv.includes("--force-quit");
 assert.deepEqual(
   process.argv.slice(2),
-  savedSettings ? ["--run-native", "--saved-settings"] : ["--run-native"],
+  savedSettings
+    ? [
+        "--run-native",
+        "--saved-settings",
+        ...(forceQuit ? ["--force-quit"] : []),
+      ]
+    : ["--run-native"],
   "EXPLICIT_NATIVE_RECOVERY_LANE_REQUIRED",
 );
 assert.equal(process.platform, "darwin");
@@ -61,6 +68,7 @@ await fs.mkdir(path.dirname(evidence), { recursive: true, mode: 0o700 });
 const report = {
   source,
   buildId: build.identity.buildId,
+  fault: forceQuit ? "first-recovery-host-SIGKILL" : "none",
   profile,
   status: "running",
   launches: [],
@@ -71,7 +79,7 @@ const report = {
     stage: "preparing",
   },
   limits:
-    "Synthetic predecessor only. No automatic unknown-operation retirement, crashed-descendant settlement, installed acceptance or provider evidence.",
+    "Synthetic original predecessor. Optional SIGKILL targets the first actual recovery Electron host only. Exact observed direct-child absence is not arbitrary descendant settlement, unknown-operation retirement, installed acceptance or provider evidence.",
 };
 const save = () =>
   fs.writeFile(evidence, JSON.stringify(report, null, 2) + "\n", {
@@ -208,6 +216,29 @@ const bounded = (promise, label) => {
     }),
   ]).finally(() => clearTimeout(timer));
 };
+// Wait for these exact observed PIDs only; never kill a child to make the
+// assertion pass. Timeout retains the disposable profile and original evidence.
+async function waitForObservedChildrenExit(observed) {
+  const deadline = performance.now() + 15000;
+  let remaining;
+  do {
+    remaining = observed.filter(({ pid }) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (error) {
+        if (error?.code === "ESRCH") return false;
+        throw error;
+      }
+    });
+    if (remaining.length === 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } while (performance.now() < deadline);
+  throw new Error(
+    `OBSERVED_RECOVERY_CHILDREN_RETAINED:${remaining.map(({ pid }) => pid).join(",")}`,
+  );
+}
+
 // The renderer can otherwise hand capturePage its preceding compositor frame
 // after focus/media/size changes. Unthrottle only this test-owned document for
 // two paint frames, capture without making it visible, then restore its setting.
@@ -340,9 +371,10 @@ try {
         .filter({ hasText: "Saved settings are unavailable" })
         .waitFor();
     launch.beforeQuit = await preserved();
-    const lease = JSON.parse(
-      await fs.readFile(path.join(stateRoot, "promotion.lease"), "utf8"),
-    );
+    const leasePath = path.join(stateRoot, "promotion.lease");
+    const leaseBytes = await fs.readFile(leasePath);
+    const lease = JSON.parse(leaseBytes.toString("utf8"));
+    const leaseIdentity = await fs.lstat(leasePath, { bigint: true });
     assert.equal(lease.pid, child.pid);
     assert.equal(lease.role, "admission");
     assert.equal(
@@ -427,12 +459,27 @@ try {
     }
     launch.closeRequested = true;
     await save();
-    await page.getByRole("button", { name: "Quit", exact: true }).click();
+    const crash = forceQuit && ordinal === 1;
+    if (crash) {
+      // The live ChildProcess handle selects only this test's original host.
+      // Do not call renderer Quit, kill a group, clear a marker or repair state.
+      launch.faultRequested = "SIGKILL";
+      await save();
+      assert.equal(child.kill("SIGKILL"), true, "RECOVERY_FAULT_NOT_DELIVERED");
+    } else
+      await page.getByRole("button", { name: "Quit", exact: true }).click();
     const [code, signal] = await bounded(exit, "RECOVERY_QUIT_UNKNOWN");
-    assert.equal(code, 0);
-    assert.equal(signal, null);
     launch.exitCode = code;
     launch.signal = signal;
+    await save();
+    assert.equal(code, crash ? null : 0);
+    assert.equal(signal, crash ? "SIGKILL" : null);
+    if (crash) {
+      await waitForObservedChildrenExit(launch.children);
+      launch.observedDirectChildrenAbsent = launch.children.map(
+        ({ pid }) => pid,
+      );
+    }
     launch.afterQuit = await preserved();
     if (launch.backend) {
       assert.throws(
@@ -448,11 +495,18 @@ try {
       false,
       "RECOVERY_LEASE_RETAINED",
     );
-    assert.equal(
-      (await fs.readFile(path.join(stateRoot, "promotion.lease"))).length,
-      0,
-      "RECOVERY_LEASE_RECORD_RETAINED",
-    );
+    const afterLease = await fs.readFile(leasePath);
+    if (crash) {
+      assert.deepEqual(
+        afterLease,
+        leaseBytes,
+        "CRASH_LEASE_DIAGNOSTIC_REWRITTEN",
+      );
+      const afterIdentity = await fs.lstat(leasePath, { bigint: true });
+      assert.equal(afterIdentity.dev, leaseIdentity.dev);
+      assert.equal(afterIdentity.ino, leaseIdentity.ino);
+      launch.retainedLeaseDiagnostic = hash(afterLease);
+    } else assert.equal(afterLease.length, 0, "RECOVERY_LEASE_RECORD_RETAINED");
     assert.equal(children(child.pid).length, 0, "RECOVERY_CHILDREN_RETAINED");
     launch.cleanupConfirmed = true;
     app = null;
@@ -461,7 +515,9 @@ try {
   await fs.rm(profile, { recursive: true });
   report.profileRemoved = true;
   report.status = savedSettings
-    ? "passed-hidden-saved-settings-Go-recovery-reads-quit-reopen-old-journals-preserved"
+    ? forceQuit
+      ? "passed-hidden-recovery-host-SIGKILL-observed-children-exit-reopen-reads-originals-preserved"
+      : "passed-hidden-saved-settings-Go-recovery-reads-quit-reopen-old-journals-preserved"
     : "passed-hidden-recovery-quit-reopen-predecessor-preserved-zero-runtime";
 } catch (error) {
   report.status = "failed-or-unknown";
