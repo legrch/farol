@@ -22,11 +22,14 @@ import (
 // It must not reenter this runtime or the journal gate. The caller retains every
 // borrowed owner through With's actual return. No field alone grants authority.
 type Config struct {
-	Request  port.HelperRequest
-	Files    helperroutes.Files
-	Journal  port.HelperJournalRepository
-	Until    time.Time
-	Reverify func(context.Context, port.HelperRequest) error
+	Request port.HelperRequest
+	Files   helperroutes.Files
+	Journal port.HelperJournalRepository
+	// Rejection is required only by WithInstallation. It borrows the same
+	// operation descriptor and original JournalAdmission/gate as Journal.
+	Rejection port.HelperTargetRejectionRepository
+	Until     time.Time
+	Reverify  func(context.Context, port.HelperRequest) error
 	// Unknown and RetainUnknown belong to the same operation owner. Neither
 	// performs I/O or reenters this runtime; retained outcomes survive With.
 	Unknown       func() error
@@ -47,6 +50,7 @@ type runtime struct {
 }
 
 var _ port.HelperRecoveryRuntime = (*runtime)(nil)
+var _ port.HelperInstallationRuntime = (*runtime)(nil)
 
 func copyRequest(r port.HelperRequest) port.HelperRequest {
 	if r.InstallLocation != nil {
@@ -354,31 +358,39 @@ func (r *runtime) WritePhase(ctx context.Context, phase string) error {
 		if err := r.fence(c); err != nil {
 			return err
 		}
-		value := release.Journal{Operation: operation(r.config.Request), Phase: phase}
-		if _, err := records.EncodeJournal(records.Journal{Schema: "farol.installed-update-journal/1", Operation: records.Operation{
-			ID:     value.Operation.ID,
-			Source: records.Build{Digest: value.Operation.Source.Digest, Version: value.Operation.Source.Version, BuildID: value.Operation.Source.BuildID},
-			Target: records.Build{Digest: value.Operation.Target.Digest, Version: value.Operation.Target.Version, BuildID: value.Operation.Target.BuildID},
-		}, Phase: phase}); err != nil {
-			return fail("journal_invalid", false, false, err)
-		}
-		view, err := r.config.Journal.CompareAndSwap(c, r.view.Revision, value)
-		if err != nil {
-			return fail("internal", true, true, err)
-		}
-		r.effected = true
-		if view == nil || view.Value == nil || *view.Value != value {
-			return fail("internal", true, true, nil)
-		}
-		v, owned := *view, *view.Value
-		v.Value, r.view = &owned, &v
-		// CAS has returned a persisted value. Any later fence refusal retains
-		// that possible effect even when the refusal itself is known and direct.
-		if err := r.classify(r.fence(c), true); err != nil {
-			f := err.(*port.HelperRecoveryFailure) // classify's closed nonnil result.
-			f.Uncertain = true
-			return f
-		}
-		return nil
+		return r.persistJournal(c, r.view.Revision, phase)
 	})
+}
+
+func (r *runtime) persistJournal(ctx context.Context, revision, phase string) error {
+	value := release.Journal{Operation: operation(r.config.Request), Phase: phase}
+	if _, err := records.EncodeJournal(records.Journal{Schema: "farol.installed-update-journal/1", Operation: records.Operation{
+		ID:     value.Operation.ID,
+		Source: records.Build{Digest: value.Operation.Source.Digest, Version: value.Operation.Source.Version, BuildID: value.Operation.Source.BuildID},
+		Target: records.Build{Digest: value.Operation.Target.Digest, Version: value.Operation.Target.Version, BuildID: value.Operation.Target.BuildID},
+	}, Phase: phase}); err != nil {
+		return fail("journal_invalid", false, false, err)
+	}
+	view, err := r.config.Journal.CompareAndSwap(ctx, revision, value)
+	if err != nil {
+		return fail("internal", true, true, err)
+	}
+	r.effected = true
+	if view == nil || view.Value == nil || *view.Value != value {
+		return fail("internal", true, true, nil)
+	}
+	v, owned := *view, *view.Value
+	v.Value, r.view = &owned, &v
+	return r.persistedFence(ctx)
+}
+
+// A successful persistence acknowledgement cannot become a known no-effect
+// refusal merely because the subsequent owner/route fence refuses.
+func (r *runtime) persistedFence(ctx context.Context) error {
+	if err := r.classify(r.fence(ctx), true); err != nil {
+		f := err.(*port.HelperRecoveryFailure) // classify's closed nonnil result.
+		f.Uncertain = true
+		return f
+	}
+	return nil
 }
