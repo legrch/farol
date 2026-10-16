@@ -1,4 +1,4 @@
-package preservedrecovery_test
+package archive_test
 
 import (
 	"fmt"
@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/legrch/farol/modules/chat/app/capabilities/archive"
 	"github.com/legrch/farol/modules/chat/app/port"
-	"github.com/legrch/farol/modules/chat/app/services/preservedrecovery"
 )
 
 // Synthetic metadata establishes pure selection behavior only. These values
@@ -35,7 +35,7 @@ func fixture() (port.PreservedRecoverySelection, port.PreservedRecoveryObservati
 
 func requirePlan(t *testing.T, s port.PreservedRecoverySelection, o port.PreservedRecoveryObservation) *port.PreservedRecoveryPlan {
 	t.Helper()
-	p, err := preservedrecovery.Select(s, o)
+	p, err := (archive.Policy{}).Select(s, o)
 	want := port.PreservedRecoveryPlan{Selection: s, ArchiveName: "chat-retired-" + s.OperationID, RetainsUnresolvedResults: o.ResultsUnresolved}
 	if err != nil || p == nil {
 		t.Fatalf("selection refused: plan=%+v error=%v", p, err)
@@ -48,8 +48,8 @@ func requirePlan(t *testing.T, s port.PreservedRecoverySelection, o port.Preserv
 
 func requireRefusal(t *testing.T, s port.PreservedRecoverySelection, o port.PreservedRecoveryObservation) {
 	t.Helper()
-	p, err := preservedrecovery.Select(s, o)
-	if p != nil || err != preservedrecovery.Refused {
+	p, err := (archive.Policy{}).Select(s, o)
+	if p != nil || err != archive.Refused {
 		t.Fatalf("unsafe metadata selected: plan=%+v error=%v", p, err)
 	}
 	if err.Error() != "CHAT_PRESERVED_RECOVERY_REFUSED" {

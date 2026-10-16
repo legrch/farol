@@ -1,6 +1,6 @@
-// Package preservedrecovery selects metadata for later closed maintenance and
-// preservation of nonempty original Chat. It performs no recovery or effects.
-package preservedrecovery
+// Package archive owns the metadata policy shared by closed preservation
+// inspection and maintenance. It performs no recovery or effects.
+package archive
 
 import (
 	"strings"
@@ -43,12 +43,15 @@ func sameObject(a, b port.JournalRoot) bool {
 	return a.Device == b.Device && a.Inode == b.Inode
 }
 
+// Policy selects archive metadata without native effects or recovery authority.
+type Policy struct{}
+
 // Select compares independently selected metadata with canonical observations.
 // Locks, complete canonical scans, exact native maintenance/process exclusion,
 // whole-profile custody and a new real owner's ACK/terminal remain prerequisites
 // of the enclosing maintenance. Historical retirement and unresolved results
 // settle nothing, and this plan cannot authorize recovery or current admission.
-func Select(s port.PreservedRecoverySelection, o port.PreservedRecoveryObservation) (*port.PreservedRecoveryPlan, error) {
+func (Policy) Select(s port.PreservedRecoverySelection, o port.PreservedRecoveryObservation) (*port.PreservedRecoveryPlan, error) {
 	b := s.Current
 	if !operation(s.OperationID) || !id(b.Scope.ProfileID) || !id(b.Scope.BackendGeneration) || !id(s.Next.ProfileID) || !id(s.Next.BackendGeneration) || !id(s.BuildID) || !id(s.HostLifetimeID) || !id(s.ChildLaunchID) || s.Next.ProfileID != b.Scope.ProfileID || s.Next.BackendGeneration == b.Scope.BackendGeneration {
 		return nil, Refused
