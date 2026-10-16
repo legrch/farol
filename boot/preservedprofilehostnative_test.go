@@ -198,7 +198,11 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 			if err != nil {
 				t.Fatal("fresh Chat unavailable", err)
 			}
-			peer.run(func(d uint64) error { return conversation.Send(ctx, d) }, "complete")
+			peer.run(func(d uint64) error { _, err := next.chat.PrepareNext(ctx, d); return err }, "prepare")
+			peer.run(func(d uint64) error { return conversation.Send(ctx, d) }, "verify-send", "send")
+			for _, kind := range []string{"accepted", "answer-delta", "completed"} {
+				peer.run(func(d uint64) error { return conversation.Observe(ctx, d) }, kind)
+			}
 			answer, err := conversation.Result(ctx)
 			if err != nil || !answer.Complete {
 				t.Fatal("fresh Chat result unavailable", err)
