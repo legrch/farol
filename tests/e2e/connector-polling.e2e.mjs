@@ -1,3 +1,4 @@
+import { pollingTunnelStore } from "./lib/polling-tunnel-store.mjs";
 import { readNativePreviewEcho } from "./lib/native-preview-echo.mjs";
 // Exact attested Dev Electron/Go, synthetic loopback child and disposable roots.
 // No installed profile, live provider/control plane, actual OS sleep or effect.
@@ -77,7 +78,7 @@ await fs.copyFile(
   path.join(auxiliary, "tunnel-client.fixture.cjs"),
 );
 const state = path.join(userData, "farol-next-state"),
-  connectorRoot = path.join(state, "secure-mcp-connector");
+  tunnelStore = pollingTunnelStore(path.join(state, "secure-mcp-connector"));
 const evidence = path.join(
   root,
   "_output/evidence",
@@ -140,27 +141,9 @@ async function poll(read, accept, label, milliseconds = 15000) {
   } while (Date.now() < until);
   throw new Error(label);
 }
-async function receiptList() {
-  return Promise.all(
-    (await fs.readdir(connectorRoot))
-      .filter((name) => /^polling-tunnel-[a-f0-9-]+\.json$/u.test(name))
-      .sort()
-      .map(async (name) => {
-        const value = JSON.parse(
-          await fs.readFile(path.join(connectorRoot, name), "utf8"),
-        );
-        assert.equal(name, `polling-tunnel-${value.id}.json`);
-        return value;
-      }),
-  );
-}
-async function control(mode) {
-  const file = path.join(connectorRoot, "polling-control.json");
-  await fs.writeFile(file + ".tmp", JSON.stringify({ mode }) + "\n", {
-    mode: 0o600,
-  });
-  await fs.rename(file + ".tmp", file);
-}
+const receiptList = tunnelStore.receipts;
+const control = tunnelStore.control;
+
 function children(parent) {
   let ids;
   try {
