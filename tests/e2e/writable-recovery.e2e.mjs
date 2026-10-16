@@ -226,12 +226,7 @@ async function custody(stateRoot, workspace) {
 }
 function preserved(original, current, allowJournalAdvance = false) {
   for (const [name, value] of Object.entries(original)) {
-    if (
-      allowJournalAdvance &&
-      (name === "chat/chat-lifecycle.json" ||
-        /^chat\/chat-handoff-/u.test(name))
-    )
-      continue;
+    if (allowJournalAdvance && name === "chat/chat-lifecycle.json") continue;
     assert.deepEqual(current[name], value, `ORIGINAL_CHANGED:${name}`);
   }
 }
