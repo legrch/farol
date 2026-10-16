@@ -23,6 +23,7 @@ import { MAX_RUN_MARKER_BYTES } from "../../../src/apps/desktop/run-marker";
 import { retainEmptyChatForArchival } from "../../../src/apps/desktop/retained-empty-archive";
 import { PrivateExecutionFence } from "../../../src/modules/computer/infra/mcp/execution-fence";
 import { PrivateMcpLifecycle } from "../../../src/modules/computer/infra/mcp/private-mcp-lifecycle";
+import { assertClosedConnectorDurableWork } from "../../../src/apps/desktop/closed-computer-recovery";
 
 export type ClosedPreservedRecoveryInput = Omit<
   ClosedEmptyChatRecoveryInput,
@@ -184,6 +185,10 @@ export async function recoverClosedPreservedChat(
             )
           )
             throw Error("PRESERVED_RECOVERY_WORK_PENDING");
+          // The Go snapshot has its own Computer/Task namespace. Connector
+          // mutation and delegation journals need their existing durable proof
+          // too, including inside the native reconciliation lifetime claim.
+          await assertClosedConnectorDurableWork(root);
           if (noQuitLifecycle) await noQuitLifecycle.waitForStop(0);
           processesAbsent();
           if (!(await verifyPromotionLease(lease)))

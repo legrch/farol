@@ -306,7 +306,11 @@ The absent-Quit branch first observes the canonical Go selection, then uses the
 existing native MCP stop and schema-2 crash reconciliation before preparation
 can archive Chat. Exact retained run/config digests identify the failed run;
 the original promotion and Computer exclusions and repeated canonical host
-proofs remain prerequisites. Inactive markers retain their bytes and physical
+proofs remain prerequisites. The existing closed-Computer durable-work guard
+must also admit the connector-owned mutation and delegation journals. The separate Go snapshot
+does not inspect those namespaces. Every host proof repeats that read-only guard
+under the original exclusions, including inside native MCP reconciliation.
+Inactive markers retain their bytes and physical
 identity in the selected MCP journal archive, with historical stop explicitly
 unconfirmed. Unsafe markers, retained shell groups and unavailable lifetime
 claims refuse before Chat preparation. Only the current maintenance lifetime
@@ -319,8 +323,10 @@ appearing Quit receipts and failed proofs. The explicit
 build and both `-ingress-native` and `-preserved-profile-native`; compilation or
 an unflagged skip is not native acceptance. It includes both historical Quit
 scopes, absent-Quit cold File/Chat with and without inactive MCP markers, exact
-schema-2 journal custody, and refusal of unsafe or leased MCP instances, with
-controlled browser, Settings and original desktop history. Normal UI access to
+schema-2 journal custody, and refusal of unsafe or leased MCP instances and
+prepared/outcome-unknown connector mutations. Refusal cases preserve private
+bytes and physical custody. Browser, Settings and original desktop history stay
+controlled fixtures. Normal UI access to
 retired history, automatic startup selection and actual Electron writable
 recovery remain separate acceptance work.
 

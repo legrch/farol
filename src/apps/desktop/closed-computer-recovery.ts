@@ -197,6 +197,32 @@ async function retainedShellReservations(root: string): Promise<number> {
   return count;
 }
 
+/** Read-only durable-work proof. The caller retains promotion and exclusive
+ * Computer exclusions; acquiring those locks does not settle these journals.
+ */
+export async function assertClosedConnectorDurableWork(
+  root: string,
+): Promise<void> {
+  if (
+    !(await new PrivateWorkspaceMutationStore({ root }).settledForUpdate()) ||
+    (
+      await new PrivateCodexHandoffJournal(
+        path.join(root, "codex-task-journal"),
+      ).updateTaskKeys()
+    ).length
+  )
+    throw new Error("CLOSED_COMPUTER_RECOVERY_WORK_PENDING");
+  const claude = path.join(root, "claude-task-journal");
+  try {
+    await privateDirectory(claude);
+    if ((await fs.readdir(claude)).length)
+      throw new Error("CLOSED_COMPUTER_RECOVERY_WORK_PENDING");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  await retainedShellReservations(root);
+}
+
 export type ClosedRecoveryState = Readonly<{
   obligations: readonly string[];
   unreadable: readonly string[];
@@ -306,26 +332,7 @@ export async function recoverClosedComputer(
             )
           )
             throw new Error("CLOSED_COMPUTER_RECOVERY_WORK_PENDING");
-          if (
-            !(await new PrivateWorkspaceMutationStore({
-              root,
-            }).settledForUpdate()) ||
-            (
-              await new PrivateCodexHandoffJournal(
-                path.join(root, "codex-task-journal"),
-              ).updateTaskKeys()
-            ).length
-          )
-            throw new Error("CLOSED_COMPUTER_RECOVERY_WORK_PENDING");
-          const claude = path.join(root, "claude-task-journal");
-          try {
-            await privateDirectory(claude);
-            if ((await fs.readdir(claude)).length)
-              throw new Error("CLOSED_COMPUTER_RECOVERY_WORK_PENDING");
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-          }
-          await retainedShellReservations(root);
+          await assertClosedConnectorDurableWork(root);
           (probes.processesAbsent ?? assertClosedConnectorProcesses)(
             path.dirname(root),
           );

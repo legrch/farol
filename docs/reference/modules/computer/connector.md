@@ -154,7 +154,11 @@ The explicit closed Dev preserved-history maintenance host selects it only
 after canonical Go idle observation, before Chat preparation. That host binds
 the retained run/config snapshots, holds the original promotion and Computer
 exclusions, and repeats its process, state and promotion-lease proofs inside the
-native lifetime claim. Source/build attestation is rechecked before and after
+native lifetime claim. Every proof also reuses the existing closed-Computer
+durable-work guard: unresolved connector mutation and delegation journals refuse,
+independently of the separate Go Computer/Task namespaces. Computer exclusion
+proves that no admitted owner is active; it does not settle durable effects.
+Source/build attestation is rechecked before and after
 canonical observation. After reconciliation it confirms only its own maintenance
 stop and repeats zero-wait idle checks. Unsafe markers, live lifetime claims,
 shell groups and unknown work still refuse. Startup UI and ordinary MCP ingress

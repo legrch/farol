@@ -64,7 +64,14 @@ const ports = vi.hoisted(() => ({
   reconcile: vi.fn<(input: Reconcile) => Promise<void>>(),
   reconcileInactiveAfterCrash:
     vi.fn<(input: CrashReconcile) => Promise<void>>(),
+  connectorWork: vi.fn<(root: string) => Promise<void>>(),
 }));
+vi.mock("../../src/apps/desktop/closed-computer-recovery", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../src/apps/desktop/closed-computer-recovery")
+  >("../../src/apps/desktop/closed-computer-recovery");
+  return { ...actual, assertClosedConnectorDurableWork: ports.connectorWork };
+});
 vi.mock("../../src/apps/desktop/closed-empty-chat-recovery", async () => {
   const actual = await vi.importActual<
     typeof import("../../src/apps/desktop/closed-empty-chat-recovery")
@@ -435,6 +442,9 @@ function fixture(
   });
   ports.lifecycle.mockImplementation(() => {
     guarded("lifecycle");
+  });
+  ports.connectorWork.mockImplementation(async () => {
+    guarded("connector-work");
   });
   ports.stop.mockImplementation(async () => {
     guarded("stop");
@@ -1000,6 +1010,106 @@ describe("closed preserved recovery with an absent Quit (controlled ports)", () 
       expect(ports.confirmStop).toHaveBeenCalledExactlyOnceWith(0);
       expect(ports.reconcileInactiveAfterCrash).toHaveBeenCalledTimes(1);
       expect(ports.reconcile).not.toHaveBeenCalled();
+      released(f);
+    },
+  );
+});
+
+describe("connector durable-work admission (controlled port)", () => {
+  it.each(["previous", "current", "absent"] as const)(
+    "rechecks the existing connector guard under both exclusions for %s Quit",
+    async (scope) => {
+      const f = scope === "absent" ? noQuitFixture() : fixture(scope);
+      ports.finish.mockImplementation(async (handoff) => {
+        f.model.phase = "finish";
+        await handoff.reconcileConnector!();
+        return f.result;
+      });
+      await expect(f.execute()).resolves.toEqual(f.result);
+      expect(ports.connectorWork.mock.calls.length).toBeGreaterThan(3);
+      for (const args of ports.connectorWork.mock.calls)
+        expect(args).toEqual([
+          path.join(f.state, "secure-mcp-connector", "computer-authority"),
+        ]);
+      expect(
+        f.events.indexOf("before-observation:connector-work"),
+      ).toBeLessThan(f.events.indexOf("before-observation:observe"));
+      expect(f.events).toContain("finish:connector-work");
+      released(f);
+    },
+  );
+
+  it.each(
+    (["previous", "current", "absent"] as const).flatMap((scope) =>
+      (["before-observation", "before-preparation"] as const).map((phase) => ({
+        scope,
+        phase,
+      })),
+    ),
+  )(
+    "refuses $scope Quit when connector work is unresolved at $phase",
+    async ({ scope, phase }) => {
+      const f = scope === "absent" ? noQuitFixture() : fixture(scope);
+      const failure = Error("CLOSED_COMPUTER_RECOVERY_WORK_PENDING");
+      f.faults.set(`${phase}:connector-work`, failure);
+      await expect(f.execute()).rejects.toBe(failure);
+      if (phase === "before-observation")
+        expect(ports.inspect).not.toHaveBeenCalled();
+      expect(ports.prepare).not.toHaveBeenCalled();
+      expect(f.movedArchive).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      expect(ports.reconcileInactiveAfterCrash).not.toHaveBeenCalled();
+      released(f);
+    },
+  );
+
+  it("rechecks connector work inside crash reconciliation before confirming stop or preparing Chat", async () => {
+    const f = noQuitFixture();
+    const failure = Error("CLOSED_COMPUTER_RECOVERY_WORK_PENDING");
+    const original = ports.reconcileInactiveAfterCrash.getMockImplementation()!;
+    ports.reconcileInactiveAfterCrash.mockImplementationOnce(async (input) => {
+      ports.connectorWork.mockRejectedValueOnce(failure);
+      await original(input);
+    });
+    await expect(f.execute()).rejects.toBe(failure);
+    expect(ports.stop).toHaveBeenCalledTimes(1);
+    expect(ports.confirmStop).not.toHaveBeenCalled();
+    expect(ports.prepare).not.toHaveBeenCalled();
+    expect(f.movedArchive).not.toHaveBeenCalled();
+    expect(ports.finish).not.toHaveBeenCalled();
+    released(f);
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "awaits the connector proof's %s under both exclusions without starting observation",
+    async (outcome) => {
+      const f = noQuitFixture();
+      const entered = deferred<void>();
+      const gate = deferred<void>();
+      const original = ports.connectorWork.getMockImplementation()!;
+      ports.connectorWork.mockImplementationOnce(async (root) => {
+        await original(root);
+        entered.resolve();
+        await gate.promise;
+      });
+      const done = f.execute();
+      void done.catch(() => undefined);
+      await entered.promise;
+      expect(f.model.promotionHeld).toBe(true);
+      expect(f.model.fenceHeld).toBe(true);
+      expect(ports.inspect).not.toHaveBeenCalled();
+      expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.release).not.toHaveBeenCalled();
+      if (outcome === "resolve") {
+        gate.resolve();
+        await expect(done).resolves.toEqual(f.result);
+      } else {
+        const failure = Error("connector settlement unconfirmed");
+        gate.reject(failure);
+        await expect(done).rejects.toBe(failure);
+        expect(ports.inspect).not.toHaveBeenCalled();
+        expect(ports.reconcileInactiveAfterCrash).not.toHaveBeenCalled();
+      }
       released(f);
     },
   );

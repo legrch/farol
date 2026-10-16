@@ -52,6 +52,7 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 		activeInstance        bool
 		unsafeInstance        bool
 		heldLifetime          bool
+		unsettledMutation     string
 		refusalCode           string
 	}{
 		{name: "previous-quit-false"},
@@ -60,6 +61,8 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 		{name: "quit-absent-active-instance", quitAbsent: true, activeInstance: true},
 		{name: "quit-absent-unsafe-instance", quitAbsent: true, activeInstance: true, unsafeInstance: true, refusalCode: "COMPUTER_MCP_LIFECYCLE_MARKER_UNSAFE"},
 		{name: "quit-absent-held-instance", quitAbsent: true, activeInstance: true, heldLifetime: true, refusalCode: "COMPUTER_MCP_LIFECYCLE_UNVERIFIED"},
+		{name: "quit-absent-prepared-mutation", quitAbsent: true, activeInstance: true, unsettledMutation: "prepared", refusalCode: "CLOSED_COMPUTER_RECOVERY_WORK_PENDING"},
+		{name: "quit-absent-unknown-mutation", quitAbsent: true, activeInstance: true, unsettledMutation: "outcome_unknown", refusalCode: "CLOSED_COMPUTER_RECOVERY_WORK_PENDING"},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			temp := filepath.Join(repo, "_output/tmp")
@@ -103,6 +106,37 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 				if _, err := os.Lstat(filepath.Join(state, "last-quit.json")); !os.IsNotExist(err) {
 					t.Fatal("quit-absent fixture has a Quit", err)
 				}
+			}
+			mutationDirectory := filepath.Join(connector, "mutations")
+			var mutationsBefore preservedObservationTree
+			if scenario.unsettledMutation != "" {
+				// Valid connector-owned records in its separate native namespace.
+				// These synthetic uncertain effects are never executed or replayed.
+				operation := freshEmptyRecoveryFixtureUUID(t)
+				owner, session, task, participant := "synthetic-owner", "connector-session", "connector-task", "connector-participant"
+				key, err := json.Marshal([]any{operation, owner, session, task, 1, participant})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var outcome any
+				if scenario.unsettledMutation == "outcome_unknown" {
+					outcome = map[string]any{"code": "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", "source": "native-workspace"}
+				}
+				record := map[string]any{
+					"identity":    map[string]any{"operationId": operation, "ownerId": owner, "sessionId": session, "taskId": task, "taskEpoch": 1, "participantId": participant},
+					"workspaceId": "quarantined-connector-workspace", "requestDigest": strings.Repeat("a", 64), "phase": scenario.unsettledMutation, "outcome": outcome,
+				}
+				encoded, err := json.Marshal(map[string]any{"schemaVersion": 1, "kind": "workspace_mutation", "record": record})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(mutationDirectory, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(mutationDirectory, fmt.Sprintf("%x.json", sha256.Sum256(key))), append(encoded, '\n'), 0600); err != nil {
+					t.Fatal(err)
+				}
+				mutationsBefore = snapshotPreservedObservationTree(t, mutationDirectory)
 			}
 			beforeWorkspace := snapshotPreservedObservationTree(t, workspace)
 			beforeArchive := snapshotPreservedObservationTree(t, filepath.Join(in.Profile.Root, "chat"))
@@ -185,6 +219,9 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 				unchangedPreservedObservationTree(t, filepath.Join(state, "config.json"), refusedConfig)
 				unchangedPreservedObservationTree(t, activeMarker, refusedMarker)
 				unchangedPreservedObservationTree(t, workspace, beforeWorkspace)
+				if scenario.unsettledMutation != "" {
+					unchangedPreservedObservationTree(t, mutationDirectory, mutationsBefore)
+				}
 				entries, err := os.ReadDir(filepath.Join(connector, "mcp-lifecycle"))
 				if err != nil {
 					t.Fatal(err)
