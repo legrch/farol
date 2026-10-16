@@ -108,6 +108,20 @@ func inspectPreservedProfile(ctx context.Context, in preservedProfileInspectionI
 // remain owned by their repositories. This observation supplies no maintenance
 // or process authority; the initiating native host must own those separately.
 func withPreservedProfileClaims(ctx context.Context, in preservedProfileInspectionInput, visit func(preservedProfileInspection, *preservedProfileChatClaims) error) (resultErr error) {
+	return retainPreservedProfileObservation(ctx, in, false, visit)
+}
+
+// Discovery returns canonical metadata only. A later separately admitted
+// preparation must select these exact bytes again; it cannot enable discovery.
+// No native claim or mutable handle leaves this read-only visitor.
+func observePreservedProfile(ctx context.Context, in preservedProfileInspectionInput, visit func(preservedProfileInspection) error) error {
+	if visit == nil || in.Selection.HandoffDigest != ([32]byte{}) || in.Selection.LifecycleDigest != ([32]byte{}) || in.Selection.ResultsDigest != ([32]byte{}) {
+		return archivepolicy.Refused
+	}
+	return retainPreservedProfileObservation(ctx, in, true, func(v preservedProfileInspection, _ *preservedProfileChatClaims) error { return visit(v) })
+}
+
+func retainPreservedProfileObservation(ctx context.Context, in preservedProfileInspectionInput, discover bool, visit func(preservedProfileInspection, *preservedProfileChatClaims) error) (resultErr error) {
 	if ctx == nil || visit == nil {
 		return archivepolicy.Refused
 	}
@@ -183,6 +197,11 @@ func withPreservedProfileClaims(ctx context.Context, in preservedProfileInspecti
 			}
 			steps := len(hv.Stages)
 			observation := chatport.PreservedRecoveryObservation{Scope: lv.Scope, ParentRoot: hv.ParentRoot, ChatRoot: hv.ChatRoot, ResultsRoot: rv.Root, ResultsStorageRoot: rv.StorageRoot, HandoffDigest: hv.HeadDigest, LifecycleDigest: lv.SnapshotDigest, ResultsDigest: rv.SnapshotDigest, HandoffSteps: steps, WriteCount: lv.WriteCount, TurnCount: lv.TurnCount, PlanCount: lv.PlanCount, ResultCount: rv.ResultCount, Incarnations: lv.Incarnations, RetirementPresent: lv.Retirement != nil, ResultsUnresolved: rv.Unresolved}
+			if discover {
+				in.Selection.HandoffDigest = hv.HeadDigest
+				in.Selection.LifecycleDigest = lv.SnapshotDigest
+				in.Selection.ResultsDigest = rv.SnapshotDigest
+			}
 			plan, err := (archivepolicy.Policy{}).Select(in.Selection, observation)
 			if err != nil {
 				return err

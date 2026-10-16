@@ -273,6 +273,20 @@ Separately admitted closed maintenance can preserve the original Chat by one exc
 
 The explicit `-preserved-profile-native` lane retains every disposable fixture. Actual Go/File edit/read/ACK, Chat lifecycle/results and filesystem claims run with controlled browser, Settings/consent and initiating-ACK doubles. Tests cover all claim locks, full namespace/physical custody, final changes, fixed deadline including lagging timers, original UNKNOWN preservation, prior archives, and a withheld normal writer after lost/late ACK. These are Go/filesystem witnesses; automatic desktop selection, Electron child/terminal custody, same-profile writable restart, provider behavior and installed acceptance remain separate unqualified work.
 
+The Dev-only `observe-preserved-profile` command returns a canonical selection
+after the same composite's final rechecks and claim closes. Its request must
+leave all three Chat digests zero; only the private read-only entry discovers
+them. The preparation entry always requires independently selected exact
+digests and rechecks the repositories again. The inspection reply explicitly
+sets `recoveryAuthorized: false`; metadata is not a historical ACK, process
+receipt or permission to prepare. Both commands retain an original five-second
+absolute budget fixed before parsing or IO, bounded strict frames and actual
+pipe deadlines. A host must additionally observe the original successful child
+close; receiving a complete-looking frame alone does not confirm the operation.
+Disposable native observation tests retain profile/workspace hashes and physical
+metadata, including blocked Unix-pipe reads and writes. They qualify no Electron
+host, promotion/connector exclusion, terminal recorder or writable restart.
+
 ## Checks and integration handoff
 
 `infra/repos/lifecycle.AcquirePreservationInspection` retains the original existing read-only claim over a complete canonical snapshot, including nonempty writes, plans, recorded retirement and UNKNOWN history. Its copied `Inspection` contains metadata only. The original caller's absolute deadline is captured once before IO and remains effective even if context timer delivery lags. Every final `Verify` re-decodes the snapshot and checks the original named physical file, claim, scope and digest; failure poisons that lease, while `Close` releases only its descriptors. This separate observation path neither relaxes empty-only inspection nor constructs a lifecycle writer, clean retirement, successor, live handle or replay authority. Whole-profile preservation, original process/Computer settlement and fresh-owner admission remain separate enclosing work. The explicit `-chat-preservation-native` fixture lane checks actual disposable files, flock, byte/metadata preservation, substitution, relocation, cancellation and deadline expiry with synthetic canonical records; it does not prove an assembled writable restart.
