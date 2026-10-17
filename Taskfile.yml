@@ -99,17 +99,26 @@ tasks:
           "$node_path" tooling/run-preview.mjs {{.CLI_ARGS}}
 
   preview:development:
-    desc: Legacy development-only preview command; runs existing build without rebuilding
+    desc: Legacy development-only preview; runs existing build without rebuilding
     cmds:
-      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run preview
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run preview:development
 
   preview:
-    desc: Owner Preview entrypoint (blocked pending runtime integration; see docs/development/owner-preview.md)
+    desc: Build verified current-main Owner Preview, smoke, and run on demand
     cmds:
-      - task: preview:run
+      - |
+        clean_path=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+        node_path="$(PATH="$clean_path" command -v node)"
+        /usr/bin/env -i \
+          HOME="${HOME:?task preview requires HOME}" \
+          LANG="${LANG:-en_US.UTF-8}" \
+          PATH="$clean_path" \
+          TMPDIR="${TMPDIR:-/tmp}" \
+          /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- \
+          "$node_path" tooling/owner-preview.mjs build-run {{.CLI_ARGS}}
 
   preview:plan:
-    desc: Inspect an offline owner Preview plan from exact accepted main; no build or launch
+    desc: Inspect current-main Owner Preview plan; no package or app launch
     cmds:
       - |
         clean_path=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
@@ -119,10 +128,11 @@ tasks:
           LANG="${LANG:-en_US.UTF-8}" \
           PATH="$clean_path" \
           TMPDIR="${TMPDIR:-/tmp}" \
+          /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- \
           "$node_path" tooling/owner-preview.mjs plan {{.CLI_ARGS}}
 
   preview:build:
-    desc: Owner Preview build admission (currently fails closed; no package is built)
+    desc: Build and smoke a strict Owner Preview derivative from current main
     cmds:
       - |
         clean_path=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
@@ -132,10 +142,11 @@ tasks:
           LANG="${LANG:-en_US.UTF-8}" \
           PATH="$clean_path" \
           TMPDIR="${TMPDIR:-/tmp}" \
+          /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- \
           "$node_path" tooling/owner-preview.mjs build {{.CLI_ARGS}}
 
   preview:run:
-    desc: Owner Preview launch admission (currently fails closed; no app is launched)
+    desc: Verify and smoke the pinned current Preview generation, then run
     cmds:
       - |
         clean_path=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
@@ -145,6 +156,7 @@ tasks:
           LANG="${LANG:-en_US.UTF-8}" \
           PATH="$clean_path" \
           TMPDIR="${TMPDIR:-/tmp}" \
+          /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- \
           "$node_path" tooling/owner-preview.mjs run {{.CLI_ARGS}}
 
   promote:
