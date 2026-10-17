@@ -212,10 +212,7 @@ test("Task and npm migrations preserve an explicitly named development caller", 
     new URL("../../Taskfile.yml", import.meta.url),
     "utf8",
   );
-  assert.match(
-    tasks,
-    /preview:development:[\s\S]*?-- npm run preview:development/u,
-  );
+  assert.match(tasks, /preview:development:[\s\S]*?-- npm run preview\n/u);
   for (const action of ["plan", "build", "run", "build-run"])
     assert.ok(
       tasks.includes(`tooling/owner-preview.mjs ${action} {{.CLI_ARGS}}`),

@@ -30,6 +30,19 @@ const selectedFiles = (plan) =>
   plan.suites.flatMap((suite) => suite.files ?? []);
 
 describe("source test scopes", () => {
+  it.each([
+    "tests/tooling/owner-preview.test.mjs",
+    "tests/tooling/owner-preview-artifact.test.mjs",
+  ])(
+    "classifies %s as integration with real process/filesystem collaborators",
+    (file) => {
+      expect(classified.integration).toContain(file);
+      expect(classified.nodeUnit).not.toContain(file);
+      expect(selectedFiles(planTests("integration", files))).toContain(file);
+      expect(selectedFiles(planTests("unit", files))).not.toContain(file);
+      expect(selectedFiles(planTests("fast", files))).not.toContain(file);
+    },
+  );
   it("includes the pure current-React Setup observer in unit and fast without claiming native E2E", () => {
     const observer = "tests/e2e/current-react-setup-action.test.mjs";
     expect(classified.nodeUnit).toContain(observer);

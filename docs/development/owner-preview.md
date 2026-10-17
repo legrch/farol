@@ -31,7 +31,8 @@ the same helper. Prefer Task's clean-environment, owner-guarded entrypoints. The
 existing `npm run preview` deliberately retains its development-only meaning,
 so its active callers and [testing guidance](../testing.md) stay valid. An
 explicit `npm run preview:development` alias preserves that same command, and
-`task preview:development` calls the explicit alias. Both still launch existing
+`task preview:development` retains the already admitted `npm run preview` command
+beneath the owner guard. Both still launch existing
 development build bytes without rebuilding. Frozen historical examples remain
 historical. `task run` retains its canonical candidate contract.
 
