@@ -22,6 +22,25 @@ describe("saved-chat preview publication", () => {
     expect(
       savedChatPreviewQualified({ ...ready, environment: "preview" }),
     ).toBe(true);
+    const partition = "persist:farol-owner-preview-chatgpt";
+    expect(
+      savedChatPreviewQualified({
+        ...ready,
+        environment: "owner-preview",
+        partition,
+        verification: {
+          ...ready.verification,
+          runtimeGeneration: `${partition}:${ready.buildId}`,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      savedChatPreviewQualified({
+        ...ready,
+        environment: "owner-preview",
+        partition,
+      }),
+    ).toBe(false);
     for (const invalid of [
       { ownerOptIn: undefined },
       { ownerOptIn: "true" },

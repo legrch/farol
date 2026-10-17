@@ -1234,6 +1234,7 @@ export function Shell() {
             <strong>{title(state, activityFilter)}</strong>
           )}
           {state.environment === "dev" && <small>Development</small>}
+          {state.environment === "owner-preview" && <small>Preview</small>}
         </div>
         {destination.area === "chatgpt" &&
           destination.connectionCheckReturn && (

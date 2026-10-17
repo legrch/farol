@@ -280,7 +280,7 @@ describe("desktop environment identity", () => {
     });
   });
 
-  it("declares the owner Preview identity without admitting an incomplete runtime", () => {
+  it("admits the fixed owner Preview identity independently of installed and Dev profiles", () => {
     const owner = ownerPreviewIdentity(appData);
     expect(owner.environment).toBe("owner-preview");
     expect(owner.applicationName).toBe("Farol Preview");
@@ -302,14 +302,14 @@ describe("desktop environment identity", () => {
         expect(owner[key]).not.toBe(existing[key]);
       }
     }
-    expect(() => desktopEnvironment(owner.environment)).toThrow(
-      "DESKTOP_ENVIRONMENT_INVALID",
-    );
+    expect(desktopEnvironment(owner.environment)).toBe("owner-preview");
+    expect(desktopIdentity("owner-preview", appData)).toEqual(owner);
   });
 
   it("accepts only the launcher's explicit marker", () => {
     expect(desktopEnvironment(undefined)).toBe("preview");
     expect(desktopEnvironment("dev")).toBe("dev");
+    expect(desktopEnvironment("owner-preview")).toBe("owner-preview");
     expect(() => desktopEnvironment("preview")).toThrow(
       "DESKTOP_ENVIRONMENT_INVALID",
     );

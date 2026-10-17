@@ -10,7 +10,7 @@ const setupStepOrder: readonly SetupStepId[] = [
 ];
 
 export interface GuidedSetupSelection {
-  readonly environment: "preview" | "dev";
+  readonly environment: "preview" | "dev" | "owner-preview";
   readonly demoMode?: boolean;
   readonly legacySetupTestMode?: boolean;
 }
@@ -23,7 +23,7 @@ export function guidedSetupSelected(input: GuidedSetupSelection): boolean {
 
 export function initialSetupPresentation(
   input: Readonly<{
-    environment: "preview" | "dev";
+    environment: "preview" | "dev" | "owner-preview";
     demoMode?: boolean;
     legacySetupTestMode?: boolean;
     dismissed: boolean;

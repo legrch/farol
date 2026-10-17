@@ -33,6 +33,7 @@ const viewFields = {
   partition: z.enum([
     "persist:farol-next-chatgpt",
     "persist:farol-dev-chatgpt",
+    "persist:farol-owner-preview-chatgpt",
   ]),
 };
 const bindingSchema = z.discriminatedUnion("phase", [

@@ -1,5 +1,5 @@
 export interface BrowserPresentationSelection {
-  readonly environment: "preview" | "dev";
+  readonly environment: "preview" | "dev" | "owner-preview";
   readonly demoMode?: boolean;
   readonly legacySetupTestMode?: boolean;
 }

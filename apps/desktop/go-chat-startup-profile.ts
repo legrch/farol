@@ -40,7 +40,7 @@ const controlled: CompiledChatModelProfile = {
 };
 export function captureChatStartupProfile(
   input: Readonly<{
-    environment: "dev" | "preview";
+    environment: "dev" | "preview" | "owner-preview";
     e2e: boolean;
     origin: string | null;
     tasks: unknown;

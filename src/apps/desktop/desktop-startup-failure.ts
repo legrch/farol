@@ -98,7 +98,12 @@ export function desktopStartupFailureReport(
   environment: DesktopEnvironment,
 ): string {
   const code = desktopStartupFailureCode(error);
-  const product = environment === "dev" ? "Farol Dev" : "Farol";
+  const product =
+    environment === "dev"
+      ? "Farol Dev"
+      : environment === "owner-preview"
+        ? "Farol Preview"
+        : "Farol";
   const remedy = PREVIOUS_DRAIN_FAILURE_CODES.has(code)
     ? "The previous session did not confirm shutdown. Preserve the existing profile and its recovery records; rebuilding the app does not settle this state. Use a qualified recovery procedure before reopening that profile."
     : DISPLAY_PRECONDITION_CODES.has(code)

@@ -308,9 +308,11 @@ export class GoChatBrowserDriver implements BrowserDriver {
     if (
       !a ||
       !isDeepStrictEqual(a.lease, lease) ||
-      !["persist:farol-next-chatgpt", "persist:farol-dev-chatgpt"].includes(
-        a.partition,
-      ) ||
+      ![
+        "persist:farol-next-chatgpt",
+        "persist:farol-dev-chatgpt",
+        "persist:farol-owner-preview-chatgpt",
+      ].includes(a.partition) ||
       !a.api ||
       ["prepare", "verifySend", "send", "observe", "cancel", "dispose"].some(
         (name) => typeof a.api[name as keyof ChatGptPhysicalApi] !== "function",

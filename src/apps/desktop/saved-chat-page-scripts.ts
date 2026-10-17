@@ -175,6 +175,7 @@ export const SavedChatPhysicalBindingSchema = z.strictObject({
   partition: z.enum([
     "persist:farol-next-chatgpt",
     "persist:farol-dev-chatgpt",
+    "persist:farol-owner-preview-chatgpt",
   ]),
 });
 export type SavedChatPhysicalBinding = Readonly<

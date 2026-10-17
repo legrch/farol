@@ -542,7 +542,7 @@ export class DesktopGoCore {
 // This is not recovery from a failed attestation and never enables execution.
 export function desktopShellSelection(
   compiledShell: DesktopCoreSelection["compiledShell"],
-  environment: "dev" | "preview",
+  environment: "dev" | "preview" | "owner-preview",
   artifactRoot: string,
 ): DesktopCoreSelection["compiledShell"] {
   const packageResources = path.join(

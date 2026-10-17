@@ -47,6 +47,7 @@ describe("explicit normal-startup controlled profile", () => {
   });
   it.each([
     { environment: "preview" as const },
+    { environment: "owner-preview" as const },
     { e2e: false },
     { origin: null },
     { origin: "https://chatgpt.com" },

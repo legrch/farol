@@ -145,7 +145,7 @@ export type SignInObservation = Readonly<{
 }>;
 export type WindowSnapshot = Readonly<{
   status: "starting" | "current" | "stale" | "unavailable" | "incompatible";
-  environment: "preview" | "dev";
+  environment: "preview" | "dev" | "owner-preview";
   buildId: string | null;
   installedVersion: Readonly<{
     version: string;

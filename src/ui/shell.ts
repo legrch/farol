@@ -275,10 +275,14 @@ const bootstrapSchema = z.strictObject({
   schema: z.literal(3),
   productName: z.literal("Farol Next Preview"),
   bundleId: z.literal("local.farol.next.preview"),
-  environment: z.enum(["preview", "dev"]),
-  displayName: z.enum(["Farol", "Farol Dev"]),
+  environment: z.enum(["preview", "dev", "owner-preview"]),
+  displayName: z.enum(["Farol", "Farol Dev", "Farol Preview"]),
   displayEdition: z.enum(["", "Development"]),
-  applicationId: z.enum(["local.farol.next.preview", "local.farol.dev"]),
+  applicationId: z.enum([
+    "local.farol.next.preview",
+    "local.farol.dev",
+    "local.farol.owner.preview",
+  ]),
   build: BuildIdentitySchema,
   demoMode: z.boolean(),
   legacySetupTestMode: z.boolean().default(false),
@@ -294,6 +298,7 @@ const bootstrapSchema = z.strictObject({
   chatgptPartition: z.enum([
     "persist:farol-next-chatgpt",
     "persist:farol-dev-chatgpt",
+    "persist:farol-owner-preview-chatgpt",
   ]),
   chatgptRecoveryPending: z.boolean(),
   chatgptConversationState: z.enum([
@@ -407,11 +412,17 @@ const required = <ElementType extends Element>(
 
 function applyProductIdentity(): void {
   const dev = bootstrap.environment === "dev";
+  const ownerPreview = bootstrap.environment === "owner-preview";
   if (
-    bootstrap.displayName !== (dev ? "Farol Dev" : "Farol") ||
+    bootstrap.displayName !==
+      (dev ? "Farol Dev" : ownerPreview ? "Farol Preview" : "Farol") ||
     bootstrap.displayEdition !== (dev ? "Development" : "") ||
     bootstrap.applicationId !==
-      (dev ? "local.farol.dev" : "local.farol.next.preview")
+      (dev
+        ? "local.farol.dev"
+        : ownerPreview
+          ? "local.farol.owner.preview"
+          : "local.farol.next.preview")
   ) {
     throw new Error("UI_DESKTOP_IDENTITY_INVALID");
   }
@@ -420,7 +431,9 @@ function applyProductIdentity(): void {
   document.documentElement.dataset.environment = bootstrap.environment;
   required<HTMLImageElement>("#brand-image").src = dev
     ? "farol-dev-mark.svg"
-    : "farol-mark.svg";
+    : ownerPreview
+      ? "farol-preview-mark.svg"
+      : "farol-mark.svg";
   document.title = [displayProductName, displayEdition]
     .filter(Boolean)
     .join(" · ");
@@ -4699,17 +4712,20 @@ function renderModelSection(): void {
   const applyBtn = required<HTMLButtonElement>("#model-apply-btn");
   const rollbackBtn = required<HTMLButtonElement>("#model-rollback-btn");
   const devEnvironment = bootstrap.environment === "dev";
+  const ownerPreviewModel = bootstrap.environment === "owner-preview";
   const selectDefaultLabel = selectDefault.closest("label");
   if (selectDefaultLabel instanceof HTMLElement) {
-    selectDefaultLabel.hidden = devEnvironment;
+    selectDefaultLabel.hidden = devEnvironment || ownerPreviewModel;
   }
-  if (devEnvironment) {
+  if (devEnvironment || ownerPreviewModel) {
     modelSelectAsDefault = false;
     selectDefault.checked = false;
   }
   required<HTMLElement>("#model-config-scope").textContent = devEnvironment
     ? "Uses only Farol Dev's private Codex home and loopback provider; personal Codex config and authentication are never read or changed."
-    : "Writes only a Farol-managed block to your Codex config.toml, never anything else in the file.";
+    : ownerPreviewModel
+      ? "Uses only Farol Preview's private Codex home and loopback provider."
+      : "Writes only a Farol-managed block to your Codex config.toml, never anything else in the file.";
 
   const status = modelStatusEvidence;
   readiness.textContent =

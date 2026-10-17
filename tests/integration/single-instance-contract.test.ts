@@ -263,9 +263,12 @@ describe("Farol Next single-instance identity", () => {
     expect(() =>
       readBuildLaunchIdentity(root, "preview", dirty.runtime),
     ).toThrow("INSTANCE_BUILD_IDENTITY_INVALID");
+    expect(() =>
+      readBuildLaunchIdentity(root, "owner-preview", dirty.runtime),
+    ).toThrow("INSTANCE_BUILD_IDENTITY_INVALID");
   });
 
-  it.each(["preview", "dev"] as const)(
+  it.each(["preview", "dev", "owner-preview"] as const)(
     "admits the Go builder's schema 4 identity for %s startup",
     async (environment) => {
       const root = await fs.mkdtemp(
@@ -386,6 +389,9 @@ describe("Farol Next single-instance identity", () => {
     });
     expect(() =>
       readBuildLaunchIdentity(root, "preview", dirty.runtime),
+    ).toThrow("INSTANCE_BUILD_IDENTITY_INVALID");
+    expect(() =>
+      readBuildLaunchIdentity(root, "owner-preview", dirty.runtime),
     ).toThrow("INSTANCE_BUILD_IDENTITY_INVALID");
   });
 

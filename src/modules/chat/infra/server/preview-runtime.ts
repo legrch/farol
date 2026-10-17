@@ -22,7 +22,9 @@ import { InMemoryTurns } from "../repo/in-memory-turns";
 export type PreviewScenario = FixtureScenario | "stream-failure";
 export type PreviewMode = "empty" | "demo";
 export type PreviewRuntimeIdentity =
-  "farol-next-preview-runtime" | "farol-dev-runtime";
+  | "farol-next-preview-runtime"
+  | "farol-dev-runtime"
+  | "farol-owner-preview-runtime";
 
 export type PreviewTask = Readonly<{
   ownerId: string;
