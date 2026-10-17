@@ -75,6 +75,18 @@ export function ownerPreviewArguments(args) {
   return { action, expectedMain };
 }
 
+export function ownerPreviewLaunchMessage(result, generation) {
+  if (result === "reopened")
+    throw new Error(
+      "OWNER_PREVIEW_RUNNING_GENERATION_UNCONFIRMED: an existing source-equivalent Preview was reopened; its generation was not observed. Quit it normally before launching the intended generation.",
+    );
+  if (result !== "primary-started")
+    throw new Error(`OWNER_PREVIEW_LAUNCH_REFUSED:${result}`);
+  if (!/^[a-f0-9]{64}$/u.test(generation ?? ""))
+    throw new Error("OWNER_PREVIEW_GENERATION_INVALID");
+  return `Owner Preview primary-started: ${generation}\n`;
+}
+
 export function assertOwnerPreviewSource({
   expectedMain,
   localMain,

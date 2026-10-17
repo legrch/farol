@@ -10,6 +10,7 @@ import {
 import {
   assertOwnerPreviewSource,
   ownerPreviewArguments,
+  ownerPreviewLaunchMessage,
   ownerPreviewPlan,
   requireOwnerPreviewRuntimeIntegration,
   PREVIEW_LAUNCHER,
@@ -51,6 +52,33 @@ test("default commands need no SHA and optional assertions remain strict", () =>
     ["run", "--go-inputs=/tmp/inputs"],
   ])
     assert.throws(() => ownerPreviewArguments(args), /Usage:/u);
+});
+
+test("launch reporting never attributes a source-equivalent reopen to the requested generation", () => {
+  const generation = "a".repeat(64);
+  assert.equal(
+    ownerPreviewLaunchMessage("primary-started", generation),
+    `Owner Preview primary-started: ${generation}\n`,
+  );
+  assert.throws(
+    () => ownerPreviewLaunchMessage("reopened", generation),
+    (error) => {
+      assert.match(
+        error.message,
+        /^OWNER_PREVIEW_RUNNING_GENERATION_UNCONFIRMED:/u,
+      );
+      assert.ok(!error.message.includes(generation));
+      return true;
+    },
+  );
+  assert.throws(
+    () => ownerPreviewLaunchMessage("startup-failed", generation),
+    /OWNER_PREVIEW_LAUNCH_REFUSED/u,
+  );
+  assert.throws(
+    () => ownerPreviewLaunchMessage("primary-started", "invalid"),
+    /OWNER_PREVIEW_GENERATION_INVALID/u,
+  );
 });
 
 test("source admission requires clean HEAD and all three current main observations", () => {

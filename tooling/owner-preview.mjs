@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   ownerPreviewArguments,
+  ownerPreviewLaunchMessage,
   assertOwnerPreviewSource,
   ownerPreviewPlan,
   requireOwnerPreviewRuntimeIntegration,
@@ -302,9 +303,7 @@ async function launch(generation, observation) {
       `OWNER_PREVIEW_LAUNCH_UNKNOWN:${outcome.signal ?? outcome.status}`,
     );
   const result = collector.finish();
-  if (!["primary-started", "reopened"].includes(result))
-    throw new Error(`OWNER_PREVIEW_LAUNCH_REFUSED:${result}`);
-  process.stdout.write(`Owner Preview ${result}: ${generation}\n`);
+  process.stdout.write(ownerPreviewLaunchMessage(result, generation));
 }
 
 try {

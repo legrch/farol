@@ -492,6 +492,7 @@ import {
   desktopUserDataPath,
   desktopEnvironment,
   desktopIdentity,
+  assertOwnerPreviewProfileSeparation,
   desktopProfileEnvironment,
   isolatedDevMcpProofAllowed,
 } from "./desktop-environment";
@@ -565,13 +566,25 @@ const desktopAppData = (() => {
 // The existing app-data proof has already validated this exact private HOME;
 // select it before Go/native child composition can observe the owner's home.
 if (isolatedE2EHome !== undefined) app.setPath("home", isolatedE2EHome);
-const declaredDesktopIdentity = desktopIdentity(
-  runtimeEnvironment,
-  desktopAppData,
-  runtimeEnvironment === "dev"
-    ? resolvePhysicalDevDataDirectoryName(desktopAppData)
-    : undefined,
-);
+const declaredDesktopIdentity = (() => {
+  try {
+    if (runtimeEnvironment === "owner-preview")
+      assertOwnerPreviewProfileSeparation(desktopAppData);
+    return desktopIdentity(
+      runtimeEnvironment,
+      desktopAppData,
+      runtimeEnvironment === "dev"
+        ? resolvePhysicalDevDataDirectoryName(desktopAppData)
+        : undefined,
+    );
+  } catch (error) {
+    terminateDesktopStartup(error, runtimeEnvironment, {
+      write: (message) => process.stderr.write(message),
+      exit: (code) => process.exit(code),
+    });
+    throw error;
+  }
+})();
 const selectedDesktopUserData = (() => {
   try {
     return desktopUserDataPath(declaredDesktopIdentity, {

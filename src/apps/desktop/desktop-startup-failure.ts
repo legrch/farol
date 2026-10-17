@@ -108,11 +108,14 @@ export function desktopStartupFailureReport(
     ? "The previous session did not confirm shutdown. Preserve the existing profile and its recovery records; rebuilding the app does not settle this state. Use a qualified recovery procedure before reopening that profile."
     : DISPLAY_PRECONDITION_CODES.has(code)
       ? "The visible-test display requirements are not met. Check available displays and the requested viewport before launching again. Use hidden mode only for an equivalent check."
-      : environment === "dev" && code === "DEV_PROFILE_DIRECTORY_AMBIGUOUS"
-        ? "Two distinct Dev profiles exist. Stop here and choose a profile explicitly; neither was moved or merged."
-        : environment === "dev"
-          ? "Fix the reported local build or configuration issue, then run 'task dev' again."
-          : "Rebuild the exact candidate, then launch it again.";
+      : environment === "owner-preview" &&
+          code === "OWNER_PREVIEW_PROFILE_DIRECTORY_UNSAFE"
+        ? "The Preview profile or its parent is aliased or unsafe. Preserve the existing directories and resolve their physical separation before another launch; rebuilding does not repair this state."
+        : environment === "dev" && code === "DEV_PROFILE_DIRECTORY_AMBIGUOUS"
+          ? "Two distinct Dev profiles exist. Stop here and choose a profile explicitly; neither was moved or merged."
+          : environment === "dev"
+            ? "Fix the reported local build or configuration issue, then run 'task dev' again."
+            : "Rebuild the exact candidate, then launch it again.";
   return (
     `${product} main-process startup failed before the app became ready (${code}). ${remedy}\n` +
     (error instanceof StartupBoundaryFailure

@@ -9,6 +9,23 @@ import {
 import { BridgeError } from "../../apps/desktop/bridge/client";
 
 describe("desktop startup failure boundary", () => {
+  it("preserves an unsafe Preview profile without suggesting a rebuild or retry", () => {
+    const write = vi.fn<(message: string) => void>();
+    const exit = vi.fn<(code: number) => void>();
+    terminateDesktopStartup(
+      new Error("OWNER_PREVIEW_PROFILE_DIRECTORY_UNSAFE"),
+      "owner-preview",
+      { write, exit },
+    );
+    expect(write.mock.calls[0]?.[0]).toContain(
+      "Preserve the existing directories",
+    );
+    expect(write.mock.calls[0]?.[0]).not.toContain(
+      "Rebuild the exact candidate",
+    );
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
   it.each(["dev", "preview"] as const)(
     "classifies an unconfirmed previous shutdown in %s as profile recovery",
     (environment) => {

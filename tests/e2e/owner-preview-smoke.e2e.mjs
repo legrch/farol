@@ -73,6 +73,8 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
     schema: "farol-owner-preview-smoke/1",
     attempt,
     status: "UNKNOWN",
+    launchFailureCleanup:
+      "playwright-owned-disposable-process-group-may-be-killed",
     sourceCommit: verified.manifest.sourceCommit,
     sourceTreeDigest: verified.manifest.sourceTreeDigest,
     baseArtifactSha256: verified.manifest.baseArtifactSha256,
@@ -149,6 +151,9 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
       // Canonical snapshot and derivative are independently reverified directly
       // before EACH launch. Never run the hidden canonical input application.
       await verifyOwnerPreview(repositoryRoot, generation);
+      // The pinned launcher may kill its own disposable process group if
+      // initialization fails before a handle returns. That is UNKNOWN, never
+      // a drained Quit or permission to publish/replay this generation.
       current = await electron.launch({
         executablePath: executable,
         args: [

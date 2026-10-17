@@ -71,9 +71,14 @@ digest. The generation directory is SHA-256 of the deterministic derivative
 manifest serialization. It is never reused or overwritten. Partial assembly
 stays under `_output/preview/failed/<64hex>`; completed but failed-smoke
 generations stay in `generations`. All previous and failed outputs are retained.
-No automatic pruning, installed-app closure, force kill or effect settlement is
-part of these commands. An unknown package subprocess outcome retains its writer
-lock for Lead reconciliation.
+No automatic pruning, installed-app closure or effect settlement is part of
+these commands. The foreground canonical package command has no automatic timeout;
+an unknown package subprocess outcome retains its writer lock for Lead
+reconciliation. A source-equivalent single-instance reopen does not identify the
+running immutable generation. The command reports that outcome as
+`OWNER_PREVIEW_RUNNING_GENERATION_UNCONFIRMED` without naming the requested
+generation as running; quit the existing Preview normally before launching the
+intended generation.
 
 The recipe permits precisely these differences from the canonical snapshot:
 
@@ -137,8 +142,12 @@ become PASS only after both clean cycles, re-verification and exact owned-profil
 cleanup, and have no caller PASS flag. Failures/UNKNOWN retain the profile and
 receipt, prevent further smoke of that generation, and require Lead
 reconciliation. A known owned app may receive one normal Quit cleanup request;
-a refused/unknown Quit is never retried or escalated to a kill. No failed smoke
-publishes the current pointer or opens the persistent owner profile.
+a refused/unknown Quit is never retried or escalated by the harness. The pinned
+Playwright Electron launcher can force-terminate its own disposable process group
+if initialization fails before returning a handle. That dependency behavior is
+not proof of a drained Quit: the attempt remains UNKNOWN with its profile and
+receipt retained. No failed smoke publishes the current pointer or opens the
+persistent owner profile.
 
 The assembled runtime preserves the existing E2E proof and admits the
 fixed environment/partitions in startup and renderer contracts, selects private

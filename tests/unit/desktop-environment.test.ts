@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   codexChildHomePath,
   ownerPreviewIdentity,
+  assertOwnerPreviewProfileSeparation,
   desktopCodexChildHomes,
   desktopCodexConfigPath,
   desktopAppDataPath,
@@ -19,8 +20,14 @@ import {
   isolatedDevMcpProofAllowed,
 } from "../../src/apps/desktop/desktop-environment";
 
+import { terminateDesktopStartup } from "../../src/apps/desktop/desktop-startup-failure";
+
 const isolatedHomes: string[] = [];
-function ordinaryBootProfile() {
+function ordinaryBootProfile(
+  environment?: string,
+  appDataPath = "/Users/example/Library/Application Support",
+  calls: string[] = [],
+) {
   const source = fs.readFileSync(
     new URL("../../src/apps/desktop/main.ts", import.meta.url),
     "utf8",
@@ -29,11 +36,10 @@ function ordinaryBootProfile() {
   const end = source.indexOf("// `buildIdentity.product`", begin);
   expect(begin).toBeGreaterThan(0);
   expect(end).toBeGreaterThan(begin);
-  const calls: string[] = [];
   // Model Electron's new productName default, then execute only the actual
   // profile-selection boot statements. No Electron or owner state is loaded.
   const paths: Record<string, string> = {
-    appData: "/Users/example/Library/Application Support",
+    appData: appDataPath,
     userData: "/Users/example/Library/Application Support/Farol",
     sessionData: "/Users/example/Library/Application Support/Farol",
   };
@@ -42,13 +48,23 @@ function ordinaryBootProfile() {
       loader: "ts",
     }).code,
     {
-      process: { env: {} },
+      process: {
+        env: environment ? { FAROL_NEXT_ENVIRONMENT: environment } : {},
+        stderr: {
+          write: (message: string) => calls.push(`startup:${message}`),
+        },
+        exit: (code: number) => {
+          throw new Error(`BOOT_EXIT:${code}`);
+        },
+      },
       path,
       desktopEnvironment,
       desktopProfileEnvironment,
       desktopAppDataPath,
       desktopUserDataPath,
       desktopIdentity,
+      assertOwnerPreviewProfileSeparation,
+      terminateDesktopStartup,
       app: {
         commandLine: { getSwitchValue: () => "" },
         getPath(name: string) {
@@ -80,6 +96,152 @@ afterEach(() => {
   for (const home of isolatedHomes.splice(0)) {
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+describe("physical Owner Preview profile admission", () => {
+  function fixture() {
+    const { home, appData } = isolatedAppData();
+    // Tests use the physical spelling; production admission rejects aliases.
+    const physicalHome = fs.realpathSync.native(home);
+    return {
+      home: physicalHome,
+      appData: path.join(physicalHome, path.basename(appData)),
+    };
+  }
+
+  it("admits a new fixed profile without creating it or changing app-data", () => {
+    const { appData } = fixture();
+    const before = fs.statSync(appData);
+    expect(assertOwnerPreviewProfileSeparation(appData)).toBeUndefined();
+    expect(fs.readdirSync(appData)).toEqual([]);
+    const after = fs.statSync(appData);
+    expect([
+      after.dev,
+      after.ino,
+      after.mode,
+      after.mtimeMs,
+      after.ctimeMs,
+    ]).toEqual([
+      before.dev,
+      before.ino,
+      before.mode,
+      before.mtimeMs,
+      before.ctimeMs,
+    ]);
+  });
+
+  it("admits the existing physically separate profile without repairing it", () => {
+    const { appData } = fixture();
+    const profile = ownerPreviewIdentity(appData).userData;
+    fs.mkdirSync(profile, { mode: 0o755 });
+    fs.writeFileSync(path.join(profile, "sentinel"), "preserve", {
+      mode: 0o600,
+    });
+    const before = fs.statSync(profile);
+    expect(ordinaryBootProfile("owner-preview", appData).result.userData).toBe(
+      profile,
+    );
+    expect(fs.readdirSync(profile)).toEqual(["sentinel"]);
+    const after = fs.statSync(profile);
+    expect([
+      after.dev,
+      after.ino,
+      after.mode,
+      after.mtimeMs,
+      after.ctimeMs,
+    ]).toEqual([
+      before.dev,
+      before.ino,
+      before.mode,
+      before.mtimeMs,
+      before.ctimeMs,
+    ]);
+  });
+
+  it("refuses a stopped installed-profile alias before selecting storage or writing locks", () => {
+    const { appData } = fixture();
+    const installed = path.join(appData, "Farol Next Preview");
+    fs.mkdirSync(installed, { mode: 0o700 });
+    const sentinel = path.join(installed, "sentinel");
+    fs.writeFileSync(sentinel, "original owner state", { mode: 0o600 });
+    const profile = ownerPreviewIdentity(appData).userData;
+    fs.symlinkSync(installed, profile);
+    const original = fs.statSync(installed);
+    const originalSentinel = fs.statSync(sentinel);
+    const alias = fs.lstatSync(profile);
+    const calls: string[] = [];
+    expect(() => ordinaryBootProfile("owner-preview", appData, calls)).toThrow(
+      "BOOT_EXIT:1",
+    );
+    expect(
+      calls.some((call) =>
+        call.includes("OWNER_PREVIEW_PROFILE_DIRECTORY_UNSAFE"),
+      ),
+    ).toBe(true);
+    expect(calls.some((call) => call.startsWith("set:"))).toBe(false);
+    expect(fs.readdirSync(installed)).toEqual(["sentinel"]);
+    expect(fs.readFileSync(sentinel, "utf8")).toBe("original owner state");
+    for (const [name, prior] of [
+      [installed, original],
+      [sentinel, originalSentinel],
+      [profile, alias],
+    ] as const) {
+      const now = fs.lstatSync(name);
+      expect([now.dev, now.ino, now.mode, now.mtimeMs, now.ctimeMs]).toEqual([
+        prior.dev,
+        prior.ino,
+        prior.mode,
+        prior.mtimeMs,
+        prior.ctimeMs,
+      ]);
+    }
+    expect(fs.readlinkSync(profile)).toBe(installed);
+  });
+
+  it("rejects app-data aliases and writable ancestors without creating a profile", () => {
+    const { home, appData } = fixture();
+    const alias = path.join(home, "aliased-app-data");
+    fs.symlinkSync(appData, alias);
+    expect(() => assertOwnerPreviewProfileSeparation(alias)).toThrow(
+      "OWNER_PREVIEW_PROFILE_DIRECTORY_UNSAFE",
+    );
+    fs.chmodSync(home, 0o777);
+    expect(() => assertOwnerPreviewProfileSeparation(appData)).toThrow(
+      "OWNER_PREVIEW_PROFILE_DIRECTORY_UNSAFE",
+    );
+    expect(fs.readdirSync(appData)).toEqual([]);
+  });
+
+  it.each(["file", "writable-profile", "writable-app-data"])(
+    "rejects %s without repair",
+    (kind) => {
+      const { appData } = fixture();
+      const profile = ownerPreviewIdentity(appData).userData;
+      if (kind === "file")
+        fs.writeFileSync(profile, "preserve", { mode: 0o600 });
+      else fs.mkdirSync(profile, { mode: 0o700 });
+      const unsafe = kind === "writable-app-data" ? appData : profile;
+      if (kind !== "file") fs.chmodSync(unsafe, 0o777);
+      const before = fs.lstatSync(unsafe);
+      expect(() => assertOwnerPreviewProfileSeparation(appData)).toThrow(
+        "OWNER_PREVIEW_PROFILE_DIRECTORY_UNSAFE",
+      );
+      const after = fs.lstatSync(unsafe);
+      expect([
+        after.dev,
+        after.ino,
+        after.mode,
+        after.mtimeMs,
+        after.ctimeMs,
+      ]).toEqual([
+        before.dev,
+        before.ino,
+        before.mode,
+        before.mtimeMs,
+        before.ctimeMs,
+      ]);
+    },
+  );
 });
 
 describe("desktop environment identity", () => {

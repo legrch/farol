@@ -38,6 +38,63 @@ export function ownerPreviewIdentity(appData: string) {
   };
 }
 
+/** Read-only admission before Electron selects or writes the Preview profile.
+ * No alias adoption, directory repair, creation or profile-content reads.
+ */
+export function assertOwnerPreviewProfileSeparation(appData: string): void {
+  const invalid = () => new Error("OWNER_PREVIEW_PROFILE_DIRECTORY_UNSAFE");
+  const uid = process.getuid?.();
+  if (
+    uid === undefined ||
+    !path.isAbsolute(appData) ||
+    appData.includes("\0") ||
+    path.resolve(appData) !== appData
+  )
+    throw invalid();
+  const profile = ownerPreviewIdentity(appData).userData;
+  const directories: string[] = [];
+  for (let parent = appData; ; parent = path.dirname(parent)) {
+    directories.unshift(parent);
+    if (parent === path.dirname(parent)) break;
+  }
+  try {
+    for (const directory of [...directories, profile]) {
+      let info;
+      try {
+        info = fs.lstatSync(directory);
+      } catch (error) {
+        if (
+          directory === profile &&
+          (error as NodeJS.ErrnoException).code === "ENOENT"
+        )
+          continue;
+        throw error;
+      }
+      // The canonical system temporary root is a sticky ancestor of disposable
+      // tests. App-data/profile themselves must always be owned and non-writable
+      // by other users; a sticky application-data root is never sufficient.
+      const temporaryAncestor =
+        directory !== appData &&
+        directory !== profile &&
+        info.uid === 0 &&
+        (info.mode & 0o1000) !== 0 &&
+        (directory === "/tmp" || directory === "/private/tmp");
+      if (
+        !info.isDirectory() ||
+        info.isSymbolicLink() ||
+        (info.uid !== 0 && info.uid !== uid) ||
+        ((directory === appData || directory === profile) &&
+          info.uid !== uid) ||
+        ((info.mode & 0o022) !== 0 && !temporaryAncestor) ||
+        fs.realpathSync.native(directory) !== directory
+      )
+        throw invalid();
+    }
+  } catch {
+    throw invalid();
+  }
+}
+
 export type DesktopEnvironment = "preview" | "dev" | "owner-preview";
 
 export type DesktopIdentity = Readonly<{
