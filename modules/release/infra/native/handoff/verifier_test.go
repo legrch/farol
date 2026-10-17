@@ -265,7 +265,16 @@ func TestLeaseIdentityRefusals(t *testing.T) {
 		code   Code
 	}{
 		{"mode", func(f *fixture) { must(t, os.Chmod(filepath.Join(f.statePath, "promotion.lease"), 0640)) }, ErrLeaseIdentity},
-		{"special_mode", func(f *fixture) { must(t, unix.Fchmod(int(f.lease.Fd()), 04600)) }, ErrLeaseIdentity},
+		{"special_mode", func(f *fixture) {
+			// Sticky is a special bit on a regular file too. This host may strip
+			// set-ID bits despite successful Fchmod; require actual fixture readback.
+			must(t, unix.Fchmod(int(f.lease.Fd()), 01600))
+			var s unix.Stat_t
+			must(t, unix.Fstat(int(f.lease.Fd()), &s))
+			if s.Mode&07777 != 01600 {
+				t.Fatal("special-mode fixture was not established")
+			}
+		}, ErrLeaseIdentity},
 		{"hardlink", func(f *fixture) {
 			must(t, os.Link(filepath.Join(f.statePath, "promotion.lease"), filepath.Join(f.statePath, "other")))
 		}, ErrLeaseIdentity},
@@ -529,8 +538,8 @@ func TestCancellationAndDependencies(t *testing.T) {
 	f.v.process = observerFunc(func(ctx context.Context, _ int, _ string) (ProcessState, error) { cancel(); return ProcessAbsent, nil })
 	ctx, cancel = context.WithCancel(context.Background())
 	defer cancel()
-	if err := f.v.VerifyClosed(ctx); err != ErrCanceled {
-		t.Fatalf("successful observer cancellation changed simple code contract: %v", err)
+	if err := f.v.VerifyClosed(ctx); !errors.Is(err, ErrCanceled) || !errors.Is(err, context.Canceled) || err.Error() != ErrCanceled.Error() {
+		t.Fatalf("observer cancellation lost its closed code or original cause: %v", err)
 	}
 	f.assertCustody()
 	t.Run("closed_borrowed_file", func(t *testing.T) {
