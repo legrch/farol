@@ -176,8 +176,8 @@ func canceled(ctx context.Context) error {
 	if ctx == nil {
 		return ErrDependency
 	}
-	if ctx.Err() != nil {
-		return ErrCanceled
+	if cause := contextCauses(ctx); cause != nil {
+		return fail(ErrCanceled, false, false, cause)
 	}
 	return nil
 }
@@ -192,7 +192,7 @@ func (v *Verifier) run(ctx context.Context, fn func(int, int, int) error) error 
 	select {
 	case v.gate <- struct{}{}:
 	case <-ctx.Done():
-		return ErrCanceled
+		return fail(ErrCanceled, false, false, contextCauses(ctx))
 	}
 	defer func() { <-v.gate }()
 	if err := canceled(ctx); err != nil {
@@ -208,16 +208,16 @@ func (v *Verifier) run(ctx context.Context, fn func(int, int, int) error) error 
 		if n == len(files) {
 			return fn(fds[0], fds[1], fds[2])
 		}
-		raw, err := files[n].SyscallConn()
+		raw, err := native(ctx).conn(files[n])
 		if err != nil {
-			return ErrDescriptor
+			return nativeFailure(ctx, ErrDescriptor, err)
 		}
 		var result error
 		err = raw.Control(func(fd uintptr) { fds[n] = int(fd); result = hold(n + 1) })
 		if err != nil {
-			return ErrDescriptor
+			return nativeFailure(ctx, ErrDescriptor, err, result)
 		}
-		return result
+		return finish(ctx, result)
 	}
 	return hold(0)
 }

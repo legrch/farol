@@ -18,19 +18,121 @@ const maxFrame = 4096
 const pollInterval = 2 * time.Millisecond
 
 // Failure codes are stable transport outcomes. Uncertain means an ACK may have
-// been exposed, its close could not be confirmed, or constructor cleanup failed.
+// been exposed, its close could not be confirmed, constructor cleanup failed,
+// or original uncertainty cannot be excluded within bounded cause inspection.
 // False never permits another attempt: even invalid/canceled calls consume
 // their channel's one attempt.
 // Continuation failures never return bytes or authorize an application effect.
 type Failure struct {
 	Code      string
 	Uncertain bool
+	// CleanupUnconfirmed is independent of ACK exposure. A failed owned close
+	// proves neither that the description remains open nor that it is closed.
+	CleanupUnconfirmed bool
+	cause              error
+	nativeFailed       bool
 }
 
 func (f *Failure) Error() string { return f.Code }
+func (f *Failure) Unwrap() error { return f.cause }
 
-func failure(code string, uncertain bool) error {
-	return &Failure{Code: "helper_channels_" + code, Uncertain: uncertain}
+func failure(code string, uncertain bool, causes ...error) error {
+	f := &Failure{Code: "helper_channels_" + code, Uncertain: uncertain, cause: errors.Join(causes...)}
+	pending := append([]error(nil), causes...)
+	for remaining := 128; len(pending) > 0; remaining-- {
+		if remaining == 0 {
+			f.Uncertain = true
+			break
+		}
+		cause := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if cause == nil {
+			continue
+		}
+		if prior, ok := cause.(*Failure); ok {
+			f.Uncertain = f.Uncertain || prior.Uncertain
+			f.CleanupUnconfirmed = f.CleanupUnconfirmed || prior.CleanupUnconfirmed
+			f.nativeFailed = f.nativeFailed || prior.nativeFailed
+		}
+		switch e := cause.(type) {
+		case interface{ Unwrap() []error }:
+			children := e.Unwrap()
+			if len(children) > remaining {
+				f.Uncertain = true
+				continue
+			}
+			pending = append(pending, children...)
+		case interface{ Unwrap() error }:
+			pending = append(pending, e.Unwrap())
+		}
+	}
+	return f
+}
+
+func ioFailure(code string, uncertain bool, controlErr, nativeErr error, causes ...error) error {
+	causes = append(causes, controlErr, nativeErr)
+	f := failure(code, uncertain, causes...).(*Failure)
+	f.nativeFailed = f.nativeFailed || controlErr != nil || nativeErr != nil && !retryable(nativeErr)
+	return f
+}
+
+func cleanupFailure(code string, uncertain bool, prior, closeErr error) error {
+	f := failure(code, uncertain, prior, closeErr).(*Failure)
+	f.CleanupUnconfirmed = true
+	return f
+}
+
+// Preserve both context notification and an elapsed absolute boundary, even if
+// the context timer has not delivered yet. Causes never enter public Error().
+func boundCauses(ctx context.Context, until time.Time) error {
+	var causes []error
+	if ctx != nil {
+		causes = append(causes, ctx.Err(), context.Cause(ctx))
+		if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+			causes = append(causes, context.DeadlineExceeded)
+		}
+	}
+	if !until.IsZero() && !time.Now().Before(until) {
+		causes = append(causes, context.DeadlineExceeded)
+	}
+	return errors.Join(causes...)
+}
+
+func retainBounds(prior error, code string, uncertain bool, ctx context.Context, until time.Time) error {
+	if code == "" {
+		return prior
+	}
+	if prior == nil {
+		return failure(code, uncertain, boundCauses(ctx, until))
+	}
+	f := *prior.(*Failure)
+	f.Uncertain = f.Uncertain || uncertain
+	f.cause = errors.Join(prior, boundCauses(ctx, until))
+	return &f
+}
+
+func mergeFailures(primary, other error) error {
+	if primary == nil {
+		return other
+	}
+	if other == nil {
+		return primary
+	}
+	f := *primary.(*Failure)
+	f.cause = errors.Join(primary, other)
+	prior := other.(*Failure)
+	f.Uncertain = f.Uncertain || prior.Uncertain
+	f.CleanupUnconfirmed = f.CleanupUnconfirmed || prior.CleanupUnconfirmed
+	f.nativeFailed = f.nativeFailed || prior.nativeFailed
+	return &f
+}
+
+func retainedFailure(err error) error {
+	f, ok := err.(*Failure)
+	if !ok || !f.nativeFailed && !f.CleanupUnconfirmed {
+		return nil
+	}
+	return err
 }
 
 type owned struct {
@@ -38,14 +140,44 @@ type owned struct {
 	raw  syscall.RawConn
 	once sync.Once
 	err  error
+	// Private deterministic fault seams; nil uses the original native calls.
+	connect   func() (syscall.RawConn, error)
+	read      func(int, []byte) (int, error)
+	write     func(int, []byte) (int, error)
+	closeFile func() error
 }
 
 func (o *owned) close() error {
 	if o == nil {
 		return nil
 	}
-	o.once.Do(func() { o.err = o.file.Close() })
+	o.once.Do(func() {
+		if o.closeFile != nil {
+			o.err = o.closeFile()
+		} else {
+			o.err = o.file.Close()
+		}
+	})
 	return o.err
+}
+
+func (o *owned) syscallConn() (syscall.RawConn, error) {
+	if o.connect != nil {
+		return o.connect()
+	}
+	return o.file.SyscallConn()
+}
+func (o *owned) readBytes(fd int, data []byte) (int, error) {
+	if o.read != nil {
+		return o.read(fd, data)
+	}
+	return unix.Read(fd, data)
+}
+func (o *owned) writeBytes(fd int, data []byte) (int, error) {
+	if o.write != nil {
+		return o.write(fd, data)
+	}
+	return unix.Write(fd, data)
 }
 
 // Channels wrappers share private ownership state even when copied. All
@@ -65,6 +197,7 @@ type channelState struct {
 	active            sync.WaitGroup
 	closeOnce         sync.Once
 	closeErr          error
+	ackErr, contErr   error
 	// Deterministic late-result tests only; nil in production.
 	afterIO func(string)
 }
@@ -86,17 +219,23 @@ func Take(ack, continuation *os.File) (*Channels, error) {
 	if continuation != nil {
 		c = &owned{file: continuation}
 	}
-	fail := func(code string) (*Channels, error) {
+	fail := func(code string, causes ...error) (*Channels, error) {
 		uncertain := false
 		if ack != nil {
-			prepareClose(ack)
-			uncertain = a.close() != nil
+			causes = append(causes, prepareClose(ack))
+			closeErr := a.close()
+			causes = append(causes, closeErr)
+			uncertain = closeErr != nil
 		}
 		if continuation != nil && continuation != ack {
-			prepareClose(continuation)
-			uncertain = c.close() != nil || uncertain
+			causes = append(causes, prepareClose(continuation))
+			closeErr := c.close()
+			causes = append(causes, closeErr)
+			uncertain = closeErr != nil || uncertain
 		}
-		return nil, failure(code, uncertain)
+		f := failure(code, uncertain, causes...).(*Failure)
+		f.CleanupUnconfirmed = uncertain
+		return nil, f
 	}
 	if ack == nil {
 		return fail("ack_required")
@@ -105,11 +244,11 @@ func Take(ack, continuation *os.File) (*Channels, error) {
 		return fail("alias")
 	}
 	if err := configure(a, true); err != nil {
-		return fail("ack_channel")
+		return fail("ack_channel", err)
 	}
 	if c != nil {
 		if err := configure(c, false); err != nil {
-			return fail("continue_channel")
+			return fail("continue_channel", err)
 		}
 	}
 	return &Channels{state: &channelState{ack: a, continuation: c, stop: make(chan struct{})}}, nil
@@ -117,25 +256,28 @@ func Take(ack, continuation *os.File) (*Channels, error) {
 
 // Only a confirmed stream socket may have linger changed, including cleanup of
 // a constructor rejected for another reason. Never apply options to other kinds.
-func prepareClose(file *os.File) {
+func prepareClose(file *os.File) error {
 	raw, err := file.SyscallConn()
 	if err != nil {
-		return
+		return err
 	}
-	_ = raw.Control(func(fd uintptr) {
+	var nativeErr error
+	err = raw.Control(func(fd uintptr) {
 		var st unix.Stat_t
-		if unix.Fstat(int(fd), &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFSOCK {
+		if nativeErr = unix.Fstat(int(fd), &st); nativeErr != nil || st.Mode&unix.S_IFMT != unix.S_IFSOCK {
 			return
 		}
-		kind, err := unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_TYPE)
-		if err == nil && kind == unix.SOCK_STREAM {
-			_ = unix.SetsockoptLinger(int(fd), unix.SOL_SOCKET, unix.SO_LINGER, &unix.Linger{})
+		var kind int
+		kind, nativeErr = unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_TYPE)
+		if nativeErr == nil && kind == unix.SOCK_STREAM {
+			nativeErr = unix.SetsockoptLinger(int(fd), unix.SOL_SOCKET, unix.SO_LINGER, &unix.Linger{})
 		}
 	})
+	return errors.Join(err, nativeErr)
 }
 
 func configure(o *owned, write bool) error {
-	raw, err := o.file.SyscallConn()
+	raw, err := o.syscallConn()
 	if err != nil {
 		return err
 	}
@@ -179,30 +321,30 @@ func configure(o *owned, write bool) error {
 		}
 		nativeErr = unix.SetNonblock(int(fd), true)
 	})
-	if err != nil {
-		return err
-	}
-	if nativeErr == nil {
+	if err == nil && nativeErr == nil {
 		o.raw = raw
 	}
-	return nativeErr
+	return errors.Join(err, nativeErr)
 }
 
 func (c *channelState) begin(ack bool) (*owned, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
-		return nil, failure("closed", ack && c.ackUncertain)
+		if ack {
+			return nil, failure("closed", c.ackUncertain, c.ackErr)
+		}
+		return nil, failure("closed", false, c.contErr)
 	}
 	if ack {
 		if c.ackUsed {
 			// An active attempt may write immediately after this observation.
-			return nil, failure("ack_used", c.ackUncertain)
+			return nil, failure("ack_used", c.ackUncertain, c.ackErr)
 		}
 		c.ackUsed, c.ackUncertain = true, true
 	} else {
 		if c.contUsed {
-			return nil, failure("continue_used", false)
+			return nil, failure("continue_used", false, c.contErr)
 		}
 		c.contUsed = true
 	}
@@ -271,45 +413,44 @@ func (c *channelState) emit(ctx context.Context, until time.Time, frame []byte) 
 		return err
 	}
 	written := 0
+	defer c.active.Done()
 	defer func() {
-		if code := c.guard(ctx, until); code != "" && err == nil {
-			err = failure(code, written > 0)
-		}
+		err = retainBounds(err, c.guard(ctx, until), written > 0, ctx, until)
 		// Terminal cleanup is mandatory even after expiry/cancellation. Its EOF
 		// may expose already-written bytes; it cannot convert a failure to success.
 		if closeErr := o.close(); closeErr != nil {
-			err = failure("ack_close", true)
+			err = cleanupFailure("ack_close", true, err, closeErr)
 		}
 		if c.afterIO != nil {
 			c.afterIO("ack_close")
 		}
-		if code := c.guard(ctx, until); code != "" && err == nil {
-			err = failure(code, written > 0)
-		}
+		err = retainBounds(err, c.guard(ctx, until), written > 0, ctx, until)
 		uncertain := written > 0
 		if f, ok := err.(*Failure); ok {
 			uncertain = uncertain || f.Uncertain
 		}
 		c.mu.Lock()
 		c.ackUncertain = uncertain
+		c.ackErr = err
 		c.mu.Unlock()
-		c.active.Done()
 	}()
 	if len(frame) < 1 || len(frame) > maxFrame {
 		return failure("ack_size", false)
 	}
+	var lastErr error
 	for written < len(frame) {
 		if code := c.guard(ctx, until); code != "" {
-			return failure(code, written > 0)
+			return failure(code, written > 0, lastErr, boundCauses(ctx, until))
 		}
 		var n int
 		var nativeErr error
 		controlErr := o.raw.Control(func(fd uintptr) {
 			// Recheck after acquiring the retained descriptor reference.
 			if c.guard(ctx, until) == "" {
-				n, nativeErr = unix.Write(int(fd), frame[written:])
+				n, nativeErr = o.writeBytes(int(fd), frame[written:])
 			}
 		})
+		lastErr = errors.Join(controlErr, nativeErr)
 		if n > 0 {
 			written += n
 		}
@@ -317,10 +458,10 @@ func (c *channelState) emit(ctx context.Context, until time.Time, frame []byte) 
 			c.afterIO("write")
 		}
 		if code := c.guard(ctx, until); code != "" {
-			return failure(code, written > 0)
+			return ioFailure(code, written > 0, controlErr, nativeErr, boundCauses(ctx, until))
 		}
 		if controlErr != nil || (nativeErr != nil && !retryable(nativeErr)) || (n == 0 && nativeErr == nil) {
-			return failure("ack_write", written > 0)
+			return ioFailure("ack_write", written > 0, controlErr, nativeErr)
 		}
 		if written < len(frame) {
 			c.pause(ctx, until)
@@ -347,37 +488,38 @@ func (c *channelState) awaitContinue(ctx context.Context, until time.Time) (fram
 	if err != nil {
 		return nil, err
 	}
+	defer c.active.Done()
 	defer func() {
-		if code := c.guard(ctx, until); code != "" && err == nil {
-			err = failure(code, false)
+		err = retainBounds(err, c.guard(ctx, until), false, ctx, until)
+		if closeErr := o.close(); closeErr != nil {
+			err = cleanupFailure("continue_close", false, err, closeErr)
 		}
-		if o.close() != nil {
-			err = failure("continue_close", false)
-		}
-		if code := c.guard(ctx, until); code != "" && err == nil {
-			err = failure(code, false)
-		}
+		err = retainBounds(err, c.guard(ctx, until), false, ctx, until)
 		if err != nil {
 			frame = nil
 		}
-		c.active.Done()
+		c.mu.Lock()
+		c.contErr = err
+		c.mu.Unlock()
 	}()
 	if o == nil {
 		return nil, failure("continue_missing", false)
 	}
 	var data [maxFrame + 1]byte
 	size := 0
+	var lastErr error
 	for {
 		if code := c.guard(ctx, until); code != "" {
-			return nil, failure(code, false)
+			return nil, failure(code, false, lastErr, boundCauses(ctx, until))
 		}
 		var n int
 		var nativeErr error
 		controlErr := o.raw.Control(func(fd uintptr) {
 			if c.guard(ctx, until) == "" {
-				n, nativeErr = unix.Read(int(fd), data[size:])
+				n, nativeErr = o.readBytes(int(fd), data[size:])
 			}
 		})
+		lastErr = errors.Join(controlErr, nativeErr)
 		if c.afterIO != nil {
 			if n == 0 && nativeErr == nil && controlErr == nil {
 				c.afterIO("eof")
@@ -386,10 +528,10 @@ func (c *channelState) awaitContinue(ctx context.Context, until time.Time) (fram
 			}
 		}
 		if code := c.guard(ctx, until); code != "" {
-			return nil, failure(code, false)
+			return nil, ioFailure(code, false, controlErr, nativeErr, boundCauses(ctx, until))
 		}
 		if controlErr != nil || (nativeErr != nil && !retryable(nativeErr)) {
-			return nil, failure("continue_read", false)
+			return nil, ioFailure("continue_read", false, controlErr, nativeErr)
 		}
 		if n > 0 {
 			size += n
@@ -410,8 +552,9 @@ func (c *channelState) awaitContinue(ctx context.Context, until time.Time) (fram
 
 // Close is idempotent, refuses reuse, and joins active nonblocking operations.
 // It closes only the retained owners, exactly once, never detached fd numbers.
-// A nil result confirms cleanup only; an interrupted Emit may have exposed ACK
-// bytes and retains its own uncertain result. Close never grants replay.
+// Native/cleanup failures retain their terminal causes on Close. A call stopped
+// by Close itself keeps its own closed result; successful cleanup may return nil.
+// Neither result grants replay or application authority.
 func (c *Channels) Close() error {
 	if c == nil || c.state == nil {
 		return failure("closed", false)
@@ -427,13 +570,24 @@ func (c *channelState) close() error {
 		c.mu.Unlock()
 		c.active.Wait()
 		ackErr, contErr := c.ack.close(), c.continuation.close()
+		ackTerminal, contTerminal := retainedFailure(c.ackErr), retainedFailure(c.contErr)
 		if ackErr != nil {
-			c.closeErr = failure("ack_close", true)
+			if ackTerminal == nil {
+				ackTerminal = cleanupFailure("ack_close", true, c.ackErr, ackErr)
+			}
 			c.mu.Lock()
 			c.ackUncertain = true
 			c.mu.Unlock()
-		} else if contErr != nil {
-			c.closeErr = failure("continue_close", false)
+		}
+		if contErr != nil && contTerminal == nil {
+			contTerminal = cleanupFailure("continue_close", false, c.contErr, contErr)
+		}
+		// Retain the historical close-code precedence, while keeping both
+		// channels' original failures, including a peer with successful cleanup.
+		if contErr != nil && ackErr == nil {
+			c.closeErr = mergeFailures(contTerminal, ackTerminal)
+		} else {
+			c.closeErr = mergeFailures(ackTerminal, contTerminal)
 		}
 	})
 	return c.closeErr

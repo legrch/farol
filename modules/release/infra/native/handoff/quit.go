@@ -15,22 +15,6 @@ import (
 
 var timestampPattern = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$`)
 
-// observationFailure keeps the safe outer refusal while retaining dependency
-// provenance for trusted callers. Dependency text never enters Error().
-type observationFailure struct {
-	code                Code
-	cause, cancellation error
-}
-
-func (e *observationFailure) Error() string { return e.code.Error() }
-func (e *observationFailure) Unwrap() []error {
-	causes := []error{e.code, e.cause}
-	if e.cancellation != nil {
-		causes = append(causes, e.cancellation)
-	}
-	return causes
-}
-
 func timestamp(s string) (time.Time, bool) {
 	if !timestampPattern.MatchString(s) {
 		return time.Time{}, false
@@ -53,12 +37,12 @@ func (v *Verifier) verifyClosed(ctx context.Context, state int) error {
 	observation, err := v.process.Observe(ctx, v.expected.PID, v.expected.ProcessStart)
 	if e := canceled(ctx); e != nil {
 		if err != nil {
-			return &observationFailure{code: ErrCanceled, cause: err, cancellation: ctx.Err()}
+			return fail(ErrCanceled, true, false, err, e)
 		}
 		return e
 	}
 	if err != nil {
-		return &observationFailure{code: ErrProcessUnknown, cause: err}
+		return fail(ErrProcessUnknown, true, false, err)
 	}
 	if observation == ProcessPresent {
 		return ErrProcessRunning

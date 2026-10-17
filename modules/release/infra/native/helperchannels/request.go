@@ -6,8 +6,6 @@ import (
 	"os"
 	"sync"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 const maxRequest = 8192
@@ -27,13 +25,14 @@ type requestState struct {
 	active    sync.WaitGroup
 	closeOnce sync.Once
 	closeErr  error
+	terminal  error
 	// Deterministic native-boundary tests only; nil in production.
 	beforeIO func()
 	afterIO  func(string)
 }
 
-func requestFailure(code string, uncertain bool) error {
-	return failure("request_"+code, uncertain)
+func requestFailure(code string, uncertain bool, causes ...error) error {
+	return failure("request_"+code, uncertain, causes...)
 }
 
 // TakeRequest transfers exclusive ownership of file ON CALL, including failure.
@@ -50,8 +49,11 @@ func TakeRequest(file *os.File) (*Request, error) {
 	}
 	o := &owned{file: file}
 	if err := configure(o, false); err != nil {
-		prepareClose(file)
-		return nil, requestFailure("channel", o.close() != nil)
+		prepareErr := prepareClose(file)
+		closeErr := o.close()
+		f := requestFailure("channel", closeErr != nil, err, prepareErr, closeErr).(*Failure)
+		f.CleanupUnconfirmed = closeErr != nil
+		return nil, f
 	}
 	return &Request{state: &requestState{input: o, stop: make(chan struct{})}}, nil
 }
@@ -60,10 +62,10 @@ func (r *requestState) begin() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
-		return requestFailure("closed", false)
+		return requestFailure("closed", false, r.terminal)
 	}
 	if r.used {
-		return requestFailure("used", false)
+		return requestFailure("used", false, r.terminal)
 	}
 	r.used = true
 	r.active.Add(1)
@@ -125,30 +127,30 @@ func (r *requestState) read(ctx context.Context, until time.Time) (data []byte, 
 	if err = r.begin(); err != nil {
 		return nil, err
 	}
+	defer r.active.Done()
 	defer func() {
-		if code := r.guard(ctx, until); code != "" && err == nil {
-			err = requestFailure(code, false)
-		}
+		err = retainBounds(err, requestGuardCode(r.guard(ctx, until)), false, ctx, until)
 		// Cleanup is mandatory even after the original bounds expire.
-		if r.input.close() != nil {
-			err = requestFailure("close", false)
+		if closeErr := r.input.close(); closeErr != nil {
+			err = cleanupFailure("request_close", false, err, closeErr)
 		}
 		if r.afterIO != nil {
 			r.afterIO("close")
 		}
-		if code := r.guard(ctx, until); code != "" && err == nil {
-			err = requestFailure(code, false)
-		}
+		err = retainBounds(err, requestGuardCode(r.guard(ctx, until)), false, ctx, until)
 		if err != nil {
 			data = nil
 		}
-		r.active.Done()
+		r.mu.Lock()
+		r.terminal = err
+		r.mu.Unlock()
 	}()
 	var buffer [maxRequest + 1]byte
 	size := 0
+	var lastErr error
 	for {
 		if code := r.guard(ctx, until); code != "" {
-			return nil, requestFailure(code, false)
+			return nil, requestFailure(code, false, lastErr, boundCauses(ctx, until))
 		}
 		var n int
 		var nativeErr error
@@ -161,9 +163,10 @@ func (r *requestState) read(ctx context.Context, until time.Time) (data []byte, 
 			}
 			if r.guard(ctx, until) == "" {
 				attempted = true
-				n, nativeErr = unix.Read(int(fd), buffer[size:])
+				n, nativeErr = r.input.readBytes(int(fd), buffer[size:])
 			}
 		})
+		lastErr = errors.Join(controlErr, nativeErr)
 		if attempted && r.afterIO != nil {
 			if n == 0 && nativeErr == nil && controlErr == nil {
 				r.afterIO("eof")
@@ -172,10 +175,10 @@ func (r *requestState) read(ctx context.Context, until time.Time) (data []byte, 
 			}
 		}
 		if code := r.guard(ctx, until); code != "" {
-			return nil, requestFailure(code, false)
+			return nil, ioFailure("request_"+code, false, controlErr, nativeErr, boundCauses(ctx, until))
 		}
 		if controlErr != nil || (nativeErr != nil && !retryable(nativeErr)) {
-			return nil, requestFailure("read", false)
+			return nil, ioFailure("request_read", false, controlErr, nativeErr)
 		}
 		if n > 0 {
 			size += n
@@ -206,9 +209,21 @@ func (r *Request) Close() error {
 		close(s.stop)
 		s.mu.Unlock()
 		s.active.Wait()
-		if s.input.close() != nil {
-			s.closeErr = requestFailure("close", false)
+		if closeErr := s.input.close(); closeErr != nil {
+			s.closeErr = s.terminal
+			if s.closeErr == nil {
+				s.closeErr = cleanupFailure("request_close", false, nil, closeErr)
+			}
+		} else {
+			s.closeErr = retainedFailure(s.terminal)
 		}
 	})
 	return s.closeErr
+}
+
+func requestGuardCode(code string) string {
+	if code == "" {
+		return ""
+	}
+	return "request_" + code
 }

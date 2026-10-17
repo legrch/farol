@@ -37,10 +37,8 @@ func held(ctx context.Context, fd int, code Code) (fingerprint, error) {
 		return fingerprint{}, err
 	}
 	var s unix.Stat_t
-	if unix.Fstat(fd, &s) != nil {
-		return fingerprint{}, code
-	}
-	if err := canceled(ctx); err != nil {
+	nativeErr := native(ctx).stat(fd, &s)
+	if err := nativeFailure(ctx, code, nativeErr); err != nil {
 		return fingerprint{}, err
 	}
 	return metadata(s), nil
@@ -50,24 +48,30 @@ func named(ctx context.Context, parent int, name string, code Code) (fingerprint
 		return fingerprint{}, false, err
 	}
 	var s unix.Stat_t
-	err := unix.Fstatat(parent, name, &s, unix.AT_SYMLINK_NOFOLLOW)
-	if e := canceled(ctx); e != nil {
-		return fingerprint{}, false, e
-	}
-	if err == unix.ENOENT {
+	err := native(ctx).named(parent, name, &s, unix.AT_SYMLINK_NOFOLLOW)
+	// ENOENT remains semantic absence, unless cancellation invalidates the
+	// observation. Every other failed observation retains its native cause.
+	if err == unix.ENOENT && canceled(ctx) == nil {
 		return fingerprint{}, false, nil
 	}
-	if err != nil {
-		return fingerprint{}, false, code
+	if e := nativeFailure(ctx, code, err); e != nil {
+		return fingerprint{}, false, e
 	}
 	return metadata(s), true, nil
 }
 
-func openDirectory(ctx context.Context, parent int, name string, home bool) (int, error) {
+func openDirectory(ctx context.Context, parent int, name string, home bool) (fd int, err error) {
 	typeCode, changedCode := ErrPathType, ErrPathReplaced
 	if home {
 		typeCode, changedCode = ErrHomeType, ErrHomeReplaced
 	}
+	fd = -1
+	accepted := false
+	defer func() {
+		if !accepted || err != nil {
+			closeOwned(ctx, &fd, &err)
+		}
+	}()
 	before, exists, err := named(ctx, parent, name, typeCode)
 	if err != nil {
 		return -1, err
@@ -76,18 +80,19 @@ func openDirectory(ctx context.Context, parent int, name string, home bool) (int
 	if !exists || !before.directory() || !owner || before.mode&0022 != 0 {
 		return -1, typeCode
 	}
-	fd, err := unix.Openat(parent, name, dirFlags, 0)
-	if err != nil {
-		return -1, typeCode
+	fd, err = native(ctx).openat(parent, name, dirFlags, 0)
+	if e := nativeFailure(ctx, typeCode, err); e != nil {
+		err = e
+		return
 	}
 	after, err := held(ctx, fd, changedCode)
-	if err != nil || !before.sameIdentity(after) {
-		unix.Close(fd)
-		if err != nil {
-			return -1, err
-		}
-		return -1, changedCode
+	if err != nil {
+		return fd, err
 	}
+	if !before.sameIdentity(after) {
+		return fd, changedCode
+	}
+	accepted = true
 	return fd, nil
 }
 
@@ -95,6 +100,17 @@ func openDirectory(ctx context.Context, parent int, name string, home bool) (int
 // without following links. There is no runtime ancestor relaxation for Cloud.
 func openRoute(ctx context.Context, homePath string) (homeFD, stateFD int, err error) {
 	homeFD, stateFD = -1, -1
+	current, next := -1, -1
+	accepted := false
+	defer func() {
+		closeOwned(ctx, &next, &err)
+		closeOwned(ctx, &current, &err)
+		err = finish(ctx, err)
+		if !accepted || err != nil {
+			closeOwned(ctx, &stateFD, &err)
+			closeOwned(ctx, &homeFD, &err)
+		}
+	}()
 	if err = canceled(ctx); err != nil {
 		return
 	}
@@ -102,16 +118,11 @@ func openRoute(ctx context.Context, homePath string) (homeFD, stateFD int, err e
 		err = ErrInput
 		return
 	}
-	current, e := unix.Open("/", dirFlags, 0)
-	if e != nil {
-		err = ErrHomeType
+	current, err = native(ctx).open("/", dirFlags, 0)
+	if e := nativeFailure(ctx, ErrHomeType, err); e != nil {
+		err = e
 		return
 	}
-	defer func() {
-		if current >= 0 {
-			unix.Close(current)
-		}
-	}()
 	root, e := held(ctx, current, ErrHomeType)
 	if e != nil {
 		err = e
@@ -122,13 +133,15 @@ func openRoute(ctx context.Context, homePath string) (homeFD, stateFD int, err e
 		return
 	}
 	for _, part := range strings.Split(homePath[1:], "/") {
-		next, e := openDirectory(ctx, current, part, true)
-		if e != nil {
-			err = e
+		next, err = openDirectory(ctx, current, part, true)
+		if err != nil {
 			return
 		}
-		unix.Close(current)
-		current = next
+		closeOwned(ctx, &current, &err)
+		current, next = next, -1
+		if err != nil {
+			return
+		}
 	}
 	home, e := held(ctx, current, ErrHomeOwner)
 	if e != nil {
@@ -140,35 +153,35 @@ func openRoute(ctx context.Context, homePath string) (homeFD, stateFD int, err e
 		return
 	}
 	homeFD, current = current, -1
-	defer func() {
-		if err != nil {
-			unix.Close(homeFD)
-			homeFD = -1
-		}
-	}()
-	parent := homeFD
 	for _, part := range []string{"Library", "Application Support", "Farol Next Preview", "farol-next-state"} {
-		next, e := openDirectory(ctx, parent, part, false)
-		if parent != homeFD {
-			unix.Close(parent)
+		parent := homeFD
+		if current >= 0 {
+			parent = current
 		}
-		if e != nil {
-			err = e
+		next, err = openDirectory(ctx, parent, part, false)
+		if err != nil {
 			return
 		}
-		parent = next
+		closeOwned(ctx, &current, &err)
+		current, next = next, -1
+		if err != nil {
+			return
+		}
 	}
-	stateFD = parent
+	stateFD, current = current, -1
+	accepted = true
 	return
 }
 
-func (v *Verifier) verifyInherited(ctx context.Context, home, state, lease int) error {
+func (v *Verifier) verifyInherited(ctx context.Context, home, state, lease int) (err error) {
 	currentHome, currentState, err := v.reopen(ctx, v.homePath)
+	defer func() {
+		closeOwned(ctx, &currentState, &err)
+		closeOwned(ctx, &currentHome, &err)
+	}()
 	if err != nil {
 		return err
 	}
-	defer unix.Close(currentHome)
-	defer unix.Close(currentState)
 	namedHome, err := held(ctx, currentHome, ErrStateChanged)
 	if err != nil {
 		return err
@@ -202,8 +215,11 @@ func (v *Verifier) verifyInherited(ctx context.Context, home, state, lease int) 
 	if !exists || !before.privateFile() || !inherited.privateFile() || !before.sameIdentity(inherited) || !inherited.matches(v.expected.LeaseIdentity) {
 		return ErrLeaseIdentity
 	}
-	flags, err := unix.FcntlInt(uintptr(lease), unix.F_GETFL, 0)
-	if err != nil || flags&unix.O_ACCMODE != unix.O_RDWR {
+	flags, err := native(ctx).flags(uintptr(lease), unix.F_GETFL, 0)
+	if e := nativeFailure(ctx, ErrLeaseAccess, err); e != nil {
+		return e
+	}
+	if flags&unix.O_ACCMODE != unix.O_RDWR {
 		return ErrLeaseAccess
 	}
 	if err = canceled(ctx); err != nil {
@@ -217,8 +233,8 @@ func (v *Verifier) verifyInherited(ctx context.Context, home, state, lease int) 
 	}
 	// Idempotent only on the inherited locked open-file description. A crossed
 	// description must fail; this never unlocks the inherited description.
-	if unix.Flock(lease, unix.LOCK_EX|unix.LOCK_NB) != nil {
-		return ErrLeaseCrossed
+	if err := nativeFailure(ctx, ErrLeaseCrossed, native(ctx).flock(lease, unix.LOCK_EX|unix.LOCK_NB)); err != nil {
+		return err
 	}
 	current, exists, err := named(ctx, state, "promotion.lease", ErrLeaseIdentity)
 	if err != nil {
@@ -234,17 +250,17 @@ func (v *Verifier) verifyInherited(ctx context.Context, home, state, lease int) 
 	return canceled(ctx)
 }
 
-func checkInheritedProbe(ctx context.Context, state int, inherited fingerprint) error {
+func checkInheritedProbe(ctx context.Context, state int, inherited fingerprint) (err error) {
 	if err := canceled(ctx); err != nil {
 		return err
 	}
-	probe, err := unix.Openat(state, "promotion.lease", readFlags, 0)
-	if err != nil {
-		return ErrLeaseProbe
+	probe, err := native(ctx).openat(state, "promotion.lease", readFlags, 0)
+	defer func() { closeOwned(ctx, &probe, &err) }()
+	if e := nativeFailure(ctx, ErrLeaseProbe, err); e != nil {
+		return e
 	}
 	// Only this independent, verifier-owned description is closed. If a shared
 	// probe unexpectedly succeeds, closing it releases that probe lock only.
-	defer unix.Close(probe)
 	p, err := held(ctx, probe, ErrLeaseIdentity)
 	if err != nil {
 		return err
@@ -252,20 +268,20 @@ func checkInheritedProbe(ctx context.Context, state int, inherited fingerprint) 
 	if !p.privateFile() || !p.sameIdentity(inherited) {
 		return ErrLeaseIdentity
 	}
-	err = unix.Flock(probe, unix.LOCK_SH|unix.LOCK_NB)
-	if c := canceled(ctx); c != nil {
-		return c
+	err = native(ctx).flock(probe, unix.LOCK_SH|unix.LOCK_NB)
+	if canceled(ctx) != nil {
+		return nativeFailure(ctx, ErrLeaseProbe, err)
 	}
 	if err == nil {
 		return ErrLeaseUnheld
 	}
 	if err != unix.EWOULDBLOCK && err != unix.EAGAIN {
-		return ErrLeaseProbe
+		return nativeFailure(ctx, ErrLeaseProbe, err)
 	}
 	return nil
 }
 
-func readQuit(ctx context.Context, state int) ([]byte, error) {
+func readQuit(ctx context.Context, state int) (data []byte, err error) {
 	before, exists, err := named(ctx, state, "last-quit.json", ErrQuitChanged)
 	if err != nil {
 		return nil, err
@@ -273,11 +289,16 @@ func readQuit(ctx context.Context, state int) ([]byte, error) {
 	if !exists || !before.privateRecord() || before.size < 1 || before.size > maxRecord {
 		return nil, ErrQuitChanged
 	}
-	fd, err := unix.Openat(state, "last-quit.json", readFlags, 0)
-	if err != nil {
-		return nil, ErrQuitChanged
+	fd, err := native(ctx).openat(state, "last-quit.json", readFlags, 0)
+	defer func() {
+		closeOwned(ctx, &fd, &err)
+		if err != nil {
+			data = nil
+		}
+	}()
+	if e := nativeFailure(ctx, ErrQuitChanged, err); e != nil {
+		return nil, e
 	}
-	defer unix.Close(fd)
 	return readPinnedQuit(ctx, state, fd, before)
 }
 
@@ -295,9 +316,9 @@ func readPinnedQuit(ctx context.Context, state, fd int, before fingerprint) ([]b
 		if err = canceled(ctx); err != nil {
 			return nil, err
 		}
-		count, e := unix.Read(fd, data[n:])
-		if e != nil {
-			return nil, ErrQuitChanged
+		count, e := native(ctx).read(fd, data[n:])
+		if err := nativeFailure(ctx, ErrQuitChanged, e); err != nil {
+			return nil, err
 		}
 		n += count
 		if count == 0 {
