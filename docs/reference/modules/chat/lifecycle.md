@@ -304,6 +304,35 @@ digest, the complete selected owner-mutation set and future maintenance
 identities remain independently supplied and verified. The known-scope
 observation and preparation entries retain their existing requirements.
 
+The trusted desktop startup composition makes one preserving-maintenance
+attempt before launching a current read-only or normal child. It borrows the
+original admission handle and full verifier; the enclosing Electron owner
+retains release and proves current singleton ownership and absence of admitted
+current runtime work. The collector selects an existing profile, physical roots,
+raw access digest, every owner mutation binding/full-byte digest and the original
+run/config/optional Quit snapshots. It neither filters uncertain phases nor
+derives the old generation. A changed namespace or pinned object refuses the
+snapshot. Canonical Go discovery and the later separately fenced observation
+and preparation still own journal qualification and maintenance policy.
+
+The existing legacy Desktop record reader is shared as typed
+`src/apps/desktop/legacy-activation-obligations.ts`; its CLI import remains a
+compatibility entry. Both consumers use the same original writer schemas,
+decode limits, two-read comparison and pending-work policy. Native Go journal
+policy is unchanged. The startup handoff retains the original full verifier
+after archive-pin verification, immediately before the final pending-intent
+rename. A late installed-replacement or current-host failure preserves that
+pending fence. The caller may then offer the existing saved Settings/read-only
+composition without retrying maintenance. Successful preparation permits a new
+cold generation while retaining the predecessor's ACK/terminal as unobserved;
+it never writes a successful predecessor Quit.
+
+The initial application wiring retains the existing Dev-only Go command scope.
+Real disposable selection/final-file/lease tests and controlled composition
+checks do not qualify Electron recovery, retained-history availability after a
+writable restart, installed command scope, production use or beta acceptance.
+Those remain separate native integration gates.
+
 Discovery returns the same metadata-only inspection envelope with
 `recoveryAuthorized: false`. Its host adapter permits only the observed current
 generation and canonical digests to change; profile, physical roots and future
