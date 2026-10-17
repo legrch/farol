@@ -122,6 +122,84 @@ async function fixture() {
 describe.skipIf(process.platform !== "darwin")(
   "startup final eligibility with the original native lease",
   () => {
+    it("records only selected legacy custody if connector reconciliation refuses before the move", async () => {
+      const f = await fixture();
+      await withStartupPromotionLease(
+        f.userData,
+        f.exact.buildId,
+        async (verify, lease) => {
+          const legacyRoot = path.join(f.state, "chatgpt-task-journal");
+          const legacyFile = path.join(legacyRoot, "chatgpt-task-journal.json");
+          await fs.mkdir(legacyRoot, { mode: 0o700 });
+          const bytes = Buffer.from(
+            JSON.stringify({
+              schema: 1,
+              operationId: randomUUID(),
+              kind: "readonly",
+              phase: "prepared",
+              createdAt: "2026-10-17T00:00:00.000Z",
+              updatedAt: "2026-10-17T00:00:00.000Z",
+              result: null,
+            }) + "\n",
+          );
+          await fs.writeFile(legacyFile, bytes, { mode: 0o600, flag: "wx" });
+          const original = await host.snapshot(legacyFile, 4096);
+          const selected = await selectStartupLegacyPreparation(
+            f.userData,
+            async () => {
+              expect(await verify()).toBe(true);
+            },
+          );
+          expect(selected).not.toBeNull();
+          const failure = Error("controlled connector reconciliation refusal");
+          await expect(
+            host.finish({
+              ...f,
+              lease,
+              verifyLease: verify,
+              legacyPreparation: selected!,
+              input: {
+                executable: "/controlled/no-go-process-is-started",
+                expectedRunSha256: sum(f.run.bytes),
+                expectedConfigSha256: sum(f.config.bytes),
+                processesAbsent: vi.fn(),
+                attest: async () => {},
+                selectionInput: {},
+              },
+              proof: async () => {
+                expect(await verify()).toBe(true);
+              },
+              archivePin: await retainEmptyArchive(f.archive),
+              reconcileConnector: async () => {
+                throw failure;
+              },
+            }),
+          ).rejects.toBe(failure);
+          await host.unchanged(f.pending, f.intent);
+          await host.unchanged(path.join(f.state, "running.json"), f.run);
+          await host.unchanged(f.configuration, f.config);
+          await host.unchanged(legacyFile, original);
+          await expect(
+            fs.lstat(path.join(f.archive, LEGACY_PREPARATION_ARCHIVE_NAME)),
+          ).rejects.toMatchObject({ code: "ENOENT" });
+          const completion = JSON.parse(
+            await fs.readFile(
+              path.join(f.archive, "maintenance-completed.json"),
+              "utf8",
+            ),
+          );
+          expect(completion).not.toHaveProperty("retainedLegacyPreparation");
+          expect(completion.selectedLegacyPreparation).toEqual({
+            operationId: selected!.operationId,
+            sha256: sum(bytes),
+            originalPhase: "prepared",
+            legacyDisposition: "selected_for_retirement",
+            correspondingGoOutcome: "unobserved",
+          });
+          expect(await verifyPromotionLease(lease)).toBe(true);
+        },
+      );
+    });
     it.each(
       (["healthy", "replacement", "current-host"] as const).flatMap((outcome) =>
         [false, true].map((legacy) => ({ outcome, legacy })),
@@ -254,11 +332,11 @@ describe.skipIf(process.platform !== "darwin")(
                   "utf8",
                 ),
               );
-              expect(completion.retainedLegacyPreparation).toEqual({
+              expect(completion.selectedLegacyPreparation).toEqual({
                 operationId: legacyPreparation!.operationId,
                 sha256: sum(legacyBytes),
                 originalPhase: "prepared",
-                legacyDisposition: "retired_without_legacy_dispatch",
+                legacyDisposition: "selected_for_retirement",
                 correspondingGoOutcome: "unobserved",
               });
             }

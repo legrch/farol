@@ -336,9 +336,12 @@ After canonical preserving maintenance and connector reconciliation, the host
 moves that exact file into the existing retired Chat archive as
 `legacy-chatgpt-prepared.json`, under the unchanged recovery pending intent.
 Archive custody and the final owner/intent checks precede cold-start eligibility.
-The completion metadata explicitly records the corresponding Go outcome as
-`unobserved`; this relocation supplies no legacy dispatch, Go ACK or successful
-predecessor terminal. Malformed records, attachments, `dispatch_intent`, retained
+The maintenance receipt records only `selectedLegacyPreparation` with disposition
+`selected_for_retirement`, including when a later connector reconciliation or move
+refuses. It makes no completed-relocation claim before the move. Physical archive
+custody and the final pending-intent transition establish retirement separately.
+The corresponding Go outcome remains `unobserved`; this relocation supplies no
+legacy dispatch, Go ACK or successful predecessor terminal. Malformed records, attachments, `dispatch_intent`, retained
 results and every other pending obligation retain their existing refusal.
 Legacy record opens use nonblocking file descriptors so an unsafe FIFO is refused
 without waiting for another process. Disposable filesystem tests preserve these
