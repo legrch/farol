@@ -85,6 +85,7 @@ export function assertOwnerPreviewProfileSeparation(appData: string): void {
         (info.uid !== 0 && info.uid !== uid) ||
         ((directory === appData || directory === profile) &&
           info.uid !== uid) ||
+        (directory === profile && (info.mode & 0o077) !== 0) ||
         ((info.mode & 0o022) !== 0 && !temporaryAncestor) ||
         fs.realpathSync.native(directory) !== directory
       )
@@ -93,6 +94,22 @@ export function assertOwnerPreviewProfileSeparation(appData: string): void {
   } catch {
     throw invalid();
   }
+}
+
+/** Create only the missing fixed Preview leaf privately, after physical
+ * ancestor admission. Never chmod, migrate or replace an existing profile.
+ */
+export function prepareOwnerPreviewProfile(appData: string): void {
+  assertOwnerPreviewProfileSeparation(appData);
+  const profile = ownerPreviewIdentity(appData).userData;
+  try {
+    fs.mkdirSync(profile, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST")
+      throw new Error("OWNER_PREVIEW_PROFILE_DIRECTORY_UNSAFE");
+  }
+  // Recheck before Electron observes the leaf, including an EEXIST race.
+  assertOwnerPreviewProfileSeparation(appData);
 }
 
 export type DesktopEnvironment = "preview" | "dev" | "owner-preview";

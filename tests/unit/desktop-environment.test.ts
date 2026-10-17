@@ -10,6 +10,7 @@ import {
   codexChildHomePath,
   ownerPreviewIdentity,
   assertOwnerPreviewProfileSeparation,
+  prepareOwnerPreviewProfile,
   desktopCodexChildHomes,
   desktopCodexConfigPath,
   desktopAppDataPath,
@@ -64,6 +65,7 @@ function ordinaryBootProfile(
       desktopUserDataPath,
       desktopIdentity,
       assertOwnerPreviewProfileSeparation,
+      prepareOwnerPreviewProfile,
       terminateDesktopStartup,
       app: {
         commandLine: { getSwitchValue: () => "" },
@@ -130,10 +132,20 @@ describe("physical Owner Preview profile admission", () => {
     ]);
   });
 
+  it("creates the missing fixed leaf with owner-only access before selecting storage", () => {
+    const { appData } = fixture();
+    const profile = ownerPreviewIdentity(appData).userData;
+    expect(fs.existsSync(profile)).toBe(false);
+    const { result } = ordinaryBootProfile("owner-preview", appData);
+    expect(result.userData).toBe(profile);
+    expect(fs.statSync(profile).mode & 0o777).toBe(0o700);
+    expect(fs.readdirSync(profile)).toEqual([]);
+  });
+
   it("admits the existing physically separate profile without repairing it", () => {
     const { appData } = fixture();
     const profile = ownerPreviewIdentity(appData).userData;
-    fs.mkdirSync(profile, { mode: 0o755 });
+    fs.mkdirSync(profile, { mode: 0o700 });
     fs.writeFileSync(path.join(profile, "sentinel"), "preserve", {
       mode: 0o600,
     });
@@ -212,36 +224,38 @@ describe("physical Owner Preview profile admission", () => {
     expect(fs.readdirSync(appData)).toEqual([]);
   });
 
-  it.each(["file", "writable-profile", "writable-app-data"])(
-    "rejects %s without repair",
-    (kind) => {
-      const { appData } = fixture();
-      const profile = ownerPreviewIdentity(appData).userData;
-      if (kind === "file")
-        fs.writeFileSync(profile, "preserve", { mode: 0o600 });
-      else fs.mkdirSync(profile, { mode: 0o700 });
-      const unsafe = kind === "writable-app-data" ? appData : profile;
-      if (kind !== "file") fs.chmodSync(unsafe, 0o777);
-      const before = fs.lstatSync(unsafe);
-      expect(() => assertOwnerPreviewProfileSeparation(appData)).toThrow(
-        "OWNER_PREVIEW_PROFILE_DIRECTORY_UNSAFE",
-      );
-      const after = fs.lstatSync(unsafe);
-      expect([
-        after.dev,
-        after.ino,
-        after.mode,
-        after.mtimeMs,
-        after.ctimeMs,
-      ]).toEqual([
-        before.dev,
-        before.ino,
-        before.mode,
-        before.mtimeMs,
-        before.ctimeMs,
-      ]);
-    },
-  );
+  it.each([
+    "file",
+    "readable-profile",
+    "writable-profile",
+    "writable-app-data",
+  ])("rejects %s without repair", (kind) => {
+    const { appData } = fixture();
+    const profile = ownerPreviewIdentity(appData).userData;
+    if (kind === "file") fs.writeFileSync(profile, "preserve", { mode: 0o600 });
+    else fs.mkdirSync(profile, { mode: 0o700 });
+    const unsafe = kind === "writable-app-data" ? appData : profile;
+    if (kind !== "file")
+      fs.chmodSync(unsafe, kind === "readable-profile" ? 0o755 : 0o777);
+    const before = fs.lstatSync(unsafe);
+    expect(() => assertOwnerPreviewProfileSeparation(appData)).toThrow(
+      "OWNER_PREVIEW_PROFILE_DIRECTORY_UNSAFE",
+    );
+    const after = fs.lstatSync(unsafe);
+    expect([
+      after.dev,
+      after.ino,
+      after.mode,
+      after.mtimeMs,
+      after.ctimeMs,
+    ]).toEqual([
+      before.dev,
+      before.ino,
+      before.mode,
+      before.mtimeMs,
+      before.ctimeMs,
+    ]);
+  });
 });
 
 describe("desktop environment identity", () => {

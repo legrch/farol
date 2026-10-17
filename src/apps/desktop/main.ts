@@ -492,7 +492,7 @@ import {
   desktopUserDataPath,
   desktopEnvironment,
   desktopIdentity,
-  assertOwnerPreviewProfileSeparation,
+  prepareOwnerPreviewProfile,
   desktopProfileEnvironment,
   isolatedDevMcpProofAllowed,
 } from "./desktop-environment";
@@ -569,7 +569,7 @@ if (isolatedE2EHome !== undefined) app.setPath("home", isolatedE2EHome);
 const declaredDesktopIdentity = (() => {
   try {
     if (runtimeEnvironment === "owner-preview")
-      assertOwnerPreviewProfileSeparation(desktopAppData);
+      prepareOwnerPreviewProfile(desktopAppData);
     return desktopIdentity(
       runtimeEnvironment,
       desktopAppData,

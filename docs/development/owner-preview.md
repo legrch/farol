@@ -136,11 +136,18 @@ and presented. It checks only exact observed owned PIDs and the app's quit drain
 it never scans or kills unrelated processes. This is representative startup and
 persistence evidence, not live-provider or general descendant qualification.
 
+Startup admits only physical, owner-controlled app-data ancestors and a
+physically separate Preview profile with owner-only access. It creates a missing
+fixed profile leaf with mode 0700 before Electron selects storage; an existing
+aliased, shared-readable or unsafe profile is refused without repair or migration.
+
 Receipts under `_output/preview/smoke/<generation>/<attempt UUID>.json` bind exact
 source, base/build, derivative and actual observations. They begin as UNKNOWN,
-become PASS only after both clean cycles, re-verification and exact owned-profile
-cleanup, and have no caller PASS flag. Failures/UNKNOWN retain the profile and
-receipt, prevent further smoke of that generation, and require Lead
+become PASS only after both clean cycles, re-verification and exact owned-process
+absence, and have no caller PASS flag. All disposable profiles and receipts remain
+retained, including successful attempts; no cleanup-to-checkpoint crash window can
+erase unresolved profile evidence. Failures/UNKNOWN prevent further smoke of that
+generation and require Lead
 reconciliation. A known owned app may receive one normal Quit cleanup request;
 a refused/unknown Quit is never retried or escalated by the harness. The pinned
 Playwright Electron launcher can force-terminate its own disposable process group

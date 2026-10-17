@@ -364,7 +364,8 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
       current = null;
     }
     await verifyOwnerPreview(repositoryRoot, generation);
-    // Only a successfully drained pair allows exact disposable-profile cleanup.
+    // Retain even successful disposable profiles. Deleting before the PASS
+    // checkpoint would lose evidence if that publication is interrupted.
     await physicalDirectory(home, { privateMode: true });
     assert.equal(
       (
@@ -374,8 +375,8 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
     );
     assert.equal(path.dirname(home), await fs.realpath(os.tmpdir()));
     assert.match(path.basename(home), /^farol-next-e2e-home-[A-Za-z0-9]{6,}$/u);
-    await fs.rm(home, { recursive: true });
-    receipt.cleanup = "exact-owned-profile-removed-after-two-drained-quits";
+    receipt.profileRetained = home;
+    receipt.cleanup = "exact-owned-profile-retained-after-two-drained-quits";
     receipt.status = "PASS";
     receipt.finishedAt = new Date().toISOString();
     await checkpoint();
