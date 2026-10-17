@@ -257,6 +257,38 @@ The adapter call counter is not a physical provider acceptance ledger. Composer
 encoding, actual transport backpressure and packaged/live-provider limits remain
 separate higher-boundary witnesses; this is not complete M10 acceptance.
 
+## Stored copies after preserving startup
+
+A normal current Go owner exposes `chat.retired.list` and `chat.retired.read`
+for explicit reads of its profile's `chat-retired-<UUID>` result namespaces.
+These methods reuse the existing archive application service, current history
+read authority, canonical result parser and read-only result claim. They never
+open the active Chat writer's result namespace. The recovery-only
+`chat.archive.list/read` methods remain absent from the normal owner.
+
+Retired entries retain `stored_unconfirmed` provenance. Their opaque keys bind
+the fixed retired namespace and original result key; the original record digest
+still pins content. Even a recorded `completed` outcome grants no HistoryOrigin,
+old terminal observation, delivery ACK, continuation or replay. The normal UI
+shows these copies separately from confirmed saved answers, as plain text with
+an explicit unconfirmed label and no Send, Resume or Acknowledge controls.
+
+Queries stream directories and records with 32-entry pages and an original
+five-second context bound, rather than imposing an additional history count
+ceiling or eagerly scanning at startup. Selected records and the physical
+profile are rechecked before returning. Busy, unsafe, unreadable, changed or
+incompatible old namespaces withhold the query; they do not become an empty
+history or gate independent app startup. Unresolved records remain visible as
+unresolved metadata. Device, inode, owner and claim equality remain mandatory;
+observation does not rebind historical device IDs after a host or volume change.
+
+The desktop binds every request and response to the same current host, profile,
+backend and renderer history epoch. A replacement, runtime gap or unavailable
+response pauses that reader without retry. Constructors perform no archive IO.
+Native filesystem/Go composition, renderer tests and assembled hidden Electron
+crash/reopen journeys provide distinct evidence; source implementation alone is
+not an installed-profile migration or live-provider acceptance result.
+
 ## Preserved nonempty recovery selection
 
 `app/capabilities/archive.Policy.Select` compares an independently preselected scope, physical roots and digests with bounded canonical observation metadata for nonempty original Chat. It selects `chat-retired-<OperationID>` and copies only the observed unresolved-results flag. A namespace with zero writes, turns, plans and results qualifies only when results remain unresolved; recorded retirement alone does not qualify. The original empty-recovery and interrupted policies retain their existing predicates.
@@ -303,6 +335,55 @@ absolute deadline spans both phases. Profile/physical root identities, access
 digest, the complete selected owner-mutation set and future maintenance
 identities remain independently supplied and verified. The known-scope
 observation and preparation entries retain their existing requirements.
+
+The trusted desktop startup composition makes one preserving-maintenance
+attempt before launching a current read-only or normal child. It borrows the
+original admission handle and full verifier; the enclosing Electron owner
+retains release and proves current singleton ownership and absence of admitted
+current runtime work. The collector selects an existing profile, physical roots,
+raw access digest, every owner mutation binding/full-byte digest and the original
+run/config/optional Quit snapshots. It neither filters uncertain phases nor
+derives the old generation. A changed namespace or pinned object refuses the
+snapshot. Canonical Go discovery and the later separately fenced observation
+and preparation still own journal qualification and maintenance policy.
+
+The existing legacy Desktop record reader is shared as typed
+`src/apps/desktop/legacy-activation-obligations.ts`; its CLI import remains a
+compatibility entry. Both consumers use the same original writer schemas,
+decode limits, two-read comparison and pending-work policy. Native Go journal
+policy is unchanged. The startup handoff retains the original full verifier
+after archive-pin verification, immediately before the final pending-intent
+rename. A late installed-replacement or current-host failure preserves that
+pending fence. The caller may then offer the existing saved Settings/read-only
+composition without retrying maintenance. Successful preparation permits a new
+cold generation while retaining the predecessor's ACK/terminal as unobserved;
+it never writes a successful predecessor Quit.
+
+Go readonly preparation owns its Go admission without creating a duplicate legacy
+Desktop journal entry. Legacy preparation and cancellation still use the original
+legacy owner. For an older duplicate, startup may select only a fully parsed
+`prepared` / `readonly` record with `result: null`. The original private root,
+file identity, bytes and phase remain pinned under the original startup admission.
+After canonical preserving maintenance and connector reconciliation, the host
+moves that exact file into the existing retired Chat archive as
+`legacy-chatgpt-prepared.json`, under the unchanged recovery pending intent.
+Archive custody and the final owner/intent checks precede cold-start eligibility.
+The maintenance receipt records only `selectedLegacyPreparation` with disposition
+`selected_for_retirement`, including when a later connector reconciliation or move
+refuses. It makes no completed-relocation claim before the move. Physical archive
+custody and the final pending-intent transition establish retirement separately.
+The corresponding Go outcome remains `unobserved`; this relocation supplies no
+legacy dispatch, Go ACK or successful predecessor terminal. Malformed records, attachments, `dispatch_intent`, retained
+results and every other pending obligation retain their existing refusal.
+Legacy record opens use nonblocking file descriptors so an unsafe FIFO is refused
+without waiting for another process. Disposable filesystem tests preserve these
+fixtures and qualify neither a live provider nor installed recovery.
+
+The initial application wiring retains the existing Dev-only Go command scope.
+Real disposable selection/final-file/lease tests and controlled composition
+checks do not qualify Electron recovery, retained-history availability after a
+writable restart, installed command scope, production use or beta acceptance.
+Those remain separate native integration gates.
 
 Discovery returns the same metadata-only inspection envelope with
 `recoveryAuthorized: false`. Its host adapter permits only the observed current

@@ -8,7 +8,7 @@
  * interrupted-effect or arbitrary-descendant qualification. Profiles are retained.
  */
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
@@ -57,14 +57,15 @@ const contract = {
   normal:
     "Normal main.cjs/Go -> approved disposable folder -> real Chat results/ACK/settlement -> Go-owned guarded File edit/read/result ACK -> ordinary confirmed Quit -> same-profile fresh writable generation -> original saved Chat answers/workspace/result -> second File edit/read/result ACK -> confirmed Quit",
   crash:
-    "Fresh normal main.cjs/Go -> same real work -> exact observed Electron host SIGKILL -> observe original direct Go child absent -> one same-profile recovery launch -> original physical history/results/workspace and actual archive UI -> report writable availability separately -> ordinary Quit",
+    "Fresh normal main.cjs/Go -> same real work -> exact observed Electron host SIGKILL -> observe original direct Go child absent -> one same-profile automatic preserving startup -> exact archived history/results and actual normal-session stored-copy UI -> new writable File ACK -> ordinary confirmed Quit",
   limits: [
     "Synthetic loopback provider/account/tasks and disposable workspace; existing admitted normal preload/UI flows, no product seam or injected journal/result",
     "Legacy Chat/history witness labels mention Home remount; this harness records actual Home -> Settings -> Diagnostics -> ChatGPT acceptance tools navigation. No renderer mounting or Home-hosted-control claim",
     "Go owns Settings edit admission/pending/result; existing typed host storage performs conditional filesystem writes, not an autonomous model tool call",
     "Hidden windows throughout; no focus, real picker, real provider, tunnel, installed profile, sleep/reboot or interrupted-effect qualification",
     "Exact observed direct child absence is not arbitrary descendant settlement or an original Go terminal/ACK receipt after host SIGKILL",
-    "Read-only recovery is preservation evidence only; it never satisfies writable recovery acceptance",
+    "Historical Desktop prepared/readonly/null metadata is deliberately seeded on the fresh disposable crash fixture only after the original host/direct Go child are absent; this is not original historical or production state",
+    "Owned parent/child queries only; no machine-wide process inventory, arbitrary descendants or old Go ACK/terminal are established",
   ],
 };
 const args = process.argv.slice(2);
@@ -173,18 +174,56 @@ async function directory(file) {
     uid: String(stat.uid),
   };
 }
-function processes() {
-  return execFileSync("/bin/ps", ["-ww", "-axo", "pid=,ppid=,command="], {
+// Query only the exact observed owned parent or its already captured child
+// PIDs. Never collect a machine-wide command/process inventory.
+function processes(pids) {
+  assert.ok(
+    Array.isArray(pids) &&
+      pids.length > 0 &&
+      pids.length <= 64 &&
+      pids.every((pid) => Number.isSafeInteger(pid) && pid > 1),
+    "OWNED_PROCESS_QUERY_INVALID",
+  );
+  const result = spawnSync(
+    "/bin/ps",
+    ["-ww", "-p", pids.join(","), "-o", "pid=,ppid=,command="],
+    { encoding: "utf8", maxBuffer: 256 * 1024, timeout: 3000 },
+  );
+  assert.equal(result.error, undefined, "OWNED_PROCESS_QUERY_UNKNOWN");
+  assert.ok(
+    result.status === 0 || (result.status === 1 && result.stdout.trim() === ""),
+    "OWNED_PROCESS_QUERY_REFUSED",
+  );
+  return result.stdout.split("\n").flatMap((line) => {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/u.exec(line);
+    if (!match) return [];
+    const row = {
+      pid: Number(match[1]),
+      ppid: Number(match[2]),
+      command: match[3],
+    };
+    assert.ok(pids.includes(row.pid), "PROCESS_QUERY_ESCAPED_OWNED_PIDS");
+    return [row];
+  });
+}
+function children(parent) {
+  assert.ok(Number.isSafeInteger(parent) && parent > 1, "OWNED_PARENT_INVALID");
+  const result = spawnSync("/usr/bin/pgrep", ["-P", String(parent)], {
     encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
-  })
-    .split("\n")
-    .flatMap((line) => {
-      const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/u.exec(line);
-      return m
-        ? [{ pid: Number(m[1]), ppid: Number(m[2]), command: m[3] }]
-        : [];
+    maxBuffer: 4096,
+    timeout: 3000,
+  });
+  assert.equal(result.error, undefined, "OWNED_CHILD_LOOKUP_UNKNOWN");
+  if (result.status === 1 && result.stdout.trim() === "") return [];
+  assert.equal(result.status, 0, "OWNED_CHILD_LOOKUP_REFUSED");
+  const pids = result.stdout
+    .trim()
+    .split(/\s+/u)
+    .map((value) => {
+      assert.match(value, /^[1-9]\d*$/u);
+      return Number(value);
     });
+  return processes(pids).filter((row) => row.ppid === parent);
 }
 async function absent(observed) {
   const deadline = performance.now() + 15000;
@@ -205,7 +244,7 @@ async function absent(observed) {
 }
 // Snapshot originals before the transition. Read-only comparisons never derive
 // expected contents from a post-transition filesystem or manufacture records.
-async function custody(stateRoot, workspace) {
+async function custody(stateRoot, workspace, retiredChat) {
   const result = {};
   async function walk(file, label) {
     const stat = await fs.lstat(file, { bigint: true });
@@ -220,7 +259,14 @@ async function custody(stateRoot, workspace) {
     }
   }
   for (const name of ["profile.json", "chat", "computer/mutations"])
-    await walk(path.join(stateRoot, "go-core", name), name);
+    await walk(
+      path.join(
+        stateRoot,
+        "go-core",
+        name === "chat" && retiredChat ? retiredChat : name,
+      ),
+      name,
+    );
   await walk(workspace, "workspace");
   return result;
 }
@@ -567,6 +613,24 @@ async function scenario({
       });
     page = await app.firstWindow({ timeout: 15000 });
     page.setDefaultTimeout(15000);
+    // Capture the original current Go child before any UI-mode assertion so a
+    // refused automatic-start path still has exact cleanup ownership.
+    const childBy = performance.now() + 15000;
+    for (;;) {
+      launch.children = children(child.pid);
+      const observed = launch.children.filter((p) =>
+        p.command.startsWith(path.join(buildRoot, "farol-backend") + " serve "),
+      );
+      assert.ok(observed.length <= 1, "AMBIGUOUS_CURRENT_GO_CHILD");
+      if (observed.length === 1) {
+        launch.backend = observed[0];
+        break;
+      }
+      assert.ok(performance.now() < childBy, "CURRENT_GO_CHILD_NOT_OBSERVED");
+      await pause();
+    }
+    await save();
+
     if (recovery)
       await page
         .getByRole("heading", {
@@ -613,7 +677,7 @@ async function scenario({
       await app.evaluate(({ app }) => app.getPath("userData")),
       path.join(appData, "Farol Dev"),
     );
-    launch.children = processes().filter((p) => p.ppid === child.pid);
+    launch.children = children(child.pid);
     const backends = launch.children.filter((p) =>
       p.command.startsWith(path.join(buildRoot, "farol-backend") + " serve "),
     );
@@ -818,6 +882,17 @@ async function scenario({
       "Farol disposable read canary",
       "Farol disposable first edited canary",
     );
+    await assert.rejects(
+      fs.lstat(
+        path.join(
+          stateRoot,
+          "chatgpt-task-journal",
+          "chatgpt-task-journal.json",
+        ),
+      ),
+      { code: "ENOENT" },
+    );
+    row.legacyGoMirror = "PASS-no-active-legacy-journal-after-real-Go-Chat-ACK";
     row.beforeTransition = await custody(stateRoot, workspace);
     row.ledger = site.driver.snapshot();
     await save();
@@ -859,7 +934,9 @@ async function scenario({
     } else {
       const marker = await regular(path.join(stateRoot, "running.json"));
       assert.deepEqual(
-        processes().find((p) => p.pid === launch.backend.pid),
+        processes([launch.backend.pid]).find(
+          (p) => p.pid === launch.backend.pid,
+        ),
         launch.backend,
         "ORIGINAL_GO_CHILD_CHANGED",
       );
@@ -884,31 +961,175 @@ async function scenario({
       );
       row.afterCrash = await custody(stateRoot, workspace);
       preserved(row.beforeTransition, row.afterCrash);
-      await start(true);
-      row.recoveryApi = await page.evaluate(() => ({
+      // A distinct NEW retained profile: seed only the historical Desktop
+      // duplicate that older builds produced. This fixture is explicit; the
+      // original quarantined c52 profile is never reopened, fixed or replayed.
+      const prepared = row.chat.observations.find(
+        (o) => o.label === "react-prepared-zero-send",
+      );
+      const operationId = prepared?.ui?.operationId;
+      assert.match(
+        operationId,
+        /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u,
+      );
+      const legacyRoot = path.join(stateRoot, "chatgpt-task-journal");
+      const legacyFile = path.join(legacyRoot, "chatgpt-task-journal.json");
+      await assert.rejects(fs.lstat(legacyFile), { code: "ENOENT" });
+      await fs.mkdir(legacyRoot, { mode: 0o700, recursive: true });
+      const timestamp = new Date().toISOString();
+      const legacyBytes = Buffer.from(
+        JSON.stringify({
+          schema: 1,
+          operationId,
+          kind: "readonly",
+          phase: "prepared",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          result: null,
+        }) + "\n",
+      );
+      await fs.writeFile(legacyFile, legacyBytes, { flag: "wx", mode: 0o600 });
+      const legacyOriginal = await regular(legacyFile);
+      row.historicalLegacyFixture = {
+        operationId,
+        sha256: legacyOriginal.sha256,
+        physical: legacyOriginal.physical,
+        limit:
+          "Explicit old-format metadata fixture on a NEW disposable profile; Chat/File/Go operations and startup are actual. No production/historical profile was edited.",
+      };
+      await save();
+      await start();
+      row.normalAPI = await page.evaluate(() => ({
         normal: typeof window.farolNext,
         recovery: typeof window.farolRecovery,
       }));
-      row.writable = "BLOCKED-read-only-recovery";
-      assert.deepEqual(row.recoveryApi, {
-        normal: "undefined",
-        recovery: "object",
+      assert.deepEqual(row.normalAPI, {
+        normal: "object",
+        recovery: "undefined",
       });
-      await page
-        .getByRole("button", { name: "Stored replies", exact: true })
+      assert.notEqual(
+        launch.generation,
+        row.launches[0].generation,
+        "OLD_GENERATION_REUSED",
+      );
+      const coreRoot = path.join(stateRoot, "go-core");
+      const names = (await fs.readdir(coreRoot)).filter((name) =>
+        /^chat-retired-[a-f0-9-]{36}$/u.test(name),
+      );
+      assert.equal(names.length, 1, "EXACT_RETIRED_CHAT_NOT_OBSERVED");
+      const retiredChat = names[0],
+        archive = path.join(coreRoot, retiredChat);
+      const completion = await json(
+        path.join(archive, "maintenance-completed.json"),
+      );
+      assert.deepEqual(completion.selectedLegacyPreparation, {
+        operationId,
+        sha256: legacyOriginal.sha256,
+        originalPhase: "prepared",
+        legacyDisposition: "selected_for_retirement",
+        correspondingGoOutcome: "unobserved",
+      });
+      assert.equal(
+        Object.hasOwn(completion, "retainedLegacyPreparation"),
+        false,
+      );
+      const legacyRetired = await regular(
+        path.join(archive, "legacy-chatgpt-prepared.json"),
+      );
+      assert.deepEqual(legacyRetired.bytes, legacyBytes);
+      for (const key of Object.keys(legacyOriginal.physical).filter(
+        (k) => k !== "ctimeNs",
+      ))
+        assert.equal(
+          legacyRetired.physical[key],
+          legacyOriginal.physical[key],
+          `LEGACY_PREPARATION_CHANGED:${key}`,
+        );
+      await assert.rejects(fs.lstat(legacyFile), { code: "ENOENT" });
+      row.legacyRetirement =
+        "PASS-original-bytes-inode-and-phase-retained-without-Go-outcome-claim";
+
+      assert.equal(completion.schema, "farol.closed-preserved-chat-recovery/1");
+      assert.equal(completion.buildId, build.identity.buildId);
+      assert.equal(completion.failedRunSha256, marker.sha256);
+      assert.equal(completion.preservedHistory.originalACK, "unobserved");
+      assert.equal(completion.preservedHistory.originalTerminal, "unobserved");
+      assert.equal(
+        completion.preservedHistory.scope.Scope.BackendGeneration,
+        row.launches[0].generation,
+      );
+      const retainedMarker = await regular(
+        path.join(archive, "failed-running.json"),
+      );
+      assert.deepEqual(retainedMarker.bytes, marker.bytes);
+      for (const key of Object.keys(marker.physical).filter(
+        (key) => key !== "ctimeNs",
+      ))
+        assert.equal(
+          retainedMarker.physical[key],
+          marker.physical[key],
+          `FAILED_RUN_CHANGED:${key}`,
+        );
+      row.failedRunRename = {
+        before: marker.physical,
+        after: retainedMarker.physical,
+        ctimeLimit:
+          "Rename may change ctime; original byte digest/inode/device/other metadata remain exact.",
+      };
+      await fs.lstat(path.join(archive, "maintenance-intent.json"));
+      await assert.rejects(
+        fs.lstat(path.join(stateRoot, "go-core.empty-recovery.pending")),
+        { code: "ENOENT" },
+      );
+      const oldChat = path.join(coreRoot, "chat");
+      const relocated = structuredClone(row.beforeTransition);
+      for (const [key, value] of Object.entries(relocated))
+        if ((key === "chat" || key.startsWith("chat/")) && value.path)
+          value.path = value.path.replace(oldChat, archive);
+      row.afterRecovery = await custody(stateRoot, workspace, retiredChat);
+      preserved(relocated, row.afterRecovery);
+      assert.deepEqual(
+        site.driver.snapshot(),
+        row.ledger,
+        "RECOVERY_PROVIDER_ACTIVITY",
+      );
+      row.preservation =
+        "PASS-original-chat-and-workspace-at-exact-archive-inodes";
+      row.archive = {
+        name: retiredChat,
+        operationId: completion.operationId,
+        originalACK: "unobserved",
+        originalTerminal: "unobserved",
+      };
+      await save();
+      await edit(
+        "Farol disposable first edited canary",
+        "Farol disposable second edited canary",
+      );
+      row.writable = "PASS-fresh-writable-generation-after-exact-host-crash";
+      await assert.rejects(fs.lstat(legacyFile), { code: "ENOENT" });
+      assert.deepEqual(
+        await regular(path.join(archive, "legacy-chatgpt-prepared.json")),
+        legacyRetired,
+      );
+
+      await journeyPage
+        .getByRole("button", { name: "Home", exact: true })
         .click();
-      await page
+      const stored = page.locator("section.recovery-archive");
+      assert.equal(await stored.count(), 1, "NORMAL_STORED_READER_NOT_UNIQUE");
+      await stored
         .getByRole("button", { name: "Load stored replies", exact: true })
         .click();
-      const rows = page.getByRole("button", {
+      const replies = stored.getByRole("button", {
         name: /^Open stored reply \d+$/u,
       });
-      await rows.nth(1).waitFor();
-      assert.equal(await rows.count(), 2);
+      await replies.nth(1).waitFor();
+      assert.equal(await replies.count(), 2, "NORMAL_RETIRED_REPLY_COUNT");
       const expected = originals.map((value) => value.ui.answer).sort();
       row.recoveredAnswers = [];
       for (let i = 0; i < 2; i++) {
-        await rows.nth(i).click();
+        await replies.nth(i).click();
         await page.waitForFunction(
           ({ expected, previous }) => {
             const text = document.querySelector(
@@ -919,31 +1140,47 @@ async function scenario({
           { expected, previous: row.recoveredAnswers.at(-1) ?? null },
         );
         row.recoveredAnswers.push(
-          await page.locator('[aria-label="Stored reply text"]').textContent(),
+          await stored
+            .locator('[aria-label="Stored reply text"]')
+            .textContent(),
         );
+        assert.equal(
+          await stored
+            .getByText("Outcome unconfirmed", { exact: true })
+            .count(),
+          1,
+        );
+        assert.equal(await stored.locator("textarea,script").count(), 0);
+        assert.equal(
+          await stored
+            .getByRole("button", { name: /^(Send|Resume|Acknowledge)/u })
+            .count(),
+          0,
+        );
+        await hidden();
         await save();
       }
       assert.deepEqual(
         [...row.recoveredAnswers].sort(),
         expected,
-        "ORIGINAL_RESULT_TEXT_NOT_RECOVERED",
+        "ORIGINAL_STORED_REPLY_TEXT_CHANGED",
       );
-      assert.deepEqual(
-        await regular(path.join(stateRoot, "running.json")),
-        marker,
-      );
-      row.afterRecovery = await custody(stateRoot, workspace);
-      preserved(row.beforeTransition, row.afterRecovery);
       assert.deepEqual(
         site.driver.snapshot(),
         row.ledger,
-        "RECOVERY_PROVIDER_ACTIVITY",
+        "STORED_READER_PROVIDER_ACTIVITY",
       );
-      row.preservation = "PASS-original-nonempty-history-results-workspace";
-      await quit(true);
-      row.afterRecoveryQuit = await custody(stateRoot, workspace);
-      preserved(row.beforeTransition, row.afterRecoveryQuit);
-      row.status = "BLOCKED-writable-recovery-not-available";
+      row.retainedHistoryUI = "PASS-normal-unconfirmed-stored-copies";
+      await quit();
+      row.afterRecoveryQuit = await custody(stateRoot, workspace, retiredChat);
+      for (const [key, value] of Object.entries(row.beforeTransition))
+        if (key === "chat" || key.startsWith("chat/"))
+          assert.deepEqual(
+            row.afterRecoveryQuit[key],
+            relocated[key],
+            `ARCHIVED_CHAT_CHANGED_AFTER_NEW_WRITE:${key}`,
+          );
+      row.status = "PASS";
     }
   } finally {
     // One ordinary cleanup attempt only if neither Quit nor fault was issued.

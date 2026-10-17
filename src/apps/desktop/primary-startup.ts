@@ -23,6 +23,8 @@ export type StartupStage =
   | "lock-secondary"
   | "before-ready"
   | "ready"
+  | "preserved-recovery-prepared"
+  | "preserved-recovery-unconfirmed"
   | "run-marker"
   | "before-delay"
   | "delay-complete"

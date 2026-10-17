@@ -17,6 +17,7 @@ import { ConnectorHostBridge } from "./bridge/connector-host.ts";
 import { BrowserPump, type BrowserDriver } from "./bridge/browser.ts";
 import { ChatBridge } from "./bridge/chat.ts";
 import { ChatHistoryBridge } from "./bridge/chat-history.ts";
+import { RecoveryArchiveReader } from "./recovery/archive.ts";
 import { ChatComputerBridge } from "./bridge/chat-computer.ts";
 import { ChatCallerBridge } from "./bridge/chat-caller.ts";
 import { ReadIntentBridge } from "./bridge/read-intent.ts";
@@ -99,6 +100,7 @@ export class DesktopGoCore {
   private readonly connector: ConnectorHostBridge | undefined;
   private readonly readIntent: ReadIntentBridge;
   private readonly historyBridge: ChatHistoryBridge;
+  private readonly retiredArchiveReader: RecoveryArchiveReader;
   private readonly settingsDelivery: SettingsDeliveryBridge;
   private readonly taskModelPolicy: TaskModelPolicyBridge;
   private readonly taskModelCatalogue: TaskModelCatalogueBridge;
@@ -129,6 +131,11 @@ export class DesktopGoCore {
         : new ConnectorHostBridge(client, client.verifiedContext, buildId);
     this.readIntent = new ReadIntentBridge(client);
     this.historyBridge = new ChatHistoryBridge(client);
+    this.retiredArchiveReader = new RecoveryArchiveReader(
+      client,
+      client.verifiedContext,
+      "chat.retired",
+    );
     this.settingsDelivery = new SettingsDeliveryBridge(client);
     this.taskModelPolicy = new TaskModelPolicyBridge(client);
     this.taskModelCatalogue = new TaskModelCatalogueBridge(client);
@@ -176,6 +183,11 @@ export class DesktopGoCore {
     if (!this.historyContext)
       throw new BridgeError("unavailable", "host_history_unavailable");
     return this.historyBridge;
+  }
+  get retiredReplies(): RecoveryArchiveReader {
+    if (!this.historyContext)
+      throw new BridgeError("unavailable", "host_retired_replies_unavailable");
+    return this.retiredArchiveReader;
   }
   get chatComputer(): ChatComputerBridge {
     if (

@@ -3,7 +3,9 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   recoverClosedPreservedChat,
+  recoverStartupPreservedChat,
   type ClosedPreservedRecoveryInput,
+  type StartupPreservedRecoveryInput,
 } from "../../apps/desktop/bridge/preserved-recovery-host";
 import type { PreservedRecoveryChildResult } from "../../apps/desktop/bridge/preserved-recovery-child";
 import type { ClosedRecoveryState } from "../../src/apps/desktop/closed-computer-recovery";
@@ -65,6 +67,13 @@ const ports = vi.hoisted(() => ({
   reconcileInactiveAfterCrash:
     vi.fn<(input: CrashReconcile) => Promise<void>>(),
   connectorWork: vi.fn<(root: string) => Promise<void>>(),
+  legacyMembership:
+    vi.fn<
+      typeof import("../../apps/desktop/recovery/legacy-preparation").assertStartupLegacyPreparation
+    >(),
+}));
+vi.mock("../../apps/desktop/recovery/legacy-preparation", () => ({
+  assertStartupLegacyPreparation: ports.legacyMembership,
 }));
 vi.mock("../../src/apps/desktop/closed-computer-recovery", async () => {
   const actual = await vi.importActual<
@@ -93,11 +102,17 @@ vi.mock("../../apps/desktop/bridge/preserved-inspection-child", () => ({
 vi.mock("../../apps/desktop/bridge/preserved-recovery-child", () => ({
   preparePreservedRecoveryChild: ports.prepare,
 }));
-vi.mock("../../src/apps/desktop/promotion-lease", () => ({
-  acquirePromotionLease: ports.acquire,
-  releasePromotionLease: ports.release,
-  verifyPromotionLease: ports.verifyLease,
-}));
+vi.mock("../../src/apps/desktop/promotion-lease", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../src/apps/desktop/promotion-lease")
+  >("../../src/apps/desktop/promotion-lease");
+  return {
+    ...actual,
+    acquirePromotionLease: ports.acquire,
+    releasePromotionLease: ports.release,
+    verifyPromotionLease: ports.verifyLease,
+  };
+});
 vi.mock("../../src/modules/computer/infra/mcp/execution-fence", () => ({
   PrivateExecutionFence: class {
     constructor(options: { root: string }) {
@@ -154,7 +169,7 @@ type Phase =
   "before-observation" | "before-preparation" | "after-preparation" | "finish";
 function fixture(
   quitScope: "previous" | "current" = "previous",
-  basename: "Farol Dev" | "Farol DEV" = "Farol Dev",
+  basename: "Farol Dev" | "Farol DEV" | "Farol" = "Farol Dev",
   currentUnconfirmed: readonly string[] = ["go-core", "connector"],
 ) {
   const userData = path.join("/synthetic", basename);
@@ -534,8 +549,8 @@ function released(f: ReturnType<typeof fixture>) {
   expect(f.events.slice(-2)).toEqual(["fence:release", "promotion:release"]);
 }
 
-function noQuitFixture() {
-  const f = fixture();
+function noQuitFixture(basename: Parameters<typeof fixture>[1] = "Farol Dev") {
+  const f = fixture("previous", basename);
   const quit = path.join(f.state, "last-quit.json");
   f.files.delete(quit);
   delete (f.input as { expectedQuitSha256?: string }).expectedQuitSha256;
@@ -1946,4 +1961,847 @@ describe("closed preserved recovery refuses progression", () => {
     expect(completed).not.toHaveBeenCalled();
     released(f);
   });
+});
+
+// The held admission flag and identity verifier below are controlled doubles.
+// They prove original-handle/callback custody, never a kernel lock, current-host
+// exclusion, actual child settlement or installed-profile qualification.
+function startupFixture(scope: "previous" | "current" | "absent" = "previous") {
+  const f =
+    scope === "absent" ? noQuitFixture("Farol") : fixture(scope, "Farol");
+  const lease = {
+    file: f.lease.file,
+    record: {
+      ...f.lease.record,
+      generation: f.input.exact.buildId,
+      role: "admission" as const,
+    },
+  } satisfies PromotionLeaseHandle;
+  const proofs = { native: true, full: true };
+  f.model.promotionHeld = true;
+  const proofStep = (name: string) => {
+    expect(f.model.promotionHeld).toBe(true);
+    const event = `${f.model.phase}:${name}`;
+    f.events.push(event);
+    if (f.faults.has(event)) throw f.faults.get(event);
+  };
+  ports.acquire.mockRejectedValue(Error("SYNTHETIC_STARTUP_ALREADY_HELD"));
+  ports.verifyLease.mockImplementation(async (actual) => {
+    expect(actual).toBe(lease);
+    proofStep("lease");
+    return proofs.native;
+  });
+  const startup = {
+    lease,
+    verify: vi.fn(async () => {
+      proofStep("startup-verify");
+      return proofs.full;
+    }),
+    assertCurrent: vi.fn(async () => {
+      proofStep("startup-current");
+    }),
+  };
+  const input = { ...f.input, startup } satisfies StartupPreservedRecoveryInput;
+  return {
+    ...f,
+    input,
+    lease,
+    startup,
+    proofs,
+    execute: () => recoverStartupPreservedChat(input),
+  };
+}
+
+function startupRetained(f: ReturnType<typeof startupFixture>) {
+  expect(ports.acquire).not.toHaveBeenCalled();
+  expect(ports.release).not.toHaveBeenCalled();
+  expect(f.model.promotionHeld).toBe(true);
+  expect(f.model.fenceHeld).toBe(false);
+  expect(f.events).not.toContain("promotion:acquire");
+  expect(f.events).not.toContain("promotion:release");
+}
+
+function startupLegacyFixture() {
+  const f = startupFixture("absent");
+  const legacyPreparation = {
+    operationId: "ba9d0681-5226-43d5-bc72-e7d6815f5bad",
+    sha256: "7".repeat(64),
+    verify: vi.fn(async () => {
+      f.events.push(`${f.model.phase}:legacy-preparation`);
+      expect(f.model.promotionHeld).toBe(true);
+    }),
+    retireInto: vi.fn(async (_archive: string) =>
+      snapshot({ phase: "prepared" }, 52),
+    ),
+  };
+  const input = {
+    ...f.input,
+    startup: { ...f.input.startup, legacyPreparation },
+  };
+  f.model.desktop = {
+    ...f.model.desktop,
+    obligations: ["CHATGPT_DISPATCH_PREPARED", ...f.model.desktop.obligations],
+  };
+  ports.legacyMembership.mockImplementation((pin, userData) => {
+    expect(pin).toBe(legacyPreparation);
+    expect(userData).toBe(input.userData);
+  });
+  return {
+    ...f,
+    input,
+    legacyPreparation,
+    execute: () => recoverStartupPreservedChat(input),
+  };
+}
+
+describe("startup ownership of inactive legacy preparation (controlled ports)", () => {
+  it("pins the exact legacy preparation through Go observation and forwards archival without an ACK", async () => {
+    const f = startupLegacyFixture();
+    ports.finish.mockImplementationOnce(async (handoff) => {
+      f.model.phase = "finish";
+      await handoff.proof();
+      expect(handoff.legacyPreparation).toBe(f.legacyPreparation);
+      expect(handoff.preservedHistory?.originalACK).toBe("unobserved");
+      expect(handoff.preservedHistory?.originalTerminal).toBe("unobserved");
+      return f.result;
+    });
+    await expect(f.execute()).resolves.toEqual(f.result);
+    expect(ports.legacyMembership).toHaveBeenCalledExactlyOnceWith(
+      f.legacyPreparation,
+      f.input.userData,
+    );
+    for (const phase of [
+      "before-observation",
+      "before-preparation",
+      "after-preparation",
+      "finish",
+    ])
+      expect(f.events).toContain(`${phase}:legacy-preparation`);
+    expect(f.legacyPreparation.retireInto).not.toHaveBeenCalled(); // finish is mocked
+    startupRetained(f);
+  });
+
+  it("keeps an unpinned legacy preparation blocking before a Go child", async () => {
+    const f = startupFixture("absent");
+    f.model.desktop = {
+      ...f.model.desktop,
+      obligations: [
+        "CHATGPT_DISPATCH_PREPARED",
+        ...f.model.desktop.obligations,
+      ],
+    };
+    await expect(f.execute()).rejects.toThrow(
+      "PRESERVED_RECOVERY_WORK_PENDING",
+    );
+    expect(ports.inspect).not.toHaveBeenCalled();
+    expect(ports.prepare).not.toHaveBeenCalled();
+    startupRetained(f);
+  });
+
+  it.each([
+    "CHATGPT_DELIVERY_PENDING:dispatch_intent",
+    "CHATGPT_DELIVERY_PENDING:result_retained",
+    "TASK_OUTCOME_UNKNOWN:1",
+    "EDIT_DELIVERY_PENDING:other",
+  ])(
+    "never waives unrelated %s work for a selected legacy preparation",
+    async (obligation) => {
+      const f = startupLegacyFixture();
+      f.model.desktop = {
+        ...f.model.desktop,
+        obligations: [...f.model.desktop.obligations, obligation],
+      };
+      await expect(f.execute()).rejects.toThrow(
+        "PRESERVED_RECOVERY_WORK_PENDING",
+      );
+      expect(ports.inspect).not.toHaveBeenCalled();
+      expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      startupRetained(f);
+    },
+  );
+
+  it("rejects missing factory membership before host IO or drain", async () => {
+    const f = startupLegacyFixture(),
+      failure = Error("STARTUP_LEGACY_PREPARATION_SELECTION_INVALID");
+    ports.legacyMembership.mockImplementationOnce(() => {
+      throw failure;
+    });
+    await expect(f.execute()).rejects.toBe(failure);
+    expect(ports.privateRoot).not.toHaveBeenCalled();
+    expect(ports.drain).not.toHaveBeenCalled();
+    expect(ports.inspect).not.toHaveBeenCalled();
+    startupRetained(f);
+  });
+
+  it.each([
+    "before-observation",
+    "before-preparation",
+    "after-preparation",
+  ] as const)(
+    "keeps a changed original metadata pin unconfirmed at %s",
+    async (phase) => {
+      const f = startupLegacyFixture(),
+        failure = Error("STARTUP_LEGACY_PREPARATION_CHANGED");
+      f.legacyPreparation.verify.mockImplementation(async () => {
+        if (f.model.phase === phase) throw failure;
+      });
+      await expect(f.execute()).rejects.toBe(failure);
+      if (phase === "before-observation")
+        expect(ports.inspect).not.toHaveBeenCalled();
+      if (phase !== "after-preparation")
+        expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      startupRetained(f);
+    },
+  );
+});
+
+describe("original startup-held preserved recovery (controlled ports)", () => {
+  afterEach(() => {
+    expect(ports.acquire).not.toHaveBeenCalled();
+    expect(ports.release).not.toHaveBeenCalled();
+  });
+
+  it.each(
+    (["previous", "current", "absent"] as const).flatMap((scope) =>
+      (["refused", "throws"] as const).map((acquire) => ({ scope, acquire })),
+    ),
+  )(
+    "uses the held admission handle for $scope Quit when another acquire $acquire",
+    async ({ scope, acquire }) => {
+      const f = startupFixture(scope);
+      if (acquire === "refused") ports.acquire.mockResolvedValue(null);
+      const originalBytes = [f.run.bytes, f.config.bytes, f.quit.bytes].map(
+        (bytes) => Buffer.from(bytes),
+      );
+      ports.finish.mockImplementationOnce(async (handoff) => {
+        f.model.phase = "finish";
+        expect(handoff.lease).toBe(f.lease);
+        expect(handoff.verifyLease).toEqual(expect.any(Function));
+        await handoff.proof();
+        await handoff.reconcileConnector!();
+        await expect(handoff.verifyLease!()).resolves.toBe(true);
+        return f.result;
+      });
+      await expect(f.execute()).resolves.toEqual(f.result);
+      expect(ports.verifyLease).toHaveBeenCalled();
+      for (const [actual] of ports.verifyLease.mock.calls)
+        expect(actual).toBe(f.lease);
+      expect(ports.inspect).toHaveBeenCalledExactlyOnceWith(
+        f.input.executable,
+        f.input.profile,
+        f.input.selectionInput,
+        f.input.exact,
+      );
+      expect(ports.prepare).toHaveBeenCalledExactlyOnceWith(
+        f.input.executable,
+        f.input.profile,
+        f.observed,
+        f.input.exact,
+      );
+      expect(ports.prepare.mock.calls[0]![2]).toBe(f.observed);
+      expect(ports.retain).toHaveBeenCalledExactlyOnceWith(f.chat, f.archive);
+      const handoff = finishInput();
+      expect(handoff.child).toBe(f.child);
+      expect(handoff.run).toBe(f.run);
+      expect(handoff.config).toBe(f.config);
+      expect(handoff.intent).toBe(f.intent);
+      expect(handoff.archivePin).toBe(f.archivePin);
+      expect(handoff.preservedHistory).toEqual({
+        scope: f.input.exact.current,
+        originalACK: "unobserved",
+        originalTerminal: "unobserved",
+      });
+      for (const phase of [
+        "before-observation",
+        "before-preparation",
+        "after-preparation",
+        "finish",
+      ]) {
+        expect(f.events).toContain(`${phase}:startup-verify`);
+        expect(f.events).toContain(`${phase}:startup-current`);
+      }
+      if (scope === "absent") {
+        expect(handoff).not.toHaveProperty("failedQuit");
+        expect(handoff).not.toHaveProperty("previousConfirmedQuit");
+        expect(ports.reconcileInactiveAfterCrash).toHaveBeenCalledWith({
+          operationId: f.input.exact.operationId,
+          failedRunSha256: f.input.expectedRunSha256,
+          configSha256: f.input.expectedConfigSha256,
+          proveIdle: handoff.proof,
+        });
+        expect(ports.confirmStop).toHaveBeenCalledWith(0);
+        expect(ports.waitForStop).toHaveBeenCalledWith(0);
+        expect(ports.reconcile).not.toHaveBeenCalled();
+        expect(f.files.has(path.join(f.state, "last-quit.json"))).toBe(false);
+      } else {
+        expect(handoff.failedQuit).toBe(f.quit);
+        expect(Object.hasOwn(handoff, "previousConfirmedQuit")).toBe(
+          scope === "previous",
+        );
+        expect(ports.reconcile).toHaveBeenCalledWith({
+          operationId: f.input.exact.operationId,
+          failedQuitSha256: f.input.expectedQuitSha256,
+          proveIdle: handoff.proof,
+        });
+        expect(ports.reconcileInactiveAfterCrash).not.toHaveBeenCalled();
+      }
+      expect([f.run.bytes, f.config.bytes, f.quit.bytes]).toEqual(
+        originalBytes,
+      );
+      startupRetained(f);
+    },
+  );
+
+  it("keeps the closed maintenance route's private-basename refusal", async () => {
+    const f = fixture("previous", "Farol");
+    await expect(f.execute()).rejects.toThrow(
+      "PRESERVED_RECOVERY_SELECTION_INVALID",
+    );
+    expect(ports.privateRoot).not.toHaveBeenCalled();
+    expect(ports.drain).not.toHaveBeenCalled();
+    expect(ports.inspect).not.toHaveBeenCalled();
+    expect(ports.finish).not.toHaveBeenCalled();
+  });
+
+  it.each(["file", "role", "generation"] as const)(
+    "refuses the wrong held %s identity before drain or children",
+    async (field) => {
+      const f = startupFixture();
+      if (field === "file")
+        f.lease.file = path.join("/other", "promotion.lease");
+      if (field === "role")
+        Object.assign(f.lease.record, { role: "promotion" });
+      if (field === "generation") f.lease.record.generation = "other-build";
+      await expect(f.execute()).rejects.toThrow(
+        "PRESERVED_RECOVERY_STARTUP_LEASE_INVALID",
+      );
+      expect(ports.drain).not.toHaveBeenCalled();
+      expect(ports.retain).not.toHaveBeenCalled();
+      expect(ports.inspect).not.toHaveBeenCalled();
+      expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      startupRetained(f);
+    },
+  );
+
+  it.each(["false", "copied", "released"] as const)(
+    "refuses a %s native-handle proof before children (identity double)",
+    async (kind) => {
+      const f = startupFixture();
+      const held = new WeakSet<PromotionLeaseHandle>([f.lease]);
+      if (kind === "copied") f.startup.lease = structuredClone(f.lease);
+      if (kind === "released") held.delete(f.lease);
+      ports.verifyLease.mockImplementation(async (actual) => {
+        expect(actual).toBe(f.startup.lease);
+        return kind !== "false" && held.has(actual);
+      });
+      await expect(f.execute()).rejects.toThrow("PROMOTION_LEASE_LOST");
+      expect(ports.verifyLease).toHaveBeenCalled();
+      expect(ports.inspect).not.toHaveBeenCalled();
+      expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      startupRetained(f);
+    },
+  );
+
+  it.each(
+    (
+      ["before-observation", "before-preparation", "after-preparation"] as const
+    ).flatMap((phase) =>
+      (["false", "throws"] as const).map((outcome) => ({ phase, outcome })),
+    ),
+  )(
+    "refuses original full startup verification $outcome at $phase",
+    async ({ phase, outcome }) => {
+      const f = startupFixture();
+      const failure = Object.assign(
+        Error("original startup verification unknown"),
+        { state: "unknown" },
+      );
+      f.startup.verify.mockImplementation(async () => {
+        if (f.model.phase !== phase) return true;
+        if (outcome === "throws") throw failure;
+        return false;
+      });
+      const done = f.execute();
+      if (outcome === "throws") await expect(done).rejects.toBe(failure);
+      else await expect(done).rejects.toThrow("PROMOTION_LEASE_LOST");
+      if (phase === "before-observation")
+        expect(ports.inspect).not.toHaveBeenCalled();
+      if (phase !== "after-preparation")
+        expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      startupRetained(f);
+    },
+  );
+
+  it.each([
+    "before-observation",
+    "before-preparation",
+    "after-preparation",
+  ] as const)(
+    "preserves original current-host proof failure at %s",
+    async (phase) => {
+      const f = startupFixture();
+      const failure = Object.assign(
+        Error("current host or owned child unconfirmed"),
+        { state: "unknown" },
+      );
+      f.faults.set(`${phase}:startup-current`, failure);
+      await expect(f.execute()).rejects.toBe(failure);
+      if (phase === "before-observation")
+        expect(ports.inspect).not.toHaveBeenCalled();
+      if (phase !== "after-preparation")
+        expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      startupRetained(f);
+    },
+  );
+
+  it.each(
+    (["before-observation", "after-preparation"] as const).flatMap((phase) =>
+      (["verify", "assertCurrent"] as const).flatMap((proof) =>
+        (["resolve", "reject"] as const).map((outcome) => ({
+          phase,
+          proof,
+          outcome,
+        })),
+      ),
+    ),
+  )(
+    "awaits original $proof $outcome at $phase before the next effect",
+    async ({ phase, proof, outcome }) => {
+      const f = startupFixture();
+      const entered = deferred<void>();
+      const gate = deferred<void>();
+      const failure = Error("original startup proof outcome unknown");
+      let waiting = false;
+      const hold = async () => {
+        if (waiting || f.model.phase !== phase) return;
+        waiting = true;
+        entered.resolve();
+        await gate.promise;
+      };
+      if (proof === "verify") {
+        const original = f.startup.verify.getMockImplementation()!;
+        f.startup.verify.mockImplementation(async () => {
+          const verified = await original();
+          await hold();
+          return verified;
+        });
+      } else {
+        const original = f.startup.assertCurrent.getMockImplementation()!;
+        f.startup.assertCurrent.mockImplementation(async () => {
+          await original();
+          await hold();
+        });
+      }
+      const done = f.execute();
+      const settled = vi.fn();
+      void done.then(settled, settled);
+      await entered.promise;
+      expect(f.model.promotionHeld).toBe(true);
+      if (phase === "before-observation") {
+        expect(ports.inspect).not.toHaveBeenCalled();
+        expect(ports.prepare).not.toHaveBeenCalled();
+      } else {
+        expect(ports.prepare).toHaveBeenCalled();
+        expect(f.model.fenceHeld).toBe(true);
+      }
+      expect(ports.finish).not.toHaveBeenCalled();
+      expect(ports.release).not.toHaveBeenCalled();
+      expect(settled).not.toHaveBeenCalled();
+      if (outcome === "resolve") {
+        gate.resolve();
+        await expect(done).resolves.toEqual(f.result);
+      } else {
+        gate.reject(failure);
+        await expect(done).rejects.toBe(failure);
+        expect(ports.finish).not.toHaveBeenCalled();
+      }
+      startupRetained(f);
+    },
+  );
+
+  it.each(
+    (["before-preparation", "after-preparation"] as const).flatMap((phase) =>
+      (["file", "role", "generation", "native"] as const).map((field) => ({
+        phase,
+        field,
+      })),
+    ),
+  )("rechecks the actual held $field at $phase", async ({ phase, field }) => {
+    const f = startupFixture();
+    const change = () => {
+      if (field === "file") f.lease.file = "/other/promotion.lease";
+      if (field === "role")
+        Object.assign(f.lease.record, { role: "promotion" });
+      if (field === "generation") f.lease.record.generation = "other-build";
+      if (field === "native") f.proofs.native = false;
+    };
+    if (phase === "before-preparation") {
+      const original = ports.inspect.getMockImplementation()!;
+      ports.inspect.mockImplementationOnce(async (...args) => {
+        const observed = await original(...args);
+        change();
+        return observed;
+      });
+    } else {
+      const original = ports.prepare.getMockImplementation()!;
+      ports.prepare.mockImplementationOnce(async (...args) => {
+        const child = await original(...args);
+        change();
+        return child;
+      });
+    }
+    await expect(f.execute()).rejects.toThrow(
+      field === "native"
+        ? "PROMOTION_LEASE_LOST"
+        : "PRESERVED_RECOVERY_STARTUP_LEASE_INVALID",
+    );
+    if (phase === "before-preparation")
+      expect(ports.prepare).not.toHaveBeenCalled();
+    expect(ports.finish).not.toHaveBeenCalled();
+    startupRetained(f);
+  });
+
+  it.each([
+    "full-false",
+    "full-throws",
+    "current",
+    "native",
+    "file",
+    "role",
+    "generation",
+  ] as const)(
+    "the forwarded final checker refuses changed %s proof in mock finish",
+    async (changed) => {
+      const f = startupFixture();
+      const failure = Object.assign(
+        Error("original final startup proof unknown"),
+        { state: "unknown" },
+      );
+      const completed = vi.fn();
+      ports.finish.mockImplementationOnce(async (handoff) => {
+        f.model.phase = "finish";
+        expect(handoff.lease).toBe(f.lease);
+        expect(handoff.verifyLease).toEqual(expect.any(Function));
+        await handoff.proof();
+        await expect(handoff.verifyLease!()).resolves.toBe(true);
+        if (changed === "full-false") f.proofs.full = false;
+        if (changed === "full-throws")
+          f.faults.set("finish:startup-verify", failure);
+        if (changed === "current")
+          f.faults.set("finish:startup-current", failure);
+        if (changed === "native") f.proofs.native = false;
+        if (changed === "file") f.lease.file = "/other/promotion.lease";
+        if (changed === "role")
+          Object.assign(f.lease.record, { role: "promotion" });
+        if (changed === "generation") f.lease.record.generation = "other-build";
+        // This is the mock's eligibility decision, not the real pending move.
+        // Native verification remains true when only the original full proof
+        // changes, so a native-only forwarded checker would wrongly complete.
+        if (!(await handoff.verifyLease!()))
+          throw Error("PROMOTION_LEASE_LOST");
+        completed();
+        return f.result;
+      });
+      const done = f.execute();
+      if (changed === "full-throws" || changed === "current")
+        await expect(done).rejects.toBe(failure);
+      else
+        await expect(done).rejects.toThrow(
+          changed === "file" || changed === "role" || changed === "generation"
+            ? "PRESERVED_RECOVERY_STARTUP_LEASE_INVALID"
+            : "PROMOTION_LEASE_LOST",
+        );
+      expect(completed).not.toHaveBeenCalled();
+      expect(f.files.get(f.pending)).toBe(f.intent);
+      startupRetained(f);
+    },
+  );
+
+  it.each(["resolve", "reject"] as const)(
+    "awaits mocked finish %s while leaving the caller's admission lease held",
+    async (outcome) => {
+      const f = startupFixture();
+      const entered = deferred<Finish>();
+      const finish = deferred<typeof f.result>();
+      const failure = Object.assign(Error("startup finish outcome unknown"), {
+        state: "unknown",
+      });
+      ports.finish.mockImplementationOnce((handoff) => {
+        entered.resolve(handoff);
+        return finish.promise;
+      });
+      const done = f.execute();
+      const settled = vi.fn();
+      void done.then(settled, settled);
+      const handoff = await entered.promise;
+      expect(handoff.lease).toBe(f.lease);
+      expect(handoff.verifyLease).toEqual(expect.any(Function));
+      expect(f.model.promotionHeld).toBe(true);
+      expect(f.model.fenceHeld).toBe(true);
+      expect(ports.release).not.toHaveBeenCalled();
+      expect(settled).not.toHaveBeenCalled();
+      if (outcome === "resolve") {
+        finish.resolve(f.result);
+        await expect(done).resolves.toEqual(f.result);
+      } else {
+        finish.reject(failure);
+        await expect(done).rejects.toBe(failure);
+      }
+      startupRetained(f);
+    },
+  );
+
+  it.each(
+    (["properties", "object"] as const).flatMap((replacement) =>
+      (["success", "original-proof-fails"] as const).map((outcome) => ({
+        replacement,
+        outcome,
+      })),
+    ),
+  )(
+    "captures original ports before IO despite startup $replacement replacement ($outcome)",
+    async ({ replacement, outcome }) => {
+      const f = startupFixture();
+      const original = {
+        verify: f.startup.verify,
+        assertCurrent: f.startup.assertCurrent,
+        attest: f.input.attest,
+        desktopState: f.input.desktopState,
+        processesAbsent: f.input.processesAbsent,
+      };
+      const entered = deferred<void>();
+      const gate = deferred<void>();
+      const root = ports.privateRoot.getMockImplementation()!;
+      ports.privateRoot.mockImplementationOnce(async (directory) => {
+        entered.resolve();
+        await gate.promise;
+        return root(directory);
+      });
+      const replacementVerify = vi.fn(async () => {
+        throw Error("late startup verifier replacement");
+      });
+      const replacementCurrent = vi.fn(async () => {
+        throw Error("late current-host proof replacement");
+      });
+      const replacementPort = vi.fn(() => {
+        throw Error("late host port replacement");
+      });
+      const failure = Error("captured original proof later refused");
+      if (outcome === "original-proof-fails")
+        f.faults.set("after-preparation:startup-verify", failure);
+      const done = f.execute();
+      void done.catch(() => undefined);
+      await entered.promise;
+      const changed = {
+        lease: structuredClone(f.lease),
+        verify: replacementVerify,
+        assertCurrent: replacementCurrent,
+      };
+      if (replacement === "properties") Object.assign(f.startup, changed);
+      else f.input.startup = changed;
+      f.input.attest = replacementPort;
+      f.input.desktopState = replacementPort;
+      f.input.processesAbsent = replacementPort;
+      ports.finish.mockImplementationOnce(async (handoff) => {
+        f.model.phase = "finish";
+        await handoff.proof();
+        await expect(handoff.verifyLease!()).resolves.toBe(true);
+        expect(handoff.lease).toBe(f.lease);
+        expect(handoff.input.attest).toBe(original.attest);
+        expect(handoff.input.processesAbsent).toBe(original.processesAbsent);
+        return f.result;
+      });
+      gate.resolve();
+      if (outcome === "success") await expect(done).resolves.toEqual(f.result);
+      else {
+        await expect(done).rejects.toBe(failure);
+        expect(ports.finish).not.toHaveBeenCalled();
+      }
+      expect(original.verify).toHaveBeenCalled();
+      expect(original.assertCurrent).toHaveBeenCalled();
+      expect(original.desktopState).toHaveBeenCalled();
+      expect(replacementVerify).not.toHaveBeenCalled();
+      expect(replacementCurrent).not.toHaveBeenCalled();
+      expect(replacementPort).not.toHaveBeenCalled();
+      for (const [actual] of ports.verifyLease.mock.calls)
+        expect(actual).toBe(f.lease);
+      startupRetained(f);
+    },
+  );
+
+  it.each(
+    (
+      [
+        "before-observation",
+        "before-preparation",
+        "after-preparation",
+        "finish",
+      ] as const
+    ).flatMap((phase) =>
+      [
+        "root:parent",
+        "unchanged:running.json",
+        "unchanged:config.json",
+        "unchanged:last-quit.json",
+        "desktop",
+        "connector-work",
+        "processes",
+      ].map((barrier) => ({ phase, barrier })),
+    ),
+  )(
+    "retains the existing $barrier refusal at $phase under startup admission",
+    async ({ phase, barrier }) => {
+      const f = startupFixture();
+      const failure = Object.assign(Error(`startup ${barrier} proof unknown`), {
+        state: "unknown",
+      });
+      f.faults.set(`${phase}:${barrier}`, failure);
+      const completed = vi.fn();
+      ports.finish.mockImplementationOnce(async (handoff) => {
+        f.model.phase = "finish";
+        await handoff.proof();
+        completed();
+        return f.result;
+      });
+      await expect(f.execute()).rejects.toBe(failure);
+      if (phase === "before-observation")
+        expect(ports.inspect).not.toHaveBeenCalled();
+      if (phase === "before-observation" || phase === "before-preparation")
+        expect(ports.prepare).not.toHaveBeenCalled();
+      if (phase !== "finish") expect(ports.finish).not.toHaveBeenCalled();
+      expect(completed).not.toHaveBeenCalled();
+      startupRetained(f);
+    },
+  );
+
+  it.each(["current", "absent"] as const)(
+    "still refuses unresolved connector journals for %s Quit",
+    async (scope) => {
+      const f = startupFixture(scope);
+      const failure = Error("CLOSED_COMPUTER_RECOVERY_WORK_PENDING");
+      f.faults.set("before-preparation:connector-work", failure);
+      await expect(f.execute()).rejects.toBe(failure);
+      expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.reconcileInactiveAfterCrash).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      startupRetained(f);
+    },
+  );
+
+  it.each(["full", "current", "native"] as const)(
+    "rechecks the original %s proof inside the mocked crash reconciliation",
+    async (proof) => {
+      const f = startupFixture("absent");
+      const failure = Error("owned read-only child proof unknown");
+      const original =
+        ports.reconcileInactiveAfterCrash.getMockImplementation()!;
+      ports.reconcileInactiveAfterCrash.mockImplementationOnce(
+        async (input) => {
+          if (proof === "full") f.proofs.full = false;
+          if (proof === "current")
+            f.faults.set("before-preparation:startup-current", failure);
+          if (proof === "native") f.proofs.native = false;
+          await original(input);
+        },
+      );
+      const done = f.execute();
+      if (proof === "current") await expect(done).rejects.toBe(failure);
+      else await expect(done).rejects.toThrow("PROMOTION_LEASE_LOST");
+      expect(ports.stop).toHaveBeenCalled();
+      expect(ports.confirmStop).not.toHaveBeenCalled();
+      expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      startupRetained(f);
+    },
+  );
+
+  it.each(["profile", "operation", "run", "config", "quit"] as const)(
+    "refuses invalid startup %s selection before host IO",
+    async (field) => {
+      const f = startupFixture();
+      if (field === "profile") f.input.profile.root = "/other/go-core";
+      if (field === "operation") f.input.exact.operationId = "not-a-uuid";
+      if (field === "run") f.input.expectedRunSha256 = "a".repeat(63);
+      if (field === "config") f.input.expectedConfigSha256 = "A".repeat(64);
+      if (field === "quit") f.input.expectedQuitSha256 = "invalid";
+      await expect(f.execute()).rejects.toThrow(
+        "PRESERVED_RECOVERY_SELECTION_INVALID",
+      );
+      expect(ports.privateRoot).not.toHaveBeenCalled();
+      expect(ports.drain).not.toHaveBeenCalled();
+      expect(ports.inspect).not.toHaveBeenCalled();
+      expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      startupRetained(f);
+    },
+  );
+
+  it.each(["retain-chat", "observe", "prepare", "archive-pin"] as const)(
+    "does not continue startup recovery after %s uncertainty",
+    async (point) => {
+      const f = startupFixture();
+      const phase =
+        point === "prepare"
+          ? "before-preparation"
+          : point === "archive-pin"
+            ? "after-preparation"
+            : "before-observation";
+      const failure = Object.assign(Error(`${point} outcome unknown`), {
+        state: "unknown",
+      });
+      f.faults.set(`${phase}:${point}`, failure);
+      await expect(f.execute()).rejects.toBe(failure);
+      if (point === "retain-chat") expect(ports.inspect).not.toHaveBeenCalled();
+      if (point === "retain-chat" || point === "observe")
+        expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      startupRetained(f);
+    },
+  );
+
+  it.each(["running.json", "config.json", "last-quit.json"])(
+    "refuses changed selected %s bytes on the startup route",
+    async (name) => {
+      const f = startupFixture();
+      f.files.set(path.join(f.state, name), snapshot({ changed: true }, 99));
+      await expect(f.execute()).rejects.toThrow(
+        "PRESERVED_RECOVERY_STATE_CHANGED",
+      );
+      expect(ports.retain).not.toHaveBeenCalled();
+      expect(ports.inspect).not.toHaveBeenCalled();
+      expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      startupRetained(f);
+    },
+  );
+
+  it.each(["Profile", "Selection", "Mutations", "extra"] as const)(
+    "refuses changed pending intent %s before startup finish",
+    async (which) => {
+      const f = startupFixture();
+      const changed = {
+        ...f.intentValue,
+        ...(which === "Profile"
+          ? { Profile: { ...f.intentValue.Profile, Root: "/other" } }
+          : {}),
+        ...(which === "Selection"
+          ? { Selection: f.input.selectionInput.Selection }
+          : {}),
+        ...(which === "Mutations" ? { Mutations: f.observed.Mutations } : {}),
+        ...(which === "extra" ? { unexpected: true } : {}),
+      };
+      f.files.set(f.pending, snapshot(changed, 13));
+      await expect(f.execute()).rejects.toThrow(
+        "PRESERVED_RECOVERY_INTENT_CHANGED",
+      );
+      expect(ports.finish).not.toHaveBeenCalled();
+      startupRetained(f);
+    },
+  );
 });

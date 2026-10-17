@@ -2,6 +2,7 @@ import { constants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { LEGACY_PREPARATION_ARCHIVE_NAME } from "./chatgpt-task-journal-record";
 
 const FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 const MAX_ENTRIES = 2057;
@@ -13,6 +14,7 @@ const additions = new Set([
   "failed-last-quit.json",
   "previous-last-quit.json",
   "maintenance-intent.json",
+  LEGACY_PREPARATION_ARCHIVE_NAME,
 ]);
 type Entry = { identity: bigint[]; bytes?: Buffer };
 function refused(): never {

@@ -30,10 +30,20 @@ import {
   retainEmptyChatForArchival,
 } from "./retained-empty-archive";
 import type { PreservedRecoveryBinding } from "../../../apps/desktop/bridge/preserved-recovery-child";
+import { LEGACY_PREPARATION_ARCHIVE_NAME } from "./chatgpt-task-journal-record";
 
 const FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 const sum = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 type Snapshot = Readonly<{ bytes: Buffer; device: number; inode: number }>;
+// The finish consumer owns this metadata-retirement port; the selector supplies
+// its private factory instance. This conveys no Go/process/connector authority.
+export type StartupLegacyPreparation = Readonly<{
+  operationId: string;
+  sha256: string;
+  verify(): Promise<void>;
+  // One memoized transition under the existing recovery intent and admission.
+  retireInto(archive: string): Promise<Snapshot>;
+}>;
 
 // Private desktop host mechanics only. Go owns selected journal validation,
 // preservation, retirement and terminal policy. This adapter never resets a
@@ -880,6 +890,7 @@ async function finishEmptyRecoveryHost({
   intent,
   preparedRoots,
   lease,
+  verifyLease,
   proof,
   knownFailure,
   archivePin,
@@ -887,6 +898,7 @@ async function finishEmptyRecoveryHost({
   previousConfirmedQuit,
   reconcileConnector,
   preservedHistory,
+  legacyPreparation,
 }: {
   input: Pick<
     ClosedEmptyChatRecoveryInput,
@@ -915,6 +927,9 @@ async function finishEmptyRecoveryHost({
     chat: { dev: number; ino: number };
   };
   lease: PromotionLeaseHandle;
+  // A borrowed startup handle retains its original full verifier through the
+  // final eligibility change, including installed-replacement/current-host gates.
+  verifyLease?: () => Promise<boolean>;
   proof(): Promise<void>;
   knownFailure?: { receiptSha256: string; completionOperationId: string };
   archivePin?: Awaited<ReturnType<typeof retainEmptyArchive>>;
@@ -926,6 +941,7 @@ async function finishEmptyRecoveryHost({
     originalACK: "unobserved";
     originalTerminal: "unobserved";
   }>;
+  legacyPreparation?: StartupLegacyPreparation;
 }): Promise<{
   phase: "prepared_for_cold_start";
   archive: string;
@@ -969,7 +985,7 @@ async function finishEmptyRecoveryHost({
         }
       : undefined;
   const receipt = Buffer.from(
-    `${JSON.stringify({ schema: preservedHistory ? "farol.closed-preserved-chat-recovery/1" : "farol.closed-empty-chat-recovery/1", operationId: exact.operationId, buildId: exact.buildId, failedRunSha256: input.expectedRunSha256, configSha256: input.expectedConfigSha256, publication: child.publication, acknowledgement: child.acknowledgement, originalChildTerminal: child.terminal, recorderConfirmed: true, ...(preservedHistory ? { preservedHistory, originalQuitScope: failedQuit ? (previousConfirmedQuit ? "previous-lifetime" : "current-unconfirmed") : "absent", retainedQuitSha256: failedQuit ? sum(failedQuit.bytes) : undefined } : {}), ...(knownFailure ? { knownFailure } : {}), ...(interruptedRetirement ? { interruptedRetirement } : {}), ...(unacknowledgedDev ? (input.selectionInput.InstalledPreserved ? { installedPreservedLifetime: unacknowledgedDev } : input.selectionInput.InstalledEmpty ? { installedEmptyLifetime: unacknowledgedDev } : { unacknowledgedDev }) : {}) })}\n`,
+    `${JSON.stringify({ schema: preservedHistory ? "farol.closed-preserved-chat-recovery/1" : "farol.closed-empty-chat-recovery/1", operationId: exact.operationId, buildId: exact.buildId, failedRunSha256: input.expectedRunSha256, configSha256: input.expectedConfigSha256, publication: child.publication, acknowledgement: child.acknowledgement, originalChildTerminal: child.terminal, recorderConfirmed: true, ...(preservedHistory ? { preservedHistory, originalQuitScope: failedQuit ? (previousConfirmedQuit ? "previous-lifetime" : "current-unconfirmed") : "absent", retainedQuitSha256: failedQuit ? sum(failedQuit.bytes) : undefined } : {}), ...(legacyPreparation ? { selectedLegacyPreparation: { operationId: legacyPreparation.operationId, sha256: legacyPreparation.sha256, originalPhase: "prepared", legacyDisposition: "selected_for_retirement", correspondingGoOutcome: "unobserved" } } : {}), ...(knownFailure ? { knownFailure } : {}), ...(interruptedRetirement ? { interruptedRetirement } : {}), ...(unacknowledgedDev ? (input.selectionInput.InstalledPreserved ? { installedPreservedLifetime: unacknowledgedDev } : input.selectionInput.InstalledEmpty ? { installedEmptyLifetime: unacknowledgedDev } : { unacknowledgedDev }) : {}) })}\n`,
   );
   const f = await fs.open(
     completion,
@@ -995,6 +1011,14 @@ async function finishEmptyRecoveryHost({
   // The original failed run and Quit remain pinned until inactive MCP ownership
   // is durably reconciled under the same exclusive Desktop/Computer leases.
   await reconcileConnector?.();
+  if (legacyPreparation !== undefined) {
+    const retainedPreparation = await legacyPreparation.retireInto(archive);
+    await archivePin?.include(
+      LEGACY_PREPARATION_ARCHIVE_NAME,
+      retainedPreparation,
+    );
+    await unchanged(pending, intent);
+  }
   // Preserve original failure and intent; NEVER manufacture a clean Quit.
   const retainedRun = path.join(archive, "failed-running.json");
   const retainedIntent = path.join(archive, "maintenance-intent.json");
@@ -1032,6 +1056,8 @@ async function finishEmptyRecoveryHost({
   input.processesAbsent();
   if (!(await verifyPromotionLease(lease))) throw Error("PROMOTION_LEASE_LOST");
   await archivePin?.verify();
+  if (verifyLease !== undefined && !(await verifyLease()))
+    throw Error("PROMOTION_LEASE_LOST");
   // This is the final eligibility change. Any preceding unknown leaves the
   // original pending inode blocking both normal Go and Electron startup.
   try {

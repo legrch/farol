@@ -10,7 +10,10 @@ import {
 
 // Private-pipe correlation with an explicit transport double; no Go owner,
 // stored native bytes, old terminal witness or successful ACK is exercised.
-function fixture(change: (value: Outcome) => unknown = (value) => value) {
+function fixture(
+  change: (value: Outcome) => unknown = (value) => value,
+  namespace: "chat.archive" | "chat.retired" = "chat.archive",
+) {
   const context = {
     profileId: "profile",
     backendGeneration: "current-backend",
@@ -18,8 +21,7 @@ function fixture(change: (value: Outcome) => unknown = (value) => value) {
   const transportContext = { ...context };
   const request = vi.fn<Client["request"]>(
     async (method, _body, options = {}) => {
-      const data =
-        method === "chat.archive.list" ? storedPage() : storedReply();
+      const data = method.endsWith(".list") ? storedPage() : storedReply();
       return change({
         status: "ok",
         requestId: options.id!,
@@ -31,10 +33,35 @@ function fixture(change: (value: Outcome) => unknown = (value) => value) {
   return {
     request,
     context,
-    reader: new RecoveryArchiveReader({ request }, context),
+    reader: new RecoveryArchiveReader({ request }, context, namespace),
   };
 }
 describe("recovery archive private-pipe adapter", () => {
+  it("rejects an unknown method namespace before transport", () => {
+    const f = fixture();
+    expect(
+      () =>
+        new RecoveryArchiveReader(
+          { request: f.request },
+          f.context,
+          "computer.settings" as never,
+        ),
+    ).toThrow();
+    expect(f.request).not.toHaveBeenCalled();
+  });
+  it("selects only retired read methods for a normal owner", async () => {
+    const f = fixture(undefined, "chat.retired");
+    expect(await f.reader.list("")).toEqual(storedPage());
+    expect(
+      await f.reader.read(storedSummary().key, storedSummary().digest),
+    ).toEqual(storedReply());
+    expect(f.request.mock.calls.map((call) => call[0])).toEqual([
+      "chat.retired.list",
+      "chat.retired.read",
+    ]);
+    for (const call of f.request.mock.calls)
+      expect(call[2]).not.toHaveProperty("operationId");
+  });
   it("correlates one original read without an effect identity or current conversation binding", async () => {
     const f = fixture();
     f.context.backendGeneration = "changed caller object";

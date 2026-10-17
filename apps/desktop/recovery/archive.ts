@@ -15,8 +15,13 @@ export class RecoveryArchiveReader {
   constructor(
     private readonly client: Pick<Client, "request">,
     context: Context,
+    private readonly namespace:
+      "chat.archive" | "chat.retired" = "chat.archive",
   ) {
-    if (!validate("Context", context))
+    if (
+      (namespace !== "chat.archive" && namespace !== "chat.retired") ||
+      !validate("Context", context)
+    )
       throw new BridgeError("refused", "invalid_archive_context");
     this.context = Object.freeze({ ...context });
   }
@@ -52,7 +57,7 @@ export class RecoveryArchiveReader {
   }
   async list(after: string): Promise<ChatArchivePage> {
     const page = (await this.query(
-      "chat.archive.list",
+      `${this.namespace}.list`,
       "ChatArchiveListRequest",
       "ChatArchivePage",
       { after },
@@ -72,7 +77,7 @@ export class RecoveryArchiveReader {
   }
   async read(key: string, digest: string): Promise<ChatArchiveReply> {
     const reply = (await this.query(
-      "chat.archive.read",
+      `${this.namespace}.read`,
       "ChatArchiveReadRequest",
       "ChatArchiveReply",
       { key, digest },
