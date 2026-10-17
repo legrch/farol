@@ -44,6 +44,56 @@ observed pipe EOF establishes complete descendant cleanup. See [current approval
 and [Computer parity](../../../../../docs/computer-parity.md) for the selected contract
 and the separate native, source and installed evidence.
 
+## Developer Shell direction and current evidence
+
+The developer Shell target is ordinary command composition and project tools
+inside the owner's selected environment. Reuse the existing access snapshots,
+grants, Go execution, Seatbelt compiler and retained operation lifecycle.
+Executable attestation protects trusted runtime images; general development
+requires a usable read/execute scope for the selected tools and dependencies.
+The finite Git/Python resource selections below retain their qualified behavior
+while that broader environment is designed and tested.
+
+This section records the target and the current implementation boundary. It
+selects no new runtime roots, permission, process launcher or production default.
+
+| Concern                            | Current implementation                                                                                                                                                   | Required before general Shell selection                                                                                                                                                                                  |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Filesystem scope                   | `rootscoped.go` intersects the same owner and task snapshots. Read-only invocation narrows every selected root; overlapping exclusions or conflicting access refuse.     | Preserve physical root identity, revocation, read/write modes and explicit additional-root approval. A working directory, Git pointer or environment variable grants no access.                                          |
+| Execution and runtime dependencies | `confinement.go` permits selected images and effective approved roots. `PATH` comes from selected executable directories; CLT/Python dependency closures remain finite.  | Design runtime read/execute roots and trusted `PATH` selection through existing grants. Discover host toolchains during qualification; retain protected image/bundle writes, mount rules and private scratch boundaries. |
+| Git                                | Root-scoped Git uses ordinary configuration, includes, hooks and explicitly approved metadata roots. The selected CLT closure supports its documented fixtures.          | Run standard Git and real hooks with their dependencies. Resolve linked `git-dir`/`common-dir` through scoped metadata access. Preserve unrelated staging and genuine hook failures.                                     |
+| Network                            | `NoNetwork` is separate from `ApprovedNetwork`; the latter requires both snapshots and the network capability. Its current semantics are broad.                          | Keep no network by default, including in hooks. Qualify separately granted network/loopback access and describe its actual breadth; a local commit does not authorize a push or download.                                |
+| Privacy and runtime integrity      | Protected images, bundle, exclusions and mount checks constrain the selected policy. Path-based rules have the documented alias/hardlink limits.                         | Exercise credential, foreign-root, alias and mounted-volume controls with synthetic canaries. Define system and user-writable runtime-root risks without assuming object-level secrecy from a path grant.                |
+| Process lifetime                   | Existing owners bind one attempt, original bounds, retained output and exact child observations. Root exit, pipe drain, group and descendant cleanup are separate facts. | Qualify long commands, hooks with background children, cancellation and reconnect. Retain unresolved effects and cleanup facts; an unknown result supplies no replay authority.                                          |
+| Refusal reporting                  | Access decisions, policy construction and native execution are distinct boundaries.                                                                                      | Establish the actual refusal layer: admission, sandbox startup/enforcement, filesystem permission, command/hook failure or unknown transport outcome. Preserve closed diagnostics and original operation identity.       |
+
+Use standard shell and Git interfaces with the existing approval and operation
+owners. Keep hook execution unchanged, and fail closed if sandbox startup or
+admission fails. A new Git command API, separate hook permission store or
+unconfined fallback would change this contract.
+
+Native qualification must cover a disposable developer workspace with:
+
+- Bash composition, a project-local script, actual Go and Node tools,
+  Python 3.12 standard-library imports and `gitleaks`, using the qualifying
+  host's discovered dependency paths;
+- standard stage/unstage/commit with enabled Python/tool-dependent `pre-commit`
+  and `commit-msg` hooks, real hook rejection, linked metadata, two roots with
+  different modes, and preserved foreign staging;
+- explicit refusal controls for ungranted files, credentials, metadata,
+  network/loopback, aliases, mount changes and revoked authority, with baseline
+  canary access and actual effects recorded separately;
+- a retained long-running command and owned-child observations, separating
+  root wait, output EOF, group/descendant facts and any partial effects after
+  cancellation or deadline.
+
+Existing compiler, pinned-runtime and native fixture results remain bound to
+their own selections and source identities. They supply no general toolchain,
+packaged Dev, installed or live connector acceptance for this target. The next
+implementation must settle runtime-root, privacy, metadata, network and lifetime
+decisions before an opt-in policy selection; current qualified fixes and P0
+recovery remain in force.
+
 ## Selected Command Line Tools Git data
 
 The trusted `GitRuntimeResources` declaration adds only the selected CLT Git's
