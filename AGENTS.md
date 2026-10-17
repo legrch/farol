@@ -50,18 +50,7 @@ schemas are compatibility boundaries. Do not rename them as a source-layout fix.
   the legacy Farol or installed `codex-chatgpt-web` identities.
 - Use English for source, tests, UI, logs, errors, and implementation documentation.
 
-- Preserve unrelated changes. Use named writers and stage only task-owned paths.
-- **Coherent implementation checkpoint:** inspect the complete owned diff; run
-  representative targeted tests and applicable type, static, generated and import
-  checks; self-review the owned diff; run `git diff --check`; then create a coherent
-  checkpoint commit. Stage only owned paths and inspect the staged diff. Use English
-  Conventional Commits without assistant or vendor attribution. Retain the original
-  terminal receipts, exact tested source identity, dependency evidence and limits.
-  A checkpoint means safe, coherent and verified enough to preserve and integrate;
-  it does not mean the whole task or product is accepted. `task ci:fast` is not
-  required before every commit. The optional evidence consistency checker
-  (`task checkpoint`, documented in `docs/checkpoints.md`) does not replace the
-  implementing Lead's provenance/coverage audit or grant acceptance.
+- **Farol-specific checkpoint evidence:** include applicable generated-binding, type, static and import checks. Optional `task checkpoint` (`docs/checkpoints.md`) validates evidence consistency, not Lead acceptance.
 - **Push is not a CI gate:** the repository intentionally has no `pre-push` hook. `task ci:fast` and `task ci:cloud` still run `scan:secrets` as explicit source-acceptance gates. Run the risk-required checks before PR merge; ordinary feature-branch push should not repeatedly execute the full-history secret scanner. This does not waive any native attestation, security review or release requirement. The active TestOps/CI pilot remains independent of this hook removal.
 - **Stable integration candidate:** freeze the exact committed range, then run
   `task ci:fast` and applicable cross-module/aggregate checks once against those
@@ -76,8 +65,6 @@ schemas are compatibility boundaries. Do not rename them as a source-layout fix.
   hardware alone does not block reviewed portable source from reaching main.
   Keep full native CI and all attestation, hook, confinement and unknown-effect
   predicates unchanged. Fix actual portable failures before source integration.
-  After checks and review pass, the Lead merges the existing PR and verifies main;
-  creating a PR is an intermediate delivery step, not the completion boundary.
   If the formal Critic host driver lacks lifecycle primitives, use fresh actual
   native reviewers with the configured cumulative role/model/effort ladder and
   retain their exact source coverage/findings; do not invent driver/close receipts
@@ -85,17 +72,7 @@ schemas are compatibility boundaries. Do not rename them as a source-layout fix.
 - **Final/package/release candidate:** run the applicable full CI, native, package,
   installation/live and release gates against exact committed bytes. Preserve
   separate evidence for source acceptance, packaging, installation and live use.
-- **Review timing:** ordinary development uses self-review, targeted tests and
-  bounded independent inspection where useful. Do not run formal R3/R4 after every
-  moving implementation checkpoint. Formal Critic R3/R4 belongs to stable/frozen
-  coherent integration ranges or final candidates when their risk classification
-  requires it. Narrow regression-backed review fixes use targeted independent
-  recheck where prior coverage remains applicable. Rerun the whole ladder only
-  when policy requires it or a fix materially changes the reviewed risk surface.
-  Keep the current Critic ladder: General/Specialists use Luna High, Strong/R3 uses
-  GPT-6.1 Sol High, and Frontier/R4 uses GPT-6 Astra Max after accepted Strong.
-  Claude review is optional for a specific unresolved question; it is not a
-  required R3/R4 gate.
+- **Farol reviewer assignments:** General/Specialists use Luna High; Strong/R3 uses GPT-6.1 Sol High; Frontier/R4 uses GPT-6 Astra Max after accepted Strong. Claude review is optional for a specific unresolved question, not a required R3/R4 gate.
 - Owner-reported installed launch, connection, or update failures are incidents.
   Prioritize restoring a usable installation under the current owner grant; follow
   `docs/installed-incident-response.md` before resuming broad acceptance reviews.
@@ -116,13 +93,5 @@ schemas are compatibility boundaries. Do not rename them as a source-layout fix.
   a gate. It must not import or invoke a V0 implementation.
 - Never commit credentials, tokens, authentication state, browser profiles,
   private prompts/transcripts, caches, or vendor runtime state.
-- The owner approved public source/history delivery to the existing
-  `legrch/farol` repository on 11 October 2026 and maintaining its `main`.
-  Verified ordinary non-force fast-forward pushes to that exact destination
-  are authorized. Inspect the outgoing range and scan source/history for
-  credentials, authentication state, private prompts/transcripts, browser
-  profiles, caches, vendor runtime state and unrelated personal data before
-  public delivery. Preserve local evidence and recovery bundles privately.
-  New or changed remotes, GitHub rename/create, visibility changes, installation,
-  activation, release, signing and licensing require an explicit owner decision.
+- **Public-source delivery:** the owner approved publishing source/history to `legrch/farol` on 11 October 2026. Before public publication, inspect the outgoing range and scan source/history for credentials, authentication state, private prompts/transcripts, browser profiles, caches, vendor runtime state and unrelated personal data. Preserve local evidence and recovery bundles privately. New or changed remotes, GitHub rename/create, visibility changes, installation, activation, release, signing and licensing require a separate explicit owner decision.
 - Live calls are one-shot. Never retry outcome-unknown or platform-refused work.
