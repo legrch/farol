@@ -75,3 +75,40 @@ The unselected `app/services/execution` service owns apply and explicit rollback
 Apply requires the exact owned source/staged pair, no previous/failed/rejected entry, accepted tree observations and the same device before preparing the original journal from confirmed absence. It exchanges only the measured pair, verifies the displaced source, fences the move to previous, writes new_installed and checks the installed target. An opaque target-verification error remains an error. Only a confirmed negative tree match may restore the same predecessor, quarantine the measured failed target, durably record its rejection and write rolled_back. That settled negative update returns the existing target_verification code with no incomplete-scope error; it is not a successful update, helper exit, relaunch or startup proof.
 
 Explicit rollback accepts only verified/completed/launch_requested with an exact owned app/predecessor pair and no staged, failed or rejected entry. The existing predecessor-state predicate refuses the known incompatible historical versions. It fences each destructive namespace transition, preserves the failed target and verifies the restored source before rolled_back. It does not manufacture rejected-target evidence for an otherwise accepted target. Every later failure after a confirmed effect remains uncertain, including a known refusal; joined or opaque errors retain their causes behind closed text and cannot inherit a nested refusal classification. Symbolic policy tests assert ordering, pair custody, refused phases/versions, no-effect preflight, copied/concurrent one-shot behavior and late-result suppression. These are not native installation, process, lease, package or OTA evidence.
+
+## Inherited-role process fixture
+
+`helperchannels.TestProcessCompositionInheritedHandshake` starts a fresh Go test
+executable with explicit `os/exec.ExtraFiles`: request fd3, ACK fd4, BORROWED
+regular lease fd5, and continuation fd6. This is a declared fixture ABI matching
+the launcher role layout, not production role authentication or a selected Go
+helper. Stdin and captured stdout/stderr provide test coordination only.
+
+The child uses the real request/channel owners, input parser, protocol service
+and JSON codecs. The parent closes its inherited transport ends, seals request
+EOF, checks one bounded correlated ACK plus EOF, and supplies continuation. One
+case seals a correlated continuation; another withholds EOF past the child's
+original deadline, observes nil bytes, then proves a late write and fresh read/ACK
+bounds cannot revive the consumed attempts. No installation effect is admitted.
+
+The parent holds a real disposable flock. Parent/child snapshots compare fd5's
+identity, flags and unchanged offset (queried without movement), including after
+transport cleanup; the parent also checks its contents. A separately opened
+description must contend before, during and after child execution, then acquire
+only after that same child is reaped and the parent's last alias closes. Snapshots are observations, not a
+syscall audit or proof against arbitrary transient mutation. Unsupported flock
+filesystems skip this witness without claiming qualification.
+
+`exec.Cmd.Wait` observes the exact child's exit and joins both diagnostic copying
+producers. A child terminal line alone is only a pre-return receipt. Each run
+retains its private `farol-helperchannels-process-*` directory under the host's
+normal temporary directory, with stdout, stderr and a parent terminal receipt,
+including failures/skips. Abnormal cleanup may kill only that retained fixture
+process handle; killed or unknown execution fails and never counts as drained
+product Quit.
+
+These are real process/descriptor transport witnesses only. Request predecessor,
+build, process-start and acceptance values remain synthetic. They do not prove
+production inherited-role authentication, original application quiescence or
+admission, full helper CLI composition, relaunch, install/apply/recover/rollback,
+package, OTA or Python retirement. Existing source/native evidence is unchanged.
