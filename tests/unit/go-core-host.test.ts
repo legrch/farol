@@ -353,13 +353,19 @@ function transport(fault?: Fault) {
     closePoll?.();
     closeStorePoll?.();
   });
+  const closeAndObserve = vi
+    .fn<Client["closeAndObserve"]>()
+    .mockResolvedValue(
+      Object.freeze({ exitCode: 0, signal: null, forced: false }),
+    );
   // Deliberately only the host-facing Client port; no constructor/child pipes.
   const client = {
     request,
     close,
+    closeAndObserve,
     verifiedContext: context,
   } as unknown as Client;
-  return { client, request, close, events, replies };
+  return { client, request, close, closeAndObserve, events, replies };
 }
 
 let settings: ProductSettings;
@@ -1473,6 +1479,7 @@ describe("explicit recovery Go host composition", () => {
       "archiveList",
       "archiveRead",
       "close",
+      "closeAndObserve",
       "folderReadsAvailable",
       "isAvailable",
       "list",
@@ -1616,6 +1623,90 @@ describe("explicit recovery Go host composition", () => {
     await expect(result).rejects.toMatchObject({
       code: "recovery_computer_closed",
     });
+  });
+  it("retains the original observation promise and immediately withdraws reads", async () => {
+    const f = transport();
+    start.mockResolvedValue(f.client);
+    const host = await startDesktopGoRecovery(recoverySelection());
+    const result = host.closeAndObserve();
+    expect(host.closeAndObserve()).toBe(result);
+    expect(host.isAvailable()).toBe(false);
+    await expect(host.archiveList("")).rejects.toMatchObject({
+      code: "recovery_computer_closed",
+    });
+    expect(await result).toBe(await f.closeAndObserve.mock.results[0]!.value);
+    await host.close();
+    await host.close();
+    expect(f.closeAndObserve).toHaveBeenCalledTimes(1);
+    expect(f.close).not.toHaveBeenCalled();
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(AttestedCore.prototype.completeRetirement).not.toHaveBeenCalled();
+  });
+  it("waits for an original plain close before observing without another launch", async () => {
+    const f = transport();
+    let finish!: () => void;
+    f.close.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    start.mockResolvedValue(f.client);
+    const host = await startDesktopGoRecovery(recoverySelection());
+    const closing = host.close();
+    const result = host.closeAndObserve();
+    expect(host.close()).toBe(closing);
+    expect(f.closeAndObserve).not.toHaveBeenCalled();
+    finish();
+    await closing;
+    await result;
+    expect(f.close).toHaveBeenCalledTimes(1);
+    expect(f.closeAndObserve).toHaveBeenCalledTimes(1);
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+  it("retains observation uncertainty for later close without another cleanup call", async () => {
+    const f = transport();
+    const failure = new BridgeError("unknown", "backend_terminal_unobserved");
+    f.closeAndObserve.mockRejectedValueOnce(failure);
+    start.mockResolvedValue(f.client);
+    const host = await startDesktopGoRecovery(recoverySelection());
+    const result = host.closeAndObserve();
+    const failed = expect(result).rejects.toBe(failure);
+    const closed = expect(host.close()).rejects.toBe(failure);
+    await Promise.all([failed, closed]);
+    expect(host.closeAndObserve()).toBe(result);
+    expect(f.closeAndObserve).toHaveBeenCalledTimes(1);
+    expect(f.close).not.toHaveBeenCalled();
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+  it("does not observe through a failed original close", async () => {
+    const f = transport();
+    const failure = new BridgeError("unknown", "profile_cleanup_unconfirmed");
+    f.close.mockRejectedValueOnce(failure);
+    start.mockResolvedValue(f.client);
+    const host = await startDesktopGoRecovery(recoverySelection());
+    await expect(host.close()).rejects.toBe(failure);
+    const result = host.closeAndObserve();
+    await expect(result).rejects.toBe(failure);
+    expect(host.closeAndObserve()).toBe(result);
+    expect(f.closeAndObserve).not.toHaveBeenCalled();
+    expect(f.close).toHaveBeenCalledTimes(1);
+  });
+  it("returns forced terminal facts without upgrading them to clean retirement", async () => {
+    const f = transport();
+    const terminal = Object.freeze({
+      exitCode: null,
+      signal: "SIGKILL" as const,
+      forced: true,
+    });
+    f.closeAndObserve.mockResolvedValueOnce(terminal);
+    start.mockResolvedValue(f.client);
+    const host = await startDesktopGoRecovery(recoverySelection());
+    expect(await host.closeAndObserve()).toBe(terminal);
+    await host.close();
+    expect(f.closeAndObserve).toHaveBeenCalledTimes(1);
+    expect(f.close).not.toHaveBeenCalled();
+    expect(AttestedCore.prototype.completeRetirement).not.toHaveBeenCalled();
   });
 });
 

@@ -73,6 +73,41 @@ export function inspectPreservedRecoveryChild(
   selectionInput: PreservedRecoverySelectionInput,
   exact: ExactPreservedRecoverySelection,
 ): Promise<PreservedRecoverySelectionInput> {
+  return runPreservedInspectionChild(
+    "observe-preserved-profile",
+    executable,
+    profile,
+    selectionInput,
+    exact,
+  );
+}
+
+// Explicit candidate-scope discovery only. The caller supplies an empty current
+// generation; the same attested original child must return its canonical scope.
+// The result still grants no preparation, historical terminal or replay right.
+export function discoverPreservedRecoveryChild(
+  executable: string,
+  profile: ProfileLaunchBinding,
+  selectionInput: PreservedRecoverySelectionInput,
+  exact: ExactPreservedRecoverySelection,
+): Promise<PreservedRecoverySelectionInput> {
+  return runPreservedInspectionChild(
+    "discover-preserved-profile",
+    executable,
+    profile,
+    selectionInput,
+    exact,
+  );
+}
+
+function runPreservedInspectionChild(
+  command: "observe-preserved-profile" | "discover-preserved-profile",
+  executable: string,
+  profile: ProfileLaunchBinding,
+  selectionInput: PreservedRecoverySelectionInput,
+  exact: ExactPreservedRecoverySelection,
+): Promise<PreservedRecoverySelectionInput> {
+  const discoverScope = command === "discover-preserved-profile";
   const deadlineAt = performance.now() + 8000;
   let selectedProfile: ProfileLaunchBinding;
   let expected: ExactPreservedRecoverySelection;
@@ -109,8 +144,10 @@ export function inspectPreservedRecoveryChild(
         expected.backendGeneration,
         selectedProfile.profileId,
         scope.ProfileID,
-        scope.BackendGeneration,
       ].every(id) ||
+      (discoverScope
+        ? scope.BackendGeneration !== ""
+        : !id(scope.BackendGeneration)) ||
       !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(
         expected.operationId,
       ) ||
@@ -199,7 +236,7 @@ export function inspectPreservedRecoveryChild(
       child = spawn(
         executable,
         [
-          "observe-preserved-profile",
+          command,
           "--profile",
           selectedProfile.profileId,
           "--profile-root",
@@ -330,9 +367,39 @@ export function inspectPreservedRecoveryChild(
         )
           throw Error("invalid inspection envelope");
         const selected = object(reply.selection, Object.keys(input.Selection));
+        let observedCurrent = input.Selection.Current;
+        if (discoverScope) {
+          const current = object(selected.Current, [
+            "Scope",
+            "ParentRoot",
+            "ChatRoot",
+          ]);
+          const scope = object(current.Scope, [
+            "ProfileID",
+            "BackendGeneration",
+          ]);
+          if (
+            scope.ProfileID !== input.Selection.Current.Scope.ProfileID ||
+            !id(scope.BackendGeneration) ||
+            scope.BackendGeneration === expected.backendGeneration
+          )
+            throw Error("invalid discovered scope");
+          observedCurrent = {
+            ...input.Selection.Current,
+            Scope: {
+              ProfileID: input.Selection.Current.Scope.ProfileID,
+              BackendGeneration: scope.BackendGeneration as string,
+            },
+          };
+        }
         for (const [key, value] of Object.entries(input.Selection)) {
           if (!digestKeys.some((digestKey) => digestKey === key)) {
-            if (!isDeepStrictEqual(selected[key], value))
+            if (
+              !isDeepStrictEqual(
+                selected[key],
+                key === "Current" ? observedCurrent : value,
+              )
+            )
               throw Error("selection correlation mismatch");
           }
         }
@@ -348,6 +415,7 @@ export function inspectPreservedRecoveryChild(
           ...input,
           Selection: {
             ...input.Selection,
+            Current: structuredClone(observedCurrent),
             HandoffDigest: [...(selected.HandoffDigest as number[])],
             LifecycleDigest: [...(selected.LifecycleDigest as number[])],
             ResultsDigest: [...(selected.ResultsDigest as number[])],

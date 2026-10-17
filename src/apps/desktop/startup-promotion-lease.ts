@@ -4,6 +4,7 @@ import {
   acquirePromotionLease,
   releasePromotionLease,
   verifyPromotionLease,
+  type PromotionLeaseHandle,
 } from "./promotion-lease";
 
 export type StartupPromotionLeasePorts = Readonly<{
@@ -67,11 +68,16 @@ export class StartupPromotionLeaseReleaseError extends AggregateError {
  * marker presence check and publication, fencing immediately before the write
  * with verify. Configuration and normal admission belong after this resolves.
  * Contention is terminal here; only the existing acquire owns its probes.
+ * Trusted maintenance may borrow the exact handle within this callback. The
+ * startup owner retains release; a copied or released handle grants no lock.
  */
 export async function withStartupPromotionLease<T>(
   userData: string,
   generation: string,
-  critical: (verify: () => Promise<boolean>) => Promise<T>,
+  critical: (
+    verify: () => Promise<boolean>,
+    lease: PromotionLeaseHandle,
+  ) => Promise<T>,
   ports: StartupPromotionLeasePorts = defaultPorts,
 ): Promise<T> {
   const lease = await ports.acquire(userData, generation, "admission");
@@ -87,7 +93,7 @@ export async function withStartupPromotionLease<T>(
     if (!(await verify())) {
       throw new Error("STARTUP_PROMOTION_LEASE_LOST");
     }
-    return await critical(verify);
+    return await critical(verify, lease);
   } catch (error) {
     primaryFailure = { error };
     throw error;

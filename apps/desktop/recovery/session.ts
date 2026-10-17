@@ -1,4 +1,4 @@
-import { BridgeError } from "../bridge/client";
+import { BridgeError, type ChildTerminalObservation } from "../bridge/client";
 import type { StartupRecoveryCore } from "./core-host";
 import {
   RecoveryReadRequestSchema,
@@ -13,6 +13,7 @@ export type StartupRecoverySession = Readonly<{
   state(): Promise<RecoveryState>;
   read(request: unknown): Promise<RecoveryReadResult>;
   close(): Promise<void>;
+  closeAndObserve(): Promise<ChildTerminalObservation>;
 }>;
 
 // One original Settings load and selected child. Saved Settings do not wait for
@@ -31,6 +32,8 @@ export function createStartupRecoverySession(
   let view: RecoveryState = { status: "settings_unavailable" };
   let core: StartupRecoveryCore | undefined;
   let coreClose: Promise<void> | undefined;
+  let coreObservation: Promise<ChildTerminalObservation> | undefined;
+  let terminalResult: Promise<ChildTerminalObservation> | undefined;
   let closeResult: Promise<void> | undefined;
   let cleanupFailure: unknown;
   let exclusionFailure: unknown;
@@ -67,8 +70,20 @@ export function createStartupRecoverySession(
     }
   };
   const closeCore = () => {
-    if (core && !coreClose) coreClose = core.close();
+    if (core && !coreClose)
+      coreClose = coreObservation
+        ? coreObservation.then(() => undefined)
+        : core.close();
     return coreClose;
+  };
+  const closeCoreAndObserve = (): Promise<ChildTerminalObservation> => {
+    if (!core)
+      throw new BridgeError("unavailable", "startup_recovery_core_not_started");
+    if (!coreObservation)
+      coreObservation = coreClose
+        ? coreClose.then(() => core!.closeAndObserve())
+        : core.closeAndObserve();
+    return coreObservation;
   };
   const loaded = (async () => {
     try {
@@ -256,14 +271,29 @@ export function createStartupRecoverySession(
         readBusy = false;
       }
     },
+    // Memoized facts from this original read-only child. This closes admission
+    // to UI reads; it grants no predecessor settlement or writable handoff.
+    closeAndObserve: () => {
+      if (!terminalResult) {
+        closing = true;
+        entries.clear();
+        terminalResult = (async () => {
+          await initialization;
+          // Initialization already awaited cleanup and retained all causes.
+          if (cleanupFailure !== undefined) throw cleanupFailure;
+          return closeCoreAndObserve();
+        })();
+      }
+      return terminalResult;
+    },
     close: () => {
       if (!closeResult) {
         closing = true;
         entries.clear();
         closeResult = (async () => {
           await initialization;
-          await closeCore();
           if (cleanupFailure !== undefined) throw cleanupFailure;
+          await closeCore();
         })();
       }
       return closeResult;
