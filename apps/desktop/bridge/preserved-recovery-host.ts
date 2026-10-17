@@ -26,6 +26,10 @@ import { retainEmptyChatForArchival } from "../../../src/apps/desktop/retained-e
 import { PrivateExecutionFence } from "../../../src/modules/computer/infra/mcp/execution-fence";
 import { PrivateMcpLifecycle } from "../../../src/modules/computer/infra/mcp/private-mcp-lifecycle";
 import { assertClosedConnectorDurableWork } from "../../../src/apps/desktop/closed-computer-recovery";
+import {
+  assertStartupLegacyPreparation,
+  type StartupLegacyPreparation,
+} from "../recovery/legacy-preparation";
 
 export type ClosedPreservedRecoveryInput = Omit<
   ClosedEmptyChatRecoveryInput,
@@ -42,6 +46,7 @@ export type StartupPreservedRecoveryInput = ClosedPreservedRecoveryInput & {
     verify: () => Promise<boolean>;
     // Trusted enclosing host/owned-child proof, never renderer or CLI data.
     assertCurrent: () => Promise<void>;
+    legacyPreparation?: StartupLegacyPreparation;
   }>;
 };
 type PreservedRecoveryResult = Readonly<{
@@ -56,6 +61,7 @@ type PreservedRecoveryAdmission =
       lease: PromotionLeaseHandle;
       verify: () => Promise<boolean>;
       assertCurrent: () => Promise<void>;
+      legacyPreparation?: StartupLegacyPreparation;
     }>;
 const sum = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 
@@ -91,12 +97,13 @@ export async function recoverClosedPreservedChat(
 export async function recoverStartupPreservedChat(
   input: StartupPreservedRecoveryInput,
 ): Promise<PreservedRecoveryResult> {
-  const { lease, verify, assertCurrent } = input.startup;
+  const { lease, verify, assertCurrent, legacyPreparation } = input.startup;
   return recoverPreservedChat(input, {
     kind: "startup",
     lease,
     verify,
     assertCurrent,
+    ...(legacyPreparation === undefined ? {} : { legacyPreparation }),
   });
 }
 
@@ -117,6 +124,10 @@ async function recoverPreservedChat(
   const { desktopState, processesAbsent, attest } = input;
   const { userData, executable, profile, exact } = selected;
   const state = path.join(userData, "farol-next-state");
+  const legacyPreparation =
+    admission.kind === "startup" ? admission.legacyPreparation : undefined;
+  if (legacyPreparation !== undefined)
+    assertStartupLegacyPreparation(legacyPreparation, userData);
   if (
     !path.isAbsolute(userData) ||
     (admission.kind === "closed-dev" &&
@@ -239,18 +250,21 @@ async function recoverPreservedChat(
           if (failedQuit) await host.unchanged(quit, failedQuit);
           else await host.absent(quit);
           const desktop = await desktopState();
+          await legacyPreparation?.verify();
           if (
             desktop.changed.length ||
             desktop.unreadable.length ||
-            !isDeepStrictEqual(
-              desktop.obligations,
-              !failedQuit || previousConfirmedQuit
+            !isDeepStrictEqual(desktop.obligations, [
+              ...(legacyPreparation === undefined
+                ? []
+                : ["CHATGPT_DISPATCH_PREPARED"]),
+              ...(!failedQuit || previousConfirmedQuit
                 ? ["QUIT_UNCONFIRMED:crash"]
                 : [
                     `QUIT_UNCONFIRMED:${quitValue.unconfirmed.join(",")}`,
                     "QUIT_UNCONFIRMED:crash",
-                  ],
-            )
+                  ]),
+            ])
           )
             throw Error("PRESERVED_RECOVERY_WORK_PENDING");
           // The Go snapshot has its own Computer/Task namespace. Connector
@@ -348,6 +362,7 @@ async function recoverPreservedChat(
           proof,
           ...(failedQuit ? { failedQuit } : {}),
           archivePin,
+          ...(legacyPreparation === undefined ? {} : { legacyPreparation }),
           ...(previousConfirmedQuit ? { previousConfirmedQuit: true } : {}),
           preservedHistory: {
             scope: exact.current,

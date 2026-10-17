@@ -67,6 +67,13 @@ const ports = vi.hoisted(() => ({
   reconcileInactiveAfterCrash:
     vi.fn<(input: CrashReconcile) => Promise<void>>(),
   connectorWork: vi.fn<(root: string) => Promise<void>>(),
+  legacyMembership:
+    vi.fn<
+      typeof import("../../apps/desktop/recovery/legacy-preparation").assertStartupLegacyPreparation
+    >(),
+}));
+vi.mock("../../apps/desktop/recovery/legacy-preparation", () => ({
+  assertStartupLegacyPreparation: ports.legacyMembership,
 }));
 vi.mock("../../src/apps/desktop/closed-computer-recovery", async () => {
   const actual = await vi.importActual<
@@ -2013,6 +2020,142 @@ function startupRetained(f: ReturnType<typeof startupFixture>) {
   expect(f.events).not.toContain("promotion:acquire");
   expect(f.events).not.toContain("promotion:release");
 }
+
+function startupLegacyFixture() {
+  const f = startupFixture("absent");
+  const legacyPreparation = {
+    operationId: "ba9d0681-5226-43d5-bc72-e7d6815f5bad",
+    sha256: "7".repeat(64),
+    verify: vi.fn(async () => {
+      f.events.push(`${f.model.phase}:legacy-preparation`);
+      expect(f.model.promotionHeld).toBe(true);
+    }),
+    retireInto: vi.fn(async (_archive: string) =>
+      snapshot({ phase: "prepared" }, 52),
+    ),
+  };
+  const input = {
+    ...f.input,
+    startup: { ...f.input.startup, legacyPreparation },
+  };
+  f.model.desktop = {
+    ...f.model.desktop,
+    obligations: ["CHATGPT_DISPATCH_PREPARED", ...f.model.desktop.obligations],
+  };
+  ports.legacyMembership.mockImplementation((pin, userData) => {
+    expect(pin).toBe(legacyPreparation);
+    expect(userData).toBe(input.userData);
+  });
+  return {
+    ...f,
+    input,
+    legacyPreparation,
+    execute: () => recoverStartupPreservedChat(input),
+  };
+}
+
+describe("startup ownership of inactive legacy preparation (controlled ports)", () => {
+  it("pins the exact legacy preparation through Go observation and forwards archival without an ACK", async () => {
+    const f = startupLegacyFixture();
+    ports.finish.mockImplementationOnce(async (handoff) => {
+      f.model.phase = "finish";
+      await handoff.proof();
+      expect(handoff.legacyPreparation).toBe(f.legacyPreparation);
+      expect(handoff.preservedHistory?.originalACK).toBe("unobserved");
+      expect(handoff.preservedHistory?.originalTerminal).toBe("unobserved");
+      return f.result;
+    });
+    await expect(f.execute()).resolves.toEqual(f.result);
+    expect(ports.legacyMembership).toHaveBeenCalledExactlyOnceWith(
+      f.legacyPreparation,
+      f.input.userData,
+    );
+    for (const phase of [
+      "before-observation",
+      "before-preparation",
+      "after-preparation",
+      "finish",
+    ])
+      expect(f.events).toContain(`${phase}:legacy-preparation`);
+    expect(f.legacyPreparation.retireInto).not.toHaveBeenCalled(); // finish is mocked
+    startupRetained(f);
+  });
+
+  it("keeps an unpinned legacy preparation blocking before a Go child", async () => {
+    const f = startupFixture("absent");
+    f.model.desktop = {
+      ...f.model.desktop,
+      obligations: [
+        "CHATGPT_DISPATCH_PREPARED",
+        ...f.model.desktop.obligations,
+      ],
+    };
+    await expect(f.execute()).rejects.toThrow(
+      "PRESERVED_RECOVERY_WORK_PENDING",
+    );
+    expect(ports.inspect).not.toHaveBeenCalled();
+    expect(ports.prepare).not.toHaveBeenCalled();
+    startupRetained(f);
+  });
+
+  it.each([
+    "CHATGPT_DELIVERY_PENDING:dispatch_intent",
+    "CHATGPT_DELIVERY_PENDING:result_retained",
+    "TASK_OUTCOME_UNKNOWN:1",
+    "EDIT_DELIVERY_PENDING:other",
+  ])(
+    "never waives unrelated %s work for a selected legacy preparation",
+    async (obligation) => {
+      const f = startupLegacyFixture();
+      f.model.desktop = {
+        ...f.model.desktop,
+        obligations: [...f.model.desktop.obligations, obligation],
+      };
+      await expect(f.execute()).rejects.toThrow(
+        "PRESERVED_RECOVERY_WORK_PENDING",
+      );
+      expect(ports.inspect).not.toHaveBeenCalled();
+      expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      startupRetained(f);
+    },
+  );
+
+  it("rejects missing factory membership before host IO or drain", async () => {
+    const f = startupLegacyFixture(),
+      failure = Error("STARTUP_LEGACY_PREPARATION_SELECTION_INVALID");
+    ports.legacyMembership.mockImplementationOnce(() => {
+      throw failure;
+    });
+    await expect(f.execute()).rejects.toBe(failure);
+    expect(ports.privateRoot).not.toHaveBeenCalled();
+    expect(ports.drain).not.toHaveBeenCalled();
+    expect(ports.inspect).not.toHaveBeenCalled();
+    startupRetained(f);
+  });
+
+  it.each([
+    "before-observation",
+    "before-preparation",
+    "after-preparation",
+  ] as const)(
+    "keeps a changed original metadata pin unconfirmed at %s",
+    async (phase) => {
+      const f = startupLegacyFixture(),
+        failure = Error("STARTUP_LEGACY_PREPARATION_CHANGED");
+      f.legacyPreparation.verify.mockImplementation(async () => {
+        if (f.model.phase === phase) throw failure;
+      });
+      await expect(f.execute()).rejects.toBe(failure);
+      if (phase === "before-observation")
+        expect(ports.inspect).not.toHaveBeenCalled();
+      if (phase !== "after-preparation")
+        expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      startupRetained(f);
+    },
+  );
+});
 
 describe("original startup-held preserved recovery (controlled ports)", () => {
   afterEach(() => {

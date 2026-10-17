@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { openExistingNativeProfileStorage } from "../../apps/desktop/bridge/profile-storage";
 import { selectStartupPreservedRecovery } from "../../apps/desktop/recovery/selection";
+import { assertStartupLegacyPreparation } from "../../apps/desktop/recovery/legacy-preparation";
 
 // Actual file selection/readback, existing profile storage and immutable DTOs
 // on a real disposable macOS filesystem; no filesystem/profile/collector mocks.
@@ -306,6 +307,40 @@ const malformedMutations = [
 describe.skipIf(process.platform !== "darwin")(
   "startup preserved recovery selection on retained real files",
   () => {
+    it("retains the factory pin through immutable selection and refuses a replaced legacy inode", async () => {
+      const f = await fixture();
+      const legacyRoot = path.join(f.state, "chatgpt-task-journal");
+      const file = path.join(legacyRoot, "chatgpt-task-journal.json");
+      await privateDirectory(legacyRoot);
+      const bytes = json({
+        schema: 1,
+        operationId: "98628534-270c-4d55-bc02-20624596c418",
+        kind: "readonly",
+        phase: "prepared",
+        result: null,
+        createdAt: "2026-10-17T00:00:00.000Z",
+        updatedAt: "2026-10-17T00:00:00.000Z",
+      });
+      await privateFile(file, bytes);
+      const before = await inventory(f.root);
+      const selected = await selectStartupPreservedRecovery(inputFor(f));
+      expect(selected.legacyPreparation).toBeDefined();
+      expect(() =>
+        assertStartupLegacyPreparation(selected.legacyPreparation!, f.userData),
+      ).not.toThrow();
+      await selected.recheck();
+      expect(await inventory(f.root)).toEqual(before);
+      const displaced = path.join(
+        f.retained,
+        "original-legacy-preparation.json",
+      );
+      await fs.rename(file, displaced);
+      await privateFile(file, bytes);
+      await expect(selected.recheck()).rejects.toThrow();
+      expect(await fs.readFile(displaced)).toEqual(bytes);
+      expect(await fs.readFile(file)).toEqual(bytes);
+    });
+
     it.each([false, true])(
       "selects an empty namespace and exact native roots (Quit present: %s)",
       async (quitPresent) => {

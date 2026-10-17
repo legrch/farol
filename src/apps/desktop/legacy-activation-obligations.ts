@@ -171,7 +171,7 @@ async function openPrivateStateFile(
   try {
     handle = await fs.open(
       file,
-      fsConstants.O_RDONLY | NO_FOLLOW | CLOSE_ON_EXEC,
+      fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | NO_FOLLOW | CLOSE_ON_EXEC,
     );
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code === "ENOENT")

@@ -117,7 +117,14 @@ export async function runStartupPreservedMaintenance(
       : {
           expectedQuitSha256: candidate.expectedQuitSha256,
         }),
-    startup: { lease, verify, assertCurrent },
+    startup: {
+      lease,
+      verify,
+      assertCurrent,
+      ...(candidate.legacyPreparation === undefined
+        ? {}
+        : { legacyPreparation: candidate.legacyPreparation }),
+    },
     desktopState: () => activationObligations(userData),
     processesAbsent,
     attest: async () => {

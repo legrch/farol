@@ -327,6 +327,23 @@ composition without retrying maintenance. Successful preparation permits a new
 cold generation while retaining the predecessor's ACK/terminal as unobserved;
 it never writes a successful predecessor Quit.
 
+Go readonly preparation owns its Go admission without creating a duplicate legacy
+Desktop journal entry. Legacy preparation and cancellation still use the original
+legacy owner. For an older duplicate, startup may select only a fully parsed
+`prepared` / `readonly` record with `result: null`. The original private root,
+file identity, bytes and phase remain pinned under the original startup admission.
+After canonical preserving maintenance and connector reconciliation, the host
+moves that exact file into the existing retired Chat archive as
+`legacy-chatgpt-prepared.json`, under the unchanged recovery pending intent.
+Archive custody and the final owner/intent checks precede cold-start eligibility.
+The completion metadata explicitly records the corresponding Go outcome as
+`unobserved`; this relocation supplies no legacy dispatch, Go ACK or successful
+predecessor terminal. Malformed records, attachments, `dispatch_intent`, retained
+results and every other pending obligation retain their existing refusal.
+Legacy record opens use nonblocking file descriptors so an unsafe FIFO is refused
+without waiting for another process. Disposable filesystem tests preserve these
+fixtures and qualify neither a live provider nor installed recovery.
+
 The initial application wiring retains the existing Dev-only Go command scope.
 Real disposable selection/final-file/lease tests and controlled composition
 checks do not qualify Electron recovery, retained-history availability after a

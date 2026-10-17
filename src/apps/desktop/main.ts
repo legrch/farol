@@ -3914,11 +3914,16 @@ function discardPreparedReadonlyTask(
 ): Promise<boolean> {
   const previous = readonlyDiscardAttempts.get(pending);
   if (previous) return previous;
-  // The Go owner must confirm cancellation/ACK before the legacy preview
-  // journal is cleared. Retain either failure; UI repetition is not a retry.
+  // The selected Go owner confirms its own cancellation/ACK. Only a legacy
+  // preview owns a legacy journal entry; never create or clear a Go mirror.
+  // Retain either failure; UI repetition is not a retry.
   const result = Promise.resolve().then(async () => {
     if (!(await withdrawGoReadonlyAdmission(pending.goAdmission))) return false;
-    if (!(await discardPreparedChatGptTask(pending.operationId))) return false;
+    if (
+      pending.goAdmission === undefined &&
+      !(await discardPreparedChatGptTask(pending.operationId))
+    )
+      return false;
     if (pendingChatGptReadonlyTask === pending)
       pendingChatGptReadonlyTask = null;
     return true;
@@ -8552,27 +8557,29 @@ async function configureAdmittedProduct(
         }
         const expiresAt = Date.now() + 10 * 60_000;
         const excludedPaths = workspaceDeniedPaths(workspace);
-        if (!chatGptTaskJournal) {
-          if (!(await withdrawGoReadonlyAdmission(goAdmission)))
-            return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
-          return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
-        }
-        try {
-          const journal = chatGptTaskJournal;
-          await journalUnderPromotionLease(liveTaskRegistry, () =>
-            journal.prepare({
-              operationId,
-              kind: "readonly",
-            }),
-          );
-        } catch (error) {
-          if (!(await withdrawGoReadonlyAdmission(goAdmission)))
-            return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
-          return configurationFailure(
-            error instanceof PromotionPendingRefusal
-              ? "CHATGPT_TASK_PROMOTION_PENDING"
-              : "CHATGPT_TASK_JOURNAL_FAILED",
-          );
+        if (goAdmission === undefined) {
+          if (!chatGptTaskJournal) {
+            if (!(await withdrawGoReadonlyAdmission(goAdmission)))
+              return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+            return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
+          }
+          try {
+            const journal = chatGptTaskJournal;
+            await journalUnderPromotionLease(liveTaskRegistry, () =>
+              journal.prepare({
+                operationId,
+                kind: "readonly",
+              }),
+            );
+          } catch (error) {
+            if (!(await withdrawGoReadonlyAdmission(goAdmission)))
+              return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+            return configurationFailure(
+              error instanceof PromotionPendingRefusal
+                ? "CHATGPT_TASK_PROMOTION_PENDING"
+                : "CHATGPT_TASK_JOURNAL_FAILED",
+            );
+          }
         }
         pendingChatGptReadonlyTask = {
           operationId,

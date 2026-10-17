@@ -13,6 +13,7 @@ import { z } from "zod";
 // `.mjs` CLI.
 
 export const CHATGPT_TASK_JOURNAL_FILE_NAME = "chatgpt-task-journal.json";
+export const LEGACY_PREPARATION_ARCHIVE_NAME = "legacy-chatgpt-prepared.json";
 // The journal refuses to decode a file larger than this before parsing it;
 // the promotion reader must refuse the same bytes.
 export const MAX_CHATGPT_TASK_JOURNAL_BYTES = 64 * 1_024;

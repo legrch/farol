@@ -19,6 +19,10 @@ import {
 } from "../../src/apps/desktop/promotion-lease";
 import { retainEmptyArchive } from "../../src/apps/desktop/retained-empty-archive";
 import { withStartupPromotionLease } from "../../src/apps/desktop/startup-promotion-lease";
+import {
+  selectStartupLegacyPreparation,
+  LEGACY_PREPARATION_ARCHIVE_NAME,
+} from "../../apps/desktop/recovery/legacy-preparation";
 
 vi.mock("../../apps/desktop/bridge/terminal-recorder", () => ({
   recordTerminal: vi.fn(async () => undefined),
@@ -118,9 +122,13 @@ async function fixture() {
 describe.skipIf(process.platform !== "darwin")(
   "startup final eligibility with the original native lease",
   () => {
-    it.each(["healthy", "replacement", "current-host"] as const)(
-      "checks the full verifier after archive verification: %s",
-      async (outcome) => {
+    it.each(
+      (["healthy", "replacement", "current-host"] as const).flatMap((outcome) =>
+        [false, true].map((legacy) => ({ outcome, legacy })),
+      ),
+    )(
+      "checks full verification after archive verification: $outcome, legacy metadata: $legacy",
+      async ({ outcome, legacy }) => {
         const f = await fixture();
         let borrowed: PromotionLeaseHandle | undefined;
         const result = await withStartupPromotionLease(
@@ -128,6 +136,38 @@ describe.skipIf(process.platform !== "darwin")(
           f.exact.buildId,
           async (verify, lease) => {
             borrowed = lease;
+            const legacyRoot = path.join(f.state, "chatgpt-task-journal");
+            const legacyFile = path.join(
+              legacyRoot,
+              "chatgpt-task-journal.json",
+            );
+            const legacyBytes = Buffer.from(
+              JSON.stringify({
+                schema: 1,
+                operationId: randomUUID(),
+                kind: "readonly",
+                phase: "prepared",
+                createdAt: "2026-10-17T00:00:00.000Z",
+                updatedAt: "2026-10-17T00:00:00.000Z",
+                result: null,
+              }) + "\n",
+            );
+            if (legacy) {
+              await fs.mkdir(legacyRoot, { mode: 0o700 });
+              await fs.writeFile(legacyFile, legacyBytes, {
+                mode: 0o600,
+                flag: "wx",
+              });
+            }
+            const originalLegacy = legacy
+              ? await host.snapshot(legacyFile, 4096)
+              : undefined;
+            const legacyPreparation = legacy
+              ? await selectStartupLegacyPreparation(f.userData, async () => {
+                  expect(await verify()).toBe(true);
+                })
+              : null;
+            if (legacy) expect(legacyPreparation).not.toBeNull();
             const pin = await retainEmptyArchive(f.archive);
             let currentHost = true;
             let injected = false;
@@ -138,6 +178,7 @@ describe.skipIf(process.platform !== "darwin")(
             const finish = host.finish({
               ...f,
               lease,
+              ...(legacyPreparation === null ? {} : { legacyPreparation }),
               input: {
                 executable: "/controlled/no-go-process-is-started",
                 expectedRunSha256: sum(f.run.bytes),
@@ -194,6 +235,33 @@ describe.skipIf(process.platform !== "darwin")(
             }
             expect(fullVerifier).toHaveBeenCalledExactlyOnceWith();
             expect(injected).toBe(true);
+            if (originalLegacy) {
+              await host.unchanged(
+                path.join(f.archive, LEGACY_PREPARATION_ARCHIVE_NAME),
+                originalLegacy,
+              );
+              expect(
+                await fs.readFile(
+                  path.join(f.archive, LEGACY_PREPARATION_ARCHIVE_NAME),
+                ),
+              ).toEqual(legacyBytes);
+              await expect(fs.lstat(legacyFile)).rejects.toMatchObject({
+                code: "ENOENT",
+              });
+              const completion = JSON.parse(
+                await fs.readFile(
+                  path.join(f.archive, "maintenance-completed.json"),
+                  "utf8",
+                ),
+              );
+              expect(completion.retainedLegacyPreparation).toEqual({
+                operationId: legacyPreparation!.operationId,
+                sha256: sum(legacyBytes),
+                originalPhase: "prepared",
+                legacyDisposition: "retired_without_legacy_dispatch",
+                correspondingGoOutcome: "unobserved",
+              });
+            }
             await host.unchanged(f.configuration, f.config);
             await host.unchanged(
               path.join(f.archive, "failed-running.json"),

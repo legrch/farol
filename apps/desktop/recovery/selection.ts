@@ -12,6 +12,10 @@ import type {
   ExactPreservedRecoverySelection,
   PreservedRecoverySelectionInput,
 } from "../bridge/preserved-recovery-child";
+import {
+  selectStartupLegacyPreparation,
+  type StartupLegacyPreparation,
+} from "./legacy-preparation";
 
 export type StartupPreservedSelection = Readonly<{
   profile: ProfileLaunchBinding;
@@ -20,6 +24,7 @@ export type StartupPreservedSelection = Readonly<{
   expectedRunSha256: string;
   expectedConfigSha256: string;
   expectedQuitSha256?: string;
+  legacyPreparation?: StartupLegacyPreparation;
   // Only before preparation: a successful recovery deliberately moves Chat
   // and original markers. This snapshot supplies no post-effect authority.
   recheck(): Promise<void>;
@@ -232,6 +237,10 @@ export async function selectStartupPreservedRecovery(
     ),
     Mutations: selected,
   };
+  const legacyPreparation = await selectStartupLegacyPreparation(
+    userData,
+    assertCurrent,
+  );
   const recheck = async () => {
     await assertCurrent();
     for (const [directory, original] of roots)
@@ -241,6 +250,7 @@ export async function selectStartupPreservedRecovery(
       throw Error("STARTUP_PRESERVED_SELECTION_CHANGED");
     for (const [file, original] of files) await host.unchanged(file, original);
     if (quit === undefined) await host.absent(quitPath);
+    await legacyPreparation?.verify();
     await host.absent(pending);
     await assertCurrent();
   };
@@ -252,6 +262,7 @@ export async function selectStartupPreservedRecovery(
     expectedRunSha256: hash(run.bytes),
     expectedConfigSha256: hash(config.bytes),
     ...(quit === undefined ? {} : { expectedQuitSha256: hash(quit.bytes) }),
+    ...(legacyPreparation === null ? {} : { legacyPreparation }),
     recheck,
   });
 }

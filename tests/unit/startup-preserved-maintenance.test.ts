@@ -162,6 +162,33 @@ function fixture() {
 }
 
 describe("one startup preserving-maintenance attempt", () => {
+  it("forwards only the collector's exact legacy pin, retaining the original admission callbacks", async () => {
+    const f = fixture();
+    const selectedPin = Object.freeze({
+      operationId: "known-old-operation",
+      sha256: "f".repeat(64),
+      verify: vi.fn(),
+      retireInto: vi.fn(),
+    });
+    ports.select.mockResolvedValue({
+      ...f.candidate,
+      legacyPreparation: selectedPin,
+    });
+    const unselected = { ...selectedPin, operationId: "unselected" };
+    await runStartupPreservedMaintenance({
+      ...f.input,
+      startup: { ...f.input.startup, legacyPreparation: unselected },
+    });
+    const handoff = ports.recover.mock
+      .calls[0]![0] as StartupPreservedRecoveryInput;
+    expect(handoff.startup.legacyPreparation).toBe(selectedPin);
+    expect(handoff.startup.lease).toBe(f.input.startup.lease);
+    expect(handoff.startup.verify).toBe(f.input.startup.verify);
+    expect(handoff.startup.assertCurrent).toBe(f.input.startup.assertCurrent);
+    expect(unselected.verify).not.toHaveBeenCalled();
+    expect(unselected.retireInto).not.toHaveBeenCalled();
+  });
+
   it("reobserves canonical scope under the original admission and forwards the complete owning guards", async () => {
     const f = fixture();
     const original = structuredClone(f.candidate.selectionInput);
