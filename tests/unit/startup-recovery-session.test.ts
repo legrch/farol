@@ -924,6 +924,49 @@ describe("startup recovery terminal observation", () => {
     },
   );
 
+  it.each(["observation-first", "quit-first"] as const)(
+    "retains both startup and cleanup failures with %s closure",
+    async (order) => {
+      const f = await fixture(),
+        startupFailure = new BridgeError("unknown", "original_exclusion_lost"),
+        cleanupFailure = new BridgeError("unknown", "original_close_unknown");
+      f.ports.start.mockImplementationOnce(async () => {
+        f.ports.assertCurrent.mockRejectedValueOnce(startupFailure);
+        return f.computer;
+      });
+      f.close.mockRejectedValueOnce(cleanupFailure);
+      const session = createStartupRecoverySession(f.ports);
+      await vi.waitFor(() => expect(f.close).toHaveBeenCalledTimes(1));
+      const first =
+        order === "observation-first"
+          ? session.closeAndObserve()
+          : session.close();
+      const failure: unknown = await first.catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toEqual([
+        startupFailure,
+        cleanupFailure,
+      ]);
+      expect((failure as AggregateError).message).toBe(
+        "recovery_cleanup_unconfirmed",
+      );
+      const observing = session.closeAndObserve(),
+        closing = session.close();
+      expect(session.closeAndObserve()).toBe(observing);
+      expect(session.close()).toBe(closing);
+      await expect(observing).rejects.toBe(failure);
+      await expect(closing).rejects.toBe(failure);
+      expect(await session.state()).toEqual({ status: "closing" });
+      expect(await session.read({ kind: "archive-list", after: "" })).toEqual({
+        status: "unavailable",
+      });
+      expect(f.close).toHaveBeenCalledTimes(1);
+      expect(f.closeAndObserve).not.toHaveBeenCalled();
+      expect(f.archiveList).not.toHaveBeenCalled();
+      expect(f.ports.start).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("does not erase original startup uncertainty just because a core object exists", async () => {
     const f = await fixture(),
       unknown = new BridgeError("unknown", "original_startup_exclusion_lost");

@@ -279,10 +279,8 @@ export function createStartupRecoverySession(
         entries.clear();
         terminalResult = (async () => {
           await initialization;
-          if (cleanupFailure !== undefined) {
-            await closeCore();
-            throw cleanupFailure;
-          }
+          // Initialization already awaited cleanup and retained all causes.
+          if (cleanupFailure !== undefined) throw cleanupFailure;
           return closeCoreAndObserve();
         })();
       }
@@ -294,8 +292,8 @@ export function createStartupRecoverySession(
         entries.clear();
         closeResult = (async () => {
           await initialization;
-          await closeCore();
           if (cleanupFailure !== undefined) throw cleanupFailure;
+          await closeCore();
         })();
       }
       return closeResult;
