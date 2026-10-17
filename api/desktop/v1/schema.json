@@ -12,6 +12,8 @@
     "computer.workspace.read": "read",
     "task.create": "effect",
     "chat.turn": "effect",
+    "chat.retired.list": "read",
+    "chat.retired.read": "read",
     "release.status": "read",
     "computer.workspace.catalogue": "read",
     "computer.workspace.bootstrap": "read",

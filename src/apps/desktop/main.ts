@@ -1,5 +1,6 @@
 import { startDesktopGoRecovery } from "../../../apps/desktop/recovery/core-host";
 import { createStartupRecoverySession } from "../../../apps/desktop/recovery/session";
+import { runStartupPreservedMaintenance } from "../../../apps/desktop/recovery/maintenance";
 import {
   openStartupRecoveryWindow,
   type StartupRecoveryWindow,
@@ -37,6 +38,7 @@ import {
   type ReadConversationProjection,
 } from "../../../apps/desktop/bridge/read-conversation";
 import { readChatHistoryView } from "../../../apps/desktop/chat-history-view";
+import { readRetiredRepliesView } from "../../../apps/desktop/retired-replies-view";
 import { projectReadConversation } from "../../../apps/desktop/read-conversation-projection";
 import { ReadConversationPromptSchema } from "../../pkg/product-settings/chat-conversation";
 import {
@@ -3933,11 +3935,16 @@ function discardPreparedReadonlyTask(
 ): Promise<boolean> {
   const previous = readonlyDiscardAttempts.get(pending);
   if (previous) return previous;
-  // The Go owner must confirm cancellation/ACK before the legacy preview
-  // journal is cleared. Retain either failure; UI repetition is not a retry.
+  // The selected Go owner confirms its own cancellation/ACK. Only a legacy
+  // preview owns a legacy journal entry; never create or clear a Go mirror.
+  // Retain either failure; UI repetition is not a retry.
   const result = Promise.resolve().then(async () => {
     if (!(await withdrawGoReadonlyAdmission(pending.goAdmission))) return false;
-    if (!(await discardPreparedChatGptTask(pending.operationId))) return false;
+    if (
+      pending.goAdmission === undefined &&
+      !(await discardPreparedChatGptTask(pending.operationId))
+    )
+      return false;
     if (pendingChatGptReadonlyTask === pending)
       pendingChatGptReadonlyTask = null;
     return true;
@@ -8571,27 +8578,29 @@ async function configureAdmittedProduct(
         }
         const expiresAt = Date.now() + 10 * 60_000;
         const excludedPaths = workspaceDeniedPaths(workspace);
-        if (!chatGptTaskJournal) {
-          if (!(await withdrawGoReadonlyAdmission(goAdmission)))
-            return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
-          return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
-        }
-        try {
-          const journal = chatGptTaskJournal;
-          await journalUnderPromotionLease(liveTaskRegistry, () =>
-            journal.prepare({
-              operationId,
-              kind: "readonly",
-            }),
-          );
-        } catch (error) {
-          if (!(await withdrawGoReadonlyAdmission(goAdmission)))
-            return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
-          return configurationFailure(
-            error instanceof PromotionPendingRefusal
-              ? "CHATGPT_TASK_PROMOTION_PENDING"
-              : "CHATGPT_TASK_JOURNAL_FAILED",
-          );
+        if (goAdmission === undefined) {
+          if (!chatGptTaskJournal) {
+            if (!(await withdrawGoReadonlyAdmission(goAdmission)))
+              return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+            return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
+          }
+          try {
+            const journal = chatGptTaskJournal;
+            await journalUnderPromotionLease(liveTaskRegistry, () =>
+              journal.prepare({
+                operationId,
+                kind: "readonly",
+              }),
+            );
+          } catch (error) {
+            if (!(await withdrawGoReadonlyAdmission(goAdmission)))
+              return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+            return configurationFailure(
+              error instanceof PromotionPendingRefusal
+                ? "CHATGPT_TASK_PROMOTION_PENDING"
+                : "CHATGPT_TASK_JOURNAL_FAILED",
+            );
+          }
         }
         pendingChatGptReadonlyTask = {
           operationId,
@@ -10957,6 +10966,11 @@ function installIpc(): void {
       ? readChatHistoryView(() => desktopGoCore, value)
       : { error: "IPC_SENDER_DENIED" },
   );
+  ipcMain.handle(channels.retiredReplies, (event, value: unknown) =>
+    isTrustedIpcSender(event, window)
+      ? readRetiredRepliesView(() => desktopGoCore, value)
+      : { error: "IPC_SENDER_DENIED" },
+  );
   ipcMain.handle(channels.task, (event, value: unknown) =>
     isTrustedIpcSender(event, window)
       ? runProductTaskCommand(value)
@@ -11357,10 +11371,10 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   });
   installedResourcesOrigin = updateRelaunch?.resourcesOrigin;
   const stateRoot = path.join(app.getPath("userData"), "farol-next-state");
-  const previousRunClean = await withStartupPromotionLease(
+  const previousHostAdmissionReady = await withStartupPromotionLease(
     app.getPath("userData"),
     buildIdentity.buildId,
-    async (verify) => {
+    async (verify, lease) => {
       await updateRelaunch?.recheck();
       startupStage("before-ready");
       await app.whenReady();
@@ -11375,65 +11389,123 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         () => false,
         (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT",
       );
+      let admissionReady = clean;
       if (compiledGoCore !== null && !clean) {
-        // Keep the original exclusion through recovery and its exact child
-        // cleanup. Existing Settings and owner reads have their own narrow
-        // composition; no old marker, operation or handoff is retired here.
-        await updateRelaunch?.recheck();
-        if (!(await verify())) throw new Error("STARTUP_PROMOTION_LEASE_LOST");
-        const assertRecoveryCurrent = async () => {
+        const assertMaintenanceCurrent = async () => {
           await updateRelaunch?.recheck();
-          if (!(await verify()))
-            throw new Error("STARTUP_PROMOTION_LEASE_LOST");
+          if (
+            !primaryInstanceLock ||
+            !app.hasSingleInstanceLock() ||
+            quitInProgress ||
+            runtimeStopping ||
+            desktopGoCore !== null ||
+            configuration !== null ||
+            startupRecovery !== null ||
+            secureMcpConnectorRuntime !== null ||
+            connectorStartInFlight !== null ||
+            modelLifecycle !== null ||
+            pendingComputer.size !== 0 ||
+            ownedLocalRuntimes.size !== 0
+          )
+            throw Error("STARTUP_RECOVERY_HOST_UNCONFIRMED");
+          if (!(await verify())) throw Error("STARTUP_PROMOTION_LEASE_LOST");
         };
-        const session = createStartupRecoverySession({
-          load: () =>
-            new ProductSettingsStore({ root: stateRoot }).loadExisting(),
-          assertCurrent: assertRecoveryCurrent,
-          start: (settings) =>
-            startDesktopGoRecovery({
-              compiledArtifact: compiledGoCore,
-              compiledResources: compiledGoResources,
+        // Select maintenance before launching any current read-only child.
+        // There is no child terminal fact to invent or infer from old receipts.
+        // Saved Settings are loaded once and retained for the independent read
+        // surface if this one attempt cannot qualify a fresh cold start.
+        const savedSettings = await new ProductSettingsStore({
+          root: stateRoot,
+        })
+          .loadExisting()
+          .catch(() => null);
+        if (savedSettings !== null) {
+          try {
+            await runStartupPreservedMaintenance({
+              userData: app.getPath("userData"),
+              home: app.getPath("home"),
+              computerId: savedSettings.computer.computerId,
               build: buildIdentity,
               artifactRoot:
                 installedResourcesOrigin?.execution.directory ?? directory,
-              stateRoot,
-              home: app.getPath("home"),
-              settings,
-              onLifecycleObservation: reportOwnedBackendLifecycle,
-            }),
-        });
-        try {
-          startupRecovery = openStartupRecoveryWindow({
-            directory: desktopExecutionResources().directory,
-            session,
-            mode: windowMode,
-            placement: () =>
-              selectedVisibleTestPlacement({ width: 640, height: 520 }).bounds,
-            quitSignals,
-            onQuitting: () => {
-              quitInProgress = true;
-            },
-          });
-          await startupRecovery.ready;
-          process.stderr.write(
-            `${secondInstanceResultPrefix}primary-recovery\n`,
-          );
-          await startupRecovery.quitRequested;
-        } finally {
-          try {
-            await session.close();
-          } finally {
-            startupRecovery?.dispose();
+              compiledArtifact: compiledGoCore,
+              compiledResources: compiledGoResources,
+              startup: {
+                lease,
+                verify,
+                assertCurrent: assertMaintenanceCurrent,
+              },
+            });
+            await assertMaintenanceCurrent();
+            admissionReady = true;
+            startupStage("preserved-recovery-prepared");
+          } catch {
+            // No retry or marker repair. The existing read-only composition
+            // can still expose saved Settings and independently safe reads.
+            startupStage("preserved-recovery-unconfirmed");
           }
         }
-        return false;
+        if (!admissionReady) {
+          // Keep the original exclusion through recovery and its exact child
+          // cleanup. Existing Settings and owner reads have their own narrow
+          // composition; no old marker, operation or handoff is retired here.
+          await updateRelaunch?.recheck();
+          if (!(await verify()))
+            throw new Error("STARTUP_PROMOTION_LEASE_LOST");
+          const assertRecoveryCurrent = async () => {
+            await updateRelaunch?.recheck();
+            if (!(await verify()))
+              throw new Error("STARTUP_PROMOTION_LEASE_LOST");
+          };
+          const session = createStartupRecoverySession({
+            load: async () => savedSettings,
+            assertCurrent: assertRecoveryCurrent,
+            start: (settings) =>
+              startDesktopGoRecovery({
+                compiledArtifact: compiledGoCore,
+                compiledResources: compiledGoResources,
+                build: buildIdentity,
+                artifactRoot:
+                  installedResourcesOrigin?.execution.directory ?? directory,
+                stateRoot,
+                home: app.getPath("home"),
+                settings,
+                onLifecycleObservation: reportOwnedBackendLifecycle,
+              }),
+          });
+          try {
+            startupRecovery = openStartupRecoveryWindow({
+              directory: desktopExecutionResources().directory,
+              session,
+              mode: windowMode,
+              placement: () =>
+                selectedVisibleTestPlacement({ width: 640, height: 520 })
+                  .bounds,
+              quitSignals,
+              onQuitting: () => {
+                quitInProgress = true;
+              },
+            });
+            await startupRecovery.ready;
+            process.stderr.write(
+              `${secondInstanceResultPrefix}primary-recovery\n`,
+            );
+            await startupRecovery.quitRequested;
+          } finally {
+            try {
+              await session.close();
+            } finally {
+              startupRecovery?.dispose();
+            }
+          }
+          return false;
+        }
       }
       if (compiledGoCore !== null) {
-        // The previous host removed its run marker only after a confirmed Quit.
-        // Recheck its retained MCP stop under this existing startup exclusion;
-        // an unconfigured connector must not require Start to permit Settings.
-        await computerMcpLifecycle().confirmCleanHostStop(clean);
+        // Admission is either a confirmed predecessor Quit or the separate
+        // qualified preserving-maintenance handoff. The latter keeps the old
+        // ACK/terminal unobserved; it never manufactures a clean Quit receipt.
+        await computerMcpLifecycle().confirmCleanHostStop(admissionReady);
       }
       await updateRelaunch?.recheck();
       if (!(await verify())) {
@@ -11446,7 +11518,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         processStart: readProcessStart(process.pid),
       });
       startupStage("run-marker");
-      return clean;
+      return admissionReady;
     },
   );
   if (startupRecovery !== null) {
@@ -11580,7 +11652,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
           runtimeEnvironment,
           installedResourcesOrigin?.execution.directory ?? directory,
         ),
-        previousHostDrainConfirmed: previousRunClean,
+        previousHostDrainConfirmed: previousHostAdmissionReady,
         build: buildIdentity,
         // The attested path must remain immutable through spawn and lifetime.
         // Shared installation paths are writable by other administrator accounts.
@@ -12043,7 +12115,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       environment: runtimeEnvironment,
       buildEnvironment,
       buildId: buildIdentity.buildId,
-      previousRunClean,
+      previousRunClean: previousHostAdmissionReady,
       snapshot: configuration.snapshot(),
     },
     {

@@ -14,6 +14,7 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	chatport "github.com/legrch/farol/modules/chat/app/port"
+	chatarchive "github.com/legrch/farol/modules/chat/app/services/archive"
 	chathandoff "github.com/legrch/farol/modules/chat/app/services/handoff"
 	chatlifecycle "github.com/legrch/farol/modules/chat/app/services/lifecycle"
 	"github.com/legrch/farol/modules/chat/infra/gate"
@@ -62,6 +63,7 @@ type NativeRuntime struct {
 	retirement       *nativeRetirement
 	historyAuthority *historyReadAuthority
 	history          *chathandoff.HistoryReader
+	retiredArchive   *chatarchive.Service
 	codexRead        *nativeCodexRead
 }
 
@@ -215,6 +217,10 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 		if err != nil {
 			return fail(err)
 		}
+		runtime.retiredArchive, err = chatarchive.New(scope, chatarchive.Dependencies{Authority: runtime.historyAuthority, Store: results.NewRetiredArchive(results.Root{Path: launch.Profile.Root, ProfileID: scope.ProfileID, Identity: chatport.JournalRoot{Device: launch.Profile.Device, Inode: launch.Profile.Inode, OwnerUID: chat.OwnerUID}})})
+		if err != nil {
+			return fail(err)
+		}
 	}
 	if launch.CodexRead != nil {
 		runtime.selectNativeCodexRead(lifetime, *launch.CodexRead)
@@ -288,6 +294,11 @@ func (r *NativeRuntime) Methods() (map[string]desktop.Method, error) {
 	merged := make(map[string]desktop.Method)
 	if r.history != nil {
 		for name, method := range chatHistoryMethods(conversation.NewHistory(r.history)) {
+			merged[name] = method
+		}
+	}
+	if r.retiredArchive != nil {
+		for name, method := range retiredArchiveMethods(r.retiredArchive) {
 			merged[name] = method
 		}
 	}

@@ -24,12 +24,14 @@ export function StoredReplies({
   starting,
   otherBusy,
   onBusy,
+  context = "recovery",
 }: {
-  api: StartupRecoveryAPI;
+  api: Pick<StartupRecoveryAPI, "read">;
   available: boolean;
   starting: boolean;
   otherBusy: boolean;
   onBusy(value: boolean): void;
+  context?: "recovery" | "retired";
 }) {
   const [rows, setRows] = useState<RecoveryArchiveEntry[]>([]);
   const [next, setNext] = useState("");
@@ -131,12 +133,19 @@ export function StoredReplies({
         These are stored copies. Previous outcomes remain unconfirmed; nothing
         will be sent or repeated.
       </p>
+      {context === "retired" ? (
+        <p className="recovery-note">
+          Copies preserved from interrupted app sessions are available here
+          separately from confirmed saved answers.
+        </p>
+      ) : null}
       {starting ? (
         <p role="status">Starting the stored reply reader…</p>
       ) : !available ? (
         <p role="status">
-          Stored replies are unavailable for this recovery session. Original
-          records remain in place.
+          {context === "recovery"
+            ? "Stored replies are unavailable for this recovery session. Original records remain in place."
+            : "Stored replies are unavailable in this app session. Original records remain in place."}
         </p>
       ) : null}
       {!loaded ? (
@@ -158,8 +167,10 @@ export function StoredReplies({
       {failed ? (
         <p role="alert">
           This stored read could not be confirmed. The reader is paused and
-          original records remain in place. You can inspect available folders or
-          Quit.
+          original records remain in place.{" "}
+          {context === "recovery"
+            ? "You can inspect available folders or Quit."
+            : "Other app functions remain independent of this reader."}
         </p>
       ) : null}
       {loaded && rows.length === 0 ? (

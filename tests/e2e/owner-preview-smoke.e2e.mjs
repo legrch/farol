@@ -83,6 +83,7 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
     generation,
     startedAt: new Date().toISOString(),
     observations: [],
+    launches: [],
     limits: [
       "disposable profile",
       "no authentication/provider/tunnel",
@@ -93,7 +94,7 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
     flag: "wx",
     mode: 0o600,
   });
-  let home, proof, appData, current, server;
+  let home, proof, appData, current, currentLaunch, server;
   let quitRequested = false;
   const checkpoint = () =>
     fs.writeFile(receiptFile, jsonBytes(receipt), { mode: 0o600 });
@@ -148,6 +149,7 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
       FAROL_NEXT_E2E_CHATGPT_URL: fixtureOrigin,
     };
     for (let cycle = 0; cycle < 2; cycle += 1) {
+      currentLaunch = null;
       // Canonical snapshot and derivative are independently reverified directly
       // before EACH launch. Never run the hidden canonical input application.
       await verifyOwnerPreview(repositoryRoot, generation);
@@ -167,6 +169,9 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
       quitRequested = false;
       const owned = current.process();
       assert.ok(Number.isInteger(owned.pid) && owned.pid > 0);
+      currentLaunch = { cycle, pid: owned.pid, terminal: null };
+      receipt.launches.push(currentLaunch);
+      await checkpoint();
       const outbound = [];
       await current.context().route("**/*", (route) => {
         const url = route.request().url();
@@ -181,7 +186,7 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
       });
       const page = await current.firstWindow({ timeout: 15000 });
       await page
-        .locator("#sidebar")
+        .locator(".desktop")
         .waitFor({ state: "attached", timeout: 15000 });
       const bootstrap = await deadline(
         page.evaluate(() => window.farolNext.bootstrap()),
@@ -313,6 +318,8 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
       quitRequested = true;
       void current.evaluate(({ app }) => app.quit()).catch(() => {});
       const [code, signal] = await deadline(exit, "normal-quit");
+      currentLaunch.terminal = { code, signal };
+      await checkpoint();
       assert.equal(code, 0);
       assert.equal(signal, null);
       const state = path.join(identity.userData, "farol-next-state");
@@ -384,14 +391,45 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
   } catch (error) {
     // One orderly cleanup request for a known owned app, never retry Quit after
     // a refused/UNKNOWN drain, never close()/kill(), and preserve the profile.
-    if (current && !quitRequested && current.process().exitCode === null) {
+    const owned = current?.process();
+    if (
+      owned &&
+      owned.exitCode === null &&
+      owned.signalCode === null &&
+      !quitRequested
+    ) {
+      const exit = once(owned, "exit");
       quitRequested = true;
       void current.evaluate(({ app }) => app.quit()).catch(() => {});
+      try {
+        const [code, signal] = await deadline(exit, "failed-attempt-quit");
+        if (currentLaunch) currentLaunch.terminal = { code, signal };
+      } catch (cleanupError) {
+        receipt.cleanupError =
+          cleanupError instanceof Error
+            ? cleanupError.message
+            : "OWNER_PREVIEW_FAILED_QUIT_UNKNOWN";
+      }
+    } else if (
+      owned &&
+      (owned.exitCode !== null || owned.signalCode !== null)
+    ) {
+      if (currentLaunch)
+        currentLaunch.terminal = {
+          code: owned.exitCode,
+          signal: owned.signalCode,
+        };
     }
+    // An exit is not a drained Quit or descendant witness. A prior Quit with
+    // an unknown outcome is neither requested again nor given a fresh budget.
+    receipt.cleanup = currentLaunch?.terminal
+      ? "failed-attempt-parent-exit-observed-profile-retained"
+      : "failed-attempt-parent-terminal-unobserved-profile-retained";
     receipt.status = "UNKNOWN";
     receipt.error =
       error instanceof Error ? error.message : "OWNER_PREVIEW_SMOKE_FAILED";
     receipt.profileRetained = home ?? null;
+    receipt.finishedAt = new Date().toISOString();
     await checkpoint();
     throw new Error(
       `OWNER_PREVIEW_SMOKE_UNCONFIRMED: ${receiptFile}: ${receipt.error}`,

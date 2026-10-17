@@ -30,6 +30,7 @@ import { commandAllowed, dependencyFences } from "./command-eligibility";
 import { ChatDirect } from "./chat-direct";
 import { ChatReadonly } from "./chat-readonly";
 import { ChatHistory } from "./chat-history";
+import { RetiredReplies } from "./retired-replies";
 import type {
   Destination,
   Intent,
@@ -3787,6 +3788,7 @@ function Diagnostics({ snapshot, settings, facade, actions }: PageProps) {
         <ChatDirect snapshot={snapshot} facade={facade} />
         <ChatReadonly snapshot={snapshot} facade={facade} />
         <ChatHistory snapshot={snapshot} facade={facade} />
+        <RetiredReplies snapshot={snapshot} facade={facade} />
       </details>
       <details>
         <summary>Browser windows</summary>
