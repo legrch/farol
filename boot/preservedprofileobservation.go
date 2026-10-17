@@ -28,6 +28,20 @@ func runPreservedProfileObservation(args []string, in io.Reader, out, diagnostic
 }
 
 func runPreservedProfileObservationDeadline(args []string, in io.Reader, out, diagnostics io.Writer, until time.Time) (code int) {
+	return runPreservedProfileInspectionDeadline(args, in, out, diagnostics, until, false)
+}
+
+// Separate read-only entry; the original known-scope command keeps its input
+// contract. Both entries retain the same bounded codec and original deadline.
+func runPreservedProfileDiscovery(args []string, in io.Reader, out, diagnostics io.Writer) int {
+	return runPreservedProfileDiscoveryDeadline(args, in, out, diagnostics, time.Now().Add(5*time.Second))
+}
+
+func runPreservedProfileDiscoveryDeadline(args []string, in io.Reader, out, diagnostics io.Writer, until time.Time) int {
+	return runPreservedProfileInspectionDeadline(args, in, out, diagnostics, until, true)
+}
+
+func runPreservedProfileInspectionDeadline(args []string, in io.Reader, out, diagnostics io.Writer, until time.Time, discoverScope bool) (code int) {
 	defer func() {
 		if code == 1 {
 			fmt.Fprintln(diagnostics, "PRESERVED_PROFILE_OBSERVATION_UNCONFIRMED")
@@ -74,7 +88,11 @@ func runPreservedProfileObservationDeadline(args []string, in io.Reader, out, di
 	var reply preservedProfileObservationReply
 	// Publish only after repository visitors, physical rechecks and claim closes
 	// return. The host must also observe original normal close, not just a frame.
-	err = observePreservedProfile(ctx, selected, func(v preservedProfileInspection) error {
+	observe := observePreservedProfile
+	if discoverScope {
+		observe = discoverPreservedProfile
+	}
+	err = observe(ctx, selected, func(v preservedProfileInspection) error {
 		reply = preservedProfileObservationReply{Schema: "farol-preserved-profile-inspection/1", BuildID: BuildID, Selection: v.Plan.Selection, RecoveryAuthorized: false}
 		return nil
 	})

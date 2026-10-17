@@ -300,7 +300,7 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
     launch(
       "desktop.preserved-inspection-go",
       "apps/desktop/bridge/preserved-inspection-child.ts",
-      "inspectPreservedRecoveryChild",
+      "runPreservedInspectionChild",
       "spawn",
       "executable",
       "app-owned-go-executable",

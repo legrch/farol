@@ -1,6 +1,9 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { inspectPreservedRecoveryChild } from "../../apps/desktop/bridge/preserved-inspection-child.ts";
+import {
+  inspectPreservedRecoveryChild,
+  discoverPreservedRecoveryChild,
+} from "../../apps/desktop/bridge/preserved-inspection-child.ts";
 import type {
   ExactPreservedRecoverySelection,
   PreservedRecoverySelectionInput,
@@ -98,6 +101,17 @@ const run = (input: PreservedRecoverySelectionInput = makeInput()) =>
   inspectPreservedRecoveryChild("/attested/backend", profile, input, exact);
 const send = (value: unknown = reply()) =>
   child.stdout.emit("data", Buffer.from(`${JSON.stringify(value)}\n`));
+const discovery = () => {
+  const input = makeInput();
+  const current = {
+    ...structuredClone(exact.current),
+    Scope: { ...exact.current.Scope, BackendGeneration: "" },
+  };
+  return {
+    input: { ...input, Selection: { ...input.Selection, Current: current } },
+    selected: { ...structuredClone(exact), current: structuredClone(current) },
+  };
+};
 const advance = async (ms: number) => {
   now += ms;
   await vi.advanceTimersByTimeAsync(ms);
@@ -121,6 +135,76 @@ async function refuse(input: unknown) {
   });
   expect(ports.spawn).not.toHaveBeenCalled();
 }
+
+it("captures only the canonical discovered scope after original write, reply and normal close", async () => {
+  const { input, selected } = discovery();
+  const original = structuredClone(input);
+  const done = discoverPreservedRecoveryChild(
+    "/attested/backend",
+    profile,
+    input,
+    selected,
+  );
+  const settled = vi.fn();
+  void done.then(settled, settled);
+  expect(ports.spawn.mock.calls[0]![1][0]).toBe("discover-preserved-profile");
+  expect(child.stdin.end.mock.calls[0]![0]).toBe(
+    `${JSON.stringify(original)}\n`,
+  );
+  send();
+  finishWrite();
+  await Promise.resolve();
+  expect(settled).not.toHaveBeenCalled();
+  child.emit("close", 0, null);
+  const result = await done;
+  expect(result).toEqual({ ...original, Selection: reply().selection });
+  expect(input).toEqual(original);
+  expect(Object.isFrozen(result.Selection.Current.Scope)).toBe(true);
+  expect(child.kill).not.toHaveBeenCalled();
+  expect(ports.spawn).toHaveBeenCalledTimes(1);
+});
+
+it("keeps known-scope observation and empty-scope discovery as separate entries", async () => {
+  await expect(
+    discoverPreservedRecoveryChild(
+      "/attested/backend",
+      profile,
+      makeInput(),
+      exact,
+    ),
+  ).rejects.toMatchObject({ state: "refused" });
+  const { input } = discovery();
+  await expect(run(input)).rejects.toMatchObject({ state: "refused" });
+  expect(ports.spawn).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["Current.Scope.BackendGeneration", ""],
+  ["Current.Scope.BackendGeneration", exact.backendGeneration],
+  ["Current.Scope.ProfileID", "another-profile"],
+  ["Current.ParentRoot.Inode", 999],
+  ["Current.ChatRoot.Inode", 999],
+  ["Current.Scope.extra", "unexpected"],
+] as [string, unknown][])(
+  "rejects crossed discovery response %s=%j without replacement",
+  async (field, value) => {
+    const { input, selected } = discovery();
+    const done = discoverPreservedRecoveryChild(
+      "/attested/backend",
+      profile,
+      input,
+      selected,
+    );
+    const failed = expect(done).rejects.toMatchObject({ state: "unknown" });
+    const invalid = reply();
+    change(invalid.selection, field, value);
+    send(invalid);
+    child.emit("close", 0, null);
+    await failed;
+    expect(ports.spawn).toHaveBeenCalledTimes(1);
+    expect(child.kill).toHaveBeenCalledTimes(1);
+  },
+);
 
 it.each(["write-reply-close", "reply-write-close", "reply-close-write"])(
   "requires all three original observations: %s",

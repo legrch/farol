@@ -294,6 +294,28 @@ Disposable native observation tests retain profile/workspace hashes and physical
 metadata, including blocked Unix-pipe reads and writes. They qualify no Electron
 host, promotion/connector exclusion, terminal recorder or writable restart.
 
+The separate Dev-only `discover-preserved-profile` entry accepts an empty
+current backend generation and zero values for all three Chat digests. It uses
+the existing canonical lifecycle inspector to capture the current scope,
+rechecks the selected physical roots and closes that diagnostic qualifier before
+the complete preserved observation reacquires its original claims. One captured
+absolute deadline spans both phases. Profile/physical root identities, access
+digest, the complete selected owner-mutation set and future maintenance
+identities remain independently supplied and verified. The known-scope
+observation and preparation entries retain their existing requirements.
+
+Discovery returns the same metadata-only inspection envelope with
+`recoveryAuthorized: false`. Its host adapter permits only the observed current
+generation and canonical digests to change; profile, physical roots and future
+identities remain exact. It requires the original request write, one bounded
+strict reply and the same child's successful normal close. Forced or missing
+close, crossed scope, extra data and deadline loss remain unconfirmed, without a
+replacement call. Native library tests retain nonempty results, UNKNOWN,
+completed File records and physical custody, including refusal under held
+claims and visitor failure. These library and CPU adapter checks do not establish
+actual CLI-child execution, current Electron host exclusion or automatic startup
+recovery. Those remain separate native selection gates.
+
 The separate closed Dev host composes observation, preparation and the existing
 terminal/marker completion under the same promotion and Computer drain leases.
 `tooling/recover-empty-chat.mjs --preserve-nonempty` retains the existing exact
