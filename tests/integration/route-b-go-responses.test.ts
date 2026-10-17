@@ -333,9 +333,7 @@ describe("startup-selected Go Responses transport with controlled peers", () => 
       resolve?: GoChatResponsesOptions["resolveCreate"];
     } = {},
   ) {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-go-responses-"),
-    );
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "fg-resp-"));
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
     const relay = opts.relay
       ? await startCodexCallerRelay({ root: path.join(root, "relay") })
@@ -946,7 +944,7 @@ describe("startup-selected Go Responses transport with controlled peers", () => 
 describe("ordinary Responses HTTP joined to the actual Go CPU peer", () => {
   for (const scenario of ["text", "tool", "lost-send-reply"] as const) {
     it(`${scenario}: joins original Go ownership without replaying Send`, async () => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-go-http-"));
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "fg-http-"));
       const p = await startGoChatResponsesFixture(scenario);
       const relay = await startCodexCallerRelay({
         root: path.join(root, "relay"),
