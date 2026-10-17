@@ -124,7 +124,7 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
       );
     });
     server.listen(0, "127.0.0.1");
-    await once(server, "listening");
+    await deadline(once(server, "listening"), "fixture-listen");
     const fixtureOrigin = `http://127.0.0.1:${server.address().port}`;
     const { _electron: electron } = await import("playwright-core");
     const executable = path.join(
@@ -209,8 +209,8 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
       ])
         assert.equal(connector[key], null);
       assert.deepEqual(bootstrap.tasks, []);
-      const actual = await current.evaluate(
-        ({ app, BrowserWindow, session }) => ({
+      const actual = await deadline(
+        current.evaluate(({ app, BrowserWindow, session }) => ({
           name: app.getName(),
           packaged: app.isPackaged,
           appPath: app.getAppPath(),
@@ -230,7 +230,8 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
             "persist:farol-owner-preview-chatgpt",
           ).storagePath,
           pids: app.getAppMetrics().map((metric) => metric.pid),
-        }),
+        })),
+        "runtime-identity",
       );
       assert.equal(actual.name, "Farol Preview");
       assert.equal(actual.packaged, true);
@@ -274,18 +275,24 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
       );
       if (cycle === 0) {
         // Actual renderer preference key, consumed and presented on reopen.
-        await page.evaluate(
-          (appearance) =>
-            localStorage.setItem(
-              "farol.appearance.v1",
-              JSON.stringify(appearance),
-            ),
-          APPEARANCE,
+        await deadline(
+          page.evaluate(
+            (appearance) =>
+              localStorage.setItem(
+                "farol.appearance.v1",
+                JSON.stringify(appearance),
+              ),
+            APPEARANCE,
+          ),
+          "save-appearance",
         );
       } else {
         assert.deepEqual(
-          await page.evaluate(() =>
-            JSON.parse(localStorage.getItem("farol.appearance.v1")),
+          await deadline(
+            page.evaluate(() =>
+              JSON.parse(localStorage.getItem("farol.appearance.v1")),
+            ),
+            "read-appearance",
           ),
           APPEARANCE,
         );
