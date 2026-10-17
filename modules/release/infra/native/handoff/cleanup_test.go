@@ -78,8 +78,34 @@ func TestQuitFailureAndCleanupKeepBothCausesWithoutBytes(t *testing.T) {
 	}
 }
 
+// These cases exercise the production walk from the physical root. A host
+// with a writable or foreign-owned ancestor must refuse that route before the
+// injected boundary. Qualify it without a seam; only the exact ancestry refusal
+// skips this native coverage. Native/cleanup failures must still fail the test.
+func requirePhysicalCleanupRoute(t *testing.T, f *fixture) {
+	t.Helper()
+	home, state, err := openRoute(context.Background(), f.homePath)
+	var cleanup error
+	if state >= 0 {
+		cleanup = errors.Join(cleanup, unix.Close(state))
+	}
+	if home >= 0 {
+		cleanup = errors.Join(cleanup, unix.Close(home))
+	}
+	if cleanup != nil {
+		t.Fatalf("physical route preflight cleanup: %v", cleanup)
+	}
+	if err == ErrHomeType && home < 0 && state < 0 {
+		t.Skip("production temporary-route ancestry refused; physical cleanup boundary NOT RUN")
+	}
+	if err != nil || home < 0 || state < 0 {
+		t.Fatalf("physical route preflight: %v", err)
+	}
+}
+
 func TestRouteWalkConsumesEachOwnerOnceOnCloseFailure(t *testing.T) {
 	f := newFixture(t)
+	requirePhysicalCleanupRoute(t, f)
 	// Production path and predicates, using the host's physical TMPDIR.
 	// Each injected failure stops traversal; no route owner may escape.
 	count := len(strings.Split(f.homePath[1:], "/")) + 3
@@ -143,6 +169,9 @@ func TestRouteErrorsRetainPrimaryAndCleanup(t *testing.T) {
 	for _, point := range []string{"root-stat", "component-stat", "state-open"} {
 		t.Run(point, func(t *testing.T) {
 			f := newFixture(t)
+			if point != "root-stat" {
+				requirePhysicalCleanupRoute(t, f)
+			}
 			primary, cleanup := errors.New("PRIMARY-CANARY"), errors.New("CLEANUP-CANARY")
 			opened, closed := 0, 0
 			primaryObserved := false
