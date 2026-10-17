@@ -16,8 +16,10 @@ import {
 } from "../../../src/apps/desktop/closed-empty-chat-recovery";
 import {
   acquirePromotionLease,
+  promotionLeasePath,
   releasePromotionLease,
   verifyPromotionLease,
+  type PromotionLeaseHandle,
 } from "../../../src/apps/desktop/promotion-lease";
 import { MAX_RUN_MARKER_BYTES } from "../../../src/apps/desktop/run-marker";
 import { retainEmptyChatForArchival } from "../../../src/apps/desktop/retained-empty-archive";
@@ -33,6 +35,28 @@ export type ClosedPreservedRecoveryInput = Omit<
   readonly exact: ExactPreservedRecoverySelection;
   readonly expectedQuitSha256?: string;
 };
+export type StartupPreservedRecoveryInput = ClosedPreservedRecoveryInput & {
+  readonly startup: Readonly<{
+    lease: PromotionLeaseHandle;
+    // The original startup verifier also fences an installed replacement.
+    verify: () => Promise<boolean>;
+    // Trusted enclosing host/owned-child proof, never renderer or CLI data.
+    assertCurrent: () => Promise<void>;
+  }>;
+};
+type PreservedRecoveryResult = Readonly<{
+  phase: "prepared_for_cold_start";
+  archive: string;
+  operationId: string;
+}>;
+type PreservedRecoveryAdmission =
+  | Readonly<{ kind: "closed-dev" }>
+  | Readonly<{
+      kind: "startup";
+      lease: PromotionLeaseHandle;
+      verify: () => Promise<boolean>;
+      assertCurrent: () => Promise<void>;
+    }>;
 const sum = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 
 // Compare the two known children as a set without changing the original
@@ -57,11 +81,29 @@ function quitForScopeComparison(quit: unknown): unknown {
 // remain separate prerequisites; old ACK/terminal values stay unobserved.
 export async function recoverClosedPreservedChat(
   input: ClosedPreservedRecoveryInput,
-): Promise<{
-  phase: "prepared_for_cold_start";
-  archive: string;
-  operationId: string;
-}> {
+): Promise<PreservedRecoveryResult> {
+  return recoverPreservedChat(input, { kind: "closed-dev" });
+}
+
+// Trusted startup may borrow only its actual held admission handle. The
+// enclosing owner retains release and current-host/read-only-child settlement.
+// The closed CLI route keeps its separate whole-app-absence contract.
+export async function recoverStartupPreservedChat(
+  input: StartupPreservedRecoveryInput,
+): Promise<PreservedRecoveryResult> {
+  const { lease, verify, assertCurrent } = input.startup;
+  return recoverPreservedChat(input, {
+    kind: "startup",
+    lease,
+    verify,
+    assertCurrent,
+  });
+}
+
+async function recoverPreservedChat(
+  input: ClosedPreservedRecoveryInput,
+  admission: PreservedRecoveryAdmission,
+): Promise<PreservedRecoveryResult> {
   const selected = structuredClone({
     userData: input.userData,
     executable: input.executable,
@@ -77,7 +119,8 @@ export async function recoverClosedPreservedChat(
   const state = path.join(userData, "farol-next-state");
   if (
     !path.isAbsolute(userData) ||
-    !["Farol Dev", "Farol DEV"].includes(path.basename(userData)) ||
+    (admission.kind === "closed-dev" &&
+      !["Farol Dev", "Farol DEV"].includes(path.basename(userData))) ||
     profile.root !== path.join(state, "go-core") ||
     !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(exact.operationId) ||
     !z.string().uuid().safeParse(exact.operationId).success ||
@@ -99,13 +142,38 @@ export async function recoverClosedPreservedChat(
   const root = path.join(state, "secure-mcp-connector", "computer-authority");
   await host.privateRoot(path.dirname(root));
   await host.privateRoot(root);
-  const lease = await acquirePromotionLease(
-    userData,
-    `preserved-chat-recovery-${exact.operationId}`,
-    "promotion",
-  );
-  if (!lease) throw Error("PRESERVED_RECOVERY_APP_ACTIVE");
+  const lease =
+    admission.kind === "closed-dev"
+      ? await acquirePromotionLease(
+          userData,
+          `preserved-chat-recovery-${exact.operationId}`,
+          "promotion",
+        )
+      : admission.lease;
+  if (!lease)
+    throw Error(
+      admission.kind === "closed-dev"
+        ? "PRESERVED_RECOVERY_APP_ACTIVE"
+        : "PRESERVED_RECOVERY_STARTUP_LEASE_INVALID",
+    );
+  const verifyLease = async (): Promise<boolean> => {
+    if (
+      admission.kind === "startup" &&
+      (lease.file !== promotionLeasePath(userData) ||
+        lease.record.role !== "admission" ||
+        lease.record.generation !== exact.buildId)
+    )
+      throw Error("PRESERVED_RECOVERY_STARTUP_LEASE_INVALID");
+    if (!(await verifyPromotionLease(lease))) return false;
+    if (admission.kind === "startup") {
+      if (!(await admission.verify())) return false;
+      await admission.assertCurrent();
+    }
+    return true;
+  };
   try {
+    if (admission.kind === "startup" && !(await verifyLease()))
+      throw Error("PROMOTION_LEASE_LOST");
     return await new PrivateExecutionFence({ root }).withClosedRecoveryDrain(
       async () => {
         const running = path.join(state, "running.json");
@@ -191,8 +259,7 @@ export async function recoverClosedPreservedChat(
           await assertClosedConnectorDurableWork(root);
           if (noQuitLifecycle) await noQuitLifecycle.waitForStop(0);
           processesAbsent();
-          if (!(await verifyPromotionLease(lease)))
-            throw Error("PROMOTION_LEASE_LOST");
+          if (!(await verifyLease())) throw Error("PROMOTION_LEASE_LOST");
         };
         await host.absent(pending);
         await host.absent(archive);
@@ -277,6 +344,7 @@ export async function recoverClosedPreservedChat(
           intent,
           preparedRoots,
           lease,
+          ...(admission.kind === "startup" ? { verifyLease } : {}),
           proof,
           ...(failedQuit ? { failedQuit } : {}),
           archivePin,
@@ -307,6 +375,6 @@ export async function recoverClosedPreservedChat(
       },
     );
   } finally {
-    await releasePromotionLease(lease);
+    if (admission.kind === "closed-dev") await releasePromotionLease(lease);
   }
 }

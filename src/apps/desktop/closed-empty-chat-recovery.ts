@@ -880,6 +880,7 @@ async function finishEmptyRecoveryHost({
   intent,
   preparedRoots,
   lease,
+  verifyLease,
   proof,
   knownFailure,
   archivePin,
@@ -915,6 +916,9 @@ async function finishEmptyRecoveryHost({
     chat: { dev: number; ino: number };
   };
   lease: PromotionLeaseHandle;
+  // A borrowed startup handle retains its original full verifier through the
+  // final eligibility change, including installed-replacement/current-host gates.
+  verifyLease?: () => Promise<boolean>;
   proof(): Promise<void>;
   knownFailure?: { receiptSha256: string; completionOperationId: string };
   archivePin?: Awaited<ReturnType<typeof retainEmptyArchive>>;
@@ -1032,6 +1036,8 @@ async function finishEmptyRecoveryHost({
   input.processesAbsent();
   if (!(await verifyPromotionLease(lease))) throw Error("PROMOTION_LEASE_LOST");
   await archivePin?.verify();
+  if (verifyLease !== undefined && !(await verifyLease()))
+    throw Error("PROMOTION_LEASE_LOST");
   // This is the final eligibility change. Any preceding unknown leaves the
   // original pending inode blocking both normal Go and Electron startup.
   try {
