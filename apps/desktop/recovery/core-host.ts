@@ -6,6 +6,7 @@ import {
   BridgeError,
   type Client,
   type BackendLifecycleObservation,
+  type ChildTerminalObservation,
 } from "../bridge/client.ts";
 import {
   desktopCoreExpectation,
@@ -52,6 +53,8 @@ export type StartupRecoveryCore = Readonly<{
     relativePath: string,
   ): ReturnType<GoComputerAuthority["snapshotSettings"]>;
   close(): Promise<void>;
+  // Current read-only child facts only; never predecessor retirement authority.
+  closeAndObserve(): Promise<ChildTerminalObservation>;
 }>;
 
 // The caller retains its original startup exclusion and predecessor run marker.
@@ -130,13 +133,27 @@ export async function startDesktopGoRecovery(
     }
     throw error;
   }
+  let closeStarted = false;
   let closing: Promise<void> | undefined;
+  let observation: Promise<ChildTerminalObservation> | undefined;
   const close = (): Promise<void> => {
-    if (!closing) closing = client.close();
+    closeStarted = true;
+    if (!closing)
+      closing = observation
+        ? observation.then(() => undefined)
+        : client.close();
     return closing;
   };
+  const closeAndObserve = (): Promise<ChildTerminalObservation> => {
+    closeStarted = true;
+    if (!observation)
+      observation = closing
+        ? closing.then(() => client.closeAndObserve())
+        : client.closeAndObserve();
+    return observation;
+  };
   const available = () => {
-    if (closing)
+    if (closeStarted)
       throw new BridgeError("unavailable", "recovery_computer_closed");
     // The existing client never reopens a stopped pipe. This getter performs
     // no request, renewal, child launch or cleanup action.
@@ -208,5 +225,6 @@ export async function startDesktopGoRecovery(
         authority.snapshotSettings(generation, workspaceId, relativePath),
       ),
     close,
+    closeAndObserve,
   });
 }

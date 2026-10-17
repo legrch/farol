@@ -91,6 +91,11 @@ function options(mode: "hidden" | "default" | "secondary-visible" = "hidden") {
       state: vi.fn(async () => ({ status: "settings_unavailable" as const })),
       read: vi.fn(async (_input: unknown) => ({ status: "refused" as const })),
       close: vi.fn(async () => undefined),
+      closeAndObserve: vi.fn(async () => ({
+        exitCode: 0,
+        signal: null,
+        forced: false,
+      })),
     },
     mode,
     placement: vi.fn(() => ({ x: -1000, y: 40, width: 640, height: 520 })),
