@@ -98,10 +98,54 @@ tasks:
           /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- \
           "$node_path" tooling/run-preview.mjs {{.CLI_ARGS}}
 
-  preview:
-    desc: Build and launch the development-only Farol Next preview (not the packaged candidate)
+  preview:development:
+    desc: Legacy development-only preview command; runs existing build without rebuilding
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run preview
+
+  preview:
+    desc: Owner Preview entrypoint (blocked pending runtime integration; see docs/development/owner-preview.md)
+    cmds:
+      - task: preview:run
+
+  preview:plan:
+    desc: Inspect an offline owner Preview plan from exact accepted main; no build or launch
+    cmds:
+      - |
+        clean_path=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+        node_path="$(PATH="$clean_path" command -v node)"
+        /usr/bin/env -i \
+          HOME="${HOME:?task preview:plan requires HOME}" \
+          LANG="${LANG:-en_US.UTF-8}" \
+          PATH="$clean_path" \
+          TMPDIR="${TMPDIR:-/tmp}" \
+          "$node_path" tooling/owner-preview.mjs plan {{.CLI_ARGS}}
+
+  preview:build:
+    desc: Owner Preview build admission (currently fails closed; no package is built)
+    cmds:
+      - |
+        clean_path=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+        node_path="$(PATH="$clean_path" command -v node)"
+        /usr/bin/env -i \
+          HOME="${HOME:?task preview:build requires HOME}" \
+          LANG="${LANG:-en_US.UTF-8}" \
+          PATH="$clean_path" \
+          TMPDIR="${TMPDIR:-/tmp}" \
+          "$node_path" tooling/owner-preview.mjs build {{.CLI_ARGS}}
+
+  preview:run:
+    desc: Owner Preview launch admission (currently fails closed; no app is launched)
+    cmds:
+      - |
+        clean_path=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+        node_path="$(PATH="$clean_path" command -v node)"
+        /usr/bin/env -i \
+          HOME="${HOME:?task preview:run requires HOME}" \
+          LANG="${LANG:-en_US.UTF-8}" \
+          PATH="$clean_path" \
+          TMPDIR="${TMPDIR:-/tmp}" \
+          "$node_path" tooling/owner-preview.mjs run {{.CLI_ARGS}}
 
   promote:
     desc: Plan a non-overwriting Next-only local promotion; pass --apply only as the owner action

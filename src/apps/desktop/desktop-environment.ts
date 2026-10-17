@@ -8,6 +8,38 @@ import {
 
 export const DEV_DISPLAY_NAME = "Farol Dev";
 
+// Declaration only. Runtime admission requires the single-instance, renderer,
+// setup and connector contracts to accept this distinct environment, plus
+// verification of updater exclusion and independent child configuration.
+// Until that coordinated change, desktopEnvironment rejects owner-preview.
+export const OWNER_PREVIEW_IDENTITY = Object.freeze({
+  environment: "owner-preview",
+  displayName: "Farol Preview",
+  displayEdition: "",
+  applicationId: "local.farol.owner.preview",
+  applicationName: "Farol Preview",
+  dataDirectoryName: "Farol Preview",
+  runtimePartition: "persist:farol-owner-preview-runtime",
+  chatGptPartition: "persist:farol-owner-preview-chatgpt",
+  runtimeIdentity: "farol-owner-preview-runtime",
+  runtimeServiceName: "Farol Preview Runtime",
+} as const);
+
+/** Fixed prospective identity; this neither selects nor opens a profile. */
+export function ownerPreviewIdentity(appData: string) {
+  if (!path.isAbsolute(appData) || appData.includes("\0")) {
+    throw new Error("DESKTOP_APP_DATA_INVALID");
+  }
+  const { dataDirectoryName, ...identity } = OWNER_PREVIEW_IDENTITY;
+  const userData = path.join(appData, dataDirectoryName);
+  return {
+    ...identity,
+    userData,
+    sessionData: userData,
+    codexHome: path.join(userData, "farol-next-private", "codex-home"),
+  };
+}
+
 export type DesktopEnvironment = "preview" | "dev";
 
 export type DesktopIdentity = Readonly<{

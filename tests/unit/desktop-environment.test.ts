@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   codexChildHomePath,
+  ownerPreviewIdentity,
   desktopCodexChildHomes,
   desktopCodexConfigPath,
   desktopAppDataPath,
@@ -277,6 +278,33 @@ describe("desktop environment identity", () => {
       runtimeIdentity: "farol-next-preview-runtime",
       runtimeServiceName: "Farol Next Runtime",
     });
+  });
+
+  it("declares the owner Preview identity without admitting an incomplete runtime", () => {
+    const owner = ownerPreviewIdentity(appData);
+    expect(owner.environment).toBe("owner-preview");
+    expect(owner.applicationName).toBe("Farol Preview");
+    expect(owner.applicationId).toBe("local.farol.owner.preview");
+    expect(owner.userData).toBe(path.join(appData, "Farol Preview"));
+    expect(owner.sessionData).toBe(owner.userData);
+    for (const environment of ["preview", "dev"] as const) {
+      const existing = desktopIdentity(environment, appData);
+      for (const key of [
+        "applicationId",
+        "userData",
+        "sessionData",
+        "runtimePartition",
+        "chatGptPartition",
+        "runtimeIdentity",
+        "runtimeServiceName",
+        "codexHome",
+      ] as const) {
+        expect(owner[key]).not.toBe(existing[key]);
+      }
+    }
+    expect(() => desktopEnvironment(owner.environment)).toThrow(
+      "DESKTOP_ENVIRONMENT_INVALID",
+    );
   });
 
   it("accepts only the launcher's explicit marker", () => {
