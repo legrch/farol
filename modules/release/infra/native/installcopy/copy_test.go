@@ -423,12 +423,24 @@ func TestRejectedObjects(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "socket":
+				// The rejection concerns the socket inode, not its bound name.
+				// A Go subtest's path can exceed Darwin's sockaddr_un limit;
+				// bind under a short owned sibling, then move that same inode.
+				socketRoot, err := os.MkdirTemp("", "fc-")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { os.RemoveAll(socketRoot) })
 				fd, err := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM, 0)
 				if err != nil {
 					t.Fatal(err)
 				}
 				defer unix.Close(fd)
-				if err := unix.Bind(fd, &unix.SockaddrUnix{Name: filepath.Join(f.source, "a")}); err != nil {
+				bound := filepath.Join(socketRoot, "a")
+				if err := unix.Bind(fd, &unix.SockaddrUnix{Name: bound}); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(bound, filepath.Join(f.source, "a")); err != nil {
 					t.Fatal(err)
 				}
 				os.Chmod(filepath.Join(f.source, "a"), 0600)
