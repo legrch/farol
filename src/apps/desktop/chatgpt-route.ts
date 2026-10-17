@@ -1346,7 +1346,10 @@ export type ChatGptRouteOptions = Readonly<{
   initialUrl: string;
   e2eOrigin: string | null;
   parent: () => BrowserWindow | null;
-  partition?: "persist:farol-next-chatgpt" | "persist:farol-dev-chatgpt";
+  partition?:
+    | "persist:farol-next-chatgpt"
+    | "persist:farol-dev-chatgpt"
+    | "persist:farol-owner-preview-chatgpt";
   requiredAppName?: string;
   // Ordinary manual ChatGPT messages remain under the owner's control.
   // Automated app-bound tasks still check requiredAppName before submission.

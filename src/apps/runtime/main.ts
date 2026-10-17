@@ -35,7 +35,11 @@ async function main(): Promise<void> {
     .enum(["empty", "demo"])
     .safeParse(process.env.FAROL_NEXT_PREVIEW_MODE);
   const parsedIdentity = z
-    .enum(["farol-next-preview-runtime", "farol-dev-runtime"])
+    .enum([
+      "farol-next-preview-runtime",
+      "farol-dev-runtime",
+      "farol-owner-preview-runtime",
+    ])
     .safeParse(process.env.FAROL_NEXT_RUNTIME_IDENTITY);
   const scenario = parsedScenario.success ? parsedScenario.data : "normal";
   if (scenario === "startup-failure") {

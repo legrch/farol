@@ -84,8 +84,8 @@ export function createUpdateAbortConnectorRecovery(
 // Codex routes require their own deliberate admission, never a startup replay.
 export function shouldResumeComputerConnector(
   input: Readonly<{
-    environment: "dev" | "preview";
-    buildEnvironment: "dev" | "preview";
+    environment: "dev" | "preview" | "owner-preview";
+    buildEnvironment: "dev" | "preview" | "owner-preview";
     previousRunClean: boolean;
     snapshot: ProductConfigurationSnapshot;
   }>,

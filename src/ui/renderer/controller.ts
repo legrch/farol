@@ -120,7 +120,7 @@ type SectionNavigationAction = Extract<
 // Parse only the renderer-safe projection; never retain the raw bootstrap object.
 export const BootstrapProjectionSchema = z.object({
   schema: z.literal(3),
-  environment: z.enum(["preview", "dev"]),
+  environment: z.enum(["preview", "dev", "owner-preview"]),
   build: BuildIdentitySchema,
   configuration: ProductConfigurationSnapshotSchema,
   runtimeState: z.enum(["starting", "ready", "offline", "failed"]),

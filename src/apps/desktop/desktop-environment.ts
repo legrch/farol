@@ -8,7 +8,134 @@ import {
 
 export const DEV_DISPLAY_NAME = "Farol Dev";
 
-export type DesktopEnvironment = "preview" | "dev";
+// Fixed owner-operated channel. It never selects the historical installed
+// profile or the development profile, and has no installed updater authority.
+export const OWNER_PREVIEW_IDENTITY = Object.freeze({
+  environment: "owner-preview",
+  displayName: "Farol Preview",
+  displayEdition: "",
+  applicationId: "local.farol.owner.preview",
+  applicationName: "Farol Preview",
+  dataDirectoryName: "Farol Preview",
+  runtimePartition: "persist:farol-owner-preview-runtime",
+  chatGptPartition: "persist:farol-owner-preview-chatgpt",
+  runtimeIdentity: "farol-owner-preview-runtime",
+  runtimeServiceName: "Farol Preview Runtime",
+} as const);
+
+/** Fixed identity calculation; this neither opens nor migrates a profile. */
+export function ownerPreviewIdentity(appData: string) {
+  if (!path.isAbsolute(appData) || appData.includes("\0")) {
+    throw new Error("DESKTOP_APP_DATA_INVALID");
+  }
+  const { dataDirectoryName, ...identity } = OWNER_PREVIEW_IDENTITY;
+  const userData = path.join(appData, dataDirectoryName);
+  return {
+    ...identity,
+    userData,
+    sessionData: userData,
+    codexHome: path.join(userData, "farol-next-private", "codex-home"),
+  };
+}
+
+/** Read-only admission before Electron selects or writes the Preview profile.
+ * No alias adoption, directory repair, creation or profile-content reads.
+ */
+export function assertOwnerPreviewProfileSeparation(appData: string): void {
+  const invalid = () => new Error("OWNER_PREVIEW_PROFILE_DIRECTORY_UNSAFE");
+  const uid = process.getuid?.();
+  if (
+    uid === undefined ||
+    !path.isAbsolute(appData) ||
+    appData.includes("\0") ||
+    path.resolve(appData) !== appData
+  )
+    throw invalid();
+  const profile = ownerPreviewIdentity(appData).userData;
+  const privateRoot = path.join(profile, "farol-next-private");
+  // Fixed storage ancestors used by private-home, credential, state and
+  // Chromium partition consumers. Inspect metadata only, without following
+  // an alias or reading existing profile contents.
+  const storageDirectories = [
+    profile,
+    privateRoot,
+    ...[
+      "codex-home",
+      "process-home",
+      "secure-mcp-connector",
+      "model-endpoint",
+    ].map((name) => path.join(privateRoot, name)),
+    path.join(profile, "farol-next-state"),
+    path.join(profile, "Partitions"),
+    ...[
+      OWNER_PREVIEW_IDENTITY.runtimePartition,
+      OWNER_PREVIEW_IDENTITY.chatGptPartition,
+    ].map((partition) =>
+      path.join(profile, "Partitions", partition.slice("persist:".length)),
+    ),
+  ];
+  const storage = new Set(storageDirectories);
+  const directories: string[] = [];
+  for (let parent = appData; ; parent = path.dirname(parent)) {
+    directories.unshift(parent);
+    if (parent === path.dirname(parent)) break;
+  }
+  try {
+    for (const directory of [...directories, ...storageDirectories]) {
+      let info;
+      try {
+        info = fs.lstatSync(directory);
+      } catch (error) {
+        if (
+          storage.has(directory) &&
+          (error as NodeJS.ErrnoException).code === "ENOENT"
+        )
+          continue;
+        throw error;
+      }
+      // The canonical system temporary root is a sticky ancestor of disposable
+      // tests. App-data/profile themselves must always be owned and non-writable
+      // by other users; a sticky application-data root is never sufficient.
+      const temporaryAncestor =
+        directory !== appData &&
+        directory !== profile &&
+        info.uid === 0 &&
+        (info.mode & 0o1000) !== 0 &&
+        (directory === "/tmp" || directory === "/private/tmp");
+      if (
+        !info.isDirectory() ||
+        info.isSymbolicLink() ||
+        (info.uid !== 0 && info.uid !== uid) ||
+        ((directory === appData || storage.has(directory)) &&
+          info.uid !== uid) ||
+        (directory === profile && (info.mode & 0o077) !== 0) ||
+        ((info.mode & 0o022) !== 0 && !temporaryAncestor) ||
+        fs.realpathSync.native(directory) !== directory
+      )
+        throw invalid();
+    }
+  } catch {
+    throw invalid();
+  }
+}
+
+/** Create only the missing fixed Preview leaf privately, after physical
+ * ancestor admission. Never chmod, migrate or replace an existing profile.
+ */
+export function prepareOwnerPreviewProfile(appData: string): void {
+  assertOwnerPreviewProfileSeparation(appData);
+  const profile = ownerPreviewIdentity(appData).userData;
+  try {
+    fs.mkdirSync(profile, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST")
+      throw new Error("OWNER_PREVIEW_PROFILE_DIRECTORY_UNSAFE");
+  }
+  // Recheck before Electron observes the leaf, including an EEXIST race.
+  assertOwnerPreviewProfileSeparation(appData);
+}
+
+export type DesktopEnvironment = "preview" | "dev" | "owner-preview";
 
 export type DesktopIdentity = Readonly<{
   environment: DesktopEnvironment;
@@ -19,22 +146,30 @@ export type DesktopIdentity = Readonly<{
   userData: string;
   sessionData: string;
   runtimePartition: string;
-  chatGptPartition: "persist:farol-next-chatgpt" | "persist:farol-dev-chatgpt";
-  runtimeIdentity: "farol-next-preview-runtime" | "farol-dev-runtime";
-  runtimeServiceName: "Farol Next Runtime" | "Farol Dev Runtime";
+  chatGptPartition:
+    | "persist:farol-next-chatgpt"
+    | "persist:farol-dev-chatgpt"
+    | "persist:farol-owner-preview-chatgpt";
+  runtimeIdentity:
+    | "farol-next-preview-runtime"
+    | "farol-dev-runtime"
+    | "farol-owner-preview-runtime";
+  runtimeServiceName:
+    "Farol Next Runtime" | "Farol Dev Runtime" | "Farol Preview Runtime";
   codexHome: string;
 }>;
 
 /**
- * Only the app-owned development launcher may opt into DEV. Packaged builds
- * and direct Electron starts remain Preview. An unexpected non-empty marker
- * fails closed instead of accidentally selecting either owner's state.
+ * App-owned launchers select only fixed, independent channel identities.
+ * An absent marker retains the historical installed identity. Unknown markers
+ * fail before any profile access; package verification is independent.
  */
 export function desktopEnvironment(
   marker: string | undefined,
 ): DesktopEnvironment {
   if (marker === undefined || marker === "") return "preview";
   if (marker === "dev") return "dev";
+  if (marker === "owner-preview") return "owner-preview";
   throw new Error("DESKTOP_ENVIRONMENT_INVALID");
 }
 
@@ -297,7 +432,7 @@ export function desktopUserDataPath(
 ): string {
   if (
     !options.enabled ||
-    identity.environment === "dev" ||
+    identity.environment !== "preview" ||
     options.override === undefined ||
     options.override === ""
   ) {
@@ -337,6 +472,7 @@ export function desktopIdentity(
   if (!path.isAbsolute(appData) || appData.includes("\0")) {
     throw new Error("DESKTOP_APP_DATA_INVALID");
   }
+  if (environment === "owner-preview") return ownerPreviewIdentity(appData);
   const dev = environment === "dev";
   if (
     dev &&
@@ -377,7 +513,7 @@ export function codexChildHomePath(
   if (!path.isAbsolute(privateCodexHome) || privateCodexHome.includes("\0")) {
     throw new Error("DESKTOP_CODEX_HOME_INVALID");
   }
-  if (environment === "dev") return privateCodexHome;
+  if (environment !== "preview") return privateCodexHome;
   return configuredCodexHome !== undefined &&
     path.isAbsolute(configuredCodexHome) &&
     !configuredCodexHome.includes("\0")
@@ -385,14 +521,14 @@ export function codexChildHomePath(
     : undefined;
 }
 
-// Model configuration follows build authority and stays private in Dev.
+// Model configuration follows build authority; Dev and owner Preview stay private.
 export function desktopCodexConfigPath(
   buildEnvironment: DesktopEnvironment,
   identity: DesktopIdentity,
   nativeHome: string,
 ): string {
   return path.join(
-    buildEnvironment === "dev"
+    buildEnvironment !== "preview"
       ? identity.codexHome
       : path.join(nativeHome, ".codex"),
     "config.toml",
@@ -412,7 +548,7 @@ export function desktopCodexChildHomes(
       configuredCodexHome,
     ),
     processHomePath:
-      buildEnvironment === "dev"
+      buildEnvironment !== "preview"
         ? path.join(identity.userData, "farol-next-private", "process-home")
         : nativeHome,
   };

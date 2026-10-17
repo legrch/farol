@@ -494,6 +494,7 @@ import {
   desktopUserDataPath,
   desktopEnvironment,
   desktopIdentity,
+  prepareOwnerPreviewProfile,
   desktopProfileEnvironment,
   isolatedDevMcpProofAllowed,
 } from "./desktop-environment";
@@ -567,13 +568,25 @@ const desktopAppData = (() => {
 // The existing app-data proof has already validated this exact private HOME;
 // select it before Go/native child composition can observe the owner's home.
 if (isolatedE2EHome !== undefined) app.setPath("home", isolatedE2EHome);
-const declaredDesktopIdentity = desktopIdentity(
-  runtimeEnvironment,
-  desktopAppData,
-  runtimeEnvironment === "dev"
-    ? resolvePhysicalDevDataDirectoryName(desktopAppData)
-    : undefined,
-);
+const declaredDesktopIdentity = (() => {
+  try {
+    if (runtimeEnvironment === "owner-preview")
+      prepareOwnerPreviewProfile(desktopAppData);
+    return desktopIdentity(
+      runtimeEnvironment,
+      desktopAppData,
+      runtimeEnvironment === "dev"
+        ? resolvePhysicalDevDataDirectoryName(desktopAppData)
+        : undefined,
+    );
+  } catch (error) {
+    terminateDesktopStartup(error, runtimeEnvironment, {
+      write: (message) => process.stderr.write(message),
+      exit: (code) => process.exit(code),
+    });
+    throw error;
+  }
+})();
 const selectedDesktopUserData = (() => {
   try {
     return desktopUserDataPath(declaredDesktopIdentity, {
@@ -754,7 +767,11 @@ const expectedTasks = demoMode ? demoTasks : [];
 
 const readySchema = z.strictObject({
   kind: z.literal("runtime.ready"),
-  identity: z.enum(["farol-next-preview-runtime", "farol-dev-runtime"]),
+  identity: z.enum([
+    "farol-next-preview-runtime",
+    "farol-dev-runtime",
+    "farol-owner-preview-runtime",
+  ]),
   port: z.number().int().min(1).max(65_535),
   token: z.string().min(32),
   tasks: z.array(
@@ -894,6 +911,9 @@ async function installedUpdateCommand(
   return installedUpdateView;
 }
 async function initializeInstalledUpdater(): Promise<void> {
+  // Owner Preview is an on-demand artifact, never an installed update owner.
+  // Refuse before constructing a runtime or inspecting installed resources.
+  if (buildEnvironment !== "preview") return;
   try {
     installedUpdater = await createInstalledUpdateRuntime({
       directory,
@@ -3619,7 +3639,7 @@ async function farolModelCodexHostPresence(): Promise<
   // DEV never inspects or asks the owner to restart a personal Codex. Its
   // model route is consumed only by app-owned children with private HOME and
   // CODEX_HOME directories.
-  if (buildEnvironment === "dev") return "not_running";
+  if (buildEnvironment !== "preview") return "not_running";
   const snapshot = configuration ? configuration.snapshot() : null;
   const executablePath =
     snapshot && snapshot.status === "ready"
@@ -3759,7 +3779,7 @@ async function codexHostHomeOption(): Promise<
     process.env.CODEX_HOME,
   );
   if (selected === undefined) return {};
-  if (buildEnvironment === "dev") await codexHostHomePath();
+  if (buildEnvironment !== "preview") await codexHostHomePath();
   return { codexHomePath: selected };
 }
 
@@ -3770,7 +3790,7 @@ async function codexHostProcessHomePath(): Promise<string> {
     app.getPath("home"),
     process.env.CODEX_HOME,
   );
-  if (buildEnvironment !== "dev") return root;
+  if (buildEnvironment === "preview") return root;
   await mkdir(root, { recursive: true, mode: 0o700 });
   const info = await lstat(root);
   const effectiveUser = process.geteuid?.();
@@ -9970,7 +9990,9 @@ function desktopBrandImage() {
       directory,
       activeDesktopIdentity.environment === "dev"
         ? "farol-dev-mark.png"
-        : "farol-mark.png",
+        : activeDesktopIdentity.environment === "owner-preview"
+          ? "farol-preview-mark.png"
+          : "farol-mark.png",
     ),
   );
   if (icon.isEmpty()) throw new Error("DESKTOP_BRAND_IMAGE_INVALID");

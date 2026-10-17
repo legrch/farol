@@ -2370,7 +2370,12 @@ function Connection({
   const externalChallenge = actions.computerPauseReason
     ? null
     : setup.externalChallenge;
-  const connectorName = snapshot.environment === "dev" ? "Farol Dev" : "Farol";
+  const connectorName =
+    snapshot.environment === "dev"
+      ? "Farol Dev"
+      : snapshot.environment === "owner-preview"
+        ? "Farol Preview"
+        : "Farol";
   const [copiedVerification, setCopiedVerification] = useState<string | null>(
     null,
   );
@@ -3214,7 +3219,7 @@ function EmbeddedConnectionCheck({
 function Model({ settings, snapshot, facade, actions }: PageProps) {
   const [selectDefault, setSelectDefault] = useState(false);
   const [reviewed, setReviewed] = useState<WindowSnapshot["evidence"]>(null);
-  const choice = snapshot.environment === "dev" ? false : selectDefault;
+  const choice = snapshot.environment !== "preview" ? false : selectDefault;
   const evidence =
     snapshot.evidence?.revision === settings.revision
       ? snapshot.evidence.value
@@ -3253,7 +3258,9 @@ function Model({ settings, snapshot, facade, actions }: PageProps) {
           Provider: farol · Model: chatgpt.{" "}
           {snapshot.environment === "dev"
             ? "Changes use Farol Dev’s private Codex home."
-            : "Changes write the Farol-managed block in Codex config.toml; default selection is a separate explicit choice."}
+            : snapshot.environment === "owner-preview"
+              ? "Changes use Farol Preview’s private Codex home."
+              : "Changes write the Farol-managed block in Codex config.toml; default selection is a separate explicit choice."}
         </p>
         <Command actions={actions} command={{ kind: "model.status" }}>
           Check model status
@@ -3263,7 +3270,7 @@ function Model({ settings, snapshot, facade, actions }: PageProps) {
             {evidence.state} · Requests served: {evidence.requestsServed}
           </p>
         )}
-        {snapshot.environment !== "dev" && (
+        {snapshot.environment === "preview" && (
           <label className="setting-row">
             <input
               type="checkbox"
@@ -3650,7 +3657,7 @@ function Diagnostics({ snapshot, settings, facade, actions }: PageProps) {
           Refresh status
         </button>
       </Group>
-      {snapshot.environment !== "dev" && (
+      {snapshot.environment === "preview" && (
         <details>
           <summary>Update recovery</summary>
           <p className="description">

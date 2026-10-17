@@ -16,7 +16,9 @@ export function savedChatPreviewQualified(
 ): boolean {
   const verification = input.verification;
   return (
-    (input.environment === "dev" || input.environment === "preview") &&
+    (input.environment === "dev" ||
+      input.environment === "preview" ||
+      input.environment === "owner-preview") &&
     input.ownerOptIn === "1" &&
     !input.outcomeUnknown &&
     verification?.profile === "chatgpt.next-partition/1" &&

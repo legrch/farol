@@ -38,7 +38,7 @@ const buildIdentitySchema = z.discriminatedUnion("schema", [
 const instanceIdentitySchema = z.strictObject({
   schema: z.literal("farol.next.single-instance/2"),
   nonce,
-  environment: z.enum(["preview", "dev"]),
+  environment: z.enum(["preview", "dev", "owner-preview"]),
   sourceCommit,
   sourceTreeDigest,
   inputLedgerSha256: sha256,
@@ -235,7 +235,7 @@ export function readBuildLaunchIdentity(
         throw new Error("Go manifest does not match exact build identity");
       }
     }
-    if (environment === "preview" && (manifest.dirty || !manifest.inputExact)) {
+    if (environment !== "dev" && (manifest.dirty || !manifest.inputExact)) {
       throw new Error("candidate identity is not exact");
     }
     const ledger = readBoundedRegularFile(

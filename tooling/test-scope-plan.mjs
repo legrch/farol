@@ -118,7 +118,7 @@ export function classifyTests(files) {
       )
         nodeUnit.push(file);
       else if (
-        /^tests\/(integration|architecture|contract|hunt|e2e\/fixtures)\//u.test(
+        /^tests\/(integration|architecture|contract|hunt|tooling|e2e\/fixtures)\//u.test(
           file,
         )
       )
