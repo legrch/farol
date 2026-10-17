@@ -62,6 +62,7 @@ schemas are compatibility boundaries. Do not rename them as a source-layout fix.
   required before every commit. The optional evidence consistency checker
   (`task checkpoint`, documented in `docs/checkpoints.md`) does not replace the
   implementing Lead's provenance/coverage audit or grant acceptance.
+- **Push is not a CI gate:** the repository intentionally has no `pre-push` hook. `task ci:fast` and `task ci:cloud` still run `scan:secrets` as explicit source-acceptance gates. Run the risk-required checks before PR merge; ordinary feature-branch push should not repeatedly execute the full-history secret scanner. This does not waive any native attestation, security review or release requirement. The active TestOps/CI pilot remains independent of this hook removal.
 - **Stable integration candidate:** freeze the exact committed range, then run
   `task ci:fast` and applicable cross-module/aggregate checks once against those
   stable bytes. Fix failures with new commits and rerun affected checks. Preserve
