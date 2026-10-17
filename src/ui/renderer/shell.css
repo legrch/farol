@@ -1676,3 +1676,29 @@ kbd {
   height: 6px;
   accent-color: var(--accent);
 }
+
+.recovery-archive {
+  display: grid;
+  gap: 12px;
+  margin-block: 16px;
+}
+.recovery-reply-list {
+  display: grid;
+  gap: 6px;
+  padding: 0;
+  list-style: none;
+}
+.recovery-reply-list button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  text-align: start;
+}
+.recovery-copy-text {
+  max-height: 360px;
+  overflow: auto;
+}
+.recovery-copy-text pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

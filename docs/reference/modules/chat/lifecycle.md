@@ -257,6 +257,38 @@ The adapter call counter is not a physical provider acceptance ledger. Composer
 encoding, actual transport backpressure and packaged/live-provider limits remain
 separate higher-boundary witnesses; this is not complete M10 acceptance.
 
+## Stored copies after preserving startup
+
+A normal current Go owner exposes `chat.retired.list` and `chat.retired.read`
+for explicit reads of its profile's `chat-retired-<UUID>` result namespaces.
+These methods reuse the existing archive application service, current history
+read authority, canonical result parser and read-only result claim. They never
+open the active Chat writer's result namespace. The recovery-only
+`chat.archive.list/read` methods remain absent from the normal owner.
+
+Retired entries retain `stored_unconfirmed` provenance. Their opaque keys bind
+the fixed retired namespace and original result key; the original record digest
+still pins content. Even a recorded `completed` outcome grants no HistoryOrigin,
+old terminal observation, delivery ACK, continuation or replay. The normal UI
+shows these copies separately from confirmed saved answers, as plain text with
+an explicit unconfirmed label and no Send, Resume or Acknowledge controls.
+
+Queries stream directories and records with 32-entry pages and an original
+five-second context bound, rather than imposing an additional history count
+ceiling or eagerly scanning at startup. Selected records and the physical
+profile are rechecked before returning. Busy, unsafe, unreadable, changed or
+incompatible old namespaces withhold the query; they do not become an empty
+history or gate independent app startup. Unresolved records remain visible as
+unresolved metadata. Device, inode, owner and claim equality remain mandatory;
+observation does not rebind historical device IDs after a host or volume change.
+
+The desktop binds every request and response to the same current host, profile,
+backend and renderer history epoch. A replacement, runtime gap or unavailable
+response pauses that reader without retry. Constructors perform no archive IO.
+Native filesystem/Go composition, renderer tests and assembled hidden Electron
+crash/reopen journeys provide distinct evidence; source implementation alone is
+not an installed-profile migration or live-provider acceptance result.
+
 ## Preserved nonempty recovery selection
 
 `app/capabilities/archive.Policy.Select` compares an independently preselected scope, physical roots and digests with bounded canonical observation metadata for nonempty original Chat. It selects `chat-retired-<OperationID>` and copies only the observed unresolved-results flag. A namespace with zero writes, turns, plans and results qualifies only when results remain unresolved; recorded retirement alone does not qualify. The original empty-recovery and interrupted policies retain their existing predicates.

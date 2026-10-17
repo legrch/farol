@@ -38,6 +38,7 @@ import {
   type ReadConversationProjection,
 } from "../../../apps/desktop/bridge/read-conversation";
 import { readChatHistoryView } from "../../../apps/desktop/chat-history-view";
+import { readRetiredRepliesView } from "../../../apps/desktop/retired-replies-view";
 import { projectReadConversation } from "../../../apps/desktop/read-conversation-projection";
 import { ReadConversationPromptSchema } from "../../pkg/product-settings/chat-conversation";
 import {
@@ -10941,6 +10942,11 @@ function installIpc(): void {
   ipcMain.handle(channels.chatHistory, (event, value: unknown) =>
     isTrustedIpcSender(event, window)
       ? readChatHistoryView(() => desktopGoCore, value)
+      : { error: "IPC_SENDER_DENIED" },
+  );
+  ipcMain.handle(channels.retiredReplies, (event, value: unknown) =>
+    isTrustedIpcSender(event, window)
+      ? readRetiredRepliesView(() => desktopGoCore, value)
       : { error: "IPC_SENDER_DENIED" },
   );
   ipcMain.handle(channels.task, (event, value: unknown) =>

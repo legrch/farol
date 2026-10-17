@@ -28,6 +28,7 @@ export type PreloadApi = Readonly<{
   snapshot(): Promise<unknown>;
   configure(command: ProductConfigurationCommand): Promise<unknown>;
   chatHistory?(request: unknown): Promise<unknown>;
+  retiredReplies?(request: unknown): Promise<unknown>;
   task(command: ProductTaskCommand): Promise<unknown>;
   installedUpdate(command: InstalledUpdateCommand): Promise<unknown>;
   setNavigationShortcuts(shortcuts: unknown): Promise<unknown>;
@@ -254,6 +255,7 @@ export interface RendererFacade {
     pending: import("../guided-workspace-access").WorkspaceReadbackBinding,
   ): Intent | null;
   readChatHistory(query: ChatHistoryQuery): Promise<ChatHistoryReply>;
+  readRetiredReplies?(query: unknown): Promise<unknown>;
   navigate(destination: Partial<Destination>): void;
   travel(direction: -1 | 1): void;
   toggleSidebar(compact: boolean): void;

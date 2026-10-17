@@ -70,3 +70,11 @@ func chatArchiveMethods(service *archive.Service) map[string]desktop.Method {
 		}},
 	}
 }
+
+// Normal startup exposes only retired namespaces through separate read methods.
+// Reusing stored-unconfirmed DTOs does not export the active recovery reader or
+// give retained observations the confirmed HistoryOrigin contract.
+func retiredArchiveMethods(service *archive.Service) map[string]desktop.Method {
+	methods := chatArchiveMethods(service)
+	return map[string]desktop.Method{"chat.retired.list": methods["chat.archive.list"], "chat.retired.read": methods["chat.archive.read"]}
+}

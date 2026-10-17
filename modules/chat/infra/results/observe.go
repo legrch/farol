@@ -176,6 +176,12 @@ func (a *archiveDisk) record(ctx context.Context, key string) (*port.ArchivedRep
 }
 
 func (a *Archive) listArchive(ctx context.Context, selection port.ArchiveListSelection) (result *port.ArchivePage, err error) {
+	return a.observeArchive(ctx, selection, nil)
+}
+
+// A visitor streams qualified metadata to the retired namespace projection.
+// It never escapes the original read-only claim or exposes unverified text.
+func (a *Archive) observeArchive(ctx context.Context, selection port.ArchiveListSelection, visit func(port.ArchiveSummary) error) (result *port.ArchivePage, err error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	disk, err := openArchiveDisk(ctx, a.root)
@@ -246,6 +252,12 @@ func (a *Archive) listArchive(ctx context.Context, selection port.ArchiveListSel
 				continue
 			}
 			if key <= selection.After {
+				continue
+			}
+			if visit != nil {
+				if err := visit(reply.Summary); err != nil {
+					return nil, err
+				}
 				continue
 			}
 			page.Entries = append(page.Entries, reply.Summary)

@@ -22,6 +22,10 @@ import { AgentDraftStore } from "../agent-draft";
 import { ConversationDraftStore } from "./conversation-draft";
 import { z } from "zod";
 import {
+  RetiredReplyQuerySchema,
+  RetiredReplyResponseSchema,
+} from "../../../apps/desktop/renderer/retired-replies-contract";
+import {
   ChatHistoryContextSchema,
   ChatHistoryQuerySchema,
   ChatHistoryReplySchema,
@@ -837,6 +841,49 @@ export class WindowController implements RendererFacade {
     )
       throw new Error("CHAT_HISTORY_CROSSED");
     return immutable(reply);
+  }
+  async readRetiredReplies(query: unknown): Promise<unknown> {
+    const before = this.state;
+    const context = before.chatHistoryContext;
+    const revision = this.staleRevision;
+    const runtimeRevision = this.runtimeRevision;
+    const historyRevision = this.historyRevision;
+    const request = RetiredReplyQuerySchema.parse(query);
+    if (
+      this.disposed ||
+      before.status !== "current" ||
+      !context ||
+      !this.api.retiredReplies
+    )
+      throw new Error("RETIRED_REPLY_UNAVAILABLE");
+    const raw = await this.api.retiredReplies({ context, query: request });
+    if (
+      this.disposed ||
+      this.state.status !== "current" ||
+      revision !== this.staleRevision ||
+      runtimeRevision !== this.runtimeRevision ||
+      historyRevision !== this.historyRevision ||
+      before.buildId !== this.state.buildId ||
+      !sameHistoryContext(context, this.state.chatHistoryContext)
+    )
+      throw new Error("RETIRED_REPLY_STALE");
+    const reply = RetiredReplyResponseSchema.parse(raw);
+    if (
+      !sameHistoryContext(reply.context, context) ||
+      reply.result.status !== "ok"
+    )
+      throw new Error("RETIRED_REPLY_CROSSED");
+    const value = reply.result.data;
+    if (
+      (request.kind === "archive-list" &&
+        (value.kind !== "archive-list" || value.after !== request.after)) ||
+      (request.kind === "archive-read" &&
+        (value.kind !== "archive-read" ||
+          value.summary.key !== request.key ||
+          value.summary.digest !== request.digest))
+    )
+      throw new Error("RETIRED_REPLY_CROSSED");
+    return immutable(reply.result);
   }
   private adoptHistoryContext(context: ChatHistoryContext | null): void {
     if (
