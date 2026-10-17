@@ -316,6 +316,15 @@ claims and visitor failure. These library and CPU adapter checks do not establis
 actual CLI-child execution, current Electron host exclusion or automatic startup
 recovery. Those remain separate native selection gates.
 
+`TestNativePreservedProfileDiscoveryWithBuiltCore` is a separate opt-in gate
+requiring a clean source-matched attested build and both `-ingress-native` and
+`-preserved-profile-native`. It observes actual CLI children through the host
+adapter on fresh retained profiles with empty and completed-File mutation sets,
+checks canonical scope/digests and byte/physical custody, and requalifies built
+resources afterward. A compiled test binary or unflagged skip is not this gate.
+Browser and Settings remain controlled fixtures; no current Electron host
+exclusion, preparation or automatic writable recovery is selected by this test.
+
 The separate closed Dev host composes observation, preparation and the existing
 terminal/marker completion under the same promotion and Computer drain leases.
 `tooling/recover-empty-chat.mjs --preserve-nonempty` retains the existing exact
