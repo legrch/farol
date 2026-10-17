@@ -168,6 +168,34 @@ export async function assertDerivativeTrees(baseApp, previewApp, assets) {
   return treeDigest(previewApp);
 }
 
+// Darwin applies umask to newly copied symlinks too. Restore only the mode
+// of each copied link itself, never chmod its target or the canonical input.
+async function preserveCopiedLinkModes(base, copied) {
+  for (const name of await fs.readdir(base)) {
+    const source = path.join(base, name);
+    const target = path.join(copied, name);
+    const before = await fs.lstat(source);
+    if (before.isSymbolicLink()) {
+      const after = await fs.lstat(target);
+      if (
+        !after.isSymbolicLink() ||
+        (await fs.readlink(source)) !== (await fs.readlink(target))
+      )
+        throw new Error("OWNER_PREVIEW_COPIED_LINK_CHANGED");
+      if ((after.mode & 0o7777) !== (before.mode & 0o7777)) {
+        if (typeof fs.lchmod !== "function")
+          throw new Error("OWNER_PREVIEW_LINK_MODE_UNSUPPORTED");
+        await fs.lchmod(target, before.mode & 0o7777);
+      }
+    } else if (before.isDirectory()) {
+      const after = await fs.lstat(target);
+      if (!after.isDirectory() || after.isSymbolicLink())
+        throw new Error("OWNER_PREVIEW_COPIED_DIRECTORY_CHANGED");
+      await preserveCopiedLinkModes(source, target);
+    }
+  }
+}
+
 export async function derivePreviewTree(baseApp, previewApp, assets) {
   assertPreviewAssets(assets);
   const baseInfo = await physicalDirectory(baseApp);
@@ -186,17 +214,20 @@ export async function derivePreviewTree(baseApp, previewApp, assets) {
       verbatimSymlinks: true,
     });
   }
+  await preserveCopiedLinkModes(baseApp, previewApp);
   const plist = path.join(previewApp, "Contents/Info.plist");
   await fs.writeFile(plist, previewPlist(await fs.readFile(plist, "utf8")));
   await fs.writeFile(
     path.join(previewApp, PREVIEW_LAUNCHER_PATH),
     PREVIEW_LAUNCHER,
   );
-  for (const [name, relative] of Object.entries(PREVIEW_ASSET_PATHS))
-    await fs.writeFile(path.join(previewApp, relative), assets[name], {
-      flag: "wx",
-      mode: 0o644,
-    });
+  for (const [name, relative] of Object.entries(PREVIEW_ASSET_PATHS)) {
+    const file = path.join(previewApp, relative);
+    await fs.writeFile(file, assets[name], { flag: "wx", mode: 0o644 });
+    // Creation applies the operator's umask. Set only this new file to its
+    // exact sealed-recipe mode; all copied canonical modes stay untouched.
+    await fs.chmod(file, 0o644);
+  }
   return assertDerivativeTrees(baseApp, previewApp, assets);
 }
 

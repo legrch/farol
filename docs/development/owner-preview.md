@@ -140,6 +140,9 @@ Startup admits only physical, owner-controlled app-data ancestors and a
 physically separate Preview profile with owner-only access. It creates a missing
 fixed profile leaf with mode 0700 before Electron selects storage; an existing
 aliased, shared-readable or unsafe profile is refused without repair or migration.
+Fixed private-home, credential, state and Chromium partition ancestors are checked
+before any descendant creation or credential access. New derivative assets receive
+their exact recipe modes independently of the operator's umask.
 
 Receipts under `_output/preview/smoke/<generation>/<attempt UUID>.json` bind exact
 source, base/build, derivative and actual observations. They begin as UNKNOWN,
@@ -155,6 +158,11 @@ if initialization fails before returning a handle. That dependency behavior is
 not proof of a drained Quit: the attempt remains UNKNOWN with its profile and
 receipt retained. No failed smoke publishes the current pointer or opens the
 persistent owner profile.
+
+V1 commands must be invoked serially. The receipt scan does not serialize two
+simultaneous manual smoke/run commands; an overlapping attempt may become UNKNOWN
+after its sibling passes the scan. Each attempt still owns a distinct disposable
+profile. Concurrent command admission is outside this on-demand qualification.
 
 The assembled runtime preserves the existing E2E proof and admits the
 fixed environment/partitions in startup and renderer contracts, selects private

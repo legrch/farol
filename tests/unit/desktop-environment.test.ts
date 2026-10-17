@@ -210,6 +210,55 @@ describe("physical Owner Preview profile admission", () => {
     expect(fs.readlinkSync(profile)).toBe(installed);
   });
 
+  it.each([
+    "farol-next-private",
+    "farol-next-private/codex-home",
+    "farol-next-private/process-home",
+    "farol-next-private/secure-mcp-connector",
+    "farol-next-private/model-endpoint",
+    "farol-next-state",
+    "Partitions",
+    "Partitions/farol-owner-preview-runtime",
+    "Partitions/farol-owner-preview-chatgpt",
+  ])("refuses an aliased %s before any private-state consumer", (relative) => {
+    const { appData } = fixture();
+    const profile = ownerPreviewIdentity(appData).userData;
+    fs.mkdirSync(profile, { mode: 0o700 });
+    const installed = path.join(appData, "Farol Next Preview");
+    fs.mkdirSync(installed, { mode: 0o700 });
+    const sentinel = path.join(installed, "original-private-state");
+    fs.writeFileSync(sentinel, "preserve fixture state", { mode: 0o600 });
+    const alias = path.join(profile, relative);
+    fs.mkdirSync(path.dirname(alias), { recursive: true, mode: 0o700 });
+    fs.symlinkSync(installed, alias);
+    const before = fs.statSync(installed);
+    const original = fs.statSync(sentinel);
+    const link = fs.lstatSync(alias);
+    const calls: string[] = [];
+    expect(() => ordinaryBootProfile("owner-preview", appData, calls)).toThrow(
+      "BOOT_EXIT:1",
+    );
+    expect(calls.some((call) => call.startsWith("set:"))).toBe(false);
+    expect(fs.readdirSync(installed)).toEqual(["original-private-state"]);
+    expect(fs.readFileSync(sentinel, "utf8")).toBe("preserve fixture state");
+    for (const [name, prior] of [
+      [installed, before],
+      [sentinel, original],
+      [alias, link],
+    ] as const) {
+      const now = fs.lstatSync(name);
+      expect([now.dev, now.ino, now.mode, now.mtimeMs, now.ctimeMs]).toEqual([
+        prior.dev,
+        prior.ino,
+        prior.mode,
+        prior.mtimeMs,
+        prior.ctimeMs,
+      ]);
+    }
+    expect(fs.readlinkSync(alias)).toBe(installed);
+    expect(fs.existsSync(path.join(installed, "process-home"))).toBe(false);
+  });
+
   it("rejects app-data aliases and writable ancestors without creating a profile", () => {
     const { home, appData } = fixture();
     const alias = path.join(home, "aliased-app-data");

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -111,6 +112,46 @@ test("derivation preserves canonical files/modes/vendor links and verifies the e
     await assert.rejects(derivePreviewTree(base, app, assets), {
       code: "EEXIST",
     });
+  }));
+
+test("a private operator umask preserves every exact derivative mode", () =>
+  fixture(async ({ directory, base, assets }) => {
+    const app = path.join(directory, "Private Umask Preview.app");
+    const verifier = new URL(
+      "../../tooling/verify-owner-preview.mjs",
+      import.meta.url,
+    ).href;
+    const assetModule = new URL(
+      "../../tooling/owner-preview-assets.mjs",
+      import.meta.url,
+    ).href;
+    const script = `
+      import { derivePreviewTree } from ${JSON.stringify(verifier)};
+      import { previewSvg } from ${JSON.stringify(assetModule)};
+      process.umask(0o077);
+      await derivePreviewTree(process.argv[1], process.argv[2], {
+        "farol-preview-mark.svg": await previewSvg(),
+        "farol-preview-mark.png": Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.from("SYNTHETIC PNG")]),
+        "farol-preview.icns": Buffer.from("icnsSYNTHETIC ICNS"),
+      });
+    `;
+    const child = spawnSync(
+      process.execPath,
+      ["--input-type=module", "--eval", script, base, app],
+      {
+        encoding: "utf8",
+        timeout: 15000,
+        maxBuffer: 1024 * 1024,
+      },
+    );
+    assert.equal(child.error, undefined);
+    assert.equal(child.status, 0, child.stderr);
+    for (const relative of Object.values(PREVIEW_ASSET_PATHS))
+      assert.equal(
+        (await fs.stat(path.join(app, relative))).mode & 0o777,
+        0o644,
+      );
+    await assertDerivativeTrees(base, app, assets);
   }));
 
 for (const [name, mutate] of [

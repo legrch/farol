@@ -52,19 +52,42 @@ export function assertOwnerPreviewProfileSeparation(appData: string): void {
   )
     throw invalid();
   const profile = ownerPreviewIdentity(appData).userData;
+  const privateRoot = path.join(profile, "farol-next-private");
+  // Fixed storage ancestors used by private-home, credential, state and
+  // Chromium partition consumers. Inspect metadata only, without following
+  // an alias or reading existing profile contents.
+  const storageDirectories = [
+    profile,
+    privateRoot,
+    ...[
+      "codex-home",
+      "process-home",
+      "secure-mcp-connector",
+      "model-endpoint",
+    ].map((name) => path.join(privateRoot, name)),
+    path.join(profile, "farol-next-state"),
+    path.join(profile, "Partitions"),
+    ...[
+      OWNER_PREVIEW_IDENTITY.runtimePartition,
+      OWNER_PREVIEW_IDENTITY.chatGptPartition,
+    ].map((partition) =>
+      path.join(profile, "Partitions", partition.slice("persist:".length)),
+    ),
+  ];
+  const storage = new Set(storageDirectories);
   const directories: string[] = [];
   for (let parent = appData; ; parent = path.dirname(parent)) {
     directories.unshift(parent);
     if (parent === path.dirname(parent)) break;
   }
   try {
-    for (const directory of [...directories, profile]) {
+    for (const directory of [...directories, ...storageDirectories]) {
       let info;
       try {
         info = fs.lstatSync(directory);
       } catch (error) {
         if (
-          directory === profile &&
+          storage.has(directory) &&
           (error as NodeJS.ErrnoException).code === "ENOENT"
         )
           continue;
@@ -83,7 +106,7 @@ export function assertOwnerPreviewProfileSeparation(appData: string): void {
         !info.isDirectory() ||
         info.isSymbolicLink() ||
         (info.uid !== 0 && info.uid !== uid) ||
-        ((directory === appData || directory === profile) &&
+        ((directory === appData || storage.has(directory)) &&
           info.uid !== uid) ||
         (directory === profile && (info.mode & 0o077) !== 0) ||
         ((info.mode & 0o022) !== 0 && !temporaryAncestor) ||
