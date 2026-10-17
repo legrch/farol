@@ -23,6 +23,7 @@ import { MAX_RUN_MARKER_BYTES } from "../../../src/apps/desktop/run-marker";
 import { retainEmptyChatForArchival } from "../../../src/apps/desktop/retained-empty-archive";
 import { PrivateExecutionFence } from "../../../src/modules/computer/infra/mcp/execution-fence";
 import { PrivateMcpLifecycle } from "../../../src/modules/computer/infra/mcp/private-mcp-lifecycle";
+import { assertClosedConnectorDurableWork } from "../../../src/apps/desktop/closed-computer-recovery";
 
 export type ClosedPreservedRecoveryInput = Omit<
   ClosedEmptyChatRecoveryInput,
@@ -184,6 +185,10 @@ export async function recoverClosedPreservedChat(
             )
           )
             throw Error("PRESERVED_RECOVERY_WORK_PENDING");
+          // The Go snapshot has its own Computer/Task namespace. Connector
+          // mutation and delegation journals need their existing durable proof
+          // too, including inside the native reconciliation lifetime claim.
+          await assertClosedConnectorDurableWork(root);
           if (noQuitLifecycle) await noQuitLifecycle.waitForStop(0);
           processesAbsent();
           if (!(await verifyPromotionLease(lease)))
@@ -206,11 +211,20 @@ export async function recoverClosedPreservedChat(
         await attest();
         await proof();
         if (!failedQuit) {
-          // Only this maintenance lifetime confirms its own stop. A stale
-          // active instance or shell group must refuse before Chat effects;
-          // no historical Quit identity or stop acknowledgement is inferred.
+          // Canonical Go idle observation and the original promotion/Computer
+          // exclusions precede this native reconciliation. Retain stale marker
+          // custody under failed-run evidence before any Chat preparation;
+          // no historical Quit or old stop acknowledgement is inferred.
           const lifecycle = new PrivateMcpLifecycle(root);
           await lifecycle.beginClosedRecoveryStop();
+          await lifecycle.reconcileInactiveAfterCrash({
+            operationId: exact.operationId,
+            failedRunSha256: selected.expectedRunSha256,
+            configSha256: selected.expectedConfigSha256,
+            proveIdle: proof,
+          });
+          // Only this maintenance lifetime confirms its own stop. Assign after
+          // the native proof callback so proof never recursively takes its lock.
           await lifecycle.confirmStop(0);
           noQuitLifecycle = lifecycle;
           await proof();

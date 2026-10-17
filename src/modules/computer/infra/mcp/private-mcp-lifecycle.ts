@@ -476,10 +476,11 @@ export class PrivateMcpLifecycle {
     await this.reconcileSelected(selected.data, input.proveIdle.bind(input));
   }
 
-  /** Unselected crash-maintenance primitive. Enclosing trusted host code must
+  /** Closed Dev crash-maintenance primitive. Enclosing trusted host code must
    * retain the same promotion/Computer exclusions and canonical work proof.
    * The run/config digests identify that observation, never a Quit or old ACK.
-   * No Desktop/CLI route selects this method until its host gates qualify.
+   * The preserved-history maintenance host selects this after canonical Go
+   * observation. Startup UI and ordinary MCP ingress never select it.
    */
   async reconcileInactiveAfterCrash(
     input: Readonly<{
@@ -559,6 +560,17 @@ export class PrivateMcpLifecycle {
         instances.some((name) => !plan.instances.includes(name))
       )
         throw new Error("COMPUTER_MCP_RECONCILIATION_CHANGED");
+      const completedFile = path.join(archive, "completed.json");
+      const completion = { ...plan, phase: "retired_unconfirmed" };
+      // Refuse retained conflicts before creating a pending claim, revoking
+      // preparation or relocating markers. The final write still rechecks
+      // exact private bytes to fence a change after this preflight.
+      const retainedCompletion = await this.privateRecoveryBytes(completedFile);
+      if (
+        retainedCompletion !== null &&
+        retainedCompletion !== `${JSON.stringify(completion)}\n`
+      )
+        throw new Error("COMPUTER_MCP_RECONCILIATION_CHANGED");
       const pendingIdentity = await this.reconciliationMarker(pending);
       await fs
         .mkdir(archive, { mode: 0o700 })
@@ -592,10 +604,7 @@ export class PrivateMcpLifecycle {
         await this.syncDirectory(archive);
         await this.sync();
       }
-      await this.writeReconciliation(path.join(archive, "completed.json"), {
-        ...plan,
-        phase: "retired_unconfirmed",
-      });
+      await this.writeReconciliation(completedFile, completion);
       const pendingPath = path.join(this.directory, pending);
       const pendingNow = await fs.lstat(pendingPath);
       if (

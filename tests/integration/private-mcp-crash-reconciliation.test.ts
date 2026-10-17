@@ -632,5 +632,140 @@ describe.skipIf(process.platform !== "darwin")(
         expect(await lifecycle.hasUnconfirmedStop()).toBe(true);
       }
     });
+    it.each(
+      ([1, 2] as const).flatMap((schema) =>
+        (["conflict", "partial", "mode", "size"] as const).map((kind) => ({
+          schema,
+          kind,
+        })),
+      ),
+    )(
+      "refuses schema$schema $kind completion before creating a pending fence or changing markers",
+      async ({ schema, kind }) => {
+        const { directory, lifecycle } = await stoppedFixture(
+          `completed-${schema}-${kind}`,
+        );
+        const selected =
+          schema === 1
+            ? {
+                schema,
+                operationId,
+                failedQuitSha256: failedRunSha256,
+                instances: [firstInstance],
+              }
+            : plan([firstInstance]);
+        const archive = path.join(directory, `retired-${operationId}`);
+        await fs.mkdir(archive, { mode: 0o700 });
+        const prepared = path.join(archive, "prepared.json");
+        const completed = path.join(archive, "completed.json");
+        await fs.writeFile(prepared, `${JSON.stringify(selected)}\n`, {
+          mode: 0o600,
+        });
+        const value = {
+          ...selected,
+          ...(schema === 1
+            ? { failedQuitSha256: replacementDigest }
+            : { configSha256: replacementDigest }),
+          phase: "retired_unconfirmed",
+        };
+        await fs.writeFile(
+          completed,
+          kind === "partial"
+            ? '{"schema":'
+            : kind === "size"
+              ? "x".repeat(8193)
+              : `${JSON.stringify(value)}\n`,
+          { mode: 0o600 },
+        );
+        if (kind === "mode") await fs.chmod(completed, 0o644);
+        const pinned = [
+          path.join(directory, firstInstance),
+          path.join(directory, "stopping"),
+          path.join(directory, `prepared-${launchDigest}`),
+          prepared,
+          completed,
+        ];
+        const before = await Promise.all(pinned.map(fileIdentity));
+        const perform = () =>
+          schema === 1
+            ? lifecycle.reconcileInactive({
+                operationId,
+                failedQuitSha256: failedRunSha256,
+                proveIdle: async () => undefined,
+              })
+            : lifecycle.reconcileInactiveAfterCrash(input());
+
+        await expect(perform()).rejects.toThrow(
+          kind === "mode" || kind === "size"
+            ? "COMPUTER_MCP_RECONCILIATION_UNSAFE"
+            : "COMPUTER_MCP_RECONCILIATION_CHANGED",
+        );
+
+        expect(await Promise.all(pinned.map(fileIdentity))).toEqual(before);
+        expect((await fs.readdir(archive)).sort()).toEqual([
+          "completed.json",
+          "prepared.json",
+        ]);
+        await absent(path.join(directory, `reconciling-${operationId}`));
+        await absent(path.join(directory, `revoked-${launchDigest}`));
+        expect(await lifecycle.hasUnconfirmedStop()).toBe(true);
+      },
+    );
+
+    it.each([1, 2] as const)(
+      "keeps the schema%s pending fence if completion changes after preflight",
+      async (schema) => {
+        const { directory, lifecycle } = await stoppedFixture(
+          `completed-late-${schema}`,
+        );
+        const archive = path.join(directory, `retired-${operationId}`);
+        const active = path.join(directory, firstInstance);
+        const target = path.join(archive, firstInstance);
+        const completed = path.join(archive, "completed.json");
+        const before = await fileIdentity(active);
+        const conflict = `${JSON.stringify({ changed: "synthetic late completion fault" })}\n`;
+        const rename = fs.rename.bind(fs);
+        // Controlled fault after the original marker relocation, not a second
+        // protocol owner or a retry of any retained partial fixture.
+        vi.spyOn(fs, "rename").mockImplementation(
+          async (source, destination) => {
+            await rename(source, destination);
+            if (source === active && destination === target)
+              await fs.writeFile(completed, conflict, {
+                mode: 0o600,
+                flag: "wx",
+              });
+          },
+        );
+        const perform = () =>
+          schema === 1
+            ? lifecycle.reconcileInactive({
+                operationId,
+                failedQuitSha256: failedRunSha256,
+                proveIdle: async () => undefined,
+              })
+            : lifecycle.reconcileInactiveAfterCrash(input());
+
+        await expect(perform()).rejects.toThrow(
+          "COMPUTER_MCP_RECONCILIATION_CHANGED",
+        );
+
+        await absent(active);
+        expect(await fileIdentity(target)).toEqual(before);
+        expect(await fs.readFile(completed, "utf8")).toBe(conflict);
+        expect(
+          (
+            await fs.lstat(path.join(directory, `reconciling-${operationId}`))
+          ).isDirectory(),
+        ).toBe(true);
+        expect(
+          await fs.readFile(
+            path.join(directory, `revoked-${launchDigest}`),
+            "utf8",
+          ),
+        ).toBe("1\n");
+        expect(await lifecycle.hasUnconfirmedStop()).toBe(true);
+      },
+    );
   },
 );

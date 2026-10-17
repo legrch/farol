@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -49,11 +50,19 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 		previousConfirmedQuit bool
 		quitAbsent            bool
 		activeInstance        bool
+		unsafeInstance        bool
+		heldLifetime          bool
+		unsettledMutation     string
+		refusalCode           string
 	}{
 		{name: "previous-quit-false"},
 		{name: "previous-quit-true", previousConfirmedQuit: true},
 		{name: "quit-absent", quitAbsent: true},
 		{name: "quit-absent-active-instance", quitAbsent: true, activeInstance: true},
+		{name: "quit-absent-unsafe-instance", quitAbsent: true, activeInstance: true, unsafeInstance: true, refusalCode: "COMPUTER_MCP_LIFECYCLE_MARKER_UNSAFE"},
+		{name: "quit-absent-held-instance", quitAbsent: true, activeInstance: true, heldLifetime: true, refusalCode: "COMPUTER_MCP_LIFECYCLE_UNVERIFIED"},
+		{name: "quit-absent-prepared-mutation", quitAbsent: true, activeInstance: true, unsettledMutation: "prepared", refusalCode: "CLOSED_COMPUTER_RECOVERY_WORK_PENDING"},
+		{name: "quit-absent-unknown-mutation", quitAbsent: true, activeInstance: true, unsettledMutation: "outcome_unknown", refusalCode: "CLOSED_COMPUTER_RECOVERY_WORK_PENDING"},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			temp := filepath.Join(repo, "_output/tmp")
@@ -98,16 +107,63 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 					t.Fatal("quit-absent fixture has a Quit", err)
 				}
 			}
+			mutationDirectory := filepath.Join(connector, "mutations")
+			var mutationsBefore preservedObservationTree
+			if scenario.unsettledMutation != "" {
+				// Valid connector-owned records in its separate native namespace.
+				// These synthetic uncertain effects are never executed or replayed.
+				operation := freshEmptyRecoveryFixtureUUID(t)
+				owner, session, task, participant := "synthetic-owner", "connector-session", "connector-task", "connector-participant"
+				key, err := json.Marshal([]any{operation, owner, session, task, 1, participant})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var outcome any
+				if scenario.unsettledMutation == "outcome_unknown" {
+					outcome = map[string]any{"code": "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", "source": "native-workspace"}
+				}
+				record := map[string]any{
+					"identity":    map[string]any{"operationId": operation, "ownerId": owner, "sessionId": session, "taskId": task, "taskEpoch": 1, "participantId": participant},
+					"workspaceId": "quarantined-connector-workspace", "requestDigest": strings.Repeat("a", 64), "phase": scenario.unsettledMutation, "outcome": outcome,
+				}
+				encoded, err := json.Marshal(map[string]any{"schemaVersion": 1, "kind": "workspace_mutation", "record": record})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(mutationDirectory, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(mutationDirectory, fmt.Sprintf("%x.json", sha256.Sum256(key))), append(encoded, '\n'), 0600); err != nil {
+					t.Fatal(err)
+				}
+				mutationsBefore = snapshotPreservedObservationTree(t, mutationDirectory)
+			}
 			beforeWorkspace := snapshotPreservedObservationTree(t, workspace)
 			beforeArchive := snapshotPreservedObservationTree(t, filepath.Join(in.Profile.Root, "chat"))
 			var refusedProfile, refusedRun, refusedConfig, refusedMarker preservedObservationTree
 			activeMarker := ""
 			if scenario.activeInstance {
-				// A correctly named, durable stale instance marker, without a
-				// live MCP process or lease. The actual host must refuse it.
+				// Real private marker bytes, with no MCP process. A separate case
+				// retains an actual native shared lifetime claim during the host.
 				activeMarker = filepath.Join(connector, "mcp-lifecycle", "active-"+freshEmptyRecoveryFixtureUUID(t))
 				if err := os.WriteFile(activeMarker, []byte("1\n"), 0600); err != nil {
 					t.Fatal(err)
+				}
+				if scenario.unsafeInstance {
+					if err := os.Chmod(activeMarker, 0644); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if scenario.heldLifetime {
+					fd, err := unix.Open(filepath.Join(connector, "mcp-lifecycle", "lifetime.lock"), unix.O_RDWR|unix.O_CREAT|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_SHLOCK, 0600)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer func() {
+						if err := unix.Close(fd); err != nil {
+							t.Error("owned MCP lifetime release unconfirmed", err)
+						}
+					}()
 				}
 				refusedProfile = snapshotPreservedObservationTree(t, in.Profile.Root)
 				refusedRun = snapshotPreservedObservationTree(t, filepath.Join(state, "running.json"))
@@ -148,10 +204,10 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 			cmd.Dir = repo
 			out, err := cmd.CombinedOutput()
 			archive := filepath.Join(profile.Root, "chat-retired-"+in.Selection.OperationID)
-			if scenario.activeInstance {
+			if scenario.refusalCode != "" {
 				exit, exited := err.(*exec.ExitError)
-				if !exited || exit.ExitCode() <= 0 || ctx.Err() != nil || !strings.Contains(string(out), "COMPUTER_MCP_INSTANCE_CLEANUP_UNVERIFIED") {
-					t.Fatalf("original host did not refuse stale MCP instance; retain %s: %v %s", userData, err, out)
+				if !exited || exit.ExitCode() <= 0 || ctx.Err() != nil || !strings.Contains(string(out), scenario.refusalCode) {
+					t.Fatalf("original host did not refuse unsafe or leased MCP instance; retain %s: %v %s", userData, err, out)
 				}
 				for _, path := range []string{archive, filepath.Join(state, "go-core.empty-recovery.pending"), filepath.Join(state, "last-quit.json")} {
 					if _, err := os.Lstat(path); !os.IsNotExist(err) {
@@ -163,7 +219,19 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 				unchangedPreservedObservationTree(t, filepath.Join(state, "config.json"), refusedConfig)
 				unchangedPreservedObservationTree(t, activeMarker, refusedMarker)
 				unchangedPreservedObservationTree(t, workspace, beforeWorkspace)
-				t.Logf("retained refused built host fixture %s; stale MCP marker intact; original run/config/Chat/UNKNOWN/workspace unchanged, no replay", userData)
+				if scenario.unsettledMutation != "" {
+					unchangedPreservedObservationTree(t, mutationDirectory, mutationsBefore)
+				}
+				entries, err := os.ReadDir(filepath.Join(connector, "mcp-lifecycle"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, entry := range entries {
+					if strings.HasPrefix(entry.Name(), "retired-") || strings.HasPrefix(entry.Name(), "reconciling-") {
+						t.Fatal("refused instance acquired reconciliation authority", entry.Name())
+					}
+				}
+				t.Logf("retained refused built host fixture %s; unsafe/leased MCP marker intact; original run/config/Chat/UNKNOWN/workspace unchanged, no replay", userData)
 				return
 			}
 			if err != nil {
@@ -239,14 +307,43 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 				}
 			}
 			if scenario.quitAbsent {
-				entries, err := os.ReadDir(filepath.Join(connector, "mcp-lifecycle"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				for _, entry := range entries {
-					if strings.HasPrefix(entry.Name(), "retired-") || strings.HasPrefix(entry.Name(), "reconciling-") {
-						t.Fatal("quit-absent recovery invented inactive reconciliation", entry.Name())
+				lifecycle := filepath.Join(connector, "mcp-lifecycle")
+				retired := filepath.Join(lifecycle, "retired-"+in.Selection.OperationID)
+				instances := []any{}
+				if scenario.activeInstance {
+					instances = append(instances, filepath.Base(activeMarker))
+					if _, err := os.Lstat(activeMarker); !os.IsNotExist(err) {
+						t.Fatal("inactive marker retained in active namespace", err)
 					}
+					var current unix.Stat_t
+					target := filepath.Join(retired, filepath.Base(activeMarker))
+					before := refusedMarker.versions[activeMarker]
+					// Relocating this file may change ctime. Its identity, owner,
+					// mode, link count, original mtime and bytes must remain exact.
+					if err := unix.Lstat(target, &current); err != nil || current.Dev != before.Dev || current.Ino != before.Ino || current.Uid != before.Uid || current.Gid != before.Gid || current.Mode != before.Mode || current.Nlink != before.Nlink || current.Size != before.Size || current.Mtim != before.Mtim {
+						t.Fatal("inactive marker physical custody changed", err)
+					}
+					retained, err := os.ReadFile(target)
+					if err != nil || string(retained) != "1\n" {
+						t.Fatal("inactive marker bytes changed", err)
+					}
+				}
+				for _, name := range []string{"prepared.json", "completed.json"} {
+					expected := map[string]any{"schema": float64(2), "operationId": in.Selection.OperationID, "basis": "failed-run", "failedRunSha256": fixture.ExpectedRunSha256, "configSha256": fixture.ExpectedConfigSha256, "instances": instances}
+					if name == "completed.json" {
+						expected["phase"] = "retired_unconfirmed"
+					}
+					raw, err := os.ReadFile(filepath.Join(retired, name))
+					var actual map[string]any
+					if err != nil || json.Unmarshal(raw, &actual) != nil || !reflect.DeepEqual(actual, expected) {
+						t.Fatal("crash MCP journal crossed run/config identity or fabricated old stop evidence", name, err)
+					}
+				}
+				if _, err := os.Lstat(filepath.Join(lifecycle, "reconciling-"+in.Selection.OperationID)); !os.IsNotExist(err) {
+					t.Fatal("completed MCP reconciliation left a pending claim", err)
+				}
+				if _, err := os.Lstat(filepath.Join(lifecycle, "stopping")); err != nil {
+					t.Fatal("maintenance removed the unconfirmed historical stop marker", err)
 				}
 			}
 			// All old files retain original bytes/identity after the known root

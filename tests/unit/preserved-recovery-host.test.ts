@@ -17,6 +17,7 @@ import { serializeQuitReceipt } from "../../src/apps/desktop/quit-receipt";
 // boundary is a controlled port. The real Quit classifier and intent codec run.
 // Mocked finish proves argument custody and awaiting, NOT shared finish internals,
 // terminal recording, marker retention/durability, Go policy or native exclusion.
+// Crash reconciliation is also a mocked port, NOT Go/native or terminal evidence.
 type Mechanics =
   typeof import("../../src/apps/desktop/closed-empty-chat-recovery").closedRecoveryHostMechanics;
 type Finish = Parameters<Mechanics["finish"]>[0];
@@ -28,6 +29,12 @@ type Prepare =
 type Reconcile = {
   operationId: string;
   failedQuitSha256: string;
+  proveIdle(): Promise<void>;
+};
+type CrashReconcile = {
+  operationId: string;
+  failedRunSha256: string;
+  configSha256: string;
   proveIdle(): Promise<void>;
 };
 const ports = vi.hoisted(() => ({
@@ -55,7 +62,16 @@ const ports = vi.hoisted(() => ({
   confirmStop: vi.fn<(timeoutMs: number) => Promise<void>>(),
   waitForStop: vi.fn<(timeoutMs: number) => Promise<void>>(),
   reconcile: vi.fn<(input: Reconcile) => Promise<void>>(),
+  reconcileInactiveAfterCrash:
+    vi.fn<(input: CrashReconcile) => Promise<void>>(),
+  connectorWork: vi.fn<(root: string) => Promise<void>>(),
 }));
+vi.mock("../../src/apps/desktop/closed-computer-recovery", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../src/apps/desktop/closed-computer-recovery")
+  >("../../src/apps/desktop/closed-computer-recovery");
+  return { ...actual, assertClosedConnectorDurableWork: ports.connectorWork };
+});
 vi.mock("../../src/apps/desktop/closed-empty-chat-recovery", async () => {
   const actual = await vi.importActual<
     typeof import("../../src/apps/desktop/closed-empty-chat-recovery")
@@ -108,6 +124,9 @@ vi.mock("../../src/modules/computer/infra/mcp/private-mcp-lifecycle", () => ({
     }
     reconcileInactive(input: Reconcile) {
       return ports.reconcile(input);
+    }
+    reconcileInactiveAfterCrash(input: CrashReconcile) {
+      return ports.reconcileInactiveAfterCrash(input);
     }
   },
 }));
@@ -421,6 +440,12 @@ function fixture(
     model.phase = "finish";
     return result;
   });
+  ports.lifecycle.mockImplementation(() => {
+    guarded("lifecycle");
+  });
+  ports.connectorWork.mockImplementation(async () => {
+    guarded("connector-work");
+  });
   ports.stop.mockImplementation(async () => {
     guarded("stop");
   });
@@ -433,6 +458,11 @@ function fixture(
   ports.reconcile.mockImplementation(async (input) => {
     guarded("reconcile");
     await input.proveIdle();
+  });
+  ports.reconcileInactiveAfterCrash.mockImplementation(async (input) => {
+    guarded("reconcile-crash");
+    await input.proveIdle();
+    guarded("reconcile-crash:complete");
   });
   const input = {
     userData,
@@ -489,6 +519,9 @@ afterEach(() => {
   expect(ports.inspect.mock.calls.length).toBeLessThanOrEqual(1);
   expect(ports.prepare.mock.calls.length).toBeLessThanOrEqual(1);
   expect(ports.finish.mock.calls.length).toBeLessThanOrEqual(1);
+  expect(
+    ports.reconcileInactiveAfterCrash.mock.calls.length,
+  ).toBeLessThanOrEqual(1);
 });
 const finishInput = () => {
   expect(ports.finish).toHaveBeenCalledTimes(1);
@@ -516,11 +549,20 @@ function noQuitFixture() {
 }
 
 describe("closed preserved recovery with an absent Quit (controlled ports)", () => {
-  it("proves native MCP idle before preparation without inventing a Quit", async () => {
+  it("reconciles the captured crash identity before preparation without inventing a Quit", async () => {
     const f = noQuitFixture();
+    const originalBytes = [f.run.bytes, f.config.bytes].map((b) =>
+      Buffer.from(b),
+    );
     ports.finish.mockImplementation(async (handoff) => {
       f.model.phase = "finish";
+      const waits = ports.waitForStop.mock.calls.length;
+      await handoff.proof();
+      expect(ports.waitForStop).toHaveBeenCalledTimes(waits + 1);
       await handoff.reconcileConnector!();
+      expect(ports.waitForStop).toHaveBeenCalledTimes(waits + 3);
+      await handoff.reconcileConnector!();
+      expect(ports.waitForStop).toHaveBeenCalledTimes(waits + 5);
       return f.result;
     });
     await expect(f.execute()).resolves.toEqual(f.result);
@@ -533,23 +575,317 @@ describe("closed preserved recovery with an absent Quit (controlled ports)", () 
       originalTerminal: "unobserved",
     });
     expect(ports.stop).toHaveBeenCalledTimes(1);
+    expect(ports.lifecycle).toHaveBeenCalledExactlyOnceWith(
+      path.join(f.state, "secure-mcp-connector", "computer-authority"),
+    );
+    expect(ports.reconcileInactiveAfterCrash).toHaveBeenCalledExactlyOnceWith({
+      operationId: f.input.exact.operationId,
+      failedRunSha256: digest(f.run.bytes),
+      configSha256: digest(f.config.bytes),
+      proveIdle: handoff.proof,
+    });
     expect(ports.confirmStop).toHaveBeenCalledExactlyOnceWith(0);
     expect(ports.waitForStop.mock.calls.length).toBeGreaterThan(1);
     for (const args of ports.waitForStop.mock.calls) expect(args).toEqual([0]);
     expect(ports.reconcile).not.toHaveBeenCalled();
-    expect(f.events.indexOf("before-observation:observe")).toBeLessThan(
-      f.events.indexOf("before-preparation:stop"),
-    );
-    expect(f.events.indexOf("before-preparation:confirm-stop")).toBeLessThan(
-      f.events.indexOf("before-preparation:prepare"),
-    );
+    const sequence = [
+      "before-observation:observe",
+      "before-preparation:attest",
+      "before-preparation:lease",
+      "before-preparation:lifecycle",
+      "before-preparation:stop",
+      "before-preparation:reconcile-crash",
+      "before-preparation:reconcile-crash:complete",
+      "before-preparation:confirm-stop",
+      "before-preparation:wait-stop",
+      "before-preparation:prepare",
+    ].map((event) => f.events.indexOf(event));
+    for (let index = 0; index < sequence.length; index++) {
+      expect(sequence[index]).toBeGreaterThanOrEqual(0);
+      if (index) expect(sequence[index]).toBeGreaterThan(sequence[index - 1]!);
+    }
     expect(
       ports.absent.mock.calls.filter(
         ([file]) => file === path.join(f.state, "last-quit.json"),
       ).length,
     ).toBeGreaterThan(2);
+    expect(
+      ports.snapshot.mock.calls.some(
+        ([file]) => file === path.join(f.state, "last-quit.json"),
+      ),
+    ).toBe(false);
+    expect(f.files.has(path.join(f.state, "last-quit.json"))).toBe(false);
+    expect([f.run.bytes, f.config.bytes]).toEqual(originalBytes);
     released(f);
   });
+
+  it("runs the original host proof during crash reconciliation without recursively waiting for a stop", async () => {
+    const f = noQuitFixture();
+    const reconcile =
+      ports.reconcileInactiveAfterCrash.getMockImplementation()!;
+    const wait = ports.waitForStop.getMockImplementation()!;
+    let reconciling = false;
+    ports.waitForStop.mockImplementation(async (timeoutMs) => {
+      expect(
+        reconciling,
+        "no waitForStop inside the native proof callback",
+      ).toBe(false);
+      await wait(timeoutMs);
+    });
+    ports.reconcileInactiveAfterCrash.mockImplementationOnce(async (input) => {
+      reconciling = true;
+      const before = {
+        desktop: f.input.desktopState.mock.calls.length,
+        processes: f.input.processesAbsent.mock.calls.length,
+        lease: ports.verifyLease.mock.calls.length,
+      };
+      expect(ports.confirmStop).not.toHaveBeenCalled();
+      expect(ports.waitForStop).not.toHaveBeenCalled();
+      await reconcile(input);
+      expect(f.input.desktopState).toHaveBeenCalledTimes(before.desktop + 1);
+      expect(f.input.processesAbsent).toHaveBeenCalledTimes(
+        before.processes + 1,
+      );
+      expect(ports.verifyLease).toHaveBeenCalledTimes(before.lease + 1);
+      expect(ports.waitForStop).not.toHaveBeenCalled();
+      expect(ports.confirmStop).not.toHaveBeenCalled();
+      reconciling = false;
+    });
+    await expect(f.execute()).resolves.toEqual(f.result);
+    expect(ports.stop).toHaveBeenCalledTimes(1);
+    expect(ports.confirmStop).toHaveBeenCalledExactlyOnceWith(0);
+    expect(ports.reconcileInactiveAfterCrash).toHaveBeenCalledTimes(1);
+    expect(ports.reconcile).not.toHaveBeenCalled();
+    released(f);
+  });
+
+  it.each(
+    (
+      [
+        "observation",
+        "attestation",
+        "pre-stop-proof",
+        "stop",
+        "reconcile",
+        "reconciliation-proof",
+        "confirm",
+        "post-stop-proof",
+      ] as const
+    ).flatMap((point) =>
+      (["resolve", "reject"] as const).map((outcome) => ({ point, outcome })),
+    ),
+  )(
+    "awaits $point $outcome under both guards before preparation or finish",
+    async ({ point, outcome }) => {
+      const f = noQuitFixture();
+      const entered = deferred<void>();
+      const gate = deferred<void>();
+      const failure = Object.assign(Error(`${point} outcome unknown`), {
+        state: "unknown",
+      });
+      const hold = async () => {
+        expect(f.model.promotionHeld).toBe(true);
+        expect(f.model.fenceHeld).toBe(true);
+        entered.resolve();
+        await gate.promise;
+      };
+      if (point === "observation") {
+        const original = ports.inspect.getMockImplementation()!;
+        ports.inspect.mockImplementationOnce(async (...args) => {
+          const observed = await original(...args);
+          await hold();
+          return observed;
+        });
+      }
+      if (point === "attestation") {
+        const original = f.input.attest.getMockImplementation()!;
+        f.input.attest.mockImplementation(async () => {
+          await original();
+          if (f.model.phase === "before-preparation") await hold();
+        });
+      }
+      if (point === "pre-stop-proof" || point === "reconciliation-proof") {
+        const original = ports.verifyLease.getMockImplementation()!;
+        let held = false;
+        ports.verifyLease.mockImplementation(async (lease) => {
+          const verified = await original(lease);
+          if (
+            !held &&
+            f.model.phase === "before-preparation" &&
+            ports.reconcileInactiveAfterCrash.mock.calls.length ===
+              (point === "pre-stop-proof" ? 0 : 1) &&
+            ports.confirmStop.mock.calls.length === 0
+          ) {
+            held = true;
+            await hold();
+          }
+          return verified;
+        });
+      }
+      if (point === "stop") {
+        const original = ports.stop.getMockImplementation()!;
+        ports.stop.mockImplementationOnce(async () => {
+          await original();
+          await hold();
+        });
+      }
+      if (point === "reconcile") {
+        const original =
+          ports.reconcileInactiveAfterCrash.getMockImplementation()!;
+        ports.reconcileInactiveAfterCrash.mockImplementationOnce(
+          async (input) => {
+            await original(input);
+            await hold();
+          },
+        );
+      }
+      if (point === "confirm") {
+        const original = ports.confirmStop.getMockImplementation()!;
+        ports.confirmStop.mockImplementationOnce(async (timeoutMs) => {
+          await original(timeoutMs);
+          await hold();
+        });
+      }
+      if (point === "post-stop-proof") {
+        const original = ports.waitForStop.getMockImplementation()!;
+        ports.waitForStop.mockImplementationOnce(async (timeoutMs) => {
+          await original(timeoutMs);
+          await hold();
+        });
+      }
+      const done = f.execute();
+      const settled = vi.fn();
+      void done.then(settled, settled);
+      await entered.promise;
+      const beforeCrash = [
+        "observation",
+        "attestation",
+        "pre-stop-proof",
+        "stop",
+      ].includes(point);
+      expect(ports.reconcileInactiveAfterCrash).toHaveBeenCalledTimes(
+        beforeCrash ? 0 : 1,
+      );
+      expect(ports.confirmStop).toHaveBeenCalledTimes(
+        point === "confirm" || point === "post-stop-proof" ? 1 : 0,
+      );
+      expect(ports.waitForStop).toHaveBeenCalledTimes(
+        point === "post-stop-proof" ? 1 : 0,
+      );
+      expect(ports.prepare).not.toHaveBeenCalled();
+      expect(f.movedArchive).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      expect(ports.release).not.toHaveBeenCalled();
+      expect(f.model.promotionHeld).toBe(true);
+      expect(f.model.fenceHeld).toBe(true);
+      expect(settled).not.toHaveBeenCalled();
+      if (outcome === "resolve") {
+        gate.resolve();
+        await expect(done).resolves.toEqual(f.result);
+      } else {
+        gate.reject(failure);
+        await expect(done).rejects.toBe(failure);
+        expect(ports.prepare).not.toHaveBeenCalled();
+        expect(f.movedArchive).not.toHaveBeenCalled();
+        expect(ports.finish).not.toHaveBeenCalled();
+        expect(ports.reconcileInactiveAfterCrash).toHaveBeenCalledTimes(
+          beforeCrash ? 0 : 1,
+        );
+        expect(ports.confirmStop).toHaveBeenCalledTimes(
+          point === "confirm" || point === "post-stop-proof" ? 1 : 0,
+        );
+      }
+      expect(ports.reconcile).not.toHaveBeenCalled();
+      released(f);
+    },
+  );
+
+  it.each(
+    (["before-observation", "before-preparation"] as const).flatMap((phase) =>
+      [
+        "attest",
+        "root:parent",
+        "unchanged:running.json",
+        "unchanged:config.json",
+        "absent:last-quit.json",
+        "desktop",
+        "processes",
+        "lease",
+        ...(phase === "before-observation" ? ["observe"] : []),
+      ].map((barrier) => ({ phase, barrier })),
+    ),
+  )(
+    "does not select crash reconciliation after $phase $barrier fails",
+    async ({ phase, barrier }) => {
+      const f = noQuitFixture();
+      const failure = Object.assign(Error(`${barrier} proof unknown`), {
+        state: "unknown",
+      });
+      f.faults.set(`${phase}:${barrier}`, failure);
+      await expect(f.execute()).rejects.toBe(failure);
+      expect(ports.lifecycle).not.toHaveBeenCalled();
+      expect(ports.stop).not.toHaveBeenCalled();
+      expect(ports.reconcileInactiveAfterCrash).not.toHaveBeenCalled();
+      expect(ports.confirmStop).not.toHaveBeenCalled();
+      expect(ports.prepare).not.toHaveBeenCalled();
+      expect(f.movedArchive).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      released(f);
+    },
+  );
+
+  it("does not select crash reconciliation after a false post-observation lease proof", async () => {
+    const f = noQuitFixture();
+    const original = ports.verifyLease.getMockImplementation()!;
+    ports.verifyLease.mockImplementation(async (lease) => {
+      await original(lease);
+      return f.model.phase !== "before-preparation";
+    });
+    await expect(f.execute()).rejects.toThrow("PROMOTION_LEASE_LOST");
+    expect(ports.reconcileInactiveAfterCrash).not.toHaveBeenCalled();
+    expect(ports.lifecycle).not.toHaveBeenCalled();
+    expect(ports.prepare).not.toHaveBeenCalled();
+    expect(ports.finish).not.toHaveBeenCalled();
+    released(f);
+  });
+
+  it.each(["running.json", "config.json"])(
+    "refuses changed selected %s bytes before crash reconciliation",
+    async (name) => {
+      const f = noQuitFixture();
+      f.files.set(path.join(f.state, name), snapshot({ changed: true }, 99));
+      await expect(f.execute()).rejects.toThrow(
+        "PRESERVED_RECOVERY_STATE_CHANGED",
+      );
+      expect(ports.inspect).not.toHaveBeenCalled();
+      expect(ports.lifecycle).not.toHaveBeenCalled();
+      expect(ports.reconcileInactiveAfterCrash).not.toHaveBeenCalled();
+      expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      released(f);
+    },
+  );
+
+  it.each(["changed", "unreadable", "obligations"] as const)(
+    "refuses a post-observation desktop %s mismatch before crash reconciliation",
+    async (field) => {
+      const f = noQuitFixture();
+      const inspect = ports.inspect.getMockImplementation()!;
+      ports.inspect.mockImplementationOnce(async (...args) => {
+        const observed = await inspect(...args);
+        f.model.desktop = { ...f.model.desktop, [field]: ["foreign-work"] };
+        return observed;
+      });
+      await expect(f.execute()).rejects.toThrow(
+        "PRESERVED_RECOVERY_WORK_PENDING",
+      );
+      expect(ports.lifecycle).not.toHaveBeenCalled();
+      expect(ports.reconcileInactiveAfterCrash).not.toHaveBeenCalled();
+      expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      released(f);
+    },
+  );
 
   it("refuses an existing Quit before observation or maintenance", async () => {
     const f = noQuitFixture();
@@ -558,6 +894,7 @@ describe("closed preserved recovery with an absent Quit (controlled ports)", () 
     expect(ports.inspect).not.toHaveBeenCalled();
     expect(ports.prepare).not.toHaveBeenCalled();
     expect(ports.stop).not.toHaveBeenCalled();
+    expect(ports.reconcileInactiveAfterCrash).not.toHaveBeenCalled();
     released(f);
   });
 
@@ -587,12 +924,15 @@ describe("closed preserved recovery with an absent Quit (controlled ports)", () 
         expect(ports.prepare).not.toHaveBeenCalled();
       expect(ports.finish).not.toHaveBeenCalled();
       expect(ports.reconcile).not.toHaveBeenCalled();
+      expect(ports.reconcileInactiveAfterCrash).toHaveBeenCalledTimes(
+        phase === "before-preparation" ? 0 : 1,
+      );
       released(f);
     },
   );
 
-  it.each(["stop", "confirmStop"] as const)(
-    "refuses an unconfirmed native %s before preparation",
+  it.each(["stop", "reconcileInactiveAfterCrash", "confirmStop"] as const)(
+    "refuses an uncertain mocked %s before preparation",
     async (method) => {
       const f = noQuitFixture();
       ports[method].mockRejectedValueOnce(Error("SYNTHETIC_MCP_NOT_IDLE"));
@@ -600,11 +940,17 @@ describe("closed preserved recovery with an absent Quit (controlled ports)", () 
       expect(ports.prepare).not.toHaveBeenCalled();
       expect(ports.finish).not.toHaveBeenCalled();
       expect(ports.reconcile).not.toHaveBeenCalled();
+      expect(ports.reconcileInactiveAfterCrash).toHaveBeenCalledTimes(
+        method === "stop" ? 0 : 1,
+      );
+      expect(ports.confirmStop).toHaveBeenCalledTimes(
+        method === "confirmStop" ? 1 : 0,
+      );
       released(f);
     },
   );
 
-  it("refuses a lost native idle proof after preparation", async () => {
+  it("refuses a lost mocked idle proof after preparation", async () => {
     const f = noQuitFixture();
     const original = ports.prepare.getMockImplementation()!;
     ports.prepare.mockImplementation(async (...args) => {
@@ -615,8 +961,158 @@ describe("closed preserved recovery with an absent Quit (controlled ports)", () 
     await expect(f.execute()).rejects.toThrow("SYNTHETIC_MCP_NOT_IDLE");
     expect(ports.finish).not.toHaveBeenCalled();
     expect(ports.reconcile).not.toHaveBeenCalled();
+    expect(ports.reconcileInactiveAfterCrash).toHaveBeenCalledTimes(1);
     released(f);
   });
+
+  it.each(["resolve", "reject"] as const)(
+    "awaits the existing stop's finish recheck %s under both guards without claiming again",
+    async (outcome) => {
+      const f = noQuitFixture();
+      const entered = deferred<void>();
+      const gate = deferred<void>();
+      const failure = Object.assign(Error("finish stop proof unknown"), {
+        state: "unknown",
+      });
+      const wait = ports.waitForStop.getMockImplementation()!;
+      const finished = vi.fn();
+      ports.finish.mockImplementationOnce(async (handoff) => {
+        f.model.phase = "finish";
+        ports.waitForStop.mockImplementationOnce(async (timeoutMs) => {
+          await wait(timeoutMs);
+          entered.resolve();
+          await gate.promise;
+        });
+        await handoff.reconcileConnector!();
+        finished();
+        return f.result;
+      });
+      const done = f.execute();
+      const settled = vi.fn();
+      void done.then(settled, settled);
+      await entered.promise;
+      expect(f.model.promotionHeld).toBe(true);
+      expect(f.model.fenceHeld).toBe(true);
+      expect(ports.release).not.toHaveBeenCalled();
+      expect(finished).not.toHaveBeenCalled();
+      expect(settled).not.toHaveBeenCalled();
+      if (outcome === "resolve") {
+        gate.resolve();
+        await expect(done).resolves.toEqual(f.result);
+        expect(finished).toHaveBeenCalledTimes(1);
+      } else {
+        gate.reject(failure);
+        await expect(done).rejects.toBe(failure);
+        expect(finished).not.toHaveBeenCalled();
+      }
+      expect(ports.lifecycle).toHaveBeenCalledTimes(1);
+      expect(ports.stop).toHaveBeenCalledTimes(1);
+      expect(ports.confirmStop).toHaveBeenCalledExactlyOnceWith(0);
+      expect(ports.reconcileInactiveAfterCrash).toHaveBeenCalledTimes(1);
+      expect(ports.reconcile).not.toHaveBeenCalled();
+      released(f);
+    },
+  );
+});
+
+describe("connector durable-work admission (controlled port)", () => {
+  it.each(["previous", "current", "absent"] as const)(
+    "rechecks the existing connector guard under both exclusions for %s Quit",
+    async (scope) => {
+      const f = scope === "absent" ? noQuitFixture() : fixture(scope);
+      ports.finish.mockImplementation(async (handoff) => {
+        f.model.phase = "finish";
+        await handoff.reconcileConnector!();
+        return f.result;
+      });
+      await expect(f.execute()).resolves.toEqual(f.result);
+      expect(ports.connectorWork.mock.calls.length).toBeGreaterThan(3);
+      for (const args of ports.connectorWork.mock.calls)
+        expect(args).toEqual([
+          path.join(f.state, "secure-mcp-connector", "computer-authority"),
+        ]);
+      expect(
+        f.events.indexOf("before-observation:connector-work"),
+      ).toBeLessThan(f.events.indexOf("before-observation:observe"));
+      expect(f.events).toContain("finish:connector-work");
+      released(f);
+    },
+  );
+
+  it.each(
+    (["previous", "current", "absent"] as const).flatMap((scope) =>
+      (["before-observation", "before-preparation"] as const).map((phase) => ({
+        scope,
+        phase,
+      })),
+    ),
+  )(
+    "refuses $scope Quit when connector work is unresolved at $phase",
+    async ({ scope, phase }) => {
+      const f = scope === "absent" ? noQuitFixture() : fixture(scope);
+      const failure = Error("CLOSED_COMPUTER_RECOVERY_WORK_PENDING");
+      f.faults.set(`${phase}:connector-work`, failure);
+      await expect(f.execute()).rejects.toBe(failure);
+      if (phase === "before-observation")
+        expect(ports.inspect).not.toHaveBeenCalled();
+      expect(ports.prepare).not.toHaveBeenCalled();
+      expect(f.movedArchive).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      expect(ports.reconcileInactiveAfterCrash).not.toHaveBeenCalled();
+      released(f);
+    },
+  );
+
+  it("rechecks connector work inside crash reconciliation before confirming stop or preparing Chat", async () => {
+    const f = noQuitFixture();
+    const failure = Error("CLOSED_COMPUTER_RECOVERY_WORK_PENDING");
+    const original = ports.reconcileInactiveAfterCrash.getMockImplementation()!;
+    ports.reconcileInactiveAfterCrash.mockImplementationOnce(async (input) => {
+      ports.connectorWork.mockRejectedValueOnce(failure);
+      await original(input);
+    });
+    await expect(f.execute()).rejects.toBe(failure);
+    expect(ports.stop).toHaveBeenCalledTimes(1);
+    expect(ports.confirmStop).not.toHaveBeenCalled();
+    expect(ports.prepare).not.toHaveBeenCalled();
+    expect(f.movedArchive).not.toHaveBeenCalled();
+    expect(ports.finish).not.toHaveBeenCalled();
+    released(f);
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "awaits the connector proof's %s under both exclusions without starting observation",
+    async (outcome) => {
+      const f = noQuitFixture();
+      const entered = deferred<void>();
+      const gate = deferred<void>();
+      const original = ports.connectorWork.getMockImplementation()!;
+      ports.connectorWork.mockImplementationOnce(async (root) => {
+        await original(root);
+        entered.resolve();
+        await gate.promise;
+      });
+      const done = f.execute();
+      void done.catch(() => undefined);
+      await entered.promise;
+      expect(f.model.promotionHeld).toBe(true);
+      expect(f.model.fenceHeld).toBe(true);
+      expect(ports.inspect).not.toHaveBeenCalled();
+      expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.release).not.toHaveBeenCalled();
+      if (outcome === "resolve") {
+        gate.resolve();
+        await expect(done).resolves.toEqual(f.result);
+      } else {
+        const failure = Error("connector settlement unconfirmed");
+        gate.reject(failure);
+        await expect(done).rejects.toBe(failure);
+        expect(ports.inspect).not.toHaveBeenCalled();
+        expect(ports.reconcileInactiveAfterCrash).not.toHaveBeenCalled();
+      }
+      released(f);
+    },
+  );
 });
 
 describe("closed preserved recovery host flow (controlled ports)", () => {
@@ -659,6 +1155,7 @@ describe("closed preserved recovery host flow (controlled ports)", () => {
     expect(ports.reconcile).toHaveBeenCalledWith(
       expect.objectContaining({ failedQuitSha256: digest(originalBytes) }),
     );
+    expect(ports.reconcileInactiveAfterCrash).not.toHaveBeenCalled();
     released(f);
   });
 
@@ -792,34 +1289,41 @@ describe("closed preserved recovery host flow (controlled ports)", () => {
         [f.pending, 65536],
       ]);
       expect(ports.lifecycle).not.toHaveBeenCalled(); // finish owns when to call it.
+      expect(ports.reconcileInactiveAfterCrash).not.toHaveBeenCalled();
       released(f);
     },
   );
 
-  it("reconciles with the existing lifecycle stop and exact failed-Quit binding under both guards", async () => {
-    const f = fixture();
-    ports.finish.mockImplementation(async (handoff) => {
-      f.model.phase = "finish";
-      const before = f.input.desktopState.mock.calls.length;
-      await handoff.reconcileConnector!();
-      expect(ports.lifecycle).toHaveBeenCalledExactlyOnceWith(
-        path.join(f.state, "secure-mcp-connector", "computer-authority"),
-      );
-      expect(ports.stop).toHaveBeenCalledTimes(1);
-      expect(ports.reconcile).toHaveBeenCalledExactlyOnceWith({
-        operationId: f.input.exact.operationId,
-        failedQuitSha256: f.input.expectedQuitSha256,
-        proveIdle: handoff.proof,
+  it.each(["previous", "current"] as const)(
+    "reconciles %s Quit with the existing stop and failed-Quit binding under both guards",
+    async (scope) => {
+      const f = fixture(scope);
+      ports.finish.mockImplementation(async (handoff) => {
+        f.model.phase = "finish";
+        const before = f.input.desktopState.mock.calls.length;
+        await handoff.reconcileConnector!();
+        expect(ports.lifecycle).toHaveBeenCalledExactlyOnceWith(
+          path.join(f.state, "secure-mcp-connector", "computer-authority"),
+        );
+        expect(ports.stop).toHaveBeenCalledTimes(1);
+        expect(ports.reconcile).toHaveBeenCalledExactlyOnceWith({
+          operationId: f.input.exact.operationId,
+          failedQuitSha256: f.input.expectedQuitSha256,
+          proveIdle: handoff.proof,
+        });
+        expect(f.input.desktopState.mock.calls.length - before).toBe(2);
+        expect(f.events.indexOf("finish:stop")).toBeLessThan(
+          f.events.indexOf("finish:reconcile"),
+        );
+        return f.result;
       });
-      expect(f.input.desktopState.mock.calls.length - before).toBe(2);
-      expect(f.events.indexOf("finish:stop")).toBeLessThan(
-        f.events.indexOf("finish:reconcile"),
-      );
-      return f.result;
-    });
-    await expect(f.execute()).resolves.toEqual(f.result);
-    released(f);
-  });
+      await expect(f.execute()).resolves.toEqual(f.result);
+      expect(ports.reconcileInactiveAfterCrash).not.toHaveBeenCalled();
+      expect(ports.confirmStop).not.toHaveBeenCalled();
+      expect(ports.waitForStop).not.toHaveBeenCalled();
+      released(f);
+    },
+  );
 
   it("awaits the original observation under both guards before preparing its returned metadata", async () => {
     const f = fixture();
@@ -897,86 +1401,111 @@ describe("closed preserved recovery host flow (controlled ports)", () => {
     },
   );
 
-  it("captures selection, executable, digests and callbacks before the first await", async () => {
-    const f = fixture();
-    const saved = structuredClone({
-      executable: f.input.executable,
-      profile: f.input.profile,
-      exact: f.input.exact,
-      selectionInput: f.input.selectionInput,
-      run: f.input.expectedRunSha256,
-      config: f.input.expectedConfigSha256,
-      quit: f.input.expectedQuitSha256,
-    });
-    const originalAttest = f.input.attest;
-    const originalProcesses = f.input.processesAbsent;
-    const originalDesktop = f.input.desktopState;
-    const gate = deferred<{ dev: number; ino: number }>();
-    ports.privateRoot.mockImplementationOnce(() => gate.promise);
-    ports.finish.mockImplementationOnce(async (handoff) => {
-      f.model.phase = "finish";
-      await handoff.reconcileConnector!();
-      return f.result;
-    });
-    const done = f.execute();
-    f.input.userData = "/synthetic/Other";
-    f.input.executable = "/changed";
-    f.input.profile.root = "/changed";
-    f.input.profile.profileId = "changed";
-    f.input.exact.operationId = "changed";
-    f.input.exact.current.ChatRoot.Inode = 999;
-    f.input.selectionInput.OwnerID = "changed";
-    f.input.selectionInput.AccessDigest[0] = 255;
-    f.input.selectionInput.Mutations[0]!.Binding.Identity.OwnerID = "changed";
-    f.input.expectedRunSha256 = "0".repeat(64);
-    f.input.expectedConfigSha256 = "0".repeat(64);
-    f.input.expectedQuitSha256 = "0".repeat(64);
-    const replacement = vi.fn(() => {
-      throw Error("late caller replacement");
-    });
-    f.input.attest = replacement;
-    f.input.processesAbsent = replacement;
-    f.input.desktopState = replacement;
-    // The private-root port uses the original synthetic path, independently of
-    // caller mutation. Its first lookup is the only suspended boundary.
-    ports.privateRoot.mockImplementation(async (directory) => {
-      if (directory === saved.profile.root) return { dev: 1, ino: 2 };
-      if (directory === f.archive) return { dev: 1, ino: 3 };
-      if (directory === f.chat) return { dev: 1, ino: 4 };
-      return { dev: 1, ino: 99 };
-    });
-    gate.resolve({ dev: 1, ino: 99 });
-    await expect(done).resolves.toEqual(f.result);
-    expect(ports.inspect).toHaveBeenCalledExactlyOnceWith(
-      saved.executable,
-      saved.profile,
-      saved.selectionInput,
-      saved.exact,
-    );
-    expect(ports.prepare).toHaveBeenCalledExactlyOnceWith(
-      saved.executable,
-      saved.profile,
-      f.observed,
-      saved.exact,
-    );
-    const handoff = finishInput();
-    expect(handoff.input).toMatchObject({
-      executable: saved.executable,
-      expectedRunSha256: saved.run,
-      expectedConfigSha256: saved.config,
-    });
-    expect(handoff.input.attest).toBe(originalAttest);
-    expect(handoff.input.processesAbsent).toBe(originalProcesses);
-    expect(ports.reconcile).toHaveBeenCalledExactlyOnceWith({
-      operationId: saved.exact.operationId,
-      failedQuitSha256: saved.quit,
-      proveIdle: handoff.proof,
-    });
-    expect(originalDesktop).toHaveBeenCalledTimes(5);
-    expect(originalAttest).toHaveBeenCalledTimes(2);
-    expect(replacement).not.toHaveBeenCalled();
-    released(f);
-  });
+  it.each(["previous", "absent"] as const)(
+    "captures %s Quit selection, executable, digests and callbacks before the first await",
+    async (scope) => {
+      const f = scope === "absent" ? noQuitFixture() : fixture();
+      const saved = structuredClone({
+        executable: f.input.executable,
+        profile: f.input.profile,
+        exact: f.input.exact,
+        selectionInput: f.input.selectionInput,
+        run: f.input.expectedRunSha256,
+        config: f.input.expectedConfigSha256,
+        quit: f.input.expectedQuitSha256,
+      });
+      const originalAttest = f.input.attest;
+      const originalProcesses = f.input.processesAbsent;
+      const originalDesktop = f.input.desktopState;
+      const gate = deferred<{ dev: number; ino: number }>();
+      ports.privateRoot.mockImplementationOnce(() => gate.promise);
+      ports.finish.mockImplementationOnce(async (handoff) => {
+        f.model.phase = "finish";
+        await handoff.reconcileConnector!();
+        return f.result;
+      });
+      const done = f.execute();
+      f.input.userData = "/synthetic/Other";
+      f.input.executable = "/changed";
+      f.input.profile.root = "/changed";
+      f.input.profile.profileId = "changed";
+      f.input.exact.operationId = "changed";
+      f.input.exact.current.ChatRoot.Inode = 999;
+      f.input.selectionInput.OwnerID = "changed";
+      f.input.selectionInput.AccessDigest[0] = 255;
+      f.input.selectionInput.Mutations[0]!.Binding.Identity.OwnerID = "changed";
+      f.input.expectedRunSha256 = "0".repeat(64);
+      f.input.expectedConfigSha256 = "0".repeat(64);
+      f.input.expectedQuitSha256 = "0".repeat(64);
+      const replacement = vi.fn(() => {
+        throw Error("late caller replacement");
+      });
+      f.input.attest = replacement;
+      f.input.processesAbsent = replacement;
+      f.input.desktopState = replacement;
+      // The private-root port uses the original synthetic path, independently of
+      // caller mutation. Its first lookup is the only suspended boundary.
+      ports.privateRoot.mockImplementation(async (directory) => {
+        if (directory === saved.profile.root) return { dev: 1, ino: 2 };
+        if (directory === f.archive) return { dev: 1, ino: 3 };
+        if (directory === f.chat) return { dev: 1, ino: 4 };
+        return { dev: 1, ino: 99 };
+      });
+      gate.resolve({ dev: 1, ino: 99 });
+      await expect(done).resolves.toEqual(f.result);
+      expect(ports.inspect).toHaveBeenCalledExactlyOnceWith(
+        saved.executable,
+        saved.profile,
+        saved.selectionInput,
+        saved.exact,
+      );
+      expect(ports.prepare).toHaveBeenCalledExactlyOnceWith(
+        saved.executable,
+        saved.profile,
+        f.observed,
+        saved.exact,
+      );
+      const handoff = finishInput();
+      expect(handoff.input).toMatchObject({
+        executable: saved.executable,
+        expectedRunSha256: saved.run,
+        expectedConfigSha256: saved.config,
+      });
+      expect(handoff.input.attest).toBe(originalAttest);
+      expect(handoff.input.processesAbsent).toBe(originalProcesses);
+      if (scope === "absent") {
+        expect(
+          ports.reconcileInactiveAfterCrash,
+        ).toHaveBeenCalledExactlyOnceWith({
+          operationId: saved.exact.operationId,
+          failedRunSha256: saved.run,
+          configSha256: saved.config,
+          proveIdle: handoff.proof,
+        });
+        expect(handoff).not.toHaveProperty("failedQuit");
+        expect(handoff).not.toHaveProperty("previousConfirmedQuit");
+        expect(handoff.preservedHistory).toEqual({
+          scope: saved.exact.current,
+          originalACK: "unobserved",
+          originalTerminal: "unobserved",
+        });
+        expect(ports.reconcile).not.toHaveBeenCalled();
+        expect(originalDesktop.mock.calls.length).toBeGreaterThanOrEqual(6);
+        expect(f.files.has(path.join(f.state, "last-quit.json"))).toBe(false);
+      } else {
+        expect(ports.reconcile).toHaveBeenCalledExactlyOnceWith({
+          operationId: saved.exact.operationId,
+          failedQuitSha256: saved.quit,
+          proveIdle: handoff.proof,
+        });
+        expect(ports.reconcileInactiveAfterCrash).not.toHaveBeenCalled();
+        expect(originalDesktop).toHaveBeenCalledTimes(5);
+      }
+      expect(originalAttest).toHaveBeenCalledTimes(2);
+      expect(replacement).not.toHaveBeenCalled();
+      released(f);
+    },
+  );
 });
 
 describe("closed preserved recovery refuses progression", () => {
