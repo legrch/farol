@@ -10,6 +10,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   acquirePromotionLease,
   releasePromotionLease,
+  verifyPromotionLease,
+  type PromotionLeaseHandle,
 } from "../../src/apps/desktop/promotion-lease";
 import { withStartupPromotionLease } from "../../src/apps/desktop/startup-promotion-lease";
 
@@ -39,6 +41,47 @@ async function expectPromotionExcluded(userData: string): Promise<void> {
 }
 
 describe("startup and updater use the same native exclusion", () => {
+  it("lends the original native handle only within the startup boundary", async () => {
+    // Retained even on failure; this is a native lock witness, not app recovery.
+    const userData = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-startup-borrowed-"),
+    );
+    console.info("Retained startup borrowed-lease fixture:", userData);
+    let borrowed: PromotionLeaseHandle | undefined;
+    await withStartupPromotionLease(
+      userData,
+      "borrowed-startup",
+      async (verify, lease) => {
+        borrowed = lease;
+        expect(lease.file).toBe(
+          path.join(userData, "farol-next-state", "promotion.lease"),
+        );
+        expect(lease.record).toMatchObject({
+          role: "admission",
+          generation: "borrowed-startup",
+          pid: process.pid,
+        });
+        expect(await verify()).toBe(true);
+        expect(await verifyPromotionLease(lease)).toBe(true);
+        expect(await verifyPromotionLease(structuredClone(lease))).toBe(false);
+        await expectPromotionExcluded(userData);
+        expect(await verify()).toBe(true);
+      },
+    );
+    if (!borrowed) throw Error("startup callback did not receive its lease");
+    expect(await verifyPromotionLease(borrowed)).toBe(false);
+    const next = await acquirePromotionLease(
+      userData,
+      "successor",
+      "promotion",
+    );
+    try {
+      expect(next).not.toBeNull();
+    } finally {
+      if (next) await releasePromotionLease(next);
+    }
+  });
+
   it.each([
     ["nonterminal", '{"phase":"placement_intent"}\n'],
     ["completed-looking", '{"phase":"completed"}\n'],
