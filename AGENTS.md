@@ -4,16 +4,6 @@ This is the standalone Farol repository. Source, tooling, tests, and resources
 live at the repository root. No sibling V0 checkout or private knowledge vault
 is required to build, test, or package it.
 
-Shared branch/worktree, PR-first integration, approval, proportionate review and
-Git completion rules live in Spine:
-`/Users/ac/code/tools/spine/rules/repository-delivery.md` and
-`/Users/ac/code/tools/spine/rules/git-completion.md`.
-Follow those shared rules for **new Farol work**. Workers submit reviewable PRs;
-only the designated Farol Lead/integrator merges accepted changes into `main`.
-A recovery exception for direct-main delivery requires a separate explicit
-owner authorization. No GitHub branch protection is requested. Farol-specific
-native gates, security, installation and release constraints remain below.
-
 The permanent model route is `provider = farol`, `model = chatgpt`.
 Existing preview bundle IDs, state roots, partitions, process names, and receipt
 schemas are compatibility boundaries. Do not rename them as a source-layout fix.
@@ -60,12 +50,7 @@ schemas are compatibility boundaries. Do not rename them as a source-layout fix.
   the legacy Farol or installed `codex-chatgpt-web` identities.
 - Use English for source, tests, UI, logs, errors, and implementation documentation.
 
-- **Farol checkpoint specifics:** follow Spine's shared exact-path staging,
-  self-review and coherent-commit contract. Include affected Go/TypeScript
-  generated, static, type and import checks as needed; preserve original terminal
-  receipts and exact source/coverage identities. `task ci:fast` is not a
-  per-commit gate. Optional `task checkpoint` (`docs/checkpoints.md`) checks
-  evidence consistency, not final Lead acceptance.
+- **Farol-specific checkpoint evidence:** include applicable generated-binding, type, static and import checks. Optional `task checkpoint` (`docs/checkpoints.md`) validates evidence consistency, not Lead acceptance.
 - **Push is not a CI gate:** the repository intentionally has no `pre-push` hook. `task ci:fast` and `task ci:cloud` still run `scan:secrets` as explicit source-acceptance gates. Run the risk-required checks before PR merge; ordinary feature-branch push should not repeatedly execute the full-history secret scanner. This does not waive any native attestation, security review or release requirement. The active TestOps/CI pilot remains independent of this hook removal.
 - **Stable integration candidate:** freeze the exact committed range, then run
   `task ci:fast` and applicable cross-module/aggregate checks once against those
@@ -80,8 +65,6 @@ schemas are compatibility boundaries. Do not rename them as a source-layout fix.
   hardware alone does not block reviewed portable source from reaching main.
   Keep full native CI and all attestation, hook, confinement and unknown-effect
   predicates unchanged. Fix actual portable failures before source integration.
-  After checks and review pass, the Lead merges the existing PR and verifies main;
-  creating a PR is an intermediate delivery step, not the completion boundary.
   If the formal Critic host driver lacks lifecycle primitives, use fresh actual
   native reviewers with the configured cumulative role/model/effort ladder and
   retain their exact source coverage/findings; do not invent driver/close receipts
@@ -89,11 +72,7 @@ schemas are compatibility boundaries. Do not rename them as a source-layout fix.
 - **Final/package/release candidate:** run the applicable full CI, native, package,
   installation/live and release gates against exact committed bytes. Preserve
   separate evidence for source acceptance, packaging, installation and live use.
-- **Farol-specific reviewer assignments:** apply Spine's shared risk-selected
-  review timing and evidence-retention rules. General/Specialists use Luna High;
-  Strong/R3 uses GPT-6.1 Sol High; Frontier/R4 uses GPT-6 Astra Max after an
-  accepted Strong review. Claude review is optional for a specific unresolved
-  question, not a required R3/R4 gate.
+- **Farol reviewer assignments:** General/Specialists use Luna High; Strong/R3 uses GPT-6.1 Sol High; Frontier/R4 uses GPT-6 Astra Max after accepted Strong. Claude review is optional for a specific unresolved question, not a required R3/R4 gate.
 - Owner-reported installed launch, connection, or update failures are incidents.
   Prioritize restoring a usable installation under the current owner grant; follow
   `docs/installed-incident-response.md` before resuming broad acceptance reviews.
@@ -114,15 +93,5 @@ schemas are compatibility boundaries. Do not rename them as a source-layout fix.
   a gate. It must not import or invoke a V0 implementation.
 - Never commit credentials, tokens, authentication state, browser profiles,
   private prompts/transcripts, caches, or vendor runtime state.
-- The owner approved public source/history delivery to `legrch/farol`
-  on 11 October 2026. New changes use reviewable PRs under Spine's shared
-  integration policy; only the designated Lead/integrator may merge accepted
-  PRs to `main` after Farol-specific gates. Direct-main push is not the normal
-  delivery path. Before public PR publication, inspect the outgoing range and
-  scan source/history for credentials, authentication state, private
-  prompts/transcripts, browser profiles, caches, vendor runtime state and
-  unrelated personal data. Preserve local evidence and recovery bundles
-  privately. New or changed remotes, GitHub rename/create, visibility changes,
-  installation, activation, release, signing and licensing still require an
-  explicit owner decision.
+- **Public-source delivery:** the owner approved publishing source/history to `legrch/farol` on 11 October 2026. Before public publication, inspect the outgoing range and scan source/history for credentials, authentication state, private prompts/transcripts, browser profiles, caches, vendor runtime state and unrelated personal data. Preserve local evidence and recovery bundles privately. New or changed remotes, GitHub rename/create, visibility changes, installation, activation, release, signing and licensing require a separate explicit owner decision.
 - Live calls are one-shot. Never retry outcome-unknown or platform-refused work.
