@@ -3,9 +3,14 @@ package process
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/legrch/farol/modules/release/app/port"
 )
 
 // deadlineWithoutNotification models an earlier deadline before cancellation is delivered.
@@ -44,4 +49,36 @@ func TestRelaunchDeterministicBoundsAndDrain(t *testing.T) {
 			t.Fatalf("expired caller deadline was not refused before fence: entered=%t sentinel=%t err=%v", entered, errors.Is(err, stopBeforeNative), err)
 		}
 	})
+}
+
+// One real fixed Open child against an absent bundle in a fresh private namespace.
+// Its terminal error and joined EOF do not prove successful application relaunch.
+func TestOpenNativeMissingBundle(t *testing.T) {
+	if runtime.GOOS != "darwin" || os.Getenv("FAROL_HELPER_NATIVE") != "1" {
+		t.Skip("Root-scheduled disposable Open failure")
+	}
+	root, err := os.MkdirTemp("", "farol-open-native-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Log("RETAINED Open fixture:", root)
+	bundle := filepath.Join(root, "absent-Farol.app")
+	if _, err := os.Lstat(bundle); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("fixture bundle is not absent", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	until, _ := ctx.Deadline()
+	fences := 0
+	err = Open(ctx, until, []string{"/usr/bin/open", "-a", bundle, "--args", "--farol-installed-update-relaunch={}"}, func(context.Context) error { fences++; return nil })
+	var failure *port.HelperRecoveryFailure
+	if !errors.As(err, &failure) || failure.Code != "launch_failed" || failure.Phase != "refused" || failure.Internal || failure.Uncertain || failure.Cause == nil {
+		t.Fatal("original Open child did not return a clean terminal failure", err)
+	}
+	if fences != 2 {
+		t.Fatal("original pre/post fences not joined", fences)
+	}
+	if _, err := os.Lstat(bundle); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("refused fixture created an app", err)
+	}
 }

@@ -137,6 +137,15 @@ func TestLiveWaitExitNativeKeepsWrapperBound(t *testing.T) {
 			default:
 			}
 			time.Sleep(time.Until(until) + time.Millisecond)
+			// Observe custody after expiry while the entered boundary is still held.
+			if premature == nil {
+				select {
+				case early := <-done:
+					premature = &early
+					t.Error("expired wrapper detached entered native work or cleanup")
+				default:
+				}
+			}
 			close(release)
 			released = true
 			if premature != nil {
