@@ -56,3 +56,13 @@ type ProcessWaitClock interface {
 	Now() time.Time
 	Sleep(context.Context, time.Duration) error
 }
+
+// ProcessWaiter is the live handoff consumer's prepared process lifecycle port.
+// Boot binds the original application service to one probe/start token. Neither
+// a successful wait nor this interface grants closed custody or writer admission.
+// Implementations retain the original absolute bound and trusted non-typed-nil
+// dependency contract; the native handoff owner never constructs app policy.
+type ProcessWaiter interface {
+	ConfirmIdentity(context.Context, time.Time) error
+	WaitExit(context.Context, time.Time) error
+}
