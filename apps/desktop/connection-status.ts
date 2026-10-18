@@ -78,6 +78,7 @@ export function connectionStatusView(
               ? "Waiting for current work to drain."
               : "";
   return {
+    validUntilMillis: until,
     state: value.state,
     marker: markers[value.state],
     label: labels[value.state],

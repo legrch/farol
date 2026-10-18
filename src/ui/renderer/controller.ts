@@ -216,10 +216,17 @@ export function canSetInstallOnQuitPreference(
 export class WindowController implements RendererFacade {
   readonly draft = new AgentDraftStore();
   readonly conversationDraft = new ConversationDraftStore();
+  private connectionStatusTimer: ReturnType<typeof setTimeout> | null = null;
+  private retireConnectionStatusTimer(): void {
+    if (this.connectionStatusTimer !== null)
+      clearTimeout(this.connectionStatusTimer);
+    this.connectionStatusTimer = null;
+  }
   private adoptConnectionStatus(value: unknown): void {
     if (this.disposed) return;
     const parsed = ConnectionStatusViewSchema.safeParse(value);
     if (!parsed.success) {
+      this.retireConnectionStatusTimer();
       this.patch({
         connectionStatus: {
           ...unavailableConnectionStatus,
@@ -228,8 +235,68 @@ export class WindowController implements RendererFacade {
       });
       return;
     }
-    if (parsed.data.revision > (this.state.connectionStatus?.revision ?? -1))
-      this.patch({ connectionStatus: parsed.data });
+    if (parsed.data.revision <= (this.state.connectionStatus?.revision ?? -1))
+      return;
+    this.retireConnectionStatusTimer();
+    const projection = parsed.data;
+    if (projection.state !== "recent_transport") {
+      this.patch({ connectionStatus: projection });
+      return;
+    }
+    const wall = Date.now(),
+      monotonic = performance.now();
+    const until = projection.validUntilMillis;
+    const withdraw = () =>
+      this.patch({
+        connectionStatus: {
+          ...unavailableConnectionStatus,
+          revision: projection.revision,
+        },
+      });
+    if (
+      until == null ||
+      !Number.isSafeInteger(wall) ||
+      wall <= 0 ||
+      !Number.isFinite(monotonic) ||
+      monotonic < 0 ||
+      until <= wall
+    ) {
+      withdraw();
+      return;
+    }
+    // Main may stop delivering. Consume its original presentation budget using
+    // independent renderer clocks; receipt, bootstrap and refresh cannot renew it.
+    const budget = until - wall;
+    const expire = () => {
+      if (
+        this.disposed ||
+        this.state.connectionStatus?.revision !== projection.revision ||
+        this.state.connectionStatus.state !== "recent_transport"
+      )
+        return;
+      this.connectionStatusTimer = null;
+      const now = Date.now(),
+        elapsed = performance.now() - monotonic;
+      if (
+        !Number.isSafeInteger(now) ||
+        now < wall ||
+        !Number.isFinite(elapsed) ||
+        elapsed < 0 ||
+        Math.abs(now - wall - elapsed) > 1000 ||
+        now >= until ||
+        elapsed >= budget
+      ) {
+        withdraw();
+        return;
+      }
+      this.connectionStatusTimer = setTimeout(
+        expire,
+        Math.min(1000, until - now, budget - elapsed),
+      );
+    };
+    // Establish cleanup ownership before synchronous snapshot subscribers run.
+    this.connectionStatusTimer = setTimeout(expire, Math.min(1000, budget));
+    this.patch({ connectionStatus: projection });
   }
   private state: WindowSnapshot = immutable({ ...initial });
   private readonly listeners = new Set<() => void>();
@@ -559,6 +626,7 @@ export class WindowController implements RendererFacade {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.retireConnectionStatusTimer();
     this.retireSignInObservation();
     this.state = immutable({ ...this.state, signInObservation: null });
     this.conversationDraft.dispose();

@@ -17,10 +17,19 @@ export const ConnectionStatusViewSchema = z.strictObject({
   detail: z.string().max(512),
   delivery: z.string().max(256),
   attention: z.boolean(),
+  // The original Go observation deadline, never a fresh receipt-time lease.
+  validUntilMillis: z
+    .number()
+    .int()
+    .positive()
+    .max(Number.MAX_SAFE_INTEGER)
+    .nullable()
+    .optional(),
 });
 export type ConnectionStatusView = z.infer<typeof ConnectionStatusViewSchema>;
 export const unavailableConnectionStatus: ConnectionStatusView = Object.freeze({
   revision: 0,
+  validUntilMillis: null,
   state: "unobserved",
   marker: "?",
   label: "Connection observation unavailable",
