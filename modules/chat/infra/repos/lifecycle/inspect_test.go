@@ -289,3 +289,105 @@ func TestLifecycleInspectionCannotResolveLostStartOrRetirementACK(t *testing.T) 
 		t.Fatal("inspection supplied retry permission", err)
 	}
 }
+
+func assertInspectionDiagnostic(t *testing.T, got *Inspection, err error, code Code, reason InspectionReason) *InspectionFailure {
+	t.Helper()
+	var original *Failure
+	if got != nil || !errors.Is(err, code) || !errors.As(err, &original) || original.Code != code || original.OutcomeUnknown || err.Error() != string(code) {
+		t.Fatal("inspection refusal changed result/classification", got, err)
+	}
+	diagnostic, ok := err.(*InspectionFailure)
+	if !ok || diagnostic.Reason() != reason || InspectionReasonOf(err) != reason {
+		t.Fatal("inspection reason differs from exact failed observation", err)
+	}
+	return diagnostic
+}
+
+func TestInspectionDiagnosticCanonicalRefusalProvenance(t *testing.T) {
+	canonical := inspectionEncode(t, inspectionEmptyRecord())
+	for _, name := range []string{"decode", "profile", "device", "inode", "uid", "root_before_profile", "byte_bound", "record_bound"} {
+		t.Run(name, func(t *testing.T) {
+			raw := append([]byte(nil), canonical...)
+			root, limits := inspectionFixtureRoot(), inspectionLimits
+			code, reason := Refused, InspectionSnapshotRootMismatch
+			switch name {
+			case "decode":
+				raw = append(raw, ' ')
+				code, reason = Invalid, InspectionSnapshotInvalid
+			case "profile":
+				root.ProfileID = "synthetic-other-profile"
+				reason = InspectionSnapshotProfileMismatch
+			case "device":
+				root.Device++
+			case "inode":
+				root.Inode++
+			case "uid":
+				root.OwnerUID++
+			case "root_before_profile":
+				root.Inode++
+				root.ProfileID = "synthetic-other-profile"
+			case "byte_bound":
+				limits.Bytes = len(raw) - 1
+				code, reason = Invalid, InspectionSnapshotInvalid
+			case "record_bound":
+				value := inspectionEmptyRecord()
+				value.Incarnations = []string{"synthetic-previous-backend", scope.BackendGeneration}
+				raw = inspectionEncode(t, value)
+				limits.Records = 1
+				code, reason = Invalid, InspectionSnapshotInvalid
+			}
+			before := append([]byte(nil), raw...)
+			got, err := inspectRecord(raw, root, limits)
+			diagnostic := assertInspectionDiagnostic(t, got, err, code, reason)
+			if !bytes.Equal(raw, before) {
+				t.Fatal("refused canonical inspection mutated its input")
+			}
+			if reason == InspectionSnapshotInvalid {
+				_, decodeErr := decode(raw, limits)
+				if decodeErr == nil || !errors.Is(diagnostic.cause, decodeErr) {
+					t.Fatal("actual canonical decoder cause lost")
+				}
+			} else if diagnostic.cause != nil {
+				t.Fatal("pure identity mismatch invented a private native cause")
+			}
+		})
+	}
+}
+
+type inspectionDiagnosticContext struct {
+	context.Context
+	calls int
+	err   error
+}
+
+func (c *inspectionDiagnosticContext) Err() error {
+	c.calls++
+	return c.err
+}
+
+func TestInspectionDiagnosticValidationBeforeNativeIO(t *testing.T) {
+	got, err := Inspect(nil, Root{}, Limits{})
+	assertInspectionDiagnostic(t, got, err, Cancelled, InspectionCancelled)
+	cancelled := &inspectionDiagnosticContext{Context: context.Background(), err: context.Canceled}
+	got, err = Inspect(cancelled, Root{}, Limits{})
+	assertInspectionDiagnostic(t, got, err, Cancelled, InspectionCancelled)
+	if cancelled.calls != 1 || !errors.Is(err, context.Canceled) {
+		t.Fatal("cancellation checkpoint/cause changed")
+	}
+	for _, limits := range []Limits{{}, {Bytes: math.MaxInt, Records: 1}, {Bytes: 1}, {Bytes: -1, Records: 1}} {
+		ctx := &inspectionDiagnosticContext{Context: context.Background()}
+		got, err := Inspect(ctx, inspectionFixtureRoot(), limits)
+		assertInspectionDiagnostic(t, got, err, Invalid, InspectionInputInvalid)
+		if ctx.calls != 1 {
+			t.Fatal("invalid limits reached a later context/native checkpoint")
+		}
+	}
+	root := inspectionFixtureRoot()
+	root.ProfileID = "synthetic bad profile"
+	ctx := &inspectionDiagnosticContext{Context: context.Background()}
+	got, err = Inspect(ctx, root, inspectionLimits)
+	assertInspectionDiagnostic(t, got, err, Invalid, InspectionInputInvalid)
+	if ctx.calls != 1 {
+		t.Fatal("invalid profile reached a later context/native checkpoint")
+	}
+}
