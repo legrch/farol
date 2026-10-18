@@ -410,3 +410,204 @@ it.each([
     }
   },
 );
+
+it.each(["unavailable", "malformed"])(
+  "recovers after valid clock settlement independently of a newer %s presentation",
+  async (intermediate) => {
+    vi.useFakeTimers({
+      toFake: ["Date", "performance", "setTimeout", "clearTimeout"],
+    });
+    vi.setSystemTime(200_000);
+    const f = liveFixture(),
+      held = deferred<unknown>();
+    const original = {
+      ...view(1, "recent_transport"),
+      validUntilMillis: 245_000,
+    };
+    vi.mocked(f.api.bootstrap)
+      .mockResolvedValueOnce({ ...bootstrap(), connectionStatus: original })
+      .mockReturnValue(held.promise);
+    const c = new WindowController(f.api);
+    try {
+      await c.start();
+      vi.advanceTimersByTime(30_000);
+      vi.setSystemTime(220_000);
+      f.notify({ ...original, revision: 2 });
+      await Promise.resolve();
+      if (intermediate === "unavailable") f.notify(view(3, "unavailable"));
+      else f.notify({ invalid: true });
+      held.resolve({
+        ...bootstrap(),
+        connectionStatus: { ...original, revision: 2 },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(c.getSnapshot().connectionStatus?.state).toBe(
+        intermediate === "unavailable" ? "unavailable" : "unobserved",
+      );
+      f.notify({ ...view(4, "recent_transport"), validUntilMillis: 265_000 });
+      expect(c.getSnapshot().connectionStatus?.state).toBe("recent_transport");
+      expect(c.getSnapshot().connectionStatus?.revision).toBe(4);
+      vi.advanceTimersByTime(45_000);
+      expect(c.getSnapshot().connectionStatus?.state).toBe("unobserved");
+      expect(f.api.bootstrap).toHaveBeenCalledTimes(2);
+      expect(f.api.configure).not.toHaveBeenCalled();
+      expect(f.api.task).not.toHaveBeenCalled();
+    } finally {
+      c.dispose();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("withdraws bootstrap queued across a clock discontinuity", async () => {
+  vi.useFakeTimers({
+    toFake: ["Date", "performance", "setTimeout", "clearTimeout"],
+  });
+  vi.setSystemTime(200_000);
+  const f = liveFixture(),
+    first = deferred<unknown>(),
+    recovery = deferred<unknown>();
+  vi.mocked(f.api.bootstrap)
+    .mockReturnValueOnce(first.promise)
+    .mockReturnValue(recovery.promise);
+  const c = new WindowController(f.api);
+  try {
+    const pending = c.start();
+    vi.advanceTimersByTime(30_000);
+    vi.setSystemTime(220_000);
+    first.resolve({
+      ...bootstrap(),
+      connectionStatus: {
+        ...view(1, "recent_transport"),
+        validUntilMillis: 245_000,
+      },
+    });
+    await pending;
+    expect(c.getSnapshot().connectionStatus?.state).toBe("unobserved");
+    f.notify({ ...view(2, "recent_transport"), validUntilMillis: 245_000 });
+    await Promise.resolve();
+    expect(c.getSnapshot().connectionStatus?.state).toBe("unobserved");
+    expect(f.api.bootstrap).toHaveBeenCalledTimes(2);
+    expect(f.api.configure).not.toHaveBeenCalled();
+    expect(f.api.task).not.toHaveBeenCalled();
+  } finally {
+    c.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it("a new explicit post-clock refresh recovers after a rejected local read", async () => {
+  vi.useFakeTimers({
+    toFake: ["Date", "performance", "setTimeout", "clearTimeout"],
+  });
+  vi.setSystemTime(200_000);
+  const f = liveFixture(),
+    held = deferred<unknown>();
+  const original = {
+    ...view(1, "recent_transport"),
+    validUntilMillis: 245_000,
+  };
+  vi.mocked(f.api.bootstrap)
+    .mockResolvedValueOnce({ ...bootstrap(), connectionStatus: original })
+    .mockReturnValueOnce(held.promise);
+  const c = new WindowController(f.api);
+  try {
+    await c.start();
+    vi.advanceTimersByTime(30_000);
+    vi.setSystemTime(220_000);
+    f.notify({ ...original, revision: 2 });
+    await Promise.resolve();
+    held.reject(new Error("local read unavailable"));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(c.getSnapshot().connectionStatus?.state).toBe("unobserved");
+    expect(f.api.bootstrap).toHaveBeenCalledTimes(2);
+    vi.mocked(f.api.bootstrap).mockResolvedValueOnce({
+      ...bootstrap(),
+      connectionStatus: {
+        ...view(3, "recent_transport"),
+        validUntilMillis: 265_000,
+      },
+    });
+    await c.refresh();
+    expect(c.getSnapshot().connectionStatus?.state).toBe("recent_transport");
+    vi.advanceTimersByTime(45_000);
+    expect(c.getSnapshot().connectionStatus?.state).toBe("unobserved");
+    expect(f.api.bootstrap).toHaveBeenCalledTimes(3);
+    expect(f.api.configure).not.toHaveBeenCalled();
+    expect(f.api.task).not.toHaveBeenCalled();
+  } finally {
+    c.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it.each([
+  "checking",
+  "reconnecting",
+  "unavailable",
+  "unobserved",
+  "action_required",
+  "stopped",
+] as const)(
+  "expires the bounded %s projection without another main message",
+  async (state) => {
+    vi.useFakeTimers({
+      toFake: ["Date", "performance", "setTimeout", "clearTimeout"],
+    });
+    vi.setSystemTime(200_000);
+    const f = liveFixture(),
+      c = new WindowController(f.api);
+    try {
+      await c.start();
+      f.notify({
+        ...unavailableConnectionStatus,
+        revision: 1,
+        state,
+        validUntilMillis: 205_000,
+        detail: "Bounded local readiness and transport snapshot.",
+      });
+      vi.advanceTimersByTime(4_999);
+      expect(c.getSnapshot().connectionStatus?.detail).toBe(
+        "Bounded local readiness and transport snapshot.",
+      );
+      vi.advanceTimersByTime(1);
+      expect(c.getSnapshot().connectionStatus).toEqual({
+        ...unavailableConnectionStatus,
+        revision: 1,
+      });
+      expect(f.api.bootstrap).toHaveBeenCalledTimes(1);
+      expect(f.api.configure).not.toHaveBeenCalled();
+      expect(f.api.task).not.toHaveBeenCalled();
+    } finally {
+      c.dispose();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("retains the ordinary unbounded unavailable fallback without an expiry timer", async () => {
+  vi.useFakeTimers({
+    toFake: ["Date", "performance", "setTimeout", "clearTimeout"],
+  });
+  vi.setSystemTime(200_000);
+  const f = liveFixture(),
+    c = new WindowController(f.api);
+  try {
+    await c.start();
+    f.notify({ ...unavailableConnectionStatus, revision: 1 });
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(60_000);
+    expect(c.getSnapshot().connectionStatus).toEqual({
+      ...unavailableConnectionStatus,
+      revision: 1,
+    });
+    expect(f.api.bootstrap).toHaveBeenCalledTimes(1);
+  } finally {
+    c.dispose();
+    vi.useRealTimers();
+  }
+});

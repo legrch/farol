@@ -116,6 +116,14 @@ type ObservedEdit = Readonly<{
   code: string | null;
 }>;
 
+type ConnectionStatusRead = Readonly<{
+  clockEpoch: number;
+  malformedRevision: number;
+  validClock: boolean;
+  buildId: string | null;
+  environment: WindowSnapshot["environment"];
+}>;
+
 type SectionNavigationAction = Extract<
   ShellAction,
   { action: "navigate-section" }
@@ -275,6 +283,51 @@ export class WindowController implements RendererFacade {
       connectionStatus: { ...unavailableConnectionStatus, revision },
     });
   }
+  private beginConnectionStatusRead(): ConnectionStatusRead {
+    const validClock = this.sampleConnectionClock() !== null;
+    if (
+      this.connectionClockBlocked &&
+      this.state.connectionStatus?.validUntilMillis != null
+    )
+      this.withdrawConnectionStatus();
+    return {
+      clockEpoch: this.connectionClockEpoch,
+      malformedRevision: this.connectionMalformedRevision,
+      validClock,
+      buildId: this.state.buildId,
+      environment: this.state.environment,
+    };
+  }
+  private adoptConnectionStatusRead(
+    data: z.infer<typeof BootstrapProjectionSchema>,
+    read: ConnectionStatusRead,
+  ): void {
+    if (this.disposed || data.connectionStatus === undefined) return;
+    const clock = this.sampleConnectionClock();
+    const sourceCurrent =
+      read.buildId === null ||
+      (read.buildId === this.state.buildId &&
+        data.build.buildId === read.buildId &&
+        read.environment === this.state.environment &&
+        data.environment === read.environment);
+    const reconciled = Boolean(
+      clock &&
+      read.validClock &&
+      sourceCurrent &&
+      read.clockEpoch === this.connectionClockEpoch &&
+      this.connectionClockBlocked,
+    );
+    // A valid fresh read settles the clock fence even when a later publication
+    // supersedes its body. Revision/publication ordering is checked separately.
+    if (reconciled) this.connectionClockBlocked = false;
+    if (
+      this.connectionClockBlocked &&
+      this.state.connectionStatus?.validUntilMillis != null
+    )
+      this.withdrawConnectionStatus();
+    if (read.malformedRevision !== this.connectionMalformedRevision) return;
+    this.adoptConnectionStatus(data.connectionStatus, reconciled);
+  }
   private reconcileConnectionClock(): void {
     if (
       this.disposed ||
@@ -284,10 +337,10 @@ export class WindowController implements RendererFacade {
       this.connectionClockReadEpoch === this.connectionClockEpoch
     )
       return;
-    const epoch = this.connectionClockEpoch,
+    const read = this.beginConnectionStatusRead();
+    const epoch = read.clockEpoch,
       build = this.state.buildId;
     const environment = this.state.environment;
-    const malformed = this.connectionMalformedRevision;
     this.connectionClockReadEpoch = epoch;
     // One local, read-only IPC snapshot issued after the discontinuity fences
     // queued positive events. It grants nothing and adopts no other UI state.
@@ -299,8 +352,7 @@ export class WindowController implements RendererFacade {
           this.disposed ||
           epoch !== this.connectionClockEpoch ||
           build !== this.state.buildId ||
-          environment !== this.state.environment ||
-          malformed !== this.connectionMalformedRevision
+          environment !== this.state.environment
         )
           return;
         const parsed = BootstrapProjectionSchema.safeParse(value);
@@ -311,13 +363,7 @@ export class WindowController implements RendererFacade {
           !parsed.data.connectionStatus
         )
           return;
-        const clock = this.sampleConnectionClock();
-        if (!clock || epoch !== this.connectionClockEpoch) return;
-        const projection = parsed.data.connectionStatus;
-        if (projection.revision < (this.state.connectionStatus?.revision ?? -1))
-          return;
-        this.connectionClockBlocked = false;
-        this.adoptConnectionStatus(projection, true);
+        this.adoptConnectionStatusRead(parsed.data, read);
       } catch {
         // Failed or unsettled reads never renew the retired presentation.
       } finally {
@@ -348,12 +394,12 @@ export class WindowController implements RendererFacade {
       return;
     }
     this.retireConnectionStatusTimer();
-    if (projection.state !== "recent_transport") {
+    const until = projection.validUntilMillis;
+    if (projection.state !== "recent_transport" && until == null) {
       this.patch({ connectionStatus: projection });
       if (this.connectionClockBlocked) this.reconcileConnectionClock();
       return;
     }
-    const until = projection.validUntilMillis;
     if (
       !clock ||
       this.connectionClockBlocked ||
@@ -372,7 +418,7 @@ export class WindowController implements RendererFacade {
       if (
         this.disposed ||
         this.state.connectionStatus?.revision !== projection.revision ||
-        this.state.connectionStatus.state !== "recent_transport"
+        this.state.connectionStatus.state !== projection.state
       )
         return;
       this.connectionStatusTimer = null;
@@ -580,6 +626,7 @@ export class WindowController implements RendererFacade {
     const order = this.configOrder.begin();
     this.startPromise = (async () => {
       try {
+        const connectionRead = this.beginConnectionStatusRead();
         const value = await this.api.bootstrap();
         if (this.disposed) return;
         const parsed = BootstrapProjectionSchema.safeParse(value);
@@ -590,7 +637,7 @@ export class WindowController implements RendererFacade {
         const data = parsed.data;
         this.adoptHistoryContext(data.chatHistoryContext ?? null);
         if (data.connectionStatus !== undefined)
-          this.adoptConnectionStatus(data.connectionStatus);
+          this.adoptConnectionStatusRead(data, connectionRead);
         this.patch({
           environment: data.environment,
           buildId: data.build.buildId,
@@ -848,6 +895,7 @@ export class WindowController implements RendererFacade {
     const runtimeRevision = this.runtimeRevision;
     const staleRevision = this.staleRevision;
     try {
+      const connectionRead = this.beginConnectionStatusRead();
       const value = await this.api.bootstrap();
       if (this.disposed) return { status: "unqualified", reason: "disposed" };
       if (!this.configOrder.isLatest(order))
@@ -880,7 +928,7 @@ export class WindowController implements RendererFacade {
           : this.state.runtime;
       this.adoptHistoryContext(parsed.data.chatHistoryContext ?? null);
       if (parsed.data.connectionStatus !== undefined)
-        this.adoptConnectionStatus(parsed.data.connectionStatus);
+        this.adoptConnectionStatusRead(parsed.data, connectionRead);
       const status =
         parsed.data.configuration.status === "ready" &&
         tasksAccepted &&
