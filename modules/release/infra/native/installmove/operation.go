@@ -66,6 +66,7 @@ type Operation struct {
 	until                       time.Time
 	fence                       Fence
 	exchange                    bool
+	capturePublication          bool
 	state                       *attempt
 	backend                     backend
 }
@@ -75,6 +76,30 @@ func PrepareRename(source, target Location, expected Identity, until time.Time, 
 }
 func PrepareExchange(left, right Location, leftExpected, rightExpected Identity, until time.Time, fence Fence) (*Operation, error) {
 	return prepare(left, right, leftExpected, rightExpected, until, fence, true, productionBackend())
+}
+
+// PrepareCapturePublication is the sole extra rename role. Trusted copy
+// composition supplies its internally generated capture name; neither ordinary
+// rename/exchange nor shared Applications accepts either capture role. Both
+// operands must be the SAME private operation directory and never overwrite.
+func PrepareCapturePublication(directory Directory, capture string, expected Identity, until time.Time, fence Fence) (*Operation, error) {
+	return prepareCapturePublication(directory, capture, expected, until, fence, productionBackend())
+}
+
+func prepareCapturePublication(d Directory, name string, expected Identity, until time.Time, fence Fence, b backend) (*Operation, error) {
+	if d.File == nil || d.Kind != OwnedParent || !validIdentity(d.Identity) || !validIdentity(expected) ||
+		len(name) != len(".launch-capture-")+24 || name[:len(".launch-capture-")] != ".launch-capture-" || until.IsZero() || fence == nil {
+		return nil, &Failure{Code: "input"}
+	}
+	for _, c := range name[len(".launch-capture-"):] {
+		if !(c >= 'a' && c <= 'f' || c >= '0' && c <= '9') {
+			return nil, &Failure{Code: "input"}
+		}
+	}
+	if b == nil {
+		return nil, &Failure{Code: "rename_unsupported"}
+	}
+	return &Operation{left: Location{Parent: d, Name: name}, right: Location{Parent: d, Name: "launch-Farol.app"}, leftExpected: expected, until: until, fence: fence, state: &attempt{}, backend: b, capturePublication: true}, nil
 }
 func prepare(left, right Location, le, re Identity, until time.Time, fence Fence, exchange bool, b backend) (*Operation, error) {
 	if !validLocation(left) || !validLocation(right) || !validIdentity(le) || exchange && !validIdentity(re) {
@@ -358,6 +383,9 @@ func (o *Operation) check(ctx context.Context, left, right int, after bool, befo
 			return fail("parent_replaced", true, nil)
 		}
 		if !m.acceptsParent(p.kind) || m.identity != p.expected {
+			return fail("parent_replaced", false, nil)
+		}
+		if o.capturePublication && (p.kind != OwnedParent || m.mode&0o7077 != 0) {
 			return fail("parent_replaced", false, nil)
 		}
 		if before.captured && m != before.parents[i] {
