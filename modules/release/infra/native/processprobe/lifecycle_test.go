@@ -16,6 +16,37 @@ type observationResult struct {
 	err   error
 }
 
+func TestJoinRetainsOriginalLateObservationAndStickyFailure(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	p, b, c := completeFixture("", "", 1, true)
+	b.existence = func(int) bool { close(entered); <-release; return true }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := observeAsync(p, ctx, time.Now().Add(3*time.Second))
+	await(t, entered)
+	cancel()
+	requireKind(t, awaitResult(t, result).err, port.ProcessProbeCleanupUnknown)
+	joined := make(chan error, 1)
+	go func() { joined <- p.Join() }()
+	select {
+	case <-joined:
+		t.Fatal("Join released a still entered original observation")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case err := <-joined:
+		requireKind(t, err, port.ProcessProbeCleanupUnknown)
+	case <-time.After(time.Second):
+		t.Fatal("original drain not observed")
+	}
+	_, err := p.Observe(context.Background(), time.Now().Add(time.Second))
+	requireKind(t, err, port.ProcessProbeCleanupUnknown)
+	if b.prepares.Load() != 1 || c.starts.Load() != 1 || c.waits.Load() != 1 || c.kills.Load() != 0 || b.exists.Load() != 1 {
+		t.Fatal("original observation was repeated")
+	}
+}
+
 func observeAsync(p *Probe, ctx context.Context, until time.Time) <-chan observationResult {
 	done := make(chan observationResult, 1)
 	go func() {
