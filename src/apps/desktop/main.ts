@@ -4725,11 +4725,14 @@ function startConnectorTransportWatch(): void {
     wait: (milliseconds) =>
       new Promise((resolve) => setTimeout(resolve, milliseconds)),
   });
-  const check = () => {
+  const observeStatus = () => {
     void connectorConnection
       .sample()
       .then(currentConnectionStatus)
       .catch(() => undefined);
+  };
+  const check = () => {
+    observeStatus();
     void connectorTransportWatch?.check().catch(() => {
       console.warn("FAROL_CONNECTOR_TRANSPORT_OBSERVATION_FAILED");
     });
@@ -4738,7 +4741,8 @@ function startConnectorTransportWatch(): void {
   connectorTransportTimer.unref();
   connectorStatusTimer = setInterval(currentConnectionStatus, 1000);
   connectorStatusTimer.unref();
-  check();
+  // Starting a status projection does not eagerly enter recovery observation.
+  observeStatus();
   powerMonitor.on("suspend", () => {
     connectorConnection.suspend();
     currentConnectionStatus();

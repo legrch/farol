@@ -56,6 +56,13 @@ function fixture() {
     ConnectorTransportWatch,
     connectorTransportWatch: null,
     connectorTransportTimer: null,
+    connectorStatusTimer: null,
+    connectorConnection: {
+      sample: vi.fn(async () => undefined),
+      suspend: vi.fn(),
+      resume: vi.fn(),
+    },
+    currentConnectionStatus: vi.fn(),
     connectorTaskAdmission: false,
     quitInProgress: false,
     installedUpdateAdmission: false,
@@ -112,7 +119,10 @@ function fixture() {
 it("wires one resume observer and an unrefed bounded timer without an eager restart", async () => {
   const f = fixture();
   f.actual.start();
-  expect(f.intervals).toHaveLength(1);
+  expect(f.intervals).toHaveLength(2);
+  expect(f.intervals[1].milliseconds).toBe(1000);
+  expect(f.intervals[1].unref).toHaveBeenCalledTimes(1);
+  expect(f.context.connectorConnection.sample).toHaveBeenCalledTimes(1);
   expect(f.intervals[0].milliseconds).toBe(30_000);
   expect(f.intervals[0].unref).toHaveBeenCalledTimes(1);
   expect(f.power.listenerCount("resume")).toBe(1);
@@ -121,6 +131,8 @@ it("wires one resume observer and an unrefed bounded timer without an eager rest
   f.power.emit("resume");
   await f.finish();
   expect(f.original.connector.checkHealth).toHaveBeenCalledTimes(1);
+  expect(f.context.connectorConnection.resume).toHaveBeenCalledTimes(1);
+  expect(f.context.connectorConnection.sample).toHaveBeenCalledTimes(2);
   expect(f.context.recoverConnectorTransport).not.toHaveBeenCalled();
   expect(f.context.window.webContents.send).not.toHaveBeenCalled();
 });
