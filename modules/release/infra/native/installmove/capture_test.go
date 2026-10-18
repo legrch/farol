@@ -37,9 +37,16 @@ func TestCapturePublicationDeterministicNamesAndRoles(t *testing.T) {
 	if _, err := PrepareCapturePublication(shared, name, Identity{"1", "3"}, until, fence); err == nil {
 		t.Fatal("shared Applications capture accepted")
 	}
-	publication, err := PrepareCapturePublication(d, name, Identity{"1", "3"}, until, fence)
+	publication, err := prepareCapturePublication(d, name, Identity{"1", "3"}, until, fence, unixBackend{})
 	if err != nil || publication.left.Parent.File != publication.right.Parent.File || publication.left.Parent.Identity != publication.right.Parent.Identity || publication.exchange || publication.right.Name != "launch-Farol.app" {
 		t.Fatal(publication, err)
+	}
+	if _, err := prepareCapturePublication(d, name, Identity{"1", "3"}, until, fence, nil); err == nil {
+		t.Fatal("nil backend accepted")
+	}
+	if runtime.GOOS != "darwin" {
+		_, err := PrepareCapturePublication(d, name, Identity{"1", "3"}, until, fence)
+		wantFailure(t, err, "rename_unsupported", false, false)
 	}
 }
 

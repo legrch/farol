@@ -16,7 +16,13 @@ import (
 // operation directory. It never adopts, removes or retries a failed capture.
 // Publication belongs to installmove's restricted capture-publication operation.
 // All callbacks, native returns and owned cleanup join before the borrow ends.
-func WithCapture(ctx context.Context, parent Directory, until time.Time, fence Fence, fn func(string, Directory) error) (result error) {
+func WithCapture(ctx context.Context, parent Directory, until time.Time, fence Fence, fn func(string, Directory) error) error {
+	return withCapture(ctx, parent, until, fence, fn, nil)
+}
+
+// afterControl is a private synchronous return-boundary test seam. Production
+// callers cannot inject it; it supplies no replacement native or cleanup owner.
+func withCapture(ctx context.Context, parent Directory, until time.Time, fence Fence, fn func(string, Directory) error, afterControl func()) (result error) {
 	if ctx == nil || parent.File == nil || !canonical(parent.Identity.Device) || !canonical(parent.Identity.Inode) || until.IsZero() || fence == nil || fn == nil {
 		return refusal("input")
 	}
@@ -27,6 +33,14 @@ func WithCapture(ctx context.Context, parent Directory, until time.Time, fence F
 	bounded, cancel := context.WithDeadline(ctx, end)
 	defer cancel()
 	r := &runner{ctx: bounded, c: &captured{until: end, fence: fence}}
+	// Include failures observed after Control and all owned cleanup return.
+	defer func() {
+		if result != nil && r.effected {
+			if f, ok := result.(*Failure); !ok || f == nil || !f.Uncertain {
+				result = &Failure{Code: "launch_copy_io", Internal: true, Uncertain: true, cause: result}
+			}
+		}
+	}()
 	if err := r.check(); err != nil {
 		return err
 	}
@@ -95,5 +109,8 @@ func WithCapture(ctx context.Context, parent Directory, until time.Time, fence F
 			return combine(osFailure(file.Sync()), osFailure(parent.File.Sync()), fence(bounded))
 		}()
 	})
+	if afterControl != nil {
+		afterControl()
+	}
 	return combine(entered, osFailure(err), r.check())
 }

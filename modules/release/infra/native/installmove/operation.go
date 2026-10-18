@@ -204,7 +204,7 @@ func (o *Operation) Run(ctx context.Context) error {
 		if attempted {
 			if c := canceled(ctx); c != nil {
 				var failure *Failure
-				return o.uncertain(errors.As(result, &failure) && failure.Internal, c)
+				return o.uncertain(errors.As(result, &failure) && failure.Internal, errors.Join(result, c))
 			}
 		}
 		return result
@@ -255,13 +255,21 @@ type backend interface {
 	held(int) (metadata, error)
 	named(int, string) (metadata, bool, error)
 	pin(int, string) (int, error)
-	close(int)
+	close(int) error
 	move(int, string, int, string, bool) error
 	sync(int) error
 	classify(error, bool) (code string, known bool)
 }
 
-func (o *Operation) run(ctx context.Context, left, right int, attempted *bool) error {
+// A Close error is an unconfirmed cleanup result even before namespace dispatch.
+// Preserve it with the primary cause and never retry the numeric descriptor.
+func (o *Operation) closePin(fd int, result *error) {
+	if err := o.backend.close(fd); err != nil {
+		*result = o.uncertain(true, errors.Join(*result, err))
+	}
+}
+
+func (o *Operation) run(ctx context.Context, left, right int, attempted *bool) (result error) {
 	before := &snapshot{}
 	if err := o.check(ctx, left, right, false, before); err != nil {
 		return err
@@ -271,7 +279,7 @@ func (o *Operation) run(ctx context.Context, left, right int, attempted *bool) e
 	if err != nil {
 		return o.beforeIO(ctx, err, o.precondition())
 	}
-	defer o.backend.close(lpin)
+	defer o.closePin(lpin, &result)
 	if err := o.checkPin(ctx, lpin, before.left); err != nil {
 		return err
 	}
@@ -280,7 +288,7 @@ func (o *Operation) run(ctx context.Context, left, right int, attempted *bool) e
 		if err != nil {
 			return o.beforeIO(ctx, err, o.precondition())
 		}
-		defer o.backend.close(rpin)
+		defer o.closePin(rpin, &result)
 		if err := o.checkPin(ctx, rpin, before.right); err != nil {
 			return err
 		}

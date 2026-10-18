@@ -37,7 +37,7 @@ func (unixBackend) pin(fd int, name string) (int, error) {
 	}
 	return pin, err
 }
-func (unixBackend) close(fd int) { _ = unix.Close(fd) }
+func (unixBackend) close(fd int) error { return unix.Close(fd) }
 func (b unixBackend) move(l int, ln string, r int, rn string, exchange bool) error {
 	return b.effect(l, ln, r, rn, exchange)
 }
