@@ -82,3 +82,43 @@ func TestOpenNativeMissingBundle(t *testing.T) {
 		t.Fatal("refused fixture created an app", err)
 	}
 }
+
+// The child has already actually exited and its diagnostics are joined when
+// this fixture changes the original bound at the second fence. No app exists.
+func TestOpenNativeFinalFenceBounds(t *testing.T) {
+	if runtime.GOOS != "darwin" || os.Getenv("FAROL_HELPER_NATIVE") != "1" {
+		t.Skip("Root-scheduled final Open fence")
+	}
+	for _, kind := range []string{"cancel", "deadline"} {
+		t.Run(kind, func(t *testing.T) {
+			root, err := os.MkdirTemp("", "farol-open-final-fence-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Log("RETAINED Open final-fence fixture:", root)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			until := time.Now().Add(5 * time.Second)
+			fences := 0
+			err = Open(ctx, until, []string{"/usr/bin/open", "-a", filepath.Join(root, "absent-Farol.app"), "--args", "--farol-installed-update-relaunch={}"}, func(context.Context) error {
+				fences++
+				if fences == 2 {
+					if kind == "cancel" {
+						cancel()
+					} else {
+						time.Sleep(time.Until(until) + time.Millisecond)
+					}
+				}
+				return nil
+			})
+			want := context.Canceled
+			if kind == "deadline" {
+				want = context.DeadlineExceeded
+			}
+			var failure *port.HelperRecoveryFailure
+			if fences != 2 || !errors.As(err, &failure) || !failure.Uncertain || !errors.Is(err, want) {
+				t.Fatalf("final fence published a stale terminal result: fences=%d err=%v", fences, err)
+			}
+		})
+	}
+}

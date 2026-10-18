@@ -20,7 +20,13 @@ func WithCapture(ctx context.Context, parent Directory, until time.Time, fence F
 	if ctx == nil || parent.File == nil || !canonical(parent.Identity.Device) || !canonical(parent.Identity.Inode) || until.IsZero() || fence == nil || fn == nil {
 		return refusal("input")
 	}
-	r := &runner{ctx: ctx, c: &captured{until: until, fence: fence}}
+	end := until
+	if deadline, ok := ctx.Deadline(); ok && deadline.Before(end) {
+		end = deadline
+	}
+	bounded, cancel := context.WithDeadline(ctx, end)
+	defer cancel()
+	r := &runner{ctx: bounded, c: &captured{until: end, fence: fence}}
 	if err := r.check(); err != nil {
 		return err
 	}
@@ -36,7 +42,7 @@ func WithCapture(ctx context.Context, parent Directory, until time.Time, fence F
 	var entered error
 	err = raw.Control(func(fd uintptr) {
 		entered = func() (result error) {
-			if err := fence(ctx); err != nil {
+			if err := fence(bounded); err != nil {
 				return err
 			}
 			before, err := r.held(int(fd))
@@ -86,7 +92,7 @@ func WithCapture(ctx context.Context, parent Directory, until time.Time, fence F
 			if err != nil || !before.sameObject(after) {
 				return combine(err, refusal("changed"))
 			}
-			return combine(osFailure(file.Sync()), osFailure(parent.File.Sync()), fence(ctx))
+			return combine(osFailure(file.Sync()), osFailure(parent.File.Sync()), fence(bounded))
 		}()
 	})
 	return combine(entered, osFailure(err), r.check())

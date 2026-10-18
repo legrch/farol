@@ -117,6 +117,7 @@ func Open(ctx context.Context, until time.Time, arguments []string, fence func(c
 	}
 	err := cmd.Wait()
 	late, after := check(), fence(bounded)
+	late = errors.Join(late, check())
 	var exit *exec.ExitError
 	if errors.As(err, &exit) && late == nil && after == nil && cmd.ProcessState != nil && cmd.ProcessState.Exited() && stdout.complete() && stderr.complete() {
 		// Actual terminal nonzero status with joined EOF is the reference's

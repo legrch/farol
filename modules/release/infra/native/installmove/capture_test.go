@@ -215,3 +215,43 @@ func TestCaptureNativeJoinsExpiredCallback(t *testing.T) {
 		t.Fatal("borrowed original parent closed", e)
 	}
 }
+
+// An independent finite until must reach both context-aware fences. The
+// original source fails promptly at the final fence instead of hanging there.
+func TestCaptureNativeFenceKeepsIndependentUntil(t *testing.T) {
+	for _, kind := range []string{"operation", "caller"} {
+		t.Run(kind, func(t *testing.T) {
+			_, parent, copyParent := captureNativeFixture(t)
+			ctx := context.Background()
+			until := time.Now().Add(250 * time.Millisecond)
+			want := until
+			if kind == "caller" {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithDeadline(ctx, want)
+				defer cancel()
+				until = want.Add(time.Minute)
+			}
+			calls, captured := 0, false
+			missing := errors.New("final capture fence lacks original deadline")
+			err := installcopy.WithCapture(ctx, copyParent, until, func(c context.Context) error {
+				calls++
+				if calls != 2 {
+					return nil
+				}
+				deadline, ok := c.Deadline()
+				if !ok || !deadline.Equal(want) {
+					return missing
+				}
+				<-c.Done()
+				return c.Err()
+			}, func(string, installcopy.Directory) error { captured = true; return nil })
+			var failure *installcopy.Failure
+			if calls != 2 || !captured || !errors.As(err, &failure) || !failure.Uncertain || !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("original capture bound did not reach final fence: calls=%d captured=%t missing=%t err=%v", calls, captured, errors.Is(err, missing), err)
+			}
+			if _, err := parent.File.Stat(); err != nil {
+				t.Fatal("original borrowed parent closed", err)
+			}
+		})
+	}
+}
