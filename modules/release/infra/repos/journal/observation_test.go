@@ -503,3 +503,71 @@ func TestObservationJournalNativeRetentionSharesGate(t *testing.T) {
 		})
 	}
 }
+
+// A copied observer becomes inert at scope closure, even if a later method or
+// original context is cancelled. These fixtures exercise no writer admission.
+func TestObservationJournalNativeClosedCallsCannotRetainUnknown(t *testing.T) {
+	if os.Getenv("FAROL_HELPER_NATIVE") != "1" {
+		t.Skip("Root-scheduled closed observation ownership regression")
+	}
+	for _, kind := range []string{"cancelled-method", "expired-method", "cancelled-original"} {
+		t.Run(kind, func(t *testing.T) {
+			root, err := os.MkdirTemp("", "farol-helper-observation-closed-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Log("RETAINED closed-observation fixture:", root)
+			f := newFixtureAt(t, root)
+			original := f.open(t)
+			binding := original.identity()
+			if err := original.Close(); err != nil {
+				t.Fatal(err)
+			}
+			borrowed, err := os.Open(f.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer borrowed.Close()
+			owner := &observationOwner{op: f.operation, binding: binding}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			var retained *Observation
+			var copied Observation
+			err = WithObservation(ctx, f.path, borrowed, binding, f.operation, owner, func(reader *Observation) error {
+				retained = reader
+				copied = *reader
+				_, err := reader.ReadHelper(ctx)
+				return err
+			})
+			if err != nil || retained == nil || owner.unknown {
+				t.Fatal("original observation did not finish cleanly")
+			}
+			checks := owner.checks
+			method, stop := context.WithTimeout(context.Background(), time.Minute)
+			defer stop()
+			switch kind {
+			case "cancelled-method":
+				stop()
+			case "expired-method":
+				method = laggingObservationContext{Context: context.Background(), until: time.Now().Add(-time.Second)}
+			case "cancelled-original":
+				cancel()
+			}
+			for _, reader := range []*Observation{retained, &copied} {
+				view, err := reader.ReadHelper(method)
+				if view != nil || !errors.Is(err, port.JournalClosed) {
+					t.Error("closed observer did not refuse as closed before active-read retention")
+				}
+				if owner.unknown || owner.checks != checks {
+					t.Error("closed observer changed original operation uncertainty or re-entered admission")
+				}
+			}
+			if _, err := borrowed.Stat(); err != nil {
+				t.Error("borrowed route closed")
+			}
+			if _, err := os.Lstat(filepath.Join(f.path, filename)); !errors.Is(err, os.ErrNotExist) {
+				t.Error("closed observation created a journal")
+			}
+		})
+	}
+}

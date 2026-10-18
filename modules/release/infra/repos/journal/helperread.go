@@ -39,6 +39,11 @@ func (r *Repo) readHelper(ctx context.Context, query func(readOptions) (*observa
 	}
 	r.gate.Lock()
 	defer r.gate.Unlock()
+	// A retained closed reader has no further influence over the operation,
+	// including when a later context is cancelled before any read can enter.
+	if r.closed {
+		return nil, port.JournalClosed
+	}
 	// Wait for the query's actual synchronous return (including its cleanup),
 	// then retain its failure alongside cancellation before releasing the gate.
 	defer func() {
@@ -52,9 +57,6 @@ func (r *Repo) readHelper(ctx context.Context, query func(readOptions) (*observa
 	}()
 	if err := bound(); err != nil {
 		return nil, err
-	}
-	if r.closed {
-		return nil, port.JournalClosed
 	}
 	if r.observation != nil {
 		if r.unknown || r.observation.JournalUnknown(r.operation) {
