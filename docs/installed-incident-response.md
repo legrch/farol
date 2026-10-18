@@ -66,6 +66,25 @@ checks remain effective.
 
 ## Evidence and follow-up
 
+The recovery backend separates stored archive observations from Computer
+readiness. After one Computer store constructor refuses, it can expose only
+the existing archive reader when that constructor explicitly confirms that no
+native description was acquired or that every acquired description was closed.
+Missing receipts, unknown cleanup or unknown publication still refuse startup.
+The original component error is retained; the store is not reopened or repaired.
+Profile, physical-root, current-owner and archive-claim checks remain effective.
+
+The Desktop consumes the original validated, immutable handshake capabilities.
+All five Computer methods must be present together or absent together. In the
+archive-only case it sends no Computer deactivation or publication probe, and
+folder queries remain unavailable. Partial or broadened recovery surfaces
+refuse. A live Computer store still requires its original publication ACK;
+unknown publication never selects the archive-only path after dispatch.
+Archive data stays `stored_unconfirmed`, with no predecessor drain, effect
+settlement, historical identity change or authority inferred from readable text.
+Disposable native cases cover a malformed Computer snapshot and an independently
+held Computer lock; they do not prove recovery of an existing installation.
+
 Retain the incident's failing observation, selected source and package identity,
 representative checks, exact installation result, and first successful live
 operation. Each incident should add regression coverage for its actual cause.

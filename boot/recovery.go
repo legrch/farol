@@ -19,7 +19,9 @@ type nativeApplication interface {
 	Close() error
 }
 
-// NativeRecovery owns only current Computer publication and local owner reads.
+// NativeRecovery owns current Computer publication when its store is available,
+// and independent local owner reads. A qualified Computer refusal advertises no
+// Computer methods; unknown descriptor cleanup still refuses the entire owner.
 // Publication remains an explicit state-changing Go CAS; this is not a read-only
 // profile inspector or proof that a predecessor finished. Old Chat, result,
 // mutation, Task, process and handoff owners are never opened or consumed.
@@ -40,6 +42,7 @@ type NativeRecovery struct {
 	ingress          *ComputerIngress
 	archive          *chatarchive.Service
 	historyAuthority *historyReadAuthority
+	computerRefusal  error
 }
 
 // NewNativeRecovery is selected before any full-runtime attempt. It opens only
@@ -69,15 +72,22 @@ func NewNativeRecovery(ctx context.Context, launch NativeLaunch, generation stri
 	}
 	r.store, err = accessrepo.Open(r.computer.Path, accessrepo.Binding{ProfileID: launch.Profile.ProfileID, OwnerID: launch.OwnerID, ComputerID: launch.ComputerID}, accessrepo.Clock{})
 	if err != nil {
-		return fail(err)
-	}
-	readers, err := newComputerReaders(launch.Home)
-	if err != nil {
-		return fail(err)
-	}
-	r.ingress, err = newOwnerIngress(r.store, readers, wire.Context{ProfileId: launch.Profile.ProfileID, BackendGeneration: generation}, launch.OwnerID, launch.ComputerID)
-	if err != nil {
-		return fail(err)
+		// The refused component remains refused. Only its explicit descriptor
+		// cleanup receipt can permit this independent read owner to continue.
+		// This creates no Computer authority and never opens the store again.
+		if !recoveryComputerCleanupConfirmed(err) {
+			return fail(err)
+		}
+		r.computerRefusal = err
+	} else {
+		readers, err := newComputerReaders(launch.Home)
+		if err != nil {
+			return fail(err)
+		}
+		r.ingress, err = newOwnerIngress(r.store, readers, wire.Context{ProfileId: launch.Profile.ProfileID, BackendGeneration: generation}, launch.OwnerID, launch.ComputerID)
+		if err != nil {
+			return fail(err)
+		}
 	}
 	if err := r.current(); err != nil {
 		return fail(err)
@@ -93,8 +103,27 @@ func NewNativeRecovery(ctx context.Context, launch NativeLaunch, generation stri
 	return r, nil
 }
 
+func recoveryComputerCleanupConfirmed(err error) bool {
+	if err == nil {
+		return false
+	}
+	return recoveryComputerCleanupKnown(accessrepo.ConstructorCleanup(err), accessrepo.CleanupUnknown(err), accessrepo.OutcomeUnknown(err))
+}
+
+func recoveryComputerCleanupKnown(cleanup accessrepo.ConstructorCleanupState, cleanupUnknown, publicationUnknown bool) bool {
+	if cleanupUnknown || publicationUnknown {
+		return false
+	}
+	switch cleanup {
+	case accessrepo.ConstructorCleanupNotAcquired, accessrepo.ConstructorCleanupConfirmed:
+		return true
+	default:
+		return false
+	}
+}
+
 func (r *NativeRecovery) current() error {
-	if r == nil || r.ctx == nil || r.profile == nil || r.ingress == nil || r.closed.Load() || r.ctx.Err() != nil {
+	if r == nil || r.ctx == nil || r.profile == nil || (r.ingress == nil && r.computerRefusal == nil) || r.closed.Load() || r.ctx.Err() != nil {
 		return errors.New("recovery_runtime_unavailable")
 	}
 	return r.qualify()
@@ -111,7 +140,9 @@ func (r *NativeRecovery) qualify() error {
 	return nil
 }
 
-// The five original Computer method contracts are unchanged. Archive Queries
+// The five original Computer methods exist together only for a live store.
+// A qualified constructor refusal exposes only the independent archive methods.
+// Their absence grants no cleanup, authority or old-effect settlement. Archive Queries
 // expose stored observations only, under the current selected profile owner.
 // An original publication ACK from this live generation is still required
 // before each Settings query. Task
@@ -125,7 +156,10 @@ func (r *NativeRecovery) Methods() (map[string]desktop.Method, error) {
 	if err := r.current(); err != nil {
 		return nil, err
 	}
-	methods := r.ingress.ownerMethods()
+	methods := make(map[string]desktop.Method)
+	if r.ingress != nil {
+		methods = r.ingress.ownerMethods()
+	}
 	for name, method := range chatArchiveMethods(r.archive) {
 		methods[name] = method
 	}
@@ -145,7 +179,9 @@ func (r *NativeRecovery) Methods() (map[string]desktop.Method, error) {
 			defer func() { stop(); cancel() }()
 			outcome, err := handle(call, request)
 			if changed := r.qualify(); changed != nil {
-				r.ingress.poison()
+				if r.ingress != nil {
+					r.ingress.poison()
+				}
 				return nil, errors.Join(err, changed)
 			}
 			if r.closed.Load() || r.ctx.Err() != nil || call.Err() != nil {

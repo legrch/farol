@@ -165,22 +165,42 @@ export async function startDesktopGoRecovery(
     available();
     return result;
   };
-  let authority: GoComputerAuthority;
+  let authority: GoComputerAuthority | undefined;
   let archive: RecoveryArchiveReader;
   let folderReadsAvailable = false;
   try {
-    authority = new GoComputerAuthority(
-      client,
-      client.verifiedContext,
-      Date.now,
-      "computer",
-    );
-    const withdrawn = await authority.withdraw();
-    await withdrawn.publish(settings);
-    // A known inactive folder publication must not veto independent private
-    // archive reads. Unknown/pending publication still closes this exact child.
-    folderReadsAvailable =
-      authority.settingsReadState(settings.computer.generation) === "available";
+    const capabilities = client.verifiedCapabilities;
+    const computer = [
+      "computer.authority.deactivate",
+      "computer.authority.publish",
+      "computer.settings.list",
+      "computer.settings.search",
+      "computer.settings.snapshot",
+    ];
+    const archiveMethods = ["chat.archive.list", "chat.archive.read"];
+    const allowed = new Set(["core.status", ...computer, ...archiveMethods]);
+    const selected = computer.filter((method) => capabilities.includes(method));
+    if (
+      capabilities.some((method) => !allowed.has(method)) ||
+      archiveMethods.some((method) => !capabilities.includes(method)) ||
+      (selected.length !== 0 && selected.length !== computer.length)
+    )
+      throw new BridgeError("refused", "invalid_recovery_capabilities");
+    if (selected.length === computer.length) {
+      authority = new GoComputerAuthority(
+        client,
+        client.verifiedContext,
+        Date.now,
+        "computer",
+      );
+      const withdrawn = await authority.withdraw();
+      await withdrawn.publish(settings);
+      // Known inactivity does not veto independent archive reads. An unknown
+      // publication still closes this exact child; it is never retried here.
+      folderReadsAvailable =
+        authority.settingsReadState(settings.computer.generation) ===
+        "available";
+    }
     archive = new RecoveryArchiveReader(client, client.verifiedContext);
   } catch (error) {
     try {
@@ -194,6 +214,11 @@ export async function startDesktopGoRecovery(
     throw error;
   }
   const generation = settings.computer.generation;
+  const computer = (): GoComputerAuthority => {
+    if (!authority)
+      throw new BridgeError("unavailable", "recovery_computer_unavailable");
+    return authority;
+  };
   return Object.freeze({
     isAvailable: () => {
       try {
@@ -209,11 +234,11 @@ export async function startDesktopGoRecovery(
       query(() => archive.read(key, digest)),
     list: (workspaceId: string, relativePath: string) =>
       query(() =>
-        authority.listSettings(generation, workspaceId, relativePath),
+        computer().listSettings(generation, workspaceId, relativePath),
       ),
     search: (workspaceId: string, relativePath: string, pattern: string) =>
       query(() =>
-        authority.searchSettings(
+        computer().searchSettings(
           generation,
           workspaceId,
           relativePath,
@@ -222,7 +247,7 @@ export async function startDesktopGoRecovery(
       ),
     snapshot: (workspaceId: string, relativePath: string) =>
       query(() =>
-        authority.snapshotSettings(generation, workspaceId, relativePath),
+        computer().snapshotSettings(generation, workspaceId, relativePath),
       ),
     close,
     closeAndObserve,
