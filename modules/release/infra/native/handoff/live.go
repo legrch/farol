@@ -131,6 +131,13 @@ func (l *Live) CheckMarker(ctx context.Context) error {
 // WaitExit observes only the already positively identified original process.
 // Its timeout/unknown state is never converted into a closed predecessor proof.
 func (l *Live) WaitExit(ctx context.Context, originalUntil time.Time) error {
+	if ctx == nil {
+		return ErrDependency
+	}
+	// The wait's original end covers final route verification and joined
+	// cleanup too. run independently keeps any earlier operation/caller bound.
+	ctx, cancel := context.WithDeadline(ctx, originalUntil)
+	defer cancel()
 	return l.run(ctx, func(_, _ int) error {
 		if l.waitAttempt {
 			return ErrProcessUnknown
