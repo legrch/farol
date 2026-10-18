@@ -542,12 +542,20 @@ async function checkHealthStatus(run, mode, expected) {
   assert.ok(before);
   const settingsHash = hash(await fs.readFile(path.join(state, "config.json")));
   await tunnelStore.controlHealth(mode);
-  // Controlled power event, not hardware sleep qualification. It invokes the
-  // original background observation schedule, without sending an owner command.
-  await run.application.evaluate(({ powerMonitor }) => {
-    powerMonitor.emit("suspend");
-    powerMonitor.emit("resume");
-  });
+  // Wait for a fresh read through the original passive tracker. A suspend
+  // fallback or request-start counter cannot certify the selected Go result.
+  const settlement = await bounded(
+    run.application.evaluate(
+      () =>
+        new Promise((resolve, reject) => {
+          if (!process.emit("farol-e2e-observe-connection", resolve))
+            reject(new Error("HEALTH_OBSERVER_SEAM_UNAVAILABLE"));
+        }),
+    ),
+    "HEALTH_OBSERVATION_SETTLEMENT_UNKNOWN",
+  );
+  assert.equal(settlement.settled, true);
+  assert.equal(settlement.view.state, expected);
   await poll(
     receiptList,
     (values) =>
@@ -555,7 +563,12 @@ async function checkHealthStatus(run, mode, expected) {
         (v) =>
           v.id === before.id &&
           v.healthRequests > before.healthRequests &&
-          v.lastHealthMode === mode,
+          v.lastHealthMode === mode &&
+          v.lastHealthSettlement?.sequence > before.healthRequests &&
+          v.lastHealthSettlement.mode === mode &&
+          v.lastHealthSettlement.outcome ===
+            (mode === "hold" ? "aborted" : "completed") &&
+          (mode !== "hold" || v.lastHealthSettlement.durationMillis >= 900),
       ),
     "HEALTH_STATUS_READ_NOT_OBSERVED",
   );
@@ -592,13 +605,14 @@ async function checkHealthStatus(run, mode, expected) {
   await hidden(run);
   run.observations.push({
     healthMode: mode,
+    selectedObservationSettlement: settlement,
     healthStatus: current.connectionStatus,
     originalHelperPid: before.pid,
     backendPid: run.backend.pid,
     receipts: after,
     settingsUnchanged: true,
     limits:
-      "Synthetic producer health and power events; actual hidden Electron/Go IPC/UI, no Tray or upstream/OS-sleep evidence.",
+      "Synthetic producer health with actual passive-observation settlement; hidden Electron/Go IPC/UI, no Tray or upstream/OS-sleep evidence.",
   });
   await save();
 }

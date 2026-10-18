@@ -145,6 +145,22 @@ it("observes and controls the original fixture in the runtime's nested state sto
       healthRequests: 12,
       lastHealthMode: "hold",
     });
+    // A request counter alone is not settlement evidence. Require the
+    // selected held HTTP read to have actually aborted before accepting it.
+    let settled;
+    for (let attempt = 0; attempt < 200; attempt++) {
+      settled = (await store.receipts())[0];
+      if (settled.lastHealthSettlement?.sequence === 12) break;
+      await delay(10);
+    }
+    expect(settled).toMatchObject({
+      healthCompleted: 11,
+      healthAborted: 1,
+      lastHealthSettlement: { sequence: 12, mode: "hold", outcome: "aborted" },
+    });
+    expect(settled.lastHealthSettlement.durationMillis).toBeGreaterThanOrEqual(
+      900,
+    );
     quitRequested = true;
     expect(child.kill("SIGTERM")).toBe(true);
     expect(await ended).toEqual({ code: 0, signal: null });

@@ -4595,6 +4595,7 @@ function captureConnectorHealth(): ConnectorHealthCapture | null {
     !runtime ||
     runtime.state === "outcome_unknown" ||
     !connector.isRunning() ||
+    connector.getTunnelObservation() !== null ||
     connector.hasUnresolvedEffect() ||
     runtime.buildId !== buildIdentity.buildId ||
     binding.buildId !== buildIdentity.buildId ||
@@ -4743,6 +4744,40 @@ function startConnectorTransportWatch(): void {
   connectorStatusTimer.unref();
   // Starting a status projection does not eagerly enter recovery observation.
   observeStatus();
+  // The existing isolated-home proof is checked before this join starts.
+  // This native-test seam invokes only the same passive observer as the timer;
+  // it publishes no authority and is absent from ordinary owner launches.
+  if (isolatedE2EHome !== undefined)
+    process.addListener("farol-e2e-observe-connection", (reply: unknown) => {
+      if (typeof reply !== "function") return;
+      void (async () => {
+        const original = captureConnectorHealth();
+        if (!original) return { settled: false };
+        let interrupted = false;
+        const interrupt = () => {
+          interrupted = true;
+        };
+        powerMonitor.on("suspend", interrupt);
+        powerMonitor.on("resume", interrupt);
+        try {
+          // Settle any earlier read, then perform one after the test selected
+          // its producer response. Coalescing cannot certify an older mode.
+          await connectorConnection.sample();
+          await connectorConnection.sample();
+          return interrupted || !connectorHealthCurrent(original)
+            ? { settled: false }
+            : { settled: true, view: currentConnectionStatus() };
+        } finally {
+          powerMonitor.removeListener("suspend", interrupt);
+          powerMonitor.removeListener("resume", interrupt);
+        }
+      })()
+        .then(
+          (value) => reply(value),
+          () => reply({ settled: false }),
+        )
+        .catch(() => undefined);
+    });
   powerMonitor.on("suspend", () => {
     connectorConnection.suspend();
     currentConnectionStatus();
@@ -12259,6 +12294,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     connectorTransportWatch?.close();
     if (connectorTransportTimer) clearInterval(connectorTransportTimer);
     connectorConnection.close();
+    if (isolatedE2EHome !== undefined)
+      process.removeAllListeners("farol-e2e-observe-connection");
     if (connectorStatusTimer) clearInterval(connectorStatusTimer);
     if (installedUpdateTimer) clearInterval(installedUpdateTimer);
     quitDrain.onBeforeQuit(event);

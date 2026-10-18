@@ -24,6 +24,9 @@ if (process.argv[2] === "run") {
     readyRequests: 0,
     metricsRequests: 0,
     healthRequests: 0,
+    healthCompleted: 0,
+    healthAborted: 0,
+    lastHealthSettlement: null,
     lastHealthMode: null,
     aborted: 0,
     lastMode: null,
@@ -83,6 +86,25 @@ if (process.argv[2] === "run") {
   const health = (request, response) => {
     if (++record.healthRequests > 128) process.exit(67);
     const selected = healthMode();
+    const sequence = record.healthRequests;
+    const started = process.hrtime.bigint();
+    const settle = (outcome) => {
+      record[outcome === "completed" ? "healthCompleted" : "healthAborted"]++;
+      if ((record.lastHealthSettlement?.sequence ?? 0) <= sequence)
+        record.lastHealthSettlement = {
+          sequence,
+          mode: selected,
+          outcome,
+          durationMillis: Number(
+            (process.hrtime.bigint() - started) / 1000000n,
+          ),
+        };
+      save();
+    };
+    response.once("finish", () => settle("completed"));
+    response.once("close", () => {
+      if (!response.writableFinished) settle("aborted");
+    });
     record.lastHealthMode = selected;
     save();
     if (selected === "hold") return;
