@@ -180,8 +180,12 @@ func TestNativeLifecycleInspectionRejectsActiveOwnerNonblocking(t *testing.T) {
 			}
 		}
 		before := nativeInspectionInventory(t, root.Path)
-		if got, err := Inspect(context.Background(), root, inspectionLimits); got != nil || !errors.Is(err, Refused) {
-			t.Fatal("active writer inspected", got, err)
+		got, err := Inspect(context.Background(), root, inspectionLimits)
+		assertInspectionDiagnostic(t, got, err, Refused, InspectionClaimLock)
+		// Only this fixture knows it holds a writer. The reason itself proves
+		// neither a live owner nor permission to retry or replace the claim.
+		if !errors.Is(err, unix.EWOULDBLOCK) {
+			t.Fatal("original flock cause lost", err)
 		}
 		assertNativeInspectionInventory(t, before, nativeInspectionInventory(t, root.Path))
 	}
@@ -281,9 +285,32 @@ func TestNativeLifecycleInspectionRejectsHostileEntriesAndBounds(t *testing.T) {
 			}
 			before := nativeInspectionInventory(t, physicalPath)
 			got, err := Inspect(context.Background(), root, limits)
-			var classified *Failure
-			if got != nil || !errors.As(err, &classified) || classified.OutcomeUnknown {
-				t.Fatal("hostile/overflow entry accepted or read claimed publication", got, err)
+			code, reason := Unavailable, InspectionSnapshotRead
+			switch name {
+			case "missing_claim", "claim_symlink":
+				code, reason = Refused, InspectionClaimOpen
+			case "claim_hardlink", "claim_fifo", "claim_directory", "claim_mode":
+				code, reason = Refused, InspectionClaimMetadata
+			case "missing_root", "root_symlink", "ancestor_symlink":
+				code, reason = Refused, InspectionRootRoute
+			case "root_mode":
+				code, reason = Refused, InspectionRootMetadata
+			case "root_identity":
+				code, reason = Refused, InspectionRootIdentity
+			case "owner_identity", "relative_root", "unclean_root":
+				code, reason = Invalid, InspectionRootInvalid
+			case "wrong_profile", "crossed_scope":
+				code, reason = Refused, InspectionSnapshotProfileMismatch
+			case "stored_root":
+				code, reason = Refused, InspectionSnapshotRootMismatch
+			case "noncanonical", "record_overflow":
+				code, reason = Invalid, InspectionSnapshotInvalid
+			}
+			diagnostic := assertInspectionDiagnostic(t, got, err, code, reason)
+			if name == "missing_claim" || name == "missing_snapshot" || name == "missing_root" {
+				if !errors.Is(diagnostic, os.ErrNotExist) {
+					t.Fatal("available original missing-entry cause lost", err)
+				}
 			}
 			assertNativeInspectionInventory(t, before, nativeInspectionInventory(t, physicalPath))
 		}) {
@@ -361,15 +388,56 @@ func TestNativeLifecycleInspectionRejectsChangingBytesAndCancellation(t *testing
 				}
 			}}
 			got, err := inspectLockedSnapshot(checkpoint, d, inspectionLimits)
-			wantCode := Unavailable
-			if name == "cancelled" {
-				wantCode = Cancelled
+			wantCode, reason := Unavailable, InspectionSnapshotChanged
+			switch name {
+			case "cancelled":
+				wantCode, reason = Cancelled, InspectionCancelled
+			case "claim_replaced", "snapshot_mode", "snapshot_hardlink", "root_replaced":
+				// disk.read has already classified these refusals. Do not infer
+				// an unavailable syscall cause or a finer reason inside it.
+				reason = InspectionSnapshotRead
 			}
-			if got != nil || !errors.Is(err, wantCode) {
-				t.Fatal("changed/cancelled inspection escaped", got, err)
+			assertInspectionDiagnostic(t, got, err, wantCode, reason)
+			if name == "cancelled" && !errors.Is(err, context.Canceled) {
+				t.Fatal("original cancellation cause lost", err)
 			}
 		}) {
 			t.Fatal("native stability check failed; stop and retain fixture evidence")
 		}
 	}
+}
+
+func TestNativeLifecycleInspectionDiagnosticClaimRoute(t *testing.T) {
+	requireNativeLifecycleInspection(t)
+	root, _ := nativeInspectionFixture(t, inspectionEmptyRecord())
+	before := nativeInspectionInventory(t, root.Path)
+	// Change only this disposable fixture at the existing post-root checkpoint.
+	// openInspectionDisk must refuse its final route check and close its own
+	// descriptors synchronously. This injects no Close failure.
+	var mutationErr error
+	checkpoint := &nativeInspectionMutationContext{Context: context.Background(), mutate: func() {
+		mutationErr = os.Rename(root.Path, root.Path+".retained")
+		if mutationErr == nil {
+			mutationErr = os.Mkdir(root.Path, 0700)
+		}
+	}}
+	d, err := openInspectionDisk(checkpoint, root)
+	// Report fixture setup failures only after openInspectionDisk has returned
+	// through its synchronous cleanup, or after closing an unexpected result.
+	if d != nil {
+		if closed := d.close(); closed != nil {
+			t.Fatal("fixture disk cleanup failed", closed)
+		}
+	}
+	if mutationErr != nil {
+		t.Fatal("fixture route mutation failed", mutationErr)
+	}
+	if d != nil {
+		t.Fatal("changed route returned a disk")
+	}
+	diagnostic := assertInspectionDiagnostic(t, nil, err, Refused, InspectionClaimRoute)
+	if !errors.Is(diagnostic.cause, Unavailable) {
+		t.Fatal("actual classified route-check cause lost", err)
+	}
+	assertNativeInspectionInventory(t, before, nativeInspectionInventory(t, root.Path+".retained"))
 }

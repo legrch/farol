@@ -47,11 +47,14 @@ type InspectionRetirement struct {
 // fence. Lock availability proves only serialization during this read, not clean
 // retirement. Neither success nor failure discharges any preexisting unknown.
 func Inspect(ctx context.Context, root Root, limits Limits) (*Inspection, error) {
-	if ctx == nil || ctx.Err() != nil {
-		return nil, failure(Cancelled, false)
+	if ctx == nil {
+		return nil, inspectionFailure(&Failure{Code: Cancelled}, InspectionCancelled)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, inspectionFailure(&Failure{Code: Cancelled}, InspectionCancelled, err)
 	}
 	if !validID(root.ProfileID) || !validLimits(limits) {
-		return nil, failure(Invalid, false)
+		return nil, inspectionFailure(&Failure{Code: Invalid}, InspectionInputInvalid)
 	}
 	return inspectClosedSnapshot(ctx, root, limits)
 }
@@ -61,10 +64,13 @@ func Inspect(ctx context.Context, root Root, limits Limits) (*Inspection, error)
 func inspectRecord(raw []byte, root Root, limits Limits) (*Inspection, error) {
 	value, err := decode(raw, limits)
 	if err != nil {
-		return nil, failure(Invalid, false)
+		return nil, inspectionFailure(&Failure{Code: Invalid}, InspectionSnapshotInvalid, err)
 	}
-	if value.Root != root.identity() || value.Scope.ProfileID != root.ProfileID {
-		return nil, failure(Refused, false)
+	if value.Root != root.identity() {
+		return nil, inspectionFailure(&Failure{Code: Refused}, InspectionSnapshotRootMismatch)
+	}
+	if value.Scope.ProfileID != root.ProfileID {
+		return nil, inspectionFailure(&Failure{Code: Refused}, InspectionSnapshotProfileMismatch)
 	}
 	turns := 0
 	for _, w := range value.Writes {
