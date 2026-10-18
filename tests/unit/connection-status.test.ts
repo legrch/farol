@@ -24,17 +24,35 @@ const sample = (): ComputerConnectorHealthState => ({
   lastPollSuccessMillis: "199000",
   localReady: true,
 });
+// Injected clocks and Go-shaped values exercise presentation only, not a live
+// provider, native runtime, or the operating system clock.
+const sampleAt = (
+  wall: number,
+  changes: Partial<ComputerConnectorHealthState> = {},
+): ComputerConnectorHealthState => ({
+  ...sample(),
+  sampleAtMillis: String(wall),
+  observedAtMillis: String(wall),
+  validUntilMillis: String(wall + 45000),
+  ...changes,
+});
 function fixture() {
   let wall = 200000,
     mono = 0,
-    current = true;
-  const original = {};
+    current = true,
+    owner = "original";
+  const capture = vi.fn((): { owner: string } | null => ({ owner }));
+  const currentOwner = vi.fn(
+    (v: { owner: string }) => v.owner === owner && current,
+  );
   const observe = vi.fn(
-    async (_: object): Promise<ComputerConnectorHealthState | null> => sample(),
+    async (_: {
+      owner: string;
+    }): Promise<ComputerConnectorHealthState | null> => sample(),
   );
   const tracker = new ConnectionStatusTracker({
-    capture: () => original,
-    current: (v) => v === original && current,
+    capture,
+    current: currentOwner,
     observe,
     now: () => wall,
     monotonic: () => mono,
@@ -42,6 +60,11 @@ function fixture() {
   return {
     tracker,
     observe,
+    capture,
+    currentOwner,
+    replaceOwner() {
+      owner = "replacement";
+    },
     clock(w: number, m: number) {
       wall = w;
       mono = m;
@@ -199,3 +222,358 @@ it("a clock discontinuity permanently retires the cached observation", async () 
   f.clock(200000, 0);
   expect(f.tracker.view().state).toBe("unobserved");
 });
+
+it("does not restore an expired successful poll after rollback and fresh resampling", async () => {
+  const f = fixture();
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("recent_transport");
+  f.clock(301000, 101000);
+  expect(f.tracker.view().state).toBe("unobserved");
+  f.clock(210000, 102000);
+  f.observe.mockResolvedValueOnce(sampleAt(210000));
+  await f.tracker.sample();
+  expect(f.observe).toHaveBeenCalledTimes(2);
+  expect(f.tracker.view().state).toBe("unobserved");
+});
+
+it("retains clock origin across normal samples and an empty cache", async () => {
+  const f = fixture();
+  await f.tracker.sample();
+  for (const [wall, mono] of [
+    [220000, 20000],
+    [240000, 40000],
+  ] as const) {
+    f.clock(wall, mono);
+    f.observe.mockResolvedValueOnce(sampleAt(wall));
+    await f.tracker.sample();
+    expect(f.tracker.view().state).toBe("recent_transport");
+  }
+  f.clock(301000, 101000);
+  f.observe.mockResolvedValueOnce(null);
+  await f.tracker.sample();
+  f.clock(210000, 102000);
+  f.observe.mockResolvedValueOnce(sampleAt(210000));
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+});
+
+it.each([
+  "expiry",
+  "absent",
+  "refused",
+  "capture-null",
+  "capture-error",
+  "invalidate",
+  "wake",
+] as const)(
+  "retains pre-discontinuity proof after %s clears the cache",
+  async (clear) => {
+    const f = fixture();
+    await f.tracker.sample();
+    f.clock(301000, 101000);
+    if (clear === "expiry") f.tracker.view();
+    if (clear === "absent") {
+      f.observe.mockResolvedValueOnce(null);
+      await f.tracker.sample();
+    }
+    if (clear === "refused") {
+      f.observe.mockRejectedValueOnce(Error("refused"));
+      await f.tracker.sample();
+    }
+    if (clear === "capture-null") {
+      f.capture.mockReturnValueOnce(null);
+      await f.tracker.sample();
+    }
+    if (clear === "capture-error") {
+      f.capture.mockImplementationOnce(() => {
+        throw Error("failed");
+      });
+      await f.tracker.sample();
+    }
+    if (clear === "invalidate") f.tracker.invalidate();
+    if (clear === "wake") {
+      f.tracker.suspend();
+      f.tracker.resume();
+    }
+    f.clock(210000, 102000);
+    f.observe.mockResolvedValueOnce(sampleAt(210000));
+    await f.tracker.sample();
+    expect(f.tracker.view().state).toBe("unobserved");
+  },
+);
+
+it("normalization, nulls, refusals and invalidation cannot restore a retired proof", async () => {
+  const f = fixture();
+  await f.tracker.sample();
+  f.clock(210000, 1000);
+  expect(f.tracker.view().state).toBe("unobserved");
+  for (let step = 0; step < 4; step++) {
+    const wall = 200000 + step * 1000;
+    f.clock(wall, step * 1000);
+    f.observe.mockResolvedValueOnce(sampleAt(wall));
+    await f.tracker.sample();
+    expect(f.tracker.view().state).toBe("unobserved");
+    f.observe.mockResolvedValueOnce(null);
+    await f.tracker.sample();
+    f.observe.mockRejectedValueOnce(Error("refused"));
+    await f.tracker.sample();
+    f.tracker.invalidate();
+    f.tracker.suspend();
+    f.tracker.resume();
+  }
+  f.observe.mockResolvedValueOnce(sampleAt(203000));
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+});
+
+it("a discontinuity during a refused read still retires the observed poll proof", async () => {
+  const f = fixture();
+  await f.tracker.sample();
+  f.observe.mockImplementationOnce(async () => {
+    f.clock(210000, 1000);
+    throw Error("refused");
+  });
+  await f.tracker.sample();
+  f.clock(200000, 0);
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+});
+
+it("retires a poll proof observed in a nonpositive Go result", async () => {
+  const f = fixture();
+  f.observe.mockResolvedValueOnce({
+    ...sample(),
+    state: "unavailable",
+    reason: "http_unavailable",
+  });
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unavailable");
+  f.tracker.invalidate();
+  f.clock(210000, 1000);
+  f.observe.mockResolvedValueOnce(sampleAt(210000));
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+});
+
+it("a new successful poll in a stable current read restores the Go positive", async () => {
+  const f = fixture();
+  await f.tracker.sample();
+  f.clock(301000, 101000);
+  expect(f.tracker.view().state).toBe("unobserved");
+  f.clock(210000, 102000);
+  f.observe.mockResolvedValueOnce(sampleAt(210000));
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+  f.clock(211000, 103000);
+  f.observe.mockResolvedValueOnce(
+    sampleAt(211000, { lastPollSuccessMillis: "210500" }),
+  );
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("recent_transport");
+  f.clock(212000, 104000);
+  f.observe.mockResolvedValueOnce(sampleAt(212000));
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+});
+
+it.each([
+  "checking",
+  "reconnecting",
+  "unavailable",
+  "unobserved",
+  "action_required",
+  "stopped",
+] as const)(
+  "keeps nonpositive Go state %s and historic uploads truthful after discontinuity",
+  async (state) => {
+    const f = fixture();
+    await f.tracker.sample();
+    f.clock(210000, 1000);
+    const value = sampleAt(210000, {
+      state,
+      lastResponseAcceptedMillis: "150000",
+    });
+    f.observe.mockResolvedValueOnce(value);
+    await f.tracker.sample();
+    expect(f.tracker.view().state).toBe(state);
+    expect(f.tracker.view().delivery).toContain("1970-01-01T00:02:30.000Z");
+    expect(value.state).toBe(state);
+    f.observe.mockResolvedValueOnce({ ...value, state: "recent_transport" });
+    await f.tracker.sample();
+    const withheld = f.tracker.view();
+    expect(withheld.state).toBe("unobserved");
+    expect(withheld.delivery).toContain("1970-01-01T00:02:30.000Z");
+    expect(withheld.delivery).toContain("does not confirm current attachment");
+  },
+);
+
+it.each([
+  "profileId",
+  "backendGeneration",
+  "buildId",
+  "runtimeId",
+  "connectorGeneration",
+  "expectedInstanceId",
+] as const)(
+  "separates the full runtime proof identity at %s",
+  async (field) => {
+    const f = fixture();
+    await f.tracker.sample();
+    f.clock(210000, 1000);
+    f.observe.mockResolvedValueOnce(
+      sampleAt(210000, { binding: { ...binding } }),
+    );
+    await f.tracker.sample();
+    expect(f.tracker.view().state).toBe("unobserved");
+    f.replaceOwner();
+    const replacement = sampleAt(
+      210000,
+      field === "expectedInstanceId"
+        ? { expectedInstanceId: "replacement" }
+        : { binding: { ...binding, [field]: "replacement" } },
+    );
+    f.observe.mockResolvedValueOnce(replacement);
+    await f.tracker.sample();
+    expect(f.tracker.view().state).toBe("recent_transport");
+    f.retire();
+    expect(f.tracker.view().state).toBe("unobserved");
+  },
+);
+
+it("a foreign in-flight owner cannot change the retired proof or lend its value to a replacement", async () => {
+  const f = fixture();
+  await f.tracker.sample();
+  f.clock(210000, 1000);
+  expect(f.tracker.view().state).toBe("unobserved");
+  let release!: (value: ComputerConnectorHealthState) => void;
+  f.observe.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  const pending = f.tracker.sample();
+  f.replaceOwner();
+  release(
+    sampleAt(210000, { binding: { ...binding, runtimeId: "replacement" } }),
+  );
+  await pending;
+  expect(f.tracker.view().state).toBe("unobserved");
+  f.observe.mockResolvedValueOnce(sampleAt(210000));
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+  f.observe.mockResolvedValueOnce(
+    sampleAt(210000, { binding: { ...binding, runtimeId: "replacement" } }),
+  );
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("recent_transport");
+});
+
+it("stale and delayed new-success reads cannot replace the retired proof", async () => {
+  const f = fixture();
+  await f.tracker.sample();
+  f.clock(210000, 1000);
+  expect(f.tracker.view().state).toBe("unobserved");
+  f.clock(260000, 51000);
+  f.observe.mockResolvedValueOnce(
+    sampleAt(210000, { lastPollSuccessMillis: "209000" }),
+  );
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+  f.observe.mockImplementationOnce(async () => {
+    f.clock(305000, 96000);
+    return sampleAt(260000, { lastPollSuccessMillis: "259000" });
+  });
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+  f.clock(210000, 97000);
+  f.observe.mockResolvedValueOnce(sampleAt(210000));
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+});
+
+it("post-wake repeat sampling cannot restore a previously observed retired proof", async () => {
+  const f = fixture();
+  await f.tracker.sample();
+  let release!: (value: ComputerConnectorHealthState) => void;
+  f.observe.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  const pending = f.tracker.sample();
+  f.tracker.suspend();
+  f.clock(210000, 1000);
+  f.tracker.resume();
+  f.observe.mockResolvedValueOnce(sampleAt(210000));
+  void f.tracker.sample();
+  release(sampleAt(210000, { lastPollSuccessMillis: "209000" }));
+  await pending;
+  await f.tracker.sample();
+  expect(f.observe).toHaveBeenCalledTimes(3);
+  expect(f.tracker.view().state).toBe("unobserved");
+  f.observe.mockResolvedValueOnce(
+    sampleAt(210000, { lastPollSuccessMillis: "209000" }),
+  );
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("recent_transport");
+});
+
+it("a clock jump during a request cannot establish a new success proof", async () => {
+  const f = fixture();
+  await f.tracker.sample();
+  f.clock(201000, 1000);
+  f.observe.mockImplementationOnce(async () => {
+    f.clock(210000, 2000);
+    return sampleAt(210000, { lastPollSuccessMillis: "209000" });
+  });
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+  f.observe.mockResolvedValueOnce(sampleAt(210000));
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+  f.observe.mockResolvedValueOnce(
+    sampleAt(210000, { lastPollSuccessMillis: "209000" }),
+  );
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("recent_transport");
+});
+
+it("resampling cannot reset away accumulated wall/monotonic drift", async () => {
+  const f = fixture();
+  await f.tracker.sample();
+  for (const [wall, mono] of [
+    [201500, 1000],
+    [203000, 2000],
+  ] as const) {
+    f.clock(wall, mono);
+    f.observe.mockResolvedValueOnce(sampleAt(wall));
+    await f.tracker.sample();
+    expect(f.tracker.view().state).toBe("recent_transport");
+  }
+  f.clock(204500, 3000);
+  f.observe.mockResolvedValueOnce(sampleAt(204500));
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+});
+
+it.each([
+  [NaN, 0],
+  [200000, NaN],
+  [200000, Infinity],
+  [200000, -1],
+] as const)(
+  "invalid clock %j cannot erase the poll proof with an empty cache",
+  async (wall, mono) => {
+    const f = fixture();
+    await f.tracker.sample();
+    f.tracker.invalidate();
+    f.clock(wall, mono);
+    await f.tracker.sample();
+    expect(f.observe).toHaveBeenCalledTimes(1);
+    f.clock(200000, 0);
+    await f.tracker.sample();
+    expect(f.tracker.view().state).toBe("unobserved");
+  },
+);
