@@ -50,7 +50,7 @@ func TestObservationJournalDeterministicNoWriterOrRenewal(t *testing.T) {
 	if err == nil || called || a.checks != 0 {
 		t.Fatal("expired observation entered native work", err)
 	}
-	reader := &Observation{repo: &Repo{gate: &a.gate, closed: true}}
+	reader := &Observation{repo: &Repo{gate: &a.gate, closed: true}, original: context.Background(), until: time.Now().Add(time.Minute)}
 	if _, writer := any(reader).(port.HelperJournalRepository); writer {
 		t.Fatal("reader exported CAS")
 	}
@@ -294,6 +294,86 @@ func TestObservationCallbackFailuresKeepPrivateCauses(t *testing.T) {
 			entries, err := os.ReadDir(f.path)
 			if err != nil || len(entries) != 0 {
 				t.Fatal("callback failure left a write or repair")
+			}
+		})
+	}
+}
+
+// Timer delivery may lag the captured deadline; a fresh method context must
+// never extend this enclosing borrow or re-enter admission after it expires.
+type laggingObservationContext struct {
+	context.Context
+	until time.Time
+}
+
+func (c laggingObservationContext) Deadline() (time.Time, bool) { return c.until, true }
+
+func TestObservationJournalNativeCannotRenewScope(t *testing.T) {
+	if os.Getenv("FAROL_HELPER_NATIVE") != "1" {
+		t.Skip("Root-scheduled physical journal scope-bound regression")
+	}
+	for _, kind := range []string{"cancelled", "expired-without-timer-notification"} {
+		t.Run(kind, func(t *testing.T) {
+			root, err := os.MkdirTemp("", "farol-helper-observation-bound-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Log("RETAINED observation-bound fixture:", root)
+			f := newFixtureAt(t, root)
+			original := f.open(t)
+			binding := original.identity()
+			if err := original.Close(); err != nil {
+				t.Fatal(err)
+			}
+			borrowed, err := os.Open(f.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer borrowed.Close()
+			owner := &observationOwner{op: f.operation, binding: binding}
+			scoped, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			var scope context.Context = scoped
+			until := time.Now().Add(250 * time.Millisecond)
+			if kind != "cancelled" {
+				scope = laggingObservationContext{Context: context.Background(), until: until}
+			}
+			entered := false
+			var readErr error
+			result := WithObservation(scope, f.path, borrowed, binding, f.operation, owner, func(reader *Observation) error {
+				entered = true
+				if kind == "cancelled" {
+					cancel()
+				} else {
+					time.Sleep(time.Until(until) + 2*time.Millisecond)
+				}
+				before := owner.checks
+				fresh, stop := context.WithTimeout(context.Background(), time.Minute)
+				defer stop()
+				view, err := reader.ReadHelper(fresh)
+				readErr = err
+				if view != nil || !errors.Is(err, port.JournalCancelled) {
+					t.Error("fresh method context renewed the expired enclosing observation")
+				}
+				if owner.checks != before {
+					t.Error("expired enclosing scope re-entered physical admission")
+				}
+				return err
+			})
+			if !entered || readErr == nil || result == nil {
+				t.Fatal("original scope or per-method refusal not observed")
+			}
+			if kind == "cancelled" && !errors.Is(readErr, context.Canceled) {
+				t.Error("original cancellation cause lost")
+			}
+			if kind != "cancelled" && !errors.Is(readErr, context.DeadlineExceeded) {
+				t.Error("captured absolute deadline cause lost")
+			}
+			if _, err := borrowed.Stat(); err != nil {
+				t.Fatal("borrowed route closed")
+			}
+			if _, err := os.Lstat(filepath.Join(f.path, filename)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("scope-bound regression created a journal")
 			}
 		})
 	}

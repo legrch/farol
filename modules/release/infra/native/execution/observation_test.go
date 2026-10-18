@@ -3,6 +3,8 @@ package execution
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -198,5 +200,58 @@ func TestObservationScopeKeepsOriginalAbsoluteBound(t *testing.T) {
 	})
 	if err == nil || calls != 0 || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("expired original deadline renewed", err, calls)
+	}
+}
+
+// Callback errors are private provenance, not public diagnostics or admission.
+func TestObservationCallbackDiagnosticsStayPrivate(t *testing.T) {
+	for _, kind := range []string{"plain", "path", "joined", "opaque", "typed-nil", "classified"} {
+		t.Run(kind, func(t *testing.T) {
+			c, journal := observationFixture()
+			private := errors.New("private callback diagnostic")
+			path := &os.PathError{Op: "observe", Path: "/private/callback-resource", Err: private}
+			classified := &port.HelperRecoveryFailure{Code: "refused", Phase: "prepared", Cause: private}
+			callback := error(private)
+			switch kind {
+			case "path":
+				callback = path
+			case "joined":
+				callback = errors.Join(path, classified)
+			case "opaque":
+				callback = fmt.Errorf("private opaque diagnostic: %w", errors.Join(path, classified))
+			case "typed-nil":
+				var missing *port.HelperRecoveryFailure
+				callback = missing
+			case "classified":
+				callback = classified
+			}
+			result := observationScope(context.Background(), c, func(port.HelperInstallationObservation) error { return callback })
+			failure, ok := result.(*port.HelperRecoveryFailure)
+			if !ok || failure == nil || result.Error() != "helper_recovery_failure" {
+				t.Fatal("callback did not return a closed classified failure")
+			}
+			if kind == "classified" {
+				if failure != classified {
+					t.Fatal("original classified callback was replaced")
+				}
+			} else if failure.Code != "internal" || !failure.Internal || failure.Uncertain {
+				t.Fatal("opaque callback inherited a nested refusal or effect classification")
+			}
+			if !errors.Is(result, callback) {
+				t.Fatal("original private callback cause lost")
+			}
+			if kind != "typed-nil" && !errors.Is(result, private) {
+				t.Fatal("private sentinel lost")
+			}
+			if kind == "path" || kind == "joined" || kind == "opaque" {
+				var got *os.PathError
+				if !errors.As(result, &got) || got != path {
+					t.Fatal("private native cause lost")
+				}
+			}
+			if journal.writes != 0 || journal.closed {
+				t.Fatal("callback failure mutated or closed borrowed journal")
+			}
+		})
 	}
 }

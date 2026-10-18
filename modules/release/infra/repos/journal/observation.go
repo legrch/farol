@@ -63,7 +63,7 @@ func WithObservation(ctx context.Context, directory string, borrowed *os.File, b
 			entered = errors.Join(port.JournalCancelled, ctx.Err())
 			return
 		}
-		if err := fn(&Observation{repo: r}); err != nil {
+		if err := fn(&Observation{repo: r, original: ctx, until: until}); err != nil {
 			entered = journalFailure(port.JournalUnavailable, err)
 		}
 	})
@@ -101,11 +101,41 @@ func joinObservationResults(all ...error) error {
 // Observation borrows a read-only view of one repository scope. Copies share
 // the original serialization gate and refuse after that scope closes.
 // Its zero value has no repository or native authority.
-type Observation struct{ repo *Repo }
+type Observation struct {
+	repo     *Repo
+	original context.Context
+	until    time.Time
+}
 
 func (o *Observation) ReadHelper(ctx context.Context) (*port.JournalView, error) {
-	if o == nil || o.repo == nil {
+	if o == nil || o.repo == nil || o.original == nil || o.until.IsZero() || ctx == nil {
 		return nil, port.JournalInvalid
 	}
-	return o.repo.ReadHelper(ctx)
+	if until, ok := ctx.Deadline(); !ok || until.IsZero() {
+		return nil, port.JournalInvalid
+	}
+	bounded, cancel := context.WithDeadline(ctx, o.until)
+	stop := context.AfterFunc(o.original, cancel)
+	defer stop()
+	defer cancel()
+	return o.repo.ReadHelper(observationContext{Context: bounded, original: o.original, until: o.until})
+}
+
+// Keep the enclosing cancellation and captured absolute deadline in every
+// existing repository bound check, including before/after synchronous I/O.
+// Err enforces expiry even when context timer notification has not arrived.
+type observationContext struct {
+	context.Context
+	original context.Context
+	until    time.Time
+}
+
+func (c observationContext) Err() error {
+	if err := c.original.Err(); err != nil {
+		return err
+	}
+	if !time.Now().Before(c.until) {
+		return context.DeadlineExceeded
+	}
+	return c.Context.Err()
 }

@@ -36,7 +36,16 @@ func withObservation(ctx context.Context, c ObservationConfig, routes func(conte
 	}
 	config := Config{Request: c.Request, Files: c.Files, Until: c.Until, Reverify: c.Reverify, Unknown: c.Unknown, RetainUnknown: c.RetainUnknown}
 	return withReader(ctx, config, c.Journal, routes, func(native port.HelperRecoveryRuntime) error {
-		return fn(observation{native.(*runtime)})
+		err := fn(observation{native.(*runtime)})
+		if err == nil {
+			return nil
+		}
+		// Only a direct, non-nil classified failure owns its classification.
+		// Opaque/joined causes remain private provenance, never nested admission.
+		if failure, ok := err.(*port.HelperRecoveryFailure); ok && failure != nil {
+			return failure
+		}
+		return fail("internal", true, false, err)
 	})
 }
 
