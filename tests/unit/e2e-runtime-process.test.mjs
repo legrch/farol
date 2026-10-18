@@ -8,12 +8,21 @@ import {
   selectRuntimeProcesses,
   readRuntimeProcessSnapshots,
   killRuntimeProcess,
+  readOwnedChildProcesses,
 } from "../e2e/runtime-process.mjs";
 
 const stamp = "Wed Oct 14 11:12:13 2026";
 const row = (pid, parent, command) =>
   `${pid} ${parent} 1024 ${stamp} ${command}\n`;
 const primary = row(100, 1, "/fixture/Electron /fixture/main.cjs");
+
+const absent = () =>
+  Object.assign(new Error("no matches"), {
+    status: 1,
+    signal: null,
+    stdout: "",
+    stderr: "",
+  });
 
 describe("E2E owned local runtime identity", () => {
   it("finds a direct Node IPC child outside Electron metrics, including spaced private paths", () => {
@@ -70,6 +79,88 @@ describe("E2E owned local runtime identity", () => {
       selectRuntimeProcesses(primary + "unparseable observation\n", 100),
     ).toThrow("TABLE_INVALID");
     expect(() => selectRuntimeProcesses(primary, 0)).toThrow("INPUT_INVALID");
+  });
+  it("queries only the owned parent and returned PIDs, retaining token metadata", () => {
+    const calls = [];
+    const snapshots = readOwnedChildProcesses(100, (file, args) => {
+      calls.push([file, args]);
+      return calls.length === 1
+        ? "101\n102\n"
+        : primary +
+            row(101, 100, "/fixture/farol-backend serve") +
+            row(102, 200, "/foreign/reparented");
+    });
+    expect(calls).toEqual([
+      ["/usr/bin/pgrep", ["-P", "100"]],
+      [
+        "/bin/ps",
+        ["-ww", "-p", "100,101,102", "-o", "pid=,ppid=,rss=,lstart=,command="],
+      ],
+    ]);
+    expect(snapshots).toEqual([
+      {
+        pid: 101,
+        parentPid: 100,
+        rssKiB: 1024,
+        processStart: stamp,
+        command: "/fixture/farol-backend serve",
+      },
+    ]);
+  });
+  it("accepts only the tools' explicit no-match result as an empty sample", () => {
+    expect(
+      readOwnedChildProcesses(100, () => {
+        throw absent();
+      }),
+    ).toEqual([]);
+  });
+  it.each([
+    { status: 3, signal: null, stdout: "", stderr: "permission denied" },
+    { status: 1, signal: null, stdout: "", stderr: "permission denied" },
+    { status: 1, signal: null, stdout: "101\n", stderr: "" },
+    { status: null, signal: "SIGTERM", stdout: "", stderr: "" },
+    { code: "EPERM" },
+  ])(
+    "keeps observation failure unknown without a wider query %#",
+    (failure) => {
+      let calls = 0;
+      expect(() =>
+        readOwnedChildProcesses(100, () => {
+          calls++;
+          throw Object.assign(new Error("native failure"), failure);
+        }),
+      ).toThrow("OBSERVATION_UNKNOWN");
+      expect(calls).toBe(1);
+    },
+  );
+  it.each(["", "0\n", "100\n", "101\n101\n", "101,102\n", "2147483648\n"])(
+    "refuses malformed parent-scoped PID output %#",
+    (output) => {
+      let calls = 0;
+      expect(() =>
+        readOwnedChildProcesses(100, () => {
+          calls++;
+          return output;
+        }),
+      ).toThrow("TABLE_INVALID");
+      expect(calls).toBe(1);
+    },
+  );
+  it("refuses unexpected metadata instead of broadening the selected set", () => {
+    let calls = 0;
+    expect(() =>
+      readOwnedChildProcesses(100, () =>
+        ++calls === 1 ? "101\n" : primary + row(999, 100, "/unexpected/child"),
+      ),
+    ).toThrow("TABLE_INVALID");
+  });
+  it("does not claim children when their selected parent cannot be observed", () => {
+    let calls = 0;
+    expect(() =>
+      readOwnedChildProcesses(100, () =>
+        ++calls === 1 ? "101\n" : row(101, 100, "/fixture/child"),
+      ),
+    ).toThrow("PRIMARY_UNCONFIRMED");
   });
   it("observes a real Node IPC child and refuses a changed identity before fault injection", async () => {
     const root = await fs.mkdtemp(
