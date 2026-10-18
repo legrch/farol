@@ -43,9 +43,12 @@ func WithObservation(ctx context.Context, directory string, borrowed *os.File, b
 	if err != nil {
 		return journalFailure(port.JournalUnavailable, err)
 	}
+	// Construction waits on the same gate. Its Err checks must observe the
+	// captured absolute end even when the original timer notification lags.
+	scoped := observationContext{Context: ctx, original: ctx, until: until}
 	var entered error
 	err = raw.Control(func(uintptr) {
-		r, e := openRepository(ctx, directory, op, nil, admission)
+		r, e := openRepository(scoped, directory, op, nil, admission)
 		if e != nil {
 			entered = e
 			return
@@ -55,6 +58,10 @@ func WithObservation(ctx context.Context, directory string, borrowed *os.File, b
 			// Close itself retains cleanup uncertainty under this same gate.
 			entered = joinObservationResults(entered, cleanup)
 		}()
+		if err := scoped.Err(); err != nil {
+			entered = errors.Join(port.JournalCancelled, err)
+			return
+		}
 		info, e := borrowed.Stat()
 		if e != nil {
 			entered = journalFailure(port.JournalChanged, e)

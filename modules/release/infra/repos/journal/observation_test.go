@@ -571,3 +571,82 @@ func TestObservationJournalNativeClosedCallsCannotRetainUnknown(t *testing.T) {
 		})
 	}
 }
+
+type gateObservationOwner struct {
+	observationOwner
+	shared observationSignalGate
+}
+
+func (a *gateObservationOwner) JournalGate() port.StateGate { return &a.shared }
+
+// The original scope end applies while waiting for construction, before its
+// existing repository opener can initiate filesystem/admission observations.
+func TestObservationJournalNativeConstructorKeepsScopeBound(t *testing.T) {
+	if os.Getenv("FAROL_HELPER_NATIVE") != "1" {
+		t.Skip("Root-scheduled physical observation constructor bound")
+	}
+	for _, kind := range []string{"expired-without-timer-notification", "cancelled"} {
+		t.Run(kind, func(t *testing.T) {
+			root, err := os.MkdirTemp("", "farol-helper-observation-constructor-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Log("RETAINED observation-constructor fixture:", root)
+			f := newFixtureAt(t, root)
+			original := f.open(t)
+			binding := original.identity()
+			if err := original.Close(); err != nil {
+				t.Fatal(err)
+			}
+			borrowed, err := os.Open(f.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer borrowed.Close()
+			owner := &gateObservationOwner{observationOwner: observationOwner{op: f.operation, binding: binding}}
+			owner.shared.attempted = make(chan struct{})
+			owner.shared.notify.Store(true)
+			owner.shared.mu.Lock()
+			locked := true
+			defer func() {
+				if locked {
+					owner.shared.mu.Unlock()
+				}
+			}()
+			scoped, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			until := time.Now().Add(time.Second)
+			var ctx context.Context = scoped
+			if kind != "cancelled" {
+				ctx = laggingObservationContext{Context: context.Background(), until: until}
+			}
+			called := false
+			done := make(chan error, 1)
+			go func() {
+				done <- WithObservation(ctx, f.path, borrowed, binding, f.operation, owner, func(*Observation) error { called = true; return nil })
+			}()
+			select {
+			case <-owner.shared.attempted:
+			case err := <-done:
+				t.Fatal("constructor did not reach original gate before its bound", err)
+			}
+			if kind == "cancelled" {
+				cancel()
+			} else {
+				time.Sleep(time.Until(until) + time.Millisecond)
+			}
+			owner.shared.mu.Unlock()
+			locked = false
+			err = <-done
+			if called || !errors.Is(err, port.JournalCancelled) || owner.checks != 0 {
+				t.Error("expired construction initiated admission or callback after its original bound")
+			}
+			if _, err := borrowed.Stat(); err != nil {
+				t.Error("borrowed route closed")
+			}
+			if _, err := os.Lstat(filepath.Join(f.path, filename)); !errors.Is(err, os.ErrNotExist) {
+				t.Error("constructor wrote a journal")
+			}
+		})
+	}
+}
