@@ -357,12 +357,22 @@ describe("parseConnectorHealthSnapshot", () => {
     },
   );
 
-  it("keeps bounded future delivery states and sparse optional data", () => {
+  it("withholds components missing their required limited flag", () => {
     const control_plane = pollingFixture();
     const response_delivery = deliveryFixture();
     delete control_plane.limited;
-    delete control_plane.observed_at;
     delete response_delivery.limited;
+    expect(
+      parseConnectorHealthSnapshot(
+        envelope({ control_plane, response_delivery }),
+      ),
+    ).toMatchObject({ controlPlane: null, responseDelivery: null });
+  });
+
+  it("keeps bounded future delivery states and sparse optional data", () => {
+    const control_plane = pollingFixture();
+    const response_delivery = deliveryFixture();
+    delete control_plane.observed_at;
     response_delivery.observed_at = null;
     response_delivery.state = "future_delivery_v2";
     for (const key of [

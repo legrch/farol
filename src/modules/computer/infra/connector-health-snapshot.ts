@@ -314,12 +314,12 @@ function component<State extends string, Details>(
     if (input === null) return null;
     const componentStatus = status(field(input, "status"));
     const state = parseState(field(input, "state"));
-    const limited = optionalBoolean(field(input, "limited"));
+    const limited = field(input, "limited");
     const observedAtMillis = optionalTimestamp(field(input, "observed_at"));
     if (
       componentStatus === null ||
       state === null ||
-      limited === null ||
+      typeof limited !== "boolean" ||
       observedAtMillis === undefined
     )
       return null;
