@@ -1673,3 +1673,72 @@ it("observes metrics only on the original active child and withholds a late resu
   expect(await runtime.observePolling()).toBeNull();
   expect(polling).toHaveBeenCalledTimes(2);
 });
+
+it("pins health observations to the original owned child and withholds a completion after stop", async () => {
+  const selected = await fixture(),
+    child = new FakeChild();
+  const start = vi.fn<ConnectorProcessStarter>(async (command) => {
+    await fs.writeFile(
+      option(command, "--health.url-file"),
+      "http://127.0.0.1:43125\n",
+      { mode: 0o600 },
+    );
+    return child;
+  });
+  const sample = {
+    snapshotAtMillis: 200000,
+    runtimeInstanceId: "instance-A",
+    runtimeStartedAtMillis: 1000,
+    runtimeLifecycle: "running" as const,
+    runtimeLimited: false,
+    live: true,
+    ready: true,
+    truncated: false,
+    controlPlane: null,
+    responseDelivery: null,
+  };
+  const health = vi.fn(async (): Promise<typeof sample | null> => ({
+    ...sample,
+  }));
+  const runtime = new SecureMcpConnectorRuntime(
+    {
+      root: selected.runtimeRoot,
+      homePath: selected.root,
+      tempPath: selected.root,
+    },
+    { start, get: async () => true, health },
+  );
+  expect(await runtime.observeHealth()).toBeNull();
+  expect(health).not.toHaveBeenCalled();
+  const launched = await runtime.start(startInput);
+  expect(launched.state).toBe("ready");
+  expect(await runtime.observeHealth()).toMatchObject({
+    runtimeGeneration: launched.runtimeGeneration,
+    expectedInstanceId: "instance-A",
+    snapshot: { runtimeInstanceId: "instance-A" },
+  });
+  health.mockResolvedValueOnce({ ...sample, runtimeInstanceId: "foreign" });
+  expect(await runtime.observeHealth()).toMatchObject({
+    expectedInstanceId: "instance-A",
+    snapshot: { runtimeInstanceId: "foreign" },
+  });
+  health.mockResolvedValueOnce(null);
+  expect(await runtime.observeHealth()).toEqual({
+    runtimeGeneration: launched.runtimeGeneration,
+    expectedInstanceId: "instance-A",
+  });
+  let release!: (value: typeof sample) => void;
+  health.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  const pending = runtime.observeHealth();
+  await runtime.stop();
+  release(sample);
+  expect(await pending).toBeNull();
+  expect(await runtime.observeHealth()).toBeNull();
+  expect(start).toHaveBeenCalledTimes(1);
+  expect(health).toHaveBeenCalledTimes(4);
+});

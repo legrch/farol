@@ -22,6 +22,13 @@ export function pollingTunnelStore(connectorRoot) {
           }),
       );
     },
+    async controlHealth(mode) {
+      const file = path.join(root, "health-control.json");
+      await fs.writeFile(file + ".tmp", JSON.stringify({ mode }) + "\n", {
+        mode: 0o600,
+      });
+      await fs.rename(file + ".tmp", file);
+    },
     async control(mode) {
       const file = path.join(root, "polling-control.json");
       await fs.writeFile(file + ".tmp", JSON.stringify({ mode }) + "\n", {

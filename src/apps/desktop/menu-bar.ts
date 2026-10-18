@@ -5,6 +5,7 @@ type MenuBarStatus = Readonly<{
   label: string;
   current: string | null;
   attention?: boolean;
+  marker?: "✓" | "…" | "↻" | "!" | "?" | "–";
 }>;
 
 /** Native lifetime owned by the host. Commands use the same app routing. */
@@ -72,7 +73,7 @@ export function createMenuBar(
     if (disposed) return;
     const value = readStatus();
     tray.setToolTip(value.label);
-    tray.setTitle(value.attention ? "!" : "");
+    tray.setTitle(value.marker ?? (value.attention ? "!" : ""));
   };
   try {
     tray.setIgnoreDoubleClickEvents(true);

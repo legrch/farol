@@ -1,3 +1,4 @@
+import { unavailableConnectionStatus } from "../../../apps/desktop/renderer/connection-status";
 import { connectorSetupPresentation } from "../connector-setup-presentation";
 import { ConnectionGuide } from "./connection-guide";
 import { designIconPath, designIconViewBox } from "./design-icons";
@@ -2338,6 +2339,8 @@ function Connection({
   setupStep,
 }: PageProps) {
   const connector = settings.connectors.secureMcp;
+  const liveConnectionStatus =
+    snapshot.connectionStatus ?? unavailableConnectionStatus;
   const setup = computerSetup(snapshot);
   const feedback = useSettingsFeedback(facade);
   const signIn = signInPresentation(
@@ -2726,6 +2729,18 @@ function Connection({
                 Reconnect
               </Command>
             )}
+          <div
+            className="notice connection-live-status"
+            role="status"
+            aria-live="polite"
+            data-state={liveConnectionStatus.state}
+          >
+            <strong>
+              {liveConnectionStatus.marker} {liveConnectionStatus.label}
+            </strong>
+            <p>{liveConnectionStatus.detail}</p>
+            <p>{liveConnectionStatus.delivery}</p>
+          </div>
           {saved && !replacing && setup.localConnectionCurrent && (
             <Command
               actions={actions}

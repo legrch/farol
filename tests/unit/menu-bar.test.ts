@@ -216,3 +216,24 @@ it("expires a throwing status producer to an explicit unavailable projection", (
   expect(menu.items[0]?.label).toBe("Farol · Status unavailable");
   dispose();
 });
+
+it("updates the supplied status shape without click or command dispatch", () => {
+  const actions = { open: vi.fn(), quit: vi.fn() };
+  let marker: "✓" | "…" | "?" = "✓";
+  const dispose = createMenuBar(actions, () => ({
+    label: "Observed status",
+    current: null,
+    marker,
+  }));
+  const tray = owned.trays[0]!;
+  expect(tray.setTitle).toHaveBeenLastCalledWith("✓");
+  marker = "…";
+  vi.advanceTimersByTime(1000);
+  expect(tray.setTitle).toHaveBeenLastCalledWith("…");
+  marker = "?";
+  vi.advanceTimersByTime(1000);
+  expect(tray.setTitle).toHaveBeenLastCalledWith("?");
+  expect(actions.open).not.toHaveBeenCalled();
+  expect(actions.quit).not.toHaveBeenCalled();
+  dispose();
+});

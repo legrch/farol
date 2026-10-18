@@ -270,7 +270,7 @@ func TestObserveConnectionWaitingIsNotOutage(t *testing.T) {
 			details.LastSuccessMillis = test.success
 			details.CurrentPollAgeSeconds = test.age
 			if test.age > 1 {
-				details.LastAttemptMillis = connectionTestMillis(139_000)
+				details.LastAttemptMillis = connectionTestMillis(context.NowMillis - uint64(math.Round(test.age*1000)))
 			}
 			got := ObserveConnection(context, sample)
 			connectionAssertState(t, got, test.wantState, test.reason)
@@ -678,4 +678,38 @@ func TestObserveConnectionProducerTransitions(t *testing.T) {
 		connectionAssertMillis(t, got.ValidUntilMillis, 245_000)
 		connectionAssertMillis(t, got.LastResponseAcceptedMillis, 80_000)
 	})
+}
+
+func TestObserveConnectionWaitingDeadlineUsesOriginalAttempt(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		now           uint64
+		attempt       *uint64
+		age, deadline float64
+		reason        ConnectionReason
+	}{
+		{"snapshot read after advertised poll budget", 202_000, connectionTestMillis(199_000), 1, 2, ConnectionReasonPollDeadlineExceeded},
+		{"old poll cannot underreport its age", 200_000, connectionTestMillis(100_000), 1, 60, ConnectionReasonPollDeadlineExceeded},
+		{"missing original attempt", 200_000, nil, 1, 60, ConnectionReasonPollingMissing},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, s := connectionFixture()
+			c.NowMillis = tc.now
+			s.ControlPlane.State = "polling"
+			s.ControlPlane.Details.LastSuccessMillis = nil
+			s.ControlPlane.Details.LastAttemptMillis = tc.attempt
+			s.ControlPlane.Details.CurrentPollAgeSeconds = tc.age
+			s.ControlPlane.Details.DeadlineSeconds = tc.deadline
+			got := ObserveConnection(c, s)
+			connectionAssertState(t, got, ConnectionStateUnobserved, tc.reason)
+		})
+	}
+	c, s := connectionFixture()
+	s.ControlPlane.State = "polling"
+	s.ControlPlane.Details.LastSuccessMillis = nil
+	s.ControlPlane.Details.DeadlineSeconds = 2
+	s.ControlPlane.Details.CurrentPollAgeSeconds = 1
+	got := ObserveConnection(c, s)
+	connectionAssertState(t, got, ConnectionStateChecking, ConnectionReasonWaitingWithoutSuccess)
+	connectionAssertMillis(t, got.ValidUntilMillis, 201_000)
 }

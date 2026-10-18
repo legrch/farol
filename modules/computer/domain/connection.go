@@ -273,7 +273,17 @@ func ObserveConnection(context ConnectionContext, sample *ConnectionHealthSnapsh
 	hasStaleSuccess := details.LastSuccessMillis != nil
 	switch poll.State {
 	case "polling":
-		if details.DeadlineSeconds > 0 && details.CurrentPollAgeSeconds <= details.DeadlineSeconds {
+		if details.LastAttemptMillis == nil {
+			return connectionWithState(observation, ConnectionStateUnobserved, ConnectionReasonPollingMissing)
+		}
+		deadline, ok := connectionAdd(*details.LastAttemptMillis, uint64(math.Ceil(details.DeadlineSeconds*1000)))
+		if !ok {
+			return connectionObservation(ConnectionStateUnobserved, ConnectionReasonTimestampOverflow)
+		}
+		// Snapshot transit time does not renew the original poll budget. A
+		// small reported age cannot override its dated original attempt.
+		if context.NowMillis <= deadline && details.CurrentPollAgeSeconds <= details.DeadlineSeconds {
+			observation.ValidUntilMillis = connectionMillis(min(until, deadline))
 			reason := ConnectionReasonWaitingWithoutSuccess
 			if hasStaleSuccess {
 				reason = ConnectionReasonWaitingWithStaleSuccess

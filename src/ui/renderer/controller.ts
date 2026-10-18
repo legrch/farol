@@ -1,4 +1,8 @@
 import {
+  ConnectionStatusViewSchema,
+  unavailableConnectionStatus,
+} from "../../../apps/desktop/renderer/connection-status";
+import {
   automaticUpdateAvailable,
   updateCheckAllowed,
   confirmedRestartAllowed,
@@ -124,6 +128,7 @@ export const BootstrapProjectionSchema = z.object({
   build: BuildIdentitySchema,
   configuration: ProductConfigurationSnapshotSchema,
   runtimeState: z.enum(["starting", "ready", "offline", "failed"]),
+  connectionStatus: ConnectionStatusViewSchema.optional(),
   selectedTaskId: z.string().default(""),
   taskRevision: z.number().int().nonnegative(),
   tasks: ProductTasksStateSchema.shape.tasks,
@@ -211,6 +216,21 @@ export function canSetInstallOnQuitPreference(
 export class WindowController implements RendererFacade {
   readonly draft = new AgentDraftStore();
   readonly conversationDraft = new ConversationDraftStore();
+  private adoptConnectionStatus(value: unknown): void {
+    if (this.disposed) return;
+    const parsed = ConnectionStatusViewSchema.safeParse(value);
+    if (!parsed.success) {
+      this.patch({
+        connectionStatus: {
+          ...unavailableConnectionStatus,
+          revision: this.state.connectionStatus?.revision ?? 0,
+        },
+      });
+      return;
+    }
+    if (parsed.data.revision > (this.state.connectionStatus?.revision ?? -1))
+      this.patch({ connectionStatus: parsed.data });
+  }
   private state: WindowSnapshot = immutable({ ...initial });
   private readonly listeners = new Set<() => void>();
   private disposers: (() => void)[] = [];
@@ -347,6 +367,9 @@ export class WindowController implements RendererFacade {
         } else this.adoptTasks(parsed.data);
       }),
       this.api.onRuntimeEvent((value) => this.record(value)),
+      this.api.onConnectionStatus?.((value) =>
+        this.adoptConnectionStatus(value),
+      ) ?? (() => undefined),
       this.api.onRuntimeState((value) => {
         this.invalidateSignInObservation();
         const parsed = RuntimeStatusSchema.safeParse(value);
@@ -398,6 +421,8 @@ export class WindowController implements RendererFacade {
         }
         const data = parsed.data;
         this.adoptHistoryContext(data.chatHistoryContext ?? null);
+        if (data.connectionStatus !== undefined)
+          this.adoptConnectionStatus(data.connectionStatus);
         this.patch({
           environment: data.environment,
           buildId: data.build.buildId,
@@ -685,6 +710,8 @@ export class WindowController implements RendererFacade {
           ? parsed.data.runtimeState
           : this.state.runtime;
       this.adoptHistoryContext(parsed.data.chatHistoryContext ?? null);
+      if (parsed.data.connectionStatus !== undefined)
+        this.adoptConnectionStatus(parsed.data.connectionStatus);
       const status =
         parsed.data.configuration.status === "ready" &&
         tasksAccepted &&

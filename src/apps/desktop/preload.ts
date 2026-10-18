@@ -79,6 +79,13 @@ if (process.argv.includes("--farol-startup-recovery")) {
       ipcRenderer.on(channels.runtimeEvent, wrapped);
       return () => ipcRenderer.removeListener(channels.runtimeEvent, wrapped);
     },
+    onConnectionStatus: (listener: (status: unknown) => void) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) =>
+        listener(value);
+      ipcRenderer.on(channels.connectionStatus, wrapped);
+      return () =>
+        ipcRenderer.removeListener(channels.connectionStatus, wrapped);
+    },
     onRuntimeState: (listener: (status: unknown) => void) => {
       const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) =>
         listener(value);
