@@ -61,6 +61,29 @@ func (p *Probe) PID() int {
 	return p.pid
 }
 
+// Join retains custody until the ORIGINAL observation, native Wait, stop (if
+// already requested) and output producers actually return. It starts no probe,
+// kill or replacement cleanup. There is deliberately no renewed deadline: the
+// bounded Observe result stays failed/unknown even if cleanup later completes.
+// A helper must call Join before releasing borrowed routes/lease or exiting.
+func (p *Probe) Join() error {
+	if p == nil || p.probeState == nil || p.gate == nil {
+		return failure(port.ProcessProbeInput)
+	}
+	<-p.gate
+	defer func() { p.gate <- struct{}{} }()
+	if p.retained != nil {
+		<-p.retained.done
+		if !p.retained.cleanupKnown() {
+			return failure(port.ProcessProbeCleanupUnknown)
+		}
+	}
+	if p.tainted {
+		return failure(p.taintKind)
+	}
+	return nil
+}
+
 // Observe preserves until's original absolute deadline, including its monotonic
 // component. Serialization, native observation and result publication share one
 // budget. Cleanup has a separate fixed cap and cannot authorize a late result.
