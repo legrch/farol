@@ -650,3 +650,115 @@ func TestObservationJournalNativeConstructorKeepsScopeBound(t *testing.T) {
 		})
 	}
 }
+
+// Pause exactly at an unsafe retirement unlock, before the old implementation
+// publishes failure. The sibling then attempts the original shared-owner gate.
+// A correct completion never exposes this interval, so no timing guess is used.
+type retirementObservationOwner struct {
+	observationOwner
+	shared retirementObservationGate
+	reader *Observation
+}
+
+func (a *retirementObservationOwner) JournalGate() port.StateGate { return &a.shared }
+
+type retirementObservationGate struct {
+	sync.Mutex
+	owner  *retirementObservationOwner
+	paused atomic.Bool
+	gap    chan struct{}
+	resume chan struct{}
+}
+
+func (g *retirementObservationGate) Unlock() {
+	unsafe := g.owner.reader != nil && g.owner.reader.repo.closed && !g.owner.unknown
+	pause := unsafe && g.paused.CompareAndSwap(false, true)
+	g.Mutex.Unlock()
+	if pause {
+		close(g.gap)
+		<-g.resume
+	}
+}
+func TestObservationJournalNativeRetirementPublishesFailureAtomically(t *testing.T) {
+	if os.Getenv("FAROL_HELPER_NATIVE") != "1" {
+		t.Skip("Root-scheduled observation retirement regression")
+	}
+	for _, kind := range []string{"callback-failure", "callback-panic"} {
+		t.Run(kind, func(t *testing.T) {
+			root, err := os.MkdirTemp("", "farol-helper-observation-retirement-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Log("RETAINED observation retirement fixture:", root)
+			f := newFixtureAt(t, root)
+			original := f.open(t)
+			binding := original.identity()
+			if err := original.Close(); err != nil {
+				t.Fatal(err)
+			}
+			first, err := os.Open(f.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer first.Close()
+			second, err := os.Open(f.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer second.Close()
+			owner := &retirementObservationOwner{observationOwner: observationOwner{op: f.operation, binding: binding}}
+			owner.shared.owner = owner
+			owner.shared.gap, owner.shared.resume = make(chan struct{}), make(chan struct{})
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			private := errors.New("private observation retirement failure")
+			type completion struct {
+				err       error
+				recovered any
+			}
+			failed := make(chan completion, 1)
+			go func() {
+				var result completion
+				defer func() { result.recovered = recover(); failed <- result }()
+				result.err = WithObservation(ctx, f.path, first, binding, f.operation, owner, func(reader *Observation) error {
+					owner.reader = reader
+					if kind == "callback-panic" {
+						panic(private)
+					}
+					return private
+				})
+			}()
+			var result completion
+			gap := false
+			select {
+			case <-owner.shared.gap:
+				gap = true
+			case result = <-failed:
+			case <-ctx.Done():
+				t.Fatal("observation completion did not return")
+			}
+			entered := false
+			sibling := WithObservation(ctx, f.path, second, binding, f.operation, owner, func(*Observation) error { entered = true; return nil })
+			if gap {
+				close(owner.shared.resume)
+				result = <-failed
+			}
+			if gap || entered || !errors.Is(sibling, port.JournalUnknown) {
+				t.Error("retirement released the gate before retained failure", gap, entered, sibling)
+			}
+			if kind == "callback-panic" {
+				if result.recovered != private {
+					t.Error("original panic lost")
+				}
+			} else if result.recovered != nil || !errors.Is(result.err, private) {
+				t.Error("original callback cause lost")
+			}
+			if _, err := first.Stat(); err != nil {
+				t.Error("first borrowed descriptor closed")
+			}
+			if _, err := second.Stat(); err != nil {
+				t.Error("second borrowed descriptor closed")
+			}
+		})
+	}
+}

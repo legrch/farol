@@ -256,6 +256,12 @@ func (r *Repo) retainUnknown() error {
 func (r *Repo) Close() error {
 	r.gate.Lock()
 	defer r.gate.Unlock()
+	return r.closeLocked()
+}
+
+// closeLocked retires the scope and joins actual owned descriptor cleanup.
+// The caller retains the same gate through any completion-state publication.
+func (r *Repo) closeLocked() error {
 	if r.closed {
 		return r.closeErr
 	}

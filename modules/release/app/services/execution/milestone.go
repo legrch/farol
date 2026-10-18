@@ -98,7 +98,11 @@ func (s *Milestone) Execute(ctx context.Context, native AdmittedRuntime, ready *
 			}
 			result = applied.Result
 		} else {
-			rolled, err := service.Rollback(ctx, RollbackCommand{})
+			var bound *Readiness
+			if s.request.Predecessor != nil {
+				bound = ready
+			}
+			rolled, err := service.rollback(ctx, bound, native)
 			if err != nil {
 				return nil, err
 			}

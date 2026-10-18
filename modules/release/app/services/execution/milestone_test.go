@@ -615,3 +615,87 @@ func TestInstallationReadinessDoesNotRereadFailedJournal(t *testing.T) {
 		})
 	}
 }
+
+// Symbolic late-boundary substitution, after the pre-ACK readiness and its
+// admitted recheck. Native CAS and namespace custody remain separate gates.
+func TestHelperMilestoneClosedRollbackKeepsOriginalBinding(t *testing.T) {
+	for _, fault := range []string{"app", "previous", "revision", "phase"} {
+		t.Run(fault, func(t *testing.T) {
+			request, r := milestoneFixture("rollback", true)
+			milestone, err := testMilestone(context.Background(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ready, err := milestone.Inspect(context.Background(), r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			changed := false
+			r.after = func(point string) {
+				if point != "fence" || changed {
+					return
+				}
+				changed = true
+				switch fault {
+				case "app", "previous":
+					entry := port.App
+					if fault == "previous" {
+						entry = port.Previous
+					}
+					tree := r.trees[entry]
+					tree.identity.Inode = "999"
+					r.trees[entry] = tree
+				case "revision":
+					r.revision++
+				case "phase":
+					r.phase = "launch_requested"
+					r.revision++
+				}
+			}
+			result, err := milestone.Execute(context.Background(), r, ready, nil)
+			if !changed || result != nil || err == nil {
+				t.Fatalf("late %s substitution accepted: result=%v error=%v", fault, result, err)
+			}
+			requireNoEffect(t, r)
+		})
+	}
+}
+
+func TestHelperMilestoneClosedRollbackNeverAdoptsLatePair(t *testing.T) {
+	for _, entry := range []port.HelperRecoveryEntry{port.App, port.Previous} {
+		t.Run(fmt.Sprint(entry), func(t *testing.T) {
+			request, r := milestoneFixture("rollback", true)
+			milestone, err := testMilestone(context.Background(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ready, err := milestone.Inspect(context.Background(), r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			replaced := false
+			r.before = func(point string) error {
+				if point == "write:rollback_started" && !replaced {
+					replaced = true
+					tree := r.trees[entry]
+					tree.identity.Inode = "999"
+					r.trees[entry] = tree
+				}
+				return nil
+			}
+			result, err := milestone.Execute(context.Background(), r, ready, nil)
+			if result != nil || !replaced {
+				t.Fatal("late substitution was not exercised", result, err)
+			}
+			requireExecutionCode(t, err, "exchange_identity", true)
+			if r.trees[entry].identity.Inode != "999" || r.phase != "rollback_started" {
+				t.Fatal("replacement displaced or falsely completed", r.trace)
+			}
+			for _, point := range r.trace {
+				if strings.HasPrefix(point, "rename:") || point == "write:rolled_back" {
+					t.Fatal("execution continued after changed identity", r.trace)
+				}
+			}
+		})
+	}
+}

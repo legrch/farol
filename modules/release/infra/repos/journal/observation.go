@@ -24,9 +24,23 @@ func WithObservation(ctx context.Context, directory string, borrowed *os.File, b
 	if gate == nil {
 		return port.JournalInvalid
 	}
+	completionLocked := false
+	lockCompletion := func() {
+		if !completionLocked {
+			gate.Lock()
+			completionLocked = true
+		}
+	}
+	// Cleanup stays inside the original borrowed RawConn.Control callback.
+	// Keep the completion gate until RawConn itself has returned and callback,
+	// cleanup, cancellation and panic uncertainty is visible to every consumer.
+	defer func() {
+		if completionLocked {
+			gate.Unlock()
+		}
+	}()
 	retainUnknown := func() {
-		gate.Lock()
-		defer gate.Unlock()
+		lockCompletion()
 		admission.RetainJournalUnknown(op)
 	}
 	defer func() {
@@ -54,8 +68,9 @@ func WithObservation(ctx context.Context, directory string, borrowed *os.File, b
 			return
 		}
 		defer func() {
-			cleanup := r.Close() // joins the original serialization gate
-			// Close itself retains cleanup uncertainty under this same gate.
+			lockCompletion()
+			cleanup := r.closeLocked()
+			// Completion retains the gate until the outer scope publishes failure.
 			entered = joinObservationResults(entered, cleanup)
 		}()
 		if err := scoped.Err(); err != nil {
