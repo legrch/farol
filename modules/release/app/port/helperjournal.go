@@ -1,6 +1,21 @@
 package port
 
-import "context"
+import (
+	"context"
+
+	release "github.com/legrch/farol/modules/release/domain"
+)
+
+// HelperJournalObservationAdmission borrows the original operation's gate and
+// retained uncertainty for existing-only preflight. It deliberately does not
+// implement JournalAdmission: no stopped-writer or exclusion proof is implied.
+// Reverify checks actual route/slot custody and never reenters JournalGate.
+type HelperJournalObservationAdmission interface {
+	JournalGate() StateGate
+	ReverifyHelperJournalObservation(context.Context, release.Operation, JournalDirectory) error
+	JournalUnknown(release.Operation) bool
+	RetainJournalUnknown(release.Operation)
+}
 
 // HelperJournalRepository borrows the existing operation journal and exclusion
 // owner; it is not a second journal, admission source or recovery authority.

@@ -191,3 +191,90 @@ A parent append after Wait checks the shared offset without seeking fd5 or alias
 Neither fixture establishes production role authentication, original application
 Quit, full helper readiness, clean terminal success, Dev/installed acceptance,
 package/OTA acceptance or Python retirement.
+
+## Captured readiness and application library
+
+The unselected `execution.NewMilestone` library composes the original apply,
+recovery and rollback policies over one independently copied request from the
+original parser/protocol owner. `execution.NewCaptured` and
+`helperrecovery.NewCaptured` use those captured values without reparsing the wire.
+Copies of a milestone share one consumed execution attempt, including missing
+readiness, cancellation and concurrent calls. The independently parsing `Bind`
+entries retain their existing behavior.
+
+`InspectInstallation` accepts only `HelperInstallationObservation`. Apply requires
+confirmed journal absence, an owned exact source/staged pair, no previous, failed
+or rejected-target entry, verified trees and one device. Rollback preserves the
+original predecessor-state guard and exact settled app/predecessor pair. Closed
+rollback accepts only verified/completed; the live branch also observes
+launch_requested. Closed phase refusals report the observed phase, while later
+pair/tree/journal refusals retain the original refused phase and closed rollback
+codes. Independent journal values and complete entry observations are repeated
+around tree verification. A malformed, unreadable, mismatched or outcome-unknown
+journal fails inspection; no failed read is retried as clean absence.
+
+A readiness value retains private observations without writer, lock, namespace,
+ACK, terminal or retry authority. Admitted execution repeats the observations.
+Closed rollback additionally compares the original journal revision, phase and
+exact pair before the first effect. Offline recovery retains the original
+crash-gap reconciliation path; live recovery delegates its preflight to the
+original recovery policy.
+
+`HelperRecoveryPolicies` is the installation consumer's port. Trusted composition
+must adapt `helperrecovery.ObserveCaptured` and `helperrecovery.NewCaptured` to
+`Observe` and `Bind`; pure application services import no sibling service. The
+observation-only recovery service cannot reconcile. Missing required policies or
+native dependencies refuse; no substitute recovery engine or runtime is created.
+Factory inputs are independent copies of the original request.
+
+`infra/native/execution.WithObservation` projects the original native owner's
+bounded reader, route fences, original absolute deadline, serialization and actual
+return custody into an observation-only interface. It opens and closes no route,
+repository or borrowed descriptor and obtains no writer admission. ReadJournal
+returns independent values without seeding the installation writer's CAS chain.
+ReadPhase and Prepare retain their original admitted revision ownership. A sole
+classified return preserves its original code and private cause; multiple
+independent failures retain opaque joined provenance. Native observation still
+requires an independently valid original reader and custody owner; the library
+cannot manufacture pre-ACK admission.
+
+The original milestone's injectable relaunch policy contract remains a library
+seam only. This component adds no capture, process launch, self-measurement or
+relaunch implementation, and no corresponding native runtime configuration. With
+a relaunch request, trusted composition must independently supply the original
+admitted capability; missing capability refuses without marking completed.
+Symbolic tests cover that existing callback ordering and known versus unknown
+failure classification, not a physical image, dispatch, Wait or successful launch.
+
+This is independently buildable source foundation. Boot/CLI composition, the
+complete pre-ACK readiness gate, transport/ACK and terminal classification,
+physical installation and recovery qualification, relaunch/capture owners,
+resource manifests, generated bindings and product selection are withheld. The
+Python helper remains selected. Pure application/input tests and race/vet are
+policy evidence; native/boot test compilation is compile-only. Neither establishes
+native admission, a live filesystem/process, full CI, package, installed, OTA or
+release acceptance. Root owns independent review, integration and those gates.
+
+## Existing-only journal observation
+
+`journal.WithObservation` opens the original operation through a borrowed route
+File and the consumer's `HelperJournalObservationAdmission`. That admission
+rechecks route/slot custody and shares the original gate and retained uncertainty;
+it supplies no stopped-writer or update-exclusion proof. The callback receives a
+sealed `Observation` with only the original bounded `ReadHelper`. It exposes no
+writer constructor, CAS, prepare, repair, descriptor or close capability. Copies
+share the original repository lifetime and refuse after synchronous cleanup.
+
+Reads do not create a journal, seed a writer revision or repair malformed state.
+The original deadline and before/after admission checks remain in force. Native,
+callback and cleanup causes stay behind closed public error text; failed or late
+reads retain uncertainty in the original owner. Subsequent effect composition
+must independently obtain full writer admission and reobserve that same journal
+under its update and instance exclusion. Observation alone is never a readiness,
+ACK, effect, retry or ownership grant.
+
+The explicitly gated disposable Darwin fixtures check existing-only reads,
+physical route binding, scope expiry, independent values, refusal/uncertainty and
+private callback-cause retention. Their admission and lease are symbolic. These
+checks do not prove a production predecessor, real lease or full pre-ACK helper
+composition, and do not select Go or retire the Python helper.

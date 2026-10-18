@@ -45,8 +45,10 @@ type Repo struct {
 	directory       fileState
 	operation       release.Operation
 	admission       port.JournalAdmission
+	observation     port.HelperJournalObservationAdmission
 	gate            port.StateGate
 	closed, unknown bool
+	closeErr        error
 	// Deterministic test-only fault/race checkpoints. Production leaves nil.
 	step       func(string) error
 	writeChunk func(*os.File, []byte) (int, error)
@@ -64,7 +66,21 @@ func New(ctx context.Context, directory string, operation release.Operation, adm
 	if admission == nil {
 		return nil, port.JournalInvalid
 	}
-	gate := admission.JournalGate()
+	return openRepository(ctx, directory, operation, admission, nil)
+}
+
+// Only the writer constructor supplies JournalAdmission. Observation shares
+// physical parsing/opening code, never a weakened writer or an exported Repo.
+func openRepository(ctx context.Context, directory string, operation release.Operation, admission port.JournalAdmission, observation port.HelperJournalObservationAdmission) (repo *Repo, result error) {
+	if ctx == nil || (admission == nil) == (observation == nil) {
+		return nil, port.JournalInvalid
+	}
+	var gate port.StateGate
+	if admission != nil {
+		gate = admission.JournalGate()
+	} else {
+		gate = observation.JournalGate()
+	}
 	if gate == nil {
 		return nil, port.JournalInvalid
 	}
@@ -76,7 +92,7 @@ func New(ctx context.Context, directory string, operation release.Operation, adm
 	if ctx.Err() != nil {
 		return nil, port.JournalCancelled
 	}
-	if admission.JournalUnknown(operation) {
+	if admission != nil && admission.JournalUnknown(operation) || observation != nil && observation.JournalUnknown(operation) {
 		return nil, port.JournalUnknown
 	}
 	if !filepath.IsAbs(directory) || filepath.Clean(directory) != directory || filepath.Base(directory) != operation.ID {
@@ -110,7 +126,14 @@ func New(ctx context.Context, directory string, operation release.Operation, adm
 	owned := false
 	defer func() {
 		if !owned {
-			ancestor.Close()
+			if err := ancestor.Close(); err != nil {
+				result = journalFailure(port.JournalUnavailable, result, err)
+				if admission != nil {
+					admission.RetainJournalUnknown(operation)
+				} else {
+					observation.RetainJournalUnknown(operation)
+				}
+			}
 		}
 	}()
 	root, err := os.OpenRoot(directory)
@@ -119,25 +142,40 @@ func New(ctx context.Context, directory string, operation release.Operation, adm
 	}
 	parent, err := root.OpenFile(".", directoryFlags(), 0)
 	if err != nil {
-		root.Close()
-		return nil, port.JournalUnavailable
+		cleanup := root.Close()
+		if cleanup != nil {
+			if admission != nil {
+				admission.RetainJournalUnknown(operation)
+			} else {
+				observation.RetainJournalUnknown(operation)
+			}
+		}
+		return nil, journalFailure(port.JournalUnavailable, err, cleanup)
 	}
-	r := &Repo{root: root, parent: parent, path: directory, directory: before.directoryObject(), operation: operation, admission: admission, gate: gate, ancestor: ancestor, ancestorPath: anchorPath, ancestorState: anchorState.directoryObject()}
+	r := &Repo{root: root, parent: parent, path: directory, directory: before.directoryObject(), operation: operation, admission: admission, observation: observation, gate: gate, ancestor: ancestor, ancestorPath: anchorPath, ancestorState: anchorState.directoryObject()}
 	if err := r.checkDirectory(); err != nil {
-		parent.Close()
-		root.Close()
-		return nil, err
+		a, b := parent.Close(), root.Close()
+		if a != nil || b != nil {
+			r.retainUnknown()
+		}
+		return nil, journalFailure(port.JournalChanged, err, a, b)
 	}
-	if err := admission.ReverifyJournal(ctx, operation, r.identity()); err != nil {
-		admission.RetainJournalUnknown(operation)
-		parent.Close()
-		root.Close()
-		return nil, port.JournalUnproven
+	verify := func() error {
+		if admission != nil {
+			return admission.ReverifyJournal(ctx, operation, r.identity())
+		}
+		return observation.ReverifyHelperJournalObservation(ctx, operation, r.identity())
+	}
+	if err := verify(); err != nil {
+		r.retainUnknown()
+		return nil, journalFailure(port.JournalUnproven, err, parent.Close(), root.Close())
 	}
 	if ctx.Err() != nil {
-		parent.Close()
-		root.Close()
-		return nil, port.JournalCancelled
+		a, b := parent.Close(), root.Close()
+		if a != nil || b != nil {
+			r.retainUnknown()
+		}
+		return nil, journalFailure(port.JournalCancelled, a, b)
 	}
 	owned = true
 	return r, nil
@@ -207,22 +245,33 @@ func (r *Repo) checkpoint(point string) error {
 
 func (r *Repo) retainUnknown() error {
 	r.unknown = true
-	r.admission.RetainJournalUnknown(r.operation)
+	if r.admission != nil {
+		r.admission.RetainJournalUnknown(r.operation)
+	} else {
+		r.observation.RetainJournalUnknown(r.operation)
+	}
 	return port.JournalUnknown
 }
 
 func (r *Repo) Close() error {
 	r.gate.Lock()
 	defer r.gate.Unlock()
+	return r.closeLocked()
+}
+
+// closeLocked retires the scope and joins actual owned descriptor cleanup.
+// The caller retains the same gate through any completion-state publication.
+func (r *Repo) closeLocked() error {
 	if r.closed {
-		return nil
+		return r.closeErr
 	}
 	r.closed = true
 	a, b, c := r.parent.Close(), r.root.Close(), r.ancestor.Close()
 	if a != nil || b != nil || c != nil {
-		return port.JournalUnavailable
+		r.retainUnknown()
+		r.closeErr = journalFailure(port.JournalUnavailable, a, b, c)
 	}
-	return nil
+	return r.closeErr
 }
 
 func record(value release.Journal) records.Journal {

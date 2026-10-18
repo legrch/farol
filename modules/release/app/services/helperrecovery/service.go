@@ -33,9 +33,10 @@ func internal(cause error, uncertain bool) error {
 }
 
 type Service struct {
-	request port.HelperRequest
-	runtime port.HelperRecoveryRuntime
-	attempt chan struct{} // Shared, never released, even across wrapper copies.
+	request     port.HelperRequest
+	runtime     port.HelperRecoveryRuntime
+	observation port.HelperRecoveryObservation
+	attempt     chan struct{} // Shared, never released, even across wrapper copies.
 }
 
 // Bind independently parses one captured request. Trusted composition supplies
@@ -63,11 +64,34 @@ func Bind(ctx context.Context, input []byte, parser port.HelperRequestParser, ru
 	if err := ctx.Err(); err != nil {
 		return nil, canceled(err, false)
 	}
-	bound := &Service{request: copyRequest(r), runtime: runtime, attempt: make(chan struct{}, 1)}
+	return NewCaptured(ctx, r, runtime)
+}
+
+// NewCaptured consumes only independent values from the original parser owner;
+// it neither reparses the wire nor supplies native admission or a retry grant.
+func NewCaptured(ctx context.Context, r port.HelperRequest, runtime port.HelperRecoveryRuntime) (*Service, error) {
+	if runtime == nil {
+		return nil, internal(nil, false)
+	}
+	s, err := ObserveCaptured(ctx, r, runtime)
+	if err != nil {
+		return nil, err
+	}
+	s.runtime = runtime
+	return s, nil
+}
+
+// ObserveCaptured exposes Inspect over observation-only ports. Reconcile
+// refuses without an independently supplied mutation runtime; journal values
+// and successful inspection can never convert this service into a writer.
+func ObserveCaptured(ctx context.Context, r port.HelperRequest, observation port.HelperRecoveryObservation) (*Service, error) {
+	if ctx == nil || observation == nil {
+		return nil, internal(nil, false)
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, canceled(err, false)
 	}
-	return bound, nil
+	return &Service{request: copyRequest(r), observation: observation, attempt: make(chan struct{}, 1)}, nil
 }
 
 func copyRequest(r port.HelperRequest) port.HelperRequest {
@@ -91,10 +115,10 @@ func canceled(cause error, uncertain bool) error {
 }
 
 func (s *Service) operation(ctx context.Context) (*operation, error) {
-	if s == nil || s.runtime == nil || s.attempt == nil || ctx == nil {
+	if s == nil || s.observation == nil || s.attempt == nil || ctx == nil {
 		return nil, internal(nil, false)
 	}
-	op := &operation{ctx: ctx, runtime: s.runtime, request: s.request}
+	op := &operation{ctx: ctx, runtime: s.runtime, observation: s.observation, request: s.request}
 	return op, op.check()
 }
 
@@ -128,7 +152,7 @@ func (s *Service) Inspect(ctx context.Context) error {
 // concurrent wrappers. The caller holds custody through actual native return;
 // neither error nor retained journal phase authorizes a second dispatch.
 func (s *Service) Reconcile(ctx context.Context) (string, error) {
-	if s == nil || s.attempt == nil {
+	if s == nil || s.runtime == nil || s.attempt == nil {
 		return "", internal(nil, false)
 	}
 	select {
@@ -151,10 +175,11 @@ func (s *Service) Reconcile(ctx context.Context) (string, error) {
 }
 
 type operation struct {
-	ctx      context.Context
-	runtime  port.HelperRecoveryRuntime
-	request  port.HelperRequest
-	effected bool
+	ctx         context.Context
+	runtime     port.HelperRecoveryRuntime
+	observation port.HelperRecoveryObservation
+	request     port.HelperRequest
+	effected    bool
 }
 
 func (op *operation) check() error {
@@ -263,7 +288,7 @@ func (op *operation) phase() (string, error) {
 	if err := op.check(); err != nil {
 		return "", err
 	}
-	p, err := op.runtime.ReadPhase(op.ctx)
+	p, err := op.observation.ReadPhase(op.ctx)
 	if err := op.result(err); err != nil {
 		return "", err
 	}
@@ -277,7 +302,7 @@ func (op *operation) entries() (port.HelperRecoveryEntries, error) {
 	if err := op.check(); err != nil {
 		return port.HelperRecoveryEntries{}, err
 	}
-	e, err := op.runtime.Entries(op.ctx)
+	e, err := op.observation.Entries(op.ctx)
 	if err := op.result(err); err != nil {
 		return port.HelperRecoveryEntries{}, err
 	}
@@ -288,7 +313,7 @@ func (op *operation) matches(e port.HelperRecoveryEntry, b port.HelperBuild) (bo
 	if err := op.check(); err != nil {
 		return false, err
 	}
-	match, err := op.runtime.MatchesTree(op.ctx, e, b)
+	match, err := op.observation.MatchesTree(op.ctx, e, b)
 	if err := op.result(err); err != nil {
 		return false, err
 	}
@@ -307,7 +332,7 @@ func (op *operation) verify(e port.HelperRecoveryEntry, b port.HelperBuild) erro
 	if err := op.check(); err != nil {
 		return err
 	}
-	return op.result(op.runtime.VerifyTree(op.ctx, e, b))
+	return op.result(op.observation.VerifyTree(op.ctx, e, b))
 }
 
 func (op *operation) fence() error {

@@ -11,6 +11,13 @@ type RollbackCommand struct{}
 type RollbackResult struct{ Result Result }
 
 func (s *Service) Rollback(ctx context.Context, _ RollbackCommand) (*RollbackResult, error) {
+	return s.rollback(ctx, nil, nil)
+}
+
+// The closed milestone retains its original observation through policy and
+// passes that pair to the existing native identity checks. ReadPhase still
+// seeds the original admitted writer CAS cursor; ReadJournal never replaces it.
+func (s *Service) rollback(ctx context.Context, ready *Readiness, observation port.HelperInstallationObservation) (*RollbackResult, error) {
 	o, err := s.operation(ctx, "rollback")
 	if err != nil {
 		return nil, err
@@ -28,6 +35,9 @@ func (s *Service) Rollback(ctx context.Context, _ RollbackCommand) (*RollbackRes
 	default:
 		return nil, o.refuse("rollback_phase")
 	}
+	if ready != nil && phase != ready.phase {
+		return nil, o.refuse("closed_rollback_pair_changed")
+	}
 	e, err := o.entries()
 	if err != nil {
 		return nil, err
@@ -40,6 +50,16 @@ func (s *Service) Rollback(ctx context.Context, _ RollbackCommand) (*RollbackRes
 	}
 	if err := o.verify(port.Previous, o.request.Source); err != nil {
 		return nil, err
+	}
+	if ready != nil {
+		if e != ready.entries {
+			return nil, o.refuse("closed_rollback_pair_changed")
+		}
+		if err := ready.Recheck(ctx, observation); err != nil {
+			return nil, err
+		}
+		// Keep these original identities even across later fences and writes.
+		e = ready.entries
 	}
 	if err := o.write("rollback_started"); err != nil {
 		return nil, err

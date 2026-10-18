@@ -60,9 +60,14 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
+	return newFixtureAt(t, t.TempDir())
+}
+
+func newFixtureAt(t *testing.T, directory string) *fixture {
+	t.Helper()
 	// Real disposable filesystem; admission is symbolic. No live profile,
 	// accepted package or process/helper quiescence is proved by this fixture.
-	parent, err := filepath.EvalSymlinks(t.TempDir())
+	parent, err := filepath.EvalSymlinks(directory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,6 +200,7 @@ func TestConstructorBindingAndAuthority(t *testing.T) {
 	for _, kind := range []string{"nil-admission", "nil-gate", "relative", "wrong-name", "alias", "mode", "missing", "invalid-operation", "cancelled", "unknown", "guard-refused"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newFixture(t)
+			privateCause := errors.New("private fixture error")
 			dir, op := f.path, f.operation
 			var admission port.JournalAdmission = f.admission
 			ctx := context.Background()
@@ -228,7 +234,7 @@ func TestConstructorBindingAndAuthority(t *testing.T) {
 			case "unknown":
 				f.admission.unknown = true
 			case "guard-refused":
-				f.admission.verify = func(context.Context) error { return errors.New("private fixture error") }
+				f.admission.verify = func(context.Context) error { return privateCause }
 			}
 			r, err := New(ctx, dir, op, admission)
 			if r != nil || err == nil {
@@ -241,8 +247,13 @@ func TestConstructorBindingAndAuthority(t *testing.T) {
 				t.Fatal("private error exposed")
 			}
 			noTemporary(t, f)
-			if kind == "guard-refused" && (!f.admission.unknown || f.admission.retained != 1) {
-				t.Fatal("refused guard not retained")
+			if kind == "guard-refused" {
+				if !f.admission.unknown || f.admission.retained != 1 {
+					t.Fatal("refused guard not retained")
+				}
+				if !errors.Is(err, privateCause) || !errors.Is(err, port.JournalUnproven) {
+					t.Fatal("classified admission failure lost its original cause")
+				}
 			}
 		})
 	}
