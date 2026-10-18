@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"io"
+	"math"
 	"os"
 	"time"
 
@@ -83,12 +84,18 @@ func liveMarker(data []byte, expectedPID int, expectedStart string) (string, err
 	var pid int
 	var start, at string
 	_, bootPresent := fields["bootTime"]
-	// Match initial_marker: the producer's number|null is present but does not
-	// supply process or lease authentication.
+	// Match the current producer's value schema. These fields still supply no
+	// process or lease authentication; the original native owners supply that.
 	if !bootPresent || json.Unmarshal(fields["pid"], &pid) != nil || pid != expectedPID || json.Unmarshal(fields["processStart"], &start) != nil || start != expectedStart || json.Unmarshal(fields["startedAt"], &at) != nil {
 		return "", errRunMarkerMismatch
 	}
-	if _, ok := timestamp(at); !ok {
+	boot := bytes.TrimSpace(fields["bootTime"])
+	var bootMillis float64
+	if !bytes.Equal(boot, []byte("null")) && (json.Unmarshal(boot, &bootMillis) != nil || bootMillis < 0 || bootMillis > 9007199254740991 || math.Trunc(bootMillis) != bootMillis) {
+		return "", errRunMarkerMismatch
+	}
+	parsed, ok := timestamp(at)
+	if !ok || parsed.UTC().Format("2006-01-02T15:04:05.000Z") != at {
 		return "", errRunMarkerMismatch
 	}
 	return at, nil
