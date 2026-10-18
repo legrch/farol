@@ -14,6 +14,7 @@ import path from "node:path";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { qualifyGoBuild } from "./qualified-go-build.mjs";
 import { parseRecoveryArguments } from "./fixtures/startup-recovery-arguments.ts";
+import { readOwnedChildProcesses } from "./runtime-process.mjs";
 import {
   ELECTRON_RUNTIME,
   observeElectronRuntime,
@@ -95,17 +96,7 @@ const save = () =>
   });
 
 const children = (pid) =>
-  execFileSync("/bin/ps", ["-ww", "-axo", "pid=,ppid=,command="], {
-    encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
-  })
-    .split("\n")
-    .flatMap((line) => {
-      const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/u.exec(line);
-      return match && Number(match[2]) === pid
-        ? [{ pid: Number(match[1]), command: match[3] }]
-        : [];
-    });
+  readOwnedChildProcesses(pid).map(({ pid, command }) => ({ pid, command }));
 const bounded = (promise, label) => {
   let timer;
   return Promise.race([
