@@ -20,9 +20,18 @@ func WithObservation(ctx context.Context, directory string, borrowed *os.File, b
 	if ctx == nil || borrowed == nil || admission == nil || fn == nil {
 		return port.JournalInvalid
 	}
+	gate := admission.JournalGate()
+	if gate == nil {
+		return port.JournalInvalid
+	}
+	retainUnknown := func() {
+		gate.Lock()
+		defer gate.Unlock()
+		admission.RetainJournalUnknown(op)
+	}
 	defer func() {
 		if p := recover(); p != nil {
-			admission.RetainJournalUnknown(op)
+			retainUnknown()
 			panic(p)
 		}
 	}()
@@ -43,9 +52,7 @@ func WithObservation(ctx context.Context, directory string, borrowed *os.File, b
 		}
 		defer func() {
 			cleanup := r.Close() // joins the original serialization gate
-			if cleanup != nil {
-				admission.RetainJournalUnknown(op)
-			}
+			// Close itself retains cleanup uncertainty under this same gate.
 			entered = joinObservationResults(entered, cleanup)
 		}()
 		info, e := borrowed.Stat()
@@ -72,8 +79,8 @@ func WithObservation(ctx context.Context, directory string, borrowed *os.File, b
 	}
 	result = joinObservationResults(entered, err)
 	if result != nil || ctx.Err() != nil || !time.Now().Before(until) {
-		// Do not let another reader/adaptor reopen uncertainty in this owner.
-		admission.RetainJournalUnknown(op)
+		// Publish scope uncertainty under the same gate as admission and reads.
+		retainUnknown()
 		result = errors.Join(result, ctx.Err())
 		if !time.Now().Before(until) {
 			result = errors.Join(result, context.DeadlineExceeded)

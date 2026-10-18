@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -374,6 +375,130 @@ func TestObservationJournalNativeCannotRenewScope(t *testing.T) {
 			}
 			if _, err := os.Lstat(filepath.Join(f.path, filename)); !errors.Is(err, os.ErrNotExist) {
 				t.Fatal("scope-bound regression created a journal")
+			}
+		})
+	}
+}
+
+// Same original gate, with an attempt signal to order two real repository
+// scopes. This is disposable filesystem/admission coverage, not process proof.
+type observationSignalGate struct {
+	mu        sync.Mutex
+	notify    atomic.Bool
+	attempted chan struct{}
+	once      sync.Once
+}
+
+func (g *observationSignalGate) Lock() {
+	if g.notify.Load() {
+		g.once.Do(func() { close(g.attempted) })
+	}
+	g.mu.Lock()
+}
+func (g *observationSignalGate) Unlock() { g.mu.Unlock() }
+
+type blockedObservationRetention struct {
+	observationOwner
+	shared  observationSignalGate
+	entered chan struct{}
+	resume  chan struct{}
+	first   sync.Once
+	outside bool
+}
+
+func (a *blockedObservationRetention) JournalGate() port.StateGate { return &a.shared }
+func (a *blockedObservationRetention) RetainJournalUnknown(op release.Operation) {
+	a.first.Do(func() {
+		if a.shared.mu.TryLock() {
+			a.outside = true
+			a.shared.mu.Unlock()
+		}
+		close(a.entered)
+		<-a.resume
+	})
+	a.observationOwner.RetainJournalUnknown(op)
+}
+
+func TestObservationJournalNativeRetentionSharesGate(t *testing.T) {
+	if os.Getenv("FAROL_HELPER_NATIVE") != "1" {
+		t.Skip("Root-scheduled physical observation retention concurrency")
+	}
+	for _, kind := range []string{"callback-failure", "callback-panic"} {
+		t.Run(kind, func(t *testing.T) {
+			root, err := os.MkdirTemp("", "farol-helper-observation-retention-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Log("RETAINED observation-retention fixture:", root)
+			f := newFixtureAt(t, root)
+			original := f.open(t)
+			binding := original.identity()
+			if err := original.Close(); err != nil {
+				t.Fatal(err)
+			}
+			first, err := os.Open(f.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer first.Close()
+			second, err := os.Open(f.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer second.Close()
+			owner := &blockedObservationRetention{observationOwner: observationOwner{op: f.operation, binding: binding}, entered: make(chan struct{}), resume: make(chan struct{})}
+			owner.shared.attempted = make(chan struct{})
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			private := errors.New("private observation failure")
+			type completion struct {
+				err       error
+				recovered any
+			}
+			failed := make(chan completion, 1)
+			go func() {
+				var result completion
+				defer func() { result.recovered = recover(); failed <- result }()
+				result.err = WithObservation(ctx, f.path, first, binding, f.operation, owner, func(*Observation) error {
+					if kind == "callback-panic" {
+						panic(private)
+					}
+					return private
+				})
+			}()
+			<-owner.entered
+			outside := owner.outside
+			owner.shared.notify.Store(true)
+			opened := make(chan struct{})
+			sibling := make(chan error, 1)
+			go func() {
+				sibling <- WithObservation(ctx, f.path, second, binding, f.operation, owner, func(*Observation) error { close(opened); return nil })
+			}()
+			<-owner.shared.attempted
+			admitted := false
+			select {
+			case <-opened:
+				admitted = true
+			case <-time.After(20 * time.Millisecond):
+			}
+			close(owner.resume)
+			result := <-failed
+			other := <-sibling
+			if outside || admitted || !errors.Is(other, port.JournalUnknown) {
+				t.Error("scope failure publication escaped its gate or allowed sibling admission")
+			}
+			if kind == "callback-panic" {
+				if result.recovered != private {
+					t.Error("scope did not preserve original panic")
+				}
+			} else if result.recovered != nil || !errors.Is(result.err, private) {
+				t.Error("scope lost its original failure")
+			}
+			if _, err := first.Stat(); err != nil {
+				t.Error("first borrowed route closed")
+			}
+			if _, err := second.Stat(); err != nil {
+				t.Error("second borrowed route closed")
 			}
 		})
 	}
