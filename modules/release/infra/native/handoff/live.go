@@ -198,12 +198,14 @@ func (l *Live) VerifyQuit(ctx context.Context, offline bool) error {
 		if l.quitBound && digest != l.quitDigest {
 			return ErrQuitChanged
 		}
+		// Later route/absence/cleanup refusal cannot authorize adopting another
+		// receipt. Rechecks retain these first physically verified bytes.
+		l.quitDigest, l.quitBound = digest, true
 		if _, present, err := named(ctx, state, "running.json", ErrProcessUnknown); err != nil {
 			return err
 		} else if present {
 			return ErrRunningMarker
 		}
-		l.quitDigest, l.quitBound = digest, true
 		return canceled(ctx)
 	})
 }

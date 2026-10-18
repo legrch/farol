@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -151,5 +152,55 @@ func TestLiveWaitExitNativeKeepsWrapperBound(t *testing.T) {
 			}
 			f.assertCustody()
 		})
+	}
+}
+
+// Real disposable receipt/route/borrow with a symbolic process waiter. No
+// original process, production profile, application launch or writer admission.
+func TestLiveQuitNativeKeepsFirstReceiptAcrossRefusal(t *testing.T) {
+	if os.Getenv("FAROL_HELPER_NATIVE") != "1" {
+		t.Skip("Root-scheduled physical Quit receipt custody")
+	}
+	for _, offline := range []bool{false, true} {
+		for _, replacement := range []bool{false, true} {
+			t.Run(fmt.Sprint(offline, "/", replacement), func(t *testing.T) {
+				f := newFixture(t)
+				waiter := &liveBoundWaiter{}
+				live, err := NewLive(f.homePath, f.home, f.state, f.v.expected.StateIdentity, 42, f.v.expected.ProcessStart, waiter, time.Now().Add(time.Minute))
+				if err != nil {
+					t.Fatal(err)
+				}
+				live.route.reopen = fixtureRoute
+				running := filepath.Join(f.statePath, "running.json")
+				if !offline {
+					marker := `{"schema":1,"pid":42,"startedAt":"2026-10-15T12:00:00.000Z","bootTime":null,"processStart":"Thu Oct 15 12:00:00 2026"}`
+					must(t, os.WriteFile(running, []byte(marker), 0600))
+					must(t, live.CaptureMarker(context.Background()))
+					must(t, live.ConfirmIdentity(context.Background()))
+					must(t, os.Remove(running))
+					must(t, live.WaitExit(context.Background(), time.Now().Add(time.Second)))
+				}
+				first := true
+				live.route.now = func() time.Time {
+					if first {
+						first = false
+						must(t, os.WriteFile(running, []byte("{}"), 0600))
+					}
+					return f.v.now()
+				}
+				wantCode(t, live.VerifyQuit(context.Background(), offline), ErrRunningMarker)
+				must(t, os.Remove(running))
+				if replacement {
+					f.writeQuit(goodQuit + "\n")
+				}
+				err = live.VerifyQuit(context.Background(), offline)
+				if replacement {
+					wantCode(t, err, ErrQuitChanged)
+				} else if err != nil {
+					t.Fatal("original receipt could not be rechecked", err)
+				}
+				f.assertCustody()
+			})
+		}
 	}
 }
