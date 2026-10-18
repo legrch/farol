@@ -329,6 +329,15 @@ export class Client {
     return this.context;
   }
 
+  // Original validated handshake facts, never a request, renewed handshake,
+  // effect probe or authority grant. The retained array is frozen on adoption.
+  get verifiedCapabilities(): readonly string[] {
+    void this.verifiedContext;
+    if (!this.identity)
+      throw new BridgeError("unavailable", "handshake_required");
+    return this.identity.capabilities;
+  }
+
   request(
     method: string,
     body: Json,
@@ -709,6 +718,7 @@ export class Client {
             code = "wrong_backend_identity";
           } else {
             // Adopt verified identity before the decoder handles the next frame.
+            Object.freeze(identity.capabilities);
             this.identity = Object.freeze(identity);
             this.context = Object.freeze({ ...result.context });
           }
