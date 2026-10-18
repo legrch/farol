@@ -27,12 +27,16 @@ type Store struct {
 var _ port.AccessRepository = (*Store)(nil)
 
 // CommitFailure preserves the distinction between an unavailable owner and a
-// possibly published authority update. Its error unwraps to an existing refusal
-// vocabulary; it never carries native paths or authorizes automatic replay.
-type CommitFailure struct{ Unknown bool }
+// possibly published authority update. Its Error text uses the existing safe
+// refusal vocabulary; Is/As retain causes, which must not be logged. It never
+// authorizes automatic replay.
+type CommitFailure struct {
+	Unknown bool
+	cause   error
+}
 
 func (e *CommitFailure) Error() string { return unavailable().Error() }
-func (e *CommitFailure) Unwrap() error { return unavailable() }
+func (e *CommitFailure) Unwrap() error { return errors.Join(unavailable(), e.cause) }
 func OutcomeUnknown(err error) bool {
 	var failure *CommitFailure
 	return errors.As(err, &failure) && failure.Unknown
@@ -54,23 +58,34 @@ func Open(root string, binding Binding, clock port.Clock) (*Store, error) {
 }
 func open(root string, b Binding, clock port.Clock, create bool) (*Store, error) {
 	if !validBinding(b) || clock == nil {
-		return nil, unavailable()
+		return nil, constructorError(unavailable(), ConstructorCleanupNotAcquired)
 	}
 	return openWithDisk(root, b, clock, create, openDisk)
 }
 
-// Only package tests inject native sync failures into the real disk adapter.
+// Only package tests inject native receipt failures into the real disk adapter.
 // Production callers cannot select a weaker restore path.
 func openWithDisk(root string, b Binding, clock port.Clock, create bool, openDisk func(string) (*disk, error)) (*Store, error) {
 	if !validBinding(b) || clock == nil {
-		return nil, unavailable()
+		return nil, constructorError(unavailable(), ConstructorCleanupNotAcquired)
 	}
 	d, err := openDisk(root)
 	if err != nil {
+		var failure *constructorFailure
+		if !errors.As(err, &failure) {
+			return nil, constructorError(err, ConstructorCleanupUnreported)
+		}
 		return nil, err
 	}
 	s := &Store{binding: b, disk: d, clock: clock}
-	fail := func(err error) (*Store, error) { d.close(); return nil, err }
+	fail := func(primary error) (*Store, error) {
+		closed := d.close()
+		cleanup := ConstructorCleanupConfirmed
+		if closed != nil {
+			cleanup = ConstructorCleanupUnknown
+		}
+		return nil, constructorError(errors.Join(primary, closed), cleanup)
+	}
 	if create {
 		initial := state{Participants: map[string]retainedParticipant{}}
 		raw, err := encodeState(b, initial)
@@ -106,7 +121,7 @@ func (s *Store) check(ctx context.Context) error {
 	raw, err := s.disk.read()
 	if err != nil || digest(raw) != s.digest {
 		s.poisoned = true
-		return unavailable()
+		return refuse(err)
 	}
 	// Decode on restore and each trusted publication; byte identity keeps a valid
 	// external replacement from bypassing the owner's mutation serialization.
@@ -143,9 +158,6 @@ func (s *Store) WithSnapshot(ctx context.Context, id string, inspect func(port.A
 func (s *Store) Close() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	if s.closed {
-		return nil
-	}
 	s.closed = true
 	return s.disk.close()
 }
@@ -185,8 +197,9 @@ func (s *Store) commitWithPublication(ctx context.Context, n state, withPublicat
 		return err
 	}
 	if err = s.disk.writeWithPublication(raw, s.digest, withPublication); err != nil {
-		var refused *publicationRefusal
-		if !errors.As(err, &refused) {
+		// Only the sole pre-publication refusal is known clean. A later cleanup
+		// failure may wrap that refusal and must still poison this owner.
+		if _, refused := err.(*publicationRefusal); !refused {
 			s.poisoned = true
 		}
 		return err

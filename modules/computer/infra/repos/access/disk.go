@@ -23,6 +23,10 @@ type disk struct {
 	lockIdentity  unix.Stat_t
 	syncDirectory func(int) error
 	syncSnapshot  func(int) error
+	cleanup       nativeCleanup
+	cleanupErr    error
+	closeErr      error
+	closed        bool
 }
 
 func private(s unix.Stat_t, kind uint32, mode uint32) bool {
@@ -34,108 +38,153 @@ func stableState(a, b unix.Stat_t) bool {
 }
 func fdstat(fd int) (unix.Stat_t, error) { var s unix.Stat_t; err := unix.Fstat(fd, &s); return s, err }
 func openDisk(root string) (*disk, error) {
+	return openDiskWithCleanup(root, nativeCleanup{})
+}
+func openDiskWithCleanup(root string, cleanup nativeCleanup) (*disk, error) {
 	if !absolute(root) {
-		return nil, unavailable()
+		return nil, constructorError(unavailable(), ConstructorCleanupNotAcquired)
 	}
 	canonical, err := filepath.EvalSymlinks(root)
 	if err != nil || canonical != root {
-		return nil, unavailable()
+		return nil, constructorError(refuse(err), ConstructorCleanupNotAcquired)
 	}
 	dir, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, unavailable()
+		return nil, constructorError(refuse(err), ConstructorCleanupNotAcquired)
 	}
-	d := &disk{root: root, dir: dir, lock: -1, syncDirectory: unix.Fsync, syncSnapshot: unix.Fsync}
-	fail := func() (*disk, error) { d.close(); return nil, unavailable() }
+	d := &disk{root: root, dir: dir, lock: -1, syncDirectory: unix.Fsync, syncSnapshot: unix.Fsync, cleanup: cleanup}
+	fail := func(primary error) (*disk, error) {
+		closed := d.close()
+		status := ConstructorCleanupConfirmed
+		if closed != nil {
+			status = ConstructorCleanupUnknown
+		}
+		return nil, constructorError(errors.Join(primary, closed), status)
+	}
 	if d.identity, err = fdstat(dir); err != nil || !private(d.identity, unix.S_IFDIR, 0700) {
-		return fail()
+		return fail(refuse(err))
 	}
 	d.lock, err = unix.Openat(dir, lockName, unix.O_RDWR|unix.O_CREAT|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0600)
 	if err != nil {
-		return fail()
+		return fail(refuse(err))
 	}
 	if d.lockIdentity, err = fdstat(d.lock); err != nil || !private(d.lockIdentity, unix.S_IFREG, 0600) {
-		return fail()
+		return fail(refuse(err))
 	}
-	if unix.Flock(d.lock, unix.LOCK_EX|unix.LOCK_NB) != nil || d.check() != nil {
-		return fail()
+	if err = unix.Flock(d.lock, unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		return fail(refuse(err))
+	}
+	if err = d.check(); err != nil {
+		return fail(err)
 	}
 	return d, nil
 }
 func (d *disk) check() error {
-	if d.dir < 0 || d.lock < 0 {
-		return unavailable()
+	if d.closed || d.dir < 0 || d.lock < 0 || d.cleanupErr != nil {
+		return refuse(d.cleanupErr, d.closeErr)
 	}
 	var named, lock unix.Stat_t
 	current, err := fdstat(d.dir)
-	if err != nil || !same(current, d.identity) || !private(current, unix.S_IFDIR, 0700) || unix.Lstat(d.root, &named) != nil || !same(named, d.identity) || !private(named, unix.S_IFDIR, 0700) {
-		return unavailable()
+	if err != nil || !same(current, d.identity) || !private(current, unix.S_IFDIR, 0700) {
+		return refuse(err)
+	}
+	if err = unix.Lstat(d.root, &named); err != nil || !same(named, d.identity) || !private(named, unix.S_IFDIR, 0700) {
+		return refuse(err)
 	}
 	current, err = fdstat(d.lock)
-	if err != nil || !same(current, d.lockIdentity) || !private(current, unix.S_IFREG, 0600) || unix.Fstatat(d.dir, lockName, &lock, unix.AT_SYMLINK_NOFOLLOW) != nil || !same(lock, d.lockIdentity) || !private(lock, unix.S_IFREG, 0600) {
-		return unavailable()
+	if err != nil || !same(current, d.lockIdentity) || !private(current, unix.S_IFREG, 0600) {
+		return refuse(err)
+	}
+	if err = unix.Fstatat(d.dir, lockName, &lock, unix.AT_SYMLINK_NOFOLLOW); err != nil || !same(lock, d.lockIdentity) || !private(lock, unix.S_IFREG, 0600) {
+		return refuse(err)
 	}
 	canonical, err := filepath.EvalSymlinks(d.root)
 	if err != nil || canonical != d.root {
-		return unavailable()
+		return refuse(err)
 	}
 	return nil
 }
 func (d *disk) close() error {
-	var err error
-	if d.lock >= 0 {
-		err = unix.Close(d.lock)
-		d.lock = -1
+	if d.closed {
+		return d.closeErr
 	}
-	if d.dir >= 0 {
-		err = errors.Join(err, unix.Close(d.dir))
-		d.dir = -1
+	d.closed = true
+	failures := d.cleanupErr
+	// A close attempt consumes the original description, even when its receipt
+	// fails. Never retry a saved integer that the OS may already have reused.
+	for _, owned := range []*int{&d.lock, &d.dir} {
+		fd := *owned
+		*owned = -1
+		if fd >= 0 {
+			if err := d.cleanup.fd(fd); err != nil {
+				failures = errors.Join(failures, &cleanupFailure{cause: err})
+			}
+		}
 	}
-	return err
+	if failures != nil {
+		d.closeErr = refuse(failures)
+	}
+	return d.closeErr
 }
-func (d *disk) read() ([]byte, error) {
-	if d.check() != nil {
-		return nil, unavailable()
+func (d *disk) read() (raw []byte, err error) {
+	if err = d.check(); err != nil {
+		return nil, err
 	}
 	fd, err := unix.Openat(d.dir, stateName, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, unavailable()
+		return nil, refuse(err)
 	}
 	f := os.NewFile(uintptr(fd), stateName)
-	defer f.Close()
+	defer func() {
+		if closed := d.closeFile(f); closed != nil {
+			raw, err = nil, refuse(err, closed)
+		}
+	}()
 	before, err := fdstat(fd)
 	if err != nil || !private(before, unix.S_IFREG, 0600) || before.Size < 1 || before.Size > maxStateBytes {
-		return nil, unavailable()
+		return nil, refuse(err)
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, maxStateBytes+1))
+	raw, err = io.ReadAll(io.LimitReader(f, maxStateBytes+1))
 	if err != nil || len(raw) > maxStateBytes {
-		return nil, unavailable()
+		return nil, refuse(err)
 	}
 	after, err := fdstat(fd)
 	var named unix.Stat_t
 	// Reading may change atime; only authority-relevant metadata must remain stable.
-	if err != nil || !stableState(before, after) || unix.Fstatat(d.dir, stateName, &named, unix.AT_SYMLINK_NOFOLLOW) != nil || !stableState(named, after) || !private(named, unix.S_IFREG, 0600) || d.check() != nil {
-		return nil, unavailable()
+	if err != nil || !stableState(before, after) {
+		return nil, refuse(err)
+	}
+	if err = unix.Fstatat(d.dir, stateName, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil || !stableState(named, after) || !private(named, unix.S_IFREG, 0600) {
+		return nil, refuse(err)
+	}
+	if err = d.check(); err != nil {
+		return nil, err
 	}
 	return raw, nil
 }
 func digest(raw []byte) [32]byte { return sha256.Sum256(raw) }
 func (d *disk) create(raw []byte) error {
-	if d.check() != nil {
-		return unavailable()
+	if err := d.check(); err != nil {
+		return err
 	}
 	fd, err := unix.Openat(d.dir, stateName, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
 	if err != nil {
-		return unavailable()
+		return refuse(err)
 	}
 	f := os.NewFile(uintptr(fd), stateName)
 	_, err = f.Write(raw)
 	if err == nil {
 		err = f.Sync()
 	}
-	closeErr := f.Close()
-	if err != nil || closeErr != nil || d.syncDirectory(d.dir) != nil || d.check() != nil {
-		return &CommitFailure{Unknown: true}
+	closeErr := d.closeFile(f)
+	if err != nil || closeErr != nil {
+		return &CommitFailure{Unknown: true, cause: errors.Join(err, closeErr)}
+	}
+	if err = d.syncDirectory(d.dir); err != nil {
+		return &CommitFailure{Unknown: true, cause: err}
+	}
+	if err = d.check(); err != nil {
+		return &CommitFailure{Unknown: true, cause: err}
 	}
 	return nil
 }
@@ -146,41 +195,55 @@ func (d *disk) write(raw []byte, expected [32]byte) error {
 // A current-consent refusal before rename is known and leaves Store usable for
 // safe observation/retirement. This classification never covers an attempted
 // publication or an error after it.
-type publicationRefusal struct{}
+type publicationRefusal struct{ cause error }
 
-func (*publicationRefusal) Error() string { return unavailable().Error() }
-func (*publicationRefusal) Unwrap() error { return unavailable() }
+func (e *publicationRefusal) Error() string { return unavailable().Error() }
+func (e *publicationRefusal) Unwrap() error { return errors.Join(unavailable(), e.cause) }
 
-func (d *disk) writeWithPublication(raw []byte, expected [32]byte, withPublication func(func() error) error) error {
-	if d.check() != nil {
-		return unavailable()
+func (d *disk) writeWithPublication(raw []byte, expected [32]byte, withPublication func(func() error) error) (err error) {
+	if err = d.check(); err != nil {
+		return err
 	}
 	var token [16]byte
-	if _, err := rand.Read(token[:]); err != nil {
-		return unavailable()
+	if _, err = rand.Read(token[:]); err != nil {
+		return refuse(err)
 	}
 	name := ".computer-access-" + hex.EncodeToString(token[:]) + ".tmp"
 	fd, err := unix.Openat(d.dir, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
 	if err != nil {
-		return unavailable()
+		return refuse(err)
 	}
 	f := os.NewFile(uintptr(fd), name)
-	defer unix.Unlinkat(d.dir, name, 0)
+	attempted, renamed := false, false
+	defer func() {
+		if !renamed {
+			if removed := unix.Unlinkat(d.dir, name, 0); removed != nil && !errors.Is(removed, unix.ENOENT) {
+				if attempted {
+					err = &CommitFailure{Unknown: true, cause: errors.Join(err, removed)}
+				} else {
+					err = refuse(err, removed)
+				}
+			}
+		}
+	}()
 	_, err = f.Write(raw)
 	if err == nil {
 		err = f.Sync()
 	}
-	closed := f.Close()
-	if err != nil || closed != nil || d.check() != nil {
-		return unavailable()
+	closed := d.closeFile(f)
+	if err != nil || closed != nil {
+		return refuse(err, closed)
+	}
+	if err = d.check(); err != nil {
+		return err
 	}
 	current, err := d.read()
 	if err != nil || digest(current) != expected {
-		return unavailable()
+		return refuse(err)
 	}
 	// Store is already locked. Acquire any current owner gates only at final
 	// publication, in Store -> owner order; never acquire Store inside them.
-	calls, attempted, publicationClosed := 0, false, false
+	calls, publicationClosed := 0, false
 	var publicationErr error
 	publish := func() error {
 		if publicationClosed {
@@ -191,8 +254,10 @@ func (d *disk) writeWithPublication(raw []byte, expected [32]byte, withPublicati
 			return unavailable()
 		}
 		attempted = true
-		if unix.Renameat(d.dir, name, d.dir, stateName) != nil {
-			publicationErr = &CommitFailure{Unknown: true}
+		if renameErr := unix.Renameat(d.dir, name, d.dir, stateName); renameErr != nil {
+			publicationErr = &CommitFailure{Unknown: true, cause: renameErr}
+		} else {
+			renamed = true
 		}
 		return publicationErr
 	}
@@ -203,16 +268,22 @@ func (d *disk) writeWithPublication(raw []byte, expected [32]byte, withPublicati
 	}
 	publicationClosed = true
 	if !attempted {
-		return &publicationRefusal{}
+		return &publicationRefusal{cause: err}
 	}
 	// Once rename was attempted, a lost/malformed guard acknowledgement or any
 	// durability/readback failure remains UNKNOWN, even with visible new bytes.
-	if err != nil || calls != 1 || publicationErr != nil || d.syncDirectory(d.dir) != nil || d.check() != nil {
-		return &CommitFailure{Unknown: true}
+	if err != nil || calls != 1 || publicationErr != nil {
+		return &CommitFailure{Unknown: true, cause: errors.Join(err, publicationErr)}
+	}
+	if err = d.syncDirectory(d.dir); err != nil {
+		return &CommitFailure{Unknown: true, cause: err}
+	}
+	if err = d.check(); err != nil {
+		return &CommitFailure{Unknown: true, cause: err}
 	}
 	current, err = d.read()
 	if err != nil || digest(current) != digest(raw) {
-		return &CommitFailure{Unknown: true}
+		return &CommitFailure{Unknown: true, cause: err}
 	}
 	return nil
 }
@@ -222,36 +293,55 @@ func (d *disk) writeWithPublication(raw []byte, expected [32]byte, withPublicati
 // It never changes bytes, revision, participants or approval and never replays
 // the original update/admission. The assembler receives no usable owner until
 // both native syncs and the exact post-sync observation have succeeded.
-func (d *disk) confirm(expected []byte) error {
-	if d.check() != nil {
-		return unavailable()
+func (d *disk) confirm(expected []byte) (err error) {
+	if err = d.check(); err != nil {
+		return err
 	}
 	fd, err := unix.Openat(d.dir, stateName, unix.O_RDWR|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return unavailable()
+		return refuse(err)
 	}
 	file := os.NewFile(uintptr(fd), stateName)
-	defer file.Close()
+	defer func() {
+		if closed := d.closeFile(file); closed != nil {
+			err = refuse(err, closed)
+		}
+	}()
 	before, err := fdstat(fd)
 	if err != nil || !private(before, unix.S_IFREG, 0600) || before.Size != int64(len(expected)) {
-		return unavailable()
+		return refuse(err)
 	}
 	raw, err := io.ReadAll(io.LimitReader(file, maxStateBytes+1))
 	after, statErr := fdstat(fd)
 	var named unix.Stat_t
-	if err != nil || statErr != nil || !bytes.Equal(raw, expected) || !stableState(before, after) || unix.Fstatat(d.dir, stateName, &named, unix.AT_SYMLINK_NOFOLLOW) != nil || !stableState(named, after) || d.check() != nil {
-		return unavailable()
+	if err != nil || statErr != nil || !bytes.Equal(raw, expected) || !stableState(before, after) {
+		return refuse(err, statErr)
 	}
-	if d.syncSnapshot(fd) != nil || d.syncDirectory(d.dir) != nil {
-		return &CommitFailure{Unknown: true}
+	if err = unix.Fstatat(d.dir, stateName, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil || !stableState(named, after) {
+		return refuse(err)
+	}
+	if err = d.check(); err != nil {
+		return err
+	}
+	if err = d.syncSnapshot(fd); err != nil {
+		return &CommitFailure{Unknown: true, cause: err}
+	}
+	if err = d.syncDirectory(d.dir); err != nil {
+		return &CommitFailure{Unknown: true, cause: err}
 	}
 	after, err = fdstat(fd)
-	if err != nil || !stableState(before, after) || unix.Fstatat(d.dir, stateName, &named, unix.AT_SYMLINK_NOFOLLOW) != nil || !stableState(named, after) || d.check() != nil {
-		return &CommitFailure{Unknown: true}
+	if err != nil || !stableState(before, after) {
+		return &CommitFailure{Unknown: true, cause: err}
+	}
+	if err = unix.Fstatat(d.dir, stateName, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil || !stableState(named, after) {
+		return &CommitFailure{Unknown: true, cause: err}
+	}
+	if err = d.check(); err != nil {
+		return &CommitFailure{Unknown: true, cause: err}
 	}
 	current, err := d.read()
 	if err != nil || !bytes.Equal(current, expected) {
-		return &CommitFailure{Unknown: true}
+		return &CommitFailure{Unknown: true, cause: err}
 	}
 	return nil
 }
