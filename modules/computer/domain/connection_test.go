@@ -178,7 +178,6 @@ func TestObserveConnectionRequiresPollingEvidence(t *testing.T) {
 		{"missing component", func(s *ConnectionHealthSnapshot) { s.ControlPlane = nil }, ConnectionReasonPollingMissing},
 		{"missing details", func(s *ConnectionHealthSnapshot) { s.ControlPlane.Details = nil }, ConnectionReasonPollingMissing},
 		{"missing observation", func(s *ConnectionHealthSnapshot) { s.ControlPlane.ObservedAtMillis = nil }, ConnectionReasonPollingMissing},
-		{"old observation", func(s *ConnectionHealthSnapshot) { s.ControlPlane.ObservedAtMillis = connectionTestMillis(154_999) }, ConnectionReasonPollingStale},
 		{"runtime limited", func(s *ConnectionHealthSnapshot) { s.RuntimeLimited = true }, ConnectionReasonPollingLimited},
 		{"snapshot truncated", func(s *ConnectionHealthSnapshot) { s.Truncated = true }, ConnectionReasonPollingLimited},
 		{"component limited", func(s *ConnectionHealthSnapshot) { s.ControlPlane.Limited = true }, ConnectionReasonPollingLimited},
@@ -230,8 +229,8 @@ func TestObserveConnectionFreshnessBoundaries(t *testing.T) {
 			connectionAssertMillis(t, got.ValidUntilMillis, test.until)
 			if test.state == ConnectionStateRecentTransport {
 				connectionAssertMillis(t, got.LastPollSuccessMillis, test.success)
-			} else if got.LastPollSuccessMillis != nil {
-				t.Fatal("stale success retained as qualified transport evidence")
+			} else {
+				connectionAssertMillis(t, got.LastPollSuccessMillis, test.success)
 			}
 		})
 	}
@@ -275,8 +274,8 @@ func TestObserveConnectionWaitingIsNotOutage(t *testing.T) {
 			}
 			got := ObserveConnection(context, sample)
 			connectionAssertState(t, got, test.wantState, test.reason)
-			if got.LastPollSuccessMillis != nil || got.NextRetryMillis != nil {
-				t.Fatalf("waiting invented positive evidence or retry: %+v", got)
+			if !reflect.DeepEqual(got.LastPollSuccessMillis, test.success) || got.NextRetryMillis != nil {
+				t.Fatalf("waiting changed historical evidence or invented retry: %+v", got)
 			}
 		})
 	}
@@ -317,7 +316,7 @@ func TestObserveConnectionLatestFailure(t *testing.T) {
 			poll.Details.FailureCategory, poll.Details.HTTPStatus = test.category, test.http
 			got := ObserveConnection(context, sample)
 			connectionAssertState(t, got, test.state, test.reason)
-			if got.LastPollSuccessMillis != nil || got.NextRetryMillis != nil || !got.LocalReady {
+			if !reflect.DeepEqual(got.LastPollSuccessMillis, poll.Details.LastSuccessMillis) || got.NextRetryMillis != nil || !got.LocalReady {
 				t.Fatalf("failure qualification = %+v", got)
 			}
 		})
@@ -522,7 +521,7 @@ func TestObserveConnectionResponseAcceptanceIsHistorical(t *testing.T) {
 		{"missing component", func(s *ConnectionHealthSnapshot) { s.ResponseDelivery = nil }, false},
 		{"missing details", func(s *ConnectionHealthSnapshot) { s.ResponseDelivery.Details = nil }, false},
 		{"missing observation", func(s *ConnectionHealthSnapshot) { s.ResponseDelivery.ObservedAtMillis = nil }, false},
-		{"stale component", func(s *ConnectionHealthSnapshot) { s.ResponseDelivery.ObservedAtMillis = connectionTestMillis(154_999) }, false},
+		{"old transition retains history", func(s *ConnectionHealthSnapshot) { s.ResponseDelivery.ObservedAtMillis = connectionTestMillis(154_999) }, true},
 		{"component limited", func(s *ConnectionHealthSnapshot) { s.ResponseDelivery.Limited = true }, false},
 		{"runtime limited", func(s *ConnectionHealthSnapshot) { s.RuntimeLimited = true }, false},
 		{"truncated", func(s *ConnectionHealthSnapshot) { s.Truncated = true }, false},
@@ -611,31 +610,72 @@ func TestObserveConnectionDoesNotMutateOrAliasInputs(t *testing.T) {
 	connectionAssertMillis(t, sample.ControlPlane.Details.NextRetryMillis, 205_000)
 }
 
-func TestObserveConnectionValidityTracksComponentEvidence(t *testing.T) {
-	context, sample := connectionFixture()
-	sample.ControlPlane.ObservedAtMillis = connectionTestMillis(155_000)
-	sample.ControlPlane.Details.LastSuccessMillis = connectionTestMillis(154_000)
-	sample.ControlPlane.Details.LastAttemptMillis = connectionTestMillis(154_000)
-	got := ObserveConnection(context, sample)
+func TestObserveConnectionValidityUsesSnapshotAndSuccess(t *testing.T) {
+	c, s := connectionFixture()
+	s.ControlPlane.ObservedAtMillis = connectionTestMillis(155_000)
+	s.ControlPlane.Details.LastSuccessMillis = connectionTestMillis(154_000)
+	s.ControlPlane.Details.LastAttemptMillis = connectionTestMillis(154_000)
+	got := ObserveConnection(c, s)
 	connectionAssertState(t, got, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess)
-	connectionAssertMillis(t, got.ValidUntilMillis, context.NowMillis)
-	context.NowMillis++
-	got = ObserveConnection(context, sample)
-	connectionAssertState(t, got, ConnectionStateUnobserved, ConnectionReasonPollingStale)
+	connectionAssertMillis(t, got.ValidUntilMillis, 244_000)
+	c.NowMillis = 244_001
+	got = ObserveConnection(c, s)
+	connectionAssertState(t, got, ConnectionStateUnobserved, ConnectionReasonStalePollSuccess)
+	connectionAssertMillis(t, got.LastPollSuccessMillis, 154_000)
 
-	context, sample = connectionFixture()
-	sample.ResponseDelivery = connectionDeliveryFixture()
-	sample.ResponseDelivery.ObservedAtMillis = connectionTestMillis(155_000)
-	sample.ResponseDelivery.Details.LastAcceptedMillis = connectionTestMillis(154_000)
-	got = ObserveConnection(context, sample)
-	connectionAssertState(t, got, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess)
-	connectionAssertMillis(t, got.ValidUntilMillis, context.NowMillis)
-	connectionAssertMillis(t, got.LastResponseAcceptedMillis, 154_000)
-	context.NowMillis++
-	got = ObserveConnection(context, sample)
-	connectionAssertState(t, got, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess)
-	if got.LastResponseAcceptedMillis != nil {
-		t.Fatal("component-expired response acceptance retained")
-	}
+	c, s = connectionFixture()
+	s.ResponseDelivery = connectionDeliveryFixture()
+	s.ResponseDelivery.ObservedAtMillis = connectionTestMillis(155_000)
+	s.ResponseDelivery.Details.LastAcceptedMillis = connectionTestMillis(154_000)
+	got = ObserveConnection(c, s)
 	connectionAssertMillis(t, got.ValidUntilMillis, 245_000)
+	c.NowMillis++
+	got = ObserveConnection(c, s)
+	connectionAssertState(t, got, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess)
+	connectionAssertMillis(t, got.LastResponseAcceptedMillis, 154_000)
+	connectionAssertMillis(t, got.ValidUntilMillis, 245_000)
+}
+
+// Producer observed_at is a transition timestamp; snapshot_at is refreshed on
+// every passive read. These values reproduce that distinction without IO.
+func TestObserveConnectionProducerTransitions(t *testing.T) {
+	t.Run("recent success survives an old transition", func(t *testing.T) {
+		c, s := connectionFixture()
+		s.ControlPlane.ObservedAtMillis = connectionTestMillis(150_000)
+		s.ControlPlane.Details.LastAttemptMillis = connectionTestMillis(150_000)
+		s.ControlPlane.Details.LastSuccessMillis = connectionTestMillis(130_000)
+		got := ObserveConnection(c, s)
+		connectionAssertState(t, got, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess)
+		connectionAssertMillis(t, got.ValidUntilMillis, 220_000)
+	})
+	t.Run("first long poll has unknown health status while checking", func(t *testing.T) {
+		c, s := connectionFixture()
+		s.ControlPlane.Status, s.ControlPlane.State = "unknown", "polling"
+		s.ControlPlane.ObservedAtMillis = connectionTestMillis(140_000)
+		s.ControlPlane.Details.LastAttemptMillis = connectionTestMillis(140_000)
+		s.ControlPlane.Details.LastSuccessMillis = nil
+		s.ControlPlane.Details.CurrentPollAgeSeconds = 60
+		s.ControlPlane.Details.DeadlineSeconds = 180
+		got := ObserveConnection(c, s)
+		connectionAssertState(t, got, ConnectionStateChecking, ConnectionReasonWaitingWithoutSuccess)
+		connectionAssertMillis(t, got.ValidUntilMillis, 245_000)
+	})
+	t.Run("unchanged backpressure is not an outage", func(t *testing.T) {
+		c, s := connectionFixture()
+		s.ControlPlane.Status, s.ControlPlane.State = "unknown", "backpressured"
+		s.ControlPlane.ObservedAtMillis = connectionTestMillis(80_000)
+		s.ControlPlane.Details.LastSuccessMillis = nil
+		got := ObserveConnection(c, s)
+		connectionAssertState(t, got, ConnectionStateChecking, ConnectionReasonBackpressuredWithoutSuccess)
+	})
+	t.Run("idle delivery history does not expire current polling", func(t *testing.T) {
+		c, s := connectionFixture()
+		s.ResponseDelivery = connectionDeliveryFixture()
+		s.ResponseDelivery.ObservedAtMillis = connectionTestMillis(80_000)
+		s.ResponseDelivery.Details.LastAcceptedMillis = connectionTestMillis(80_000)
+		got := ObserveConnection(c, s)
+		connectionAssertState(t, got, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess)
+		connectionAssertMillis(t, got.ValidUntilMillis, 245_000)
+		connectionAssertMillis(t, got.LastResponseAcceptedMillis, 80_000)
+	})
 }

@@ -185,14 +185,7 @@ func ObserveConnection(context ConnectionContext, sample *ConnectionHealthSnapsh
 	if !ok {
 		return connectionObservation(ConnectionStateUnobserved, ConnectionReasonTimestampOverflow)
 	}
-	lastAccepted := connectionLastAccepted(context, sample)
-	if lastAccepted != nil {
-		responseUntil, ok := connectionAdd(*sample.ResponseDelivery.ObservedAtMillis, connectionSnapshotAge)
-		if !ok {
-			return connectionObservation(ConnectionStateUnobserved, ConnectionReasonTimestampOverflow)
-		}
-		until = min(until, responseUntil)
-	}
+	lastAccepted := connectionLastAccepted(sample)
 	observation := ConnectionObservation{
 		ObservedAtMillis:           connectionMillis(sample.SnapshotAtMillis),
 		ValidUntilMillis:           connectionMillis(until),
@@ -227,9 +220,7 @@ func ObserveConnection(context ConnectionContext, sample *ConnectionHealthSnapsh
 	switch poll.Status {
 	case "disabled":
 		return connectionWithState(observation, ConnectionStateUnobserved, ConnectionReasonPollingDisabled)
-	case "unknown":
-		return connectionWithState(observation, ConnectionStateUnobserved, ConnectionReasonPollingUnknown)
-	case "ok", "degraded":
+	case "unknown", "ok", "degraded":
 	default:
 		return connectionWithState(observation, ConnectionStateUnobserved, ConnectionReasonPollingUnsupported)
 	}
@@ -239,19 +230,19 @@ func ObserveConnection(context ConnectionContext, sample *ConnectionHealthSnapsh
 	if poll.ObservedAtMillis == nil || poll.Details == nil {
 		return connectionWithState(observation, ConnectionStateUnobserved, ConnectionReasonPollingMissing)
 	}
-	if context.NowMillis-*poll.ObservedAtMillis > connectionSnapshotAge {
-		return connectionWithState(observation, ConnectionStateUnobserved, ConnectionReasonPollingStale)
-	}
-	pollUntil, ok := connectionAdd(*poll.ObservedAtMillis, connectionSnapshotAge)
-	if !ok {
-		return connectionObservation(ConnectionStateUnobserved, ConnectionReasonTimestampOverflow)
-	}
-	until = min(until, pollUntil)
-	observation.ValidUntilMillis = connectionMillis(until)
+	// Component observed_at records a transition, not the time of this read.
+	// Only snapshot_at bounds observation freshness; historical facts never
+	// extend that bound or establish an attachment.
 	if poll.State == "stopped" {
 		return connectionWithState(observation, ConnectionStateUnobserved, ConnectionReasonPollingStopped)
 	}
 	details := poll.Details
+	if poll.Status == "unknown" && details.LastSuccessMillis != nil {
+		return connectionWithState(observation, ConnectionStateUnobserved, ConnectionReasonPollingUnknown)
+	}
+	if details.LastSuccessMillis != nil {
+		observation.LastPollSuccessMillis = connectionMillis(*details.LastSuccessMillis)
+	}
 	if details.LastErrorMillis != nil && (details.LastSuccessMillis == nil || *details.LastErrorMillis >= *details.LastSuccessMillis) {
 		state, reason := connectionFailure(poll)
 		observation = connectionWithState(observation, state, reason)
@@ -296,6 +287,9 @@ func ObserveConnection(context ConnectionContext, sample *ConnectionHealthSnapsh
 			reason = ConnectionReasonBackpressuredWithStaleSuccess
 		}
 		return connectionWithState(observation, ConnectionStateChecking, reason)
+	}
+	if poll.Status == "unknown" && poll.State != "starting" {
+		return connectionWithState(observation, ConnectionStateUnobserved, ConnectionReasonPollingUnknown)
 	}
 	reason := ConnectionReasonNoPollSuccess
 	if hasStaleSuccess {
@@ -379,12 +373,12 @@ func connectionEvidenceValid(sample *ConnectionHealthSnapshot) bool {
 	return true
 }
 
-func connectionLastAccepted(context ConnectionContext, sample *ConnectionHealthSnapshot) *uint64 {
+func connectionLastAccepted(sample *ConnectionHealthSnapshot) *uint64 {
 	delivery := sample.ResponseDelivery
 	if sample.RuntimeLimited || sample.Truncated || delivery == nil || delivery.Limited ||
 		(delivery.Status != "ok" && delivery.Status != "degraded") ||
 		!connectionIdentifier(delivery.State, 32) || delivery.ObservedAtMillis == nil ||
-		context.NowMillis-*delivery.ObservedAtMillis > connectionSnapshotAge || delivery.Details == nil {
+		delivery.Details == nil {
 		return nil
 	}
 	details := delivery.Details

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { parseConnectorHealthSnapshot } from "../../src/modules/computer/infra/connector-health-snapshot";
+import { parseConnectorHealthSnapshot } from "../../apps/desktop/bridge/connector-health-snapshot";
 
-// In-memory examples of the Lead-settled v0.0.16 aggregate schema only.
+// In-memory examples of the public v0.0.16 aggregate producer schema only.
 // These fixtures provide no native, HTTP, provider, or installed evidence.
 const snapshotAt = "2026-10-18T12:00:00.123456789Z";
 const snapshotMillis = Date.parse("2026-10-18T12:00:00.123Z");
@@ -55,8 +55,8 @@ function deliveryFixture(): Record<string, unknown> {
 
 function envelope(
   components: unknown = {
-    control_plane: pollingFixture(),
-    response_delivery: deliveryFixture(),
+    "control-plane": pollingFixture(),
+    "response-delivery": deliveryFixture(),
   },
 ): Record<string, unknown> {
   return {
@@ -86,6 +86,26 @@ function freezeInput(value: unknown): void {
 }
 
 describe("parseConnectorHealthSnapshot", () => {
+  it("reads the v0.0.16 producer component names without aliases", () => {
+    // Public producer PollHealth.Name/DeliveryHealth.Name use hyphens.
+    const actual = parseConnectorHealthSnapshot(
+      envelope({
+        "control-plane": pollingFixture(),
+        "response-delivery": deliveryFixture(),
+      }),
+    );
+    expect(actual?.controlPlane?.state).toBe("polling");
+    expect(actual?.responseDelivery?.details?.accepted).toBe(1);
+    const aliases = parseConnectorHealthSnapshot(
+      envelope({
+        control_plane: pollingFixture(),
+        response_delivery: deliveryFixture(),
+      }),
+    );
+    expect(aliases?.controlPlane).toBeNull();
+    expect(aliases?.responseDelivery).toBeNull();
+  });
+
   it("normalizes only the documented aggregate polling and delivery fields", () => {
     expect(parseConnectorHealthSnapshot(envelope())).toEqual({
       snapshotAtMillis: snapshotMillis,
@@ -317,7 +337,7 @@ describe("parseConnectorHealthSnapshot", () => {
   ])("keeps allowlisted polling state %s", (state) => {
     expect(
       parseConnectorHealthSnapshot(
-        envelope({ control_plane: { ...pollingFixture(), state } }),
+        envelope({ "control-plane": { ...pollingFixture(), state } }),
       )?.controlPlane?.state,
     ).toBe(state);
   });
@@ -327,8 +347,8 @@ describe("parseConnectorHealthSnapshot", () => {
     (status) => {
       const parsed = parseConnectorHealthSnapshot(
         envelope({
-          control_plane: { ...pollingFixture(), status, limited: true },
-          response_delivery: { ...deliveryFixture(), status, limited: true },
+          "control-plane": { ...pollingFixture(), status, limited: true },
+          "response-delivery": { ...deliveryFixture(), status, limited: true },
         }),
       );
       expect(parsed?.controlPlane).toMatchObject({ status, limited: true });
@@ -350,7 +370,10 @@ describe("parseConnectorHealthSnapshot", () => {
     "withholds malformed or unsupported polling components: %s",
     (control_plane) => {
       const parsed = parseConnectorHealthSnapshot(
-        envelope({ control_plane, response_delivery: deliveryFixture() }),
+        envelope({
+          "control-plane": control_plane,
+          "response-delivery": deliveryFixture(),
+        }),
       );
       expect(parsed?.controlPlane).toBeNull();
       expect(parsed?.responseDelivery).not.toBeNull();
@@ -364,7 +387,10 @@ describe("parseConnectorHealthSnapshot", () => {
     delete response_delivery.limited;
     expect(
       parseConnectorHealthSnapshot(
-        envelope({ control_plane, response_delivery }),
+        envelope({
+          "control-plane": control_plane,
+          "response-delivery": response_delivery,
+        }),
       ),
     ).toMatchObject({ controlPlane: null, responseDelivery: null });
   });
@@ -394,7 +420,10 @@ describe("parseConnectorHealthSnapshot", () => {
       delete details(response_delivery)[key];
     details(response_delivery).disposition = "future_disposition_v2";
     const parsed = parseConnectorHealthSnapshot(
-      envelope({ control_plane, response_delivery }),
+      envelope({
+        "control-plane": control_plane,
+        "response-delivery": response_delivery,
+      }),
     );
     expect(parsed?.controlPlane).toMatchObject({
       limited: false,
@@ -435,14 +464,16 @@ describe("parseConnectorHealthSnapshot", () => {
     const response_delivery = deliveryFixture();
     response_delivery.state = value;
     expect(
-      parseConnectorHealthSnapshot(envelope({ response_delivery }))
-        ?.responseDelivery,
+      parseConnectorHealthSnapshot(
+        envelope({ "response-delivery": response_delivery }),
+      )?.responseDelivery,
     ).toBeNull();
     response_delivery.state = "uploading";
     details(response_delivery).disposition = value;
     expect(
-      parseConnectorHealthSnapshot(envelope({ response_delivery }))
-        ?.responseDelivery?.details,
+      parseConnectorHealthSnapshot(
+        envelope({ "response-delivery": response_delivery }),
+      )?.responseDelivery?.details,
     ).toBeNull();
   });
 
@@ -456,8 +487,9 @@ describe("parseConnectorHealthSnapshot", () => {
     });
     delete details(response_delivery).last_accepted;
     expect(
-      parseConnectorHealthSnapshot(envelope({ response_delivery }))
-        ?.responseDelivery?.details,
+      parseConnectorHealthSnapshot(
+        envelope({ "response-delivery": response_delivery }),
+      )?.responseDelivery?.details,
     ).toMatchObject({
       accepted: 0,
       completed: 4,
@@ -497,7 +529,10 @@ describe("parseConnectorHealthSnapshot", () => {
           key === "consecutive_failures" ? control_plane : response_delivery;
         details(target)[key] = value;
         const parsed = parseConnectorHealthSnapshot(
-          envelope({ control_plane, response_delivery }),
+          envelope({
+            "control-plane": control_plane,
+            "response-delivery": response_delivery,
+          }),
         );
         expect(
           (key === "consecutive_failures"
@@ -514,7 +549,10 @@ describe("parseConnectorHealthSnapshot", () => {
         key === "consecutive_failures" ? control_plane : response_delivery,
       )[key];
       const parsed = parseConnectorHealthSnapshot(
-        envelope({ control_plane, response_delivery }),
+        envelope({
+          "control-plane": control_plane,
+          "response-delivery": response_delivery,
+        }),
       );
       expect(
         (key === "consecutive_failures"
@@ -543,8 +581,9 @@ describe("parseConnectorHealthSnapshot", () => {
       const control_plane = pollingFixture();
       details(control_plane)[key] = value;
       expect(
-        parseConnectorHealthSnapshot(envelope({ control_plane }))?.controlPlane
-          ?.details,
+        parseConnectorHealthSnapshot(
+          envelope({ "control-plane": control_plane }),
+        )?.controlPlane?.details,
       ).toBeNull();
     });
   }
@@ -570,7 +609,10 @@ describe("parseConnectorHealthSnapshot", () => {
     ])
       details(response_delivery)[key] = Number.MAX_SAFE_INTEGER;
     const parsed = parseConnectorHealthSnapshot(
-      envelope({ control_plane, response_delivery }),
+      envelope({
+        "control-plane": control_plane,
+        "response-delivery": response_delivery,
+      }),
     );
     expect(parsed?.controlPlane?.details?.consecutiveFailures).toBe(
       Number.MAX_SAFE_INTEGER,
@@ -605,7 +647,10 @@ describe("parseConnectorHealthSnapshot", () => {
         ].includes(key);
         details(polling ? control_plane : response_delivery)[key] = value;
         const parsed = parseConnectorHealthSnapshot(
-          envelope({ control_plane, response_delivery }),
+          envelope({
+            "control-plane": control_plane,
+            "response-delivery": response_delivery,
+          }),
         );
         expect(
           (polling ? parsed?.controlPlane : parsed?.responseDelivery)?.details,
@@ -628,7 +673,10 @@ describe("parseConnectorHealthSnapshot", () => {
     details(control_plane).failure_category = value;
     details(response_delivery).failure_category = value;
     const parsed = parseConnectorHealthSnapshot(
-      envelope({ control_plane, response_delivery }),
+      envelope({
+        "control-plane": control_plane,
+        "response-delivery": response_delivery,
+      }),
     );
     expect(parsed?.controlPlane?.details?.failureCategory).toBe(
       value === "future_error" ? null : value,
@@ -646,7 +694,10 @@ describe("parseConnectorHealthSnapshot", () => {
       details(control_plane).http_status = value;
       details(response_delivery).http_status = value;
       const parsed = parseConnectorHealthSnapshot(
-        envelope({ control_plane, response_delivery }),
+        envelope({
+          "control-plane": control_plane,
+          "response-delivery": response_delivery,
+        }),
       );
       expect(parsed?.controlPlane?.details?.httpStatus).toBe(
         value === 0 ? null : value,
@@ -672,7 +723,10 @@ describe("parseConnectorHealthSnapshot", () => {
     details(control_plane)[key as string] = value;
     details(response_delivery)[key as string] = value;
     const parsed = parseConnectorHealthSnapshot(
-      envelope({ control_plane, response_delivery }),
+      envelope({
+        "control-plane": control_plane,
+        "response-delivery": response_delivery,
+      }),
     );
     expect(parsed?.controlPlane?.details).toBeNull();
     expect(parsed?.responseDelivery?.details).toBeNull();
@@ -683,7 +737,9 @@ describe("parseConnectorHealthSnapshot", () => {
     (value) => {
       const control_plane = pollingFixture();
       control_plane.details = value;
-      const parsed = parseConnectorHealthSnapshot(envelope({ control_plane }));
+      const parsed = parseConnectorHealthSnapshot(
+        envelope({ "control-plane": control_plane }),
+      );
       expect(parsed?.controlPlane).toMatchObject({
         status: "ok",
         state: "polling",
@@ -696,8 +752,8 @@ describe("parseConnectorHealthSnapshot", () => {
     const control_plane = pollingFixture();
     const response_delivery = deliveryFixture();
     const input = envelope({
-      control_plane,
-      response_delivery,
+      "control-plane": control_plane,
+      "response-delivery": response_delivery,
       private_component: { raw_error: "DO_NOT_RETAIN" },
     });
     input.url = "DO_NOT_RETAIN";
@@ -755,7 +811,7 @@ describe("parseConnectorHealthSnapshot", () => {
     });
     expect(parseConnectorHealthSnapshot(input)).toBeNull();
     expect(parseConnectorHealthSnapshot(Object.create(envelope()))).toBeNull();
-    const components = Object.create({ control_plane: pollingFixture() });
+    const components = Object.create({ "control-plane": pollingFixture() });
     expect(
       parseConnectorHealthSnapshot(envelope(components))?.controlPlane,
     ).toBeNull();
@@ -774,11 +830,11 @@ describe("parseConnectorHealthSnapshot", () => {
     const control_plane = pollingFixture();
     control_plane.details = inaccessible;
     expect(
-      parseConnectorHealthSnapshot(envelope({ control_plane }))?.controlPlane
-        ?.details,
+      parseConnectorHealthSnapshot(envelope({ "control-plane": control_plane }))
+        ?.controlPlane?.details,
     ).toBeNull();
     expect(
-      parseConnectorHealthSnapshot(envelope({ control_plane: inaccessible }))
+      parseConnectorHealthSnapshot(envelope({ "control-plane": inaccessible }))
         ?.controlPlane,
     ).toBeNull();
     const revoked = Proxy.revocable({}, {});

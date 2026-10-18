@@ -377,12 +377,12 @@ export function parseConnectorHealthSnapshot(
       ready,
       truncated,
       controlPlane: component(
-        components === null ? MISSING : field(components, "control_plane"),
+        components === null ? MISSING : field(components, "control-plane"),
         pollingState,
         pollingDetails,
       ),
       responseDelivery: component(
-        components === null ? MISSING : field(components, "response_delivery"),
+        components === null ? MISSING : field(components, "response-delivery"),
         (state) => (identifier(state, 32) ? state : null),
         deliveryDetails,
       ),
