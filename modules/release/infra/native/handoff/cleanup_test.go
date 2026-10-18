@@ -34,9 +34,11 @@ func TestEveryOwnedVerifierCloseRefusesSuccess(t *testing.T) {
 			}}
 			err := f.v.VerifyClosed(context.WithValue(context.Background(), nativeKey{}, n))
 			checkNativeFailure(t, err, ErrCleanup, true, cause)
-			want := 3
-			if target == 4 {
-				want = 4
+			// Route owners close before the independent lease probe opens.
+			// An unconfirmed route close stops there; later owners must not open.
+			want := target
+			if target <= 2 {
+				want = 2
 			}
 			if calls != want {
 				t.Fatalf("cleanup omitted or repeated: %d want %d", calls, want)
