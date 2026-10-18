@@ -174,6 +174,13 @@ func openRoute(ctx context.Context, homePath string) (homeFD, stateFD int, err e
 }
 
 func (v *Verifier) verifyInherited(ctx context.Context, home, state, lease int) (err error) {
+	if err := v.verifyRoute(ctx, home, state); err != nil {
+		return err
+	}
+	return v.verifyLease(ctx, state, lease)
+}
+
+func (v *Verifier) verifyRoute(ctx context.Context, home, state int) (err error) {
 	currentHome, currentState, err := v.reopen(ctx, v.homePath)
 	defer func() {
 		closeOwned(ctx, &currentState, &err)
@@ -204,6 +211,10 @@ func (v *Verifier) verifyInherited(ctx context.Context, home, state, lease int) 
 	if !namedState.sameIdentity(heldState) || namedState.links != heldState.links || !heldState.directory() || heldState.uid != uint32(unix.Geteuid()) || heldState.mode&07777 != 0700 || !heldState.matches(v.expected.StateIdentity) {
 		return ErrStateChanged
 	}
+	return canceled(ctx)
+}
+
+func (v *Verifier) verifyLease(ctx context.Context, state, lease int) error {
 	before, exists, err := named(ctx, state, "promotion.lease", ErrLeaseIdentity)
 	if err != nil {
 		return err
@@ -282,14 +293,18 @@ func checkInheritedProbe(ctx context.Context, state int, inherited fingerprint) 
 }
 
 func readQuit(ctx context.Context, state int) (data []byte, err error) {
-	before, exists, err := named(ctx, state, "last-quit.json", ErrQuitChanged)
+	return readRecord(ctx, state, "last-quit.json", maxRecord)
+}
+
+func readRecord(ctx context.Context, state int, name string, limit int) (data []byte, err error) {
+	before, exists, err := named(ctx, state, name, ErrQuitChanged)
 	if err != nil {
 		return nil, err
 	}
-	if !exists || !before.privateRecord() || before.size < 1 || before.size > maxRecord {
+	if !exists || !before.privateRecord() || before.size < 1 || before.size > int64(limit) {
 		return nil, ErrQuitChanged
 	}
-	fd, err := native(ctx).openat(state, "last-quit.json", readFlags, 0)
+	fd, err := native(ctx).openat(state, name, readFlags, 0)
 	defer func() {
 		closeOwned(ctx, &fd, &err)
 		if err != nil {
@@ -299,10 +314,14 @@ func readQuit(ctx context.Context, state int) (data []byte, err error) {
 	if e := nativeFailure(ctx, ErrQuitChanged, err); e != nil {
 		return nil, e
 	}
-	return readPinnedQuit(ctx, state, fd, before)
+	return readPinnedRecord(ctx, state, fd, name, limit, before)
 }
 
 func readPinnedQuit(ctx context.Context, state, fd int, before fingerprint) ([]byte, error) {
+	return readPinnedRecord(ctx, state, fd, "last-quit.json", maxRecord, before)
+}
+
+func readPinnedRecord(ctx context.Context, state, fd int, name string, limit int, before fingerprint) ([]byte, error) {
 	pinned, err := held(ctx, fd, ErrQuitChanged)
 	if err != nil {
 		return nil, err
@@ -310,7 +329,7 @@ func readPinnedQuit(ctx context.Context, state, fd int, before fingerprint) ([]b
 	if pinned != before {
 		return nil, ErrQuitChanged
 	}
-	data := make([]byte, maxRecord+1)
+	data := make([]byte, limit+1)
 	n := 0
 	for n < len(data) {
 		if err = canceled(ctx); err != nil {
@@ -329,7 +348,7 @@ func readPinnedQuit(ctx context.Context, state, fd int, before fingerprint) ([]b
 	if err != nil {
 		return nil, err
 	}
-	current, exists, err := named(ctx, state, "last-quit.json", ErrQuitChanged)
+	current, exists, err := named(ctx, state, name, ErrQuitChanged)
 	if err != nil {
 		return nil, err
 	}

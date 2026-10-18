@@ -183,30 +183,44 @@ func canceled(ctx context.Context) error {
 }
 
 func (v *Verifier) run(ctx context.Context, fn func(int, int, int) error) error {
+	if v == nil {
+		return ErrDependency
+	}
+	return v.withFiles(ctx, []*os.File{v.home, v.state, v.lease}, func(fds []int) error { return fn(fds[0], fds[1], fds[2]) })
+}
+
+func (v *Verifier) withFiles(ctx context.Context, files []*os.File, fn func([]int) error) error {
 	if err := canceled(ctx); err != nil {
 		return err
 	}
 	if v == nil || v.gate == nil {
 		return ErrDependency
 	}
+	var expiration <-chan time.Time
+	if until, ok := ctx.Deadline(); ok {
+		timer := time.NewTimer(time.Until(until))
+		defer timer.Stop()
+		expiration = timer.C
+	}
 	select {
 	case v.gate <- struct{}{}:
 	case <-ctx.Done():
 		return fail(ErrCanceled, false, false, contextCauses(ctx))
+	case <-expiration:
+		return fail(ErrCanceled, false, false, context.DeadlineExceeded, contextCauses(ctx))
 	}
 	defer func() { <-v.gate }()
 	if err := canceled(ctx); err != nil {
 		return err
 	}
-	files := []*os.File{v.home, v.state, v.lease}
-	var fds [3]int
+	fds := make([]int, len(files))
 	var hold func(int) error
 	hold = func(n int) error {
 		if err := canceled(ctx); err != nil {
 			return err
 		}
 		if n == len(files) {
-			return fn(fds[0], fds[1], fds[2])
+			return fn(fds)
 		}
 		raw, err := native(ctx).conn(files[n])
 		if err != nil {

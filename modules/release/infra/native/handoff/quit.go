@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"io"
 	"regexp"
 	"strconv"
 	"time"
@@ -75,11 +74,8 @@ func (v *Verifier) verifyClosed(ctx context.Context, state int) error {
 	if err = canceled(ctx); err != nil {
 		return err
 	}
-	if now.IsZero() || now.Year() < 1 || now.Year() > 9999 {
-		return ErrClock
-	}
-	if !at.After(started) || at.After(now) {
-		return ErrQuitStale
+	if err := verifyQuitTime(at, &started, now); err != nil {
+		return err
 	}
 	// Observe marker again after the receipt read. This narrows races without
 	// claiming atomic exclusion of a restarted process or external namespace.
@@ -91,40 +87,31 @@ func (v *Verifier) verifyClosed(ctx context.Context, state int) error {
 	return canceled(ctx)
 }
 
+// Both native handoff paths observe an already completed Quit. Only offline
+// recovery lacks a captured process start; it still cannot accept a future Quit.
+func verifyQuitTime(at time.Time, started *time.Time, now time.Time) error {
+	if now.IsZero() || now.Year() < 1 || now.Year() > 9999 {
+		return ErrClock
+	}
+	if started != nil && !at.After(*started) || at.After(now) {
+		return ErrQuitStale
+	}
+	return nil
+}
+
 func quitTimestamp(data []byte) (time.Time, error) {
-	if len(data) < 1 || len(data) > maxRecord || !strictUnicode(data) {
+	if len(data) < 1 || len(data) > maxRecord {
 		return time.Time{}, ErrQuitInvalid
 	}
-	d := json.NewDecoder(bytes.NewReader(data))
-	t, err := d.Token()
-	if err != nil || t != json.Delim('{') {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || !strictUnicode(data) {
+		return time.Time{}, ErrQuitInvalid
+	}
+	if trimmed[0] != '{' {
 		return time.Time{}, ErrQuitNotConfirmed
 	}
-	fields := make(map[string]json.RawMessage, 4)
-	for d.More() {
-		t, err = d.Token()
-		if err != nil {
-			return time.Time{}, ErrQuitInvalid
-		}
-		k, ok := t.(string)
-		if !ok {
-			return time.Time{}, ErrQuitInvalid
-		}
-		if _, exists := fields[k]; exists {
-			return time.Time{}, ErrQuitInvalid
-		}
-		var raw json.RawMessage
-		if d.Decode(&raw) != nil {
-			return time.Time{}, ErrQuitInvalid
-		}
-		fields[k] = raw
-	}
-	t, err = d.Token()
-	if err != nil || t != json.Delim('}') {
-		return time.Time{}, ErrQuitInvalid
-	}
-	var extra any
-	if d.Decode(&extra) != io.EOF {
+	fields, err := recordFields(data)
+	if err != nil {
 		return time.Time{}, ErrQuitInvalid
 	}
 	if len(fields) != 4 || !bytes.Equal(bytes.TrimSpace(fields["schema"]), []byte("1")) || !bytes.Equal(bytes.TrimSpace(fields["drained"]), []byte("true")) {
@@ -135,7 +122,8 @@ func quitTimestamp(data []byte) (time.Time, error) {
 		return time.Time{}, ErrQuitNotConfirmed
 	}
 	var at string
-	if len(fields["at"]) == 0 || bytes.TrimSpace(fields["at"])[0] != '"' || json.Unmarshal(fields["at"], &at) != nil {
+	atData := bytes.TrimSpace(fields["at"])
+	if len(atData) == 0 || atData[0] != '"' || json.Unmarshal(atData, &at) != nil {
 		return time.Time{}, ErrQuitNotConfirmed
 	}
 	parsed, ok := timestamp(at)

@@ -625,7 +625,7 @@ func TestCancellationDuringOwnedPinCleanup(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			native := testNative()
-			b := &faultBackend{backend: native, closeFn: func(fd int) { native.close(fd); cancel() }}
+			b := &faultBackend{backend: native, closeFn: func(fd int) error { err := native.close(fd); cancel(); return err }}
 			if nativeError != nil {
 				b.moveFn = func(int, string, int, string, bool) error { return nativeError }
 			}
@@ -1069,15 +1069,14 @@ type faultBackend struct {
 	moveFn  func(int, string, int, string, bool) error
 	syncFn  func(int) error
 	pinFn   func(int, string) (int, error)
-	closeFn func(int)
+	closeFn func(int) error
 }
 
-func (b *faultBackend) close(fd int) {
+func (b *faultBackend) close(fd int) error {
 	if b.closeFn != nil {
-		b.closeFn(fd)
-		return
+		return b.closeFn(fd)
 	}
-	b.backend.close(fd)
+	return b.backend.close(fd)
 }
 
 func (b *faultBackend) pin(fd int, name string) (int, error) {
@@ -1110,4 +1109,103 @@ func (b *faultBackend) sync(fd int) error {
 		return b.syncFn(fd)
 	}
 	return b.backend.sync(fd)
+}
+
+// Actual owned pins are closed once, then a lost receipt is injected. This
+// tests uncertainty propagation, not a physical OS Close failure.
+func TestOwnedPinCloseReceiptIsRetained(t *testing.T) {
+	if os.Getenv("FAROL_HELPER_NATIVE") != "1" {
+		t.Skip("Root-scheduled pin cleanup receipt")
+	}
+	for _, kind := range []string{"rename", "exchange", "publication", "pre-effect", "cancel"} {
+		t.Run(kind, func(t *testing.T) {
+			root, err := os.MkdirTemp("", "farol-pin-close-receipt-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Log("RETAINED pin receipt fixture:", root)
+			file, err := os.Open(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := file.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			d := Directory{File: file, Identity: fileIdentity(t, file)}
+			f := &fixture{t: t, root: root, left: Location{d, "staged.app"}, right: Location{d, "previous.app"}}
+			if kind == "publication" {
+				f.left.Name = ".launch-capture-0123456789abcdef01234567"
+				f.right.Name = "launch-Farol.app"
+			}
+			f.le = f.makeEntry(f.left)
+			if kind == "exchange" {
+				f.re = f.makeEntry(f.right)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			lost, primary := errors.New("private pin close receipt lost"), errors.New("private initial fence")
+			calls := map[int]int{}
+			native := testNative()
+			b := &faultBackend{backend: native, closeFn: func(fd int) error {
+				calls[fd]++
+				err := native.close(fd)
+				if kind == "cancel" {
+					cancel()
+				}
+				return errors.Join(err, lost)
+			}}
+			fence := func(context.Context) error {
+				if kind == "pre-effect" {
+					return primary
+				}
+				return nil
+			}
+			var o *Operation
+			if kind == "publication" {
+				o, err = prepareCapturePublication(d, f.left.Name, f.le, time.Now().Add(time.Minute), fence, b)
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				o = f.operation(kind == "exchange", b, fence)
+			}
+			err = o.Run(ctx)
+			code := "move_uncertain"
+			if kind == "exchange" {
+				code = "exchange_uncertain"
+			}
+			wantFailure(t, err, code, true, true)
+			if !errors.Is(err, lost) || kind == "pre-effect" && !errors.Is(err, primary) || kind == "cancel" && !errors.Is(err, context.Canceled) {
+				t.Fatal("original primary/cleanup causes lost", err)
+			}
+			want := 1
+			if kind == "exchange" {
+				want = 2
+			}
+			if len(calls) != want {
+				t.Fatal("owned pin cleanup count", calls)
+			}
+			for _, count := range calls {
+				if count != 1 {
+					t.Fatal("numeric pin close retried", calls)
+				}
+			}
+			if _, err := file.Stat(); err != nil {
+				t.Fatal("borrowed parent closed", err)
+			}
+			if kind == "pre-effect" {
+				assertEntry(t, f.left, f.le)
+				assertAbsent(t, f.right)
+			} else {
+				assertEntry(t, f.right, f.le)
+				if kind == "exchange" {
+					assertEntry(t, f.left, f.re)
+				} else {
+					assertAbsent(t, f.left)
+				}
+			}
+		})
+	}
 }

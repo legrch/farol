@@ -281,3 +281,41 @@ func TestCreateErrorsRetainUnknownEffects(t *testing.T) {
 		})
 	}
 }
+
+// Cancellation is injected only after the actual Control callback and owned
+// child cleanup return, before the public operation's final bound check.
+func TestCaptureOuterReturnRetainsPostEffectUncertainty(t *testing.T) {
+	if os.Getenv("FAROL_HELPER_NATIVE") != "1" {
+		t.Skip("Root-scheduled capture Control return")
+	}
+	root, err := os.MkdirTemp("", "farol-capture-control-return-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Log("RETAINED capture Control-return fixture:", root)
+	parent := openDirectory(t, root)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var child *os.File
+	name := ""
+	returned := false
+	err = withCapture(ctx, parent, time.Now().Add(time.Minute), func(context.Context) error { return nil }, func(capture string, d Directory) error { name = capture; child = d.File; return nil }, func() {
+		returned = true
+		if child == nil {
+			t.Error("capture never entered")
+		} else if _, err := child.Stat(); !errors.Is(err, os.ErrClosed) {
+			t.Error("original owned child cleanup not joined", err)
+		}
+		cancel()
+	})
+	var f *Failure
+	if !returned || name == "" || !errors.As(err, &f) || !f.Uncertain || !errors.Is(err, context.Canceled) {
+		t.Fatal("outer post-effect cancellation became ordinary refusal", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, name)); err != nil {
+		t.Fatal("failed capture removed", err)
+	}
+	if _, err := parent.File.Stat(); err != nil {
+		t.Fatal("original borrowed parent closed", err)
+	}
+}
