@@ -112,7 +112,7 @@ func decimal(v uint64) string { return strconv.FormatUint(v, 10) }
 func counter(v string) (uint64, error) {
 	n, err := strconv.ParseUint(v, 10, 64)
 	if err != nil || decimal(n) != v {
-		return 0, unavailable()
+		return 0, refuse(err)
 	}
 	return n, nil
 }
@@ -204,7 +204,7 @@ func stateDocument(b Binding, s state) document {
 func encodeDocument(d document) ([]byte, error) {
 	raw, err := json.Marshal(d)
 	if err != nil || len(raw)+1 > maxStateBytes {
-		return nil, unavailable()
+		return nil, refuse(err)
 	}
 	return append(raw, '\n'), nil
 }
@@ -216,7 +216,13 @@ func decodeState(b Binding, raw []byte) (state, error) {
 	var d document
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	if len(raw) > maxStateBytes || dec.Decode(&d) != nil || d.Schema != 1 || d.ProfileID != b.ProfileID || d.OwnerID != b.OwnerID || d.ComputerID != b.ComputerID || d.Participants == nil || len(d.Participants) > maxParticipants {
+	if len(raw) > maxStateBytes {
+		return s, unavailable()
+	}
+	if err := dec.Decode(&d); err != nil {
+		return s, refuse(err)
+	}
+	if d.Schema != 1 || d.ProfileID != b.ProfileID || d.OwnerID != b.OwnerID || d.ComputerID != b.ComputerID || d.Participants == nil || len(d.Participants) > maxParticipants {
 		return s, unavailable()
 	}
 	var err error
@@ -265,7 +271,7 @@ func decodeState(b Binding, raw []byte) (state, error) {
 	}
 	canonical, err := encodeDocument(current)
 	if err != nil || !bytes.Equal(canonical, raw) {
-		return s, unavailable()
+		return s, refuse(err)
 	}
 	for id, r := range s.Participants {
 		seen := map[string]bool{id: true}
@@ -282,7 +288,7 @@ func decodeState(b Binding, raw []byte) (state, error) {
 			}
 			narrowed, err := authority.Delegate(ceiling, authority.Delegation{ParticipantAdmission: authority.ParticipantAdmission{ParticipantID: child.ParticipantID, Role: child.Role, MutationOwnership: child.MutationOwnership}, Narrowing: &authority.Narrowing{Workspaces: child.Grant.Workspaces, ExcludedPaths: child.Grant.ExcludedPaths, Capabilities: child.Grant.Capabilities, Network: child.Grant.Network, Commands: child.Grant.Commands}})
 			if err != nil {
-				return s, unavailable()
+				return s, refuse(err)
 			}
 			for _, required := range narrowed.Grant.ExcludedPaths {
 				found := false
