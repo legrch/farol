@@ -9,6 +9,8 @@ import {
   protocolMinor,
   validate,
   type Context,
+  type ComputerConnectorHealthRequest,
+  type ComputerConnectorHealthState,
   type ComputerConnectorPollingRequest,
   type ComputerConnectorPollingState,
   type EventData,
@@ -35,6 +37,11 @@ export class PollingObservationExpiredError extends BridgeError {
     super("refused", "connector_polling_expired");
   }
 }
+export class HealthObservationExpiredError extends BridgeError {
+  constructor() {
+    super("refused", "connector_health_expired");
+  }
+}
 // A local refusal before stdin.write, not a remote outcome or a pipe error.
 // Keep this distinct from an identically named provider/protocol failure.
 export class RequestNotSentError extends BridgeError {
@@ -56,6 +63,12 @@ type Pending = {
   }>;
   observation?: Readonly<
     ComputerConnectorPollingRequest & { deadlineMillis: number }
+  >;
+  healthObservation?: Readonly<
+    Pick<ComputerConnectorHealthRequest, "binding" | "expectedInstanceId"> & {
+      deadlineMillis: number;
+      sampleAtMillis?: string;
+    }
   >;
   operationId?: string;
   handshake?: Handshake;
@@ -150,8 +163,8 @@ export class Client {
   private decoder = new Decoder();
   private pending = new Map<string, Pending>();
   private used = new Set<string>();
-  // Only the two reciprocal, read-only host polls use constant-space ordered
-  // wire IDs. Effect/command IDs keep their lifetime replay fence.
+  // Only the two reciprocal host polls and health reads use constant-space
+  // ordered wire IDs. Effect/command IDs keep their lifetime replay fence.
   private readonly pollNonce = randomUUID();
   private readonly polls = new Map<string, bigint>();
   private stopped = false;
@@ -439,12 +452,14 @@ export class Client {
       return Promise.reject(
         new BridgeError("unavailable", "backend_unavailable"),
       );
-    const pollLane =
+    const readLane =
       method === "chat.browser.next"
         ? "browser"
         : method === "computer.settings.store.next"
           ? "settings"
-          : undefined;
+          : method === "computer.connector.health"
+            ? "health"
+            : undefined;
     const pollingObservation = method === "computer.connector.polling";
     const retiring =
       method === "computer.connector.close" ||
@@ -459,7 +474,7 @@ export class Client {
     if (
       this.pending.size >= 32 ||
       this.writerBusy ||
-      (pollLane === undefined && this.used.size >= (retiring ? 4096 : 4088))
+      (readLane === undefined && this.used.size >= (retiring ? 4096 : 4088))
     )
       return Promise.reject(new RequestNotSentError());
     if (id.startsWith("desktop-poll-"))
@@ -478,10 +493,14 @@ export class Client {
       (pollingObservation &&
         (operationId !== undefined ||
           !validate("ComputerConnectorPollingRequest", body))) ||
-      (pollLane !== undefined &&
+      (readLane !== undefined &&
         (operationId !== undefined ||
           !validate(
-            pollLane === "browser" ? "BrowserNext" : "SettingsStoreNext",
+            readLane === "browser"
+              ? "BrowserNext"
+              : readLane === "settings"
+                ? "SettingsStoreNext"
+                : "ComputerConnectorHealthRequest",
             body,
           )))
     )
@@ -492,15 +511,15 @@ export class Client {
       ...(operationId !== undefined ? { operationId } : {}),
     };
     const sequence =
-      pollLane === undefined
+      readLane === undefined
         ? undefined
-        : (this.polls.get(pollLane) ?? 0n) + 1n;
+        : (this.polls.get(readLane) ?? 0n) + 1n;
     if (sequence !== undefined && sequence > 18446744073709551615n)
       return Promise.reject(new RequestNotSentError());
     const wireId =
       sequence === undefined
         ? id
-        : `desktop-poll-${pollLane}:${this.pollNonce}:${sequence}`;
+        : `desktop-poll-${readLane}:${this.pollNonce}:${sequence}`;
     const request: Request = { jsonrpc: "2.0", id: wireId, method, params };
     if (!validate("Request", request))
       return Promise.reject(new BridgeError("refused", "invalid_request"));
@@ -520,9 +539,13 @@ export class Client {
       return Promise.reject(
         new RequestNotSentError("request_deadline_expired"),
       );
-    if (pollLane === undefined) this.used.add(id);
-    else this.polls.set(pollLane, sequence!);
+    if (readLane === undefined) this.used.add(id);
+    else this.polls.set(readLane, sequence!);
     const responseDeadline = Date.now() + remainingMs;
+    const healthRequest =
+      readLane === "health"
+        ? (body as unknown as ComputerConnectorHealthRequest)
+        : undefined;
     return new Promise((resolve, reject) => {
       const expire = () => {
         this.pending.delete(wireId);
@@ -531,10 +554,10 @@ export class Client {
       };
       const timer = setTimeout(() => {
         // After a desktop event-loop stall, timers can precede an original
-        // reply already waiting on stdout. Give reciprocal polls and this one
-        // pure diagnostic one IO turn, with the same ID and no resend. A late
+        // reply already waiting on stdout. Give ordered reads and the polling
+        // diagnostic one IO turn, with the same ID and no resend. A late
         // diagnostic is discarded; only validated empty polls may be delivered.
-        if (pollLane !== undefined || pollingObservation) {
+        if (readLane !== undefined || pollingObservation) {
           const pending = this.pending.get(wireId);
           if (pending) pending.timeoutCheck = setImmediate(expire);
         } else expire();
@@ -544,13 +567,13 @@ export class Client {
         resolve,
         reject,
         timer,
-        ...(pollLane === undefined
+        ...(readLane === undefined || readLane === "health"
           ? {}
           : {
               poll: {
                 deadlineMillis: responseDeadline,
                 shape:
-                  pollLane === "browser"
+                  readLane === "browser"
                     ? ("BrowserNextResult" as const)
                     : ("SettingsStoreNextResult" as const),
               },
@@ -567,6 +590,18 @@ export class Client {
                   ...(body as unknown as ComputerConnectorPollingRequest)
                     .samples,
                 }),
+              },
+            }
+          : {}),
+        ...(healthRequest
+          ? {
+              healthObservation: {
+                deadlineMillis: responseDeadline,
+                binding: Object.freeze({ ...healthRequest.binding }),
+                expectedInstanceId: healthRequest.expectedInstanceId,
+                ...(healthRequest.snapshot
+                  ? { sampleAtMillis: healthRequest.snapshot.snapshotAtMillis }
+                  : {}),
               },
             }
           : {}),
@@ -642,6 +677,10 @@ export class Client {
       pending.observation !== undefined &&
       (pending.timeoutCheck !== undefined ||
         Date.now() >= pending.observation.deadlineMillis);
+    const lateHealthObservation =
+      pending.healthObservation !== undefined &&
+      (pending.timeoutCheck !== undefined ||
+        Date.now() >= pending.healthObservation.deadlineMillis);
     if (response.result) {
       const result = response.result;
       if (
@@ -700,6 +739,34 @@ export class Client {
         pending.reject(new PollingObservationExpiredError());
         return;
       }
+      if (lateHealthObservation) {
+        const original = pending.healthObservation!;
+        if (
+          result.status !== "ok" ||
+          result.code !== undefined ||
+          !validate("ComputerConnectorHealthState", result.data)
+        ) {
+          this.fail("response_timeout");
+          return;
+        }
+        const observed = result.data as unknown as ComputerConnectorHealthState;
+        if (
+          Object.entries(original.binding).some(
+            ([key, field]) =>
+              observed.binding[key as keyof typeof observed.binding] !== field,
+          ) ||
+          observed.expectedInstanceId !== original.expectedInstanceId ||
+          observed.sampleAtMillis !== original.sampleAtMillis
+        ) {
+          this.fail("response_timeout");
+          return;
+        }
+        clearTimeout(pending.timer);
+        clearImmediate(pending.timeoutCheck);
+        this.pending.delete(response.id);
+        pending.reject(new HealthObservationExpiredError());
+        return;
+      }
       if (pending.handshake) {
         const expected = pending.handshake;
         let code: string | undefined;
@@ -754,7 +821,7 @@ export class Client {
           : { ...result, requestId: pending.callerId },
       );
     } else {
-      if (latePoll || lateObservation) {
+      if (latePoll || lateObservation || lateHealthObservation) {
         this.fail("response_timeout");
         return;
       }
