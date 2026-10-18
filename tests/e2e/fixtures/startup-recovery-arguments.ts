@@ -8,6 +8,7 @@ export function parseRecoveryArguments(args: readonly string[]) {
     forceQuit: args.includes("--force-quit"),
     normalHostCrash: args.includes("--normal-host-crash"),
     backendCrash: args.includes("--backend-crash"),
+    computerStoreRefusal: args.includes("--computer-store-refusal"),
   });
   const {
     savedSettings,
@@ -15,6 +16,7 @@ export function parseRecoveryArguments(args: readonly string[]) {
     forceQuit,
     normalHostCrash,
     backendCrash,
+    computerStoreRefusal,
   } = selected;
   assert.ok(
     Number(forceQuit) + Number(normalHostCrash) + Number(backendCrash) <= 1,
@@ -27,6 +29,14 @@ export function parseRecoveryArguments(args: readonly string[]) {
   assert.ok(
     !backendCrash || (savedSettings && storedReplies),
     "SELECT_EXPLICIT_BACKEND_CRASH_JOURNEY",
+  );
+  assert.ok(
+    !computerStoreRefusal || (!forceQuit && !normalHostCrash && !backendCrash),
+    "SELECT_ONE_RECOVERY_FAULT",
+  );
+  assert.ok(
+    !computerStoreRefusal || (savedSettings && storedReplies),
+    "SELECT_EXPLICIT_COMPUTER_STORE_REFUSAL_JOURNEY",
   );
   assert.deepEqual(
     args,
@@ -42,7 +52,9 @@ export function parseRecoveryArguments(args: readonly string[]) {
                 ? ["--normal-host-crash"]
                 : backendCrash
                   ? ["--backend-crash"]
-                  : []),
+                  : computerStoreRefusal
+                    ? ["--computer-store-refusal"]
+                    : []),
           ]
         : []),
     ],
