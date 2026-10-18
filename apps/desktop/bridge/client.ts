@@ -75,6 +75,62 @@ type Pending = {
   retirementHandoffId?: string;
 };
 
+type DiagnosticObservation =
+  | Readonly<{
+      kind: "health";
+      value: NonNullable<Pending["healthObservation"]>;
+    }>
+  | Readonly<{ kind: "polling"; value: NonNullable<Pending["observation"]> }>;
+
+function diagnosticObservation(pending: Pending): DiagnosticObservation | null {
+  if (pending.healthObservation)
+    return { kind: "health", value: pending.healthObservation };
+  if (pending.observation)
+    return { kind: "polling", value: pending.observation };
+  return null;
+}
+
+// The response envelope is validated and correlated before this function.
+// A valid pure-read refusal remains a refusal; discarding it grants nothing.
+function matchesDiagnostic(
+  result: Outcome,
+  original: DiagnosticObservation,
+): boolean {
+  if (result.operationId !== undefined) return false;
+  if (result.status !== "ok") return result.data === undefined;
+  if (result.code !== undefined) return false;
+  if (original.kind === "health") {
+    if (!validate("ComputerConnectorHealthState", result.data)) return false;
+    const observed = result.data as unknown as ComputerConnectorHealthState;
+    return (
+      Object.entries(original.value.binding).every(
+        ([key, value]) =>
+          observed.binding[key as keyof typeof observed.binding] === value,
+      ) &&
+      observed.expectedInstanceId === original.value.expectedInstanceId &&
+      observed.sampleAtMillis === original.value.sampleAtMillis
+    );
+  }
+  if (!validate("ComputerConnectorPollingState", result.data)) return false;
+  const observed = result.data as unknown as ComputerConnectorPollingState;
+  return (
+    Object.entries(original.value.binding).every(
+      ([key, value]) =>
+        observed.binding[key as keyof typeof observed.binding] === value,
+    ) &&
+    observed.cycles === original.value.samples.cycles &&
+    observed.errors === original.value.samples.errors &&
+    (observed.ageSeconds !== undefined) ===
+      (observed.state === "recent" || observed.state === "stale")
+  );
+}
+
+function diagnosticExpired(original: DiagnosticObservation): BridgeError {
+  return original.kind === "health"
+    ? new HealthObservationExpiredError()
+    : new PollingObservationExpiredError();
+}
+
 // Facts observed on the original ChildProcess, not a clean-retirement decision.
 // Go must separately qualify origin retirement and the initiating host's ACK.
 export type ChildTerminalObservation = Readonly<{
@@ -162,6 +218,10 @@ const lifecycleSignals = new Set([
 export class Client {
   private decoder = new Decoder();
   private pending = new Map<string, Pending>();
+  // Never evict unresolved diagnostic IDs: a late original reply must retain
+  // its correlation. At capacity only new diagnostics backpressure; ordinary
+  // requests and the existing retirement reserve stay independent.
+  private expiredDiagnostics = new Map<string, DiagnosticObservation>();
   private used = new Set<string>();
   // Only the two reciprocal host polls and health reads use constant-space
   // ordered wire IDs. Effect/command IDs keep their lifetime replay fence.
@@ -474,6 +534,12 @@ export class Client {
     if (
       this.pending.size >= 32 ||
       this.writerBusy ||
+      ((readLane === "health" || pollingObservation) &&
+        this.expiredDiagnostics.size +
+          [...this.pending.values()].filter(
+            (item) => item.healthObservation || item.observation,
+          ).length >=
+          32) ||
       (readLane === undefined && this.used.size >= (retiring ? 4096 : 4088))
     )
       return Promise.reject(new RequestNotSentError());
@@ -548,16 +614,25 @@ export class Client {
         : undefined;
     return new Promise((resolve, reject) => {
       const expire = () => {
+        const pending = this.pending.get(wireId);
+        if (!pending) return;
+        const diagnostic = diagnosticObservation(pending);
         this.pending.delete(wireId);
+        if (diagnostic) {
+          // This read timed out, not its shared backend. Retain bounded
+          // metadata until the original reply, never resend or restore it.
+          this.expiredDiagnostics.set(wireId, diagnostic);
+          pending.reject(diagnosticExpired(diagnostic));
+          return;
+        }
         reject(new BridgeError("unknown", "response_timeout"));
         this.fail("response_timeout");
       };
       const timer = setTimeout(() => {
-        // After a desktop event-loop stall, timers can precede an original
-        // reply already waiting on stdout. Give ordered reads and the polling
-        // diagnostic one IO turn, with the same ID and no resend. A late
-        // diagnostic is discarded; only validated empty polls may be delivered.
-        if (readLane !== undefined || pollingObservation) {
+        // Reciprocal command polls retain their one-IO-turn empty-poll grace.
+        // Pure diagnostics expire independently, with bounded late-reply
+        // correlation; they cannot poison unrelated work merely for lateness.
+        if (readLane !== undefined && readLane !== "health") {
           const pending = this.pending.get(wireId);
           if (pending) pending.timeoutCheck = setImmediate(expire);
         } else expire();
@@ -663,6 +738,27 @@ export class Client {
       return;
     }
     const response = value as Response;
+    const expired = response.id
+      ? this.expiredDiagnostics.get(response.id)
+      : undefined;
+    if (expired) {
+      const result = response.result;
+      if (
+        !result ||
+        result.requestId !== response.id ||
+        result.operationId !== undefined ||
+        (this.context &&
+          (result.context.profileId !== this.context.profileId ||
+            result.context.backendGeneration !==
+              this.context.backendGeneration)) ||
+        !matchesDiagnostic(result, expired)
+      ) {
+        this.fail("crossed_response_context");
+        return;
+      }
+      this.expiredDiagnostics.delete(response.id!);
+      return;
+    }
     if (!response.id || !this.pending.has(response.id)) {
       this.fail("crossed_response_id");
       return;
@@ -708,63 +804,16 @@ export class Client {
         this.fail("response_timeout");
         return;
       }
-      if (lateObservation) {
-        const original = pending.observation!;
-        if (
-          result.status !== "ok" ||
-          result.code !== undefined ||
-          !validate("ComputerConnectorPollingState", result.data)
-        ) {
-          this.fail("response_timeout");
-          return;
-        }
-        const observed =
-          result.data as unknown as ComputerConnectorPollingState;
-        if (
-          Object.entries(original.binding).some(
-            ([key, field]) =>
-              observed.binding[key as keyof typeof observed.binding] !== field,
-          ) ||
-          observed.cycles !== original.samples.cycles ||
-          observed.errors !== original.samples.errors ||
-          (observed.ageSeconds !== undefined) !==
-            (observed.state === "recent" || observed.state === "stale")
-        ) {
+      if (lateObservation || lateHealthObservation) {
+        const original = diagnosticObservation(pending);
+        if (!original || !matchesDiagnostic(result, original)) {
           this.fail("response_timeout");
           return;
         }
         clearTimeout(pending.timer);
         clearImmediate(pending.timeoutCheck);
         this.pending.delete(response.id);
-        pending.reject(new PollingObservationExpiredError());
-        return;
-      }
-      if (lateHealthObservation) {
-        const original = pending.healthObservation!;
-        if (
-          result.status !== "ok" ||
-          result.code !== undefined ||
-          !validate("ComputerConnectorHealthState", result.data)
-        ) {
-          this.fail("response_timeout");
-          return;
-        }
-        const observed = result.data as unknown as ComputerConnectorHealthState;
-        if (
-          Object.entries(original.binding).some(
-            ([key, field]) =>
-              observed.binding[key as keyof typeof observed.binding] !== field,
-          ) ||
-          observed.expectedInstanceId !== original.expectedInstanceId ||
-          observed.sampleAtMillis !== original.sampleAtMillis
-        ) {
-          this.fail("response_timeout");
-          return;
-        }
-        clearTimeout(pending.timer);
-        clearImmediate(pending.timeoutCheck);
-        this.pending.delete(response.id);
-        pending.reject(new HealthObservationExpiredError());
+        pending.reject(diagnosticExpired(original));
         return;
       }
       if (pending.handshake) {
@@ -856,6 +905,7 @@ export class Client {
       pending.reject(new BridgeError(state, code));
     }
     this.pending.clear();
+    this.expiredDiagnostics.clear();
     if (!this.owned) {
       for (const detach of this.detachStreams) detach();
       this.detachStreams = [];

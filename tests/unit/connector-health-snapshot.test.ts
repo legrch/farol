@@ -678,12 +678,13 @@ describe("parseConnectorHealthSnapshot", () => {
         "response-delivery": response_delivery,
       }),
     );
-    expect(parsed?.controlPlane?.details?.failureCategory).toBe(
-      value === "future_error" ? null : value,
-    );
-    expect(parsed?.responseDelivery?.details?.failureCategory).toBe(
-      value === "future_error" ? null : value,
-    );
+    if (value === "future_error") {
+      expect(parsed?.controlPlane?.details).toBeNull();
+      expect(parsed?.responseDelivery?.details).toBeNull();
+    } else {
+      expect(parsed?.controlPlane?.details?.failureCategory).toBe(value);
+      expect(parsed?.responseDelivery?.details?.failureCategory).toBe(value);
+    }
   });
 
   it.each([100, 200, 401, 403, 429, 503, 504, 599, 0, null])(
@@ -842,3 +843,21 @@ describe("parseConnectorHealthSnapshot", () => {
     expect(parseConnectorHealthSnapshot(revoked.proxy)).toBeNull();
   });
 });
+
+it.each(["future_error", "raw\nfailure", ""])(
+  "withholds unsupported failure evidence instead of erasing category %j",
+  (category) => {
+    const control = pollingFixture();
+    control.status = "ok";
+    control.state = "idle";
+    const current = details(control);
+    current.failure_category = category;
+    delete current.last_error;
+    delete current.http_status;
+    const parsed = parseConnectorHealthSnapshot(
+      envelope({ "control-plane": control }),
+    );
+    // A recent success must not turn an unsupported failure report into absence.
+    expect(parsed?.controlPlane?.details).toBeNull();
+  },
+);

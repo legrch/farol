@@ -168,12 +168,17 @@ it("retains the sent binding and samples when the caller mutates its input", asy
   });
   expect(f.client.verifiedContext).toEqual(context);
 });
-it("keeps a missing original response fatal without retry", async () => {
+it("isolates a missing pure diagnostic response without retry", async () => {
   const f = await fixture();
   const pending = f.query();
   await vi.advanceTimersByTimeAsync(5001);
-  expect(await pending).toMatchObject({ error: { code: "response_timeout" } });
-  expect(() => f.client.verifiedContext).toThrow("backend_unavailable");
+  expect(await pending).toMatchObject({
+    error: { code: "connector_polling_expired" },
+  });
+  expect(f.client.verifiedContext).toEqual(context);
+  await expect(f.client.request("core.status", {})).resolves.toMatchObject({
+    status: "ok",
+  });
   expect(
     f.requests.filter((r) => r.method === "computer.connector.polling"),
   ).toHaveLength(1);

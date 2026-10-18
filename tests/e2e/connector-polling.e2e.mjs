@@ -719,6 +719,7 @@ try {
       ["stale", "unobserved"],
       ["first-poll", "checking"],
       ["backpressure", "checking"],
+      ["future-failure", "unobserved"],
       ["malformed", "unobserved"],
       ["unsupported", "unobserved"],
       ["missing", "unobserved"],

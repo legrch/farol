@@ -191,7 +191,8 @@ function failureCategory(
     case "request_error":
       return value;
     default:
-      return null;
+      // Unsupported failure evidence is not the absence of a failure.
+      return undefined;
   }
 }
 

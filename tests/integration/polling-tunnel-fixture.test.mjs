@@ -129,6 +129,12 @@ it("observes and controls the original fixture in the runtime's nested state sto
         ).toBe(60000);
       }
     }
+    await store.controlHealth("future-failure");
+    const unsupportedFailure = await readConnectorHealth(url);
+    expect(unsupportedFailure.controlPlane.details).toBeNull();
+    expect(
+      connectorHealthWire(unsupportedFailure).controlPlane,
+    ).not.toHaveProperty("details");
     for (const mode of ["malformed", "unsupported", "missing", "hold"]) {
       await store.controlHealth(mode);
       expect(await readConnectorHealth(url)).toBeNull();
@@ -136,7 +142,7 @@ it("observes and controls the original fixture in the runtime's nested state sto
     expect((await store.receipts())[0]).toMatchObject({
       pid: child.pid,
       phase: "running",
-      healthRequests: 11,
+      healthRequests: 12,
       lastHealthMode: "hold",
     });
     quitRequested = true;

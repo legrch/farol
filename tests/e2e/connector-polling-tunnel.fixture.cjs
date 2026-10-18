@@ -62,6 +62,7 @@ if (process.argv[2] === "run") {
       const mode = JSON.parse(bytes).mode;
       return [
         "recent",
+        "future-failure",
         "stale",
         "first-poll",
         "backpressure",
@@ -102,6 +103,9 @@ if (process.argv[2] === "run") {
       configured_wait_seconds: 120,
       effective_wait_seconds: 120,
       deadline_seconds: 180,
+      ...(selected === "future-failure"
+        ? { failure_category: "future_error" }
+        : {}),
       ...(failed
         ? {
             last_error: at(now),
