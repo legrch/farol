@@ -1,7 +1,8 @@
 // Explicit native lane: exact Go build and synthetic data, with either a
 // synthetic predecessor or an actual idle normal-host crash. Hidden recovery
 // UI -> Quit or exact-host SIGKILL -> same-profile reopen. No live provider,
-// installed profile, operation replay or arbitrary descendant claim.
+// installed profile, operation replay or arbitrary descendant claim. The optional
+// Computer store refusal is a future post-fix journey, not baseline qualification.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomUUID, createHash } from "node:crypto";
@@ -9,6 +10,7 @@ import { once } from "node:events";
 import { createRequire } from "node:module";
 import { buildSync } from "esbuild";
 import fs from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
@@ -33,6 +35,7 @@ const {
   normalHostCrash,
   storedReplies,
   backendCrash,
+  computerStoreRefusal,
 } = parseRecoveryArguments(process.argv.slice(2));
 assert.equal(process.platform, "darwin");
 const root = process.cwd(),
@@ -75,7 +78,9 @@ const report = {
       ? "first-recovery-host-SIGKILL"
       : backendCrash
         ? "original-recovery-backend-SIGSTOP-pending-UI-read-SIGKILL"
-        : "none",
+        : computerStoreRefusal
+          ? "disposable-fixed-computer-access-snapshot-malformed"
+          : "none",
   profile,
   status: "running",
   launches: [],
@@ -88,7 +93,7 @@ const report = {
     stage: "preparing",
   },
   limits:
-    "Synthetic data only. Stored-reply mode seeds real Go result records with an explicit UNKNOWN after the old backend exits, without original terminal/ACK or Browser Send; it is native archive/IPC/UI custody evidence only. Normal-host crash uses its actual marker, original Go owner and loopback Browser fixture. Optional recovery-host/backend crash retains a synthetic predecessor marker. Backend-loss mode suspends only the exact observed Go child, starts one explicit UI read and then kills that same child; pending UI is not proof the backend received/processed the request. Observed direct-child absence is not arbitrary descendant settlement, interrupted workspace-effect, machine restart, installed or live provider evidence.",
+    "Synthetic data only. Stored-reply mode seeds real Go result records with an explicit UNKNOWN after the old backend exits, without original terminal/ACK or Browser Send; it is native archive/IPC/UI custody evidence only. Normal-host crash uses its actual marker, original Go owner and loopback Browser fixture. Optional recovery-host/backend crash retains a synthetic predecessor marker. Backend-loss mode suspends only the exact observed Go child, starts one explicit UI read and then kills that same child; pending UI is not proof the backend received/processed the request. Computer-store refusal retains the original fixed access snapshot in the same fresh private namespace, replaces only that snapshot with malformed JSON, and selects no folder read. This expected post-fix journey requires separate qualification against actual built bytes. Observed direct-child absence is not arbitrary descendant settlement, interrupted workspace-effect, machine restart, installed or live provider evidence.",
 };
 const save = () =>
   fs.writeFile(evidence, JSON.stringify(report, null, 2) + "\n", {
@@ -106,6 +111,193 @@ const bounded = (promise, label) => {
     }),
   ]).finally(() => clearTimeout(timer));
 };
+
+const physical = (info) =>
+  [
+    info.dev,
+    info.ino,
+    info.mode,
+    info.uid,
+    info.gid,
+    info.nlink,
+    info.size,
+    info.mtimeNs,
+    info.ctimeNs,
+  ].map(String);
+const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+// Fixed paths from seedRecoveryProfile -> openNativeProfileStorage and the
+// Computer access disk's stateName. No caller-supplied path or old namespace.
+const computerSnapshot = path.join(
+  stateRoot,
+  "go-core",
+  "computer",
+  "computer-access.json",
+);
+const computerCustody = path.join(profile, "computer-store-refusal-original");
+const retainedComputerSnapshot = path.join(
+  computerCustody,
+  "computer-access.json",
+);
+let computerFault;
+async function faultDirectories(withCustody = false) {
+  const identities = {};
+  for (const directory of [
+    profile,
+    appData,
+    userData,
+    stateRoot,
+    path.join(stateRoot, "go-core"),
+    path.dirname(computerSnapshot),
+    ...(withCustody ? [computerCustody] : []),
+  ]) {
+    const info = await fs.lstat(directory, { bigint: true });
+    assert.ok(info.isDirectory(), "COMPUTER_FAULT_PARENT_NOT_DIRECTORY");
+    assert.equal(info.uid, BigInt(process.getuid()));
+    assert.equal(info.mode & 0o7777n, 0o700n);
+    assert.equal(await fs.realpath(directory), directory);
+    identities[path.relative(profile, directory)] = [
+      info.dev,
+      info.ino,
+      info.mode,
+      info.uid,
+      info.gid,
+    ].map(String);
+  }
+  return identities;
+}
+async function faultFile(target) {
+  const named = await fs.lstat(target, { bigint: true });
+  assert.ok(named.isFile(), "COMPUTER_FAULT_INPUT_NOT_REGULAR");
+  assert.equal(named.uid, BigInt(process.getuid()));
+  assert.equal(named.mode & 0o7777n, 0o600n);
+  assert.equal(named.nlink, 1n);
+  assert.ok(named.size > 0n && named.size <= 1024n * 1024n);
+  const file = await fs.open(
+    target,
+    fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
+  );
+  try {
+    const before = await file.stat({ bigint: true });
+    assert.deepEqual(physical(before), physical(named));
+    const buffer = Buffer.alloc(Number(before.size) + 1);
+    const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+    assert.equal(BigInt(bytesRead), before.size);
+    const bytes = buffer.subarray(0, bytesRead);
+    assert.deepEqual(
+      physical(await file.stat({ bigint: true })),
+      physical(before),
+    );
+    assert.deepEqual(
+      physical(await fs.lstat(target, { bigint: true })),
+      physical(before),
+    );
+    return { bytes, physical: physical(before), sha256: hash(bytes) };
+  } finally {
+    await file.close();
+  }
+}
+async function injectComputerStoreRefusal() {
+  assert.equal(seeded.originalChildCleanup, "confirmed");
+  assert.equal(seeded.stored.entries.length, 33);
+  assert.equal(path.dirname(profile), temp);
+  assert.ok(path.basename(profile).startsWith("farol-dev-onboarding-startup-"));
+  const directories = await faultDirectories();
+  const marker = await faultFile(path.join(profile, ".farol-next-e2e-root"));
+  assert.equal(marker.bytes.toString("utf8"), proof);
+  const identity = await faultFile(
+    path.join(stateRoot, "go-core", "profile.json"),
+  );
+  const nativeProfile = JSON.parse(identity.bytes.toString("utf8"));
+  assert.equal(nativeProfile.schema, "farol-native-profile/2");
+  assert.equal(nativeProfile.profileId, seeded.profileId);
+  assert.equal(typeof nativeProfile.computerId, "string");
+  assert.ok(nativeProfile.computerId.length > 0);
+  const original = await faultFile(computerSnapshot);
+  const access = JSON.parse(original.bytes.toString("utf8"));
+  assert.equal(access.schema, 1);
+  assert.equal(access.profileId, seeded.profileId);
+  assert.equal(access.ownerId, "owner-desktop");
+  assert.equal(access.computerId, nativeProfile.computerId);
+  await fs.mkdir(computerCustody, { mode: 0o700 });
+  await assert.rejects(fs.lstat(retainedComputerSnapshot), { code: "ENOENT" });
+  assert.deepEqual(await faultDirectories(), directories);
+  const custodyDirectories = await faultDirectories(true);
+  report.computerStoreFault = {
+    stage: "selected-original-unchanged",
+    snapshot: path.relative(profile, computerSnapshot),
+    custody: path.relative(profile, retainedComputerSnapshot),
+    profileId: seeded.profileId,
+    originalChildCleanup: seeded.originalChildCleanup,
+    original: { sha256: original.sha256, physical: original.physical },
+  };
+  await save();
+  assert.deepEqual(await faultFile(computerSnapshot), original);
+  assert.deepEqual(await faultDirectories(true), custodyDirectories);
+  await fs.rename(computerSnapshot, retainedComputerSnapshot);
+  const retained = await faultFile(retainedComputerSnapshot);
+  assert.deepEqual(retained.bytes, original.bytes);
+  // Rename can change ctime, but retains the original inode and other metadata.
+  assert.deepEqual(
+    retained.physical.slice(0, -1),
+    original.physical.slice(0, -1),
+  );
+  report.computerStoreFault.stage = "original-retained";
+  report.computerStoreFault.retained = {
+    sha256: retained.sha256,
+    physical: retained.physical,
+  };
+  await save();
+  const malformed = Buffer.from('{"syntheticComputerStoreRefusal":\n');
+  assert.throws(() => JSON.parse(malformed.toString("utf8")));
+  assert.deepEqual(await faultDirectories(true), custodyDirectories);
+  const file = await fs.open(
+    computerSnapshot,
+    fsConstants.O_WRONLY |
+      fsConstants.O_CREAT |
+      fsConstants.O_EXCL |
+      fsConstants.O_NOFOLLOW,
+    Number(BigInt(original.physical[2]) & 0o7777n),
+  );
+  try {
+    await file.writeFile(malformed);
+    await file.sync();
+  } finally {
+    await file.close();
+  }
+  for (const directory of [path.dirname(computerSnapshot), computerCustody]) {
+    const handle = await fs.open(
+      directory,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+    );
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  }
+  const replacement = await faultFile(computerSnapshot);
+  assert.deepEqual(replacement.bytes, malformed);
+  assert.notDeepEqual(
+    replacement.physical.slice(0, 2),
+    retained.physical.slice(0, 2),
+  );
+  assert.deepEqual(await faultFile(retainedComputerSnapshot), retained);
+  assert.deepEqual(await faultDirectories(true), custodyDirectories);
+  computerFault = {
+    directories: custodyDirectories,
+    files: new Map([
+      [computerSnapshot, replacement],
+      [retainedComputerSnapshot, retained],
+      [path.join(profile, ".farol-next-e2e-root"), marker],
+    ]),
+  };
+  report.computerStoreFault.stage = "malformed-replacement-original-retained";
+  report.computerStoreFault.replacement = {
+    sha256: replacement.sha256,
+    physical: replacement.physical,
+  };
+}
 
 await save();
 let seeded;
@@ -178,6 +370,11 @@ try {
     }).trim();
   }
   report.fixture = { ...report.fixture, stage: "prepared", ...seeded };
+  if (computerStoreRefusal) {
+    // Keep the original seed lifecycle and receipts even if fault setup fails.
+    await save();
+    await injectComputerStoreRefusal();
+  }
   await save();
 } catch (error) {
   report.status = "fixture-failed-or-unknown";
@@ -215,19 +412,6 @@ for (const [name, bytes] of retained)
 const expectedNote = savedSettings
   ? await fs.readFile(path.join(profile, "workspace", "note.md"))
   : null;
-const physical = (info) =>
-  [
-    info.dev,
-    info.ino,
-    info.mode,
-    info.uid,
-    info.gid,
-    info.nlink,
-    info.size,
-    info.mtimeNs,
-    info.ctimeNs,
-  ].map(String);
-const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const preserved = async () => {
   const result = {};
   if (normalHostCrash)
@@ -276,6 +460,26 @@ const preserved = async () => {
       };
       await inspect(directory);
     }
+  }
+  if (computerStoreRefusal) {
+    assert.ok(computerFault, "COMPUTER_STORE_FAULT_NOT_PREPARED");
+    assert.deepEqual(await faultDirectories(true), computerFault.directories);
+    assert.deepEqual(await fs.readdir(computerCustody), [
+      "computer-access.json",
+    ]);
+    for (const [target, expected] of computerFault.files) {
+      const actual = await faultFile(target);
+      assert.deepEqual(
+        actual,
+        expected,
+        "COMPUTER_STORE_FAULT_OR_CUSTODY_CHANGED",
+      );
+      result[path.relative(profile, target)] = JSON.stringify({
+        bytes: actual.sha256,
+        physical: actual.physical,
+      });
+    }
+    assert.deepEqual(await faultDirectories(true), computerFault.directories);
   }
   if (report.preservedBaseline)
     assert.deepEqual(
@@ -620,26 +824,71 @@ try {
         .getByRole("heading", { name: "Saved settings", exact: true })
         .waitFor();
       await page.getByLabel("Saved folder").selectOption(seeded.workspaceId);
-      await page
-        .getByRole("button", { name: "Open folder", exact: true })
-        .click();
-      await page
-        .getByRole("button", { name: "note.md", exact: true })
-        .waitFor();
-      await page.getByRole("button", { name: "folder/", exact: true }).click();
-      await page
-        .getByRole("button", { name: "nested.txt", exact: true })
-        .waitFor();
-      await page.getByRole("button", { name: "Up", exact: true }).click();
-      await page.getByRole("button", { name: "note.md", exact: true }).click();
-      assert.ok(expectedNote);
-      const bytes = expectedNote;
-      await page.getByText(`SHA-256 ${hash(bytes)}`, { exact: true }).waitFor();
-      launch.reads = {
-        folder: true,
-        nested: true,
-        metadata: { bytes: bytes.length, sha256: hash(bytes) },
-      };
+      if (computerStoreRefusal) {
+        await page
+          .getByText(
+            "Folder reads are unavailable. Your saved folder selection is still shown below.",
+            { exact: true },
+          )
+          .waitFor();
+        launch.availability = await page.evaluate(() =>
+          window.farolRecovery.state(),
+        );
+        assert.equal(launch.availability.status, "ready");
+        assert.equal(launch.availability.revision, seeded.settingsRevision);
+        assert.equal(launch.availability.computer, "unavailable");
+        assert.equal(launch.availability.archive, "available");
+        assert.deepEqual(launch.availability.folders, [
+          {
+            workspaceId: seeded.workspaceId,
+            label: "Recovery fixture",
+            root: path.join(profile, "workspace"),
+          },
+        ]);
+        assert.equal(
+          await page
+            .getByRole("button", { name: "Open folder", exact: true })
+            .isDisabled(),
+          true,
+        );
+        assert.equal(
+          await page.getByLabel("Folder contents", { exact: true }).count(),
+          0,
+        );
+        assert.equal(await page.locator(".recovery-metadata").count(), 0);
+        launch.reads = {
+          folder: false,
+          nested: false,
+          folderReadSelected: false,
+        };
+      } else {
+        await page
+          .getByRole("button", { name: "Open folder", exact: true })
+          .click();
+        await page
+          .getByRole("button", { name: "note.md", exact: true })
+          .waitFor();
+        await page
+          .getByRole("button", { name: "folder/", exact: true })
+          .click();
+        await page
+          .getByRole("button", { name: "nested.txt", exact: true })
+          .waitFor();
+        await page.getByRole("button", { name: "Up", exact: true }).click();
+        await page
+          .getByRole("button", { name: "note.md", exact: true })
+          .click();
+        assert.ok(expectedNote);
+        const bytes = expectedNote;
+        await page
+          .getByText(`SHA-256 ${hash(bytes)}`, { exact: true })
+          .waitFor();
+        launch.reads = {
+          folder: true,
+          nested: true,
+          metadata: { bytes: bytes.length, sha256: hash(bytes) },
+        };
+      }
       if (storedReplies) {
         await page
           .getByRole("button", { name: "Stored replies", exact: true })
@@ -674,7 +923,10 @@ try {
         const expected = [...seeded.stored.entries].sort((a, b) =>
           a.key.localeCompare(b.key),
         );
-        for (const index of [0, 32]) {
+        const readIndexes = computerStoreRefusal
+          ? expected.map((_, index) => index)
+          : [0, 32];
+        for (const index of readIndexes) {
           await page
             .getByRole("button", {
               name: `Open stored reply ${index + 1}`,
@@ -720,6 +972,42 @@ try {
             expected[index].text,
             "STORED_REPLY_TEXT_CHANGED",
           );
+          if (computerStoreRefusal) {
+            assert.equal(observed.selected, `Open stored reply ${index + 1}`);
+            const entry = expected[index];
+            assert.match(entry.key, /^[a-f0-9]{64}$/u);
+            assert.match(entry.digest, /^[a-f0-9]{64}$/u);
+            // Publication digests cover the complete original .attempt record,
+            // not just its payload. Bind the UI text to that seed receipt and
+            // the preserved original commit without issuing a second API read.
+            const record = path.join(
+              "go-core",
+              "chat",
+              "chat-results",
+              entry.key,
+            );
+            assert.equal(
+              JSON.parse(report.preservedBaseline[record + ".attempt"]).bytes,
+              entry.digest,
+              "STORED_REPLY_ORIGINAL_DIGEST_CHANGED",
+            );
+            assert.equal(
+              JSON.parse(report.preservedBaseline[record + ".commit"]).bytes,
+              hash(Buffer.from(entry.digest)),
+              "STORED_REPLY_ORIGINAL_COMMIT_CHANGED",
+            );
+            observed.originalRecordSha256 = entry.digest;
+            observed.textSha256 = hash(Buffer.from(observed.text));
+            assert.equal(observed.textSha256, hash(Buffer.from(entry.text)));
+            assert.equal(
+              await page
+                .locator(
+                  ".recovery-copy-text script, .recovery-copy-text a, .recovery-copy-text iframe",
+                )
+                .count(),
+              0,
+            );
+          }
         }
         await page.getByText("Outcome unconfirmed", { exact: true }).waitFor();
         assert.equal(
@@ -733,7 +1021,7 @@ try {
         launch.reads.archive = {
           observation: "stored_unconfirmed",
           pages: [32, 1],
-          readKeys: [expected[0].key, expected[32].key],
+          readKeys: readIndexes.map((index) => expected[index].key),
           originalFencePreserved: true,
         };
       }
@@ -742,6 +1030,28 @@ try {
         .getByRole("alert")
         .filter({ hasText: "Saved settings are unavailable" })
         .waitFor();
+    if (computerStoreRefusal) {
+      launch.afterArchiveAvailability = await page.evaluate(() =>
+        window.farolRecovery.state(),
+      );
+      assert.deepEqual(launch.afterArchiveAvailability, launch.availability);
+      assert.equal(
+        await page
+          .getByRole("heading", { name: "Saved settings", exact: true })
+          .isVisible(),
+        true,
+      );
+      assert.equal(
+        await page
+          .getByRole("button", {
+            name: "Open folder",
+            exact: true,
+            includeHidden: true,
+          })
+          .isDisabled(),
+        true,
+      );
+    }
     launch.beforeQuit = await preserved();
     const leasePath = path.join(stateRoot, "promotion.lease");
     const leaseBytes = await fs.readFile(leasePath);
@@ -1033,15 +1343,22 @@ try {
     app = null;
     await save();
   }
-  await fs.rm(profile, { recursive: true });
-  report.profileRemoved = true;
+  if (computerStoreRefusal) {
+    // Keep the original inode and malformed snapshot available for inspection.
+    report.profileRetained = "computer-store-refusal-original-and-replacement";
+  } else {
+    await fs.rm(profile, { recursive: true });
+    report.profileRemoved = true;
+  }
   report.status = savedSettings
     ? storedReplies
       ? backendCrash
         ? "passed-hidden-stored-unconfirmed-backend-loss-pending-UI-read-reopen-originals-preserved"
         : forceQuit
           ? "passed-hidden-stored-unconfirmed-host-SIGKILL-reopen-originals-preserved"
-          : "passed-hidden-stored-unconfirmed-33-replies-UNKNOWN-preserved-two-recovery-lifetimes"
+          : computerStoreRefusal
+            ? "passed-hidden-computer-store-refusal-33-stored-unconfirmed-replies-two-recovery-lifetimes-originals-retained"
+            : "passed-hidden-stored-unconfirmed-33-replies-UNKNOWN-preserved-two-recovery-lifetimes"
       : normalHostCrash
         ? "passed-normal-host-SIGKILL-real-marker-two-recovery-lifetimes-reads-originals-preserved"
         : forceQuit
