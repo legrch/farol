@@ -713,3 +713,164 @@ func TestObserveConnectionWaitingDeadlineUsesOriginalAttempt(t *testing.T) {
 	connectionAssertState(t, got, ConnectionStateChecking, ConnectionReasonWaitingWithoutSuccess)
 	connectionAssertMillis(t, got.ValidUntilMillis, 201_000)
 }
+
+// The producer captures snapshot_at before reading component locks. These value
+// fixtures model later transitions without executing the producer or any IO.
+func TestObserveConnectionProducerTimestampBounds(t *testing.T) {
+	fields := []struct {
+		name   string
+		field  func(*ConnectionHealthSnapshot) **uint64
+		state  ConnectionState
+		reason ConnectionReason
+	}{
+		{"poll observation", func(s *ConnectionHealthSnapshot) **uint64 { return &s.ControlPlane.ObservedAtMillis }, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess},
+		{"poll attempt", func(s *ConnectionHealthSnapshot) **uint64 { return &s.ControlPlane.Details.LastAttemptMillis }, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess},
+		{"poll success", func(s *ConnectionHealthSnapshot) **uint64 { return &s.ControlPlane.Details.LastSuccessMillis }, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess},
+		{"poll error", func(s *ConnectionHealthSnapshot) **uint64 { return &s.ControlPlane.Details.LastErrorMillis }, ConnectionStateUnobserved, ConnectionReasonFailureUnobserved},
+		{"delivery observation", func(s *ConnectionHealthSnapshot) **uint64 { return &s.ResponseDelivery.ObservedAtMillis }, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess},
+		{"delivery accepted", func(s *ConnectionHealthSnapshot) **uint64 { return &s.ResponseDelivery.Details.LastAcceptedMillis }, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess},
+		{"delivery completed", func(s *ConnectionHealthSnapshot) **uint64 { return &s.ResponseDelivery.Details.LastCompletedMillis }, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess},
+		{"delivery failure", func(s *ConnectionHealthSnapshot) **uint64 { return &s.ResponseDelivery.Details.LastFailureMillis }, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess},
+	}
+	for _, field := range fields {
+		for _, bound := range []struct {
+			name  string
+			value uint64
+			valid bool
+		}{
+			{"at snapshot", 200_000, true},
+			{"after snapshot before consumer", 200_002, true},
+			{"at consumer", 200_005, true},
+			{"after consumer", 200_006, false},
+			{"before runtime start", 999, false},
+		} {
+			t.Run(field.name+"/"+bound.name, func(t *testing.T) {
+				c, s := connectionFixture()
+				c.NowMillis = 200_005
+				s.ResponseDelivery = connectionDeliveryFixture()
+				*field.field(s) = connectionTestMillis(bound.value)
+				got := ObserveConnection(c, s)
+				if !bound.valid {
+					connectionAssertState(t, got, ConnectionStateUnobserved, ConnectionReasonInvalidEvidence)
+					connectionAssertNoFacts(t, got)
+					return
+				}
+				connectionAssertState(t, got, field.state, field.reason)
+				connectionAssertMillis(t, got.ObservedAtMillis, 200_000)
+				connectionAssertMillis(t, got.ValidUntilMillis, 245_000)
+			})
+		}
+	}
+}
+
+func TestObserveConnectionProducerFailureAfterSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name, category string
+		http           *uint64
+		state          ConnectionState
+		reason         ConnectionReason
+	}{
+		{"401", "http_error", connectionTestMillis(401), ConnectionStateActionRequired, ConnectionReasonAuthorizationRequired},
+		{"403", "http_error", connectionTestMillis(403), ConnectionStateActionRequired, ConnectionReasonAuthorizationRequired},
+		{"503", "http_error", connectionTestMillis(503), ConnectionStateUnavailable, ConnectionReasonHTTPUnavailable},
+		{"timeout", "timeout", nil, ConnectionStateUnavailable, ConnectionReasonTransportUnavailable},
+		{"network", "network_error", nil, ConnectionStateUnavailable, ConnectionReasonTransportUnavailable},
+		{"canceled", "canceled", nil, ConnectionStateChecking, ConnectionReasonFailureCanceled},
+		{"request error", "request_error", nil, ConnectionStateUnobserved, ConnectionReasonRequestUnobserved},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, s := connectionFixture()
+			c.NowMillis = 200_005
+			poll := s.ControlPlane
+			poll.Status, poll.State = "degraded", "backoff"
+			poll.ObservedAtMillis = connectionTestMillis(200_002)
+			poll.Details.LastErrorMillis = connectionTestMillis(200_002)
+			poll.Details.ConsecutiveFailures = 1
+			poll.Details.FailureCategory = connectionTestString(tc.category)
+			poll.Details.HTTPStatus = tc.http
+			poll.Details.NextRetryMillis = connectionTestMillis(205_000)
+			got := ObserveConnection(c, s)
+			connectionAssertState(t, got, tc.state, tc.reason)
+			connectionAssertMillis(t, got.LastPollSuccessMillis, 199_000)
+			connectionAssertMillis(t, got.NextRetryMillis, 205_000)
+			connectionAssertMillis(t, got.ValidUntilMillis, 245_000)
+		})
+	}
+}
+
+func TestObserveConnectionProducerDeliveryAfterSnapshot(t *testing.T) {
+	for _, disposition := range []string{"accepted", "completed", "failed"} {
+		t.Run(disposition, func(t *testing.T) {
+			c, s := connectionFixture()
+			c.NowMillis = 200_005
+			s.ResponseDelivery = connectionDeliveryFixture()
+			delivery := s.ResponseDelivery
+			delivery.State = disposition
+			delivery.ObservedAtMillis = connectionTestMillis(200_002)
+			delivery.Details.Disposition = disposition
+			delivery.Details.LastCompletedMillis = connectionTestMillis(200_002)
+			accepted := uint64(198_000)
+			switch disposition {
+			case "accepted":
+				accepted = 200_002
+				delivery.Details.LastAcceptedMillis = connectionTestMillis(accepted)
+				delivery.Details.Completed = 1
+			case "completed":
+				delivery.Details.Completed = 1
+			case "failed":
+				delivery.Status = "degraded"
+				delivery.Details.TerminalFailures = 1
+				delivery.Details.LastFailureMillis = connectionTestMillis(200_002)
+				delivery.Details.FailureCategory = connectionTestString("network_error")
+			}
+			got := ObserveConnection(c, s)
+			connectionAssertState(t, got, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess)
+			connectionAssertMillis(t, got.LastPollSuccessMillis, 199_000)
+			connectionAssertMillis(t, got.LastResponseAcceptedMillis, accepted)
+			connectionAssertMillis(t, got.ValidUntilMillis, 245_000)
+		})
+	}
+}
+
+func TestObserveConnectionProducerConcurrentPollAge(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		attempt       uint64
+		age, deadline float64
+		state         ConnectionState
+		reason        ConnectionReason
+	}{
+		{"existing attempt rounding", 199_000, 1.001, 60, ConnectionStateChecking, ConnectionReasonWaitingWithoutSuccess},
+		{"existing attempt excessive age", 199_000, 1.001001, 60, ConnectionStateUnobserved, ConnectionReasonInvalidEvidence},
+		{"consumer transit does not increase producer age", 199_000, 1.005, 60, ConnectionStateUnobserved, ConnectionReasonInvalidEvidence},
+		{"same millisecond rounding", 200_000, 0.0009, 60, ConnectionStateChecking, ConnectionReasonWaitingWithoutSuccess},
+		{"same millisecond excessive age", 200_000, 0.001001, 60, ConnectionStateUnobserved, ConnectionReasonInvalidEvidence},
+		{"concurrent attempt has zero age", 200_002, 0, 60, ConnectionStateChecking, ConnectionReasonWaitingWithoutSuccess},
+		{"concurrent attempt cannot have positive age", 200_002, 0.000001, 60, ConnectionStateUnobserved, ConnectionReasonInvalidEvidence},
+		{"concurrent attempt cannot underflow age", 200_002, 60, 60, ConnectionStateUnobserved, ConnectionReasonInvalidEvidence},
+		{"attempt at consumer has zero age", 200_005, 0, 60, ConnectionStateChecking, ConnectionReasonWaitingWithoutSuccess},
+		{"attempt after consumer", 200_006, 0, 60, ConnectionStateUnobserved, ConnectionReasonInvalidEvidence},
+		{"deadline still uses original attempt", 200_002, 0, 0.002, ConnectionStateUnobserved, ConnectionReasonPollDeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, s := connectionFixture()
+			c.NowMillis = 200_005
+			poll := s.ControlPlane
+			poll.Status, poll.State = "unknown", "polling"
+			poll.ObservedAtMillis = connectionTestMillis(tc.attempt)
+			poll.Details.LastAttemptMillis = connectionTestMillis(tc.attempt)
+			poll.Details.LastSuccessMillis = nil
+			poll.Details.CurrentPollAgeSeconds = tc.age
+			poll.Details.DeadlineSeconds = tc.deadline
+			got := ObserveConnection(c, s)
+			connectionAssertState(t, got, tc.state, tc.reason)
+			if tc.reason == ConnectionReasonInvalidEvidence {
+				connectionAssertNoFacts(t, got)
+			} else if tc.state == ConnectionStateChecking {
+				connectionAssertMillis(t, got.ValidUntilMillis, min(uint64(245_000), tc.attempt+uint64(math.Ceil(tc.deadline*1000))))
+			} else {
+				connectionAssertMillis(t, got.ValidUntilMillis, 245_000)
+			}
+		})
+	}
+}

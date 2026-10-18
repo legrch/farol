@@ -175,7 +175,7 @@ func ObserveConnection(context ConnectionContext, sample *ConnectionHealthSnapsh
 		!connectionLifecycle(sample.RuntimeLifecycle) {
 		return connectionObservation(ConnectionStateUnobserved, ConnectionReasonInvalidSnapshot)
 	}
-	if !connectionEvidenceValid(sample) {
+	if !connectionEvidenceValid(sample, context.NowMillis) {
 		return connectionObservation(ConnectionStateUnobserved, ConnectionReasonInvalidEvidence)
 	}
 	if context.NowMillis-sample.SnapshotAtMillis > connectionSnapshotAge {
@@ -341,41 +341,50 @@ func connectionFailure(poll *ControlPlaneHealth) (ConnectionState, ConnectionRea
 	return ConnectionStateUnobserved, ConnectionReasonFailureUnobserved
 }
 
-func connectionEvidenceValid(sample *ConnectionHealthSnapshot) bool {
+func connectionEvidenceValid(sample *ConnectionHealthSnapshot, nowMillis uint64) bool {
 	if poll := sample.ControlPlane; poll != nil {
-		if !connectionPastTimestamp(poll.ObservedAtMillis, sample) {
+		if !connectionPastTimestamp(poll.ObservedAtMillis, sample, nowMillis) {
 			return false
 		}
 		if d := poll.Details; d != nil {
-			if !connectionPastTimestamp(d.LastAttemptMillis, sample) || !connectionPastTimestamp(d.LastSuccessMillis, sample) ||
-				!connectionPastTimestamp(d.LastErrorMillis, sample) || !connectionOptionalTimestamp(d.NextRetryMillis) ||
+			if !connectionPastTimestamp(d.LastAttemptMillis, sample, nowMillis) || !connectionPastTimestamp(d.LastSuccessMillis, sample, nowMillis) ||
+				!connectionPastTimestamp(d.LastErrorMillis, sample, nowMillis) || !connectionOptionalTimestamp(d.NextRetryMillis) ||
 				d.ConsecutiveFailures > connectionMaxSafeInteger || !connectionHTTPStatus(d.HTTPStatus) ||
 				!connectionSeconds(d.CurrentPollAgeSeconds) || !connectionSeconds(d.ConfiguredWaitSeconds) ||
 				!connectionSeconds(d.EffectiveWaitSeconds) || !connectionSeconds(d.DeadlineSeconds) {
 				return false
 			}
 			if poll.State == "polling" {
-				// Millisecond truncation permits at most one millisecond of rounding.
 				start := sample.RuntimeStartedAtMillis
 				if d.LastAttemptMillis != nil {
 					start = *d.LastAttemptMillis
 				}
-				if d.DeadlineSeconds <= 0 || d.CurrentPollAgeSeconds > float64(sample.SnapshotAtMillis-start)/1000+0.001 {
+				if d.DeadlineSeconds <= 0 {
+					return false
+				}
+				if start > sample.SnapshotAtMillis {
+					// The producer clamps elapsed age to zero when an attempt
+					// starts after the root snapshot clock was captured.
+					if d.CurrentPollAgeSeconds != 0 {
+						return false
+					}
+				} else if d.CurrentPollAgeSeconds > float64(sample.SnapshotAtMillis-start)/1000+0.001 {
+					// Millisecond truncation permits at most one millisecond of rounding.
 					return false
 				}
 			}
 		}
 	}
 	if delivery := sample.ResponseDelivery; delivery != nil {
-		if !connectionPastTimestamp(delivery.ObservedAtMillis, sample) {
+		if !connectionPastTimestamp(delivery.ObservedAtMillis, sample, nowMillis) {
 			return false
 		}
 		if d := delivery.Details; d != nil {
 			if d.InProgress > connectionMaxSafeInteger || d.Attempts > connectionMaxSafeInteger ||
 				d.Retries > connectionMaxSafeInteger || d.Accepted > connectionMaxSafeInteger ||
 				d.Completed > connectionMaxSafeInteger || d.TerminalFailures > connectionMaxSafeInteger ||
-				!connectionPastTimestamp(d.LastAcceptedMillis, sample) || !connectionPastTimestamp(d.LastCompletedMillis, sample) ||
-				!connectionPastTimestamp(d.LastFailureMillis, sample) || !connectionHTTPStatus(d.HTTPStatus) {
+				!connectionPastTimestamp(d.LastAcceptedMillis, sample, nowMillis) || !connectionPastTimestamp(d.LastCompletedMillis, sample, nowMillis) ||
+				!connectionPastTimestamp(d.LastFailureMillis, sample, nowMillis) || !connectionHTTPStatus(d.HTTPStatus) {
 				return false
 			}
 		}
@@ -414,8 +423,10 @@ func connectionOptionalTimestamp(value *uint64) bool {
 	return value == nil || connectionTimestamp(*value)
 }
 
-func connectionPastTimestamp(value *uint64, sample *ConnectionHealthSnapshot) bool {
-	return value == nil || connectionTimestamp(*value) && *value >= sample.RuntimeStartedAtMillis && *value <= sample.SnapshotAtMillis
+// Components are read after the root snapshot clock is captured. Their
+// transitions may be newer than that clock, but never newer than the consumer.
+func connectionPastTimestamp(value *uint64, sample *ConnectionHealthSnapshot, nowMillis uint64) bool {
+	return value == nil || connectionTimestamp(*value) && *value >= sample.RuntimeStartedAtMillis && *value <= nowMillis
 }
 
 func connectionSeconds(value float64) bool {
