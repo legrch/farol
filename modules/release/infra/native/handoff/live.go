@@ -17,9 +17,15 @@ import (
 // It has no inherited lease, closed-proof adapter or effect capability. Boot
 // holds its separately acquired promotion lease before VerifyQuit/CheckStopped.
 type Live struct {
-	route                                               *Verifier
-	wait                                                port.ProcessWaiter
-	until                                               time.Time
+	route *Verifier
+	wait  port.ProcessWaiter
+	until time.Time
+	state *liveState
+}
+
+// Copies retain the same one-shot attempts and receipt/marker witnesses. The
+// original route gate serializes this state with borrowed native operations.
+type liveState struct {
 	markerAttempt, markerCaptured, waitAttempt, stopped bool
 	started                                             string
 	quitDigest                                          [32]byte
@@ -33,11 +39,11 @@ func NewLive(homePath string, home, state *os.File, identity Identity, pid int, 
 	if home == nil || state == nil || !validHome(homePath) || !validIdentity(identity) || until.IsZero() || pid <= 1 || !validText(start, 128) || wait == nil {
 		return nil, ErrInput
 	}
-	return &Live{route: &Verifier{homePath: homePath, home: home, state: state, expected: Expected{StateIdentity: identity, PID: pid, ProcessStart: start}, now: time.Now, gate: make(chan struct{}, 1), reopen: openRoute}, wait: wait, until: until}, nil
+	return &Live{state: &liveState{}, route: &Verifier{homePath: homePath, home: home, state: state, expected: Expected{StateIdentity: identity, PID: pid, ProcessStart: start}, now: time.Now, gate: make(chan struct{}, 1), reopen: openRoute}, wait: wait, until: until}, nil
 }
 
-func (l *Live) run(ctx context.Context, fn func(int, int) error) error {
-	if l == nil || l.route == nil || ctx == nil {
+func (l *Live) run(ctx context.Context, fn func(context.Context, int, int) error) error {
+	if l == nil || l.route == nil || l.state == nil || ctx == nil {
 		return ErrDependency
 	}
 	ctx, cancel := context.WithDeadline(ctx, l.until)
@@ -47,7 +53,7 @@ func (l *Live) run(ctx context.Context, fn func(int, int) error) error {
 		if err := v.verifyRoute(ctx, fds[0], fds[1]); err != nil {
 			return err
 		}
-		if err := fn(fds[0], fds[1]); err != nil {
+		if err := fn(ctx, fds[0], fds[1]); err != nil {
 			return err
 		}
 		return v.verifyRoute(ctx, fds[0], fds[1])
@@ -57,11 +63,11 @@ func (l *Live) run(ctx context.Context, fn func(int, int) error) error {
 // CaptureMarker consumes the single original marker observation. The strict
 // parser and before/held/named physical checks belong to this handoff owner.
 func (l *Live) CaptureMarker(ctx context.Context) error {
-	return l.run(ctx, func(_, state int) error {
-		if l.markerAttempt {
+	return l.run(ctx, func(ctx context.Context, _ int, state int) error {
+		if l.state.markerAttempt {
 			return ErrRunningMarker
 		}
-		l.markerAttempt = true
+		l.state.markerAttempt = true
 		data, err := readRecord(ctx, state, "running.json", 4096)
 		if err != nil {
 			return err
@@ -70,8 +76,11 @@ func (l *Live) CaptureMarker(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		l.started, l.markerCaptured = at, true
-		l.markerDigest = sha256.Sum256(data)
+		if err := canceled(ctx); err != nil {
+			return err
+		}
+		l.state.started, l.state.markerCaptured = at, true
+		l.state.markerDigest = sha256.Sum256(data)
 		return nil
 	})
 }
@@ -102,8 +111,8 @@ func liveMarker(data []byte, expectedPID int, expectedStart string) (string, err
 }
 
 func (l *Live) ConfirmIdentity(ctx context.Context) error {
-	return l.run(ctx, func(_, _ int) error {
-		if !l.markerCaptured {
+	return l.run(ctx, func(ctx context.Context, _ int, _ int) error {
+		if !l.state.markerCaptured {
 			return ErrRunningMarker
 		}
 		return l.wait.ConfirmIdentity(ctx, l.until)
@@ -113,15 +122,15 @@ func (l *Live) ConfirmIdentity(ctx context.Context) error {
 // CheckMarker rechecks the original marker without adopting a replacement or
 // consuming another process confirmation.
 func (l *Live) CheckMarker(ctx context.Context) error {
-	return l.run(ctx, func(_, state int) error {
-		if !l.markerCaptured || l.stopped {
+	return l.run(ctx, func(ctx context.Context, _ int, state int) error {
+		if !l.state.markerCaptured || l.state.stopped {
 			return ErrRunningMarker
 		}
 		data, err := readRecord(ctx, state, "running.json", 4096)
 		if err != nil {
 			return err
 		}
-		if sha256.Sum256(data) != l.markerDigest {
+		if sha256.Sum256(data) != l.state.markerDigest {
 			return ErrRunningMarker
 		}
 		return nil
@@ -138,11 +147,11 @@ func (l *Live) WaitExit(ctx context.Context, originalUntil time.Time) error {
 	// cleanup too. run independently keeps any earlier operation/caller bound.
 	ctx, cancel := context.WithDeadline(ctx, originalUntil)
 	defer cancel()
-	return l.run(ctx, func(_, _ int) error {
-		if l.waitAttempt {
+	return l.run(ctx, func(ctx context.Context, _ int, _ int) error {
+		if l.state.waitAttempt {
 			return ErrProcessUnknown
 		}
-		l.waitAttempt = true
+		l.state.waitAttempt = true
 		until := l.until
 		if originalUntil.Before(until) {
 			until = originalUntil
@@ -150,7 +159,10 @@ func (l *Live) WaitExit(ctx context.Context, originalUntil time.Time) error {
 		if err := l.wait.WaitExit(ctx, until); err != nil {
 			return err
 		}
-		l.stopped = true
+		if err := canceled(ctx); err != nil {
+			return err
+		}
+		l.state.stopped = true
 		return nil
 	})
 }
@@ -159,8 +171,8 @@ func (l *Live) WaitExit(ctx context.Context, originalUntil time.Time) error {
 // promotion lease. It records the first exact confirmed receipt and never adopts
 // a later replacement. This observation alone grants no writer admission.
 func (l *Live) VerifyQuit(ctx context.Context, offline bool) error {
-	return l.run(ctx, func(_, state int) error {
-		if !offline && (!l.stopped || !l.markerCaptured) || offline && l.markerAttempt {
+	return l.run(ctx, func(ctx context.Context, _ int, state int) error {
+		if !offline && (!l.state.stopped || !l.state.markerCaptured) || offline && l.state.markerAttempt {
 			return ErrProcessUnknown
 		}
 		if _, present, err := named(ctx, state, "running.json", ErrProcessUnknown); err != nil {
@@ -178,7 +190,7 @@ func (l *Live) VerifyQuit(ctx context.Context, offline bool) error {
 		}
 		var started *time.Time
 		if !offline {
-			value, _ := timestamp(l.started)
+			value, _ := timestamp(l.state.started)
 			started = &value
 		}
 		if l.route.now == nil {
@@ -195,12 +207,15 @@ func (l *Live) VerifyQuit(ctx context.Context, offline bool) error {
 			return err
 		}
 		digest := sha256.Sum256(data)
-		if l.quitBound && digest != l.quitDigest {
+		if l.state.quitBound && digest != l.state.quitDigest {
 			return ErrQuitChanged
+		}
+		if err := canceled(ctx); err != nil {
+			return err
 		}
 		// Later route/absence/cleanup refusal cannot authorize adopting another
 		// receipt. Rechecks retain these first physically verified bytes.
-		l.quitDigest, l.quitBound = digest, true
+		l.state.quitDigest, l.state.quitBound = digest, true
 		if _, present, err := named(ctx, state, "running.json", ErrProcessUnknown); err != nil {
 			return err
 		} else if present {

@@ -204,3 +204,94 @@ func TestLiveQuitNativeKeepsFirstReceiptAcrossRefusal(t *testing.T) {
 		}
 	}
 }
+
+// Disposable physical records with a symbolic process waiter only. Entered
+// reads return synchronously; no later record I/O may start after the bound.
+func TestLiveNativeCallbacksKeepOriginalDeadline(t *testing.T) {
+	if os.Getenv("FAROL_HELPER_NATIVE") != "1" {
+		t.Skip("Root-scheduled bounded Live record observation")
+	}
+	for _, kind := range []string{"marker", "quit"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newFixture(t)
+			live, err := NewLive(f.homePath, f.home, f.state, f.v.expected.StateIdentity, 42, f.v.expected.ProcessStart, &liveBoundWaiter{}, time.Now().Add(time.Minute))
+			if err != nil {
+				t.Fatal(err)
+			}
+			live.route.reopen = fixtureRoute
+			live.route.now = f.v.now
+			if kind == "marker" {
+				marker := `{"schema":1,"pid":42,"startedAt":"2026-10-15T12:00:00.000Z","bootTime":null,"processStart":"Thu Oct 15 12:00:00 2026"}`
+				must(t, os.WriteFile(filepath.Join(f.statePath, "running.json"), []byte(marker), 0600))
+			}
+			live.until = time.Now().Add(200 * time.Millisecond)
+			reads := 0
+			n := nativeCalls{read: func(fd int, data []byte) (int, error) {
+				reads++
+				count, e := unix.Read(fd, data)
+				if reads == 1 {
+					time.Sleep(time.Until(live.until) + time.Millisecond)
+				}
+				return count, e
+			}}
+			ctx := context.WithValue(context.Background(), nativeKey{}, n)
+			if kind == "marker" {
+				err = live.CaptureMarker(ctx)
+			} else {
+				err = live.VerifyQuit(ctx, true)
+			}
+			if !errors.Is(err, ErrCanceled) || !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal("late observation not refused", err)
+			}
+			if reads != 1 {
+				t.Fatal("additional record reads began after the original end", reads)
+			}
+			f.assertCustody()
+		})
+	}
+}
+
+func TestLiveNativeCopiesShareObservationConsumption(t *testing.T) {
+	if os.Getenv("FAROL_HELPER_NATIVE") != "1" {
+		t.Skip("Root-scheduled copied Live custody")
+	}
+	for _, kind := range []string{"marker", "wait", "quit"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newFixture(t)
+			waiter := &liveBoundWaiter{}
+			live, err := NewLive(f.homePath, f.home, f.state, f.v.expected.StateIdentity, 42, f.v.expected.ProcessStart, waiter, time.Now().Add(time.Minute))
+			if err != nil {
+				t.Fatal(err)
+			}
+			live.route.reopen = fixtureRoute
+			live.route.now = f.v.now
+			if kind == "quit" {
+				copied := *live
+				must(t, live.VerifyQuit(context.Background(), true))
+				f.writeQuit(goodQuit + "\n")
+				wantCode(t, copied.VerifyQuit(context.Background(), true), ErrQuitChanged)
+			} else {
+				running := filepath.Join(f.statePath, "running.json")
+				marker := `{"schema":1,"pid":42,"startedAt":"2026-10-15T12:00:00.000Z","bootTime":null,"processStart":"Thu Oct 15 12:00:00 2026"}`
+				must(t, os.WriteFile(running, []byte(marker), 0600))
+				if kind == "marker" {
+					copied := *live
+					must(t, live.CaptureMarker(context.Background()))
+					wantCode(t, copied.CaptureMarker(context.Background()), ErrRunningMarker)
+				} else {
+					must(t, live.CaptureMarker(context.Background()))
+					must(t, live.ConfirmIdentity(context.Background()))
+					copied := *live
+					must(t, os.Remove(running))
+					until := time.Now().Add(time.Second)
+					must(t, live.WaitExit(context.Background(), until))
+					wantCode(t, copied.WaitExit(context.Background(), until), ErrProcessUnknown)
+					if waiter.calls != 1 {
+						t.Fatal("copied owner issued another wait", waiter.calls)
+					}
+				}
+			}
+			f.assertCustody()
+		})
+	}
+}
