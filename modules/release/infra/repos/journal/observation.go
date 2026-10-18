@@ -63,7 +63,9 @@ func WithObservation(ctx context.Context, directory string, borrowed *os.File, b
 			entered = errors.Join(port.JournalCancelled, ctx.Err())
 			return
 		}
-		entered = fn(&Observation{repo: r})
+		if err := fn(&Observation{repo: r}); err != nil {
+			entered = journalFailure(port.JournalUnavailable, err)
+		}
 	})
 	if err != nil {
 		err = journalFailure(port.JournalUnavailable, err)

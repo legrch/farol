@@ -3,6 +3,7 @@ package journal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -159,5 +160,141 @@ func TestObservationGuardRefusalKeepsPrivateCause(t *testing.T) {
 	}
 	if _, err := borrowed.Stat(); err != nil {
 		t.Fatal("borrowed route closed", err)
+	}
+}
+
+func TestObservationTypedNilPrivateFailureIsSafe(t *testing.T) {
+	var cause *failure
+	if cause.Error() != port.JournalUnavailable.Error() || len(cause.Unwrap()) != 0 {
+		t.Fatal("nil private failure changed safe text or invented causes")
+	}
+	var original *failure
+	if !errors.As(cause, &original) || original != nil {
+		t.Fatal("typed-nil private cause lost its type")
+	}
+	var missing *os.PathError
+	if errors.As(cause, &missing) || errors.Is(cause, errors.New("unrelated sentinel")) {
+		t.Fatal("nil private failure invented a cause")
+	}
+}
+
+// Root-scheduled disposable filesystem with symbolic admission only. These
+// cases prove no live helper, stopped writer, process, lease or installed grant.
+func TestObservationCallbackFailuresKeepPrivateCauses(t *testing.T) {
+	if os.Getenv("FAROL_HELPER_NATIVE") != "1" {
+		t.Skip("Root-scheduled physical callback failure regression")
+	}
+	for _, kind := range []string{"plain", "joined", "opaque", "typed-nil", "typed-nil-joined"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newFixture(t)
+			original := f.open(t)
+			binding := original.identity()
+			if err := original.Close(); err != nil {
+				t.Fatal(err)
+			}
+			borrowed, err := os.Open(f.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer borrowed.Close()
+			info, err := borrowed.Stat()
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, valid := metadata(info)
+			if !valid {
+				t.Fatal("borrowed metadata unavailable")
+			}
+
+			privateCause := errors.New("private callback diagnostic")
+			nativeCause := errors.New("private callback native diagnostic")
+			pathCause := &os.PathError{Op: "observe", Path: f.path, Err: nativeCause}
+			refusal := &port.HelperRecoveryFailure{Code: "refused", Phase: "prepared", Cause: privateCause}
+			var nilCause *failure
+			callbackCause := error(privateCause)
+			want := []error{privateCause}
+			structured := kind == "joined" || kind == "opaque" || kind == "typed-nil-joined"
+			if structured {
+				callbackCause = errors.Join(privateCause, pathCause, refusal)
+				want = append(want, nativeCause, pathCause, refusal)
+			}
+			switch kind {
+			case "opaque":
+				callbackCause = fmt.Errorf("private callback wrapper: %w", callbackCause)
+			case "typed-nil":
+				callbackCause = nilCause
+				want = []error{nilCause}
+			case "typed-nil-joined":
+				callbackCause = errors.Join(nilCause, callbackCause)
+				want = append(want, nilCause)
+			}
+
+			owner := &observationOwner{op: f.operation, binding: binding}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			var retained *Observation
+			var copied Observation
+			err = WithObservation(ctx, f.path, borrowed, binding, f.operation, owner, func(reader *Observation) error {
+				retained = reader
+				copied = *reader
+				view, err := reader.ReadHelper(ctx)
+				if err != nil || view == nil || view.Value != nil || view.Revision == "" {
+					t.Fatal("callback did not observe original journal absence")
+				}
+				return callbackCause
+			})
+			if retained == nil || err == nil || err.Error() != port.JournalUnavailable.Error() {
+				t.Fatal("callback failure did not retain fixed public text")
+			}
+			if !owner.JournalUnknown(f.operation) || !errors.Is(err, port.JournalUnavailable) || !errors.Is(err, callbackCause) {
+				t.Fatal("callback failure lost original cause or retained uncertainty")
+			}
+			for _, cause := range want {
+				if !errors.Is(err, cause) {
+					t.Fatal("callback failure lost original sentinel membership")
+				}
+			}
+			if structured {
+				var path *os.PathError
+				var nested *port.HelperRecoveryFailure
+				if !errors.As(err, &path) || path != pathCause || !errors.As(err, &nested) || nested != refusal {
+					t.Fatal("callback failure lost structured private causes")
+				}
+			}
+			var missing *os.LinkError
+			if errors.Is(err, errors.New("unrelated callback sentinel")) || errors.As(err, &missing) {
+				t.Fatal("callback failure invented an unrelated cause")
+			}
+			checks := owner.checks
+			for _, reader := range []*Observation{retained, &copied} {
+				if view, err := reader.ReadHelper(ctx); view != nil || !errors.Is(err, port.JournalClosed) {
+					t.Fatal("failed callback retained a live reader")
+				}
+				if _, writer := any(reader).(port.JournalRepository); writer {
+					t.Fatal("observation exposed a writer")
+				}
+			}
+			if !owner.JournalUnknown(f.operation) || owner.checks != checks {
+				t.Fatal("closed observation renewed admission or cleared uncertainty")
+			}
+			if f.admission.unknown || f.admission.retained != 0 || f.admission.verified != 1 {
+				t.Fatal("observation changed original writer admission")
+			}
+			info, err = borrowed.Stat()
+			if err != nil {
+				t.Fatal("observation closed borrowed ownership")
+			}
+			after, valid := metadata(info)
+			if !valid || after != before {
+				t.Fatal("observation changed borrowed identity or metadata")
+			}
+			if _, err := os.Lstat(filepath.Join(f.path, filename)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("callback failure changed journal absence")
+			}
+			entries, err := os.ReadDir(f.path)
+			if err != nil || len(entries) != 0 {
+				t.Fatal("callback failure left a write or repair")
+			}
+		})
 	}
 }

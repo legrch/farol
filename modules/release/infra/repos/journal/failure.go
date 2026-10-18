@@ -13,8 +13,19 @@ type failure struct {
 	cause error
 }
 
-func (f *failure) Error() string   { return f.code.Error() }
-func (f *failure) Unwrap() []error { return []error{f.code, f.cause} }
+func (f *failure) Error() string {
+	if f == nil {
+		return port.JournalUnavailable.Error()
+	}
+	return f.code.Error()
+}
+
+func (f *failure) Unwrap() []error {
+	if f == nil {
+		return nil
+	}
+	return []error{f.code, f.cause}
+}
 
 func journalFailure(code port.JournalCode, causes ...error) error {
 	return &failure{code: code, cause: errors.Join(causes...)}
