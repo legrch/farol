@@ -11253,6 +11253,10 @@ function recoverWindowOpenFailure(): void {
   if (failedWindow && !failedWindow.isDestroyed()) failedWindow.destroy();
 }
 
+function nativeMenuBarEnabled(): boolean {
+  return process.env.FAROL_NEXT_E2E !== "1" && process.platform === "darwin";
+}
+
 function reopenWindow(): void {
   void containWindowOpenFailure(ensureWindow, recoverWindowOpenFailure);
 }
@@ -11477,6 +11481,18 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
             startupRecovery = openStartupRecoveryWindow({
               directory: desktopExecutionResources().directory,
               session,
+              ...(nativeMenuBarEnabled()
+                ? {
+                    menuBar: (actions) =>
+                      createMenuBar(actions, () => ({
+                        label: quitInProgress
+                          ? "Farol · Closing recovery"
+                          : "Farol · Startup recovery required",
+                        current: null,
+                        attention: !quitInProgress,
+                      })),
+                  }
+                : {}),
               mode: windowMode,
               placement: () =>
                 selectedVisibleTestPlacement({ width: 640, height: 520 })
@@ -11918,7 +11934,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   installIpc();
   installApplicationMenu();
   // Hidden tests own no visible status item. Ordinary owner launch gets one.
-  if (process.env.FAROL_NEXT_E2E !== "1" && process.platform === "darwin") {
+  if (nativeMenuBarEnabled()) {
     const disposeMenuBar = await runDesktopStartupBoundary("native-menu", () =>
       createMenuBar(
         {
@@ -11947,9 +11963,12 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         },
         () => ({
           label:
-            runtimeState === "ready"
-              ? "Farol · Local service available"
-              : "Farol · Service unavailable",
+            runtimeState === "starting"
+              ? "Farol · Starting local service"
+              : runtimeState === "ready"
+                ? "Farol · Local service available · Connection status in Settings"
+                : "Farol · Local service unavailable",
+          attention: runtimeState === "offline" || runtimeState === "failed",
           current:
             productTasksState().tasks.find(
               (task) => task.lifecycle === "running",

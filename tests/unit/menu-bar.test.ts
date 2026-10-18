@@ -1,6 +1,6 @@
 // Mocked native menu policy; no visible macOS menu/focus acceptance.
 import type { EventEmitter } from "node:events";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createMenuBar } from "../../src/apps/desktop/menu-bar";
 type Item = { label?: string; click?: () => void; enabled?: boolean };
 type Menu = { items: Item[] };
@@ -8,6 +8,8 @@ type OwnedTray = EventEmitter & {
   setContextMenu: ReturnType<typeof vi.fn>;
   popUpContextMenu: ReturnType<typeof vi.fn>;
   destroy: ReturnType<typeof vi.fn>;
+  setToolTip: ReturnType<typeof vi.fn>;
+  setTitle: ReturnType<typeof vi.fn>;
 };
 const owned = vi.hoisted(() => ({ trays: [] as OwnedTray[] }));
 vi.mock("electron", async () => {
@@ -17,6 +19,7 @@ vi.mock("electron", async () => {
     popUpContextMenu = vi.fn();
     destroy = vi.fn();
     setToolTip = vi.fn();
+    setTitle = vi.fn();
     setIgnoreDoubleClickEvents = vi.fn();
     constructor() {
       super();
@@ -37,6 +40,12 @@ vi.mock("electron", async () => {
 });
 beforeEach(() => {
   owned.trays.length = 0;
+  vi.useFakeTimers();
+});
+afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 function fixture() {
   const actions = {
@@ -45,7 +54,7 @@ function fixture() {
     updates: vi.fn(),
     quit: vi.fn(),
   };
-  let status: { label: string; current: string | null } = {
+  let status: { label: string; current: string | null; attention?: boolean } = {
     label: "Service unavailable",
     current: null,
   };
@@ -117,4 +126,93 @@ it("disposal removes listeners, destroys once and fences a queued opening", () =
   expect(f.tray.listenerCount("click")).toBe(0);
   expect(f.tray.listenerCount("right-click")).toBe(0);
   expect(f.tray.destroy).toHaveBeenCalledTimes(1);
+});
+
+it("refreshes native status without a click and releases its owned timer", () => {
+  const f = fixture();
+  expect(f.tray.setToolTip).toHaveBeenLastCalledWith("Service unavailable");
+  f.setStatus({
+    label: "Startup recovery required",
+    current: null,
+    attention: true,
+  });
+  vi.advanceTimersByTime(1_000);
+  expect(f.tray.setToolTip).toHaveBeenLastCalledWith(
+    "Startup recovery required",
+  );
+  expect(f.tray.setTitle).toHaveBeenLastCalledWith("!");
+  expect(f.tray.popUpContextMenu).not.toHaveBeenCalled();
+  Object.values(f.actions).forEach((action) =>
+    expect(action).not.toHaveBeenCalled(),
+  );
+  f.dispose();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("fences an already queued refresh after disposal", () => {
+  const interval = vi.spyOn(globalThis, "setInterval");
+  const f = fixture();
+  const refresh = interval.mock.calls[0]?.[0] as () => void;
+  expect(refresh).toBeTypeOf("function");
+  f.dispose();
+  f.tray.setToolTip.mockClear();
+  f.tray.setTitle.mockClear();
+  refresh();
+  expect(f.tray.setToolTip).not.toHaveBeenCalled();
+  expect(f.tray.setTitle).not.toHaveBeenCalled();
+});
+
+it("exposes only Open and Quit when no normal-runtime actions are supplied", () => {
+  const actions = { open: vi.fn(), quit: vi.fn() };
+  const dispose = createMenuBar(actions, () => ({
+    label: "Startup recovery required",
+    current: null,
+  }));
+  const tray = owned.trays[0]!;
+  tray.emit("click");
+  const menu = tray.popUpContextMenu.mock.lastCall?.[0] as Menu;
+  expect(menu.items.map((item) => item.label).filter(Boolean)).toEqual([
+    "Startup recovery required",
+    "Open Farol",
+    "Quit Farol",
+  ]);
+  for (const item of menu.items) item.click?.();
+  expect(actions.open).toHaveBeenCalledOnce();
+  expect(actions.quit).toHaveBeenCalledOnce();
+  dispose();
+});
+
+it("contains a native refresh and cleanup failure without an uncaught timer", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const f = fixture();
+  f.tray.setToolTip.mockImplementation(() => {
+    throw new Error("native tooltip unavailable");
+  });
+  f.tray.destroy.mockImplementation(() => {
+    throw new Error("native cleanup unconfirmed");
+  });
+  expect(() => vi.advanceTimersByTime(1_000)).not.toThrow();
+  expect(warn).toHaveBeenCalledWith("FAROL_MENU_BAR_UNAVAILABLE");
+  expect(vi.getTimerCount()).toBe(0);
+  vi.advanceTimersByTime(10_000);
+  expect(f.tray.destroy).toHaveBeenCalledOnce();
+});
+
+it("expires a throwing status producer to an explicit unavailable projection", () => {
+  let unavailable = false;
+  const dispose = createMenuBar({ open: vi.fn(), quit: vi.fn() }, () => {
+    if (unavailable) throw new Error("projection unavailable");
+    return { label: "Original observation", current: null };
+  });
+  const tray = owned.trays[0]!;
+  unavailable = true;
+  vi.advanceTimersByTime(1_000);
+  expect(tray.setToolTip).toHaveBeenLastCalledWith(
+    "Farol · Status unavailable",
+  );
+  expect(tray.setTitle).toHaveBeenLastCalledWith("!");
+  tray.emit("click");
+  const menu = tray.popUpContextMenu.mock.lastCall?.[0] as Menu;
+  expect(menu.items[0]?.label).toBe("Farol · Status unavailable");
+  dispose();
 });

@@ -257,3 +257,64 @@ it("withholds IPC results when Quit crosses the original session read", async ()
   expect(input.session.close).not.toHaveBeenCalled(); // The startup caller owns closure.
   view.dispose();
 });
+
+it("owns a recovery-only status item through exact-window reopen and Quit", async () => {
+  const input = options("default");
+  const stop = vi.fn();
+  let actions: Readonly<{ open(): void; quit(): void }> | undefined;
+  const menuBar = vi.fn((value: Readonly<{ open(): void; quit(): void }>) => {
+    actions = value;
+    return stop;
+  });
+  const view = openStartupRecoveryWindow({ ...input, menuBar });
+  expect(menuBar).not.toHaveBeenCalled();
+  await view.ready;
+  expect(menuBar).toHaveBeenCalledOnce();
+  actions!.open();
+  expect(harness.windows).toHaveLength(1);
+  expect(harness.windows[0].show).toHaveBeenCalledTimes(2);
+  actions!.quit();
+  expect(harness.quit).toHaveBeenCalledOnce();
+  harness.appEvents.get("before-quit")!({ preventDefault: vi.fn() });
+  await view.quitRequested;
+  expect(stop).toHaveBeenCalledOnce();
+  actions!.open();
+  expect(harness.windows[0].show).toHaveBeenCalledTimes(2);
+  view.dispose();
+  view.dispose();
+  expect(stop).toHaveBeenCalledOnce();
+  expect([...harness.ipcHandlers.keys()]).toEqual([]);
+});
+
+it("keeps the recovery UI available when its status item cannot be created", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const view = openStartupRecoveryWindow({
+    ...options(),
+    menuBar: () => {
+      throw new Error("native fixture failure");
+    },
+  });
+  await expect(view.ready).resolves.toBeUndefined();
+  expect(warn).toHaveBeenCalledWith("FAROL_RECOVERY_MENU_BAR_UNAVAILABLE");
+  await expect(view.reopen()).resolves.toBeUndefined();
+  view.dispose();
+  warn.mockRestore();
+});
+
+it("keeps original recovery Quit progress when status-item disposal fails", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const stop = vi.fn(() => {
+    throw new Error("native cleanup unconfirmed");
+  });
+  const input = options();
+  const view = openStartupRecoveryWindow({ ...input, menuBar: () => stop });
+  await view.ready;
+  harness.appEvents.get("before-quit")!({ preventDefault: vi.fn() });
+  await view.quitRequested;
+  expect(input.onQuitting).toHaveBeenCalledOnce();
+  expect(stop).toHaveBeenCalledOnce();
+  expect(warn).toHaveBeenCalledWith("FAROL_RECOVERY_MENU_BAR_UNAVAILABLE");
+  view.dispose();
+  expect(stop).toHaveBeenCalledOnce();
+  warn.mockRestore();
+});
