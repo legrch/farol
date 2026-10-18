@@ -364,6 +364,16 @@ function transport(fault?: Fault) {
     close,
     closeAndObserve,
     verifiedContext: context,
+    verifiedCapabilities: Object.freeze([
+      "core.status",
+      "computer.authority.deactivate",
+      "computer.authority.publish",
+      "computer.settings.list",
+      "computer.settings.search",
+      "computer.settings.snapshot",
+      "chat.archive.list",
+      "chat.archive.read",
+    ]),
   } as unknown as Client;
   return { client, request, close, closeAndObserve, events, replies };
 }
@@ -1443,6 +1453,102 @@ function recoverySelection(): RecoveryCoreSelection {
 }
 
 describe("explicit recovery Go host composition", () => {
+  it("uses the original archive-only handshake without a Computer effect probe", async () => {
+    const f = transport();
+    Object.defineProperty(f.client, "verifiedCapabilities", {
+      value: Object.freeze([
+        "core.status",
+        "chat.archive.list",
+        "chat.archive.read",
+      ]),
+    });
+    start.mockResolvedValue(f.client);
+    const host = await startDesktopGoRecovery(recoverySelection());
+    expect(host.folderReadsAvailable).toBe(false);
+    expect(f.request).not.toHaveBeenCalled();
+    for (const read of [
+      () => host.list("work", "."),
+      () => host.search("work", ".", "text"),
+      () => host.snapshot("work", "note.md"),
+    ])
+      await expect(read()).rejects.toMatchObject({
+        state: "unavailable",
+        code: "recovery_computer_unavailable",
+      });
+    expect(f.request).not.toHaveBeenCalled();
+    f.request.mockImplementationOnce(async (_method, _body, options) => ({
+      status: "ok",
+      requestId: options!.id!,
+      context,
+      data: {
+        observation: "stored_unconfirmed",
+        entries: [],
+        next: "",
+        unresolved: false,
+      },
+    }));
+    expect((await host.archiveList("")).observation).toBe("stored_unconfirmed");
+    expect(f.request).toHaveBeenCalledExactlyOnceWith(
+      "chat.archive.list",
+      { after: "" },
+      expect.anything(),
+    );
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(AttestedCore.prototype.completeRetirement).not.toHaveBeenCalled();
+    await host.close();
+    expect(f.close).toHaveBeenCalledTimes(1);
+    await expect(host.archiveList("")).rejects.toMatchObject({
+      code: "recovery_computer_closed",
+    });
+  });
+  it.each([
+    ["core.status", "chat.archive.list"],
+    ["core.status", "chat.archive.read"],
+    [
+      "core.status",
+      "chat.archive.list",
+      "chat.archive.read",
+      "computer.authority.deactivate",
+    ],
+    [
+      "core.status",
+      "chat.archive.list",
+      "chat.archive.read",
+      "computer.settings.list",
+    ],
+    ["core.status", "chat.archive.list", "chat.archive.read", "task.create"],
+  ])(
+    "refuses incomplete or broadened recovery capabilities before effects: %j",
+    async (...capabilities) => {
+      const f = transport();
+      Object.defineProperty(f.client, "verifiedCapabilities", {
+        value: Object.freeze(capabilities),
+      });
+      start.mockResolvedValue(f.client);
+      await expect(
+        startDesktopGoRecovery(recoverySelection()),
+      ).rejects.toMatchObject({ code: "invalid_recovery_capabilities" });
+      expect(f.request).not.toHaveBeenCalled();
+      expect(f.close).toHaveBeenCalledTimes(1);
+      expect(start).toHaveBeenCalledTimes(1);
+    },
+  );
+  it("retains a lost handshake observation and closes its original child", async () => {
+    const f = transport();
+    const failure = new BridgeError("unknown", "backend_unavailable");
+    Object.defineProperty(f.client, "verifiedCapabilities", {
+      get() {
+        throw failure;
+      },
+    });
+    start.mockResolvedValue(f.client);
+    await expect(startDesktopGoRecovery(recoverySelection())).rejects.toBe(
+      failure,
+    );
+    expect(f.request).not.toHaveBeenCalled();
+    expect(f.close).toHaveBeenCalledTimes(1);
+    expect(start).toHaveBeenCalledTimes(1);
+  });
   it("qualifies existing storage and one child, publishes owner-only grants and exposes only bounded reads", async () => {
     const f = transport();
     start.mockResolvedValue(f.client);

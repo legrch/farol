@@ -314,6 +314,13 @@ describe("K0 real inherited-pipe process", () => {
         }),
       );
       phase = "capability-checks";
+      const capabilities = client.verifiedCapabilities;
+      expect(capabilities).toContain("core.status");
+      expect(Object.isFrozen(capabilities)).toBe(true);
+      expect(() =>
+        (capabilities as string[]).push("computer.authority.publish"),
+      ).toThrow();
+      expect(client.verifiedCapabilities).toBe(capabilities);
       expect((await client.request("computer.workspace.read", {})).status).toBe(
         "unavailable",
       );
@@ -350,6 +357,7 @@ describe("K0 real inherited-pipe process", () => {
       signal: null,
       forced: false,
     });
+    expect(() => client!.verifiedCapabilities).toThrow("backend_unavailable");
   });
   it("refuses wrong build/profile/version and missing backend", async () => {
     await expect(
@@ -361,6 +369,7 @@ describe("K0 real inherited-pipe process", () => {
     const child = spawn(executable, ["serve", "--profile", "test"]);
     const client = new Client(child, true);
     try {
+      expect(() => client.verifiedCapabilities).toThrow("handshake_required");
       await expect(
         client.handshake(
           {
