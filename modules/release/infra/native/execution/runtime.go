@@ -45,6 +45,7 @@ type runtime struct {
 	attempts map[string]bool
 	unknown  error
 	view     *port.JournalView
+	reader   port.HelperJournalObservationReader
 	routes   func(context.Context) error
 	effected bool
 }
@@ -88,8 +89,15 @@ func With(ctx context.Context, config Config, fn func(port.HelperRecoveryRuntime
 
 // The route seam is private to package tests; production always uses the live
 // helperroutes borrow. It is not a runtime alternate root or admission option.
-func with(ctx context.Context, config Config, routes func(context.Context) error, fn func(port.HelperRecoveryRuntime) error) (result error) {
-	if ctx == nil || config.Journal == nil || config.Reverify == nil || config.Unknown == nil || config.RetainUnknown == nil || config.Until.IsZero() || fn == nil {
+func with(ctx context.Context, config Config, routes func(context.Context) error, fn func(port.HelperRecoveryRuntime) error) error {
+	if config.Journal == nil {
+		return fail("internal", true, false, nil)
+	}
+	return withReader(ctx, config, config.Journal, routes, fn)
+}
+
+func withReader(ctx context.Context, config Config, reader port.HelperJournalObservationReader, routes func(context.Context) error, fn func(port.HelperRecoveryRuntime) error) (result error) {
+	if ctx == nil || reader == nil || config.Reverify == nil || config.Unknown == nil || config.RetainUnknown == nil || config.Until.IsZero() || fn == nil {
 		return fail("internal", true, false, nil)
 	}
 	if _, err := records.EncodeJournal(records.Journal{Schema: "farol.installed-update-journal/1", Operation: records.Operation{
@@ -104,7 +112,7 @@ func with(ctx context.Context, config Config, routes func(context.Context) error
 	if earlier, ok := ctx.Deadline(); ok && earlier.Before(until) {
 		until = earlier
 	}
-	r := &runtime{config: config, original: ctx, until: until, active: true, attempts: make(map[string]bool), routes: routes}
+	r := &runtime{config: config, original: ctx, until: until, active: true, attempts: make(map[string]bool), routes: routes, reader: reader}
 	callbackReturned := false
 	defer func() {
 		r.mu.Lock()
@@ -130,7 +138,7 @@ func with(ctx context.Context, config Config, routes func(context.Context) error
 			result = retained
 			return
 		}
-		result = errors.Join(result, r.unknown, late)
+		result = joinResults(result, r.unknown, late)
 	}()
 	if err := r.invoke(ctx, "", func(effective context.Context) error { return r.fence(effective) }); err != nil {
 		return err
@@ -138,6 +146,21 @@ func with(ctx context.Context, config Config, routes func(context.Context) error
 	result = fn(r)
 	callbackReturned = true
 	return result
+}
+
+// Preserve a sole original classified cause. Additional independent failures
+// remain opaque joined provenance and cannot inherit a nested refusal.
+func joinResults(all ...error) error {
+	var causes []error
+	for _, err := range all {
+		if err != nil {
+			causes = append(causes, err)
+		}
+	}
+	if len(causes) == 1 {
+		return causes[0]
+	}
+	return errors.Join(causes...)
 }
 
 func (r *runtime) deadline(ctx context.Context, effected bool) error {
@@ -328,7 +351,7 @@ func (r *runtime) ReadPhase(ctx context.Context) (string, error) {
 		if err := r.fence(c); err != nil {
 			return err
 		}
-		view, err := r.config.Journal.ReadHelper(c)
+		view, err := r.reader.ReadHelper(c)
 		if err != nil {
 			return err
 		}

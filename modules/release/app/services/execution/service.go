@@ -64,9 +64,27 @@ func Bind(ctx context.Context, input []byte, parser port.HelperRequestParser, ru
 	if err := ctx.Err(); err != nil {
 		return bad("canceled", false, err)
 	}
-	if r.Action != "apply" && r.Action != "rollback" {
-		return bad("input", false, nil)
+	return NewCaptured(ctx, r, runtime)
+}
+
+// NewCaptured composes the already parsed request from the original helper
+// protocol owner. It copies all pointer fields and performs no parsing, native
+// work or admission. Only trusted composition of that same captured request and
+// an independently admitted runtime may use it; values grant no authority.
+func NewCaptured(ctx context.Context, r port.HelperRequest, runtime port.HelperInstallationRuntime) (*Service, error) {
+	if ctx == nil || runtime == nil {
+		return nil, &Failure{Code: "internal", Phase: "refused", Internal: true}
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, &Failure{Code: "canceled", Phase: "refused", Cause: err}
+	}
+	if r.Action != "apply" && r.Action != "rollback" {
+		return nil, &Failure{Code: "input", Phase: "refused"}
+	}
+	return &Service{request: captureRequest(r), runtime: runtime, attempt: make(chan struct{}, 1)}, nil
+}
+
+func captureRequest(r port.HelperRequest) port.HelperRequest {
 	if r.InstallLocation != nil {
 		v := *r.InstallLocation
 		r.InstallLocation = &v
@@ -79,18 +97,16 @@ func Bind(ctx context.Context, input []byte, parser port.HelperRequestParser, ru
 		v := *r.LeaseIdentity
 		r.LeaseIdentity = &v
 	}
-	if err := ctx.Err(); err != nil {
-		return bad("canceled", false, err)
-	}
-	return &Service{request: r, runtime: runtime, attempt: make(chan struct{}, 1)}, nil
+	return r
 }
 
 type operation struct {
-	ctx      context.Context
-	request  port.HelperRequest
-	runtime  port.HelperInstallationRuntime
-	phase    string
-	effected bool
+	ctx         context.Context
+	request     port.HelperRequest
+	runtime     port.HelperInstallationRuntime
+	observation port.HelperRecoveryObservation
+	phase       string
+	effected    bool
 }
 
 func (s *Service) operation(ctx context.Context, action string) (*operation, error) {
@@ -103,7 +119,7 @@ func (s *Service) operation(ctx context.Context, action string) (*operation, err
 	default:
 		return nil, &Failure{Code: "execution_attempt_unknown", Phase: "refused", Uncertain: true}
 	}
-	o := &operation{ctx: ctx, request: s.request, runtime: s.runtime, phase: "refused"}
+	o := &operation{ctx: ctx, request: s.request, runtime: s.runtime, observation: s.runtime, phase: "refused"}
 	if err := o.check(); err != nil {
 		return nil, err
 	}
@@ -185,14 +201,14 @@ func (o *operation) call(effect bool, fn func() error) error {
 }
 func (o *operation) entries() (port.HelperRecoveryEntries, error) {
 	var v port.HelperRecoveryEntries
-	err := o.call(false, func() error { var err error; v, err = o.runtime.Entries(o.ctx); return err })
+	err := o.call(false, func() error { var err error; v, err = o.observation.Entries(o.ctx); return err })
 	if err != nil {
 		return port.HelperRecoveryEntries{}, err
 	}
 	return v, nil
 }
 func (o *operation) verify(entry port.HelperRecoveryEntry, build port.HelperBuild) error {
-	return o.call(false, func() error { return o.runtime.VerifyTree(o.ctx, entry, build) })
+	return o.call(false, func() error { return o.observation.VerifyTree(o.ctx, entry, build) })
 }
 func (o *operation) fence() error {
 	return o.call(false, func() error { return o.runtime.Fence(o.ctx) })
