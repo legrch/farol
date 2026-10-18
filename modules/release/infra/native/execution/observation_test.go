@@ -55,6 +55,46 @@ func TestObservationScopeHasNoWriterAndEndsAfterReturn(t *testing.T) {
 		t.Fatal("observation mutated or closed borrowed journal")
 	}
 }
+func TestObservationPhaseDoesNotSeedWriterRevision(t *testing.T) {
+	for _, seeded := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unseeded", true: "existing-admitted-revision"}[seeded], func(t *testing.T) {
+			c, journal := observationFixture()
+			var kept port.HelperInstallationObservation
+			err := observationScope(context.Background(), c, func(o port.HelperInstallationObservation) error {
+				kept = o
+				owner := o.(observation).owner
+				if seeded {
+					owner.view = &port.JournalView{Revision: "admitted", Value: &release.Journal{Operation: operation(c.Request), Phase: "prepared"}}
+				}
+				original := owner.view
+				phase, err := o.ReadPhase(context.Background())
+				if err != nil {
+					return err
+				}
+				if phase != "verified" {
+					t.Error("observation did not return the actual read phase", phase)
+				}
+				if owner.view != original {
+					t.Error("read-only phase observation changed the writer CAS revision")
+				}
+				if original != nil && (original.Revision != "admitted" || original.Value.Phase != "prepared") {
+					t.Error("observation mutated existing admitted values")
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if phase, err := kept.ReadPhase(context.Background()); err == nil || phase != "" {
+				t.Fatal("retained phase observer survived its original scope", phase, err)
+			}
+			if journal.writes != 0 || journal.closed {
+				t.Fatal("phase observer wrote or closed its borrowed journal")
+			}
+		})
+	}
+}
+
 func TestObservationScopeRejectsRawFilesAndInvalidReaderResults(t *testing.T) {
 	c, j := observationFixture()
 	called := false

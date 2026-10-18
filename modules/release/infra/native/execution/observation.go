@@ -47,7 +47,18 @@ var _ port.HelperInstallationObservation = observation{}
 func (o observation) ReadJournal(ctx context.Context) (*port.JournalView, error) {
 	return o.owner.ReadJournal(ctx)
 }
-func (o observation) ReadPhase(ctx context.Context) (string, error) { return o.owner.ReadPhase(ctx) }
+func (o observation) ReadPhase(ctx context.Context) (string, error) {
+	// The admitted ReadPhase deliberately seeds its writer CAS cursor. Preflight
+	// instead uses the existing bounded, fenced reader without retaining a revision.
+	view, err := o.owner.ReadJournal(ctx)
+	if err != nil {
+		return "", err
+	}
+	if view.Value == nil {
+		return "", fail("journal_invalid", false, false, nil)
+	}
+	return view.Value.Phase, nil
+}
 func (o observation) Entries(ctx context.Context) (port.HelperRecoveryEntries, error) {
 	return o.owner.Entries(ctx)
 }
