@@ -112,3 +112,82 @@ build, process-start and acceptance values remain synthetic. They do not prove
 production inherited-role authentication, original application quiescence or
 admission, full helper CLI composition, relaunch, install/apply/recover/rollback,
 package, OTA or Python retirement. Existing source/native evidence is unchanged.
+
+## Unselected closed-predecessor boot scope
+
+`boot/releasehelperclosed.go` composes the existing request parser, protocol and
+JSON codecs, byte-channel owners, physical routes, slot verifier, handoff verifier,
+bound native process observer and update lock. There is no CLI selection. Only
+closed `apply` and `rollback` requests with explicit `legacy` or `shared`
+`installLocation` and their physical slot binding are supported. Missing closed
+proof or the optional-location legacy branch refuses before native admission.
+This is a custody/protocol checkpoint, not complete helper readiness.
+
+The trusted launch supplies actual, distinct `os.File` owners for request fd3,
+ACK fd4 and continuation fd6. Their ownership transfers on call, including
+failure. It supplies the already exclusively locked authoritative fd5 as a borrow
+and keeps that File and every alias unchanged through actual return. Explicit
+role checks inspect only those supplied Files; they cannot authenticate the
+producer or prove absence of dup aliases. A misplaced borrowed lease is never
+adopted for transport cleanup. The scope never duplicates, seeks, reconfigures,
+unlocks or closes fd5. The existing handoff verifier performs its independent
+contention probe and idempotent inherited exclusive check; it acquires no fresh
+authoritative predecessor lease.
+
+The original absolute deadline is supplied before request work and captured with
+any earlier caller deadline before constructors or I/O. `waitSeconds`, copied
+wrappers and fresh caller contexts cannot renew it. Native checks independently
+observe that absolute end, including when context timer notification lags.
+Request bytes are EOF-sealed and parsed once. The protocol holds independent
+values for both full builds, operation, process birth, predecessor state/start/quit
+digest and lease identity. The physical canonical slot additionally binds location.
+
+One live route borrow retains home, applications, state, update and operation
+Files. Before and around the ACK/continuation boundaries, the same native owner
+rechecks those routes, the slot, inherited lease custody, actual process absence
+and the exact confirmed quit receipt. Live PIDs refuse even with a different
+birth token; unknown/error observations never establish absence. It emits one
+correlated `closed_predecessor_ready` frame only after those checks. Continuation
+is one bounded EOF-sealed frame checked against the original protocol request.
+Only after continuation and another closed-custody check does it acquire the
+existing update lock. The parent's inherited lease remains caller-owned.
+
+A single internal synchronous callback can borrow the same Files, captured request
+and original bound for later composition of the existing journal/execution owners.
+Its fence compares the complete request and rechecks the same native admission,
+including the update lock. Copies share one nested borrow attempt and sticky
+uncertainty. Retained wrappers refuse after scope closure. Failed fences, callback
+errors/panics and final cleanup failures retain exact private causes behind closed
+public text. Scope closure joins already entered callbacks and native method
+returns before once-only owned cleanup, even after cancellation. No descriptor
+closure runs detached. If the existing process observer reports unknown cleanup,
+that remains unknown under its original retained observer; this boot scope does
+not invent a completed Wait or create a replacement cleanup owner. Its cleanup
+now explicitly calls that ORIGINAL observer's Join before releasing the update
+owner and the surrounding borrowed-route lifetime. Join waits for already entered
+native return and stream drain; it starts no replacement probe, signal or retry,
+and its uncertainty remains an original error cause. Independent update-close
+failure is retained too. The exact fd5 borrow stays inside the synchronous
+RawConn.Control callback through that return; no descriptor escapes the callback.
+
+ACK exposure and EOF are transport evidence only. This scope does not perform the
+Python branch's application/tree/pair/journal readiness preflight, installation,
+recovery, rollback, relaunch or terminal exit classification. Complete pre-ACK
+application composition remains a selection gate; this unselected ready frame
+must not be wired to an application effect or product readiness until that gate
+and the existing desktop protocol are independently accepted.
+
+`releasehelperclosed_test.go` uses private symbolic native/transport seams with
+the real parser/codecs. It checks correlation, order, boundary refusal, original
+bounds, sticky uncertainty, copied/retained wrappers, joined return, panic and
+cause retention. These deterministic tests prove no physical inherited role,
+lease, route or process. `releasehelperclosednative_test.go` is a separately gated
+Darwin fixture: Root alone allocates it with `FAROL_CLOSED_HELPER_NATIVE=1`. Each
+case creates a fresh disposable home, actual predecessor process, inherited
+fd3/fd4/fd5/fd6 helper child and physical slot/lease/routes. It retains directories,
+stdout/stderr and actual `exec.Cmd.Wait` receipts, including failures. The parent
+holds its lease through helper Wait and checks independent contention and flags.
+A parent append after Wait checks the shared offset without seeking fd5 or aliases.
+Neither fixture establishes production role authentication, original application
+Quit, full helper readiness, clean terminal success, Dev/installed acceptance,
+package/OTA acceptance or Python retirement.
