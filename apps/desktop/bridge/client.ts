@@ -531,15 +531,17 @@ export class Client {
     // original retirement ACK. Withdrawal joins this reserve only after an
     // exact prepare ACK, so ordinary Settings changes cannot spend it.
     // All keep their lifetime one-shot ID fence.
+    const pendingDiagnostics = [...this.pending.values()].filter(
+      (item) => item.healthObservation || item.observation,
+    ).length;
+    // Pure observations have a separate bounded allowance. Keep all 32
+    // original request slots available even while diagnostics await replies.
+    // Active ordinary calls plus active/expired diagnostics total at most 64.
     if (
-      this.pending.size >= 32 ||
       this.writerBusy ||
-      ((readLane === "health" || pollingObservation) &&
-        this.expiredDiagnostics.size +
-          [...this.pending.values()].filter(
-            (item) => item.healthObservation || item.observation,
-          ).length >=
-          32) ||
+      (readLane === "health" || pollingObservation
+        ? this.expiredDiagnostics.size + pendingDiagnostics >= 32
+        : this.pending.size - pendingDiagnostics >= 32) ||
       (readLane === undefined && this.used.size >= (retiring ? 4096 : 4088))
     )
       return Promise.reject(new RequestNotSentError());

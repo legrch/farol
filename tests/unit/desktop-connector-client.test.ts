@@ -2037,6 +2037,96 @@ it.each(["health", "polling"] as const)(
   },
 );
 
+it.each([
+  ["health", "diagnostics-first"],
+  ["polling", "diagnostics-first"],
+  ["mixed", "diagnostics-first"],
+  ["health", "ordinary-first"],
+  ["polling", "ordinary-first"],
+  ["mixed", "ordinary-first"],
+] as const)(
+  "isolates pending diagnostics from ordinary capacity (%s, %s)",
+  async (kind, order) => {
+    const f = await healthPipePeer();
+    const diagnostics: Request[] = [];
+    const ordinary: Request[] = [];
+    const outcomes: Promise<unknown>[] = [];
+    const admitDiagnostics = () => {
+      for (let n = 0; n < 32; n++) {
+        const selected =
+          kind === "mixed" ? (n % 2 ? "polling" : "health") : kind;
+        outcomes.push(
+          f.client
+            .request("computer.connector." + selected, diagnosticBody(selected))
+            .catch((error: unknown) => error),
+        );
+        diagnostics.push(f.calls.at(-1)!);
+      }
+      expect(
+        diagnostics.every(
+          (request) =>
+            request.method === "computer.connector.health" ||
+            request.method === "computer.connector.polling",
+        ),
+      ).toBe(true);
+      expect(new Set(diagnostics.map((request) => request.id)).size).toBe(32);
+    };
+    const admitOrdinary = () => {
+      for (let n = 0; n < 32; n++) {
+        outcomes.push(
+          f.client
+            .request(methods[0]!, {}, { id: `ordinary-${n}` })
+            .catch((error: unknown) => error),
+        );
+        ordinary.push(f.calls.at(-1)!);
+      }
+      expect(ordinary.every((request) => request.method === methods[0])).toBe(
+        true,
+      );
+      expect(new Set(ordinary.map((request) => request.id)).size).toBe(32);
+    };
+    try {
+      if (order === "diagnostics-first") {
+        admitDiagnostics();
+        await expect(
+          f.client.request("core.status", {}),
+        ).resolves.toMatchObject({ status: "ok" });
+        admitOrdinary();
+      } else {
+        admitOrdinary();
+        admitDiagnostics();
+      }
+      const sent = f.calls.length;
+      await expect(
+        f.client.request(methods[0]!, {}, { id: "ordinary-overflow" }),
+      ).rejects.toBeInstanceOf(RequestNotSentError);
+      for (const selected of ["health", "polling"] as const)
+        await expect(
+          f.client.request(
+            "computer.connector." + selected,
+            diagnosticBody(selected),
+          ),
+        ).rejects.toBeInstanceOf(RequestNotSentError);
+      expect(f.calls).toHaveLength(sent);
+      for (const request of ordinary) f.receive(response(request.id));
+      for (const request of diagnostics) f.receive(diagnosticReply(request));
+      expect(await Promise.all(outcomes)).toEqual(
+        Array.from({ length: 64 }, () =>
+          expect.objectContaining({ status: "ok" }),
+        ),
+      );
+      await expect(
+        f.client.request("core.status", {}, { id: "ordinary-overflow" }),
+      ).resolves.toMatchObject({ status: "ok" });
+      expect(f.client.verifiedContext).toEqual(context);
+      expect(f.client.lifecycleObservations).toEqual([]);
+    } finally {
+      await f.client.close();
+      await Promise.all(outcomes);
+    }
+  },
+);
+
 it("caps unanswered diagnostics without blocking original close or weakening one-shot IDs", async () => {
   const f = await healthPipePeer();
   const held: Request[] = [];
