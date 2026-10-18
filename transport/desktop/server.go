@@ -160,7 +160,7 @@ func (s *Server) Serve(parent context.Context, in io.ReadCloser, out io.WriteClo
 			return fmt.Errorf("protocol frame: %w", err)
 		}
 		response, call := s.prepareDispatch(data)
-		// Valid, strictly ordered reciprocal polls retain two counters rather
+		// Valid, strictly ordered reads retain three counters rather
 		// than spending the bounded effect/control request history while idle.
 		// Invalid frames, forged polls and all other calls still spend the cap.
 		if !s.pollAdmitted {
@@ -269,10 +269,10 @@ func (s *Server) prepareDispatch(data []byte) (wire.Response, *invocation) {
 	return wire.Response{}, &invocation{request: req, method: method}
 }
 
-var orderedPoll = regexp.MustCompile(`^desktop-poll-(browser|settings):([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}):([1-9][0-9]{0,19})$`)
+var orderedPoll = regexp.MustCompile(`^desktop-poll-(browser|settings|health):([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}):([1-9][0-9]{0,19})$`)
 
-// This private inherited-pipe namespace admits only the two registered read
-// polls. It cannot admit an effect, renew authority or reset a request fence.
+// This private inherited-pipe namespace admits only the three registered ordered
+// reads. It cannot admit an effect, renew authority or reset a request fence.
 // The pipe reader alone owns these constant-space sequence counters.
 func (s *Server) admitPoll(req wire.Request) bool {
 	parts := orderedPoll.FindStringSubmatch(req.Id)
@@ -280,8 +280,11 @@ func (s *Server) admitPoll(req wire.Request) bool {
 		return false
 	}
 	method, shape := "chat.browser.next", "BrowserNext"
-	if parts[1] == "settings" {
+	switch parts[1] {
+	case "settings":
 		method, shape = "computer.settings.store.next", "SettingsStoreNext"
+	case "health":
+		method, shape = "computer.connector.health", "ComputerConnectorHealthRequest"
 	}
 	if req.Method != method || s.config.Methods[method].Handle == nil || wire.Validate(shape, req.Params.Body) != nil || (s.pollNonce != "" && s.pollNonce != parts[2]) {
 		return false

@@ -7,9 +7,23 @@ import {
   RequestNotSentError,
 } from "../../apps/desktop/bridge/client.ts";
 import { Decoder, frame } from "../../apps/desktop/bridge/frame.ts";
-import type { Request } from "../../apps/desktop/bridge/wire.ts";
+import type {
+  ComputerConnectorHealthRequest,
+  Request,
+} from "../../apps/desktop/bridge/wire.ts";
 import { SettingsStorePump } from "../../apps/desktop/bridge/settings-store.ts";
 import { GoComputerAuthority } from "../../apps/desktop/go-computer-authority.ts";
+
+const healthBody = {
+  binding: {
+    buildId: "build",
+    profileId: "profile",
+    backendGeneration: "backend",
+    runtimeId: "runtime",
+    connectorGeneration: "1",
+  },
+  expectedInstanceId: "instance",
+};
 
 // Real framed Client, controlled in-memory pipe peer. No Go/Electron/provider.
 async function peer(heldMethods: readonly string[] = []) {
@@ -54,7 +68,21 @@ async function peer(heldMethods: readonly string[] = []) {
                   }
                 : request.method === "computer.authority.deactivate"
                   ? { fence: "1", storeRevision: "0" }
-                  : {}),
+                  : request.method === "computer.connector.health"
+                    ? {
+                        binding: (
+                          request.params
+                            .body as unknown as ComputerConnectorHealthRequest
+                        ).binding,
+                        expectedInstanceId: (
+                          request.params
+                            .body as unknown as ComputerConnectorHealthRequest
+                        ).expectedInstanceId,
+                        state: "unobserved",
+                        reason: "missing_snapshot",
+                        localReady: false,
+                      }
+                    : {}),
         },
       }),
     );
@@ -280,20 +308,23 @@ it.each([
   30000,
 );
 
-it("keeps both idle polls alive beyond a night's old stream budget and retains retirement capacity", async () => {
+it("keeps all three ordered reads alive beyond the old stream budget and retains retirement capacity", async () => {
   const { client, calls } = await peer();
   try {
-    for (let i = 0; i < 6000; i++) {
+    for (let i = 0; i < 6001; i++) {
       for (const method of [
         "chat.browser.next",
         "computer.settings.store.next",
+        "computer.connector.health",
       ]) {
         const id = `${method}-${i}`;
         expect(
           (
             await client.request(
               method,
-              { deadlineMillis: String(Date.now() + 14000) },
+              method === "computer.connector.health"
+                ? healthBody
+                : { deadlineMillis: String(Date.now() + 14000) },
               { id },
             )
           ).requestId,
@@ -303,6 +334,15 @@ it("keeps both idle polls alive beyond a night's old stream budget and retains r
     expect(new Set(calls.map((call) => call.id)).size).toBe(calls.length);
     expect(calls[1]!.id).toMatch(/^desktop-poll-browser:.*:1$/u);
     expect(calls[2]!.id).toMatch(/^desktop-poll-settings:.*:1$/u);
+    expect(calls[3]!.id).toMatch(/^desktop-poll-health:.*:1$/u);
+    const retained = client as unknown as {
+      used: Set<string>;
+      polls: Map<string, bigint>;
+      pending: Map<string, unknown>;
+    };
+    expect(retained.used.size).toBe(1); // Only the original handshake.
+    expect(retained.polls.size).toBe(3);
+    expect(retained.pending.size).toBe(0);
     // Ordinary calls retain a finite replay history; no command is retried.
     for (let i = 0; i < 4087; i++)
       await client.request("core.status", {}, { id: `status-${i}` });
@@ -327,12 +367,38 @@ it("keeps both idle polls alive beyond a night's old stream budget and retains r
           )
         ).status,
       ).toBe("ok");
+      const count = calls.length;
+      await expect(
+        client.request(
+          method,
+          method === "core.retirement.prepare" ? { handoffId: "handoff" } : {},
+          { id: `quit-${method}`, operationId: `op-${method}` },
+        ),
+      ).rejects.toMatchObject({ code: "duplicate_request_id" });
+      expect(calls).toHaveLength(count);
     }
+    for (let i = 0; i < 5; i++)
+      await client.request(
+        "core.retirement.ack",
+        {},
+        {
+          id: `reserved-${i}`,
+          operationId: `reserved-op-${i}`,
+        },
+      );
+    const saturated = calls.length;
+    await expect(
+      client.request("core.retirement.ack", {}, { operationId: "overflow" }),
+    ).rejects.toBeInstanceOf(RequestNotSentError);
+    expect(calls).toHaveLength(saturated);
     // Idle observation remains separate from effect/control history saturation.
     expect(
       (await client.request("chat.browser.next", { deadlineMillis: "1" }))
         .status,
     ).toBe("ok");
+    await expect(
+      client.request("computer.connector.health", healthBody),
+    ).resolves.toMatchObject({ status: "ok", data: healthBody });
   } finally {
     await client.close();
   }
@@ -364,6 +430,48 @@ it("rejects forged namespaces and invalid polls before submission without spendi
       client.request("core.status", {}, { id: "original" }),
     ).rejects.toMatchObject({ code: "duplicate_request_id" });
     expect(calls).toHaveLength(count);
+  } finally {
+    await client.close();
+  }
+});
+
+it("refuses invalid health reads before submission without spending an ordered sequence", async () => {
+  const { client, calls } = await peer();
+  try {
+    for (const [body, options] of [
+      [healthBody, { id: "bad id" }],
+      [healthBody, { id: "health", operationId: "effect" }],
+      [{ deadlineMillis: "1" }, { id: "health" }],
+      [{ ...healthBody, extra: true }, { id: "health" }],
+      [{ ...healthBody, expectedInstanceId: "" }, { id: "health" }],
+      [{ ...healthBody, snapshot: {} }, { id: "health" }],
+      [healthBody, { id: "desktop-poll-health:forged:1" }],
+    ] as const) {
+      await expect(
+        client.request("computer.connector.health", body, options),
+      ).rejects.toMatchObject({ state: "refused" });
+    }
+    expect(calls).toHaveLength(1);
+    for (let i = 1; i <= 2; i++) {
+      await expect(
+        client.request("computer.connector.health", healthBody, { id: "same" }),
+      ).resolves.toMatchObject({ requestId: "same", data: healthBody });
+      expect(calls.at(-1)!.id).toMatch(
+        new RegExp(`^desktop-poll-health:.*:${i}$`, "u"),
+      );
+    }
+    const retained = client as unknown as { polls: Map<string, bigint> };
+    retained.polls.set("health", 18446744073709551614n);
+    await client.request("computer.connector.health", healthBody);
+    expect(calls.at(-1)!.id).toMatch(/:18446744073709551615$/u);
+    const count = calls.length;
+    await expect(
+      client.request("computer.connector.health", healthBody),
+    ).rejects.toBeInstanceOf(RequestNotSentError);
+    expect(calls).toHaveLength(count);
+    await expect(client.request("core.status", {})).resolves.toMatchObject({
+      status: "ok",
+    });
   } finally {
     await client.close();
   }
