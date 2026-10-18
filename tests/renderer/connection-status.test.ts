@@ -250,3 +250,163 @@ it("retains one owned timer across synchronous subscribers", async () => {
     vi.useRealTimers();
   }
 });
+
+it.each(["newer", "unavailable", "malformed", "expired"])(
+  "preserves clock continuity through %s before accepting another positive",
+  async (intermediate) => {
+    vi.useFakeTimers({
+      toFake: ["Date", "performance", "setTimeout", "clearTimeout"],
+    });
+    vi.setSystemTime(200_000);
+    const f = liveFixture(),
+      held = deferred<unknown>();
+    const original = {
+      ...view(1, "recent_transport"),
+      validUntilMillis: 245_000,
+    };
+    vi.mocked(f.api.bootstrap)
+      .mockResolvedValueOnce({ ...bootstrap(), connectionStatus: original })
+      .mockReturnValue(held.promise);
+    const c = new WindowController(f.api);
+    try {
+      await c.start();
+      vi.advanceTimersByTime(intermediate === "expired" ? 45_000 : 30_000);
+      vi.setSystemTime(intermediate === "expired" ? 230_000 : 220_000);
+      if (intermediate === "unavailable") f.notify(view(2, "unavailable"));
+      if (intermediate === "malformed") f.notify({ invalid: true });
+      f.notify({ ...original, revision: 3 });
+      expect(c.getSnapshot().connectionStatus?.state).toBe("unobserved");
+      expect(c.getSnapshot().connectionStatus?.revision).toBe(3);
+      await Promise.resolve();
+      expect(f.api.bootstrap).toHaveBeenCalledTimes(2);
+      f.notify({ ...original, revision: 4 });
+      expect(f.api.bootstrap).toHaveBeenCalledTimes(2);
+      vi.advanceTimersByTime(30_000);
+      expect(c.getSnapshot().connectionStatus?.state).toBe("unobserved");
+      expect(f.api.configure).not.toHaveBeenCalled();
+      expect(f.api.task).not.toHaveBeenCalled();
+    } finally {
+      c.dispose();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("fences an ordinary refresh started before a renderer clock rollback", async () => {
+  vi.useFakeTimers({
+    toFake: ["Date", "performance", "setTimeout", "clearTimeout"],
+  });
+  vi.setSystemTime(200_000);
+  const f = liveFixture(),
+    oldRead = deferred<unknown>(),
+    recovery = deferred<unknown>();
+  const original = {
+    ...view(1, "recent_transport"),
+    validUntilMillis: 245_000,
+  };
+  vi.mocked(f.api.bootstrap)
+    .mockResolvedValueOnce({ ...bootstrap(), connectionStatus: original })
+    .mockReturnValueOnce(oldRead.promise)
+    .mockReturnValue(recovery.promise);
+  const c = new WindowController(f.api);
+  try {
+    await c.start();
+    vi.advanceTimersByTime(30_000);
+    const refresh = c.refresh();
+    vi.setSystemTime(220_000);
+    oldRead.resolve({
+      ...bootstrap(),
+      connectionStatus: { ...original, revision: 2 },
+    });
+    await refresh;
+    expect(c.getSnapshot().connectionStatus?.state).toBe("unobserved");
+    expect(f.api.bootstrap).toHaveBeenCalledTimes(3);
+  } finally {
+    c.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it.each([
+  "current",
+  "older",
+  "other-build",
+  "other-environment",
+  "malformed",
+  "rejected",
+  "second-jump",
+  "disposed",
+  "newer-unavailable",
+])(
+  "accepts only the post-discontinuity local read with current fences: %s",
+  async (result) => {
+    vi.useFakeTimers({
+      toFake: ["Date", "performance", "setTimeout", "clearTimeout"],
+    });
+    vi.setSystemTime(200_000);
+    const f = liveFixture(),
+      recovery = deferred<unknown>();
+    const original = {
+      ...view(1, "recent_transport"),
+      validUntilMillis: 245_000,
+    };
+    vi.mocked(f.api.bootstrap)
+      .mockResolvedValueOnce({ ...bootstrap(), connectionStatus: original })
+      .mockReturnValue(recovery.promise);
+    const c = new WindowController(f.api);
+    try {
+      await c.start();
+      const configuration = c.getSnapshot().configuration,
+        tasks = c.getSnapshot().tasks;
+      vi.advanceTimersByTime(30_000);
+      vi.setSystemTime(220_000);
+      f.notify({ ...original, revision: 2 });
+      await Promise.resolve();
+      expect(f.api.bootstrap).toHaveBeenCalledTimes(2);
+      expect(c.getSnapshot().connectionStatus?.state).toBe("unobserved");
+      const reply = {
+        ...bootstrap(),
+        connectionStatus: {
+          ...view(2, "recent_transport"),
+          validUntilMillis: 265_000,
+        },
+      };
+      if (result === "older") reply.connectionStatus.revision = 1;
+      if (result === "other-build") reply.build.buildId = "4".repeat(64);
+      if (result === "other-environment") reply.environment = "dev";
+      if (result === "second-jump") {
+        vi.setSystemTime(210_000);
+        f.notify({ ...original, revision: 3 });
+      }
+      if (result === "disposed") c.dispose();
+      if (result === "newer-unavailable") f.notify(view(3, "unavailable"));
+      if (result === "rejected")
+        recovery.reject(new Error("local read unavailable"));
+      else recovery.resolve(result === "malformed" ? { invalid: true } : reply);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      if (result === "current") {
+        expect(c.getSnapshot().connectionStatus?.state).toBe(
+          "recent_transport",
+        );
+        // The explicit read consumes the original main deadline, not a new lease.
+        vi.advanceTimersByTime(45_000);
+        expect(c.getSnapshot().connectionStatus?.state).toBe("unobserved");
+      } else {
+        expect(c.getSnapshot().connectionStatus?.state).toBe(
+          result === "newer-unavailable" ? "unavailable" : "unobserved",
+        );
+      }
+      expect(c.getSnapshot().configuration).toBe(configuration);
+      expect(c.getSnapshot().tasks).toBe(tasks);
+      expect(f.api.configure).not.toHaveBeenCalled();
+      expect(f.api.task).not.toHaveBeenCalled();
+      // A rejected/malformed/mismatched response is never automatically replayed.
+      expect(f.api.bootstrap).toHaveBeenCalledTimes(2);
+    } finally {
+      c.dispose();
+      vi.useRealTimers();
+    }
+  },
+);
