@@ -45,6 +45,9 @@ func (r *Repo) readHelper(ctx context.Context, query func(readOptions) (*observa
 		if err := bound(); err != nil {
 			view = nil
 			result = errors.Join(result, err)
+			if r.observation != nil {
+				r.retainUnknown()
+			}
 		}
 	}()
 	if err := bound(); err != nil {
@@ -53,9 +56,27 @@ func (r *Repo) readHelper(ctx context.Context, query func(readOptions) (*observa
 	if r.closed {
 		return nil, port.JournalClosed
 	}
+	if r.observation != nil {
+		if r.unknown || r.observation.JournalUnknown(r.operation) {
+			return nil, port.JournalUnknown
+		}
+		defer func() {
+			if result != nil {
+				r.retainUnknown()
+			}
+		}()
+		if err := r.observation.ReverifyHelperJournalObservation(ctx, r.operation, r.identity()); err != nil {
+			return nil, journalFailure(port.JournalUnproven, err)
+		}
+	}
 	observed, err := query(readOptions{maxBytes: records.MaxHelperRecordBytes, bound: bound})
 	if err != nil {
 		return nil, err
+	}
+	if r.observation != nil {
+		if err := r.observation.ReverifyHelperJournalObservation(ctx, r.operation, r.identity()); err != nil {
+			return nil, journalFailure(port.JournalUnproven, err)
+		}
 	}
 	return observed.view, nil
 }

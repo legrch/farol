@@ -254,3 +254,27 @@ Python helper remains selected. Pure application/input tests and race/vet are
 policy evidence; native/boot test compilation is compile-only. Neither establishes
 native admission, a live filesystem/process, full CI, package, installed, OTA or
 release acceptance. Root owns independent review, integration and those gates.
+
+## Existing-only journal observation
+
+`journal.WithObservation` opens the original operation through a borrowed route
+File and the consumer's `HelperJournalObservationAdmission`. That admission
+rechecks route/slot custody and shares the original gate and retained uncertainty;
+it supplies no stopped-writer or update-exclusion proof. The callback receives a
+sealed `Observation` with only the original bounded `ReadHelper`. It exposes no
+writer constructor, CAS, prepare, repair, descriptor or close capability. Copies
+share the original repository lifetime and refuse after synchronous cleanup.
+
+Reads do not create a journal, seed a writer revision or repair malformed state.
+The original deadline and before/after admission checks remain in force. Native,
+callback and cleanup causes stay behind closed public error text; failed or late
+reads retain uncertainty in the original owner. Subsequent effect composition
+must independently obtain full writer admission and reobserve that same journal
+under its update and instance exclusion. Observation alone is never a readiness,
+ACK, effect, retry or ownership grant.
+
+The explicitly gated disposable Darwin fixtures check existing-only reads,
+physical route binding, scope expiry, independent values, refusal/uncertainty and
+private callback-cause retention. Their admission and lease are symbolic. These
+checks do not prove a production predecessor, real lease or full pre-ACK helper
+composition, and do not select Go or retire the Python helper.
