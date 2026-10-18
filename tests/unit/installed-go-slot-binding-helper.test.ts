@@ -4,6 +4,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { installedGoSlotBindingHelper } from "../../apps/desktop/installed-slot-binding-helper";
+import { BridgeError } from "../../apps/desktop/bridge/client.ts";
 import type { BuildIdentity } from "../../src/pkg/build-info/identity";
 
 // Constructed native-header bytes and independent fixture expectations only.
@@ -146,4 +147,56 @@ it("refuses a cancelled host fence before inspecting the image", async () => {
   });
   await expect(selected.qualify()).rejects.toThrow("CLOSED_ADMISSION");
   expect(recheck).not.toHaveBeenCalled();
+});
+
+it("preserves bridge refusal classification through the direct shared verifier", async () => {
+  const selected = installedGoSlotBindingHelper({
+    compiledArtifact: artifact(),
+    build,
+    directory: root,
+    recheck: async () => undefined,
+    beforeEffect() {},
+  });
+  bytes[127] = 1;
+  fs.writeFileSync(path.join(root, "farol-backend"), bytes);
+  const result = selected.qualify();
+  await expect(result).rejects.toBeInstanceOf(BridgeError);
+  await expect(result).rejects.toMatchObject({
+    state: "refused",
+    code: "core_artifact_digest_mismatch",
+    message: "core_artifact_digest_mismatch",
+  });
+});
+
+it("retains custody callback order around the exact byte inspection", async () => {
+  const events: string[] = [];
+  const open = fs.openSync;
+  const inspect = vi.spyOn(fs, "openSync").mockImplementation((...args) => {
+    events.push("inspect");
+    return open(...args);
+  });
+  try {
+    const selected = installedGoSlotBindingHelper({
+      compiledArtifact: artifact(),
+      build,
+      directory: root,
+      recheck: async () => {
+        events.push("recheck");
+      },
+      beforeEffect() {
+        events.push("beforeEffect");
+      },
+    });
+    await selected.qualify();
+    expect(events).toEqual([
+      "beforeEffect",
+      "recheck",
+      "beforeEffect",
+      "inspect",
+      "recheck",
+      "beforeEffect",
+    ]);
+  } finally {
+    inspect.mockRestore();
+  }
 });

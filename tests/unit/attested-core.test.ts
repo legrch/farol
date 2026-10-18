@@ -110,7 +110,9 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 async function refused(core: AttestedCore, code: string): Promise<void> {
-  await expect(core.start()).rejects.toMatchObject({ state: "refused", code });
+  const result = core.start();
+  await expect(result).rejects.toBeInstanceOf(BridgeError);
+  await expect(result).rejects.toMatchObject({ state: "refused", code });
   expect(mockSpawn).not.toHaveBeenCalled();
 }
 function replaceFixture(bytes: Buffer): void {
@@ -203,6 +205,20 @@ describe("closed consumed artifact declaration", () => {
     expect(() => parseCoreArtifactDeclaration(proxy)).toThrow(
       "invalid_core_artifact",
     );
+  });
+  it("preserves an existing bridge error thrown by a declaration trap", () => {
+    const failure = new BridgeError("unknown", "fixture_declaration_trap");
+    const proxy = new Proxy(artifact, {
+      ownKeys() {
+        throw failure;
+      },
+    });
+    try {
+      parseCoreArtifactDeclaration(proxy);
+      expect.unreachable("Expected the original trap error");
+    } catch (error) {
+      expect(error).toBe(failure);
+    }
   });
   it.each([
     "../farol",
@@ -348,6 +364,20 @@ describe("independently pinned host binding", () => {
       );
     },
   );
+  it("validates the profile before inspecting the expected binary", async () => {
+    const inspect = vi.fn(() => {
+      throw new BridgeError("unknown", "fixture_binary_trap");
+    });
+    await refused(
+      new AttestedCore(artifact, {
+        ...expected,
+        profileId: "bad profile",
+        binary: new Proxy(expected.binary, { getPrototypeOf: inspect }),
+      }),
+      "invalid_core_expectation",
+    );
+    expect(inspect).not.toHaveBeenCalled();
+  });
   it("runtime-parses expectations and rejects a launch override", async () => {
     await refused(
       new AttestedCore(artifact, {
