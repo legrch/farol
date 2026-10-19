@@ -95,3 +95,45 @@ identity/reasons and all entry data, modes and object IDs. Report wall time, CPU
 and peak memory separately. A faster snapshot does not by itself qualify an
 entire CI gate, package, native route or installed application. Existing compiler
 refusals, output-preservation checks and their time limits remain unchanged.
+
+## Bounded Linux execution and complete CI composition
+
+`task ci` now composes every leaf of the previous complete `ci:fast` gate,
+including source coverage, Hunt/build evidence, full core race/vet and protocol
+checks, output checks and secret scanning, plus `test:tooling`. `ci:fast` is a
+compatibility alias. `ci:cloud` retains every previous portable obligation and
+adds tooling controls; native/resource/mixed and package acceptance remain
+separate. No native test is removed or reclassified by this adoption packet.
+
+`task test:tooling` runs the toolchain check, all discovered Python controls and
+the three adopted Node control files. The observer and public task must register
+the same actual files. Experimental native obligation admission remains in its
+separate retained packet; this source increment does not implement or accept the
+all-local-family root union.
+
+The optional `tooling/testops/docker_gate.py` runner executes the fixed portable
+source, full core, tooling and secret-scan branches with one or two jobs. Each
+job has an owned network-disabled container, read-only source/dependency/SDK
+inputs, private output and cache, two CPUs, 3 GiB memory and 256 PIDs. Admission
+binds exact clean source, locked dependency content, tools and original command
+receipts. Source changes, incomplete reports, OOM, cancellation and unknown
+retirement cannot become PASS. It requires explicitly prepared owned volumes
+and dependency evidence; it does not pull images or acquire dependencies.
+
+This local Docker adapter is qualified only for host UID 501 and the declared
+Linux arm64 tool/image/input set. Its paths and prepared volumes are explicit
+inputs, not a portable installation standard. Ordinary `task ci:cloud` remains
+the source entrypoint for a separately provisioned Linux runner. Container
+qualification alone does not prove a hosted CI workflow or native Mac coverage.
+
+`tooling/testops/affected_host.py` is a separate opt-in controlled iteration
+runner. It authenticates a clean source and dependency binding, collects fresh
+compiler metadata in an owned container, and validates original selected-file
+and case receipts. Unknown mappings widen or refuse. The focused Go route is
+limited to its fixed four-package policy. `task test:affected` remains PLAN_ONLY;
+neither affected mode replaces the complete source, native or release gates.
+
+The extracted core command plan retains all nine original commands, flags,
+ordering and nested-module contexts. Its final marker records only completion
+of that command chain; it does not invent Go case counts or general descendant
+containment. A fixed contract test retains the original command array.
