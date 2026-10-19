@@ -3,7 +3,8 @@
  * task dev -- --check
  * node tests/e2e/writable-recovery.e2e.mjs --run-native
  *   --source-sha <exact committed SHA> --build-id <qualified build ID>
- * Optional --scenario normal|crash (default both). Never automatically rerun.
+ * Optional --scenario normal|crash (default both), or explicit connector-failed-quit.
+ * Never automatically rerun a scenario.
  * Synthetic loopback account/provider only. No installed/live-provider, OS sleep,
  * interrupted-effect or arbitrary-descendant qualification. Profiles are retained.
  */
@@ -52,17 +53,20 @@ const contract = {
   owned: "tests/e2e/writable-recovery.e2e.mjs",
   modes: [
     "--contract",
-    "--run-native --source-sha SHA --build-id ID [--scenario normal|crash]",
+    "--run-native --source-sha SHA --build-id ID [--scenario normal|crash|connector-failed-quit]",
   ],
   normal:
     "Normal main.cjs/Go -> approved disposable folder -> real Chat results/ACK/settlement -> Go-owned guarded File edit/read/result ACK -> ordinary confirmed Quit -> same-profile fresh writable generation -> original saved Chat answers/workspace/result -> second File edit/read/result ACK -> confirmed Quit",
   crash:
     "Fresh normal main.cjs/Go -> same real work -> exact observed Electron host SIGKILL -> observe original direct Go child absent -> one same-profile automatic preserving startup -> exact archived history/results and actual normal-session stored-copy UI -> new writable File ACK -> ordinary confirmed Quit",
+  connectorFailedQuit:
+    "Explicit only: normal main.cjs/attested Go + saved Chat/File work -> prove original Electron/anchor/synthetic tunnel ancestry -> one exact anchor SIGKILL with original tunnel still running -> ordinary app Quit -> require drained=false/unconfirmed=[connector], real original Go absence and unchanged run marker -> settle the nonce-bound owned tunnel -> one same-profile ordinary restart -> record actual normal/read-only/UI outcome and preservation; no forced recovery or success",
   limits: [
     "Synthetic loopback provider/account/tasks and disposable workspace; existing admitted normal preload/UI flows, no product seam or injected journal/result",
     "Legacy Chat/history witness labels mention Home remount; this harness records actual Home -> Settings -> Diagnostics -> ChatGPT acceptance tools navigation. No renderer mounting or Home-hosted-control claim",
     "Go owns Settings edit admission/pending/result; existing typed host storage performs conditional filesystem writes, not an autonomous model tool call",
-    "Hidden windows throughout; no focus, real picker, real provider, tunnel, installed profile, sleep/reboot or interrupted-effect qualification",
+    "Hidden windows throughout; no focus, real picker, real provider/control plane, installed profile, sleep/reboot or interrupted-effect qualification; connector-failed-quit uses a synthetic loopback tunnel only",
+    "Connector-only failure is a hypothesis until native qualification. Any other failed-drain shape is NONMATCHING_FIXTURE, never R04 PASS. A read-only restart records that limit and performs no write or recovery action",
     "Exact observed direct child absence is not arbitrary descendant settlement or an original Go terminal/ACK receipt after host SIGKILL",
     "Historical Desktop prepared/readonly/null metadata is deliberately seeded on the fresh disposable crash fixture only after the original host/direct Go child are absent; this is not original historical or production state",
     "Owned parent/child queries only; no machine-wide process inventory, arbitrary descendants or old Go ACK/terminal are established",
@@ -87,7 +91,11 @@ if (args.length === 0 || (args.length === 1 && args[0] === "--contract")) {
   }
   assert.match(pins["--source-sha"] ?? "", /^[a-f0-9]{40}$/u);
   assert.match(pins["--build-id"] ?? "", /^[a-f0-9]{64}$/u);
-  assert.ok([undefined, "normal", "crash"].includes(pins["--scenario"]));
+  assert.ok(
+    [undefined, "normal", "crash", "connector-failed-quit"].includes(
+      pins["--scenario"],
+    ),
+  );
   await main(pins);
 }
 
@@ -358,7 +366,9 @@ async function main(pins) {
           active,
         });
       } catch (error) {
-        row.status = "FAILED_OR_UNKNOWN";
+        row.status = row.nonmatchingFixture
+          ? "NONMATCHING_FIXTURE"
+          : "FAILED_OR_UNKNOWN";
         row.error = String(error?.stack ?? error);
         await save();
       }
@@ -432,6 +442,125 @@ async function scenario({
     flag: "wx",
   });
   row.profile = profile;
+  const connectorFailure = name === "connector-failed-quit";
+  const tunnelRoot = path.join(stateRoot, "secure-mcp-connector", "state");
+  let tunnelExecutable,
+    ownedTunnel,
+    stopIssued = false;
+  if (connectorFailure) {
+    const fixtureRoot = path.join(profile, "connector-fixture");
+    await fs.mkdir(fixtureRoot, { mode: 0o700 });
+    tunnelExecutable = path.join(fixtureRoot, "connector-only-tunnel.cjs");
+    await fs.writeFile(
+      tunnelExecutable,
+      `#!${process.execPath}\n${await fs.readFile(new URL("./connector-only-tunnel.fixture.cjs", import.meta.url), "utf8")}`,
+      { flag: "wx", mode: 0o700 },
+    );
+    await fs.copyFile(
+      new URL("./tunnel-client.fixture.cjs", import.meta.url),
+      path.join(fixtureRoot, "tunnel-client.fixture.cjs"),
+      fs.constants.COPYFILE_EXCL,
+    );
+    row.fixture = { executable: tunnelExecutable, status: "not-started" };
+  }
+  const tunnelRecord = async () => {
+    let names;
+    try {
+      names = await fs.readdir(tunnelRoot);
+    } catch (error) {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    }
+    const files = names.filter((value) =>
+      /^connector-only-[a-f0-9-]{36}\.json$/u.test(value),
+    );
+    assert.ok(files.length <= 1, "AMBIGUOUS_FIXTURE_TUNNEL_NO_SIGNAL");
+    if (!files.length) return null;
+    const value = await json(path.join(tunnelRoot, files[0]));
+    assert.equal(files[0], `connector-only-${value.id}.json`);
+    assert.match(
+      value.id,
+      /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u,
+    );
+    assert.equal(value.executable, tunnelExecutable);
+    for (const pid of [value.pid, value.parentPid])
+      assert.ok(
+        Number.isSafeInteger(pid) && pid > 1,
+        "INVALID_FIXTURE_PID_NO_SIGNAL",
+      );
+    if (ownedTunnel)
+      for (const key of ["id", "pid", "parentPid", "executable"])
+        assert.equal(
+          value[key],
+          ownedTunnel[key],
+          "FIXTURE_IDENTITY_CHANGED_NO_SIGNAL",
+        );
+    return value;
+  };
+  const exactCommand = (pid) => {
+    // Anchor argv contains newlines; the ordinary row parser cannot retain its
+    // full inline script. This query is restricted to one already owned PID.
+    const result = spawnSync(
+      "/bin/ps",
+      ["-ww", "-p", String(pid), "-o", "command="],
+      { encoding: "utf8", maxBuffer: 32768, timeout: 3000 },
+    );
+    assert.equal(result.error, undefined, "FIXTURE_COMMAND_QUERY_UNKNOWN");
+    assert.equal(result.status, 0, "FIXTURE_COMMAND_QUERY_REFUSED");
+    return result.stdout.trim();
+  };
+  const poll = async (read, accept, label) => {
+    const deadline = performance.now() + 15000;
+    do {
+      const value = await read();
+      if (accept(value)) return value;
+      await pause();
+    } while (performance.now() < deadline);
+    throw new Error(label);
+  };
+  const settleTunnel = async () => {
+    assert.ok(ownedTunnel, "FIXTURE_ANCESTRY_NOT_PROVEN_NO_CLEANUP_SIGNAL");
+    assert.equal(stopIssued, false, "DUPLICATE_FIXTURE_STOP_FORBIDDEN");
+    const before = await tunnelRecord();
+    assert.equal(before.phase, "running", "FIXTURE_TERMINAL_NONMATCHING");
+    const current = processes([ownedTunnel.pid]);
+    assert.equal(current.length, 1, "ORIGINAL_FIXTURE_TUNNEL_MISSING");
+    assert.equal(
+      current[0].command,
+      row.fixture.tunnel.command,
+      "FIXTURE_PROCESS_CHANGED",
+    );
+    stopIssued = true;
+    row.fixture.stop = { status: "request-issued", id: ownedTunnel.id };
+    await save();
+    // The fixture consumes only its own nonce-bound request and signals itself.
+    // Never signal a reparented/reused numeric tunnel PID from this harness.
+    const requestFile = path.join(
+      tunnelRoot,
+      `connector-only-stop-${ownedTunnel.id}.json`,
+    );
+    await fs.writeFile(
+      requestFile + ".tmp",
+      JSON.stringify({
+        id: ownedTunnel.id,
+        pid: ownedTunnel.pid,
+        action: "stop",
+      }) + "\n",
+      { flag: "wx", mode: 0o600 },
+    );
+    await fs.rename(requestFile + ".tmp", requestFile);
+    row.fixture.terminal = await poll(
+      tunnelRecord,
+      (value) => value?.phase === "exited",
+      "FIXTURE_TERMINAL_UNKNOWN_NO_REOPEN",
+    );
+    await save();
+    assert.equal(row.fixture.terminal.exitCode, 0);
+    assert.equal(row.fixture.terminal.stopConsumed, true);
+    await absent([{ pid: ownedTunnel.pid }, { pid: ownedTunnel.parentPid }]);
+    row.fixture.stop.status = "terminal-and-exact-original-absence-observed";
+    await save();
+  };
   const session = {
     user: { id: "startup-synthetic-user" },
     account: { id: "startup-synthetic-account" },
@@ -549,7 +678,7 @@ async function scenario({
   };
   const journal = () =>
     json(path.join(stateRoot, "go-core/chat/chat-lifecycle.json"));
-  const start = async (recovery = false) => {
+  const start = async (recovery = false, observeStartup = false) => {
     active();
     assert.deepEqual(sourceIdentity(root), source);
     await qualifyGoBuild(buildRoot, source);
@@ -581,6 +710,9 @@ async function scenario({
         FAROL_NEXT_E2E_TEST_ROOT: profile,
         FAROL_NEXT_E2E_TEST_PROOF: proof,
         FAROL_NEXT_E2E_CHATGPT_URL: site.url,
+        ...(tunnelExecutable
+          ? { FAROL_NEXT_E2E_TUNNEL_CLIENT: tunnelExecutable }
+          : {}),
         FAROL_NEXT_E2E_WORKSPACE_ROOT: workspace,
         FAROL_NEXT_E2E_WORKSPACE_FILE: path.join(
           workspace,
@@ -596,6 +728,65 @@ async function scenario({
     child.once("exit", (code, signal) => {
       original.terminal = { code, signal };
     });
+    if (connectorFailure) {
+      original.lifecycle = [];
+      let buffered = "",
+        bytes = 0;
+      child.stderr.on("data", (chunk) => {
+        bytes += chunk.length;
+        if (bytes > 2 * 1024 * 1024 || original.lifecycle.length >= 64) {
+          original.lifecycleOverflow = true;
+          return;
+        }
+        buffered += chunk.toString("utf8");
+        if (Buffer.byteLength(buffered) > 65536) {
+          original.lifecycleOverflow = true;
+          buffered = "";
+          return;
+        }
+        const lines = buffered.split("\n");
+        buffered = lines.pop() ?? "";
+        for (const line of lines) {
+          const prefix = "FAROL_BACKEND_LIFECYCLE:";
+          if (!line.startsWith(prefix)) continue;
+          try {
+            const value = JSON.parse(line.slice(prefix.length));
+            if (
+              !["go-backend", "connector-anchor", "connector-tunnel"].includes(
+                value.source,
+              )
+            )
+              continue;
+            original.lifecycle.push(
+              Object.fromEntries(
+                [
+                  "source",
+                  "phase",
+                  "event",
+                  "code",
+                  "state",
+                  "exitCode",
+                  "signal",
+                  "forced",
+                  "hostLifetimeId",
+                  "childLaunchId",
+                  "runtimeGeneration",
+                ]
+                  .filter(
+                    (key) =>
+                      ["string", "number", "boolean"].includes(
+                        typeof value[key],
+                      ) || value[key] === null,
+                  )
+                  .map((key) => [key, value[key]]),
+              ),
+            );
+          } catch {
+            original.lifecycleParseError = true;
+          }
+        }
+      });
+    }
     for (const stream of ["stdout", "stderr"])
       child[stream].on("data", (chunk) => {
         // Only the disposable synthetic profile can contribute to these logs.
@@ -613,6 +804,40 @@ async function scenario({
       });
     page = await app.firstWindow({ timeout: 15000 });
     page.setDefaultTimeout(15000);
+    if (observeStartup) {
+      // Read actual DOM/API state only; no recovery/reset/migration command.
+      launch.startupObservation = await poll(
+        () =>
+          page
+            .evaluate(() => ({
+              normalAPI: typeof window.farolNext,
+              recoveryAPI: typeof window.farolRecovery,
+              normalShell: !!document.querySelector(".desktop"),
+              recoveryHeading: [...document.querySelectorAll("h1,h2")].some(
+                (node) =>
+                  node.textContent === "Your previous session needs recovery",
+              ),
+              text: document.body.innerText.slice(0, 16000),
+              buttons: [...document.querySelectorAll("button")].map((node) => ({
+                text: node.textContent,
+                disabled: node.disabled,
+              })),
+            }))
+            .then(async (value) => {
+              launch.startupObservation = value;
+              await save();
+              return value;
+            }),
+        (value) => value.normalShell || value.recoveryHeading,
+        "REOPEN_UI_UNKNOWN_NO_RETRY",
+      );
+      recovery = launch.startupObservation.recoveryHeading;
+      launch.recovery = recovery;
+      row.restartOutcome = recovery
+        ? "read-only-recovery-shell"
+        : "normal-shell-awaiting-readiness";
+      await save();
+    }
     // Capture the original current Go child before any UI-mode assertion so a
     // refused automatic-start path still has exact cleanup ownership.
     const childBy = performance.now() + 15000;
@@ -668,6 +893,7 @@ async function scenario({
       assert.equal(bootstrap.applicationId, "local.farol.dev");
       launch.marker = await json(path.join(stateRoot, "running.json"));
       assert.equal(launch.marker.pid, child.pid);
+      if (observeStartup) row.restartOutcome = "normal-ready";
       launch.journal = await journal();
       launch.generation = launch.journal.scope.BackendGeneration;
       assert.ok(launch.generation);
@@ -897,7 +1123,328 @@ async function scenario({
     row.ledger = site.driver.snapshot();
     await save();
     assert.equal(row.ledger.acceptedSends, 2);
-    if (name === "normal") {
+    if (connectorFailure) {
+      await configure({ kind: "connector.select-client" });
+      await configure({
+        kind: "connector.configure",
+        tunnelId: "connector_only_owned_fixture",
+        runtimeKey: "synthetic-connector-only-runtime-key",
+      });
+      await configure({ kind: "connector.start" });
+      const record = await poll(
+        tunnelRecord,
+        (value) => value?.phase === "running",
+        "FIXTURE_TUNNEL_NOT_OBSERVED_NO_SIGNAL",
+      );
+      const exact = processes([child.pid, record.parentPid, record.pid]);
+      const anchor = exact.find((value) => value.pid === record.parentPid);
+      const tunnel = exact.find((value) => value.pid === record.pid);
+      assert.equal(exact.length, 3, "FIXTURE_ANCESTRY_INCOMPLETE_NO_SIGNAL");
+      assert.equal(
+        anchor.ppid,
+        child.pid,
+        "FIXTURE_ANCHOR_NOT_OWNED_NO_SIGNAL",
+      );
+      const anchorCommand = exactCommand(anchor.pid);
+      assert.ok(
+        anchorCommand.includes("farol-tunnel-terminal-v1") &&
+          anchorCommand.includes(tunnelExecutable),
+        "FIXTURE_ANCHOR_COMMAND_NOT_MATCHED_NO_SIGNAL",
+      );
+      assert.equal(
+        tunnel.ppid,
+        anchor.pid,
+        "FIXTURE_TUNNEL_NOT_OWNED_NO_SIGNAL",
+      );
+      assert.equal(
+        tunnel.command,
+        `${process.execPath} ${tunnelExecutable} ${record.argv.join(" ")}`,
+        "FIXTURE_TUNNEL_COMMAND_NOT_MATCHED_NO_SIGNAL",
+      );
+      assert.deepEqual(
+        processes([launch.backend.pid]),
+        [launch.backend],
+        "ORIGINAL_GO_CHILD_CHANGED",
+      );
+      ownedTunnel = record;
+      row.fixture = {
+        ...row.fixture,
+        record,
+        anchor,
+        tunnel,
+        anchorCommand,
+        status: "exact-original-ancestry-proven",
+      };
+      const settings = await json(path.join(stateRoot, "config.json"));
+      row.settingsBeforeFailure = settings;
+      const marker = await regular(path.join(stateRoot, "running.json"));
+      assert.deepEqual(
+        JSON.parse(marker.bytes.toString("utf8")),
+        launch.marker,
+        "ORIGINAL_NORMAL_RUN_MARKER_CHANGED",
+      );
+      row.fixture.originalRunMarker = {
+        sha256: marker.sha256,
+        physical: marker.physical,
+      };
+      // Chat and File effects have already settled. This signal targets only
+      // the current owned connector anchor, never Go, a process group or a scan.
+      const rechecked = processes([anchor.pid, tunnel.pid]);
+      assert.deepEqual(
+        rechecked.find((value) => value.pid === anchor.pid),
+        anchor,
+      );
+      assert.deepEqual(
+        rechecked.find((value) => value.pid === tunnel.pid),
+        tunnel,
+      );
+      assert.equal(exactCommand(anchor.pid), anchorCommand);
+      row.fixture.status = "anchor-SIGKILL-issued";
+      await save();
+      assert.equal(process.kill(anchor.pid, "SIGKILL"), true);
+      await absent([anchor]);
+      row.fixture.anchorTerminal = await poll(
+        async () =>
+          launch.lifecycle.find(
+            (value) =>
+              value.source === "connector-anchor" &&
+              value.event === "exit" &&
+              value.state === "observed" &&
+              value.signal === "SIGKILL" &&
+              value.exitCode === null,
+          ),
+        Boolean,
+        "ORIGINAL_ANCHOR_TERMINAL_UNKNOWN_NO_QUIT_RETRY",
+      );
+      await save();
+      assert.equal((await tunnelRecord()).phase, "running");
+      assert.equal(
+        processes([tunnel.pid])[0]?.command,
+        tunnel.command,
+        "ORIGINAL_TUNNEL_NOT_RETAINED_NONMATCHING_FIXTURE",
+      );
+      await hidden();
+      launch.closeRequested = true;
+      launch.status = "ordinary-app-quit-issued";
+      const requestedAt = Date.now();
+      await save();
+      // A disconnected evaluate reply is not terminal evidence. The original
+      // child exit and exact Go absence below remain independent prerequisites.
+      const quittingLaunch = launch;
+      void app
+        .evaluate(({ app }) => app.quit())
+        .catch((error) => {
+          quittingLaunch.quitCallError = String(error);
+        });
+      await bounded(ended, "FAILED_QUIT_TERMINAL_UNKNOWN_NO_RETRY", 15000);
+      await logWrites;
+      await save();
+      assert.deepEqual(launch.terminal, { code: 0, signal: null });
+      await absent([launch.backend]);
+      launch.originalGoChildAbsent = true;
+      launch.quitReceipt = await json(path.join(stateRoot, "last-quit.json"));
+      await save();
+      const receipt = launch.quitReceipt;
+      if (
+        receipt.schema !== 1 ||
+        receipt.drained !== false ||
+        JSON.stringify(receipt.unconfirmed) !== '["connector"]'
+      ) {
+        row.nonmatchingFixture = true;
+        throw new Error("NONMATCHING_FIXTURE_NOT_R04_PASS");
+      }
+      assert.equal(new Date(receipt.at).toISOString(), receipt.at);
+      assert.ok(Date.parse(receipt.at) >= requestedAt);
+      assert.deepEqual(
+        await regular(path.join(stateRoot, "running.json")),
+        marker,
+        "FAILED_QUIT_ORIGINAL_RUN_MARKER_CHANGED",
+      );
+      assert.equal(
+        launch.lifecycleOverflow,
+        undefined,
+        "LIFECYCLE_EVIDENCE_OVERFLOW",
+      );
+      assert.equal(
+        launch.lifecycleParseError,
+        undefined,
+        "LIFECYCLE_EVIDENCE_MALFORMED",
+      );
+      launch.goClosureEvidence =
+        "Exact original direct Go PID absence independently observed; lifecycle observations retained separately, no inferred terminal ACK";
+      launch.status = "connector-only-failed-drain-observed";
+      row.afterFailedQuit = await custody(stateRoot, workspace);
+      preserved(row.beforeTransition, row.afterFailedQuit, true);
+      await settleTunnel();
+      const afterQuitSettings = await json(path.join(stateRoot, "config.json"));
+      for (const key of ["general", "tasks", "nativeHosts"])
+        assert.deepEqual(
+          afterQuitSettings[key],
+          settings[key],
+          `SETTINGS_CHANGED:${key}`,
+        );
+      for (const key of ["computerId", "commands", "workspaces"])
+        assert.deepEqual(
+          afterQuitSettings.computer[key],
+          settings.computer[key],
+          `COMPUTER_GRANTS_CHANGED:${key}`,
+        );
+      row.settingsAfterFailedQuit = afterQuitSettings;
+      await save();
+      await start(false, true); // Exactly one retained-profile ordinary reopen.
+      const archives = (
+        await fs.readdir(path.join(stateRoot, "go-core"))
+      ).filter((value) => /^chat-retired-[a-f0-9-]{36}$/u.test(value));
+      assert.ok(archives.length <= 1, "AMBIGUOUS_REOPEN_CHAT_CUSTODY");
+      const relocated = structuredClone(row.afterFailedQuit);
+      if (archives.length)
+        for (const [key, value] of Object.entries(relocated))
+          if ((key === "chat" || key.startsWith("chat/")) && value.path)
+            value.path = value.path.replace(
+              path.join(stateRoot, "go-core/chat"),
+              path.join(stateRoot, "go-core", archives[0]),
+            );
+      row.afterReopen = await custody(stateRoot, workspace, archives[0]);
+      preserved(relocated, row.afterReopen, true);
+      const reopenedSettings = await json(path.join(stateRoot, "config.json"));
+      row.settingsAfterReopen = reopenedSettings;
+      for (const key of ["general", "tasks", "nativeHosts"])
+        assert.deepEqual(
+          reopenedSettings[key],
+          settings[key],
+          `REOPEN_SETTINGS_CHANGED:${key}`,
+        );
+      for (const key of ["computerId", "commands", "workspaces"])
+        assert.deepEqual(
+          reopenedSettings.computer[key],
+          settings.computer[key],
+          `REOPEN_COMPUTER_GRANTS_CHANGED:${key}`,
+        );
+      assert.deepEqual(
+        site.driver.snapshot(),
+        row.ledger,
+        "REOPEN_PROVIDER_ACTIVITY",
+      );
+      if (launch.recovery) {
+        assert.deepEqual(
+          await regular(path.join(stateRoot, "running.json")),
+          marker,
+          "READ_ONLY_RESTART_CHANGED_ORIGINAL_RUN_MARKER",
+        );
+        assert.deepEqual(
+          await json(path.join(stateRoot, "last-quit.json")),
+          receipt,
+          "READ_ONLY_RESTART_CHANGED_FAILED_QUIT",
+        );
+        assert.deepEqual(launch.startupObservation.normalAPI, "undefined");
+        assert.deepEqual(launch.startupObservation.recoveryAPI, "object");
+        row.writable =
+          "NOT_RUN-read-only-recovery-shell-no-write-or-recovery-action";
+        await quit(true);
+      } else {
+        assert.notEqual(
+          launch.generation,
+          row.launches[0].generation,
+          "GENERATION_REUSED",
+        );
+        if (!archives.length) {
+          const originalLedger = site.driver.snapshot(),
+            originalJournal = await journal();
+          row.history = {};
+          await runHistoryReadJourney({
+            window: journeyPage,
+            originals,
+            hidden,
+            active,
+            report: row.history,
+            save,
+            unchanged: async () => {
+              assert.deepEqual(site.driver.snapshot(), originalLedger);
+              assert.deepEqual(await journal(), originalJournal);
+            },
+          });
+        } else {
+          await journeyPage
+            .getByRole("button", { name: "Home", exact: true })
+            .click();
+          const stored = page.locator("section.recovery-archive");
+          assert.equal(
+            await stored.count(),
+            1,
+            "REOPEN_STORED_READER_NOT_UNIQUE",
+          );
+          await stored
+            .getByRole("button", { name: "Load stored replies", exact: true })
+            .click();
+          const replies = stored.getByRole("button", {
+            name: /^Open stored reply \d+$/u,
+          });
+          await replies.nth(1).waitFor();
+          assert.equal(await replies.count(), 2, "REOPEN_STORED_REPLY_COUNT");
+          const expected = originals.map((value) => value.ui.answer).sort();
+          row.recoveredAnswers = [];
+          for (let i = 0; i < 2; i++) {
+            await replies.nth(i).click();
+            await page.waitForFunction(
+              ({ expected, previous }) => {
+                const text = document.querySelector(
+                  '[aria-label="Stored reply text"]',
+                )?.textContent;
+                return expected.includes(text) && text !== previous;
+              },
+              { expected, previous: row.recoveredAnswers.at(-1) ?? null },
+            );
+            row.recoveredAnswers.push(
+              await stored
+                .locator('[aria-label="Stored reply text"]')
+                .textContent(),
+            );
+            assert.equal(
+              await stored
+                .getByText("Outcome unconfirmed", { exact: true })
+                .count(),
+              1,
+            );
+            assert.equal(
+              await stored
+                .getByRole("button", { name: /^(Send|Resume|Acknowledge)/u })
+                .count(),
+              0,
+            );
+            await hidden();
+          }
+          assert.deepEqual([...row.recoveredAnswers].sort(), expected);
+          assert.deepEqual(
+            site.driver.snapshot(),
+            row.ledger,
+            "STORED_READER_PROVIDER_ACTIVITY",
+          );
+        }
+        await edit(
+          "Farol disposable first edited canary",
+          "Farol disposable second edited canary",
+        );
+        row.writable =
+          "PASS-new-File-result-read-and-ACK-after-connector-only-failed-Quit";
+        await quit();
+      }
+      const afterRestartQuit = await custody(stateRoot, workspace, archives[0]);
+      for (const [key, value] of Object.entries(relocated))
+        if (
+          (key === "chat" || key.startsWith("chat/")) &&
+          key !== "chat/chat-lifecycle.json"
+        )
+          assert.deepEqual(
+            afterRestartQuit[key],
+            value,
+            `REOPEN_CHAT_CHANGED:${key}`,
+          );
+      row.afterRestartQuit = afterRestartQuit;
+      assert.equal(row.launches.length, 2, "UNEXPECTED_REOPEN_COUNT");
+      row.status = "PASS";
+      row.qualification =
+        "Fixture journey only; actual restartOutcome/writable recorded separately, not source acceptance or R04 acceptance";
+    } else if (name === "normal") {
       await quit();
       row.afterQuit = await custody(stateRoot, workspace);
       preserved(row.beforeTransition, row.afterQuit, true);
@@ -1201,6 +1748,14 @@ async function scenario({
         launch.originalGoChildAbsent = true;
       } catch (error) {
         launch.cleanupError = String(error);
+      }
+    }
+    if (connectorFailure && ownedTunnel && !stopIssued) {
+      try {
+        await settleTunnel();
+      } catch (error) {
+        row.fixture.cleanupError = String(error);
+        await save();
       }
     }
     if (site) {
