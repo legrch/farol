@@ -243,23 +243,23 @@ func ObserveConnection(context ConnectionContext, sample *ConnectionHealthSnapsh
 	if details.LastSuccessMillis != nil {
 		observation.LastPollSuccessMillis = connectionMillis(*details.LastSuccessMillis)
 	}
-	if details.LastErrorMillis != nil && (details.LastSuccessMillis == nil || *details.LastErrorMillis >= *details.LastSuccessMillis) {
+	// Succeeded clears the producer's current failure fields together, while
+	// retaining last_error as history. Their wall-clock order cannot establish
+	// recovery: a later failure may have a numerically earlier timestamp.
+	failureOutstanding := poll.Status == "degraded" || poll.State == "backoff" || details.ConsecutiveFailures > 0 || details.FailureCategory != nil || (details.HTTPStatus != nil && *details.HTTPStatus >= 400)
+	if failureOutstanding {
+		if details.LastErrorMillis == nil {
+			if poll.State == "backoff" {
+				observation.NextRetryMillis = connectionNextRetry(context, details)
+			}
+			return connectionWithState(observation, ConnectionStateUnobserved, ConnectionReasonFailureUnobserved)
+		}
 		state, reason := connectionFailure(poll)
 		observation = connectionWithState(observation, state, reason)
 		if state == ConnectionStateUnavailable || poll.State == "backoff" {
 			observation.NextRetryMillis = connectionNextRetry(context, details)
 		}
 		return observation
-	}
-	// A degraded/backoff report without a dated failure cannot establish its order.
-	if details.LastErrorMillis == nil && (poll.Status == "degraded" || poll.State == "backoff" || details.ConsecutiveFailures > 0 || details.FailureCategory != nil || (details.HTTPStatus != nil && *details.HTTPStatus >= 400)) {
-		if poll.State == "backoff" {
-			observation.NextRetryMillis = connectionNextRetry(context, details)
-		}
-		return connectionWithState(observation, ConnectionStateUnobserved, ConnectionReasonFailureUnobserved)
-	}
-	if details.FailureCategory != nil && !connectionFailureCategory(*details.FailureCategory) {
-		return connectionWithState(observation, ConnectionStateUnobserved, ConnectionReasonFailureUnobserved)
 	}
 	if details.LastSuccessMillis != nil && context.NowMillis-*details.LastSuccessMillis <= connectionSuccessAge {
 		successUntil, ok := connectionAdd(*details.LastSuccessMillis, connectionSuccessAge)

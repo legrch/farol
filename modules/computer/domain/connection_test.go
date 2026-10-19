@@ -321,13 +321,6 @@ func TestObserveConnectionLatestFailure(t *testing.T) {
 			}
 		})
 	}
-	context, sample := connectionFixture()
-	sample.ControlPlane.Status, sample.ControlPlane.State = "degraded", "backoff"
-	sample.ControlPlane.Details.LastErrorMillis = connectionTestMillis(198_999)
-	sample.ControlPlane.Details.FailureCategory = connectionTestString("http_error")
-	sample.ControlPlane.Details.HTTPStatus = connectionTestMillis(503)
-	got := ObserveConnection(context, sample)
-	connectionAssertState(t, got, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess)
 	for _, change := range []func(*ControlPlaneHealth){
 		func(p *ControlPlaneHealth) { p.Status = "degraded" },
 		func(p *ControlPlaneHealth) { p.State = "backoff" },
@@ -339,6 +332,86 @@ func TestObserveConnectionLatestFailure(t *testing.T) {
 		change(sample.ControlPlane)
 		got := ObserveConnection(context, sample)
 		connectionAssertState(t, got, ConnectionStateUnobserved, ConnectionReasonFailureUnobserved)
+	}
+}
+
+// Current failure fields are cleared together by the pinned producer's
+// Succeeded transition. Wall-clock order alone cannot prove that transition.
+func TestObserveConnectionOutstandingFailureSurvivesClockReordering(t *testing.T) {
+	tests := []struct {
+		name     string
+		category string
+		http     *uint64
+		state    ConnectionState
+		reason   ConnectionReason
+	}{
+		{"authorization", "http_error", connectionTestMillis(401), ConnectionStateActionRequired, ConnectionReasonAuthorizationRequired},
+		{"forbidden", "http_error", connectionTestMillis(403), ConnectionStateActionRequired, ConnectionReasonAuthorizationRequired},
+		{"HTTP unavailable", "http_error", connectionTestMillis(503), ConnectionStateUnavailable, ConnectionReasonHTTPUnavailable},
+		{"network", "network_error", nil, ConnectionStateUnavailable, ConnectionReasonTransportUnavailable},
+		{"timeout", "timeout", nil, ConnectionStateUnavailable, ConnectionReasonTransportUnavailable},
+		{"canceled", "canceled", nil, ConnectionStateChecking, ConnectionReasonFailureCanceled},
+		{"request", "request_error", nil, ConnectionStateUnobserved, ConnectionReasonRequestUnobserved},
+		{"unsupported", "unsupported", nil, ConnectionStateUnobserved, ConnectionReasonFailureUnobserved},
+	}
+	for _, test := range tests {
+		for _, state := range []string{"backoff", "polling", "backpressured"} {
+			t.Run(test.name+"/"+state, func(t *testing.T) {
+				context, sample := connectionFixture()
+				poll := sample.ControlPlane
+				poll.Status, poll.State = "degraded", state
+				poll.Details.LastErrorMillis = connectionTestMillis(198_900)
+				poll.Details.ConsecutiveFailures = 1
+				poll.Details.FailureCategory = connectionTestString(test.category)
+				poll.Details.HTTPStatus = test.http
+				poll.Details.NextRetryMillis = connectionTestMillis(205_000)
+				got := ObserveConnection(context, sample)
+				connectionAssertState(t, got, test.state, test.reason)
+				connectionAssertMillis(t, got.LastPollSuccessMillis, 199_000)
+				connectionAssertMillis(t, got.ValidUntilMillis, 245_000)
+				if test.state == ConnectionStateUnavailable || state == "backoff" {
+					connectionAssertMillis(t, got.NextRetryMillis, 205_000)
+				} else if got.NextRetryMillis != nil {
+					t.Fatal("invented retry outside a reported failure plan")
+				}
+			})
+		}
+	}
+	for _, test := range []struct {
+		name   string
+		change func(*ControlPlaneHealth)
+	}{
+		{"degraded", func(p *ControlPlaneHealth) { p.Status = "degraded" }},
+		{"backoff", func(p *ControlPlaneHealth) { p.State = "backoff" }},
+		{"failures", func(p *ControlPlaneHealth) { p.Details.ConsecutiveFailures = 1 }},
+		{"category", func(p *ControlPlaneHealth) { p.Details.FailureCategory = connectionTestString("request_error") }},
+		{"HTTP", func(p *ControlPlaneHealth) { p.Details.HTTPStatus = connectionTestMillis(404) }},
+	} {
+		t.Run("conflicting current evidence/"+test.name, func(t *testing.T) {
+			context, sample := connectionFixture()
+			sample.ControlPlane.Details.LastErrorMillis = connectionTestMillis(198_900)
+			test.change(sample.ControlPlane)
+			got := ObserveConnection(context, sample)
+			if got.State == ConnectionStateRecentTransport {
+				t.Fatalf("outstanding failure became positive: %+v", got)
+			}
+		})
+	}
+}
+
+func TestObserveConnectionClearedFailureRetainsHistoricalError(t *testing.T) {
+	for _, lastError := range []uint64{198_900, 199_000, 199_100} {
+		for _, state := range []string{"idle", "polling", "backpressured"} {
+			context, sample := connectionFixture()
+			sample.ControlPlane.State = state
+			sample.ControlPlane.Details.LastErrorMillis = connectionTestMillis(lastError)
+			got := ObserveConnection(context, sample)
+			connectionAssertState(t, got, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess)
+			connectionAssertMillis(t, got.LastPollSuccessMillis, 199_000)
+			if got.NextRetryMillis != nil {
+				t.Fatalf("cleared failure retained a retry: %+v", got)
+			}
+		}
 	}
 }
 
@@ -726,7 +799,11 @@ func TestObserveConnectionProducerTimestampBounds(t *testing.T) {
 		{"poll observation", func(s *ConnectionHealthSnapshot) **uint64 { return &s.ControlPlane.ObservedAtMillis }, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess},
 		{"poll attempt", func(s *ConnectionHealthSnapshot) **uint64 { return &s.ControlPlane.Details.LastAttemptMillis }, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess},
 		{"poll success", func(s *ConnectionHealthSnapshot) **uint64 { return &s.ControlPlane.Details.LastSuccessMillis }, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess},
-		{"poll error", func(s *ConnectionHealthSnapshot) **uint64 { return &s.ControlPlane.Details.LastErrorMillis }, ConnectionStateUnobserved, ConnectionReasonFailureUnobserved},
+		{"poll error", func(s *ConnectionHealthSnapshot) **uint64 {
+			s.ControlPlane.Status = "degraded"
+			s.ControlPlane.Details.ConsecutiveFailures = 1
+			return &s.ControlPlane.Details.LastErrorMillis
+		}, ConnectionStateUnobserved, ConnectionReasonFailureUnobserved},
 		{"delivery observation", func(s *ConnectionHealthSnapshot) **uint64 { return &s.ResponseDelivery.ObservedAtMillis }, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess},
 		{"delivery accepted", func(s *ConnectionHealthSnapshot) **uint64 { return &s.ResponseDelivery.Details.LastAcceptedMillis }, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess},
 		{"delivery completed", func(s *ConnectionHealthSnapshot) **uint64 { return &s.ResponseDelivery.Details.LastCompletedMillis }, ConnectionStateRecentTransport, ConnectionReasonRecentPollSuccess},
