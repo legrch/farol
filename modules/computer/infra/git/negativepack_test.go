@@ -403,6 +403,16 @@ func TestThinDeltaPropagatesAnOwnerReadFailure(t *testing.T) {
 	})
 	_, err := readPack(context.Background(), bytes.NewReader(wire), mustPlan(t, in), reader)
 	wantIs(t, err, errInjected)
+	// An EOF from the owner's reader is a port fault, not a truncated client pack.
+	eofReader := objectsFunc(func(_ context.Context, got string) (string, []byte, error) {
+		if got == in.Known[2].OID {
+			return "", nil, io.EOF
+		}
+		return known.ReadObject(context.Background(), got)
+	})
+	_, err = readPack(context.Background(), bytes.NewReader(wire), mustPlan(t, in), eofReader)
+	wantIs(t, err, io.EOF)
+	wantCode(t, classified(err), ErrPort)
 }
 
 func TestDeltaWithUnavailableOrDivergentBaseIsRefused(t *testing.T) {

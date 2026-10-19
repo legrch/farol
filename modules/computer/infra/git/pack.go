@@ -82,7 +82,7 @@ func (s *source) known(id string) (*object, error) {
 	}
 	kind, data, err := s.reader.ReadObject(s.ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, ownerFailure{err}
 	}
 	if err = s.ctx.Err(); err != nil {
 		return nil, err
@@ -154,11 +154,19 @@ type verifiedPack struct {
 // mismatches and other stream or owner errors keep their own class.
 func readPack(ctx context.Context, r io.Reader, plan *egress.Plan, reader egressport.Objects) (*verifiedPack, error) {
 	pack, err := readPackStream(ctx, r, plan, reader)
-	if err != nil && !errors.Is(err, ErrProtocol) && (errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) {
+	var owner ownerFailure
+	if err != nil && !errors.As(err, &owner) && !errors.Is(err, ErrProtocol) && (errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) {
 		return nil, errors.Join(ErrProtocol, err)
 	}
 	return pack, err
 }
+
+// ownerFailure marks an error from the owner's object reader, so an EOF there
+// stays a port fault instead of being read as a truncated client pack.
+type ownerFailure struct{ err error }
+
+func (e ownerFailure) Error() string { return e.err.Error() }
+func (e ownerFailure) Unwrap() error { return e.err }
 
 func readPackStream(ctx context.Context, r io.Reader, plan *egress.Plan, reader egressport.Objects) (*verifiedPack, error) {
 	in := plan.Intent()
