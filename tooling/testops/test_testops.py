@@ -4,11 +4,77 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import shlex
+import atexit
 import unittest
 from unittest.mock import patch
 
 import testops
 import measure
+
+
+# Share only disposable tool caches; every fixture still has its own repository.
+_git_environment = tempfile.TemporaryDirectory(prefix="testops-fixture-git-env-")
+_git_home = Path(_git_environment.name) / "home"
+_git_temporary = Path(_git_environment.name) / "tmp"
+_git_home.mkdir()
+_git_temporary.mkdir()
+atexit.register(_git_environment.cleanup)
+
+
+class FixtureIsolation(unittest.TestCase):
+    def test_fixture_setup_cannot_follow_ambient_repository_or_index(self):
+        self.exercise_hostile_fixture("repository")
+
+    def test_fixture_setup_cannot_inherit_hooks_templates_or_signing(self):
+        self.exercise_hostile_fixture("configuration")
+
+    def exercise_hostile_fixture(self, mode):
+        with tempfile.TemporaryDirectory(prefix="testops-fixture-git-isolation-") as folder:
+            root = Path(folder).resolve(); victim = root / "victim"; victim.mkdir()
+            env = {"PATH":"/usr/bin:/bin", "HOME":str(root), "TMPDIR":str(root), "LC_ALL":"C",
+                   "GIT_CONFIG_NOSYSTEM":"1", "GIT_CONFIG_GLOBAL":os.devnull, "GIT_OPTIONAL_LOCKS":"0"}
+            def own_git(*args):
+                return subprocess.check_output(["/usr/bin/git", "-c", "core.hooksPath=/dev/null",
+                    "-c", "commit.gpgSign=false", "-c", "init.templateDir=", "-c", "user.name=Victim Fixture",
+                    "-c", "user.email=victim@example.invalid", "-C",str(victim),*args],env=env)
+            own_git("init","-q");(victim/"tracked.txt").write_text("original\n")
+            own_git("add",".");own_git("commit","-qm","fixture baseline")
+            (victim/"tracked.txt").write_text("preserve unstaged\n")
+            (victim/"staged.txt").write_text("preserve staged\n");own_git("add","staged.txt")
+            (victim/"untracked.txt").write_text("preserve untracked\n")
+            def seal():
+                return {str(p.relative_to(victim)):testops.digest(p.read_bytes())
+                        for p in victim.rglob('*') if p.is_file()}
+            before = seal()
+            hostile = dict(env)
+            if mode == "repository":
+                hostile.update(GIT_DIR=str(victim/".git"),GIT_WORK_TREE=str(victim),
+                               GIT_COMMON_DIR=str(victim/".git"),GIT_INDEX_FILE=str(victim/".git/index"))
+            else:
+                hooks=root/"hostile-hooks";hooks.mkdir();template=root/"hostile-template";(template/"hooks").mkdir(parents=True)
+                marker=root/"hook-ran";signer_marker=root/"signer-ran"
+                hook="#!/bin/sh\nprintf ran > "+shlex.quote(str(marker))+"\nexit 0\n"
+                for p in [hooks/"pre-commit",template/"hooks/pre-commit"]:p.write_text(hook);p.chmod(0o700)
+                signer=root/"signer";signer.write_text("#!/bin/sh\nprintf ran > "+shlex.quote(str(signer_marker))+"\nexit 1\n");signer.chmod(0o700)
+                config=root/"hostile.gitconfig"
+                config.write_text("[core]\n hooksPath = "+json.dumps(str(hooks))+"\n[commit]\n gpgSign = true\n[gpg]\n program = "+json.dumps(str(signer))+"\n")
+                hostile.update(GIT_CONFIG_GLOBAL=str(config),GIT_TEMPLATE_DIR=str(template),GIT_CONFIG_COUNT="3",
+                    GIT_CONFIG_KEY_0="core.hooksPath",GIT_CONFIG_VALUE_0=str(hooks),
+                    GIT_CONFIG_KEY_1="commit.gpgSign",GIT_CONFIG_VALUE_1="true",
+                    GIT_CONFIG_KEY_2="gpg.program",GIT_CONFIG_VALUE_2=str(signer),
+                    GIT_CONFIG_PARAMETERS="'commit.gpgsign=true'")
+            fixture=Repository("test_no_changes_is_not_a_test_pass")
+            try:
+                with patch.dict(os.environ,hostile,clear=True):
+                    fixture.setUp()
+                    self.assertEqual(seal(),before)
+                    self.assertEqual(Path(fixture.run_git("rev-parse","--show-toplevel").strip()),fixture.root.resolve())
+                self.assertEqual(seal(),before)
+                self.assertFalse((root/"hook-ran").exists())
+                self.assertFalse((root/"signer-ran").exists())
+            finally:
+                fixture.doCleanups()
 
 
 class Repository(unittest.TestCase):
@@ -31,7 +97,13 @@ class Repository(unittest.TestCase):
         self.base = self.run_git("rev-parse", "HEAD").strip()
 
     def run_git(self, *args):
-        return subprocess.check_output(["git", "-C", str(self.root), *args], text=True)
+        env = {"PATH":"/usr/bin:/bin", "HOME":str(_git_home), "TMPDIR":str(_git_temporary),
+               "LC_ALL":"C", "GIT_CONFIG_NOSYSTEM":"1", "GIT_CONFIG_GLOBAL":os.devnull,
+               "GIT_OPTIONAL_LOCKS":"0", "GIT_TERMINAL_PROMPT":"0"}
+        return subprocess.check_output(["/usr/bin/git", "-c", "core.fsmonitor=false",
+            "-c", "core.hooksPath=/dev/null", "-c", "init.templateDir=",
+            "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false",
+            "-C", str(self.root), *args], env=env, text=True)
 
     def write(self, path, value):
         target = self.root / path
