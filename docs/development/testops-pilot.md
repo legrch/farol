@@ -148,3 +148,23 @@ retains at most 1 MiB across both streams, with direct-child termination on
 excess output and failure even after exit zero. Its interruption still does not
 prove descendant cleanup. Arbitrary generated artifacts and caches on the
 writable output bind have no disk quota and require operator storage admission.
+
+## Original execution evidence
+
+Pipe-derived digests and byte counts remain immutable. The observer checks
+every retained stream before consuming reports or issuing a successor and
+again after namespace retirement; the host independently checks those original
+digests, counts, EOF and I/O facts. An unexpected adopted child, including an
+already-reaped zero-exit child, prevents PASS. A successful retirement record
+contains no descendant PIDs, reaped terminals, signals or errors.
+
+Host report and nested cloud JSON reads are limited to 16 MiB each, and each
+log read to the shared 32 MiB output ceiling. Both the initial file size and a
+bounded read detect excess or file growth. Arbitrary artifact and cache writes
+still have no disk quota and require operator storage admission.
+
+Cleanup and retirement require the admitted Docker engine identity before and
+after inspection, and before and after a stop. A changed or unreadable engine
+cannot prove retirement or authorize another stop; the original handle remains
+in custody. These checks observe the selected endpoint; they are not an atomic
+daemon transaction.

@@ -18,7 +18,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dag import Budget, Job, Outcome, run, Blocked
 from testops import identity
-from gate_observer import COMMANDS, TOOLS
+from gate_observer import COMMANDS, TOOLS, evidence_file, validate_stage_logs, natural_retirement
 from dependency_seal import ALGORITHM, reference
 from deadline import JOB_SECONDS
 
@@ -45,7 +45,7 @@ def host_record(directory, name, value):
         os.close(descriptor)
 
 
-def wait_container(child, job, name, directory, options, docker, stop, deadline_hit):
+def wait_container(child, job, name, directory, options, docker, stop, deadline_hit, engine):
     """Retain the original child even if cleanup or evidence persistence fails."""
     try:
         return child.wait(timeout=JOB_SECONDS[job.id] + 120), False
@@ -57,7 +57,7 @@ def wait_container(child, job, name, directory, options, docker, stop, deadline_
         try:
             host_record(directory, "original-docker-deadline.json", evidence)
             cidfile = directory / (".original-container-" + job.id + ".cid")
-            docker.stop_owned_after_deadline(cidfile, name, options.scope, directory)
+            docker.stop_owned_after_deadline(cidfile, name, options.scope, directory, engine)
             return child.wait(timeout=30), True
         except Exception as error:
             # Never repeat an unknown/denied cleanup effect. This second record
@@ -89,28 +89,12 @@ def memory_events_closed(raw):
 
 
 def job_file(directory, relative):
-    relative = Path(relative)
-    if (relative.is_absolute() or not relative.parts or ".." in relative.parts
-            or not directory.is_absolute() or directory.resolve(strict=True) != directory):
-        raise Blocked("PHYSICAL_JOB_EVIDENCE_FILE_REQUIRED")
-    descriptors = []
     try:
-        descriptors.append(os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
-        for piece in relative.parts[:-1]:
-            descriptors.append(os.open(piece, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptors[-1]))
-        fd = os.open(relative.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptors[-1])
-        descriptors.append(fd)
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise Blocked("PHYSICAL_JOB_EVIDENCE_FILE_REQUIRED")
-        # fdopen owns a duplicate; the complete descriptor chain remains pinned
-        # until the read finishes, including every untrusted nested directory.
-        with os.fdopen(os.dup(fd), "rb") as stream:
-            return stream.read()
+        return evidence_file(directory, relative)
+    except ValueError as error:
+        raise Blocked(str(error)) from error
     except OSError as error:
         raise Blocked("PHYSICAL_JOB_EVIDENCE_FILE_REQUIRED") from error
-    finally:
-        for descriptor in reversed(descriptors):
-            os.close(descriptor)
 
 
 def receipt(job, report, source, directory):
@@ -131,14 +115,16 @@ def receipt(job, report, source, directory):
             or report.get("toolHashes") != TOOLS
             or len(report.get("stages", [])) != len(COMMANDS[job.id])):
         raise Blocked("ORIGINAL_COMPLETE_JOB_REPORT_REQUIRED")
-    for index, (stage, command) in enumerate(zip(report["stages"], COMMANDS[job.id])):
+    if not natural_retirement(report.get("descendantRetirement")):
+        raise Blocked("ORIGINAL_DESCENDANT_RETIREMENT_REQUIRED")
+    for stage, command in zip(report["stages"], COMMANDS[job.id]):
         if (stage.get("command") != command or type(stage.get("exitCode")) is not int
                 or stage["exitCode"] != 0 or stage.get("terminal") is not True):
             raise Blocked("ORIGINAL_STAGE_REPORT_REQUIRED")
-        for stream in ("stdout", "stderr"):
-            data = job_file(directory, f"command-{index}.{stream}.log")
-            if hashlib.sha256(data).hexdigest() != stage.get(stream + "Sha256"):
-                raise Blocked("ORIGINAL_STAGE_LOG_MISMATCH")
+    try:
+        validate_stage_logs(report["stages"], directory)
+    except (ValueError, OSError) as error:
+        raise Blocked(str(error)) from error
     cgroup = report.get("cgroup", {})
     if (cgroup.get("memory.max") != str(3072 * 1024 * 1024)
             or cgroup.get("cpu.max") != "200000 100000"
@@ -202,15 +188,22 @@ class Docker:
         if source and values[0].get("Labels", {}).get("farol.testops.source") != source:
             raise Blocked("FROZEN_SOURCE_VOLUME_LABEL_REQUIRED")
 
-    def removed(self, name, directory):
+    def require_engine(self, expected):
+        if not isinstance(expected, dict) or not expected or self.engine() != expected:
+            raise Blocked("ENGINE_IDENTITY_CHANGED")
+
+    def removed(self, name, directory, engine):
+        self.require_engine(engine)
         result = subprocess.run(self.prefix + ["container", "inspect", "--format", "{{json .State}}", name], env=self.env,
                                 stdin=subprocess.DEVNULL, capture_output=True, timeout=15)
         record = {"schema": 1, "container": name, "exitCode": result.returncode,
-                  "stdout": result.stdout.decode(), "stderr": result.stderr.decode()}
+                  "stdout": result.stdout.decode(), "stderr": result.stderr.decode(), "engine": engine}
         host_record(directory, "original-container-retirement.json", record)
+        self.require_engine(engine)
         return container_absent(record, name)
 
-    def stop_owned_after_deadline(self, cidfile, name, scope, directory):
+    def stop_owned_after_deadline(self, cidfile, name, scope, directory, engine):
+        self.require_engine(engine)
         # CID evidence is outside the container's writable bind. Never stop by
         # a guessed PID, port, image, project prefix or unverified container name.
         if cidfile.is_symlink() or not cidfile.is_file() or cidfile.stat().st_size > 128:
@@ -227,17 +220,20 @@ class Docker:
         record = {"container": cid, "exitCode": result.returncode,
                   "stdout": result.stdout.decode(), "stderr": result.stderr.decode()}
         host_record(directory, "deadline-container-readback.json", record)
+        self.require_engine(engine)
         if container_absent(record, cid):
             return {"containerId": cid, "alreadyAbsent": True}
         if result.returncode != 0:
             raise Blocked("DEADLINE_CONTAINER_READBACK_UNCONFIRMED")
         state = json.loads(result.stdout)
         validate_disposable_container(state, cid, name, scope)
+        self.require_engine(engine)
         stopped = subprocess.run(self.prefix + ["stop", "--time", "5", cid], env=self.env,
                                  stdin=subprocess.DEVNULL, capture_output=True, timeout=15)
         record = {"containerId": cid, "exitCode": stopped.returncode,
                   "stdout": stopped.stdout.decode(), "stderr": stopped.stderr.decode()}
         host_record(directory, "deadline-container-stop.json", record)
+        self.require_engine(engine)
         if stopped.returncode != 0 and not container_absent(
                 {"container": cid, **record}, cid):
             raise Blocked("DEADLINE_CONTAINER_STOP_UNCONFIRMED")
@@ -321,10 +317,10 @@ def execute_container(job, directory, binding, options, docker, nonce, engine, s
                 return Outcome("BLOCKED", True, reason="CANCELLED_BEFORE_DOCKER")
             child = subprocess.Popen(command, env=docker.env, stdin=subprocess.DEVNULL,
                                      stdout=stdout, stderr=stderr, start_new_session=True)
-            code, timed_out = wait_container(child, job, name, directory, options, docker, stop, deadline_hit)
+            code, timed_out = wait_container(child, job, name, directory, options, docker, stop, deadline_hit, engine)
         host_record(directory, "original-docker-terminal.json",
                     {"schema": 1, "container": name, "exitCode": code, "terminal": True})
-        retired = docker.removed(name, directory)
+        retired = docker.removed(name, directory, engine)
         if not retired:
             return Outcome("UNKNOWN", False, reason="ORIGINAL_CONTAINER_RETIREMENT_UNCONFIRMED")
         if timed_out:

@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -41,12 +43,75 @@ TOOLS = {
     "/testops-seed/testops/linux-tools-bootstrap-03/bin/gitleaks": "00e91bbe655bd7c47753e8cfe61cb76ea1a5d7e7702fe161ee40102b46b3823b",
 }
 
+REPORT_LIMIT_BYTES = 16 * 1024 * 1024
+OUTPUT_LIMIT_BYTES = 32 * 1024 * 1024
+
+
+def evidence_file(directory, relative, limit=REPORT_LIMIT_BYTES):
+    """Pin physical descriptors and bound both the initial size and actual read."""
+    relative = Path(relative)
+    if (relative.is_absolute() or not relative.parts or ".." in relative.parts
+            or not directory.is_absolute() or directory.resolve(strict=True) != directory):
+        raise ValueError("PHYSICAL_JOB_EVIDENCE_FILE_REQUIRED")
+    descriptors = []
+    try:
+        descriptors.append(os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
+        for piece in relative.parts[:-1]:
+            descriptors.append(os.open(piece, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptors[-1]))
+        fd = os.open(relative.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptors[-1])
+        descriptors.append(fd)
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("PHYSICAL_JOB_EVIDENCE_FILE_REQUIRED")
+        if metadata.st_size > limit:
+            raise ValueError("JOB_EVIDENCE_SIZE_LIMIT")
+        with os.fdopen(os.dup(fd), "rb") as stream:
+            data = stream.read(limit + 1)
+        if len(data) > limit:
+            raise ValueError("JOB_EVIDENCE_SIZE_LIMIT")
+        return data
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def natural_retirement(value):
+    # Even an already-reaped zero-exit adopted child is unexpected: the direct
+    # commands and their stdio must already have been observed by Capture.
+    return (isinstance(value, dict) and value.get("drained") is True
+            and value.get("reason") == "NATURAL_TERMINAL"
+            and all(value.get(key) == [] for key in
+                    ("initialPids", "remainingPids", "reaped", "signals", "errors")))
+
+
+def original_stream(stage, stream, data):
+    observed = stage.get("output", {}).get(stream, {})
+    if (stage.get("stdioClosed") is not True or stage.get("outputTruncated") is not False
+            or stage.get("outputErrors") != []
+            or any(type(observed.get(key)) is not int or observed[key] != len(data)
+                   for key in ("observedBytes", "retainedBytes"))
+            or observed.get("observedSha256") != hashlib.sha256(data).hexdigest()
+            or stage.get(stream + "Sha256") != observed.get("observedSha256")):
+        raise ValueError("ORIGINAL_STAGE_LOG_MISMATCH")
+
+
+def validate_stage_logs(stages, directory):
+    total = 0
+    for index, stage in enumerate(stages):
+        for stream in ("stdout", "stderr"):
+            data = evidence_file(directory, f"command-{index}.{stream}.log", OUTPUT_LIMIT_BYTES)
+            original_stream(stage, stream, data)
+            total += len(data)
+            if total > OUTPUT_LIMIT_BYTES:
+                raise ValueError("ORIGINAL_STAGE_LOG_BUDGET_EXCEEDED")
+
 
 def cloud_receipt(root):
     reports = list((root / "_output/evidence/test-scopes").glob("*/report.json"))
     if len(reports) != 1:
         raise ValueError("EXACT_CLOUD_REPORT_REQUIRED")
-    report = json.loads(reports[0].read_text())
+    data = evidence_file(root / "_output", reports[0].relative_to(root / "_output"))
+    report = json.loads(data)
     plan = json.loads(subprocess.check_output(
         ["node", "tooling/test-scopes.mjs", "--scope=cloud", "--list"], cwd=root))
     count = len(plan["suites"])
@@ -68,7 +133,7 @@ def cloud_receipt(root):
                 or terminal.get("timedOut") is not False or terminal.get("cancelled", False) is not False
                 or type(result["counts"].get("failed")) is not int or result["counts"]["failed"] != 0):
             raise ValueError("CLOUD_ORIGINAL_SUITE_TERMINAL_REQUIRED")
-    return {"path": str(reports[0].relative_to(root)), "sha256": sha(reports[0]),
+    return {"path": str(reports[0].relative_to(root)), "sha256": hashlib.sha256(data).hexdigest(),
             "plan": plan, "counts": [{"id": r["id"], "counts": r["counts"]} for r in report["results"]]}
 
 
@@ -78,7 +143,7 @@ def sha(path):
 
 def selftest_count(command, stdout, stderr):
     if command[0] == "node":
-        text = stdout.read_text()
+        text = evidence_file(stdout.parent, stdout.name, OUTPUT_LIMIT_BYTES).decode()
         pairs = re.findall(r"^# (tests|pass|fail|cancelled|skipped|todo) (\d+)$", text, re.M)
         values = {key: int(value) for key, value in pairs}
         if (len(pairs) != 6 or set(values) != {"tests", "pass", "fail", "cancelled", "skipped", "todo"}
@@ -86,7 +151,7 @@ def selftest_count(command, stdout, stderr):
                 or any(values[k] for k in ("fail", "cancelled", "skipped", "todo"))):
             raise ValueError("NODE_SELFTEST_REPORT_INCOMPLETE")
         return values["pass"]
-    text = stderr.read_text()
+    text = evidence_file(stderr.parent, stderr.name, OUTPUT_LIMIT_BYTES).decode()
     found = re.findall(r"^Ran (\d+) tests in [0-9.]+s$", text, re.M)
     if len(found) != 1 or int(found[0]) <= 0 or not text.rstrip().endswith("OK"):
         raise ValueError("PYTHON_SELFTEST_REPORT_INCOMPLETE")
@@ -151,7 +216,7 @@ def main():
     start = time.monotonic()
     issued = {}
     captures = []
-    budget = OutputBudget(32 * 1024 * 1024)
+    budget = OutputBudget(OUTPUT_LIMIT_BYTES)
     report["retainedOutputLimitBytes"] = budget.limit
     try:
         for index, command in enumerate(commands):
@@ -167,7 +232,11 @@ def main():
             observe_command(command, root, stdout_path, stderr_path, stage, budget, remaining, issued, captures,
                             lambda: report_path.write_text(json.dumps(report, indent=2) + "\n"))
             stage.update(wallSeconds=time.monotonic() - stage_start,
-                         stdoutSha256=sha(stdout_path), stderrSha256=sha(stderr_path))
+                         stdoutSha256=stage["output"]["stdout"]["observedSha256"],
+                         stderrSha256=stage["output"]["stderr"]["observedSha256"])
+            # Check every earlier stream before consuming a report or issuing
+            # a successor; later commands share this writable directory.
+            validate_stage_logs(report["stages"], output)
             if job == "pilot-selftests":
                 stage["casesPassed"] = selftest_count(command, stdout_path, stderr_path)
         report.update(exitCode=0, terminal=True)
@@ -193,20 +262,21 @@ def main():
             capture.close()
         report["descendantRetirement"] = retirement
         report["descendantsDrained"] = retirement["drained"]
-        for index, stage in enumerate(report["stages"]):
+        for stage in report["stages"]:
             for observed in retirement["reaped"]:
                 if observed["pid"] == stage.get("pid"):
                     stage.update(observed)
                     issued[observed["pid"]].returncode = observed["exitCode"]
-            for stream in ("stdout", "stderr"):
-                path = output / f"command-{index}.{stream}.log"
-                if path.is_file():
-                    stage[stream + "Sha256"] = sha(path)
-        if retirement["initialPids"] or report["timedOut"]:
+        if not natural_retirement(retirement) or report["timedOut"]:
             report.update(status="FAIL" if retirement["drained"] else "UNKNOWN", complete=False,
                           terminal=retirement["drained"])
         if not retirement["drained"]:
             report.update(status="UNKNOWN", complete=False, terminal=False)
+        if report["status"] == "PASS":
+            try:
+                validate_stage_logs(report["stages"], output)
+            except (ValueError, OSError) as error:
+                report.update(status="FAIL", complete=False, error=str(error))
         report["wallSeconds"] = time.monotonic() - start
         report["cgroup"] = {name: Path("/sys/fs/cgroup", name).read_text().strip()
                             for name in ("memory.max", "memory.peak", "memory.events", "cpu.max", "cpu.stat", "pids.max")}

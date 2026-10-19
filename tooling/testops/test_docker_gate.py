@@ -15,7 +15,9 @@ from unittest.mock import patch, Mock
 
 from dag import Blocked, Job
 from docker_gate import receipt, container_command, container_absent, validate_disposable_container, IMAGE, Docker, host_record, wait_container, execute_container, job_file
-from gate_observer import COMMANDS, TOOLS, selftest_count, remaining_processes, cloud_receipt
+from gate_observer import (COMMANDS, TOOLS, selftest_count, remaining_processes, cloud_receipt,
+                           evidence_file, validate_stage_logs, natural_retirement, observe_command)
+from bounded_capture import OutputBudget
 from testops import task_blocks
 
 
@@ -43,18 +45,75 @@ class Receipts(unittest.TestCase):
         self.report = {"schema": 1, "id": "core", "source": self.source, "sourceAfter": self.source,
                        "commands": COMMANDS["core"], "complete": True, "status": "PASS",
                        "terminal": True, "exitCode": 0, "descendantsDrained": True, "toolHashes": TOOLS,
+                       "descendantRetirement": {"initialPids": [], "remainingPids": [], "reaped": [],
+                           "signals": [], "errors": [], "drained": True, "reason": "NATURAL_TERMINAL"},
                        "deadlineSeconds": 1800, "timedOut": False,
                        "cgroup": {"memory.max": str(3072 * 1024 * 1024), "cpu.max": "200000 100000",
                                   "pids.max": "256", "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\n"},
-                       "stages": [{"command": COMMANDS["core"][0], "exitCode": 0, "terminal": True}]}
+                       "stages": [{"command": COMMANDS["core"][0], "exitCode": 0, "terminal": True,
+                                   "output": {}, "stdioClosed": True, "outputErrors": [], "outputTruncated": False}]}
         for stream in ("stdout", "stderr"):
             data = ("original " + stream).encode()
             (self.output / f"command-0.{stream}.log").write_bytes(data)
             self.report["stages"][0][stream + "Sha256"] = hashlib.sha256(data).hexdigest()
+            self.report["stages"][0]["output"][stream] = {"observedBytes": len(data), "retainedBytes": len(data),
+                "observedSha256": hashlib.sha256(data).hexdigest()}
         (self.output / "job-report.json").write_text(json.dumps(self.report))
 
     def test_complete_original_receipt_with_bound_logs(self):
         self.assertTrue(receipt(self.job, self.report, self.source, self.output)["complete"])
+
+    def test_recomputed_file_hash_cannot_replace_original_pipe_evidence(self):
+        for stream in ("stdout", "stderr"):
+            data = (self.output / f"command-0.{stream}.log").read_bytes()
+            self.report["stages"][0].setdefault("output", {})[stream] = {
+                "observedBytes": len(data), "retainedBytes": len(data),
+                "observedSha256": hashlib.sha256(data).hexdigest()}
+        self.report["stages"][0].update(stdioClosed=True, outputErrors=[], outputTruncated=False)
+        replacement = b"later successful command substituted this log"
+        (self.output / "command-0.stderr.log").write_bytes(replacement)
+        self.report["stages"][0]["stderrSha256"] = hashlib.sha256(replacement).hexdigest()
+        with self.assertRaisesRegex(Blocked, "ORIGINAL_STAGE_LOG"):
+            receipt(self.job, self.report, self.source, self.output)
+
+    def test_already_reaped_unexpected_descendant_prevents_success(self):
+        for exit_code in (0, 7):
+            self.report["descendantRetirement"] = {"initialPids": [], "remainingPids": [],
+                "reaped": [{"pid": 42, "terminal": True, "exitCode": exit_code}],
+                "signals": [], "errors": [], "drained": True, "reason": "NATURAL_TERMINAL"}
+            with self.subTest(exitCode=exit_code), self.assertRaisesRegex(Blocked, "DESCENDANT"):
+                receipt(self.job, self.report, self.source, self.output)
+
+    def test_each_stream_requires_closed_finite_original_pipe_metadata(self):
+        for field, value in (("stdioClosed", False), ("outputTruncated", True), ("outputErrors", ["WRITE:OSError"]),
+                             ("output", {})):
+            candidate = copy.deepcopy(self.report)
+            candidate["stages"][0][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(Blocked, "ORIGINAL_STAGE_LOG"):
+                receipt(self.job, candidate, self.source, self.output)
+        for key, value in (("observedBytes", True), ("retainedBytes", 0), ("observedSha256", "a" * 64)):
+            candidate = copy.deepcopy(self.report)
+            candidate["stages"][0]["output"]["stderr"][key] = value
+            with self.subTest(field=key), self.assertRaisesRegex(Blocked, "ORIGINAL_STAGE_LOG"):
+                receipt(self.job, candidate, self.source, self.output)
+
+    def test_retirement_must_be_natural_without_hidden_children_or_actions(self):
+        original = self.report["descendantRetirement"]
+        self.assertTrue(natural_retirement(original))
+        for field, value in (("initialPids", [42]), ("remainingPids", [42]), ("reaped", [{"exitCode": 0}]),
+                             ("signals", [{"signal": 15}]), ("errors", ["UNKNOWN"]),
+                             ("reason", "UNEXPECTED_DESCENDANTS"), ("drained", 1)):
+            candidate = copy.deepcopy(self.report)
+            candidate["descendantRetirement"][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(Blocked, "DESCENDANT"):
+                receipt(self.job, candidate, self.source, self.output)
+
+    def test_log_total_cannot_exceed_shared_retained_budget(self):
+        with patch("gate_observer.OUTPUT_LIMIT_BYTES", 5), \
+                patch("gate_observer.evidence_file", return_value=b"abc"), \
+                patch("gate_observer.original_stream"):
+            with self.assertRaisesRegex(ValueError, "LOG_BUDGET_EXCEEDED"):
+                validate_stage_logs([{}], self.output)
 
     def test_source_and_tool_hashes_without_installed_dependency_binding_refuse(self):
         missing = dict(self.source)
@@ -236,6 +295,7 @@ class HostCustody(unittest.TestCase):
         self.options = SimpleNamespace(scope="farol-testops-01234567", dependency_volume=None)
         self.job = Job("core")
         self.docker = Mock()
+        self.engine = {"idSha256": "a" * 64}
         self.child = Mock(pid=12345, returncode=None)
         self.stop, self.deadline = threading.Event(), threading.Event()
 
@@ -265,7 +325,7 @@ class HostCustody(unittest.TestCase):
 
     def wait(self):
         return wait_container(self.child, self.job, "original", self.directory,
-                              self.options, self.docker, self.stop, self.deadline)
+                              self.options, self.docker, self.stop, self.deadline, self.engine)
 
     def test_new_private_record_is_exclusive(self):
         host_record(self.directory, "terminal.json", {"terminal": True})
@@ -285,6 +345,44 @@ class HostCustody(unittest.TestCase):
             with self.subTest(relative=relative), self.assertRaises(Blocked):
                 job_file(self.directory, relative)
         self.assertEqual(job_file(self.directory, "original.json"), b"{}")
+
+    def test_sparse_oversized_report_is_refused_before_host_allocation(self):
+        path = self.directory / "oversized.json"
+        with path.open("wb") as output:
+            output.truncate(16 * 1024 * 1024 + 1)
+        with self.assertRaisesRegex(Blocked, "EVIDENCE_SIZE_LIMIT"):
+            job_file(self.directory, path.name)
+
+    def test_size_growth_after_stat_is_still_bounded(self):
+        path = self.directory / "growing.json"
+        path.write_bytes(b"a")
+        original = os.fstat
+        def grow(fd):
+            metadata = original(fd)
+            path.write_bytes(b"a" * 33)
+            return metadata
+        with patch("gate_observer.os.fstat", side_effect=grow), self.assertRaisesRegex(ValueError, "EVIDENCE_SIZE_LIMIT"):
+            evidence_file(self.directory, path.name, limit=32)
+
+    def test_later_real_child_cannot_rebase_an_earlier_captured_log(self):
+        stages, issued, captures = [], {}, []
+        budget = OutputBudget(4096)
+        commands = [[sys.executable, "-c", "import sys; print('original', file=sys.stderr)"],
+                    [sys.executable, "-c", "from pathlib import Path; Path('command-0.stderr.log').write_text('replacement')"]]
+        for index, command in enumerate(commands):
+            stage = {"command": command}; stages.append(stage)
+            observe_command(command, self.directory, self.directory / f"command-{index}.stdout.log",
+                            self.directory / f"command-{index}.stderr.log", stage, budget, 15, issued, captures)
+            for stream in ("stdout", "stderr"):
+                stage[stream + "Sha256"] = stage["output"][stream]["observedSha256"]
+            if index == 0:
+                validate_stage_logs(stages, self.directory)
+        original_digest = stages[0]["output"]["stderr"]["observedSha256"]
+        with self.assertRaisesRegex(ValueError, "ORIGINAL_STAGE_LOG"):
+            validate_stage_logs(stages, self.directory)
+        self.assertEqual(stages[0]["stderrSha256"], original_digest)
+        self.assertTrue(all(child.returncode == 0 for child in issued.values()))
+        self.assertEqual(captures, [])
 
     def test_existing_symlink_hardlink_regular_and_fifo_never_redirect_host_write(self):
         victim = self.directory / "victim.txt"
@@ -326,10 +424,11 @@ class HostCustody(unittest.TestCase):
         (self.directory / "original-container-retirement.json").symlink_to(victim)
         docker = Docker.__new__(Docker)
         docker.prefix, docker.env = ["NOT_EXECUTED"], {}
+        docker.engine = Mock(return_value=self.engine)
         response = SimpleNamespace(returncode=1, stdout=b"", stderr=b"Error: No such container: original")
         with patch("docker_gate.subprocess.run", return_value=response) as call:
             with self.assertRaises(FileExistsError):
-                docker.removed("original", self.directory)
+                docker.removed("original", self.directory, self.engine)
         self.assertEqual(call.call_count, 1)
         self.assertEqual(victim.read_text(), "retained")
 
@@ -345,7 +444,7 @@ class HostCustody(unittest.TestCase):
         self.assertEqual(self.wait(), (0, True))
         self.assertTrue(self.stop.is_set() and self.deadline.is_set())
         self.docker.stop_owned_after_deadline.assert_called_once_with(
-            self.directory / ".original-container-core.cid", "original", self.options.scope, self.directory)
+            self.directory / ".original-container-core.cid", "original", self.options.scope, self.directory, self.engine)
         self.assertEqual(json.loads((self.directory / "original-docker-deadline.json").read_text())["originalDockerPid"], 12345)
         self.assertFalse((self.directory / "original-docker-draining.json").exists())
 
@@ -389,12 +488,74 @@ class HostCustody(unittest.TestCase):
         (self.directory / "deadline-container-readback.json").symlink_to(victim)
         docker = Docker.__new__(Docker)
         docker.prefix, docker.env = ["NOT_EXECUTED"], {}
+        docker.engine = Mock(return_value=self.engine)
         response = SimpleNamespace(returncode=1, stdout=b"", stderr=("Error: No such container: " + cid).encode())
         with patch("docker_gate.subprocess.run", return_value=response) as call:
             with self.assertRaises(FileExistsError):
-                docker.stop_owned_after_deadline(cidfile, "original", self.options.scope, self.directory)
+                docker.stop_owned_after_deadline(cidfile, "original", self.options.scope, self.directory, self.engine)
         self.assertEqual(call.call_count, 1)
         self.assertEqual(victim.read_text(), "retained")
+
+    def test_engine_change_cannot_prove_retirement_or_issue_stop(self):
+        docker = Docker.__new__(Docker)
+        docker.prefix, docker.env = ["NOT_EXECUTED"], {}
+        cid = "a" * 64
+        cidfile = self.directory / "original.cid"; cidfile.write_text(cid)
+        for operation in ("removed", "stop"):
+            docker.engine = Mock(return_value={"idSha256": "b" * 64})
+            with self.subTest(operation=operation), patch("docker_gate.subprocess.run") as run:
+                with self.assertRaisesRegex(Blocked, "ENGINE_IDENTITY_CHANGED"):
+                    if operation == "removed":
+                        docker.removed("original", self.directory, self.engine)
+                    else:
+                        docker.stop_owned_after_deadline(cidfile, "original", self.options.scope, self.directory, self.engine)
+                run.assert_not_called()
+
+    def test_absence_on_a_changed_engine_after_inspect_is_unknown(self):
+        docker = Docker.__new__(Docker)
+        docker.prefix, docker.env = ["NOT_EXECUTED"], {}
+        docker.engine = Mock(side_effect=[self.engine, {"idSha256": "b" * 64}])
+        response = SimpleNamespace(returncode=1, stdout=b"", stderr=b"Error: No such container: original")
+        with patch("docker_gate.subprocess.run", return_value=response) as run:
+            with self.assertRaisesRegex(Blocked, "ENGINE_IDENTITY_CHANGED"):
+                docker.removed("original", self.directory, self.engine)
+        self.assertEqual(run.call_count, 1)
+
+    def test_engine_change_after_owned_cid_inspect_prevents_stop(self):
+        docker = Docker.__new__(Docker)
+        docker.prefix, docker.env = ["NOT_EXECUTED"], {}
+        cid = "a" * 64; cidfile = self.directory / "original.cid"; cidfile.write_text(cid)
+        docker.engine = Mock(side_effect=[self.engine, {"idSha256": "b" * 64}])
+        response = SimpleNamespace(returncode=0, stdout=b"{}", stderr=b"")
+        with patch("docker_gate.subprocess.run", return_value=response) as run:
+            with self.assertRaisesRegex(Blocked, "ENGINE_IDENTITY_CHANGED"):
+                docker.stop_owned_after_deadline(cidfile, "original", self.options.scope, self.directory, self.engine)
+        self.assertEqual(run.call_count, 1)
+
+    def test_engine_read_failure_never_falls_through_to_container_api(self):
+        docker = Docker.__new__(Docker)
+        docker.prefix, docker.env = ["NOT_EXECUTED"], {}
+        docker.engine = Mock(side_effect=OSError("controlled endpoint unavailable"))
+        with patch("docker_gate.subprocess.run") as run, self.assertRaises(OSError):
+            docker.removed("original", self.directory, self.engine)
+        run.assert_not_called()
+
+    def test_unchanged_engine_allows_only_the_exact_original_stop(self):
+        docker = Docker.__new__(Docker)
+        docker.prefix, docker.env = ["NOT_EXECUTED"], {}
+        docker.engine = Mock(return_value=self.engine)
+        cid = "a" * 64; cidfile = self.directory / "original.cid"; cidfile.write_text(cid)
+        value = {"Id": cid, "Name": "/original", "Labels": {"farol.testops.task": "01234567"},
+                 "User": "501:20", "NetworkMode": "none", "PidMode": "",
+                 "Privileged": False, "ReadonlyRootfs": True}
+        responses = [SimpleNamespace(returncode=0, stdout=json.dumps(value).encode(), stderr=b""),
+                     SimpleNamespace(returncode=0, stdout=cid.encode(), stderr=b"")]
+        with patch("docker_gate.subprocess.run", side_effect=responses) as run:
+            result = docker.stop_owned_after_deadline(cidfile, "original", self.options.scope, self.directory, self.engine)
+        self.assertEqual(result, {"containerId": cid, "alreadyAbsent": False})
+        self.assertEqual(run.call_args.args[0], ["NOT_EXECUTED", "stop", "--time", "5", cid])
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(docker.engine.call_count, 4)
 
     def test_terminal_persistence_failure_retains_unknown_after_original_wait(self):
         self.docker.engine.return_value = {"qualified": "synthetic"}

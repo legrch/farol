@@ -347,12 +347,12 @@ def main():
                 timed_out = True
                 stop.set()
                 try:
-                    docker.stop_owned_after_deadline(directory / ".original-container-affected.cid", name, options.scope, directory)
+                    docker.stop_owned_after_deadline(directory / ".original-container-affected.cid", name, options.scope, directory, engine)
                     code = child.wait(timeout=30)
                 except Exception as error:
                     code = drain_after_cleanup_failure(child, directory, error, observation)
         (directory / "original-docker-terminal.json").write_text(json.dumps({"terminal": True, "pid": child.pid, "exitCode": code, "timedOut": timed_out, **observation}) + "\n")
-        if not docker.removed(name, directory):
+        if not docker.removed(name, directory, engine):
             return Outcome("UNKNOWN", False, reason="ORIGINAL_CONTAINER_RETIREMENT_UNCONFIRMED")
         if code != 0 or timed_out or observation.get("controlFailure"):
             return Outcome("FAIL", True, reason="AFFECTED_ORIGINAL_DOCKER_NON_SUCCESS:" + str(code))
