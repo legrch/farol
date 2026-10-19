@@ -138,14 +138,18 @@ export class ConnectionStatusTracker<T> {
   private inFlight: Promise<void> | null = null;
   private inFlightEpoch: number | null = null;
   private repeatRequested = false;
-  // Continuity and successful-poll proof outlive the presentation cache. A fresh
-  // snapshot of the same old success cannot repair a clock discontinuity.
+  // Clock epochs and successful-poll proof outlive the presentation cache.
+  // After any discontinuity, a first snapshot is only an advancement baseline.
+  private clockEpoch = 0;
   private clock: Readonly<{ wall: number; monotonic: number }> | null = null;
   private proof:
     | (RuntimeProofIdentity &
         Readonly<{
-          success: string | undefined;
-          retired: string | undefined;
+          original: T;
+          success: string;
+          settled: number;
+          baselineWall: number;
+          proven: boolean;
         }>)
     | null = null;
   private retained: Readonly<{
@@ -218,32 +222,61 @@ export class ConnectionStatusTracker<T> {
           ) > 1000))
     ) {
       this.retained = null;
-      if (this.proof?.success !== undefined)
-        this.proof = { ...this.proof, retired: this.proof.success };
+      this.clockEpoch++;
+      this.proof = null;
       if (valid) this.clock = { wall, monotonic };
     } else if (!this.clock) {
       this.clock = { wall, monotonic };
     }
     return valid;
   }
-  private rememberProof(value: ComputerConnectorHealthState): boolean {
-    const previous = this.proof;
+  private rememberProof(
+    value: ComputerConnectorHealthState,
+    original: T,
+    issuedWall: number,
+    issuedMono: number,
+    settled: number,
+    settledWall: number,
+  ): boolean {
+    const saved = this.proof;
+    const previous =
+      saved && sameRuntime(saved, value) && this.ports.current(saved.original)
+        ? saved
+        : null;
+    this.proof = previous;
+    const success = value.lastPollSuccessMillis,
+      millis = Number(success);
+    if (
+      success === undefined ||
+      !Number.isSafeInteger(millis) ||
+      millis <= 0 ||
+      (this.clockEpoch !== 0 && Number(value.observedAtMillis) < issuedWall)
+    )
+      return true;
+    if (previous && millis < Number(previous.success)) return true;
+    // v0.0.16 changes last_success only in Succeeded, under the same mutex as
+    // Snapshot. Backpressured snapshots retain it and report poll age zero.
+    // Serialized, freshly issued reads of the same current runtime can prove
+    // advancement after a post-jump baseline settles. The success timestamp
+    // must also follow that settlement, not merely differ from an older value.
+    // Go still owns every health/age rule.
+    const proven =
+      this.clockEpoch === 0 ||
+      (previous !== null &&
+        ((success === previous.success && previous.proven) ||
+          (millis > Number(previous.success) &&
+            millis > previous.baselineWall &&
+            issuedMono >= previous.settled)));
     this.proof = {
       binding: { ...value.binding },
       expectedInstanceId: value.expectedInstanceId,
-      success:
-        value.lastPollSuccessMillis ??
-        (previous && sameRuntime(previous, value)
-          ? previous.success
-          : undefined),
-      retired:
-        previous && sameRuntime(previous, value) ? previous.retired : undefined,
+      original: previous?.original ?? original,
+      success,
+      settled: previous?.settled ?? settled,
+      baselineWall: previous?.baselineWall ?? settledWall,
+      proven,
     };
-    return (
-      value.state === "recent_transport" &&
-      (value.lastPollSuccessMillis === undefined ||
-        value.lastPollSuccessMillis === this.proof.retired)
-    );
+    return !proven;
   }
   sample(): Promise<void> {
     if (this.closed || this.suspended) return Promise.resolve();
@@ -253,11 +286,12 @@ export class ConnectionStatusTracker<T> {
     }
     const epoch = this.epoch;
     let original: T | null;
-    let wall: number, mono: number;
+    let wall: number, mono: number, clockEpoch: number;
     try {
       wall = this.ports.now();
       mono = this.ports.monotonic();
       if (!this.trackClock(wall, mono)) return Promise.resolve();
+      clockEpoch = this.clockEpoch;
       original = this.ports.capture();
       if (!original || !this.ports.current(original)) {
         this.retained = null;
@@ -282,6 +316,7 @@ export class ConnectionStatusTracker<T> {
           endMono = this.ports.monotonic();
         if (
           !this.trackClock(endWall, endMono) ||
+          this.clockEpoch !== clockEpoch ||
           !value ||
           !this.ports.current(captured) ||
           !Number.isFinite(mono) ||
@@ -300,7 +335,14 @@ export class ConnectionStatusTracker<T> {
           mono + Math.max(0, Math.min(until - wall, until - observed));
         if (observed > endWall || endWall >= until || endMono >= expires)
           return;
-        const withholdPositive = this.rememberProof(value);
+        const withholdPositive = this.rememberProof(
+          value,
+          captured,
+          wall,
+          mono,
+          endMono,
+          endWall,
+        );
         this.retained = {
           original: captured,
           value,

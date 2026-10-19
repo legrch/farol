@@ -434,6 +434,16 @@ it.each([
     );
     f.observe.mockResolvedValueOnce(replacement);
     await f.tracker.sample();
+    expect(f.tracker.view().state).toBe("unobserved");
+    f.clock(211000, 2000);
+    f.observe.mockResolvedValueOnce({
+      ...replacement,
+      sampleAtMillis: "211000",
+      observedAtMillis: "211000",
+      validUntilMillis: "256000",
+      lastPollSuccessMillis: "210500",
+    });
+    await f.tracker.sample();
     expect(f.tracker.view().state).toBe("recent_transport");
     f.retire();
     expect(f.tracker.view().state).toBe("unobserved");
@@ -464,6 +474,15 @@ it("a foreign in-flight owner cannot change the retired proof or lend its value 
   expect(f.tracker.view().state).toBe("unobserved");
   f.observe.mockResolvedValueOnce(
     sampleAt(210000, { binding: { ...binding, runtimeId: "replacement" } }),
+  );
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+  f.clock(211000, 2000);
+  f.observe.mockResolvedValueOnce(
+    sampleAt(211000, {
+      binding: { ...binding, runtimeId: "replacement" },
+      lastPollSuccessMillis: "210500",
+    }),
   );
   await f.tracker.sample();
   expect(f.tracker.view().state).toBe("recent_transport");
@@ -517,6 +536,12 @@ it("post-wake repeat sampling cannot restore a previously observed retired proof
     sampleAt(210000, { lastPollSuccessMillis: "209000" }),
   );
   await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+  f.clock(211000, 2000);
+  f.observe.mockResolvedValueOnce(
+    sampleAt(211000, { lastPollSuccessMillis: "210500" }),
+  );
+  await f.tracker.sample();
   expect(f.tracker.view().state).toBe("recent_transport");
 });
 
@@ -535,6 +560,12 @@ it("a clock jump during a request cannot establish a new success proof", async (
   expect(f.tracker.view().state).toBe("unobserved");
   f.observe.mockResolvedValueOnce(
     sampleAt(210000, { lastPollSuccessMillis: "209000" }),
+  );
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+  f.clock(211000, 3000);
+  f.observe.mockResolvedValueOnce(
+    sampleAt(211000, { lastPollSuccessMillis: "210500" }),
   );
   await f.tracker.sample();
   expect(f.tracker.view().state).toBe("recent_transport");
@@ -577,3 +608,328 @@ it.each([
     expect(f.tracker.view().state).toBe("unobserved");
   },
 );
+
+// v0.0.16 PollHealth keeps last_success while backpressured, with poll age zero.
+// These Go-shaped fixtures model a newly read historical success; reading it
+// after a wall-clock rollback does not date the successful server poll.
+it.each(
+  [true, false].flatMap((retained) =>
+    [
+      "expiry",
+      "absent",
+      "refused",
+      "capture-null",
+      "capture-error",
+      "invalidate",
+      "wake",
+    ].map((gap) => ({ retained, gap })),
+  ),
+)(
+  "withholds an unseen historical success after rollback (retained=$retained, gap=$gap)",
+  async ({ retained, gap }) => {
+    const f = fixture();
+    if (!retained) f.observe.mockResolvedValueOnce(null);
+    await f.tracker.sample();
+    f.clock(301000, 101000);
+    if (gap === "expiry") f.tracker.view();
+    if (gap === "absent") {
+      f.observe.mockResolvedValueOnce(null);
+      await f.tracker.sample();
+    }
+    if (gap === "refused") {
+      f.observe.mockRejectedValueOnce(Error("refused"));
+      await f.tracker.sample();
+    }
+    if (gap === "capture-null") {
+      f.capture.mockReturnValueOnce(null);
+      await f.tracker.sample();
+    }
+    if (gap === "capture-error") {
+      f.capture.mockImplementationOnce(() => {
+        throw Error("failed");
+      });
+      await f.tracker.sample();
+    }
+    if (gap === "invalidate") f.tracker.invalidate();
+    if (gap === "wake") {
+      f.tracker.suspend();
+      f.tracker.resume();
+    }
+    // The helper succeeded at 209000 before health reads failed, then stayed
+    // backpressured. At monotonic 102000 that unseen success is 93 seconds old.
+    f.clock(210000, 102000);
+    f.observe.mockResolvedValueOnce(
+      sampleAt(210000, { lastPollSuccessMillis: "209000" }),
+    );
+    await f.tracker.sample();
+    expect(f.tracker.view().state).toBe("unobserved");
+    f.clock(211000, 103000);
+    f.observe.mockResolvedValueOnce(
+      sampleAt(211000, { lastPollSuccessMillis: "209000" }),
+    );
+    await f.tracker.sample();
+    expect(f.tracker.view().state).toBe("unobserved");
+    // A later read sees an actual success after the post-jump baseline read.
+    f.clock(212000, 104000);
+    f.observe.mockResolvedValueOnce(
+      sampleAt(212000, { lastPollSuccessMillis: "211500" }),
+    );
+    await f.tracker.sample();
+    expect(f.tracker.view().state).toBe("recent_transport");
+  },
+);
+
+it("missing success evidence cannot establish a post-jump advancement baseline", async () => {
+  const f = fixture();
+  f.observe.mockResolvedValueOnce(null);
+  await f.tracker.sample();
+  f.clock(210000, 1000);
+  f.observe.mockResolvedValueOnce({
+    binding,
+    expectedInstanceId: "instance",
+    sampleAtMillis: "210000",
+    observedAtMillis: "210000",
+    validUntilMillis: "255000",
+    state: "checking",
+    reason: "polling_missing",
+    localReady: true,
+  });
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("checking");
+  f.clock(211000, 2000);
+  f.observe.mockResolvedValueOnce(
+    sampleAt(211000, { lastPollSuccessMillis: "209000" }),
+  );
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+  f.clock(212000, 3000);
+  f.observe.mockResolvedValueOnce(
+    sampleAt(212000, { lastPollSuccessMillis: "211500" }),
+  );
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("recent_transport");
+});
+
+it.each([false, true])(
+  "fences an in-flight read across observed clock epochs even when endpoints normalize (view=%s)",
+  async (viewBeforeSettlement) => {
+    const f = fixture();
+    await f.tracker.sample();
+    f.clock(201000, 1000);
+    let release!: (value: ComputerConnectorHealthState) => void;
+    f.observe.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const pending = f.tracker.sample();
+    f.clock(210000, 2000);
+    expect(f.tracker.view().state).toBe("unobserved");
+    f.clock(202000, 2000);
+    if (viewBeforeSettlement) f.tracker.view();
+    release(sampleAt(202000, { lastPollSuccessMillis: "201500" }));
+    await pending;
+    expect(f.tracker.view().state).toBe("unobserved");
+    f.observe.mockResolvedValueOnce(
+      sampleAt(202000, { lastPollSuccessMillis: "201500" }),
+    );
+    await f.tracker.sample();
+    expect(f.tracker.view().state).toBe("unobserved");
+    f.clock(203000, 3000);
+    f.observe.mockResolvedValueOnce(
+      sampleAt(203000, { lastPollSuccessMillis: "202500" }),
+    );
+    await f.tracker.sample();
+    expect(f.tracker.view().state).toBe("recent_transport");
+  },
+);
+
+it("requires new advancement again after each discontinuity", async () => {
+  const f = fixture();
+  await f.tracker.sample();
+  f.clock(210000, 1000);
+  f.observe.mockResolvedValueOnce(sampleAt(210000));
+  await f.tracker.sample();
+  f.clock(211000, 2000);
+  f.observe.mockResolvedValueOnce(
+    sampleAt(211000, { lastPollSuccessMillis: "210500" }),
+  );
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("recent_transport");
+  f.clock(220000, 3000);
+  f.observe.mockResolvedValueOnce(
+    sampleAt(220000, { lastPollSuccessMillis: "219000" }),
+  );
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+  f.clock(221000, 4000);
+  f.observe.mockResolvedValueOnce(
+    sampleAt(221000, { lastPollSuccessMillis: "219000" }),
+  );
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+  f.clock(222000, 5000);
+  f.observe.mockResolvedValueOnce(
+    sampleAt(222000, { lastPollSuccessMillis: "221500" }),
+  );
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("recent_transport");
+});
+
+it("does not seed advancement from snapshots predating request issuance", async () => {
+  const f = fixture();
+  await f.tracker.sample();
+  for (const [wall, mono, observed, success, state] of [
+    [210000, 1000, 209500, "209000", "unobserved"],
+    [211000, 2000, 210500, "210000", "unobserved"],
+    [212000, 3000, 212000, "211500", "unobserved"],
+    [213000, 4000, 213000, "212500", "recent_transport"],
+  ] as const) {
+    f.clock(wall, mono);
+    f.observe.mockResolvedValueOnce(
+      sampleAt(observed, { lastPollSuccessMillis: success }),
+    );
+    await f.tracker.sample();
+    expect(f.tracker.view().state).toBe(state);
+  }
+});
+
+it("does not lend an advancement baseline to a replacement owner with the same runtime identity", async () => {
+  const f = fixture();
+  await f.tracker.sample();
+  f.clock(210000, 1000);
+  f.observe.mockResolvedValueOnce(sampleAt(210000));
+  await f.tracker.sample();
+  f.replaceOwner();
+  f.clock(211000, 2000);
+  f.observe.mockResolvedValueOnce(
+    sampleAt(211000, { lastPollSuccessMillis: "210500" }),
+  );
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+  f.clock(212000, 3000);
+  f.observe.mockResolvedValueOnce(
+    sampleAt(212000, { lastPollSuccessMillis: "211500" }),
+  );
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("recent_transport");
+});
+
+it("dates advancement after baseline settlement rather than request issuance", async () => {
+  const f = fixture();
+  await f.tracker.sample();
+  f.clock(210000, 1000);
+  f.observe.mockImplementationOnce(async () => {
+    f.clock(212000, 3000);
+    return sampleAt(210000, { lastPollSuccessMillis: "209000" });
+  });
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+  f.clock(213000, 4000);
+  f.observe.mockResolvedValueOnce(
+    sampleAt(213000, { lastPollSuccessMillis: "211500" }),
+  );
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("unobserved");
+  f.clock(214000, 5000);
+  f.observe.mockResolvedValueOnce(
+    sampleAt(214000, { lastPollSuccessMillis: "213500" }),
+  );
+  await f.tracker.sample();
+  expect(f.tracker.view().state).toBe("recent_transport");
+});
+
+it.each(["absent", "refused", "expiry", "invalidate", "wake"] as const)(
+  "preserves the post-jump baseline across %s without trusting unseen historical success",
+  async (gap) => {
+    const f = fixture();
+    await f.tracker.sample();
+    f.clock(210000, 1000);
+    f.observe.mockResolvedValueOnce(sampleAt(210000));
+    await f.tracker.sample();
+    expect(f.tracker.view().state).toBe("unobserved");
+    f.clock(260000, 51000);
+    if (gap === "absent") {
+      f.observe.mockResolvedValueOnce(null);
+      await f.tracker.sample();
+    }
+    if (gap === "refused") {
+      f.observe.mockRejectedValueOnce(Error("refused"));
+      await f.tracker.sample();
+    }
+    if (gap === "expiry") f.tracker.view();
+    if (gap === "invalidate") f.tracker.invalidate();
+    if (gap === "wake") {
+      f.tracker.suspend();
+      f.tracker.resume();
+    }
+    f.observe.mockResolvedValueOnce(
+      sampleAt(260000, {
+        lastPollSuccessMillis: "209000",
+        validUntilMillis: "299000",
+      }),
+    );
+    await f.tracker.sample();
+    expect(f.tracker.view().state).toBe("unobserved");
+    f.clock(261000, 52000);
+    f.observe.mockResolvedValueOnce(
+      sampleAt(261000, { lastPollSuccessMillis: "260500" }),
+    );
+    await f.tracker.sample();
+    expect(f.tracker.view().state).toBe("recent_transport");
+  },
+);
+
+it("recovers across fresh capture wrappers with the same inner owner and fences an actual replacement", async () => {
+  let wall = 200000,
+    mono = 0,
+    success = "199000";
+  let inner = { owner: {}, connector: {}, core: {} };
+  const capture = vi.fn(() => ({ ...inner, binding: { ...binding } }));
+  const tracker = new ConnectionStatusTracker({
+    capture,
+    current: (original) =>
+      original.owner === inner.owner &&
+      original.connector === inner.connector &&
+      original.core === inner.core &&
+      Object.entries(binding).every(
+        ([key, value]) =>
+          original.binding[key as keyof typeof binding] === value,
+      ),
+    observe: async () => sampleAt(wall, { lastPollSuccessMillis: success }),
+    now: () => wall,
+    monotonic: () => mono,
+  });
+  await tracker.sample();
+  wall = 210000;
+  mono = 1000;
+  success = "209000";
+  await tracker.sample();
+  expect(tracker.view().state).toBe("unobserved");
+  wall = 211000;
+  mono = 2000;
+  await tracker.sample();
+  expect(tracker.view().state).toBe("unobserved");
+  wall = 212000;
+  mono = 3000;
+  success = "211500";
+  await tracker.sample();
+  expect(tracker.view().state).toBe("recent_transport");
+  const wrappers = capture.mock.results.map((result) => result.value);
+  expect(new Set(wrappers).size).toBe(4);
+  expect(new Set(wrappers.map((value) => value.owner)).size).toBe(1);
+  expect(new Set(wrappers.map((value) => value.binding)).size).toBe(4);
+  inner = { owner: {}, connector: {}, core: {} };
+  expect(tracker.view().state).toBe("unobserved");
+  wall = 213000;
+  mono = 4000;
+  success = "212500";
+  await tracker.sample();
+  expect(tracker.view().state).toBe("unobserved");
+  wall = 214000;
+  mono = 5000;
+  success = "213500";
+  await tracker.sample();
+  expect(tracker.view().state).toBe("recent_transport");
+});
