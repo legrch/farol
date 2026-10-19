@@ -53,7 +53,7 @@ const contract = {
   owned: "tests/e2e/writable-recovery.e2e.mjs",
   modes: [
     "--contract",
-    "--run-native --source-sha SHA --build-id ID [--scenario normal|crash|connector-failed-quit]",
+    "--run-native --source-sha SHA --build-id ID [--scenario normal|crash|connector-failed-quit] [--expect-restart normal-writable]",
   ],
   normal:
     "Normal main.cjs/Go -> approved disposable folder -> real Chat results/ACK/settlement -> Go-owned guarded File edit/read/result ACK -> ordinary confirmed Quit -> same-profile fresh writable generation -> original saved Chat answers/workspace/result -> second File edit/read/result ACK -> confirmed Quit",
@@ -67,6 +67,7 @@ const contract = {
     "Go owns Settings edit admission/pending/result; existing typed host storage performs conditional filesystem writes, not an autonomous model tool call",
     "Hidden windows throughout; no focus, real picker, real provider/control plane, installed profile, sleep/reboot or interrupted-effect qualification; connector-failed-quit uses a synthetic loopback tunnel only",
     "Connector-only failure is a hypothesis until native qualification. Any other failed-drain shape is NONMATCHING_FIXTURE, never R04 PASS. A read-only restart records that limit and performs no write or recovery action",
+    "--expect-restart normal-writable requires an actual normal-ready restart, retained history and a new File result/read/ACK; it rejects read-only recovery after ordinary cleanup",
     "Exact observed direct child absence is not arbitrary descendant settlement or an original Go terminal/ACK receipt after host SIGKILL",
     "Historical Desktop prepared/readonly/null metadata is deliberately seeded on the fresh disposable crash fixture only after the original host/direct Go child are absent; this is not original historical or production state",
     "Owned parent/child queries only; no machine-wide process inventory, arbitrary descendants or old Go ACK/terminal are established",
@@ -82,7 +83,9 @@ if (args.length === 0 || (args.length === 1 && args[0] === "--contract")) {
     const key = args.shift(),
       value = args.shift();
     assert.ok(
-      ["--source-sha", "--build-id", "--scenario"].includes(key) &&
+      ["--source-sha", "--build-id", "--scenario", "--expect-restart"].includes(
+        key,
+      ) &&
         value &&
         !Object.hasOwn(pins, key),
       "INVALID_ARGUMENT",
@@ -95,6 +98,12 @@ if (args.length === 0 || (args.length === 1 && args[0] === "--contract")) {
     [undefined, "normal", "crash", "connector-failed-quit"].includes(
       pins["--scenario"],
     ),
+  );
+  assert.ok(
+    pins["--expect-restart"] === undefined ||
+      (pins["--expect-restart"] === "normal-writable" &&
+        pins["--scenario"] === "connector-failed-quit"),
+    "INVALID_RESTART_EXPECTATION",
   );
   await main(pins);
 }
@@ -357,6 +366,7 @@ async function main(pins) {
       try {
         await scenario({
           name,
+          expectedRestart: pins["--expect-restart"],
           row,
           retainedRoot,
           temp,
@@ -403,6 +413,7 @@ async function main(pins) {
 
 async function scenario({
   name,
+  expectedRestart,
   row,
   retainedRoot,
   temp,
@@ -1440,6 +1451,18 @@ async function scenario({
           );
       row.afterRestartQuit = afterRestartQuit;
       assert.equal(row.launches.length, 2, "UNEXPECTED_REOPEN_COUNT");
+      if (expectedRestart === "normal-writable") {
+        assert.equal(
+          row.restartOutcome,
+          "normal-ready",
+          "CONNECTOR_ONLY_WRITABLE_RESTART_REQUIRED",
+        );
+        assert.equal(
+          row.writable,
+          "PASS-new-File-result-read-and-ACK-after-connector-only-failed-Quit",
+        );
+      }
+      row.expectedRestart = expectedRestart ?? "observe";
       row.status = "PASS";
       row.qualification =
         "Fixture journey only; actual restartOutcome/writable recorded separately, not source acceptance or R04 acceptance";
