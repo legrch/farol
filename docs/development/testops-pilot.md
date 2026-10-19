@@ -168,3 +168,15 @@ after inspection, and before and after a stop. A changed or unreadable engine
 cannot prove retirement or authorize another stop; the original handle remains
 in custody. These checks observe the selected endpoint; they are not an atomic
 daemon transaction.
+
+## Go test source consumers
+
+Reverse Go package selection is narrow only when every discovered test belongs
+to the Go package graph. Any non-Go test can inspect Go source, including a
+configured TypeScript consumer whose file reads are absent from import metadata.
+Such changes broaden to the complete inventory with
+`GO_SOURCE_CONSUMER_OWNERSHIP_UNAUDITED` and `NEEDS_REVIEW`; both affected execution
+routes refuse before selected tests. This currently disables narrow Go iteration
+in this mixed repository until cross-language source ownership is qualified.
+Pure Go test inventories retain reverse-package planning. Complete CI and all
+native, package and release gates remain unchanged.

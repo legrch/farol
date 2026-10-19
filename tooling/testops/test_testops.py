@@ -188,14 +188,41 @@ class Repository(unittest.TestCase):
                      "imports": ["example.invalid/demo/modules/a"]}]}}
 
     def test_native_go_test_change_does_not_widen_for_unrelated_typescript_aliases(self):
+        (self.root / "tests/a.test.ts").unlink()
+        self.commit()
+        self.base = self.run_git("rev-parse", "HEAD").strip()
         self.write("modules/a/value_test.go", 'package a\nimport "testing"\nfunc TestOther(t *testing.T) {}\n')
         metadata = self.compiler_metadata()
+        metadata["typescript"]["edges"] = []
         metadata["typescript"]["gaps"] = [{"file": "src/a.ts", "reason": "DYNAMIC_IMPORT"}]
         plan = testops.compiler_affected(self.root, self.changes(), metadata)
         self.assertEqual(plan["status"], "PLAN_ONLY")
         self.assertEqual({p["path"] for p in plan["selected"]},
                          {"modules/a/value_test.go", "modules/b/use_test.go"})
         self.assertFalse(plan["executionAllowed"])
+
+    def exercise_go_source_consumer(self, extension):
+        consumer = "tests/source-consumer.test." + extension
+        self.write(consumer, 'import fs from "node:fs";\n'
+                   'const text = fs.readFileSync("modules/a/value_test.go", "utf8");\n'
+                   'if (/^func TestMain\\(/m.test(text)) throw new Error("TEST_MAIN_NOT_ADMITTED");\n')
+        self.commit()
+        self.base = self.run_git("rev-parse", "HEAD").strip()
+        self.write("modules/a/value_test.go", 'package a\nimport "testing"\n'
+                   'func TestValue(t *testing.T) {}\nfunc TestMain(m *testing.M) { m.Run() }\n')
+        changes = self.changes()
+        self.assertEqual([row["path"] for row in changes["paths"]], ["modules/a/value_test.go"])
+        plan = testops.compiler_affected(self.root, changes, self.compiler_metadata())
+        self.assertEqual(plan["status"], "NEEDS_REVIEW")
+        self.assertEqual({row["path"] for row in plan["selected"]},
+                         {p for p in testops.source_files(self.root) if testops.test_file(p)})
+        self.assertIn({"path": consumer, "reason": "GO_SOURCE_CONSUMER_OWNERSHIP_UNAUDITED"}, plan["broadened"])
+
+    def test_go_test_change_retains_unconfigured_javascript_source_consumer(self):
+        self.exercise_go_source_consumer("mjs")
+
+    def test_go_test_change_retains_configured_typescript_source_consumer(self):
+        self.exercise_go_source_consumer("ts")
 
     def test_native_ts_test_plan_adds_opaque_consumers_and_reverse_importers(self):
         self.write("tests/a.test.ts", "export const caseName = 'changed';\n")

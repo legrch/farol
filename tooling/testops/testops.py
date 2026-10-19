@@ -352,6 +352,11 @@ def compiler_affected(root, changes, metadata):
         p = safe_path(item["path"])
         if p.endswith("_test.go") and p in go_owners and not go.get("gaps"):
             include(p, "go-compiler-reverse-package:" + p)
+            # A native package graph cannot prove which JS/TS tests read Go
+            # source. Configured TS imports do not capture these file reads.
+            for consumer in tests:
+                if consumer not in go_owners:
+                    broadened.append({"path": consumer, "reason": "GO_SOURCE_CONSUMER_OWNERSHIP_UNAUDITED"})
         elif (test_file(p) and p in typescript.get("inputHashes", {})
               and not p.endswith((".e2e.mjs", ".d.ts", ".d.mts"))):
             include(p, "typescript-native-reverse-import:" + p)
