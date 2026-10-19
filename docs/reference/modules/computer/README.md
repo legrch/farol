@@ -10,4 +10,5 @@
 - [Workspace mutation](mutation.md)
 - [Search](search.md)
 - [Process infrastructure](infra/process.md)
+- [Source-bound managed Git transport (unselected)](infra/git.md)
 - [Mutation repository](infra/repos/mutation.md)
