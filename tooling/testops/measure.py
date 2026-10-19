@@ -20,6 +20,8 @@ import threading
 import time
 
 import testops
+from bounded_capture import OutputBudget, start_capture
+from deadline import CommandTimeout
 
 ROOT = testops.ROOT
 STOP = threading.Event()
@@ -90,30 +92,40 @@ def run_probe(probe, directory, env):
     if STOP.is_set():
         return {"id": name, "status": "NOT_RUN", "reason": "CANCELLED"}
     start = time.monotonic()
-    with (directory / (name + ".log")).open("xb") as log:
-        child = subprocess.Popen(command, cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
-                                 stdout=log, stderr=subprocess.STDOUT)
-        stop_sent = None
-        forced = False
-        while True:
-            pid, waitstatus, usage = os.wait4(child.pid, os.WNOHANG)
-            if pid:
-                child.returncode = os.waitstatus_to_exitcode(waitstatus)
-                break
+    log = directory / (name + ".log")
+    stage = {}
+    budget = OutputBudget(1024 * 1024)
+    capture = start_capture(command, ROOT, log, log, stage, budget, env=env)
+    child = capture.child
+    stop_sent = None
+    forced = False
+    try:
+        while child.returncode is None or not stage["stdioClosed"]:
+            try:
+                capture.wait(0.05)
+            except CommandTimeout:
+                pass
             elapsed = time.monotonic() - start
-            if STOP.is_set() or elapsed > 60:
+            if STOP.is_set() or elapsed > 60 or budget.exceeded or stage["outputErrors"]:
                 if stop_sent is None:
-                    child.terminate()
+                    if child.returncode is None:
+                        child.terminate()
                     stop_sent = time.monotonic()
                 elif time.monotonic() - stop_sent > 3 and not forced:
-                    child.kill()
+                    if child.returncode is None:
+                        child.kill()
                     forced = True
-            time.sleep(0.02)
+                if forced and child.returncode is not None:
+                    break
+    finally:
+        capture.close()
     return {"id": name, "command": command, "exitCode": child.returncode,
-            "status": "PASS" if child.returncode == 0 and stop_sent is None else "FAIL",
+            "status": "PASS" if (child.returncode == 0 and stop_sent is None and stage["stdioClosed"]
+                                  and not stage["outputErrors"] and not budget.exceeded) else "FAIL",
             "wallSeconds": time.monotonic() - start,
-            "userCpuSeconds": usage.ru_utime, "systemCpuSeconds": usage.ru_stime,
-            "peakRssBytes": usage.ru_maxrss * (1 if sys.platform == "darwin" else 1024),
+            "userCpuSeconds": stage.get("userCpuSeconds"), "systemCpuSeconds": stage.get("systemCpuSeconds"),
+            "peakRssBytes": stage.get("maxIndividualReapedChildRssBytes"),
+            "originalChild": stage, "retainedOutputLimitBytes": budget.limit,
             "logSha256": testops.digest((directory / (name + ".log")).read_bytes()),
             "terminationRequested": stop_sent is not None,
             "descendantCleanup": "NOT_PROVEN" if stop_sent is not None else "normal-terminal"}

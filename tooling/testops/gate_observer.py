@@ -18,7 +18,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from testops import identity
 from dependency_seal import fingerprint
-from deadline import JOB_SECONDS, CommandTimeout, wait_original, private_processes, retire_private_descendants
+from deadline import JOB_SECONDS, CommandTimeout, private_processes, retire_private_descendants
+from bounded_capture import OutputBudget, start_capture
 
 
 COMMANDS = {
@@ -98,6 +99,22 @@ def remaining_processes():
     return private_processes([])
 
 
+def observe_command(command, root, stdout_path, stderr_path, stage, budget, seconds, issued, captures, on_started=None):
+    capture = start_capture(command, root, stdout_path, stderr_path, stage, budget)
+    child = capture.child
+    issued[child.pid] = child
+    captures.append(capture)
+    stage["pid"] = child.pid
+    if on_started is not None:
+        on_started()
+    capture.wait(seconds)
+    capture.close()
+    captures.remove(capture)
+    if (child.returncode != 0 or stage["outputTruncated"] or stage["outputErrors"]
+            or not stage["stdioClosed"]):
+        raise ValueError("ORIGINAL_COMMAND_FAILED")
+
+
 def main():
     if len(sys.argv) != 3 or sys.argv[1] not in COMMANDS:
         raise ValueError("ONE_FIXED_JOB_AND_SOURCE_BINDING_REQUIRED")
@@ -133,25 +150,24 @@ def main():
     report_path.write_text(json.dumps(report, indent=2) + "\n")
     start = time.monotonic()
     issued = {}
+    captures = []
+    budget = OutputBudget(32 * 1024 * 1024)
+    report["retainedOutputLimitBytes"] = budget.limit
     try:
         for index, command in enumerate(commands):
             stdout_path = output / f"command-{index}.stdout.log"
             stderr_path = output / f"command-{index}.stderr.log"
             stage_start = time.monotonic()
-            with stdout_path.open("xb") as stdout, stderr_path.open("xb") as stderr:
-                child = subprocess.Popen(command, cwd=root, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr)
-                issued[child.pid] = child
-                stage = {"command": command, "pid": child.pid, "terminal": False}
-                report["stages"].append(stage)
-                report_path.write_text(json.dumps(report, indent=2) + "\n")
-                remaining = JOB_SECONDS[job] - (time.monotonic() - start)
-                if remaining <= 0:
-                    raise CommandTimeout("ORIGINAL_JOB_DEADLINE_EXCEEDED")
-                stage.update(wait_original(child, remaining))
+            stage = {"command": command, "terminal": False}
+            remaining = JOB_SECONDS[job] - (time.monotonic() - start)
+            if remaining <= 0:
+                raise CommandTimeout("ORIGINAL_JOB_DEADLINE_EXCEEDED")
+            report["stages"].append(stage)
+            report_path.write_text(json.dumps(report, indent=2) + "\n")
+            observe_command(command, root, stdout_path, stderr_path, stage, budget, remaining, issued, captures,
+                            lambda: report_path.write_text(json.dumps(report, indent=2) + "\n"))
             stage.update(wallSeconds=time.monotonic() - stage_start,
                          stdoutSha256=sha(stdout_path), stderrSha256=sha(stderr_path))
-            if child.returncode != 0:
-                raise ValueError("ORIGINAL_COMMAND_FAILED")
             if job == "pilot-selftests":
                 stage["casesPassed"] = selftest_count(command, stdout_path, stderr_path)
         report.update(exitCode=0, terminal=True)
@@ -172,6 +188,9 @@ def main():
         report.update(status="FAIL", error=type(error).__name__ + ":" + str(error))
     finally:
         retirement = retire_private_descendants(report["timedOut"])
+        for capture in captures:
+            capture.finish_after_retirement()
+            capture.close()
         report["descendantRetirement"] = retirement
         report["descendantsDrained"] = retirement["drained"]
         for index, stage in enumerate(report["stages"]):

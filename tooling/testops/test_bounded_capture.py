@@ -7,6 +7,8 @@ import tempfile
 import unittest
 
 from bounded_capture import Capture, OutputBudget
+from gate_observer import observe_command
+import measure
 from deadline import CommandTimeout
 
 
@@ -103,3 +105,54 @@ class BoundedOutput(unittest.TestCase):
         self.assertEqual(result["stage"]["exitCode"], 9)
         self.assertEqual(result["exit"], 9)
         self.assertEqual(result["stdout"], b"PASS prefix\n")
+
+
+class CallerOutputLimits(unittest.TestCase):
+    def test_gate_rejects_zero_exit_flood_and_shares_budget_across_commands(self):
+        with tempfile.TemporaryDirectory(prefix="testops-gate-output-") as name:
+            root = Path(name)
+            budget = OutputBudget(32768)
+            issued, captures = {}, []
+            for index in range(2):
+                stage = {}
+                with self.assertRaisesRegex(ValueError, "ORIGINAL_COMMAND_FAILED"):
+                    observe_command([sys.executable, "-c", "import os;os.write(1,b'x'*65536);os.write(2,b'y'*65536)"],
+                                    root, root / f"{index}.o", root / f"{index}.e",
+                                    stage, budget, 3, issued, captures)
+                self.assertEqual(stage["exitCode"], 0)
+                self.assertTrue(stage["terminal"] and stage["stdioClosed"])
+                self.assertTrue(stage["outputTruncated"])
+                self.assertEqual(captures, [])
+            self.assertEqual(sum(p.stat().st_size for p in root.iterdir()), 32768)
+            self.assertTrue(all(p.returncode == 0 for p in issued.values()))
+
+    def test_gate_retains_complete_successful_output(self):
+        with tempfile.TemporaryDirectory(prefix="testops-gate-success-") as name:
+            root = Path(name)
+            stage = {}
+            observe_command([sys.executable, "-c", "print('ordinary')"], root,
+                            root / "o", root / "e", stage, OutputBudget(32768), 3, {}, [])
+            self.assertEqual((root / "o").read_bytes(), b"ordinary\n")
+            self.assertTrue(stage["terminal"] and stage["stdioClosed"])
+            self.assertFalse(stage["outputTruncated"])
+
+    def test_measurement_flood_is_bounded_and_never_passes(self):
+        with tempfile.TemporaryDirectory(prefix="testops-measure-flood-") as name:
+            root = Path(name)
+            measure.STOP.clear()
+            result = measure.run_probe(("flood", [sys.executable, "-c", "import os;os.write(1,b'x'*2097152);os.write(2,b'y'*2097152)"]), root, None)
+            self.assertEqual(result["status"], "FAIL")
+            self.assertLessEqual((root / "flood.log").stat().st_size, 1024 * 1024)
+            self.assertTrue(result["originalChild"]["terminal"])
+            self.assertTrue(result["originalChild"]["outputTruncated"])
+
+    def test_measurement_retains_normal_exit_and_nonzero_status(self):
+        with tempfile.TemporaryDirectory(prefix="testops-measure-status-") as name:
+            root = Path(name)
+            measure.STOP.clear()
+            for code in (0, 9):
+                result = measure.run_probe((str(code), [sys.executable, "-c", f"import sys;print('hello');print('error',file=sys.stderr);sys.exit({code})"]), root, None)
+                self.assertEqual(result["status"], "PASS" if code == 0 else "FAIL")
+                self.assertEqual(result["exitCode"], code)
+                self.assertTrue(result["originalChild"]["terminal"] and result["originalChild"]["stdioClosed"])
+                self.assertEqual(set((root / f"{code}.log").read_text().splitlines()), {"hello", "error"})

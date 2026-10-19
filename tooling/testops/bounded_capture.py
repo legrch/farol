@@ -6,9 +6,26 @@ same handle/pipes available to the enclosing private-container cleanup protocol.
 import os
 import hashlib
 import selectors
+import subprocess
 import time
 
 from deadline import CommandTimeout, usage_record
+
+
+def start_capture(command, cwd, stdout_path, stderr_path, stage, budget, env=None):
+    """Open fresh bounded logs; retain only the original child and its pipes."""
+    stdout = stdout_path.open("xb")
+    stderr = None
+    try:
+        stderr = stdout if stderr_path == stdout_path else stderr_path.open("xb")
+        child = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return Capture(child, stdout, stderr, stage, budget)
+    except Exception:
+        stdout.close()
+        if stderr is not None:
+            stderr.close()
+        raise
 
 
 class OutputBudget:

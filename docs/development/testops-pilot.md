@@ -137,3 +137,14 @@ The extracted core command plan retains all nine original commands, flags,
 ordering and nested-module contexts. Its final marker records only completion
 of that command chain; it does not invent Go case counts or general descendant
 containment. A fixed contract test retains the original command array.
+
+## Process log budgets
+
+Each generic container job shares a 32 MiB retained stdout/stderr budget across
+its commands. Both original pipes are drained; truncation or log I/O failure
+prevents success or a successor, including an original zero exit. Original
+terminal/EOF and namespace retirement remain required. Each measurement probe
+retains at most 1 MiB across both streams, with direct-child termination on
+excess output and failure even after exit zero. Its interruption still does not
+prove descendant cleanup. Arbitrary generated artifacts and caches on the
+writable output bind have no disk quota and require operator storage admission.
