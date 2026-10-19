@@ -21,7 +21,11 @@ import {
   verifyPromotionLease,
   type PromotionLeaseHandle,
 } from "../../../src/apps/desktop/promotion-lease";
-import { MAX_RUN_MARKER_BYTES } from "../../../src/apps/desktop/run-marker";
+import {
+  MAX_RUN_MARKER_BYTES,
+  RunMarkerSchema,
+} from "../../../src/apps/desktop/run-marker";
+import { QuitReceiptSchema } from "../../../src/apps/desktop/quit-receipt";
 import { retainEmptyChatForArchival } from "../../../src/apps/desktop/retained-empty-archive";
 import { PrivateExecutionFence } from "../../../src/modules/computer/infra/mcp/execution-fence";
 import { PrivateMcpLifecycle } from "../../../src/modules/computer/infra/mcp/private-mcp-lifecycle";
@@ -80,6 +84,25 @@ function quitForScopeComparison(quit: unknown): unknown {
   )
     return quit;
   return { ...quit, unconfirmed: ["go-core", "connector"] };
+}
+
+// The Desktop drain can leave only its connector unconfirmed. Recognizing
+// that exact failure scope preserves the original receipt; canonical Go
+// inspection, process exclusion and durable-work proof still own admission.
+function preservedQuitScope(
+  run: unknown,
+  quit: unknown,
+): "current-unconfirmed" | "previous-confirmed" {
+  const marker = RunMarkerSchema.safeParse(run);
+  const receipt = QuitReceiptSchema.safeParse(quit);
+  if (
+    marker.success &&
+    receipt.success &&
+    !receipt.data.drained &&
+    isDeepStrictEqual(receipt.data.unconfirmed, ["connector"])
+  )
+    return "current-unconfirmed";
+  return unacknowledgedDevQuitScope(run, quitForScopeComparison(quit));
 }
 
 // Trusted closed Dev maintenance only. No installed route, old effect replay or
@@ -213,10 +236,7 @@ async function recoverPreservedChat(
           : undefined;
         const previousConfirmedQuit =
           failedQuit !== undefined &&
-          unacknowledgedDevQuitScope(
-            runValue,
-            quitForScopeComparison(quitValue),
-          ) === "previous-confirmed";
+          preservedQuitScope(runValue, quitValue) === "previous-confirmed";
         if (
           failedQuit &&
           !previousConfirmedQuit &&

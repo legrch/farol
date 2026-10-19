@@ -1670,9 +1670,9 @@ describe("closed preserved recovery refuses progression", () => {
       "INTERRUPTED_CHAT_RECOVERY_QUIT_CHANGED",
     ],
     [
-      "missing go-core",
+      "removed go-core with unchanged desktop obligations",
       { unconfirmed: ["connector"] },
-      "INTERRUPTED_CHAT_RECOVERY_QUIT_CHANGED",
+      "PRESERVED_RECOVERY_WORK_PENDING",
     ],
     [
       "duplicate connector pair",
@@ -1966,9 +1966,14 @@ describe("closed preserved recovery refuses progression", () => {
 // The held admission flag and identity verifier below are controlled doubles.
 // They prove original-handle/callback custody, never a kernel lock, current-host
 // exclusion, actual child settlement or installed-profile qualification.
-function startupFixture(scope: "previous" | "current" | "absent" = "previous") {
+function startupFixture(
+  scope: "previous" | "current" | "absent" = "previous",
+  currentUnconfirmed: readonly string[] = ["go-core", "connector"],
+) {
   const f =
-    scope === "absent" ? noQuitFixture("Farol") : fixture(scope, "Farol");
+    scope === "absent"
+      ? noQuitFixture("Farol")
+      : fixture(scope, "Farol", currentUnconfirmed);
   const lease = {
     file: f.lease.file,
     record: {
@@ -2020,6 +2025,114 @@ function startupRetained(f: ReturnType<typeof startupFixture>) {
   expect(f.events).not.toContain("promotion:acquire");
   expect(f.events).not.toContain("promotion:release");
 }
+
+describe("connector-only preserving scope (controlled ports)", () => {
+  it("keeps exact connector-only failure bytes through closed preserving recovery", async () => {
+    const f = fixture("current", "Farol Dev", ["connector"]);
+    ports.finish.mockImplementation(async (handoff) => {
+      f.model.phase = "finish";
+      await handoff.reconcileConnector!();
+      return f.result;
+    });
+    await expect(f.execute()).resolves.toEqual(f.result);
+    const handoff = finishInput();
+    expect(handoff.failedQuit).toBe(f.quit);
+    expect(handoff.failedQuit!.bytes).toEqual(f.quit.bytes);
+    expect(digest(handoff.failedQuit!.bytes)).toBe(f.input.expectedQuitSha256);
+    expect(f.quitValue.unconfirmed).toEqual(["connector"]);
+    expect(handoff).not.toHaveProperty("previousConfirmedQuit");
+    expect(handoff.preservedHistory).toEqual({
+      scope: f.input.exact.current,
+      originalACK: "unobserved",
+      originalTerminal: "unobserved",
+    });
+    expect(ports.inspect).toHaveBeenCalledOnce();
+    expect(ports.prepare).toHaveBeenCalledOnce();
+    expect(ports.connectorWork).toHaveBeenCalled();
+    expect(f.input.processesAbsent).toHaveBeenCalled();
+    expect(ports.reconcile).toHaveBeenCalledWith(
+      expect.objectContaining({ failedQuitSha256: digest(f.quit.bytes) }),
+    );
+    released(f);
+  });
+
+  it("retains the original startup admission and complete proofs for connector-only failure", async () => {
+    const f = startupFixture("current", ["connector"]);
+    ports.finish.mockImplementation(async (handoff) => {
+      f.model.phase = "finish";
+      await handoff.reconcileConnector!();
+      return f.result;
+    });
+    await expect(f.execute()).resolves.toEqual(f.result);
+    const handoff = finishInput();
+    expect(handoff.failedQuit).toBe(f.quit);
+    expect(handoff.failedQuit!.bytes).toEqual(f.quit.bytes);
+    expect(f.quitValue.unconfirmed).toEqual(["connector"]);
+    expect(handoff).not.toHaveProperty("previousConfirmedQuit");
+    expect(handoff.preservedHistory?.originalACK).toBe("unobserved");
+    expect(handoff.preservedHistory?.originalTerminal).toBe("unobserved");
+    expect(ports.inspect).toHaveBeenCalledOnce();
+    expect(ports.prepare).toHaveBeenCalledOnce();
+    expect(ports.connectorWork).toHaveBeenCalled();
+    expect(f.startup.assertCurrent).toHaveBeenCalled();
+    expect(f.startup.verify).toHaveBeenCalled();
+    startupRetained(f);
+  });
+
+  it.each([
+    "canonical-inspection",
+    "connector-work",
+    "processes",
+    "startup-current",
+  ] as const)(
+    "keeps %s failure blocking the connector-only path",
+    async (point) => {
+      const f = startupFixture("current", ["connector"]);
+      const failure = Error("SYNTHETIC_REQUIRED_PROOF_UNCONFIRMED");
+      if (point === "canonical-inspection")
+        ports.inspect.mockRejectedValue(failure);
+      else if (point === "connector-work")
+        ports.connectorWork.mockRejectedValue(failure);
+      else if (point === "processes")
+        f.input.processesAbsent.mockImplementation(() => {
+          throw failure;
+        });
+      else f.startup.assertCurrent.mockRejectedValue(failure);
+      await expect(f.execute()).rejects.toBe(failure);
+      expect(ports.prepare).not.toHaveBeenCalled();
+      expect(ports.finish).not.toHaveBeenCalled();
+      startupRetained(f);
+    },
+  );
+
+  it("does not waive additional desktop work for connector-only failure", async () => {
+    const f = startupFixture("current", ["connector"]);
+    f.model.desktop = {
+      ...f.model.desktop,
+      obligations: [...f.model.desktop.obligations, "TASK_RUNNING:1"],
+    };
+    await expect(f.execute()).rejects.toThrow(
+      "PRESERVED_RECOVERY_WORK_PENDING",
+    );
+    expect(ports.inspect).not.toHaveBeenCalled();
+    expect(ports.prepare).not.toHaveBeenCalled();
+    startupRetained(f);
+  });
+
+  it.each([
+    ["go-core"],
+    ["connector", "connector"],
+    ["connector", "provider"],
+    ["connector", "go-core", "provider"],
+    [],
+  ])("does not broaden other failed child sets: %j", async (...children) => {
+    const f = startupFixture("current", children);
+    await expect(f.execute()).rejects.toThrow();
+    expect(ports.inspect).not.toHaveBeenCalled();
+    expect(ports.prepare).not.toHaveBeenCalled();
+    startupRetained(f);
+  });
+});
 
 function startupLegacyFixture() {
   const f = startupFixture("absent");
