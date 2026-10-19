@@ -753,3 +753,13 @@ func TestContextEndClosesAStreamBlockedInAWrite(t *testing.T) {
 		t.Fatalf("cancellation reported as %v", err)
 	}
 }
+
+func TestStreamErrorsWrappingSentinelsArePortFailures(t *testing.T) {
+	g, _, client, peer, _, _ := buildGate(t, nil)
+	client.writeErr = errors.Join(errInjected, ErrScope) // looks like a refusal, is a stream fault
+	r, err := g.Run(bounded(t), client, peer)
+	wantCode(t, err, ErrPort)
+	if !errors.Is(err, errInjected) || r.RemoteMayHaveEffects {
+		t.Fatalf("%+v %v", r, err)
+	}
+}

@@ -116,6 +116,9 @@ func (g *Gate) Run(ctx context.Context, client io.ReadWriteCloser, peer egresspo
 	if peer.Binding() != in.Target {
 		return result, ErrScope
 	}
+	// Every error from the owner-supplied streams is a port fault, whatever it
+	// wraps; only a clean io.EOF passes through for the protocol readers.
+	cs, ps := ownedStream{client}, ownedStream{peer}
 	check := func() error {
 		if e := ctx.Err(); e != nil {
 			return e
@@ -129,18 +132,18 @@ func (g *Gate) Run(ctx context.Context, client io.ReadWriteCloser, peer egresspo
 		return result, err
 	}
 	result.Stage = "advertisement"
-	ad, err := readAdvertisement(peer, in)
+	ad, err := readAdvertisement(ps, in)
 	if err != nil {
 		return result, err
 	}
 	if err = check(); err != nil {
 		return result, err
 	}
-	if err = ad.writeTo(client); err != nil {
+	if err = ad.writeTo(cs); err != nil {
 		return result, err
 	}
 	result.Stage = "client_update"
-	command, noUpdate, err := readUpdate(client, in, ad)
+	command, noUpdate, err := readUpdate(cs, in, ad)
 	if err != nil {
 		return result, err
 	}
@@ -149,7 +152,7 @@ func (g *Gate) Run(ctx context.Context, client io.ReadWriteCloser, peer egresspo
 		return result, nil
 	}
 	result.Stage = "pack_validation"
-	pack, err := readPack(ctx, client, g.plan, g.objects)
+	pack, err := readPack(ctx, cs, g.plan, g.objects)
 	if err != nil {
 		return result, err
 	}
@@ -178,7 +181,7 @@ func (g *Gate) Run(ctx context.Context, client io.ReadWriteCloser, peer egresspo
 	result.Stage = "upload"
 	result.RemoteMayHaveEffects = true
 	result.RefOutcome = Unknown
-	result.CommandBytes, err = writeAll(peer, command)
+	result.CommandBytes, err = writeAll(ps, command)
 	if err != nil {
 		return result, err
 	}
@@ -192,7 +195,7 @@ func (g *Gate) Run(ctx context.Context, client io.ReadWriteCloser, peer egresspo
 			n = 32 << 10
 		}
 		var written int64
-		written, err = writeAll(peer, data[:n])
+		written, err = writeAll(ps, data[:n])
 		result.PackBytes += written
 		if err != nil {
 			return result, err
@@ -200,7 +203,7 @@ func (g *Gate) Run(ctx context.Context, client io.ReadWriteCloser, peer egresspo
 		data = data[n:]
 	}
 	result.Stage = "remote_report"
-	accepted, reply, err := readStatus(peer, in.Ref)
+	accepted, reply, err := readStatus(ps, in.Ref)
 	if err != nil {
 		return result, err
 	}
@@ -213,7 +216,7 @@ func (g *Gate) Run(ctx context.Context, client io.ReadWriteCloser, peer egresspo
 		return result, err
 	}
 	result.Stage = "client_report"
-	_, err = writeAll(client, reply)
+	_, err = writeAll(cs, reply)
 	result.ClientNotified = err == nil
 	return result, err
 }
@@ -224,4 +227,23 @@ func closeSafely(c io.Closer) (err error) {
 		}
 	}()
 	return c.Close()
+}
+
+// ownedStream marks errors from an owner-supplied stream as port faults.
+type ownedStream struct{ rw io.ReadWriter }
+
+func (s ownedStream) Read(p []byte) (int, error) {
+	n, err := s.rw.Read(p)
+	if err != nil && err != io.EOF {
+		err = ownerFailure{err}
+	}
+	return n, err
+}
+
+func (s ownedStream) Write(p []byte) (int, error) {
+	n, err := s.rw.Write(p)
+	if err != nil {
+		err = ownerFailure{err}
+	}
+	return n, err
 }

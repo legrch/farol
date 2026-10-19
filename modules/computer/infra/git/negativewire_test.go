@@ -510,6 +510,8 @@ func TestClassifiedFailureCodes(t *testing.T) {
 		{custodyFailure(ErrScope), "GIT_TRANSPORT_SCOPE_REFUSED"},
 		{custodyFailure(errors.Join(ErrRemote, errInjected)), "GIT_TRANSPORT_PORT_FAILURE"},
 		{custodyFailure(context.Canceled), "GIT_TRANSPORT_PORT_FAILURE"},
+		// A stream error that wraps a sentinel is still the stream's fault.
+		{ownerFailure{errors.Join(errInjected, ErrScope)}, "GIT_TRANSPORT_PORT_FAILURE"},
 	} {
 		got := classified(tc.err)
 		var f *Failure
