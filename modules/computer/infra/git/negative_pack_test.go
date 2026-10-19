@@ -75,7 +75,11 @@ func TestReadPackRefusesMalformedStreamsWithSpecificReason(t *testing.T) {
 		}, io.ErrUnexpectedEOF},
 		{"bad zlib header", nil, func(*testing.T) []byte {
 			return packBytes(2, 1, entryHeader(3, 3), []byte("XXXXXXXX"))
-		}, zlib.ErrHeader},
+		}, ErrProtocol},
+		{"corrupt deflate body", nil, func(*testing.T) []byte {
+			// Valid zlib header, then a final deflate block of reserved type 3.
+			return packBytes(2, 1, entryHeader(3, 3), []byte{0x78, 0x9c, 0x07, 0, 0, 0})
+		}, ErrProtocol},
 		{"stream shorter than declared", nil, func(t *testing.T) []byte { return rawPack("sha1", 2, 1, entry(t, 3, 10, nil, abc)) }, io.ErrUnexpectedEOF},
 		{"stream longer than declared", nil, func(t *testing.T) []byte { return rawPack("sha1", 2, 1, entry(t, 3, 3, nil, []byte("abcdef"))) }, ErrProtocol},
 		{"corrupt deflate checksum", nil, func(t *testing.T) []byte {
@@ -586,5 +590,20 @@ func TestCanonicalUploadIsSortedAndOmitsKnownObjects(t *testing.T) {
 	}
 	if binary.BigEndian.Uint32(out[8:12]) != 3 || binary.BigEndian.Uint32(out[4:8]) != 2 {
 		t.Fatal("header")
+	}
+}
+
+func TestMalformedZlibIsAPublicProtocolFailureWithTheOriginalCause(t *testing.T) {
+	in, known, _ := packFixture(t, "sha1")
+	_, err := readWire(t, in, known, packBytes(2, 1, entryHeader(3, 3), []byte("XXXXXXXX")))
+	if !errors.Is(err, zlib.ErrHeader) {
+		t.Fatalf("original zlib cause lost: %v", err)
+	}
+	wantCode(t, classified(err), ErrProtocol)
+	if got := inflateFailure(io.ErrUnexpectedEOF); got != io.ErrUnexpectedEOF {
+		t.Fatalf("stream truncation reclassified: %v", got)
+	}
+	if got := inflateFailure(ErrLimit); got != ErrLimit {
+		t.Fatalf("limit reclassified: %v", got)
 	}
 }

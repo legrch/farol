@@ -2,12 +2,14 @@ package git
 
 import (
 	"bytes"
+	"compress/flate"
 	"compress/zlib"
 	"context"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"hash"
 	"io"
 	"strconv"
@@ -231,7 +233,7 @@ func readPack(ctx context.Context, r io.Reader, plan *egress.Plan, reader egress
 		}
 		zr, err := zlib.NewReader(c)
 		if err != nil {
-			return nil, err
+			return nil, inflateFailure(err)
 		}
 		e.data = make([]byte, int(size))
 		_, readErr := io.ReadFull(zr, e.data)
@@ -239,13 +241,13 @@ func readPack(ctx context.Context, r io.Reader, plan *egress.Plan, reader egress
 		n, endErr := zr.Read(extra[:])
 		closeErr := zr.Close()
 		if readErr != nil {
-			return nil, readErr
+			return nil, inflateFailure(readErr)
 		}
 		if n != 0 || endErr != io.EOF {
 			return nil, ErrProtocol
 		}
 		if closeErr != nil {
-			return nil, closeErr
+			return nil, inflateFailure(closeErr)
 		}
 		offsets[e.offset] = len(entries)
 		entries = append(entries, e)
@@ -341,4 +343,15 @@ func readPack(ctx context.Context, r io.Reader, plan *egress.Plan, reader egress
 		return nil, err
 	}
 	return p, nil
+}
+
+// inflateFailure attributes malformed zlib/deflate bytes to the client's pack
+// (ErrProtocol) while keeping the original cause. Errors from the underlying
+// stream, such as limits, truncation or cancellation, keep their own class.
+func inflateFailure(err error) error {
+	var corrupt flate.CorruptInputError
+	if errors.Is(err, zlib.ErrHeader) || errors.Is(err, zlib.ErrChecksum) || errors.Is(err, zlib.ErrDictionary) || errors.As(err, &corrupt) {
+		return errors.Join(ErrProtocol, err)
+	}
+	return err
 }
