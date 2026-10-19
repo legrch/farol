@@ -339,6 +339,7 @@ func TestReadStatusRefusesWithSpecificReason(t *testing.T) {
 		{"unpack prefix only with a rejection", statusWire("unpack \n", "ng "+ref+" x\n"), ErrProtocol},
 		{"unpack prefix only without newline", statusWire("unpack ", "ng "+ref+" x\n"), ErrProtocol},
 		{"unpack word missing", statusWire("done ok\n", "ok "+ref+"\n"), ErrProtocol},
+		{"remote refuses with ERR instead of a report", pkt("ERR temporary failure\n"), ErrRemote},
 		{"unpack truncated", pkt("unpack ok\n"), io.EOF},
 		{"flush instead of status", join(pkt("unpack ok\n"), flushPkt), ErrProtocol},
 		{"oversize status line", statusWire("unpack ok\n", "ng "+ref+" "+big+"\n"), ErrProtocol},

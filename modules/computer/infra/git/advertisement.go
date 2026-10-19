@@ -204,6 +204,9 @@ func readStatus(r io.Reader, ref string) (bool, []byte, error) {
 		return false, nil, ErrProtocol
 	}
 	unpack = bytes.TrimSuffix(unpack, []byte{'\n'})
+	if bytes.HasPrefix(unpack, []byte("ERR ")) {
+		return false, nil, ErrRemote // the remote refused the session instead of reporting
+	}
 	if !bytes.HasPrefix(unpack, []byte("unpack ")) || len(unpack) <= 7 {
 		return false, nil, ErrProtocol
 	}
