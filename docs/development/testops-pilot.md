@@ -47,3 +47,34 @@ or implement deployed DEV/PROD commands. E2E describes behavioral scope; deploye
 DEV/PROD verification, controlled-write QA and local product fixtures remain
 separate adoption obligations. Private cross-project inventories and raw test
 evidence remain outside source history.
+
+## Compiler-derived affected plans
+
+`node tooling/testops/languagegraph.mjs` emits a source-bound TypeScript graph
+using the locked compiler and parser. Save it under ignored output, then pass its
+path to the existing affected command with `--compiler-metadata`. The graph and
+selected plan remain data only: neither permits executing the selected product
+tests. Every input source hash must still match. Unsupported import/dynamic-load
+behavior broadens selection rather than silently omitting a consumer.
+
+Go collection is opt-in and requires all of `--go`, `--go-sha256` and `--cache`.
+It invokes only metadata collection with an explicit executable pin and private
+cache. The default graph covers the declared Darwin/Linux arm64 contexts with
+CGO disabled; this does not qualify either operating system or native behavior.
+The optional `--go-runtime linux-arm64-race` context remains explicit and must not
+be inferred for other hosts. No automatic toolchain or dependency acquisition is
+part of graph collection.
+
+The focused Go accounting adapter retains exact package, top-level test and
+observed subtest membership, requiring original run and terminal events. Its
+fixed four-package policy is a bounded prerequisite for a later opt-in Linux
+executor, not general Go execution authority. Existing core race/vet and native
+gates remain required. Unknown packages, changed membership and incomplete event
+streams are refused; no recorded green result can authorize a replay.
+
+Run the two additional existing controls with `node --test --test-concurrency=1
+tooling/testops/languagegraph.test.mjs
+tooling/testops/iteration-witness.test.mjs`. The iteration witness executes only
+fresh synthetic fixture tests, comparing full and selected case membership;
+it does not execute selected Farol tests. Actual resource-safe CI and the
+host/container affected executor remain separate qualified adoption work.
