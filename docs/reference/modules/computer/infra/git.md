@@ -177,7 +177,8 @@ Public failure classes follow one rule:
   valid, as `gitprotocol-common` requires receivers to accept it.
 - `GIT_TRANSPORT_LIMIT`: an explicit bound or varint overflow.
 - `GIT_TRANSPORT_SOURCE_MISMATCH`: bytes or graph that disagree with the
-  owner's manifest, known objects or task base.
+  owner's manifest, known objects or task base, including a well-formed delta
+  whose declared base size differs from its authenticated base.
 - `GIT_TRANSPORT_SCOPE_REFUSED`: an update outside the plan, such as another ref
   or a non-fast-forward of the remote predecessor, or a custody refusal.
 - `GIT_TRANSPORT_PORT_FAILURE`: an owner/port fault or a stream that closes
