@@ -52,6 +52,12 @@ cross-module infrastructure or another permission/journal database.
   source/graph/ancestry validation, bounded PACK parsing, canonical upload,
   sanitized report status and separate readback interpretation.
 
+The pure domain exposes `Plan.Canonical()` as immutable deterministic JSON.
+Infrastructure `git.IntentDigest(plan)` computes its SHA-256 for trusted composition
+and the existing custody owner; nil and zero plans have no digest. The gate caches
+that binding and readback refuses an unbound plan. Stream ports declare methods
+structurally, without putting hashing or stream implementations in pure layers.
+
 A Plan constructor is **not an authority issuer**. Its source manifest is trusted
 input only after the existing owner has proved task ownership and immutable source
 custody. Commit authorship, a matching checkout path, a syntactically valid seal
