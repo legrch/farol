@@ -14,7 +14,8 @@ var ErrIntent = errors.New("EGRESS_INVALID_INTENT")
 
 // Object is a trusted source-manifest entry. Digest is SHA-256 of the canonical
 // Git object (type, space, decimal size, NUL, content), even for SHA-1 repos.
-// Comparing both digests prevents a SHA-1 alias from substituting approved bytes.
+// Comparing both digests prevents a SHA-1 alias from substituting approved bytes
+// that the gate handles; a known object only referenced by OID is not read.
 type Object struct {
 	OID, Kind, Digest string
 	Size              int64

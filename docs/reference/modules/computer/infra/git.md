@@ -109,6 +109,15 @@ SSH identity implementation is supplied by these interfaces.
    must be actual ancestors proved from authenticated commit bytes. Known remote
    objects terminate content closure, not ancestry proof. Gitlinks refer to a
    different repository and grant no submodule access.
+
+   A known object referenced from a new tree is checked against the manifest
+   by OID and kind only. Its bytes are neither read, uploaded nor relied upon:
+   the remote already stores them. The SHA-256 digest guards every object whose
+   bytes the gate handles (uploaded objects, delta bases, ancestry commits).
+   Reading the owner's copy of a merely referenced object could not detect a
+   SHA-1 collision with the object the remote stores, so that case stays the
+   receiver's collision detection or a SHA-256 repository's guarantee.
+
 6. The outgoing pack is reconstructed from verified source bytes, sorted by OID,
    with a fixed compression policy and no thin deltas. Raw client compression,
    order, extra known objects, capability spelling and trailing data are never
