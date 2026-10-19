@@ -52,11 +52,17 @@ type Gate struct {
 }
 
 func NewGate(plan *egress.Plan, custody egressport.Custody, objects egressport.Objects) (*Gate, error) {
-	digest := IntentDigest(plan)
-	if digest == "" || custody == nil {
+	if plan == nil || custody == nil {
 		return nil, ErrScope
 	}
-	return &Gate{plan: plan, digest: digest, custody: custody, objects: objects}, nil
+	// Snapshot the plan: the digest custody sees and the plan the gate enforces
+	// must stay one value even if the caller later overwrites its own copy.
+	snapshot := *plan
+	digest := IntentDigest(&snapshot)
+	if digest == "" {
+		return nil, ErrScope
+	}
+	return &Gate{plan: &snapshot, digest: digest, custody: custody, objects: objects}, nil
 }
 
 // Run takes ownership of two original, interruptible streams. Both are closed

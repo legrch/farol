@@ -763,3 +763,25 @@ func TestStreamErrorsWrappingSentinelsArePortFailures(t *testing.T) {
 		t.Fatalf("%+v %v", r, err)
 	}
 }
+
+// Overwriting the caller's plan after NewGate must not change what the gate
+// enforces: custody saw the digest of the admitted plan only.
+func TestGateEnforcesItsAdmittedPlanSnapshot(t *testing.T) {
+	g, _, _, _, in, _ := buildGate(t, nil)
+	admitted := g.plan
+	other := in
+	other.Ref = "refs/heads/feature/other"
+	replacement, err := egress.NewPlan(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller := *admitted
+	gate, err := NewGate(&caller, g.custody, g.objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller = *replacement // a legal whole-value overwrite of the caller's copy
+	if gate.plan.Intent().Ref != in.Ref || gate.digest != IntentDigest(admitted) {
+		t.Fatalf("gate follows the caller's overwritten plan: %s", gate.plan.Intent().Ref)
+	}
+}
