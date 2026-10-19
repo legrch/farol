@@ -169,6 +169,20 @@ particular attempt produced it. Unrelated concurrent work is never overwritten.
 Errors retain original causes via `Unwrap`, but public `Error`/`Code` omit arbitrary
 transport/config/hook text. Remote failure prose is not copied into receipts.
 
+Public failure classes follow one rule:
+
+- `GIT_TRANSPORT_PROTOCOL`: malformed client or remote encoding, including a
+  pkt-line or pack cut off mid-way, bad zlib/deflate data, a corrupt pack trailer
+  and unsupported protocol features. A text pkt-line without its trailing LF is
+  valid, as `gitprotocol-common` requires receivers to accept it.
+- `GIT_TRANSPORT_LIMIT`: an explicit bound or varint overflow.
+- `GIT_TRANSPORT_SOURCE_MISMATCH`: bytes or graph that disagree with the
+  owner's manifest, known objects or task base.
+- `GIT_TRANSPORT_SCOPE_REFUSED`: an update outside the plan, such as another ref
+  or a non-fast-forward of the remote predecessor, or a custody refusal.
+- `GIT_TRANSPORT_PORT_FAILURE`: an owner/port fault or a stream that closes
+  exactly between packets; `DEADLINE` and `CANCELLED` follow the context.
+
 ## Native composition still required before activation
 
 This packet is intentionally not reachable from boot, MCP or installed Shell.

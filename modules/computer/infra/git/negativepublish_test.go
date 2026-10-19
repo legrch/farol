@@ -85,7 +85,7 @@ func TestRunRefusalsAreStagedClassifiedAndNeverReachTheRemote(t *testing.T) {
 			setup: func(_ *testing.T, _ *custody, _ *fakeStream, p *fakePeer, _ egress.Intent, _ []byte, _ *context.Context) {
 				p.reader = bytes.NewReader(pkt("ERR repository not found\n"))
 			}},
-		{name: "remote advertisement truncated", stage: "advertisement", want: ErrPort,
+		{name: "remote advertisement truncated", stage: "advertisement", want: ErrProtocol,
 			setup: func(_ *testing.T, _ *custody, _ *fakeStream, p *fakePeer, in egress.Intent, _ []byte, _ *context.Context) {
 				p.reader = bytes.NewReader(advertised(in, in.Old)[:20])
 			}},

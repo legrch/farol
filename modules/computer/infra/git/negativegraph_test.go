@@ -235,7 +235,7 @@ func TestGraphRefusesUnreachableAndUnprovenUpdates(t *testing.T) {
 			other := opaqueCommit("tree " + in.Known[1].OID)
 			in.Base = addKnown(in, known, other)
 			return o[0], []*object{o[0], o[1], o[2]}
-		}, ErrScope},
+		}, ErrSource},
 		{"head does not descend from the remote predecessor", func(_ *testing.T, in *egress.Intent, known memoryObjects, o []*object) (*object, []*object) {
 			other := opaqueCommit("tree " + in.Known[1].OID)
 			in.Old = addKnown(in, known, other)

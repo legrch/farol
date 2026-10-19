@@ -135,8 +135,11 @@ func (p *verifiedPack) verifyGraph() error {
 			queue = append(queue, parent)
 		}
 	}
-	if !hasBase || !hasOld {
-		return ErrScope
+	if !hasBase {
+		return ErrSource // the intended head and the owner's task base disagree
+	}
+	if !hasOld {
+		return ErrScope // not a fast-forward of the remote predecessor
 	}
 	return nil
 }

@@ -25,7 +25,10 @@ const maxPacket = 65520
 func readPacket(r io.Reader) ([]byte, bool, error) {
 	var header [4]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
-		return nil, false, err
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, false, truncated(err) // a partial length header
+		}
+		return nil, false, err // the stream closed between packets: a stream event
 	}
 	for _, c := range header {
 		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
@@ -45,9 +48,19 @@ func readPacket(r io.Reader) ([]byte, bool, error) {
 	}
 	b := make([]byte, int(n)-4)
 	if _, err = io.ReadFull(r, b); err != nil {
-		return nil, false, err
+		return nil, false, truncated(err)
 	}
 	return b, false, nil
+}
+
+// truncated attributes a peer stream that ends inside a pkt-line to the
+// peer's encoding (ErrProtocol), keeping the EOF cause; other stream errors
+// keep their own class. A close exactly between packets stays a stream event.
+func truncated(err error) error {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return errors.Join(ErrProtocol, err)
+	}
+	return err
 }
 func packet(b []byte) ([]byte, error) {
 	if len(b) > maxPacket-4 {
