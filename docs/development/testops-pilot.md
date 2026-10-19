@@ -78,3 +78,20 @@ tooling/testops/iteration-witness.test.mjs`. The iteration witness executes only
 fresh synthetic fixture tests, comparing full and selected case membership;
 it does not execute selected Farol tests. Actual resource-safe CI and the
 host/container affected executor remain separate qualified adoption work.
+
+## Batched source attestation
+
+The source snapshot reads explicitly requested committed Git blobs through the
+system Git batch protocol, with length-framed binary parsing and bounded replies.
+It still compares every regular working file, retains independent expected-byte
+buffers per path, and rejects dirty state, hidden index flags and unreadable
+inputs. No cache crosses snapshots. Invalid or failed batch responses refuse;
+they never trigger a fallback. Oversized individual blobs use the original
+bounded reader, selected before execution.
+
+This changes shared source attestation and needs independent review and exact
+candidate checks. A matched comparison must retain the same commit, complete
+identity/reasons and all entry data, modes and object IDs. Report wall time, CPU
+and peak memory separately. A faster snapshot does not by itself qualify an
+entire CI gate, package, native route or installed application. Existing compiler
+refusals, output-preservation checks and their time limits remain unchanged.
