@@ -4672,6 +4672,9 @@ function captureConnectorStop(): Pick<
     quitInProgress ||
     installedUpdateAdmission ||
     state.settings.setup.connect.outcomeUnknown ||
+    state.settings.computer.pendingEdit !== null ||
+    state.settings.setup.computer.outcomeUnknown ||
+    workspaceMutationAdmission ||
     connector.hasUnresolvedEffect()
   )
     return null;
@@ -4730,6 +4733,9 @@ function ownerStoppedCurrent(original: OwnerStoppedCapture): boolean {
     backendAvailable: core.backendAvailable,
     stoppedSettings: state.settings.connectors.secureMcp.runtime === null,
     setupOutcomeUnknown: state.settings.setup.connect.outcomeUnknown,
+    settingsEditPending: state.settings.computer.pendingEdit !== null,
+    settingsOutcomeUnknown: state.settings.setup.computer.outcomeUnknown,
+    workspaceMutationInProgress: workspaceMutationAdmission,
     helperRunning: connector.isRunning(),
     helperOutcomeUnknown: connector.hasUnresolvedEffect(),
     tunnelObserved: connector.getTunnelObservation() !== null,

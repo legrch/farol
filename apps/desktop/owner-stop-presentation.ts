@@ -20,6 +20,9 @@ export type OwnerStopPresentationFrame = Readonly<{
   backendAvailable: boolean;
   stoppedSettings: boolean;
   setupOutcomeUnknown: boolean;
+  settingsEditPending: boolean;
+  settingsOutcomeUnknown: boolean;
+  workspaceMutationInProgress: boolean;
   helperRunning: boolean;
   helperOutcomeUnknown: boolean;
   tunnelObserved: boolean;
@@ -45,6 +48,9 @@ export function ownerStopPresentationCurrent(
     current.backendAvailable &&
     current.stoppedSettings &&
     !current.setupOutcomeUnknown &&
+    !current.settingsEditPending &&
+    !current.settingsOutcomeUnknown &&
+    !current.workspaceMutationInProgress &&
     !current.helperRunning &&
     !current.helperOutcomeUnknown &&
     !current.tunnelObserved &&
