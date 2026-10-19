@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from testops import identity
 from dependency_seal import fingerprint
 from deadline import JOB_SECONDS, CommandTimeout, private_processes, retire_private_descendants
-from bounded_capture import OutputBudget, start_capture
+from bounded_capture import OutputBudget, start_capture, read_physical_file
 
 
 COMMANDS = {
@@ -48,31 +48,7 @@ OUTPUT_LIMIT_BYTES = 32 * 1024 * 1024
 
 
 def evidence_file(directory, relative, limit=REPORT_LIMIT_BYTES):
-    """Pin physical descriptors and bound both the initial size and actual read."""
-    relative = Path(relative)
-    if (relative.is_absolute() or not relative.parts or ".." in relative.parts
-            or not directory.is_absolute() or directory.resolve(strict=True) != directory):
-        raise ValueError("PHYSICAL_JOB_EVIDENCE_FILE_REQUIRED")
-    descriptors = []
-    try:
-        descriptors.append(os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
-        for piece in relative.parts[:-1]:
-            descriptors.append(os.open(piece, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptors[-1]))
-        fd = os.open(relative.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptors[-1])
-        descriptors.append(fd)
-        metadata = os.fstat(fd)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise ValueError("PHYSICAL_JOB_EVIDENCE_FILE_REQUIRED")
-        if metadata.st_size > limit:
-            raise ValueError("JOB_EVIDENCE_SIZE_LIMIT")
-        with os.fdopen(os.dup(fd), "rb") as stream:
-            data = stream.read(limit + 1)
-        if len(data) > limit:
-            raise ValueError("JOB_EVIDENCE_SIZE_LIMIT")
-        return data
-    finally:
-        for descriptor in reversed(descriptors):
-            os.close(descriptor)
+    return read_physical_file(directory, relative, limit)
 
 
 def natural_retirement(value):

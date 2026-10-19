@@ -1,14 +1,18 @@
 """Original child/pipe evidence using finite disposable Python processes only."""
 from pathlib import Path
 import hashlib
+import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch, Mock
 
 from bounded_capture import Capture, OutputBudget
 from gate_observer import observe_command
 import measure
+import affected_run
 from deadline import CommandTimeout
 
 
@@ -108,6 +112,91 @@ class BoundedOutput(unittest.TestCase):
 
 
 class CallerOutputLimits(unittest.TestCase):
+    def test_measurement_sparse_log_rejects_without_an_unbounded_final_read(self):
+        with tempfile.TemporaryDirectory(prefix="testops-measure-sparse-") as name:
+            root = Path(name).resolve(); log = root / "sparse.log"
+            program = ("from pathlib import Path; p=Path(" + repr(str(log)) + "); "
+                       "f=p.open('r+b'); f.truncate(4*1024**3); f.close(); print('original')")
+            original = Path.read_bytes
+            def allocation_trap(file):
+                if file == log and file.stat().st_size > 1024**2:
+                    raise AssertionError("UNBOUNDED_FINAL_LOG_READ_ATTEMPT")
+                return original(file)
+            measure.STOP.clear()
+            with patch.object(Path, "read_bytes", allocation_trap):
+                result = measure.run_probe(("sparse", [sys.executable, "-c", program]), root, None)
+            self.assertEqual(result["status"], "FAIL")
+            self.assertTrue(result["originalChild"]["terminal"] and result["originalChild"]["stdioClosed"])
+            self.assertEqual(result["exitCode"], 0)
+            self.assertTrue(result["originalChild"]["outputErrors"])
+            self.assertLess(log.stat().st_blocks * 512, 1024**2)
+
+    def test_measurement_keeps_original_digest_after_same_size_log_replacement(self):
+        with tempfile.TemporaryDirectory(prefix="testops-measure-replacement-") as name:
+            root = Path(name).resolve(); log = root / "replacement.log"; close = Capture.close
+            def replace_after_close(capture):
+                close(capture)
+                log.write_bytes(b"forged!!\n")
+            measure.STOP.clear()
+            with patch.object(Capture, "close", replace_after_close):
+                result = measure.run_probe(("replacement", [sys.executable, "-c", "print('original')"]), root, None)
+            self.assertEqual(result["status"], "FAIL")
+            self.assertEqual(result["logSha256"], hashlib.sha256(b"original\n").hexdigest())
+            self.assertTrue(result["originalChild"]["outputErrors"])
+
+    def test_affected_finally_persists_failure_for_sparse_log_without_rebasing(self):
+        # Unit protocol harness: real finite Python child, mocked admission and
+        # private-namespace/cgroup facts. This is not native/Linux qualification.
+        with tempfile.TemporaryDirectory(prefix="testops-affected-final-log-") as name:
+            root = Path(name).resolve(); directory = root / "evidence"; directory.mkdir()
+            log = directory / "compiler.stdout.log"; lease = Mock(); issued = []
+            cgroup = root / "cgroup"; cgroup.mkdir()
+            for key in ("memory.max", "memory.peak", "memory.events", "cpu.max", "cpu.stat", "pids.max"):
+                (cgroup / key).write_text("oom 0\noom_kill 0\n" if key == "memory.events" else "0")
+            before = {"source": {"head": "unit-fixture"}}
+            changes = {"paths": [{"path": "tests/a.test.ts"}]}
+            retirement = {"initialPids": [], "remainingPids": [], "reaped": [], "signals": [],
+                          "errors": [], "drained": True, "reason": "NATURAL_TERMINAL"}
+            original_read, original_popen = Path.read_bytes, subprocess.Popen
+            def allocation_trap(file):
+                if file == log and file.stat().st_size > 32*1024**2:
+                    raise AssertionError("UNBOUNDED_FINAL_LOG_READ_ATTEMPT")
+                return original_read(file)
+            def path_factory(*args):
+                if args == ("/tmp/testops-home",):return root / "home"
+                if args and args[0] == "/sys/fs/cgroup":return cgroup.joinpath(*args[1:])
+                return Path(*args)
+            program = ("from pathlib import Path; p=Path(" + repr(str(log)) + "); "
+                       "f=p.open('r+b'); f.truncate(4*1024**3); f.close(); print('original')")
+            def child(_command, **kwargs):
+                result = original_popen([sys.executable, "-c", program], **kwargs)
+                issued.append(result);return result
+            with patch.dict(os.environ), patch.object(affected_run, "ROOT", root), \
+                    patch.object(affected_run, "DIRECTORY", directory), \
+                    patch.object(affected_run, "arguments", return_value=("base", False)), \
+                    patch.object(affected_run, "private_container"), \
+                    patch.object(affected_run, "binding", return_value=before), \
+                    patch.object(affected_run, "changed", return_value=changes), \
+                    patch.object(affected_run, "acquire_attempt", return_value=lease), \
+                    patch.object(affected_run, "private_processes", return_value=[]), \
+                    patch.object(affected_run, "retire_private_descendants", return_value=retirement), \
+                    patch.object(affected_run, "Path", side_effect=path_factory), \
+                    patch.object(affected_run.os, "chdir"), patch.object(affected_run.signal, "signal"), \
+                    patch.object(Path, "read_bytes", allocation_trap), \
+                    patch.object(subprocess, "Popen", side_effect=child):
+                code = affected_run.main()
+            report = json.loads((directory / "report.json").read_text())
+            self.assertEqual(code, 1)
+            self.assertNotEqual(report["status"], "PASS")
+            self.assertFalse(report["complete"])
+            self.assertEqual(len(issued), 1)
+            self.assertEqual(issued[0].returncode, 0)
+            self.assertEqual(report["stages"][0]["stdoutSha256"], hashlib.sha256(b"original\n").hexdigest())
+            self.assertTrue(report["stages"][0]["outputErrors"])
+            self.assertEqual(report["lease"], "HELD")
+            lease.release.assert_not_called()
+            self.assertLess(log.stat().st_blocks * 512, 1024**2)
+
     def test_gate_rejects_zero_exit_flood_and_shares_budget_across_commands(self):
         with tempfile.TemporaryDirectory(prefix="testops-gate-output-") as name:
             root = Path(name)
@@ -156,3 +245,8 @@ class CallerOutputLimits(unittest.TestCase):
                 self.assertEqual(result["exitCode"], code)
                 self.assertTrue(result["originalChild"]["terminal"] and result["originalChild"]["stdioClosed"])
                 self.assertEqual(set((root / f"{code}.log").read_text().splitlines()), {"hello", "error"})
+                self.assertEqual(result["logSha256"], hashlib.sha256((root / f"{code}.log").read_bytes()).hexdigest())
+                sinks = result["originalChild"]["retainedLogs"]
+                self.assertEqual(sinks["stdout"], sinks["stderr"])
+                self.assertEqual(sinks["stdout"]["bytesWritten"],
+                                 sum(row["retainedBytes"] for row in result["originalChild"]["output"].values()))

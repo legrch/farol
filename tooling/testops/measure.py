@@ -20,7 +20,7 @@ import threading
 import time
 
 import testops
-from bounded_capture import CommandCancelled, OutputBudget, start_capture
+from bounded_capture import CommandCancelled, OutputBudget, start_capture, validate_retained_log
 from deadline import CommandTimeout
 
 ROOT = testops.ROOT
@@ -91,6 +91,7 @@ def run_probe(probe, directory, env):
     name, command = probe
     if STOP.is_set():
         return {"id": name, "status": "NOT_RUN", "reason": "CANCELLED"}
+    directory = directory.resolve(strict=True)
     start = time.monotonic()
     log = directory / (name + ".log")
     stage = {}
@@ -122,14 +123,15 @@ def run_probe(probe, directory, env):
                     break
     finally:
         capture.close()
+    log_valid = validate_retained_log(stage, "stdout", log, budget.limit)
     return {"id": name, "command": command, "exitCode": child.returncode,
             "status": "PASS" if (child.returncode == 0 and stop_sent is None and stage["stdioClosed"]
-                                  and not stage["outputErrors"] and not budget.exceeded) else "FAIL",
+                                  and not stage["outputErrors"] and not budget.exceeded and log_valid) else "FAIL",
             "wallSeconds": time.monotonic() - start,
             "userCpuSeconds": stage.get("userCpuSeconds"), "systemCpuSeconds": stage.get("systemCpuSeconds"),
             "peakRssBytes": stage.get("maxIndividualReapedChildRssBytes"),
             "originalChild": stage, "retainedOutputLimitBytes": budget.limit,
-            "logSha256": testops.digest((directory / (name + ".log")).read_bytes()),
+            "logSha256": stage["retainedLogs"]["stdout"]["writeSha256"],
             "terminationRequested": stop_sent is not None,
             "descendantCleanup": "NOT_PROVEN" if stop_sent is not None else "normal-terminal"}
 

@@ -169,6 +169,17 @@ cannot prove retirement or authorize another stop; the original handle remains
 in custody. These checks observe the selected endpoint; they are not an atomic
 daemon transaction.
 
+## Final retained-log integrity
+
+Final log validation uses the same bounded, non-following physical reader as
+ordinary evidence validation. A sparse oversized log, path replacement or I/O
+failure records failure without an unrestricted final read or replacing original
+pipe/write digests. Capture records per-sink write order as well as per-stream
+observations, including merged measurement logs. Affected failure finalization
+retains the lease and persists its nonpassing report after log rejection;
+generated compiler/cloud JSON uses the same bounded evidence path. These unit
+and protocol guarantees do not supply native or current Linux execution evidence.
+
 ## Go test source consumers
 
 Reverse Go package selection is narrow only when every discovered test belongs

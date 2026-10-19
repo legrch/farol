@@ -25,7 +25,7 @@ from dependency_seal import fingerprint
 from gate_observer import TOOLS
 from deadline import retire_private_descendants, private_processes, CommandTimeout
 from dag import Lease
-from bounded_capture import Capture, OutputBudget
+from bounded_capture import Capture, OutputBudget, read_physical_file, validate_retained_log
 
 ROOT = Path("/workspace")
 DIRECTORY = ROOT / "_output/affected-iteration"
@@ -207,15 +207,10 @@ def stage_deadline(name, focused):
 
 
 def evidence_bytes(file):
-    limit = 32 * 1024**2
-    if (file.is_symlink() or file.resolve() != file or not file.is_file()
-            or file.stat().st_size > limit):
-        raise ValueError("AFFECTED_ORIGINAL_EVIDENCE_CHANGED:" + file.name)
-    with file.open("rb") as stream:
-        raw = stream.read(limit + 1)
-    if len(raw) > limit:
-        raise ValueError("AFFECTED_ORIGINAL_EVIDENCE_CHANGED:" + file.name)
-    return raw
+    try:
+        return read_physical_file(file.parent, file.name, 32 * 1024**2)
+    except (OSError, ValueError) as error:
+        raise ValueError("AFFECTED_ORIGINAL_EVIDENCE_CHANGED:" + file.name) from error
 
 
 def verify_evidence(originals):
@@ -346,7 +341,7 @@ def main(expected_source=None, host_cancelled=None):
     try:
         save()
         execute("compiler", [NODE, "tooling/testops/affected-inputs.mjs", "collect-focused" if focused else "collect"])
-        metadata = json.loads((DIRECTORY / "compiler.json").read_text())
+        metadata = json.loads(evidence_bytes(DIRECTORY / "compiler.json"))
         report["metadataSha256"] = {}
         for filename in ("compiler.json", "cloud.json"):
             file = DIRECTORY / filename
@@ -355,7 +350,7 @@ def main(expected_source=None, host_cancelled=None):
             report["metadataSha256"][filename] = digest
         plan = compiler_affected(ROOT, changes, metadata)
         (DIRECTORY / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
-        cloud = json.loads((DIRECTORY / "cloud.json").read_text())
+        cloud = json.loads(evidence_bytes(DIRECTORY / "cloud.json"))
         if focused:
             from affected_focused import focused_projection, focused_commands
             projected = focused_projection(plan, cloud, metadata)
@@ -396,8 +391,11 @@ def main(expected_source=None, host_cancelled=None):
                     issued[observed["pid"]].returncode = observed["exitCode"]
             for stream in ("stdout", "stderr"):
                 file = DIRECTORY / (stage["id"] + "." + stream + ".log")
-                if file.is_file():
-                    stage[stream + "Sha256"] = hashlib.sha256(file.read_bytes()).hexdigest()
+                observed = stage.get("output", {}).get(stream, {}).get("observedSha256")
+                if observed is not None:
+                    stage[stream + "Sha256"] = observed
+                if stage.get("originalPid") is not None:
+                    validate_retained_log(stage, stream, file, output_budget.limit)
         report["outputBudget"] = {"limitBytes": output_budget.limit, "remainingBytes": output_budget.remaining,
                                   "exceeded": output_budget.exceeded}
         if retirement["initialPids"] or timed_out or cancelled or output_budget.exceeded or any(stage.get("outputErrors") for stage in report["stages"]):
