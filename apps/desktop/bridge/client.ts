@@ -9,6 +9,8 @@ import {
   protocolMinor,
   validate,
   type Context,
+  type ComputerConnectorHealthRequest,
+  type ComputerConnectorHealthState,
   type ComputerConnectorPollingRequest,
   type ComputerConnectorPollingState,
   type EventData,
@@ -35,6 +37,11 @@ export class PollingObservationExpiredError extends BridgeError {
     super("refused", "connector_polling_expired");
   }
 }
+export class HealthObservationExpiredError extends BridgeError {
+  constructor() {
+    super("refused", "connector_health_expired");
+  }
+}
 // A local refusal before stdin.write, not a remote outcome or a pipe error.
 // Keep this distinct from an identically named provider/protocol failure.
 export class RequestNotSentError extends BridgeError {
@@ -57,10 +64,72 @@ type Pending = {
   observation?: Readonly<
     ComputerConnectorPollingRequest & { deadlineMillis: number }
   >;
+  healthObservation?: Readonly<
+    Pick<ComputerConnectorHealthRequest, "binding" | "expectedInstanceId"> & {
+      deadlineMillis: number;
+      sampleAtMillis?: string;
+    }
+  >;
   operationId?: string;
   handshake?: Handshake;
   retirementHandoffId?: string;
 };
+
+type DiagnosticObservation =
+  | Readonly<{
+      kind: "health";
+      value: NonNullable<Pending["healthObservation"]>;
+    }>
+  | Readonly<{ kind: "polling"; value: NonNullable<Pending["observation"]> }>;
+
+function diagnosticObservation(pending: Pending): DiagnosticObservation | null {
+  if (pending.healthObservation)
+    return { kind: "health", value: pending.healthObservation };
+  if (pending.observation)
+    return { kind: "polling", value: pending.observation };
+  return null;
+}
+
+// The response envelope is validated and correlated before this function.
+// A valid pure-read refusal remains a refusal; discarding it grants nothing.
+function matchesDiagnostic(
+  result: Outcome,
+  original: DiagnosticObservation,
+): boolean {
+  if (result.operationId !== undefined) return false;
+  if (result.status !== "ok") return result.data === undefined;
+  if (result.code !== undefined) return false;
+  if (original.kind === "health") {
+    if (!validate("ComputerConnectorHealthState", result.data)) return false;
+    const observed = result.data as unknown as ComputerConnectorHealthState;
+    return (
+      Object.entries(original.value.binding).every(
+        ([key, value]) =>
+          observed.binding[key as keyof typeof observed.binding] === value,
+      ) &&
+      observed.expectedInstanceId === original.value.expectedInstanceId &&
+      observed.sampleAtMillis === original.value.sampleAtMillis
+    );
+  }
+  if (!validate("ComputerConnectorPollingState", result.data)) return false;
+  const observed = result.data as unknown as ComputerConnectorPollingState;
+  return (
+    Object.entries(original.value.binding).every(
+      ([key, value]) =>
+        observed.binding[key as keyof typeof observed.binding] === value,
+    ) &&
+    observed.cycles === original.value.samples.cycles &&
+    observed.errors === original.value.samples.errors &&
+    (observed.ageSeconds !== undefined) ===
+      (observed.state === "recent" || observed.state === "stale")
+  );
+}
+
+function diagnosticExpired(original: DiagnosticObservation): BridgeError {
+  return original.kind === "health"
+    ? new HealthObservationExpiredError()
+    : new PollingObservationExpiredError();
+}
 
 // Facts observed on the original ChildProcess, not a clean-retirement decision.
 // Go must separately qualify origin retirement and the initiating host's ACK.
@@ -149,9 +218,13 @@ const lifecycleSignals = new Set([
 export class Client {
   private decoder = new Decoder();
   private pending = new Map<string, Pending>();
+  // Never evict unresolved diagnostic IDs: a late original reply must retain
+  // its correlation. At capacity only new diagnostics backpressure; ordinary
+  // requests and the existing retirement reserve stay independent.
+  private expiredDiagnostics = new Map<string, DiagnosticObservation>();
   private used = new Set<string>();
-  // Only the two reciprocal, read-only host polls use constant-space ordered
-  // wire IDs. Effect/command IDs keep their lifetime replay fence.
+  // Only the two reciprocal host polls and health reads use constant-space
+  // ordered wire IDs. Effect/command IDs keep their lifetime replay fence.
   private readonly pollNonce = randomUUID();
   private readonly polls = new Map<string, bigint>();
   private stopped = false;
@@ -439,12 +512,14 @@ export class Client {
       return Promise.reject(
         new BridgeError("unavailable", "backend_unavailable"),
       );
-    const pollLane =
+    const readLane =
       method === "chat.browser.next"
         ? "browser"
         : method === "computer.settings.store.next"
           ? "settings"
-          : undefined;
+          : method === "computer.connector.health"
+            ? "health"
+            : undefined;
     const pollingObservation = method === "computer.connector.polling";
     const retiring =
       method === "computer.connector.close" ||
@@ -456,10 +531,18 @@ export class Client {
     // original retirement ACK. Withdrawal joins this reserve only after an
     // exact prepare ACK, so ordinary Settings changes cannot spend it.
     // All keep their lifetime one-shot ID fence.
+    const pendingDiagnostics = [...this.pending.values()].filter(
+      (item) => item.healthObservation || item.observation,
+    ).length;
+    // Pure observations have a separate bounded allowance. Keep all 32
+    // original request slots available even while diagnostics await replies.
+    // Active ordinary calls plus active/expired diagnostics total at most 64.
     if (
-      this.pending.size >= 32 ||
       this.writerBusy ||
-      (pollLane === undefined && this.used.size >= (retiring ? 4096 : 4088))
+      (readLane === "health" || pollingObservation
+        ? this.expiredDiagnostics.size + pendingDiagnostics >= 32
+        : this.pending.size - pendingDiagnostics >= 32) ||
+      (readLane === undefined && this.used.size >= (retiring ? 4096 : 4088))
     )
       return Promise.reject(new RequestNotSentError());
     if (id.startsWith("desktop-poll-"))
@@ -478,10 +561,14 @@ export class Client {
       (pollingObservation &&
         (operationId !== undefined ||
           !validate("ComputerConnectorPollingRequest", body))) ||
-      (pollLane !== undefined &&
+      (readLane !== undefined &&
         (operationId !== undefined ||
           !validate(
-            pollLane === "browser" ? "BrowserNext" : "SettingsStoreNext",
+            readLane === "browser"
+              ? "BrowserNext"
+              : readLane === "settings"
+                ? "SettingsStoreNext"
+                : "ComputerConnectorHealthRequest",
             body,
           )))
     )
@@ -492,15 +579,15 @@ export class Client {
       ...(operationId !== undefined ? { operationId } : {}),
     };
     const sequence =
-      pollLane === undefined
+      readLane === undefined
         ? undefined
-        : (this.polls.get(pollLane) ?? 0n) + 1n;
+        : (this.polls.get(readLane) ?? 0n) + 1n;
     if (sequence !== undefined && sequence > 18446744073709551615n)
       return Promise.reject(new RequestNotSentError());
     const wireId =
       sequence === undefined
         ? id
-        : `desktop-poll-${pollLane}:${this.pollNonce}:${sequence}`;
+        : `desktop-poll-${readLane}:${this.pollNonce}:${sequence}`;
     const request: Request = { jsonrpc: "2.0", id: wireId, method, params };
     if (!validate("Request", request))
       return Promise.reject(new BridgeError("refused", "invalid_request"));
@@ -520,21 +607,34 @@ export class Client {
       return Promise.reject(
         new RequestNotSentError("request_deadline_expired"),
       );
-    if (pollLane === undefined) this.used.add(id);
-    else this.polls.set(pollLane, sequence!);
+    if (readLane === undefined) this.used.add(id);
+    else this.polls.set(readLane, sequence!);
     const responseDeadline = Date.now() + remainingMs;
+    const healthRequest =
+      readLane === "health"
+        ? (body as unknown as ComputerConnectorHealthRequest)
+        : undefined;
     return new Promise((resolve, reject) => {
       const expire = () => {
+        const pending = this.pending.get(wireId);
+        if (!pending) return;
+        const diagnostic = diagnosticObservation(pending);
         this.pending.delete(wireId);
+        if (diagnostic) {
+          // This read timed out, not its shared backend. Retain bounded
+          // metadata until the original reply, never resend or restore it.
+          this.expiredDiagnostics.set(wireId, diagnostic);
+          pending.reject(diagnosticExpired(diagnostic));
+          return;
+        }
         reject(new BridgeError("unknown", "response_timeout"));
         this.fail("response_timeout");
       };
       const timer = setTimeout(() => {
-        // After a desktop event-loop stall, timers can precede an original
-        // reply already waiting on stdout. Give reciprocal polls and this one
-        // pure diagnostic one IO turn, with the same ID and no resend. A late
-        // diagnostic is discarded; only validated empty polls may be delivered.
-        if (pollLane !== undefined || pollingObservation) {
+        // Reciprocal command polls retain their one-IO-turn empty-poll grace.
+        // Pure diagnostics expire independently, with bounded late-reply
+        // correlation; they cannot poison unrelated work merely for lateness.
+        if (readLane !== undefined && readLane !== "health") {
           const pending = this.pending.get(wireId);
           if (pending) pending.timeoutCheck = setImmediate(expire);
         } else expire();
@@ -544,13 +644,13 @@ export class Client {
         resolve,
         reject,
         timer,
-        ...(pollLane === undefined
+        ...(readLane === undefined || readLane === "health"
           ? {}
           : {
               poll: {
                 deadlineMillis: responseDeadline,
                 shape:
-                  pollLane === "browser"
+                  readLane === "browser"
                     ? ("BrowserNextResult" as const)
                     : ("SettingsStoreNextResult" as const),
               },
@@ -567,6 +667,18 @@ export class Client {
                   ...(body as unknown as ComputerConnectorPollingRequest)
                     .samples,
                 }),
+              },
+            }
+          : {}),
+        ...(healthRequest
+          ? {
+              healthObservation: {
+                deadlineMillis: responseDeadline,
+                binding: Object.freeze({ ...healthRequest.binding }),
+                expectedInstanceId: healthRequest.expectedInstanceId,
+                ...(healthRequest.snapshot
+                  ? { sampleAtMillis: healthRequest.snapshot.snapshotAtMillis }
+                  : {}),
               },
             }
           : {}),
@@ -628,6 +740,27 @@ export class Client {
       return;
     }
     const response = value as Response;
+    const expired = response.id
+      ? this.expiredDiagnostics.get(response.id)
+      : undefined;
+    if (expired) {
+      const result = response.result;
+      if (
+        !result ||
+        result.requestId !== response.id ||
+        result.operationId !== undefined ||
+        (this.context &&
+          (result.context.profileId !== this.context.profileId ||
+            result.context.backendGeneration !==
+              this.context.backendGeneration)) ||
+        !matchesDiagnostic(result, expired)
+      ) {
+        this.fail("crossed_response_context");
+        return;
+      }
+      this.expiredDiagnostics.delete(response.id!);
+      return;
+    }
     if (!response.id || !this.pending.has(response.id)) {
       this.fail("crossed_response_id");
       return;
@@ -642,6 +775,10 @@ export class Client {
       pending.observation !== undefined &&
       (pending.timeoutCheck !== undefined ||
         Date.now() >= pending.observation.deadlineMillis);
+    const lateHealthObservation =
+      pending.healthObservation !== undefined &&
+      (pending.timeoutCheck !== undefined ||
+        Date.now() >= pending.healthObservation.deadlineMillis);
     if (response.result) {
       const result = response.result;
       if (
@@ -669,35 +806,16 @@ export class Client {
         this.fail("response_timeout");
         return;
       }
-      if (lateObservation) {
-        const original = pending.observation!;
-        if (
-          result.status !== "ok" ||
-          result.code !== undefined ||
-          !validate("ComputerConnectorPollingState", result.data)
-        ) {
-          this.fail("response_timeout");
-          return;
-        }
-        const observed =
-          result.data as unknown as ComputerConnectorPollingState;
-        if (
-          Object.entries(original.binding).some(
-            ([key, field]) =>
-              observed.binding[key as keyof typeof observed.binding] !== field,
-          ) ||
-          observed.cycles !== original.samples.cycles ||
-          observed.errors !== original.samples.errors ||
-          (observed.ageSeconds !== undefined) !==
-            (observed.state === "recent" || observed.state === "stale")
-        ) {
+      if (lateObservation || lateHealthObservation) {
+        const original = diagnosticObservation(pending);
+        if (!original || !matchesDiagnostic(result, original)) {
           this.fail("response_timeout");
           return;
         }
         clearTimeout(pending.timer);
         clearImmediate(pending.timeoutCheck);
         this.pending.delete(response.id);
-        pending.reject(new PollingObservationExpiredError());
+        pending.reject(diagnosticExpired(original));
         return;
       }
       if (pending.handshake) {
@@ -754,7 +872,7 @@ export class Client {
           : { ...result, requestId: pending.callerId },
       );
     } else {
-      if (latePoll || lateObservation) {
+      if (latePoll || lateObservation || lateHealthObservation) {
         this.fail("response_timeout");
         return;
       }
@@ -789,6 +907,7 @@ export class Client {
       pending.reject(new BridgeError(state, code));
     }
     this.pending.clear();
+    this.expiredDiagnostics.clear();
     if (!this.owned) {
       for (const detach of this.detachStreams) detach();
       this.detachStreams = [];

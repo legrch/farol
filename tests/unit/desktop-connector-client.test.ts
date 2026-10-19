@@ -1,10 +1,14 @@
 import { EventEmitter } from "node:events";
 import { createConnection } from "node:net";
+import { PassThrough } from "node:stream";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   BridgeError,
+  Client,
+  HealthObservationExpiredError,
+  PollingObservationExpiredError,
   RequestNotSentError,
-  type Client,
 } from "../../apps/desktop/bridge/client.ts";
 import { ComputerBridge } from "../../apps/desktop/bridge/computer.ts";
 import {
@@ -15,12 +19,14 @@ import {
   SocketConnectorClient,
   type ConnectorSocket,
 } from "../../apps/desktop/bridge/connector-client.ts";
-import { frame, parseJSON } from "../../apps/desktop/bridge/frame.ts";
+import { Decoder, frame, parseJSON } from "../../apps/desktop/bridge/frame.ts";
 import {
   maxFrameBytes,
   protocolMajor,
   protocolMinor,
   type ComputerConnectorEndpoint,
+  type ComputerConnectorHealthRequest,
+  type ComputerConnectorHealthState,
   type Identity,
   type Json,
   type Request,
@@ -1513,4 +1519,705 @@ it("carries an actual process bridge start through the socket adapter", async ()
     data: { handle: "owned-handle" },
   });
   expect(f.socket.writes).toHaveLength(3);
+});
+
+// Actual inherited framing against an in-memory pipe peer, separate from the
+// socket doubles above. No child is spawned and no native/provider is exercised.
+async function healthPipePeer() {
+  const child = Object.assign(new EventEmitter(), {
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+  });
+  const calls: Request[] = [];
+  const receive = (value: unknown) => child.stdout.write(frame(value));
+  const decoder = new Decoder();
+  child.stdin.on("data", (bytes: Buffer) =>
+    decoder.push(bytes, (value) => {
+      const request = value as Request;
+      calls.push(request);
+      if (request.method === "core.handshake")
+        receive(response(request.id, identity() as unknown as Json));
+      else if (request.method === "core.status") receive(response(request.id));
+    }),
+  );
+  const client = new Client(child as unknown as ChildProcessWithoutNullStreams);
+  await client.handshake(
+    { protocolMajor, protocolMinor, buildId: "build", profileId: "profile" },
+    1000,
+  );
+  return { client, calls, receive };
+}
+
+function healthRequest(withSnapshot = true): ComputerConnectorHealthRequest {
+  return {
+    binding: endpoint().binding,
+    expectedInstanceId: "original-instance",
+    ...(withSnapshot
+      ? {
+          snapshot: {
+            snapshotAtMillis: "9007199254740993",
+            runtimeInstanceId: "original-instance",
+            runtimeStartedAtMillis: "1",
+            runtimeLifecycle: "running" as const,
+            runtimeLimited: false,
+            live: true,
+            ready: true,
+            truncated: false,
+          },
+        }
+      : {}),
+  };
+}
+
+function healthResult(request: Request) {
+  const original = request.params
+    .body as unknown as ComputerConnectorHealthRequest;
+  const data: ComputerConnectorHealthState = {
+    binding: original.binding,
+    expectedInstanceId: original.expectedInstanceId,
+    ...(original.snapshot
+      ? { sampleAtMillis: original.snapshot.snapshotAtMillis }
+      : {}),
+    state: "unobserved",
+    reason: "missing_snapshot",
+    localReady: false,
+  };
+  return {
+    jsonrpc: "2.0",
+    id: request.id,
+    result: { status: "ok", requestId: request.id, context, data },
+  };
+}
+
+it.each([true, false])(
+  "delivers an immediate original health presentation for host validation (snapshot=%s)",
+  async (withSnapshot) => {
+    const f = await healthPipePeer();
+    try {
+      const pending = f.client.request(
+        "computer.connector.health",
+        healthRequest(withSnapshot) as unknown as Json,
+        { id: "health-caller", timeoutMs: 100 },
+      );
+      const reply = healthResult(f.calls.at(-1)!);
+      f.receive(reply);
+      await expect(pending).resolves.toEqual({
+        ...reply.result,
+        requestId: "health-caller",
+      });
+      expect(f.client.verifiedContext).toEqual(context);
+    } finally {
+      await f.client.close();
+    }
+  },
+);
+
+it.each([
+  [true, true],
+  [true, false],
+  [false, true],
+  [false, false],
+])(
+  "discards the late original health observation without poisoning the pipe (snapshot=%s timer=%s)",
+  async (withSnapshot, timerRuns) => {
+    const f = await healthPipePeer();
+    try {
+      const pending = f.client.request(
+        "computer.connector.health",
+        healthRequest(withSnapshot) as unknown as Json,
+        { id: "health-caller", timeoutMs: 100 },
+      );
+      const expired = expect(pending).rejects.toBeInstanceOf(
+        HealthObservationExpiredError,
+      );
+      if (timerRuns) vi.advanceTimersByTime(100);
+      else vi.setSystemTime(Date.now() + 100);
+      f.receive(healthResult(f.calls.at(-1)!));
+      await expired;
+      await expect(pending).rejects.toMatchObject({
+        state: "refused",
+        code: "connector_health_expired",
+      });
+      vi.advanceTimersByTime(1);
+      await expect(f.client.request("core.status", {})).resolves.toMatchObject({
+        status: "ok",
+      });
+      expect(f.client.verifiedContext).toEqual(context);
+      expect(f.client.lifecycleObservations).toEqual([]);
+      expect(
+        f.calls.filter((call) => call.method === "computer.connector.health"),
+      ).toHaveLength(1);
+    } finally {
+      await f.client.close();
+    }
+  },
+);
+
+it("correlates a late health result against the original framed sample, independent of later caller mutation", async () => {
+  const f = await healthPipePeer();
+  try {
+    const original = healthRequest();
+    const body = {
+      ...original,
+      binding: { ...original.binding },
+      snapshot: { ...original.snapshot! },
+    };
+    const pending = f.client.request(
+      "computer.connector.health",
+      body as unknown as Json,
+      { timeoutMs: 100 },
+    );
+    const expired = expect(pending).rejects.toBeInstanceOf(
+      HealthObservationExpiredError,
+    );
+    body.binding.runtimeId = "changed";
+    body.expectedInstanceId = "changed";
+    body.snapshot.snapshotAtMillis = "1";
+    vi.advanceTimersByTime(100);
+    f.receive(healthResult(f.calls.at(-1)!));
+    await expired;
+    expect(f.client.verifiedContext).toEqual(context);
+  } finally {
+    await f.client.close();
+  }
+});
+
+it.each(
+  [
+    "binding-buildId",
+    "binding-profileId",
+    "binding-backendGeneration",
+    "binding-runtimeId",
+    "binding-connectorGeneration",
+    "instance",
+    "sample",
+    "missing-sample",
+    "outer-id",
+    "request-id",
+    "profile",
+    "generation",
+    "operation",
+    "refused-data",
+    "unknown-data",
+    "unavailable-data",
+    "unsupported-data",
+    "code",
+    "protocol-error",
+    "empty",
+    "empty-browser-poll",
+    "null",
+    "malformed",
+    "unknown-state",
+    "extra-field",
+  ].flatMap((kind) => [
+    { kind, expiredFirst: false },
+    { kind, expiredFirst: true },
+  ]),
+)(
+  "fails closed on late health $kind (expired=$expiredFirst) without resending",
+  async ({ kind, expiredFirst }) => {
+    const f = await healthPipePeer();
+    try {
+      const pending = f.client.request(
+        "computer.connector.health",
+        healthRequest() as unknown as Json,
+        { timeoutMs: 100 },
+      );
+      const rejected = expect(pending).rejects.toMatchObject({
+        state: expiredFirst ? "refused" : "unknown",
+      });
+      const original = healthResult(f.calls.at(-1)!);
+      const data = original.result.data;
+      const withData = (changed: unknown) => ({
+        ...original,
+        result: { ...original.result, data: changed },
+      });
+      let reply: unknown = original;
+      if (kind.startsWith("binding-")) {
+        const key = kind.slice("binding-".length);
+        reply = withData({ ...data, binding: { ...data.binding, [key]: "2" } });
+      } else {
+        switch (kind) {
+          case "instance":
+            reply = withData({ ...data, expectedInstanceId: "crossed" });
+            break;
+          case "sample":
+            reply = withData({ ...data, sampleAtMillis: "9007199254740992" });
+            break;
+          case "missing-sample":
+            reply = withData({ ...data, sampleAtMillis: undefined });
+            break;
+          case "outer-id":
+            reply = { ...original, id: "crossed" };
+            break;
+          case "request-id":
+            original.result.requestId = "crossed";
+            break;
+          case "profile":
+          case "generation":
+            reply = {
+              ...original,
+              result: {
+                ...original.result,
+                context: {
+                  ...context,
+                  [kind === "profile" ? "profileId" : "backendGeneration"]:
+                    "stale",
+                },
+              },
+            };
+            break;
+          case "operation":
+            reply = {
+              ...original,
+              result: { ...original.result, operationId: "effect" },
+            };
+            break;
+          case "refused-data":
+          case "unknown-data":
+          case "unavailable-data":
+          case "unsupported-data":
+            original.result.status = kind.replace("-data", "");
+            break;
+          case "code":
+            reply = {
+              ...original,
+              result: { ...original.result, code: "error" },
+            };
+            break;
+          case "protocol-error":
+            reply = {
+              jsonrpc: "2.0",
+              id: original.id,
+              error: { code: -32602, message: "invalid_request" },
+            };
+            break;
+          case "empty":
+            reply = withData({});
+            break;
+          case "empty-browser-poll":
+            reply = withData({ command: null });
+            break;
+          case "null":
+            reply = withData(null);
+            break;
+          case "malformed":
+            reply = withData({ ...data, localReady: "false" });
+            break;
+          case "unknown-state":
+            reply = withData({ ...data, state: "unexpected" });
+            break;
+          case "extra-field":
+            reply = withData({ ...data, extra: true });
+            break;
+        }
+      }
+      if (expiredFirst) await vi.advanceTimersByTimeAsync(201);
+      else vi.setSystemTime(Date.now() + 100);
+      f.receive(reply);
+      await rejected;
+      expect(() => f.client.verifiedContext).toThrow("backend_unavailable");
+      await expect(f.client.request("core.status", {})).rejects.toMatchObject({
+        state: "unavailable",
+      });
+      expect(
+        f.calls.filter((call) => call.method === "computer.connector.health"),
+      ).toHaveLength(1);
+    } finally {
+      await f.client.close();
+    }
+  },
+);
+
+it("refuses a late health sample when the original request carried no snapshot", async () => {
+  const f = await healthPipePeer();
+  try {
+    const pending = f.client.request(
+      "computer.connector.health",
+      healthRequest(false) as unknown as Json,
+      { timeoutMs: 100 },
+    );
+    const rejected = expect(pending).rejects.toMatchObject({
+      state: "unknown",
+      code: "response_timeout",
+    });
+    const reply = healthResult(f.calls.at(-1)!);
+    vi.setSystemTime(Date.now() + 100);
+    f.receive({
+      ...reply,
+      result: {
+        ...reply.result,
+        data: { ...reply.result.data, sampleAtMillis: "1" },
+      },
+    });
+    await rejected;
+    expect(() => f.client.verifiedContext).toThrow();
+  } finally {
+    await f.client.close();
+  }
+});
+
+it("isolates a missing original health reply without replay", async () => {
+  const f = await healthPipePeer();
+  try {
+    const pending = f.client.request(
+      "computer.connector.health",
+      healthRequest() as unknown as Json,
+      { timeoutMs: 100 },
+    );
+    const rejected = expect(pending).rejects.toMatchObject({
+      state: "refused",
+      code: "connector_health_expired",
+    });
+    const original = f.calls.at(-1)!;
+    await vi.advanceTimersByTimeAsync(201);
+    await rejected;
+    expect(f.client.verifiedContext).toEqual(context);
+    f.receive(healthResult(original));
+    expect(f.client.verifiedContext).toEqual(context);
+    expect(
+      f.calls.filter((call) => call.method === "computer.connector.health"),
+    ).toHaveLength(1);
+  } finally {
+    await f.client.close();
+  }
+});
+
+it.each([true, false])(
+  "preserves the existing polling diagnostic expiry and correlation (matching=%s)",
+  async (matching) => {
+    const f = await healthPipePeer();
+    try {
+      const pending = f.client.request(
+        "computer.connector.polling",
+        {
+          binding: { ...endpoint().binding },
+          samples: { cycles: "9007199254740993", errors: "1" },
+        },
+        { timeoutMs: 100 },
+      );
+      const rejected = matching
+        ? expect(pending).rejects.toBeInstanceOf(PollingObservationExpiredError)
+        : expect(pending).rejects.toMatchObject({
+            state: "unknown",
+            code: "response_timeout",
+          });
+      const request = f.calls.at(-1)!;
+      expect(request.id).not.toMatch(/^desktop-poll-/u);
+      vi.setSystemTime(Date.now() + 100);
+      f.receive(
+        response(request.id, {
+          binding: { ...endpoint().binding },
+          state: "recent",
+          observedAtMillis: "10",
+          ageSeconds: "1",
+          cycles: "9007199254740993",
+          errors: matching ? "1" : "2",
+        }),
+      );
+      await rejected;
+      if (matching) expect(f.client.verifiedContext).toEqual(context);
+      else expect(() => f.client.verifiedContext).toThrow();
+      expect(
+        f.calls.filter((call) => call.method === "computer.connector.polling"),
+      ).toHaveLength(1);
+    } finally {
+      await f.client.close();
+    }
+  },
+);
+
+const diagnosticBody = (kind: "health" | "polling"): Json =>
+  (kind === "health"
+    ? healthRequest()
+    : {
+        binding: endpoint().binding,
+        samples: { cycles: "10", errors: "0" },
+      }) as unknown as Json;
+function diagnosticReply(request: Request, status = "ok"): unknown {
+  if (status !== "ok")
+    return {
+      jsonrpc: "2.0",
+      id: request.id,
+      result: {
+        status,
+        requestId: request.id,
+        context,
+        code: "diagnostic_refused",
+      },
+    };
+  if (request.method === "computer.connector.health")
+    return healthResult(request);
+  const body = request.params.body as unknown as {
+    binding: unknown;
+    samples: { cycles?: string; errors?: string };
+  };
+  return {
+    jsonrpc: "2.0",
+    id: request.id,
+    result: {
+      status: "ok",
+      requestId: request.id,
+      context,
+      data: {
+        binding: body.binding,
+        state: "recent",
+        observedAtMillis: "200000",
+        ageSeconds: "1",
+        ...body.samples,
+      },
+    },
+  };
+}
+it.each(["health", "polling"] as const)(
+  "keeps unrelated work alive after the full diagnostic %s timeout",
+  async (kind) => {
+    const f = await healthPipePeer();
+    try {
+      const pending = f.client
+        .request("computer.connector." + kind, diagnosticBody(kind), {
+          timeoutMs: 100,
+        })
+        .catch((error: unknown) => error);
+      const original = f.calls.at(-1)!;
+      await vi.advanceTimersByTimeAsync(201);
+      const expired = await pending;
+      f.receive(diagnosticReply(original));
+      expect(f.client.verifiedContext).toEqual(context);
+      expect(expired).toBeInstanceOf(
+        kind === "health"
+          ? HealthObservationExpiredError
+          : PollingObservationExpiredError,
+      );
+      await expect(f.client.request("core.status", {})).resolves.toMatchObject({
+        status: "ok",
+      });
+      expect(f.client.lifecycleObservations).toEqual([]);
+      expect(
+        f.calls.filter((call) => call.method === "computer.connector." + kind),
+      ).toHaveLength(1);
+    } finally {
+      await f.client.close();
+    }
+  },
+);
+
+it.each(["health", "polling"] as const)(
+  "keeps a valid late %s refusal isolated before and after timer dispatch",
+  async (kind) => {
+    for (const status of ["refused", "unknown", "unavailable", "unsupported"])
+      for (const expiredFirst of [false, true]) {
+        const f = await healthPipePeer();
+        try {
+          const pending = f.client.request(
+            "computer.connector." + kind,
+            diagnosticBody(kind),
+            { timeoutMs: 100 },
+          );
+          const rejected = expect(pending).rejects.toBeInstanceOf(
+            kind === "health"
+              ? HealthObservationExpiredError
+              : PollingObservationExpiredError,
+          );
+          const request = f.calls.at(-1)!;
+          if (expiredFirst) await vi.advanceTimersByTimeAsync(201);
+          else vi.setSystemTime(Date.now() + 100);
+          f.receive(diagnosticReply(request, status));
+          await rejected;
+          expect(f.client.verifiedContext).toEqual(context);
+          await expect(
+            f.client.request("core.status", {}),
+          ).resolves.toMatchObject({ status: "ok" });
+          expect(f.client.lifecycleObservations).toEqual([]);
+        } finally {
+          await f.client.close();
+        }
+      }
+  },
+);
+
+it.each([
+  ["health", "diagnostics-first"],
+  ["polling", "diagnostics-first"],
+  ["mixed", "diagnostics-first"],
+  ["health", "ordinary-first"],
+  ["polling", "ordinary-first"],
+  ["mixed", "ordinary-first"],
+] as const)(
+  "isolates pending diagnostics from ordinary capacity (%s, %s)",
+  async (kind, order) => {
+    const f = await healthPipePeer();
+    const diagnostics: Request[] = [];
+    const ordinary: Request[] = [];
+    const outcomes: Promise<unknown>[] = [];
+    const admitDiagnostics = () => {
+      for (let n = 0; n < 32; n++) {
+        const selected =
+          kind === "mixed" ? (n % 2 ? "polling" : "health") : kind;
+        outcomes.push(
+          f.client
+            .request("computer.connector." + selected, diagnosticBody(selected))
+            .catch((error: unknown) => error),
+        );
+        diagnostics.push(f.calls.at(-1)!);
+      }
+      expect(
+        diagnostics.every(
+          (request) =>
+            request.method === "computer.connector.health" ||
+            request.method === "computer.connector.polling",
+        ),
+      ).toBe(true);
+      expect(new Set(diagnostics.map((request) => request.id)).size).toBe(32);
+    };
+    const admitOrdinary = () => {
+      for (let n = 0; n < 32; n++) {
+        outcomes.push(
+          f.client
+            .request(methods[0]!, {}, { id: `ordinary-${n}` })
+            .catch((error: unknown) => error),
+        );
+        ordinary.push(f.calls.at(-1)!);
+      }
+      expect(ordinary.every((request) => request.method === methods[0])).toBe(
+        true,
+      );
+      expect(new Set(ordinary.map((request) => request.id)).size).toBe(32);
+    };
+    try {
+      if (order === "diagnostics-first") {
+        admitDiagnostics();
+        await expect(
+          f.client.request("core.status", {}),
+        ).resolves.toMatchObject({ status: "ok" });
+        admitOrdinary();
+      } else {
+        admitOrdinary();
+        admitDiagnostics();
+      }
+      const sent = f.calls.length;
+      await expect(
+        f.client.request(methods[0]!, {}, { id: "ordinary-overflow" }),
+      ).rejects.toBeInstanceOf(RequestNotSentError);
+      for (const selected of ["health", "polling"] as const)
+        await expect(
+          f.client.request(
+            "computer.connector." + selected,
+            diagnosticBody(selected),
+          ),
+        ).rejects.toBeInstanceOf(RequestNotSentError);
+      expect(f.calls).toHaveLength(sent);
+      for (const request of ordinary) f.receive(response(request.id));
+      for (const request of diagnostics) f.receive(diagnosticReply(request));
+      expect(await Promise.all(outcomes)).toEqual(
+        Array.from({ length: 64 }, () =>
+          expect.objectContaining({ status: "ok" }),
+        ),
+      );
+      await expect(
+        f.client.request("core.status", {}, { id: "ordinary-overflow" }),
+      ).resolves.toMatchObject({ status: "ok" });
+      expect(f.client.verifiedContext).toEqual(context);
+      expect(f.client.lifecycleObservations).toEqual([]);
+    } finally {
+      await f.client.close();
+      await Promise.all(outcomes);
+    }
+  },
+);
+
+it("caps unanswered diagnostics without blocking original close or weakening one-shot IDs", async () => {
+  const f = await healthPipePeer();
+  const held: Request[] = [];
+  try {
+    for (let n = 0; n < 32; n++) {
+      const kind = n % 2 ? "polling" : "health";
+      const pending = f.client
+        .request("computer.connector." + kind, diagnosticBody(kind), {
+          timeoutMs: 100,
+        })
+        .catch((error: unknown) => error);
+      held.push(f.calls.at(-1)!);
+      await vi.advanceTimersByTimeAsync(101);
+      expect(await pending).toBeInstanceOf(
+        kind === "health"
+          ? HealthObservationExpiredError
+          : PollingObservationExpiredError,
+      );
+    }
+    const count = f.calls.length;
+    for (const kind of ["health", "polling"] as const)
+      await expect(
+        f.client.request("computer.connector." + kind, diagnosticBody(kind)),
+      ).rejects.toBeInstanceOf(RequestNotSentError);
+    expect(f.calls).toHaveLength(count);
+    await expect(f.client.request("core.status", {})).resolves.toMatchObject({
+      status: "ok",
+    });
+    const close = f.client.request(
+      "computer.connector.close",
+      { binding: endpoint().binding } as unknown as Json,
+      { id: "original-close", operationId: "close-operation" },
+    );
+    const request = f.calls.at(-1)!;
+    f.receive({
+      jsonrpc: "2.0",
+      id: request.id,
+      result: {
+        status: "ok",
+        requestId: request.id,
+        operationId: "close-operation",
+        context,
+        data: { binding: endpoint().binding, closed: true },
+      },
+    });
+    await expect(close).resolves.toMatchObject({
+      status: "ok",
+      operationId: "close-operation",
+    });
+    await expect(
+      f.client.request(
+        "computer.connector.close",
+        { binding: endpoint().binding } as unknown as Json,
+        { id: "original-close", operationId: "close-operation" },
+      ),
+    ).rejects.toMatchObject({ code: "duplicate_request_id" });
+    // A reply releases only its own diagnostic slot. No original work is retried.
+    f.receive(diagnosticReply(held[0]!));
+    const resumed = f.client.request(
+      "computer.connector.health",
+      diagnosticBody("health"),
+      { id: "fresh-read" },
+    );
+    f.receive(diagnosticReply(f.calls.at(-1)!));
+    await expect(resumed).resolves.toMatchObject({ status: "ok" });
+    expect(f.client.verifiedContext).toEqual(context);
+    expect(
+      f.calls.filter((call) => call.method === "computer.connector.close"),
+    ).toHaveLength(1);
+  } finally {
+    await f.client.close();
+  }
+});
+
+it("does not accept a duplicate original late diagnostic after consuming its correlation", async () => {
+  const f = await healthPipePeer();
+  try {
+    const pending = f.client
+      .request("computer.connector.health", diagnosticBody("health"), {
+        timeoutMs: 100,
+      })
+      .catch((error: unknown) => error);
+    const request = f.calls.at(-1)!;
+    await vi.advanceTimersByTimeAsync(201);
+    await pending;
+    const reply = diagnosticReply(request);
+    f.receive(reply);
+    expect(f.client.verifiedContext).toEqual(context);
+    f.receive(reply);
+    expect(() => f.client.verifiedContext).toThrow("backend_unavailable");
+  } finally {
+    await f.client.close();
+  }
 });

@@ -1,3 +1,7 @@
+import {
+  readConnectorHealth,
+  connectorHealthWire,
+} from "../../apps/desktop/connector-health.ts";
 import { expect, it } from "vitest";
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
@@ -96,6 +100,67 @@ it("observes and controls the original fixture in the runtime's nested state sto
       metricsRequests: 7,
       lastMode: "hold",
     });
+    // Actual bounded loopback HTTP into the production parser/wire mapping;
+    // all upstream states/times are synthetic, with no Go policy/UI claim.
+    for (const mode of [
+      "recent",
+      "stale",
+      "first-poll",
+      "backpressure",
+      "http503",
+      "http504",
+      "auth401",
+    ]) {
+      await store.controlHealth(mode);
+      const health = await readConnectorHealth(url);
+      expect(health).not.toBeNull();
+      expect(connectorHealthWire(health)).not.toBeNull();
+      expect(health.runtimeInstanceId).toBe((await store.receipts())[0].id);
+      if (mode === "http503" || mode === "http504")
+        expect(health.controlPlane.details.httpStatus).toBe(
+          Number(mode.slice(4)),
+        );
+      if (mode === "auth401")
+        expect(health.controlPlane.details.httpStatus).toBe(401);
+      if (mode === "first-poll") {
+        expect(health.controlPlane.status).toBe("unknown");
+        expect(
+          health.snapshotAtMillis - health.controlPlane.observedAtMillis,
+        ).toBe(60000);
+      }
+    }
+    await store.controlHealth("future-failure");
+    const unsupportedFailure = await readConnectorHealth(url);
+    expect(unsupportedFailure.controlPlane.details).toBeNull();
+    expect(
+      connectorHealthWire(unsupportedFailure).controlPlane,
+    ).not.toHaveProperty("details");
+    for (const mode of ["malformed", "unsupported", "missing", "hold"]) {
+      await store.controlHealth(mode);
+      expect(await readConnectorHealth(url)).toBeNull();
+    }
+    expect((await store.receipts())[0]).toMatchObject({
+      pid: child.pid,
+      phase: "running",
+      healthRequests: 12,
+      lastHealthMode: "hold",
+    });
+    // A request counter alone is not settlement evidence. Require the
+    // selected held HTTP read to have actually aborted before accepting it.
+    let settled;
+    for (let attempt = 0; attempt < 200; attempt++) {
+      settled = (await store.receipts())[0];
+      if (settled.lastHealthSettlement?.sequence === 12) break;
+      await delay(10);
+    }
+    expect(settled).toMatchObject({
+      healthCompleted: 11,
+      healthAborted: 1,
+      lastHealthSettlement: { sequence: 12, mode: "hold", outcome: "aborted" },
+    });
+    expect(settled.lastHealthSettlement.durationMillis).toBeGreaterThanOrEqual(
+      900,
+    );
     quitRequested = true;
     expect(child.kill("SIGTERM")).toBe(true);
     expect(await ended).toEqual({ code: 0, signal: null });

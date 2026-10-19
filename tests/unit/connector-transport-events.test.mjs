@@ -5,6 +5,7 @@ import { stripTypeScriptTypes } from "node:module";
 import { parse } from "@babel/parser";
 import { expect, it, vi } from "vitest";
 import { ConnectorTransportWatch } from "../../apps/desktop/connector-transport-watch.ts";
+import { ConnectionStatusTracker } from "../../apps/desktop/connection-status.ts";
 import { AuthorityTransitionReservation } from "../../src/apps/desktop/authority-transition.ts";
 
 // Run the actual event/timer join and watcher with controlled health/clock ports.
@@ -33,7 +34,7 @@ async function until(predicate) {
   throw Error("CONTROLLED_EVENT_DID_NOT_REACH_BOUNDARY");
 }
 
-function fixture() {
+function fixture({ e2e = false } = {}) {
   const power = new EventEmitter();
   const timeouts = [];
   const intervals = [];
@@ -53,9 +54,20 @@ function fixture() {
   });
   let eligible = true;
   const context = {
+    process: new EventEmitter(),
+    isolatedE2EHome: e2e ? "/private/tmp/owned-native-test-home" : undefined,
+    captureConnectorHealth: vi.fn(() => (eligible ? original : null)),
+    connectorHealthCurrent: vi.fn((value) => value === original && eligible),
     ConnectorTransportWatch,
     connectorTransportWatch: null,
     connectorTransportTimer: null,
+    connectorStatusTimer: null,
+    connectorConnection: {
+      sample: vi.fn(async () => undefined),
+      suspend: vi.fn(),
+      resume: vi.fn(),
+    },
+    currentConnectionStatus: vi.fn(),
     connectorTaskAdmission: false,
     quitInProgress: false,
     installedUpdateAdmission: false,
@@ -112,7 +124,10 @@ function fixture() {
 it("wires one resume observer and an unrefed bounded timer without an eager restart", async () => {
   const f = fixture();
   f.actual.start();
-  expect(f.intervals).toHaveLength(1);
+  expect(f.intervals).toHaveLength(2);
+  expect(f.intervals[1].milliseconds).toBe(1000);
+  expect(f.intervals[1].unref).toHaveBeenCalledTimes(1);
+  expect(f.context.connectorConnection.sample).toHaveBeenCalledTimes(1);
   expect(f.intervals[0].milliseconds).toBe(30_000);
   expect(f.intervals[0].unref).toHaveBeenCalledTimes(1);
   expect(f.power.listenerCount("resume")).toBe(1);
@@ -121,6 +136,8 @@ it("wires one resume observer and an unrefed bounded timer without an eager rest
   f.power.emit("resume");
   await f.finish();
   expect(f.original.connector.checkHealth).toHaveBeenCalledTimes(1);
+  expect(f.context.connectorConnection.resume).toHaveBeenCalledTimes(1);
+  expect(f.context.connectorConnection.sample).toHaveBeenCalledTimes(2);
   expect(f.context.recoverConnectorTransport).not.toHaveBeenCalled();
   expect(f.context.window.webContents.send).not.toHaveBeenCalled();
 });
@@ -357,3 +374,166 @@ it("does not admit another observation or recovery from resume after Quit closes
   expect(f.original.connector.checkHealth).not.toHaveBeenCalled();
   expect(f.context.recoverConnectorTransport).not.toHaveBeenCalled();
 });
+
+// Actual main-process capture/current predicates with a supplied Go DTO.
+// The retained anchor deliberately stays running after the tunnel terminates.
+function passiveHealthFixture() {
+  const functions = parse(source, {
+    sourceType: "module",
+    plugins: ["typescript"],
+  }).program.body.filter(
+    (node) =>
+      node.type === "FunctionDeclaration" &&
+      ["captureConnectorHealth", "connectorHealthCurrent"].includes(
+        node.id?.name,
+      ),
+  );
+  expect(functions).toHaveLength(2);
+  const binding = {
+    buildId: "build",
+    profileId: "profile",
+    backendGeneration: "backend",
+    runtimeId: "runtime",
+    connectorGeneration: "9",
+  };
+  const runtime = {
+    state: "ready",
+    buildId: "build",
+    runtimeGeneration: "original-tunnel",
+    computerGeneration: 7,
+    connectorGeneration: 9,
+  };
+  const settings = {
+    computer: { generation: 7 },
+    connectors: { secureMcp: { generation: 9, runtime } },
+  };
+  let terminal = null;
+  const connector = {
+    isRunning: () => true,
+    hasUnresolvedEffect: () => false,
+    getTunnelObservation: () => terminal,
+  };
+  const context = {
+    configuration: { snapshot: () => ({ status: "ready", settings }) },
+    secureMcpConnectorRuntime: connector,
+    desktopGoCore: {
+      backendAvailable: true,
+      currentComputerConnectorBinding: () => binding,
+    },
+    buildIdentity: { buildId: "build" },
+    quitInProgress: false,
+    installedUpdateAdmission: false,
+  };
+  const api = vm.runInNewContext(
+    stripTypeScriptTypes(
+      functions.map((node) => source.slice(node.start, node.end)).join("\n") +
+        "; ({ capture: captureConnectorHealth, current: connectorHealthCurrent });",
+    ),
+    context,
+  );
+  const value = {
+    binding,
+    expectedInstanceId: "instance",
+    sampleAtMillis: "200000",
+    state: "recent_transport",
+    reason: "recent_poll_success",
+    observedAtMillis: "200000",
+    validUntilMillis: "245000",
+    lastPollSuccessMillis: "199000",
+    localReady: true,
+  };
+  return {
+    api,
+    value,
+    terminate(state) {
+      terminal = { state, runtimeGeneration: runtime.runtimeGeneration };
+    },
+  };
+}
+
+it.each([
+  ["exited", "before capture"],
+  ["outcome_unknown", "before capture"],
+  ["exited", "during Go reply"],
+  ["outcome_unknown", "during Go reply"],
+  ["exited", "after publication"],
+  ["outcome_unknown", "after publication"],
+])(
+  "withdraws positive tunnel status on %s %s while its anchor still runs",
+  async (state, phase) => {
+    const f = passiveHealthFixture();
+    const deferred = Promise.withResolvers();
+    const observe = vi.fn(() =>
+      phase === "during Go reply" ? deferred.promise : Promise.resolve(f.value),
+    );
+    const tracker = new ConnectionStatusTracker({
+      capture: f.api.capture,
+      current: f.api.current,
+      observe,
+      now: () => 200000,
+      monotonic: () => 0,
+    });
+    if (phase === "before capture") {
+      f.terminate(state);
+      expect(f.api.capture()).toBeNull();
+      await tracker.sample();
+      expect(observe).not.toHaveBeenCalled();
+    } else {
+      const original = f.api.capture();
+      const pending = tracker.sample();
+      if (phase === "after publication") {
+        await pending;
+        expect(tracker.view().state).toBe("recent_transport");
+      }
+      f.terminate(state);
+      expect(f.api.current(original)).toBe(false);
+      deferred.resolve(f.value);
+      await pending;
+    }
+    expect(tracker.view().state).toBe("unobserved");
+  },
+);
+
+it.each([false, true])(
+  "native observation completion waits behind earlier reads and fences power interruption=%s",
+  async (interrupted) => {
+    expect(
+      fixture().context.process.listenerCount("farol-e2e-observe-connection"),
+    ).toBe(0);
+    const f = fixture({ e2e: true });
+    await Promise.resolve();
+    const before = f.context.connectorConnection.sample.mock.calls.length;
+    const earlier = Promise.withResolvers(),
+      fresh = Promise.withResolvers();
+    f.context.connectorConnection.sample
+      .mockReturnValueOnce(earlier.promise)
+      .mockReturnValueOnce(fresh.promise);
+    f.context.currentConnectionStatus.mockReturnValue({
+      state: "unobserved",
+      revision: 17,
+    });
+    let receipt = null;
+    expect(
+      f.context.process.emit("farol-e2e-observe-connection", (value) => {
+        receipt = value;
+      }),
+    ).toBe(true);
+    expect(receipt).toBeNull();
+    if (interrupted) f.power.emit("suspend");
+    earlier.resolve();
+    await until(
+      () =>
+        f.context.connectorConnection.sample.mock.calls.length === before + 2,
+    );
+    expect(receipt).toBeNull();
+    fresh.resolve();
+    await until(() => receipt !== null);
+    expect(receipt).toEqual(
+      interrupted
+        ? { settled: false }
+        : { settled: true, view: { state: "unobserved", revision: 17 } },
+    );
+    expect(f.power.listenerCount("suspend")).toBe(1);
+    expect(f.power.listenerCount("resume")).toBe(1);
+  },
+);

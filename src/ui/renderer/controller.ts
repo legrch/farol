@@ -1,4 +1,8 @@
 import {
+  ConnectionStatusViewSchema,
+  unavailableConnectionStatus,
+} from "../../../apps/desktop/renderer/connection-status";
+import {
   automaticUpdateAvailable,
   updateCheckAllowed,
   confirmedRestartAllowed,
@@ -112,6 +116,14 @@ type ObservedEdit = Readonly<{
   code: string | null;
 }>;
 
+type ConnectionStatusRead = Readonly<{
+  clockEpoch: number;
+  malformedRevision: number;
+  validClock: boolean;
+  buildId: string | null;
+  environment: WindowSnapshot["environment"];
+}>;
+
 type SectionNavigationAction = Extract<
   ShellAction,
   { action: "navigate-section" }
@@ -124,6 +136,7 @@ export const BootstrapProjectionSchema = z.object({
   build: BuildIdentitySchema,
   configuration: ProductConfigurationSnapshotSchema,
   runtimeState: z.enum(["starting", "ready", "offline", "failed"]),
+  connectionStatus: ConnectionStatusViewSchema.optional(),
   selectedTaskId: z.string().default(""),
   taskRevision: z.number().int().nonnegative(),
   tasks: ProductTasksStateSchema.shape.tasks,
@@ -211,6 +224,227 @@ export function canSetInstallOnQuitPreference(
 export class WindowController implements RendererFacade {
   readonly draft = new AgentDraftStore();
   readonly conversationDraft = new ConversationDraftStore();
+  private connectionStatusTimer: ReturnType<typeof setTimeout> | null = null;
+  private retireConnectionStatusTimer(): void {
+    if (this.connectionStatusTimer !== null)
+      clearTimeout(this.connectionStatusTimer);
+    this.connectionStatusTimer = null;
+  }
+  private connectionClock: {
+    wall: number;
+    monotonic: number;
+    lastWall: number;
+    lastMonotonic: number;
+  } | null = null;
+  private connectionClockEpoch = 0;
+  private connectionClockBlocked = false;
+  private connectionClockRead: Promise<void> | null = null;
+  private connectionClockReadEpoch = -1;
+  private connectionMalformedRevision = 0;
+  private sampleConnectionClock(): { wall: number; monotonic: number } | null {
+    const wall = Date.now(),
+      monotonic = performance.now();
+    const valid =
+      Number.isSafeInteger(wall) &&
+      wall > 0 &&
+      Number.isFinite(monotonic) &&
+      monotonic >= 0;
+    const previous = this.connectionClock;
+    if (
+      !valid ||
+      (previous &&
+        (wall < previous.lastWall ||
+          monotonic < previous.lastMonotonic ||
+          Math.abs(wall - previous.wall - (monotonic - previous.monotonic)) >
+            1000))
+    ) {
+      this.connectionClockEpoch++;
+      this.connectionClockBlocked = true;
+      this.connectionClock = null;
+    }
+    if (!valid) return null;
+    // Continuity belongs to the window, including unavailable/malformed views
+    // and expired leases. A newer revision must not reset the clock origin.
+    this.connectionClock ??= {
+      wall,
+      monotonic,
+      lastWall: wall,
+      lastMonotonic: monotonic,
+    };
+    this.connectionClock.lastWall = wall;
+    this.connectionClock.lastMonotonic = monotonic;
+    return { wall, monotonic };
+  }
+  private withdrawConnectionStatus(
+    revision = this.state.connectionStatus?.revision ?? 0,
+  ): void {
+    this.retireConnectionStatusTimer();
+    this.patch({
+      connectionStatus: { ...unavailableConnectionStatus, revision },
+    });
+  }
+  private beginConnectionStatusRead(): ConnectionStatusRead {
+    const validClock = this.sampleConnectionClock() !== null;
+    if (
+      this.connectionClockBlocked &&
+      this.state.connectionStatus?.validUntilMillis != null
+    )
+      this.withdrawConnectionStatus();
+    return {
+      clockEpoch: this.connectionClockEpoch,
+      malformedRevision: this.connectionMalformedRevision,
+      validClock,
+      buildId: this.state.buildId,
+      environment: this.state.environment,
+    };
+  }
+  private adoptConnectionStatusRead(
+    data: z.infer<typeof BootstrapProjectionSchema>,
+    read: ConnectionStatusRead,
+  ): void {
+    if (this.disposed || data.connectionStatus === undefined) return;
+    const clock = this.sampleConnectionClock();
+    const sourceCurrent =
+      read.buildId === null ||
+      (read.buildId === this.state.buildId &&
+        data.build.buildId === read.buildId &&
+        read.environment === this.state.environment &&
+        data.environment === read.environment);
+    const reconciled = Boolean(
+      clock &&
+      read.validClock &&
+      sourceCurrent &&
+      read.clockEpoch === this.connectionClockEpoch &&
+      this.connectionClockBlocked,
+    );
+    // A valid fresh read settles the clock fence even when a later publication
+    // supersedes its body. Revision/publication ordering is checked separately.
+    if (reconciled) this.connectionClockBlocked = false;
+    if (
+      this.connectionClockBlocked &&
+      this.state.connectionStatus?.validUntilMillis != null
+    )
+      this.withdrawConnectionStatus();
+    if (read.malformedRevision !== this.connectionMalformedRevision) return;
+    this.adoptConnectionStatus(data.connectionStatus, reconciled);
+  }
+  private reconcileConnectionClock(): void {
+    if (
+      this.disposed ||
+      !this.connectionClock ||
+      !this.state.buildId ||
+      this.connectionClockRead ||
+      this.connectionClockReadEpoch === this.connectionClockEpoch
+    )
+      return;
+    const read = this.beginConnectionStatusRead();
+    const epoch = read.clockEpoch,
+      build = this.state.buildId;
+    const environment = this.state.environment;
+    this.connectionClockReadEpoch = epoch;
+    // One local, read-only IPC snapshot issued after the discontinuity fences
+    // queued positive events. It grants nothing and adopts no other UI state.
+    this.connectionClockRead = Promise.resolve().then(async () => {
+      try {
+        if (this.disposed || epoch !== this.connectionClockEpoch) return;
+        const value = await this.api.bootstrap();
+        if (
+          this.disposed ||
+          epoch !== this.connectionClockEpoch ||
+          build !== this.state.buildId ||
+          environment !== this.state.environment
+        )
+          return;
+        const parsed = BootstrapProjectionSchema.safeParse(value);
+        if (
+          !parsed.success ||
+          parsed.data.build.buildId !== build ||
+          parsed.data.environment !== environment ||
+          !parsed.data.connectionStatus
+        )
+          return;
+        this.adoptConnectionStatusRead(parsed.data, read);
+      } catch {
+        // Failed or unsettled reads never renew the retired presentation.
+      } finally {
+        this.connectionClockRead = null;
+      }
+    });
+  }
+  private adoptConnectionStatus(value: unknown, reconciled = false): void {
+    if (this.disposed) return;
+    const clock = this.sampleConnectionClock();
+    const parsed = ConnectionStatusViewSchema.safeParse(value);
+    if (!parsed.success) {
+      this.connectionMalformedRevision++;
+      this.withdrawConnectionStatus();
+      if (this.connectionClockBlocked) this.reconcileConnectionClock();
+      return;
+    }
+    const projection = parsed.data;
+    const revision = this.state.connectionStatus?.revision ?? -1;
+    if (
+      projection.revision < revision ||
+      (!reconciled && projection.revision === revision)
+    ) {
+      if (this.connectionClockBlocked) {
+        this.withdrawConnectionStatus();
+        this.reconcileConnectionClock();
+      }
+      return;
+    }
+    this.retireConnectionStatusTimer();
+    const until = projection.validUntilMillis;
+    if (projection.state !== "recent_transport" && until == null) {
+      this.patch({ connectionStatus: projection });
+      if (this.connectionClockBlocked) this.reconcileConnectionClock();
+      return;
+    }
+    if (
+      !clock ||
+      this.connectionClockBlocked ||
+      until == null ||
+      until <= clock.wall
+    ) {
+      this.withdrawConnectionStatus(projection.revision);
+      if (this.connectionClockBlocked) this.reconcileConnectionClock();
+      return;
+    }
+    const { wall, monotonic } = clock;
+    // Consume the original Go deadline. Neither another message nor bootstrap
+    // can replenish the independent renderer's monotonic presentation budget.
+    const budget = until - wall;
+    const expire = () => {
+      if (
+        this.disposed ||
+        this.state.connectionStatus?.revision !== projection.revision ||
+        this.state.connectionStatus.state !== projection.state
+      )
+        return;
+      this.connectionStatusTimer = null;
+      const current = this.sampleConnectionClock();
+      const elapsed = current ? current.monotonic - monotonic : NaN;
+      if (
+        !current ||
+        this.connectionClockBlocked ||
+        !Number.isFinite(elapsed) ||
+        elapsed < 0 ||
+        current.wall >= until ||
+        elapsed >= budget
+      ) {
+        this.withdrawConnectionStatus();
+        if (this.connectionClockBlocked) this.reconcileConnectionClock();
+        return;
+      }
+      this.connectionStatusTimer = setTimeout(
+        expire,
+        Math.min(1000, until - current.wall, budget - elapsed),
+      );
+    };
+    // Establish cleanup ownership before synchronous snapshot subscribers run.
+    this.connectionStatusTimer = setTimeout(expire, Math.min(1000, budget));
+    this.patch({ connectionStatus: projection });
+  }
   private state: WindowSnapshot = immutable({ ...initial });
   private readonly listeners = new Set<() => void>();
   private disposers: (() => void)[] = [];
@@ -347,6 +581,9 @@ export class WindowController implements RendererFacade {
         } else this.adoptTasks(parsed.data);
       }),
       this.api.onRuntimeEvent((value) => this.record(value)),
+      this.api.onConnectionStatus?.((value) =>
+        this.adoptConnectionStatus(value),
+      ) ?? (() => undefined),
       this.api.onRuntimeState((value) => {
         this.invalidateSignInObservation();
         const parsed = RuntimeStatusSchema.safeParse(value);
@@ -389,6 +626,7 @@ export class WindowController implements RendererFacade {
     const order = this.configOrder.begin();
     this.startPromise = (async () => {
       try {
+        const connectionRead = this.beginConnectionStatusRead();
         const value = await this.api.bootstrap();
         if (this.disposed) return;
         const parsed = BootstrapProjectionSchema.safeParse(value);
@@ -398,6 +636,8 @@ export class WindowController implements RendererFacade {
         }
         const data = parsed.data;
         this.adoptHistoryContext(data.chatHistoryContext ?? null);
+        if (data.connectionStatus !== undefined)
+          this.adoptConnectionStatusRead(data, connectionRead);
         this.patch({
           environment: data.environment,
           buildId: data.build.buildId,
@@ -534,6 +774,7 @@ export class WindowController implements RendererFacade {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.retireConnectionStatusTimer();
     this.retireSignInObservation();
     this.state = immutable({ ...this.state, signInObservation: null });
     this.conversationDraft.dispose();
@@ -654,6 +895,7 @@ export class WindowController implements RendererFacade {
     const runtimeRevision = this.runtimeRevision;
     const staleRevision = this.staleRevision;
     try {
+      const connectionRead = this.beginConnectionStatusRead();
       const value = await this.api.bootstrap();
       if (this.disposed) return { status: "unqualified", reason: "disposed" };
       if (!this.configOrder.isLatest(order))
@@ -685,6 +927,8 @@ export class WindowController implements RendererFacade {
           ? parsed.data.runtimeState
           : this.state.runtime;
       this.adoptHistoryContext(parsed.data.chatHistoryContext ?? null);
+      if (parsed.data.connectionStatus !== undefined)
+        this.adoptConnectionStatusRead(parsed.data, connectionRead);
       const status =
         parsed.data.configuration.status === "ready" &&
         tasksAccepted &&

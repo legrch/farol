@@ -29,10 +29,12 @@ import { waitForReactShell } from "./current-react-setup.mjs";
 const args = process.argv.slice(2);
 assert.ok(
   JSON.stringify(args) === '["--run-native"]' ||
-    JSON.stringify(args) === '["--run-native","--go-callback-delay"]',
+    JSON.stringify(args) === '["--run-native","--go-callback-delay"]' ||
+    JSON.stringify(args) === '["--run-native","--health-status"]',
   "POLLING_NATIVE_ARGUMENTS",
 );
-const goDelay = args.length === 2;
+const goDelay = args.includes("--go-callback-delay");
+const healthStatus = args.includes("--health-status");
 assert.equal(process.platform, "darwin");
 const root = process.cwd(),
   source = sourceIdentity(root),
@@ -89,6 +91,7 @@ const report = {
   buildId: qualified.identity.buildId,
   home,
   auxiliary,
+  healthStatus,
   fault: goDelay
     ? "original-Go-paused-main-loop-delay-resume"
     : "HTTP-polling-and-main-loop-delay",
@@ -532,6 +535,88 @@ async function check(run, mode, expected, fault) {
   assert.deepEqual(ledger.ledger, []);
   await hidden(run);
 }
+async function checkHealthStatus(run, mode, expected) {
+  const before = (await receiptList()).find(
+    (value) => value.phase === "running",
+  );
+  assert.ok(before);
+  const settingsHash = hash(await fs.readFile(path.join(state, "config.json")));
+  await tunnelStore.controlHealth(mode);
+  // Wait for a fresh read through the original passive tracker. A suspend
+  // fallback or request-start counter cannot certify the selected Go result.
+  const settlement = await bounded(
+    run.application.evaluate(
+      () =>
+        new Promise((resolve, reject) => {
+          if (!process.emit("farol-e2e-observe-connection", resolve))
+            reject(new Error("HEALTH_OBSERVER_SEAM_UNAVAILABLE"));
+        }),
+    ),
+    "HEALTH_OBSERVATION_SETTLEMENT_UNKNOWN",
+  );
+  assert.equal(settlement.settled, true);
+  assert.equal(settlement.view.state, expected);
+  await poll(
+    receiptList,
+    (values) =>
+      values.some(
+        (v) =>
+          v.id === before.id &&
+          v.healthRequests > before.healthRequests &&
+          v.lastHealthMode === mode &&
+          v.lastHealthSettlement?.sequence > before.healthRequests &&
+          v.lastHealthSettlement.mode === mode &&
+          v.lastHealthSettlement.outcome ===
+            (mode === "hold" ? "aborted" : "completed") &&
+          (mode !== "hold" || v.lastHealthSettlement.durationMillis >= 900),
+      ),
+    "HEALTH_STATUS_READ_NOT_OBSERVED",
+  );
+  const current = await poll(
+    () => bootstrap(run),
+    (v) => v.connectionStatus?.state === expected,
+    "HEALTH_STATUS_NOT_PUBLISHED",
+  );
+  const card = run.page.locator(".connection-live-status");
+  await poll(
+    () => card.getAttribute("data-state"),
+    (v) => v === expected,
+    "HEALTH_STATUS_UI_NOT_CURRENT",
+  );
+  assert.ok((await card.innerText()).includes(current.connectionStatus.label));
+  assert.equal(
+    hash(await fs.readFile(path.join(state, "config.json"))),
+    settingsHash,
+  );
+  const after = await receiptList();
+  assert.equal(after.length, run.ordinal);
+  assert.ok(
+    after.some(
+      (v) =>
+        v.id === before.id && v.pid === before.pid && v.phase === "running",
+    ),
+  );
+  assert.deepEqual(
+    children(run.pid).filter((v) => v.pid === run.backend.pid),
+    [run.backend],
+  );
+  assert.equal(site.driver.snapshot().attemptedSends, 0);
+  assert.equal(site.driver.snapshot().acceptedSends, 0);
+  await hidden(run);
+  run.observations.push({
+    healthMode: mode,
+    selectedObservationSettlement: settlement,
+    healthStatus: current.connectionStatus,
+    originalHelperPid: before.pid,
+    backendPid: run.backend.pid,
+    receipts: after,
+    settingsUnchanged: true,
+    limits:
+      "Synthetic producer health with actual passive-observation settlement; hidden Electron/Go IPC/UI, no Tray or upstream/OS-sleep evidence.",
+  });
+  await save();
+}
+
 async function blockMain(run) {
   return bounded(
     run.application.evaluate(() => {
@@ -634,6 +719,31 @@ try {
     (values) => values.length === 1 && values[0].phase === "running",
     "POLLING_HELPER_NOT_RUNNING",
   );
+  if (healthStatus) {
+    await diagnosticPage(first);
+    await first.page
+      .locator(".contextual-sidebar")
+      .getByRole("button", { name: "Connection", exact: true })
+      .click();
+    await first.page.locator(".connection-live-status").waitFor();
+    for (const [mode, expected] of [
+      ["http503", "unavailable"],
+      ["http504", "unavailable"],
+      ["auth401", "action_required"],
+      ["stale", "unobserved"],
+      ["first-poll", "checking"],
+      ["backpressure", "checking"],
+      ["future-failure", "unobserved"],
+      ["malformed", "unobserved"],
+      ["unsupported", "unobserved"],
+      ["missing", "unobserved"],
+      ["hold", "unobserved"],
+    ]) {
+      await checkHealthStatus(first, "recent", "recent_transport");
+      await checkHealthStatus(first, mode, expected);
+    }
+    await tunnelStore.controlHealth("recent");
+  }
   await diagnosticPage(first);
   for (const [mode, expected] of [
     ["recent", "The helper reported a recent server poll."],
@@ -721,7 +831,9 @@ try {
   );
   report.status = goDelay
     ? "passed-hidden-Go-polling-expired-observation-clean-reopen"
-    : "passed-hidden-Go-polling-original-child-HTTP-delay-clean-reopen";
+    : healthStatus
+      ? "passed-hidden-Go-health-status-original-child-no-send-clean-reopen"
+      : "passed-hidden-Go-polling-original-child-HTTP-delay-clean-reopen";
   await save();
 } catch (error) {
   report.status = "failed-or-unknown";

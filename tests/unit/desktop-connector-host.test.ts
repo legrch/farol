@@ -809,3 +809,121 @@ it.each([
     code: "invalid_connector_polling",
   });
 });
+
+const healthSample = () => ({
+  snapshotAtMillis: "200000",
+  runtimeInstanceId: "instance-A",
+  runtimeStartedAtMillis: "1000",
+  runtimeLifecycle: "running" as const,
+  runtimeLimited: false,
+  live: true,
+  ready: true,
+  truncated: false,
+});
+const healthResult = () => ({
+  binding,
+  expectedInstanceId: "instance-A",
+  sampleAtMillis: "200000",
+  state: "unobserved",
+  reason: "polling_missing",
+  localReady: true,
+  observedAtMillis: "200000",
+  validUntilMillis: "245000",
+});
+it("observes health only through the original bound read, with a detached request and no effect", async () => {
+  const { host, request } = fixture();
+  await expect(host.observeHealth("instance-A")).rejects.toMatchObject({
+    code: "connector_health_unavailable",
+  });
+  expect(request).not.toHaveBeenCalled();
+  await host.open(input);
+  request.mockClear();
+  request.mockImplementation(async (_method, _body, options = {}) => ({
+    status: "ok",
+    requestId: options.id!,
+    context,
+    data: healthResult(),
+  }));
+  const source = healthSample();
+  const pending = host.observeHealth("instance-A", source);
+  source.snapshotAtMillis = "300000";
+  const result = await pending;
+  expect(result.sampleAtMillis).toBe("200000");
+  expect(Object.isFrozen(result.binding)).toBe(true);
+  expect(request).toHaveBeenCalledExactlyOnceWith(
+    "computer.connector.health",
+    { binding, expectedInstanceId: "instance-A", snapshot: healthSample() },
+    { id: expect.any(String), timeoutMs: 5000 },
+  );
+});
+it.each([
+  { binding: { ...binding, runtimeId: "foreign" } },
+  { expectedInstanceId: "foreign" },
+  { sampleAtMillis: "200001" },
+])("rejects crossed health echo %j without effects", async (changed) => {
+  const { host, request } = fixture();
+  await host.open(input);
+  request.mockImplementationOnce(async (_method, _body, options = {}) => ({
+    status: "ok",
+    requestId: options.id!,
+    context,
+    data: { ...healthResult(), ...changed },
+  }));
+  await expect(
+    host.observeHealth("instance-A", healthSample()),
+  ).rejects.toMatchObject({ code: "crossed_connector_health" });
+  expect(request).toHaveBeenCalledTimes(2);
+});
+it("rejects malformed health state and retains original unknown outcomes", async () => {
+  const { host, request } = fixture();
+  await host.open(input);
+  request.mockImplementationOnce(async (_method, _body, options = {}) => ({
+    status: "ok",
+    requestId: options.id!,
+    context,
+    data: { ...healthResult(), reason: "raw-private-error" },
+  }));
+  await expect(
+    host.observeHealth("instance-A", healthSample()),
+  ).rejects.toMatchObject({ code: "invalid_connector_health" });
+  request.mockImplementationOnce(async (_method, _body, options = {}) => ({
+    status: "unknown",
+    requestId: options.id!,
+    context,
+  }));
+  await expect(
+    host.observeHealth("instance-A", healthSample()),
+  ).rejects.toMatchObject({ state: "unknown" });
+  expect(request).toHaveBeenCalledTimes(3);
+});
+it("withholds a pending health result after original close without replay", async () => {
+  const { host, request } = fixture();
+  await host.open(input);
+  const deferred = deferredOutcome();
+  let requestId = "";
+  request.mockImplementation(async (method, _body, options = {}) => {
+    if (method === "computer.connector.health") {
+      requestId = options.id!;
+      return deferred.promise;
+    }
+    return {
+      status: "ok",
+      requestId: options.id!,
+      operationId: options.operationId!,
+      context,
+      data: { binding, closed: true },
+    };
+  });
+  const pending = host.observeHealth("instance-A", healthSample());
+  const rejected = expect(pending).rejects.toMatchObject({
+    code: "connector_health_unavailable",
+  });
+  await host.close();
+  deferred.resolve({ status: "ok", requestId, context, data: healthResult() });
+  await rejected;
+  expect(request.mock.calls.map(([method]) => method)).toEqual([
+    "computer.connector.open",
+    "computer.connector.health",
+    "computer.connector.close",
+  ]);
+});

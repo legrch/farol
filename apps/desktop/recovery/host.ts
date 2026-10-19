@@ -31,6 +31,7 @@ export function openStartupRecoveryWindow(
     }>;
     quitSignals: GracefulQuitSignals;
     onQuitting(): void;
+    menuBar?: (actions: Readonly<{ open(): void; quit(): void }>) => () => void;
   }>,
 ): StartupRecoveryWindow {
   const document = path.join(options.directory, "shell.html");
@@ -59,6 +60,17 @@ export function openStartupRecoveryWindow(
   let stopping = false;
   let disposed = false;
   let rendered = false;
+  let stopMenuBar: (() => void) | null = null;
+  const disposeMenuBar = () => {
+    const stop = stopMenuBar;
+    stopMenuBar = null;
+    try {
+      stop?.();
+    } catch {
+      // A status-item error must not prevent the original recovery child drain.
+      console.warn("FAROL_RECOVERY_MENU_BAR_UNAVAILABLE");
+    }
+  };
   let requestQuit!: () => void;
   const quitRequested = new Promise<void>((resolve) => {
     requestQuit = resolve;
@@ -67,6 +79,7 @@ export function openStartupRecoveryWindow(
     event.preventDefault();
     if (stopping) return;
     stopping = true;
+    disposeMenuBar();
     options.onQuitting();
     if (!window.isDestroyed()) window.hide();
     requestQuit();
@@ -149,6 +162,14 @@ export function openStartupRecoveryWindow(
       }
       rendered = true;
       reveal();
+      try {
+        stopMenuBar =
+          options.menuBar?.({ open: reveal, quit: () => app.quit() }) ?? null;
+        if (stopping || disposed) disposeMenuBar();
+      } catch {
+        // Keep the already available read-only UI and its Dock reopen route.
+        console.warn("FAROL_RECOVERY_MENU_BAR_UNAVAILABLE");
+      }
     });
   // A second launch may await readiness before the primary's continuation does.
   void ready.catch(() => undefined);
@@ -162,6 +183,7 @@ export function openStartupRecoveryWindow(
     dispose: () => {
       if (disposed) return;
       disposed = true;
+      disposeMenuBar();
       ipcMain.removeListener(recoveryChannels.quit, quitFromRenderer);
       ipcMain.removeHandler(recoveryChannels.state);
       ipcMain.removeHandler(recoveryChannels.read);

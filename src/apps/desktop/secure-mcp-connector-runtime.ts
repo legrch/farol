@@ -1,3 +1,9 @@
+import {
+  readConnectorHealth,
+  connectorHealthWire,
+} from "../../../apps/desktop/connector-health";
+import type { ConnectorHealthSnapshot } from "../../../apps/desktop/bridge/connector-health-snapshot";
+import type { ComputerConnectorHealthSnapshot } from "../../../apps/desktop/bridge/wire";
 import { readConnectorPollingMetrics } from "../../../apps/desktop/connector-polling";
 import type { ComputerConnectorPollingSamples } from "../../../apps/desktop/bridge/wire";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
@@ -256,6 +262,7 @@ type Dependencies = Readonly<{
   start?: ConnectorProcessStarter;
   get?: (url: string) => Promise<boolean>;
   polling?: (base: string) => Promise<ComputerConnectorPollingSamples>;
+  health?: (base: string) => Promise<ConnectorHealthSnapshot | null>;
   wait?: (milliseconds: number) => Promise<void>;
   now?: () => number;
   id?: () => string;
@@ -719,6 +726,10 @@ export class SecureMcpConnectorRuntime {
   private readonly run: ConnectorCommandRunner;
   private readonly startProcess: ConnectorProcessStarter;
   private readonly get: (url: string) => Promise<boolean>;
+  private readonly health: (
+    base: string,
+  ) => Promise<ConnectorHealthSnapshot | null>;
+  private healthInstanceId: string | null = null;
   private readonly polling: (
     base: string,
   ) => Promise<ComputerConnectorPollingSamples>;
@@ -767,6 +778,7 @@ export class SecureMcpConnectorRuntime {
           beforeEffect,
         ));
     this.get = dependencies.get ?? getReady;
+    this.health = dependencies.health ?? readConnectorHealth;
     this.polling = dependencies.polling ?? readConnectorPollingMetrics;
     this.wait = dependencies.wait ?? wait;
     this.now = dependencies.now ?? Date.now;
@@ -928,6 +940,7 @@ export class SecureMcpConnectorRuntime {
       return result;
     }
     this.child = child;
+    this.healthInstanceId = null;
     this.runtimeGeneration = runtimeGeneration;
     const phase = {
       value: "startup" as ConnectorRuntimeLifecycleObservation["phase"],
@@ -1099,6 +1112,46 @@ export class SecureMcpConnectorRuntime {
     )
       return null;
     return Object.freeze({ runtimeGeneration: generation, samples });
+  }
+
+  // Passive reads are bound to this original owned child and locator. The
+  // first report pins its runtime instance for diagnostics, never authority.
+  async observeHealth(): Promise<Readonly<{
+    runtimeGeneration: string;
+    expectedInstanceId: string;
+    snapshot?: ComputerConnectorHealthSnapshot;
+  }> | null> {
+    const child = this.child,
+      base = this.healthBaseUrl,
+      generation = this.runtimeGeneration;
+    if (
+      !child ||
+      child.exitCode !== null ||
+      child.tunnelObservation != null ||
+      base === null ||
+      generation === null ||
+      this.hasUnresolvedEffect()
+    )
+      return null;
+    const sample = await this.health(base);
+    if (
+      this.child !== child ||
+      child.exitCode !== null ||
+      child.tunnelObservation != null ||
+      this.healthBaseUrl !== base ||
+      this.runtimeGeneration !== generation ||
+      this.hasUnresolvedEffect()
+    )
+      return null;
+    const snapshot = sample === null ? null : connectorHealthWire(sample);
+    if (snapshot && this.healthInstanceId === null)
+      this.healthInstanceId = snapshot.runtimeInstanceId;
+    if (this.healthInstanceId === null) return null;
+    return Object.freeze({
+      runtimeGeneration: generation,
+      expectedInstanceId: this.healthInstanceId,
+      ...(snapshot === null ? {} : { snapshot }),
+    });
   }
 
   // Host composition must correlate this with its current runtime generation;

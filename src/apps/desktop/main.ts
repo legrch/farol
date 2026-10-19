@@ -1,3 +1,8 @@
+import { ConnectionStatusTracker } from "../../../apps/desktop/connection-status";
+import {
+  unavailableConnectionStatus,
+  type ConnectionStatusView,
+} from "../../../apps/desktop/renderer/connection-status";
 import { startDesktopGoRecovery } from "../../../apps/desktop/recovery/core-host";
 import { createStartupRecoverySession } from "../../../apps/desktop/recovery/session";
 import { runStartupPreservedMaintenance } from "../../../apps/desktop/recovery/maintenance";
@@ -848,6 +853,33 @@ let startupConnectorResumeCancelled = false;
 let connectorTransportWatch: ConnectorTransportWatch<ConnectorTransportCapture> | null =
   null;
 let connectorTransportTimer: NodeJS.Timeout | null = null;
+let connectorStatusTimer: NodeJS.Timeout | null = null;
+let connectionStatusRevision = 0;
+let connectionStatusBody = "";
+let retainedConnectionView: ConnectionStatusView = unavailableConnectionStatus;
+const connectorConnection = new ConnectionStatusTracker<ConnectorHealthCapture>(
+  {
+    capture: captureConnectorHealth,
+    current: connectorHealthCurrent,
+    observe: async (original) => {
+      const health = await original.connector.observeHealth();
+      if (
+        !health ||
+        health.runtimeGeneration !== original.runtimeGeneration ||
+        !connectorHealthCurrent(original)
+      )
+        return null;
+      const result = await original.core.observeComputerConnectorHealth(
+        health.expectedInstanceId,
+        health.snapshot,
+      );
+      return connectorHealthCurrent(original) ? result : null;
+    },
+    now: Date.now,
+    monotonic: () => performance.now(),
+  },
+);
+
 // F3-1b: one authority transition at a time. A command that changes Computer
 // authority holds it through its commit; a connector start and an Agent
 // admission hold it from reading the settings until they run, so neither can
@@ -1593,6 +1625,7 @@ function bootstrap() {
       error: "SETTINGS_READ_FAILED",
     },
     runtimeState,
+    connectionStatus: currentConnectionStatus(),
     runtimeError,
     runtimeIdentity: runtime?.identity ?? null,
     embeddedNode: runtime?.embeddedNode ?? null,
@@ -4529,6 +4562,99 @@ async function recoverConnectorTransport(
   }
 }
 
+type ConnectorHealthCapture = Readonly<{
+  owner: ProductConfigurationService;
+  connector: SecureMcpConnectorRuntime;
+  core: DesktopGoCore;
+  binding: Readonly<ComputerConnectorBinding>;
+  runtimeGeneration: string;
+  computerGeneration: number;
+  connectorGeneration: number;
+}>;
+
+// Passive diagnostics do not reserve the effect-admission lane or block UI.
+function captureConnectorHealth(): ConnectorHealthCapture | null {
+  const owner = configuration,
+    connector = secureMcpConnectorRuntime,
+    core = desktopGoCore;
+  const state = owner?.snapshot(),
+    binding = core?.currentComputerConnectorBinding();
+  if (
+    !owner ||
+    !connector ||
+    !core?.backendAvailable ||
+    !binding ||
+    state?.status !== "ready" ||
+    quitInProgress ||
+    installedUpdateAdmission
+  )
+    return null;
+  const selected = state.settings.connectors.secureMcp,
+    runtime = selected.runtime;
+  if (
+    !runtime ||
+    runtime.state === "outcome_unknown" ||
+    !connector.isRunning() ||
+    connector.getTunnelObservation() !== null ||
+    connector.hasUnresolvedEffect() ||
+    runtime.buildId !== buildIdentity.buildId ||
+    binding.buildId !== buildIdentity.buildId ||
+    runtime.computerGeneration !== state.settings.computer.generation ||
+    runtime.connectorGeneration !== selected.generation ||
+    binding.connectorGeneration !== String(selected.generation)
+  )
+    return null;
+  return {
+    owner,
+    connector,
+    core,
+    binding,
+    runtimeGeneration: runtime.runtimeGeneration,
+    computerGeneration: runtime.computerGeneration,
+    connectorGeneration: runtime.connectorGeneration,
+  };
+}
+
+function connectorHealthCurrent(original: ConnectorHealthCapture): boolean {
+  const current = captureConnectorHealth();
+  return (
+    current !== null &&
+    current.owner === original.owner &&
+    current.connector === original.connector &&
+    current.core === original.core &&
+    current.runtimeGeneration === original.runtimeGeneration &&
+    current.computerGeneration === original.computerGeneration &&
+    current.connectorGeneration === original.connectorGeneration &&
+    Object.entries(original.binding).every(
+      ([key, value]) =>
+        current.binding[key as keyof typeof current.binding] === value,
+    )
+  );
+}
+
+function currentConnectionStatus(): ConnectionStatusView {
+  const value = connectorConnection.view();
+  const body = JSON.stringify({ ...value, revision: 0 });
+  if (body !== connectionStatusBody) {
+    connectionStatusBody = body;
+    retainedConnectionView = Object.freeze({
+      ...value,
+      revision: ++connectionStatusRevision,
+    });
+    if (window && !window.isDestroyed()) {
+      try {
+        window.webContents.send(
+          channels.connectionStatus,
+          retainedConnectionView,
+        );
+      } catch {
+        /* A projection cannot change original lifecycle or admission. */
+      }
+    }
+  }
+  return retainedConnectionView;
+}
+
 function startConnectorTransportWatch(): void {
   if (connectorTransportWatch || quitInProgress) return;
   connectorTransportWatch = new ConnectorTransportWatch({
@@ -4600,15 +4726,65 @@ function startConnectorTransportWatch(): void {
     wait: (milliseconds) =>
       new Promise((resolve) => setTimeout(resolve, milliseconds)),
   });
+  const observeStatus = () => {
+    void connectorConnection
+      .sample()
+      .then(currentConnectionStatus)
+      .catch(() => undefined);
+  };
   const check = () => {
+    observeStatus();
     void connectorTransportWatch?.check().catch(() => {
       console.warn("FAROL_CONNECTOR_TRANSPORT_OBSERVATION_FAILED");
     });
   };
   connectorTransportTimer = setInterval(check, 30_000);
   connectorTransportTimer.unref();
-  powerMonitor.on("suspend", () => connectorTransportWatch?.suspend());
+  connectorStatusTimer = setInterval(currentConnectionStatus, 1000);
+  connectorStatusTimer.unref();
+  // Starting a status projection does not eagerly enter recovery observation.
+  observeStatus();
+  // The existing isolated-home proof is checked before this join starts.
+  // This native-test seam invokes only the same passive observer as the timer;
+  // it publishes no authority and is absent from ordinary owner launches.
+  if (isolatedE2EHome !== undefined)
+    process.addListener("farol-e2e-observe-connection", (reply: unknown) => {
+      if (typeof reply !== "function") return;
+      void (async () => {
+        const original = captureConnectorHealth();
+        if (!original) return { settled: false };
+        let interrupted = false;
+        const interrupt = () => {
+          interrupted = true;
+        };
+        powerMonitor.on("suspend", interrupt);
+        powerMonitor.on("resume", interrupt);
+        try {
+          // Settle any earlier read, then perform one after the test selected
+          // its producer response. Coalescing cannot certify an older mode.
+          await connectorConnection.sample();
+          await connectorConnection.sample();
+          return interrupted || !connectorHealthCurrent(original)
+            ? { settled: false }
+            : { settled: true, view: currentConnectionStatus() };
+        } finally {
+          powerMonitor.removeListener("suspend", interrupt);
+          powerMonitor.removeListener("resume", interrupt);
+        }
+      })()
+        .then(
+          (value) => reply(value),
+          () => reply({ settled: false }),
+        )
+        .catch(() => undefined);
+    });
+  powerMonitor.on("suspend", () => {
+    connectorConnection.suspend();
+    currentConnectionStatus();
+    connectorTransportWatch?.suspend();
+  });
   powerMonitor.on("resume", () => {
+    connectorConnection.resume();
     connectorTransportWatch?.resume();
     check();
   });
@@ -11253,6 +11429,10 @@ function recoverWindowOpenFailure(): void {
   if (failedWindow && !failedWindow.isDestroyed()) failedWindow.destroy();
 }
 
+function nativeMenuBarEnabled(): boolean {
+  return process.env.FAROL_NEXT_E2E !== "1" && process.platform === "darwin";
+}
+
 function reopenWindow(): void {
   void containWindowOpenFailure(ensureWindow, recoverWindowOpenFailure);
 }
@@ -11477,6 +11657,18 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
             startupRecovery = openStartupRecoveryWindow({
               directory: desktopExecutionResources().directory,
               session,
+              ...(nativeMenuBarEnabled()
+                ? {
+                    menuBar: (actions) =>
+                      createMenuBar(actions, () => ({
+                        label: quitInProgress
+                          ? "Farol · Closing recovery"
+                          : "Farol · Startup recovery required",
+                        current: null,
+                        attention: !quitInProgress,
+                      })),
+                  }
+                : {}),
               mode: windowMode,
               placement: () =>
                 selectedVisibleTestPlacement({ width: 640, height: 520 })
@@ -11918,7 +12110,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   installIpc();
   installApplicationMenu();
   // Hidden tests own no visible status item. Ordinary owner launch gets one.
-  if (process.env.FAROL_NEXT_E2E !== "1" && process.platform === "darwin") {
+  if (nativeMenuBarEnabled()) {
     const disposeMenuBar = await runDesktopStartupBoundary("native-menu", () =>
       createMenuBar(
         {
@@ -11946,10 +12138,9 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
           },
         },
         () => ({
-          label:
-            runtimeState === "ready"
-              ? "Farol · Local service available"
-              : "Farol · Service unavailable",
+          label: "Farol · " + currentConnectionStatus().label,
+          attention: currentConnectionStatus().attention,
+          marker: currentConnectionStatus().marker,
           current:
             productTasksState().tasks.find(
               (task) => task.lifecycle === "running",
@@ -12102,6 +12293,10 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     quitInProgress = true;
     connectorTransportWatch?.close();
     if (connectorTransportTimer) clearInterval(connectorTransportTimer);
+    connectorConnection.close();
+    if (isolatedE2EHome !== undefined)
+      process.removeAllListeners("farol-e2e-observe-connection");
+    if (connectorStatusTimer) clearInterval(connectorStatusTimer);
     if (installedUpdateTimer) clearInterval(installedUpdateTimer);
     quitDrain.onBeforeQuit(event);
   });

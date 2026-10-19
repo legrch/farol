@@ -1,3 +1,8 @@
+import type {
+  ComputerConnectorHealthRequest,
+  ComputerConnectorHealthSnapshot,
+  ComputerConnectorHealthState,
+} from "./wire.ts";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { BridgeError, type Client } from "./client.ts";
@@ -212,6 +217,68 @@ export class ConnectorHostBridge {
       this.pending = false;
     }
   }
+  async observeHealth(
+    expectedInstanceId: string,
+    snapshot?: ComputerConnectorHealthSnapshot,
+  ): Promise<ComputerConnectorHealthState> {
+    const original = this.current;
+    if (!original || this.blocked || this.pending || this.closeInFlight)
+      throw new BridgeError("unavailable", "connector_health_unavailable");
+    // A detached validated copy prevents caller mutation during the request.
+    const body: unknown = JSON.parse(
+      JSON.stringify({
+        binding: original.endpoint.binding,
+        expectedInstanceId,
+        ...(snapshot === undefined ? {} : { snapshot }),
+      }),
+    );
+    if (!validate("ComputerConnectorHealthRequest", body))
+      throw new BridgeError("refused", "invalid_connector_health");
+    const query = body as ComputerConnectorHealthRequest;
+    const id = randomUUID();
+    const outcome = await this.client.request(
+      "computer.connector.health",
+      body as Json,
+      { id, timeoutMs: 5000 },
+    );
+    if (
+      this.current !== original ||
+      this.blocked ||
+      this.pending ||
+      this.closeInFlight
+    )
+      throw new BridgeError("unavailable", "connector_health_unavailable");
+    if (
+      !validate("Outcome", outcome) ||
+      outcome.requestId !== id ||
+      outcome.operationId !== undefined ||
+      outcome.context.profileId !== this.context.profileId ||
+      outcome.context.backendGeneration !== this.context.backendGeneration
+    )
+      throw new BridgeError("unknown", "crossed_connector_health");
+    if (outcome.status !== "ok")
+      throw new BridgeError(outcome.status, "connector_health_unavailable");
+    if (
+      outcome.code !== undefined ||
+      !validate("ComputerConnectorHealthState", outcome.data)
+    )
+      throw new BridgeError("unknown", "invalid_connector_health");
+    const value = outcome.data as unknown as ComputerConnectorHealthState;
+    if (
+      Object.entries(original.endpoint.binding).some(
+        ([key, field]) =>
+          value.binding[key as keyof typeof value.binding] !== field,
+      ) ||
+      value.expectedInstanceId !== query.expectedInstanceId ||
+      value.sampleAtMillis !== query.snapshot?.snapshotAtMillis
+    )
+      throw new BridgeError("unknown", "crossed_connector_health");
+    return Object.freeze({
+      ...value,
+      binding: Object.freeze({ ...value.binding }),
+    });
+  }
+
   async observePolling(
     samples: ComputerConnectorPollingSamples,
   ): Promise<ComputerConnectorPollingState> {

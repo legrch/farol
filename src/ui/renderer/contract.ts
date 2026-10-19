@@ -1,3 +1,4 @@
+import type { ConnectionStatusView } from "../../../apps/desktop/renderer/connection-status";
 import type { NavigationShortcuts } from "../../pkg/ipc/navigation-shortcuts";
 import type { AgentDraftStore } from "../agent-draft";
 import type { ConversationDraftStore } from "./conversation-draft";
@@ -44,6 +45,7 @@ export type PreloadApi = Readonly<{
   onConfigurationChanged(listener: () => void): () => void;
   onTasksState(listener: (value: unknown) => void): () => void;
   onRuntimeEvent(listener: (value: unknown) => void): () => void;
+  onConnectionStatus?(listener: (value: unknown) => void): () => void;
   onRuntimeState(listener: (value: unknown) => void): () => void;
   onInstalledUpdateState(listener: (value: unknown) => void): () => void;
   onBrowserRouteState(listener: (value: unknown) => void): () => void;
@@ -156,6 +158,7 @@ export type WindowSnapshot = Readonly<{
   tasks: ProductTasksState;
   activity: readonly ActivityEntry[];
   runtime: "starting" | "ready" | "offline" | "failed";
+  connectionStatus?: ConnectionStatusView;
   route: "loading" | "loaded" | "failed";
   signInObservation: SignInObservation | null;
   update: InstalledUpdateView;
