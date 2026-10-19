@@ -203,6 +203,9 @@ func readStatus(r io.Reader, ref string) (bool, []byte, error) {
 		return false, nil, ErrProtocol
 	}
 	unpack = bytes.TrimSuffix(unpack, []byte{'\n'})
+	if !reportText(unpack) {
+		return false, nil, ErrProtocol
+	}
 	if bytes.HasPrefix(unpack, []byte("ERR ")) {
 		return false, nil, ErrRemote // the remote refused the session instead of reporting
 	}
@@ -217,6 +220,9 @@ func readStatus(r io.Reader, ref string) (bool, []byte, error) {
 		return false, nil, ErrProtocol
 	}
 	status = bytes.TrimSuffix(status, []byte{'\n'})
+	if !reportText(status) {
+		return false, nil, ErrProtocol // an embedded LF or control byte is not one report line
+	}
 	accepted := string(status) == "ok "+ref
 	if !accepted {
 		reason, rejected := strings.CutPrefix(string(status), "ng "+ref+" ")
@@ -277,4 +283,11 @@ func remoteFormat(capabilities map[string]bool, format string) error {
 func isCommand(cmd []byte, format string) bool {
 	fields := strings.Split(string(cmd), " ")
 	return len(fields) == 3 && egress.ValidOID(format, fields[0], true) && egress.ValidOID(format, fields[1], true) && egress.ValidRef(fields[2])
+}
+
+// reportText accepts one report-status line: an embedded LF, CR or NUL would
+// let one packet carry several report lines. Other bytes stay opaque reason
+// text, which is never echoed.
+func reportText(line []byte) bool {
+	return !bytes.ContainsAny(line, "\n\r\x00")
 }
