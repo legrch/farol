@@ -1124,6 +1124,19 @@ async function scenario({
     await save();
     assert.equal(row.ledger.acceptedSends, 2);
     if (connectorFailure) {
+      // Compare every persisted owner choice, including filePolicy and the
+      // selected tunnel/client/credential binding. Only documented runtime
+      // observations and revision counters may change across shutdown/startup.
+      const retainedSettings = (value) => {
+        const retained = structuredClone(value);
+        delete retained.revision;
+        delete retained.computer.generation;
+        for (const key of ["generation", "runtime", "challenge", "attachment"])
+          delete retained.connectors.secureMcp[key];
+        for (const key of ["chatgpt", "computer", "connect", "hosts", "verify"])
+          delete retained.setup[key];
+        return retained;
+      };
       await configure({ kind: "connector.select-client" });
       await configure({
         kind: "connector.configure",
@@ -1277,18 +1290,11 @@ async function scenario({
       preserved(row.beforeTransition, row.afterFailedQuit, true);
       await settleTunnel();
       const afterQuitSettings = await json(path.join(stateRoot, "config.json"));
-      for (const key of ["general", "tasks", "nativeHosts"])
-        assert.deepEqual(
-          afterQuitSettings[key],
-          settings[key],
-          `SETTINGS_CHANGED:${key}`,
-        );
-      for (const key of ["computerId", "commands", "workspaces"])
-        assert.deepEqual(
-          afterQuitSettings.computer[key],
-          settings.computer[key],
-          `COMPUTER_GRANTS_CHANGED:${key}`,
-        );
+      assert.deepEqual(
+        retainedSettings(afterQuitSettings),
+        retainedSettings(settings),
+        "RETAINED_SETTINGS_CHANGED_AFTER_FAILED_QUIT",
+      );
       row.settingsAfterFailedQuit = afterQuitSettings;
       await save();
       await start(false, true); // Exactly one retained-profile ordinary reopen.
@@ -1308,18 +1314,11 @@ async function scenario({
       preserved(relocated, row.afterReopen, true);
       const reopenedSettings = await json(path.join(stateRoot, "config.json"));
       row.settingsAfterReopen = reopenedSettings;
-      for (const key of ["general", "tasks", "nativeHosts"])
-        assert.deepEqual(
-          reopenedSettings[key],
-          settings[key],
-          `REOPEN_SETTINGS_CHANGED:${key}`,
-        );
-      for (const key of ["computerId", "commands", "workspaces"])
-        assert.deepEqual(
-          reopenedSettings.computer[key],
-          settings.computer[key],
-          `REOPEN_COMPUTER_GRANTS_CHANGED:${key}`,
-        );
+      assert.deepEqual(
+        retainedSettings(reopenedSettings),
+        retainedSettings(settings),
+        "RETAINED_SETTINGS_CHANGED_AFTER_REOPEN",
+      );
       assert.deepEqual(
         site.driver.snapshot(),
         row.ledger,
