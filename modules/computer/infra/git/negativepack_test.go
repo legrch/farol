@@ -413,6 +413,17 @@ func TestThinDeltaPropagatesAnOwnerReadFailure(t *testing.T) {
 	_, err = readPack(context.Background(), bytes.NewReader(wire), mustPlan(t, in), eofReader)
 	wantIs(t, err, io.EOF)
 	wantCode(t, classified(err), ErrPort)
+	// A reader that returns a sentinel, or no reader at all, is still the owner's fault.
+	sentinelReader := objectsFunc(func(_ context.Context, got string) (string, []byte, error) {
+		if got == in.Known[2].OID {
+			return "", nil, ErrSource
+		}
+		return known.ReadObject(context.Background(), got)
+	})
+	_, err = readPack(context.Background(), bytes.NewReader(wire), mustPlan(t, in), sentinelReader)
+	wantCode(t, classified(err), ErrPort)
+	_, err = readPack(context.Background(), bytes.NewReader(wire), mustPlan(t, in), nil)
+	wantCode(t, classified(err), ErrPort)
 }
 
 func TestDeltaWithUnavailableOrDivergentBaseIsRefused(t *testing.T) {

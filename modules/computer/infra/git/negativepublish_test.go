@@ -610,7 +610,7 @@ func TestGateWithoutAnObjectSourceCannotAuthenticateTheBaseline(t *testing.T) {
 	g, c, client, peer, _, _ := buildGate(t, nil)
 	g.objects = nil
 	r, err := g.Run(bounded(t), client, peer)
-	wantIs(t, err, ErrSource)
+	wantCode(t, err, ErrPort) // a missing owner reader is the owner's fault, not the source's
 	if r.Stage != "pack_validation" || c.begins != 0 || len(peer.Bytes()) != 0 || r.RemoteMayHaveEffects {
 		t.Fatalf("%+v", r)
 	}

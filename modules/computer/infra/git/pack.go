@@ -74,8 +74,11 @@ func (s *source) known(id string) (*object, error) {
 	if v := s.cache[id]; v != nil {
 		return v, nil
 	}
-	if !s.plan.IsKnown(id) || s.reader == nil {
+	if !s.plan.IsKnown(id) {
 		return nil, ErrSource
+	}
+	if s.reader == nil {
+		return nil, ownerFailure{ErrPort} // the owner supplied no object reader
 	}
 	if err := s.ctx.Err(); err != nil {
 		return nil, err

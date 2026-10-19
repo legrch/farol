@@ -22,10 +22,13 @@ func classified(err error) error {
 		return nil
 	}
 	code := ErrPort.Error()
-	for _, known := range []error{ErrProtocol, ErrLimit, ErrSource, ErrRemote, ErrScope, ErrReplay} {
-		if errors.Is(err, known) {
-			code = known.Error()
-			break
+	var owner ownerFailure
+	if !errors.As(err, &owner) { // an owner reader fault is a port failure, whatever it wraps
+		for _, known := range []error{ErrProtocol, ErrLimit, ErrSource, ErrRemote, ErrScope, ErrReplay} {
+			if errors.Is(err, known) {
+				code = known.Error()
+				break
+			}
 		}
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
