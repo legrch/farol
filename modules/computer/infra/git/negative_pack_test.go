@@ -600,6 +600,13 @@ func TestMalformedZlibIsAPublicProtocolFailureWithTheOriginalCause(t *testing.T)
 		t.Fatalf("original zlib cause lost: %v", err)
 	}
 	wantCode(t, classified(err), ErrProtocol)
+	// A complete zlib stream that inflates to fewer bytes than the object
+	// header declares is the client's encoding, not a transport failure.
+	_, err = readWire(t, in, known, rawPack("sha1", 2, 1, entry(t, 3, 10, nil, []byte("abc"))))
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("original truncation cause lost: %v", err)
+	}
+	wantCode(t, classified(err), ErrProtocol)
 	if got := inflateFailure(io.ErrUnexpectedEOF); got != io.ErrUnexpectedEOF {
 		t.Fatalf("stream truncation reclassified: %v", got)
 	}

@@ -23,7 +23,10 @@ func applyDelta(base, delta []byte, max int64) ([]byte, error) {
 		return 0, ErrLimit
 	}
 	source, err := readSize()
-	if err != nil || source != uint64(len(base)) {
+	if err != nil {
+		return nil, err // a malformed delta header is the client's encoding
+	}
+	if source != uint64(len(base)) {
 		return nil, ErrSource
 	}
 	target, err := readSize()

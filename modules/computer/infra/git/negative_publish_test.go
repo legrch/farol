@@ -116,7 +116,7 @@ func TestRunRefusalsAreStagedClassifiedAndNeverReachTheRemote(t *testing.T) {
 			}},
 		refusalCase{name: "pack over its byte limit", stage: "pack_validation", want: ErrLimit,
 			edit: func(in *egress.Intent, _ memoryObjects, _ *[]*object) { in.Limits.PackBytes = 64 }},
-		refusalCase{name: "pack truncated", stage: "pack_validation", want: ErrPort,
+		refusalCase{name: "pack truncated", stage: "pack_validation", want: ErrProtocol,
 			setup: func(_ *testing.T, _ *custody, cl *fakeStream, _ *fakePeer, in egress.Intent, wire []byte, _ *context.Context) {
 				cl.reader = bytes.NewReader(update(in, wire[:len(wire)/2]))
 			}},

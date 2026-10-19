@@ -34,12 +34,12 @@ func TestApplyDeltaRefusalsAreClassified(t *testing.T) {
 		max   int64
 		want  error
 	}{
-		{"empty delta", nil, 16, ErrSource},
-		{"source size truncated", []byte{0x83}, 16, ErrSource},
+		{"empty delta", nil, 16, ErrProtocol},
+		{"source size truncated", []byte{0x83}, 16, ErrProtocol},
 		{"target size truncated", []byte{3, 0x84}, 16, ErrProtocol},
 		{"source size disagrees with the base", []byte{2, 0}, 16, ErrSource},
 		{"target over the object bound", []byte{3, 17}, 16, ErrLimit},
-		{"size varint overflows", bytes.Repeat([]byte{0xff}, 11), 16, ErrSource},
+		{"size varint overflows", bytes.Repeat([]byte{0xff}, 11), 16, ErrLimit},
 		{"target varint overflows", append([]byte{3}, bytes.Repeat([]byte{0xff}, 11)...), 16, ErrLimit},
 		// The true size is 2^65: silently dropping the overflowing bits would
 		// yield an empty target and let a hostile delta pass as a valid one.

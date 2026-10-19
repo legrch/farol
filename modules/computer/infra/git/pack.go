@@ -148,7 +148,19 @@ type verifiedPack struct {
 	source  *source
 }
 
+// readPack attributes a client pack that ends early — before its header,
+// an object, its compressed body or its trailer — to the client's encoding
+// (ErrProtocol), keeping the original EOF cause. Limits, cancellation, source
+// mismatches and other stream or owner errors keep their own class.
 func readPack(ctx context.Context, r io.Reader, plan *egress.Plan, reader egressport.Objects) (*verifiedPack, error) {
+	pack, err := readPackStream(ctx, r, plan, reader)
+	if err != nil && !errors.Is(err, ErrProtocol) && (errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) {
+		return nil, errors.Join(ErrProtocol, err)
+	}
+	return pack, err
+}
+
+func readPackStream(ctx context.Context, r io.Reader, plan *egress.Plan, reader egressport.Objects) (*verifiedPack, error) {
 	in := plan.Intent()
 	lim := in.Limits
 	c := &capture{ctx: ctx, r: r, limit: lim.PackBytes}
