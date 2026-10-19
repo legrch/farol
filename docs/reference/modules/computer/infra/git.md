@@ -14,7 +14,7 @@ Shell, not a catalog of Farol replacements for Git subcommands.
 Network destination filtering alone cannot enforce a repository, ref or outgoing
 commit inside an encrypted SSH connection. Giving the entire Git/hook process
 tree the owner's unrestricted SSH agent and network also broadens arbitrary hook
-code. A typed *transport boundary*, not a second Git executor, separates these
+code. A typed _transport boundary_, not a second Git executor, separates these
 powers:
 
 ```text
@@ -119,7 +119,7 @@ SSH identity implementation is supplied by these interfaces.
    must succeed, and current authority is checked before each upload chunk.
 
 The expected old OID travels unchanged in receive-pack's update command. The real
-receiver's compare-and-swap protects against a concurrent writer *after* the
+receiver's compare-and-swap protects against a concurrent writer _after_ the
 advertisement. A separate read followed by an unconditional push is not equivalent.
 The `+` in a client's force refspec cannot bypass this gate's ancestry proof.
 Existing remote protection and server hooks remain authoritative.
@@ -162,7 +162,7 @@ A rejected push may have uploaded objects; retain `RemoteMayHaveEffects` after
 release. A failed durable barrier must be reconciled by its original owner even
 when no update bytes were sent. No automatic retry is implemented.
 
-`Reconcile` accepts a *new*, independently authorized remote observation and
+`Reconcile` accepts a _new_, independently authorized remote observation and
 classifies target observed / other observed / unobserved without changing the
 original outcome. Seeing the desired SHA after a lost response does not prove this
 particular attempt produced it. Unrelated concurrent work is never overwritten.
