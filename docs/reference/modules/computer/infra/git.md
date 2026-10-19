@@ -41,6 +41,25 @@ packet: only this real Computer consumer is implemented. Reuse this evidence
 when another consumer actually needs identical semantics; do not build speculative
 cross-module infrastructure or another permission/journal database.
 
+## Relationship to the general-purpose Shell
+
+The accepted Computer direction is one ordinary sandboxed developer Shell:
+standard Git and real hooks under the existing grants, Seatbelt policy and
+process owner, without Farol replacement Git verbs, a hook runner, an executable
+catalogue or a parallel permission/journal system. This package is consistent
+with that direction only as unwired portable preparation:
+
+- It adds no command, tool or boot selection. Ordinary local Git (stage, commit,
+  worktrees, configuration, includes and hooks) is unchanged and is not routed
+  through this package.
+- Network remains independent authority. `ApprovedNetwork` is broad; it is not a
+  destination-, repository- or ref-scoped push permission, and accepting this
+  source does not make it one.
+- Selecting a destination-scoped egress or credential route that uses this gate
+  is a separate architecture decision, taken together with the native composition
+  below. Merging this package or any passing portable test does not imply it.
+- A separate privileged Git or hook service remains out of scope.
+
 ## Implemented pieces
 
 - `modules/computer/domain/egress`: immutable `Plan`, bounded source manifests,
