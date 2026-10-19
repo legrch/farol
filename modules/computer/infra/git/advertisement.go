@@ -59,6 +59,10 @@ func readAdvertisement(r io.Reader, in egress.Intent) (*advertisement, error) {
 				}
 				ad.capabilities[c] = true
 			}
+			// Establish the remote's format before parsing OIDs in it.
+			if err := remoteFormat(ad.capabilities, in.Format); err != nil {
+				return nil, err
+			}
 		} else if len(parts) != 1 {
 			return nil, ErrProtocol
 		}
@@ -86,23 +90,6 @@ func readAdvertisement(r io.Reader, in egress.Intent) (*advertisement, error) {
 	}
 	if len(ad.rows) == 0 || !ad.capabilities["report-status"] {
 		return nil, ErrProtocol
-	}
-	formats := 0
-	for c := range ad.capabilities {
-		if strings.HasPrefix(c, "object-format=") {
-			formats++
-		}
-	}
-	if formats > 1 {
-		return nil, ErrProtocol // contradictory capabilities
-	}
-	for c := range ad.capabilities {
-		if strings.HasPrefix(c, "object-format=") && c != "object-format="+in.Format {
-			return nil, ErrRemote // the remote repository's format differs from the plan
-		}
-	}
-	if in.Format == "sha256" && !ad.capabilities["object-format=sha256"] {
-		return nil, ErrRemote
 	}
 	if egress.IsZero(in.Old) {
 		if target != "" {
@@ -157,8 +144,8 @@ func readUpdate(r io.Reader, in egress.Intent, ad *advertisement) ([]byte, bool,
 	}
 	line = bytes.TrimSuffix(line, []byte{'\n'})
 	parts := bytes.Split(line, []byte{0})
-	if len(parts) != 2 {
-		return nil, false, ErrProtocol
+	if len(parts) != 2 || !isCommand(parts[0], in.Format) {
+		return nil, false, ErrProtocol // includes the unsupported push-cert prelude
 	}
 	if string(parts[0]) != in.Old+" "+in.Head+" "+in.Ref || in.Old == in.Head {
 		return nil, false, ErrScope
@@ -179,12 +166,15 @@ func readUpdate(r io.Reader, in egress.Intent, ad *advertisement) ([]byte, bool,
 	if in.Format == "sha256" && !seen["object-format=sha256"] {
 		return nil, false, ErrProtocol
 	}
-	_, flush, err = readPacket(r)
+	second, flush, err := readPacket(r)
 	if err != nil {
 		return nil, false, err
 	}
 	if !flush {
-		return nil, false, ErrScope
+		if isCommand(bytes.TrimSuffix(second, []byte{'\n'}), in.Format) {
+			return nil, false, ErrScope // another ref update
+		}
+		return nil, false, ErrProtocol
 	}
 	// Re-encode only the one validated command. Never relay the untrusted
 	// client's entire prelude or any additional/implicit refspec.
@@ -228,8 +218,12 @@ func readStatus(r io.Reader, ref string) (bool, []byte, error) {
 	}
 	status = bytes.TrimSuffix(status, []byte{'\n'})
 	accepted := string(status) == "ok "+ref
-	if !accepted && !strings.HasPrefix(string(status), "ng "+ref+" ") {
-		return false, nil, ErrProtocol
+	if !accepted {
+		reason, rejected := strings.CutPrefix(string(status), "ng "+ref+" ")
+		// report-status requires a nonempty reason other than the reserved "ok".
+		if !rejected || reason == "" || reason == "ok" {
+			return false, nil, ErrProtocol
+		}
 	}
 	if accepted && string(unpack) != "unpack ok" {
 		return false, nil, ErrProtocol
@@ -254,4 +248,33 @@ func readStatus(r io.Reader, ref string) (bool, []byte, error) {
 	a, _ := packet(one)
 	b, _ := packet(two)
 	return accepted, append(append(a, b...), []byte("0000")...), nil
+}
+
+// remoteFormat refuses contradictory format capabilities as malformed and a
+// well-formed format other than the plan's as a changed remote.
+func remoteFormat(capabilities map[string]bool, format string) error {
+	advertised := ""
+	for c := range capabilities {
+		if f, ok := strings.CutPrefix(c, "object-format="); ok {
+			if advertised != "" {
+				return ErrProtocol // contradictory capabilities
+			}
+			advertised = f
+		}
+	}
+	if advertised == "" {
+		advertised = "sha1" // Git's default when the capability is absent
+	}
+	if advertised != format {
+		return ErrRemote
+	}
+	return nil
+}
+
+// isCommand reports whether a pkt-line payload is structurally a ref-update
+// command, so an out-of-plan command (SCOPE) is told apart from malformed or
+// unsupported input (PROTOCOL).
+func isCommand(cmd []byte, format string) bool {
+	fields := strings.Split(string(cmd), " ")
+	return len(fields) == 3 && egress.ValidOID(format, fields[0], true) && egress.ValidOID(format, fields[1], true) && egress.ValidRef(fields[2])
 }

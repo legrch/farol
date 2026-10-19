@@ -226,7 +226,8 @@ func TestReadUpdateRefusesWithSpecificReason(t *testing.T) {
 		{"different ref", pkt(in.Old + " " + in.Head + " refs/heads/feature/other\x00report-status\n"), ErrScope},
 		{"delete command", pkt(in.Old + " " + strings.Repeat("0", 40) + " " + in.Ref + "\x00report-status\n"), ErrScope},
 		{"shallow line", pkt("shallow " + in.Base + "\n"), ErrProtocol},
-		{"push certificate", pkt("push-cert\x00report-status\n"), ErrScope},
+		{"push certificate", pkt("push-cert\x00report-status\n"), ErrProtocol},
+		{"garbage before capabilities", pkt("garbage\x00report-status\n"), ErrProtocol},
 		{"report-status absent", command(in, "ofs-delta"), ErrProtocol},
 		{"duplicate capability", command(in, "report-status report-status"), ErrProtocol},
 		{"empty capability token", command(in, "report-status  ofs-delta"), ErrProtocol},
@@ -243,7 +244,8 @@ func TestReadUpdateRefusesWithSpecificReason(t *testing.T) {
 		{"wrong object-format", command(in, "report-status object-format=sha256"), ErrProtocol},
 		{"empty stream", nil, io.EOF},
 		{"command without terminator", command(in, "report-status"), io.EOF},
-		{"second command", join(command(in, "report-status"), adRow(in.Old, "refs/heads/main"), flushPkt), ErrScope},
+		{"second command", join(command(in, "report-status"), pkt(in.Old+" "+in.Head+" refs/heads/main\n"), flushPkt), ErrScope},
+		{"malformed second packet", join(command(in, "report-status"), adRow(in.Old, "refs/heads/main"), flushPkt), ErrProtocol},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -346,6 +348,8 @@ func TestReadStatusRefusesWithSpecificReason(t *testing.T) {
 		{"status for another ref", statusWire("unpack ok\n", "ok refs/heads/main\n"), ErrProtocol},
 		{"rejection for another ref", statusWire("unpack ok\n", "ng refs/heads/main reason\n"), ErrProtocol},
 		{"rejection without a reason separator", statusWire("unpack ok\n", "ng "+ref+"\n"), ErrProtocol},
+		{"rejection with an empty reason", statusWire("unpack ok\n", "ng "+ref+" \n"), ErrProtocol},
+		{"rejection with the reserved reason ok", statusWire("unpack ok\n", "ng "+ref+" ok\n"), ErrProtocol},
 		{"unknown status verb", statusWire("unpack ok\n", "maybe "+ref+"\n"), ErrProtocol},
 		{"success trailing text", statusWire("unpack ok\n", "ok "+ref+" extra\n"), ErrProtocol},
 		{"success with failed unpack", statusWire("unpack index-pack abnormal exit\n", "ok "+ref+"\n"), ErrProtocol},
@@ -571,4 +575,13 @@ func TestReconcileKeepsOriginalOutcomeAndRefusesUnboundResults(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A SHA-256 plan meeting a genuine SHA-1 advertisement (40-digit OIDs) is a
+// changed remote, established from the capabilities before any OID is parsed.
+func TestSHA1RemoteForASHA256PlanIsRemoteChanged(t *testing.T) {
+	in, _, _ := packFixture(t, "sha256")
+	sha1Row := adFirst(strings.Repeat("1", 40), "refs/heads/main", "report-status object-format=sha1")
+	_, err := readAdvertisement(bytes.NewReader(join(sha1Row, flushPkt)), in)
+	wantIs(t, err, ErrRemote)
 }
