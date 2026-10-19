@@ -202,6 +202,7 @@ type objectLink struct{ id, kind string }
 func treeLinks(data []byte, format string, oidBytes int, maxLinks int) ([]objectLink, error) {
 	links := []objectLink{}
 	seen := map[string]bool{}
+	var prev []byte
 	for len(data) > 0 {
 		if len(seen) >= maxLinks {
 			return nil, ErrLimit
@@ -217,6 +218,16 @@ func treeLinks(data []byte, format string, oidBytes int, maxLinks int) ([]object
 			return nil, ErrSource
 		}
 		seen[string(name)] = true
+		// Git orders tree entries by name, comparing a subtree as name+"/";
+		// a tree out of that order is not a valid Git object to publish.
+		key := append([]byte(nil), name...)
+		if mode == "40000" {
+			key = append(key, '/')
+		}
+		if prev != nil && bytes.Compare(prev, key) >= 0 {
+			return nil, ErrSource
+		}
+		prev = key
 		id := hex.EncodeToString(data[nul+1 : nul+1+oidBytes])
 		if !validObjectID(format, id) {
 			return nil, ErrSource

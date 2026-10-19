@@ -3,6 +3,7 @@ package git
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -139,6 +140,9 @@ func TestGraphRefusesTreesItCannotParse(t *testing.T) {
 			return &object{kind: "tree", data: append([]byte("100644 f\x00"), bytes.Repeat([]byte{1}, 10)...)}
 		}, ErrSource},
 		{"directory that is a blob", func(in egress.Intent) *object { return rawTree("sha1", [2]string{"40000 d", blob(in)}) }, ErrSource},
+		{"entries out of Git order", func(in egress.Intent) *object {
+			return rawTree("sha1", [2]string{"100644 b", blob(in)}, [2]string{"100644 a", blob(in)})
+		}, ErrSource},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -162,7 +166,7 @@ func TestGraphTreeEntryBudgetIsInclusive(t *testing.T) {
 				in.Limits.Objects = 6
 				var entries [][2]string
 				for i := 0; i < tc.entries; i++ {
-					entries = append(entries, [2]string{fmt.Sprintf("160000 module%d", i), fakeOID(i)})
+					entries = append(entries, [2]string{fmt.Sprintf("160000 module%02d", i), fakeOID(i)})
 				}
 				tr := rawTree("sha1", entries...)
 				head := commit(in.Format, objID(in.Format, tr), in.Base)
@@ -342,7 +346,7 @@ func TestGraphAcceptsTheEmptyBlobAndEmptyTree(t *testing.T) {
 			in, known, _ := packFixture(t, format)
 			empty := &object{kind: "blob"}
 			emptyTree := &object{kind: "tree"}
-			tr := rawTree(format, [2]string{"100644 empty.txt", objID(format, empty)}, [2]string{"40000 dir", objID(format, emptyTree)})
+			tr := rawTree(format, [2]string{"40000 dir", objID(format, emptyTree)}, [2]string{"100644 empty.txt", objID(format, empty)})
 			head := commit(format, objID(format, tr), in.Base)
 			objects := []*object{head, tr, empty, emptyTree}
 			in = setObjects(in, format, head, objects)
@@ -371,5 +375,22 @@ func TestGraphAcceptsAPredecessorInsideThePack(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTreeEntriesFollowGitOrderWithSubtreesComparedAsNameSlash(t *testing.T) {
+	id := bytes.Repeat([]byte{1}, 20)
+	entry := func(mode, name string) []byte { return append([]byte(mode+" "+name+"\x00"), id...) }
+	// "a.c" (0x2e) sorts before the subtree "a" compared as "a/" (0x2f).
+	if _, err := treeLinks(join(entry("100644", "a.c"), entry("40000", "a")), "sha1", 20, 16); err != nil {
+		t.Fatalf("valid Git order refused: %v", err)
+	}
+	for name, data := range map[string][]byte{
+		"subtree before a name it sorts after": join(entry("40000", "a"), entry("100644", "a.c")),
+		"plain reverse order":                  join(entry("100644", "b"), entry("100644", "a")),
+	} {
+		if _, err := treeLinks(data, "sha1", 20, 16); !errors.Is(err, ErrSource) {
+			t.Fatalf("%s: got %v, want ErrSource", name, err)
+		}
 	}
 }
