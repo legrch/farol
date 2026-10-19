@@ -275,7 +275,7 @@ func readPackStream(ctx context.Context, r io.Reader, plan *egress.Plan, reader 
 	}
 	_, _ = h.Write(c.data[:prefix])
 	if !bytes.Equal(h.Sum(nil), trailer) {
-		return nil, ErrSource
+		return nil, ErrProtocol // the client's pack integrity trailer, not a manifest disagreement
 	}
 	objects := map[string]*object{}
 	remaining := len(entries)

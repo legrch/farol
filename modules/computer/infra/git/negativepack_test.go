@@ -93,7 +93,7 @@ func TestReadPackRefusesMalformedStreamsWithSpecificReason(t *testing.T) {
 		}, io.ErrUnexpectedEOF},
 		{"trailer of the wrong algorithm", nil, func(t *testing.T) []byte {
 			return rawPack("sha256", 2, 1, entry(t, 3, 3, nil, abc))
-		}, ErrSource},
+		}, ErrProtocol},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -113,7 +113,7 @@ func TestReadPackSHA256TrailerMismatches(t *testing.T) {
 	flipped := bytes.Clone(wire)
 	flipped[len(flipped)-1] ^= 1
 	_, err := readWire(t, in, known, flipped)
-	wantIs(t, err, ErrSource)
+	wantIs(t, err, ErrProtocol)
 	// A SHA-1 trailer is too short to be read as a SHA-256 trailer.
 	sha1Trailer := rawPack("sha1", 2, 0)
 	_, err = readWire(t, in, known, sha1Trailer)

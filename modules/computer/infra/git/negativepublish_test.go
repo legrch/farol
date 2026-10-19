@@ -108,7 +108,7 @@ func TestRunRefusalsAreStagedClassifiedAndNeverReachTheRemote(t *testing.T) {
 			setup: func(_ *testing.T, _ *custody, cl *fakeStream, _ *fakePeer, in egress.Intent, wire []byte, _ *context.Context) {
 				cl.reader = bytes.NewReader(bytes.Replace(update(in, wire), []byte("report-status ofs-delta"), []byte("report-status side-band-64k"), 1))
 			}},
-		refusalCase{name: "pack trailer corrupt", stage: "pack_validation", want: ErrSource,
+		refusalCase{name: "pack trailer corrupt", stage: "pack_validation", want: ErrProtocol,
 			setup: func(_ *testing.T, _ *custody, cl *fakeStream, _ *fakePeer, in egress.Intent, wire []byte, _ *context.Context) {
 				bad := bytes.Clone(wire)
 				bad[len(bad)-1] ^= 1
