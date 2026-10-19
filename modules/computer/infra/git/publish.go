@@ -96,6 +96,11 @@ func (g *Gate) Run(ctx context.Context, client io.ReadWriteCloser, peer egresspo
 		if closeErr != nil {
 			err = errors.Join(err, ErrPort)
 		}
+		// Cancellation closes blocked streams, whose own errors then surface;
+		// the context's end is the cause, so keep it in the classification.
+		if err != nil && ctx != nil && ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
+			err = errors.Join(ctx.Err(), err)
+		}
 		err = classified(err)
 	}()
 	if ctx == nil || client == nil || peer == nil {

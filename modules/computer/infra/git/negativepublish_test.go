@@ -743,4 +743,9 @@ func TestContextEndClosesAStreamBlockedInAWrite(t *testing.T) {
 	if err == nil || r.RefOutcome != Unknown || !r.RemoteMayHaveEffects || r.Stage != "upload" {
 		t.Fatalf("%+v %v", r, err)
 	}
+	// The interrupted write's own error must not hide that the context ended.
+	var f *Failure
+	if !errors.As(err, &f) || f.Code() != "GIT_TRANSPORT_CANCELLED" {
+		t.Fatalf("cancellation reported as %v", err)
+	}
 }
