@@ -48,8 +48,14 @@ func readAdvertisement(r io.Reader, in egress.Intent) (*advertisement, error) {
 			if len(parts) != 2 {
 				return nil, ErrProtocol
 			}
-			for _, c := range strings.Fields(string(parts[1])) {
-				if ad.capabilities[c] || len(c) > 256 {
+			// Capabilities are separated by single spaces; any other whitespace,
+			// or an empty token, is malformed rather than a separator.
+			tokens := strings.Split(string(parts[1]), " ")
+			if string(parts[1]) == "" {
+				tokens = nil
+			}
+			for _, c := range tokens {
+				if c == "" || ad.capabilities[c] || len(c) > 256 {
 					return nil, ErrProtocol
 				}
 				for _, b := range c {
