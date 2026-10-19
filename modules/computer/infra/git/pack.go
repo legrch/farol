@@ -131,7 +131,7 @@ func (c *capture) Read(p []byte) (int, error) {
 	}
 	n, err := c.r.Read(p)
 	if n < 0 || n > len(p) {
-		return 0, ErrProtocol
+		return 0, ErrPort // the stream broke the io.Reader contract
 	}
 	c.data = append(c.data, p[:n]...)
 	if n == 0 && err == nil {
@@ -266,8 +266,11 @@ func readPackStream(ctx context.Context, r io.Reader, plan *egress.Plan, reader 
 		if readErr != nil {
 			return nil, inflateFailure(readErr)
 		}
-		if n != 0 || endErr != io.EOF {
-			return nil, ErrProtocol
+		if n != 0 {
+			return nil, ErrProtocol // more inflated data than the object header declares
+		}
+		if endErr != io.EOF {
+			return nil, inflateFailure(endErr)
 		}
 		if closeErr != nil {
 			return nil, inflateFailure(closeErr)

@@ -514,7 +514,11 @@ func TestInvalidCallsAreRefusedAtAdmissionAndStillCloseWhatTheyWereGiven(t *test
 				p = nil
 			}
 			r, err := g.Run(ctx, cl, p)
-			wantCode(t, err, ErrScope)
+			want := ErrScope // an unbounded or absent context grants no bounded authority
+			if name == "nil client" || name == "nil peer" {
+				want = ErrPort // the owner supplied no stream
+			}
+			wantCode(t, err, want)
 			if r.Stage != "admission" || r.RefOutcome != NotAttempted || r.RemoteMayHaveEffects || c.checks != 0 || c.begins != 0 {
 				t.Fatalf("%+v checks=%d", r, c.checks)
 			}

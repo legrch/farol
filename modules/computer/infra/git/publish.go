@@ -103,8 +103,11 @@ func (g *Gate) Run(ctx context.Context, client io.ReadWriteCloser, peer egresspo
 		}
 		err = classified(err)
 	}()
-	if ctx == nil || client == nil || peer == nil {
+	if ctx == nil {
 		return result, ErrScope
+	}
+	if client == nil || peer == nil {
+		return result, ErrPort // the owner supplied no stream
 	}
 	if _, bounded := ctx.Deadline(); !bounded {
 		return result, ErrScope

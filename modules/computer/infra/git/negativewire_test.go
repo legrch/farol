@@ -126,20 +126,20 @@ func TestReadAdvertisementSHA256NeedsExplicitObjectFormat(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		caps string
-		ok   bool
+		want error
 	}{
-		{"declared", "report-status object-format=sha256", true},
-		{"absent means sha1", "report-status", false},
-		{"other format", "report-status object-format=sha1", false},
-		{"both formats", "report-status object-format=sha1 object-format=sha256", false},
+		{"declared", "report-status object-format=sha256", nil},
+		{"absent means sha1", "report-status", ErrRemote},
+		{"other format", "report-status object-format=sha1", ErrRemote},
+		{"both formats", "report-status object-format=sha1 object-format=sha256", ErrProtocol},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := readAdvertisement(bytes.NewReader(join(adFirst(zero, "capabilities^{}", tc.caps), flushPkt)), in)
-			if tc.ok && err != nil {
+			if tc.want == nil && err != nil {
 				t.Fatal(err)
 			}
-			if !tc.ok {
-				wantIs(t, err, ErrProtocol)
+			if tc.want != nil {
+				wantIs(t, err, tc.want)
 			}
 		})
 	}

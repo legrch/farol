@@ -87,13 +87,22 @@ func readAdvertisement(r io.Reader, in egress.Intent) (*advertisement, error) {
 	if len(ad.rows) == 0 || !ad.capabilities["report-status"] {
 		return nil, ErrProtocol
 	}
+	formats := 0
+	for c := range ad.capabilities {
+		if strings.HasPrefix(c, "object-format=") {
+			formats++
+		}
+	}
+	if formats > 1 {
+		return nil, ErrProtocol // contradictory capabilities
+	}
 	for c := range ad.capabilities {
 		if strings.HasPrefix(c, "object-format=") && c != "object-format="+in.Format {
-			return nil, ErrProtocol
+			return nil, ErrRemote // the remote repository's format differs from the plan
 		}
 	}
 	if in.Format == "sha256" && !ad.capabilities["object-format=sha256"] {
-		return nil, ErrProtocol
+		return nil, ErrRemote
 	}
 	if egress.IsZero(in.Old) {
 		if target != "" {

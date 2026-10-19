@@ -256,8 +256,8 @@ func TestReadPackRefusesMisbehavingReaders(t *testing.T) {
 		r    io.Reader
 		want error
 	}{
-		{"reports more than requested", brokenReader{n: 1 << 20}, ErrProtocol},
-		{"reports negative progress", brokenReader{n: -1}, ErrProtocol},
+		{"reports more than requested", brokenReader{n: 1 << 20}, ErrPort},
+		{"reports negative progress", brokenReader{n: -1}, ErrPort},
 		{"makes no progress", brokenReader{}, io.ErrNoProgress},
 		{"fails", brokenReader{err: errInjected}, errInjected},
 	} {

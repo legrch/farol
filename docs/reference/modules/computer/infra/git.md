@@ -180,14 +180,19 @@ Public failure classes follow one rule:
   owner's manifest, known objects or task base, including a well-formed delta
   whose declared base size differs from its authenticated base.
 - `GIT_TRANSPORT_SCOPE_REFUSED`: an update outside the plan, such as another ref
-  or a non-fast-forward of the remote predecessor, or a custody refusal.
+  or a non-fast-forward of the remote predecessor, or a custody refusal. Custody
+  signals a refusal by returning `ErrScope`; any other custody error is a port
+  failure.
 - `GIT_TRANSPORT_REMOTE_CHANGED`: the remote's advertised state differs from
-  the plan (another predecessor or unexpected refs), or the remote refused the
-  session with an `ERR` line.
+  the plan (another predecessor, an existing target ref or another object
+  format), or the remote refused with an `ERR` line in its advertisement or
+  in place of its report.
 - `GIT_TRANSPORT_ALREADY_CONSUMED`: a second, nil or zero gate run.
-- `GIT_TRANSPORT_PORT_FAILURE`: an owner or port fault, including a missing or
-  failing owner object reader whatever it returns, or a stream that closes
-  exactly between packets.
+- `GIT_TRANSPORT_PORT_FAILURE`: an owner or port fault, including a missing
+  stream, a stream that breaks the `io.Reader` contract, a missing or failing
+  owner object reader whatever it returns, or a pkt-line stream that closes
+  exactly between packets. A client that closes after requesting an update but
+  before its complete pack is a truncated pack (`PROTOCOL`).
 - `GIT_TRANSPORT_DEADLINE` and `GIT_TRANSPORT_CANCELLED` follow the context and
   take precedence when it has ended.
 
