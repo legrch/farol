@@ -34,7 +34,10 @@ func (s *computerConnector) healthMethod() desktop.Method {
 		}
 		defer func() { <-s.effects }()
 		slot := s.current
-		if slot == nil || slot.closing || slot.startupUncertain || input.Binding != slot.opened.Endpoint.Binding {
+		if slot == nil {
+			return s.ownerStoppedHealth(ctx, input)
+		}
+		if slot.closing || slot.startupUncertain || input.Binding != slot.opened.Endpoint.Binding {
 			return ingressOutcome(nil, computerUnavailable())
 		}
 		observed, err := slot.owner.ObserveHealth(ctx, connectorsvc.ObserveHealthQuery{
@@ -173,4 +176,27 @@ func healthHTTPStatus(value *uint32) *uint64 {
 	}
 	result := uint64(*value)
 	return &result
+}
+
+// Caller holds the existing connector effect gate. Only the original successful
+// owner-stop Close in this live backend can supply this negative observation.
+// No detached snapshot, persisted status or public binding can create it.
+func (s *computerConnector) ownerStoppedHealth(ctx context.Context, input wire.ComputerConnectorHealthRequest) (*desktop.Outcome, error) {
+	origin := s.closed
+	if s.current != nil || origin == nil || origin.consumed || !origin.ownerStopped || origin.retiredOwner == nil || input.Snapshot != nil || input.Binding != origin.binding || input.ExpectedInstanceId != origin.binding.RuntimeId || s.recoveryDisposition(ctx, origin, false) != "settled" {
+		return ingressOutcome(nil, computerUnavailable())
+	}
+	observed, err := origin.retiredOwner.ObserveOwnerStoppedHealth(ctx, input.ExpectedInstanceId)
+	if err != nil {
+		return ingressOutcome(nil, err)
+	}
+	if ctx.Err() != nil || s.closed != origin || s.current != nil || s.recoveryDisposition(ctx, origin, false) != "settled" {
+		return ingressOutcome(nil, computerUnavailable())
+	}
+	return ingressOutcome(&wire.ComputerConnectorHealthState{
+		Binding: input.Binding, ExpectedInstanceId: input.ExpectedInstanceId,
+		State: observed.State, Reason: observed.Reason, LocalReady: false,
+		ObservedAtMillis: pollingDecimal(observed.ObservedAtMillis),
+		ValidUntilMillis: pollingDecimal(observed.ValidUntilMillis),
+	}, nil)
 }

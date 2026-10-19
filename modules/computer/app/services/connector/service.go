@@ -22,15 +22,17 @@ const (
 )
 
 type Service struct {
-	gate         port.ConnectorGate
-	journal      port.ConnectorJournal
-	guard        port.CurrentConnectorGuard
-	launch       port.ConnectorLaunch
-	ceiling      port.ConnectorExecutionCeiling
-	binding      port.TaskBinding
-	phase        phase
-	clock        port.Clock
-	verification *verificationAttempt
+	gate                port.ConnectorGate
+	journal             port.ConnectorJournal
+	guard               port.CurrentConnectorGuard
+	launch              port.ConnectorLaunch
+	ceiling             port.ConnectorExecutionCeiling
+	binding             port.TaskBinding
+	phase               phase
+	clock               port.Clock
+	verification        *verificationAttempt
+	withdrawalConfirmed bool
+	ownerStopConfirmed  bool
 }
 
 var _ port.CurrentExecutionAdmission = (*Service)(nil)
@@ -220,11 +222,15 @@ func (s *Service) Withdraw(ctx context.Context) error {
 		s.gate.Unlock()
 		return failure()
 	}
+	wasActive := s.phase == active
 	s.phase = withdrawn
 	id := s.binding.ParticipantID
 	s.gate.Unlock()
 	if err := s.journal.WithdrawConnector(ctx, id); err != nil {
 		return classify(err)
 	}
+	s.gate.Lock()
+	s.withdrawalConfirmed = wasActive && ctx != nil && ctx.Err() == nil
+	s.gate.Unlock()
 	return nil
 }

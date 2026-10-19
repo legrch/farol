@@ -121,6 +121,12 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	defer func() { <-s.effects }()
 	// Consume an automatic attempt before any refusal; another operation ID or
 	// a later ledger observation cannot reopen the same recovery opportunity.
+	// Any new admission attempt retires the prior negative presentation, even
+	// when this attempt is refused before publication. Recovery correlation
+	// retains its existing one-shot consumption rules.
+	if s.closed != nil {
+		s.closed.ownerStopped = false
+	}
 	origin, recoveryErr := s.consumeRecovery(in)
 	if recoveryErr != nil {
 		return nil, recoveryErr
@@ -404,6 +410,13 @@ func (s *computerConnector) Close(ctx context.Context, operation string, in wire
 	}
 	s.closed = &connectorRecoveryOrigin{binding: in.Binding, publication: slot.guard.publication,
 		owner: s.root.ownerID, computer: s.root.computerID, ledger: s.mutations}
+	if in.Reason != nil && *in.Reason == "owner_stop" {
+		if err := slot.owner.ConfirmOwnerStop(ctx); err != nil {
+			return nil, err
+		}
+		s.closed.ownerStopped = true
+		s.closed.retiredOwner = slot.owner
+	}
 	disposition := s.recoveryDisposition(ctx, s.closed, false)
 	return &wire.ComputerConnectorClosed{Binding: in.Binding, Closed: true, Recovery: &disposition}, nil
 }

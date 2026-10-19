@@ -144,6 +144,23 @@ type ConnectionObservation struct {
 	LocalReady                 bool
 }
 
+// ObserveOwnerStoppedConnection is a fresh presentation observation of a
+// confirmed owner stop. Trusted lifecycle code supplies this fact independently
+// of detached health data. It carries no readiness, transport or retry claims.
+func ObserveOwnerStoppedConnection(now uint64) ConnectionObservation {
+	if !connectionTimestamp(now) {
+		return connectionObservation(ConnectionStateUnobserved, ConnectionReasonInvalidClock)
+	}
+	until, ok := connectionAdd(now, connectionSnapshotAge)
+	if !ok {
+		return connectionObservation(ConnectionStateUnobserved, ConnectionReasonTimestampOverflow)
+	}
+	return ConnectionObservation{
+		State: ConnectionStateStopped, Reason: ConnectionReasonOwnerStopped,
+		ObservedAtMillis: connectionMillis(now), ValidUntilMillis: connectionMillis(until),
+	}
+}
+
 // ObserveConnection uses only the supplied clock, generation and detached values.
 func ObserveConnection(context ConnectionContext, sample *ConnectionHealthSnapshot) ConnectionObservation {
 	if context.OwnerStopped {
