@@ -337,6 +337,8 @@ def main():
         timed_out = False
         observation = {"cancellationPublished": False}
         with (directory / "docker.stdout.log").open("xb") as stdout, (directory / "docker.stderr.log").open("xb") as stderr:
+            if stop.is_set():
+                return Outcome("BLOCKED", True, reason="CANCELLED_BEFORE_DOCKER")
             child = subprocess.Popen(command, env=docker.env, stdin=subprocess.DEVNULL,
                                      stdout=stdout, stderr=stderr, start_new_session=True)
             try:

@@ -36,6 +36,52 @@ class AffectedHost(unittest.TestCase):
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, "HOST_SOURCE_MISMATCH"):
                 require_host_source(self.source, {**self.source, key: value})
 
+    def test_cancel_during_host_setup_leaves_docker_child_unissued(self):
+        import os
+        import affected_host as host
+        for phase in ["command-record", "log-setup"]:
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory(prefix="testops-host-cancel-") as folder:
+                root = Path(folder).resolve(); parent = root / "_output/testops"; parent.mkdir(parents=True)
+                ref = parent / "reference.json"; ref.write_text("{}")
+                (root / "package-lock.json").write_text("{}")
+                options = SimpleNamespace(scope="farol-testops-aabbccdd", dependency_reference=ref,
+                    dependency_reference_sha256="e" * 64, base="d" * 40, output="cancelled",
+                    source_volume="source", seed_volume="seed", sdk_volume="sdk", dependency_volume="deps", focused=True,
+                    docker=Path("/not-executed/docker"), socket=Path("/not-executed/socket"))
+                changes = {"requestedBase":"d" * 40, "paths":[{"path":"tests/unit/a.test.mjs"}]}
+                handlers = {}; outcomes = []
+                original_write, original_open = Path.write_text, Path.open
+                def write_file(path, *args, **kwargs):
+                    result = original_write(path, *args, **kwargs)
+                    if phase == "command-record" and path.name == "docker-command.json":
+                        handlers[host.signal.SIGINT](None, None)
+                    return result
+                def open_file(path, *args, **kwargs):
+                    handle = original_open(path, *args, **kwargs)
+                    if phase == "log-setup" and path.name == "docker.stderr.log":
+                        handlers[host.signal.SIGINT](None, None)
+                    return handle
+                def run_fixed(root, jobs, budget, platform, binding, execute, output, stop):
+                    directory = parent / output; directory.mkdir()
+                    outcomes.append(execute(jobs[0], directory, binding()))
+                    return {"status":outcomes[-1].status}
+                with patch.dict(os.environ), patch.object(host, "ROOT", root), \
+                        patch.object(host, "require_host_owner"), patch.object(host.argparse.ArgumentParser, "parse_args", return_value=options), \
+                        patch.object(host, "identity", return_value=self.source), patch.object(host, "changed", return_value=changes), \
+                        patch.object(host, "reference", return_value=host.DEPENDENCIES), patch.object(host, "Docker") as docker, \
+                        patch.object(host.signal, "signal", side_effect=lambda sig, handler:handlers.update({sig:handler})), \
+                        patch.object(host, "iteration_command", return_value=("unissued", ["NOT_EXECUTED"])), \
+                        patch.object(host, "run", side_effect=run_fixed), patch.object(Path, "write_text", new=write_file), \
+                        patch.object(Path, "open", new=open_file), \
+                        patch.object(host.subprocess, "Popen", side_effect=AssertionError("cancelled Docker must remain unissued")) as launch:
+                    docker.return_value.engine.return_value = {"synthetic":True}
+                    self.assertEqual(host.main(), 1)
+                    launch.assert_not_called()
+                    docker.return_value.removed.assert_not_called()
+                self.assertEqual(outcomes[0].status, "BLOCKED")
+                self.assertTrue(outcomes[0].terminal)
+                self.assertEqual(outcomes[0].reason, "CANCELLED_BEFORE_DOCKER")
+
     def test_unqualified_host_uid_refuses_before_source_docker_or_private_mount_creation(self):
         from affected_host import main, require_host_owner
         with patch("affected_host.os.geteuid", return_value=501):

@@ -355,6 +355,9 @@ def compiler_affected(root, changes, metadata):
         elif (test_file(p) and p in typescript.get("inputHashes", {})
               and not p.endswith((".e2e.mjs", ".d.ts", ".d.mts"))):
             include(p, "typescript-native-reverse-import:" + p)
+            for consumer in tests:
+                if consumer not in typescript["inputHashes"] and consumer not in go_owners:
+                    broadened.append({"path": consumer, "reason": "CONSUMER_OUTSIDE_COMPILER_PROJECTS"})
             for gap in typescript.get("gaps", []):
                 owner = safe_path(gap["file"])
                 if test_file(owner):

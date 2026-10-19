@@ -147,6 +147,19 @@ class Repository(unittest.TestCase):
         metadata = self.compiler_metadata(); metadata["go"] = None
         self.assertEqual(testops.compiler_affected(self.root, self.changes(), metadata)["status"], "NEEDS_REVIEW")
 
+    def test_unchanged_consumer_outside_compiler_project_prevents_narrowing(self):
+        self.write("tests/consumer.test.mjs", "import './a.test.ts';\n")
+        self.commit()
+        self.base = self.run_git("rev-parse", "HEAD").strip()
+        self.write("tests/a.test.ts", "export const changed = 2;\n")
+        changes = self.changes()
+        self.assertEqual([row["path"] for row in changes["paths"]], ["tests/a.test.ts"])
+        plan = testops.compiler_affected(self.root, changes, self.compiler_metadata())
+        self.assertEqual(plan["status"], "NEEDS_REVIEW")
+        self.assertEqual({p["path"] for p in plan["selected"]},
+                         {p for p in testops.source_files(self.root) if testops.test_file(p)})
+        self.assertIn({"path": "tests/consumer.test.mjs", "reason": "CONSUMER_OUTSIDE_COMPILER_PROJECTS"}, plan["broadened"])
+
     def test_native_metadata_stale_incomplete_and_redirected_inputs_block(self):
         metadata = self.compiler_metadata()
         self.write("src/a.ts", "export const changed = 1;\n")
@@ -306,6 +319,25 @@ class Schedule(unittest.TestCase):
 
 
 class Measurement(unittest.TestCase):
+    def test_cancel_during_log_setup_leaves_measurement_child_unissued(self):
+        with tempfile.TemporaryDirectory(prefix="testops-measure-cancel-") as folder:
+            original = Path.open
+            def open_file(path, *args, **kwargs):
+                handle = original(path, *args, **kwargs)
+                if path.name == "cancelled.log":
+                    measure.STOP.set()
+                return handle
+            measure.STOP.clear()
+            try:
+                with patch.object(Path, "open", new=open_file), \
+                        patch("bounded_capture.subprocess.Popen", side_effect=AssertionError("cancelled child must remain unissued")) as launch:
+                    result = measure.run_probe(("cancelled", ["NOT_EXECUTED"]), Path(folder), None)
+                    self.assertEqual(result["status"], "NOT_RUN")
+                    self.assertEqual(result["reason"], "CANCELLED")
+                    launch.assert_not_called()
+            finally:
+                measure.STOP.clear()
+
     def test_impersonating_node_is_rejected_before_execution(self):
         with tempfile.TemporaryDirectory() as folder:
             fake = Path(folder) / "node"

@@ -20,7 +20,7 @@ import threading
 import time
 
 import testops
-from bounded_capture import OutputBudget, start_capture
+from bounded_capture import CommandCancelled, OutputBudget, start_capture
 from deadline import CommandTimeout
 
 ROOT = testops.ROOT
@@ -95,7 +95,10 @@ def run_probe(probe, directory, env):
     log = directory / (name + ".log")
     stage = {}
     budget = OutputBudget(1024 * 1024)
-    capture = start_capture(command, ROOT, log, log, stage, budget, env=env)
+    try:
+        capture = start_capture(command, ROOT, log, log, stage, budget, env=env, cancelled=STOP.is_set)
+    except CommandCancelled:
+        return {"id": name, "status": "NOT_RUN", "reason": "CANCELLED"}
     child = capture.child
     stop_sent = None
     forced = False
