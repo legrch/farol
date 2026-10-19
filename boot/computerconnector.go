@@ -410,10 +410,9 @@ func (s *computerConnector) Close(ctx context.Context, operation string, in wire
 	}
 	s.closed = &connectorRecoveryOrigin{binding: in.Binding, publication: slot.guard.publication,
 		owner: s.root.ownerID, computer: s.root.computerID, ledger: s.mutations}
-	if in.Reason != nil && *in.Reason == "owner_stop" {
-		if err := slot.owner.ConfirmOwnerStop(ctx); err != nil {
-			return nil, err
-		}
+	// The original endpoint close and journal withdrawal already acknowledged.
+	// Presentation refusal can hide stopped health, never erase that Close.
+	if in.Reason != nil && *in.Reason == "owner_stop" && slot.owner.ConfirmOwnerStop(ctx) == nil {
 		s.closed.ownerStopped = true
 		s.closed.retiredOwner = slot.owner
 	}

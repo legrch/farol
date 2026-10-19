@@ -842,6 +842,22 @@ try {
     assert.equal(settlement.settled, true);
     assert.equal(settlement.view.state, "stopped");
     assert.equal(settlement.view.label, "Stopped by owner");
+    assert.ok(
+      settlement.view.detail.includes("Polling history is not included"),
+    );
+    assert.ok(
+      settlement.view.delivery.includes(
+        "Response upload history is not included",
+      ),
+    );
+    assert.ok(
+      !settlement.view.detail.includes("No successful server poll observed"),
+    );
+    assert.ok(
+      !settlement.view.delivery.includes(
+        "No accepted response upload observed",
+      ),
+    );
     const current = await poll(
       () => bootstrap(second),
       (value) => value.connectionStatus?.state === "stopped",
@@ -853,7 +869,10 @@ try {
       (value) => value === "stopped",
       "OWNER_STOP_UI_NOT_CURRENT",
     );
-    assert.ok((await card.innerText()).includes("Stopped by owner"));
+    const cardText = await card.innerText();
+    assert.ok(cardText.includes("Stopped by owner"));
+    assert.ok(cardText.includes("Polling history is not included"));
+    assert.ok(cardText.includes("Response upload history is not included"));
     assert.equal(
       current.configuration.settings.connectors.secureMcp.runtime,
       null,

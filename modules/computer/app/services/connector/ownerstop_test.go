@@ -102,3 +102,26 @@ func TestOwnerStoppedHealthRejectsCrossedCancelledAndInvalidClock(t *testing.T) 
 		}
 	}
 }
+
+func TestOwnerStopNeedsOriginalPublicationAcknowledgement(t *testing.T) {
+	f := newFixture(t)
+	f.journal.publishErr = errors.New("original publication ACK lost")
+	if err := f.owner.Publish(ctx); err == nil {
+		t.Fatal("fixture did not lose publication acknowledgement")
+	}
+	if err := f.owner.Withdraw(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.owner.ConfirmOwnerStop(ctx); err == nil {
+		t.Fatal("unconfirmed original publication became stopped proof")
+	}
+	if got, err := f.owner.ObserveOwnerStoppedHealth(ctx, "runtime"); got != nil || err == nil {
+		t.Fatal("unconfirmed original owner disclosed stopped", got, err)
+	}
+	if _, err := f.owner.Reconnect(ctx); err == nil {
+		t.Fatal("withdrawal revived original publication")
+	}
+	if f.journal.publishes.Load() != 1 || f.journal.withdrawals.Load() != 1 {
+		t.Fatal("observation changed journal")
+	}
+}

@@ -933,3 +933,25 @@ it("recovers across fresh capture wrappers with the same inner owner and fences 
   await tracker.sample();
   expect(tracker.view().state).toBe("recent_transport");
 });
+
+it("does not mistake omitted stopped history for observed absence of success", () => {
+  expect(connectionStatusView(sample(), 200000, true).detail).toContain(
+    "Last successful server poll:",
+  );
+  const stopped: ComputerConnectorHealthState = {
+    binding,
+    expectedInstanceId: "instance",
+    state: "stopped",
+    reason: "owner_stopped",
+    observedAtMillis: "200000",
+    validUntilMillis: "245000",
+    localReady: false,
+  };
+  const view = connectionStatusView(stopped, 200000, true);
+  expect(view.label).toBe("Stopped by owner");
+  expect(view.detail).toContain("Polling history is not included");
+  expect(view.delivery).toContain("Response upload history is not included");
+  expect(view.detail).not.toContain("No successful server poll observed");
+  expect(view.delivery).not.toContain("No accepted response upload observed");
+  expect(view.delivery).toContain("External attachment has not been confirmed");
+});

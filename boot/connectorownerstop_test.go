@@ -117,3 +117,74 @@ func TestGenericOrFailedCloseCannotProduceOwnerStoppedHealth(t *testing.T) {
 		})
 	}
 }
+
+// Forces the actual renewal-currentness path into the close/withdraw interval.
+// Deterministic injected endpoint ordering, not a native scheduling witness.
+func TestOwnerStopRenewalReadAfterGuardClosureKeepsKnownAcknowledgement(t *testing.T) {
+	s, j, _, _, _ := connectorMutationFixture(t)
+	slot := s.current
+	if slot.renewalScope == nil {
+		t.Fatal("fixture lacks original renewal scope")
+	}
+	checked := false
+	slot.endpoint = recoveryClosingEndpoint{connectorEndpoint: slot.endpoint, after: func() {
+		called := false
+		err := s.root.withRenewalCurrent(context.Background(), slot.renewalScope, func() error { called = true; return nil })
+		if err == nil || called {
+			t.Fatal("closed guard allowed renewal currentness")
+		}
+		checked = true
+	}}
+	reason := "owner_stop"
+	closed, err := s.Close(context.Background(), "owner-stop-after-renewal", wire.ComputerConnectorClose{Binding: slot.opened.Endpoint.Binding, Reason: &reason})
+	if err != nil || closed == nil || !closed.Closed {
+		t.Fatalf("known successful closure lost to renewal: %+v %v", closed, err)
+	}
+	if !checked || s.current != nil || j.withdrawals != 1 || j.publications != 1 {
+		t.Fatal("close did not retain original acknowledgement")
+	}
+	got := healthRead(t, s, wire.ComputerConnectorHealthRequest{Binding: closed.Binding, ExpectedInstanceId: closed.Binding.RuntimeId})
+	if got.State != "stopped" || got.Reason != "owner_stopped" || got.LocalReady {
+		t.Fatal("original confirmed stop was not observable", got)
+	}
+	if _, err := slot.owner.Reconnect(context.Background()); err == nil {
+		t.Fatal("negative stop revived old admission")
+	}
+}
+
+type ownerStopCancelWithdrawJournal struct {
+	*connectorJournalFixture
+	cancel context.CancelFunc
+}
+
+func (j ownerStopCancelWithdrawJournal) WithdrawConnector(ctx context.Context, id string) error {
+	err := j.connectorJournalFixture.WithdrawConnector(ctx, id)
+	if err == nil {
+		j.cancel()
+	}
+	return err
+}
+
+func TestOwnerStopPresentationRefusalCannotEraseAcknowledgedClose(t *testing.T) {
+	s, j, _, endpoint, in := newConnectorFixture(t)
+	callCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.journal = ownerStopCancelWithdrawJournal{connectorJournalFixture: j, cancel: cancel}
+	opened, err := s.Open(context.Background(), "open", in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reason := "owner_stop"
+	closed, err := s.Close(callCtx, "close", wire.ComputerConnectorClose{Binding: opened.Endpoint.Binding, Reason: &reason})
+	if err != nil || closed == nil || !closed.Closed {
+		t.Fatalf("presentation refusal erased known close: %+v %v", closed, err)
+	}
+	if s.current != nil || endpoint.closes != 1 || j.withdrawals != 1 || j.publications != 1 || s.closed == nil || s.closed.ownerStopped {
+		t.Fatal("presentation refusal changed closure or invented stopped proof")
+	}
+	out, err := healthCall(t, s, context.Background(), wire.ComputerConnectorHealthRequest{Binding: closed.Binding, ExpectedInstanceId: closed.Binding.RuntimeId}, "")
+	healthRefused(t, out, err)
+	if _, err := s.Close(context.Background(), "replay", wire.ComputerConnectorClose{Binding: closed.Binding, Reason: &reason}); err == nil || endpoint.closes != 1 || j.withdrawals != 1 {
+		t.Fatal("known close was replayed")
+	}
+}

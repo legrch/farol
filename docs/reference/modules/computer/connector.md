@@ -70,7 +70,10 @@ does not cancel native processes, settle mutation outcomes or implement drain.
 
 An inherited host Close may additionally identify the explicit `owner_stop`
 cause. Only successful original endpoint closure and acknowledged withdrawal of
-an active owner let root confirm this cause. A separate read-only health path
+an owner with a known original publication let root confirm this cause. A
+concurrent negative renewal check cannot erase that publication history or
+restore admission. Presentation eligibility is separate from acknowledgement of
+an already successful Close; refusal to present cannot turn it into a failure. A separate read-only health path
 can then observe that retired owner while the same backend, settings consent and
 settled operation ledger remain current. It returns only `stopped/owner_stopped`
 with a bounded presentation timestamp: no local readiness, historical polling,
