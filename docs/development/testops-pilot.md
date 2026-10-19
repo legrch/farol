@@ -1,0 +1,49 @@
+# TestOps planning and measurement pilot
+
+This first adoption slice adds read-only inventory and deterministic iteration
+planning. It is experimental and needs independent review before integration.
+Existing source, native, package and release gates remain authoritative.
+
+## Commands
+
+`task test:inventory` lists observed command declarations and test files with
+source hashes. Static declaration discovery does not establish runtime effects,
+platform support or complete CI coverage. Run
+`node tooling/testops/catalog.mjs .` for the data-only Task include, namespace,
+alias and dependency catalog. It uses the already locked Prettier YAML parser;
+it never evaluates Task variables or shell expressions. Unresolved declarations
+remain explicit gaps.
+
+`task test:affected -- --base main --explain` includes committed changes from the
+explicit merge base, staged, unstaged, untracked and physical source differences.
+Reasons accompany selection. Unknown mappings broaden selection and return
+NEEDS_REVIEW; source redirects and hidden index state refuse admission. This is
+PLAN_ONLY and never executes tests or replaces final acceptance. Compiler-derived
+metadata is an optional advanced input whose producer is not part of this slice;
+without it the conservative source planner remains usable.
+
+`python3 -B tooling/testops/testops.py dag --manifest PLAN.json --jobs 2` simulates
+declared dependencies and exclusive resources. Simulation timings are estimates,
+not measured CI speed or execution authority. The actual CI scheduler is a later
+independently qualified adoption slice.
+
+`python3 -B tooling/testops/measure.py --help` describes the opt-in bounded timing
+experiment. It executes only its three fixed documentation/import-boundary
+checks against authenticated tools and source. Capture a complete baseline before
+comparison; preserve failures, tool identities, setup limits and source hashes.
+This experiment is not a full project CI benchmark.
+
+## Verification and remaining delivery
+
+Run `python3 -B -m unittest discover -s tooling/testops -p test_testops.py` and
+`node --test --test-concurrency=1 tooling/testops/catalog.test.mjs` using the
+declared toolchain. They use disposable fixtures. Run `node
+tooling/testops/registry.mjs` to observe existing source registrations; this
+adapter does not alter their membership or execute a suite.
+
+This slice retains all existing public commands and CI ordering. It does not
+introduce a new green partial root test aggregate, promote Linux skips to native PASS,
+or implement deployed DEV/PROD commands. E2E describes behavioral scope; deployed
+DEV/PROD verification, controlled-write QA and local product fixtures remain
+separate adoption obligations. Private cross-project inventories and raw test
+evidence remain outside source history.

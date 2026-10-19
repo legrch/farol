@@ -1,6 +1,16 @@
 version: "3"
 
 tasks:
+  test:affected:
+    desc: Explain deterministic affected selection; PLAN_ONLY, never executes tests
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- /usr/bin/python3 -B tooling/testops/testops.py affected {{.CLI_ARGS}}
+
+  test:inventory:
+    desc: Inventory tracked test and command declarations without executing them
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- /usr/bin/python3 -B tooling/testops/testops.py inventory
+
   checkpoint:
     desc: Validate exact-source evidence for a local unaccepted checkpoint; never commits or accepts
     cmds:
