@@ -68,6 +68,29 @@ reactivate this owner. The journal may still require Lead's exact reconciliation
 neither reconnect, status nor these APIs replay an unsettled write. This service
 does not cancel native processes, settle mutation outcomes or implement drain.
 
+An inherited host Close may additionally identify the explicit `owner_stop`
+cause. Only successful original endpoint closure and acknowledged withdrawal of
+an owner with a known original publication let root confirm this cause. A
+concurrent negative renewal check cannot erase that publication history or
+restore admission. Presentation eligibility is separate from acknowledgement of
+an already successful Close; refusal to present cannot turn it into a failure. A separate read-only health path
+can then observe that retired owner while the same backend, settings consent and
+settled operation ledger remain current. It returns only `stopped/owner_stopped`
+with a bounded presentation timestamp: no local readiness, historical polling,
+upload, retry or execution authority. Ordinary Close, failed/unknown drain,
+detached snapshots, a replacement backend and every new Open attempt cannot
+produce or preserve this observation. The service's positive `WithCurrent` and
+`Reconnect` remain unavailable after withdrawal.
+
+Desktop publishes this Go result only after its complete explicit Stop drain,
+stopped-settings publication and verification-receipt cleanup all succeed. It
+retains the exact original Close acknowledgement and current owner/core/helper
+identities and Computer/connector generations. Pending admission, a running or
+uncertain helper, changed settings and Quit/update hide the presentation. An
+already stopped profile after cold launch has no such volatile receipt and stays
+unobserved. This is current-backend presentation, not persisted stop authority,
+automatic reconnection, native closure proof or installed acceptance.
+
 Trusted root now exposes `computer.connector.open/close` only on the inherited
 host pipe. Open consumes the current acknowledged Go Settings publication,
 mints the execution correlations above and registers a private socket on that

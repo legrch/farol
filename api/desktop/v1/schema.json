@@ -4410,6 +4410,11 @@
       "fields": {
         "binding": {
           "type": "ComputerConnectorBinding"
+        },
+        "reason": {
+          "type": "text",
+          "values": ["owner_stop"],
+          "optional": true
         }
       }
     },

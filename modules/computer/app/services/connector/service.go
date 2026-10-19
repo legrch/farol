@@ -22,15 +22,18 @@ const (
 )
 
 type Service struct {
-	gate         port.ConnectorGate
-	journal      port.ConnectorJournal
-	guard        port.CurrentConnectorGuard
-	launch       port.ConnectorLaunch
-	ceiling      port.ConnectorExecutionCeiling
-	binding      port.TaskBinding
-	phase        phase
-	clock        port.Clock
-	verification *verificationAttempt
+	gate                 port.ConnectorGate
+	journal              port.ConnectorJournal
+	guard                port.CurrentConnectorGuard
+	launch               port.ConnectorLaunch
+	ceiling              port.ConnectorExecutionCeiling
+	binding              port.TaskBinding
+	phase                phase
+	clock                port.Clock
+	verification         *verificationAttempt
+	publicationConfirmed bool
+	withdrawalConfirmed  bool
+	ownerStopConfirmed   bool
 }
 
 var _ port.CurrentExecutionAdmission = (*Service)(nil)
@@ -137,7 +140,13 @@ func (s *Service) Publish(ctx context.Context) error {
 		}
 		return failure()
 	}
-	return s.guarded(ctx, func() error { s.phase = active; return nil })
+	if err = s.guarded(ctx, func() error { s.phase = active; return nil }); err != nil {
+		return err
+	}
+	// Retain only the known original publication acknowledgement. A later
+	// negative currentness check cannot erase it or reactivate this owner.
+	s.publicationConfirmed = true
+	return nil
 }
 
 // WithCurrent provides an independent value under the synchronous owner gate.
@@ -226,5 +235,8 @@ func (s *Service) Withdraw(ctx context.Context) error {
 	if err := s.journal.WithdrawConnector(ctx, id); err != nil {
 		return classify(err)
 	}
+	s.gate.Lock()
+	s.withdrawalConfirmed = s.publicationConfirmed && ctx != nil && ctx.Err() == nil
+	s.gate.Unlock()
 	return nil
 }

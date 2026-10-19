@@ -212,13 +212,43 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 const [modulePath, helperPath, stage, archive, verifierPath, manifestJson, scenario] = process.argv.slice(1);
+if (scenario === "delayed-bootstrap") await new Promise(resolve => setTimeout(resolve, 2500));
 const { createUpdatePackageVerifier } = await import(pathToFileURL(modulePath).href);
 const originalOpen = fs.open.bind(fs);
+const originalLstat = fs.lstat.bind(fs);
+let resourceStarted = false;
+let resourceActive = false;
+let resourceStartedAt;
+let resourceDeadline;
+const resourceExpired = () => {
+  process.stderr.write("ARTIFACT_READ_DEADLINE\\n");
+  process.exit(70);
+};
+const finishResourceRead = () => {
+  if (!resourceActive) return;
+  resourceActive = false;
+  clearTimeout(resourceDeadline);
+  // A synchronous stall can delay the timer callback. Check monotonic elapsed
+  // time before allowing completion to cancel that callback.
+  if (performance.now() - resourceStartedAt >= 2000) resourceExpired();
+};
+// This two-second oracle covers the resource operation itself. Node/module
+// startup and the already-awaited native extraction have a separate outer bound.
+fs.lstat = async (file, ...rest) => {
+  if (path.basename(String(file)) === "artifact.json" && !resourceStarted) {
+    resourceStarted = true;
+    resourceActive = true;
+    resourceStartedAt = performance.now();
+    resourceDeadline = setTimeout(resourceExpired, 2000);
+  }
+  return originalLstat(file, ...rest);
+};
 let unboundedReads = 0;
 let maximumReadLength = 0;
 let checkedSize = 0;
 fs.open = async (file, flags, ...rest) => {
   if (path.basename(String(file)) !== "artifact.json") return originalOpen(file, flags, ...rest);
+  if (scenario === "stalled-read") await new Promise(resolve => setTimeout(resolve, 2500));
   if (["fifo", "regular", "symlink", "directory"].includes(scenario)) {
     await fs.rename(file, file + ".previous");
     if (scenario === "fifo") execFileSync("/usr/bin/mkfifo", [file]);
@@ -228,6 +258,14 @@ fs.open = async (file, flags, ...rest) => {
   }
   const descriptor = await originalOpen(file, flags, ...rest);
   checkedSize = Number((await descriptor.stat()).size);
+  const originalClose = descriptor.close.bind(descriptor);
+  descriptor.close = async (...args) => {
+    try {
+      const result = await originalClose(...args);
+      if (scenario === "stalled-sync-close") Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2500);
+      return result;
+    } finally { finishResourceRead(); }
+  };
   const originalRead = descriptor.read.bind(descriptor);
   const originalReadFile = descriptor.readFile.bind(descriptor);
   let changed = false;
@@ -261,6 +299,7 @@ let code = null;
 let accepted = false;
 try { await verifier.verifyPackage("opaque", JSON.parse(manifestJson)); accepted = true; await verifier.discard("opaque"); }
 catch (error) { code = error.code ?? null; }
+finishResourceRead();
 let measured = false;
 try { await fs.stat(verifierPath + ".called"); measured = true; } catch {}
 process.stdout.write(JSON.stringify({ code, accepted, measured, unboundedReads, maximumReadLength, checkedSize, stages: (await fs.readdir(stage)).length }));
@@ -277,6 +316,9 @@ describe("extracted artifact descriptor and bounded read", () => {
     "growth",
     "metadata",
     "read-replacement",
+    "delayed-bootstrap",
+    "stalled-read",
+    "stalled-sync-close",
   ]) {
     it(`handles ${scenario} without an unbounded read or premature measurement`, async () => {
       await disposable(async ({ directory, stage }) => {
@@ -352,14 +394,27 @@ with zipfile.ZipFile(sys.argv[1], "w", compression=zipfile.ZIP_DEFLATED) as arch
             JSON.stringify(expected),
             scenario,
           ],
-          deadline,
+          // Bound preparation separately; the in-probe resource oracle stays 2s.
+          { ...deadline, timeout: 10_000 },
         );
+        if (["stalled-read", "stalled-sync-close"].includes(scenario)) {
+          expect(result.error, result.stderr).toBeUndefined();
+          expect(result.signal).toBeNull();
+          expect(result.status, result.stderr).toBe(70);
+          expect(result.stderr).toBe("ARTIFACT_READ_DEADLINE\n");
+          await expect(fs.stat(verifierPath + ".called")).rejects.toMatchObject(
+            { code: "ENOENT" },
+          );
+          expect(await fs.readdir(stage)).toHaveLength(1);
+          return;
+        }
         assertExited(result);
         const outcome = JSON.parse(result.stdout);
+        const ordinary = ["ordinary", "delayed-bootstrap"].includes(scenario);
         expect(outcome).toMatchObject({
-          code: scenario === "ordinary" ? null : "package_mismatch",
-          accepted: scenario === "ordinary",
-          measured: scenario === "ordinary",
+          code: ordinary ? null : "package_mismatch",
+          accepted: ordinary,
+          measured: ordinary,
           unboundedReads: 0,
           stages: 0,
         });

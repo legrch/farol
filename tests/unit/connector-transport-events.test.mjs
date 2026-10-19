@@ -34,7 +34,7 @@ async function until(predicate) {
   throw Error("CONTROLLED_EVENT_DID_NOT_REACH_BOUNDARY");
 }
 
-function fixture({ e2e = false } = {}) {
+function fixture({ e2e = false, statusKind = "running" } = {}) {
   const power = new EventEmitter();
   const timeouts = [];
   const intervals = [];
@@ -52,12 +52,15 @@ function fixture({ e2e = false } = {}) {
       getTunnelObservation: vi.fn(() => null),
     },
   });
+  const statusCapture = Object.freeze({ kind: statusKind, original });
   let eligible = true;
   const context = {
     process: new EventEmitter(),
     isolatedE2EHome: e2e ? "/private/tmp/owned-native-test-home" : undefined,
-    captureConnectorHealth: vi.fn(() => (eligible ? original : null)),
-    connectorHealthCurrent: vi.fn((value) => value === original && eligible),
+    captureConnectionStatus: vi.fn(() => (eligible ? statusCapture : null)),
+    connectionStatusCurrent: vi.fn(
+      (value) => value === statusCapture && eligible,
+    ),
     ConnectorTransportWatch,
     connectorTransportWatch: null,
     connectorTransportTimer: null,
@@ -494,13 +497,18 @@ it.each([
   },
 );
 
-it.each([false, true])(
-  "native observation completion waits behind earlier reads and fences power interruption=%s",
-  async (interrupted) => {
+it.each([
+  [false, "running"],
+  [true, "running"],
+  [false, "owner-stopped"],
+  [true, "owner-stopped"],
+])(
+  "native observation completion waits behind earlier reads and fences power interruption=%s, capture=%s",
+  async (interrupted, statusKind) => {
     expect(
       fixture().context.process.listenerCount("farol-e2e-observe-connection"),
     ).toBe(0);
-    const f = fixture({ e2e: true });
+    const f = fixture({ e2e: true, statusKind });
     await Promise.resolve();
     const before = f.context.connectorConnection.sample.mock.calls.length;
     const earlier = Promise.withResolvers(),
@@ -508,10 +516,11 @@ it.each([false, true])(
     f.context.connectorConnection.sample
       .mockReturnValueOnce(earlier.promise)
       .mockReturnValueOnce(fresh.promise);
-    f.context.currentConnectionStatus.mockReturnValue({
-      state: "unobserved",
+    const view = {
+      state: statusKind === "owner-stopped" ? "stopped" : "unobserved",
       revision: 17,
-    });
+    };
+    f.context.currentConnectionStatus.mockReturnValue(view);
     let receipt = null;
     expect(
       f.context.process.emit("farol-e2e-observe-connection", (value) => {
@@ -529,9 +538,7 @@ it.each([false, true])(
     fresh.resolve();
     await until(() => receipt !== null);
     expect(receipt).toEqual(
-      interrupted
-        ? { settled: false }
-        : { settled: true, view: { state: "unobserved", revision: 17 } },
+      interrupted ? { settled: false } : { settled: true, view },
     );
     expect(f.power.listenerCount("suspend")).toBe(1);
     expect(f.power.listenerCount("resume")).toBe(1);

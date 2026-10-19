@@ -24,6 +24,7 @@ type ConnectorHostMethod =
 export type ConnectorClosureReceipt = Readonly<{
   requestId: string;
   operationId: string;
+  reason?: "owner_stop";
   result: Readonly<ComputerConnectorClosed>;
 }>;
 
@@ -360,7 +361,83 @@ export class ConnectorHostBridge {
   get closureReceipt(): ConnectorClosureReceipt | undefined {
     return this.closure;
   }
-  close(): Promise<void> {
+  get ownerStoppedReceipt(): ConnectorClosureReceipt | undefined {
+    if (
+      this.current ||
+      this.pending ||
+      this.blocked ||
+      this.closeInFlight ||
+      this.closureConsumed ||
+      this.closure?.reason !== "owner_stop" ||
+      this.closure.result.recovery !== "settled"
+    )
+      return undefined;
+    return this.closure;
+  }
+
+  async observeOwnerStoppedHealth(
+    original: ConnectorClosureReceipt,
+  ): Promise<ComputerConnectorHealthState> {
+    if (this.ownerStoppedReceipt !== original)
+      throw new BridgeError("unavailable", "connector_health_unavailable");
+    const binding = original.result.binding;
+    const query: ComputerConnectorHealthRequest = {
+      binding,
+      expectedInstanceId: binding.runtimeId,
+    };
+    const id = randomUUID();
+    const outcome = await this.client.request(
+      "computer.connector.health",
+      query as unknown as Json,
+      { id, timeoutMs: 5000 },
+    );
+    if (this.ownerStoppedReceipt !== original)
+      throw new BridgeError("unavailable", "connector_health_unavailable");
+    if (
+      !validate("Outcome", outcome) ||
+      outcome.requestId !== id ||
+      outcome.operationId !== undefined ||
+      outcome.context.profileId !== this.context.profileId ||
+      outcome.context.backendGeneration !== this.context.backendGeneration
+    )
+      throw new BridgeError("unknown", "crossed_connector_health");
+    if (outcome.status !== "ok")
+      throw new BridgeError(outcome.status, "connector_health_unavailable");
+    if (
+      outcome.code !== undefined ||
+      !validate("ComputerConnectorHealthState", outcome.data)
+    )
+      throw new BridgeError("unknown", "invalid_connector_health");
+    const value = outcome.data as unknown as ComputerConnectorHealthState;
+    if (
+      Object.entries(binding).some(
+        ([key, field]) =>
+          value.binding[key as keyof typeof value.binding] !== field,
+      ) ||
+      value.expectedInstanceId !== binding.runtimeId ||
+      value.sampleAtMillis !== undefined
+    )
+      throw new BridgeError("unknown", "crossed_connector_health");
+    // This retired route can disclose only the original negative observation.
+    // It cannot restore currentBinding, readiness or a positive transport fact.
+    if (
+      value.state !== "stopped" ||
+      value.reason !== "owner_stopped" ||
+      value.localReady ||
+      value.observedAtMillis === undefined ||
+      value.validUntilMillis === undefined ||
+      value.lastPollSuccessMillis !== undefined ||
+      value.lastResponseAcceptedMillis !== undefined ||
+      value.nextRetryMillis !== undefined
+    )
+      throw new BridgeError("unknown", "invalid_connector_health");
+    return Object.freeze({
+      ...value,
+      binding: Object.freeze({ ...value.binding }),
+    });
+  }
+
+  close(reason?: "owner_stop"): Promise<void> {
     // Join the original request, including its exact failure, before checking
     // pending: an in-flight open still has no close promise and remains fenced.
     if (this.closeInFlight) return this.closeInFlight;
@@ -371,22 +448,29 @@ export class ConnectorHostBridge {
     const current = this.current;
     if (!current) return Promise.resolve();
     this.pending = true;
-    this.closeInFlight = this.closeCurrent(current).finally(() => {
+    this.closeInFlight = this.closeCurrent(current, reason).finally(() => {
       this.pending = false;
       this.closeInFlight = undefined;
     });
     return this.closeInFlight;
   }
-  private async closeCurrent(current: ComputerConnectorOpened): Promise<void> {
+  private async closeCurrent(
+    current: ComputerConnectorOpened,
+    reason?: "owner_stop",
+  ): Promise<void> {
     const id = randomUUID(),
       operationId = randomUUID();
     try {
       const out = await this.client.request(
         "computer.connector.close",
-        { binding: current.endpoint.binding } as unknown as Json,
+        {
+          binding: current.endpoint.binding,
+          ...(reason ? { reason } : {}),
+        } as unknown as Json,
         { id, operationId, timeoutMs: 6000 },
       );
       if (
+        !validate("Outcome", out) ||
         out.status !== "ok" ||
         out.requestId !== id ||
         out.operationId !== operationId ||
@@ -409,6 +493,7 @@ export class ConnectorHostBridge {
       this.closure = Object.freeze({
         requestId: id,
         operationId,
+        ...(reason ? { reason } : {}),
         result: Object.freeze({
           ...closed,
           binding: Object.freeze({ ...closed.binding }),

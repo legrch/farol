@@ -823,7 +823,108 @@ try {
   );
   await diagnosticPage(second);
   await check(second, "recent", "The helper reported a recent server poll.");
+  const helperBeforeStop = healthStatus
+    ? (await receiptList()).find((value) => value.phase === "running")
+    : undefined;
   await configure(second, { kind: "connector.stop" });
+  if (healthStatus) {
+    assert.ok(helperBeforeStop, "OWNER_STOP_ORIGINAL_HELPER_MISSING");
+    const settlement = await bounded(
+      second.application.evaluate(
+        () =>
+          new Promise((resolve, reject) => {
+            if (!process.emit("farol-e2e-observe-connection", resolve))
+              reject(new Error("HEALTH_OBSERVER_SEAM_UNAVAILABLE"));
+          }),
+      ),
+      "OWNER_STOP_OBSERVATION_UNSETTLED",
+    );
+    assert.equal(settlement.settled, true);
+    assert.equal(settlement.view.state, "stopped");
+    assert.equal(settlement.view.label, "Stopped by owner");
+    assert.ok(
+      settlement.view.detail.includes("Polling history is not included"),
+    );
+    assert.ok(
+      settlement.view.delivery.includes(
+        "Response upload history is not included",
+      ),
+    );
+    assert.ok(
+      !settlement.view.detail.includes("No successful server poll observed"),
+    );
+    assert.ok(
+      !settlement.view.delivery.includes(
+        "No accepted response upload observed",
+      ),
+    );
+    const current = await poll(
+      () => bootstrap(second),
+      (value) => value.connectionStatus?.state === "stopped",
+      "OWNER_STOP_STATUS_NOT_PUBLISHED",
+    );
+    const card = second.page.locator(".connection-live-status");
+    await poll(
+      () => card.getAttribute("data-state"),
+      (value) => value === "stopped",
+      "OWNER_STOP_UI_NOT_CURRENT",
+    );
+    const cardText = await card.innerText();
+    assert.ok(cardText.includes("Stopped by owner"));
+    assert.ok(cardText.includes("Polling history is not included"));
+    assert.ok(cardText.includes("Response upload history is not included"));
+    assert.equal(
+      current.configuration.settings.connectors.secureMcp.runtime,
+      null,
+    );
+    const stoppedReceipts = await poll(
+      receiptList,
+      (values) =>
+        values.length === 2 &&
+        values.every(
+          (value) => value.phase === "exited" && value.exitCode === 0,
+        ),
+      "OWNER_STOP_HELPER_NOT_CLOSED",
+    );
+    assert.ok(absent(helperBeforeStop.pid));
+    assert.ok(absent(helperBeforeStop.parentPid));
+    assert.deepEqual(
+      children(second.pid).filter((value) => value.pid === second.backend.pid),
+      [second.backend],
+    );
+    assert.equal(site.driver.snapshot().attemptedSends, 0);
+    assert.equal(site.driver.snapshot().acceptedSends, 0);
+    // A second explicit Stop has no active Go binding. Retain the original
+    // confirmed negative observation without starting another helper.
+    await configure(second, { kind: "connector.stop" });
+    const repeatSettlement = await bounded(
+      second.application.evaluate(
+        () =>
+          new Promise((resolve, reject) => {
+            if (!process.emit("farol-e2e-observe-connection", resolve))
+              reject(new Error("HEALTH_OBSERVER_SEAM_UNAVAILABLE"));
+          }),
+      ),
+      "OWNER_STOP_REPEAT_UNSETTLED",
+    );
+    assert.equal(repeatSettlement.settled, true);
+    assert.equal(repeatSettlement.view.state, "stopped");
+    assert.equal((await receiptList()).length, 2);
+    await hidden(second);
+    second.observations.push({
+      ownerStop: {
+        repeatSettlement,
+        settlement,
+        view: current.connectionStatus,
+        helperBeforeStop,
+        receipts: stoppedReceipts,
+        originalBackendPid: second.backend.pid,
+        limits:
+          "Actual hidden Electron/Go/UI and owned helper closure; synthetic control plane, no Tray/OS-sleep/live-provider/installed acceptance.",
+      },
+    });
+    await save();
+  }
   await quit(second);
   assert.deepEqual(
     await fs.readFile(path.join(workspace, "sentinel.txt")),

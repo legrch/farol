@@ -347,8 +347,20 @@ export class DesktopGoCore {
   computerConnectorClosureReceipt() {
     return this.connector?.closureReceipt;
   }
-  closeComputerConnector(): Promise<void> {
-    return this.connector?.close() ?? Promise.resolve();
+  computerConnectorOwnerStoppedReceipt() {
+    return this.backendAvailable
+      ? this.connector?.ownerStoppedReceipt
+      : undefined;
+  }
+  closeComputerConnector(reason?: "owner_stop"): Promise<void> {
+    return this.connector?.close(reason) ?? Promise.resolve();
+  }
+  observeComputerConnectorOwnerStoppedHealth(
+    receipt: import("./bridge/connector-host.ts").ConnectorClosureReceipt,
+  ) {
+    if (!this.backendAvailable || !this.connector)
+      throw new BridgeError("unavailable", "host_connector_unavailable");
+    return this.connector.observeOwnerStoppedHealth(receipt);
   }
   observeComputerConnectorHealth(
     expectedInstanceId: string,

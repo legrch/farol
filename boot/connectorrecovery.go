@@ -4,6 +4,7 @@ import (
 	"context"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
+	connectorsvc "github.com/legrch/farol/modules/computer/app/services/connector"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 )
 
@@ -12,12 +13,14 @@ import (
 // Go cannot prove delivery of the Close reply or client-side UNKNOWN state;
 // runtime/broker closure and client acknowledgement remain host admission gates.
 type connectorRecoveryOrigin struct {
-	binding     wire.ComputerConnectorBinding
-	publication wire.ComputerAuthorityPublication
-	owner       string
-	computer    string
-	ledger      *SettingsMutationIngress
-	consumed    bool
+	binding      wire.ComputerConnectorBinding
+	publication  wire.ComputerAuthorityPublication
+	owner        string
+	computer     string
+	ledger       *SettingsMutationIngress
+	consumed     bool
+	ownerStopped bool
+	retiredOwner *connectorsvc.Service
 }
 
 func (s *computerConnector) consumeRecovery(in wire.ComputerConnectorOpen) (*connectorRecoveryOrigin, error) {

@@ -1,3 +1,8 @@
+import {
+  ownerStopPresentationCurrent,
+  type OwnerStopPresentation,
+} from "../../../apps/desktop/owner-stop-presentation";
+
 import { ConnectionStatusTracker } from "../../../apps/desktop/connection-status";
 import {
   unavailableConnectionStatus,
@@ -854,14 +859,24 @@ let connectorTransportWatch: ConnectorTransportWatch<ConnectorTransportCapture> 
   null;
 let connectorTransportTimer: NodeJS.Timeout | null = null;
 let connectorStatusTimer: NodeJS.Timeout | null = null;
+let completedOwnerStop: OwnerStoppedCapture | null = null;
 let connectionStatusRevision = 0;
 let connectionStatusBody = "";
 let retainedConnectionView: ConnectionStatusView = unavailableConnectionStatus;
-const connectorConnection = new ConnectionStatusTracker<ConnectorHealthCapture>(
-  {
-    capture: captureConnectorHealth,
-    current: connectorHealthCurrent,
-    observe: async (original) => {
+const connectorConnection =
+  new ConnectionStatusTracker<ConnectionStatusCapture>({
+    capture: captureConnectionStatus,
+    current: connectionStatusCurrent,
+    observe: async (capture) => {
+      if (capture.kind === "owner-stopped") {
+        const original = capture.original;
+        const result =
+          await original.core.observeComputerConnectorOwnerStoppedHealth(
+            original.receipt,
+          );
+        return connectionStatusCurrent(capture) ? result : null;
+      }
+      const original = capture.original;
       const health = await original.connector.observeHealth();
       if (
         !health ||
@@ -877,8 +892,7 @@ const connectorConnection = new ConnectionStatusTracker<ConnectorHealthCapture>(
     },
     now: Date.now,
     monotonic: () => performance.now(),
-  },
-);
+  });
 
 // F3-1b: one authority transition at a time. A command that changes Computer
 // authority holds it through its commit; a connector start and an Agent
@@ -3708,6 +3722,7 @@ async function stopAndConfirmComputerMcp(
   inFlightStart: Promise<void> | null = null,
   core = desktopGoCore,
   savedChat = savedChatBridgeRuntime,
+  reason?: "owner_stop",
 ): Promise<void> {
   if (!connector) throw new Error("CONNECTOR_STOP_UNCONFIRMED");
   const lifecycle = computerMcpLifecycle();
@@ -3727,7 +3742,7 @@ async function stopAndConfirmComputerMcp(
       } finally {
         // Withdraw the original Go owner even when the old adapter drain fails.
         // A failure remains unconfirmed; it cannot authorize a new launch.
-        await core?.closeComputerConnector();
+        await core?.closeComputerConnector(reason);
       }
     },
     confirmStop: () => lifecycle.confirmStop(),
@@ -4632,6 +4647,122 @@ function connectorHealthCurrent(original: ConnectorHealthCapture): boolean {
   );
 }
 
+// Stop correlation does not require a positive health sample or a running
+// helper: an already exited helper can still have an admitted Go owner to close.
+function captureConnectorStop(): Pick<
+  ConnectorHealthCapture,
+  | "owner"
+  | "connector"
+  | "core"
+  | "binding"
+  | "computerGeneration"
+  | "connectorGeneration"
+> | null {
+  const owner = configuration,
+    connector = secureMcpConnectorRuntime,
+    core = desktopGoCore;
+  const state = owner?.snapshot(),
+    binding = core?.currentComputerConnectorBinding();
+  if (
+    !owner ||
+    !connector ||
+    !core?.backendAvailable ||
+    !binding ||
+    state?.status !== "ready" ||
+    quitInProgress ||
+    installedUpdateAdmission ||
+    state.settings.setup.connect.outcomeUnknown ||
+    state.settings.computer.pendingEdit !== null ||
+    state.settings.setup.computer.outcomeUnknown ||
+    workspaceMutationAdmission ||
+    connector.hasUnresolvedEffect()
+  )
+    return null;
+  const selected = state.settings.connectors.secureMcp,
+    runtime = selected.runtime;
+  if (
+    binding.buildId !== buildIdentity.buildId ||
+    binding.connectorGeneration !== String(selected.generation) ||
+    (runtime &&
+      (runtime.state === "outcome_unknown" ||
+        runtime.buildId !== buildIdentity.buildId ||
+        runtime.computerGeneration !== state.settings.computer.generation ||
+        runtime.connectorGeneration !== selected.generation))
+  )
+    return null;
+  return {
+    owner,
+    connector,
+    core,
+    binding,
+    computerGeneration: state.settings.computer.generation,
+    connectorGeneration: selected.generation,
+  };
+}
+
+type OwnerStoppedCapture = OwnerStopPresentation &
+  Readonly<{
+    owner: ProductConfigurationService;
+    connector: SecureMcpConnectorRuntime;
+    core: DesktopGoCore;
+  }>;
+type ConnectionStatusCapture =
+  | Readonly<{ kind: "running"; original: ConnectorHealthCapture }>
+  | Readonly<{ kind: "owner-stopped"; original: OwnerStoppedCapture }>;
+
+function ownerStoppedCurrent(original: OwnerStoppedCapture): boolean {
+  const owner = configuration,
+    connector = secureMcpConnectorRuntime,
+    core = desktopGoCore;
+  const state = owner?.snapshot();
+  if (
+    !owner ||
+    !connector ||
+    !core ||
+    state?.status !== "ready" ||
+    completedOwnerStop !== original
+  )
+    return false;
+  return ownerStopPresentationCurrent(original, {
+    owner,
+    connector,
+    core,
+    receipt: core.computerConnectorOwnerStoppedReceipt(),
+    computerGeneration: state.settings.computer.generation,
+    connectorGeneration: state.settings.connectors.secureMcp.generation,
+    backendAvailable: core.backendAvailable,
+    stoppedSettings: state.settings.connectors.secureMcp.runtime === null,
+    setupOutcomeUnknown: state.settings.setup.connect.outcomeUnknown,
+    settingsEditPending: state.settings.computer.pendingEdit !== null,
+    settingsOutcomeUnknown: state.settings.setup.computer.outcomeUnknown,
+    workspaceMutationInProgress: workspaceMutationAdmission,
+    helperRunning: connector.isRunning(),
+    helperOutcomeUnknown: connector.hasUnresolvedEffect(),
+    tunnelObserved: connector.getTunnelObservation() !== null,
+    currentBinding: core.currentComputerConnectorBinding() !== undefined,
+    admissionInProgress: connectorTaskAdmission,
+    quitting: quitInProgress,
+    updating: installedUpdateAdmission,
+  });
+}
+
+function captureConnectionStatus(): ConnectionStatusCapture | null {
+  if (connectorTaskAdmission) return null;
+  const running = captureConnectorHealth();
+  if (running) return { kind: "running", original: running };
+  const stopped = completedOwnerStop;
+  return stopped && ownerStoppedCurrent(stopped)
+    ? { kind: "owner-stopped", original: stopped }
+    : null;
+}
+
+function connectionStatusCurrent(capture: ConnectionStatusCapture): boolean {
+  if (connectorTaskAdmission) return false;
+  return capture.kind === "running"
+    ? connectorHealthCurrent(capture.original)
+    : ownerStoppedCurrent(capture.original);
+}
+
 function currentConnectionStatus(): ConnectionStatusView {
   const value = connectorConnection.view();
   const body = JSON.stringify({ ...value, revision: 0 });
@@ -4751,7 +4882,7 @@ function startConnectorTransportWatch(): void {
     process.addListener("farol-e2e-observe-connection", (reply: unknown) => {
       if (typeof reply !== "function") return;
       void (async () => {
-        const original = captureConnectorHealth();
+        const original = captureConnectionStatus();
         if (!original) return { settled: false };
         let interrupted = false;
         const interrupt = () => {
@@ -4764,7 +4895,7 @@ function startConnectorTransportWatch(): void {
           // its producer response. Coalescing cannot certify an older mode.
           await connectorConnection.sample();
           await connectorConnection.sample();
-          return interrupted || !connectorHealthCurrent(original)
+          return interrupted || !connectionStatusCurrent(original)
             ? { settled: false }
             : { settled: true, view: currentConnectionStatus() };
         } finally {
@@ -7107,10 +7238,23 @@ async function configureAdmittedProduct(
       if (connectorTaskAdmission) {
         return configurationFailure("CONNECTOR_ALREADY_RUNNING");
       }
+      const stopping = captureConnectorStop();
+      const previousStop =
+        completedOwnerStop && ownerStoppedCurrent(completedOwnerStop)
+          ? completedOwnerStop
+          : null;
+      completedOwnerStop = null;
+      connectorConnection.invalidate();
       connectorTaskAdmission = true;
       try {
         try {
-          await stopAndConfirmComputerMcp();
+          await stopAndConfirmComputerMcp(
+            undefined,
+            null,
+            undefined,
+            undefined,
+            "owner_stop",
+          );
         } catch {
           return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
         }
@@ -7120,6 +7264,23 @@ async function configureAdmittedProduct(
           await clearConnectorVerificationReceipt(secureMcpLaunchRoot());
         } catch {
           return configurationFailure("CONNECTOR_ATTACHMENT_INVALID");
+        }
+        const receipt = desktopGoCore?.computerConnectorOwnerStoppedReceipt();
+        if (
+          stopping &&
+          receipt &&
+          Object.entries(stopping.binding).every(
+            ([key, value]) =>
+              receipt.result.binding[
+                key as keyof typeof receipt.result.binding
+              ] === value,
+          )
+        ) {
+          completedOwnerStop = Object.freeze({ ...stopping, receipt });
+        } else if (previousStop && receipt === previousStop.receipt) {
+          // A no-op Stop retains the exact previous acknowledged stop; it
+          // neither creates a new receipt nor promotes a generic Close.
+          completedOwnerStop = previousStop;
         }
         return ProductConfigurationResultSchema.parse(stopped);
       } finally {

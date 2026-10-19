@@ -55,15 +55,21 @@ export function connectionStatusView(
     now >= until
   )
     return unavailableConnectionStatus;
+  const ownerStopped =
+    value.state === "stopped" && value.reason === "owner_stopped";
   const lastPoll = instant(value.lastPollSuccessMillis);
   const accepted = instant(value.lastResponseAcceptedMillis);
   const retry = instant(value.nextRetryMillis);
-  const local = value.localReady
-    ? "Local helper ready."
-    : "Local helper not ready.";
-  const poll = lastPoll
-    ? "Last successful server poll: " + lastPoll + "."
-    : "No successful server poll observed.";
+  const local = ownerStopped
+    ? "Connector stopped by owner."
+    : value.localReady
+      ? "Local helper ready."
+      : "Local helper not ready.";
+  const poll = ownerStopped
+    ? "Polling history is not included in this stopped observation."
+    : lastPoll
+      ? "Last successful server poll: " + lastPoll + "."
+      : "No successful server poll observed.";
   const reason =
     value.reason === "authorization_required"
       ? "Check connection credentials and permissions."
@@ -98,11 +104,13 @@ export function connectionStatusView(
     ]
       .filter(Boolean)
       .join(" "),
-    delivery: accepted
-      ? "Last accepted response upload: " +
-        accepted +
-        ". This historical observation does not confirm current attachment."
-      : "No accepted response upload observed. External attachment has not been confirmed.",
+    delivery: ownerStopped
+      ? "Response upload history is not included in this stopped observation. External attachment has not been confirmed."
+      : accepted
+        ? "Last accepted response upload: " +
+          accepted +
+          ". This historical observation does not confirm current attachment."
+        : "No accepted response upload observed. External attachment has not been confirmed.",
   };
 }
 
