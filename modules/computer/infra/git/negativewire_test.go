@@ -499,10 +499,17 @@ func TestClassifiedFailureCodes(t *testing.T) {
 		{ErrPort, "GIT_TRANSPORT_PORT_FAILURE"},
 		{errInjected, "GIT_TRANSPORT_PORT_FAILURE"},
 		{io.ErrUnexpectedEOF, "GIT_TRANSPORT_PORT_FAILURE"},
-		{context.DeadlineExceeded, "GIT_TRANSPORT_DEADLINE"},
-		{context.Canceled, "GIT_TRANSPORT_CANCELLED"},
-		{errors.Join(ErrScope, context.Canceled), "GIT_TRANSPORT_CANCELLED"},
-		{errors.Join(ErrLimit, context.DeadlineExceeded), "GIT_TRANSPORT_DEADLINE"},
+		// A context error claims cancellation only when the run's context ended.
+		{context.DeadlineExceeded, "GIT_TRANSPORT_PORT_FAILURE"},
+		{context.Canceled, "GIT_TRANSPORT_PORT_FAILURE"},
+		{contextEnded{context.DeadlineExceeded}, "GIT_TRANSPORT_DEADLINE"},
+		{contextEnded{context.Canceled}, "GIT_TRANSPORT_CANCELLED"},
+		{errors.Join(ErrScope, contextEnded{context.Canceled}), "GIT_TRANSPORT_CANCELLED"},
+		{errors.Join(contextEnded{context.DeadlineExceeded}, ownerFailure{ErrLimit}), "GIT_TRANSPORT_DEADLINE"},
+		// Custody: ErrScope is a refusal; anything else is the owner's fault.
+		{custodyFailure(ErrScope), "GIT_TRANSPORT_SCOPE_REFUSED"},
+		{custodyFailure(errors.Join(ErrRemote, errInjected)), "GIT_TRANSPORT_PORT_FAILURE"},
+		{custodyFailure(context.Canceled), "GIT_TRANSPORT_PORT_FAILURE"},
 	} {
 		got := classified(tc.err)
 		var f *Failure

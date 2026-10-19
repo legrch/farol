@@ -98,8 +98,8 @@ func (g *Gate) Run(ctx context.Context, client io.ReadWriteCloser, peer egresspo
 		}
 		// Cancellation closes blocked streams, whose own errors then surface;
 		// the context's end is the cause, so keep it in the classification.
-		if err != nil && ctx != nil && ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
-			err = errors.Join(ctx.Err(), err)
+		if err != nil && ctx != nil && ctx.Err() != nil {
+			err = errors.Join(contextEnded{ctx.Err()}, err)
 		}
 		err = classified(err)
 	}()
@@ -121,7 +121,7 @@ func (g *Gate) Run(ctx context.Context, client io.ReadWriteCloser, peer egresspo
 			return e
 		}
 		if e := g.custody.Check(ctx, g.digest); e != nil {
-			return e
+			return custodyFailure(e)
 		}
 		return ctx.Err()
 	}
@@ -169,7 +169,7 @@ func (g *Gate) Run(ctx context.Context, client io.ReadWriteCloser, peer egresspo
 	result.Stage = "release_fence"
 	result.ReleaseFenceAttempted = true
 	if err = g.custody.BeforeRelease(ctx, g.digest); err != nil {
-		return result, err
+		return result, custodyFailure(err)
 	}
 	result.ReleaseFenced = true
 	if err = check(); err != nil {

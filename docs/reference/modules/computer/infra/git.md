@@ -182,7 +182,7 @@ Public failure classes follow one rule:
 - `GIT_TRANSPORT_SCOPE_REFUSED`: an update outside the plan, such as another ref
   or a non-fast-forward of the remote predecessor, or a custody refusal. Custody
   signals a refusal by returning `ErrScope`; any other custody error is a port
-  failure.
+  failure, whatever it wraps.
 - `GIT_TRANSPORT_REMOTE_CHANGED`: the remote's advertised state differs from
   the plan (another predecessor, an existing target ref or another object
   format), or the remote refused with an `ERR` line in its advertisement or
@@ -193,8 +193,9 @@ Public failure classes follow one rule:
   owner object reader whatever it returns, or a pkt-line stream that closes
   exactly between packets. A client that closes after requesting an update but
   before its complete pack is a truncated pack (`PROTOCOL`).
-- `GIT_TRANSPORT_DEADLINE` and `GIT_TRANSPORT_CANCELLED` follow the context and
-  take precedence when it has ended.
+- `GIT_TRANSPORT_DEADLINE` and `GIT_TRANSPORT_CANCELLED` follow the run's own
+  context and take precedence when it has ended. A context error returned by an
+  owner callback while the run's context is still live is a port failure.
 
 ## Native composition still required before activation
 
