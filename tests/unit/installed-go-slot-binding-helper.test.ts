@@ -149,6 +149,31 @@ it("refuses a cancelled host fence before inspecting the image", async () => {
   expect(recheck).not.toHaveBeenCalled();
 });
 
+it("remeasures the same image without the host fence, and still refuses drift", async () => {
+  const recheck = vi.fn(async () => undefined);
+  const beforeEffect = vi.fn(() => {
+    throw Error("QUIT_EFFECT_ENDED");
+  });
+  const selected = installedGoSlotBindingHelper({
+    compiledArtifact: artifact(),
+    build,
+    directory: root,
+    recheck,
+    beforeEffect,
+  });
+  expect(await selected.remeasure()).toBe(path.join(root, "farol-backend"));
+  expect(recheck).toHaveBeenCalledTimes(2);
+  expect(beforeEffect).not.toHaveBeenCalled();
+  bytes[127] = 1;
+  fs.writeFileSync(path.join(root, "farol-backend"), bytes);
+  await expect(selected.remeasure()).rejects.toMatchObject({
+    code: "core_artifact_digest_mismatch",
+  });
+  recheck.mockRejectedValueOnce(Error("IMAGE_CHANGED"));
+  await expect(selected.remeasure()).rejects.toThrow("IMAGE_CHANGED");
+  expect(beforeEffect).not.toHaveBeenCalled();
+});
+
 it("preserves bridge refusal classification through the direct shared verifier", async () => {
   const selected = installedGoSlotBindingHelper({
     compiledArtifact: artifact(),

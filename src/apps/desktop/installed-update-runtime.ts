@@ -1990,12 +1990,12 @@ async function createRuntime(
       compiledArtifact: options.goCoreArtifact,
       build: options.goCoreBuild ?? options.build,
       directory: image?.directory ?? options.directory,
+      // Resource custody only; the adapter brackets it with `beforeEffect`
+      // for qualification and omits the fence for the post-close measurement.
       recheck: async () => {
-        beforeEffect();
         if (image) await image.recheck();
         else if (!supervised || (await supervised.verifyResources()) !== true)
           throw new Error("UPDATE_SUPERVISOR_RESOURCES_CHANGED");
-        beforeEffect();
       },
       beforeEffect,
     });

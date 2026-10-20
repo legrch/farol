@@ -149,7 +149,11 @@ async function selection() {
   const executable = await nativeGoExecutable();
   return {
     kind: "go",
-    helper: { buildId: "7".repeat(64), qualify: async () => executable },
+    helper: {
+      buildId: "7".repeat(64),
+      qualify: async () => executable,
+      remeasure: async () => executable,
+    },
   };
 }
 const read = (file) => fs.readFile(file, "utf8");

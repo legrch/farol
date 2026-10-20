@@ -3569,6 +3569,8 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
                   throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
                 return path.join(root, "never-spawned-farol-backend");
               },
+              remeasure: async () =>
+                path.join(root, "never-spawned-farol-backend"),
             },
           },
           request,

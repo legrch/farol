@@ -265,6 +265,7 @@ describe("installed helper bounded readiness protocol", () => {
       goSelection({
         buildId: "not-a-digest",
         qualify: async () => FIXTURE_GO_EXECUTABLE,
+        remeasure: async () => FIXTURE_GO_EXECUTABLE,
       }),
       request,
     );
@@ -330,6 +331,41 @@ describe("installed helper bounded readiness protocol", () => {
       code: 0,
       protocolError: null,
     });
+  });
+
+  it("measures the executable after close without the effect fence that ended with the Quit", async () => {
+    // A normal-Quit fence ends once preparation returns, while the detached
+    // helper still runs. Its refusal after close is not executable drift.
+    let fenced = 0;
+    let measured = 0;
+    const helper = {
+      buildId: fakeGoHelper().buildId,
+      qualify: async () => {
+        if (++fenced > 1) throw new Error("UPDATE_QUIT_EFFECT_NOT_ALLOWED");
+        return FIXTURE_GO_EXECUTABLE;
+      },
+      remeasure: async () => {
+        measured += 1;
+        return FIXTURE_GO_EXECUTABLE;
+      },
+    };
+    const { child, pending } = await launch(
+      1000,
+      request,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      goSelection(helper),
+    );
+    child.ack.end(`${JSON.stringify(event())}\n`);
+    const result = await pending;
+    child.finish(0);
+    expect(await result.operation.completion).toMatchObject({
+      code: 0,
+      protocolError: null,
+    });
+    expect([fenced, measured]).toEqual([1, 1]);
   });
 
   it("keeps ordinary live rollback on its correlated Quit handoff", async () => {

@@ -264,12 +264,16 @@ type QuitEffectRefusal = "quit_deadline_expired" | "quit_effect_not_allowed";
 /**
  * The attested Go release helper: `farol-backend` from an immutable execution
  * image. `qualify` re-measures the executable against the build's compiled
- * declaration and returns its absolute path. It is the trusted host's adapter,
- * never renderer data. There is no interpreter alternative.
+ * declaration inside the caller's effect fence and returns its absolute path.
+ * `remeasure` repeats only the image and executable measurement, without the
+ * fence, for the check after the child has closed: by then a normal-Quit
+ * fence has ended, and its refusal is not evidence of drift. It is the trusted
+ * host's adapter, never renderer data. There is no interpreter alternative.
  */
 export interface InstalledGoUpdateHelper {
   readonly buildId: string;
   qualify(): Promise<string>;
+  remeasure(): Promise<string>;
 }
 
 /**
@@ -955,11 +959,12 @@ export async function startInstalledUpdateHelper(
     void (async () => {
       // The image the child ran must still be the attested one after its exit,
       // or its terminal line cannot be trusted. An exec that never started has
-      // nothing to re-measure.
+      // nothing to re-measure. This is a measurement, not an effect, so it
+      // runs outside the effect fence that may have ended with the Quit.
       if (spawned) {
         let unchanged = false;
         try {
-          unchanged = (await goHelper.qualify()) === executable;
+          unchanged = (await goHelper.remeasure()) === executable;
         } catch {
           unchanged = false;
         }

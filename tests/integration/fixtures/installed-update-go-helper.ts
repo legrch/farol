@@ -17,17 +17,22 @@ export type FixtureGoHelper = InstalledGoUpdateHelper & {
   qualified: number;
 };
 
-/** A Go capability whose qualification is observable and never touches disk. */
+/**
+ * A Go capability whose qualification is observable and never touches disk.
+ * `qualify` and `remeasure` share one counter and one result, in call order.
+ */
 export function fakeGoHelper(
   executable: string | (() => Promise<string>) = FIXTURE_GO_EXECUTABLE,
 ): FixtureGoHelper {
+  const measure = async () => {
+    helper.qualified += 1;
+    return typeof executable === "string" ? executable : executable();
+  };
   const helper: FixtureGoHelper = {
     buildId: FIXTURE_GO_BUILD_ID,
     qualified: 0,
-    qualify: async () => {
-      helper.qualified += 1;
-      return typeof executable === "string" ? executable : executable();
-    },
+    qualify: measure,
+    remeasure: measure,
   };
   return helper;
 }
@@ -66,6 +71,7 @@ export async function compiledGoHelper(): Promise<InstalledUpdateHelperSelection
   return goSelection({
     buildId: FIXTURE_GO_BUILD_ID,
     qualify: async () => executable,
+    remeasure: async () => executable,
   });
 }
 
