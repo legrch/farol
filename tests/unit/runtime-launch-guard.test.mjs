@@ -495,6 +495,39 @@ describe("bounded owned executable closure", () => {
       "EXECUTABLE_KIND_MISMATCH",
     );
   });
+  it("accepts the bridge set without the retired update helper and no other subset", async () => {
+    const f = await packageFixture();
+    await fs.unlink(path.join(f.directory, "update-helper.py"));
+    const { "update-helper.py": _retired, ...entrySha256 } = f.entrySha256;
+    const full = [...BUILD_ENTRIES, ...GO_CORE_ENTRIES].sort();
+    const bridge = full.filter((entry) => entry !== "update-helper.py");
+    await expect(
+      verifyRuntimeExecutableClosure({ ...f, entrySha256, entries: bridge }),
+    ).resolves.toMatchObject({ nativeQualification: false });
+    // The default ledger still requires the file, and a ledger that names it
+    // cannot be satisfied by its absence.
+    await expect(
+      verifyRuntimeExecutableClosure({ ...f, entrySha256 }),
+    ).rejects.toThrow("BUILD_ENTRY_SET_INVALID");
+    await expect(
+      verifyRuntimeExecutableClosure({ ...f, entries: bridge }),
+    ).rejects.toThrow("BUILD_ENTRY_SET_INVALID");
+    for (const removed of ["computer-safe-open.py", "update-archive.py"])
+      await expect(
+        verifyRuntimeExecutableClosure({
+          ...f,
+          entrySha256,
+          entries: bridge.filter((entry) => entry !== removed),
+        }),
+      ).rejects.toThrow("RUNTIME_LAUNCH_ENTRY_SET_INVALID");
+    await expect(
+      verifyRuntimeExecutableClosure({
+        ...f,
+        entrySha256,
+        entries: [...bridge, "surprise"].sort(),
+      }),
+    ).rejects.toThrow("RUNTIME_LAUNCH_ENTRY_SET_INVALID");
+  });
   it("uses existing ledger expectations and never repairs a byte mismatch", async () => {
     const f = await packageFixture();
     const expected = { ...f.entrySha256 };

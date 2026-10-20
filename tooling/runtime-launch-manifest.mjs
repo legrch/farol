@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { BUILD_ENTRIES, verifyBuildEntries } from "./build-contract.mjs";
+import {
+  BUILD_ENTRIES,
+  bridgeEntrySets,
+  verifyBuildEntries,
+} from "./build-contract.mjs";
 import { GO_CORE_ENTRIES } from "./go-core-artifact.mjs";
 import { NATIVE_SAFE_OPEN_HELPER } from "./native-helper-contract.mjs";
 import { ELECTRON_RUNTIME } from "./runtime-contract.mjs";
@@ -649,8 +653,17 @@ export async function verifyRuntimeExecutableClosure({
   directory,
   entrySha256,
   manifest = RUNTIME_LAUNCH_MANIFEST,
+  entries = [...BUILD_ENTRIES, ...GO_CORE_ENTRIES].sort(),
 }) {
   assertRuntimeLaunchManifest(manifest);
+  // Only the bridge alternatives of the full ledger: the exact set, or that set
+  // minus the retired Python update helper (build-contract.mjs).
+  const selected = bridgeEntrySets([...BUILD_ENTRIES, ...GO_CORE_ENTRIES]).find(
+    (candidate) =>
+      candidate.length === entries.length &&
+      candidate.every((entry, index) => entry === entries[index]),
+  );
+  if (!selected) fail("ENTRY_SET_INVALID");
   const declared = new Map(manifest.resources.map((row) => [row.key, row]));
   const known = new Set([
     ...BUILD_ENTRIES,
@@ -708,11 +721,7 @@ export async function verifyRuntimeExecutableClosure({
     )
       fail("EXECUTABLE_KIND_MISMATCH");
   }
-  await verifyBuildEntries(
-    directory,
-    entrySha256,
-    [...BUILD_ENTRIES, ...GO_CORE_ENTRIES].sort(),
-  );
+  await verifyBuildEntries(directory, entrySha256, selected);
   return {
     resources: manifest.resources.length,
     byteAuthority: "existing-build-package-validators",
