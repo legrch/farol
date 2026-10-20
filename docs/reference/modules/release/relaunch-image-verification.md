@@ -4,11 +4,11 @@ The native execution runtime checks, after the one original `/usr/bin/open -a`
 returns, that the process it started runs the image it verified. This is
 **detection, not prevention**. The relaunch route stays unselected: the Python
 helper remains the selected helper. The unselected live helper
-(`run-live-release-helper`) now accepts `relaunch: true` for apply, where it
-launches after `verified`, and for rollback, where it never launches (Python
-parity); it alone installs the self measurement and the relaunch argument
-capability. The closed helper supplies neither and still refuses relaunch; recover is
-refused by both.
+(`run-live-release-helper`) now accepts `relaunch: true` for apply and for
+recover, where it launches after `verified` only, and for rollback, where it
+never launches (Python parity); it alone installs the self measurement and the relaunch argument
+capability. The closed helper supplies neither and still refuses relaunch and recover;
+offline recover (`relaunch: false`) is refused by both.
 
 **Divergence from Python.** Python writes `completed` after `open` returns zero,
 whatever started. This verification is strict: zero, ambiguous or mismatched
