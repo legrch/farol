@@ -5,7 +5,8 @@ The desktop selects the Go apply/recovery/rollback helper entries; the retained
 and `exchange_checked` operations have a Go primitive in
 `modules/release/infra/native/installmove`, composed by those entries. This primitive moves directory
 entries; it owns no update policy, durable journal, admission lease, recovery,
-installation or relaunch decision. The existing Release owner must compose it.
+installation or relaunch decision; those stay with the Release owners that the
+helper entries compose.
 
 `PrepareRename` and `PrepareExchange` capture two exact borrowed parent files,
 canonical device/inode identities, fixed leaf names, an original absolute

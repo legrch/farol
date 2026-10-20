@@ -355,9 +355,10 @@ journal fails inspection; no failed read is retried as clean absence.
 A readiness value retains private observations without writer, lock, namespace,
 ACK, terminal or retry authority. Admitted execution repeats the observations.
 Closed rollback additionally compares the original journal revision, phase and
-exact pair before the first effect. Offline recovery retains the original
-crash-gap reconciliation path; live recovery delegates its preflight to the
-original recovery policy.
+exact pair before the first effect. In this policy library, offline recovery
+retains the original crash-gap reconciliation path, although both entries refuse
+offline recover; live recovery delegates its preflight to the original recovery
+policy.
 
 `HelperRecoveryPolicies` is the installation consumer's port. Trusted composition
 must adapt `helperrecovery.ObserveCaptured` and `helperrecovery.NewCaptured` to

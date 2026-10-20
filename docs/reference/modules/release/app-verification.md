@@ -51,5 +51,6 @@ Python; Python used once to generate independent test oracles is build/test-only
 Targeted race/vet/fuzz and Darwin cross-compilation are source evidence only.
 Darwin execution, APFS exchange, inherited installed descriptors, exact helper
 failure-code mapping, journal/fsync, original-process exit, launch/recovery and
-OTA/rollback parity remain NOT RUN or unimplemented until their actual owners
-are composed and qualified. Do not delete the Python reference helper on this evidence.
+OTA/rollback parity are not established by this evidence; they belong to the
+composing helper entries and their native lanes, and package, installed and OTA
+qualification remain open. Do not delete the Python reference helper on this evidence.

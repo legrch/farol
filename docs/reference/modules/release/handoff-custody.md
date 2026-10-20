@@ -118,8 +118,8 @@ Linux disposable pipe/socket fixtures cover backpressure, partial writes,
 deadline/cancellation, close races, copied wrappers, caller-frame reuse and
 ownership on constructor refusal. These are transport tests. The helper's
 correlation, readiness, continuation admission, terminal classification and
-journaled install/recovery remain separate application integration work. This
-package is composed by the selected Go helper entries; Python retirement and Darwin, package, installed and OTA
+journaled install/recovery belong to the composing helper entries, not to this
+package. This package is composed by the selected Go helper entries; Python retirement and Darwin, package, installed and OTA
 qualification remain NOT RUN.
 
 ## Prepared application protocol binding

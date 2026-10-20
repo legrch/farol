@@ -183,7 +183,7 @@ dispatch. Only the helper's exact readiness acknowledgment permits normal Quit.
 Unknown acknowledgment or completion never permits another apply. The same child
 handle remains observable while the original app is alive, including after a
 process metadata readback failure. The actual helper PID is persisted on the spawn
-event, before sending helper program/request bytes or waiting for readiness, then
+event, before sending the request bytes or waiting for readiness, then
 enriched with its start time.
 Failure or timeout while recording closes only the unsent pipes; it never sends
 a late request or changes an unknown result into permission to relaunch. An
