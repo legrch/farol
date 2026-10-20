@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   approveToolPrerequisite,
+  GIT_VERIFICATION_UNAVAILABLE_NOTE,
+  gitVerificationPrerequisite,
   guardedEditApplyPrerequisite,
   searchMatchDisplay,
   workspaceReadPrerequisite,
@@ -108,5 +110,34 @@ describe("why a verified-workspace read cannot run", () => {
 
   it("has nothing to say for a verified workspace with no pending edit", () => {
     expect(workspaceReadPrerequisite(true, false)).toBeNull();
+  });
+});
+
+describe("fixed Git check button title", () => {
+  const ready = { available: true, commandsEnabled: true, verified: true };
+
+  it("names a build without the Git checks before any prerequisite the owner could change", () => {
+    expect(
+      gitVerificationPrerequisite(
+        { available: false, commandsEnabled: false, verified: false },
+        "enabled",
+      ),
+    ).toBe(GIT_VERIFICATION_UNAVAILABLE_NOTE);
+    expect(
+      gitVerificationPrerequisite({ ...ready, available: false }, "enabled"),
+    ).toBe("Git checks are not available in this build");
+  });
+
+  it("keeps the legacy prerequisites in their order and the enabled text", () => {
+    expect(
+      gitVerificationPrerequisite(
+        { ...ready, commandsEnabled: false, verified: false },
+        "enabled",
+      ),
+    ).toBe("Enable Verified commands above");
+    expect(
+      gitVerificationPrerequisite({ ...ready, verified: false }, "enabled"),
+    ).toBe("Verify this workspace again first");
+    expect(gitVerificationPrerequisite(ready, "enabled")).toBe("enabled");
   });
 });

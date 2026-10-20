@@ -50,6 +50,9 @@ Shell start/read/cancel and fixed Git status/head are present in the current MCP
 source. Ordinary Git uses approved shell command authority and separate Git
 history approval. The existing Chat Computer port and Product Agent peer do not
 admit general shell. Migration must not widen those grants to claim route parity.
+The Settings Git status/head buttons are separate: by owner decision of
+2026-10-20 they are unavailable in Go-aware builds (`WORKSPACE_COMMAND_UNAVAILABLE`)
+and run only in the explicit legacy build.
 
 ## Unknown and reconnect
 
