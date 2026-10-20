@@ -143,6 +143,22 @@ describe("Dev dependency bytes", () => {
     expect(f.inspect).toThrow("DEV_DEPENDENCY_MANIFEST_INVALID");
   });
 
+  it("refuses an escaping key even among ignored foreign compiler entries", () => {
+    const f = fixture();
+    for (const key of [
+      "node_modules/@esbuild/../outside",
+      "node_modules/@esbuild/..",
+    ]) {
+      f.reviewed[key] = { treeSha256: "0".repeat(64) };
+      fs.writeFileSync(
+        f.manifest,
+        JSON.stringify({ schema: 1, packages: f.reviewed }),
+      );
+      expect(f.inspect).toThrow("DEV_DEPENDENCY_MANIFEST_INVALID");
+      delete f.reviewed[key];
+    }
+  });
+
   it("retains metadata mismatch before any byte-based success", () => {
     const f = fixture();
     const file = path.join(f.root, "node_modules/.package-lock.json");

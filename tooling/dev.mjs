@@ -239,19 +239,23 @@ export function readDependencyState(
   // Reuse the builder's reviewed tree digests, including unexpected files,
   // rather than blessing local content or ignoring Finder metadata.
   const expected = readDependencyDigests(root);
+  const compiler = toolchainPackageRoots(platform, arch);
+  // Every manifest key is validated, including foreign-platform compiler
+  // entries that this platform does not verify.
+  if (
+    ![...Object.keys(expected), ...compiler].every(
+      (name) =>
+        /^node_modules\/(?:@[^/]+\/)?[^/]+$/u.test(name) &&
+        !name.split("/").some((part) => part === "." || part === ".."),
+    )
+  )
+    throw new Error("DEV_DEPENDENCY_MANIFEST_INVALID");
   const roots = [
     ...Object.keys(expected).filter(
       (name) => !name.startsWith("node_modules/@esbuild/"),
     ),
-    ...toolchainPackageRoots(platform, arch),
+    ...compiler,
   ];
-  if (
-    !roots.every((name) => /^node_modules\/(?:@[^/]+\/)?[^/]+$/u.test(name)) ||
-    roots.some((name) =>
-      name.split("/").some((part) => part === "." || part === ".."),
-    )
-  )
-    throw new Error("DEV_DEPENDENCY_MANIFEST_INVALID");
   const reasons = dependencyDrift(root, roots, expected).map(
     ({ packageRoot, reason }) =>
       `${packageRoot} does not match reviewed bytes (${reason})`,
