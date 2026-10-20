@@ -244,7 +244,18 @@ failed images retained), self-measurement and relaunch-argument building. Both
 self-measurement and argument building are optional `Config` capabilities that
 only trusted composition installs; boot does not install them yet. With a
 relaunch request and no installed capability, the runtime refuses without marking
-completed. Tests cover callback ordering, effect fencing and known versus unknown
+completed. The arguments it dispatches must name the image it verified (the
+private capture for a shared install, the owner's `~/Applications` slot
+otherwise); any other application path refuses before an effect.
+
+Like the selected Python reference helper, the relaunch hands `/usr/bin/open -a`
+a pathname after verifying the image through held descriptors. A writer running
+as the same user can still replace that path between verification and
+LaunchServices resolution. Copying is not a same-user exclusion boundary (see
+[install namespace](install-namespace.md)), and this port neither narrows nor
+widens that window. Binding the launch to the verified bytes, or verifying the
+launched process image afterwards, needs its own design before the capability
+is composed. Tests cover callback ordering, effect fencing and known versus unknown
 failure classification with disposable fixtures, not a physical installed image,
 dispatch, Wait or successful launch.
 

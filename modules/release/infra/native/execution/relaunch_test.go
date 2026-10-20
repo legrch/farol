@@ -174,3 +174,35 @@ func TestRelaunchSelfMeasurementUsesCapturedPortAndOriginalBound(t *testing.T) {
 		})
 	}
 }
+
+func TestLaunchArgumentsMustNameTheVerifiedImage(t *testing.T) {
+	request := port.HelperRequest{Home: "/Users/owner"}
+	hint := "--farol-installed-update-relaunch={}"
+	capture := "/Users/owner/Library/Application Support/Farol Next Preview/installed-updates/op/launch-Farol.app"
+	for _, tc := range []struct {
+		name    string
+		shared  bool
+		capture string
+		app     string
+		want    bool
+	}{
+		{"slot install opens the owner slot", false, "", "/Users/owner/Applications/Farol.app", true},
+		{"slot install refuses another app", false, "", "/Applications/Other.app", false},
+		{"shared install opens the verified capture", true, capture, capture, true},
+		{"shared install refuses the shared slot", true, capture, "/Users/owner/Applications/Farol.app", false},
+		{"shared install without a capture refuses", true, "", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := []string{"/usr/bin/open", "-a", tc.app, "--args", hint}
+			if got := launchBound(request, tc.shared, tc.capture, args); got != tc.want {
+				t.Fatalf("launchBound = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	if launchBound(request, false, "", []string{"/usr/bin/open", "-a"}) {
+		t.Fatal("short argument list accepted")
+	}
+	if launchBound(port.HelperRequest{}, false, "", []string{"/usr/bin/open", "-a", "/Applications/Farol.app", "--args", hint}) {
+		t.Fatal("request without a home accepted")
+	}
+}

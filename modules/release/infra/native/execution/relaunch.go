@@ -182,7 +182,26 @@ func (r *runtime) LaunchTarget(ctx context.Context, self port.HelperSelfIdentity
 		if err != nil {
 			return err
 		}
+		if !launchBound(r.config.Request, r.config.Files.SharedParent, r.capturePath, arguments) {
+			return fail("launch_image_unconfirmed", false, false, nil)
+		}
 		r.effected = true
 		return helperprocess.Open(c, r.until, arguments, verify)
 	})
+}
+
+// launchBound requires the application path handed to /usr/bin/open to be the
+// image this runtime verified: the private capture for a shared install, the
+// owner's ~/Applications slot otherwise. A capability that builds arguments
+// cannot redirect the launch to another image. Like the reference helper, the
+// launch is still by pathname; see the release helper-recovery reference.
+func launchBound(request port.HelperRequest, shared bool, capturePath string, arguments []string) bool {
+	if len(arguments) != 5 || request.Home == "" {
+		return false
+	}
+	expected := request.Home + "/Applications/Farol.app"
+	if shared {
+		expected = capturePath
+	}
+	return expected != "" && arguments[2] == expected
 }
