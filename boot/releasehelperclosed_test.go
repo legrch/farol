@@ -13,6 +13,8 @@ import (
 	"time"
 
 	releaseport "github.com/legrch/farol/modules/release/app/port"
+	executionapp "github.com/legrch/farol/modules/release/app/services/execution"
+	release "github.com/legrch/farol/modules/release/domain"
 	"github.com/legrch/farol/modules/release/infra/native/handoff"
 	"github.com/legrch/farol/modules/release/infra/native/helperroutes"
 )
@@ -34,6 +36,15 @@ type closedHelperFixture struct {
 	captured                                             releaseport.HelperRequest
 	slot                                                 []byte
 	routesFiles                                          helperroutes.Files
+	// Readiness seam: configured outcome plus what the seam observed.
+	readyErr, readyCause                   error
+	readyPanic                             any
+	readyResult                            *executionapp.Readiness
+	beforeReady                            func(context.Context)
+	readyCtx                               context.Context
+	readyHelper                            closedReleaseHelper
+	readyCalls, framesAtReady, readyChecks int
+	readyMilestone                         *executionapp.Milestone
 }
 
 func closedHelperJSON(t *testing.T, v any) []byte {
@@ -136,8 +147,28 @@ func (a closedHelperFixtureAdmission) Close() error {
 	}
 	return a.f.admissionClose
 }
+func (f *closedHelperFixture) ready(ctx context.Context, m *executionapp.Milestone, h closedReleaseHelper) (*executionapp.Readiness, error) {
+	f.event("ready")
+	f.readyCalls++
+	f.readyCtx, f.readyHelper, f.readyMilestone = ctx, h, m
+	f.framesAtReady, f.readyChecks = len(f.frames), f.checks
+	if f.beforeReady != nil {
+		f.beforeReady(ctx)
+	}
+	if f.readyPanic != nil {
+		panic(f.readyPanic)
+	}
+	if f.readyErr != nil {
+		return nil, f.readyErr
+	}
+	if f.readyResult != nil {
+		return f.readyResult, nil
+	}
+	return &executionapp.Readiness{}, nil
+}
 func (f *closedHelperFixture) deps() closedHelperDependencies {
 	return closedHelperDependencies{
+		ready: f.ready,
 		take: func(closedHelperFiles) (closedHelperInput, closedHelperChannels, error) {
 			f.event("take")
 			return closedHelperFixtureInput{f}, closedHelperFixtureChannels{f}, nil
@@ -223,7 +254,7 @@ func TestClosedHelperDeterministicOrderAndCorrelation(t *testing.T) {
 			if e := f.run(context.Background(), nil); e != nil {
 				t.Fatal(e)
 			}
-			want := []string{"take", "read", "borrow", "open", "with-files", "admission", "check", "check", "emit", "check", "continue", "check", "acquire", "check", "callback", "check", "admission-close", "routes-close", "borrow-return", "channels-close", "input-close"}
+			want := []string{"take", "read", "borrow", "open", "with-files", "admission", "check", "ready", "check", "emit", "check", "continue", "check", "acquire", "check", "callback", "check", "admission-close", "routes-close", "borrow-return", "channels-close", "input-close"}
 			if !reflect.DeepEqual(f.events, want) {
 				t.Fatalf("order:\n%v\n%v", f.events, want)
 			}
@@ -783,6 +814,294 @@ func TestClosedHelperCloseAbsentOwnersAndSingleFailures(t *testing.T) {
 		}
 		if calls != 1 || !errors.Is(err, cause) {
 			t.Fatal("single cleanup cause lost or repeated", calls, err)
+		}
+	}
+}
+
+// Readiness seam tests. The seam is symbolic: they prove ordering, refusal
+// containment, bound reuse and uncertainty retention, not the native journal,
+// app trees or Darwin custody (those belong to the production composition lane).
+func closedHelperReadyFailure(t *testing.T, err error) *closedHelperFailure {
+	t.Helper()
+	var failure *closedHelperFailure
+	if !errors.As(err, &failure) {
+		t.Fatal("failure lost its closed classification", err)
+	}
+	return failure
+}
+
+func TestClosedHelperReadinessPrecedesFrameAndIsRetained(t *testing.T) {
+	for _, action := range []string{"apply", "rollback"} {
+		t.Run(action, func(t *testing.T) {
+			f := newClosedHelperFixture(t)
+			r := closedHelperRequestFixture()
+			r["action"] = action
+			f.input = closedHelperJSON(t, r)
+			f.continuation = closedHelperJSON(t, closedHelperContinuation(r))
+			f.readyResult = &executionapp.Readiness{}
+			if e := f.run(context.Background(), func(s closedReleaseHelper) error {
+				if s.state.readiness != f.readyResult || s.state.milestone == nil || s.state.milestone != f.readyMilestone {
+					t.Fatal("readiness or milestone not retained for a later execution step")
+				}
+				return nil
+			}); e != nil {
+				t.Fatal(e)
+			}
+			if f.readyCalls != 1 || f.framesAtReady != 0 {
+				t.Fatal("readiness did not precede the only ACK attempt", f.readyCalls, f.framesAtReady)
+			}
+			// Exactly the first custody proof precedes readiness; a fresh proof follows it.
+			if f.readyChecks != 1 || f.events[len(f.events)-1] == "ready" {
+				t.Fatal("readiness did not follow the first custody proof", f.readyChecks, f.events)
+			}
+			first, ready, emit := -1, -1, -1
+			for i, e := range f.events {
+				switch {
+				case e == "check" && first < 0:
+					first = i
+				case e == "ready":
+					ready = i
+				case e == "emit":
+					emit = i
+				}
+			}
+			if !(first < ready && ready < emit) {
+				t.Fatal("order", f.events)
+			}
+			if f.checks < 2 || f.events[emit-1] != "check" {
+				t.Fatal("no custody fence between readiness and ACK", f.events)
+			}
+			closedHelperClosedOnce(t, f)
+		})
+	}
+}
+
+func TestClosedHelperReadinessRefusalExposesNothing(t *testing.T) {
+	for _, tc := range []struct{ action, code string }{{"apply", "operation_exists"}, {"apply", "staged_missing"}, {"rollback", "closed_rollback_pair"}, {"rollback", "closed_rollback_journal_changed"}} {
+		t.Run(tc.action+"-"+tc.code, func(t *testing.T) {
+			f := newClosedHelperFixture(t)
+			r := closedHelperRequestFixture()
+			r["action"] = tc.action
+			f.input = closedHelperJSON(t, r)
+			f.continuation = closedHelperJSON(t, closedHelperContinuation(r))
+			refusal := &executionapp.Failure{Code: tc.code, Phase: "refused"}
+			f.readyErr = refusal
+			err := f.run(context.Background(), nil)
+			closedHelperFailureCheck(t, err, refusal)
+			// Nested closed wrappers are conservatively uncertain; exposure is the
+			// property under test, and Emit never happened.
+			closedHelperReadyFailure(t, err)
+			if len(f.frames) != 0 || closedHelperHas(f.events, "emit") || closedHelperHas(f.events, "continue") || f.acquired != 0 || f.callback != 0 {
+				t.Fatal("refusal exposed a frame or reached continuation authority", f.events)
+			}
+			closedHelperClosedOnce(t, f)
+		})
+	}
+}
+
+func TestClosedHelperReadinessErrorsAndNilResultAreContained(t *testing.T) {
+	cause := errors.New("private-readiness-native-cause")
+	for _, mode := range []string{"opaque", "internal", "uncertain", "nil-result", "missing-seam"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newClosedHelperFixture(t)
+			deps := f.deps()
+			var captured closedReleaseHelper
+			switch mode {
+			case "opaque":
+				f.readyErr = cause
+			case "internal":
+				f.readyErr = &executionapp.Failure{Code: "internal", Phase: "refused", Internal: true}
+			case "uncertain":
+				f.readyErr = &executionapp.Failure{Code: "canceled", Phase: "refused", Uncertain: true, Cause: cause}
+			case "nil-result":
+				deps.ready = func(_ context.Context, _ *executionapp.Milestone, helper closedReleaseHelper) (*executionapp.Readiness, error) {
+					captured = helper
+					return nil, nil
+				}
+			case "missing-seam":
+				deps.ready = nil
+			}
+			err := withClosedReleaseHelperDependencies(context.Background(), closedHelperFiles{}, f.until, func(closedReleaseHelper) error { t.Fatal("callback"); return nil }, deps)
+			closedHelperFailureCheck(t, err)
+			if mode == "opaque" || mode == "uncertain" {
+				closedHelperFailureCheck(t, err, cause)
+			}
+			if !closedHelperReadyFailure(t, err).uncertain {
+				t.Fatal("unproven readiness failure was classified as a clean refusal")
+			}
+			if mode == "nil-result" && (captured.state == nil || captured.unknown() == nil) {
+				t.Fatal("a nil readiness result did not retain uncertainty in its preflight scope")
+			}
+			if len(f.frames) != 0 || f.acquired != 0 {
+				t.Fatal("failure exposed a frame or acquired the update lock")
+			}
+			closedHelperClosedOnce(t, f)
+		})
+	}
+}
+
+func TestClosedHelperReadinessUsesOriginalBound(t *testing.T) {
+	t.Run("elapses-inside-readiness", func(t *testing.T) {
+		f := newClosedHelperFixture(t)
+		f.until = time.Now().Add(40 * time.Millisecond)
+		// A caller deadline far beyond the original bound must not extend it.
+		parent, cancel := context.WithTimeout(context.Background(), time.Hour)
+		defer cancel()
+		f.beforeReady = func(ctx context.Context) {
+			if d, ok := ctx.Deadline(); !ok || d.After(f.until) {
+				t.Error("readiness context deadline extends the original bound", d, f.until)
+			}
+			time.Sleep(time.Until(f.until) + 2*time.Millisecond)
+		}
+		err := f.run(parent, nil)
+		closedHelperFailureCheck(t, err, context.DeadlineExceeded)
+		if len(f.frames) != 0 || f.callback != 0 {
+			t.Fatal("late readiness reached the frame")
+		}
+		closedHelperClosedOnce(t, f)
+	})
+	t.Run("cancelled-inside-readiness", func(t *testing.T) {
+		f := newClosedHelperFixture(t)
+		ctx, cancel := context.WithCancelCause(context.Background())
+		defer cancel(nil)
+		native := errors.New("private-readiness-cancellation")
+		f.beforeReady = func(context.Context) { cancel(native) }
+		f.readyErr = context.Canceled
+		err := f.run(ctx, nil)
+		closedHelperFailureCheck(t, err, context.Canceled, native)
+		if len(f.frames) != 0 || f.callback != 0 {
+			t.Fatal("cancelled readiness reached the frame")
+		}
+		closedHelperClosedOnce(t, f)
+	})
+}
+
+func TestClosedHelperReadinessPanicIsJoinedAndRetained(t *testing.T) {
+	f := newClosedHelperFixture(t)
+	cause := errors.New("private-readiness-panic /never-in-public-text")
+	f.readyPanic = cause
+	err := f.run(context.Background(), nil)
+	closedHelperFailureCheck(t, err, cause)
+	if !closedHelperReadyFailure(t, err).uncertain {
+		t.Fatal("readiness panic was not unknown")
+	}
+	if strings.Contains(err.Error(), "private") {
+		t.Fatal("panic text exposed")
+	}
+	if len(f.frames) != 0 || f.acquired != 0 || f.callback != 0 {
+		t.Fatal("panic exposed a frame or reached continuation authority")
+	}
+	// The preflight scope retains the uncertainty and is permanently closed.
+	closedHelperFailureCheck(t, f.readyHelper.unknown(), cause)
+	before := f.checks
+	closedHelperFailureCheck(t, f.readyHelper.reverify(context.Background(), f.readyHelper.state.request))
+	if f.checks != before {
+		t.Fatal("ended preflight scope performed native work")
+	}
+	closedHelperClosedOnce(t, f)
+}
+
+func TestClosedHelperReadinessScopeEndsBeforeFrame(t *testing.T) {
+	f := newClosedHelperFixture(t)
+	if err := f.run(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	before := f.checks
+	closedHelperFailureCheck(t, f.readyHelper.reverify(context.Background(), f.readyHelper.state.request))
+	if f.checks != before {
+		t.Fatal("retained preflight scope renewed native authority")
+	}
+	// Preflight and callback scopes are distinct owners.
+	if f.readyHelper.state.milestone != nil || f.readyHelper.state.readiness != nil {
+		t.Fatal("preflight scope retained execution inputs")
+	}
+}
+
+func TestClosedHelperJournalObservationAdmissionRefusals(t *testing.T) {
+	op := release.Operation{ID: strings.Repeat("1", 32)}
+	binding := releaseport.JournalDirectory{Device: "1", Inode: "2", ParentDevice: "3", ParentInode: "4"}
+	if _, writer := any(&closedHelperJournalObservation{}).(releaseport.JournalAdmission); writer {
+		t.Fatal("observation admission impersonates the writer admission")
+	}
+	ctx := context.Background()
+	t.Run("nil", func(t *testing.T) {
+		for _, a := range []*closedHelperJournalObservation{nil, {}, {operation: op, binding: binding}} {
+			if a.JournalGate() != nil || !a.JournalUnknown(op) || a.ReverifyHelperJournalObservation(ctx, op, binding) == nil {
+				t.Fatal("unbound observation admission accepted")
+			}
+			a.RetainJournalUnknown(op) // Must not panic.
+		}
+	})
+	t.Run("active-ended-and-mismatch", func(t *testing.T) {
+		f := newClosedHelperFixture(t)
+		state := &closedReleaseHelperState{active: true, request: closedHelperRequestCopy(f.captured), original: ctx, until: f.until, admission: closedHelperFixtureAdmission{f}}
+		state.request = closedHelperRequestFixtureParsed(t)
+		a := &closedHelperJournalObservation{helper: closedReleaseHelper{state}, gate: &fakeGate{}, operation: op, binding: binding}
+		if a.JournalGate() == nil || a.JournalUnknown(op) {
+			t.Fatal("active scope refused")
+		}
+		if err := a.ReverifyHelperJournalObservation(ctx, op, binding); err != nil || f.checks != 1 {
+			t.Fatal("active scope did not run its custody check", err, f.checks)
+		}
+		other := op
+		other.ID = strings.Repeat("9", 32)
+		moved := binding
+		moved.Inode = "5"
+		if a.ReverifyHelperJournalObservation(ctx, other, binding) == nil || a.ReverifyHelperJournalObservation(ctx, op, moved) == nil || !a.JournalUnknown(other) || f.checks != 1 {
+			t.Fatal("mismatched operation or directory binding accepted")
+		}
+		state.end()
+		if a.ReverifyHelperJournalObservation(ctx, op, binding) == nil || f.checks != 1 {
+			t.Fatal("ended scope renewed custody authority")
+		}
+	})
+	t.Run("retains-unknown", func(t *testing.T) {
+		f := newClosedHelperFixture(t)
+		state := &closedReleaseHelperState{active: true, request: closedHelperRequestFixtureParsed(t), original: ctx, until: f.until, admission: closedHelperFixtureAdmission{f}}
+		a := &closedHelperJournalObservation{helper: closedReleaseHelper{state}, gate: &fakeGate{}, operation: op, binding: binding}
+		a.RetainJournalUnknown(op)
+		if !a.JournalUnknown(op) || state.unknown() == nil {
+			t.Fatal("journal uncertainty not retained")
+		}
+		if a.ReverifyHelperJournalObservation(ctx, op, binding) == nil || f.checks != 0 {
+			t.Fatal("unknown scope performed native work")
+		}
+	})
+}
+
+type fakeGate struct{}
+
+func (*fakeGate) Lock()   {}
+func (*fakeGate) Unlock() {}
+
+func closedHelperRequestFixtureParsed(t *testing.T) releaseport.HelperRequest {
+	t.Helper()
+	f := newClosedHelperFixture(t)
+	if err := f.run(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	return closedHelperRequestCopy(f.captured)
+}
+
+func TestClosedHelperReadyRefusesUnboundInputs(t *testing.T) {
+	m, err := executionapp.NewMilestone(context.Background(), closedHelperRequestFixtureParsed(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, call := range map[string]func() (*executionapp.Readiness, error){
+		"nil-context": func() (*executionapp.Readiness, error) { return closedHelperReady(nil, m, closedReleaseHelper{}) },
+		"nil-milestone": func() (*executionapp.Readiness, error) {
+			return closedHelperReady(context.Background(), nil, closedReleaseHelper{})
+		},
+		"nil-state": func() (*executionapp.Readiness, error) {
+			return closedHelperReady(context.Background(), m, closedReleaseHelper{})
+		},
+		"no-route": func() (*executionapp.Readiness, error) {
+			return closedHelperReady(context.Background(), m, closedReleaseHelper{&closedReleaseHelperState{}})
+		},
+	} {
+		if ready, err := call(); ready != nil || err == nil {
+			t.Fatal(name, "accepted unbound readiness inputs")
 		}
 	}
 }

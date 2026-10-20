@@ -121,7 +121,8 @@ bound native process observer and update lock. There is no CLI selection. Only
 closed `apply` and `rollback` requests with explicit `legacy` or `shared`
 `installLocation` and their physical slot binding are supported. Missing closed
 proof or the optional-location legacy branch refuses before native admission.
-This is a custody/protocol checkpoint, not complete helper readiness.
+Pre-ACK application readiness joins closed custody here; journal execution,
+installation, recovery, relaunch and terminal classification remain unselected.
 
 The trusted launch supplies actual, distinct `os.File` owners for request fd3,
 ACK fd4 and continuation fd6. Their ownership transfers on call, including
@@ -141,13 +142,24 @@ observe that absolute end, including when context timer notification lags.
 Request bytes are EOF-sealed and parsed once. The protocol holds independent
 values for both full builds, operation, process birth, predecessor state/start/quit
 digest and lease identity. The physical canonical slot additionally binds location.
+A `Milestone` is created from that parsed request before any native work.
 
 One live route borrow retains home, applications, state, update and operation
 Files. Before and around the ACK/continuation boundaries, the same native owner
 rechecks those routes, the slot, inherited lease custody, actual process absence
 and the exact confirmed quit receipt. Live PIDs refuse even with a different
-birth token; unknown/error observations never establish absence. It emits one
-correlated `closed_predecessor_ready` frame only after those checks. Continuation
+birth token; unknown/error observations never establish absence. After the first
+custody proof, still inside the borrow, it runs application readiness (apply:
+journal absent, no previous/failed/rejected entry, verified app and staged trees
+on one device; rollback: the `closed_rollback_pair`) through the existing
+`journal.WithObservation`, `execution.WithObservation` and `Milestone.Inspect`
+owners over the borrowed Files and the original bound. A single boot-local
+observation admission (not a writer admission) supplies the private gate, the
+scope's own custody check and sticky uncertainty. Any readiness refusal, error,
+panic or late result exposes nothing and emits no refused frame. It then emits one
+correlated `closed_predecessor_ready` frame after another custody check. The
+readiness result and Milestone are retained, unused, for a later execution step.
+Continuation
 is one bounded EOF-sealed frame checked against the original protocol request.
 Only after continuation and another closed-custody check does it acquire the
 existing update lock. The parent's inherited lease remains caller-owned.
@@ -170,17 +182,19 @@ and its uncertainty remains an original error cause. Independent update-close
 failure is retained too. The exact fd5 borrow stays inside the synchronous
 RawConn.Control callback through that return; no descriptor escapes the callback.
 
-ACK exposure and EOF are transport evidence only. This scope does not perform the
-Python branch's application/tree/pair/journal readiness preflight, installation,
-recovery, rollback, relaunch or terminal exit classification. Complete pre-ACK
-application composition remains a selection gate; this unselected ready frame
-must not be wired to an application effect or product readiness until that gate
-and the existing desktop protocol are independently accepted.
+ACK exposure and EOF are transport evidence only. This scope does not call
+`Milestone.Execute`, or perform installation, recovery, rollback, relaunch or
+terminal exit classification, and it repeats no readiness after continuation yet.
+The unselected ready frame must not be wired to an application effect or product
+readiness until that gate and the existing desktop protocol are independently
+accepted.
 
 `releasehelperclosed_test.go` uses private symbolic native/transport seams with
 the real parser/codecs. It checks correlation, order, boundary refusal, original
 bounds, sticky uncertainty, copied/retained wrappers, joined return, panic and
-cause retention. These deterministic tests prove no physical inherited role,
+cause retention, and with a symbolic readiness seam: its order before the frame,
+refusal containment, the original bound, panic retention and the observation
+admission's nil/ended refusals. These deterministic tests prove no physical inherited role,
 lease, route or process. `releasehelperclosednative_test.go` is a separately gated
 Darwin fixture: Root alone allocates it with `FAROL_CLOSED_HELPER_NATIVE=1`. Each
 case creates a fresh disposable home, actual predecessor process, inherited

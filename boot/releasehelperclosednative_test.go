@@ -21,6 +21,7 @@ import (
 	"time"
 
 	releaseport "github.com/legrch/farol/modules/release/app/port"
+	executionapp "github.com/legrch/farol/modules/release/app/services/execution"
 	inputapp "github.com/legrch/farol/modules/release/app/services/helperinput"
 	protocolapp "github.com/legrch/farol/modules/release/app/services/helperprotocol"
 	inputnative "github.com/legrch/farol/modules/release/infra/native/helperinput"
@@ -91,7 +92,16 @@ func TestClosedHelperNativeChild(t *testing.T) {
 		t.Fatal(snapshotErr)
 	}
 	receipt := closedHelperNativeTerminal{Mode: mode, Before: before}
-	err := withClosedReleaseHelper(context.Background(), closedHelperFiles{input, ack, lease, continuation}, until, func(scope closedReleaseHelper) error {
+	deps := closedHelperProductionDependencies()
+	if mode != "readiness-refused" {
+		// Custody-only lane: the disposable fixture has no app/staged trees, so
+		// readiness is a SYMBOLIC pass here. Only "readiness-refused" exercises the
+		// production readiness composition over the real borrowed routes.
+		deps.ready = func(context.Context, *executionapp.Milestone, closedReleaseHelper) (*executionapp.Readiness, error) {
+			return &executionapp.Readiness{}, nil
+		}
+	}
+	err := withClosedReleaseHelperDependencies(context.Background(), closedHelperFiles{input, ack, lease, continuation}, until, func(scope closedReleaseHelper) error {
 		receipt.Callback = true
 		return scope.withFiles(context.Background(), func(ctx context.Context, files helperroutes.Files, request releaseport.HelperRequest, bound time.Time) error {
 			if !bound.Equal(until) {
@@ -109,7 +119,7 @@ func TestClosedHelperNativeChild(t *testing.T) {
 			}
 			return nil // No journal, app tree or installation effect is composed.
 		})
-	})
+	}, deps)
 	if err != nil {
 		receipt.Error = err.Error()
 	}
@@ -228,7 +238,7 @@ func TestClosedHelperNativeInheritedCustody(t *testing.T) {
 	if os.Getenv(closedHelperNativeEnv) != "1" {
 		t.Skip("Root must allocate the native lane explicitly")
 	}
-	for _, mode := range []string{"sealed", "partial", "withheld-eof", "replaced-slot", "replaced-lease", "replaced-route", "live", "reused", "stale-quit", "unconfirmed-quit"} {
+	for _, mode := range []string{"sealed", "partial", "withheld-eof", "replaced-slot", "replaced-lease", "replaced-route", "live", "reused", "stale-quit", "unconfirmed-quit", "readiness-refused"} {
 		t.Run(mode, func(t *testing.T) {
 			dir, err := os.MkdirTemp("", "farol-closed-helper-native-")
 			if err != nil {
@@ -391,7 +401,9 @@ func TestClosedHelperNativeInheritedCustody(t *testing.T) {
 			if readErr != nil {
 				runErrors = append(runErrors, readErr)
 			}
-			preRefusal := live || mode == "stale-quit" || mode == "unconfirmed-quit"
+			// readiness-refused: custody passes, then the production readiness finds no
+			// app/staged tree. It must refuse before any ACK, journal write or update lock.
+			preRefusal := live || mode == "stale-quit" || mode == "unconfirmed-quit" || mode == "readiness-refused"
 			if preRefusal {
 				if len(ready) != 0 {
 					runErrors = append(runErrors, errors.New("pre-readiness refusal exposed ACK"))
@@ -495,6 +507,14 @@ func TestClosedHelperNativeInheritedCustody(t *testing.T) {
 						connErr = conn.Control(func(fd uintptr) { flockErr = unix.Flock(int(fd), unix.LOCK_EX|unix.LOCK_NB) })
 					}
 					runErrors = append(runErrors, connErr, flockErr, released.Close())
+				}
+			}
+			if mode == "readiness-refused" {
+				if _, e := os.Lstat(filepath.Join(operation, "journal.json")); !errors.Is(e, os.ErrNotExist) {
+					runErrors = append(runErrors, errors.New("readiness wrote or exposed a journal"), e)
+				}
+				if _, e := os.Lstat(filepath.Join(update, "lock")); !errors.Is(e, os.ErrNotExist) {
+					runErrors = append(runErrors, errors.New("readiness refusal reached the update lock"), e)
 				}
 			}
 			if !found || terminal.Callback != wantSuccess || (terminal.Error == "") != wantSuccess {

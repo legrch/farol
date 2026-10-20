@@ -10,6 +10,7 @@ import (
 	"time"
 
 	releaseport "github.com/legrch/farol/modules/release/app/port"
+	executionapp "github.com/legrch/farol/modules/release/app/services/execution"
 	inputapp "github.com/legrch/farol/modules/release/app/services/helperinput"
 	protocolapp "github.com/legrch/farol/modules/release/app/services/helperprotocol"
 	"github.com/legrch/farol/modules/release/infra/native/handoff"
@@ -77,6 +78,8 @@ func closedHelperFail(uncertain bool, causes ...error) error {
 		case *releaseport.ProcessProbeFailure:
 			uncertain = uncertain || f.Kind != releaseport.ProcessProbeUnknown && f.Kind != releaseport.ProcessProbeInput
 		case *releaseport.HelperRecoveryFailure:
+			uncertain = uncertain || f.Uncertain || f.Internal
+		case *executionapp.Failure:
 			uncertain = uncertain || f.Uncertain || f.Internal
 		case *inputapp.Failure, *protocolapp.Failure, handoff.Code:
 		case interface{ Unwrap() []error }, interface{ Unwrap() error }:
@@ -177,15 +180,27 @@ type closedHelperDependencies struct {
 	borrow    func(*os.File, func() error) error
 	open      func(context.Context, releaseport.HelperRequest, time.Time) (closedHelperRoutes, error)
 	admission func(helperroutes.Files, *os.File, releaseport.HelperRequest, []byte, time.Time) (closedHelperAdmission, error)
+	// ready completes pre-ACK application readiness inside the borrowed routes.
+	// The helper wraps ONLY the preflight scope (observation-only); it ends before
+	// the ready frame and is never the post-continuation callback scope.
+	ready func(context.Context, *executionapp.Milestone, closedReleaseHelper) (*executionapp.Readiness, error)
 }
 
-// withClosedReleaseHelper composes only closed custody and protocol. It selects
-// no CLI and executes no journal, installation, recovery or relaunch operation.
-// Its ready frame is not full-helper application preflight or terminal evidence.
+// withClosedReleaseHelper composes closed custody, pre-ACK application readiness
+// and protocol. It selects no CLI and executes no journal, installation,
+// recovery or relaunch operation: readiness is observation-only and its result is
+// merely retained for a later, separately selected execution step. The ready
+// frame is emitted only after custody AND readiness; it is not terminal evidence.
 // The trusted launch must supply its original absolute bound, captured before
 // request work; request WaitSeconds and later contexts never start a fresh budget.
 func withClosedReleaseHelper(ctx context.Context, files closedHelperFiles, until time.Time, fn func(closedReleaseHelper) error) error {
-	return withClosedReleaseHelperDependencies(ctx, files, until, fn, closedHelperDependencies{
+	return withClosedReleaseHelperDependencies(ctx, files, until, fn, closedHelperProductionDependencies())
+}
+
+// closedHelperProductionDependencies is the fixed concrete composition. It is a
+// function only so the explicit native test lane can reuse it with one seam replaced.
+func closedHelperProductionDependencies() closedHelperDependencies {
+	return closedHelperDependencies{
 		take: takeClosedHelperFiles, borrow: borrowClosedHelperLease,
 		open: func(ctx context.Context, r releaseport.HelperRequest, u time.Time) (closedHelperRoutes, error) {
 			if runtime.GOOS != "darwin" {
@@ -194,7 +209,8 @@ func withClosedReleaseHelper(ctx context.Context, files closedHelperFiles, until
 			return helperroutes.OpenExisting(ctx, r.Home, r.OperationID, *r.InstallLocation, u)
 		},
 		admission: newClosedHelperAdmission,
-	})
+		ready:     closedHelperReady,
+	}
 }
 
 func withClosedReleaseHelperDependencies(ctx context.Context, files closedHelperFiles, until time.Time, fn func(closedReleaseHelper) error, deps closedHelperDependencies) (result error) {
@@ -253,6 +269,10 @@ func withClosedReleaseHelperDependencies(ctx context.Context, files closedHelper
 	if err := closedHelperBounds(effective, until); err != nil {
 		return err
 	}
+	milestone, err := executionapp.NewMilestone(effective, request)
+	if err != nil || milestone == nil {
+		return closedHelperFail(false, err)
+	}
 	expected, err := protocol.BuildSlotBinding(effective, protocolnative.JSONCodec{})
 	if err != nil || len(expected) == 0 {
 		return closedHelperFail(false, err)
@@ -281,10 +301,38 @@ func withClosedReleaseHelperDependencies(ctx context.Context, files closedHelper
 			if err = check(); err != nil {
 				return err
 			}
+			// Application readiness follows the first custody proof and precedes the
+			// frame. A refusal or error here exposes nothing and emits no refused frame.
+			preflight := &closedReleaseHelperState{active: true, files: borrow, request: closedHelperRequestCopy(request), original: effective, until: until, admission: admission}
+			var readiness *executionapp.Readiness
+			err = closedHelperCall(func() (e error) {
+				if deps.ready == nil {
+					return closedHelperFail(true)
+				}
+				readiness, e = deps.ready(effective, milestone, closedReleaseHelper{preflight})
+				return e
+			})
+			// Join every entered preflight call before judging the result.
+			preflight.end()
+			if err != nil {
+				preflight.retainUnknown(err)
+				return closedHelperFail(false, err)
+			}
+			if err = preflight.unknown(); err != nil {
+				return closedHelperFail(false, err)
+			}
+			if readiness == nil {
+				// A seam that reports success without a result is an internal defect,
+				// retained as unknown exactly like an error or panic.
+				err = closedHelperFail(true)
+				preflight.retainUnknown(err)
+				return err
+			}
 			frame, err := protocol.BuildHandoff(effective, protocolapp.ClosedPredecessorReady, nil)
 			if err != nil {
 				return closedHelperFail(false, err)
 			}
+			// Fence after readiness, immediately before the only ACK attempt.
 			if err = check(); err != nil {
 				return err
 			}
@@ -314,7 +362,7 @@ func withClosedReleaseHelperDependencies(ctx context.Context, files closedHelper
 			if err = check(); err != nil {
 				return err
 			}
-			state := &closedReleaseHelperState{active: true, files: borrow, request: closedHelperRequestCopy(request), original: effective, until: until, admission: admission}
+			state := &closedReleaseHelperState{active: true, files: borrow, request: closedHelperRequestCopy(request), original: effective, until: until, admission: admission, milestone: milestone, readiness: readiness}
 			scoped = state
 			defer func() {
 				// Joins every already-entered scoped callback/native method before cleanup,
@@ -387,6 +435,10 @@ type closedReleaseHelperState struct {
 	until        time.Time
 	admission    closedHelperAdmission
 	retained     error
+	// Retained for a later separately selected execution step; no method exposes
+	// them and nothing here calls Execute.
+	milestone *executionapp.Milestone
+	readiness *executionapp.Readiness
 }
 
 func (s *closedReleaseHelperState) begin(consume bool) error {
