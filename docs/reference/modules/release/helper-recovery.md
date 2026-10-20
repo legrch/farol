@@ -184,8 +184,8 @@ failure is retained too. The exact fd5 borrow stays inside the synchronous
 RawConn.Control callback through that return; no descriptor escapes the callback.
 
 ACK exposure and EOF are transport evidence only. `request.relaunch` is refused
-before any IO or frame (the relaunch gate is closed), and the launch port is always
-nil. Inside the callback scope alone, which holds the acquired update lock, a
+before any IO or frame (the relaunch gate is closed), and the closed helper supplies no
+relaunch capabilities, so its launch port is inert. Inside the callback scope alone, which holds the acquired update lock, a
 single-consume `execute` composes the existing journal and rejection repositories
 under one writer admission and one gate, then runs `Milestone.Execute` once
 through `WithAdmittedInstallation`. The admission refuses unless the update lock
@@ -254,7 +254,8 @@ Relaunch follows `update_helper.py` run() (1382-1403) through the existing
 `Milestone.Execute`: only a verified apply launches. After `verified` it captures the
 private `launch-Farol.app` for a shared install, journals `launch_requested`, measures
 this helper process, builds the hint with phase `completed` and this helper's own pid
-and start, opens the image once, and journals `completed`; a clean nonzero launch is
+and start, opens the image once, verifies the launched process image
+(`relaunch-image-verification.md`), and journals `completed`; a clean nonzero launch is
 `launch_failed` (exit 70, phase `launch_requested`). A rollback that asks for relaunch
 settles `rolled_back` and never launches, exactly as Python (the desktop's Roll back
 button sends it). The live helper alone supplies the launch capabilities
@@ -272,12 +273,16 @@ refusal sends one `refused` frame instead of `waiting_for_exit` and exits 70.
 Nothing selects it: the desktop still spawns `update_helper.py`.
 `releasehelperlivenative_test.go` runs the compiled entry against a scratch
 `/bin/cat` predecessor under `FAROL_LIVE_HELPER_NATIVE=1`; its relaunch cases stop
-before `/usr/bin/open` (inert images have no executable) so they cannot start an app. The
-launch itself is exercised end to end in `infra/native/execution`
-(`milestonerelaunch_test.go`, and the `FAROL_RELAUNCH_NATIVE=1` lane over scratch
-bundles). A shared install cannot be applied end to end without a root-owned
-Applications parent, so its capture stays on the root-scheduled capture witness and its
-binding on `launchBound` and the argument tests.
+before `/usr/bin/open` (inert images have no executable) so they cannot start an app.
+The launch and its post-launch verification are exercised in `infra/native/execution`:
+deterministic Milestone relaunch tests (`milestonerelaunch_test.go`) and, under
+`FAROL_RELAUNCH_NATIVE=1`, `TestNativeMilestoneRelaunchEndToEnd` over scratch bundles,
+which replaces LaunchServices with a direct exec of a scratch executable. Boot wiring
+tests (`releasehelperliverelaunch_test.go`) cover which capabilities each helper carries.
+Not covered: the real LaunchServices `/usr/bin/open`, a shared install end to end (it
+needs a root-owned Applications parent, so its capture stays on the root-scheduled
+capture witness and its binding on `launchBound` and the argument tests), and any
+packaged or installed run.
 
 The unselected ready frame must not be wired to an application effect or product
 readiness until that gate and the existing desktop protocol are independently
@@ -346,11 +351,12 @@ independent failures retain opaque joined provenance. Native observation still
 requires an independently valid original reader and custody owner; the library
 cannot manufacture pre-ACK admission.
 
-The native execution runtime now implements the relaunch effects: private
+The native execution runtime implements the relaunch effects: private
 capture of the verified shared install image (itself an operation effect, with
-failed images retained), self-measurement and relaunch-argument building. Both
-self-measurement and argument building are optional `Config` capabilities that
-only trusted composition installs. The live helper (`farol run-live-release-helper`)
+failed images retained), self-measurement (`MeasureSelf`), relaunch-argument
+building (`RelaunchArguments`) and post-launch image verification
+(`relaunch-image-verification.md`). Self-measurement and argument building are
+optional `Config` capabilities that only trusted composition installs. The live helper (`farol run-live-release-helper`)
 installs them only for a relaunch request; the closed helper supplies none and still
 refuses relaunch. With a relaunch request and no installed capability, the runtime refuses without marking
 completed. The arguments it dispatches must name the image it verified (the
@@ -362,21 +368,28 @@ a pathname after verifying the image through held descriptors. A writer running
 as the same user can still replace that path between verification and
 LaunchServices resolution. Copying is not a same-user exclusion boundary (see
 [install namespace](install-namespace.md)), and this port neither narrows nor
-widens that window. Binding the launch to the verified bytes, or verifying the
-launched process image afterwards, needs its own design before the capability
-is composed. Tests cover callback ordering, effect fencing and known versus unknown
-failure classification with disposable fixtures, not a physical installed image,
-dispatch, Wait or successful launch.
+widens that window. Unlike Python, the runtime then verifies the launched process
+image afterwards under the owner's cooperative-writer contract. This is detection,
+not prevention, and it does not close the window. Zero, ambiguous or mismatched
+candidates are uncertain and leave the journal at `launch_requested`. Deterministic
+tests cover callback ordering, effect fencing, known versus unknown failure
+classification and every verification branch with disposable fixtures. The gated
+native lane covers real kernel reads over scratch bundles, including a successful
+launch, but not LaunchServices, a physical shared or installed image, or a packaged
+run.
 
-This is independently buildable source foundation. Boot/CLI composition, the
-complete pre-ACK readiness gate, transport/ACK and terminal classification,
-physical installation and recovery qualification, resource manifests, generated bindings and
-product selection are withheld. The relaunch capabilities are composed only in the live helper
-for a relaunch request; the closed helper refuses relaunch, and recover remains refused. The
-desktop still spawns `update_helper.py`, and the Python helper remains selected. Pure application/input tests and race/vet are
-policy evidence; native/boot test compilation is compile-only. Neither establishes
-native admission, a live filesystem/process, full CI, package, installed, OTA or
-release acceptance. Root owns independent review, integration and those gates.
+This is independently buildable source foundation. This library does not itself
+provide transport/ACK, terminal classification, physical installation and recovery
+qualification, resource manifests, generated bindings or product selection. Boot
+composes the readiness gate, ACK and terminal mapping only in the unselected closed
+and live helper entries above; the relaunch capabilities are composed only in the live
+helper for a relaunch request, the closed helper refuses relaunch, and recover remains
+refused. Resource manifests, generated bindings and product selection are withheld: the
+desktop still spawns `update_helper.py`, and the Python helper remains selected. Pure
+application/input tests and race/vet are policy evidence; native and boot tests run
+their physical cases only in their gated lanes and are otherwise compile-only. Neither
+establishes native admission, a live filesystem/process, full CI, package, installed,
+OTA or release acceptance. Root owns independent review, integration and those gates.
 
 ## Existing-only journal observation
 
