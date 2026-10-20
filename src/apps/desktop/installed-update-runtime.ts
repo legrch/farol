@@ -2345,6 +2345,10 @@ async function createRuntime(
       await runTrusted("update-slot.mjs", [file], beforeEffect),
     );
   const known = (code: string) => ({ ok: false as const, code });
+  // The single boundary of first-launch adoption: the ordinary desktop runtime
+  // in the user slot. Never the shared slot, never a supervised owner runtime.
+  // Every adoption read, lookup and write is gated on this one value.
+  const adoptionApplies = installLocation !== "shared" && !supervised;
   const adoptionChannel =
     options.build.updateChannel === "github-stable" ? "stable" : "owner-beta";
   // The published manifest must describe exactly the running build.
@@ -2528,12 +2532,7 @@ async function createRuntime(
       }
       const file = slot + ".receipt.json";
       const receiptRaw = await readRecord(file);
-      if (
-        receiptRaw === null &&
-        !repair &&
-        installLocation !== "shared" &&
-        !supervised
-      ) {
+      if (receiptRaw === null && !repair && adoptionApplies) {
         // No owner-tool receipt: only a previously adopted baseline can anchor
         // this copy. Its absence is the one condition that permits adoption.
         expected = await readAdoptedExpectation();
@@ -2576,8 +2575,7 @@ async function createRuntime(
     Readonly<{ ok: true }> | Readonly<{ ok: false; code: string }>
   > => {
     if (
-      installLocation === "shared" ||
-      supervised ||
+      !adoptionApplies ||
       options.build.sourceDirty ||
       !options.build.buildVersion ||
       !["github-stable", "github-owner-beta"].includes(
@@ -3556,8 +3554,7 @@ async function createRuntime(
           error instanceof Error &&
           error.message === "UPDATE_BASELINE_ADOPTION_SUPERSEDED";
         if (
-          installLocation === "shared" ||
-          supervised ||
+          !adoptionApplies ||
           !(error instanceof Error) ||
           (error.message !== "UPDATE_BASELINE_ADOPTION_REQUIRED" && !superseded)
         )
