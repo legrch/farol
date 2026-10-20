@@ -17,6 +17,11 @@ import { createOwnerLaunchResultCollector } from "./owner-launch-result.mjs";
 import { ownerLaunchEnvironment } from "./launch-snapshot.mjs";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { prepareDevBuild } from "./dev-process-control.mjs";
+import {
+  dependencyDrift,
+  readDependencyDigests,
+  toolchainPackageRoots,
+} from "./dependency-digests.mjs";
 
 export const DECLARED_NODE_VERSIONS = Object.freeze(["24.20.0", "26.7.0"]);
 export const DECLARED_NPM_VERSION = "11.19.0";
@@ -203,7 +208,11 @@ export function evaluateDependencies({ committedPackages, installedPackages }) {
   return { ok: reasons.length === 0, reasons };
 }
 
-function readDependencyState(root) {
+export function readDependencyState(
+  root,
+  platform = process.platform,
+  arch = process.arch,
+) {
   const nodeModules = path.join(root, "node_modules");
   if (!fs.existsSync(nodeModules)) {
     return { ok: false, reasons: ["node_modules is missing"] };
@@ -220,7 +229,34 @@ function readDependencyState(root) {
       .packages ?? {};
   const installedPackages =
     JSON.parse(fs.readFileSync(hiddenLockPath, "utf8")).packages ?? {};
-  return evaluateDependencies({ committedPackages, installedPackages });
+  const metadata = evaluateDependencies({
+    committedPackages,
+    installedPackages,
+  });
+  if (!metadata.ok) return metadata;
+
+  // npm's hidden lock describes the installation, not its current bytes.
+  // Reuse the builder's reviewed tree digests, including unexpected files,
+  // rather than blessing local content or ignoring Finder metadata.
+  const expected = readDependencyDigests(root);
+  const roots = [
+    ...Object.keys(expected).filter(
+      (name) => !name.startsWith("node_modules/@esbuild/"),
+    ),
+    ...toolchainPackageRoots(platform, arch),
+  ];
+  if (
+    !roots.every((name) => /^node_modules\/(?:@[^/]+\/)?[^/]+$/u.test(name)) ||
+    roots.some((name) =>
+      name.split("/").some((part) => part === "." || part === ".."),
+    )
+  )
+    throw new Error("DEV_DEPENDENCY_MANIFEST_INVALID");
+  const reasons = dependencyDrift(root, roots, expected).map(
+    ({ packageRoot, reason }) =>
+      `${packageRoot} does not match reviewed bytes (${reason})`,
+  );
+  return { ok: reasons.length === 0, reasons };
 }
 
 function electronBinaryPresent(root) {
@@ -249,7 +285,13 @@ export function planDependencyActions({ dependencyState, electronPresent }) {
  */
 export async function applyDependencyPlan(
   plan,
-  { runNpmCi, runElectronInstall, log = () => {} },
+  {
+    runNpmCi,
+    runElectronInstall,
+    electronPresent,
+    verifyDependencies,
+    log = () => {},
+  },
 ) {
   if (plan.needsInstall) {
     log(
@@ -259,15 +301,35 @@ export async function applyDependencyPlan(
     const status = await runNpmCi();
     if (status !== 0) return status;
   }
-  // npm 11 can skip Electron's own postinstall, so this is checked
-  // unconditionally, even when the lockfile comparison above found nothing
-  // to do.
-  if (plan.needsElectronInstall) {
+  // npm ci replaces node_modules. Reobserve after it, since a previously
+  // present Electron can disappear, or npm can already have installed it.
+  const needsElectronInstall = electronPresent
+    ? !(await electronPresent())
+    : plan.needsElectronInstall;
+  if (needsElectronInstall) {
     log(
       "Electron's own binary is missing (its postinstall did not run); fetching it now...",
     );
     const status = await runElectronInstall();
     if (status !== 0) return status;
+  }
+  // An installer exit code is not proof of repaired inputs. Never loop,
+  // rewrite digests, launch, or let the Go builder consume unresolved drift.
+  if (verifyDependencies) {
+    const verified = await verifyDependencies();
+    if (!verified.ok) {
+      log(
+        `Dependencies still fail verification after preparation:\n${verified.reasons.map((reason) => `  - ${reason}`).join("\n")}\n` +
+          "No build or launch was attempted. Preserve the mismatch and repair the locked installation; do not refresh expected digests.",
+      );
+      return 1;
+    }
+  }
+  if (electronPresent && !(await electronPresent())) {
+    log(
+      "Electron is still missing after preparation. No build or launch was attempted.",
+    );
+    return 1;
   }
   return 0;
 }
@@ -286,6 +348,8 @@ async function ensureDependencies(root, npmBin, log) {
   });
   return applyDependencyPlan(plan, {
     log,
+    electronPresent: () => electronBinaryPresent(root),
+    verifyDependencies: () => readDependencyState(root),
     runNpmCi: () =>
       runInherited(npmBin, ["ci", "--no-audit", "--no-fund"], { cwd: root }),
     runElectronInstall: () =>
