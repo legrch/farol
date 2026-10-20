@@ -32,11 +32,12 @@ Only the child-owned copies close. The existing host rechecks named operation
 and parent identities, enforces its original timeout, and waits for the same
 child's actual close even after requesting termination.
 
-No selected Go failure dispatches Python. Explicit legacy/controller composition
-without a compiled Go declaration retains the old string/helper route for its
-separate compatibility exit. The Python helper resource is no longer dispatched for
-apply/recover/rollback (the desktop runs the Go helper entries), but it stays in
-the package manifests for that legacy route until a separate deletion packet. The
+No selected Go failure dispatches Python. The old string/helper route is removed:
+composition without a compiled Go declaration refuses every update action
+(`UPDATE_HELPER_GO_CORE_REQUIRED`) before it could publish a binding. The Python
+helper resource is no longer dispatched for publication or apply/recover/rollback,
+but it stays in the package manifests under the
+[bridge rule](../../../installed-update-helper.md#retiring-the-python-helper-bridge-rule). The
 historically named `update-archive.py` is already a Go executable; its suffix is
 not interpreter evidence.
 
@@ -65,12 +66,11 @@ lost receipts and original-child cleanup. They do not execute an installed app.
 
 macOS filesystem/descriptor behavior, packaged child execution, clean-Mac first
 launch, installed update and OTA/rollback remain NOT RUN until separately
-qualified in their real environments. Removing the legacy publication consumer
-requires those gates and explicit compatibility retirement. Removing
-`resources/native/update_helper.py` additionally requires complete Go
-apply/recovery/rollback, promotion-lease, predecessor-closure, journal, private
-relaunch and interrupted-operation parity; this publication slice does not supply
-that acceptance.
+qualified in their real environments. The legacy Python publication consumer is
+removed: a build without the compiled Go core refuses every update action before
+admission, so it never publishes a binding. Removing
+`resources/native/update_helper.py` from the package follows the
+[bridge rule](../../../installed-update-helper.md#retiring-the-python-helper-bridge-rule).
 
 ## Read-only helper slot observation
 
@@ -86,4 +86,4 @@ The 21 request vectors and 19 canonical vectors preserve full bytes, nested/root
 
 The application codec-port tests separately exercise 1/8192/8193-byte results and delivered deadline cancellation. Arbitrary port bytes are not reachable valid slot records: even two 128-astral-codepoint versions produce a bounded record well below 8192 bytes. Invalid records at 8192 and 8193 bytes witness canonical refusal only; they do not establish a reachable valid-request maximum. Native absolute-clock enforcement remains with the native verifier; pure application tests establish delivered-context cancellation only.
 
-Reproduce the source-bound oracle with `go test -race ./modules/release/infra/native/helperprotocol -run '^TestSlotBindingOriginalPythonASTGolden$' -count=1 -v`. Run the complete packet with `go test -race ./modules/release/infra/native/slotbinding ./modules/release/infra/native/helperprotocol ./modules/release/app/services/helperprotocol`, then `go vet` on those same packages, `npm run docs:check` and `git diff --check`, using the repository-declared toolchains and a writable Go build cache. Development Python is required for the oracle only. The desktop runs supported apply/recover/rollback through the selected Go helpers with no Python fallback; the Python helper files stay in the resources only until their deletion packet. This corpus alone establishes no package, installation, live-provider or release acceptance.
+Reproduce the source-bound oracle with `go test -race ./modules/release/infra/native/helperprotocol -run '^TestSlotBindingOriginalPythonASTGolden$' -count=1 -v`. Run the complete packet with `go test -race ./modules/release/infra/native/slotbinding ./modules/release/infra/native/helperprotocol ./modules/release/app/services/helperprotocol`, then `go vet` on those same packages, `npm run docs:check` and `git diff --check`, using the repository-declared toolchains and a writable Go build cache. Development Python is required for the oracle only. The desktop runs supported apply/recover/rollback and slot-binding publication through the selected Go helpers with no Python fallback; the Python helper stays in the resources under the [bridge rule](../../../installed-update-helper.md#retiring-the-python-helper-bridge-rule). This corpus alone establishes no package, installation, live-provider or release acceptance.

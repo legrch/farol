@@ -5,8 +5,8 @@ update the way Sparkle and Squirrel.Mac do: verify the update before install,
 replace it atomically through a helper, ask LaunchServices to open the result,
 and report done. The owner chose this model (Brain 04 §6: copy best practice,
 invent nothing). The desktop selects this route: its updater spawns the Go helper
-entries and never falls back to Python (`update_helper.py` stays in the tree
-until a deletion packet). The live helper (`run-live-release-helper`)
+entries and never falls back to Python (`update_helper.py` stays shipped under the
+[bridge rule](../../../installed-update-helper.md#retiring-the-python-helper-bridge-rule)). The live helper (`run-live-release-helper`)
 accepts `relaunch: true` for apply and for recover, where it launches after
 `verified` only, and for rollback, where it never launches (Python parity); it
 alone installs the self measurement and the relaunch argument capability. The

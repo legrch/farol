@@ -65,8 +65,9 @@ OTA acceptance remain separate and are not established by this preparation.
 The Go helper composition (existing input/protocol, handoff custody, process
 observation, app verification, slot and journal owners, namespace effects,
 private launch capture and terminal mapping) is selected by the desktop with no
-Python fallback. The remaining retirement exit is the deletion packet for the
-Python file; native and installed qualification remain explicit gates.
+Python fallback. The Python file leaves the package under the
+[bridge rule](../../../installed-update-helper.md#retiring-the-python-helper-bridge-rule);
+native and installed qualification remain explicit gates.
 
 ## Private launch tree copying
 

@@ -2,8 +2,9 @@
 
 The desktop selects the Go apply/recovery/rollback helper entries
 (`run-closed-release-helper`, `run-live-release-helper`) with no Python fallback;
-`resources/native/update_helper.py` stays in the tree and package as the
-behavioural reference until a separate deletion packet. The Go components below
+`resources/native/update_helper.py` stays in the tree as the behavioural
+reference and in the package under the
+[bridge rule](../../../installed-update-helper.md#retiring-the-python-helper-bridge-rule). The Go components below
 are composed by those entries; they do not by themselves remove the packaged
 Python resource. Release's existing journal, update/recovery policy,
 admission and one-shot effect owners remain authoritative.
