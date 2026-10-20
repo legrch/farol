@@ -45,22 +45,6 @@ func TestLiveHelperAcceptsRelaunchForApplyAndRollback(t *testing.T) {
 	}
 }
 
-// Recover stays refused, with or without relaunch, before any IO.
-func TestLiveHelperStillRefusesRecoverWithRelaunch(t *testing.T) {
-	for _, relaunch := range []bool{false, true} {
-		f := newLiveHelperFixture(t, func(r map[string]any) { r["action"], r["relaunch"] = "recover", relaunch })
-		line, exit := f.entry()
-		if exit != 79 || string(line) != `{"phase": "unknown", "error": "internal"}`+"\n" {
-			t.Fatalf("relaunch=%v exit %d line %q", relaunch, exit, line)
-		}
-		for _, e := range []string{"open", "admission", "acquire", "capture", "ready", "emit", "execute"} {
-			if f.count(e) != 0 {
-				t.Fatalf("relaunch=%v recover reached %s: %v", relaunch, e, f.events)
-			}
-		}
-	}
-}
-
 // The live execution receives the relaunch capabilities only when the request
 // asked for them; the closed helper never does.
 func TestLiveHelperWiresRelaunchCapabilitiesOnlyForARelaunchRequest(t *testing.T) {

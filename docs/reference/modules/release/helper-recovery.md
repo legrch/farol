@@ -241,18 +241,31 @@ extra-argv refusals.
 
 `boot/releasehelperlive.go` and `boot/releasehelperliveentry.go` add the unselected
 live-predecessor sibling `farol run-live-release-helper` for apply and rollback, each
-with or without `relaunch` (Quit-and-install and "Install update now"): fd3 request and
+with or without `relaunch` (Quit-and-install and "Install update now"), and for
+`recover` with `relaunch: true` (the desktop's Recover button): fd3 request and
 fd4 ACK, no fd5 lease or fd6 continuation. In the Python order it takes the update lock, captures the original
 running marker, completes pre-ACK readiness, positively confirms the exact pid and
 process start, emits `waiting_for_exit`, waits for that process to exit (counted from
 the wait by `waitSeconds`, never past the original bound), then takes the promotion
 lease and verifies the Quit receipt before the single `execute`; terminal mapping,
-no-replay and sticky uncertainty are the closed owners'. Recover (with or without
-relaunch), a closed predecessor and a request without an install location refuse
-before any IO.
+no-replay and sticky uncertainty are the closed owners'. Offline recover
+(`relaunch: false`, which has no production caller), a closed predecessor and a
+request without an install location refuse before any IO.
+
+Live recover runs the apply order (`update_helper.py` 1366-1376): marker capture,
+pre-ACK readiness (the original `inspect_recovery`, observation only), process
+identity, `waiting_for_exit`, exit, Quit proof, then one `Reconcile`. The boot-local
+`helperRecoveryPolicies` (`releasehelperrecovery.go`) adapts `helperrecovery.ObserveCaptured`
+and `NewCaptured` as the `HelperRecoveryPolicies` port, and the live helper attaches it
+to the Milestone for `recover` only; apply and rollback carry no policy and the closed
+helper still refuses recover. A recovery relaunches only when it settled `verified`
+(then it follows the relaunch contract below, with the hint action `recover` and phase
+`completed`); `cancelled` and `rolled_back` outcomes exit 0 and never launch. A live
+rollback gets no post-Quit reconcile: its preflight phase set plus `Readiness.Recheck`
+matches Python. This is unselected like the rest of the sibling.
 
 Relaunch follows `update_helper.py` run() (1382-1403) through the existing
-`Milestone.Execute`: only a verified apply launches. After `verified` it captures the
+`Milestone.Execute`: only a verified apply or recovery launches. After `verified` it captures the
 private `launch-Farol.app` for a shared install, journals `launch_requested`, measures
 this helper process, builds the hint with phase `completed` and this helper's own pid
 and start, opens the image once, verifies the launched process image
@@ -276,7 +289,7 @@ Nothing selects it: the desktop still spawns `update_helper.py`.
 `/bin/cat` predecessor under `FAROL_LIVE_HELPER_NATIVE=1`; its relaunch cases stop
 before `/usr/bin/open` (inert images have no executable) so they cannot start an app.
 The launch and its post-launch verification are exercised in `infra/native/execution`:
-deterministic Milestone relaunch tests (`milestonerelaunch_test.go`) and, under
+deterministic Milestone relaunch tests (`milestonerelaunch_test.go`, and for recovery `milestonerecover_test.go`) and, under
 `FAROL_RELAUNCH_NATIVE=1`, `TestNativeMilestoneRelaunchEndToEnd` over scratch bundles,
 which replaces LaunchServices with a direct exec of a scratch executable. Boot wiring
 tests (`releasehelperliverelaunch_test.go`) cover which capabilities each helper carries.
@@ -384,8 +397,8 @@ provide transport/ACK, terminal classification, physical installation and recove
 qualification, resource manifests, generated bindings or product selection. Boot
 composes the readiness gate, ACK and terminal mapping only in the unselected closed
 and live helper entries above; the relaunch capabilities are composed only in the live
-helper for a relaunch request, the closed helper refuses relaunch, and recover remains
-refused. Resource manifests, generated bindings and product selection are withheld: the
+helper for a relaunch request, the closed helper refuses relaunch and recover, and
+offline recover is refused by both. Resource manifests, generated bindings and product selection are withheld: the
 desktop still spawns `update_helper.py`, and the Python helper remains selected. Pure
 application/input tests and race/vet are policy evidence; native and boot tests run
 their physical cases only in their gated lanes and are otherwise compile-only. Neither

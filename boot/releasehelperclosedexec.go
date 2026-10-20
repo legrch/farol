@@ -7,6 +7,7 @@ import (
 
 	releaseport "github.com/legrch/farol/modules/release/app/port"
 	executionapp "github.com/legrch/farol/modules/release/app/services/execution"
+	"github.com/legrch/farol/modules/release/app/services/helperrecovery"
 	release "github.com/legrch/farol/modules/release/domain"
 	executionnative "github.com/legrch/farol/modules/release/infra/native/execution"
 	"github.com/legrch/farol/modules/release/infra/native/helperroutes"
@@ -155,8 +156,26 @@ func closedHelperNativeConfig(in closedHelperExecution, repository releaseport.H
 // no second cause rule applies here. Wrapped, joined, typed-nil and non-Failure
 // errors are unknown.
 func closedHelperCleanRefusal(err error) bool {
-	f, ok := err.(*executionapp.Failure)
-	return ok && f != nil && !f.Internal && !f.Uncertain
+	_, _, ok := closedHelperCleanFailureOf(err)
+	return ok
+}
+
+// closedHelperCleanFailureOf is the one reading of such a refusal: the direct
+// application Failure of the execution owner, or of the original recovery owner
+// (a live recover surfaces its Inspect, Recheck and Reconcile errors unchanged).
+// Each owner's OWN Internal/Uncertain flags are authoritative; nothing unwraps.
+func closedHelperCleanFailureOf(err error) (phase, code string, ok bool) {
+	switch f := err.(type) {
+	case *executionapp.Failure:
+		if f != nil && !f.Internal && !f.Uncertain {
+			return f.Phase, f.Code, true
+		}
+	case *helperrecovery.Failure:
+		if f != nil && !f.Internal && !f.Uncertain {
+			return f.Phase, f.Code, true
+		}
+	}
+	return "", "", false
 }
 
 // execute runs the retained Milestone exactly once, inside the post-AcquireUpdate
@@ -258,11 +277,11 @@ func closedHelperTerminal(operationID string, result *executionapp.Result, err e
 		return unknown()
 	}
 	if err != nil {
-		f, ok := err.(*executionapp.Failure)
-		if !ok || !closedHelperCleanRefusal(err) || !closedHelperPhasePattern.MatchString(f.Phase) || !closedHelperCodePattern.MatchString(f.Code) {
+		phase, code, ok := closedHelperCleanFailureOf(err)
+		if !ok || !closedHelperPhasePattern.MatchString(phase) || !closedHelperCodePattern.MatchString(code) {
 			return unknown()
 		}
-		return closedHelperTerminalLine(f.Phase, f.Code, operationID, true), closedHelperExitRefusal
+		return closedHelperTerminalLine(phase, code, operationID, true), closedHelperExitRefusal
 	}
 	if result == nil || !closedHelperPhasePattern.MatchString(result.Phase) {
 		return unknown()

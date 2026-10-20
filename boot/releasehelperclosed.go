@@ -13,6 +13,7 @@ import (
 	executionapp "github.com/legrch/farol/modules/release/app/services/execution"
 	inputapp "github.com/legrch/farol/modules/release/app/services/helperinput"
 	protocolapp "github.com/legrch/farol/modules/release/app/services/helperprotocol"
+	"github.com/legrch/farol/modules/release/app/services/helperrecovery"
 	"github.com/legrch/farol/modules/release/app/services/processwait"
 	"github.com/legrch/farol/modules/release/infra/native/handoff"
 	"github.com/legrch/farol/modules/release/infra/native/helperchannels"
@@ -88,6 +89,8 @@ func closedHelperFail(uncertain bool, causes ...error) error {
 		case *releaseport.HelperRecoveryFailure:
 			uncertain = uncertain || f.Uncertain || f.Internal
 		case *executionapp.Failure:
+			uncertain = uncertain || f.Uncertain || f.Internal
+		case *helperrecovery.Failure:
 			uncertain = uncertain || f.Uncertain || f.Internal
 		case *processwait.Failure:
 			// Live-predecessor observation only; the closed path never produces it.

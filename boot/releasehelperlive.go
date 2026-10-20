@@ -26,11 +26,14 @@ import (
 // The live release helper composes the LIVE-predecessor apply and rollback
 // path of resources/native/update_helper.py (run(), the non-closed branches) over
 // the existing Go owners. It is UNSELECTED. It accepts apply and rollback, each
-// with or without relaunch; recover refuses before any IO. Relaunch launches
-// only after an apply settled verified (Milestone.Execute); a rollback with
-// relaunch true never launches, exactly as Python. The closed composition
-// (releasehelperclosed*.go) still refuses relaunch; the scope state, readiness,
-// execution and terminal classification are the same owners it uses.
+// with or without relaunch, and recover with relaunch only (offline recover
+// refuses before any IO). Relaunch launches only after an apply or a recovery
+// settled verified (Milestone.Execute); a rollback with relaunch true, and a
+// recovery that settled cancelled or rolled_back, never launch, exactly as
+// Python. Recover alone attaches the boot-adapted recovery policy owner
+// (releasehelperrecovery.go) to its Milestone. The closed composition
+// (releasehelperclosed*.go) still refuses relaunch and recover; the scope state,
+// readiness, execution and terminal classification are the same owners it uses.
 //
 // Order, mirroring Python (apply 1258-1265, rollback 1331-1348):
 //
@@ -81,6 +84,11 @@ type liveHelperDependencies struct {
 	measure func(context.Context, time.Time) (releaseport.HelperSelfIdentity, error)
 	// now supplies the wait budget's start; production uses time.Now.
 	now func() time.Time
+	// recovery is the policy owner attached to the Milestone of a recover request
+	// ONLY (apply and rollback never carry it). milestone constructs the Milestone;
+	// nil selects executionapp.NewMilestone.
+	recovery  releaseport.HelperRecoveryPolicies
+	milestone func(context.Context, releaseport.HelperRequest, ...releaseport.HelperRecoveryPolicies) (*executionapp.Milestone, error)
 }
 
 func liveHelperProductionDependencies() liveHelperDependencies {
@@ -97,16 +105,33 @@ func liveHelperProductionDependencies() liveHelperDependencies {
 		execute:   closedHelperExecute,
 		measure:   liveHelperMeasureSelf,
 		now:       time.Now,
+		recovery:  helperRecoveryPolicies{},
+		milestone: executionapp.NewMilestone,
 	}
 }
 
+// liveHelperMilestone constructs the request's Milestone. The recovery policy
+// owner is attached for a recover request alone: apply and rollback keep the
+// policy-free Milestone, exactly as the closed helper does.
+func liveHelperMilestone(ctx context.Context, request releaseport.HelperRequest, deps liveHelperDependencies) (*executionapp.Milestone, error) {
+	construct := deps.milestone
+	if construct == nil {
+		construct = executionapp.NewMilestone
+	}
+	if request.Action == "recover" {
+		return construct(ctx, request, deps.recovery)
+	}
+	return construct(ctx, request)
+}
+
 // liveHelperValid is the accepted subset: a live predecessor (no closed proof, no
-// inherited lease), an explicit physical install location, and apply or
-// rollback, with relaunch either way. Recover and everything else is refused
-// before any IO or frame.
+// inherited lease), an explicit physical install location, and apply or rollback
+// with relaunch either way, or recover WITH relaunch (the desktop's Recover
+// button; offline recover has no production caller and stays refused).
+// Everything else is refused before any IO or frame.
 func liveHelperValid(r releaseport.HelperRequest) bool {
 	return r.Predecessor == nil && r.LeaseIdentity == nil && r.InstallLocation != nil &&
-		(r.Action == "apply" || r.Action == "rollback")
+		(r.Action == "apply" || r.Action == "rollback" || r.Action == "recover" && r.Relaunch)
 }
 
 // liveHelperMeasureSelf is the boot-composed ProcessObservation of this helper
@@ -193,8 +218,8 @@ func withLiveReleaseHelperDependencies(ctx context.Context, files liveHelperFile
 	if err != nil {
 		return closedHelperFail(false, err)
 	}
-	// Recover is a later packet: refused here, before any IO or frame, so no
-	// later step can reach a recovery effect.
+	// Offline recover and every other unsupported shape are refused here, before
+	// any IO or frame, so no later step can reach a recovery effect.
 	if !liveHelperValid(request) {
 		return closedHelperFail(false)
 	}
@@ -216,7 +241,7 @@ func withLiveReleaseHelperDependencies(ctx context.Context, files liveHelperFile
 	// From here the request is known: a provably clean pre-ACK refusal is sent as
 	// the one refused frame (see closedHelperRefusalPath) instead of staying silent.
 	refusal := &closedHelperRefusalPath{ctx: effective, until: until, protocol: protocol, operationID: request.OperationID, emit: channels.Emit, exposed: &exposed}
-	milestone, err := executionapp.NewMilestone(effective, request)
+	milestone, err := liveHelperMilestone(effective, request, deps)
 	if err != nil {
 		return refusal.refuse(err)
 	}
