@@ -117,8 +117,11 @@ func openArchiveDisk(ctx context.Context, root Root) (_ *archiveDisk, err error)
 
 func (a *archiveDisk) verify(ctx context.Context) error {
 	d := a.d
-	if ctx.Err() != nil || d.checkPhysical() != nil {
+	if ctx.Err() != nil {
 		return Unavailable
+	}
+	if d.checkPhysical() != nil {
+		return Refused // a changed qualified identity is not unavailable storage
 	}
 	root, re := resultStat(d.rootFD)
 	dir, de := resultStat(d.dir)
@@ -148,8 +151,11 @@ func (a *archiveDisk) verify(ctx context.Context) error {
 // independently and using physical checks only. A retained result UNKNOWN is
 // never bypassed to open a writer or advertised as a known-success publication.
 func archiveFile(ctx context.Context, d *resultDisk, name string, limit int) ([]byte, error) {
-	if ctx.Err() != nil || d.checkPhysical() != nil {
+	if ctx.Err() != nil {
 		return nil, Unavailable
+	}
+	if d.checkPhysical() != nil {
+		return nil, Refused // a changed qualified identity is not unavailable storage
 	}
 	fd, err := unix.Openat(d.dir, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
