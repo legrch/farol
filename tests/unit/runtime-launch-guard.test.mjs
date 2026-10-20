@@ -514,6 +514,15 @@ describe("bounded owned executable closure", () => {
     await expect(
       verifyRuntimeExecutableClosure({ ...f, entries: bridge }),
     ).rejects.toThrow("BUILD_ENTRY_SET_INVALID");
+    // A bridge ledger never admits the retired file beside it unchecked.
+    await f.write(
+      "update-helper.py",
+      Buffer.from("# synthetic Python source\n"),
+    );
+    await expect(
+      verifyRuntimeExecutableClosure({ ...f, entrySha256, entries: bridge }),
+    ).rejects.toThrow("RUNTIME_LAUNCH_PACKAGE_ENTRY_UNMANIFESTED");
+    await fs.unlink(path.join(f.directory, "update-helper.py"));
     for (const removed of ["computer-safe-open.py", "update-archive.py"])
       await expect(
         verifyRuntimeExecutableClosure({

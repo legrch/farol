@@ -665,9 +665,10 @@ export async function verifyRuntimeExecutableClosure({
   );
   if (!selected) fail("ENTRY_SET_INVALID");
   const declared = new Map(manifest.resources.map((row) => [row.key, row]));
+  // Only the selected set: a file outside it (the retired helper included) is
+  // unmanifested even when another ledger would list it.
   const known = new Set([
-    ...BUILD_ENTRIES,
-    ...GO_CORE_ENTRIES,
+    ...selected,
     "build-manifest.json",
     "package.json",
     // Added by the existing package owner after build entry production; the
