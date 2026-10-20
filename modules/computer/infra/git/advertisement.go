@@ -265,16 +265,20 @@ func readStatus(r io.Reader, ref string) (bool, []byte, error) {
 // remoteFormat refuses contradictory format capabilities as malformed and a
 // well-formed format other than the plan's as a changed remote.
 func remoteFormat(capabilities map[string]bool, format string) error {
-	advertised := ""
+	advertised, declared := "", 0
 	for c := range capabilities {
 		if f, ok := strings.CutPrefix(c, "object-format="); ok {
-			if advertised != "" {
-				return ErrProtocol // contradictory capabilities
+			if f == "" {
+				return ErrProtocol // the capability requires a hash algorithm
 			}
+			declared++
 			advertised = f
 		}
 	}
-	if advertised == "" {
+	if declared > 1 {
+		return ErrProtocol // contradictory capabilities
+	}
+	if declared == 0 {
 		advertised = "sha1" // Git's default when the capability is absent
 	}
 	if advertised != format {

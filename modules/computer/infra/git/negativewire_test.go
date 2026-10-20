@@ -136,6 +136,8 @@ func TestReadAdvertisementSHA256NeedsExplicitObjectFormat(t *testing.T) {
 		{"absent means sha1", "report-status", ErrRemote},
 		{"other format", "report-status object-format=sha1", ErrRemote},
 		{"both formats", "report-status object-format=sha1 object-format=sha256", ErrProtocol},
+		{"empty format", "report-status object-format=", ErrProtocol},
+		{"empty and declared format", "report-status object-format= object-format=sha256", ErrProtocol},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := readAdvertisement(bytes.NewReader(join(adFirst(zero, "capabilities^{}", tc.caps), flushPkt)), in)

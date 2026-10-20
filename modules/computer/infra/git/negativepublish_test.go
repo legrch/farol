@@ -709,6 +709,24 @@ func TestClientCloseFailureMarksCleanupUncertainWithoutRewritingTheOutcome(t *te
 	if peer.Closed() != 1 {
 		t.Fatal("peer left open")
 	}
+	// The original close cause stays inspectable behind the sanitized code.
+	wantCode(t, err, ErrPort)
+	if !errors.Is(err, errInjected) {
+		t.Fatalf("close cause lost: %v", err)
+	}
+}
+
+// A close failure after a classified refusal keeps the refusal's class and both causes.
+func TestCloseFailureAfterARefusalKeepsTheRefusalClass(t *testing.T) {
+	g, _, client, peer, _, _ := buildGate(t, nil)
+	closeFailure := errors.New("close failed")
+	peer.closeErr = closeFailure
+	peer.reader = bytes.NewReader(pkt("ERR access denied\n"))
+	r, err := g.Run(bounded(t), client, peer)
+	wantCode(t, err, ErrRemote)
+	if !errors.Is(err, closeFailure) || !r.StreamCleanupUncertain {
+		t.Fatalf("%+v %v", r, err)
+	}
 }
 
 // blockingPeer blocks every write until the gate closes it.

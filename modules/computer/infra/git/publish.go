@@ -99,8 +99,8 @@ func (g *Gate) Run(ctx context.Context, client io.ReadWriteCloser, peer egresspo
 		if recovered := recover(); recovered != nil {
 			err = ErrPort
 		}
-		if closeErr != nil {
-			err = errors.Join(err, ErrPort)
+		if closeErr != nil && err == nil {
+			err = ownerFailure{closeErr} // the run succeeded but cleanup failed
 		}
 		// Cancellation closes blocked streams, whose own errors then surface;
 		// the context's end is the cause, so keep it in the classification.
@@ -108,6 +108,12 @@ func (g *Gate) Run(ctx context.Context, client io.ReadWriteCloser, peer egresspo
 			err = errors.Join(contextEnded{ctx.Err()}, err)
 		}
 		err = classified(err)
+		// Keep a close failure inspectable without letting it change the class
+		// established by the run's own outcome.
+		var f *Failure
+		if closeErr != nil && errors.As(err, &f) && !errors.Is(f.cause, closeErr) {
+			f.cause = errors.Join(f.cause, closeErr)
+		}
 	}()
 	if ctx == nil {
 		return result, ErrScope
