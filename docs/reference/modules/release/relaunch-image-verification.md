@@ -29,7 +29,7 @@ no retry and no replay. A second launch attempt in the same scope is refused as
 
 1. Before launch, the expected identity is derived from descriptors that were
    pinned before the tree was verified. The executable (or, for the script
-   launcher, the runtime executable it names) is opened without following links
+   launcher, the runtime executable it names) is opened without following links and without blocking (a FIFO or device substituted for it is refused from `fstat` before any read, never waited on)
    under the held application directory, and its identity is recorded. The tree
    verification then covers the entries those descriptors name. After it, the
    derivation proves that each descriptor still has the recorded device, inode,
@@ -81,6 +81,11 @@ the runtime therefore:
 the target can still exit and its pid be reused by an unrelated process. That
 needs a full pid wraparound inside that interval. The window is reduced, not
 eliminated, which is consistent with detection rather than prevention.
+
+**Authority.** Discovery can last seconds after the last operation fence. The
+runtime's own fence (retained uncertainty, routes and the owner's reverification)
+runs again when containment starts and immediately before the kill. A failing
+fence means no kill and an uncertain result.
 
 **Deadline.** The original deadline is checked again immediately before
 containment starts and immediately before the kill. An observation that arrives

@@ -99,6 +99,10 @@ func openBelowAs(root *os.File, dirLast bool, components ...string) (*os.File, e
 		flags := unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_CLOEXEC
 		if !last || dirLast {
 			flags |= unix.O_DIRECTORY
+		} else {
+			// A substituted FIFO or device with no peer must not block the
+			// open. The caller checks the type from fstat before any read.
+			flags |= unix.O_NONBLOCK
 		}
 		raw, err := current.SyscallConn()
 		if err != nil {
@@ -190,6 +194,9 @@ func pin(app *os.File, path ...string) (*pinnedFile, error) {
 		return nil, err
 	}
 	st, err := fstat(file)
+	if err == nil && st.Mode&unix.S_IFMT != unix.S_IFREG {
+		err = errors.New("not a regular file")
+	}
 	if err != nil {
 		_ = file.Close()
 		return nil, err

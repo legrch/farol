@@ -95,7 +95,7 @@ func relaunchHint(operationID string, helperPID int64, arguments []string) (stri
 // verifyLaunched runs inside the existing launch:open scope after open
 // returned. verify is the scope's own held-tree check; it runs once more on
 // success. want is the identity derived from the verified image before launch.
-func verifyLaunched(ctx context.Context, p launchPlatform, hint string, want expectedImage, verify func(context.Context) error) error {
+func verifyLaunched(ctx context.Context, p launchPlatform, hint string, want expectedImage, verify, fence func(context.Context) error) error {
 	end := p.now().Add(launchDiscoveryCap)
 	type observation struct {
 		pid  int
@@ -127,7 +127,7 @@ func verifyLaunched(ctx context.Context, p launchPlatform, hint string, want exp
 				return verify(ctx)
 			default:
 				if pending != nil && pending.pid == pids[0] && pending.live == live && p.now().Sub(pending.at) >= launchMismatchSettle {
-					return refuseLaunchedImage(ctx, p, pids[0], live)
+					return refuseLaunchedImage(ctx, p, pids[0], live, fence)
 				}
 				if pending == nil || pending.pid != pids[0] || pending.live != live {
 					pending = &observation{pid: pids[0], live: live, at: p.now()}
@@ -160,8 +160,13 @@ func verifyLaunched(ctx context.Context, p launchPlatform, hint string, want exp
 // A late observation never reaches the signal: the context, which carries the
 // original deadline, is checked again before the watch is registered and
 // immediately before the kill, and an expired one leaves the outcome uncertain.
-func refuseLaunchedImage(ctx context.Context, p launchPlatform, pid int, observed liveImage) error {
+func refuseLaunchedImage(ctx context.Context, p launchPlatform, pid int, observed liveImage, fence func(context.Context) error) error {
 	if err := ctx.Err(); err != nil {
+		return fail("launch_image_mismatch", false, true, err)
+	}
+	// Discovery can last seconds after the last fence: the operation's route,
+	// lease, slot and admission authority are revalidated before any effect.
+	if err := fence(ctx); err != nil {
 		return fail("launch_image_mismatch", false, true, err)
 	}
 	watch, err := p.watch(pid)
@@ -171,14 +176,14 @@ func refuseLaunchedImage(ctx context.Context, p launchPlatform, pid int, observe
 	case err != nil:
 		return fail("launch_image_mismatch", false, true, err)
 	}
-	result := containWatched(ctx, p, watch, pid, observed)
+	result := containWatched(ctx, p, watch, pid, observed, fence)
 	if err := watch.close(); err != nil {
 		return fail("launch_image_mismatch", false, true, errors.Join(err, result))
 	}
 	return result
 }
 
-func containWatched(ctx context.Context, p launchPlatform, watch exitWatch, pid int, observed liveImage) error {
+func containWatched(ctx context.Context, p launchPlatform, watch exitWatch, pid int, observed liveImage, fence func(context.Context) error) error {
 	current, err := p.start(pid)
 	switch {
 	case errors.Is(err, errProcessGone):
@@ -187,6 +192,12 @@ func containWatched(ctx context.Context, p launchPlatform, watch exitWatch, pid 
 		return fail("launch_image_mismatch", false, true, err)
 	case current != observed.Start:
 		return fail("launch_image_mismatch", false, true, errors.New("process start changed; nothing killed"))
+	}
+	// Authority is revalidated immediately before the signal, then the exit
+	// watch is polled, then the original deadline is checked a last time, so a
+	// slow fence or poll can never be followed by a late kill.
+	if err := fence(ctx); err != nil {
+		return fail("launch_image_mismatch", false, true, err)
 	}
 	exited, err := watch.exited()
 	switch {

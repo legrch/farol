@@ -223,7 +223,7 @@ func (r *runtime) LaunchTarget(ctx context.Context, self port.HelperSelfIdentity
 		if err := platform.open(c, r.until, arguments, verify); err != nil {
 			return err
 		}
-		return verifyLaunched(c, platform, hint, want, verify)
+		return verifyLaunched(c, platform, hint, want, verify, r.fence)
 	})
 }
 

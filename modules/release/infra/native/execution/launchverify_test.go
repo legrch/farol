@@ -7,6 +7,7 @@ import (
 	stdruntime "runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -766,4 +767,83 @@ func TestUniversalExecutableAcceptsEverySliceAndNothingElse(t *testing.T) {
 			t.Fatalf("a foreign hash was accepted: %+v kills=%v", failure, fake.kills)
 		}
 	})
+}
+
+// The operation's authority is revalidated before containment and again just
+// before the signal: discovery can outlive the last fence by seconds.
+func TestContainmentRevalidatesOperationAuthority(t *testing.T) {
+	for name, tc := range map[string]struct {
+		allowed int // post-discovery fences that still pass
+		watches int
+	}{
+		"authority lost before containment": {allowed: 0, watches: 0},
+		"authority lost before the kill":    {allowed: 1, watches: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fx, fake, verified := launchHarness(t)
+			fake.candidatesFn = servesOne(pidOurs)
+			fake.imageFn = func(int, int) (liveImage, error) {
+				return liveImage{Image: substituteHash(verified), Start: startOurs}, nil
+			}
+			fake.startFn = func(int, int) (processStart, error) { return startOurs, nil }
+			reverify, passed := fx.config.Reverify, 0
+			fx.config.Reverify = func(ctx context.Context, request port.HelperRequest) error {
+				if fake.calls.candidates >= 1 {
+					if passed++; passed > tc.allowed {
+						return errors.New("route, lease or slot authority lost")
+					}
+				}
+				return reverify(ctx, request)
+			}
+			method, _ := fx.launch(t)
+			failure := recoveryFailure(t, method)
+			if failure.Code != "launch_image_mismatch" || !failure.Uncertain || len(fake.kills) != 0 || fake.watches != tc.watches {
+				t.Fatalf("invalid authority reached containment: %+v kills=%v watches=%d", failure, fake.kills, fake.watches)
+			}
+		})
+	}
+}
+
+// A substituted FIFO with no writer must be refused promptly, not block the
+// open that pins the executable before verification.
+func TestPinningRefusesANonRegularExecutableWithoutBlocking(t *testing.T) {
+	good := scratchExecutable(t, "good", stdruntime.GOARCH, "")
+	for name, build := range map[string]func(t *testing.T, app string){
+		"fifo executable": func(t *testing.T, app string) {
+			exe := app + "/Contents/MacOS/Sleeper"
+			must(t, os.Remove(exe))
+			must(t, syscall.Mkfifo(exe, 0600))
+		},
+		"fifo runtime executable": func(t *testing.T, app string) {
+			must(t, os.Remove(app+"/Contents/MacOS/Sleeper"))
+			must(t, os.WriteFile(app+"/Contents/MacOS/Launcher", []byte("#!/bin/sh\nexec "+runtimeReference+" \"$@\"\n"), 0700))
+			must(t, os.MkdirAll(app+"/Contents/Frameworks/Electron Runtime.app/Contents/MacOS", 0700))
+			must(t, syscall.Mkfifo(app+"/"+runtimeExecutable, 0600))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			app := t.TempDir() + "/Farol.app"
+			writeBundle(t, app, good)
+			build(t, app)
+			held, err := os.Open(app)
+			must(t, err)
+			defer held.Close()
+			done := make(chan error, 1)
+			go func() {
+				pinned, err := pinLaunchImage(held)
+				if pinned != nil {
+					pinned.close()
+				}
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if !errors.Is(err, errLaunchImage) {
+					t.Fatalf("a FIFO was pinned: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("pinning blocked on a FIFO")
+			}
+		})
+	}
 }
