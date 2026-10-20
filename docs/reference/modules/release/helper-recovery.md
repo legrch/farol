@@ -189,13 +189,31 @@ single-consume `execute` composes the existing journal and rejection repositorie
 under one writer admission and one gate, then runs `Milestone.Execute` once
 through `WithAdmittedInstallation`. The admission refuses unless the update lock
 was actually acquired, and custody is rechecked before and after Execute: a
-failed fence is unknown, never success. Execution is unselected: no CLI, stdout or
-desktop selection calls it, and Python stays the selected helper. The pure
+failed fence is unknown, never success. Execution is unselected: only the
+`farol run-closed-release-helper` entry below calls it, no desktop, launcher,
+resource or package step names that entry, and Python stays the selected helper. The pure
 `closedHelperTerminal` maps its outcome to the Python contract: success
 `{"phase","operationId"}` exit 0; a result code or a direct, clean application
 refusal `{"phase","error","operationId"}` exit 70; everything else
 (internal, uncertain, wrapped or non-Failure errors, malformed phase or code)
 `{"phase":"unknown","error":"internal","operationId"}` exit 79.
+`boot/releasehelperclosedentry.go` is the unselected executable entry
+`farol run-closed-release-helper`. It accepts no further argv (any extra argument
+exits 2 with no descriptor or stdout use), wraps fd3 request, fd4 ACK, fd5
+borrowed lease and fd6 continuation only there, and fixes its original absolute
+bound at process start plus 120 s, the request schema's maximum `waitSeconds`,
+which cannot be read before request work. It runs the callback's single `execute`
+and writes exactly one `closedHelperTerminal` line to fd1 in one non-blocking
+write with SIGPIPE ignored and any error ignored, as `emit_terminal` does; the
+exit code is that line's mapping (0, 70, 79) and a panic is 79. A clean refusal
+returned by `execute` settles the custody scope and reports 70; any outer error
+governs and is 79. Because outer custody and readiness errors are opaque, every
+pre-ACK refusal (a changed staged tree, a missing tree, a pre-parse failure) exits
+79 with no ACK, naming the operation ID only once the readiness scope holds it.
+The lane `releasehelperclosedexecnative_test.go` runs the compiled entry under the
+same gate with real digest-matching trees: apply to `verified`, closed rollback to
+`rolled_back`, and the pre-ACK, relaunch and extra-argv refusals.
+
 The unselected ready frame must not be wired to an application effect or product
 readiness until that gate and the existing desktop protocol are independently
 accepted.
