@@ -12608,6 +12608,9 @@ if (!primaryInstanceLock) {
       terminateDesktopStartup(error, runtimeEnvironment, {
         write: (message) => process.stderr.write(message),
         exit: (code) => app.exit(code),
+        // A recipient who just opened the app sees nothing else: this is the
+        // only window-less surface Electron allows before ready.
+        notify: (title, message) => dialog.showErrorBox(title, message),
       });
     });
 }
