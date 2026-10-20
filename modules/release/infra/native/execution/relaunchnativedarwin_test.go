@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	executionapp "github.com/legrch/farol/modules/release/app/services/execution"
 )
 
 // Native witnesses for post-launch image verification. They are gated and run
@@ -160,6 +162,68 @@ func TestNativeLaunchVerification(t *testing.T) {
 			}
 			if fx.phase(t) != "launch_requested" {
 				t.Fatal("mismatch moved the journal")
+			}
+		})
+	}
+}
+
+// The whole Milestone, end to end: a real apply to verified over scratch
+// bundles, then the relaunch through Execute with the production kernel reads.
+// Only /usr/bin/open is replaced (see spawnPlatform), so a verified process
+// really runs and is found, identified and accepted by the production code.
+func TestNativeMilestoneRelaunchEndToEnd(t *testing.T) {
+	requireNative(t)
+	impostor := scratchExecutable(t, "impostor", stdruntime.GOARCH, "")
+	for _, tc := range []struct {
+		name     string
+		bundle   string // executable of the bundle swapped in; empty means no swap
+		mismatch bool
+	}{
+		{"verified process completes", "", false},
+		{"swapped bundle never completes", impostor, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			platform := &spawnPlatform{t: t}
+			f := newRelaunchLifecycle(t, func(*relaunchLifecycle) launchPlatform { return platform })
+			platform.app = f.app
+			aside, intruder := f.app+".verified", f.app+".intruder"
+			if tc.bundle != "" {
+				platform.swap = func() {
+					rename(t, f.app, aside)
+					writeBundle(t, f.app, tc.bundle)
+				}
+				platform.restore = func() {
+					rename(t, f.app, intruder)
+					rename(t, aside, f.app)
+				}
+			}
+			m, ready := f.prepare(t, "apply", true)
+			result, err := f.run(t, m, ready)
+			if platform.opens != 1 || platform.cmd == nil {
+				t.Fatal("expected exactly one launch", platform.opens, describe(err))
+			}
+			if !tc.mismatch {
+				if err != nil {
+					t.Fatal(describe(err))
+				}
+				if result == nil || *result != (executionapp.Result{Phase: "completed"}) {
+					t.Fatal("verified launch did not complete", result)
+				}
+				f.physical(t, f.repo, "completed")
+				if !platform.alive() {
+					t.Fatal("the verified process was not left running")
+				}
+				return
+			}
+			var failure *executionapp.Failure
+			if result != nil || !errors.As(err, &failure) || failure.Code == "launch_failed" {
+				t.Fatal("a substituted image did not fail the Milestone", result, describe(err))
+			}
+			if !platform.gone() {
+				t.Fatal("the substituted process is still running")
+			}
+			if f.diskPhase(t) != "launch_requested" {
+				t.Fatal("a substituted image moved the journal to", f.diskPhase(t))
 			}
 		})
 	}

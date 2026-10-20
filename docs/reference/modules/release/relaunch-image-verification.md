@@ -2,10 +2,18 @@
 
 The native execution runtime checks, after the one original `/usr/bin/open -a`
 returns, that the process it started runs the image it verified. This is
-**detection, not prevention**. The relaunch route stays unselected: boot installs
-neither the self measurement nor the relaunch argument capability, the closed
-helper still refuses relaunch requests, and the Python helper remains the
-selected helper.
+**detection, not prevention**. The relaunch route stays unselected: the Python
+helper remains the selected helper. The unselected live helper
+(`run-live-release-helper`) now accepts `relaunch: true` for apply, where it
+launches after `verified`, and for rollback, where it never launches (Python
+parity); it alone installs the self measurement and the relaunch argument
+capability. The closed helper supplies neither and still refuses relaunch.
+
+**Divergence from Python.** Python writes `completed` after `open` returns zero,
+whatever started. This verification is strict: zero, ambiguous or mismatched
+candidates are uncertain, the journal stays `launch_requested` and the helper
+exits 79. That is deliberate, so an unverified launch is reconciled rather than
+reported complete.
 
 ## Contract
 
@@ -130,4 +138,6 @@ processes with the production kernel reads and includes a negative swap with an
 unmutated control. It replaces only `open` with a direct exec of a scratch
 executable, because the identity policy requires the production bundle id that a
 running Farol also carries; LaunchServices is therefore not exercised by that
-lane.
+lane. The same lane also drives `Milestone.Execute` end to end (a real apply,
+then the relaunch) over scratch bundles, with a swapped-bundle negative that must
+not complete.

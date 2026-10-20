@@ -239,21 +239,45 @@ changed staged trees send the refused frame and exit 70) and the relaunch and
 extra-argv refusals.
 
 `boot/releasehelperlive.go` and `boot/releasehelperliveentry.go` add the unselected
-live-predecessor sibling `farol run-live-release-helper` for apply and rollback with
-`relaunch == false` only (Quit-and-install): fd3 request and fd4 ACK, no fd5 lease or
-fd6 continuation. In the Python order it takes the update lock, captures the original
+live-predecessor sibling `farol run-live-release-helper` for apply and rollback, each
+with or without `relaunch` (Quit-and-install and "Install update now"): fd3 request and
+fd4 ACK, no fd5 lease or fd6 continuation. In the Python order it takes the update lock, captures the original
 running marker, completes pre-ACK readiness, positively confirms the exact pid and
 process start, emits `waiting_for_exit`, waits for that process to exit (counted from
 the wait by `waitSeconds`, never past the original bound), then takes the promotion
 lease and verifies the Quit receipt before the single `execute`; terminal mapping,
-no-replay and sticky uncertainty are the closed owners'. Relaunch true, recover, a
-closed predecessor and a request without an install location refuse before any IO.
+no-replay and sticky uncertainty are the closed owners'. Recover (with or without
+relaunch), a closed predecessor and a request without an install location refuse
+before any IO.
+
+Relaunch follows `update_helper.py` run() (1382-1403) through the existing
+`Milestone.Execute`: only a verified apply launches. After `verified` it captures the
+private `launch-Farol.app` for a shared install, journals `launch_requested`, measures
+this helper process, builds the hint with phase `completed` and this helper's own pid
+and start, opens the image once, and journals `completed`; a clean nonzero launch is
+`launch_failed` (exit 70, phase `launch_requested`). A rollback that asks for relaunch
+settles `rolled_back` and never launches, exactly as Python (the desktop's Roll back
+button sends it). The live helper alone supplies the launch capabilities
+(`RelaunchArguments` from the bound protocol, `MeasureSelf` over the native probe and
+the process-wait policy, joined before return); the closed helper supplies none and
+still refuses relaunch. **Deliberate divergence from Python:** the post-launch image
+verification of `relaunch-image-verification.md` is strict. Zero, ambiguous or
+mismatched candidates are uncertain, so the journal stays `launch_requested` and the
+exit is 79, where Python writes `completed` after any zero exit from `open`. The desktop
+reads the journal on its next start, so the unverified launch is reconciled rather than
+reported complete.
 Its pre-ACK refusals (update lock, marker, readiness, process identity, custody
 fences, slot binding) follow the same refused-frame rule: a provably clean
 refusal sends one `refused` frame instead of `waiting_for_exit` and exits 70.
 Nothing selects it: the desktop still spawns `update_helper.py`.
 `releasehelperlivenative_test.go` runs the compiled entry against a scratch
-`/bin/cat` predecessor under `FAROL_LIVE_HELPER_NATIVE=1`.
+`/bin/cat` predecessor under `FAROL_LIVE_HELPER_NATIVE=1`; its relaunch cases stop
+before `/usr/bin/open` (inert images have no executable) so they cannot start an app. The
+launch itself is exercised end to end in `infra/native/execution`
+(`milestonerelaunch_test.go`, and the `FAROL_RELAUNCH_NATIVE=1` lane over scratch
+bundles). A shared install cannot be applied end to end without a root-owned
+Applications parent, so its capture stays on the root-scheduled capture witness and its
+binding on `launchBound` and the argument tests.
 
 The unselected ready frame must not be wired to an application effect or product
 readiness until that gate and the existing desktop protocol are independently

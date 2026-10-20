@@ -17,9 +17,16 @@ func WithInstallation(ctx context.Context, config Config, fn func(port.HelperIns
 // projection: the exact pair the application Milestone's AdmittedRuntime asks
 // for. It is declared here, structurally, so this package never imports the
 // application service. The value is the package's one concrete runtime.
+//
+// It also carries the relaunch effects the same runtime implements, so trusted
+// composition can hand the very value to Milestone.Execute as its launch port.
+// The effects remain inert unless the Config supplies RelaunchArguments and
+// MeasureSelf, and Execute reaches them only for a verified apply that asked for
+// relaunch.
 type AdmittedInstallation interface {
 	port.HelperInstallationRuntime
 	port.HelperInstallationObservation
+	port.HelperRelaunchEffects
 }
 
 var _ AdmittedInstallation = (*runtime)(nil)

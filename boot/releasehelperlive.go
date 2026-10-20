@@ -25,10 +25,12 @@ import (
 
 // The live release helper composes the LIVE-predecessor apply and rollback
 // path of resources/native/update_helper.py (run(), the non-closed branches) over
-// the existing Go owners. It is UNSELECTED and covers relaunch == false only:
-// relaunch true and recover refuse before any IO. The closed composition
-// (releasehelperclosed*.go) is unchanged; the scope state, readiness, execution
-// and terminal classification are the same owners it uses.
+// the existing Go owners. It is UNSELECTED. It accepts apply and rollback, each
+// with or without relaunch; recover refuses before any IO. Relaunch launches
+// only after an apply settled verified (Milestone.Execute); a rollback with
+// relaunch true never launches, exactly as Python. The closed composition
+// (releasehelperclosed*.go) still refuses relaunch; the scope state, readiness,
+// execution and terminal classification are the same owners it uses.
 //
 // Order, mirroring Python (apply 1258-1265, rollback 1331-1348):
 //
@@ -73,6 +75,10 @@ type liveHelperDependencies struct {
 	admission func(helperroutes.Files, releaseport.HelperRequest, []byte, time.Time) (liveHelperAdmission, error)
 	ready     func(context.Context, *executionapp.Milestone, closedReleaseHelper) (*executionapp.Readiness, error)
 	execute   closedHelperExecutor
+	// measure observes this very process for the relaunch hint (Python
+	// process_start of os.getpid()). It is consulted only through a request that
+	// asked for relaunch.
+	measure func(context.Context, time.Time) (releaseport.HelperSelfIdentity, error)
 	// now supplies the wait budget's start; production uses time.Now.
 	now func() time.Time
 }
@@ -89,16 +95,41 @@ func liveHelperProductionDependencies() liveHelperDependencies {
 		admission: newLiveHelperAdmission,
 		ready:     closedHelperReady,
 		execute:   closedHelperExecute,
+		measure:   liveHelperMeasureSelf,
 		now:       time.Now,
 	}
 }
 
 // liveHelperValid is the accepted subset: a live predecessor (no closed proof, no
-// inherited lease), an explicit physical install location, apply or rollback,
-// and no relaunch. Everything else is refused before any IO or frame.
+// inherited lease), an explicit physical install location, and apply or
+// rollback, with relaunch either way. Recover and everything else is refused
+// before any IO or frame.
 func liveHelperValid(r releaseport.HelperRequest) bool {
 	return r.Predecessor == nil && r.LeaseIdentity == nil && r.InstallLocation != nil &&
-		(r.Action == "apply" || r.Action == "rollback") && !r.Relaunch
+		(r.Action == "apply" || r.Action == "rollback")
+}
+
+// liveHelperMeasureSelf is the boot-composed ProcessObservation of this helper
+// (the hint's pid and process start). It captures the start once through the
+// process-wait policy over a native probe, and joins that probe before
+// returning, on every path. A clean, non-uncertain observation refusal becomes
+// a launch_helper_identity refusal; a join failure or anything else stays an
+// opaque error the runtime classifies as uncertain.
+func liveHelperMeasureSelf(ctx context.Context, until time.Time) (releaseport.HelperSelfIdentity, error) {
+	pid := os.Getpid()
+	probe, err := processprobe.New(pid)
+	if err != nil {
+		return releaseport.HelperSelfIdentity{}, err
+	}
+	start, captureErr := processwait.Capture(ctx, until, probe, liveHelperClock{})
+	joinErr := probe.Join()
+	if joinErr != nil || captureErr != nil {
+		if f, ok := captureErr.(*processwait.Failure); ok && f != nil && !f.Uncertain && joinErr == nil {
+			return releaseport.HelperSelfIdentity{}, &releaseport.HelperRecoveryFailure{Code: "launch_helper_identity", Phase: "refused", Cause: captureErr}
+		}
+		return releaseport.HelperSelfIdentity{}, closedHelperJoin(true, captureErr, joinErr)
+	}
+	return releaseport.HelperSelfIdentity{PID: int64(pid), ProcessStart: start}, nil
 }
 
 func withLiveReleaseHelperDependencies(ctx context.Context, files liveHelperFiles, until time.Time, fn func(closedReleaseHelper) error, deps liveHelperDependencies) (result error) {
@@ -149,10 +180,22 @@ func withLiveReleaseHelperDependencies(ctx context.Context, files liveHelperFile
 	if err != nil {
 		return closedHelperFail(false, err)
 	}
-	// Relaunch and recover are later packets: refused here, before any IO or
-	// frame, so no later step can reach a launch or recovery effect.
+	// Recover is a later packet: refused here, before any IO or frame, so no
+	// later step can reach a recovery effect.
 	if !liveHelperValid(request) {
 		return closedHelperFail(false)
+	}
+	// Relaunch capabilities exist only for a request that asked for them. The
+	// hint is built by the protocol owner bound to THIS request ("completed" is
+	// the phase the relaunched desktop expects), never from request-supplied text.
+	var relaunch *closedHelperRelaunch
+	if request.Relaunch {
+		relaunch = &closedHelperRelaunch{
+			arguments: func(c context.Context, self releaseport.HelperSelfIdentity, captured *string) ([]string, error) {
+				return protocol.BuildRelaunchArguments(c, "completed", self, captured, protocolnative.JSONCodec{})
+			},
+			measure: deps.measure,
+		}
 	}
 	if err := closedHelperBounds(effective, until); err != nil {
 		return err
@@ -286,7 +329,7 @@ func withLiveReleaseHelperDependencies(ctx context.Context, files liveHelperFile
 			if err = check(); err != nil {
 				return err
 			}
-			state := &closedReleaseHelperState{active: true, files: borrow, request: closedHelperRequestCopy(request), original: effective, until: until, admission: admission, milestone: milestone, readiness: readiness, execution: deps.execute, updateHeld: true}
+			state := &closedReleaseHelperState{active: true, files: borrow, request: closedHelperRequestCopy(request), original: effective, until: until, admission: admission, milestone: milestone, readiness: readiness, execution: deps.execute, relaunch: relaunch, updateHeld: true}
 			scoped = state
 			defer func() {
 				state.end()
