@@ -238,6 +238,28 @@ func TestMilestoneRecoverSecondReconcileIsAttemptUnknown(t *testing.T) {
 	f.physical(t, f.repo, "cancelled")
 }
 
+// The pre-ACK Inspect is the original read-only pair check: a prepared journal
+// whose entries match no recognised pair is a clean recovery_pair refusal at
+// readiness, before anything could be told to quit and with nothing changed.
+func TestMilestoneRecoverRelaunchUnrecognisedPairRefusesAtReadiness(t *testing.T) {
+	f := newFakeRelaunchLifecycle(t)
+	f.stage(t, func(native port.HelperInstallationRuntime) error { return native.Prepare(context.Background()) })
+	must(t, os.RemoveAll(filepath.Join(f.path, "staged.app")))
+	before := compositionSnapshot(t, f.root)
+	_, ready, err := f.recoverMilestone(t, recoverPolicies{})
+	var failure *executionapp.Failure
+	var recovery *helperrecovery.Failure
+	if ready != nil || err == nil || !errors.As(err, &failure) && !errors.As(err, &recovery) {
+		t.Fatal("an unrecognised pair was inspected as ready", ready, describe(err))
+	}
+	if !(recovery != nil && recovery.Code == "recovery_pair" && !recovery.Uncertain) && !(failure != nil && failure.Code == "recovery_pair" && !failure.Uncertain && !failure.Internal) {
+		t.Fatal("not the clean recovery_pair refusal", describe(err))
+	}
+	f.unchanged(t, before)
+	f.requireNoLaunch(t)
+	f.physical(t, f.repo, "prepared")
+}
+
 // Without the recovery policy the Milestone cannot even inspect a relaunching
 // recovery: no journal, entry or launch effect follows.
 func TestMilestoneRecoverRelaunchWithoutAPolicyRefusesAtReadiness(t *testing.T) {
