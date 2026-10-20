@@ -512,6 +512,7 @@ import {
 } from "./desktop-environment";
 import {
   runDesktopStartupBoundary,
+  startupNoticeAllowed,
   terminateDesktopStartup,
 } from "./desktop-startup-failure";
 import { resolvePhysicalDevDataDirectoryName } from "./dev-profile-directory";
@@ -12609,8 +12610,14 @@ if (!primaryInstanceLock) {
         write: (message) => process.stderr.write(message),
         exit: (code) => app.exit(code),
         // A recipient who just opened the app sees nothing else: this is the
-        // only window-less surface Electron allows before ready.
-        notify: (title, message) => dialog.showErrorBox(title, message),
+        // only window-less surface Electron allows before ready. It is modal,
+        // so a non-interactive launch never gets it and exits at once.
+        ...(startupNoticeAllowed(process.env)
+          ? {
+              notify: (title: string, message: string) =>
+                dialog.showErrorBox(title, message),
+            }
+          : {}),
       });
     });
 }

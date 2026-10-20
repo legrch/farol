@@ -177,6 +177,17 @@ export function desktopStartupFailureReport(
   );
 }
 
+// A native notice is modal: it holds the exit until someone dismisses it. A
+// launch nobody is watching (E2E harness, CI, an explicit non-interactive
+// run) must never get one, or it would block instead of exiting.
+export function startupNoticeAllowed(env: NodeJS.ProcessEnv): boolean {
+  return (
+    env.FAROL_NEXT_E2E !== "1" &&
+    env.FAROL_NEXT_NONINTERACTIVE !== "1" &&
+    (env.CI === undefined || env.CI === "" || env.CI === "false")
+  );
+}
+
 export function terminateDesktopStartup(
   error: unknown,
   environment: DesktopEnvironment,
@@ -184,7 +195,9 @@ export function terminateDesktopStartup(
     write: (message: string) => void;
     exit: (code: number) => void;
     // Optional native notice for recoverable first-launch failures only. It is
-    // shown once, never retried, and can neither skip nor delay the exit.
+    // shown once and never retried. It cannot skip the exit, but a modal notice
+    // delays it until dismissed, so callers pass it only for an interactive
+    // launch (`startupNoticeAllowed`).
     notify?: (title: string, message: string) => void;
   }>,
 ): void {

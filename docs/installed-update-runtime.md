@@ -293,6 +293,9 @@ downloading and installing an update, and that must not strand the copy. Any oth
 Any failure writes nothing. The four user-actionable failures (network, release not
 found, tree mismatch, release mismatch) are also shown in a native error box, since
 the process has no window yet, then the process exits 1; there is no retry loop.
+The box is modal, so a non-interactive launch (`FAROL_NEXT_E2E=1`, a set `CI`,
+or `FAROL_NEXT_NONINTERACTIVE=1`) gets no box and exits at once, with the same
+stderr report.
 Once the app is running, the shared-slot updater accepts the same valid record in
 `readAcceptedSource()` and reports no `UPDATE_SOURCE_IDENTITY_UNCONFIRMED`.
 

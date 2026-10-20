@@ -5,9 +5,23 @@ import {
   desktopStartupFailureCode,
   desktopStartupFailureNotice,
   runDesktopStartupBoundary,
+  startupNoticeAllowed,
   terminateDesktopStartup,
 } from "../../src/apps/desktop/desktop-startup-failure";
 import { BridgeError } from "../../apps/desktop/bridge/client";
+
+describe("startup notice interactivity", () => {
+  it("allows the modal notice only for an interactive launch", () => {
+    expect(startupNoticeAllowed({})).toBe(true);
+    expect(startupNoticeAllowed({ CI: "false" })).toBe(true);
+    expect(startupNoticeAllowed({ FAROL_NEXT_E2E: "1" })).toBe(false);
+    expect(startupNoticeAllowed({ FAROL_NEXT_NONINTERACTIVE: "1" })).toBe(
+      false,
+    );
+    expect(startupNoticeAllowed({ CI: "true" })).toBe(false);
+    expect(startupNoticeAllowed({ CI: "1" })).toBe(false);
+  });
+});
 
 describe("desktop startup failure boundary", () => {
   it("preserves an unsafe Preview profile without suggesting a rebuild or retry", () => {
