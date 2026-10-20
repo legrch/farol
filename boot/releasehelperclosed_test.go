@@ -46,6 +46,9 @@ type closedHelperFixture struct {
 	readyHelper                            closedReleaseHelper
 	readyCalls, framesAtReady, readyChecks int
 	readyMilestone                         *executionapp.Milestone
+	// Execution seam: what the symbolic executor was handed and its outcome.
+	execCalls int
+	execFn    func(context.Context, closedHelperExecution) (*executionapp.Result, error)
 }
 
 func closedHelperJSON(t *testing.T, v any) []byte {
@@ -170,6 +173,14 @@ func (f *closedHelperFixture) ready(ctx context.Context, m *executionapp.Milesto
 func (f *closedHelperFixture) deps() closedHelperDependencies {
 	return closedHelperDependencies{
 		ready: f.ready,
+		execute: func(ctx context.Context, in closedHelperExecution) (*executionapp.Result, error) {
+			f.event("execute")
+			f.execCalls++
+			if f.execFn != nil {
+				return f.execFn(ctx, in)
+			}
+			return &executionapp.Result{Phase: "verified"}, nil
+		},
 		take: func(closedHelperFiles) (closedHelperInput, closedHelperChannels, error) {
 			f.event("take")
 			return closedHelperFixtureInput{f}, closedHelperFixtureChannels{f}, nil

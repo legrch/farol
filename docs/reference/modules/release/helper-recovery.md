@@ -121,8 +121,8 @@ bound native process observer and update lock. There is no CLI selection. Only
 closed `apply` and `rollback` requests with explicit `legacy` or `shared`
 `installLocation` and their physical slot binding are supported. Missing closed
 proof or the optional-location legacy branch refuses before native admission.
-Pre-ACK application readiness joins closed custody here; journal execution,
-installation, recovery, relaunch and terminal classification remain unselected.
+Pre-ACK application readiness joins closed custody here. Execution is composed
+but unselected (see the end of this section); relaunch is refused.
 
 The trusted launch supplies actual, distinct `os.File` owners for request fd3,
 ACK fd4 and continuation fd6. Their ownership transfers on call, including
@@ -158,7 +158,7 @@ observation admission (not a writer admission) supplies the private gate, the
 scope's own custody check and sticky uncertainty. Any readiness refusal, error,
 panic or late result exposes nothing and emits no refused frame. It then emits one
 correlated `closed_predecessor_ready` frame after another custody check. The
-readiness result and Milestone are retained, unused, for a later execution step.
+readiness result and Milestone are retained for the single execution step.
 Continuation
 is one bounded EOF-sealed frame checked against the original protocol request.
 Only after continuation and another closed-custody check does it acquire the
@@ -182,9 +182,20 @@ and its uncertainty remains an original error cause. Independent update-close
 failure is retained too. The exact fd5 borrow stays inside the synchronous
 RawConn.Control callback through that return; no descriptor escapes the callback.
 
-ACK exposure and EOF are transport evidence only. This scope does not call
-`Milestone.Execute`, or perform installation, recovery, rollback, relaunch or
-terminal exit classification, and it repeats no readiness after continuation yet.
+ACK exposure and EOF are transport evidence only. `request.relaunch` is refused
+before any IO or frame (the relaunch gate is closed), and the launch port is always
+nil. Inside the callback scope alone, which holds the acquired update lock, a
+single-consume `execute` composes the existing journal and rejection repositories
+under one writer admission and one gate, then runs `Milestone.Execute` once
+through `WithAdmittedInstallation`. The admission refuses unless the update lock
+was actually acquired, and custody is rechecked before and after Execute: a
+failed fence is unknown, never success. Execution is unselected: no CLI, stdout or
+desktop selection calls it, and Python stays the selected helper. The pure
+`closedHelperTerminal` maps its outcome to the Python contract: success
+`{"phase","operationId"}` exit 0; a result code or a direct, clean application
+refusal `{"phase","error","operationId"}` exit 70; everything else
+(internal, uncertain, wrapped or non-Failure errors, malformed phase or code)
+`{"phase":"unknown","error":"internal","operationId"}` exit 79.
 The unselected ready frame must not be wired to an application effect or product
 readiness until that gate and the existing desktop protocol are independently
 accepted.
