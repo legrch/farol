@@ -41,6 +41,7 @@ import { runBoundedProcess } from "./bounded-process.mjs";
 import { qualifyGoBuild } from "./qualified-go-build.mjs";
 import { predecessorPackagePaths } from "./predecessor-package-path.mjs";
 import { packageLayout } from "../../tooling/package-layout.mjs";
+import { unregisteredAppCopyName } from "./lib/unregistered-app-copy.mjs";
 import {
   startChatGptFixture,
   stopChatGptFixture,
@@ -2046,9 +2047,12 @@ async function rejectMismatchedBuildLaunch(instance) {
       ];
       manifestPath = path.join(copiedBuild, "build-manifest.json");
     } else {
+      // Executed by absolute path, never opened: a `.app` name would let
+      // LaunchServices register this clone under the production identifier
+      // when it runs, and removing the directory does not unregister it.
       const copiedApp = path.join(
         temporary,
-        packageLayout(artifact.schema).appName,
+        unregisteredAppCopyName(packageLayout(artifact.schema).appName),
       );
       const copied = spawnSync("/bin/cp", ["-cR", appPath, copiedApp], {
         encoding: "utf8",
