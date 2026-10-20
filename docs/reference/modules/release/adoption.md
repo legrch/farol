@@ -48,6 +48,28 @@ tree and path. Release owns that baseline; Distribution cannot synthesize it or
 reuse a receipt from another generation/path. Profile and journal relocation do
 not rewrite unknown outcomes, accepted publications or old helper witnesses.
 
+## Implemented: user-slot first-launch adoption
+
+The installed updater implements one narrow form of this adoption, for
+`~/Applications/Farol.app` only. The full lifecycle in
+`docs/installed-update-runtime.md` is authoritative; in short, on a check that finds
+no promotion receipt, update receipt or earlier adoption, the app finds the
+GitHub release manifest for its own exact version, requires it to describe the
+running build, measures its installed tree against the manifest's artifact digest,
+and creates one create-only `adopted-baseline.json` in the owner-private updater
+root. Any failure, including a network failure, writes nothing.
+
+This is trust on first use. The descriptor is the release manifest fetched from
+GitHub for the running version. It is not a DMG sidecar or a user-reported digest,
+and it is not independent of the account that published the download. Adoption
+detects a corrupt or partial copy, the wrong version and later drift; it does not
+detect a deliberately tampered download.
+
+Not implemented here: the shared `/Applications/Farol.app` slot (it keeps its
+startup refusal and never adopts), the destination-case table above, the legacy
+slot move, any first install, and a Distribution-facing request or result. The
+rest of this document remains the required semantics for those.
+
 ## Results and one-shot observation
 
 - Installed: exact physical package/tree at the accepted fixed destination and
