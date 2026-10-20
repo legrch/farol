@@ -158,7 +158,10 @@ func (f *liveNativeFixture) arm(t *testing.T, markerStart string) {
 // confirmed receipt and removes its marker.
 func (f *liveNativeFixture) quit(t *testing.T) {
 	t.Helper()
-	f.pred.stop(t)
+	// Like the desktop (main.ts), publish the receipt and remove the marker while
+	// the process is still alive, and only THEN let that exact process exit. The
+	// helper can observe the exit at any instant, so it must already find a
+	// finished Quit state.
 	receipt := closedHelperJSON(t, map[string]any{"schema": 1, "at": time.Now().UTC().Format(time.RFC3339Nano), "drained": true, "unconfirmed": []string{}})
 	if err := os.WriteFile(filepath.Join(f.statePath, "last-quit.json"), receipt, 0600); err != nil {
 		t.Fatal(err)
@@ -166,6 +169,7 @@ func (f *liveNativeFixture) quit(t *testing.T) {
 	if err := os.Remove(filepath.Join(f.statePath, "running.json")); err != nil {
 		t.Fatal(err)
 	}
+	f.pred.stop(t)
 }
 
 func (f *liveNativeFixture) request(action string, relaunch bool) map[string]any {
@@ -384,12 +388,14 @@ func TestLiveHelperNativeMissingQuitReceiptIsRefused(t *testing.T) {
 	f := newLiveNativeFixture(t, true)
 	f.arm(t, "")
 	apply := f.request("apply", false)
-	// The process exits and its marker vanishes, but NO last-quit.json is published.
+	// The marker vanishes while the process is alive and the process then exits,
+	// but NO last-quit.json is published. Removing the marker first keeps the
+	// refusal about the missing receipt, not about a marker still present.
 	f.quitHook = func() {
-		f.pred.stop(t)
 		if err := os.Remove(filepath.Join(f.statePath, "running.json")); err != nil {
 			t.Error(err)
 		}
+		f.pred.stop(t)
 	}
 	o := f.run(t, apply, true)
 	f.wantWaitingFrame(t, apply, o.ack)
