@@ -31,6 +31,14 @@ const messages: Readonly<Record<string, string>> = {
     "An earlier package check did not finish. Its files are saved. Review Diagnostics to recover that check before updating.",
 };
 
+// First-launch adoption failures carry their own guidance, not the generic copy.
+const adoptionResultCodes: ReadonlySet<string> = new Set([
+  "UPDATE_ADOPTION_RELEASE_NOT_FOUND",
+  "UPDATE_BASELINE_ADOPTION_REQUIRED",
+  "UPDATE_ADOPTION_TREE_MISMATCH",
+  "UPDATE_ADOPTION_NETWORK_FAILURE",
+]);
+
 export function updateBlockMessage(
   code: string,
   fallback = "Farol can’t restart safely yet. Review active work and Diagnostics before updating.",
@@ -47,6 +55,8 @@ export function updateResultMessage(
   if (phase === "unavailable")
     return "Farol cannot confirm update availability in this session. Review Diagnostics before another check.";
   if (code === "UPDATE_VERIFICATION_RECOVERY_REQUIRED") return messages[code]!;
+  if (code !== undefined && adoptionResultCodes.has(code))
+    return messages[code]!;
   return recoveryRequired
     ? "The update result needs recovery. Check Diagnostics and the installed version before another update action."
     : "The update did not finish. Check Diagnostics and the installed version before trying again.";
