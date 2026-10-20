@@ -239,6 +239,32 @@ func TestLiveHelperRelaunchTerminalMapping(t *testing.T) {
 	}
 }
 
+// The runtime configuration carries the launch capabilities exactly when the
+// execution does: a live relaunch execution wires both, anything else neither.
+func TestClosedHelperNativeConfigWiresRelaunchCapabilitiesOnlyWhenCarried(t *testing.T) {
+	measure := func(context.Context, time.Time) (releaseport.HelperSelfIdentity, error) {
+		return releaseport.HelperSelfIdentity{}, nil
+	}
+	arguments := func(context.Context, releaseport.HelperSelfIdentity, *string) ([]string, error) { return nil, nil }
+	carried := closedHelperNativeConfig(closedHelperExecution{relaunch: &closedHelperRelaunch{arguments: arguments, measure: measure}}, nil, nil)
+	if carried.RelaunchArguments == nil || carried.MeasureSelf == nil {
+		t.Fatal("a relaunch execution lost a launch capability", carried.RelaunchArguments != nil, carried.MeasureSelf != nil)
+	}
+	for name, in := range map[string]closedHelperExecution{
+		"closed":                     {},
+		"no measurement":             {relaunch: &closedHelperRelaunch{arguments: arguments}},
+		"no argument capability":     {relaunch: &closedHelperRelaunch{measure: measure}},
+		"empty relaunch capability":  {relaunch: &closedHelperRelaunch{}},
+		"relaunch carried but unset": {relaunch: nil},
+	} {
+		c := closedHelperNativeConfig(in, nil, nil)
+		wantArgs, wantMeasure := in.relaunch != nil && in.relaunch.arguments != nil, in.relaunch != nil && in.relaunch.measure != nil
+		if (c.RelaunchArguments != nil) != wantArgs || (c.MeasureSelf != nil) != wantMeasure {
+			t.Fatalf("%s: wiring args=%v measure=%v", name, c.RelaunchArguments != nil, c.MeasureSelf != nil)
+		}
+	}
+}
+
 // liveRelaunchProbe scripts one observation and counts the joins of it.
 type liveRelaunchProbe struct {
 	observation releaseport.ProcessObservation

@@ -121,14 +121,7 @@ func closedHelperExecute(ctx context.Context, in closedHelperExecution) (result 
 		return nil, err
 	}
 	defer closeOwner(rejected.Close)
-	config := executionnative.Config{
-		Request: in.request, Files: in.files, Journal: repository, Rejection: rejected, Until: in.until,
-		Reverify: in.helper.reverify, Unknown: in.helper.unknown, RetainUnknown: in.helper.retainUnknown,
-	}
-	if in.relaunch != nil {
-		config.RelaunchArguments, config.MeasureSelf = in.relaunch.arguments, in.relaunch.measure
-	}
-	err = executionnative.WithAdmittedInstallation(ctx, config, func(native executionnative.AdmittedInstallation) error {
+	err = executionnative.WithAdmittedInstallation(ctx, closedHelperNativeConfig(in, repository, rejected), func(native executionnative.AdmittedInstallation) error {
 		executed, e := in.milestone.Execute(ctx, native, in.readiness, native)
 		if e == nil {
 			result = executed
@@ -139,6 +132,20 @@ func closedHelperExecute(ctx context.Context, in closedHelperExecution) (result 
 		result = nil
 	}
 	return result, err
+}
+
+// closedHelperNativeConfig is the installation runtime's configuration for one
+// execution. The launch capabilities are the live helper's alone: an execution
+// without them leaves both nil, so the runtime refuses any launch.
+func closedHelperNativeConfig(in closedHelperExecution, repository releaseport.HelperJournalRepository, rejected releaseport.HelperTargetRejectionRepository) executionnative.Config {
+	config := executionnative.Config{
+		Request: in.request, Files: in.files, Journal: repository, Rejection: rejected, Until: in.until,
+		Reverify: in.helper.reverify, Unknown: in.helper.unknown, RetainUnknown: in.helper.retainUnknown,
+	}
+	if in.relaunch != nil {
+		config.RelaunchArguments, config.MeasureSelf = in.relaunch.arguments, in.relaunch.measure
+	}
+	return config
 }
 
 // closedHelperCleanRefusal recognizes only a direct, non-nil application
