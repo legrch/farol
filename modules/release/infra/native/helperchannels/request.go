@@ -43,6 +43,8 @@ func requestFailure(code string, uncertain bool, causes ...error) error {
 //
 // Only read-end pipes and stream sockets are accepted. Owned O_NONBLOCK is
 // enabled and socket SO_LINGER disabled so native reads and cleanup are bounded.
+// FD_CLOEXEC is added so no exec'd child inherits the request; failure refuses
+// before any read.
 func TakeRequest(file *os.File) (*Request, error) {
 	if file == nil {
 		return nil, requestFailure("required", false)

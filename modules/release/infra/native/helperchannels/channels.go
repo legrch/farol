@@ -205,7 +205,9 @@ type channelState struct {
 // Take consumes exclusive ownership of all nonnil handles ON CALL, including
 // failure. ACK is required. Pipes require O_WRONLY for ACK and O_RDONLY for
 // continuation; stream sockets may be duplex. Owned O_NONBLOCK is enabled and
-// owned socket SO_LINGER is disabled to bound native calls and close.
+// owned socket SO_LINGER is disabled to bound native calls and close. FD_CLOEXEC
+// is added to each owned descriptor so no exec'd child inherits it; failure to
+// set it refuses before any I/O.
 //
 // The caller must transfer unique descriptions without borrowed aliases and
 // never use them again. In particular request and borrowed lease roles must
@@ -276,6 +278,23 @@ func prepareClose(file *os.File) error {
 	return errors.Join(err, nativeErr)
 }
 
+// closeOnExec only adds FD_CLOEXEC to this process's descriptor flags: it reads
+// F_GETFD and writes it back with that one bit ORed in. The flag is per process
+// and per descriptor number, so the parent's table and the shared open-file
+// description are untouched. It stops a later exec.Command child (for example
+// /bin/ps) from inheriting this transport.
+func closeOnExec(fd uintptr) error {
+	flags, err := unix.FcntlInt(fd, unix.F_GETFD, 0)
+	if err != nil {
+		return err
+	}
+	if flags&unix.FD_CLOEXEC != 0 {
+		return nil
+	}
+	_, err = unix.FcntlInt(fd, unix.F_SETFD, flags|unix.FD_CLOEXEC)
+	return err
+}
+
 func configure(o *owned, write bool) error {
 	raw, err := o.syscallConn()
 	if err != nil {
@@ -319,7 +338,10 @@ func configure(o *owned, write bool) error {
 			nativeErr = unix.EINVAL
 			return
 		}
-		nativeErr = unix.SetNonblock(int(fd), true)
+		if nativeErr = unix.SetNonblock(int(fd), true); nativeErr != nil {
+			return
+		}
+		nativeErr = closeOnExec(fd)
 	})
 	if err == nil && nativeErr == nil {
 		o.raw = raw
