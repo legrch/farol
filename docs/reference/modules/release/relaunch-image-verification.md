@@ -27,11 +27,20 @@ journal phase (`launch_requested`) and original deadline. There is no new phase,
 no retry and no replay. A second launch attempt in the same scope is refused as
 `recovery_attempt_unknown`.
 
-1. Before launch, the held verified application directory yields the expected
-   identity: the SHA-256 (or SHA-1/SHA-384) digest of the best `CodeDirectory`
-   from the executable's `LC_CODE_SIGNATURE`, truncated to 20 bytes, and the
-   executable's device and inode. A universal binary resolves to the running
-   architecture's slice. No `codesign` is run.
+1. Before launch, the expected identity is derived from descriptors that were
+   pinned before the tree was verified. The executable (or, for the script
+   launcher, the runtime executable it names) is opened without following links
+   under the held application directory, and its identity is recorded. The tree
+   verification then covers the entries those descriptors name. After it, the
+   derivation proves that each descriptor still has the recorded device, inode,
+   mode, size, mtime and ctime, that the name still resolves to the same object,
+   and that it did not change while being read. Only then is the SHA-256 (or
+   SHA-1/SHA-384) digest of the best `CodeDirectory` from the executable's
+   `LC_CODE_SIGNATURE`, truncated to 20 bytes, computed from that descriptor,
+   together with the device and inode. The executable is never reopened by name
+   to read it, so a swap between verification and derivation is refused as
+   `launch_image_unconfirmed` (uncertain once `open` has run). A universal binary
+   resolves to the running architecture's slice. No `codesign` is run.
 2. `open` runs once. Its argument is the relaunch hint, which names the operation
    id and the helper pid and start, so it acts as a nonce for this launch.
 3. The child is found by polling same-effective-user processes whose
@@ -73,6 +82,16 @@ the runtime therefore:
 the target can still exit and its pid be reused by an unrelated process. That
 needs a full pid wraparound inside that interval. The window is reduced, not
 eliminated, which is consistent with detection rather than prevention.
+
+**Deadline.** The original deadline is checked again immediately before
+containment starts and immediately before the kill. An observation that arrives
+late, including a candidate scan that returns after the deadline, never leads to
+a signal and leaves the outcome uncertain. The candidate scan stops between
+processes once the context ends.
+
+**Delivered signal only.** A kill that fails, including `ESRCH` (no signal was
+sent), is an uncertain `launch_image_mismatch`. Only a delivered SIGKILL is
+definite.
 
 The retained launch image is never touched. The journal stays at
 `launch_requested`.

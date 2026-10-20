@@ -43,7 +43,7 @@ func (nativePlatform) sleep(ctx context.Context, d time.Duration) error {
 	return helperprocess.Clock{}.Sleep(ctx, d)
 }
 
-func (nativePlatform) candidates(_ context.Context, argument string) ([]int, error) {
+func (nativePlatform) candidates(ctx context.Context, argument string) ([]int, error) {
 	uid := os.Geteuid()
 	processes, err := unix.SysctlKinfoProcSlice("kern.proc.uid", uid)
 	if err != nil {
@@ -51,6 +51,9 @@ func (nativePlatform) candidates(_ context.Context, argument string) ([]int, err
 	}
 	var pids []int
 	for _, process := range processes {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		pid := int(process.Proc.P_pid)
 		if pid == os.Getpid() || int(process.Eproc.Ucred.Uid) != uid {
 			continue

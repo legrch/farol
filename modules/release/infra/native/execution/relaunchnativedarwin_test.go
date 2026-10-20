@@ -165,6 +165,27 @@ func TestNativeLaunchVerification(t *testing.T) {
 	}
 }
 
+// The same gap with the production kernel reads: the executable is swapped
+// between verification and derivation, and nothing is launched.
+func TestNativeSwapBetweenVerificationAndDerivationLaunchesNothing(t *testing.T) {
+	requireNative(t)
+	good := scratchExecutable(t, "good", stdruntime.GOARCH, "")
+	impostor := scratchExecutable(t, "impostor", stdruntime.GOARCH, "")
+	platform := &spawnPlatform{t: t}
+	fx := newRelaunchFixture(t, platform, good)
+	platform.app = fx.app
+	fx.config.afterVerify = func() {
+		exe := fx.app + "/Contents/MacOS/Sleeper"
+		rename(t, exe, exe+".verified")
+		copyFile(t, impostor, exe, 0700)
+	}
+	method, _ := fx.launch(t)
+	failure := recoveryFailure(t, method)
+	if failure.Code != "launch_image_unconfirmed" || platform.opens != 0 || platform.cmd != nil {
+		t.Fatalf("a swapped executable reached the launch: %+v opens=%d", failure, platform.opens)
+	}
+}
+
 // The OS primitives alone: a real process found by its exact argument, and its
 // kernel identity equal to the identity derived from the executable on disk.
 func TestNativePlatformObservesARealProcess(t *testing.T) {

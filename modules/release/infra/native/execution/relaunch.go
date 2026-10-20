@@ -145,6 +145,14 @@ func (r *runtime) LaunchTarget(ctx context.Context, self port.HelperSelfIdentity
 		var want launchImage
 		wanted := false
 		verify := func(ctx context.Context) error {
+			// The executable is pinned before the tree is verified and derived
+			// only from that descriptor; it is never reopened by name.
+			var pinned *heldLaunch
+			defer func() {
+				if pinned != nil {
+					pinned.close()
+				}
+			}()
 			if err := r.fence(ctx); err != nil {
 				return err
 			}
@@ -169,16 +177,23 @@ func (r *runtime) LaunchTarget(ctx context.Context, self port.HelperSelfIdentity
 			} else if captured != nil {
 				return fail("launch_image_unexpected", false, false, nil)
 			}
-			negative, err := r.image(ctx, location, r.config.Request.Target, func(held *os.File, actual port.HelperIdentity) error {
+			negative, err := r.imageHeld(ctx, location, r.config.Request.Target, func(app *os.File) error {
+				var err error
+				if pinned, err = pinLaunchImage(app); err != nil {
+					return fail("launch_image_unconfirmed", false, false, err)
+				}
+				return nil
+			}, func(held *os.File, actual port.HelperIdentity) error {
 				if r.config.Files.SharedParent && expected != actual {
 					return fail("launch_image_unconfirmed", false, false, nil)
 				}
-				derived, err := expectedLaunchImage(held, stdruntime.GOARCH)
+				// After the open call a refusal is an unknown outcome.
+				derived, err := pinned.derive(held, stdruntime.GOARCH)
 				if err != nil {
-					return fail("launch_image_unconfirmed", false, false, err)
+					return fail("launch_image_unconfirmed", false, r.effected, err)
 				}
 				if wanted && derived != want {
-					return fail("launch_image_unconfirmed", false, false, nil)
+					return fail("launch_image_unconfirmed", false, r.effected, nil)
 				}
 				want, wanted = derived, true
 				return nil

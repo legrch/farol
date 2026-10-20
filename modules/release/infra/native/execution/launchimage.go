@@ -53,11 +53,17 @@ func imageError(reason string, cause error) error {
 // openBelow opens a path below a held directory one component at a time, never
 // following a link. The returned file is owned by the caller.
 func openBelow(root *os.File, components ...string) (*os.File, error) {
+	return openBelowAs(root, false, components...)
+}
+
+// openBelowAs is openBelow where dirLast requires the final component to be a
+// directory as well.
+func openBelowAs(root *os.File, dirLast bool, components ...string) (*os.File, error) {
 	current := root
 	for i, name := range components {
 		last := i == len(components)-1
 		flags := unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_CLOEXEC
-		if !last {
+		if !last || dirLast {
 			flags |= unix.O_DIRECTORY
 		}
 		raw, err := current.SyscallConn()
@@ -88,6 +94,29 @@ func openBelow(root *os.File, components ...string) (*os.File, error) {
 	return current, nil
 }
 
+// statByName stats a path below a held directory without following a link.
+func statByName(root *os.File, components ...string) (unix.Stat_t, error) {
+	var st unix.Stat_t
+	parent, err := openBelowAs(root, true, components[:len(components)-1]...)
+	if err != nil {
+		return st, err
+	}
+	if parent != root {
+		defer parent.Close()
+	}
+	raw, err := parent.SyscallConn()
+	if err != nil {
+		return st, err
+	}
+	var inner error
+	if err := raw.Control(func(fd uintptr) {
+		inner = unix.Fstatat(int(fd), components[len(components)-1], &st, unix.AT_SYMLINK_NOFOLLOW)
+	}); err != nil {
+		return st, err
+	}
+	return st, inner
+}
+
 func fstat(file *os.File) (unix.Stat_t, error) {
 	var st unix.Stat_t
 	raw, err := file.SyscallConn()
@@ -101,43 +130,125 @@ func fstat(file *os.File) (unix.Stat_t, error) {
 	return st, inner
 }
 
-// expectedLaunchImage derives the expected process image from the held verified
-// application directory. It reads through that descriptor only, and it never
-// executes or shells out to a code-signing tool: the expected hash is computed
-// from the Mach-O LC_CODE_SIGNATURE of the executable the launch will run.
-func expectedLaunchImage(app *os.File, arch string) (launchImage, error) {
-	directory, err := openBelow(app, "Contents", "MacOS")
+// pinnedFile is a descriptor opened without following a link, with the
+// identity it had when it was pinned.
+type pinnedFile struct {
+	path []string
+	file *os.File
+	st   unix.Stat_t
+}
+
+func sameObject(a, b unix.Stat_t) bool {
+	return a.Dev == b.Dev && a.Ino == b.Ino && a.Mode == b.Mode && a.Nlink == b.Nlink &&
+		a.Uid == b.Uid && a.Size == b.Size && a.Mtim == b.Mtim && a.Ctim == b.Ctim
+}
+
+// heldLaunch pins the files the expected launch image is derived from BEFORE
+// the tree is verified. The verification then covers exactly the entries these
+// descriptors name, and derive proves that before reading a single byte.
+type heldLaunch struct {
+	exe, runtime *pinnedFile
+}
+
+func pin(app *os.File, path ...string) (*pinnedFile, error) {
+	file, err := openBelow(app, path...)
 	if err != nil {
-		return launchImage{}, imageError("launch directory", err)
+		return nil, err
+	}
+	st, err := fstat(file)
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return &pinnedFile{path: path, file: file, st: st}, nil
+}
+
+func (h *heldLaunch) close() {
+	for _, p := range []*pinnedFile{h.exe, h.runtime} {
+		if p != nil {
+			_ = p.file.Close()
+		}
+	}
+}
+
+// pinLaunchImage opens, without following links, the executable LaunchServices
+// will run: the single entry of Contents/MacOS and, when that is a launcher
+// script, the runtime executable it names. It must run before verification.
+func pinLaunchImage(app *os.File) (*heldLaunch, error) {
+	directory, err := openBelowAs(app, true, "Contents", "MacOS")
+	if err != nil {
+		return nil, imageError("launch directory", err)
 	}
 	names, err := directory.Readdirnames(3)
 	_ = directory.Close()
 	if err != nil || len(names) != 1 {
-		return launchImage{}, imageError("launch directory must hold exactly one executable", err)
+		return nil, imageError("launch directory must hold exactly one executable", err)
 	}
-	launcher, err := openBelow(app, "Contents", "MacOS", names[0])
-	if err != nil {
-		return launchImage{}, imageError("launch executable", err)
+	held := &heldLaunch{}
+	if held.exe, err = pin(app, "Contents", "MacOS", names[0]); err != nil {
+		return nil, imageError("launch executable", err)
 	}
-	defer launcher.Close()
-	head := make([]byte, maxScriptBytes)
-	n, err := launcher.ReadAt(head, 0)
-	if err != nil && err != io.EOF {
-		return launchImage{}, imageError("launch executable read", err)
+	head := make([]byte, 2)
+	if n, err := held.exe.file.ReadAt(head, 0); n == 2 && err == nil && string(head) == "#!" {
+		if held.runtime, err = pin(app, "Contents", "Frameworks", "Electron Runtime.app", "Contents", "MacOS", "Electron"); err != nil {
+			held.close()
+			return nil, imageError("runtime executable", err)
+		}
 	}
-	head = head[:n]
-	if bytes.HasPrefix(head, []byte("#!")) {
-		if !bytes.Contains(head, []byte(runtimeReference)) {
+	return held, nil
+}
+
+// derive computes the expected process image from the pinned descriptors only.
+// After verification it proves each descriptor is still the object its name
+// resolves to, and that it did not change while being read. A swap anywhere
+// between pinning and here makes the name and the descriptor disagree. It never
+// reopens an executable by name to read it, and never runs a signing tool.
+func (h *heldLaunch) derive(app *os.File, arch string) (launchImage, error) {
+	for _, p := range []*pinnedFile{h.exe, h.runtime} {
+		if p == nil {
+			continue
+		}
+		current, err := fstat(p.file)
+		if err != nil || !sameObject(current, p.st) {
+			return launchImage{}, imageError("pinned executable changed", err)
+		}
+		named, err := statByName(app, p.path...)
+		if err != nil || !sameObject(named, p.st) {
+			return launchImage{}, imageError("executable name no longer names the pinned object", err)
+		}
+	}
+	source := h.exe
+	if h.runtime != nil {
+		head := make([]byte, maxScriptBytes)
+		n, err := h.exe.file.ReadAt(head, 0)
+		if err != nil && err != io.EOF {
+			return launchImage{}, imageError("launcher read", err)
+		}
+		if !bytes.Contains(head[:n], []byte(runtimeReference)) {
 			return launchImage{}, imageError("launcher does not name the runtime executable", nil)
 		}
-		runtime, err := openBelow(app, "Contents", "Frameworks", "Electron Runtime.app", "Contents", "MacOS", "Electron")
-		if err != nil {
-			return launchImage{}, imageError("runtime executable", err)
-		}
-		defer runtime.Close()
-		return imageOf(runtime, arch)
+		source = h.runtime
 	}
-	return imageOf(launcher, arch)
+	image, err := imageOf(source.file, arch)
+	if err != nil {
+		return launchImage{}, err
+	}
+	after, err := fstat(source.file)
+	if err != nil || !sameObject(after, source.st) {
+		return launchImage{}, imageError("executable changed while read", err)
+	}
+	return image, nil
+}
+
+// expectedLaunchImage pins and derives in one step, for callers with no
+// verification between the two.
+func expectedLaunchImage(app *os.File, arch string) (launchImage, error) {
+	held, err := pinLaunchImage(app)
+	if err != nil {
+		return launchImage{}, err
+	}
+	defer held.close()
+	return held.derive(app, arch)
 }
 
 func imageOf(file *os.File, arch string) (launchImage, error) {

@@ -44,6 +44,10 @@ type Config struct {
 	// launch is the private OS seam for post-launch image verification. Only
 	// package tests set it; nil selects the native Darwin implementation.
 	launch launchPlatform
+	// afterVerify runs right after a successful tree verification, before the
+	// callback that borrows the image. Package tests use it to place a swap in
+	// exactly that gap; production leaves it nil.
+	afterVerify func()
 }
 
 type runtime struct {

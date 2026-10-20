@@ -312,16 +312,65 @@ func TestExitWatchBindsTheKillToTheObservedProcess(t *testing.T) {
 }
 
 func TestKillFailureIsUncertain(t *testing.T) {
+	for name, killErr := range map[string]error{
+		"kill refused":                errors.New("operation not permitted"),
+		"no such process (no signal)": errProcessGone,
+	} {
+		t.Run(name, func(t *testing.T) {
+			fx, fake, verified := launchHarness(t)
+			fake.candidatesFn = servesOne(pidOurs)
+			fake.imageFn = func(int, int) (liveImage, error) {
+				return liveImage{Image: substituteHash(verified), Start: startOurs}, nil
+			}
+			fake.startFn = func(int, int) (processStart, error) { return startOurs, nil }
+			fake.killErr = killErr
+			method, _ := fx.launch(t)
+			// Only a delivered signal is definite; ESRCH means none was sent.
+			if failure := recoveryFailure(t, method); failure.Code != "launch_image_mismatch" || !failure.Uncertain || len(fake.kills) != 1 {
+				t.Fatalf("an undelivered kill is not containment: %+v kills=%v", failure, fake.kills)
+			}
+		})
+	}
+}
+
+func TestLateObservationNeverReachesTheKill(t *testing.T) {
 	fx, fake, verified := launchHarness(t)
+	fx.config.Until = time.Now().Add(500 * time.Millisecond)
+	fake.imageFn = func(int, int) (liveImage, error) {
+		return liveImage{Image: substituteHash(verified), Start: startOurs}, nil
+	}
+	fake.startFn = func(int, int) (processStart, error) { return startOurs, nil }
+	// The mismatch is pending (virtual time settles it), then one scan returns
+	// only after the original deadline: containment must not start.
+	fake.candidatesFn = func(call int) ([]int, error) {
+		if call == 6 {
+			time.Sleep(700 * time.Millisecond)
+		}
+		return []int{pidOurs}, nil
+	}
+	method, _ := fx.launch(t)
+	failure := recoveryFailure(t, method)
+	if !failure.Uncertain || len(fake.kills) != 0 || fake.watches != 0 {
+		t.Fatalf("a late scan must not contain or kill: %+v kills=%v watches=%d", failure, fake.kills, fake.watches)
+	}
+}
+
+func TestDeadlineBetweenWatchAndKillLeavesTheProcessAlone(t *testing.T) {
+	fx, fake, verified := launchHarness(t)
+	fx.config.Until = time.Now().Add(500 * time.Millisecond)
 	fake.candidatesFn = servesOne(pidOurs)
 	fake.imageFn = func(int, int) (liveImage, error) {
 		return liveImage{Image: substituteHash(verified), Start: startOurs}, nil
 	}
 	fake.startFn = func(int, int) (processStart, error) { return startOurs, nil }
-	fake.killErr = errors.New("operation not permitted")
+	// The final exit poll is slow: the deadline passes before the signal.
+	fake.exitedFn = func() (bool, error) {
+		time.Sleep(700 * time.Millisecond)
+		return false, nil
+	}
 	method, _ := fx.launch(t)
-	if failure := recoveryFailure(t, method); failure.Code != "launch_image_mismatch" || !failure.Uncertain || len(fake.kills) != 1 {
-		t.Fatalf("a failed kill is not containment: %+v kills=%v", failure, fake.kills)
+	if failure := recoveryFailure(t, method); !failure.Uncertain || len(fake.kills) != 0 {
+		t.Fatalf("an expired deadline reached the kill: %+v kills=%v", failure, fake.kills)
 	}
 }
 
@@ -583,4 +632,95 @@ func TestExpectedImageComesFromTheHeldBundle(t *testing.T) {
 			}
 		}
 	})
+}
+
+// The verified tree covers the entries the pinned descriptors name. Swapping the
+// executable in the gap between verification and derivation must be refused,
+// whether it replaces the file or rewrites it in place.
+func TestExecutableSwappedBetweenVerificationAndDerivationIsRefused(t *testing.T) {
+	impostor := scratchExecutable(t, "other", stdruntime.GOARCH, "")
+	for name, swap := range map[string]func(t *testing.T, app string){
+		"replaced file": func(t *testing.T, app string) {
+			exe := app + "/Contents/MacOS/Sleeper"
+			must(t, os.Rename(exe, exe+".verified"))
+			copyFile(t, impostor, exe, 0700)
+		},
+		"rewritten in place": func(t *testing.T, app string) {
+			data, err := os.ReadFile(impostor)
+			must(t, err)
+			must(t, os.WriteFile(app+"/Contents/MacOS/Sleeper", data, 0700))
+		},
+	} {
+		for _, when := range []struct {
+			name  string
+			call  int
+			after bool // the open call already happened
+		}{{"before launch", 1, false}, {"after launch", 2, true}} {
+			t.Run(name+" "+when.name, func(t *testing.T) {
+				fx, fake, verified := launchHarness(t)
+				fake.candidatesFn = servesOne(pidOurs)
+				fake.imageFn = func(int, int) (liveImage, error) { return liveImage{Image: verified, Start: startOurs}, nil }
+				calls := 0
+				fx.config.afterVerify = func() {
+					calls++
+					if calls == when.call {
+						swap(t, fx.app)
+					}
+				}
+				method, _ := fx.launch(t)
+				failure := recoveryFailure(t, method)
+				if failure.Code != "launch_image_unconfirmed" || failure.Uncertain != when.after || len(fake.kills) != 0 {
+					t.Fatalf("swap accepted or misclassified: %+v kills=%v", failure, fake.kills)
+				}
+				if (fake.opens == 1) != when.after {
+					t.Fatal("unexpected number of opens", fake.opens)
+				}
+			})
+		}
+	}
+}
+
+func TestPinnedExecutableRefusesAnyChangeBeforeDerivation(t *testing.T) {
+	good := scratchExecutable(t, "good", stdruntime.GOARCH, "")
+	other := scratchExecutable(t, "other", stdruntime.GOARCH, "")
+	for name, change := range map[string]func(t *testing.T, app string){
+		"renamed away and replaced": func(t *testing.T, app string) {
+			exe := app + "/Contents/MacOS/Sleeper"
+			must(t, os.Rename(exe, exe+".old"))
+			copyFile(t, other, exe, 0700)
+		},
+		"replaced with identical bytes": func(t *testing.T, app string) {
+			exe := app + "/Contents/MacOS/Sleeper"
+			must(t, os.Rename(exe, exe+".old"))
+			copyFile(t, good, exe, 0700)
+		},
+		"touched": func(t *testing.T, app string) {
+			future := time.Now().Add(time.Hour)
+			must(t, os.Chtimes(app+"/Contents/MacOS/Sleeper", future, future))
+		},
+		"replaced by a link": func(t *testing.T, app string) {
+			exe := app + "/Contents/MacOS/Sleeper"
+			must(t, os.Rename(exe, exe+".old"))
+			must(t, os.Symlink(exe+".old", exe))
+		},
+		"removed": func(t *testing.T, app string) { must(t, os.Remove(app+"/Contents/MacOS/Sleeper")) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			app := t.TempDir() + "/Farol.app"
+			writeBundle(t, app, good)
+			held, err := os.Open(app)
+			must(t, err)
+			defer held.Close()
+			pinned, err := pinLaunchImage(held)
+			must(t, err)
+			defer pinned.close()
+			if _, err := pinned.derive(held, stdruntime.GOARCH); err != nil {
+				t.Fatal("an untouched pin must derive", err)
+			}
+			change(t, app)
+			if _, err := pinned.derive(held, stdruntime.GOARCH); !errors.Is(err, errLaunchImage) {
+				t.Fatalf("a changed executable derived an image: %v", err)
+			}
+		})
+	}
 }

@@ -127,7 +127,7 @@ func verifyLaunched(ctx context.Context, p launchPlatform, hint string, want lau
 				return verify(ctx)
 			default:
 				if pending != nil && pending.pid == pids[0] && pending.live == live && p.now().Sub(pending.at) >= launchMismatchSettle {
-					return refuseLaunchedImage(p, pids[0], live)
+					return refuseLaunchedImage(ctx, p, pids[0], live)
 				}
 				if pending == nil || pending.pid != pids[0] || pending.live != live {
 					pending = &observation{pid: pids[0], live: live, at: p.now()}
@@ -156,7 +156,14 @@ func verifyLaunched(ctx context.Context, p launchPlatform, hint string, want lau
 // can still exit and its pid be recycled by an unrelated process, which needs a
 // full pid wraparound inside that interval. macOS has no pidfd, so this is
 // reduced, not eliminated.
-func refuseLaunchedImage(p launchPlatform, pid int, observed liveImage) error {
+//
+// A late observation never reaches the signal: the context, which carries the
+// original deadline, is checked again before the watch is registered and
+// immediately before the kill, and an expired one leaves the outcome uncertain.
+func refuseLaunchedImage(ctx context.Context, p launchPlatform, pid int, observed liveImage) error {
+	if err := ctx.Err(); err != nil {
+		return fail("launch_image_mismatch", false, true, err)
+	}
 	watch, err := p.watch(pid)
 	switch {
 	case errors.Is(err, errProcessGone):
@@ -164,14 +171,14 @@ func refuseLaunchedImage(p launchPlatform, pid int, observed liveImage) error {
 	case err != nil:
 		return fail("launch_image_mismatch", false, true, err)
 	}
-	result := containWatched(p, watch, pid, observed)
+	result := containWatched(ctx, p, watch, pid, observed)
 	if err := watch.close(); err != nil {
 		return fail("launch_image_mismatch", false, true, errors.Join(err, result))
 	}
 	return result
 }
 
-func containWatched(p launchPlatform, watch exitWatch, pid int, observed liveImage) error {
+func containWatched(ctx context.Context, p launchPlatform, watch exitWatch, pid int, observed liveImage) error {
 	current, err := p.start(pid)
 	switch {
 	case errors.Is(err, errProcessGone):
@@ -188,7 +195,12 @@ func containWatched(p launchPlatform, watch exitWatch, pid int, observed liveIma
 	case exited:
 		return fail("launch_image_mismatch", false, true, errors.New("substitute exited after registration; nothing killed"))
 	}
-	if err := p.kill(pid); err != nil && !errors.Is(err, errProcessGone) {
+	if err := ctx.Err(); err != nil {
+		return fail("launch_image_mismatch", false, true, err)
+	}
+	// Only a signal that was actually delivered is definite. ESRCH means none
+	// was sent, so the outcome for the substitute is unknown.
+	if err := p.kill(pid); err != nil {
 		return fail("launch_image_mismatch", false, true, err)
 	}
 	return fail("launch_image_mismatch", false, false, nil)
