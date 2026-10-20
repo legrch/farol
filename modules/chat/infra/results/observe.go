@@ -36,7 +36,10 @@ func openArchiveDisk(ctx context.Context, root Root) (_ *archiveDisk, err error)
 		return nil, Invalid
 	}
 	canonical, err := filepath.EvalSymlinks(root.Path)
-	if err != nil || canonical != root.Path {
+	if err != nil {
+		return nil, missingRoot(root.Path, err)
+	}
+	if canonical != root.Path {
 		return nil, Refused
 	}
 	d := &resultDisk{root: root, rootFD: -1, dir: -1, claim: -1}
@@ -49,7 +52,7 @@ func openArchiveDisk(ctx context.Context, root Root) (_ *archiveDisk, err error)
 	flags := unix.O_RDONLY | unix.O_DIRECTORY | unix.O_NOFOLLOW | unix.O_CLOEXEC
 	d.rootFD, err = unix.Open(root.Path, flags, 0)
 	if err != nil {
-		return nil, Refused
+		return nil, openFailure(err)
 	}
 	d.rootMeta, err = resultStat(d.rootFD)
 	if err != nil || !resultQualified(d.rootMeta, root.Identity) || d.checkRoots(false) != nil {
@@ -57,7 +60,7 @@ func openArchiveDisk(ctx context.Context, root Root) (_ *archiveDisk, err error)
 	}
 	d.dir, err = unix.Openat(d.rootFD, resultChild, flags, 0)
 	if err != nil {
-		return nil, Refused
+		return nil, openFailure(err)
 	}
 	d.dirMeta, err = resultStat(d.dir)
 	if err != nil || !resultPhysical(d.dirMeta, unix.S_IFDIR, 0700, root.Identity.OwnerUID) {
@@ -69,10 +72,19 @@ func openArchiveDisk(ctx context.Context, root Root) (_ *archiveDisk, err error)
 	}
 	d.claim, err = unix.Openat(d.dir, resultClaim, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, Refused
+		return nil, openFailure(err)
 	}
 	d.claimMeta, err = resultStat(d.claim)
-	if err != nil || !resultPhysical(d.claimMeta, unix.S_IFREG, 0600, root.Identity.OwnerUID) || unix.Flock(d.claim, unix.LOCK_EX|unix.LOCK_NB) != nil || d.checkPhysical() != nil {
+	if err != nil || !resultPhysical(d.claimMeta, unix.S_IFREG, 0600, root.Identity.OwnerUID) {
+		return nil, Refused
+	}
+	if err := unix.Flock(d.claim, unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return nil, Unavailable // another owner holds the claim: busy, not refused
+		}
+		return nil, Refused
+	}
+	if d.checkPhysical() != nil {
 		return nil, Refused
 	}
 	expected, err := json.Marshal(resultClaimRecord{1, root.ProfileID, root.Identity, d.identity()})
@@ -80,7 +92,10 @@ func openArchiveDisk(ctx context.Context, root Root) (_ *archiveDisk, err error)
 		return nil, Invalid
 	}
 	raw, err := archiveFile(ctx, d, resultClaim, len(expected))
-	if err != nil || !bytes.Equal(raw, expected) {
+	if err != nil {
+		return nil, observed(err)
+	}
+	if !bytes.Equal(raw, expected) {
 		return nil, Refused
 	}
 	a := &archiveDisk{d: d, claim: raw}
@@ -93,8 +108,8 @@ func openArchiveDisk(ctx context.Context, root Root) (_ *archiveDisk, err error)
 	} else if !errors.Is(err, unix.ENOENT) {
 		return nil, Refused
 	}
-	if a.verify(ctx) != nil {
-		return nil, Refused
+	if err := a.verify(ctx); err != nil {
+		return nil, observed(err)
 	}
 	retained = true
 	return a, nil
@@ -102,8 +117,11 @@ func openArchiveDisk(ctx context.Context, root Root) (_ *archiveDisk, err error)
 
 func (a *archiveDisk) verify(ctx context.Context) error {
 	d := a.d
-	if ctx.Err() != nil || d.checkPhysical() != nil {
+	if ctx.Err() != nil {
 		return Unavailable
+	}
+	if d.checkPhysical() != nil {
+		return Refused // a changed qualified identity is not unavailable storage
 	}
 	root, re := resultStat(d.rootFD)
 	dir, de := resultStat(d.dir)
@@ -111,7 +129,10 @@ func (a *archiveDisk) verify(ctx context.Context) error {
 		return Refused
 	}
 	raw, err := archiveFile(ctx, d, resultClaim, len(a.claim))
-	if err != nil || !bytes.Equal(raw, a.claim) {
+	if err != nil {
+		return observed(err)
+	}
+	if !bytes.Equal(raw, a.claim) {
 		return Refused
 	}
 	var unknown unix.Stat_t
@@ -130,12 +151,15 @@ func (a *archiveDisk) verify(ctx context.Context) error {
 // independently and using physical checks only. A retained result UNKNOWN is
 // never bypassed to open a writer or advertised as a known-success publication.
 func archiveFile(ctx context.Context, d *resultDisk, name string, limit int) ([]byte, error) {
-	if ctx.Err() != nil || d.checkPhysical() != nil {
+	if ctx.Err() != nil {
 		return nil, Unavailable
+	}
+	if d.checkPhysical() != nil {
+		return nil, Refused // a changed qualified identity is not unavailable storage
 	}
 	fd, err := unix.Openat(d.dir, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, Refused
+		return nil, openFailure(err)
 	}
 	f := os.NewFile(uintptr(fd), "chat-archive-observation")
 	before, err := resultStat(fd)
@@ -145,11 +169,18 @@ func archiveFile(ctx context.Context, d *resultDisk, name string, limit int) ([]
 		return nil, Refused
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
+	if err != nil {
+		_ = f.Close()
+		return nil, openFailure(err) // listed store failures are unavailable; others refuse
+	}
 	after, se := resultStat(fd)
 	ok := err == nil && se == nil && len(raw) == int(before.Size) && resultStable(before, after) && unix.Fstatat(d.dir, name, &named, unix.AT_SYMLINK_NOFOLLOW) == nil && resultStable(named, after)
 	closed := f.Close()
-	if !ok || closed != nil || d.checkPhysical() != nil || ctx.Err() != nil {
+	if !ok || closed != nil || d.checkPhysical() != nil {
 		return nil, Refused
+	}
+	if ctx.Err() != nil {
+		return nil, Unavailable // the budget ended mid-read; the bytes were not judged
 	}
 	return raw, nil
 }
@@ -160,8 +191,11 @@ func (a *archiveDisk) record(ctx context.Context, key string) (*port.ArchivedRep
 		return nil, "", err
 	}
 	commit, err := archiveFile(ctx, a.d, key+".commit", 64)
+	if err != nil {
+		return nil, "", observed(err)
+	}
 	digest := sha256.Sum256(raw)
-	if err != nil || !bytes.Equal(commit, []byte(hex.EncodeToString(digest[:]))) {
+	if !bytes.Equal(commit, []byte(hex.EncodeToString(digest[:]))) {
 		return nil, "", Refused
 	}
 	r, err := decodeResult(raw)
@@ -196,7 +230,7 @@ func (a *Archive) observeArchive(ctx context.Context, selection port.ArchiveList
 	}()
 	fd, err := unix.Openat(disk.d.dir, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, Refused
+		return nil, openFailure(err)
 	}
 	f := os.NewFile(uintptr(fd), "chat-archive-directory")
 	defer func() {
@@ -217,7 +251,7 @@ func (a *Archive) observeArchive(ctx context.Context, selection port.ArchiveList
 		}
 		entries, readErr := f.ReadDir(64)
 		if readErr != nil && readErr != io.EOF {
-			return nil, Unavailable
+			return nil, openFailure(readErr)
 		}
 		for _, entry := range entries {
 			name := entry.Name()
@@ -281,12 +315,15 @@ func (a *Archive) observeArchive(ctx context.Context, selection port.ArchiveList
 	// streaming scan. Neither directory order nor a valid commit creates an ACK.
 	for _, summary := range page.Entries {
 		reply, owner, err := disk.record(ctx, summary.Key)
-		if err != nil || reply == nil || owner != selection.OwnerID || reply.Summary != summary {
+		if err != nil {
+			return nil, observed(err)
+		}
+		if reply == nil || owner != selection.OwnerID || reply.Summary != summary {
 			return nil, Refused
 		}
 	}
-	if disk.verify(ctx) != nil {
-		return nil, Refused
+	if err := disk.verify(ctx); err != nil {
+		return nil, observed(err)
 	}
 	return page, nil
 }
@@ -305,12 +342,71 @@ func (a *Archive) readArchive(ctx context.Context, selection port.ArchiveReadSel
 		}
 	}()
 	reply, owner, err := disk.record(ctx, selection.Key)
-	if err != nil || reply == nil || owner != selection.OwnerID || reply.Summary.Digest != selection.Digest {
+	if err != nil {
+		return nil, observed(err)
+	}
+	if reply == nil || owner != selection.OwnerID || reply.Summary.Digest != selection.Digest {
 		return nil, Refused
 	}
 	again, owner, err := disk.record(ctx, selection.Key)
-	if err != nil || again == nil || owner != selection.OwnerID || *again != *reply || disk.verify(ctx) != nil {
+	if err != nil {
+		return nil, observed(err)
+	}
+	if again == nil || owner != selection.OwnerID || *again != *reply {
 		return nil, Refused
 	}
+	if err := disk.verify(ctx); err != nil {
+		return nil, observed(err)
+	}
 	return reply, nil
+}
+
+// observed keeps an unavailable observation (an ended budget or a store that
+// could not be read) distinct from a refusal of the bytes that were judged.
+// Durable reference: missing or busy storage is unavailable; invalid committed
+// pairs refuse.
+func observed(err error) error {
+	if errors.Is(err, Unavailable) {
+		return Unavailable
+	}
+	return Refused
+}
+
+// openFailure separates a store that could not be opened now (missing, busy,
+// out of descriptors, interrupted, I/O) from a name that resolves to something
+// other than the owned regular file, such as a symlink refused by O_NOFOLLOW.
+func openFailure(err error) error {
+	switch {
+	case errors.Is(err, unix.ENOENT), errors.Is(err, unix.EIO), errors.Is(err, unix.EINTR), errors.Is(err, unix.EAGAIN),
+		errors.Is(err, unix.EMFILE), errors.Is(err, unix.ENFILE), errors.Is(err, unix.ENOMEM), errors.Is(err, unix.EBUSY):
+		return Unavailable
+	}
+	return Refused
+}
+
+// missingRoot is Unavailable only when the root genuinely does not exist below
+// a canonical, symlink-free existing ancestor. A dangling or other symlink on
+// the way is an unsafe name and refuses.
+func missingRoot(path string, err error) error {
+	if !errors.Is(err, unix.ENOENT) {
+		return openFailure(err)
+	}
+	for p := path; ; p = filepath.Dir(p) {
+		info, lerr := os.Lstat(p)
+		if lerr == nil {
+			if info.Mode()&os.ModeSymlink != 0 {
+				return Refused
+			}
+			if canonical, cerr := filepath.EvalSymlinks(p); cerr != nil || canonical != p {
+				return Refused
+			}
+			return Unavailable
+		}
+		if !errors.Is(lerr, unix.ENOENT) {
+			return openFailure(lerr)
+		}
+		if p == filepath.Dir(p) {
+			return Refused
+		}
+	}
 }
