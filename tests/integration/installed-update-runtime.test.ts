@@ -5516,6 +5516,9 @@ describe("normal Quit runtime (disposable files; helper and native ports doubled
     }));
     const controller = await optedIn({ ...options(), acquireAdmission });
     const original = request();
+    // The runtime computes the readiness budget after this instant, so the
+    // remaining deadline at this instant is an exact upper bound under load.
+    const before = Date.now();
     const first = controller.applyOnNormalQuit(original);
     const second = controller.applyOnNormalQuit(
       request(original.deadlineAt + 100_000),
@@ -5539,7 +5542,7 @@ describe("normal Quit runtime (disposable files; helper and native ports doubled
     expect(launch.canStartEffect()).toBe(true);
     expect(launch.readinessTimeoutMs).toBeGreaterThan(0);
     expect(launch.readinessTimeoutMs).toBeLessThanOrEqual(
-      original.deadlineAt - Date.now() + 100,
+      original.deadlineAt - before,
     );
     const saved = JSON.parse(await fs.readFile(ready, "utf8"));
     expect(saved.operation.operationId).toBe(
