@@ -3,11 +3,11 @@ package execution
 import (
 	"context"
 	"os"
+	stdruntime "runtime"
 
 	"github.com/legrch/farol/modules/release/app/port"
 	"github.com/legrch/farol/modules/release/infra/native/installcopy"
 	"github.com/legrch/farol/modules/release/infra/native/installmove"
-	helperprocess "github.com/legrch/farol/modules/release/infra/native/process"
 )
 
 var _ port.HelperRelaunchEffects = (*runtime)(nil)
@@ -136,6 +136,14 @@ func (r *runtime) LaunchTarget(ctx context.Context, self port.HelperSelfIdentity
 		if self != r.self || self.PID != int64(os.Getpid()) || self.ProcessStart == "" || r.config.RelaunchArguments == nil {
 			return fail("launch_helper_identity", false, false, nil)
 		}
+		platform := r.config.launch
+		if platform == nil {
+			platform = nativeLaunchPlatform()
+		}
+		// want is derived from the held verified directory on every verify. The
+		// first value is the launch contract; any later derivation must agree.
+		var want launchImage
+		wanted := false
 		verify := func(ctx context.Context) error {
 			if err := r.fence(ctx); err != nil {
 				return err
@@ -161,10 +169,18 @@ func (r *runtime) LaunchTarget(ctx context.Context, self port.HelperSelfIdentity
 			} else if captured != nil {
 				return fail("launch_image_unexpected", false, false, nil)
 			}
-			negative, err := r.image(ctx, location, r.config.Request.Target, func(_ *os.File, actual port.HelperIdentity) error {
+			negative, err := r.image(ctx, location, r.config.Request.Target, func(held *os.File, actual port.HelperIdentity) error {
 				if r.config.Files.SharedParent && expected != actual {
 					return fail("launch_image_unconfirmed", false, false, nil)
 				}
+				derived, err := expectedLaunchImage(held, stdruntime.GOARCH)
+				if err != nil {
+					return fail("launch_image_unconfirmed", false, false, err)
+				}
+				if wanted && derived != want {
+					return fail("launch_image_unconfirmed", false, false, nil)
+				}
+				want, wanted = derived, true
 				return nil
 			})
 			if err != nil {
@@ -185,8 +201,15 @@ func (r *runtime) LaunchTarget(ctx context.Context, self port.HelperSelfIdentity
 		if !launchBound(r.config.Request, r.config.Files.SharedParent, r.capturePath, arguments) {
 			return fail("launch_image_unconfirmed", false, false, nil)
 		}
+		hint, ok := relaunchHint(r.config.Request.OperationID, self.PID, arguments)
+		if !ok || !wanted {
+			return fail("launch_image_unconfirmed", false, false, nil)
+		}
 		r.effected = true
-		return helperprocess.Open(c, r.until, arguments, verify)
+		if err := platform.open(c, r.until, arguments, verify); err != nil {
+			return err
+		}
+		return verifyLaunched(c, platform, hint, want, verify)
 	})
 }
 
@@ -194,7 +217,8 @@ func (r *runtime) LaunchTarget(ctx context.Context, self port.HelperSelfIdentity
 // image this runtime verified: the private capture for a shared install, the
 // owner's ~/Applications slot otherwise. A capability that builds arguments
 // cannot redirect the launch to another image. Like the reference helper, the
-// launch is still by pathname; see the release helper-recovery reference.
+// launch is still by pathname; the post-launch check in launchverify.go detects
+// a substituted image but cannot prevent it (see relaunch-image-verification.md).
 func launchBound(request port.HelperRequest, shared bool, capturePath string, arguments []string) bool {
 	if len(arguments) != 5 || request.Home == "" {
 		return false

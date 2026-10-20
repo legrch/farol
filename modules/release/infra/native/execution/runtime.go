@@ -40,6 +40,10 @@ type Config struct {
 	// Boot composes the original process-observation application policy. This
 	// optional measurement is not request-supplied identity or launch authority.
 	MeasureSelf func(context.Context, time.Time) (port.HelperSelfIdentity, error)
+
+	// launch is the private OS seam for post-launch image verification. Only
+	// package tests set it; nil selects the native Darwin implementation.
+	launch launchPlatform
 }
 
 type runtime struct {
