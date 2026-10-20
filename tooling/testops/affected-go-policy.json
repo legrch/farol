@@ -1,0 +1,116 @@
+{
+  "schema": 1,
+  "kind": "bounded-affected-go-admission",
+  "acceptance": false,
+  "packages": [
+    {
+      "dir": "modules/chat/app/services/contextcheckpoint",
+      "path": "github.com/legrch/farol/modules/chat/app/services/contextcheckpoint",
+      "module": "go.mod",
+      "files": [
+        "modules/chat/app/services/contextcheckpoint/composition_test.go",
+        "modules/chat/app/services/contextcheckpoint/plan_test.go"
+      ],
+      "topLevelTests": [
+        "TestActualRequestExactLimitsAndSingleUnitOverflow",
+        "TestConcurrentPublicationUsesOneOriginalOperation",
+        "TestDenseUnknownHistoryRecoversWithinExactEncodedBudget",
+        "TestImportedCheckpointCannotAddPermissionFields",
+        "TestImportedCheckpointRejectsMalformedUTF8WithoutRepair",
+        "TestIncompleteHistoryReturnsExactUnansweredIdentity",
+        "TestInvalidInterruptedAndLateSummaryKeepSafeOriginals",
+        "TestKnownRefusalAndPreWriteFailureStayKnown",
+        "TestLegacyMaterializedMutationCannotChangeCheckpointOrPlan",
+        "TestLongConversationMaterializesBoundedCompleteRequest",
+        "TestPlanConversionKeepsReservationsInEveryDimension",
+        "TestPlanProjectionNeverDropsUnsupportedHistoricalCalls",
+        "TestPlanProjectionRetainsSummaryAndRechecksBeforeExpose",
+        "TestPlanProjectionUnicodeIsStableAndDetached",
+        "TestPlanReceiptBindsOmittedOriginalBytes",
+        "TestPlanReceiptSeparatesSourceAccountOrderAndReservations",
+        "TestPreparedWindowCapacityIsBoundedWithoutEviction",
+        "TestPublicationAndRecoveryAreObservationOnly",
+        "TestRecoveryBoundsTypedObservationBeforeCopyOrHash",
+        "TestRepeatedIDsAndActualWireOverflow",
+        "TestSourceAppendRevocationAndMissingOriginalFailClosed",
+        "TestStoreOwnedReceiptCannotChangeDuringCurrentCheck",
+        "TestUnknownPublicationNeverReplays",
+        "TestUnknownStatusReachesProviderEvenWithSuccessfulProse",
+        "TestUntrustedSummaryNeverOverridesInstructionsOrUnknowns"
+      ]
+    },
+    {
+      "dir": "modules/chat/domain/contextbudget",
+      "path": "github.com/legrch/farol/modules/chat/domain/contextbudget",
+      "module": "go.mod",
+      "files": ["modules/chat/domain/contextbudget/policy_test.go"],
+      "topLevelTests": [
+        "TestAllBudgetDimensionsAndReservationsAreEnforced",
+        "TestBindingAndSourceRangeCannotBeSubstituted",
+        "TestFailureRefusalAndCancellationRemainSourceEvidence",
+        "TestIngestionLimitsAreIndependentOfOutboundBudget",
+        "TestLongConversationMaterializesBoundedCompleteRequest",
+        "TestMalformedHistoryFailsBeforeMaterialization",
+        "TestRecentOptionalSuffixDoesNotBackfillAcrossBudgetGap",
+        "TestRecoveryRejectsTamperedCheckpointRatherThanRepairingIdentity",
+        "TestRequiredUnknownExchangeCannotBeDroppedToFitLatestIntent",
+        "TestSummaryRejectsMalformedUTF8",
+        "TestSummaryRemainsUntrustedSourceBoundDataAcrossRecovery"
+      ]
+    },
+    {
+      "dir": "modules/chat/infra/contextsource",
+      "path": "github.com/legrch/farol/modules/chat/infra/contextsource",
+      "module": "go.mod",
+      "files": ["modules/chat/infra/contextsource/source_test.go"],
+      "topLevelTests": [
+        "TestActualLifecycleOriginalContextMaterializesPlan",
+        "TestActualSourceGateHoldsOriginalOwnerAndPreservesCallbackFailure",
+        "TestOriginalDisclosureLeaseNeverReacquired",
+        "TestOriginalSourceLeaseRejectsLateFollowAndFreeze",
+        "TestSourceRefusesCrossedSelectionBeforeDisclosure"
+      ]
+    },
+    {
+      "dir": "modules/chat/infra/planruntime",
+      "path": "github.com/legrch/farol/modules/chat/infra/planruntime",
+      "module": "go.mod",
+      "files": [
+        "modules/chat/infra/planruntime/journal_test.go",
+        "modules/chat/infra/planruntime/runtime_test.go"
+      ],
+      "topLevelTests": [
+        "TestActualRuntimeComposesExactProducerWireAndCompleteSidecars",
+        "TestActualStrictWirePreflightRejectsProducerJSONBeforeOwnerEffects",
+        "TestJournalChangedIntentCannotReplaceConsumedOriginal",
+        "TestJournalConcurrentCallsConsumeOneOriginalKnownFreshReceipt",
+        "TestJournalConstructorPinsOriginalConcreteOwnerContract",
+        "TestJournalConstructorRejectsUnqualifiedMissingCrossScopeOrCancelledInputs",
+        "TestJournalFreshOriginalSettlementSurvivesSourceWithdrawalAndDuplicate",
+        "TestJournalFullReferenceRejectsChangedOrOmittedSidecarsBeforeOwnerIO",
+        "TestJournalImpossibleNewFreshDuplicateCannotDispatchAgain",
+        "TestJournalLostReservationACKOrHistoricalOperationCannotMintSettlement",
+        "TestJournalRetainsOriginalIndependentCopyAndExactCanonicalWitness",
+        "TestJournalSettlementRefusesRawTextSuppressionAndPreservesOtherFields",
+        "TestJournalZeroValueCannotEnterUnownedProtocol",
+        "TestRuntimeAccountThenSourceMatchesConcurrentBrowserGuardOrder",
+        "TestRuntimeConcurrentOriginalOperationUsesOneOwningJournalReservation",
+        "TestRuntimeEstimateExpiresDuringFinalGateWait",
+        "TestRuntimeFinalGateRollbackAfterNewerOperationSample",
+        "TestRuntimeLostOriginalAcknowledgementsRemainUnknownWithoutHTTPReplay",
+        "TestRuntimeOriginalCompleteIntentChangesForSameProviderBytes",
+        "TestRuntimePrepareRejectsForeignOriginalSessionAndMalformedBinding",
+        "TestRuntimePreparedViewIsDetachedAndCannotRetargetOriginal",
+        "TestRuntimePreservesOriginalInstructionWithoutInventingTurn",
+        "TestRuntimeRetainsOriginalExplicitHTTPWriter",
+        "TestRuntimeSourceAccountModelAndEstimateWithdrawBeforeFirstEffects",
+        "TestRuntimeWithdrawalAcrossOriginalIOAndFinalPublication"
+      ]
+    }
+  ],
+  "limits": [
+    "Four audited controlled-port packages only; no generic native or deployed Go execution admission",
+    "All default-race active test files and top-level test names must match; every observed subtest still requires an original terminal",
+    "Not a substitute for complete core, CI, native or release qualification"
+  ]
+}

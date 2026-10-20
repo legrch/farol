@@ -90,6 +90,7 @@ async function fixture({
   await fs.copyFile(producer, path.join(tooling, "prepare-release-archive.py"));
   for (const name of [
     "source-identity.mjs",
+    "source-git-blobs.mjs",
     "candidate-contract.mjs",
     "package-layout.mjs",
   ])

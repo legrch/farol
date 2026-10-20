@@ -2,18 +2,51 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
+import { afterAll, describe, expect, it } from "vitest";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 
+const gitEnvironment = await fs.mkdtemp(
+  path.join(os.tmpdir(), "farol-fixture-git-env-"),
+);
+const gitHome = path.join(gitEnvironment, "home");
+const gitTemporary = path.join(gitEnvironment, "tmp");
+await fs.mkdir(gitHome);
+await fs.mkdir(gitTemporary);
+afterAll(() => fs.rm(gitEnvironment, { recursive: true, force: true }));
+
 function git(repository, ...arguments_) {
-  return execFileSync("git", ["-C", repository, ...arguments_], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_NOSYSTEM: "1",
+  return execFileSync(
+    "/usr/bin/git",
+    [
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "core.hooksPath=/dev/null",
+      "-c",
+      "init.templateDir=",
+      "-c",
+      "commit.gpgSign=false",
+      "-c",
+      "tag.gpgSign=false",
+      "-C",
+      repository,
+      ...arguments_,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        PATH: "/usr/bin:/bin",
+        HOME: gitHome,
+        TMPDIR: gitTemporary,
+        LC_ALL: "C",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_OPTIONAL_LOCKS: "0",
+        GIT_TERMINAL_PROMPT: "0",
+      },
     },
-  }).trim();
+  ).trim();
 }
 
 async function repositoryWithOneFile(body = "export {};\n") {
@@ -40,6 +73,120 @@ async function repositoryWithOneFile(body = "export {};\n") {
 }
 
 describe("source identity distinguishes a difference from a failure", () => {
+  it("keeps caller repository, index, configuration and hooks outside fixture setup", async () => {
+    const lab = await fs.mkdtemp(path.join(os.tmpdir(), "farol-fixture-env-"));
+    const victim = path.join(lab, "victim");
+    await fs.mkdir(victim);
+    const seed = (...args) =>
+      execFileSync(
+        "/usr/bin/git",
+        [
+          "-c",
+          "core.hooksPath=/dev/null",
+          "-c",
+          "init.templateDir=",
+          "-c",
+          "commit.gpgSign=false",
+          "-c",
+          "user.name=Victim Fixture",
+          "-c",
+          "user.email=victim@example.invalid",
+          "-C",
+          victim,
+          ...args,
+        ],
+        {
+          env: {
+            PATH: "/usr/bin:/bin",
+            HOME: lab,
+            TMPDIR: lab,
+            LC_ALL: "C",
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            GIT_OPTIONAL_LOCKS: "0",
+          },
+        },
+      );
+    const seal = async () => {
+      const result = [];
+      const walk = async (directory) => {
+        for (const entry of await fs.readdir(directory, {
+          withFileTypes: true,
+        })) {
+          const file = path.join(directory, entry.name);
+          if (entry.isDirectory()) await walk(file);
+          else
+            result.push([
+              path.relative(victim, file),
+              createHash("sha256")
+                .update(await fs.readFile(file))
+                .digest("hex"),
+            ]);
+        }
+      };
+      await walk(victim);
+      return result.sort(([a], [b]) => a.localeCompare(b));
+    };
+    const previous = new Map(
+      Object.entries(process.env).filter(
+        ([key]) =>
+          key.startsWith("GIT_") || ["PATH", "HOME", "TMPDIR"].includes(key),
+      ),
+    );
+    let fixture;
+    try {
+      seed("init", "-q");
+      await fs.writeFile(path.join(victim, "tracked.txt"), "original\n");
+      seed("add", ".");
+      seed("commit", "-qm", "fixture baseline");
+      await fs.writeFile(
+        path.join(victim, "tracked.txt"),
+        "preserve unstaged\n",
+      );
+      await fs.writeFile(path.join(victim, "staged.txt"), "preserve staged\n");
+      seed("add", "staged.txt");
+      await fs.writeFile(
+        path.join(victim, "untracked.txt"),
+        "preserve untracked\n",
+      );
+      const before = await seal();
+      const hooks = path.join(lab, "hooks");
+      await fs.mkdir(hooks);
+      const marker = path.join(hooks, "pre-commit.executed");
+      await fs.writeFile(
+        path.join(hooks, "pre-commit"),
+        '#!/bin/sh\nprintf ran > "$0.executed"\nexit 0\n',
+        { mode: 0o700 },
+      );
+      for (const key of Object.keys(process.env))
+        if (key.startsWith("GIT_")) delete process.env[key];
+      Object.assign(process.env, {
+        PATH: "/usr/bin:/bin",
+        HOME: lab,
+        TMPDIR: lab,
+        GIT_DIR: path.join(victim, ".git"),
+        GIT_WORK_TREE: victim,
+        GIT_COMMON_DIR: path.join(victim, ".git"),
+        GIT_INDEX_FILE: path.join(victim, ".git/index"),
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "core.hooksPath",
+        GIT_CONFIG_VALUE_0: hooks,
+      });
+      fixture = await repositoryWithOneFile();
+      expect(await seal()).toEqual(before);
+      expect(git(fixture, "rev-parse", "--show-toplevel")).toBe(
+        await fs.realpath(fixture),
+      );
+      await expect(fs.access(marker)).rejects.toThrow();
+    } finally {
+      for (const key of Object.keys(process.env))
+        if (key.startsWith("GIT_") || ["PATH", "HOME", "TMPDIR"].includes(key))
+          delete process.env[key];
+      for (const [key, value] of previous) process.env[key] = value;
+      if (fixture) await fs.rm(fixture, { recursive: true, force: true });
+      await fs.rm(lab, { recursive: true, force: true });
+    }
+  });
   // The defect: six separate conditions all collapsed into one unnamed
   // `exact = false`, so a clean `git status` with `dirty: true` gave the
   // caller nothing to act on -- and a read that FAILED was folded into the

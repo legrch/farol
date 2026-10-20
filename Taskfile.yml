@@ -1,22 +1,36 @@
 version: "3"
 
 tasks:
+  test:affected:
+    desc: Explain deterministic affected selection; PLAN_ONLY, never executes tests
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- /usr/bin/python3 -B tooling/testops/testops.py affected {{.CLI_ARGS}}
+
+  test:inventory:
+    desc: Inventory tracked test and command declarations without executing them
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- /usr/bin/python3 -B tooling/testops/testops.py inventory
+
   checkpoint:
     desc: Validate exact-source evidence for a local unaccepted checkpoint; never commits or accepts
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/checkpoint.mjs {{.CLI_ARGS}}
 
   ci:
-    desc: Farol Next deterministic architecture, policy, coverage, Hunt, and _output build gate
+    desc: Complete local source/build gate; ci:fast remains a compatibility alias, native/package/live qualification stays separate
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run ci
       - task: test:core
+      - task: test:tooling
+      - task: output:check
+      - task: scan:secrets
 
   ci:cloud:
     desc: Portable source integration gate; native/resource/mixed and package acceptance remain separate
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run ci:cloud
       - task: test:core
+      - task: test:tooling
       - task: scan:secrets
 
   test:cloud:
@@ -28,6 +42,13 @@ tasks:
     desc: Verify Go modules, generated desktop bridge, protocol, and import boundaries
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/check-core.mjs
+
+  test:tooling:
+    desc: Check the declared toolchain and bounded planner, inventory and scheduler fixture regressions
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run check:toolchain
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- /usr/bin/python3 -B -m unittest discover -s tooling/testops -p 'test_*.py'
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node --test --test-concurrency=1 --test-reporter=tap tooling/testops/catalog.test.mjs tooling/testops/languagegraph.test.mjs tooling/testops/iteration-witness.test.mjs
 
   test:unit:
     desc: Unit/component selection across TypeScript, React and Go; --list shows the plan
@@ -244,11 +265,9 @@ tasks:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tests/e2e/update-stage-cleanup.e2e.mjs --probe-timeout-fault
 
   ci:fast:
-    desc: Complete deterministic standalone gate without native UI
+    desc: Compatibility alias for ci; there is no separate fast gate
     cmds:
       - task: ci
-      - task: output:check
-      - task: scan:secrets
 
   output:check:
     desc: Check the generated build, coverage, Hunt, logs and scratch layout
