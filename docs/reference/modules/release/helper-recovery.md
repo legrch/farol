@@ -238,18 +238,20 @@ independent failures retain opaque joined provenance. Native observation still
 requires an independently valid original reader and custody owner; the library
 cannot manufacture pre-ACK admission.
 
-The original milestone's injectable relaunch policy contract remains a library
-seam only. This component adds no capture, process launch, self-measurement or
-relaunch implementation, and no corresponding native runtime configuration. With
-a relaunch request, trusted composition must independently supply the original
-admitted capability; missing capability refuses without marking completed.
-Symbolic tests cover that existing callback ordering and known versus unknown
-failure classification, not a physical image, dispatch, Wait or successful launch.
+The native execution runtime now implements the relaunch effects: private
+capture of the verified shared install image (itself an operation effect, with
+failed images retained), self-measurement and relaunch-argument building. Both
+self-measurement and argument building are optional `Config` capabilities that
+only trusted composition installs; boot does not install them yet. With a
+relaunch request and no installed capability, the runtime refuses without marking
+completed. Tests cover callback ordering, effect fencing and known versus unknown
+failure classification with disposable fixtures, not a physical installed image,
+dispatch, Wait or successful launch.
 
 This is independently buildable source foundation. Boot/CLI composition, the
 complete pre-ACK readiness gate, transport/ACK and terminal classification,
-physical installation and recovery qualification, relaunch/capture owners,
-resource manifests, generated bindings and product selection are withheld. The
+physical installation and recovery qualification, composed relaunch/capture
+capabilities, resource manifests, generated bindings and product selection are withheld. The
 Python helper remains selected. Pure application/input tests and race/vet are
 policy evidence; native/boot test compilation is compile-only. Neither establishes
 native admission, a live filesystem/process, full CI, package, installed, OTA or
