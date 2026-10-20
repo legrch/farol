@@ -190,7 +190,7 @@ type liveNativeOutcome struct {
 func (f *liveNativeFixture) run(t *testing.T, request map[string]any, quit bool, args ...string) liveNativeOutcome {
 	t.Helper()
 	requestBytes := closedHelperJSON(t, request)
-	if request["relaunch"] == false && request["action"] != "recover" {
+	if request["action"] != "recover" {
 		protocol, err := protocolapp.Bind(context.Background(), requestBytes, inputapp.New(inputnative.JSONDecoder{}), protocolnative.JSONCodec{})
 		if err != nil {
 			t.Fatal(err)
@@ -340,6 +340,86 @@ func TestLiveHelperNativeApplyThenRollback(t *testing.T) {
 	}
 }
 
+// Relaunch on the real compiled entry, over the same inert oracle images. They
+// have no Contents/MacOS executable, so the launch image cannot be pinned and the
+// run stops BEFORE /usr/bin/open is ever built or executed: this lane never starts
+// an app and cannot collide with the owner's Farol. What it does prove natively is
+// the order up to that point (apply verified, launch_requested journalled, the
+// launch port reachable so the run gets as far as the launch attempt), and that
+// the stage is retained as unknown (exit 79) rather than written as completed.
+// This lane cannot tell the self measurement from the image check as the cause
+// of the stop; TestLiveHelperNativeMeasuresThisProcess proves the former alone. The
+// launch itself is exercised over scratch bundles in
+// modules/release/infra/native/execution (FAROL_RELAUNCH_NATIVE=1).
+func TestLiveHelperNativeRelaunchStopsBeforeOpenWhenTheImageCannotBePinned(t *testing.T) {
+	liveNativeRequire(t)
+	f := newLiveNativeFixture(t, true)
+	apps := filepath.Join(f.home, "Applications", "Farol.app")
+	f.arm(t, "")
+	request := f.request("apply", true)
+	o := f.run(t, request, true)
+	f.wantWaitingFrame(t, request, o.ack)
+	f.requireTerminal(t, o.execNativeOutcome, `{"phase": "unknown", "error": "internal", "operationId": "`+strings.Repeat("1", 32)+`"}`+"\n", 79)
+	if got := f.phase(t); got != "launch_requested" {
+		t.Fatal("journal phase", got)
+	}
+	if execNativeRead(t, filepath.Join(apps, "Contents/Info.plist")) != execNativeTestdata(t, "oracle.bplist") {
+		t.Fatal("installed app is not the target")
+	}
+	if f.exists(filepath.Join(f.operation, "launch-Farol.app")) {
+		t.Fatal("a legacy install published a private capture")
+	}
+}
+
+// A rollback that asked for relaunch settles rolled_back and never launches, like
+// Python: the launch condition is a verified apply.
+func TestLiveHelperNativeRollbackWithRelaunchNeverLaunches(t *testing.T) {
+	liveNativeRequire(t)
+	f := newLiveNativeFixture(t, true)
+	id := strings.Repeat("1", 32)
+	apps := filepath.Join(f.home, "Applications", "Farol.app")
+	f.arm(t, "")
+	apply := f.request("apply", false)
+	o := f.run(t, apply, true)
+	f.requireTerminal(t, o.execNativeOutcome, `{"phase": "verified", "operationId": "`+id+`"}`+"\n", 0)
+
+	f.arm(t, "")
+	rollback := f.request("rollback", true)
+	o = f.run(t, rollback, true)
+	f.wantWaitingFrame(t, rollback, o.ack)
+	f.requireTerminal(t, o.execNativeOutcome, `{"phase": "rolled_back", "operationId": "`+id+`"}`+"\n", 0)
+	if got := f.phase(t); got != "rolled_back" {
+		t.Fatal("journal phase", got)
+	}
+	if execNativeRead(t, filepath.Join(apps, "Contents/Info.plist")) != execNativeTestdata(t, "oracle.xml") {
+		t.Fatal("installed app is not the source after rollback")
+	}
+}
+
+// The real self measurement: this very process, through the native probe and the
+// process-wait policy, equal to an independent observation, and joined.
+func TestLiveHelperNativeMeasuresThisProcess(t *testing.T) {
+	liveNativeRequire(t)
+	until := time.Now().Add(5 * time.Second)
+	self, err := liveHelperMeasureSelf(context.Background(), until)
+	if err != nil || self.PID != int64(os.Getpid()) || self.ProcessStart == "" {
+		t.Fatal("measurement", self, err)
+	}
+	probe, err := processprobe.New(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed, err := probe.Observe(context.Background(), until)
+	if err != nil || probe.Join() != nil || observed.Presence != releaseport.ProcessPresent || observed.Start != self.ProcessStart {
+		t.Fatalf("independent observation %+v (%v) differs from %+v", observed, err, self)
+	}
+	expired, cancel := context.WithCancel(context.Background())
+	cancel()
+	if again, err := liveHelperMeasureSelf(expired, until); err == nil || again != (releaseport.HelperSelfIdentity{}) {
+		t.Fatal("a canceled measurement produced an identity", again, err)
+	}
+}
+
 // The predecessor never exits inside the bound: the frame was sent, so the
 // outcome is unknown (79), but nothing was written, no journal exists and the
 // installed app is untouched.
@@ -413,13 +493,13 @@ func TestLiveHelperNativeMissingQuitReceiptIsRefused(t *testing.T) {
 	f.noEffect(t)
 }
 
-// Relaunch and recover are later packets: refused before any IO, no frame, no
-// update lock, no operation ID.
-func TestLiveHelperNativeRelaunchAndRecoverRefusedBeforeAnyEffect(t *testing.T) {
+// Recover (with or without relaunch) is a later packet: refused before any IO, no
+// frame, no update lock, no operation ID.
+func TestLiveHelperNativeRecoverRefusedBeforeAnyEffect(t *testing.T) {
 	liveNativeRequire(t)
 	for name, mutate := range map[string]func(map[string]any){
-		"relaunch": func(r map[string]any) { r["relaunch"] = true },
-		"recover":  func(r map[string]any) { r["action"] = "recover" },
+		"recover":          func(r map[string]any) { r["action"] = "recover" },
+		"recover-relaunch": func(r map[string]any) { r["action"], r["relaunch"] = "recover", true },
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newLiveNativeFixture(t, true)

@@ -39,6 +39,22 @@ type lifecycleFixture struct {
 	sourceID, targetID port.HelperIdentity
 }
 
+// writeLifecycleVector installs one inert image: the original-helper identity
+// documents, and, when exe is set, that executable as Contents/MacOS/Sleeper.
+func writeLifecycleVector(t *testing.T, root, plist, exe string) {
+	t.Helper()
+	must(t, os.MkdirAll(filepath.Join(root, "Contents/Resources/app"), 0700))
+	for _, document := range []struct{ from, to string }{{plist, "Contents/Info.plist"}, {"oracle.json", "Contents/Resources/app/build-identity.json"}} {
+		data, err := os.ReadFile(filepath.Join("..", "appidentity", "testdata", document.from))
+		must(t, err)
+		must(t, os.WriteFile(filepath.Join(root, document.to), data, 0600))
+	}
+	if exe != "" {
+		must(t, os.MkdirAll(filepath.Join(root, "Contents/MacOS"), 0700))
+		copyFile(t, exe, filepath.Join(root, "Contents/MacOS/Sleeper"), 0700)
+	}
+}
+
 func lifecycleOpen(t *testing.T, path string) *os.File {
 	t.Helper()
 	file, err := os.Open(path)
@@ -86,6 +102,15 @@ func newLifecycleFixture(t *testing.T) *lifecycleFixture {
 
 func newLifecycleFixtureAt(t *testing.T, base *compositionFixture) *lifecycleFixture {
 	t.Helper()
+	return newLifecycleFixtureWithExecutable(t, base, "")
+}
+
+// newLifecycleFixtureWithExecutable is the same fixture whose TARGET image also
+// carries one scratch executable in Contents/MacOS, so a verified apply leaves an
+// installed app that a launch can pin. The target digest is the independently
+// computed tree digest of that exact image. An empty exe keeps the inert vectors.
+func newLifecycleFixtureWithExecutable(t *testing.T, base *compositionFixture, exe string) *lifecycleFixture {
+	t.Helper()
 	if stdruntime.GOOS != "darwin" {
 		t.Skip("composition requires production Darwin rename and rejection publication")
 	}
@@ -98,7 +123,13 @@ func newLifecycleFixtureAt(t *testing.T, base *compositionFixture) *lifecycleFix
 	request := f.config.Request
 	request.Schema, request.Action, request.Home = "farol.installed-update/1", "apply", f.root
 	request.Source = build("aa5be957bca1b602513cc520d48ebabb39a79adfffe07ee47434fbc33f4a62bd")
-	request.Target = build("d0bd0b78217c34f9a0f86dad465ac033ec6a63cd1ba5bdeeffcac545d08bee2d")
+	targetDigest := "d0bd0b78217c34f9a0f86dad465ac033ec6a63cd1ba5bdeeffcac545d08bee2d"
+	if exe != "" {
+		probe := filepath.Join(t.TempDir(), "probe.app")
+		writeLifecycleVector(t, probe, "oracle.bplist", exe)
+		targetDigest = treeDigest(t, probe)
+	}
+	request.Target = build(targetDigest)
 	request.Drain = port.HelperDrain{Status: "reconciled", AcceptedSource: request.Source.BuildID, AcceptedTarget: request.Target.BuildID}
 	request.PID, request.ProcessStart, request.WaitSeconds = 123, "symbolic-process-start", 30
 	must(t, f.repo.Close())
@@ -113,14 +144,8 @@ func newLifecycleFixtureAt(t *testing.T, base *compositionFixture) *lifecycleFix
 
 	app := filepath.Join(f.config.Files.Applications.Name(), "Farol.app")
 	image, stage := filepath.Join(f.root, "target.app"), filepath.Join(f.path, "staged.app")
-	for _, vector := range []struct{ root, plist string }{{app, "oracle.xml"}, {image, "oracle.bplist"}} {
-		must(t, os.MkdirAll(filepath.Join(vector.root, "Contents/Resources/app"), 0700))
-		for _, document := range []struct{ from, to string }{{vector.plist, "Contents/Info.plist"}, {"oracle.json", "Contents/Resources/app/build-identity.json"}} {
-			data, err := os.ReadFile(filepath.Join("..", "appidentity", "testdata", document.from))
-			must(t, err)
-			must(t, os.WriteFile(filepath.Join(vector.root, document.to), data, 0600))
-		}
-	}
+	writeLifecycleVector(t, app, "oracle.xml", "")
+	writeLifecycleVector(t, image, "oracle.bplist", exe)
 	must(t, os.Mkdir(stage, 0700))
 	imageFile, stageFile := lifecycleOpen(t, image), lifecycleOpen(t, stage)
 	imageID, stageID := compositionIdentity(t, imageFile), compositionIdentity(t, stageFile)

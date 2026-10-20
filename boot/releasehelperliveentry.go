@@ -10,7 +10,7 @@ import (
 )
 
 // liveReleaseHelperCommand is the executable entry of the live release helper
-// (apply and rollback, relaunch false). Like its closed sibling it is flat,
+// (apply and rollback, each with or without relaunch). Like its closed sibling it is flat,
 // kebab-case and verb-first, and UNSELECTED: the desktop still spawns
 // resources/native/update_helper.py and no launcher, resource, manifest or
 // package step names this mode.

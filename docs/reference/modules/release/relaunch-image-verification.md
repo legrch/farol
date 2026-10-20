@@ -2,10 +2,19 @@
 
 The native execution runtime checks, after the one original `/usr/bin/open -a`
 returns, that the process it started runs the image it verified. This is
-**detection, not prevention**. The relaunch route stays unselected: boot installs
-neither the self measurement nor the relaunch argument capability, the closed
-helper still refuses relaunch requests, and the Python helper remains the
-selected helper.
+**detection, not prevention**. The relaunch route stays unselected: the Python
+helper remains the selected helper. The unselected live helper
+(`run-live-release-helper`) now accepts `relaunch: true` for apply, where it
+launches after `verified`, and for rollback, where it never launches (Python
+parity); it alone installs the self measurement and the relaunch argument
+capability. The closed helper supplies neither and still refuses relaunch; recover is
+refused by both.
+
+**Divergence from Python.** Python writes `completed` after `open` returns zero,
+whatever started. This verification is strict: zero, ambiguous or mismatched
+candidates are uncertain, the journal stays `launch_requested` and the helper
+exits 79. That is deliberate, so an unverified launch is reconciled rather than
+reported complete.
 
 ## Contract
 
@@ -123,11 +132,22 @@ later hardening step; it is not a precondition.
 ## Tests
 
 Deterministic tests drive every branch through a private OS seam with the real
-runtime, journal and tree verification. A golden test compares the Mach-O
-cdhash parser with `codesign -d -vvv`, including a universal binary and a
-two-hash signature. The native lane (`FAROL_RELAUNCH_NATIVE=1`) reads real
-processes with the production kernel reads and includes a negative swap with an
-unmutated control. It replaces only `open` with a direct exec of a scratch
-executable, because the identity policy requires the production bundle id that a
-running Farol also carries; LaunchServices is therefore not exercised by that
-lane.
+runtime, journal and tree verification. `milestonerelaunch_test.go` runs
+`Milestone.Execute` through apply, relaunch and verification (completion, clean
+launch failure, uncertain verification that never completes, rollback that never
+launches, and refusal without capabilities); boot wiring tests cover which
+capabilities each helper carries. A golden test compares the Mach-O cdhash parser
+with `codesign -d -vvv`, including a universal binary and a two-hash signature.
+
+The native lane (`FAROL_RELAUNCH_NATIVE=1`) reads real processes with the
+production kernel reads and includes a negative swap with an unmutated control. It
+replaces only `open` with a direct exec of a scratch executable, because the
+identity policy requires the production bundle id that a running Farol also
+carries; LaunchServices is therefore not exercised by that lane.
+`TestNativeMilestoneRelaunchEndToEnd` in the same lane drives `Milestone.Execute`
+end to end (a real apply, then the relaunch) over scratch bundles, with a
+swapped-bundle negative that must not complete.
+
+Not covered: the real LaunchServices `/usr/bin/open`, a shared install end to end
+(it needs a root-owned Applications parent), and any packaged or installed run.
+The whole Go helper path is unselected; the desktop still spawns the Python helper.

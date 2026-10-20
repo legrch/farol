@@ -494,10 +494,11 @@ type closedReleaseHelperState struct {
 	admission    closedHelperAdmission
 	retained     error
 	// Retained for the single execution step. Only closedReleaseHelper.execute
-	// consumes them, once, and always with a nil relaunch port.
+	// consumes them, once. relaunch is set by the live helper alone.
 	milestone *executionapp.Milestone
 	readiness *executionapp.Readiness
 	execution closedHelperExecutor
+	relaunch  *closedHelperRelaunch
 	// updateHeld is set only at construction of the post-AcquireUpdate callback
 	// scope, after AcquireUpdate returned success and the next custody check
 	// passed. The preflight scope never sets it. closedHelperNativeAdmission.Check

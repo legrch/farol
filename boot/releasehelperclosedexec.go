@@ -73,6 +73,19 @@ type closedHelperExecution struct {
 	helper    closedReleaseHelper
 	milestone *executionapp.Milestone
 	readiness *executionapp.Readiness
+	// relaunch carries the launch capabilities of the LIVE helper only. The
+	// closed helper leaves it nil, so a relaunch can never resolve there: the
+	// runtime refuses with launch_helper_identity before any launch effect.
+	relaunch *closedHelperRelaunch
+}
+
+// closedHelperRelaunch is the boot-composed pair the installation runtime needs
+// for a relaunch. Neither value is request-supplied authority: arguments are
+// built by the protocol owner for the already bound request, and measure
+// observes this very process.
+type closedHelperRelaunch struct {
+	arguments func(context.Context, releaseport.HelperSelfIdentity, *string) ([]string, error)
+	measure   func(context.Context, time.Time) (releaseport.HelperSelfIdentity, error)
 }
 
 // closedHelperExecutor is the private seam behind closedReleaseHelper.execute.
@@ -82,7 +95,10 @@ type closedHelperExecutor func(context.Context, closedHelperExecution) (*executi
 // closedHelperExecute opens the existing journal and rejection repositories over
 // the borrowed operation directory with ONE admission and ONE gate, then runs
 // Milestone.Execute exactly once through the existing installation runtime.
-// Relaunch is closed: the launch port is always nil.
+// The launch port is the same native runtime. It is inert unless the request
+// asked for relaunch AND the execution carries the live helper's relaunch
+// capabilities; the closed helper refuses relaunch before any IO and supplies
+// none.
 func closedHelperExecute(ctx context.Context, in closedHelperExecution) (result *executionapp.Result, err error) {
 	if ctx == nil || in.milestone == nil || in.readiness == nil || in.files.Operation == nil {
 		return nil, closedHelperFail(false)
@@ -105,11 +121,8 @@ func closedHelperExecute(ctx context.Context, in closedHelperExecution) (result 
 		return nil, err
 	}
 	defer closeOwner(rejected.Close)
-	err = executionnative.WithAdmittedInstallation(ctx, executionnative.Config{
-		Request: in.request, Files: in.files, Journal: repository, Rejection: rejected, Until: in.until,
-		Reverify: in.helper.reverify, Unknown: in.helper.unknown, RetainUnknown: in.helper.retainUnknown,
-	}, func(native executionnative.AdmittedInstallation) error {
-		executed, e := in.milestone.Execute(ctx, native, in.readiness, nil)
+	err = executionnative.WithAdmittedInstallation(ctx, closedHelperNativeConfig(in, repository, rejected), func(native executionnative.AdmittedInstallation) error {
+		executed, e := in.milestone.Execute(ctx, native, in.readiness, native)
 		if e == nil {
 			result = executed
 		}
@@ -119,6 +132,20 @@ func closedHelperExecute(ctx context.Context, in closedHelperExecution) (result 
 		result = nil
 	}
 	return result, err
+}
+
+// closedHelperNativeConfig is the installation runtime's configuration for one
+// execution. The launch capabilities are the live helper's alone: an execution
+// without them leaves both nil, so the runtime refuses any launch.
+func closedHelperNativeConfig(in closedHelperExecution, repository releaseport.HelperJournalRepository, rejected releaseport.HelperTargetRejectionRepository) executionnative.Config {
+	config := executionnative.Config{
+		Request: in.request, Files: in.files, Journal: repository, Rejection: rejected, Until: in.until,
+		Reverify: in.helper.reverify, Unknown: in.helper.unknown, RetainUnknown: in.helper.retainUnknown,
+	}
+	if in.relaunch != nil {
+		config.RelaunchArguments, config.MeasureSelf = in.relaunch.arguments, in.relaunch.measure
+	}
+	return config
 }
 
 // closedHelperCleanRefusal recognizes only a direct, non-nil application
@@ -168,7 +195,7 @@ func (s closedReleaseHelper) execute(ctx context.Context) (result *executionapp.
 	err = closedHelperCall(func() (e error) {
 		executed, e = o.execution(effective, closedHelperExecution{
 			files: o.files, request: closedHelperRequestCopy(o.request), until: o.until,
-			helper: s, milestone: o.milestone, readiness: o.readiness,
+			helper: s, milestone: o.milestone, readiness: o.readiness, relaunch: o.relaunch,
 		})
 		return e
 	})
