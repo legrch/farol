@@ -1,9 +1,9 @@
 # Installed application namespace preparation
 
-The selected apply/recovery/rollback helper is still
-`resources/native/update_helper.py`. Its `rename_checked` and `exchange_checked`
-operations now have an unselected Go primitive in
-`modules/release/infra/native/installmove`. This primitive moves directory
+The desktop selects the Go apply/recovery/rollback helper entries; the retained
+`resources/native/update_helper.py` is no longer dispatched. Its `rename_checked`
+and `exchange_checked` operations have a Go primitive in
+`modules/release/infra/native/installmove`, composed by those entries. This primitive moves directory
 entries; it owns no update policy, durable journal, admission lease, recovery,
 installation or relaunch decision. The existing Release owner must compose it.
 
@@ -17,7 +17,7 @@ closes, unlocks, seeks or reconfigures a borrowed parent.
 
 The default `OwnedParent` role requires an effective-user-owned directory with
 no group or world write. The explicit `SharedApplicationsParent` role is
-restricted to the `Farol.app` leaf and preserves the selected helper's separate
+restricted to the `Farol.app` leaf and preserves the Python reference helper's separate
 shared-parent predicate: root ownership, no world write, and group write only
 for group 80. Trusted composition selects that role only after verifying the
 physical root and `/Applications` route. Selecting a role or supplying an inode
@@ -61,11 +61,11 @@ permissions. Darwin cross-compilation proves compilation only. Actual APFS
 exchange, installed update/recovery/rollback, package resources, clean-Mac and
 OTA acceptance remain separate and are not established by this preparation.
 
-The remaining retirement exit is the complete Go helper composition: existing
-input/protocol, handoff custody, process observation, app verification, slot and
-journal owners, namespace effects, private launch capture and terminal mapping.
-The selected Python route stays in place until that capability is ready for
-source cutover; native and installed qualification remain explicit gates.
+The Go helper composition (existing input/protocol, handoff custody, process
+observation, app verification, slot and journal owners, namespace effects,
+private launch capture and terminal mapping) is selected by the desktop with no
+Python fallback. The remaining retirement exit is the deletion packet for the
+Python file; native and installed qualification remain explicit gates.
 
 ## Private launch tree copying
 
@@ -105,4 +105,4 @@ collisions, no-follow races, partial mutations, post-fsync metadata changes and
 cancellation during cleanup. Three actual UID/GID mutation cases require
 privileges and remain skipped in this Cloud environment. Darwin builds were
 cross-compiled only. Native, packaged, installed and clean-Mac qualification,
-and removal of the selected Python helper, remain open.
+and removal of the retained Python helper, remain open.

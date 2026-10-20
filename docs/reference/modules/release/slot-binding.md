@@ -34,8 +34,9 @@ child's actual close even after requesting termination.
 
 No selected Go failure dispatches Python. Explicit legacy/controller composition
 without a compiled Go declaration retains the old string/helper route for its
-separate compatibility exit. The Python helper resource remains required by
-apply/recover/rollback and cannot yet be removed from package manifests. The
+separate compatibility exit. The Python helper resource is no longer dispatched for
+apply/recover/rollback (the desktop runs the Go helper entries), but it stays in
+the package manifests for that legacy route until a separate deletion packet. The
 historically named `update-archive.py` is already a Go executable; its suffix is
 not interpreter evidence.
 
@@ -73,7 +74,7 @@ that acceptance.
 
 ## Read-only helper slot observation
 
-The existing `slotbinding.Verifier` is a separate, unselected helper-side capability. It captures request-bound expected bytes and an absolute deadline, borrows the exact operation directory, and compares private parent/file metadata and full bytes through actual synchronous return. It never seeks, closes, unlocks or changes the borrowed directory descriptor. The caller retains named-route custody, authoritative lease, slot and admission; a matching observation supplies no readiness, persistence, install, retry or replay authority. All 13 existing phases, schema and UNKNOWN predicates remain unchanged.
+The existing `slotbinding.Verifier` is a separate helper-side capability, called by the selected Go helper entries (`boot/releasehelperclosed.go`, `boot/releasehelperlive.go`), not by the publisher. It captures request-bound expected bytes and an absolute deadline, borrows the exact operation directory, and compares private parent/file metadata and full bytes through actual synchronous return. It never seeks, closes, unlocks or changes the borrowed directory descriptor. The caller retains named-route custody, authoritative lease, slot and admission; a matching observation supplies no readiness, persistence, install, retry or replay authority. All 13 existing phases, schema and UNKNOWN predicates remain unchanged.
 
 `verify_test.go` uses fresh disposable files and independent directory opens to witness a nonzero directory cursor, status/inheritance flags and flock exclusion across success, refusal and expired read/cleanup return. Controlled read and close seams enter before a fixed absolute deadline and return after it, including native errors joined with deadline causes and a context whose cancellation delivery deliberately lags. Cleanup closes the owned read descriptor once even after expiry; the caller retains borrowed custody until the blocked native/cleanup call actually returns and closes its directory only afterward. Later observations cannot renew the verifier's original deadline. These controlled seams are native-descriptor tests on the executing host, not evidence of an arbitrarily blocked kernel call or whole-helper lifetime composition. Existing `helperlocks/deadline_test.go` remains the owner of lock-gate, callback and original-budget witnesses; this packet does not duplicate that research.
 

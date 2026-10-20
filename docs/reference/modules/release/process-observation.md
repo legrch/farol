@@ -1,24 +1,26 @@
 # Predecessor process observation preparation
 
-Python remains the selected apply/recovery helper. Its
+The desktop selects the Go apply/recovery helpers (`run-closed-release-helper`
+and `run-live-release-helper`); there is no Python fallback. The Go process
+observer and wait service are called by those entries (`boot/releasehelperclosed.go`,
+`boot/releasehelperlive.go`). The retained Python
 [`process_start` and `wait_exit`](../../../../resources/native/update_helper.py)
-own predecessor confirmation and exit waiting today. The TypeScript
+are the behavioural reference and are no longer dispatched. The TypeScript
 [`installed-update-helper` adapter](../../../../src/modules/release/infra/native/installed-update-helper.ts)
-captures the process-start token and supervises the helper protocol. The prepared
-Go process observer and wait service have no selected updater caller. This page
-records their source contract and the remaining selection gates; it does not
-claim Python retirement or installed acceptance.
+captures the process-start token and supervises the helper protocol. This page
+records the source contract and the remaining gates; it does not claim Python
+retirement or installed acceptance.
 
 ## Prepared ownership and call graph
 
-The future owning helper composes Release
+The owning helper composes Release
 [`processwait`](../../../../modules/release/app/services/processwait/service.go)
 with its consumer-owned
 [`ProcessProbe` and `ProcessWaitClock` ports](../../../../modules/release/app/port/processprobe.go).
 The concrete Release
 [`processprobe`](../../../../modules/release/infra/native/processprobe/probe.go)
-binds one immutable PID. Root boot composition will validate concrete dependencies
-and inject the native observer and clock. No Computer internals, generic shell
+binds one immutable PID. Root boot composition validates concrete dependencies
+and injects the native observer and clock. No Computer internals, generic shell
 port, parallel updater, new journal schema or fallback engine is introduced.
 
 1. `processwait.Capture` accepts only a valid positively present start token.
@@ -92,21 +94,23 @@ deadline, cleanup and unclassified failures remain uncertain. Cancellation after
 observation begins is uncertain. Neither flag value authorizes retry or settles
 an application effect. An absent snapshot accompanied by an error proves nothing.
 
-Two existing unselected seams must close before selection:
+Two seams were listed here as blockers before selection:
 
 - [`handoff.verifyClosed`](../../../../modules/release/infra/native/handoff/quit.go)
-  currently flattens observer errors to its process-unknown code. Its eventual
-  adapter must preserve uncertain startup, timeout and cleanup separately from a
-  completed refusal without bypassing inherited lease, marker or quit checks.
-- The complete helper must preserve Python's terminal distinction: explicit
-  `Refusal` exits 70, while startup exceptions, subprocess timeouts and other
-  internal failures emit `phase=unknown`, `error=internal` and exit 79. The Go
-  uncertainty flag alone is not a complete terminal/protocol mapping.
+  still flattens observer errors to its process-unknown code (marked uncertain).
+  Preserving uncertain startup, timeout and cleanup separately from a completed
+  refusal remains an open refinement of the selected route; it must not bypass
+  inherited lease, marker or quit checks.
+- The helper preserves Python's terminal distinction in boot composition
+  (`closedHelperTerminal`): explicit `Refusal` exits 70, while startup
+  exceptions, subprocess timeouts and other internal failures emit
+  `phase=unknown`, `error=internal` and exit 79. The Go uncertainty flag alone
+  is not a complete terminal/protocol mapping.
 
 The TypeScript adapter still owns helper-child supervision, readiness/continuation
 and terminal protocol correlation, original child exit evidence, cancellation,
-Electron/IPC integration and the current token capture route. Future Go helper
-selection must replace backend observation through the owning Release service
+Electron/IPC integration and the current token capture route. The Go helper
+selection replaced backend observation through the owning Release service
 while retaining the desktop adapter responsibilities and accepted public DTOs.
 
 ## Evidence and retirement criteria
@@ -120,8 +124,8 @@ this Linux test process through the app using the private native constructor.
 That is portable mechanism evidence only. It does not activate production Linux
 observation or qualify Darwin tokens, timing, cleanup or helper integration.
 
-Python can retire only after the complete Go helper is composed and selected by
-the single owning route, with the old backend duplicate removed and these gates
+The complete Go helper is composed and selected by the single owning route.
+Python can retire only after the old duplicate is removed and these gates are
 closed against exact candidate bytes:
 
 - Darwin actual ps parity with Python and TypeScript, including locale/timezone,

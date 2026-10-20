@@ -2,8 +2,10 @@
 
 The first source-selected native capability is now the
 [Go slot-binding publisher](slot-binding.md) in Go-aware desktop builds. This
-does not select the Go updater policy or replace the Python apply/recovery
-helper. The preparation history and broader cutover requirements below remain
+does not select the Go updater policy. The desktop also selects the Go
+apply/recovery/rollback helper entries (`run-closed-release-helper`,
+`run-live-release-helper`) with no Python fallback; the Python helper file stays
+in the tree until a deletion packet. The preparation history and broader cutover requirements below remain
 applicable to those separate capabilities.
 
 This additive module is preparation from accepted base
@@ -108,12 +110,12 @@ new Desktop wire schema.
 
 ## Current parity seams
 
-| Current owner/source                                                | Prepared destination and remaining deletion exit                                                                                                                                                                                                                |
-| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/modules/release/app/installed-updater.ts`                      | `domain/update.go` + `app/services/update`; preserve status/check/later/restart/recover/rollback and Close cases. Core must map the existing restart intention to Apply through its accepted generated bridge before the TS controller leaves the active route. |
-| `src/apps/desktop/installed-update-runtime.ts`                      | Native journal/retention, work-admission and crash adapters remain pending. Current ready/download/restore/receipt schemas, durable write windows and same-child evidence must pass physical disposable parity before removing this slice.                      |
-| `resources/native/update_helper.py`                                 | Go install/exchange/restore implementation remains pending. Preserve no-follow descriptors, exact accepted pair, lease, normal Quit ACK, atomic swap and one-shot launch journal; native/package parity precedes deletion.                                      |
-| `src/modules/release/app/github-release.ts` + domain release policy | Discovery/eligibility/manifest compatibility remain pending. Keep the current alpha version/build ordering, provenance, bounded download and reverified-package cases.                                                                                          |
+| Current owner/source                                                | Prepared destination and remaining deletion exit                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/modules/release/app/installed-updater.ts`                      | `domain/update.go` + `app/services/update`; preserve status/check/later/restart/recover/rollback and Close cases. Core must map the existing restart intention to Apply through its accepted generated bridge before the TS controller leaves the active route.                                                                                             |
+| `src/apps/desktop/installed-update-runtime.ts`                      | Native journal/retention, work-admission and crash adapters remain pending. Current ready/download/restore/receipt schemas, durable write windows and same-child evidence must pass physical disposable parity before removing this slice.                                                                                                                  |
+| `resources/native/update_helper.py`                                 | Go install/exchange/restore implementation is selected by the desktop (no Python fallback); this file is no longer dispatched and remains until native/package parity and a deletion packet. Preserve no-follow descriptors, exact accepted pair, lease, normal Quit ACK, atomic swap and one-shot launch journal; native/package parity precedes deletion. |
+| `src/modules/release/app/github-release.ts` + domain release policy | Discovery/eligibility/manifest compatibility remain pending. Keep the current alpha version/build ordering, provenance, bounded download and reverified-package cases.                                                                                                                                                                                      |
 
 Preparation's policy doubles correspond to existing
 `tests/unit/installed-updater.test.ts` intentions; its symbolic crash vectors

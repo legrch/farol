@@ -60,7 +60,7 @@ The pure application checks its context around ports and final success. Native
 ports must independently enforce the original absolute budget and earlier caller
 deadline, including when cancellation delivery lags. They retain synchronous
 process and descriptor custody; application context checks cannot prove native
-cleanup. Final helper exit-70/exit-79 classification remains composition work.
+cleanup. Final helper exit-70/exit-79 classification is done in boot composition (`closedHelperTerminal`, below).
 
 Static outcomes from the original Python AST cover 4,354 phase/pair rows and
 1,024 predecessor-version pairs, with the original source digest checked by Go
@@ -74,7 +74,7 @@ separate observational subset; it is unchanged by this preparation.
 
 ## Admitted installation policy
 
-The unselected `app/services/execution` service owns apply and explicit rollback policy over consumer-owned `HelperInstallationRuntime`. Its independent captured-request parser has no effects or admission authority. The same trusted operation owner supplies the runtime only after its actual route, slot, lease, stopped-writer and continuation gates; this application opens no path, process, route or journal. Copies share a one-shot attempt consumed before cancellation or port I/O. Native ports independently retain original absolute deadlines and actual-return custody.
+The `app/services/execution` service, which the desktop reaches through the selected Go helper entries, owns apply and explicit rollback policy over consumer-owned `HelperInstallationRuntime`. Its independent captured-request parser has no effects or admission authority. The same trusted operation owner supplies the runtime only after its actual route, slot, lease, stopped-writer and continuation gates; this application opens no path, process, route or journal. Copies share a one-shot attempt consumed before cancellation or port I/O. Native ports independently retain original absolute deadlines and actual-return custody.
 
 Apply requires the exact owned source/staged pair, no previous/failed/rejected entry, accepted tree observations and the same device before preparing the original journal from confirmed absence. It exchanges only the measured pair, verifies the displaced source, fences the move to previous, writes new_installed and checks the installed target. An opaque target-verification error remains an error. Only a confirmed negative tree match may restore the same predecessor, quarantine the measured failed target, durably record its rejection and write rolled_back. That settled negative update returns the existing target_verification code with no incomplete-scope error; it is not a successful update, helper exit, relaunch or startup proof.
 
@@ -85,8 +85,8 @@ Explicit rollback accepts only verified/completed/launch_requested with an exact
 `helperchannels.TestProcessCompositionInheritedHandshake` starts a fresh Go test
 executable with explicit `os/exec.ExtraFiles`: request fd3, ACK fd4, BORROWED
 regular lease fd5, and continuation fd6. This is a declared fixture ABI matching
-the launcher role layout, not production role authentication or a selected Go
-helper. Stdin and captured stdout/stderr provide test coordination only.
+the launcher role layout, not production role authentication or the production helper
+entry. Stdin and captured stdout/stderr provide test coordination only.
 
 The child uses the real request/channel owners, input parser, protocol service
 and JSON codecs. The parent closes its inherited transport ends, seals request
@@ -121,7 +121,7 @@ package, OTA or Python retirement. Existing source/native evidence is unchanged.
 
 `boot/releasehelperclosed.go` composes the existing request parser, protocol and
 JSON codecs, byte-channel owners, physical routes, slot verifier, handoff verifier,
-bound native process observer and update lock. There is no CLI selection. Only
+bound native process observer and update lock. The scope itself has no CLI selection; the two entries described below wrap it. Only
 closed `apply` and `rollback` requests with explicit `legacy` or `shared`
 `installLocation` and their physical slot binding are supported. Missing closed
 proof or the optional-location legacy branch refuses before native admission.
@@ -203,7 +203,7 @@ alternative. Both entries share one absolute process budget
 (`closedHelperEntryBudget`, 600 seconds): the desktop's 300 second readiness ceiling,
 the request's 120 second maximum wait, and 180 seconds for the staged copy, promotion
 and relaunch. A 120 second budget from process start let a maximal wait spend the whole
-bound before execution began. It is captured before any request IO and never extended. The pure
+bound before execution began (the earlier bound, now replaced). It is captured before any request IO and never extended. The pure
 `closedHelperTerminal` maps its outcome to the Python contract: success
 `{"phase","operationId"}` exit 0; a result code or a direct, clean application
 refusal `{"phase","error","operationId"}` exit 70; everything else
@@ -213,8 +213,9 @@ refusal `{"phase","error","operationId"}` exit 70; everything else
 `farol run-closed-release-helper`. It accepts no further argv (any extra argument
 exits 2 with no descriptor or stdout use), wraps fd3 request, fd4 ACK, fd5
 borrowed lease and fd6 continuation only there, and fixes its original absolute
-bound at process start plus 120 s, the request schema's maximum `waitSeconds`,
-which cannot be read before request work. It runs the callback's single `execute`
+bound at process start plus 600 s (`closedHelperEntryBudget`, shared with the live entry).
+The request's `waitSeconds` (at most 120 s) cannot be read before request work and
+never tightens it. It runs the callback's single `execute`
 and writes exactly one `closedHelperTerminal` line to fd1 in one non-blocking
 write with SIGPIPE ignored and any error ignored, as `emit_terminal` does; the
 exit code is that line's mapping (0, 70, 79) and a panic is 79. A clean refusal
@@ -307,9 +308,11 @@ needs a root-owned Applications parent, so its capture stays on the root-schedul
 capture witness and its binding on `launchBound` and the argument tests), and any
 packaged or installed run.
 
-The unselected ready frame must not be wired to an application effect or product
-readiness until that gate and the existing desktop protocol are independently
-accepted.
+The `closed_predecessor_ready` frame is selected: the desktop launcher
+(`installed-update-helper.ts`) reads it as the readiness handshake and then
+transfers the promotion lease. It is transport evidence only and grants no
+application effect by itself; execution still needs the continuation frame and
+the custody rechecks above.
 
 `releasehelperclosed_test.go` uses private symbolic native/transport seams with
 the real parser/codecs. It checks correlation, order, boundary refusal, original
@@ -330,7 +333,7 @@ package/OTA acceptance or Python retirement.
 
 ## Captured readiness and application library
 
-The unselected `execution.NewMilestone` library composes the original apply,
+The `execution.NewMilestone` library, used by both selected entries, composes the original apply,
 recovery and rollback policies over one independently copied request from the
 original parser/protocol owner. `execution.NewCaptured` and
 `helperrecovery.NewCaptured` use those captured values without reparsing the wire.
@@ -386,7 +389,7 @@ completed. The arguments it dispatches must name the image it verified (the
 private capture for a shared install, the owner's `~/Applications` slot
 otherwise); any other application path refuses before an effect.
 
-Like the selected Python reference helper, the relaunch hands `/usr/bin/open -a`
+Like the retained Python reference helper, the relaunch hands `/usr/bin/open -a`
 a pathname after verifying the image through held descriptors. A writer running
 as the same user can still replace that path between verification and
 LaunchServices resolution. Copying is not a same-user exclusion boundary (see
