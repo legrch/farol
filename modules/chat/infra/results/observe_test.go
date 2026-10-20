@@ -377,4 +377,12 @@ func TestArchiveOpenFailuresSeparateUnavailableStoreFromRefusedNames(t *testing.
 	if _, err := openArchiveDisk(context.Background(), missing); !errors.Is(err, Unavailable) {
 		t.Fatal("missing root reported as", err)
 	}
+	dangling := root
+	dangling.Path = filepath.Join(filepath.Dir(root.Path), "dangling-root")
+	if err := os.Symlink(filepath.Join(filepath.Dir(root.Path), "nowhere"), dangling.Path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openArchiveDisk(context.Background(), dangling); !errors.Is(err, Refused) {
+		t.Fatal("dangling root symlink reported as", err)
+	}
 }

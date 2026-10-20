@@ -37,7 +37,7 @@ func openArchiveDisk(ctx context.Context, root Root) (_ *archiveDisk, err error)
 	}
 	canonical, err := filepath.EvalSymlinks(root.Path)
 	if err != nil {
-		return nil, openFailure(err) // a missing root is unavailable storage
+		return nil, missingRoot(root.Path, err)
 	}
 	if canonical != root.Path {
 		return nil, Refused
@@ -165,7 +165,7 @@ func archiveFile(ctx context.Context, d *resultDisk, name string, limit int) ([]
 	raw, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
 	if err != nil {
 		_ = f.Close()
-		return nil, Unavailable // the store could not be read; nothing was judged
+		return nil, openFailure(err) // listed store failures are unavailable; others refuse
 	}
 	after, se := resultStat(fd)
 	ok := err == nil && se == nil && len(raw) == int(before.Size) && resultStable(before, after) && unix.Fstatat(d.dir, name, &named, unix.AT_SYMLINK_NOFOLLOW) == nil && resultStable(named, after)
@@ -376,4 +376,31 @@ func openFailure(err error) error {
 		return Unavailable
 	}
 	return Refused
+}
+
+// missingRoot is Unavailable only when the root genuinely does not exist below
+// a canonical, symlink-free existing ancestor. A dangling or other symlink on
+// the way is an unsafe name and refuses.
+func missingRoot(path string, err error) error {
+	if !errors.Is(err, unix.ENOENT) {
+		return openFailure(err)
+	}
+	for p := path; ; p = filepath.Dir(p) {
+		info, lerr := os.Lstat(p)
+		if lerr == nil {
+			if info.Mode()&os.ModeSymlink != 0 {
+				return Refused
+			}
+			if canonical, cerr := filepath.EvalSymlinks(p); cerr != nil || canonical != p {
+				return Refused
+			}
+			return Unavailable
+		}
+		if !errors.Is(lerr, unix.ENOENT) {
+			return openFailure(lerr)
+		}
+		if p == filepath.Dir(p) {
+			return Refused
+		}
+	}
 }
