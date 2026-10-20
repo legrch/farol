@@ -7,6 +7,7 @@ import (
 	executionapp "github.com/legrch/farol/modules/release/app/services/execution"
 	release "github.com/legrch/farol/modules/release/domain"
 	executionnative "github.com/legrch/farol/modules/release/infra/native/execution"
+	"github.com/legrch/farol/modules/release/infra/native/helperroutes"
 	releasestate "github.com/legrch/farol/modules/release/infra/native/state"
 	"github.com/legrch/farol/modules/release/infra/repos/journal"
 )
@@ -52,6 +53,23 @@ func (a *closedHelperJournalObservation) RetainJournalUnknown(release.Operation)
 	}
 }
 
+// closedHelperOperationBinding derives the full operation, the journal's expected
+// directory binding and the fixed operation path from the parsed request and the
+// borrowed routes. The helper routes pin the update directory and the operation
+// directory beneath it; their identities are the expected binding.
+func closedHelperOperationBinding(request releaseport.HelperRequest, files helperroutes.Files) (release.Operation, releaseport.JournalDirectory, string) {
+	build := func(b releaseport.HelperBuild) release.Build {
+		return release.Build{Digest: b.Digest, Version: b.Version, BuildID: b.BuildID}
+	}
+	operation := release.Operation{ID: request.OperationID, Source: build(request.Source), Target: build(request.Target)}
+	binding := releaseport.JournalDirectory{
+		Device: files.OperationIdentity.Device, Inode: files.OperationIdentity.Inode,
+		ParentDevice: files.UpdateIdentity.Device, ParentInode: files.UpdateIdentity.Inode,
+	}
+	directory := request.Home + "/Library/Application Support/Farol Next Preview/installed-updates/" + request.OperationID
+	return operation, binding, directory
+}
+
 // closedHelperReady is the production readiness seam. It composes only the
 // existing owners over the borrowed Files: bounded journal observation, the
 // read-only installation projection and the Milestone's pure policy. It never
@@ -62,17 +80,7 @@ func closedHelperReady(ctx context.Context, milestone *executionapp.Milestone, h
 		return nil, closedHelperFail(false)
 	}
 	request := closedHelperRequestCopy(s.request)
-	build := func(b releaseport.HelperBuild) release.Build {
-		return release.Build{Digest: b.Digest, Version: b.Version, BuildID: b.BuildID}
-	}
-	operation := release.Operation{ID: request.OperationID, Source: build(request.Source), Target: build(request.Target)}
-	// The helper routes pin the update directory and the operation directory
-	// beneath it; these identities are the journal's expected directory binding.
-	binding := releaseport.JournalDirectory{
-		Device: s.files.OperationIdentity.Device, Inode: s.files.OperationIdentity.Inode,
-		ParentDevice: s.files.UpdateIdentity.Device, ParentInode: s.files.UpdateIdentity.Inode,
-	}
-	directory := request.Home + "/Library/Application Support/Farol Next Preview/installed-updates/" + request.OperationID
+	operation, binding, directory := closedHelperOperationBinding(request, s.files)
 	admission := &closedHelperJournalObservation{helper: helper, gate: releasestate.New(), operation: operation, binding: binding}
 	err = journal.WithObservation(ctx, directory, s.files.Operation, binding, operation, admission, func(reader *journal.Observation) error {
 		return executionnative.WithObservation(ctx, executionnative.ObservationConfig{

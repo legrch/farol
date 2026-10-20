@@ -187,6 +187,9 @@ type closedHelperDependencies struct {
 	// The helper wraps ONLY the preflight scope (observation-only); it ends before
 	// the ready frame and is never the post-continuation callback scope.
 	ready func(context.Context, *executionapp.Milestone, closedReleaseHelper) (*executionapp.Readiness, error)
+	// execute composes the single post-continuation Milestone.Execute under the
+	// callback scope's own custody. Only closedReleaseHelper.execute reaches it.
+	execute closedHelperExecutor
 }
 
 // withClosedReleaseHelper composes closed custody, pre-ACK application readiness
@@ -213,6 +216,7 @@ func closedHelperProductionDependencies() closedHelperDependencies {
 		},
 		admission: newClosedHelperAdmission,
 		ready:     closedHelperReady,
+		execute:   closedHelperExecute,
 	}
 }
 
@@ -266,7 +270,9 @@ func withClosedReleaseHelperDependencies(ctx context.Context, files closedHelper
 	}
 	// This prepared subset requires a physical slot proof, including explicit
 	// legacy location. The old optional-location branch is deliberately unsupported.
-	if request.Predecessor == nil || request.LeaseIdentity == nil || request.InstallLocation == nil || request.Predecessor.Kind != "confirmed_closed" || request.Action != "apply" && request.Action != "rollback" {
+	// Relaunch is deliberately unselected: its gate is CLOSED. It is refused here,
+	// before any IO or frame, so no later step can reach a launch effect.
+	if request.Predecessor == nil || request.LeaseIdentity == nil || request.InstallLocation == nil || request.Predecessor.Kind != "confirmed_closed" || request.Action != "apply" && request.Action != "rollback" || request.Relaunch {
 		return closedHelperFail(false)
 	}
 	if err := closedHelperBounds(effective, until); err != nil {
@@ -365,7 +371,7 @@ func withClosedReleaseHelperDependencies(ctx context.Context, files closedHelper
 			if err = check(); err != nil {
 				return err
 			}
-			state := &closedReleaseHelperState{active: true, files: borrow, request: closedHelperRequestCopy(request), original: effective, until: until, admission: admission, milestone: milestone, readiness: readiness}
+			state := &closedReleaseHelperState{active: true, files: borrow, request: closedHelperRequestCopy(request), original: effective, until: until, admission: admission, milestone: milestone, readiness: readiness, execution: deps.execute, updateHeld: true}
 			scoped = state
 			defer func() {
 				// Joins every already-entered scoped callback/native method before cleanup,
@@ -438,10 +444,16 @@ type closedReleaseHelperState struct {
 	until        time.Time
 	admission    closedHelperAdmission
 	retained     error
-	// Retained for a later separately selected execution step; no method exposes
-	// them and nothing here calls Execute.
+	// Retained for the single execution step. Only closedReleaseHelper.execute
+	// consumes them, once, and always with a nil relaunch port.
 	milestone *executionapp.Milestone
 	readiness *executionapp.Readiness
+	execution closedHelperExecutor
+	// updateHeld is set only at construction of the post-AcquireUpdate callback
+	// scope, after AcquireUpdate returned success and the next custody check
+	// passed. The preflight scope never sets it. closedHelperNativeAdmission.Check
+	// verifies the update lease only when one exists, so it cannot prove this.
+	updateHeld bool
 }
 
 func (s *closedReleaseHelperState) begin(consume bool) error {
