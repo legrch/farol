@@ -117,16 +117,22 @@ func TestClosedHelperNativeChild(t *testing.T) {
 	}
 	receipt := closedHelperNativeTerminal{Mode: mode, Before: before}
 	deps := closedHelperProductionDependencies()
+	// The witness runs immediately after the production take, before the request
+	// is read and closed: all four inherited roles are still their original
+	// descriptors, so no reused number can stand in for a closed role.
+	take := deps.take
+	deps.take = func(f closedHelperFiles) (closedHelperInput, closedHelperChannels, error) {
+		input, channels, err := take(f)
+		if err == nil {
+			_ = closedHelperNativeWitness(&receipt)
+		}
+		return input, channels, err
+	}
 	if mode != "readiness-refused" {
 		// Custody-only lane: the disposable fixture has no app/staged trees, so
 		// readiness is a SYMBOLIC pass here. Only "readiness-refused" exercises the
 		// production readiness composition over the real borrowed routes.
-		// The witness runs here because all four inherited roles are still open:
-		// after the borrow began, before the ACK, continuation consumption or close.
 		deps.ready = func(context.Context, *executionapp.Milestone, closedReleaseHelper) (*executionapp.Readiness, error) {
-			if err := closedHelperNativeWitness(&receipt); err != nil {
-				return nil, err
-			}
 			return &executionapp.Readiness{}, nil
 		}
 	}
