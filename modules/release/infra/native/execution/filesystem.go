@@ -160,13 +160,6 @@ func (r *runtime) tree(ctx context.Context, entry port.HelperRecoveryEntry, buil
 // fixed app role or internally generated private capture. No path comes from
 // request data. An optional callback borrows the verified opened image.
 func (r *runtime) image(ctx context.Context, location installmove.Location, build port.HelperBuild, fn func(*os.File, port.HelperIdentity) error, code ...*string) (negative bool, result error) {
-	return r.imageHeld(ctx, location, build, nil, fn, code...)
-}
-
-// imageHeld is image with an optional pin callback. It borrows the held app
-// directory after the entry checks and BEFORE the tree is verified, so a caller
-// can pin descriptors of files whose identity the verification then covers.
-func (r *runtime) imageHeld(ctx context.Context, location installmove.Location, build port.HelperBuild, pin func(*os.File) error, fn func(*os.File, port.HelperIdentity) error, code ...*string) (negative bool, result error) {
 	setCode := func(value string) {
 		if len(code) == 1 && code[0] != nil {
 			*code[0] = value
@@ -226,11 +219,6 @@ func (r *runtime) imageHeld(ctx context.Context, location installmove.Location, 
 	if err != nil {
 		return false, err
 	}
-	if pin != nil {
-		if err := pin(app); err != nil {
-			return false, err
-		}
-	}
 	_, err = verifier.Verify(ctx)
 	if err != nil {
 		if apptree.IsVerificationRefusal(err, pureIdentityRefusal) {
@@ -238,9 +226,6 @@ func (r *runtime) imageHeld(ctx context.Context, location installmove.Location, 
 			return true, nil
 		}
 		return false, err
-	}
-	if r.config.afterVerify != nil {
-		r.config.afterVerify()
 	}
 	if fn != nil {
 		if err := fn(app, snapshot(before).Identity); err != nil {

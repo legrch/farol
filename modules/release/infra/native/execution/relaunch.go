@@ -7,6 +7,7 @@ import (
 	"github.com/legrch/farol/modules/release/app/port"
 	"github.com/legrch/farol/modules/release/infra/native/installcopy"
 	"github.com/legrch/farol/modules/release/infra/native/installmove"
+	helperprocess "github.com/legrch/farol/modules/release/infra/native/process"
 )
 
 var _ port.HelperRelaunchEffects = (*runtime)(nil)
@@ -135,23 +136,11 @@ func (r *runtime) LaunchTarget(ctx context.Context, self port.HelperSelfIdentity
 		if self != r.self || self.PID != int64(os.Getpid()) || self.ProcessStart == "" || r.config.RelaunchArguments == nil {
 			return fail("launch_helper_identity", false, false, nil)
 		}
-		platform := r.config.launch
-		if platform == nil {
-			platform = nativeLaunchPlatform()
+		open := r.config.open
+		if open == nil {
+			open = helperprocess.Open
 		}
-		// want is derived from the held verified directory on every verify. The
-		// first value is the launch contract; any later derivation must agree.
-		var want expectedImage
-		wanted := false
 		verify := func(ctx context.Context) error {
-			// The executable is pinned before the tree is verified and derived
-			// only from that descriptor; it is never reopened by name.
-			var pinned *heldLaunch
-			defer func() {
-				if pinned != nil {
-					pinned.close()
-				}
-			}()
 			if err := r.fence(ctx); err != nil {
 				return err
 			}
@@ -176,25 +165,10 @@ func (r *runtime) LaunchTarget(ctx context.Context, self port.HelperSelfIdentity
 			} else if captured != nil {
 				return fail("launch_image_unexpected", false, false, nil)
 			}
-			negative, err := r.imageHeld(ctx, location, r.config.Request.Target, func(app *os.File) error {
-				var err error
-				if pinned, err = pinLaunchImage(app); err != nil {
-					return fail("launch_image_unconfirmed", false, false, err)
-				}
-				return nil
-			}, func(held *os.File, actual port.HelperIdentity) error {
+			negative, err := r.image(ctx, location, r.config.Request.Target, func(_ *os.File, actual port.HelperIdentity) error {
 				if r.config.Files.SharedParent && expected != actual {
 					return fail("launch_image_unconfirmed", false, false, nil)
 				}
-				// After the open call a refusal is an unknown outcome.
-				derived, err := pinned.derive(held)
-				if err != nil {
-					return fail("launch_image_unconfirmed", false, r.effected, err)
-				}
-				if wanted && !derived.equal(want) {
-					return fail("launch_image_unconfirmed", false, r.effected, nil)
-				}
-				want, wanted = derived, true
 				return nil
 			})
 			if err != nil {
@@ -215,15 +189,12 @@ func (r *runtime) LaunchTarget(ctx context.Context, self port.HelperSelfIdentity
 		if !launchBound(r.config.Request, r.config.Files.SharedParent, r.capturePath, arguments) {
 			return fail("launch_image_unconfirmed", false, false, nil)
 		}
-		hint, ok := relaunchHint(r.config.Request.OperationID, self.PID, arguments)
-		if !ok || !wanted {
-			return fail("launch_image_unconfirmed", false, false, nil)
-		}
+		// The relaunch follows the Sparkle/Squirrel.Mac model: the image was
+		// verified before install and again just above, LaunchServices starts
+		// it, and a returned zero status is the end of the helper's work. No
+		// process is looked up, measured or signalled afterwards.
 		r.effected = true
-		if err := platform.open(c, r.until, arguments, verify); err != nil {
-			return err
-		}
-		return verifyLaunched(c, platform, hint, want, verify, r.fence)
+		return open(c, r.until, arguments, verify)
 	})
 }
 
@@ -231,8 +202,7 @@ func (r *runtime) LaunchTarget(ctx context.Context, self port.HelperSelfIdentity
 // image this runtime verified: the private capture for a shared install, the
 // owner's ~/Applications slot otherwise. A capability that builds arguments
 // cannot redirect the launch to another image. Like the reference helper, the
-// launch is still by pathname; the post-launch check in launchverify.go detects
-// a substituted image but cannot prevent it (see relaunch-image-verification.md).
+// launch is still by pathname; see the release helper-recovery reference.
 func launchBound(request port.HelperRequest, shared bool, capturePath string, arguments []string) bool {
 	if len(arguments) != 5 || request.Home == "" {
 		return false

@@ -342,36 +342,14 @@ func TestLiveHelperNativeApplyThenRollback(t *testing.T) {
 	}
 }
 
-// Relaunch on the real compiled entry, over the same inert oracle images. They
-// have no Contents/MacOS executable, so the launch image cannot be pinned and the
-// run stops BEFORE /usr/bin/open is ever built or executed: this lane never starts
-// an app and cannot collide with the owner's Farol. What it does prove natively is
-// the order up to that point (apply verified, launch_requested journalled, the
-// launch port reachable so the run gets as far as the launch attempt), and that
-// the stage is retained as unknown (exit 79) rather than written as completed.
-// This lane cannot tell the self measurement from the image check as the cause
-// of the stop; TestLiveHelperNativeMeasuresThisProcess proves the former alone. The
-// launch itself is exercised over scratch bundles in
-// modules/release/infra/native/execution (FAROL_RELAUNCH_NATIVE=1).
-func TestLiveHelperNativeRelaunchStopsBeforeOpenWhenTheImageCannotBePinned(t *testing.T) {
-	liveNativeRequire(t)
-	f := newLiveNativeFixture(t, true)
-	apps := filepath.Join(f.home, "Applications", "Farol.app")
-	f.arm(t, "")
-	request := f.request("apply", true)
-	o := f.run(t, request, true)
-	f.wantWaitingFrame(t, request, o.ack)
-	f.requireTerminal(t, o.execNativeOutcome, `{"phase": "unknown", "error": "internal", "operationId": "`+strings.Repeat("1", 32)+`"}`+"\n", 79)
-	if got := f.phase(t); got != "launch_requested" {
-		t.Fatal("journal phase", got)
-	}
-	if execNativeRead(t, filepath.Join(apps, "Contents/Info.plist")) != execNativeTestdata(t, "oracle.bplist") {
-		t.Fatal("installed app is not the target")
-	}
-	if f.exists(filepath.Join(f.operation, "launch-Farol.app")) {
-		t.Fatal("a legacy install published a private capture")
-	}
-}
+// There is deliberately no apply or recover relaunch witness on the compiled
+// entry. With the production /usr/bin/open the only seam, a relaunch here would
+// run LaunchServices over a disposable inert image that carries the production
+// bundle id: it registers that temporary path with the owner's LaunchServices and
+// can collide with the owner's Farol. The launch is exercised with a replaced
+// open in modules/release/infra/native/execution (deterministic Milestone tests
+// and FAROL_RELAUNCH_NATIVE=1), and the terminal line and exit code of every
+// result in the boot terminal-mapping tests.
 
 // A rollback that asked for relaunch settles rolled_back and never launches, like
 // Python: the launch condition is a verified apply.
@@ -580,40 +558,6 @@ func TestLiveHelperNativeRecoverUnrecognisedPairIsRefusedWithTheOwnersCode(t *te
 	}
 	if err := f.pred.cmd.Process.Signal(syscall.Signal(0)); err != nil {
 		t.Fatal("predecessor was disturbed", err)
-	}
-}
-
-// Recover with relaunch over a REAL verified journal and trees: the frame is sent,
-// the scratch predecessor exits, the production recovery policy reconciles the
-// pair (verified), and the run reaches the launch attempt. The inert oracle images
-// have no Contents/MacOS executable, so, exactly as in the apply relaunch lane, the
-// launch image cannot be pinned and the run stops BEFORE /usr/bin/open is built or
-// executed: nothing starts, the journal stays launch_requested and the outcome is
-// unknown (79), never completed. The launch itself is exercised over scratch bundles
-// in modules/release/infra/native/execution (FAROL_RELAUNCH_NATIVE=1).
-func TestLiveHelperNativeRecoverWithRelaunchStopsBeforeOpen(t *testing.T) {
-	liveNativeRequire(t)
-	f := newLiveNativeFixture(t, true)
-	id := strings.Repeat("1", 32)
-	apps := filepath.Join(f.home, "Applications", "Farol.app")
-	f.arm(t, "")
-	apply := f.request("apply", false)
-	o := f.run(t, apply, true)
-	f.requireTerminal(t, o.execNativeOutcome, `{"phase": "verified", "operationId": "`+id+`"}`+"\n", 0)
-
-	f.arm(t, "")
-	request := f.request("recover", true)
-	o = f.run(t, request, true)
-	f.wantWaitingFrame(t, request, o.ack)
-	f.requireTerminal(t, o.execNativeOutcome, `{"phase": "unknown", "error": "internal", "operationId": "`+id+`"}`+"\n", 79)
-	if got := f.phase(t); got != "launch_requested" {
-		t.Fatal("journal phase", got)
-	}
-	if execNativeRead(t, filepath.Join(apps, "Contents/Info.plist")) != execNativeTestdata(t, "oracle.bplist") {
-		t.Fatal("installed app is not the target")
-	}
-	if f.exists(filepath.Join(f.operation, "launch-Farol.app")) {
-		t.Fatal("a legacy install published a private capture")
 	}
 }
 

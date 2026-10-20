@@ -47,8 +47,8 @@ func (f *relaunchLifecycle) recoverMilestone(t *testing.T, policies ...port.Help
 
 func (f *relaunchLifecycle) requireNoLaunch(t *testing.T) {
 	t.Helper()
-	if f.measures != 0 || f.builds != 0 || f.fake.opens != 0 || f.fake.calls.candidates != 0 || len(f.fake.kills) != 0 {
-		t.Fatal("a recovery that did not settle verified launched", f.measures, f.builds, f.fake.opens, f.fake.kills)
+	if f.measures != 0 || f.builds != 0 || f.fake.opens != 0 {
+		t.Fatal("a recovery that did not settle verified launched", f.measures, f.builds, f.fake.opens)
 	}
 }
 
@@ -77,8 +77,8 @@ func TestMilestoneRecoverRelaunchCompletesAfterReconcilingToVerified(t *testing.
 	if want := []string{"prepared", "verified", "launch_requested", "completed"}; !containsInOrder(f.phases, want[1:]) {
 		t.Fatalf("journal order %v does not contain %v", f.phases, want[1:])
 	}
-	if f.measures != 1 || f.builds != 1 || f.fake.opens != 1 || len(f.fake.kills) != 0 {
-		t.Fatal("measure, arguments and open must each run once", f.measures, f.builds, f.fake.opens, f.fake.kills)
+	if f.measures != 1 || f.builds != 1 || f.fake.opens != 1 {
+		t.Fatal("measure, arguments and open must each run once", f.measures, f.builds, f.fake.opens)
 	}
 	for step, phases := range map[string][]string{"measure": f.atMeasure, "arguments": f.atBuild, "open": f.fake.phases} {
 		if len(phases) != 1 || phases[0] != "launch_requested" {
@@ -189,7 +189,7 @@ func TestMilestoneRecoverRelaunchRollbackRepairNeverLaunches(t *testing.T) {
 // original launch_failed; the journal keeps launch_requested.
 func TestMilestoneRecoverRelaunchCleanLaunchFailure(t *testing.T) {
 	f := newFakeRelaunchLifecycle(t)
-	f.fake.openErr = fail("launch_failed", false, false, nil)
+	f.fake.err = fail("launch_failed", false, false, nil)
 	f.stage(t, func(native port.HelperInstallationRuntime) error {
 		if err := native.Prepare(context.Background()); err != nil {
 			return err

@@ -41,13 +41,10 @@ type Config struct {
 	// optional measurement is not request-supplied identity or launch authority.
 	MeasureSelf func(context.Context, time.Time) (port.HelperSelfIdentity, error)
 
-	// launch is the private OS seam for post-launch image verification. Only
-	// package tests set it; nil selects the native Darwin implementation.
-	launch launchPlatform
-	// afterVerify runs right after a successful tree verification, before the
-	// callback that borrows the image. Package tests use it to place a swap in
-	// exactly that gap; production leaves it nil.
-	afterVerify func()
+	// open is the private seam for the one original /usr/bin/open. Only package
+	// tests set it, because a test cannot run LaunchServices; nil selects
+	// helperprocess.Open.
+	open func(ctx context.Context, until time.Time, arguments []string, fence func(context.Context) error) error
 }
 
 type runtime struct {

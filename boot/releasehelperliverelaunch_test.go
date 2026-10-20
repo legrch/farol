@@ -16,8 +16,10 @@ import (
 
 // Deterministic witnesses for the live helper's relaunch composition. Every
 // owner is a private symbolic seam: they prove acceptance, wiring and terminal
-// mapping. The launch itself (journal order, argv, the post-launch image check)
-// is exercised in modules/release/infra/native/execution over the real runtime.
+// mapping. The launch itself (journal order, argv, the pre-launch image and
+// binding checks, and the zero and nonzero open outcomes) is exercised in
+// modules/release/infra/native/execution: deterministic Milestone relaunch tests
+// and the FAROL_RELAUNCH_NATIVE=1 lane, which replaces open.
 
 const liveRelaunchHome = "/disposable-fixture-home" // closedHelperRequestFixture's home
 
@@ -205,11 +207,9 @@ func TestLiveHelperRelaunchTerminalMapping(t *testing.T) {
 			`{"phase": "launch_requested", "error": "launch_failed", "operationId": "` + id + `"}` + "\n", 70},
 		{"launch_failed as a failure", nil, &executionapp.Failure{Phase: "launch_requested", Code: "launch_failed"},
 			`{"phase": "launch_requested", "error": "launch_failed", "operationId": "` + id + `"}` + "\n", 70},
-		{"unverified launch stays unknown", nil, &executionapp.Failure{Phase: "launch_requested", Code: "launch_unverified", Uncertain: true},
+		{"unknown open outcome stays unknown", nil, &executionapp.Failure{Phase: "launch_requested", Code: "launch_failed", Uncertain: true},
 			liveHelperUnknownLine, 79},
-		{"ambiguous image stays unknown", nil, &executionapp.Failure{Phase: "launch_requested", Code: "launch_image_ambiguous", Uncertain: true},
-			liveHelperUnknownLine, 79},
-		{"mismatched image stays unknown", nil, errors.Join(errors.New("launch_image_mismatch"), &executionapp.Failure{Phase: "launch_requested", Code: "launch_image_mismatch"}),
+		{"unclassified launch error stays unknown", nil, errors.Join(errors.New("open outcome unknown"), &executionapp.Failure{Phase: "launch_requested", Code: "launch_unavailable"}),
 			liveHelperUnknownLine, 79},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -268,30 +268,29 @@ Relaunch follows `update_helper.py` run() (1382-1403) through the existing
 `Milestone.Execute`: only a verified apply or recovery launches. After `verified` it captures the
 private `launch-Farol.app` for a shared install, journals `launch_requested`, measures
 this helper process, builds the hint with phase `completed` and this helper's own pid
-and start, opens the image once, verifies the launched process image
-(`relaunch-image-verification.md`), and journals `completed`; a clean nonzero launch is
-`launch_failed` (exit 70, phase `launch_requested`). A rollback that asks for relaunch
+and start, and opens the image once with `/usr/bin/open`, following the Sparkle and
+Squirrel.Mac model the owner chose (`relaunch-image-verification.md`). A zero exit
+journals `completed`; a clean nonzero launch is `launch_failed` (exit 70, phase
+`launch_requested`). Nothing inspects the launched process afterwards. A rollback that asks for relaunch
 settles `rolled_back` and never launches, exactly as Python (the desktop's Roll back
 button sends it). The live helper alone supplies the launch capabilities
 (`RelaunchArguments` from the bound protocol, `MeasureSelf` over the native probe and
 the process-wait policy, joined before return); the closed helper supplies none and
-still refuses relaunch. **Deliberate divergence from Python:** the post-launch image
-verification of `relaunch-image-verification.md` is strict. Zero, ambiguous or
-mismatched candidates are uncertain, so the journal stays `launch_requested` and the
-exit is 79, where Python writes `completed` after any zero exit from `open`. The desktop
-reads the journal on its next start, so the unverified launch is reconciled rather than
-reported complete.
+still refuses relaunch. A timeout or other unknown outcome of `open` keeps the
+journal at `launch_requested` and exits 79; the desktop reads the journal on its next
+start and reconciles it. Protection against a substituted image is the later Developer
+ID signing step.
 Its pre-ACK refusals (update lock, marker, readiness, process identity, custody
 fences, slot binding) follow the same refused-frame rule: a provably clean
 refusal sends one `refused` frame instead of `waiting_for_exit` and exits 70.
 Nothing selects it: the desktop still spawns `update_helper.py`.
 `releasehelperlivenative_test.go` runs the compiled entry against a scratch
-`/bin/cat` predecessor under `FAROL_LIVE_HELPER_NATIVE=1`; its relaunch cases stop
-before `/usr/bin/open` (inert images have no executable) so they cannot start an app.
-The launch and its post-launch verification are exercised in `infra/native/execution`:
+`/bin/cat` predecessor under `FAROL_LIVE_HELPER_NATIVE=1`. It has no apply or recover
+relaunch case on the compiled entry, since `/usr/bin/open` is the only launch seam.
+The launch is exercised in `infra/native/execution`:
 deterministic Milestone relaunch tests (`milestonerelaunch_test.go`, and for recovery `milestonerecover_test.go`) and, under
 `FAROL_RELAUNCH_NATIVE=1`, `TestNativeMilestoneRelaunchEndToEnd` over scratch bundles,
-which replaces LaunchServices with a direct exec of a scratch executable. Boot wiring
+which replaces `open` with a direct exec of a scratch executable and covers zero and nonzero open outcomes. Boot wiring
 tests (`releasehelperliverelaunch_test.go`) cover which capabilities each helper carries.
 Not covered: the real LaunchServices `/usr/bin/open`, a shared install end to end (it
 needs a root-owned Applications parent, so its capture stays on the root-scheduled
@@ -368,7 +367,7 @@ cannot manufacture pre-ACK admission.
 The native execution runtime implements the relaunch effects: private
 capture of the verified shared install image (itself an operation effect, with
 failed images retained), self-measurement (`MeasureSelf`), relaunch-argument
-building (`RelaunchArguments`) and post-launch image verification
+building (`RelaunchArguments`) and the single `/usr/bin/open` launch
 (`relaunch-image-verification.md`). Self-measurement and argument building are
 optional `Config` capabilities that only trusted composition installs. The live helper (`farol run-live-release-helper`)
 installs them only for a relaunch request; the closed helper supplies none and still
@@ -382,15 +381,13 @@ a pathname after verifying the image through held descriptors. A writer running
 as the same user can still replace that path between verification and
 LaunchServices resolution. Copying is not a same-user exclusion boundary (see
 [install namespace](install-namespace.md)), and this port neither narrows nor
-widens that window. Unlike Python, the runtime then verifies the launched process
-image afterwards under the owner's cooperative-writer contract. This is detection,
-not prevention, and it does not close the window. Zero, ambiguous or mismatched
-candidates are uncertain and leave the journal at `launch_requested`. Deterministic
-tests cover callback ordering, effect fencing, known versus unknown failure
-classification and every verification branch with disposable fixtures. The gated
-native lane covers real kernel reads over scratch bundles, including a successful
-launch, but not LaunchServices, a physical shared or installed image, or a packaged
-run.
+widens that window. Like Python, and like Sparkle and Squirrel.Mac, the runtime does
+not look at the launched process afterwards; protection against a substituted image
+is the later Developer ID signing step. Deterministic tests cover callback ordering,
+effect fencing, known versus unknown failure classification and the zero, nonzero and
+unknown `open` outcomes with disposable fixtures. The gated native lane runs the
+Milestone over scratch bundles with `open` replaced by a direct exec, but not
+LaunchServices, a physical shared or installed image, or a packaged run.
 
 This is independently buildable source foundation. This library does not itself
 provide transport/ACK, terminal classification, physical installation and recovery
