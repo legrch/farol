@@ -241,31 +241,64 @@ func (b *cancelBody) Read(p []byte) (int, error) {
 }
 func (b *cancelBody) Close() error { b.closed.Store(true); return nil }
 
-func TestCancellationAndAbsoluteDeadlineMidstreamAreUnknown(t *testing.T) {
-	for _, mode := range []string{"cancel", "deadline"} {
-		t.Run(mode, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			var count atomic.Int32
-			var body *cancelBody
-			client := New(&http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-				count.Add(1)
-				body = &cancelBody{prefix: strings.NewReader(created("response_1") + delta("PRIVATE_PARTIAL")), ctx: r.Context()}
-				if mode == "cancel" {
-					cancel()
-				}
-				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: body}, nil
-			})})
-			r := fixtureRequest()
-			if mode == "deadline" {
-				r.DeadlineMillis = uint64(time.Now().Add(30 * time.Millisecond).UnixMilli())
-			}
-			got := client.Infer(ctx, fixtureCredential(), r)
-			if got.State != inference.Unknown || got.Text != "" || got.Code != inference.Cancelled || count.Load() != 1 || !body.closed.Load() {
-				t.Fatalf("%+v count=%d", got, count.Load())
-			}
-		})
+// The deadline is an absolute wall-clock value fixed before Infer, so a stalled
+// scheduler can let a short one pass before dispatch. Such an attempt must be
+// the exact pre-I/O refusal, and the next one widens the budget. Every attempt
+// is asserted; none is accepted on a weaker predicate.
+var midstreamDeadlineBudgets = []time.Duration{50 * time.Millisecond, 200 * time.Millisecond, 800 * time.Millisecond, 3200 * time.Millisecond}
+
+func inferMidstream(mode string, budget time.Duration) (inference.Outcome, int32, *cancelBody) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var count atomic.Int32
+	var body *cancelBody
+	client := New(&http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		count.Add(1)
+		body = &cancelBody{prefix: strings.NewReader(created("response_1") + delta("PRIVATE_PARTIAL")), ctx: r.Context()}
+		if mode == "cancel" {
+			cancel()
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: body}, nil
+	})})
+	r := fixtureRequest()
+	if mode == "deadline" {
+		r.DeadlineMillis = uint64(time.Now().Add(budget).UnixMilli())
 	}
+	got := client.Infer(ctx, fixtureCredential(), r)
+	return got, count.Load(), body
+}
+
+func TestCancellationAndAbsoluteDeadlineMidstreamAreUnknown(t *testing.T) {
+	midstream := func(t *testing.T, got inference.Outcome, count int32, body *cancelBody) {
+		t.Helper()
+		if got.State != inference.Unknown || got.Text != "" || got.Code != inference.Cancelled || count != 1 || !body.closed.Load() {
+			t.Fatalf("%+v count=%d", got, count)
+		}
+	}
+	t.Run("cancel", func(t *testing.T) {
+		got, count, body := inferMidstream("cancel", 0)
+		midstream(t, got, count, body)
+		if !errors.Is(body.ctx.Err(), context.Canceled) {
+			t.Fatalf("request context ended by %v, want cancellation", body.ctx.Err())
+		}
+	})
+	t.Run("deadline", func(t *testing.T) {
+		for _, budget := range midstreamDeadlineBudgets {
+			got, count, body := inferMidstream("deadline", budget)
+			if count == 0 {
+				if got != (inference.Outcome{State: inference.NotSent, Code: inference.Cancelled}) || body != nil {
+					t.Fatalf("budget %v: deadline before dispatch gave %+v", budget, got)
+				}
+				continue
+			}
+			midstream(t, got, count, body)
+			if !errors.Is(body.ctx.Err(), context.DeadlineExceeded) {
+				t.Fatalf("request context ended by %v, want the absolute deadline", body.ctx.Err())
+			}
+			return
+		}
+		t.Fatalf("the deadline passed before dispatch at every budget %v", midstreamDeadlineBudgets)
+	})
 }
 
 func TestContentTypeIsRequired(t *testing.T) {
