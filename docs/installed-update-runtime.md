@@ -211,8 +211,12 @@ apply and restore with `UPDATE_HELPER_GO_CORE_REQUIRED` before any admission, co
 binding or process and must be updated by hand; a Go capability that fails to qualify
 refuses with the existing not-started outcome. Neither ever falls back to Python, whose
 `update_helper.py` stays in the tree and package until a separate deletion packet. The
-supervised maintainer controller reads the accepted target package's own Go declaration
-and refuses before the predecessor quits when there is none. These source changes do not
+supervised maintainer controller uses the accepted target package's own Go declaration
+and build identity exactly as the full package verifier checked the bundled binary
+against them, captured once by the resource observation inside its tree-digest
+fences (`captureSupervisedUpdateResources().goCore`); every later observation must
+verify the same value, and nothing re-reads them from the package path. It refuses
+before the predecessor quits when there is none. These source changes do not
 replace the installed 0.1.11 app.
 
 A pre-readiness refusal is retryable only after that same helper's classified

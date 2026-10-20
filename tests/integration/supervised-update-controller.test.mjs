@@ -19,7 +19,7 @@ const ports = vi.hoisted(() => ({
   goCore: vi.fn(),
 }));
 vi.mock("../../tooling/supervised-update-go-core.mjs", () => ({
-  readSupervisedGoCore: ports.goCore,
+  selectSupervisedGoCore: ports.goCore,
 }));
 vi.mock("../../src/apps/desktop/installed-predecessor.ts", () => ({
   captureInstalledPredecessor: ports.capture,
@@ -158,13 +158,17 @@ beforeEach(async () => {
     changed: [],
     drained: true,
   });
-  resource = { app: input.appPath, verify: vi.fn(async () => true) };
+  resource = {
+    app: input.appPath,
+    goCore: { core: { fixture: "verified core" }, identity: { fixture: true } },
+    verify: vi.fn(async () => true),
+  };
   ports.resources.mockResolvedValue(resource);
   goCore = {
     goCoreArtifact: { schema: "farol-core-artifact/1", fixture: true },
     goCoreBuild: { buildId: target.buildId, fixture: true },
   };
-  ports.goCore.mockResolvedValue(goCore);
+  ports.goCore.mockReturnValue(goCore);
   backup = {
     root: "private-copy",
     app: "private-copy/Farol.app",
@@ -238,13 +242,15 @@ describe("supervised update composition (mocked lifecycle)", () => {
 
   it("hands the accepted target package's own Go declaration and build to the runtime", async () => {
     expect((await runSupervisedUpdate(input)).status).toBe("verified_closed");
+    // The declaration is the one the resource observation captured from the
+    // verified package, never a fresh read of the package path.
     expect(ports.goCore).toHaveBeenCalledExactlyOnceWith({
-      appPath: resource.app,
+      goCore: resource.goCore,
       expected: input.expected,
     });
     expect(selected.goCoreArtifact).toBe(goCore.goCoreArtifact);
     expect(selected.goCoreBuild).toBe(goCore.goCoreBuild);
-    // Read from the verified resources, then those resources are verified again.
+    // Selected from the verified capture, then those resources are verified again.
     expect(resource.verify.mock.invocationCallOrder[0]).toBeGreaterThan(
       ports.goCore.mock.invocationCallOrder[0],
     );
@@ -256,7 +262,9 @@ describe("supervised update composition (mocked lifecycle)", () => {
   ])(
     "refuses a target package with %s before the predecessor is asked to quit",
     async (_name, code) => {
-      ports.goCore.mockRejectedValue(new Error(code));
+      ports.goCore.mockImplementation(() => {
+        throw new Error(code);
+      });
       expect(await runSupervisedUpdate(input)).toMatchObject({
         status: "blocked",
         code,

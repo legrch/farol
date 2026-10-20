@@ -259,12 +259,19 @@ export async function captureSupervisedUpdateResources({
           artifact.updateChannel === channelForVersion(claims.version),
         "ARTIFACT_CLAIMS",
       );
+      // The Go declaration is the one the verifier checked the binary against,
+      // read inside this observation's two tree-digest fences. It is captured
+      // once; every later observation must verify exactly the same value.
+      let verifiedGoCore = null;
       const identity = await verifyPackageContent({
         artifact,
         appPath: app,
         expectedVersion: claims.version,
         expectedBuildVersion: claims.buildVersion,
         expectedChannel: channelForVersion(claims.version),
+        onVerifiedGoCore: (value) => {
+          verifiedGoCore = value;
+        },
       });
       requireValue(
         matchesClaims(identity, claims) &&
@@ -288,7 +295,21 @@ export async function captureSupervisedUpdateResources({
         "APP_CHANGED",
       );
       await inspectParents(paths, uid, parents);
-      return { parents, root: named, artifactRead, artifact };
+      const goCore =
+        verifiedGoCore === null
+          ? null
+          : freezeJson(JSON.parse(JSON.stringify(verifiedGoCore)));
+      requireValue(
+        !retained || JSON.stringify(goCore) === JSON.stringify(retained.goCore),
+        "APP_CONTENT_CHANGED",
+      );
+      return {
+        parents,
+        root: named,
+        artifactRead,
+        artifact,
+        goCore: retained ? retained.goCore : goCore,
+      };
     } finally {
       await handle.close();
     }
@@ -300,6 +321,8 @@ export async function captureSupervisedUpdateResources({
   return Object.freeze({
     app,
     artifact: retained.artifact,
+    // `{ core, identity }` from the verified package, or null without a core.
+    goCore: retained.goCore,
     verify() {
       if (refused) return Promise.resolve(false);
       if (inFlight) return inFlight;
