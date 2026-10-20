@@ -14,6 +14,7 @@ export type GithubReleaseErrorCode =
   | "invalid_installed_version"
   | "invalid_release_metadata"
   | "release_catalogue_incomplete"
+  | "release_not_found"
   | "invalid_manifest"
   | "release_mismatch"
   | "wrong_provenance"

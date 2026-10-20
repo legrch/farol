@@ -1168,6 +1168,36 @@ it.each([
     "An earlier package check did not finish. Its files are saved.",
     ["Dismiss", "Review Diagnostics"],
   ],
+  [
+    {
+      phase: "failed",
+      code: "UPDATE_ADOPTION_RELEASE_NOT_FOUND",
+      recoveryRequired: false,
+    },
+    "The update did not finish",
+    "This copy of Farol isn’t a published release",
+    ["Dismiss", "Review Diagnostics"],
+  ],
+  [
+    {
+      phase: "failed",
+      code: "UPDATE_ADOPTION_TREE_MISMATCH",
+      recoveryRequired: false,
+    },
+    "The update did not finish",
+    "This copy of Farol doesn’t match its published release. Download it again.",
+    ["Dismiss", "Review Diagnostics"],
+  ],
+  [
+    {
+      phase: "failed",
+      code: "UPDATE_ADOPTION_NETWORK_FAILURE",
+      recoveryRequired: false,
+    },
+    "The update did not finish",
+    "Check your connection and try again.",
+    ["Dismiss", "Review Diagnostics"],
+  ],
 ] satisfies [WindowSnapshot["update"], string, string, string[]][])(
   "Updates %j shows its own heading, state and release actions",
   async (update, heading, status, actions) => {

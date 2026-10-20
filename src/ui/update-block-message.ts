@@ -18,10 +18,26 @@ const messages: Readonly<Record<string, string>> = {
     "Farol could not confirm that local work has finished. Review its current result before restarting.",
   UPDATE_HELPER_GO_CORE_REQUIRED:
     "This Farol build can’t update itself any more. Install the current Farol build manually.",
+  UPDATE_BASELINE_ADOPTION_REQUIRED:
+    "This copy of Farol isn’t a published release, so it can’t update itself. Download Farol from its releases page.",
+  UPDATE_ADOPTION_RELEASE_NOT_FOUND:
+    "This copy of Farol isn’t a published release, so it can’t update itself. Download Farol from its releases page.",
+  UPDATE_ADOPTION_TREE_MISMATCH:
+    "This copy of Farol doesn’t match its published release. Download it again.",
+  UPDATE_ADOPTION_NETWORK_FAILURE:
+    "Farol couldn’t check its release. Check your connection and try again.",
   UPDATE_STATE_UNREADABLE: "Farol couldn’t read its update status.",
   UPDATE_VERIFICATION_RECOVERY_REQUIRED:
     "An earlier package check did not finish. Its files are saved. Review Diagnostics to recover that check before updating.",
 };
+
+// First-launch adoption failures carry their own guidance, not the generic copy.
+const adoptionResultCodes: ReadonlySet<string> = new Set([
+  "UPDATE_ADOPTION_RELEASE_NOT_FOUND",
+  "UPDATE_BASELINE_ADOPTION_REQUIRED",
+  "UPDATE_ADOPTION_TREE_MISMATCH",
+  "UPDATE_ADOPTION_NETWORK_FAILURE",
+]);
 
 export function updateBlockMessage(
   code: string,
@@ -39,6 +55,8 @@ export function updateResultMessage(
   if (phase === "unavailable")
     return "Farol cannot confirm update availability in this session. Review Diagnostics before another check.";
   if (code === "UPDATE_VERIFICATION_RECOVERY_REQUIRED") return messages[code]!;
+  if (code !== undefined && adoptionResultCodes.has(code))
+    return messages[code]!;
   return recoveryRequired
     ? "The update result needs recovery. Check Diagnostics and the installed version before another update action."
     : "The update did not finish. Check Diagnostics and the installed version before trying again.";

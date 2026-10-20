@@ -178,6 +178,71 @@ receipt and its exact source/target digest. Version and build labels alone canno
 turn modified installed bytes into an accepted predecessor. Missing, redirected,
 malformed or mismatched evidence blocks preparation without launching a helper.
 
+### First-launch adoption (user slot only)
+
+A copy that was downloaded and dragged into `~/Applications/Farol.app` has no
+private promotion receipt and no update receipt. Instead of refusing every check
+with `UPDATE_SOURCE_IDENTITY_UNCONFIRMED`, `discover()` adopts one baseline, and
+only when `readAcceptedSource()` fails with exactly `UPDATE_BASELINE_ADOPTION_REQUIRED`.
+That error means: no `last-update.json`, no closed-repair receipt or journal, no
+`<slot>.receipt.json` and no `adopted-baseline.json`, in the user slot. "No" means
+the name does not exist (`ENOENT`). A file that exists but holds JSON `null` is
+present, keeps the pre-adoption behaviour for that evidence and is never adopted
+over. The shared
+`/Applications/Farol.app` slot never adopts and keeps its startup refusal.
+Adoption belongs to the ordinary desktop runtime, user slot only; never shared or
+supervised. The supervised runtime neither looks up a release, nor writes, nor
+reads `adopted-baseline.json`, and behaves exactly as before adoption existed.
+
+Adoption runs these steps and writes nothing unless all of them pass:
+
+1. The running build must be clean, carry a `buildVersion` and use the
+   `github-stable` or `github-owner-beta` channel.
+2. `findGithubReleaseManifest` reads the fixed releases catalogue and the single
+   non-draft release whose version equals the running version, under the same size
+   and provenance checks as discovery. A full 100-entry page is incomplete; a
+   duplicate exact version is invalid; an unpublished version is
+   `UPDATE_ADOPTION_RELEASE_NOT_FOUND`.
+3. The published manifest must describe the running build: `buildId`,
+   `sourceCommit`, `sourceTreeDigest`, `version`, `buildVersion` and channel,
+   else `UPDATE_ADOPTION_RELEASE_MISMATCH`.
+4. The installed tree is measured with the existing slot helper. Its digest and
+   build must equal the manifest's `artifactSha256`, `version` and `buildId`,
+   else `UPDATE_ADOPTION_TREE_MISMATCH`.
+5. The runtime creates `adopted-baseline.json` next to `last-update.json`
+   (`farol.next.adopted-baseline/1`: `slot`, `userData`, the full manifest and
+   `adoptedAt`) through the existing private record writer: one atomic rename
+   publish. A crash before the rename leaves only a stray temporary file and no
+   record, so the next check adopts normally. The app is single-instance, and a
+   concurrent writer can only publish an equally validated record for the same
+   running build and slot, so the last writer wins safely. A record that already
+   describes the running build is accepted by `readAcceptedSource()` and never
+   rewritten.
+
+A network failure is `UPDATE_ADOPTION_NETWORK_FAILURE` and records nothing, so a
+later check tries again. After adoption, `readAcceptedSource()` re-validates the
+record on every use: the manifest must parse, the slot and profile must match, and
+the manifest must still describe the running build. A record that does not parse,
+has an invalid manifest, or names another slot or profile is tampered or foreign:
+it is `UPDATE_SOURCE_IDENTITY_UNCONFIRMED` and is never adopted over. A valid record
+for this slot that describes another published build is superseded, for example
+when the recipient installs a newer published build over the slot by hand. The
+runtime then raises `UPDATE_BASELINE_ADOPTION_SUPERSEDED` and runs the same
+adoption in the user slot: lookup, manifest match and tree digest must all pass
+first, and a failure leaves the old record untouched. Only then is the record
+replaced atomically, and only if its bytes still equal the superseded record that
+was read. A record that changed in between belongs to a concurrent writer and is
+validated as found. A record that already describes the running build is never
+rewritten. Once an update has
+settled, `last-update.json` takes precedence over the adopted record, and an owner
+promotion receipt takes precedence over adoption.
+
+Adoption is trust on first use. It establishes that this copy equals the build the
+GitHub release for its exact version published at the time of the first check. It
+detects a corrupt or partial copy, the wrong version, and later drift of the
+installed tree. It does not detect a deliberately tampered download, because the
+manifest comes from the same account and channel that served the download.
+
 A durable ready record binds the verified archive to an operation before helper
 dispatch. Only the helper's exact readiness acknowledgment permits normal Quit.
 Unknown acknowledgment or completion never permits another apply. The same child
