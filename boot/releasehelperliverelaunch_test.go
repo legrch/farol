@@ -16,8 +16,10 @@ import (
 
 // Deterministic witnesses for the live helper's relaunch composition. Every
 // owner is a private symbolic seam: they prove acceptance, wiring and terminal
-// mapping. The launch itself (journal order, argv, the post-launch image check)
-// is exercised in modules/release/infra/native/execution over the real runtime.
+// mapping. The launch itself (journal order, argv, the pre-launch image and
+// binding checks, and the zero and nonzero open outcomes) is exercised in
+// modules/release/infra/native/execution: deterministic Milestone relaunch tests
+// and the FAROL_RELAUNCH_NATIVE=1 lane, which replaces open.
 
 const liveRelaunchHome = "/disposable-fixture-home" // closedHelperRequestFixture's home
 

@@ -285,12 +285,12 @@ fences, slot binding) follow the same refused-frame rule: a provably clean
 refusal sends one `refused` frame instead of `waiting_for_exit` and exits 70.
 Nothing selects it: the desktop still spawns `update_helper.py`.
 `releasehelperlivenative_test.go` runs the compiled entry against a scratch
-`/bin/cat` predecessor under `FAROL_LIVE_HELPER_NATIVE=1`; its relaunch cases stop
-before `/usr/bin/open` (inert images have no executable) so they cannot start an app.
+`/bin/cat` predecessor under `FAROL_LIVE_HELPER_NATIVE=1`. It has no apply or recover
+relaunch case on the compiled entry, since `/usr/bin/open` is the only launch seam.
 The launch is exercised in `infra/native/execution`:
 deterministic Milestone relaunch tests (`milestonerelaunch_test.go`, and for recovery `milestonerecover_test.go`) and, under
 `FAROL_RELAUNCH_NATIVE=1`, `TestNativeMilestoneRelaunchEndToEnd` over scratch bundles,
-which replaces LaunchServices with a direct exec of a scratch executable. Boot wiring
+which replaces `open` with a direct exec of a scratch executable and covers zero and nonzero open outcomes. Boot wiring
 tests (`releasehelperliverelaunch_test.go`) cover which capabilities each helper carries.
 Not covered: the real LaunchServices `/usr/bin/open`, a shared install end to end (it
 needs a root-owned Applications parent, so its capture stays on the root-scheduled
