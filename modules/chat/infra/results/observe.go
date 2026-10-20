@@ -141,7 +141,7 @@ func archiveFile(ctx context.Context, d *resultDisk, name string, limit int) ([]
 	}
 	fd, err := unix.Openat(d.dir, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, Refused
+		return nil, openFailure(err)
 	}
 	f := os.NewFile(uintptr(fd), "chat-archive-observation")
 	before, err := resultStat(fd)
@@ -151,6 +151,10 @@ func archiveFile(ctx context.Context, d *resultDisk, name string, limit int) ([]
 		return nil, Refused
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
+	if err != nil {
+		_ = f.Close()
+		return nil, Unavailable // the store could not be read; nothing was judged
+	}
 	after, se := resultStat(fd)
 	ok := err == nil && se == nil && len(raw) == int(before.Size) && resultStable(before, after) && unix.Fstatat(d.dir, name, &named, unix.AT_SYMLINK_NOFOLLOW) == nil && resultStable(named, after)
 	closed := f.Close()
@@ -345,6 +349,18 @@ func (a *Archive) readArchive(ctx context.Context, selection port.ArchiveReadSel
 // pairs refuse.
 func observed(err error) error {
 	if errors.Is(err, Unavailable) {
+		return Unavailable
+	}
+	return Refused
+}
+
+// openFailure separates a store that could not be opened now (missing, busy,
+// out of descriptors, interrupted, I/O) from a name that resolves to something
+// other than the owned regular file, such as a symlink refused by O_NOFOLLOW.
+func openFailure(err error) error {
+	switch {
+	case errors.Is(err, unix.ENOENT), errors.Is(err, unix.EIO), errors.Is(err, unix.EINTR), errors.Is(err, unix.EAGAIN),
+		errors.Is(err, unix.EMFILE), errors.Is(err, unix.ENFILE), errors.Is(err, unix.ENOMEM), errors.Is(err, unix.EBUSY):
 		return Unavailable
 	}
 	return Refused

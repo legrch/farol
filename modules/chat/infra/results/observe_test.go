@@ -348,3 +348,29 @@ func TestObservedKeepsUnavailableApartFromRefusal(t *testing.T) {
 		t.Fatal("classification lost")
 	}
 }
+
+func TestArchiveOpenFailuresSeparateUnavailableStoreFromRefusedNames(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want error
+	}{
+		{unix.ENOENT, Unavailable}, {unix.EIO, Unavailable}, {unix.EINTR, Unavailable},
+		{unix.EMFILE, Unavailable}, {unix.ELOOP, Refused}, {unix.EACCES, Refused}, {unix.ENOTDIR, Refused},
+	} {
+		if got := openFailure(tc.err); !errors.Is(got, tc.want) {
+			t.Fatalf("%v -> %v, want %v", tc.err, got, tc.want)
+		}
+	}
+	// A committed record whose attempt file is gone is unavailable, not tampering;
+	// a symlinked attempt still refuses (covered by the record-link case above).
+	root, a, q, _ := archiveFixture(t)
+	disk, err := openArchiveDisk(context.Background(), a.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = disk.d.close() }()
+	if _, err := archiveFile(context.Background(), disk.d, resultKey(q)+".missing", port.MaxResultRecordBytes); !errors.Is(err, Unavailable) {
+		t.Fatal("missing file reported as", err)
+	}
+	_ = root
+}
