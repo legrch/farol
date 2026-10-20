@@ -30,6 +30,28 @@ export function workspaceSearchPrerequisite(
   return null;
 }
 
+export const GIT_VERIFICATION_UNAVAILABLE_NOTE =
+  "Git checks are not available in this build";
+
+/**
+ * The title of a fixed Git check button: its first unmet prerequisite, or the
+ * given text when it can run. A build without the Git checks says so before
+ * anything the owner could still change.
+ */
+export function gitVerificationPrerequisite(
+  state: Readonly<{
+    available: boolean;
+    commandsEnabled: boolean;
+    verified: boolean;
+  }>,
+  enabledReason: string,
+): string {
+  if (!state.available) return GIT_VERIFICATION_UNAVAILABLE_NOTE;
+  if (!state.commandsEnabled) return "Enable Verified commands above";
+  if (!state.verified) return "Verify this workspace again first";
+  return enabledReason;
+}
+
 /**
  * Why a prepared guarded edit cannot be applied yet, or null when it can.
  *

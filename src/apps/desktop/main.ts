@@ -420,6 +420,8 @@ import { launchCodexAppServer } from "./codex-app-server-process";
 import { runCodexHostSmoke } from "./codex-host-smoke";
 import { runCodexNativeAgentCheck } from "./codex-native-agent-check";
 import { CodexAgentWorkspaceProbe } from "./codex-agent-workspace-probe";
+import { GoSettingsListWorkspace } from "./go-settings-workspace";
+import type { ReadonlyWorkspace } from "../../modules/computer/app/port/readonly-workspace";
 import { CodexNativeAgentHost } from "../../modules/agent/infra/native/codex-native-agent-host";
 import { PrivateAssignmentStore } from "../../modules/agent/infra/repo/private-assignment-store";
 import { AcknowledgeAgentResult } from "../../modules/agent/app/service/acknowledge-agent-result";
@@ -1654,6 +1656,8 @@ function bootstrap() {
     updateChannel: buildIdentity.updateChannel,
     nativeFilesystem: true,
     nativeAgent: productAgentCapabilityAvailable(),
+    // The fixed Git verifiers exist only in the explicit legacy build.
+    gitVerificationAvailable: compiledGoCore === null,
     liveProvider: false,
     windowState: currentWindowState(),
     chatgptSignInBlocked: chatGptSignInBlocked.current(),
@@ -6058,9 +6062,26 @@ function workspaceReadFailure(code: string): ProductConfigurationResult {
   }
 }
 
+// The workspace the Codex agent check lists through. A Go build asks the Go
+// settings list and a Go failure is the check's failure: it never dispatches
+// the Python helper. Only the explicit legacy build keeps the native one.
+function codexAgentCheckWorkspace(
+  settings: ProductSettings,
+): ReadonlyWorkspace {
+  if (compiledGoCore === null) return nativeWorkspace;
+  return new GoSettingsListWorkspace((workspace, relativePath) =>
+    listOwnerWorkspace(
+      settings.computer.generation,
+      workspace,
+      workspace.approvedRoot,
+      relativePath,
+    ),
+  );
+}
+
 async function listOwnerWorkspace(
   generation: number,
-  workspace: ApprovedProductWorkspace,
+  workspace: Pick<ApprovedProductWorkspace, "workspaceId" | "root">,
   identity: WorkspaceRootIdentity,
   relativePath: string,
   diagnosticAction?: string,
@@ -7990,8 +8011,10 @@ async function configureAdmittedProduct(
               nonce: randomUUID,
               now: () => Date.now(),
             },
-            new CodexAgentWorkspaceProbe(settings, nativeWorkspace, () =>
-              Date.now(),
+            new CodexAgentWorkspaceProbe(
+              settings,
+              codexAgentCheckWorkspace(settings),
+              () => Date.now(),
             ),
           );
           const started: ActiveCodexAgentCheck = {
@@ -9675,6 +9698,14 @@ async function configureAdmittedProduct(
       }
       if (selected.status === "not_verified") {
         return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
+      }
+      // Owner decision 2026-10-20: the fixed Git verifiers run the Python
+      // safe-open snapshot and the Command Line Tools Git, and only the
+      // explicit legacy build keeps them. A Go build refuses with the closed
+      // product code before any authority or helper is built, never retries,
+      // and never reaches Python or git.
+      if (compiledGoCore !== null) {
+        return configurationFailure("WORKSPACE_COMMAND_UNAVAILABLE");
       }
       const action = verificationWorkspaceAction(
         snapshot.settings,

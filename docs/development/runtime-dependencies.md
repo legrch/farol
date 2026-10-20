@@ -23,6 +23,13 @@ the explicit legacy slot publisher; their presence is not four normal Go-aware
 routes. Both resources remain packaged. `update-archive.py` is a Go executable
 under a historical resource name, not an interpreter script.
 
+By owner decision of 2026-10-20, the Settings "Git status" and "Git HEAD"
+checks (the Python snapshot plus Command Line Tools Git) are unavailable in
+Go-aware builds: they refuse with `WORKSPACE_COMMAND_UNAVAILABLE` and the
+buttons are disabled; they run only in explicit legacy builds. The Codex agent
+check lists through the Go settings list in a Go-aware build and never falls
+back to Python.
+
 Electron supplies its bundled Node runtime. Go/compiler/npm/CLT development tools
 and Python build/test/maintenance scripts are separate from the installed app.
 Explicit user-selected Codex/Claude executables and authorized user Git hooks may

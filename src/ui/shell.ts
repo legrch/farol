@@ -87,6 +87,7 @@ import {
 } from "./task-menu-presentation";
 import {
   approveToolPrerequisite,
+  gitVerificationPrerequisite,
   guardedEditApplyPrerequisite,
   searchMatchDisplay,
   workspaceReadPrerequisite,
@@ -310,6 +311,9 @@ const bootstrapSchema = z.strictObject({
   updateChannel: z.enum(["local-preview-only", "github-owner-beta"]),
   nativeFilesystem: z.literal(true),
   nativeAgent: z.boolean(),
+  // False in a Go build, where the Git status and Git HEAD checks are
+  // unavailable by owner decision; true only in the explicit legacy build.
+  gitVerificationAvailable: z.boolean(),
   liveProvider: z.literal(false),
   windowState: WindowStateSchema,
   chatgptSignInBlocked: chatGptSignInBlockedSchema,
@@ -2627,13 +2631,18 @@ function renderComputerConfiguration(): void {
       const gitStatus = document.createElement("button");
       gitStatus.type = "button";
       gitStatus.textContent = "Git status";
-      gitStatus.disabled = !verified || settings.computer.commands === "none";
-      gitStatus.title =
-        settings.computer.commands === "none"
-          ? "Enable Verified commands above"
-          : verified
-            ? "Run the fixed no-network Git status verifier at this workspace root"
-            : "Verify this workspace again first";
+      const gitState = {
+        available: bootstrap.gitVerificationAvailable,
+        commandsEnabled: settings.computer.commands !== "none",
+        verified,
+      };
+      const gitChecksBlocked =
+        !gitState.available || !verified || !gitState.commandsEnabled;
+      gitStatus.disabled = gitChecksBlocked;
+      gitStatus.title = gitVerificationPrerequisite(
+        gitState,
+        "Run the fixed no-network Git status verifier at this workspace root",
+      );
       gitStatus.addEventListener("click", () => {
         void configureProduct(
           {
@@ -2646,13 +2655,11 @@ function renderComputerConfiguration(): void {
       const gitHead = document.createElement("button");
       gitHead.type = "button";
       gitHead.textContent = "Git HEAD";
-      gitHead.disabled = !verified || settings.computer.commands === "none";
-      gitHead.title =
-        settings.computer.commands === "none"
-          ? "Enable Verified commands above"
-          : verified
-            ? "Read the exact Git HEAD commit through the fixed no-network verifier"
-            : "Verify this workspace again first";
+      gitHead.disabled = gitChecksBlocked;
+      gitHead.title = gitVerificationPrerequisite(
+        gitState,
+        "Read the exact Git HEAD commit through the fixed no-network verifier",
+      );
       gitHead.addEventListener("click", () => {
         void configureProduct(
           {
