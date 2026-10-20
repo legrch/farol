@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   downloadAndVerifyGithubUpdate,
   discoverGithubUpdate as discoverWithBuild,
+  findGithubReleaseManifest,
   packageMatchesRelease,
   parseGithubReleaseManifest,
   parseRetainedGithubReleaseManifest,
@@ -600,6 +601,206 @@ describe("GitHub update discovery", () => {
     expect(await discoverGithubUpdate("0.1.0", "stable", redirected)).toEqual({
       ok: false,
       code: "wrong_provenance",
+    });
+  });
+});
+
+describe("published manifest lookup for first-launch adoption", () => {
+  const installed = { version, buildVersion: "2" };
+
+  it("selects the single release of the exact installed version and its manifest", async () => {
+    const source = ports([
+      release({
+        tag_name: "v0.1.0",
+        html_url: "https://github.com/legrch/farol/releases/tag/v0.1.0",
+        assets: [],
+      }),
+      release(),
+    ]);
+    expect(
+      await findGithubReleaseManifest(installed, "stable", source),
+    ).toEqual({ ok: true, value: manifest });
+    expect(source.fetchJson).toHaveBeenNthCalledWith(
+      1,
+      GITHUB_RELEASES_API,
+      1_048_576,
+    );
+    expect(source.fetchJson).toHaveBeenNthCalledWith(
+      2,
+      assetUrl("farol-release.json"),
+      16_384,
+    );
+    expect(source.download).not.toHaveBeenCalled();
+  });
+
+  it("skips a draft and reports an unpublished version as not found", async () => {
+    expect(
+      await findGithubReleaseManifest(
+        installed,
+        "stable",
+        ports([release({ draft: true }), release()]),
+      ),
+    ).toEqual({ ok: true, value: manifest });
+    for (const releases of [[], [release({ draft: true })]]) {
+      const source = ports(releases);
+      expect(
+        await findGithubReleaseManifest(installed, "stable", source),
+      ).toEqual({
+        ok: false,
+        code: "release_not_found",
+      });
+      expect(source.fetchJson).toHaveBeenCalledTimes(1);
+    }
+    expect(
+      await findGithubReleaseManifest(
+        { version: "0.2.0", buildVersion: "2" },
+        "stable",
+        ports(),
+      ),
+    ).toEqual({ ok: false, code: "release_not_found" });
+  });
+
+  it("refuses a duplicate exact version as ambiguous", async () => {
+    const source = ports([release(), release()]);
+    expect(
+      await findGithubReleaseManifest(installed, "stable", source),
+    ).toEqual({
+      ok: false,
+      code: "invalid_release_metadata",
+    });
+    expect(source.fetchJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not select a release of another channel", async () => {
+    const source = ports();
+    expect(
+      await findGithubReleaseManifest(installed, "owner-beta", source),
+    ).toEqual({ ok: false, code: "release_not_found" });
+    expect(source.fetchJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an installed build number that the published manifest does not carry", async () => {
+    expect(
+      await findGithubReleaseManifest(
+        { version, buildVersion: "3" },
+        "stable",
+        ports(),
+      ),
+    ).toEqual({ ok: false, code: "release_mismatch" });
+    expect(
+      await findGithubReleaseManifest(
+        { version, buildVersion: "0" },
+        "stable",
+        ports(),
+      ),
+    ).toEqual({ ok: false, code: "invalid_installed_version" });
+  });
+
+  it("rejects a manifest of another channel than the one asked for", async () => {
+    const beta = "0.1.1-owner.beta.1";
+    const betaTag = `v${beta}`;
+    const betaArchive = `Farol-${beta}-darwin-arm64.zip`;
+    const betaRelease = release({
+      tag_name: betaTag,
+      html_url: `https://github.com/legrch/farol/releases/tag/${betaTag}`,
+      prerelease: true,
+      assets: [
+        {
+          name: "farol-release.json",
+          browser_download_url: assetUrl("farol-release.json", betaTag),
+          size: 900,
+          state: "uploaded",
+        },
+        {
+          name: betaArchive,
+          browser_download_url: assetUrl(betaArchive, betaTag),
+          size: 10,
+          state: "uploaded",
+        },
+      ],
+    });
+    const betaManifest = {
+      ...manifest,
+      channel: "owner-beta",
+      version: beta,
+      archiveName: betaArchive,
+    };
+    expect(
+      await findGithubReleaseManifest(
+        { version: beta, buildVersion: "2" },
+        "owner-beta",
+        ports([betaRelease], betaManifest),
+      ),
+    ).toEqual({ ok: true, value: betaManifest });
+    expect(
+      await findGithubReleaseManifest(
+        { version: beta, buildVersion: "2" },
+        "owner-beta",
+        ports([betaRelease], { ...betaManifest, channel: "stable" }),
+      ),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("does not claim a complete catalogue from a full GitHub page", async () => {
+    const page = Array.from({ length: 100 }, () => release({ draft: true }));
+    page[0] = release();
+    const source = ports(page);
+    expect(
+      await findGithubReleaseManifest(installed, "stable", source),
+    ).toEqual({
+      ok: false,
+      code: "release_catalogue_incomplete",
+    });
+    expect(source.fetchJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects foreign provenance for the catalogue and for the manifest", async () => {
+    const wrongCatalogue = {
+      ...ports(),
+      fetchJson: vi.fn(async () => ({
+        ok: true as const,
+        value: {
+          value: [release()],
+          finalUrl: "https://evil.example/releases",
+          redirects: [],
+        },
+      })),
+    };
+    expect(
+      await findGithubReleaseManifest(installed, "stable", wrongCatalogue),
+    ).toEqual({ ok: false, code: "wrong_provenance" });
+    const wrongManifest = {
+      ...ports(),
+      fetchJson: vi.fn(async (url: string) => ({
+        ok: true as const,
+        value: {
+          value: url === GITHUB_RELEASES_API ? [release()] : manifest,
+          finalUrl:
+            url === GITHUB_RELEASES_API ? url : "https://evil.example/manifest",
+          redirects:
+            url === GITHUB_RELEASES_API
+              ? []
+              : [url, "https://evil.example/manifest"],
+        },
+      })),
+    };
+    expect(
+      await findGithubReleaseManifest(installed, "stable", wrongManifest),
+    ).toEqual({ ok: false, code: "wrong_provenance" });
+  });
+
+  it("reports a transport failure without a result", async () => {
+    const failed = {
+      ...ports(),
+      fetchJson: vi.fn(async () => {
+        throw new Error("offline");
+      }),
+    };
+    expect(
+      await findGithubReleaseManifest(installed, "stable", failed),
+    ).toEqual({
+      ok: false,
+      code: "network_failure",
     });
   });
 });

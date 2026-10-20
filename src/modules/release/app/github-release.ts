@@ -276,16 +276,13 @@ function allowedUrl(value: string, allowAssetRedirect: boolean): boolean {
   }
 }
 
-export async function discoverGithubUpdate(
-  installed: InstalledReleaseIdentity,
-  channel: ReleaseChannel,
+/**
+ * Fetch the fixed bounded release catalogue. Shared by discovery and adoption so
+ * both apply identical size, provenance and completeness checks.
+ */
+async function fetchReleaseCatalogue(
   ports: Pick<GithubReleasePorts, "fetchJson">,
-): Promise<Outcome<UpdateCandidate | null>> {
-  if (
-    !parseReleaseVersion(installed.version) ||
-    !BUILD_VERSION.test(installed.buildVersion)
-  )
-    return failure("invalid_installed_version");
+): Promise<Outcome<readonly unknown[]>> {
   let fetched;
   try {
     fetched = await ports.fetchJson(
@@ -311,25 +308,14 @@ export async function discoverGithubUpdate(
   // Never report "up to date" or choose a partial maximum from truncated metadata.
   if (fetched.value.value.length === 100)
     return failure("release_catalogue_incomplete");
-  let chosen: Release | null = null;
-  for (const raw of fetched.value.value) {
-    const parsed = parseRelease(raw);
-    if (!parsed.ok) return parsed;
-    const release = parsed.value;
-    if (!release || !versionBelongsToChannel(release.version, channel))
-      continue;
-    const comparison = compareReleaseVersions(
-      release.version,
-      installed.version,
-    );
-    if (comparison === null) return failure("invalid_release_metadata");
-    if (comparison <= 0) continue;
-    if (!chosen || compareReleaseVersions(release.version, chosen.version)! > 0)
-      chosen = release;
-    else if (compareReleaseVersions(release.version, chosen.version) === 0)
-      return failure("invalid_release_metadata");
-  }
-  if (!chosen) return { ok: true, value: null };
+  return { ok: true, value: fetched.value.value as readonly unknown[] };
+}
+
+/** Fetch and strictly parse the exact manifest asset of one selected release. */
+async function fetchReleaseManifest(
+  chosen: Release,
+  ports: Pick<GithubReleasePorts, "fetchJson">,
+): Promise<Outcome<{ manifest: ReleaseManifest; asset: ReleaseAsset }>> {
   const manifestAsset = chosen.assets.find(
     (asset) => asset.name === RELEASE_MANIFEST_ASSET,
   );
@@ -356,29 +342,115 @@ export async function discoverGithubUpdate(
     return failure("wrong_provenance");
   const manifest = parseGithubReleaseManifest(manifestResponse.value.value);
   if (!manifest.ok) return manifest;
+  return {
+    ok: true,
+    value: { manifest: manifest.value, asset: manifestAsset },
+  };
+}
+
+export async function discoverGithubUpdate(
+  installed: InstalledReleaseIdentity,
+  channel: ReleaseChannel,
+  ports: Pick<GithubReleasePorts, "fetchJson">,
+): Promise<Outcome<UpdateCandidate | null>> {
   if (
-    manifest.value.version !== chosen.version ||
-    manifest.value.channel !== channel
+    !parseReleaseVersion(installed.version) ||
+    !BUILD_VERSION.test(installed.buildVersion)
   )
+    return failure("invalid_installed_version");
+  const catalogue = await fetchReleaseCatalogue(ports);
+  if (!catalogue.ok) return catalogue;
+  let chosen: Release | null = null;
+  for (const raw of catalogue.value) {
+    const parsed = parseRelease(raw);
+    if (!parsed.ok) return parsed;
+    const release = parsed.value;
+    if (!release || !versionBelongsToChannel(release.version, channel))
+      continue;
+    const comparison = compareReleaseVersions(
+      release.version,
+      installed.version,
+    );
+    if (comparison === null) return failure("invalid_release_metadata");
+    if (comparison <= 0) continue;
+    if (!chosen || compareReleaseVersions(release.version, chosen.version)! > 0)
+      chosen = release;
+    else if (compareReleaseVersions(release.version, chosen.version) === 0)
+      return failure("invalid_release_metadata");
+  }
+  if (!chosen) return { ok: true, value: null };
+  const fetchedManifest = await fetchReleaseManifest(chosen, ports);
+  if (!fetchedManifest.ok) return fetchedManifest;
+  const { manifest, asset: manifestAsset } = fetchedManifest.value;
+  if (manifest.version !== chosen.version || manifest.channel !== channel)
     return failure("release_mismatch");
-  if (BigInt(manifest.value.buildVersion) <= BigInt(installed.buildVersion))
+  if (BigInt(manifest.buildVersion) <= BigInt(installed.buildVersion))
     return failure("release_mismatch");
   const archiveAsset = chosen.assets.find(
-    (asset) => asset.name === manifest.value.archiveName,
+    (asset) => asset.name === manifest.archiveName,
   );
   if (!archiveAsset) return failure("missing_asset");
-  if (archiveAsset.size !== manifest.value.archiveSize)
+  if (archiveAsset.size !== manifest.archiveSize)
     return failure("release_mismatch");
   return {
     ok: true,
     value: {
-      manifest: manifest.value,
+      manifest,
       manifestAsset,
       archiveAsset,
       tag: chosen.tag,
       ...(chosen.notes ? { notes: chosen.notes } : {}),
     },
   };
+}
+
+/**
+ * Find the published manifest of the exact installed release, for first-launch
+ * adoption. It applies the same catalogue and manifest checks as discovery but
+ * selects the one non-draft release whose version equals the installed one.
+ * A match is a statement about what was published, not proof of the installed
+ * bytes: the caller must still measure the installed tree against the manifest.
+ */
+export async function findGithubReleaseManifest(
+  installed: InstalledReleaseIdentity,
+  channel: ReleaseChannel,
+  ports: Pick<GithubReleasePorts, "fetchJson">,
+): Promise<Outcome<ReleaseManifest>> {
+  if (
+    !parseReleaseVersion(installed.version) ||
+    !BUILD_VERSION.test(installed.buildVersion)
+  )
+    return failure("invalid_installed_version");
+  const catalogue = await fetchReleaseCatalogue(ports);
+  if (!catalogue.ok) return catalogue;
+  let chosen: Release | null = null;
+  for (const raw of catalogue.value) {
+    const parsed = parseRelease(raw);
+    if (!parsed.ok) return parsed;
+    const release = parsed.value;
+    if (!release || !versionBelongsToChannel(release.version, channel))
+      continue;
+    const comparison = compareReleaseVersions(
+      release.version,
+      installed.version,
+    );
+    if (comparison === null) return failure("invalid_release_metadata");
+    if (comparison !== 0) continue;
+    if (chosen) return failure("invalid_release_metadata");
+    chosen = release;
+  }
+  if (!chosen) return failure("release_not_found");
+  const fetchedManifest = await fetchReleaseManifest(chosen, ports);
+  if (!fetchedManifest.ok) return fetchedManifest;
+  const manifest = fetchedManifest.value.manifest;
+  if (
+    manifest.version !== installed.version ||
+    manifest.version !== chosen.version ||
+    manifest.channel !== channel ||
+    manifest.buildVersion !== installed.buildVersion
+  )
+    return failure("release_mismatch");
+  return { ok: true, value: manifest };
 }
 
 export function packageMatchesRelease(
