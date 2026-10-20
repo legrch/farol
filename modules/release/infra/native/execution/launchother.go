@@ -26,8 +26,9 @@ func (unsupportedPlatform) image(int) (liveImage, error) { return liveImage{}, e
 func (unsupportedPlatform) start(int) (processStart, error) {
 	return processStart{}, errLaunchUnsupported
 }
-func (unsupportedPlatform) kill(int) error { return errLaunchUnsupported }
-func (unsupportedPlatform) now() time.Time { return time.Now() }
+func (unsupportedPlatform) watch(int) (exitWatch, error) { return nil, errLaunchUnsupported }
+func (unsupportedPlatform) kill(int) error               { return errLaunchUnsupported }
+func (unsupportedPlatform) now() time.Time               { return time.Now() }
 func (unsupportedPlatform) sleep(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()

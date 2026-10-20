@@ -54,10 +54,20 @@ type launchPlatform interface {
 	image(pid int) (liveImage, error)
 	// start rereads a process birth time.
 	start(pid int) (processStart, error)
+	// watch registers for the exit of exactly one process. It reports
+	// errProcessGone when that process no longer exists. The caller closes it.
+	watch(pid int) (exitWatch, error)
 	// kill sends SIGKILL to exactly one pid.
 	kill(pid int) error
 	now() time.Time
 	sleep(ctx context.Context, d time.Duration) error
+}
+
+// exitWatch observes whether the registered process has exited since watch
+// returned. exited never blocks.
+type exitWatch interface {
+	exited() (bool, error)
+	close() error
 }
 
 func launchUnverified(cause error, uncertain bool) error {
@@ -135,11 +145,33 @@ func verifyLaunched(ctx context.Context, p launchPlatform, hint string, want lau
 	}
 }
 
-// refuseLaunchedImage contains a confirmed substitute. It kills only the exact
-// pid whose birth time still equals the one observed with the mismatching
-// image, so a recycled pid is never signalled. The result is the definite
-// classified refusal; the retained launch image is untouched.
+// refuseLaunchedImage contains a confirmed substitute. A pid alone cannot name
+// a process, so the kill is bound to the observed one in three steps: an exit
+// watch is registered first, the birth time must still equal the observed one,
+// and a zero-timeout poll of the watch must show no exit immediately before the
+// signal. The result is the definite classified refusal when the signal was
+// sent; the retained launch image is untouched.
+//
+// Residual window: between that last poll and the kill system call the target
+// can still exit and its pid be recycled by an unrelated process, which needs a
+// full pid wraparound inside that interval. macOS has no pidfd, so this is
+// reduced, not eliminated.
 func refuseLaunchedImage(p launchPlatform, pid int, observed liveImage) error {
+	watch, err := p.watch(pid)
+	switch {
+	case errors.Is(err, errProcessGone):
+		return fail("launch_image_mismatch", false, true, errors.New("substitute exited before containment"))
+	case err != nil:
+		return fail("launch_image_mismatch", false, true, err)
+	}
+	result := containWatched(p, watch, pid, observed)
+	if err := watch.close(); err != nil {
+		return fail("launch_image_mismatch", false, true, errors.Join(err, result))
+	}
+	return result
+}
+
+func containWatched(p launchPlatform, watch exitWatch, pid int, observed liveImage) error {
 	current, err := p.start(pid)
 	switch {
 	case errors.Is(err, errProcessGone):
@@ -148,6 +180,13 @@ func refuseLaunchedImage(p launchPlatform, pid int, observed liveImage) error {
 		return fail("launch_image_mismatch", false, true, err)
 	case current != observed.Start:
 		return fail("launch_image_mismatch", false, true, errors.New("process start changed; nothing killed"))
+	}
+	exited, err := watch.exited()
+	switch {
+	case err != nil:
+		return fail("launch_image_mismatch", false, true, err)
+	case exited:
+		return fail("launch_image_mismatch", false, true, errors.New("substitute exited after registration; nothing killed"))
 	}
 	if err := p.kill(pid); err != nil && !errors.Is(err, errProcessGone) {
 		return fail("launch_image_mismatch", false, true, err)

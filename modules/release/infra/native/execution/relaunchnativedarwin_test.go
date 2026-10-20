@@ -218,6 +218,28 @@ func TestNativePlatformObservesARealProcess(t *testing.T) {
 	if again != live.Start || live.Start.Seconds == 0 {
 		t.Fatal("birth time unstable", again, live.Start)
 	}
+	// The exit watch sees a live process as running, its death, and refuses a
+	// pid that no longer exists.
+	watched := start()
+	watch, err := p.watch(watched.Process.Pid)
+	must(t, err)
+	if exited, err := watch.exited(); err != nil || exited {
+		t.Fatal("a live process reported as exited", exited, err)
+	}
+	must(t, p.kill(watched.Process.Pid))
+	seen := false
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline) && !seen; time.Sleep(10 * time.Millisecond) {
+		if seen, err = watch.exited(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !seen {
+		t.Fatal("the exit was never reported")
+	}
+	must(t, watch.close())
+	if _, err := p.watch(watched.Process.Pid); !errors.Is(err, errProcessGone) {
+		t.Fatal("watching a reaped pid must report it gone", err)
+	}
 	// A second process with the same argument makes the nonce ambiguous.
 	second := start()
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {

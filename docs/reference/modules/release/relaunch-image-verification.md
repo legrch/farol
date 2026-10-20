@@ -47,15 +47,32 @@ no retry and no replay. A second launch attempt in the same scope is refused as
 
 ## Outcomes
 
-| Observation                                                            | Result                                                                                                            |
-| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| One candidate, hash and vnode match                                    | success after one more held-tree check                                                                            |
-| One candidate, same mismatch seen twice at least 50 ms apart           | `launch_image_mismatch`, definite; the exact pid is sent SIGKILL only if its birth time is still the observed one |
-| Mismatch but birth time changed, process gone or kill failed           | `launch_image_mismatch`, uncertain; nothing is killed unless the birth time matches                               |
-| Mismatch that changes between observations (an exec still in progress) | keep polling; never killed unless it settles                                                                      |
-| Zero candidates by the cap or deadline                                 | `launch_unverified`, uncertain; no kill, no retry                                                                 |
-| Two or more candidates                                                 | `launch_image_ambiguous`, uncertain; no kill                                                                      |
-| Deadline reached while polling                                         | uncertain                                                                                                         |
+| Observation                                                                               | Result                                                                                                                             |
+| ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| One candidate, hash and vnode match                                                       | success after one more held-tree check                                                                                             |
+| One candidate, same mismatch seen twice at least 50 ms apart                              | `launch_image_mismatch`, definite; SIGKILL is sent to the exact pid only after the exit watch, birth-time and no-exit checks below |
+| Mismatch but exit watch refused or fired, birth time changed, process gone or kill failed | `launch_image_mismatch`, uncertain; nothing is killed unless every containment check passes                                        |
+| Mismatch that changes between observations (an exec still in progress)                    | keep polling; never killed unless it settles                                                                                       |
+| Zero candidates by the cap or deadline                                                    | `launch_unverified`, uncertain; no kill, no retry                                                                                  |
+| Two or more candidates                                                                    | `launch_image_ambiguous`, uncertain; no kill                                                                                       |
+| Deadline reached while polling                                                            | uncertain                                                                                                                          |
+
+### Binding the kill to the observed process
+
+A pid alone does not name a process, and macOS has no `pidfd`. Before the kill,
+the runtime therefore:
+
+1. registers `EVFILT_PROC` with `NOTE_EXIT` for the pid on a private kqueue; if the
+   process no longer exists, nothing is killed;
+2. rereads the birth time, which must equal the one observed with the mismatch;
+3. polls the kqueue with a zero timeout immediately before the signal; a pending
+   exit means nothing is killed;
+4. sends SIGKILL, and closes the kqueue on every path.
+
+**Residual window.** Between the final zero-timeout poll and the kill system call
+the target can still exit and its pid be reused by an unrelated process. That
+needs a full pid wraparound inside that interval. The window is reduced, not
+eliminated, which is consistent with detection rather than prevention.
 
 The retained launch image is never touched. The journal stays at
 `launch_requested`.

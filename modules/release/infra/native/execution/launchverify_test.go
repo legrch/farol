@@ -29,6 +29,12 @@ type fakeLaunch struct {
 	candidatesFn func(call int) ([]int, error)
 	imageFn      func(pid, call int) (liveImage, error)
 	startFn      func(pid, call int) (processStart, error)
+	// watchFn scripts the exit registration; nil registers cleanly.
+	watchFn func(pid int) error
+	// exitedFn scripts the final zero-timeout poll; nil reports no exit.
+	exitedFn func() (bool, error)
+	watches  int
+	closed   int
 	// duringOpen runs between the two fences of the one open, like a swap.
 	duringOpen func()
 }
@@ -75,6 +81,38 @@ func (f *fakeLaunch) start(pid int) (processStart, error) {
 	f.order = append(f.order, "start")
 	f.mu.Unlock()
 	return f.startFn(pid, call)
+}
+
+type fakeWatch struct{ f *fakeLaunch }
+
+func (w fakeWatch) exited() (bool, error) {
+	w.f.mu.Lock()
+	w.f.order = append(w.f.order, "exited")
+	w.f.mu.Unlock()
+	if w.f.exitedFn == nil {
+		return false, nil
+	}
+	return w.f.exitedFn()
+}
+
+func (w fakeWatch) close() error {
+	w.f.mu.Lock()
+	defer w.f.mu.Unlock()
+	w.f.closed++
+	return nil
+}
+
+func (f *fakeLaunch) watch(pid int) (exitWatch, error) {
+	f.mu.Lock()
+	f.watches++
+	f.order = append(f.order, "watch")
+	f.mu.Unlock()
+	if f.watchFn != nil {
+		if err := f.watchFn(pid); err != nil {
+			return nil, err
+		}
+	}
+	return fakeWatch{f}, nil
 }
 
 func (f *fakeLaunch) kill(pid int) error {
@@ -171,10 +209,13 @@ func TestSubstitutedImageIsKilledOnceAfterTheStartTimeCheck(t *testing.T) {
 			if failure.Code != "launch_image_mismatch" || failure.Uncertain || failure.Internal {
 				t.Fatalf("not a definite mismatch: %+v", failure)
 			}
+			if fake.watches != 1 || fake.closed != 1 {
+				t.Fatal("the exit watch was not registered once and closed", fake.watches, fake.closed)
+			}
 			if len(fake.kills) != 1 || fake.kills[0] != pidOurs || fake.opens != 1 {
 				t.Fatal("expected exactly one kill of the exact pid after one open", fake.kills, fake.opens)
 			}
-			if !strings.HasSuffix(strings.Join(fake.order, ","), "start,kill") {
+			if !strings.HasSuffix(strings.Join(fake.order, ","), "watch,start,exited,kill") {
 				t.Fatal("kill was not preceded by the start-time recheck", fake.order)
 			}
 			if fx.phase(t) != "launch_requested" {
@@ -212,6 +253,59 @@ func TestStartTimeChangeOrExitPreventsTheKill(t *testing.T) {
 			}
 			if len(fake.kills) != 0 {
 				t.Fatal("killed a process that could not be proven the observed one", fake.kills)
+			}
+		})
+	}
+}
+
+func TestExitWatchBindsTheKillToTheObservedProcess(t *testing.T) {
+	for name, tc := range map[string]struct {
+		watch  func(int) error
+		exited func() (bool, error)
+		start  func(int, int) (processStart, error)
+		kills  int
+	}{
+		"clean": {kills: 1},
+		"exit seen after registration": {
+			exited: func() (bool, error) { return true, nil },
+		},
+		"exit poll failed": {
+			exited: func() (bool, error) { return false, errors.New("kevent failed") },
+		},
+		"registration finds no process": {
+			watch: func(int) error { return errProcessGone },
+		},
+		"registration failed": {
+			watch: func(int) error { return errors.New("kqueue unavailable") },
+		},
+		"start changed after registration": {
+			start: func(int, int) (processStart, error) { return processStart{Seconds: startOurs.Seconds + 1}, nil },
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fx, fake, verified := launchHarness(t)
+			fake.candidatesFn = servesOne(pidOurs)
+			fake.imageFn = func(int, int) (liveImage, error) {
+				return liveImage{Image: substituteHash(verified), Start: startOurs}, nil
+			}
+			fake.startFn = func(int, int) (processStart, error) { return startOurs, nil }
+			if tc.start != nil {
+				fake.startFn = tc.start
+			}
+			fake.watchFn, fake.exitedFn = tc.watch, tc.exited
+			method, _ := fx.launch(t)
+			failure := recoveryFailure(t, method)
+			if failure.Code != "launch_image_mismatch" || failure.Uncertain != (tc.kills == 0) {
+				t.Fatalf("unexpected classification: %+v", failure)
+			}
+			if len(fake.kills) != tc.kills {
+				t.Fatalf("kills = %v, want %d", fake.kills, tc.kills)
+			}
+			if tc.watch == nil && (fake.watches != 1 || fake.closed != 1) {
+				t.Fatal("the exit watch was not registered once and closed", fake.watches, fake.closed)
+			}
+			if tc.watch != nil && (fake.calls.start != 0 || fake.closed != 0) {
+				t.Fatal("a failed registration must stop before any start read", fake.calls.start, fake.closed)
 			}
 		})
 	}

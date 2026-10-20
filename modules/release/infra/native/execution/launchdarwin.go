@@ -84,6 +84,64 @@ func (nativePlatform) start(pid int) (processStart, error) {
 	return processStart{Seconds: int64(info.Proc.P_starttime.Sec), Microseconds: int64(info.Proc.P_starttime.Usec)}, nil
 }
 
+// kqueueWatch is a private kqueue holding one EVFILT_PROC/NOTE_EXIT
+// registration. The registration is the only thing that ties the later signal
+// to the process that was observed.
+type kqueueWatch struct {
+	fd   int
+	done bool // the exit event was already consumed by the registration call
+}
+
+func (nativePlatform) watch(pid int) (exitWatch, error) {
+	fd, err := unix.Kqueue()
+	if err != nil {
+		return nil, err
+	}
+	unix.CloseOnExec(fd)
+	change := unix.Kevent_t{Ident: uint64(pid), Filter: unix.EVFILT_PROC, Flags: unix.EV_ADD | unix.EV_ENABLE | unix.EV_ONESHOT, Fflags: unix.NOTE_EXIT}
+	var events [1]unix.Kevent_t
+	zero := unix.Timespec{}
+	n, err := kevent(fd, []unix.Kevent_t{change}, events[:], &zero)
+	if err == nil && n > 0 && events[0].Flags&unix.EV_ERROR != 0 && events[0].Data != 0 {
+		err = unix.Errno(events[0].Data)
+	}
+	if err != nil {
+		_ = unix.Close(fd)
+		if errors.Is(err, unix.ESRCH) {
+			return nil, errProcessGone
+		}
+		return nil, err
+	}
+	return &kqueueWatch{fd: fd, done: n > 0 && events[0].Filter == unix.EVFILT_PROC && events[0].Fflags&unix.NOTE_EXIT != 0}, nil
+}
+
+func kevent(fd int, changes, events []unix.Kevent_t, timeout *unix.Timespec) (int, error) {
+	for {
+		n, err := unix.Kevent(fd, changes, events, timeout)
+		if err != unix.EINTR {
+			return n, err
+		}
+	}
+}
+
+func (w *kqueueWatch) exited() (bool, error) {
+	if w.done {
+		return true, nil
+	}
+	var events [1]unix.Kevent_t
+	zero := unix.Timespec{}
+	n, err := kevent(w.fd, nil, events[:], &zero)
+	if err != nil {
+		return false, err
+	}
+	if n > 0 && events[0].Filter == unix.EVFILT_PROC && events[0].Fflags&unix.NOTE_EXIT != 0 {
+		w.done = true
+	}
+	return w.done, nil
+}
+
+func (w *kqueueWatch) close() error { return unix.Close(w.fd) }
+
 func (nativePlatform) kill(pid int) error {
 	err := unix.Kill(pid, unix.SIGKILL)
 	if errors.Is(err, unix.ESRCH) {
