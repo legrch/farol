@@ -1,7 +1,7 @@
 //go:build linux || darwin
 
-// Package helperlocks provides unselected counterparts of the helper's fixed
-// update lock and fresh promotion lease. It grants no install authority and does
+// Package helperlocks provides the Go counterparts of the helper's fixed update
+// lock and fresh promotion lease, composed by the selected Go helper entries. It grants no install authority and does
 // not replace handoff's verification of an inherited, transferred lease.
 //
 // Callers retain the borrowed parent, its actual named route, all other owners,

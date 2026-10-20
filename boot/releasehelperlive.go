@@ -25,7 +25,8 @@ import (
 
 // The live release helper composes the LIVE-predecessor apply and rollback
 // path of resources/native/update_helper.py (run(), the non-closed branches) over
-// the existing Go owners. It is UNSELECTED. It accepts apply and rollback, each
+// the existing Go owners. The desktop selects it (`run-live-release-helper`)
+// whenever no promotion lease is transferred. It accepts apply and rollback, each
 // with or without relaunch, and recover with relaunch only (offline recover
 // refuses before any IO). Relaunch launches only after an apply or a recovery
 // settled verified (Milestone.Execute); a rollback with relaunch true, and a

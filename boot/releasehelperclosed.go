@@ -31,7 +31,8 @@ import (
 // os.File aliases. Ownership of request/ACK/continuation transfers ON CALL,
 // including failure. Lease is the caller's already exclusively locked fd5: the
 // caller keeps it and its aliases unchanged through actual synchronous return.
-// This unselected composition never adopts, duplicates or closes it. Its only
+// This composition (selected by the desktop as `run-closed-release-helper`)
+// never adopts, duplicates or closes it. Its only
 // change is adding FD_CLOEXEC to fd5's per-process descriptor flag before any
 // request IO (see takeClosedHelperFiles), so a later exec'd child cannot inherit
 // the lease.
