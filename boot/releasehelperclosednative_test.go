@@ -273,6 +273,17 @@ func closedHelperNativeContention(path string) error {
 	}
 	return errors.Join(err, closeErr)
 }
+
+// closedHelperNativeRefusalCodes are the stable refusal codes each pre-ACK mode
+// produces from the real native owners.
+var closedHelperNativeRefusalCodes = map[string]string{
+	"live":              "closed_process_running",
+	"reused":            "closed_process_running",
+	"stale-quit":        "quit_stale",
+	"unconfirmed-quit":  "quit_not_confirmed",
+	"readiness-refused": "app_missing",
+}
+
 func TestClosedHelperNativeInheritedCustody(t *testing.T) {
 	if os.Getenv(closedHelperNativeEnv) != "1" {
 		t.Skip("Root must allocate the native lane explicitly")
@@ -444,8 +455,10 @@ func TestClosedHelperNativeInheritedCustody(t *testing.T) {
 			// app/staged tree. It must refuse before any ACK, journal write or update lock.
 			preRefusal := live || mode == "stale-quit" || mode == "unconfirmed-quit" || mode == "readiness-refused"
 			if preRefusal {
-				if len(ready) != 0 {
-					runErrors = append(runErrors, errors.New("pre-readiness refusal exposed ACK"))
+				// A clean pre-ACK refusal sends exactly the one refused frame (Python
+				// parity) and never the ready frame.
+				if !bytes.Equal(ready, wantRefusedFrame(t, requestBytes, closedHelperNativeRefusalCodes[mode])) {
+					runErrors = append(runErrors, fmt.Errorf("pre-ACK refusal did not send exactly the refused frame %q: %q", closedHelperNativeRefusalCodes[mode], ready))
 				}
 			} else {
 				expected, e := protocol.BuildHandoff(context.Background(), protocolapp.ClosedPredecessorReady, nil)

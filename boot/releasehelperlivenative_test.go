@@ -241,8 +241,10 @@ func (f *liveNativeFixture) run(t *testing.T, request map[string]any, quit bool,
 	if readErr != nil {
 		t.Error(readErr)
 	}
-	// The frame seals with EOF; only then does the desktop quit.
-	if len(ack) != 0 && quit {
+	// The waiting_for_exit frame seals with EOF; only then does the desktop quit.
+	// A refused frame keeps the desktop running (installed-update-helper.ts).
+	waiting := bytes.Contains(ack, []byte(`"phase":"`+protocolapp.WaitingForExit+`"`))
+	if waiting && quit {
 		if f.quitHook != nil {
 			f.quitHook()
 		} else {
@@ -258,7 +260,7 @@ func (f *liveNativeFixture) run(t *testing.T, request map[string]any, quit bool,
 	if waitErr != nil && !errors.As(waitErr, &exitErr) {
 		t.Fatal(waitErr)
 	}
-	return liveNativeOutcome{execNativeOutcome: execNativeOutcome{ack: ack, stdout: c.stdout.Bytes(), stderr: c.stderr.Bytes(), exit: exit, cmd: c.cmd}, waitingFrame: len(ack) != 0}
+	return liveNativeOutcome{execNativeOutcome: execNativeOutcome{ack: ack, stdout: c.stdout.Bytes(), stderr: c.stderr.Bytes(), exit: exit, cmd: c.cmd}, waitingFrame: waiting}
 }
 
 func (f *liveNativeFixture) wantWaitingFrame(t *testing.T, request map[string]any, got []byte) {
@@ -271,6 +273,17 @@ func (f *liveNativeFixture) wantWaitingFrame(t *testing.T, request map[string]an
 	if err != nil || !bytes.Equal(got, expected) {
 		t.Fatalf("waiting_for_exit frame missing or wrong: %q", got)
 	}
+}
+
+// wantRefusal asserts the Python-parity pre-ACK refusal: exactly one refused
+// handoff frame for this request (never waiting_for_exit), then the refusal line
+// and exit 70.
+func (f *liveNativeFixture) wantRefusal(t *testing.T, request map[string]any, o liveNativeOutcome, phase, code string) {
+	t.Helper()
+	if !bytes.Equal(o.ack, wantRefusedFrame(t, closedHelperJSON(t, request), code)) {
+		t.Fatalf("refused frame missing or wrong: %q", o.ack)
+	}
+	f.requireTerminal(t, o.execNativeOutcome, refusalLine(phase, code), 70)
 }
 
 func (f *liveNativeFixture) noEffect(t *testing.T) {
@@ -354,17 +367,16 @@ func TestLiveHelperNativeNeverExitsIsUnknownWithoutEffect(t *testing.T) {
 }
 
 // A start that differs from the observed process (a reused pid) is refused BEFORE
-// the desktop is told to exit: no frame at all, no effect. The marker and request
-// agree on the bogus start so only the live identity witness can refuse it.
+// the desktop is told to exit: the desktop receives only the refused frame (as
+// from Python), the helper exits 70 and nothing is written. The marker and
+// request agree on the bogus start so only the live identity witness can refuse it.
 func TestLiveHelperNativeWrongProcessStartIsRefusedBeforeTheFrame(t *testing.T) {
 	liveNativeRequire(t)
 	f := newLiveNativeFixture(t, true)
 	f.arm(t, "Thu Jan  1 00:00:00 1970")
-	o := f.run(t, f.request("apply", false), true)
-	if o.waitingFrame {
-		t.Fatalf("a mismatched process identity was acknowledged: %q", o.ack)
-	}
-	f.requireTerminal(t, o.execNativeOutcome, `{"phase": "unknown", "error": "internal", "operationId": "`+strings.Repeat("1", 32)+`"}`+"\n", 79)
+	request := f.request("apply", false)
+	o := f.run(t, request, true)
+	f.wantRefusal(t, request, o, "refused", "process_identity")
 	f.noEffect(t)
 }
 
@@ -376,9 +388,7 @@ func TestLiveHelperNativeForeignMarkerIsRefusedBeforeTheFrame(t *testing.T) {
 	request := f.request("apply", false)
 	request["processStart"] = "Thu Jan  1 00:00:00 1970"
 	o := f.run(t, request, true)
-	if o.waitingFrame || o.exit != 79 {
-		t.Fatalf("foreign marker: ack %q exit %d", o.ack, o.exit)
-	}
+	f.wantRefusal(t, request, o, "refused", "run_marker_mismatch")
 	f.noEffect(t)
 }
 
@@ -433,17 +443,15 @@ func TestLiveHelperNativeRelaunchAndRecoverRefusedBeforeAnyEffect(t *testing.T) 
 }
 
 // A missing app/staged tree is refused by the production readiness BEFORE the
-// frame: nothing is exposed, nothing written. The update lock was already taken
+// waiting_for_exit frame: only the refused frame is sent, nothing is written. The update lock was already taken
 // (Python takes it for a live predecessor before readiness) and is released.
 func TestLiveHelperNativeReadinessRefusalPrecedesTheFrame(t *testing.T) {
 	liveNativeRequire(t)
 	f := newLiveNativeFixture(t, false)
 	f.arm(t, "")
-	o := f.run(t, f.request("apply", false), true)
-	if o.waitingFrame {
-		t.Fatal("pre-ACK refusal exposed a frame", o.ack)
-	}
-	f.requireTerminal(t, o.execNativeOutcome, `{"phase": "unknown", "error": "internal", "operationId": "`+strings.Repeat("1", 32)+`"}`+"\n", 79)
+	request := f.request("apply", false)
+	o := f.run(t, request, true)
+	f.wantRefusal(t, request, o, "refused", "app_missing")
 	f.noEffect(t)
 	if err := f.pred.cmd.Process.Signal(syscall.Signal(0)); err != nil {
 		t.Fatal("predecessor was disturbed", err)

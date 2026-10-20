@@ -46,7 +46,10 @@ type liveHelperFixture struct {
 	waitPanic                                                     any
 	failCheck, checks, acquired                                   int
 	checkErr                                                      error
-	readyErr                                                      error
+	readyErr, channelClose                                        error
+	beforeReady                                                   func(closedReleaseHelper)
+	routesPreErr, routeClose                                      error
+	beforeRoutes                                                  func()
 	readyCalls, execCalls                                         int
 	framesAtReady                                                 int
 	execFn                                                        func(context.Context, closedHelperExecution) (*executionapp.Result, error)
@@ -69,7 +72,10 @@ func (c liveHelperFixtureChannels) Emit(_ context.Context, _ time.Time, b []byte
 	c.f.frames = append(c.f.frames, append([]byte(nil), b...))
 	return c.f.emitErr
 }
-func (c liveHelperFixtureChannels) Close() error { c.f.event("channels-close"); return nil }
+func (c liveHelperFixtureChannels) Close() error {
+	c.f.event("channels-close")
+	return c.f.channelClose
+}
 
 type liveHelperFixtureInput struct{ f *liveHelperFixture }
 
@@ -84,9 +90,15 @@ type liveHelperFixtureRoutes struct{ f *liveHelperFixture }
 
 func (r liveHelperFixtureRoutes) WithFiles(_ context.Context, fn func(helperroutes.Files) error) error {
 	r.f.event("with-files")
+	if r.f.beforeRoutes != nil {
+		r.f.beforeRoutes()
+	}
+	if r.f.routesPreErr != nil {
+		return r.f.routesPreErr
+	}
 	return fn(helperroutes.Files{})
 }
-func (r liveHelperFixtureRoutes) Close() error { r.f.event("routes-close"); return nil }
+func (r liveHelperFixtureRoutes) Close() error { r.f.event("routes-close"); return r.f.routeClose }
 
 type liveHelperFixtureAdmission struct{ f *liveHelperFixture }
 
@@ -132,6 +144,9 @@ func (f *liveHelperFixture) deps() liveHelperDependencies {
 			f.event("ready")
 			f.readyCalls++
 			f.framesAtReady = len(f.frames)
+			if f.beforeReady != nil {
+				f.beforeReady(h)
+			}
 			if f.readyErr != nil {
 				return nil, f.readyErr
 			}
@@ -300,7 +315,8 @@ func TestLiveHelperRefusalsBeforeAnyEffect(t *testing.T) {
 	}
 }
 
-// Every pre-frame failure exposes nothing: no ACK, no wait, no Execute.
+// Every pre-frame failure that is not a provably clean refusal exposes nothing:
+// no ACK, no wait, no Execute. Clean refusals are in releasehelperrefusal_test.go.
 func TestLiveHelperPreACKFailuresExposeNothing(t *testing.T) {
 	boom := errors.New("boom")
 	for name, set := range map[string]func(*liveHelperFixture){
@@ -308,9 +324,11 @@ func TestLiveHelperPreACKFailuresExposeNothing(t *testing.T) {
 		"acquire":     func(f *liveHelperFixture) { f.acquireErr = boom },
 		"marker":      func(f *liveHelperFixture) { f.captureErr = boom },
 		"readiness": func(f *liveHelperFixture) {
-			f.readyErr = &executionapp.Failure{Phase: "refused", Code: "operation_exists"}
+			f.readyErr = &executionapp.Failure{Phase: "refused", Code: "operation_exists", Uncertain: true}
 		},
-		"identity":        func(f *liveHelperFixture) { f.confirmErr = &processwait.Failure{Code: "process_identity"} },
+		"identity": func(f *liveHelperFixture) {
+			f.confirmErr = &processwait.Failure{Code: "process_identity", Uncertain: true}
+		},
 		"check-pre-ack":   func(f *liveHelperFixture) { f.failCheck, f.checkErr = 4, boom },
 		"check-post-lock": func(f *liveHelperFixture) { f.failCheck, f.checkErr = 2, boom },
 	} {
@@ -336,16 +354,17 @@ func TestLiveHelperPreACKFailuresExposeNothing(t *testing.T) {
 }
 
 // The process identity is positively confirmed BEFORE the desktop is told to
-// exit: a start mismatch / pid reuse emits no frame and never waits.
+// exit: a start mismatch / pid reuse sends only the refused frame (never the
+// waiting_for_exit frame) and never waits.
 func TestLiveHelperIdentityPrecedesTheFrame(t *testing.T) {
 	f := newLiveHelperFixture(t)
 	f.confirmErr = &processwait.Failure{Code: "process_reused"}
-	if _, exit := f.entry(); exit != 79 {
+	if _, exit := f.entry(); exit != 70 {
 		t.Fatal("exit", exit)
 	}
-	liveHelperSequence(t, f.events, "ready", "confirm", "admission-close")
-	if f.count("emit") != 0 || f.count("wait") != 0 || f.execCalls != 0 {
-		t.Fatal("identity failure reached the frame", f.events)
+	liveHelperSequence(t, f.events, "ready", "confirm", "emit", "admission-close")
+	if f.count("emit") != 1 || f.count("wait") != 0 || f.execCalls != 0 || len(f.frames) != 1 || !bytes.Contains(f.frames[0], []byte(`"phase":"refused"`)) {
+		t.Fatal("identity failure reached the waiting frame", f.events, f.frames)
 	}
 }
 

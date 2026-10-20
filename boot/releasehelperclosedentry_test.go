@@ -135,13 +135,14 @@ func TestClosedHelperEntryOuterErrorGovernsSuccess(t *testing.T) {
 	}
 }
 
-// A pre-ACK refusal exposes no frame and never executes; the ID is already known.
+// A clean pre-ACK refusal sends the one refused frame (as Python does) and never
+// executes or takes the update lock; the full matrix is releasehelperrefusal_test.go.
 func TestClosedHelperEntryPreACKRefusal(t *testing.T) {
 	f := newClosedHelperFixture(t)
 	f.readyErr = &executionapp.Failure{Phase: "prepared", Code: "staged_changed"}
 	line, exit := closedHelperEntryRun(t, f)
-	want := `{"phase": "unknown", "error": "internal", "operationId": "` + closedHelperEntryTestID + `"}` + "\n"
-	if exit != 79 || string(line) != want || len(f.frames) != 0 || f.execCalls != 0 || f.acquired != 0 {
+	want := `{"phase": "prepared", "error": "staged_changed", "operationId": "` + closedHelperEntryTestID + `"}` + "\n"
+	if exit != 70 || string(line) != want || len(f.frames) != 1 || f.execCalls != 0 || f.acquired != 0 {
 		t.Fatalf("exit %d line %q frames %d exec %d", exit, line, len(f.frames), f.execCalls)
 	}
 }

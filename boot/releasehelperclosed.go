@@ -69,6 +69,10 @@ func closedHelperFail(uncertain bool, causes ...error) error {
 		switch f := e.(type) {
 		case *closedHelperFailure:
 			uncertain = uncertain || f.uncertain
+		case *closedHelperRefused, *closedHelperRefusalRecord:
+			// A refusal is only meaningful standing alone. Beside any other cause it
+			// is part of an unknown outcome.
+			uncertain = true
 		case *helperchannels.Failure:
 			uncertain = uncertain || f.Uncertain || f.CleanupUnconfirmed
 		case *helperlocks.Failure:
@@ -113,12 +117,23 @@ func closedHelperFail(uncertain bool, causes ...error) error {
 }
 
 func closedHelperJoin(uncertain bool, causes ...error) error {
+	var only error
+	count := 0
 	for _, e := range causes {
 		if e != nil {
-			return closedHelperFail(uncertain, causes...)
+			only = e
+			count++
 		}
 	}
-	return nil
+	if count == 0 {
+		return nil
+	}
+	// A sent refused frame passes unchanged through custody cleanup that itself
+	// succeeded. Any other cause beside it makes the outcome unknown.
+	if r, ok := only.(*closedHelperRefused); ok && r != nil && count == 1 {
+		return r
+	}
+	return closedHelperFail(uncertain, causes...)
 }
 
 // The fixed absolute boundary is enforced even when a parent's timer/Err lags.
@@ -282,40 +297,62 @@ func withClosedReleaseHelperDependencies(ctx context.Context, files closedHelper
 	if err := closedHelperBounds(effective, until); err != nil {
 		return err
 	}
+	// From here the request is known: a provably clean pre-ACK refusal is sent as
+	// the one refused frame (see closedHelperRefusalPath) instead of staying silent.
+	refusal := &closedHelperRefusalPath{ctx: effective, until: until, protocol: protocol, operationID: request.OperationID, emit: channels.Emit, exposed: &exposed}
 	milestone, err := executionapp.NewMilestone(effective, request)
-	if err != nil || milestone == nil {
-		return closedHelperFail(false, err)
+	if err != nil {
+		return refusal.refuse(err)
+	}
+	if milestone == nil {
+		return closedHelperFail(false)
 	}
 	expected, err := protocol.BuildSlotBinding(effective, protocolnative.JSONCodec{})
-	if err != nil || len(expected) == 0 {
-		return closedHelperFail(false, err)
+	if err != nil {
+		return refusal.refuse(err)
 	}
-	return deps.borrow(files.Lease, func() (err error) {
+	if len(expected) == 0 {
+		return closedHelperFail(false)
+	}
+	return refusal.finish(deps.borrow(files.Lease, func() (err error) {
 		routes, err := deps.open(effective, request, until)
 		if err != nil {
-			return closedHelperFail(false, err)
+			return refusal.refuse(err)
 		}
 		if routes == nil {
 			return closedHelperFail(true)
 		}
-		defer func() { err = closedHelperJoin(exposed, err, routes.Close()) }()
-		return routes.WithFiles(effective, func(borrow helperroutes.Files) (err error) {
+		routesClosed := false
+		closeRoutes := func() error {
+			if routesClosed {
+				return nil
+			}
+			routesClosed = true
+			return routes.Close()
+		}
+		defer func() { err = closedHelperJoin(exposed, err, closeRoutes()) }()
+		return refusal.beforeCallback(routes.WithFiles(effective, refusal.settle(func(borrow helperroutes.Files) (err error) {
 			admission, err := deps.admission(borrow, files.Lease, request, expected, until)
 			if err != nil {
-				return closedHelperFail(false, err)
+				return refusal.refuse(err)
 			}
 			if admission == nil {
 				return closedHelperFail(true)
 			}
 			defer func() { err = closedHelperJoin(exposed, err, admission.Close()) }()
 			check := func() error {
-				return closedHelperJoin(exposed, admission.Check(effective), closedHelperBounds(effective, until))
+				checked, bounded := admission.Check(effective), closedHelperBounds(effective, until)
+				if checked != nil && bounded == nil && !exposed {
+					return refusal.refuse(checked)
+				}
+				return closedHelperJoin(exposed, checked, bounded)
 			}
 			if err = check(); err != nil {
 				return err
 			}
 			// Application readiness follows the first custody proof and precedes the
-			// frame. A refusal or error here exposes nothing and emits no refused frame.
+			// frame. A provably clean refusal here sends the one refused frame; any
+			// other failure exposes nothing and is unknown.
 			preflight := &closedReleaseHelperState{active: true, files: borrow, request: closedHelperRequestCopy(request), original: effective, until: until, admission: admission}
 			var readiness *executionapp.Readiness
 			err = closedHelperCall(func() (e error) {
@@ -327,8 +364,14 @@ func withClosedReleaseHelperDependencies(ctx context.Context, files closedHelper
 			})
 			// Join every entered preflight call before judging the result.
 			preflight.end()
+			// Uncertainty retained before this judgement is sticky: it forbids a
+			// refusal even when the final error is itself a clean classification.
+			prior := preflight.unknown()
 			if err != nil {
 				preflight.retainUnknown(err)
+				if prior == nil {
+					return refusal.refuse(err)
+				}
 				return closedHelperFail(false, err)
 			}
 			if err = preflight.unknown(); err != nil {
@@ -349,7 +392,9 @@ func withClosedReleaseHelperDependencies(ctx context.Context, files closedHelper
 			if err = check(); err != nil {
 				return err
 			}
-			// There is one actual attempt. No refused-frame fallback or receipt is made.
+			// There is one actual attempt: from here a failure is unknown and no refused
+			// frame follows the ready frame. Before this point a clean refusal sent the
+			// one refused frame instead (refusal.refuse); neither path retries or receipts.
 			exposed = true
 			if err = channels.Emit(effective, until, frame); err != nil {
 				return closedHelperFail(true, err)
@@ -399,8 +444,8 @@ func withClosedReleaseHelperDependencies(ctx context.Context, files closedHelper
 				return err
 			}
 			return nil
-		})
-	})
+		})), closeRoutes)
+	}))
 }
 
 func closedHelperRequestCopy(r releaseport.HelperRequest) releaseport.HelperRequest {
