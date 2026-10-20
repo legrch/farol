@@ -1,18 +1,26 @@
 # Release Go preparation
 
-The first source-selected native capability is now the
-[Go slot-binding publisher](slot-binding.md) in Go-aware desktop builds. This
-does not select the Go updater policy or replace the Python apply/recovery
-helper. The preparation history and broader cutover requirements below remain
-applicable to those separate capabilities.
+Two native capabilities of this module are selected by Go-aware desktop builds:
 
-This additive module is preparation from accepted base
-`1eb30bd23df22c9581d277280f8e0699612786b5`. It does not change the active updater,
-installed application, package identity or resource path. The source-only archive transfer is explicitly leased from frozen
-`a47c9ccea1a00eb210f675f71a0690fc3be6c857`. The next stage is based on accepted K1
-`acb131d9e7d483296d4edac262cf881cddfb91bb`, including the root module and
-unchanged archive dependency. Runtime wiring/build closure and fresh source
-acceptance are still required before cutover.
+- the [Go slot-binding publisher](slot-binding.md);
+- the Go apply/recovery/rollback helper entries (`run-closed-release-helper`,
+  `run-live-release-helper`), which the desktop runs with no Python fallback.
+  The Python helper file stays in the tree until a deletion packet.
+
+The updater policy and controller are not cut over. The active updater remains
+the TypeScript `installed-updater.ts` and `installed-update-runtime.ts`, which
+decide when to check, download, apply, recover or roll back and then start the
+selected Go helper. The Go policy in `domain/update.go` and
+`app/services/update` has no production caller. Package, installation and
+release acceptance of the helper switch are still open.
+
+The module began as additive preparation from accepted base
+`1eb30bd23df22c9581d277280f8e0699612786b5`, without changes to the installed
+application, package identity or resource path. The source-only archive transfer
+is explicitly leased from frozen `a47c9ccea1a00eb210f675f71a0690fc3be6c857`. The
+next stage is based on accepted K1 `acb131d9e7d483296d4edac262cf881cddfb91bb`,
+including the root module and unchanged archive dependency. Cutting over the
+policy needs its own runtime wiring, build closure and fresh source acceptance.
 
 ## Module documents
 
@@ -94,8 +102,9 @@ TS closed schemas plus exact operation binding. Parsing/encoding does not read a
 live profile, verify a package, acquire a lease, persist an intent or settle a child.
 Malformed UTF-8/unpaired UTF-16 escapes are refused rather than silently replacing
 identity bytes. The existing TS schemas' optional/null and UTF-16 string bounds
-remain explicit. Promotion/closed-repair receipts and physical file access are
-still later parity work.
+remain explicit. The codec itself has no physical file access; the journal
+writer that publishes its bytes is described in [journal persistence](journal.md).
+Promotion and closed-repair receipt records are still later parity work.
 
 The consuming [migration port](../../../../modules/release/app/port/migration.go) supplies a read-only durable
 projection and an externally held authoritative admission guard to the leased
@@ -108,12 +117,12 @@ new Desktop wire schema.
 
 ## Current parity seams
 
-| Current owner/source                                                | Prepared destination and remaining deletion exit                                                                                                                                                                                                                |
-| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/modules/release/app/installed-updater.ts`                      | `domain/update.go` + `app/services/update`; preserve status/check/later/restart/recover/rollback and Close cases. Core must map the existing restart intention to Apply through its accepted generated bridge before the TS controller leaves the active route. |
-| `src/apps/desktop/installed-update-runtime.ts`                      | Native journal/retention, work-admission and crash adapters remain pending. Current ready/download/restore/receipt schemas, durable write windows and same-child evidence must pass physical disposable parity before removing this slice.                      |
-| `resources/native/update_helper.py`                                 | Go install/exchange/restore implementation remains pending. Preserve no-follow descriptors, exact accepted pair, lease, normal Quit ACK, atomic swap and one-shot launch journal; native/package parity precedes deletion.                                      |
-| `src/modules/release/app/github-release.ts` + domain release policy | Discovery/eligibility/manifest compatibility remain pending. Keep the current alpha version/build ordering, provenance, bounded download and reverified-package cases.                                                                                          |
+| Current owner/source                                                | Prepared destination and remaining deletion exit                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/modules/release/app/installed-updater.ts`                      | `domain/update.go` + `app/services/update`; preserve status/check/later/restart/recover/rollback and Close cases. Core must map the existing restart intention to Apply through its accepted generated bridge before the TS controller leaves the active route.                                                                                             |
+| `src/apps/desktop/installed-update-runtime.ts`                      | Native journal/retention, work-admission and crash adapters remain pending. Current ready/download/restore/receipt schemas, durable write windows and same-child evidence must pass physical disposable parity before removing this slice.                                                                                                                  |
+| `resources/native/update_helper.py`                                 | Go install/exchange/restore implementation is selected by the desktop (no Python fallback); this file is no longer dispatched and remains until native/package parity and a deletion packet. Preserve no-follow descriptors, exact accepted pair, lease, normal Quit ACK, atomic swap and one-shot launch journal; native/package parity precedes deletion. |
+| `src/modules/release/app/github-release.ts` + domain release policy | Discovery/eligibility/manifest compatibility remain pending. Keep the current alpha version/build ordering, provenance, bounded download and reverified-package cases.                                                                                                                                                                                      |
 
 Preparation's policy doubles correspond to existing
 `tests/unit/installed-updater.test.ts` intentions; its symbolic crash vectors
@@ -159,4 +168,6 @@ until Release measures and durably binds the installed package. These are contra
 requirements, not a currently available command.
 
 Current-alpha native journal persistence and its evidence limits are described in
-[journal.md](journal.md). Its borrowed admission is not wired to the active runtime.
+[journal.md](journal.md). Its borrowed admission is the production writer `JournalAdmission`
+(`closedHelperJournalAdmission`, `boot/releasehelperclosedexec.go`), composed in
+both selected Go helper entries.

@@ -55,13 +55,13 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
   roots: ["src", "apps/desktop", "modules", "boot", "cmd"],
   launches: [
     launch(
-      "release.update-python",
+      "release.update-go",
       release + "installed-update-helper.ts",
       "startInstalledUpdateHelper",
       "spawn",
-      '"/usr/bin/python3"',
-      "legacy-python-active",
-      ["update-helper.py"],
+      "executable",
+      "app-owned-go-executable",
+      ["farol-backend"],
     ),
     launch(
       "release.slot-binding",

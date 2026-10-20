@@ -90,8 +90,8 @@ foreign-UID negative is explicitly skipped without root; no privilege escalation
 is attempted. Linux compilation is not native Linux persistence evidence.
 
 Application phase transitions, restore/retained/download record persistence,
-durable unknown reconciliation, boot/helper integration, installed migration and
-mandatory R4 remain open. No active TypeScript/Python implementation is deleted.
+durable unknown reconciliation, installed migration and mandatory R4 remain open
+(boot/helper integration is composed by the selected Go helper entries). No active TypeScript/Python implementation is deleted.
 
 ## Fixed rejected-target persistence
 

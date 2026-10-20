@@ -1,6 +1,7 @@
 // Package execution implements the recovery ports with native
-// observations, namespace primitives and the existing operation journal. It is
-// unselected: it opens no route, acquires no lease and launches no process.
+// observations, namespace primitives and the existing operation journal. By
+// itself it opens no route, acquires no lease and launches no process; the
+// selected Go helper entries compose it.
 package execution
 
 import (

@@ -11,9 +11,9 @@ import (
 
 // liveReleaseHelperCommand is the executable entry of the live release helper
 // (apply and rollback, each with or without relaunch). Like its closed sibling it is flat,
-// kebab-case and verb-first, and UNSELECTED: the desktop still spawns
-// resources/native/update_helper.py and no launcher, resource, manifest or
-// package step names this mode.
+// kebab-case and verb-first. The desktop selects it for every live apply,
+// rollback and (relaunching) recover, and it has no interpreter alternative
+// (installed-update-helper.ts).
 const liveReleaseHelperCommand = "run-live-release-helper"
 
 // liveHelperEntry is the testable logic of the entry. It mirrors closedHelperEntry

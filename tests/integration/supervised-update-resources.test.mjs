@@ -145,6 +145,7 @@ describe("supervised resources (native FS, mocked package verifier)", () => {
       expectedVersion: f.expected.version,
       expectedBuildVersion: f.expected.buildVersion,
       expectedChannel: "github-owner-beta",
+      onVerifiedGoCore: expect.any(Function),
     });
     f.expected.buildId = "0".repeat(64);
     expect(await result.verify()).toBe(true);
@@ -378,6 +379,51 @@ describe("supervised resources (native FS, mocked package verifier)", () => {
       await expect(capture(f)).rejects.toThrow(/SUPERVISED_RESOURCES_/u);
     },
   );
+
+  it("exposes the Go declaration the verifier checked, never a later read of the package", async () => {
+    const f = await fixture();
+    const verified = {
+      core: { schema: "farol-core-artifact/1", fixture: "verified" },
+      identity: { buildId: f.expected.buildId },
+    };
+    vi.mocked(verifyPackageContent).mockImplementation(async (options) => {
+      options.onVerifiedGoCore({
+        core: structuredClone(verified.core),
+        identity: structuredClone(verified.identity),
+      });
+      return identity(options);
+    });
+    const result = await capture(f);
+    expect(result.goCore).toEqual(verified);
+    expect(Object.isFrozen(result.goCore.core)).toBe(true);
+    expect(await result.verify()).toBe(true);
+    // A substituted declaration on disk is never adopted: the captured value
+    // stays, and the content fence refuses the changed package.
+    await fs.writeFile(
+      path.join(f.appPath, "Contents/Resources/app/build-manifest.json"),
+      JSON.stringify({ schema: 4, core: { fixture: "substituted" } }),
+    );
+    expect(await result.verify()).toBe(false);
+    expect(result.goCore).toEqual(verified);
+  });
+
+  it("refuses a later observation whose verified declaration differs", async () => {
+    const f = await fixture();
+    let core = { fixture: "first" };
+    vi.mocked(verifyPackageContent).mockImplementation(async (options) => {
+      options.onVerifiedGoCore({ core, identity: { fixture: true } });
+      return identity(options);
+    });
+    const result = await capture(f);
+    core = { fixture: "second" };
+    expect(await result.verify()).toBe(false);
+    expect(result.goCore.core).toEqual({ fixture: "first" });
+  });
+
+  it("reports no declaration for a package without a compiled core", async () => {
+    const result = await capture(await fixture());
+    expect(result.goCore).toBeNull();
+  });
 
   it("shares a concurrent verification and never upgrades a failed observation", async () => {
     const f = await fixture();

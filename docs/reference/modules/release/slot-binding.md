@@ -34,8 +34,9 @@ child's actual close even after requesting termination.
 
 No selected Go failure dispatches Python. Explicit legacy/controller composition
 without a compiled Go declaration retains the old string/helper route for its
-separate compatibility exit. The Python helper resource remains required by
-apply/recover/rollback and cannot yet be removed from package manifests. The
+separate compatibility exit. The Python helper resource is no longer dispatched for
+apply/recover/rollback (the desktop runs the Go helper entries), but it stays in
+the package manifests for that legacy route until a separate deletion packet. The
 historically named `update-archive.py` is already a Go executable; its suffix is
 not interpreter evidence.
 
@@ -73,7 +74,7 @@ that acceptance.
 
 ## Read-only helper slot observation
 
-The existing `slotbinding.Verifier` is a separate, unselected helper-side capability. It captures request-bound expected bytes and an absolute deadline, borrows the exact operation directory, and compares private parent/file metadata and full bytes through actual synchronous return. It never seeks, closes, unlocks or changes the borrowed directory descriptor. The caller retains named-route custody, authoritative lease, slot and admission; a matching observation supplies no readiness, persistence, install, retry or replay authority. All 13 existing phases, schema and UNKNOWN predicates remain unchanged.
+The existing `slotbinding.Verifier` is a separate helper-side capability, called by the selected Go helper entries (`boot/releasehelperclosed.go`, `boot/releasehelperlive.go`), not by the publisher. It captures request-bound expected bytes and an absolute deadline, borrows the exact operation directory, and compares private parent/file metadata and full bytes through actual synchronous return. It never seeks, closes, unlocks or changes the borrowed directory descriptor. The caller retains named-route custody, authoritative lease, slot and admission; a matching observation supplies no readiness, persistence, install, retry or replay authority. All 13 existing phases, schema and UNKNOWN predicates remain unchanged.
 
 `verify_test.go` uses fresh disposable files and independent directory opens to witness a nonzero directory cursor, status/inheritance flags and flock exclusion across success, refusal and expired read/cleanup return. Controlled read and close seams enter before a fixed absolute deadline and return after it, including native errors joined with deadline causes and a context whose cancellation delivery deliberately lags. Cleanup closes the owned read descriptor once even after expiry; the caller retains borrowed custody until the blocked native/cleanup call actually returns and closes its directory only afterward. Later observations cannot renew the verifier's original deadline. These controlled seams are native-descriptor tests on the executing host, not evidence of an arbitrarily blocked kernel call or whole-helper lifetime composition. Existing `helperlocks/deadline_test.go` remains the owner of lock-gate, callback and original-budget witnesses; this packet does not duplicate that research.
 
@@ -85,4 +86,4 @@ The 21 request vectors and 19 canonical vectors preserve full bytes, nested/root
 
 The application codec-port tests separately exercise 1/8192/8193-byte results and delivered deadline cancellation. Arbitrary port bytes are not reachable valid slot records: even two 128-astral-codepoint versions produce a bounded record well below 8192 bytes. Invalid records at 8192 and 8193 bytes witness canonical refusal only; they do not establish a reachable valid-request maximum. Native absolute-clock enforcement remains with the native verifier; pure application tests establish delivered-context cancellation only.
 
-Reproduce the source-bound oracle with `go test -race ./modules/release/infra/native/helperprotocol -run '^TestSlotBindingOriginalPythonASTGolden$' -count=1 -v`. Run the complete packet with `go test -race ./modules/release/infra/native/slotbinding ./modules/release/infra/native/helperprotocol ./modules/release/app/services/helperprotocol`, then `go vet` on those same packages, `npm run docs:check` and `git diff --check`, using the repository-declared toolchains and a writable Go build cache. Development Python is required for the oracle; runtime Python remains required for supported apply/recover/rollback. No full-helper selection, runtime Python removal, package, installation, live-provider or release acceptance follows from this corpus.
+Reproduce the source-bound oracle with `go test -race ./modules/release/infra/native/helperprotocol -run '^TestSlotBindingOriginalPythonASTGolden$' -count=1 -v`. Run the complete packet with `go test -race ./modules/release/infra/native/slotbinding ./modules/release/infra/native/helperprotocol ./modules/release/app/services/helperprotocol`, then `go vet` on those same packages, `npm run docs:check` and `git diff --check`, using the repository-declared toolchains and a writable Go build cache. Development Python is required for the oracle only. The desktop runs supported apply/recover/rollback through the selected Go helpers with no Python fallback; the Python helper files stay in the resources only until their deletion packet. This corpus alone establishes no package, installation, live-provider or release acceptance.

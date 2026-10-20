@@ -9,8 +9,13 @@ import { treeDigest } from "../../tooling/artifact-digest.mjs";
 import { originalPredecessorSettingsReadable } from "../../src/apps/desktop/beta3-state-readability.ts";
 import {
   captureInstalledProcessStart,
+  installedSlotBindingBytes,
   startInstalledUpdateHelper,
 } from "../../src/modules/release/infra/native/installed-update-helper.ts";
+import {
+  compiledGoHelper,
+  referenceGoHelper,
+} from "./fixtures/installed-update-go-helper.ts";
 
 // Native evidence is limited to disposable bundle/state trees and owned Python
 // children. No installed app, real profile, provider, or relaunch is exercised.
@@ -506,28 +511,54 @@ describe("closed installed helper (disposable native filesystem and child fixtur
     // afterEach retains this exact handle even if a later assertion fails.
     vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
       const child = nativeSpawn(...args);
-      if (args[1]?.at(-1) === "-") observe(child);
+      if (args[1]?.[0] === "run-closed-release-helper") observe(child);
       return child;
     });
     const release = vi.fn(async () => {
       await close(f.lease);
     });
-    const result = await startInstalledUpdateHelper(helper, f.request, {
-      readinessTimeoutMs: 5000,
-      recordSpawn: async (operation) => {
-        expect(operation.pid).toBeGreaterThan(1);
+    // The launcher spawns the Go closed entry. By default a disposable
+    // reference executable runs the retired program through the same fd3-fd6
+    // contract. FAROL_DESKTOP_GO_HELPER_NATIVE=1 runs the compiled entry instead,
+    // whose request is the desktop's: an install location and the canonical
+    // slot binding the desktop publishes before dispatch.
+    const native = process.env["FAROL_DESKTOP_GO_HELPER_NATIVE"] === "1";
+    const request = native
+      ? { ...f.request, installLocation: "legacy" }
+      : f.request;
+    if (native) {
+      // The desktop's operation directory is private and holds this binding.
+      await fs.chmod(path.dirname(f.op), 0o700);
+      await fs.chmod(f.op, 0o700);
+      await fs.writeFile(
+        path.join(f.op, "slot-binding.json"),
+        installedSlotBindingBytes(request, "legacy"),
+        { mode: 0o600 },
+      );
+    }
+    const result = await startInstalledUpdateHelper(
+      native ? await compiledGoHelper() : await referenceGoHelper(f.root),
+      request,
+      {
+        readinessTimeoutMs: 5000,
+        recordSpawn: async (operation) => {
+          expect(operation.pid).toBeGreaterThan(1);
+        },
+        promotionLease: {
+          descriptor: f.lease.fd,
+          identity: f.leaseIdentity,
+          verify: async () =>
+            inode(await f.lease.stat({ bigint: true })).inode ===
+              f.leaseIdentity.inode && (await isLocked(f.leasePath)),
+          release,
+        },
       },
-      promotionLease: {
-        descriptor: f.lease.fd,
-        identity: f.leaseIdentity,
-        verify: async () =>
-          inode(await f.lease.stat({ bigint: true })).inode ===
-            f.leaseIdentity.inode && (await isLocked(f.leasePath)),
-        release,
-      },
-    });
-    expect(["continued", "terminal"], result.reason).toContain(result.status);
+    );
     const completed = await result.operation.completion;
+    expect(
+      ["continued", "terminal"],
+      `${result.reason} ${JSON.stringify(result.operation.observe())}`,
+    ).toContain(result.status);
     expect(completed.code).toBe(0);
     expect(completed.protocolError).toBeNull();
     expect(completed.terminal?.phase).toBe("verified");

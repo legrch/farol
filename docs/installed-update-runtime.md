@@ -183,7 +183,7 @@ dispatch. Only the helper's exact readiness acknowledgment permits normal Quit.
 Unknown acknowledgment or completion never permits another apply. The same child
 handle remains observable while the original app is alive, including after a
 process metadata readback failure. The actual helper PID is persisted on the spawn
-event, before sending helper program/request bytes or waiting for readiness, then
+event, before sending the request bytes or waiting for readiness, then
 enriched with its start time.
 Failure or timeout while recording closes only the unsent pipes; it never sends
 a late request or changes an unknown result into permission to relaunch. An
@@ -202,9 +202,22 @@ and stay within the installer's limits.
 The archive helper is an attested, offline-built native executable. Its resource
 filename remains `update-archive.py` for package compatibility; it is executed
 directly, not through Python. The package includes its Go and Unicode dependency
-notices. The React/Go Dev's external Computer file route now uses Go. Install/swap
-helpers retain their existing reviewed Python boundary; this remains a transitional
-release dependency. These source changes do not replace the installed 0.1.11 app.
+notices. The React/Go Dev's external Computer file route now uses Go. The install/swap
+helper is the attested Go `farol-backend` too: the runtime selects it with
+`selectUpdateHelper` (the same private execution image and adapter as slot-binding
+publication) and spawns `run-closed-release-helper` under a transferred promotion lease
+or `run-live-release-helper` otherwise. A build without the compiled Go core refuses
+apply and restore with `UPDATE_HELPER_GO_CORE_REQUIRED` before any admission, copy,
+binding or process and must be updated by hand; a Go capability that fails to qualify
+refuses with the existing not-started outcome. Neither ever falls back to Python, whose
+`update_helper.py` stays in the tree and package until a separate deletion packet. The
+supervised maintainer controller uses the accepted target package's own Go declaration
+and build identity exactly as the full package verifier checked the bundled binary
+against them, captured once by the resource observation inside its tree-digest
+fences (`captureSupervisedUpdateResources().goCore`); every later observation must
+verify the same value, and nothing re-reads them from the package path. It refuses
+before the predecessor quits when there is none. These source changes do not
+replace the installed 0.1.11 app.
 
 A pre-readiness refusal is retryable only after that same helper's classified
 terminal exit confirms it never crossed the mutation handoff. The app rechecks

@@ -1,4 +1,5 @@
-// Package installmove provides an unselected, one-attempt app namespace primitive.
+// Package installmove provides a one-attempt app namespace primitive. It selects
+// no route itself; the selected Go helper entries compose it.
 // Release retains route, lease, slot, journal and admission authority in Fence.
 // Expected device/inode values do not prove accepted tree contents or attributes:
 // Fence must verify those. Private snapshots preserve mode/owner/group from the

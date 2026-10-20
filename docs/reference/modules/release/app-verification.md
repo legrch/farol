@@ -1,9 +1,11 @@
 # Installed-helper verification preparation
 
-The selected apply/recovery/rollback helper remains
-`resources/native/update_helper.py`. The Go components below prepare its
-replacement; they do not select a helper command or reduce the installed Python
-dependency by themselves. Release's existing journal, update/recovery policy,
+The desktop selects the Go apply/recovery/rollback helper entries
+(`run-closed-release-helper`, `run-live-release-helper`) with no Python fallback;
+`resources/native/update_helper.py` stays in the tree and package as the
+behavioural reference until a separate deletion packet. The Go components below
+are composed by those entries; they do not by themselves remove the packaged
+Python resource. Release's existing journal, update/recovery policy,
 admission and one-shot effect owners remain authoritative.
 
 `app/services/helperinput` owns the existing `farol.installed-update/1` request
@@ -49,5 +51,6 @@ Python; Python used once to generate independent test oracles is build/test-only
 Targeted race/vet/fuzz and Darwin cross-compilation are source evidence only.
 Darwin execution, APFS exchange, inherited installed descriptors, exact helper
 failure-code mapping, journal/fsync, original-process exit, launch/recovery and
-OTA/rollback parity remain NOT RUN or unimplemented until their actual owners
-are composed and qualified. Do not delete the selected helper on this evidence.
+OTA/rollback parity are not established by this evidence; they belong to the
+composing helper entries and their native lanes, and package, installed and OTA
+qualification remain open. Do not delete the Python reference helper on this evidence.

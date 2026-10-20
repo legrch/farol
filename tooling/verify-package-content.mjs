@@ -73,6 +73,7 @@ export async function verifyPackageContent({
   expectedChannel,
   sourceResourceManifest,
   assertArtifactPath,
+  onVerifiedGoCore,
 }) {
   // Schema 4 manifests carry a version 1 tree digest, whose framing is
   // ambiguous.  Recognize them explicitly instead of reporting a mismatch.
@@ -443,6 +444,10 @@ export async function verifyPackageContent({
   );
   assertEmbeddedRuntime(embeddedRuntime);
   execFileSync("/usr/bin/plutil", ["-lint", mainPlist], { stdio: "pipe" });
+  // Hand out the exact declaration and identity the Go binary was verified
+  // against, so a consumer never re-reads them from the mutable package path.
+  if (layout.core)
+    onVerifiedGoCore?.({ core: embedded.core, identity: buildIdentity });
   return {
     product: artifact.product,
     bundleId: artifact.bundleId,

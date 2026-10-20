@@ -45,7 +45,7 @@ const issue = (result, prefix) =>
   result.issues.some((x) => x.startsWith(prefix));
 
 describe("semantic runtime launch ratchet", () => {
-  it("retains all four unresolved Python callsites by function, not a zero-Python assertion", () => {
+  it("retains all three unresolved Python callsites by function, not a zero-Python assertion", () => {
     const rows = RUNTIME_LAUNCH_MANIFEST.launches.filter((row) =>
       ["legacy-python-active", "go-with-legacy-python"].includes(
         row.classification,
@@ -55,8 +55,18 @@ describe("semantic runtime launch ratchet", () => {
       "src/modules/computer/infra/native/native-readonly-workspace.ts:runHelper",
       "src/modules/computer/infra/native/workspace-snapshot.ts:spawnSnapshotHelper",
       "src/modules/release/infra/native/installed-update-helper.ts:publishInstalledOperationBinding",
-      "src/modules/release/infra/native/installed-update-helper.ts:startInstalledUpdateHelper",
     ]);
+    // The update helper is the attested Go executable alone; it has no
+    // interpreter, so its row names only the Go resource.
+    expect(
+      RUNTIME_LAUNCH_MANIFEST.launches.find(
+        (row) => row.id === "release.update-go",
+      ),
+    ).toMatchObject({
+      symbol: "startInstalledUpdateHelper",
+      classification: "app-owned-go-executable",
+      resources: ["farol-backend"],
+    });
     expect(
       RUNTIME_LAUNCH_MANIFEST.boundaries.map((row) => row.classification),
     ).toContain("optional-user-hook-runtime");

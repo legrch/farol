@@ -24,14 +24,17 @@ or refusal result, including Unicode escaping, shared/private path choices,
 target and helper correlation and hint bounds. Real Go input parsing, request
 policy and encoding are composed in the test. The vectors carry the original
 helper source digest; they do not observe a native process, prove a copied image
-or qualify startup admission. The selected updater still invokes Python, and
-native/packaged/installed/recovery/OTA gates remain separate.
+or qualify startup admission. The desktop's selected updater runs the Go helpers
+and does not invoke Python; these vectors check the retained Python reference, not
+those entries, and native/packaged/installed/recovery/OTA gates remain separate.
 
 `infra/native/handoff` prepares the Go replacement for the existing installed
-helper's inherited-lease and closed-predecessor observations. It is not selected
-by the updater yet. Normal apply/recover/rollback still uses
-`resources/native/update_helper.py`; this source foundation removes no required
-Python launch and introduces no new journal, admission owner or install engine.
+helper's inherited-lease and closed-predecessor observations. The selected Go
+helper entries compose it (`boot/releasehelperclosed.go`,
+`boot/releasehelperlive.go`). Normal apply/recover/rollback no longer uses
+`resources/native/update_helper.py`, which stays in the tree until a separate
+deletion packet; this source foundation introduces no new journal, admission
+owner or install engine.
 
 The verifier borrows the exact home, state and inherited lease descriptors.
 It never closes, unlocks, seeks or reconfigures them. The caller retains their
@@ -61,12 +64,13 @@ never renews the original caller deadline.
 Observer and app-identity failures retain their exact typed dependency causes
 through `errors.Is` and `errors.As`, behind the same closed outer refusal text.
 Concurrent cancellation keeps both the original cause and context error. This
-allows eventual helper composition to distinguish inspected refusals from an
+allows the helper composition to distinguish inspected refusals from an
 internal failure without exposing native paths or losing cleanup uncertainty.
-It does not select or implement the helper's final exit-70/exit-79 mapping.
+This package does not itself implement the helper's final exit-70/exit-79
+mapping; boot composition does (`closedHelperTerminal`).
 
 Namespace/process changes remain possible between observations; this is not an
-atomic race-exclusion claim. The parent exclusion owner and the future helper's
+atomic race-exclusion claim. The parent exclusion owner and the helper's
 existing journal/effect/unknown fences remain mandatory. This package does not
 observe app trees, transfer continuation, perform exchange/rollback or relaunch.
 
@@ -78,7 +82,8 @@ is separately asserted. Darwin cross-compilation is not Darwin execution.
 
 Retirement requires the remaining physical tree/plist, original process and
 continuation, journaled mutation/recovery/rollback and authenticated launch parity,
-followed by independently verified Go source selection. Darwin inheritance,
+in addition to the Go source selection already in place (`run-closed-release-helper`,
+`run-live-release-helper`). Darwin inheritance,
 installed helper, clean-Mac launch and OTA/rollback acceptance remain NOT RUN.
 
 ## Prepared ACK and continuation transport
@@ -87,7 +92,7 @@ installed helper, clean-Mac launch and OTA/rollback acceptance remain NOT RUN.
 continuation byte streams. `Take` consumes exclusive ownership even on failure;
 request and borrowed lease descriptors must never be passed to it. It performs
 no descriptor-number discovery, JSON parsing, peer authentication or application
-authorization. The eventual trusted launcher must bind those actual roles.
+authorization. The trusted launcher must bind those actual roles.
 
 Pipes require ACK write-only and continuation read-only access; only stream
 sockets are also accepted. Owned descriptors become nonblocking, gain
@@ -113,8 +118,8 @@ Linux disposable pipe/socket fixtures cover backpressure, partial writes,
 deadline/cancellation, close races, copied wrappers, caller-frame reuse and
 ownership on constructor refusal. These are transport tests. The helper's
 correlation, readiness, continuation admission, terminal classification and
-journaled install/recovery remain separate application integration work. This
-package is unselected; Python retirement and Darwin, package, installed and OTA
+journaled install/recovery belong to the composing helper entries, not to this
+package. This package is composed by the selected Go helper entries; Python retirement and Darwin, package, installed and OTA
 qualification remain NOT RUN.
 
 ## Prepared application protocol binding
@@ -147,13 +152,13 @@ Known parser refusal codes remain distinct from unexpected internal failures;
 handoff size, invalid continuation, crossed identity and continuation overflow
 also remain distinct. An empty native continuation EOF has its own transport
 code, `helper_channels_continue_empty`, for mapping to the original helper's
-`continue_invalid`; overflow maps to `continue_size`. The eventual helper entry
-must preserve the original terminal exit70 versus unknown/internal exit79, and
+`continue_invalid`; overflow maps to `continue_size`. The helper entries
+preserve the original terminal exit70 versus unknown/internal exit79, and
 must not interpret a value-validation success as an effect or replay permit.
 
-These components have no selected CLI/updater caller yet. Python still owns the
-normal apply/recovery/rollback helper. Complete native custody, mutation,
-recovery, relaunch, terminal supervision and installed selection remain open;
+These components are called by the selected Go helper entries, and the desktop
+updater runs them with no Python fallback. Complete native custody, mutation,
+recovery, relaunch, terminal supervision and installed acceptance remain open;
 portable composition tests do not close Darwin or installed acceptance.
 
 ## Existing physical route custody

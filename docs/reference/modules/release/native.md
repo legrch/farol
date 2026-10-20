@@ -1,9 +1,11 @@
 # Native release boundary
 
-This source-only checkpoint is additive and unwired. It moves the leased archive
-package and prepares existing record codecs and the consuming migration port.
-The active updater/helper, root dispatcher, package pins and installed identity
-stay under the integration owner's existing lifecycle until parity and cutover.
+This checkpoint began as an additive, source-only move of the leased archive
+package, the existing record codecs and the consuming migration port. The
+desktop now runs the Go update helper entries for apply, recovery and rollback
+(see [helper recovery](helper-recovery.md)). The TypeScript updater policy, root
+dispatcher, package pins and installed identity stay under the integration
+owner's existing lifecycle.
 
 ## Durable owner and physical adapter
 
@@ -65,7 +67,7 @@ inode checks and current-alpha state rebinding remain separately required.
 
 ## Helper readiness and process evidence
 
-The existing helper consumes one bounded request on descriptor 3 and one private
+The update helper (the Go entries, as the retained Python program did) consumes one bounded request on descriptor 3 and one private
 ACK frame on descriptor 4. Readiness requires exact operation/action/build/app
 PID/start binding and EOF, not a spawn, write or partial JSON chunk. Refusal ACK
 does not prove child exit or absence of all metadata effects. Terminal close for
@@ -81,15 +83,17 @@ helper exit after the original caller loses its child handle. The current source
 uses `ps` for process-start/absence observation; it exports no durable reconnect
 to that child handle after caller restart. A previously platform-refused observation
 is not retried or rerouted by this source preparation. Offline recover is a
-mutation path, not a substitute for read-only reconciliation. Until supported
+mutation path, not a substitute for read-only reconciliation; the Go entries
+refuse it, and the desktop never sends it. Until supported
 same-child or approved exact native process evidence exists, process uncertainty
 and all resulting admission limits remain explicit.
 
 ## Integration exits
 
-Core/Lead accept root module/command/build closure and fresh executable attestation,
-then wire one active runtime. Both transitional Go suites stay explicit until the
-old nested module is retired. Physical archive/package/resource and legacy-alpha
-compatibility must pass before resource/consumer deletion. A new Go helper needs
-fresh durable/ACK/normal-Quit/lease/swap/restore/crash tests against disposable
-native state; package and installed acceptance remain separately owned evidence.
+The desktop runs the attested Go helper entries from the build's private
+execution image. Both transitional Go suites stay explicit until the old nested
+module is retired. Physical archive/package/resource and legacy-alpha
+compatibility must pass before resource/consumer deletion. The Go helper's
+durable, ACK, normal-Quit, lease, swap, restore and crash behaviour is tested
+against disposable native state ([helper recovery](helper-recovery.md)); package
+and installed acceptance remain separately owned evidence.
