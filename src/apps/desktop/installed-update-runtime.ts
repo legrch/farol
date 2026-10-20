@@ -2364,20 +2364,33 @@ async function createRuntime(
     m.version === options.build.version &&
     m.buildVersion === options.build.buildVersion &&
     m.channel === adoptionChannel;
+  // Digest of the adopted record last found to describe another published
+  // build. Only an unchanged record with this digest may be replaced.
+  let supersededDigest: string | null = null;
   const readAdoptedExpectation = async (): Promise<
     z.infer<typeof AcceptedBuild>
   > => {
-    const raw = await readRecord(adoptedFile);
+    let digest: string | undefined;
+    const raw = await readRecord(adoptedFile, true, (value) => {
+      digest = value;
+    });
     if (raw === null) throw new Error("UPDATE_BASELINE_ADOPTION_REQUIRED");
+    // A record that does not parse, carries an invalid manifest or names another
+    // slot or profile is tampered or foreign: refuse, never adopt over it.
     const record = AdoptedBaseline.parse(raw);
     const parsed = parseGithubReleaseManifest(record.manifest);
     if (
       !parsed.ok ||
       record.slot !== slot ||
-      record.userData !== options.userData ||
-      !manifestDescribesRunningBuild(parsed.value)
+      record.userData !== options.userData
     )
       throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+    // A valid record for this slot that describes another published build is
+    // superseded, for example by a newer release dragged over the old copy.
+    if (!manifestDescribesRunningBuild(parsed.value)) {
+      supersededDigest = digest ?? null;
+      throw new Error("UPDATE_BASELINE_ADOPTION_SUPERSEDED");
+    }
     return {
       digest: parsed.value.artifactSha256,
       version: parsed.value.version,
@@ -2561,7 +2574,9 @@ async function createRuntime(
   // First-launch adoption for the user slot only. It runs from discovery when
   // neither an owner-tool receipt nor an update receipt anchors this copy, and
   // it never overwrites a record. A failure writes nothing.
-  const adoptBaseline = async (): Promise<
+  const adoptBaseline = async (
+    replacing: string | null,
+  ): Promise<
     Readonly<{ ok: true }> | Readonly<{ ok: false; code: string }>
   > => {
     if (
@@ -2605,23 +2620,33 @@ async function createRuntime(
       })
     )
       return known("UPDATE_ADOPTION_TREE_MISMATCH");
+    const record = {
+      schema: "farol.next.adopted-baseline/1",
+      slot,
+      userData: options.userData,
+      manifest,
+      adoptedAt: new Date().toISOString(),
+    };
     try {
-      await writeRecord(
-        adoptedFile,
-        {
-          schema: "farol.next.adopted-baseline/1",
-          slot,
-          userData: options.userData,
-          manifest,
-          adoptedAt: new Date().toISOString(),
-        },
-        undefined,
-        true,
-      );
+      if (replacing === null)
+        await writeRecord(adoptedFile, record, undefined, true);
+      else {
+        // Replace only the exact superseded record. A changed or vanished file
+        // is a concurrent writer: leave it and let the caller validate it.
+        let current: string | undefined;
+        const existing = await readRecord(adoptedFile, true, (value) => {
+          current = value;
+        });
+        if (existing === null || current !== replacing) return { ok: true };
+        await writeRecord(adoptedFile, record);
+      }
     } catch (error) {
       // Another writer created the record first. Keep theirs: the next read
       // validates whichever record is present and never replaces it.
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST")
+      if (
+        replacing !== null ||
+        (error as NodeJS.ErrnoException).code !== "EEXIST"
+      )
         return known("UPDATE_ADOPTION_RECORD_UNWRITTEN");
     }
     return { ok: true };
@@ -3535,13 +3560,18 @@ async function createRuntime(
         // Do not query GitHub using an unconfirmed installed baseline.
         current = await readAcceptedSource();
       } catch (error) {
+        const superseded =
+          error instanceof Error &&
+          error.message === "UPDATE_BASELINE_ADOPTION_SUPERSEDED";
         if (
           installLocation === "shared" ||
           !(error instanceof Error) ||
-          error.message !== "UPDATE_BASELINE_ADOPTION_REQUIRED"
+          (error.message !== "UPDATE_BASELINE_ADOPTION_REQUIRED" && !superseded)
         )
           return known("UPDATE_SOURCE_IDENTITY_UNCONFIRMED");
-        const adopted = await adoptBaseline();
+        const adopted = await adoptBaseline(
+          superseded ? supersededDigest : null,
+        );
         if (!adopted.ok) return known(adopted.code);
         try {
           current = await readAcceptedSource();

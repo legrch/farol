@@ -57,7 +57,11 @@ no promotion receipt, update receipt or earlier adoption, the app finds the
 GitHub release manifest for its own exact version, requires it to describe the
 running build, measures its installed tree against the manifest's artifact digest,
 and creates one create-only `adopted-baseline.json` in the owner-private updater
-root. Any failure, including a network failure, writes nothing.
+root. Any failure, including a network failure, writes nothing. A manually
+installed newer published build re-adopts: a valid record that describes another
+published build is superseded and is replaced, atomically and only if unchanged,
+after the same lookup, manifest and tree checks pass. A tampered record is never
+replaced.
 
 This is trust on first use. The descriptor is the release manifest fetched from
 GitHub for the running version. It is not a DMG sidecar or a user-reported digest,

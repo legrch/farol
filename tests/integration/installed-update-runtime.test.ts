@@ -6593,9 +6593,9 @@ describe("first-launch adoption in the user slot (disposable files; GitHub and n
 
   it.each([
     [
-      "build identity",
+      "manifest",
       (record: Record<string, any>) => {
-        record.manifest.buildId = "8".repeat(64);
+        record.manifest.artifactSha256 = "not-a-digest";
       },
     ],
     [
@@ -6749,6 +6749,167 @@ describe("first-launch adoption in the user slot (disposable files; GitHub and n
       await offline.close();
     },
   );
+
+  // A newer published build that the recipient installed by hand over the slot.
+  const next = BuildIdentitySchema.parse({
+    ...build,
+    version: "0.1.0-owner.beta.2",
+    buildVersion: "3",
+    sourceCommit: "3".repeat(40),
+    sourceTreeDigest: "4".repeat(64),
+  });
+  next.buildId = createHash("sha256")
+    .update(canonicalBuildIdentityPayload(next))
+    .digest("hex");
+  const nextDigest = "a".repeat(64);
+  const publishedNext = () => ({
+    ...manifest,
+    version: next.version,
+    buildVersion: next.buildVersion!,
+    buildId: next.buildId,
+    sourceCommit: next.sourceCommit,
+    sourceTreeDigest: next.sourceTreeDigest,
+    artifactSha256: nextDigest,
+    archiveName: `Farol-${next.version}-darwin-arm64.zip`,
+  });
+  function measureNext(digest = nextDigest) {
+    mocks.exec.mockImplementation(async () => ({
+      stdout: JSON.stringify({
+        digest,
+        version: next.version,
+        buildId: next.buildId,
+      }),
+    }));
+  }
+  async function checkedNext() {
+    const controller = (await createInstalledUpdateRuntime({
+      ...options(),
+      build: next,
+      goCoreArtifact: compiledFor(next),
+    }))!;
+    await controller.initialize();
+    await controller.check(true);
+    return controller;
+  }
+  async function adoptedOld() {
+    await dragged();
+    const first = await checked();
+    expect(first.snapshot()).toMatchObject({ phase: "available" });
+    await first.close();
+    return fs.readFile(adoptedFile());
+  }
+
+  it("re-adopts when a newer published build is installed over an adopted copy", async () => {
+    await adoptedOld();
+    mocks.find.mockResolvedValue({ ok: true, value: publishedNext() });
+    measureNext();
+    const controller = await checkedNext();
+    expect(controller.snapshot()).toMatchObject({ phase: "available" });
+    expect(mocks.find).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(await fs.readFile(adoptedFile(), "utf8"))).toMatchObject({
+      schema: "farol.next.adopted-baseline/1",
+      slot,
+      userData,
+      manifest: publishedNext(),
+    });
+    expect(
+      (await fs.readdir(path.dirname(adoptedFile()))).filter((name) =>
+        name.startsWith("adopted-baseline.json."),
+      ),
+    ).toEqual([]);
+    await controller.close();
+    // A record that already describes the running build is never rewritten.
+    const bytes = await fs.readFile(adoptedFile());
+    const inode = (await fs.lstat(adoptedFile())).ino;
+    const again = await checkedNext();
+    expect(again.snapshot()).toMatchObject({ phase: "available" });
+    expect(mocks.find).toHaveBeenCalledTimes(2);
+    expect(await fs.readFile(adoptedFile())).toEqual(bytes);
+    expect((await fs.lstat(adoptedFile())).ino).toBe(inode);
+    await again.close();
+  });
+
+  it("keeps the superseded record when the new copy does not match its release", async () => {
+    const old = await adoptedOld();
+    mocks.find.mockResolvedValue({ ok: true, value: publishedNext() });
+    measureNext("0".repeat(64));
+    const controller = await checkedNext();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_ADOPTION_TREE_MISMATCH",
+    });
+    expect(await fs.readFile(adoptedFile())).toEqual(old);
+    await controller.close();
+  });
+
+  it.each([
+    [
+      "a network failure",
+      { ok: false, code: "network_failure" },
+      "NETWORK_FAILURE",
+    ],
+    [
+      "an unpublished version",
+      { ok: false, code: "release_not_found" },
+      "RELEASE_NOT_FOUND",
+    ],
+    [
+      "a manifest of another build",
+      { ok: true, value: { ...publishedNext(), buildId: "7".repeat(64) } },
+      "RELEASE_MISMATCH",
+    ],
+  ])("keeps the superseded record after %s", async (_name, lookup, suffix) => {
+    const old = await adoptedOld();
+    mocks.find.mockResolvedValue(lookup);
+    measureNext();
+    const controller = await checkedNext();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: `UPDATE_ADOPTION_${suffix}`,
+    });
+    expect(await fs.readFile(adoptedFile())).toEqual(old);
+    await controller.close();
+  });
+
+  it("keeps a record that changed while the superseded one was being replaced", async () => {
+    await adoptedOld();
+    const winner = {
+      schema: "farol.next.adopted-baseline/1",
+      slot,
+      userData,
+      manifest: publishedNext(),
+      adoptedAt: "2026-10-21T00:00:00.000Z",
+    };
+    mocks.find.mockImplementation(async () => {
+      await fs.writeFile(adoptedFile(), `${JSON.stringify(winner)}\n`);
+      return { ok: true, value: publishedNext() };
+    });
+    measureNext();
+    const controller = await checkedNext();
+    expect(controller.snapshot()).toMatchObject({ phase: "available" });
+    expect(JSON.parse(await fs.readFile(adoptedFile(), "utf8"))).toEqual(
+      winner,
+    );
+    await controller.close();
+  });
+
+  it("does not replace a record that is tampered rather than superseded", async () => {
+    await adoptedOld();
+    const record = JSON.parse(await fs.readFile(adoptedFile(), "utf8"));
+    record.slot = "/elsewhere/Farol.app";
+    await fs.writeFile(adoptedFile(), JSON.stringify(record));
+    const tampered = await fs.readFile(adoptedFile());
+    mocks.find.mockResolvedValue({ ok: true, value: publishedNext() });
+    measureNext();
+    const controller = await checkedNext();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_SOURCE_IDENTITY_UNCONFIRMED",
+    });
+    expect(mocks.find).toHaveBeenCalledTimes(1);
+    expect(await fs.readFile(adoptedFile())).toEqual(tampered);
+    await controller.close();
+  });
 
   it("does not adopt when the measurement itself cannot be read", async () => {
     await dragged();

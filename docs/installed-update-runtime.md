@@ -212,8 +212,18 @@ Adoption runs these steps and writes nothing unless all of them pass:
 A network failure is `UPDATE_ADOPTION_NETWORK_FAILURE` and records nothing, so a
 later check tries again. After adoption, `readAcceptedSource()` re-validates the
 record on every use: the manifest must parse, the slot and profile must match, and
-the manifest must still describe the running build. A record that fails this is
-`UPDATE_SOURCE_IDENTITY_UNCONFIRMED` and is never adopted over. Once an update has
+the manifest must still describe the running build. A record that does not parse,
+has an invalid manifest, or names another slot or profile is tampered or foreign:
+it is `UPDATE_SOURCE_IDENTITY_UNCONFIRMED` and is never adopted over. A valid record
+for this slot that describes another published build is superseded, for example
+when the recipient installs a newer published build over the slot by hand. The
+runtime then raises `UPDATE_BASELINE_ADOPTION_SUPERSEDED` and runs the same
+adoption in the user slot: lookup, manifest match and tree digest must all pass
+first, and a failure leaves the old record untouched. Only then is the record
+replaced atomically, and only if its bytes still equal the superseded record that
+was read. A record that changed in between belongs to a concurrent writer and is
+validated as found. A record that already describes the running build is never
+rewritten. Once an update has
 settled, `last-update.json` takes precedence over the adopted record, and an owner
 promotion receipt takes precedence over adoption.
 
