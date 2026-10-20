@@ -191,7 +191,7 @@ Public failure classes follow one rule:
 - `GIT_TRANSPORT_SCOPE_REFUSED`: an update outside the plan, such as another ref
   or a non-fast-forward of the remote predecessor, or a custody refusal. Custody
   signals a refusal by returning `ErrScope`; any other custody error is a port
-  failure, whatever it wraps.
+  failure, including one that wraps `ErrScope`.
 - `GIT_TRANSPORT_REMOTE_CHANGED`: the remote's advertised state differs from
   the plan (another predecessor, an existing target ref or another object
   format), or the remote refused with an `ERR` line in its advertisement or

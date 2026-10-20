@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -519,6 +520,7 @@ func TestClassifiedFailureCodes(t *testing.T) {
 		{errors.Join(contextEnded{context.DeadlineExceeded}, ownerFailure{ErrLimit}), "GIT_TRANSPORT_DEADLINE"},
 		// Custody: ErrScope is a refusal; anything else is the owner's fault.
 		{custodyFailure(ErrScope), "GIT_TRANSPORT_SCOPE_REFUSED"},
+		{custodyFailure(fmt.Errorf("journal unavailable: %w", ErrScope)), "GIT_TRANSPORT_PORT_FAILURE"},
 		{custodyFailure(errors.Join(ErrRemote, errInjected)), "GIT_TRANSPORT_PORT_FAILURE"},
 		{custodyFailure(context.Canceled), "GIT_TRANSPORT_PORT_FAILURE"},
 		// A stream error that wraps a sentinel is still the stream's fault.

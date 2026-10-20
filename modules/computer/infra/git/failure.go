@@ -64,7 +64,7 @@ func custodyFailure(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, ErrScope) {
+	if err == ErrScope { // exactly the refusal sentinel; a wrapped one is a fault report
 		return scopeRefusal{err}
 	}
 	return ownerFailure{err}
