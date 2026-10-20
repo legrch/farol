@@ -536,6 +536,53 @@ func TestLiveHelperNativeRecoverWithoutAJournalIsRefusedBeforeTheFrame(t *testin
 	}
 }
 
+// A REAL prepared journal whose only entry is the original app (staged, previous
+// and failed all absent) matches no recovery pair. The clean `recovery_pair`
+// refusal comes from the original recovery owner's own Failure type, through the
+// production readiness scope: ONE refused frame (never waiting_for_exit), phase
+// and code from the owner, exit 70, and nothing is written. The journal is
+// constructed from a real apply by restoring the source app and rewinding its phase.
+func TestLiveHelperNativeRecoverUnrecognisedPairIsRefusedWithTheOwnersCode(t *testing.T) {
+	liveNativeRequire(t)
+	f := newLiveNativeFixture(t, true)
+	id := strings.Repeat("1", 32)
+	apps := filepath.Join(f.home, "Applications", "Farol.app")
+	f.arm(t, "")
+	o := f.run(t, f.request("apply", false), true)
+	f.requireTerminal(t, o.execNativeOutcome, `{"phase": "verified", "operationId": "`+id+`"}`+"\n", 0)
+	if err := os.RemoveAll(apps); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(f.operation, "previous.app"), apps); err != nil {
+		t.Fatal(err)
+	}
+	journalPath := filepath.Join(f.operation, "journal.json")
+	rewound := strings.Replace(execNativeRead(t, journalPath), `"phase":"verified"`, `"phase":"prepared"`, 1)
+	if err := os.WriteFile(journalPath, []byte(rewound), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.phase(t); got != "prepared" {
+		t.Fatal("journal phase", got)
+	}
+
+	f.arm(t, "")
+	request := f.request("recover", true)
+	o = f.run(t, request, true)
+	if o.waitingFrame {
+		t.Fatal("an unrecognised pair exposed waiting_for_exit", o.ack)
+	}
+	f.wantRefusal(t, request, o, "prepared", "recovery_pair")
+	if got := f.phase(t); got != "prepared" || f.exists(filepath.Join(f.operation, "previous.app")) || f.exists(filepath.Join(f.operation, "failed.app")) {
+		t.Fatal("a refused recovery wrote an effect", got)
+	}
+	if execNativeRead(t, filepath.Join(apps, "Contents/Info.plist")) != execNativeTestdata(t, "oracle.xml") {
+		t.Fatal("installed app changed")
+	}
+	if err := f.pred.cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatal("predecessor was disturbed", err)
+	}
+}
+
 // Recover with relaunch over a REAL verified journal and trees: the frame is sent,
 // the scratch predecessor exits, the production recovery policy reconciles the
 // pair (verified), and the run reaches the launch attempt. The inert oracle images

@@ -7,6 +7,7 @@ import (
 	executionapp "github.com/legrch/farol/modules/release/app/services/execution"
 	inputapp "github.com/legrch/farol/modules/release/app/services/helperinput"
 	protocolapp "github.com/legrch/farol/modules/release/app/services/helperprotocol"
+	"github.com/legrch/farol/modules/release/app/services/helperrecovery"
 	"github.com/legrch/farol/modules/release/app/services/processwait"
 	"github.com/legrch/farol/modules/release/infra/native/handoff"
 	"github.com/legrch/farol/modules/release/infra/native/helperlocks"
@@ -55,6 +56,11 @@ func closedHelperRefusalOf(err error) (phase, code string, ok bool) {
 			phase, code, ok = f.phase, f.code, true
 		}
 	case *executionapp.Failure:
+		if f != nil && !f.Internal && !f.Uncertain {
+			phase, code, ok = f.Phase, f.Code, true
+		}
+	case *helperrecovery.Failure:
+		// The original recovery owner (live recover's Inspect, Recheck, Reconcile).
 		if f != nil && !f.Internal && !f.Uncertain {
 			phase, code, ok = f.Phase, f.Code, true
 		}
