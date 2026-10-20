@@ -6486,35 +6486,142 @@ describe("selected shared slot (redirected disposable filesystem, mocked helper)
     },
   );
 
-  it("never adopts a baseline for the shared slot", async () => {
-    const fixture = await shared();
-    await fs.rm(fixture.physical + ".receipt.json");
-    mocks.find.mockResolvedValue({
-      ok: true,
-      value: {
-        ...manifest,
-        version: build.version,
-        buildVersion: build.buildVersion!,
-        buildId: build.buildId,
-        sourceCommit: build.sourceCommit,
-        sourceTreeDigest: build.sourceTreeDigest,
-        artifactSha256: source.digest,
-        archiveName: `Farol-${build.version}-darwin-arm64.zip`,
-      },
+  describe("first-launch adoption record for the shared slot (startup adopts; the runtime only reads)", () => {
+    const sharedSlot = "/Applications/Farol.app";
+    const adoptedFile = () =>
+      path.join(userData, "installed-updates/adopted-baseline.json");
+    const published = () => ({
+      ...manifest,
+      version: build.version,
+      buildVersion: build.buildVersion!,
+      buildId: build.buildId,
+      sourceCommit: build.sourceCommit,
+      sourceTreeDigest: build.sourceTreeDigest,
+      artifactSha256: source.digest,
+      archiveName: `Farol-${build.version}-darwin-arm64.zip`,
     });
-    const controller = (await createInstalledUpdateRuntime(options()))!;
-    await controller.initialize();
-    await controller.check();
-    expect(controller.snapshot()).toMatchObject({
-      phase: "failed",
-      code: "UPDATE_SOURCE_IDENTITY_UNCONFIRMED",
+    const recordFor = (overrides: Record<string, unknown> = {}) => ({
+      schema: "farol.next.adopted-baseline/1",
+      slot: sharedSlot,
+      userData,
+      manifest: published(),
+      adoptedAt: "2026-10-21T00:00:00.000Z",
+      ...overrides,
     });
-    expect(mocks.find).not.toHaveBeenCalled();
-    expect(mocks.discover).not.toHaveBeenCalled();
-    await expect(
-      fs.lstat(path.join(userData, "installed-updates/adopted-baseline.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await controller.close();
+    async function writeAdopted(value: unknown) {
+      await fs.mkdir(path.dirname(adoptedFile()), {
+        recursive: true,
+        mode: 0o700,
+      });
+      await fs.writeFile(adoptedFile(), `${JSON.stringify(value)}\n`, {
+        mode: 0o600,
+      });
+    }
+    async function dragged() {
+      const fixture = await shared();
+      await fs.rm(fixture.physical + ".receipt.json");
+      mocks.find.mockResolvedValue({ ok: true, value: published() });
+      return fixture;
+    }
+    async function checked() {
+      const controller = (await createInstalledUpdateRuntime(options()))!;
+      await controller.initialize();
+      await controller.check();
+      return controller;
+    }
+
+    it("never adopts by itself: without a record the shared runtime reports an unconfirmed source", async () => {
+      await dragged();
+      const controller = await checked();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_SOURCE_IDENTITY_UNCONFIRMED",
+      });
+      expect(mocks.find).not.toHaveBeenCalled();
+      expect(mocks.discover).not.toHaveBeenCalled();
+      await expect(fs.lstat(adoptedFile())).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await controller.close();
+    });
+
+    it("accepts a valid shared-slot record written at startup, without a lookup or a rewrite", async () => {
+      await dragged();
+      await writeAdopted(recordFor());
+      const bytes = await fs.readFile(adoptedFile());
+      const inode = (await fs.lstat(adoptedFile())).ino;
+      const controller = await checked();
+      expect(controller.snapshot()).toMatchObject({ phase: "available" });
+      expect(mocks.find).not.toHaveBeenCalled();
+      expect(await fs.readFile(adoptedFile())).toEqual(bytes);
+      expect((await fs.lstat(adoptedFile())).ino).toBe(inode);
+      await controller.close();
+    });
+
+    it("does not adopt over a superseded shared record from discovery", async () => {
+      await dragged();
+      await writeAdopted(
+        recordFor({
+          manifest: { ...published(), buildId: "7".repeat(64) },
+        }),
+      );
+      const bytes = await fs.readFile(adoptedFile());
+      const controller = await checked();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_SOURCE_IDENTITY_UNCONFIRMED",
+      });
+      expect(mocks.find).not.toHaveBeenCalled();
+      expect(mocks.discover).not.toHaveBeenCalled();
+      expect(await fs.readFile(adoptedFile())).toEqual(bytes);
+      await controller.close();
+    });
+
+    it("refuses a record that names the user slot", async () => {
+      const fixture = await dragged();
+      await writeAdopted(recordFor({ slot: fixture.physical }));
+      const bytes = await fs.readFile(adoptedFile());
+      const controller = await checked();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_SOURCE_IDENTITY_UNCONFIRMED",
+      });
+      expect(mocks.find).not.toHaveBeenCalled();
+      expect(await fs.readFile(adoptedFile())).toEqual(bytes);
+      await controller.close();
+    });
+
+    it.each([
+      ["a JSON null file", null],
+      ["another profile", recordFor({ userData: "/elsewhere/profile" })],
+      [
+        "an invalid manifest",
+        recordFor({ manifest: { ...published(), artifactSha256: "x" } }),
+      ],
+    ])("refuses a record that is %s", async (_name, value) => {
+      await dragged();
+      await writeAdopted(value);
+      const bytes = await fs.readFile(adoptedFile());
+      const controller = await checked();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_SOURCE_IDENTITY_UNCONFIRMED",
+      });
+      expect(mocks.find).not.toHaveBeenCalled();
+      expect(await fs.readFile(adoptedFile())).toEqual(bytes);
+      await controller.close();
+    });
+
+    it("lets an owner-tool receipt win and ignores a stray shared record", async () => {
+      await shared();
+      await writeAdopted(recordFor());
+      const bytes = await fs.readFile(adoptedFile());
+      const controller = await checked();
+      expect(controller.snapshot()).toMatchObject({ phase: "available" });
+      expect(mocks.find).not.toHaveBeenCalled();
+      expect(await fs.readFile(adoptedFile())).toEqual(bytes);
+      await controller.close();
+    });
   });
 });
 
@@ -6726,6 +6833,31 @@ describe("first-launch adoption in the user slot (disposable files; GitHub and n
     expect(await fs.readFile(adoptedFile())).toEqual(bytes);
     expect((await fs.lstat(adoptedFile())).ino).toBe(inode);
     await second.close();
+  });
+
+  it("refuses a record that names the shared slot, never using it for the user slot", async () => {
+    await dragged();
+    await fs.mkdir(path.dirname(adoptedFile()), { mode: 0o700 });
+    await fs.writeFile(
+      adoptedFile(),
+      `${JSON.stringify({
+        schema: "farol.next.adopted-baseline/1",
+        slot: "/Applications/Farol.app",
+        userData,
+        manifest: published(),
+        adoptedAt: "2026-10-21T00:00:00.000Z",
+      })}\n`,
+      { mode: 0o600 },
+    );
+    const bytes = await fs.readFile(adoptedFile());
+    const controller = await checked();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_SOURCE_IDENTITY_UNCONFIRMED",
+    });
+    expect(mocks.find).not.toHaveBeenCalled();
+    expect(await fs.readFile(adoptedFile())).toEqual(bytes);
+    await controller.close();
   });
 
   it("publishes nothing when a crash left only a temporary file, and adopts normally afterwards", async () => {

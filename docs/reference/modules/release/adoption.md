@@ -48,10 +48,11 @@ tree and path. Release owns that baseline; Distribution cannot synthesize it or
 reuse a receipt from another generation/path. Profile and journal relocation do
 not rewrite unknown outcomes, accepted publications or old helper witnesses.
 
-## Implemented: user-slot first-launch adoption
+## Implemented: first-launch adoption
 
-The installed updater implements one narrow form of this adoption, for
-`~/Applications/Farol.app` only. The full lifecycle in
+The installed updater implements one narrow form of this adoption, for the user
+slot `~/Applications/Farol.app` at the first update check and for the shared slot
+`/Applications/Farol.app` at startup. The full lifecycle in
 `docs/installed-update-runtime.md` is authoritative; in short, on a check that finds
 no promotion receipt, update receipt or earlier adoption, the app finds the
 GitHub release manifest for its own exact version, requires it to describe the
@@ -69,9 +70,22 @@ and it is not independent of the account that published the download. Adoption
 detects a corrupt or partial copy, the wrong version and later drift; it does not
 detect a deliberately tampered download.
 
-Not implemented here: the shared `/Applications/Farol.app` slot (it keeps its
-startup refusal and never adopts), the destination-case table above, the legacy
-slot move, any first install, and a Distribution-facing request or result. The
+The shared slot adopts at startup, before `app.whenReady()` and before any backend
+binary exists, because the immutable-tree contract needs the baseline first. When
+the receipt, update receipt, repair evidence and any earlier record are truly
+absent, startup looks up the manifest for the running version, requires it to
+describe the running build, requires the in-process tree digest to equal its
+`artifactSha256` and only then captures the private resources with that digest as
+the expectation; the record, with `slot: "/Applications/Farol.app"`, is written to
+the private profile after the capture succeeds and never under `/Applications`.
+Network failure, unpublished release, tree mismatch and release mismatch end
+startup with exit 1 and a native error box. The first launch needs the network;
+afterwards the record is read offline. A record for one slot is never valid for the
+other. The shared runtime never adopts by itself. A second macOS user still cannot
+launch a shared copy owned by another uid.
+
+Not implemented here: the destination-case table above, the legacy slot move,
+any first install, and a Distribution-facing request or result. The
 rest of this document remains the required semantics for those.
 
 ## Results and one-shot observation

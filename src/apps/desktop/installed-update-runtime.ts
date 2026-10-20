@@ -16,7 +16,6 @@ import {
 import {
   discoverGithubUpdate,
   downloadAndVerifyGithubUpdate,
-  findGithubReleaseManifest,
   packageMatchesRelease,
   parseGithubReleaseManifest,
   parseRetainedGithubReleaseManifest,
@@ -65,6 +64,16 @@ import type {
 } from "./installed-predecessor";
 import { originalPredecessorSettingsReadable } from "./beta3-state-readability";
 import { treeDigest } from "../../pkg/artifact-tree-digest/digest";
+import {
+  ADOPTED_BASELINE_FILE,
+  SHARED_SLOT,
+  adoptedRecordFor,
+  adoptionBuildEligible,
+  publishAdoptedRecord,
+  readAdoptedRecord,
+  recordAbsent,
+  resolveAdoptionManifest,
+} from "./installed-adoption";
 import { installedGoSlotBindingHelper } from "../../../apps/desktop/installed-slot-binding-helper";
 
 import {
@@ -144,18 +153,6 @@ const PromotionReceipt = z.strictObject({
     obligations: z.array(z.never()).length(0),
   }),
   verifiedDestinationSha256: Digest,
-});
-// First-launch adoption of a copy that was dragged into the user slot rather
-// than installed by the owner tool. It records what the published release
-// manifest said about this exact version, once, and is honestly trust on first
-// use: it detects a corrupt or partial copy, the wrong version and later drift,
-// not a deliberately tampered download. It is never a PromotionReceipt.
-const AdoptedBaseline = z.strictObject({
-  schema: z.literal("farol.next.adopted-baseline/1"),
-  slot: z.string().max(4096),
-  userData: z.string().max(4096),
-  manifest: z.unknown(),
-  adoptedAt: z.string().max(64),
 });
 // A cold repair is a distinct installer result, never a synthetic live-update receipt.
 const ClosedRepairReceipt = z.strictObject({
@@ -601,6 +598,9 @@ export type InstalledUpdateRelaunchOptions = Readonly<{
       timeoutMs: number,
     ): Promise<unknown>;
     readProcess: typeof readInstalledProcess;
+    // Startup adoption only: real-absence probe and atomic record publisher.
+    recordAbsent?: typeof recordAbsent;
+    writeRecord?: (file: string, value: unknown) => Promise<void>;
     rejectedDirectory?: Readonly<{
       openDirectory: typeof openRejectedDirectory;
       lstat: typeof readRejectedEntry;
@@ -688,6 +688,12 @@ async function observeSharedSlotStartup(
     return expected;
   };
   let expected: z.infer<typeof AcceptedBuild>;
+  // Set only by first-launch adoption; published after a successful capture.
+  let adoption: {
+    file: string;
+    record: ReturnType<typeof adoptedRecordFor>;
+    replacing: string | null;
+  } | null = null;
   const ready = await read(path.join(root, "ready.json"));
   const saved = await read(path.join(root, "last-update.json"));
   const repair = await read(app + ".repair.json");
@@ -749,22 +755,106 @@ async function observeSharedSlotStartup(
     expected = receipt.phase === "installed" ? receipt.target : receipt.source;
   } else {
     const file = app + ".receipt.json";
-    const receipt = PromotionReceipt.parse(await read(file));
+    const receiptRaw = await read(file);
+    // Adoption needs every other piece of baseline evidence to be truly absent
+    // (ENOENT). A file that exists, even holding JSON null, keeps the refusal
+    // below. A ready record is allowed only when it is a plain retained
+    // download with no operation: the user may quit between downloading an
+    // update and installing it, and that must not strand an adopted copy.
+    const absent = options.observation?.recordAbsent ?? recordAbsent;
     if (
-      receipt.destination !== app ||
-      receipt.receipt !== file ||
-      receipt.activation.userData !== profile ||
-      receipt.sourceCommit !== build.sourceCommit ||
-      receipt.sourceTreeDigest !== build.sourceTreeDigest ||
-      receipt.version !== build.version ||
-      receipt.artifactSha256 !== receipt.verifiedDestinationSha256
-    )
-      throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-    expected = {
-      digest: receipt.verifiedDestinationSha256,
-      version: receipt.version,
-      buildId: build.buildId,
-    };
+      receiptRaw === null &&
+      saved === null &&
+      repair === null &&
+      repairJournal === null &&
+      (ready !== null || (await absent(path.join(root, "ready.json")))) &&
+      (
+        await Promise.all(
+          [
+            file,
+            path.join(root, "last-update.json"),
+            app + ".repair.json",
+            "/Applications/.farol-closed-repair.json",
+          ].map(absent),
+        )
+      ).every(Boolean)
+    ) {
+      const adoptedFile = path.join(root, ADOPTED_BASELINE_FILE);
+      const state = await readAdoptedRecord({
+        file: adoptedFile,
+        slot: SHARED_SLOT,
+        userData: profile,
+        build,
+        read,
+        absent,
+      });
+      if (state.kind === "expected") {
+        // A recorded baseline never touches the network.
+        expected = { ...state.expected };
+      } else {
+        // The expectation comes from the published manifest, never from the
+        // slot being measured. Plain Node https works before Electron is ready.
+        const transport = createGithubUpdateTransport({
+          privateStateDirectory: root,
+          verifyPackage: async () => {
+            throw new Error("UPDATE_ADOPTION_PACKAGE_UNUSED");
+          },
+        });
+        const resolved = await resolveAdoptionManifest({
+          build,
+          fetchJson: (url, maximum) => transport.fetchJson(url, maximum),
+        });
+        if (!resolved.ok) throw new Error(resolved.code);
+        const manifest = resolved.value;
+        let measured: string;
+        try {
+          measured = options.observation
+            ? AcceptedBuild.parse(
+                await options.observation.readBuild(
+                  options.directory,
+                  app,
+                  30000,
+                ),
+              ).digest
+            : await treeDigest(app, options.physicalFiles);
+        } catch {
+          throw new Error("UPDATE_ADOPTION_TREE_UNREADABLE");
+        }
+        if (measured !== manifest.artifactSha256)
+          throw new Error("UPDATE_ADOPTION_TREE_MISMATCH");
+        expected = {
+          digest: manifest.artifactSha256,
+          version: manifest.version,
+          buildId: manifest.buildId,
+        };
+        adoption = {
+          file: adoptedFile,
+          record: adoptedRecordFor({
+            slot: SHARED_SLOT,
+            userData: profile,
+            manifest,
+          }),
+          replacing: state.kind === "superseded" ? state.digest : null,
+        };
+      }
+    } else {
+      const receipt = PromotionReceipt.parse(receiptRaw);
+      if (
+        receipt.destination !== app ||
+        receipt.receipt !== file ||
+        receipt.activation.userData !== profile ||
+        receipt.sourceCommit !== build.sourceCommit ||
+        receipt.sourceTreeDigest !== build.sourceTreeDigest ||
+        receipt.version !== build.version ||
+        receipt.artifactSha256 !== receipt.verifiedDestinationSha256
+      )
+        throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+      expected = {
+        digest: receipt.verifiedDestinationSha256,
+        version: receipt.version,
+        buildId: build.buildId,
+      };
+    }
   }
   if (expected.buildId !== build.buildId || expected.version !== build.version)
     throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
@@ -776,6 +866,37 @@ async function observeSharedSlotStartup(
     copyApp: options.copyApp,
     physicalFiles: options.physicalFiles,
   });
+  if (adoption) {
+    // Only the verified, captured image may anchor the record, and nothing is
+    // written under /Applications. A failed write is a closed failure.
+    let published: boolean;
+    try {
+      published = await publishAdoptedRecord({
+        ...adoption,
+        read,
+        write: options.observation?.writeRecord ?? writeRecord,
+      });
+    } catch {
+      throw new Error("UPDATE_ADOPTION_RECORD_UNWRITTEN");
+    }
+    if (!published) {
+      // Another writer replaced the superseded record: it must validate for
+      // this exact build and manifest digest, else startup stays refused.
+      const current = await readAdoptedRecord({
+        file: adoption.file,
+        slot: SHARED_SLOT,
+        userData: profile,
+        build,
+        read,
+        absent: options.observation?.recordAbsent ?? recordAbsent,
+      });
+      if (
+        current.kind !== "expected" ||
+        current.expected.digest !== expected.digest
+      )
+        throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+    }
+  }
   const resourcesOrigin: InstalledUpdateResourcesOrigin = Object.freeze({
     kind: "shared-slot",
     slot: "/Applications/Farol.app",
@@ -1499,16 +1620,6 @@ async function readRecord(
     throw new Error("UPDATE_RECORD_CHANGED");
   observeDigest?.(digest!);
   return value;
-}
-// True only when lstat proves the name does not exist (ENOENT). Any other
-// outcome, including an existing file whose JSON content is null, is presence.
-async function recordAbsent(file: string): Promise<boolean> {
-  try {
-    await fs.lstat(file);
-    return false;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT";
-  }
 }
 async function writeRecord(
   file: string,
@@ -2320,7 +2431,7 @@ async function createRuntime(
   const readyFile = path.join(root, "ready.json");
   const cleanupFile = path.join(root, "package-cleanup-pending.json");
   const receiptFile = path.join(root, "last-update.json");
-  const adoptedFile = path.join(root, "adopted-baseline.json");
+  const adoptedFile = path.join(root, ADOPTED_BASELINE_FILE);
   const restoreFile = path.join(root, "restore-pending.json");
   let restorable: z.infer<typeof Retained> | null = null;
   let restoreKind: "recover" | "rollback" | null = null;
@@ -2355,58 +2466,35 @@ async function createRuntime(
       await runTrusted("update-slot.mjs", [file], beforeEffect),
     );
   const known = (code: string) => ({ ok: false as const, code });
-  // The single boundary of first-launch adoption: the ordinary desktop runtime
-  // in the user slot. Never the shared slot, never a supervised owner runtime.
-  // Every adoption read, lookup and write is gated on this one value.
-  const adoptionApplies = installLocation !== "shared" && !supervised;
-  const adoptionChannel =
-    options.build.updateChannel === "github-stable" ? "stable" : "owner-beta";
-  // The published manifest must describe exactly the running build.
-  const manifestDescribesRunningBuild = (m: ReleaseManifest) =>
-    m.buildId === options.build.buildId &&
-    m.sourceCommit === options.build.sourceCommit &&
-    m.sourceTreeDigest === options.build.sourceTreeDigest &&
-    m.version === options.build.version &&
-    m.buildVersion === options.build.buildVersion &&
-    m.channel === adoptionChannel;
+  // The two boundaries of first-launch adoption. Reading a valid record is
+  // allowed to the ordinary desktop runtime in either slot, never to a
+  // supervised owner runtime. Writing at the first update check is allowed only
+  // in the user slot: the shared slot adopts once, at startup, before its
+  // immutable backend resources are captured, and never from here.
+  const adoptionReadApplies = !supervised;
+  const adoptionWriteAppliesAtDiscovery =
+    installLocation !== "shared" && !supervised;
   // Digest of the adopted record last found to describe another published
   // build. Only an unchanged record with this digest may be replaced.
   let supersededDigest: string | null = null;
   const readAdoptedExpectation = async (): Promise<
     z.infer<typeof AcceptedBuild>
   > => {
-    let digest: string | undefined;
-    const raw = await readRecord(adoptedFile, true, (value) => {
-      digest = value;
+    const state = await readAdoptedRecord({
+      file: adoptedFile,
+      slot,
+      userData: options.userData,
+      build: options.build,
+      read: readRecord,
+      absent: recordAbsent,
     });
-    if (raw === null) {
-      // Adoption needs real absence. A present file holding JSON null is a
-      // tampered record: refuse, never adopt over it.
-      if (await recordAbsent(adoptedFile))
-        throw new Error("UPDATE_BASELINE_ADOPTION_REQUIRED");
-      throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-    }
-    // A record that does not parse, carries an invalid manifest or names another
-    // slot or profile is tampered or foreign: refuse, never adopt over it.
-    const record = AdoptedBaseline.parse(raw);
-    const parsed = parseGithubReleaseManifest(record.manifest);
-    if (
-      !parsed.ok ||
-      record.slot !== slot ||
-      record.userData !== options.userData
-    )
-      throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-    // A valid record for this slot that describes another published build is
-    // superseded, for example by a newer release dragged over the old copy.
-    if (!manifestDescribesRunningBuild(parsed.value)) {
-      supersededDigest = digest ?? null;
+    if (state.kind === "absent")
+      throw new Error("UPDATE_BASELINE_ADOPTION_REQUIRED");
+    if (state.kind === "superseded") {
+      supersededDigest = state.digest;
       throw new Error("UPDATE_BASELINE_ADOPTION_SUPERSEDED");
     }
-    return {
-      digest: parsed.value.artifactSha256,
-      version: parsed.value.version,
-      buildId: options.build.buildId,
-    };
+    return { ...state.expected };
   };
   const readAcceptedSource = async (
     beforeEffect: () => void = () => undefined,
@@ -2551,7 +2639,7 @@ async function createRuntime(
       if (
         receiptRaw === null &&
         !repair &&
-        adoptionApplies &&
+        adoptionReadApplies &&
         // Every other piece of baseline evidence must be truly absent. A file
         // that exists with JSON null keeps main's behaviour and never adopts.
         (
@@ -2598,7 +2686,7 @@ async function createRuntime(
       throw new Error("UPDATE_ACCEPTED_SOURCE_CHANGED");
     return measured;
   };
-  // First-launch adoption for the user slot only. It runs from discovery when
+  // First-launch adoption from discovery, for the user slot only. It runs when
   // neither an owner-tool receipt nor an update receipt anchors this copy, and
   // it never overwrites a record. A failure writes nothing.
   const adoptBaseline = async (
@@ -2607,31 +2695,16 @@ async function createRuntime(
     Readonly<{ ok: true }> | Readonly<{ ok: false; code: string }>
   > => {
     if (
-      !adoptionApplies ||
-      options.build.sourceDirty ||
-      !options.build.buildVersion ||
-      !["github-stable", "github-owner-beta"].includes(
-        options.build.updateChannel,
-      )
+      !adoptionWriteAppliesAtDiscovery ||
+      !adoptionBuildEligible(options.build)
     )
       return known("UPDATE_ADOPTION_BUILD_INELIGIBLE");
-    let found;
-    try {
-      found = await findGithubReleaseManifest(
-        {
-          version: options.build.version,
-          buildVersion: options.build.buildVersion,
-        },
-        adoptionChannel,
-        transport,
-      );
-    } catch {
-      return known("UPDATE_ADOPTION_NETWORK_FAILURE");
-    }
-    if (!found.ok) return known(`UPDATE_ADOPTION_${found.code.toUpperCase()}`);
-    const manifest = found.value;
-    if (!manifestDescribesRunningBuild(manifest))
-      return known("UPDATE_ADOPTION_RELEASE_MISMATCH");
+    const resolved = await resolveAdoptionManifest({
+      build: options.build,
+      fetchJson: (url, maximum) => transport.fetchJson(url, maximum),
+    });
+    if (!resolved.ok) return known(resolved.code);
+    const manifest = resolved.value;
     let measured: z.infer<typeof AcceptedBuild>;
     try {
       measured = await readBuild(slot);
@@ -2647,27 +2720,20 @@ async function createRuntime(
       })
     )
       return known("UPDATE_ADOPTION_TREE_MISMATCH");
-    const record = {
-      schema: "farol.next.adopted-baseline/1",
-      slot,
-      userData: options.userData,
-      manifest,
-      adoptedAt: new Date().toISOString(),
-    };
     try {
-      if (replacing !== null) {
-        // Replace only the exact superseded record. A changed or vanished file
-        // belongs to another writer: leave it and let the caller validate it.
-        let current: string | undefined;
-        const existing = await readRecord(adoptedFile, true, (value) => {
-          current = value;
-        });
-        if (existing === null || current !== replacing) return { ok: true };
-      }
-      // One atomic rename publish. A concurrent writer can only publish an
-      // equally validated record for this running build and slot, so the last
-      // writer wins safely.
-      await writeRecord(adoptedFile, record);
+      // A skipped replacement means another writer owns the file now: leave it
+      // and let the caller validate it.
+      await publishAdoptedRecord({
+        file: adoptedFile,
+        record: adoptedRecordFor({
+          slot,
+          userData: options.userData,
+          manifest,
+        }),
+        replacing,
+        read: readRecord,
+        write: (file, value) => writeRecord(file, value),
+      });
     } catch {
       return known("UPDATE_ADOPTION_RECORD_UNWRITTEN");
     }
@@ -3586,7 +3652,7 @@ async function createRuntime(
           error instanceof Error &&
           error.message === "UPDATE_BASELINE_ADOPTION_SUPERSEDED";
         if (
-          !adoptionApplies ||
+          !adoptionWriteAppliesAtDiscovery ||
           !(error instanceof Error) ||
           (error.message !== "UPDATE_BASELINE_ADOPTION_REQUIRED" && !superseded)
         )

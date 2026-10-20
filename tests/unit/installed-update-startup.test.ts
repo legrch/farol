@@ -4,9 +4,30 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const captureMock = vi.hoisted(() => vi.fn());
+const adoptionMocks = vi.hoisted(() => ({
+  find: vi.fn(),
+  transport: vi.fn(),
+}));
 vi.mock("../../src/apps/desktop/installed-execution-snapshot", () => ({
   captureInstalledExecutionSnapshot: captureMock,
 }));
+// Only the catalogue lookup and the transport are doubled: no network is ever
+// reached from this file, and the rest of the release module stays real.
+vi.mock("../../src/modules/release/app/github-release", async (original) => ({
+  ...(await original<
+    typeof import("../../src/modules/release/app/github-release")
+  >()),
+  findGithubReleaseManifest: adoptionMocks.find,
+}));
+vi.mock(
+  "../../src/modules/release/infra/native/github-update-transport",
+  () => ({
+    createGithubUpdateTransport: (...args: unknown[]) => {
+      adoptionMocks.transport(...args);
+      return { fetchJson: vi.fn() };
+    },
+  }),
+);
 import fs from "node:fs/promises";
 import {
   waitForInstalledUpdateRelaunch,
@@ -341,6 +362,8 @@ function rejectedFixture() {
 
 beforeEach(() => {
   captureMock.mockReset();
+  adoptionMocks.find.mockReset();
+  adoptionMocks.transport.mockReset();
   vi.spyOn(process, "getuid").mockReturnValue(501);
   vi.spyOn(process, "geteuid").mockReturnValue(501);
   vi.spyOn(os, "userInfo").mockReturnValue({
@@ -550,20 +573,6 @@ describe("installed updater startup correlation (pure ports only)", () => {
     },
   );
 
-  it("refuses ordinary shared startup before capture without an independent baseline", async () => {
-    const f = fixture();
-    f.records.delete(f.receiptFile);
-    await expect(
-      waitForInstalledUpdateRelaunch({
-        ...f.options,
-        args: [],
-        directory: "/Applications/Farol.app/Contents/Resources/app",
-        physicalFiles: fs,
-        copyApp: vi.fn().mockResolvedValue(undefined),
-      }),
-    ).rejects.toThrow();
-    expect(captureMock).not.toHaveBeenCalled();
-  });
   it("carries an accepted public shared relaunch hint into immutable backend resources", async () => {
     const f = fixture();
     const publicDirectory = "/Applications/Farol.app/Contents/Resources/app";
@@ -1396,3 +1405,474 @@ it.each(["missing", "other-slot", "other-pair", "noncanonical"])(
     expect(f.observation.readProcess).not.toHaveBeenCalled();
   },
 );
+
+// Shared-slot first-launch adoption: a recipient who dragged the app into
+// /Applications has no owner-tool receipt. The expectation comes from the
+// published manifest at startup, never from the slot being measured.
+describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubled)", () => {
+  const publicDirectory = "/Applications/Farol.app/Contents/Resources/app";
+  const adoptedFile = path.join(root, "adopted-baseline.json");
+  const sharedApp = "/Applications/Farol.app";
+
+  function adoptionFixture(build = targetBuild, accepted = target) {
+    const f = unboundSharedFixture("completed");
+    // Nothing anchors this copy: no ready, last-update, receipt or repair file.
+    f.records.delete(path.join(root, "last-update.json"));
+    f.builds.set(sharedApp, accepted);
+    const published = {
+      ...f.manifest,
+      version: build.version,
+      buildVersion: build.buildVersion,
+      sourceCommit: build.sourceCommit,
+      sourceTreeDigest: build.sourceTreeDigest,
+      buildId: build.buildId,
+      artifactSha256: accepted.digest,
+    };
+    const log: string[] = [];
+    const written: string[] = [];
+    const write = vi.fn(async (file: string, value: unknown) => {
+      log.push("write");
+      written.push(file);
+      f.records.set(file, structuredClone(value));
+    });
+    captureMock.mockImplementation(async () => {
+      log.push("capture");
+      return {
+        app: "/fixture-private/image",
+        directory: "/fixture-private/resources",
+        executable: "/fixture-private/executable",
+        digest: accepted.digest,
+        recheck: vi.fn().mockResolvedValue(undefined),
+      };
+    });
+    adoptionMocks.find.mockImplementation(async () => {
+      log.push("find");
+      return { ok: true, value: structuredClone(published) };
+    });
+    const options: InstalledUpdateRelaunchOptions = {
+      ...f.options,
+      args: [],
+      directory: publicDirectory,
+      build,
+      physicalFiles: fs,
+      copyApp: vi.fn().mockResolvedValue(undefined),
+      observation: {
+        ...f.observation,
+        recordAbsent: async (file: string) => !f.records.has(file),
+        writeRecord: write,
+      },
+    };
+    const record = (overrides: Record<string, unknown> = {}) => ({
+      schema: "farol.next.adopted-baseline/1",
+      slot: sharedApp,
+      userData: profile,
+      manifest: structuredClone(published),
+      adoptedAt: "2026-10-21T00:00:00.000Z",
+      ...overrides,
+    });
+    return { ...f, options, published, log, written, write, record };
+  }
+  const noEffects = (f: ReturnType<typeof adoptionFixture>) => {
+    expect(captureMock).not.toHaveBeenCalled();
+    expect(f.write).not.toHaveBeenCalled();
+    expect(f.records.has(adoptedFile)).toBe(false);
+  };
+
+  it("adopts from the published manifest, captures that digest, then records once", async () => {
+    const f = adoptionFixture();
+    const guard = await waitForInstalledUpdateRelaunch(f.options);
+    expect(guard!.resourcesOrigin).toMatchObject({ kind: "shared-slot" });
+    expect(adoptionMocks.find).toHaveBeenCalledExactlyOnceWith(
+      { version: targetBuild.version, buildVersion: targetBuild.buildVersion },
+      "owner-beta",
+      expect.anything(),
+    );
+    expect(adoptionMocks.transport).toHaveBeenCalledOnce();
+    const transportOptions = adoptionMocks.transport.mock.calls[0]![0] as {
+      privateStateDirectory: string;
+      verifyPackage(): Promise<unknown>;
+    };
+    expect(transportOptions.privateStateDirectory).toBe(root);
+    await expect(transportOptions.verifyPackage()).rejects.toThrow(
+      "UPDATE_ADOPTION_PACKAGE_UNUSED",
+    );
+    expect(captureMock).toHaveBeenCalledOnce();
+    expect(captureMock.mock.calls[0]![0]).toMatchObject({
+      sourceApp: sharedApp,
+      privateParent: root,
+      expectedDigest: f.published.artifactSha256,
+    });
+    // The record follows the capture and stays in the private profile.
+    expect(f.log).toEqual(["find", "capture", "write"]);
+    expect(f.written).toEqual([adoptedFile]);
+    expect(f.written.every((file) => !file.startsWith("/Applications"))).toBe(
+      true,
+    );
+    expect(f.records.get(adoptedFile)).toEqual({
+      schema: "farol.next.adopted-baseline/1",
+      slot: sharedApp,
+      userData: profile,
+      manifest: f.published,
+      adoptedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u),
+    });
+  });
+
+  it("measures the slot only after the manifest and refuses a tree that differs before any capture", async () => {
+    const f = adoptionFixture();
+    f.builds.set(sharedApp, { ...target, digest: "9".repeat(64) });
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_ADOPTION_TREE_MISMATCH",
+    );
+    noEffects(f);
+  });
+
+  it("never takes the expectation from the measured slot", async () => {
+    const f = adoptionFixture();
+    f.builds.set(sharedApp, { ...target, digest: "8".repeat(64) });
+    f.published.artifactSha256 = "7".repeat(64);
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_ADOPTION_TREE_MISMATCH",
+    );
+    noEffects(f);
+  });
+
+  it("closes with a distinct code when the tree cannot be measured", async () => {
+    const f = adoptionFixture();
+    f.observation.readBuild.mockRejectedValue(new Error("private /Users path"));
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_ADOPTION_TREE_UNREADABLE",
+    );
+    noEffects(f);
+  });
+
+  it.each([
+    [
+      "offline",
+      () => Promise.reject(new Error("ENOTFOUND")),
+      "NETWORK_FAILURE",
+    ],
+    [
+      "an unpublished version",
+      () => Promise.resolve({ ok: false, code: "release_not_found" }),
+      "RELEASE_NOT_FOUND",
+    ],
+    [
+      "a refused catalogue",
+      () => Promise.resolve({ ok: false, code: "invalid_release_metadata" }),
+      "INVALID_RELEASE_METADATA",
+    ],
+  ])("refuses %s without capture or a record", async (_n, lookup, suffix) => {
+    const f = adoptionFixture();
+    adoptionMocks.find.mockImplementation(lookup);
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      `UPDATE_ADOPTION_${suffix}`,
+    );
+    noEffects(f);
+  });
+
+  it.each([
+    ["buildId", { buildId: "7".repeat(64) }],
+    ["sourceCommit", { sourceCommit: "7".repeat(40) }],
+    ["sourceTreeDigest", { sourceTreeDigest: "7".repeat(64) }],
+    ["channel", { channel: "stable" }],
+    ["version", { version: "0.1.0-owner.beta.9" }],
+    ["buildVersion", { buildVersion: "9" }],
+  ])(
+    "refuses a manifest whose %s is not the running build",
+    async (_name, drift) => {
+      const f = adoptionFixture();
+      adoptionMocks.find.mockResolvedValue({
+        ok: true,
+        value: { ...f.published, ...drift },
+      });
+      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+        "UPDATE_ADOPTION_RELEASE_MISMATCH",
+      );
+      expect(f.observation.readBuild).not.toHaveBeenCalled();
+      noEffects(f);
+    },
+  );
+
+  it("records nothing when the capture refuses", async () => {
+    const f = adoptionFixture();
+    captureMock.mockRejectedValue(
+      new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED"),
+    );
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_EXECUTION_RESOURCES_UNCONFIRMED",
+    );
+    expect(f.write).not.toHaveBeenCalled();
+    expect(f.records.has(adoptedFile)).toBe(false);
+  });
+
+  it("fails closed when the record cannot be written", async () => {
+    const f = adoptionFixture();
+    f.write.mockRejectedValue(new Error("EACCES /private/path"));
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_ADOPTION_RECORD_UNWRITTEN",
+    );
+    expect(f.records.has(adoptedFile)).toBe(false);
+  });
+
+  it("uses an existing valid record without touching the network or rewriting it", async () => {
+    const f = adoptionFixture();
+    f.records.set(adoptedFile, f.record());
+    const guard = await waitForInstalledUpdateRelaunch(f.options);
+    expect(guard!.resourcesOrigin).toMatchObject({ kind: "shared-slot" });
+    expect(adoptionMocks.find).not.toHaveBeenCalled();
+    expect(adoptionMocks.transport).not.toHaveBeenCalled();
+    expect(f.write).not.toHaveBeenCalled();
+    expect(captureMock.mock.calls[0]![0]).toMatchObject({
+      expectedDigest: f.published.artifactSha256,
+    });
+  });
+
+  describe("a superseded record (valid for this slot, another published build)", () => {
+    const other = (f: ReturnType<typeof adoptionFixture>) =>
+      f.record({
+        manifest: {
+          ...f.published,
+          version: sourceBuild.version,
+          buildVersion: sourceBuild.buildVersion,
+          sourceCommit: sourceBuild.sourceCommit,
+          sourceTreeDigest: sourceBuild.sourceTreeDigest,
+          buildId: sourceBuild.buildId,
+          artifactSha256: source.digest,
+          archiveName: `Farol-${sourceBuild.version}-darwin-arm64.zip`,
+        },
+      });
+
+    it("re-adopts and replaces it after a successful capture", async () => {
+      const f = adoptionFixture();
+      f.records.set(adoptedFile, other(f));
+      await waitForInstalledUpdateRelaunch(f.options);
+      expect(f.log).toEqual(["find", "capture", "write"]);
+      expect(
+        (f.records.get(adoptedFile) as { manifest: unknown }).manifest,
+      ).toEqual(f.published);
+    });
+
+    it("keeps the old record when the new copy fails to verify", async () => {
+      const f = adoptionFixture();
+      const old = other(f);
+      f.records.set(adoptedFile, old);
+      f.builds.set(sharedApp, { ...target, digest: "9".repeat(64) });
+      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+        "UPDATE_ADOPTION_TREE_MISMATCH",
+      );
+      expect(f.records.get(adoptedFile)).toEqual(old);
+      expect(f.write).not.toHaveBeenCalled();
+    });
+
+    it("leaves a record another writer published meanwhile, if it describes this build", async () => {
+      const f = adoptionFixture();
+      f.records.set(adoptedFile, other(f));
+      const winner = f.record({ adoptedAt: "2026-10-21T01:00:00.000Z" });
+      captureMock.mockImplementationOnce(async () => {
+        f.records.set(adoptedFile, structuredClone(winner));
+        return {
+          app: "/fixture-private/image",
+          directory: "/fixture-private/resources",
+          executable: "/fixture-private/executable",
+          digest: target.digest,
+          recheck: vi.fn().mockResolvedValue(undefined),
+        };
+      });
+      await waitForInstalledUpdateRelaunch(f.options);
+      expect(f.write).not.toHaveBeenCalled();
+      expect(f.records.get(adoptedFile)).toEqual(winner);
+    });
+
+    it("refuses when the changed record does not describe this build", async () => {
+      const f = adoptionFixture();
+      f.records.set(adoptedFile, other(f));
+      const intruder = f.record({ slot: "/elsewhere/Farol.app" });
+      captureMock.mockImplementationOnce(async () => {
+        f.records.set(adoptedFile, structuredClone(intruder));
+        return {
+          app: "/fixture-private/image",
+          directory: "/fixture-private/resources",
+          executable: "/fixture-private/executable",
+          digest: target.digest,
+          recheck: vi.fn().mockResolvedValue(undefined),
+        };
+      });
+      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+        "UPDATE_ACCEPTED_SOURCE_UNCONFIRMED",
+      );
+      expect(f.write).not.toHaveBeenCalled();
+      expect(f.records.get(adoptedFile)).toEqual(intruder);
+    });
+  });
+
+  it.each([
+    ["JSON null", () => null],
+    [
+      "another slot",
+      (f: ReturnType<typeof adoptionFixture>) =>
+        f.record({ slot: "/Users/x/Applications/Farol.app" }),
+    ],
+    [
+      "another profile",
+      (f: ReturnType<typeof adoptionFixture>) =>
+        f.record({ userData: "/elsewhere" }),
+    ],
+    [
+      "an invalid manifest",
+      (f: ReturnType<typeof adoptionFixture>) =>
+        f.record({ manifest: { ...f.published, artifactSha256: "nope" } }),
+    ],
+    [
+      "an unknown field",
+      (f: ReturnType<typeof adoptionFixture>) => f.record({ extra: true }),
+    ],
+  ])(
+    "refuses a tampered record (%s) without adopting over it",
+    async (_n, make) => {
+      const f = adoptionFixture();
+      const tampered = make(f);
+      f.records.set(adoptedFile, tampered);
+      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow();
+      expect(adoptionMocks.find).not.toHaveBeenCalled();
+      noEffectsExceptRecord(f, tampered);
+    },
+  );
+  function noEffectsExceptRecord(
+    f: ReturnType<typeof adoptionFixture>,
+    kept: unknown,
+  ) {
+    expect(captureMock).not.toHaveBeenCalled();
+    expect(f.write).not.toHaveBeenCalled();
+    expect(f.records.get(adoptedFile)).toEqual(kept);
+  }
+
+  describe("other baseline evidence, even a null file, forbids adoption", () => {
+    it.each([
+      ["last-update.json", path.join(root, "last-update.json")],
+      ["the promotion receipt", "/Applications/Farol.app.receipt.json"],
+      ["the repair receipt", "/Applications/Farol.app.repair.json"],
+      ["the repair journal", "/Applications/.farol-closed-repair.json"],
+      ["ready.json", path.join(root, "ready.json")],
+    ])("%s present as JSON null", async (_name, file) => {
+      const f = adoptionFixture();
+      f.records.set(file, null);
+      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow();
+      expect(adoptionMocks.find).not.toHaveBeenCalled();
+      noEffects(f);
+    });
+
+    it.each([
+      ["last-update.json", path.join(root, "last-update.json")],
+      ["the promotion receipt", "/Applications/Farol.app.receipt.json"],
+      ["the repair receipt", "/Applications/Farol.app.repair.json"],
+      ["the repair journal", "/Applications/.farol-closed-repair.json"],
+      ["ready.json", path.join(root, "ready.json")],
+    ])("%s present but unusable", async (_name, file) => {
+      const f = adoptionFixture();
+      f.records.set(file, { schema: "unknown" });
+      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow();
+      expect(adoptionMocks.find).not.toHaveBeenCalled();
+      noEffects(f);
+    });
+
+    it("a retained download without an operation does not strand an adopted copy", async () => {
+      const f = adoptionFixture();
+      f.records.set(adoptedFile, f.record());
+      f.records.set(path.join(root, "ready.json"), {
+        schema: "farol.ready-update/1",
+        handle: "/private/retained.zip",
+        manifest: {},
+        operation: null,
+      });
+      const guard = await waitForInstalledUpdateRelaunch(f.options);
+      expect(guard!.resourcesOrigin).toMatchObject({ kind: "shared-slot" });
+      expect(adoptionMocks.find).not.toHaveBeenCalled();
+    });
+  });
+
+  it("keeps the update-receipt path unchanged and offline even beside an adopted record", async () => {
+    const f = unboundSharedFixture("completed");
+    f.records.set(adoptedFile, {
+      schema: "farol.next.adopted-baseline/1",
+      slot: sharedApp,
+      userData: profile,
+      manifest: f.manifest,
+      adoptedAt: "2026-10-21T00:00:00.000Z",
+    });
+    const guard = await waitForInstalledUpdateRelaunch(f.options);
+    expect(guard!.resourcesOrigin).toMatchObject({ kind: "shared-slot" });
+    expect(adoptionMocks.find).not.toHaveBeenCalled();
+    expect(captureMock.mock.calls[0]![0]).toMatchObject({
+      expectedDigest: f.accepted.digest,
+    });
+  });
+
+  it("keeps the owner-tool receipt path unchanged and offline", async () => {
+    const f = unboundSharedFixture("operation");
+    f.records.set("/Applications/Farol.app.receipt.json", {
+      schema: "farol.next.promotion-plan/1",
+      operation: "applied",
+      product: "Farol Next Preview",
+      version: sourceBuild.version,
+      sourceCommit: sourceBuild.sourceCommit,
+      sourceTreeDigest: sourceBuild.sourceTreeDigest,
+      sourceDirty: false,
+      artifactSha256: source.digest,
+      source: "/tmp/source",
+      destination: sharedApp,
+      receipt: "/Applications/Farol.app.receipt.json",
+      overwrite: false,
+      legacyMutation: false,
+      activation: { userData: profile, drained: true, obligations: [] },
+      verifiedDestinationSha256: source.digest,
+    });
+    f.records.delete(path.join(root, "ready.json"));
+    await waitForInstalledUpdateRelaunch(f.options);
+    expect(adoptionMocks.find).not.toHaveBeenCalled();
+    expect(captureMock.mock.calls[0]![0]).toMatchObject({
+      expectedDigest: source.digest,
+    });
+  });
+
+  it.each([
+    ["a dirty build", { sourceDirty: true }],
+    ["a build without a build version", { buildVersion: undefined }],
+    ["a local-channel build", { updateChannel: "local" }],
+  ])("never adopts %s", async (_name, drift) => {
+    const f = adoptionFixture();
+    const bad = { ...f.options.build, ...drift } as typeof targetBuild;
+    await expect(
+      waitForInstalledUpdateRelaunch({ ...f.options, build: bad }),
+    ).rejects.toThrow();
+    expect(adoptionMocks.find).not.toHaveBeenCalled();
+    noEffects(f);
+  });
+
+  it("never adopts a private launch image", async () => {
+    const f = adoptionFixture();
+    const privateDirectory = path.join(
+      opRoot,
+      "launch-Farol.app/Contents/Resources/app",
+    );
+    await expect(
+      waitForInstalledUpdateRelaunch({
+        ...f.options,
+        directory: privateDirectory,
+      }),
+    ).rejects.toThrow();
+    expect(adoptionMocks.find).not.toHaveBeenCalled();
+    noEffects(f);
+  });
+
+  it("never adopts for a checkout or another install location", async () => {
+    const f = adoptionFixture();
+    await expect(
+      waitForInstalledUpdateRelaunch({
+        ...f.options,
+        directory: "/Users/farol-startup-fixture/code/farol/app",
+      }),
+    ).resolves.toBeNull();
+    expect(adoptionMocks.find).not.toHaveBeenCalled();
+    noEffects(f);
+  });
+});
