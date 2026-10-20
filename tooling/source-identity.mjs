@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { readGitBlobs } from "./source-git-blobs.mjs";
 
 // The system Git by absolute path, with a fixed environment: a `git` earlier on
 // PATH, or GIT_DIR/GIT_WORK_TREE/GIT_CONFIG_* inherited from the caller, must
@@ -21,11 +22,12 @@ const gitEnvironment = Object.freeze({
 // default spawn buffer; the cap is a limit, not an allocation.
 const gitMaxBuffer = 256 * 1024 * 1024;
 
-function git(repositoryRoot, arguments_, encoding = null) {
+function git(repositoryRoot, arguments_, encoding = null, input = undefined) {
   return execFileSync(GIT, ["-C", repositoryRoot, ...arguments_], {
     encoding,
     env: gitEnvironment,
     maxBuffer: gitMaxBuffer,
+    input,
   });
 }
 
@@ -70,6 +72,16 @@ export function sourceSnapshot(repositoryRoot, scope = ".") {
   const unreadable = (relative, detail) => {
     throw new Error(`SOURCE_IDENTITY_UNREADABLE:${relative}:${detail}`);
   };
+  let expectedBlobs;
+  const remainingBlobPaths = new Map();
+  for (const entry of entries.values()) {
+    if (entry.mode === "100644" || entry.mode === "100755") {
+      remainingBlobPaths.set(
+        entry.objectId,
+        (remainingBlobPaths.get(entry.objectId) ?? 0) + 1,
+      );
+    }
+  }
   for (const [relative, entry] of entries) {
     if (entry.mode !== "100644" && entry.mode !== "100755") {
       reasons.push({ kind: "mode", path: relative, detail: entry.mode });
@@ -84,11 +96,34 @@ export function sourceSnapshot(repositoryRoot, scope = ".") {
     }
     if (!stat.isFile() || stat.isSymbolicLink()) {
       reasons.push({ kind: "not-a-regular-file", path: relative });
+      const remaining = remainingBlobPaths.get(entry.objectId) - 1;
+      remainingBlobPaths.set(entry.objectId, remaining);
+      if (remaining === 0) expectedBlobs?.delete(entry.objectId);
       continue;
     }
     let expected;
     try {
-      expected = git(repositoryRoot, ["cat-file", "blob", entry.objectId]);
+      if (!expectedBlobs) {
+        expectedBlobs = readGitBlobs(
+          [...entries.values()]
+            .filter((item) => item.mode === "100644" || item.mode === "100755")
+            .map((item) => item.objectId),
+          (args, input) => git(repositoryRoot, args, null, input),
+        );
+        for (const id of expectedBlobs.keys()) {
+          if (remainingBlobPaths.get(id) === 0) expectedBlobs.delete(id);
+        }
+      }
+      // Each path previously owned a separate Buffer, even for identical Git
+      // blobs. Preserve that ownership for consumers of sourceSnapshot.entries.
+      expected = Buffer.from(expectedBlobs.get(entry.objectId));
+      const remaining = remainingBlobPaths.get(entry.objectId) - 1;
+      remainingBlobPaths.set(entry.objectId, remaining);
+      // Keep only an alias of the already-required path buffer for duplicate
+      // paths. Release the original Git response after its first use, rather
+      // than retaining a second full tree beside entries until return.
+      if (remaining > 0) expectedBlobs.set(entry.objectId, expected);
+      else expectedBlobs.delete(entry.objectId);
     } catch (error) {
       // A spawn that fails, is killed, or overflows its buffer throws rather
       // than returning short bytes. Naming the object is what makes the next

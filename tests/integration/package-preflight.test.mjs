@@ -34,6 +34,7 @@ it("refuses a core-less 0.2 candidate before changing the retained package", asy
       "font-contract.mjs",
       "runtime-contract.mjs",
       "source-identity.mjs",
+      "source-git-blobs.mjs",
       "package-layout.mjs",
     ])
       await fs.copyFile(
