@@ -34,20 +34,29 @@ type Config struct {
 	// performs I/O or reenters this runtime; retained outcomes survive With.
 	Unknown       func() error
 	RetainUnknown func(error)
+	// Original protocol owner builds values only. This optional capability is
+	// installed by the full helper composition, never by request input.
+	RelaunchArguments func(context.Context, port.HelperSelfIdentity, *string) ([]string, error)
+	// Boot composes the original process-observation application policy. This
+	// optional measurement is not request-supplied identity or launch authority.
+	MeasureSelf func(context.Context, time.Time) (port.HelperSelfIdentity, error)
 }
 
 type runtime struct {
-	mu       sync.Mutex
-	config   Config
-	original context.Context
-	until    time.Time
-	active   bool
-	attempts map[string]bool
-	unknown  error
-	view     *port.JournalView
-	reader   port.HelperJournalObservationReader
-	routes   func(context.Context) error
-	effected bool
+	mu              sync.Mutex
+	config          Config
+	original        context.Context
+	until           time.Time
+	active          bool
+	attempts        map[string]bool
+	unknown         error
+	view            *port.JournalView
+	reader          port.HelperJournalObservationReader
+	routes          func(context.Context) error
+	effected        bool
+	capturePath     string
+	captureIdentity port.HelperIdentity
+	self            port.HelperSelfIdentity
 }
 
 var _ port.HelperRecoveryRuntime = (*runtime)(nil)
