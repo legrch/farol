@@ -183,16 +183,17 @@ and its uncertainty remains an original error cause. Independent update-close
 failure is retained too. The exact fd5 borrow stays inside the synchronous
 RawConn.Control callback through that return; no descriptor escapes the callback.
 
-ACK exposure and EOF are transport evidence only. `request.relaunch` is refused
+ACK exposure and EOF are transport evidence only. In the closed helper `request.relaunch` is refused
 before any IO or frame (the relaunch gate is closed), and the closed helper supplies no
-relaunch capabilities, so its launch port is inert. Inside the callback scope alone, which holds the acquired update lock, a
-single-consume `execute` composes the existing journal and rejection repositories
+relaunch capabilities, so its launch port is inert. Inside the callback scope, which holds the acquired update lock and is
+shared with the live helper below, a single-consume `execute` composes the existing journal and rejection repositories
 under one writer admission and one gate, then runs `Milestone.Execute` once
 through `WithAdmittedInstallation`. The admission refuses unless the update lock
 was actually acquired, and custody is rechecked before and after Execute: a
-failed fence is unknown, never success. Execution is unselected: only the
-`farol run-closed-release-helper` entry below calls it, no desktop, launcher,
-resource or package step names that entry, and Python stays the selected helper. The pure
+failed fence is unknown, never success. Execution is unselected: the
+`farol run-closed-release-helper` entry below and the live `farol run-live-release-helper`
+entry both call it through this scope, no desktop, launcher, resource or package step
+names either entry, and Python stays the selected helper. The pure
 `closedHelperTerminal` maps its outcome to the Python contract: success
 `{"phase","operationId"}` exit 0; a result code or a direct, clean application
 refusal `{"phase","error","operationId"}` exit 70; everything else
