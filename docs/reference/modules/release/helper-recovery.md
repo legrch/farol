@@ -155,9 +155,10 @@ on one device; rollback: the `closed_rollback_pair`) through the existing
 `journal.WithObservation`, `execution.WithObservation` and `Milestone.Inspect`
 owners over the borrowed Files and the original bound. A single boot-local
 observation admission (not a writer admission) supplies the private gate, the
-scope's own custody check and sticky uncertainty. Any readiness refusal, error,
-panic or late result exposes nothing and emits no refused frame. It then emits one
-correlated `closed_predecessor_ready` frame after another custody check. The
+scope's own custody check and sticky uncertainty. A provably clean pre-ACK
+refusal (see below) sends the one `refused` frame instead; any other readiness
+error, panic or late result exposes nothing and emits no frame. Otherwise it emits
+one correlated `closed_predecessor_ready` frame after another custody check. The
 readiness result and Milestone are retained for the single execution step.
 Continuation
 is one bounded EOF-sealed frame checked against the original protocol request.
@@ -206,13 +207,36 @@ which cannot be read before request work. It runs the callback's single `execute
 and writes exactly one `closedHelperTerminal` line to fd1 in one non-blocking
 write with SIGPIPE ignored and any error ignored, as `emit_terminal` does; the
 exit code is that line's mapping (0, 70, 79) and a panic is 79. A clean refusal
-returned by `execute` settles the custody scope and reports 70; any outer error
-governs and is 79. Because outer custody and readiness errors are opaque, every
-pre-ACK refusal (a changed staged tree, a missing tree, a pre-parse failure) exits
-79 with no ACK, naming the operation ID only once the readiness scope holds it.
-The lane `releasehelperclosedexecnative_test.go` runs the compiled entry under the
-same gate with real digest-matching trees: apply to `verified`, closed rollback to
-`rolled_back`, and the pre-ACK, relaunch and extra-argv refusals.
+returned by `execute` settles the custody scope and reports 70; any other outer
+error governs and is 79.
+
+Pre-ACK refusals follow `update_helper.py` `main()`: once the request is parsed
+and before any handoff frame, a refusal emits ONE `refused` handoff frame
+(`BuildHandoff(..., Refused, code)`, `{"phase":"refused","error":code,...}`, as
+`emit_handoff(request, "refused", code)`), then the terminal line
+`{"phase","error","operationId"}` and exit 70. The desktop settles that frame as
+`refused` with the code as the reason (`installed-update-helper.ts`) and does not
+quit. `boot/releasehelperrefusal.go` owns the rule for both entries. A refusal
+qualifies only when it is provably clean: a DIRECT, non-nil error of an owner
+whose own flags say neither internal nor uncertain (`executionapp.Failure`,
+`handoff.Failure`/`Code`, `slotbinding.VerificationFailure`, `helperroutes.Error`,
+`helperlocks.Failure`, `helperinput`/`helperprotocol` failures, `processwait.Failure`)
+with a well-formed phase and code, and no uncertainty retained before the
+judgement. Readiness cannot rely on its scopes' error chain, which they re-wrap
+as internal, so `closedHelperReady` records the clean `Milestone.Inspect` refusal
+at its site and lets the read-only scopes settle; the same holds for the route
+scope, which records a sent refusal and settles with its normal custody
+verification. Wrapped, joined, opaque, internal or uncertain errors, a refusal
+after the first frame (ready or `waiting_for_exit`), a bound already elapsed, any
+failure of the refused frame's single write attempt (never retried) and any
+cleanup failure afterwards keep today's outcome: no further frame and exit 79.
+A refusal before the request is parsed also stays 79 with no frame (Python exits
+70 there without a frame; this divergence remains). The terminal line names the
+refusal's own operation ID. The lane `releasehelperclosedexecnative_test.go` runs
+the compiled entry under the same gate with real digest-matching trees: apply to
+`verified`, closed rollback to `rolled_back`, the pre-ACK refusals (missing and
+changed staged trees send the refused frame and exit 70) and the relaunch and
+extra-argv refusals.
 
 `boot/releasehelperlive.go` and `boot/releasehelperliveentry.go` add the unselected
 live-predecessor sibling `farol run-live-release-helper` for apply and rollback with
@@ -224,6 +248,9 @@ the wait by `waitSeconds`, never past the original bound), then takes the promot
 lease and verifies the Quit receipt before the single `execute`; terminal mapping,
 no-replay and sticky uncertainty are the closed owners'. Relaunch true, recover, a
 closed predecessor and a request without an install location refuse before any IO.
+Its pre-ACK refusals (update lock, marker, readiness, process identity, custody
+fences, slot binding) follow the same refused-frame rule: a provably clean
+refusal sends one `refused` frame instead of `waiting_for_exit` and exits 70.
 Nothing selects it: the desktop still spawns `update_helper.py`.
 `releasehelperlivenative_test.go` runs the compiled entry against a scratch
 `/bin/cat` predecessor under `FAROL_LIVE_HELPER_NATIVE=1`.

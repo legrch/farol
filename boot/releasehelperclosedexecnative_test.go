@@ -399,17 +399,18 @@ func TestClosedHelperNativeExecApplyThenRollback(t *testing.T) {
 }
 
 // A pre-ACK refusal: custody passes, then the production readiness finds no
-// app/staged tree. Nothing is exposed and nothing is written. The outer error is
-// not a direct application refusal, so the entry reports it as unknown (79) with
-// the operation ID the readiness scope already held.
+// app/staged tree. The desktop receives the one refused frame (never the ready
+// frame), the helper reports the refusal and exits 70 as Python does, and nothing
+// is written.
 func TestClosedHelperNativeExecPreACKRefusal(t *testing.T) {
 	execNativeRequire(t)
 	f := newExecNativeFixture(t, false)
-	o := f.run(t, "pre-ack", f.request("apply", false))
-	if len(o.ack) != 0 {
-		t.Fatal("pre-ACK refusal exposed an ACK", o.ack)
+	request := f.request("apply", false)
+	o := f.run(t, "pre-ack", request)
+	if !bytes.Equal(o.ack, wantRefusedFrame(t, closedHelperJSON(t, request), "app_missing")) {
+		t.Fatal("pre-ACK refusal did not send exactly the refused frame", o.ack)
 	}
-	f.requireTerminal(t, o, `{"phase": "unknown", "error": "internal", "operationId": "`+strings.Repeat("1", 32)+`"}`+"\n", 79)
+	f.requireTerminal(t, o, refusalLine("refused", "app_missing"), 70)
 	if f.exists(filepath.Join(f.operation, "journal.json")) {
 		t.Fatal("readiness wrote a journal")
 	}
@@ -447,8 +448,8 @@ func TestClosedHelperNativeExecRefusesExtraArgv(t *testing.T) {
 }
 
 // A staged tree that no longer matches the request digest is refused by the
-// production readiness BEFORE the ACK: no frame, exit 79 (the outer error is not
-// a direct application refusal), installed app and journal untouched.
+// production readiness BEFORE the ACK: only the refused frame, exit 70, installed
+// app and journal untouched.
 func TestClosedHelperNativeExecChangedStagedTree(t *testing.T) {
 	execNativeRequire(t)
 	f := newExecNativeFixture(t, true)
@@ -457,10 +458,10 @@ func TestClosedHelperNativeExecChangedStagedTree(t *testing.T) {
 	}
 	apply := f.request("apply", false)
 	o := f.run(t, "staged-changed", apply)
-	if len(o.ack) != 0 {
-		t.Fatal("a changed staged tree was acknowledged", o.ack)
+	if !bytes.Equal(o.ack, wantRefusedFrame(t, closedHelperJSON(t, apply), "digest")) {
+		t.Fatal("a changed staged tree was not refused with exactly the refused frame", o.ack)
 	}
-	f.requireTerminal(t, o, `{"phase": "unknown", "error": "internal", "operationId": "`+strings.Repeat("1", 32)+`"}`+"\n", 79)
+	f.requireTerminal(t, o, refusalLine("refused", "digest"), 70)
 	if f.exists(filepath.Join(f.operation, "journal.json")) {
 		t.Fatal("refusal wrote a journal")
 	}

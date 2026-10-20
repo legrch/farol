@@ -390,12 +390,21 @@ func TestClosedHelperDeterministicBoundaryRefusals(t *testing.T) {
 			f := newClosedHelperFixture(t)
 			f.failCheck = boundary
 			f.checkErr = cause
-			closedHelperFailureCheck(t, f.run(context.Background(), nil), cause)
+			err := f.run(context.Background(), nil)
+			_, clean := cause.(handoff.Code)
+			if boundary <= 2 && clean {
+				// A provably clean custody refusal before the ACK sends the one refused frame.
+				if refused, ok := err.(*closedHelperRefused); !ok || refused.code != string(cause.(handoff.Code)) || len(f.frames) != 1 || !bytes.Contains(f.frames[0], []byte(`"phase":"refused"`)) {
+					t.Fatalf("boundary %d cause %v: %#v frames %q", boundary, cause, err, f.frames)
+				}
+			} else {
+				closedHelperFailureCheck(t, err, cause)
+				if boundary <= 2 && len(f.frames) != 0 {
+					t.Fatal("unclassified pre-ACK failure exposed a frame")
+				}
+			}
 			if boundary <= 5 && f.callback != 0 {
 				t.Fatal("refusal reached callback")
-			}
-			if boundary <= 2 && len(f.frames) != 0 {
-				t.Fatal("pre-ACK refusal exposed frame")
 			}
 			if boundary <= 4 && f.acquired != 0 {
 				t.Fatal("pre-continuation refusal acquired lock")
@@ -888,7 +897,9 @@ func TestClosedHelperReadinessPrecedesFrameAndIsRetained(t *testing.T) {
 	}
 }
 
-func TestClosedHelperReadinessRefusalExposesNothing(t *testing.T) {
+// A clean readiness refusal sends exactly one refused frame and nothing else:
+// no ready frame, continuation, update lock or callback.
+func TestClosedHelperReadinessRefusalSendsOnlyTheRefusedFrame(t *testing.T) {
 	for _, tc := range []struct{ action, code string }{{"apply", "operation_exists"}, {"apply", "staged_missing"}, {"rollback", "closed_rollback_pair"}, {"rollback", "closed_rollback_journal_changed"}} {
 		t.Run(tc.action+"-"+tc.code, func(t *testing.T) {
 			f := newClosedHelperFixture(t)
@@ -896,15 +907,17 @@ func TestClosedHelperReadinessRefusalExposesNothing(t *testing.T) {
 			r["action"] = tc.action
 			f.input = closedHelperJSON(t, r)
 			f.continuation = closedHelperJSON(t, closedHelperContinuation(r))
-			refusal := &executionapp.Failure{Code: tc.code, Phase: "refused"}
-			f.readyErr = refusal
+			f.readyErr = &executionapp.Failure{Code: tc.code, Phase: "refused"}
 			err := f.run(context.Background(), nil)
-			closedHelperFailureCheck(t, err, refusal)
-			// Nested closed wrappers are conservatively uncertain; exposure is the
-			// property under test, and Emit never happened.
-			closedHelperReadyFailure(t, err)
-			if len(f.frames) != 0 || closedHelperHas(f.events, "emit") || closedHelperHas(f.events, "continue") || f.acquired != 0 || f.callback != 0 {
-				t.Fatal("refusal exposed a frame or reached continuation authority", f.events)
+			refused, ok := err.(*closedHelperRefused)
+			if !ok || refused.code != tc.code || refused.phase != "refused" || refused.operationID != closedHelperEntryTestID {
+				t.Fatalf("clean readiness refusal was not reported as refused: %#v", err)
+			}
+			if len(f.frames) != 1 || !bytes.Contains(f.frames[0], []byte(`"phase":"refused"`)) || !bytes.Contains(f.frames[0], []byte(`"error":"`+tc.code+`"`)) {
+				t.Fatalf("frames %q", f.frames)
+			}
+			if closedHelperHas(f.events, "continue") || f.acquired != 0 || f.callback != 0 || f.execCalls != 0 {
+				t.Fatal("refusal reached continuation authority", f.events)
 			}
 			closedHelperClosedOnce(t, f)
 		})

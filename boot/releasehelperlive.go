@@ -157,34 +157,47 @@ func withLiveReleaseHelperDependencies(ctx context.Context, files liveHelperFile
 	if err := closedHelperBounds(effective, until); err != nil {
 		return err
 	}
+	// From here the request is known: a provably clean pre-ACK refusal is sent as
+	// the one refused frame (see closedHelperRefusalPath) instead of staying silent.
+	refusal := &closedHelperRefusalPath{ctx: effective, until: until, protocol: protocol, operationID: request.OperationID, emit: channels.Emit, exposed: &exposed}
 	milestone, err := executionapp.NewMilestone(effective, request)
-	if err != nil || milestone == nil {
-		return closedHelperFail(false, err)
+	if err != nil {
+		return refusal.refuse(err)
+	}
+	if milestone == nil {
+		return closedHelperFail(false)
 	}
 	expected, err := protocol.BuildSlotBinding(effective, protocolnative.JSONCodec{})
-	if err != nil || len(expected) == 0 {
-		return closedHelperFail(false, err)
+	if err != nil {
+		return refusal.refuse(err)
+	}
+	if len(expected) == 0 {
+		return closedHelperFail(false)
 	}
 	routes, err := deps.open(effective, request, until)
 	if err != nil {
-		return closedHelperFail(false, err)
+		return refusal.refuse(err)
 	}
 	if routes == nil {
 		return closedHelperFail(true)
 	}
-	return func() (err error) {
+	return refusal.finish(func() (err error) {
 		defer func() { err = closedHelperJoin(exposed, err, routes.Close()) }()
-		return routes.WithFiles(effective, func(borrow helperroutes.Files) (err error) {
+		return routes.WithFiles(effective, refusal.settle(func(borrow helperroutes.Files) (err error) {
 			admission, err := deps.admission(borrow, request, expected, until)
 			if err != nil {
-				return closedHelperFail(false, err)
+				return refusal.refuse(err)
 			}
 			if admission == nil {
 				return closedHelperFail(true)
 			}
 			defer func() { err = closedHelperJoin(exposed, err, admission.Close()) }()
 			check := func() error {
-				return closedHelperJoin(exposed, admission.Check(effective), closedHelperBounds(effective, until))
+				checked, bounded := admission.Check(effective), closedHelperBounds(effective, until)
+				if checked != nil && bounded == nil && !exposed {
+					return refusal.refuse(checked)
+				}
+				return closedHelperJoin(exposed, checked, bounded)
 			}
 			if err = check(); err != nil {
 				return err
@@ -192,13 +205,13 @@ func withLiveReleaseHelperDependencies(ctx context.Context, files liveHelperFile
 			// Python takes the update lock for a live predecessor BEFORE reading the
 			// marker or waiting (update_lock(update) right after the route opens).
 			if err = admission.AcquireUpdate(effective); err != nil {
-				return closedHelperFail(false, err)
+				return refusal.refuse(err)
 			}
 			if err = check(); err != nil {
 				return err
 			}
 			if err = admission.Capture(effective); err != nil {
-				return closedHelperFail(false, err)
+				return refusal.refuse(err)
 			}
 			if err = check(); err != nil {
 				return err
@@ -214,8 +227,14 @@ func withLiveReleaseHelperDependencies(ctx context.Context, files liveHelperFile
 			})
 			// Join every entered preflight call before judging the result.
 			preflight.end()
+			// Uncertainty retained before this judgement is sticky: it forbids a
+			// refusal even when the final error is itself a clean classification.
+			prior := preflight.unknown()
 			if err != nil {
 				preflight.retainUnknown(err)
+				if prior == nil {
+					return refusal.refuse(err)
+				}
 				return closedHelperFail(false, err)
 			}
 			if err = preflight.unknown(); err != nil {
@@ -229,7 +248,7 @@ func withLiveReleaseHelperDependencies(ctx context.Context, files liveHelperFile
 			// The original process must be positively identified BEFORE it may be told
 			// to exit; an absent PID is never inferred (Python process_start check).
 			if err = admission.Confirm(effective); err != nil {
-				return closedHelperFail(false, err)
+				return refusal.refuse(err)
 			}
 			frame, err := protocol.BuildHandoff(effective, protocolapp.WaitingForExit, nil)
 			if err != nil {
@@ -281,8 +300,8 @@ func withLiveReleaseHelperDependencies(ctx context.Context, files liveHelperFile
 				return err
 			}
 			return nil
-		})
-	}()
+		}))
+	}())
 }
 
 // liveHelperClock is the production ProcessWaitClock: wall time and a
@@ -324,17 +343,27 @@ func newLiveHelperAdmission(files helperroutes.Files, r releaseport.HelperReques
 	}
 	slot, err := slotbinding.NewVerifier(files.Operation, slotbinding.Identity(files.OperationIdentity), expected, until)
 	if err != nil {
-		return nil, closedHelperJoin(false, err, probe.Join())
+		return nil, liveHelperCtorFail(err, probe)
 	}
 	waiter, err := processwait.New(r.ProcessStart, probe, liveHelperClock{})
 	if err != nil {
-		return nil, closedHelperJoin(false, err, probe.Join())
+		return nil, liveHelperCtorFail(err, probe)
 	}
 	live, err := handoff.NewLive(r.Home, files.Home, files.State, handoff.Identity(files.StateIdentity), int(r.PID), r.ProcessStart, waiter, until)
 	if err != nil {
-		return nil, closedHelperJoin(false, err, probe.Join())
+		return nil, liveHelperCtorFail(err, probe)
 	}
 	return &liveHelperNativeAdmission{files: files, until: until, live: live, slot: slot, probeJoin: probe.Join}, nil
+}
+
+// liveHelperCtorFail joins the original observation after a failed constructor.
+// A clean constructor error stays direct when that observation also ended
+// cleanly, so its classification survives; any Join failure makes it unknown.
+func liveHelperCtorFail(err error, probe *processprobe.Probe) error {
+	if joined := probe.Join(); joined != nil {
+		return closedHelperJoin(false, err, joined)
+	}
+	return err
 }
 
 func (a *liveHelperNativeAdmission) Check(ctx context.Context) error {

@@ -82,6 +82,12 @@ func closedHelperReady(ctx context.Context, milestone *executionapp.Milestone, h
 	request := closedHelperRequestCopy(s.request)
 	operation, binding, directory := closedHelperOperationBinding(request, s.files)
 	admission := &closedHelperJournalObservation{helper: helper, gate: releasestate.New(), operation: operation, binding: binding}
+	// The observation scopes re-wrap every callback error as an internal,
+	// uncertain scope failure, which would erase a clean application refusal.
+	// Record it at the site instead and let the read-only scopes settle normally.
+	// Observation retains nothing and has no effect, so a refusal here is only
+	// recorded when no uncertainty was retained before it.
+	var refusal *closedHelperRefusalRecord
 	err = journal.WithObservation(ctx, directory, s.files.Operation, binding, operation, admission, func(reader *journal.Observation) error {
 		return executionnative.WithObservation(ctx, executionnative.ObservationConfig{
 			Request: request, Files: s.files, Journal: reader, Until: s.until,
@@ -89,11 +95,24 @@ func closedHelperReady(ctx context.Context, milestone *executionapp.Milestone, h
 		}, func(observation releaseport.HelperInstallationObservation) error {
 			var e error
 			ready, e = milestone.Inspect(ctx, observation)
+			if e != nil && helper.unknown() == nil {
+				if phase, code, ok := closedHelperRefusalOf(e); ok {
+					refusal, ready = &closedHelperRefusalRecord{phase: phase, code: code}, nil
+					return nil
+				}
+			}
 			return e
 		})
 	})
 	if err != nil {
 		return nil, closedHelperFail(false, err)
+	}
+	if refusal != nil {
+		// Every scope returned normally. Sticky uncertainty still forbids it.
+		if helper.unknown() != nil || ready != nil {
+			return nil, closedHelperFail(true)
+		}
+		return nil, refusal
 	}
 	return ready, nil
 }

@@ -17,9 +17,10 @@ import (
 const liveReleaseHelperCommand = "run-live-release-helper"
 
 // liveHelperEntry is the testable logic of the entry. It mirrors closedHelperEntry
-// exactly: the same Execute callback, the same clean-refusal rule and the same
-// terminal classification. A non-nil outer error always governs (79); a panic
-// anywhere yields exit 79.
+// exactly: the same Execute callback, the same clean-refusal rule, the same
+// pre-ACK refused-frame path (releasehelperrefusal.go) and the same terminal
+// classification. A non-nil outer error other than a sent refusal always governs
+// (79); a panic anywhere yields exit 79.
 func liveHelperEntry(ctx context.Context, files liveHelperFiles, until time.Time, deps liveHelperDependencies) (line []byte, exit int) {
 	operationID := ""
 	defer func() {

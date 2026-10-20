@@ -47,11 +47,13 @@ type closedHelperEntryWriter func(line []byte)
 // protocol, runs the one Execute in its callback and maps the OUTER error plus
 // the callback's captured outcome through closedHelperTerminal.
 //
-// A clean application refusal from execute is recorded and the callback returns
-// nil, so the custody scope settles normally and the refusal is reported as 70.
-// Every other callback failure is returned and therefore becomes the outer
-// error. A non-nil outer error always governs and is classified as unknown (79).
-// A panic anywhere in the entry yields exit 79.
+// Two refusals report 70. A clean post-continuation application refusal from
+// execute is recorded and the callback returns nil, so the custody scope settles
+// normally. A provably clean PRE-ACK refusal (see releasehelperrefusal.go) sends
+// the one refused handoff frame inside the composition, as Python does, and
+// comes back as *closedHelperRefused. Every other callback or composition failure
+// becomes the outer error; any other non-nil outer error always governs and is
+// classified as unknown (79). A panic anywhere in the entry yields exit 79.
 func closedHelperEntry(ctx context.Context, files closedHelperFiles, until time.Time, deps closedHelperDependencies) (line []byte, exit int) {
 	operationID := ""
 	defer func() {

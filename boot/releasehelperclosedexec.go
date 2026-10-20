@@ -205,6 +205,7 @@ const (
 //
 //	success          {"phase": P, "operationId": ID}              exit 0
 //	refusal          {"phase": P, "error": C, "operationId": ID}  exit 70
+//	pre-ACK refusal  the same line, after one refused handoff frame was written
 //	anything else    {"phase": "unknown", "error": "internal", "operationId": ID}  exit 79
 //
 // A non-nil error always governs, even beside a result: a custody failure after
@@ -214,6 +215,14 @@ const (
 // no error, and an operation ID that is not 32 lowercase hex digits are unknown.
 // An unusable ID is omitted, exactly as Python omits it without a request.
 func closedHelperTerminal(operationID string, result *executionapp.Result, err error) (line []byte, exit int) {
+	// A refused frame was already sent for this exact operation: its own ID,
+	// phase and code govern, and the line reports the same refusal as exit 70.
+	if refused, ok := err.(*closedHelperRefused); ok && refused != nil {
+		if !closedHelperIDPattern.MatchString(refused.operationID) || !closedHelperPhasePattern.MatchString(refused.phase) || !closedHelperCodePattern.MatchString(refused.code) {
+			return closedHelperTerminalLine("unknown", "internal", operationID, closedHelperIDPattern.MatchString(operationID)), closedHelperExitUnknown
+		}
+		return closedHelperTerminalLine(refused.phase, refused.code, refused.operationID, true), closedHelperExitRefusal
+	}
 	idOK := closedHelperIDPattern.MatchString(operationID)
 	unknown := func() ([]byte, int) {
 		return closedHelperTerminalLine("unknown", "internal", operationID, idOK), closedHelperExitUnknown
