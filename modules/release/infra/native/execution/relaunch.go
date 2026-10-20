@@ -3,7 +3,6 @@ package execution
 import (
 	"context"
 	"os"
-	stdruntime "runtime"
 
 	"github.com/legrch/farol/modules/release/app/port"
 	"github.com/legrch/farol/modules/release/infra/native/installcopy"
@@ -142,7 +141,7 @@ func (r *runtime) LaunchTarget(ctx context.Context, self port.HelperSelfIdentity
 		}
 		// want is derived from the held verified directory on every verify. The
 		// first value is the launch contract; any later derivation must agree.
-		var want launchImage
+		var want expectedImage
 		wanted := false
 		verify := func(ctx context.Context) error {
 			// The executable is pinned before the tree is verified and derived
@@ -188,11 +187,11 @@ func (r *runtime) LaunchTarget(ctx context.Context, self port.HelperSelfIdentity
 					return fail("launch_image_unconfirmed", false, false, nil)
 				}
 				// After the open call a refusal is an unknown outcome.
-				derived, err := pinned.derive(held, stdruntime.GOARCH)
+				derived, err := pinned.derive(held)
 				if err != nil {
 					return fail("launch_image_unconfirmed", false, r.effected, err)
 				}
-				if wanted && derived != want {
+				if wanted && !derived.equal(want) {
 					return fail("launch_image_unconfirmed", false, r.effected, nil)
 				}
 				want, wanted = derived, true

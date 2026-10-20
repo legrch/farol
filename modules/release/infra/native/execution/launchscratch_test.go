@@ -243,3 +243,24 @@ func (f *relaunchFixture) phase(t *testing.T) string {
 	must(t, json.Unmarshal(data, &wire))
 	return wire.Phase
 }
+
+// scratchUniversal returns a signed two-slice executable (arm64, amd64) and the
+// code-directory hash of each slice in file order, as the signing tool reports.
+func scratchUniversal(t *testing.T) (string, [][20]byte) {
+	t.Helper()
+	if _, err := os.Stat("/usr/bin/lipo"); err != nil {
+		t.Skip("lipo unavailable")
+	}
+	arm := scratchExecutable(t, "golden", "arm64", "")
+	intel := scratchExecutable(t, "golden", "amd64", "")
+	scratch.mu.Lock()
+	path := filepath.Join(scratch.dir, "universal")
+	scratch.mu.Unlock()
+	if _, err := os.Stat(path); err != nil {
+		if out, err := exec.Command("/usr/bin/lipo", "-create", arm, intel, "-output", path).CombinedOutput(); err != nil {
+			t.Fatalf("lipo failed: %v\n%s", err, out)
+		}
+		signScratch(t, path, "")
+	}
+	return path, [][20]byte{codesignCDHash(t, path, "arm64"), codesignCDHash(t, path, "x86_64")}
+}

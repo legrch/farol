@@ -95,7 +95,7 @@ func relaunchHint(operationID string, helperPID int64, arguments []string) (stri
 // verifyLaunched runs inside the existing launch:open scope after open
 // returned. verify is the scope's own held-tree check; it runs once more on
 // success. want is the identity derived from the verified image before launch.
-func verifyLaunched(ctx context.Context, p launchPlatform, hint string, want launchImage, verify func(context.Context) error) error {
+func verifyLaunched(ctx context.Context, p launchPlatform, hint string, want expectedImage, verify func(context.Context) error) error {
 	end := p.now().Add(launchDiscoveryCap)
 	type observation struct {
 		pid  int
@@ -123,7 +123,7 @@ func verifyLaunched(ctx context.Context, p launchPlatform, hint string, want lau
 				pending = nil
 			case err != nil:
 				return launchUnverified(err, true)
-			case live.Image == want:
+			case want.accepts(live.Image):
 				return verify(ctx)
 			default:
 				if pending != nil && pending.pid == pids[0] && pending.live == live && p.now().Sub(pending.at) >= launchMismatchSettle {

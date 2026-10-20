@@ -155,12 +155,21 @@ func recoveryFailure(t *testing.T, err error) *port.HelperRecoveryFailure {
 // A launch fixture over the real tree verification with a scripted OS seam.
 func launchHarness(t *testing.T) (*relaunchFixture, *fakeLaunch, launchImage) {
 	t.Helper()
+	fx, fake, want := launchHarnessFor(t, scratchExecutable(t, "good", stdruntime.GOARCH, ""))
+	if len(want.CDHashes) != 1 {
+		t.Fatal("thin fixture must have one slice")
+	}
+	return fx, fake, launchImage{CDHash: want.CDHashes[0], Device: want.Device, Inode: want.Inode}
+}
+
+func launchHarnessFor(t *testing.T, exe string) (*relaunchFixture, *fakeLaunch, expectedImage) {
+	t.Helper()
 	fake := newFakeLaunch()
-	fx := newRelaunchFixture(t, fake, scratchExecutable(t, "good", stdruntime.GOARCH, ""))
+	fx := newRelaunchFixture(t, fake, exe)
 	held, err := os.Open(fx.app)
 	must(t, err)
 	t.Cleanup(func() { _ = held.Close() })
-	want, err := expectedLaunchImage(held, stdruntime.GOARCH)
+	want, err := expectedLaunchImage(held)
 	must(t, err)
 	return fx, fake, want
 }
@@ -574,16 +583,16 @@ func TestExpectedImageComesFromTheHeldBundle(t *testing.T) {
 		a, b := t.TempDir()+"/A.app", t.TempDir()+"/B.app"
 		writeBundle(t, a, good)
 		writeBundle(t, b, other)
-		x, err := expectedLaunchImage(open(a), stdruntime.GOARCH)
+		x, err := expectedLaunchImage(open(a))
 		must(t, err)
-		y, err := expectedLaunchImage(open(b), stdruntime.GOARCH)
+		y, err := expectedLaunchImage(open(b))
 		must(t, err)
-		if x.CDHash == y.CDHash || x.Inode == y.Inode {
+		if x.CDHashes[0] == y.CDHashes[0] || x.Inode == y.Inode {
 			t.Fatal("distinct bundles derived the same image")
 		}
 		want, err := parsedCDHash(t, good, stdruntime.GOARCH)
 		must(t, err)
-		if x.CDHash != want {
+		if len(x.CDHashes) != 1 || x.CDHashes[0] != want {
 			t.Fatal("derived hash is not the executable's code-directory hash")
 		}
 	})
@@ -594,11 +603,11 @@ func TestExpectedImageComesFromTheHeldBundle(t *testing.T) {
 		must(t, os.WriteFile(app+"/Contents/MacOS/Farol Next Preview", []byte("#!/bin/sh\nexec "+runtimeReference+" \"$@\"\n"), 0700))
 		must(t, os.MkdirAll(app+"/Contents/Frameworks/Electron Runtime.app/Contents/MacOS", 0700))
 		copyFile(t, other, app+"/"+runtimeExecutable, 0700)
-		got, err := expectedLaunchImage(open(app), stdruntime.GOARCH)
+		got, err := expectedLaunchImage(open(app))
 		must(t, err)
 		want, err := parsedCDHash(t, other, stdruntime.GOARCH)
 		must(t, err)
-		if got.CDHash != want {
+		if len(got.CDHashes) != 1 || got.CDHashes[0] != want {
 			t.Fatal("script launcher bound the wrong image")
 		}
 	})
@@ -607,7 +616,7 @@ func TestExpectedImageComesFromTheHeldBundle(t *testing.T) {
 			app := t.TempDir() + "/Farol.app"
 			writeBundle(t, app, good)
 			mutate(app)
-			_, err := expectedLaunchImage(open(app), stdruntime.GOARCH)
+			_, err := expectedLaunchImage(open(app))
 			return err
 		}
 		for name, mutate := range map[string]func(string){
@@ -714,13 +723,47 @@ func TestPinnedExecutableRefusesAnyChangeBeforeDerivation(t *testing.T) {
 			pinned, err := pinLaunchImage(held)
 			must(t, err)
 			defer pinned.close()
-			if _, err := pinned.derive(held, stdruntime.GOARCH); err != nil {
+			if _, err := pinned.derive(held); err != nil {
 				t.Fatal("an untouched pin must derive", err)
 			}
 			change(t, app)
-			if _, err := pinned.derive(held, stdruntime.GOARCH); !errors.Is(err, errLaunchImage) {
+			if _, err := pinned.derive(held); !errors.Is(err, errLaunchImage) {
 				t.Fatalf("a changed executable derived an image: %v", err)
 			}
 		})
 	}
+}
+
+// LaunchServices, Rosetta or a user preference pick the slice of a universal
+// executable, so every slice of the pinned bytes is acceptable and nothing else.
+func TestUniversalExecutableAcceptsEverySliceAndNothingElse(t *testing.T) {
+	universal, slices := scratchUniversal(t)
+	_, _, want := launchHarnessFor(t, universal)
+	if len(want.CDHashes) != 2 || !(want.CDHashes[0] == slices[0] && want.CDHashes[1] == slices[1] || want.CDHashes[0] == slices[1] && want.CDHashes[1] == slices[0]) {
+		t.Fatal("expected set is not exactly the two slice hashes", want.CDHashes)
+	}
+	for i, slice := range slices {
+		isHelperArch := (i == 0) == (stdruntime.GOARCH == "arm64")
+		t.Run(map[bool]string{true: "helper architecture slice", false: "other architecture slice"}[isHelperArch], func(t *testing.T) {
+			fx, fake, want := launchHarnessFor(t, universal)
+			fake.candidatesFn = servesOne(pidOurs)
+			live := launchImage{CDHash: slice, Device: want.Device, Inode: want.Inode}
+			fake.imageFn = func(int, int) (liveImage, error) { return liveImage{Image: live, Start: startOurs}, nil }
+			method, scope := fx.launch(t)
+			if method != nil || scope != nil || len(fake.kills) != 0 {
+				t.Fatal("a legitimate slice was refused or killed", method, scope, fake.kills)
+			}
+		})
+	}
+	t.Run("a hash in no slice is a mismatch", func(t *testing.T) {
+		fx, fake, want := launchHarnessFor(t, universal)
+		fake.candidatesFn = servesOne(pidOurs)
+		unknown := launchImage{CDHash: substituteHash(launchImage{CDHash: slices[0]}).CDHash, Device: want.Device, Inode: want.Inode}
+		fake.imageFn = func(int, int) (liveImage, error) { return liveImage{Image: unknown, Start: startOurs}, nil }
+		fake.startFn = func(int, int) (processStart, error) { return startOurs, nil }
+		method, _ := fx.launch(t)
+		if failure := recoveryFailure(t, method); failure.Code != "launch_image_mismatch" || failure.Uncertain || len(fake.kills) != 1 {
+			t.Fatalf("a foreign hash was accepted: %+v kills=%v", failure, fake.kills)
+		}
+	})
 }

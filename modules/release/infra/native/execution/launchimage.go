@@ -27,6 +27,40 @@ type launchImage struct {
 	Inode  uint64
 }
 
+// expectedImage is what a process may legitimately run: the executable's file
+// and the code-directory hash of ANY slice of it. LaunchServices, Rosetta or a
+// user preference choose the slice, so none is assumed; every slice is part of
+// the verified bytes, so accepting each of them binds the same file.
+type expectedImage struct {
+	CDHashes [][20]byte
+	Device   uint32
+	Inode    uint64
+}
+
+func (e expectedImage) accepts(live launchImage) bool {
+	if live.Device != e.Device || live.Inode != e.Inode {
+		return false
+	}
+	for _, hash := range e.CDHashes {
+		if hash == live.CDHash {
+			return true
+		}
+	}
+	return false
+}
+
+func (e expectedImage) equal(other expectedImage) bool {
+	if e.Device != other.Device || e.Inode != other.Inode || len(e.CDHashes) != len(other.CDHashes) {
+		return false
+	}
+	for i := range e.CDHashes {
+		if e.CDHashes[i] != other.CDHashes[i] {
+			return false
+		}
+	}
+	return true
+}
+
 const (
 	// macOSDirectory is the bundle directory LaunchServices executes from. The
 	// verified package has exactly one entry in it.
@@ -203,18 +237,18 @@ func pinLaunchImage(app *os.File) (*heldLaunch, error) {
 // resolves to, and that it did not change while being read. A swap anywhere
 // between pinning and here makes the name and the descriptor disagree. It never
 // reopens an executable by name to read it, and never runs a signing tool.
-func (h *heldLaunch) derive(app *os.File, arch string) (launchImage, error) {
+func (h *heldLaunch) derive(app *os.File) (expectedImage, error) {
 	for _, p := range []*pinnedFile{h.exe, h.runtime} {
 		if p == nil {
 			continue
 		}
 		current, err := fstat(p.file)
 		if err != nil || !sameObject(current, p.st) {
-			return launchImage{}, imageError("pinned executable changed", err)
+			return expectedImage{}, imageError("pinned executable changed", err)
 		}
 		named, err := statByName(app, p.path...)
 		if err != nil || !sameObject(named, p.st) {
-			return launchImage{}, imageError("executable name no longer names the pinned object", err)
+			return expectedImage{}, imageError("executable name no longer names the pinned object", err)
 		}
 	}
 	source := h.exe
@@ -222,81 +256,121 @@ func (h *heldLaunch) derive(app *os.File, arch string) (launchImage, error) {
 		head := make([]byte, maxScriptBytes)
 		n, err := h.exe.file.ReadAt(head, 0)
 		if err != nil && err != io.EOF {
-			return launchImage{}, imageError("launcher read", err)
+			return expectedImage{}, imageError("launcher read", err)
 		}
 		if !bytes.Contains(head[:n], []byte(runtimeReference)) {
-			return launchImage{}, imageError("launcher does not name the runtime executable", nil)
+			return expectedImage{}, imageError("launcher does not name the runtime executable", nil)
 		}
 		source = h.runtime
 	}
-	image, err := imageOf(source.file, arch)
+	image, err := imageOf(source.file)
 	if err != nil {
-		return launchImage{}, err
+		return expectedImage{}, err
 	}
 	after, err := fstat(source.file)
 	if err != nil || !sameObject(after, source.st) {
-		return launchImage{}, imageError("executable changed while read", err)
+		return expectedImage{}, imageError("executable changed while read", err)
 	}
 	return image, nil
 }
 
 // expectedLaunchImage pins and derives in one step, for callers with no
 // verification between the two.
-func expectedLaunchImage(app *os.File, arch string) (launchImage, error) {
+func expectedLaunchImage(app *os.File) (expectedImage, error) {
 	held, err := pinLaunchImage(app)
 	if err != nil {
-		return launchImage{}, err
+		return expectedImage{}, err
 	}
 	defer held.close()
-	return held.derive(app, arch)
+	return held.derive(app)
 }
 
-func imageOf(file *os.File, arch string) (launchImage, error) {
+func imageOf(file *os.File) (expectedImage, error) {
 	st, err := fstat(file)
 	if err != nil {
-		return launchImage{}, imageError("executable stat", err)
+		return expectedImage{}, imageError("executable stat", err)
 	}
 	if st.Mode&unix.S_IFMT != unix.S_IFREG || st.Nlink != 1 || st.Size < 1 {
-		return launchImage{}, imageError("executable is not a plain file", nil)
+		return expectedImage{}, imageError("executable is not a plain file", nil)
 	}
-	hash, err := codeDirectoryHash(file, st.Size, arch)
+	hashes, err := codeDirectoryHashes(file, st.Size)
 	if err != nil {
-		return launchImage{}, imageError("code directory", err)
+		return expectedImage{}, imageError("code directory", err)
 	}
-	return launchImage{CDHash: hash, Device: uint32(st.Dev), Inode: uint64(st.Ino)}, nil
+	return expectedImage{CDHashes: hashes, Device: uint32(st.Dev), Inode: uint64(st.Ino)}, nil
 }
 
-// codeDirectoryHash returns the 20-byte code-directory hash the kernel reports
-// for the given Mach-O: the first 20 bytes of the digest of the best
-// CodeDirectory. A universal binary is resolved to the slice for arch (a Go
-// GOARCH name), which is the slice a native launch executes.
-func codeDirectoryHash(file io.ReaderAt, size int64, arch string) ([20]byte, error) {
+// slices returns each Mach-O slice of the file: the whole file when thin, every
+// architecture when universal.
+func slices(file io.ReaderAt, size int64) ([]*io.SectionReader, []macho.Cpu, error) {
 	whole := io.NewSectionReader(file, 0, size)
-	slice := whole
 	fat, err := macho.NewFatFile(whole)
 	switch {
 	case err == nil:
-		cpu := map[string]macho.Cpu{"arm64": macho.CpuArm64, "amd64": macho.CpuAmd64}[arch]
-		found := false
+		var out []*io.SectionReader
+		var cpus []macho.Cpu
 		for _, candidate := range fat.Arches {
-			if candidate.Cpu == cpu {
-				if found {
-					return [20]byte{}, errors.New("duplicate universal slice")
-				}
-				found = true
-				if int64(candidate.Offset)+int64(candidate.Size) > size {
-					return [20]byte{}, errors.New("universal slice out of range")
-				}
-				slice = io.NewSectionReader(file, int64(candidate.Offset), int64(candidate.Size))
+			if int64(candidate.Offset)+int64(candidate.Size) > size {
+				return nil, nil, errors.New("universal slice out of range")
 			}
+			out = append(out, io.NewSectionReader(file, int64(candidate.Offset), int64(candidate.Size)))
+			cpus = append(cpus, candidate.Cpu)
 		}
-		if !found {
-			return [20]byte{}, errors.New("no universal slice for the running architecture")
+		if len(out) == 0 {
+			return nil, nil, errors.New("empty universal binary")
 		}
+		return out, cpus, nil
 	case errors.Is(err, macho.ErrNotFat):
-	default:
+		return []*io.SectionReader{whole}, []macho.Cpu{0}, nil
+	}
+	return nil, nil, err
+}
+
+// codeDirectoryHashes returns the 20-byte code-directory hash of EVERY slice, in
+// file order. Each is the first 20 bytes of the digest of that slice's best
+// CodeDirectory. An unsigned or malformed slice refuses the whole file.
+func codeDirectoryHashes(file io.ReaderAt, size int64) ([][20]byte, error) {
+	parts, _, err := slices(file, size)
+	if err != nil {
+		return nil, err
+	}
+	hashes := make([][20]byte, 0, len(parts))
+	for _, part := range parts {
+		hash, err := sliceHash(part)
+		if err != nil {
+			return nil, err
+		}
+		hashes = append(hashes, hash)
+	}
+	return hashes, nil
+}
+
+// codeDirectoryHash returns the hash of the slice for arch (a Go GOARCH name).
+func codeDirectoryHash(file io.ReaderAt, size int64, arch string) ([20]byte, error) {
+	parts, cpus, err := slices(file, size)
+	if err != nil {
 		return [20]byte{}, err
 	}
+	if len(parts) == 1 && cpus[0] == 0 {
+		return sliceHash(parts[0])
+	}
+	want := map[string]macho.Cpu{"arm64": macho.CpuArm64, "amd64": macho.CpuAmd64}[arch]
+	found := -1
+	for i, cpu := range cpus {
+		if cpu == want {
+			if found >= 0 {
+				return [20]byte{}, errors.New("duplicate universal slice")
+			}
+			found = i
+		}
+	}
+	if found < 0 {
+		return [20]byte{}, errors.New("no universal slice for the architecture")
+	}
+	return sliceHash(parts[found])
+}
+
+func sliceHash(slice *io.SectionReader) ([20]byte, error) {
 	thin, err := macho.NewFile(slice)
 	if err != nil {
 		return [20]byte{}, err

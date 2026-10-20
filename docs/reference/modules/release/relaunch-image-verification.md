@@ -39,8 +39,7 @@ no retry and no replay. A second launch attempt in the same scope is refused as
    `LC_CODE_SIGNATURE`, truncated to 20 bytes, computed from that descriptor,
    together with the device and inode. The executable is never reopened by name
    to read it, so a swap between verification and derivation is refused as
-   `launch_image_unconfirmed` (uncertain once `open` has run). A universal binary
-   resolves to the running architecture's slice. No `codesign` is run.
+   `launch_image_unconfirmed` (uncertain once `open` has run). A universal binary yields the hash of every slice, and a live hash is accepted when it equals any of them: LaunchServices, Rosetta or a user preference chooses the slice, so none is assumed. Every slice is part of the verified bytes, so this does not weaken the file binding, which is checked separately by device and inode. No `codesign` is run.
 2. `open` runs once. Its argument is the relaunch hint, which names the operation
    id and the helper pid and start, so it acts as a nonce for this launch.
 3. The child is found by polling same-effective-user processes whose

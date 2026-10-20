@@ -227,11 +227,11 @@ func TestNativePlatformObservesARealProcess(t *testing.T) {
 	defer held.Close()
 	st, err := fstat(held)
 	must(t, err)
-	expected, err := imageOf(held, stdruntime.GOARCH)
+	expected, err := imageOf(held)
 	must(t, err)
 	live, err := p.image(pid)
 	must(t, err)
-	if live.Image != expected || live.Image.Inode != uint64(st.Ino) {
+	if !expected.accepts(live.Image) || live.Image.Inode != uint64(st.Ino) {
 		t.Fatalf("kernel identity %+v differs from the executable's %+v", live.Image, expected)
 	}
 	again, err := p.start(pid)
