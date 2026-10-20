@@ -256,8 +256,21 @@ func TestArchiveNativeRefusesCrossedChangedAndUnsafeRecordsWithoutWrites(t *test
 				cancel()
 			}
 			before := archiveSnapshot(t, root)
-			if reply, err := a.ReadStoredReply(ctx, selection); reply != nil || err == nil {
+			reply, err := a.ReadStoredReply(ctx, selection)
+			if reply != nil || err == nil {
 				t.Fatal("unsafe bytes exposed", reply, err)
+			}
+			// An ended budget is unavailable; judged bytes that disagree refuse.
+			switch kind {
+			case "cancel", "profile":
+				// Rejected as input before any storage observation.
+				if !errors.Is(err, Invalid) {
+					t.Fatal("entry validation reported as", err)
+				}
+			case "commit", "record", "digest", "owner":
+				if !errors.Is(err, Refused) {
+					t.Fatal("judged mismatch reported as", err)
+				}
 			}
 			archiveUnchanged(t, root, before)
 			if _, err := os.Lstat(filepath.Join(child, resultUnknown)); !errors.Is(err, os.ErrNotExist) {
@@ -291,5 +304,47 @@ func TestArchiveNativeMissingNamespaceAndRelocationAreNotEmptyRecovery(t *testin
 	})
 	if err := disk.verify(context.Background()); err == nil {
 		t.Fatal("relocated root qualified")
+	}
+}
+
+// endsAfter reports a live context for its first n Err calls, then Canceled:
+// a deterministic budget that ends while a file is being read.
+type endsAfter struct {
+	context.Context
+	n int
+}
+
+func (c *endsAfter) Err() error {
+	if c.n > 0 {
+		c.n--
+		return nil
+	}
+	return context.Canceled
+}
+
+func TestArchiveBudgetEndingMidReadIsUnavailableNotRefused(t *testing.T) {
+	root, a, q, receipt := archiveFixture(t)
+	disk, err := openArchiveDisk(context.Background(), a.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = disk.d.close() }()
+	// archiveFile checks the budget on entry and again after the read.
+	if _, err := archiveFile(&endsAfter{Context: context.Background(), n: 1}, disk.d, resultKey(q)+".attempt", port.MaxResultRecordBytes); !errors.Is(err, Unavailable) {
+		t.Fatal("budget ending mid-read reported as", err)
+	}
+	if _, _, err := disk.record(&endsAfter{Context: context.Background(), n: 3}, resultKey(q)); !errors.Is(err, Unavailable) {
+		t.Fatal("budget ending during the commit read reported as", err)
+	}
+	if raw, err := archiveFile(context.Background(), disk.d, resultKey(q)+".attempt", port.MaxResultRecordBytes); err != nil || len(raw) == 0 {
+		t.Fatal("live budget refused", err)
+	}
+	_ = root
+	_ = receipt
+}
+
+func TestObservedKeepsUnavailableApartFromRefusal(t *testing.T) {
+	if !errors.Is(observed(Unavailable), Unavailable) || !errors.Is(observed(Refused), Refused) || !errors.Is(observed(errors.New("other")), Refused) {
+		t.Fatal("classification lost")
 	}
 }

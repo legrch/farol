@@ -80,7 +80,10 @@ func openArchiveDisk(ctx context.Context, root Root) (_ *archiveDisk, err error)
 		return nil, Invalid
 	}
 	raw, err := archiveFile(ctx, d, resultClaim, len(expected))
-	if err != nil || !bytes.Equal(raw, expected) {
+	if err != nil {
+		return nil, observed(err)
+	}
+	if !bytes.Equal(raw, expected) {
 		return nil, Refused
 	}
 	a := &archiveDisk{d: d, claim: raw}
@@ -93,8 +96,8 @@ func openArchiveDisk(ctx context.Context, root Root) (_ *archiveDisk, err error)
 	} else if !errors.Is(err, unix.ENOENT) {
 		return nil, Refused
 	}
-	if a.verify(ctx) != nil {
-		return nil, Refused
+	if err := a.verify(ctx); err != nil {
+		return nil, observed(err)
 	}
 	retained = true
 	return a, nil
@@ -111,7 +114,10 @@ func (a *archiveDisk) verify(ctx context.Context) error {
 		return Refused
 	}
 	raw, err := archiveFile(ctx, d, resultClaim, len(a.claim))
-	if err != nil || !bytes.Equal(raw, a.claim) {
+	if err != nil {
+		return observed(err)
+	}
+	if !bytes.Equal(raw, a.claim) {
 		return Refused
 	}
 	var unknown unix.Stat_t
@@ -148,8 +154,11 @@ func archiveFile(ctx context.Context, d *resultDisk, name string, limit int) ([]
 	after, se := resultStat(fd)
 	ok := err == nil && se == nil && len(raw) == int(before.Size) && resultStable(before, after) && unix.Fstatat(d.dir, name, &named, unix.AT_SYMLINK_NOFOLLOW) == nil && resultStable(named, after)
 	closed := f.Close()
-	if !ok || closed != nil || d.checkPhysical() != nil || ctx.Err() != nil {
+	if !ok || closed != nil || d.checkPhysical() != nil {
 		return nil, Refused
+	}
+	if ctx.Err() != nil {
+		return nil, Unavailable // the budget ended mid-read; the bytes were not judged
 	}
 	return raw, nil
 }
@@ -160,8 +169,11 @@ func (a *archiveDisk) record(ctx context.Context, key string) (*port.ArchivedRep
 		return nil, "", err
 	}
 	commit, err := archiveFile(ctx, a.d, key+".commit", 64)
+	if err != nil {
+		return nil, "", observed(err)
+	}
 	digest := sha256.Sum256(raw)
-	if err != nil || !bytes.Equal(commit, []byte(hex.EncodeToString(digest[:]))) {
+	if !bytes.Equal(commit, []byte(hex.EncodeToString(digest[:]))) {
 		return nil, "", Refused
 	}
 	r, err := decodeResult(raw)
@@ -281,12 +293,15 @@ func (a *Archive) observeArchive(ctx context.Context, selection port.ArchiveList
 	// streaming scan. Neither directory order nor a valid commit creates an ACK.
 	for _, summary := range page.Entries {
 		reply, owner, err := disk.record(ctx, summary.Key)
-		if err != nil || reply == nil || owner != selection.OwnerID || reply.Summary != summary {
+		if err != nil {
+			return nil, observed(err)
+		}
+		if reply == nil || owner != selection.OwnerID || reply.Summary != summary {
 			return nil, Refused
 		}
 	}
-	if disk.verify(ctx) != nil {
-		return nil, Refused
+	if err := disk.verify(ctx); err != nil {
+		return nil, observed(err)
 	}
 	return page, nil
 }
@@ -305,12 +320,32 @@ func (a *Archive) readArchive(ctx context.Context, selection port.ArchiveReadSel
 		}
 	}()
 	reply, owner, err := disk.record(ctx, selection.Key)
-	if err != nil || reply == nil || owner != selection.OwnerID || reply.Summary.Digest != selection.Digest {
+	if err != nil {
+		return nil, observed(err)
+	}
+	if reply == nil || owner != selection.OwnerID || reply.Summary.Digest != selection.Digest {
 		return nil, Refused
 	}
 	again, owner, err := disk.record(ctx, selection.Key)
-	if err != nil || again == nil || owner != selection.OwnerID || *again != *reply || disk.verify(ctx) != nil {
+	if err != nil {
+		return nil, observed(err)
+	}
+	if again == nil || owner != selection.OwnerID || *again != *reply {
 		return nil, Refused
 	}
+	if err := disk.verify(ctx); err != nil {
+		return nil, observed(err)
+	}
 	return reply, nil
+}
+
+// observed keeps an unavailable observation (an ended budget or a store that
+// could not be read) distinct from a refusal of the bytes that were judged.
+// Durable reference: missing or busy storage is unavailable; invalid committed
+// pairs refuse.
+func observed(err error) error {
+	if errors.Is(err, Unavailable) {
+		return Unavailable
+	}
+	return Refused
 }
