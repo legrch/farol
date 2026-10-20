@@ -13,6 +13,7 @@ import (
 	executionapp "github.com/legrch/farol/modules/release/app/services/execution"
 	inputapp "github.com/legrch/farol/modules/release/app/services/helperinput"
 	protocolapp "github.com/legrch/farol/modules/release/app/services/helperprotocol"
+	"github.com/legrch/farol/modules/release/app/services/processwait"
 	"github.com/legrch/farol/modules/release/infra/native/handoff"
 	"github.com/legrch/farol/modules/release/infra/native/helperchannels"
 	inputnative "github.com/legrch/farol/modules/release/infra/native/helperinput"
@@ -84,6 +85,9 @@ func closedHelperFail(uncertain bool, causes ...error) error {
 			uncertain = uncertain || f.Uncertain || f.Internal
 		case *executionapp.Failure:
 			uncertain = uncertain || f.Uncertain || f.Internal
+		case *processwait.Failure:
+			// Live-predecessor observation only; the closed path never produces it.
+			uncertain = uncertain || f.Uncertain
 		case *inputapp.Failure, *protocolapp.Failure, handoff.Code:
 		case interface{ Unwrap() []error }, interface{ Unwrap() error }:
 			// An opaque wrapper may conceal a native failure beside a refusal.

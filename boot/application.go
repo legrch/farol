@@ -78,6 +78,9 @@ func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Wri
 	if len(args) > 0 && args[0] == closedReleaseHelperCommand {
 		return runClosedReleaseHelper(args[1:], out, diagnostics)
 	}
+	if len(args) > 0 && args[0] == liveReleaseHelperCommand {
+		return runLiveReleaseHelper(args[1:], out, diagnostics)
+	}
 	if len(args) > 0 && args[0] == "discover-preserved-profile" {
 		return runPreservedProfileDiscovery(args[1:], in, out, diagnostics)
 	}
