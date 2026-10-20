@@ -187,6 +187,9 @@ only when `readAcceptedSource()` fails with exactly `UPDATE_BASELINE_ADOPTION_RE
 That error means: no `last-update.json`, no closed-repair receipt, no
 `<slot>.receipt.json` and no `adopted-baseline.json`, in the user slot. The shared
 `/Applications/Farol.app` slot never adopts and keeps its startup refusal.
+Adoption belongs to the ordinary desktop runtime, user slot only; never shared or
+supervised. The supervised runtime neither looks up a release, nor writes, nor
+reads `adopted-baseline.json`, and behaves exactly as before adoption existed.
 
 Adoption runs these steps and writes nothing unless all of them pass:
 

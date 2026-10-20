@@ -747,6 +747,74 @@ describe("supervised installed updater (native files/lease, mocked package/proce
     await controller!.close();
   });
 
+  describe("first-launch adoption is never part of the supervised workflow", () => {
+    const adopted = () =>
+      path.join(userData, "installed-updates/adopted-baseline.json");
+    const publishedBuild = () => ({
+      ...manifest,
+      version: build.version,
+      buildVersion: build.buildVersion!,
+      buildId: build.buildId,
+      sourceCommit: build.sourceCommit,
+      sourceTreeDigest: build.sourceTreeDigest,
+      artifactSha256: source.digest,
+      archiveName: `Farol-${build.version}-darwin-arm64.zip`,
+    });
+    async function withoutReceipt() {
+      await fs.rm(slot + ".receipt.json");
+      mocks.find.mockResolvedValue({ ok: true, value: publishedBuild() });
+      const { localArchive: _local, ...input } = await selected();
+      return input;
+    }
+
+    it("reports an unconfirmed source without a lookup or a record when there is no receipt", async () => {
+      const input = await withoutReceipt();
+      const controller = (await createSupervisedInstalledUpdateRuntime(input))!;
+      await controller.initialize();
+      await controller.check(true);
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_SOURCE_IDENTITY_UNCONFIRMED",
+      });
+      expect(mocks.find).not.toHaveBeenCalled();
+      expect(mocks.discover).not.toHaveBeenCalled();
+      await expect(fs.lstat(adopted())).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await controller.close();
+    });
+
+    it("does not use a valid adopted record and leaves its bytes untouched", async () => {
+      const input = await withoutReceipt();
+      await fs.mkdir(path.dirname(adopted()), { mode: 0o700 });
+      await fs.writeFile(
+        adopted(),
+        `${JSON.stringify({
+          schema: "farol.next.adopted-baseline/1",
+          slot,
+          userData,
+          manifest: publishedBuild(),
+          adoptedAt: "2026-10-21T00:00:00.000Z",
+        })}\n`,
+        { mode: 0o600 },
+      );
+      const bytes = await fs.readFile(adopted());
+      const inode = (await fs.lstat(adopted())).ino;
+      const controller = (await createSupervisedInstalledUpdateRuntime(input))!;
+      await controller.initialize();
+      await controller.check(true);
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_SOURCE_IDENTITY_UNCONFIRMED",
+      });
+      expect(mocks.find).not.toHaveBeenCalled();
+      expect(mocks.discover).not.toHaveBeenCalled();
+      expect(await fs.readFile(adopted())).toEqual(bytes);
+      expect((await fs.lstat(adopted())).ino).toBe(inode);
+      await controller.close();
+    });
+  });
+
   it("refuses a supervised package without a Go declaration before any helper", async () => {
     const { goCoreArtifact: _omitted, ...input } = await selected();
     const controller = await createSupervisedInstalledUpdateRuntime(input);

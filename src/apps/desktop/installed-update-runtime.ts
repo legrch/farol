@@ -2528,7 +2528,12 @@ async function createRuntime(
       }
       const file = slot + ".receipt.json";
       const receiptRaw = await readRecord(file);
-      if (receiptRaw === null && !repair && installLocation !== "shared") {
+      if (
+        receiptRaw === null &&
+        !repair &&
+        installLocation !== "shared" &&
+        !supervised
+      ) {
         // No owner-tool receipt: only a previously adopted baseline can anchor
         // this copy. Its absence is the one condition that permits adoption.
         expected = await readAdoptedExpectation();
@@ -2572,6 +2577,7 @@ async function createRuntime(
   > => {
     if (
       installLocation === "shared" ||
+      supervised ||
       options.build.sourceDirty ||
       !options.build.buildVersion ||
       !["github-stable", "github-owner-beta"].includes(
@@ -3551,6 +3557,7 @@ async function createRuntime(
           error.message === "UPDATE_BASELINE_ADOPTION_SUPERSEDED";
         if (
           installLocation === "shared" ||
+          supervised ||
           !(error instanceof Error) ||
           (error.message !== "UPDATE_BASELINE_ADOPTION_REQUIRED" && !superseded)
         )
