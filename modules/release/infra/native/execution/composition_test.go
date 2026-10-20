@@ -97,17 +97,25 @@ func compositionIdentity(t *testing.T, file *os.File) helperroutes.Identity {
 
 func newCompositionFixture(t *testing.T) *compositionFixture {
 	t.Helper()
-	root, err := filepath.EvalSymlinks(t.TempDir())
+	return newCompositionFixtureAt(t, t.TempDir())
+}
+
+func newCompositionFixtureAt(t *testing.T, directory string, canonicalHome ...bool) *compositionFixture {
+	t.Helper()
+	root, err := filepath.EvalSymlinks(directory)
 	must(t, err)
 	must(t, os.Chmod(root, 0700))
 	request := port.HelperRequest{OperationID: strings.Repeat("e", 32),
 		Source: port.HelperBuild{Digest: strings.Repeat("a", 64), Version: "1.2.3-preview.4", BuildID: strings.Repeat("b", 64)},
 		Target: port.HelperBuild{Digest: strings.Repeat("c", 64), Version: "1.2.4-preview.4", BuildID: strings.Repeat("d", 64)}}
 	parent := filepath.Join(root, "operations")
+	if len(canonicalHome) == 1 && canonicalHome[0] {
+		parent = filepath.Join(root, "Library/Application Support/Farol Next Preview/installed-updates")
+	}
 	path := filepath.Join(parent, request.OperationID)
 	apps := filepath.Join(root, "Applications")
 	for _, dir := range []string{parent, path, apps} {
-		must(t, os.Mkdir(dir, 0700))
+		must(t, os.MkdirAll(dir, 0700))
 	}
 	open := func(path string) *os.File {
 		file, err := os.Open(path)

@@ -81,7 +81,15 @@ func newLifecycleFixture(t *testing.T) *lifecycleFixture {
 	if stdruntime.GOOS != "darwin" {
 		t.Skip("composition requires production Darwin rename and rejection publication")
 	}
-	f := &lifecycleFixture{compositionFixture: newCompositionFixture(t)}
+	return newLifecycleFixtureAt(t, newCompositionFixture(t))
+}
+
+func newLifecycleFixtureAt(t *testing.T, base *compositionFixture) *lifecycleFixture {
+	t.Helper()
+	if stdruntime.GOOS != "darwin" {
+		t.Skip("composition requires production Darwin rename and rejection publication")
+	}
+	f := &lifecycleFixture{compositionFixture: base}
 	// Independent original-helper vectors differ in plist bytes/digest while
 	// keeping the same parsed version/build. They are inert, unsigned images.
 	build := func(digest string) port.HelperBuild {

@@ -145,13 +145,25 @@ func pureIdentityRefusal(err error) bool {
 // tree opens only the chosen fixed directory under its borrowed pinned parent.
 // It owns and closes that newly opened handle; cancellation cannot abandon it.
 // A negative match is returned only after all owned cleanup and final fencing.
-func (r *runtime) tree(ctx context.Context, entry port.HelperRecoveryEntry, build port.HelperBuild) (negative bool, result error) {
+func (r *runtime) tree(ctx context.Context, entry port.HelperRecoveryEntry, build port.HelperBuild, code ...*string) (negative bool, result error) {
 	if entry == port.RejectedTarget {
 		return false, fail("input", false, false, nil)
 	}
 	location, err := r.location(entry)
 	if err != nil {
 		return false, err
+	}
+	return r.image(ctx, location, build, nil, code...)
+}
+
+// image retains the original before/held/named tree and identity checks for a
+// fixed app role or internally generated private capture. No path comes from
+// request data. An optional callback borrows the verified opened image.
+func (r *runtime) image(ctx context.Context, location installmove.Location, build port.HelperBuild, fn func(*os.File, port.HelperIdentity) error, code ...*string) (negative bool, result error) {
+	setCode := func(value string) {
+		if len(code) == 1 && code[0] != nil {
+			*code[0] = value
+		}
 	}
 	if err := r.fence(ctx); err != nil {
 		return false, err
@@ -161,6 +173,7 @@ func (r *runtime) tree(ctx context.Context, entry port.HelperRecoveryEntry, buil
 		return false, err
 	}
 	if !before.present || before.stat.Mode&unix.S_IFMT != unix.S_IFDIR || before.stat.Uid != uint32(os.Geteuid()) {
+		setCode("app_type")
 		return true, r.fence(ctx)
 	}
 	raw, err := location.Parent.File.SyscallConn()
@@ -209,11 +222,50 @@ func (r *runtime) tree(ctx context.Context, entry port.HelperRecoveryEntry, buil
 	_, err = verifier.Verify(ctx)
 	if err != nil {
 		if apptree.IsVerificationRefusal(err, pureIdentityRefusal) {
+			setCode(inspectedTreeCode(err))
 			return true, nil
 		}
 		return false, err
 	}
+	if fn != nil {
+		if err := fn(app, snapshot(before).Identity); err != nil {
+			return false, err
+		}
+		after, err := observe(ctx, location)
+		if err != nil {
+			return false, err
+		}
+		if !after.present || !sameMetadata(before.stat, after.stat) {
+			return false, fail("entry_replaced", false, true, nil)
+		}
+	}
 	return false, nil
+}
+
+// Only called AFTER the original verifier classified its own inspected
+// negative result. Opaque/I/O/cleanup errors never become a clean refusal.
+func inspectedTreeCode(err error) string {
+	var identity *appidentity.Error
+	if errors.As(err, &identity) && identity != nil {
+		switch identity.Code {
+		case appidentity.BundleMismatch:
+			return "bundle_identity"
+		case appidentity.BuildMismatch:
+			return "build_identity"
+		}
+	}
+	var tree *apptree.Error
+	if errors.As(err, &tree) && tree != nil {
+		switch tree.Code {
+		case apptree.CodeDigest:
+			return "digest"
+		case apptree.CodeLimit:
+			return "tree_limit"
+		case apptree.CodeName:
+			return "tree_name"
+		}
+	}
+	return "tree_mismatch"
 }
 
 func (r *runtime) MatchesTree(ctx context.Context, entry port.HelperRecoveryEntry, build port.HelperBuild) (bool, error) {
@@ -223,12 +275,13 @@ func (r *runtime) MatchesTree(ctx context.Context, entry port.HelperRecoveryEntr
 }
 func (r *runtime) VerifyTree(ctx context.Context, entry port.HelperRecoveryEntry, build port.HelperBuild) error {
 	return r.invoke(ctx, "", func(c context.Context) error {
-		negative, err := r.tree(c, entry, build)
+		code := "tree_mismatch"
+		negative, err := r.tree(c, entry, build, &code)
 		if err != nil {
 			return err
 		}
 		if negative {
-			return fail("tree_mismatch", false, false, nil)
+			return fail(code, false, false, nil)
 		}
 		return nil
 	})
