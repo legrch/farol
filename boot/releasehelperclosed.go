@@ -29,7 +29,9 @@ import (
 // os.File aliases. Ownership of request/ACK/continuation transfers ON CALL,
 // including failure. Lease is the caller's already exclusively locked fd5: the
 // caller keeps it and its aliases unchanged through actual synchronous return.
-// This unselected composition never adopts, duplicates, reconfigures or closes it.
+// This unselected composition never adopts, duplicates or closes it. Its only
+// change is adding FD_CLOEXEC to fd5's per-process descriptor flag (see
+// borrowClosedHelperLease), so a later exec'd child cannot inherit the lease.
 type closedHelperFiles struct{ Request, ACK, Lease, Continuation *os.File }
 
 type closedHelperFailure struct {
@@ -576,6 +578,20 @@ func inspectClosedHelperRole(file *os.File, want int) (role closedHelperFileRole
 	})
 	return role, closedHelperJoin(false, e, inner)
 }
+
+// closedHelperSetCloseOnExec reads F_GETFD and ORs in FD_CLOEXEC; nothing else.
+func closedHelperSetCloseOnExec(fd uintptr) error {
+	flags, err := unix.FcntlInt(fd, unix.F_GETFD, 0)
+	if err != nil {
+		return err
+	}
+	if flags&unix.FD_CLOEXEC != 0 {
+		return nil
+	}
+	_, err = unix.FcntlInt(fd, unix.F_SETFD, flags|unix.FD_CLOEXEC)
+	return err
+}
+
 func borrowClosedHelperLease(lease *os.File, fn func() error) error {
 	if lease == nil {
 		return closedHelperFail(false)
@@ -591,6 +607,16 @@ func borrowClosedHelperLease(lease *os.File, fn func() error) error {
 	err = raw.Control(func(fd uintptr) {
 		if fd != 5 {
 			result = closedHelperFail(false)
+			return
+		}
+		// Go's exec dup2s only Stdio and ExtraFiles, so a non-CLOEXEC fd5 would leak
+		// into every child (/bin/ps, a relaunch). Add FD_CLOEXEC only: F_GETFD then
+		// F_SETFD with that one bit ORed in. The flag belongs to this process's
+		// descriptor table entry, so the parent's table and the shared open-file
+		// description (offset, status flags, flock) stay untouched. Failure refuses
+		// before fn or any effect.
+		if e := closedHelperSetCloseOnExec(fd); e != nil {
+			result = closedHelperFail(false, e)
 			return
 		}
 		result = fn()

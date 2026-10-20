@@ -17,6 +17,7 @@ import (
 	release "github.com/legrch/farol/modules/release/domain"
 	"github.com/legrch/farol/modules/release/infra/native/handoff"
 	"github.com/legrch/farol/modules/release/infra/native/helperroutes"
+	"golang.org/x/sys/unix"
 )
 
 // All native owners here are PRIVATE SYMBOLIC seams. The real parser and codecs
@@ -1103,5 +1104,38 @@ func TestClosedHelperReadyRefusesUnboundInputs(t *testing.T) {
 		if ready, err := call(); ready != nil || err == nil {
 			t.Fatal(name, "accepted unbound readiness inputs")
 		}
+	}
+}
+
+// The lease flag change adds FD_CLOEXEC and nothing else, and is idempotent.
+func TestClosedHelperSetCloseOnExecAddsOnlyThatBit(t *testing.T) {
+	var fds [2]int
+	if err := unix.Pipe(fds[:]); err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(fds[0])
+	defer unix.Close(fds[1])
+	fd := uintptr(fds[0])
+	if _, err := unix.FcntlInt(fd, unix.F_SETFD, 0); err != nil {
+		t.Fatal(err)
+	}
+	statusBefore, err := unix.FcntlInt(fd, unix.F_GETFL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := closedHelperSetCloseOnExec(fd); err != nil {
+			t.Fatal(err)
+		}
+		flags, err := unix.FcntlInt(fd, unix.F_GETFD, 0)
+		if err != nil || flags != unix.FD_CLOEXEC {
+			t.Fatalf("F_GETFD = %#x, %v", flags, err)
+		}
+		if st, err := unix.FcntlInt(fd, unix.F_GETFL, 0); err != nil || st != statusBefore {
+			t.Fatalf("F_GETFL changed: %#x -> %#x, %v", statusBefore, st, err)
+		}
+	}
+	if err := closedHelperSetCloseOnExec(^uintptr(0)); err == nil {
+		t.Fatal("invalid descriptor accepted")
 	}
 }

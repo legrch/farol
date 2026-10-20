@@ -78,6 +78,30 @@ type closedHelperNativeTerminal struct {
 	Callback      bool
 	Error         string
 	Before, After closedHelperNativeLease
+	// Observed inside the borrow scope, after take/borrow: F_GETFD of the four
+	// inherited roles by number, and what a plain exec'd /bin/sh child can open.
+	WitnessRan bool
+	RoleFlags  map[int]int
+	ChildSees  string
+}
+
+// closedHelperNativeWitness reads the per-process descriptor flags of the four
+// inherited roles (numbers only; nothing is closed or reconfigured) and spawns a
+// child with NO ExtraFiles, like processprobe's /bin/ps or a relaunch /usr/bin/open.
+// Any role that is still inheritable shows up as an open /dev/fd entry.
+func closedHelperNativeWitness(receipt *closedHelperNativeTerminal) error {
+	receipt.RoleFlags = map[int]int{}
+	for _, n := range []int{3, 4, 5, 6} {
+		flags, err := unix.FcntlInt(uintptr(n), unix.F_GETFD, 0)
+		if err != nil {
+			return err
+		}
+		receipt.RoleFlags[n] = flags
+	}
+	out, err := exec.Command("/bin/sh", "-c", "for n in 3 4 5 6; do [ -e /dev/fd/$n ] && echo $n; done; exit 0").Output()
+	receipt.ChildSees = strings.TrimSpace(string(out))
+	receipt.WitnessRan = err == nil
+	return err
 }
 
 func TestClosedHelperNativeChild(t *testing.T) {
@@ -97,7 +121,12 @@ func TestClosedHelperNativeChild(t *testing.T) {
 		// Custody-only lane: the disposable fixture has no app/staged trees, so
 		// readiness is a SYMBOLIC pass here. Only "readiness-refused" exercises the
 		// production readiness composition over the real borrowed routes.
+		// The witness runs here because all four inherited roles are still open:
+		// after the borrow began, before the ACK, continuation consumption or close.
 		deps.ready = func(context.Context, *executionapp.Milestone, closedReleaseHelper) (*executionapp.Readiness, error) {
+			if err := closedHelperNativeWitness(&receipt); err != nil {
+				return nil, err
+			}
 			return &executionapp.Readiness{}, nil
 		}
 	}
@@ -127,8 +156,12 @@ func TestClosedHelperNativeChild(t *testing.T) {
 	if snapshotErr != nil {
 		t.Error(snapshotErr)
 	}
-	if !reflect.DeepEqual(receipt.Before, receipt.After) {
-		t.Error("borrowed fd5 metadata or flags changed")
+	// The only permitted change to fd5 is the per-process FD_CLOEXEC bit; identity,
+	// size, file status flags and every other descriptor flag stay as inherited.
+	wantAfter := receipt.Before
+	wantAfter.FDFlags |= unix.FD_CLOEXEC
+	if !reflect.DeepEqual(wantAfter, receipt.After) {
+		t.Error("borrowed fd5 changed beyond adding FD_CLOEXEC", receipt.Before, receipt.After)
 	}
 	data, marshalErr := json.Marshal(receipt)
 	if marshalErr != nil {
@@ -519,6 +552,19 @@ func TestClosedHelperNativeInheritedCustody(t *testing.T) {
 			}
 			if !found || terminal.Callback != wantSuccess || (terminal.Error == "") != wantSuccess {
 				runErrors = append(runErrors, errors.New("fixture terminal outcome mismatch"))
+			}
+			if wantSuccess && found {
+				if !terminal.WitnessRan {
+					runErrors = append(runErrors, errors.New("exec witness did not run"))
+				}
+				for _, n := range []int{3, 4, 5, 6} {
+					if got, ok := terminal.RoleFlags[n]; !ok || got != unix.FD_CLOEXEC {
+						runErrors = append(runErrors, fmt.Errorf("fd%d F_GETFD = %d, want exactly FD_CLOEXEC", n, got))
+					}
+				}
+				if terminal.ChildSees != "" {
+					runErrors = append(runErrors, fmt.Errorf("exec'd child inherited descriptors: %q", terminal.ChildSees))
+				}
 			}
 			if !helper.waited || !predecessor.waited {
 				runErrors = append(runErrors, errors.New("actual Wait receipt missing"))

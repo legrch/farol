@@ -493,3 +493,111 @@ func TestOptionalContinueAndCloseUnused(t *testing.T) {
 	}
 	closed(t, aw)
 }
+
+// inheritedPipe returns descriptors exactly like an exec'd launcher hands them
+// over: no FD_CLOEXEC, blocking.
+func inheritedPipe(t *testing.T) (*os.File, *os.File) {
+	t.Helper()
+	var fds [2]int
+	if err := unix.Pipe(fds[:]); err != nil {
+		t.Fatal(err)
+	}
+	for _, fd := range fds {
+		if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, w := os.NewFile(uintptr(fds[0]), "inherited-read"), os.NewFile(uintptr(fds[1]), "inherited-write")
+	t.Cleanup(func() { _ = r.Close(); _ = w.Close() })
+	return r, w
+}
+
+func descriptorState(t *testing.T, f *os.File) (fdFlags, statusFlags int) {
+	t.Helper()
+	raw, err := f.SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inner error
+	if err = raw.Control(func(fd uintptr) {
+		if fdFlags, inner = unix.FcntlInt(fd, unix.F_GETFD, 0); inner != nil {
+			return
+		}
+		statusFlags, inner = unix.FcntlInt(fd, unix.F_GETFL, 0)
+	}); err != nil || inner != nil {
+		t.Fatal(err, inner)
+	}
+	return fdFlags, statusFlags
+}
+
+// Taking an inherited descriptor adds FD_CLOEXEC and O_NONBLOCK and changes
+// nothing else, so no later exec.Command child (/bin/ps) inherits a transport.
+func TestTakeAddsOnlyCloseOnExec(t *testing.T) {
+	reqR, reqW := inheritedPipe(t)
+	ackR, ackW := inheritedPipe(t)
+	contR, contW := inheritedPipe(t)
+	_, _, _ = reqW, ackR, contW
+	type snap struct{ fd, status int }
+	files := map[string]*os.File{"request": reqR, "ack": ackW, "continuation": contR}
+	before := map[string]snap{}
+	for name, f := range files {
+		fd, st := descriptorState(t, f)
+		if fd&unix.FD_CLOEXEC != 0 {
+			t.Fatalf("%s fixture already close-on-exec", name)
+		}
+		before[name] = snap{fd, st}
+	}
+	req, err := TakeRequest(reqR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = req.Close() })
+	_ = take(t, ackW, contR)
+	for name, f := range files {
+		fd, st := descriptorState(t, f)
+		if fd != before[name].fd|unix.FD_CLOEXEC {
+			t.Errorf("%s F_GETFD = %#x, want %#x", name, fd, before[name].fd|unix.FD_CLOEXEC)
+		}
+		if st != before[name].status|unix.O_NONBLOCK {
+			t.Errorf("%s F_GETFL = %#x, want %#x", name, st, before[name].status|unix.O_NONBLOCK)
+		}
+	}
+}
+
+func TestTakeSocketsAddOnlyCloseOnExec(t *testing.T) {
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fd := range fds {
+		if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, b := os.NewFile(uintptr(fds[0]), "inherited-a"), os.NewFile(uintptr(fds[1]), "inherited-b")
+	t.Cleanup(func() { _ = a.Close(); _ = b.Close() })
+	fdBefore, stBefore := descriptorState(t, a)
+	req, err := TakeRequest(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = req.Close() })
+	fdAfter, stAfter := descriptorState(t, a)
+	if fdAfter != fdBefore|unix.FD_CLOEXEC || stAfter != stBefore|unix.O_NONBLOCK {
+		t.Fatalf("socket flags %#x/%#x from %#x/%#x", fdAfter, stAfter, fdBefore, stBefore)
+	}
+}
+
+// A descriptor that cannot be configured (including its flag change) is refused
+// by configure, which TakeRequest and Take run before any read.
+func TestConfigureRefusesClosedDescriptor(t *testing.T) {
+	r, w := pipe(t)
+	_ = w
+	o := &owned{file: r}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := configure(o, false); err == nil {
+		t.Fatal("configure accepted a closed descriptor")
+	}
+}
