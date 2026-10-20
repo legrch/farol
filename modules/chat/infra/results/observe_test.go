@@ -139,8 +139,8 @@ func TestArchiveNativeConstructorAndBusyReadsNeverOpenAnotherOwner(t *testing.T)
 	root, a, _, receipt := archiveFixture(t)
 	n := nativeResultOwner(t, root, scopeFixture(), TextLimits(), "open")
 	before := archiveSnapshot(t, root)
-	if page, err := a.ListStoredReplies(context.Background(), port.ArchiveListSelection{ProfileID: "profile", OwnerID: "owner"}); page != nil || err == nil {
-		t.Fatal("live result writer was crossed", err)
+	if page, err := a.ListStoredReplies(context.Background(), port.ArchiveListSelection{ProfileID: "profile", OwnerID: "owner"}); page != nil || !errors.Is(err, Unavailable) {
+		t.Fatal("busy claim must be unavailable, not crossed or refused", err)
 	}
 	if reply, err := a.ReadStoredReply(context.Background(), port.ArchiveReadSelection{ProfileID: "profile", OwnerID: "owner", Key: resultKey(requestFixture()), Digest: receipt.Publication.Digest}); reply != nil || err == nil {
 		t.Fatal("live result writer read exposed", err)
@@ -283,8 +283,8 @@ func TestArchiveNativeMissingNamespaceAndRelocationAreNotEmptyRecovery(t *testin
 	root := nativeResultRoot(t)
 	a := NewArchive(root)
 	before := archiveSnapshot(t, root)
-	if page, err := a.ListStoredReplies(context.Background(), port.ArchiveListSelection{ProfileID: "profile", OwnerID: "owner"}); page != nil || err == nil {
-		t.Fatal("missing namespace became empty", err)
+	if page, err := a.ListStoredReplies(context.Background(), port.ArchiveListSelection{ProfileID: "profile", OwnerID: "owner"}); page != nil || !errors.Is(err, Unavailable) {
+		t.Fatal("missing namespace must be unavailable, never empty", err)
 	}
 	archiveUnchanged(t, root, before)
 	root, _, _, _ = archiveFixture(t)

@@ -49,7 +49,7 @@ func openArchiveDisk(ctx context.Context, root Root) (_ *archiveDisk, err error)
 	flags := unix.O_RDONLY | unix.O_DIRECTORY | unix.O_NOFOLLOW | unix.O_CLOEXEC
 	d.rootFD, err = unix.Open(root.Path, flags, 0)
 	if err != nil {
-		return nil, Refused
+		return nil, openFailure(err)
 	}
 	d.rootMeta, err = resultStat(d.rootFD)
 	if err != nil || !resultQualified(d.rootMeta, root.Identity) || d.checkRoots(false) != nil {
@@ -57,7 +57,7 @@ func openArchiveDisk(ctx context.Context, root Root) (_ *archiveDisk, err error)
 	}
 	d.dir, err = unix.Openat(d.rootFD, resultChild, flags, 0)
 	if err != nil {
-		return nil, Refused
+		return nil, openFailure(err)
 	}
 	d.dirMeta, err = resultStat(d.dir)
 	if err != nil || !resultPhysical(d.dirMeta, unix.S_IFDIR, 0700, root.Identity.OwnerUID) {
@@ -69,10 +69,19 @@ func openArchiveDisk(ctx context.Context, root Root) (_ *archiveDisk, err error)
 	}
 	d.claim, err = unix.Openat(d.dir, resultClaim, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, Refused
+		return nil, openFailure(err)
 	}
 	d.claimMeta, err = resultStat(d.claim)
-	if err != nil || !resultPhysical(d.claimMeta, unix.S_IFREG, 0600, root.Identity.OwnerUID) || unix.Flock(d.claim, unix.LOCK_EX|unix.LOCK_NB) != nil || d.checkPhysical() != nil {
+	if err != nil || !resultPhysical(d.claimMeta, unix.S_IFREG, 0600, root.Identity.OwnerUID) {
+		return nil, Refused
+	}
+	if err := unix.Flock(d.claim, unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return nil, Unavailable // another owner holds the claim: busy, not refused
+		}
+		return nil, Refused
+	}
+	if d.checkPhysical() != nil {
 		return nil, Refused
 	}
 	expected, err := json.Marshal(resultClaimRecord{1, root.ProfileID, root.Identity, d.identity()})
