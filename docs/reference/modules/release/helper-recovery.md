@@ -214,6 +214,20 @@ The lane `releasehelperclosedexecnative_test.go` runs the compiled entry under t
 same gate with real digest-matching trees: apply to `verified`, closed rollback to
 `rolled_back`, and the pre-ACK, relaunch and extra-argv refusals.
 
+`boot/releasehelperlive.go` and `boot/releasehelperliveentry.go` add the unselected
+live-predecessor sibling `farol run-live-release-helper` for apply and rollback with
+`relaunch == false` only (Quit-and-install): fd3 request and fd4 ACK, no fd5 lease or
+fd6 continuation. In the Python order it takes the update lock, captures the original
+running marker, completes pre-ACK readiness, positively confirms the exact pid and
+process start, emits `waiting_for_exit`, waits for that process to exit (counted from
+the wait by `waitSeconds`, never past the original bound), then takes the promotion
+lease and verifies the Quit receipt before the single `execute`; terminal mapping,
+no-replay and sticky uncertainty are the closed owners'. Relaunch true, recover, a
+closed predecessor and a request without an install location refuse before any IO.
+Nothing selects it: the desktop still spawns `update_helper.py`.
+`releasehelperlivenative_test.go` runs the compiled entry against a scratch
+`/bin/cat` predecessor under `FAROL_LIVE_HELPER_NATIVE=1`.
+
 The unselected ready frame must not be wired to an application effect or product
 readiness until that gate and the existing desktop protocol are independently
 accepted.
