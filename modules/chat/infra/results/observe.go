@@ -36,7 +36,10 @@ func openArchiveDisk(ctx context.Context, root Root) (_ *archiveDisk, err error)
 		return nil, Invalid
 	}
 	canonical, err := filepath.EvalSymlinks(root.Path)
-	if err != nil || canonical != root.Path {
+	if err != nil {
+		return nil, openFailure(err) // a missing root is unavailable storage
+	}
+	if canonical != root.Path {
 		return nil, Refused
 	}
 	d := &resultDisk{root: root, rootFD: -1, dir: -1, claim: -1}

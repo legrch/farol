@@ -372,5 +372,9 @@ func TestArchiveOpenFailuresSeparateUnavailableStoreFromRefusedNames(t *testing.
 	if _, err := archiveFile(context.Background(), disk.d, resultKey(q)+".missing", port.MaxResultRecordBytes); !errors.Is(err, Unavailable) {
 		t.Fatal("missing file reported as", err)
 	}
-	_ = root
+	missing := root
+	missing.Path = filepath.Join(filepath.Dir(root.Path), "absent-root")
+	if _, err := openArchiveDisk(context.Background(), missing); !errors.Is(err, Unavailable) {
+		t.Fatal("missing root reported as", err)
+	}
 }
