@@ -121,15 +121,15 @@ func closedHelperExecute(ctx context.Context, in closedHelperExecution) (result 
 	return result, err
 }
 
-// closedHelperCleanRefusal recognizes only a direct, classified application
-// refusal with no uncertain cause. Anything wrapped, joined or opaque is unknown.
+// closedHelperCleanRefusal recognizes only a direct, non-nil application
+// Failure that is neither Internal nor Uncertain. The application owner already
+// classifies its causes (operation.call joins every native cause into Cause and
+// derives Internal/Uncertain from them), so those flags are authoritative and
+// no second cause rule applies here. Wrapped, joined, typed-nil and non-Failure
+// errors are unknown.
 func closedHelperCleanRefusal(err error) bool {
 	f, ok := err.(*executionapp.Failure)
-	if !ok || f == nil || f.Internal || f.Uncertain {
-		return false
-	}
-	wrapped, _ := closedHelperFail(false, f).(*closedHelperFailure)
-	return wrapped != nil && !wrapped.uncertain
+	return ok && f != nil && !f.Internal && !f.Uncertain
 }
 
 // execute runs the retained Milestone exactly once, inside the post-AcquireUpdate

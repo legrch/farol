@@ -3,9 +3,11 @@ package execution
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/legrch/farol/modules/release/app/port"
 	executionapp "github.com/legrch/farol/modules/release/app/services/execution"
@@ -173,5 +175,51 @@ func TestWithAdmittedInstallationRefusesWithoutRealRoutesOrOwners(t *testing.T) 
 	config.Rejection = nil
 	if err := withAdmittedInstallation(context.Background(), config, milestoneRoutes, func(AdmittedInstallation) error { entered = true; return nil }); err == nil || entered {
 		t.Fatal("missing rejection owner accepted")
+	}
+}
+
+// A staged tree whose content changes after inspection, with the same directory
+// identity, is refused by the Recheck inside Execute. The returned error is the
+// application's direct Failure, built exactly as operation.call builds it: the
+// native refusal joined into Cause, with Internal and Uncertain both false. It
+// is a clean pre-effect refusal (boot maps it to exit 70), not an unknown.
+func TestMilestoneCompositionChangedStagedContentIsACleanRefusal(t *testing.T) {
+	f := newLifecycleFixture(t)
+	m, ready := f.milestone(t, "apply", true)
+	stage := filepath.Join(f.path, "staged.app")
+	identity := func() port.HelperIdentity {
+		info, err := os.Open(stage)
+		must(t, err)
+		defer info.Close()
+		id := compositionIdentity(t, info)
+		return port.HelperIdentity{Device: id.Device, Inode: id.Inode}
+	}
+	before := identity()
+	must(t, os.WriteFile(filepath.Join(stage, "Contents/Info.plist"), []byte("content changed after inspection"), 0600))
+	if identity() != before {
+		t.Fatal("setup changed the staged directory identity")
+	}
+	snapshot := compositionSnapshot(t, f.root)
+	result, err := f.execute(t, m, ready)
+	failure, direct := err.(*executionapp.Failure)
+	if result != nil || !direct || failure == nil {
+		t.Fatal("execution did not return a direct application Failure", result, err)
+	}
+	t.Logf("real refusal: code=%q phase=%q internal=%v uncertain=%v", failure.Code, failure.Phase, failure.Internal, failure.Uncertain)
+	if failure.Internal || failure.Uncertain || failure.Phase != "refused" || failure.Code == "" {
+		t.Fatal("clean native refusal was classified unknown", failure)
+	}
+	var native *port.HelperRecoveryFailure
+	if !errors.As(failure, &native) || native.Code != failure.Code {
+		t.Fatal("the native refusal is not retained as the joined cause", failure.Cause)
+	}
+	// No effect: no journal, app and staged trees as they were, nothing retained.
+	f.unchanged(t, snapshot)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	view, readErr := f.repo.ReadHelper(ctx)
+	must(t, readErr)
+	if _, statErr := os.Lstat(filepath.Join(f.path, "journal.json")); !errors.Is(statErr, os.ErrNotExist) || view.Value != nil || f.owner.retained() != nil {
+		t.Fatal("a refused execution wrote a journal or retained uncertainty")
 	}
 }

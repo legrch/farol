@@ -221,6 +221,9 @@ func TestClosedHelperExecuteFencesAroundExecuteAndPassesCopy(t *testing.T) {
 
 func TestClosedHelperExecuteFailureClassification(t *testing.T) {
 	clean := &executionapp.Failure{Code: "readiness_required", Phase: "refused"}
+	// Exactly the application's output for a clean native refusal: operation.call
+	// always joins the native cause, with Internal and Uncertain both false.
+	digest := &executionapp.Failure{Code: "digest", Phase: "refused", Cause: errors.Join(&releaseport.HelperRecoveryFailure{Code: "digest", Phase: "refused"}, nil)}
 	cases := []struct {
 		name      string
 		fn        func(*closedHelperFixture, context.Context, closedHelperExecution) (*executionapp.Result, error)
@@ -237,9 +240,9 @@ func TestClosedHelperExecuteFailureClassification(t *testing.T) {
 		{name: "internal-failure", retained: true, fn: func(*closedHelperFixture, context.Context, closedHelperExecution) (*executionapp.Result, error) {
 			return nil, &executionapp.Failure{Code: "x", Phase: "refused", Internal: true}
 		}},
-		{name: "uncertain-cause-behind-clean-failure", retained: true, fn: func(*closedHelperFixture, context.Context, closedHelperExecution) (*executionapp.Result, error) {
-			return nil, &executionapp.Failure{Code: "x", Phase: "refused", Cause: errors.New("opaque native")}
-		}},
+		{name: "digest-refusal-shaped-like-the-application", fn: func(*closedHelperFixture, context.Context, closedHelperExecution) (*executionapp.Result, error) {
+			return nil, digest
+		}, wantErr: digest},
 		{name: "opaque-error", retained: true, fn: func(*closedHelperFixture, context.Context, closedHelperExecution) (*executionapp.Result, error) {
 			return nil, errors.New("opaque")
 		}},
@@ -380,7 +383,7 @@ func TestClosedHelperTerminalMapping(t *testing.T) {
 		{"error-beats-clean-result", id, &executionapp.Result{Phase: "verified"}, errors.New("late"), want("unknown", "internal", true), 79},
 		{"uncertain", id, nil, failure(executionapp.Failure{Code: "x", Phase: "refused", Uncertain: true}), want("unknown", "internal", true), 79},
 		{"internal", id, nil, failure(executionapp.Failure{Code: "x", Phase: "refused", Internal: true}), want("unknown", "internal", true), 79},
-		{"uncertain-cause", id, nil, failure(executionapp.Failure{Code: "x", Phase: "refused", Cause: errors.New("opaque")}), want("unknown", "internal", true), 79},
+		{"digest-refusal-with-joined-native-cause", id, nil, &executionapp.Failure{Code: "digest", Phase: "refused", Cause: errors.Join(&releaseport.HelperRecoveryFailure{Code: "digest", Phase: "refused"}, nil)}, want("refused", "digest", true), 70},
 		{"non-failure", id, nil, errors.New("plain"), want("unknown", "internal", true), 79},
 		{"wrapped-failure", id, nil, fmt.Errorf("w: %w", &executionapp.Failure{Code: "x", Phase: "refused"}), want("unknown", "internal", true), 79},
 		{"scope-failure", id, nil, closedHelperFail(true, &executionapp.Failure{Code: "x", Phase: "refused"}), want("unknown", "internal", true), 79},
