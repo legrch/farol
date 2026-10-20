@@ -245,7 +245,7 @@ func (a *Archive) observeArchive(ctx context.Context, selection port.ArchiveList
 		}
 		entries, readErr := f.ReadDir(64)
 		if readErr != nil && readErr != io.EOF {
-			return nil, Unavailable
+			return nil, openFailure(readErr)
 		}
 		for _, entry := range entries {
 			name := entry.Name()
