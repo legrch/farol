@@ -208,9 +208,28 @@ func (f *execNativeFixture) request(action string, relaunch bool) map[string]any
 	return request
 }
 
-// run spawns the real compiled entry with the real fd3-6 layout. When the helper
-// is expected to ACK it is released with the correlated continuation; otherwise
-// the continuation is never written. The ACK is checked against the protocol's own
+// closedHelperShouldContinue reports whether the desktop side of the handshake
+// may release the helper with the correlated continuation: only when the ACK is
+// exactly the protocol's own ready frame for this request. Any other frame, a
+// valid refused frame included, is terminal for the helper, which closes its
+// pipes and exits; writing a continuation after it would race that closure and
+// fail with a broken pipe. If the expected frame cannot be built, nothing is
+// released, so a scenario that needs readiness fails its own assertions.
+func closedHelperShouldContinue(requestBytes, ack []byte) bool {
+	if len(ack) == 0 {
+		return false
+	}
+	protocol, err := protocolapp.Bind(context.Background(), requestBytes, inputapp.New(inputnative.JSONDecoder{}), protocolnative.JSONCodec{})
+	if err != nil {
+		return false
+	}
+	ready, err := protocol.BuildHandoff(context.Background(), protocolapp.ClosedPredecessorReady, nil)
+	return err == nil && bytes.Equal(ack, ready)
+}
+
+// run spawns the real compiled entry with the real fd3-6 layout. The helper is
+// released with the correlated continuation only after its exact ready ACK; any
+// other outcome (a refused frame included) never receives one. The ACK is checked against the protocol's own
 // bytes when want is non-empty.
 func (f *execNativeFixture) run(t *testing.T, name string, request map[string]any, args ...string) execNativeOutcome {
 	t.Helper()
@@ -271,7 +290,7 @@ func (f *execNativeFixture) run(t *testing.T, name string, request map[string]an
 	if readErr != nil {
 		t.Error(readErr)
 	}
-	if len(ack) != 0 {
+	if closedHelperShouldContinue(requestBytes, ack) {
 		if _, e := contWrite.Write(closedHelperJSON(t, closedHelperContinuation(request))); e != nil {
 			t.Error(e)
 		}
