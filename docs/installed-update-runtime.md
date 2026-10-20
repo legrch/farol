@@ -205,9 +205,13 @@ Adoption runs these steps and writes nothing unless all of them pass:
    else `UPDATE_ADOPTION_TREE_MISMATCH`.
 5. The runtime creates `adopted-baseline.json` next to `last-update.json`
    (`farol.next.adopted-baseline/1`: `slot`, `userData`, the full manifest and
-   `adoptedAt`) through the existing private record writer, with create-only
-   publication. If another writer created it first, that record is kept and
-   re-validated; an existing record is never replaced.
+   `adoptedAt`) through the existing private record writer: one atomic rename
+   publish. A crash before the rename leaves only a stray temporary file and no
+   record, so the next check adopts normally. The app is single-instance, and a
+   concurrent writer can only publish an equally validated record for the same
+   running build and slot, so the last writer wins safely. A record that already
+   describes the running build is accepted by `readAcceptedSource()` and never
+   rewritten.
 
 A network failure is `UPDATE_ADOPTION_NETWORK_FAILURE` and records nothing, so a
 later check tries again. After adoption, `readAcceptedSource()` re-validates the

@@ -6634,32 +6634,60 @@ describe("first-launch adoption in the user slot (disposable files; GitHub and n
     await second.close();
   });
 
-  it("keeps a record another writer created first and does not replace it", async () => {
+  it("accepts a record another writer already published for this build and does not rewrite it", async () => {
     await dragged();
-    const winner = {
+    const other = {
       schema: "farol.next.adopted-baseline/1",
       slot,
       userData,
       manifest: published(),
       adoptedAt: "2026-10-21T00:00:00.000Z",
     };
-    mocks.find.mockImplementation(async () => {
-      await fs.writeFile(adoptedFile(), `${JSON.stringify(winner)}\n`, {
-        mode: 0o600,
-      });
-      return { ok: true, value: published() };
+    await fs.mkdir(path.dirname(adoptedFile()), { mode: 0o700 });
+    await fs.writeFile(adoptedFile(), `${JSON.stringify(other)}\n`, {
+      mode: 0o600,
     });
+    const bytes = await fs.readFile(adoptedFile());
+    const inode = (await fs.lstat(adoptedFile())).ino;
+    const first = await checked();
+    expect(first.snapshot()).toMatchObject({ phase: "available" });
+    await first.close();
+    const second = await checked(true);
+    expect(second.snapshot()).toMatchObject({ phase: "available" });
+    expect(mocks.find).not.toHaveBeenCalled();
+    expect(await fs.readFile(adoptedFile())).toEqual(bytes);
+    expect((await fs.lstat(adoptedFile())).ino).toBe(inode);
+    await second.close();
+  });
+
+  it("publishes nothing when a crash left only a temporary file, and adopts normally afterwards", async () => {
+    await dragged();
+    // writeRecord stages `<file>.<24 hex>` and publishes it by rename. A crash
+    // between the staged write and the rename leaves only this file behind.
+    const stray = `${adoptedFile()}.${"ab".repeat(12)}`;
+    await fs.mkdir(path.dirname(adoptedFile()), { mode: 0o700 });
+    await fs.writeFile(
+      stray,
+      `${JSON.stringify({ schema: "farol.next.adopted-baseline/1" })}\n`,
+      { mode: 0o600 },
+    );
+    await noRecord();
     const controller = await checked();
     expect(controller.snapshot()).toMatchObject({ phase: "available" });
-    expect(JSON.parse(await fs.readFile(adoptedFile(), "utf8"))).toEqual(
-      winner,
-    );
-    expect(
-      (await fs.readdir(path.dirname(adoptedFile()))).filter((name) =>
-        name.startsWith("adopted-baseline.json."),
-      ),
-    ).toEqual([]);
+    expect(mocks.find).toHaveBeenCalledTimes(1);
+    const stat = await fs.lstat(adoptedFile());
+    expect(stat.nlink).toBe(1);
+    expect(stat.mode & 0o777).toBe(0o600);
+    expect(JSON.parse(await fs.readFile(adoptedFile(), "utf8"))).toMatchObject({
+      slot,
+      userData,
+      manifest: published(),
+    });
     await controller.close();
+    const next = await checked(true);
+    expect(next.snapshot()).toMatchObject({ phase: "available" });
+    expect(mocks.find).toHaveBeenCalledTimes(1);
+    await next.close();
   });
 
   it("lets the update receipt win over an adopted baseline after an update", async () => {

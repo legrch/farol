@@ -1504,9 +1504,6 @@ async function writeRecord(
   file: string,
   value: unknown,
   beforeEffect: () => void = () => undefined,
-  // Create only: publish with link(2) so an existing record is never replaced.
-  // The caller sees EEXIST and must re-read the winner instead of overwriting.
-  exclusive = false,
 ): Promise<void> {
   const bytes = `${JSON.stringify(value)}\n`;
   if (Buffer.byteLength(bytes) > MAX_RECORD_BYTES)
@@ -1523,13 +1520,7 @@ async function writeRecord(
     await fd.close();
   }
   beforeEffect();
-  if (exclusive) {
-    try {
-      await fs.link(temporary, file);
-    } finally {
-      await fs.unlink(temporary);
-    }
-  } else await fs.rename(temporary, file);
+  await fs.rename(temporary, file);
   beforeEffect();
   const parent = await fs.open(
     path.dirname(file),
@@ -2628,26 +2619,21 @@ async function createRuntime(
       adoptedAt: new Date().toISOString(),
     };
     try {
-      if (replacing === null)
-        await writeRecord(adoptedFile, record, undefined, true);
-      else {
+      if (replacing !== null) {
         // Replace only the exact superseded record. A changed or vanished file
-        // is a concurrent writer: leave it and let the caller validate it.
+        // belongs to another writer: leave it and let the caller validate it.
         let current: string | undefined;
         const existing = await readRecord(adoptedFile, true, (value) => {
           current = value;
         });
         if (existing === null || current !== replacing) return { ok: true };
-        await writeRecord(adoptedFile, record);
       }
-    } catch (error) {
-      // Another writer created the record first. Keep theirs: the next read
-      // validates whichever record is present and never replaces it.
-      if (
-        replacing !== null ||
-        (error as NodeJS.ErrnoException).code !== "EEXIST"
-      )
-        return known("UPDATE_ADOPTION_RECORD_UNWRITTEN");
+      // One atomic rename publish. A concurrent writer can only publish an
+      // equally validated record for this running build and slot, so the last
+      // writer wins safely.
+      await writeRecord(adoptedFile, record);
+    } catch {
+      return known("UPDATE_ADOPTION_RECORD_UNWRITTEN");
     }
     return { ok: true };
   };
