@@ -1139,3 +1139,27 @@ func TestClosedHelperSetCloseOnExecAddsOnlyThatBit(t *testing.T) {
 		t.Fatal("invalid descriptor accepted")
 	}
 }
+
+func TestClosedHelperLeaseCloseOnExecRefusesWrongDescriptorUnchanged(t *testing.T) {
+	if err := closedHelperLeaseCloseOnExec(nil); err == nil {
+		t.Fatal("nil lease was accepted")
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	if r.Fd() == 5 {
+		t.Skip("pipe landed on fd5")
+	}
+	if _, err := unix.FcntlInt(r.Fd(), unix.F_SETFD, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := closedHelperLeaseCloseOnExec(r); err == nil {
+		t.Fatal("a descriptor other than fd5 was accepted as the lease")
+	}
+	if flags, err := unix.FcntlInt(r.Fd(), unix.F_GETFD, 0); err != nil || flags != 0 {
+		t.Fatalf("refused descriptor flags changed: %d %v", flags, err)
+	}
+}

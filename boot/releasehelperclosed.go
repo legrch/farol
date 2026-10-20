@@ -30,8 +30,9 @@ import (
 // including failure. Lease is the caller's already exclusively locked fd5: the
 // caller keeps it and its aliases unchanged through actual synchronous return.
 // This unselected composition never adopts, duplicates or closes it. Its only
-// change is adding FD_CLOEXEC to fd5's per-process descriptor flag (see
-// borrowClosedHelperLease), so a later exec'd child cannot inherit the lease.
+// change is adding FD_CLOEXEC to fd5's per-process descriptor flag before any
+// request IO (see takeClosedHelperFiles), so a later exec'd child cannot inherit
+// the lease.
 type closedHelperFiles struct{ Request, ACK, Lease, Continuation *os.File }
 
 type closedHelperFailure struct {
@@ -579,6 +580,32 @@ func inspectClosedHelperRole(file *os.File, want int) (role closedHelperFileRole
 	return role, closedHelperJoin(false, e, inner)
 }
 
+// closedHelperLeaseCloseOnExec adds FD_CLOEXEC to the borrowed fd5 only. Go's
+// exec dup2s only Stdio and ExtraFiles, so a non-CLOEXEC lease would leak into
+// every child (/bin/ps, a relaunch). The flag belongs to this process's
+// descriptor table entry, so the parent's table and the shared open-file
+// description (offset, status flags, flock) stay untouched.
+func closedHelperLeaseCloseOnExec(lease *os.File) error {
+	if lease == nil {
+		return closedHelperFail(false)
+	}
+	raw, err := lease.SyscallConn()
+	if err != nil {
+		return closedHelperFail(true, err)
+	}
+	var inner error
+	err = raw.Control(func(fd uintptr) {
+		if fd != 5 {
+			inner = closedHelperFail(false)
+			return
+		}
+		if e := closedHelperSetCloseOnExec(fd); e != nil {
+			inner = closedHelperFail(false, e)
+		}
+	})
+	return closedHelperJoin(false, err, inner)
+}
+
 // closedHelperSetCloseOnExec reads F_GETFD and ORs in FD_CLOEXEC; nothing else.
 func closedHelperSetCloseOnExec(fd uintptr) error {
 	flags, err := unix.FcntlInt(fd, unix.F_GETFD, 0)
@@ -609,13 +636,10 @@ func borrowClosedHelperLease(lease *os.File, fn func() error) error {
 			result = closedHelperFail(false)
 			return
 		}
-		// Go's exec dup2s only Stdio and ExtraFiles, so a non-CLOEXEC fd5 would leak
-		// into every child (/bin/ps, a relaunch). Add FD_CLOEXEC only: F_GETFD then
-		// F_SETFD with that one bit ORed in. The flag belongs to this process's
-		// descriptor table entry, so the parent's table and the shared open-file
-		// description (offset, status flags, flock) stay untouched. Failure refuses
-		// before fn or any effect.
-		if e := closedHelperSetCloseOnExec(fd); e != nil {
+		// takeClosedHelperFiles already added FD_CLOEXEC before any request IO.
+		// Borrow only re-observes it; a cleared flag refuses before fn or any effect.
+		flags, e := unix.FcntlInt(fd, unix.F_GETFD, 0)
+		if e != nil || flags&unix.FD_CLOEXEC == 0 {
 			result = closedHelperFail(false, e)
 			return
 		}
@@ -625,6 +649,11 @@ func borrowClosedHelperLease(lease *os.File, fn func() error) error {
 }
 func takeClosedHelperFiles(f closedHelperFiles) (closedHelperInput, closedHelperChannels, error) {
 	lease, leaseErr := inspectClosedHelperRole(f.Lease, 5)
+	if leaseErr == nil {
+		// Before any request IO: a flag failure refuses while the one-shot request
+		// is still unread, and the transports below are closed by the same path.
+		leaseErr = closedHelperLeaseCloseOnExec(f.Lease)
+	}
 	result := closedHelperJoin(false, leaseErr)
 	seen := map[*os.File]bool{f.Lease: true}
 	transports := []*os.File{f.Request, f.ACK, f.Continuation}

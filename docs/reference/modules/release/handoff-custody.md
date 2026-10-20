@@ -92,8 +92,8 @@ authorization. The eventual trusted launcher must bind those actual roles.
 Pipes require ACK write-only and continuation read-only access; only stream
 sockets are also accepted. Owned descriptors become nonblocking, gain
 `FD_CLOEXEC` and, for stream sockets, have linger disabled. The closed helper
-composition likewise adds only `FD_CLOEXEC` to borrowed fd5 before any use,
-refusing before effect on failure. The flag is per process, so the parent's table
+composition likewise adds only `FD_CLOEXEC` to borrowed fd5 before any request
+read, refusing while the request is still unread on failure; borrow re-observes it. The flag is per process, so the parent's table
 and the shared open-file description are unchanged. No exec'd child, such as the
 `/bin/ps` probe or a relaunch, inherits fd3 to fd6. Metadata cannot establish peer trust or the
 absence of separately duplicated descriptions; the caller must transfer unique
