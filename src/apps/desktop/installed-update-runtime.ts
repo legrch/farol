@@ -16,6 +16,7 @@ import {
 import {
   discoverGithubUpdate,
   downloadAndVerifyGithubUpdate,
+  findGithubReleaseManifest,
   packageMatchesRelease,
   parseGithubReleaseManifest,
   parseRetainedGithubReleaseManifest,
@@ -143,6 +144,18 @@ const PromotionReceipt = z.strictObject({
     obligations: z.array(z.never()).length(0),
   }),
   verifiedDestinationSha256: Digest,
+});
+// First-launch adoption of a copy that was dragged into the user slot rather
+// than installed by the owner tool. It records what the published release
+// manifest said about this exact version, once, and is honestly trust on first
+// use: it detects a corrupt or partial copy, the wrong version and later drift,
+// not a deliberately tampered download. It is never a PromotionReceipt.
+const AdoptedBaseline = z.strictObject({
+  schema: z.literal("farol.next.adopted-baseline/1"),
+  slot: z.string().max(4096),
+  userData: z.string().max(4096),
+  manifest: z.unknown(),
+  adoptedAt: z.string().max(64),
 });
 // A cold repair is a distinct installer result, never a synthetic live-update receipt.
 const ClosedRepairReceipt = z.strictObject({
@@ -1491,6 +1504,9 @@ async function writeRecord(
   file: string,
   value: unknown,
   beforeEffect: () => void = () => undefined,
+  // Create only: publish with link(2) so an existing record is never replaced.
+  // The caller sees EEXIST and must re-read the winner instead of overwriting.
+  exclusive = false,
 ): Promise<void> {
   const bytes = `${JSON.stringify(value)}\n`;
   if (Buffer.byteLength(bytes) > MAX_RECORD_BYTES)
@@ -1507,7 +1523,13 @@ async function writeRecord(
     await fd.close();
   }
   beforeEffect();
-  await fs.rename(temporary, file);
+  if (exclusive) {
+    try {
+      await fs.link(temporary, file);
+    } finally {
+      await fs.unlink(temporary);
+    }
+  } else await fs.rename(temporary, file);
   beforeEffect();
   const parent = await fs.open(
     path.dirname(file),
@@ -2297,6 +2319,7 @@ async function createRuntime(
   const readyFile = path.join(root, "ready.json");
   const cleanupFile = path.join(root, "package-cleanup-pending.json");
   const receiptFile = path.join(root, "last-update.json");
+  const adoptedFile = path.join(root, "adopted-baseline.json");
   const restoreFile = path.join(root, "restore-pending.json");
   let restorable: z.infer<typeof Retained> | null = null;
   let restoreKind: "recover" | "rollback" | null = null;
@@ -2331,6 +2354,36 @@ async function createRuntime(
       await runTrusted("update-slot.mjs", [file], beforeEffect),
     );
   const known = (code: string) => ({ ok: false as const, code });
+  const adoptionChannel =
+    options.build.updateChannel === "github-stable" ? "stable" : "owner-beta";
+  // The published manifest must describe exactly the running build.
+  const manifestDescribesRunningBuild = (m: ReleaseManifest) =>
+    m.buildId === options.build.buildId &&
+    m.sourceCommit === options.build.sourceCommit &&
+    m.sourceTreeDigest === options.build.sourceTreeDigest &&
+    m.version === options.build.version &&
+    m.buildVersion === options.build.buildVersion &&
+    m.channel === adoptionChannel;
+  const readAdoptedExpectation = async (): Promise<
+    z.infer<typeof AcceptedBuild>
+  > => {
+    const raw = await readRecord(adoptedFile);
+    if (raw === null) throw new Error("UPDATE_BASELINE_ADOPTION_REQUIRED");
+    const record = AdoptedBaseline.parse(raw);
+    const parsed = parseGithubReleaseManifest(record.manifest);
+    if (
+      !parsed.ok ||
+      record.slot !== slot ||
+      record.userData !== options.userData ||
+      !manifestDescribesRunningBuild(parsed.value)
+    )
+      throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+    return {
+      digest: parsed.value.artifactSha256,
+      version: parsed.value.version,
+      buildId: options.build.buildId,
+    };
+  };
   const readAcceptedSource = async (
     beforeEffect: () => void = () => undefined,
   ) => {
@@ -2470,22 +2523,29 @@ async function createRuntime(
           throw new Error("UPDATE_REPAIR_IDENTITY_UNCONFIRMED");
       }
       const file = slot + ".receipt.json";
-      const receipt = PromotionReceipt.parse(await readRecord(file));
-      if (
-        receipt.destination !== slot ||
-        receipt.receipt !== file ||
-        receipt.activation.userData !== options.userData ||
-        receipt.sourceCommit !== options.build.sourceCommit ||
-        receipt.sourceTreeDigest !== options.build.sourceTreeDigest ||
-        receipt.version !== options.build.version ||
-        receipt.artifactSha256 !== receipt.verifiedDestinationSha256
-      )
-        throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-      expected = {
-        digest: receipt.verifiedDestinationSha256,
-        version: receipt.version,
-        buildId: options.build.buildId,
-      };
+      const receiptRaw = await readRecord(file);
+      if (receiptRaw === null && !repair && installLocation !== "shared") {
+        // No owner-tool receipt: only a previously adopted baseline can anchor
+        // this copy. Its absence is the one condition that permits adoption.
+        expected = await readAdoptedExpectation();
+      } else {
+        const receipt = PromotionReceipt.parse(receiptRaw);
+        if (
+          receipt.destination !== slot ||
+          receipt.receipt !== file ||
+          receipt.activation.userData !== options.userData ||
+          receipt.sourceCommit !== options.build.sourceCommit ||
+          receipt.sourceTreeDigest !== options.build.sourceTreeDigest ||
+          receipt.version !== options.build.version ||
+          receipt.artifactSha256 !== receipt.verifiedDestinationSha256
+        )
+          throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+        expected = {
+          digest: receipt.verifiedDestinationSha256,
+          version: receipt.version,
+          buildId: options.build.buildId,
+        };
+      }
     }
     if (
       expected.buildId !== options.build.buildId ||
@@ -2497,6 +2557,74 @@ async function createRuntime(
     if (!sameBuild(measured, expected))
       throw new Error("UPDATE_ACCEPTED_SOURCE_CHANGED");
     return measured;
+  };
+  // First-launch adoption for the user slot only. It runs from discovery when
+  // neither an owner-tool receipt nor an update receipt anchors this copy, and
+  // it never overwrites a record. A failure writes nothing.
+  const adoptBaseline = async (): Promise<
+    Readonly<{ ok: true }> | Readonly<{ ok: false; code: string }>
+  > => {
+    if (
+      installLocation === "shared" ||
+      options.build.sourceDirty ||
+      !options.build.buildVersion ||
+      !["github-stable", "github-owner-beta"].includes(
+        options.build.updateChannel,
+      )
+    )
+      return known("UPDATE_ADOPTION_BUILD_INELIGIBLE");
+    let found;
+    try {
+      found = await findGithubReleaseManifest(
+        {
+          version: options.build.version,
+          buildVersion: options.build.buildVersion,
+        },
+        adoptionChannel,
+        transport,
+      );
+    } catch {
+      return known("UPDATE_ADOPTION_NETWORK_FAILURE");
+    }
+    if (!found.ok) return known(`UPDATE_ADOPTION_${found.code.toUpperCase()}`);
+    const manifest = found.value;
+    if (!manifestDescribesRunningBuild(manifest))
+      return known("UPDATE_ADOPTION_RELEASE_MISMATCH");
+    let measured: z.infer<typeof AcceptedBuild>;
+    try {
+      measured = await readBuild(slot);
+    } catch {
+      return known("UPDATE_ADOPTION_TREE_UNREADABLE");
+    }
+    if (
+      measured.digest !== manifest.artifactSha256 ||
+      !sameBuild(measured, {
+        digest: manifest.artifactSha256,
+        version: manifest.version,
+        buildId: manifest.buildId,
+      })
+    )
+      return known("UPDATE_ADOPTION_TREE_MISMATCH");
+    try {
+      await writeRecord(
+        adoptedFile,
+        {
+          schema: "farol.next.adopted-baseline/1",
+          slot,
+          userData: options.userData,
+          manifest,
+          adoptedAt: new Date().toISOString(),
+        },
+        undefined,
+        true,
+      );
+    } catch (error) {
+      // Another writer created the record first. Keep theirs: the next read
+      // validates whichever record is present and never replaces it.
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST")
+        return known("UPDATE_ADOPTION_RECORD_UNWRITTEN");
+    }
+    return { ok: true };
   };
   const readJournal = (op: z.infer<typeof Operation>) =>
     readOperationJournal(root, op, installLocation);
@@ -3406,8 +3534,20 @@ async function createRuntime(
         // update-slot measures CFBundleVersion and binds it to this identity.
         // Do not query GitHub using an unconfirmed installed baseline.
         current = await readAcceptedSource();
-      } catch {
-        return known("UPDATE_SOURCE_IDENTITY_UNCONFIRMED");
+      } catch (error) {
+        if (
+          installLocation === "shared" ||
+          !(error instanceof Error) ||
+          error.message !== "UPDATE_BASELINE_ADOPTION_REQUIRED"
+        )
+          return known("UPDATE_SOURCE_IDENTITY_UNCONFIRMED");
+        const adopted = await adoptBaseline();
+        if (!adopted.ok) return known(adopted.code);
+        try {
+          current = await readAcceptedSource();
+        } catch {
+          return known("UPDATE_SOURCE_IDENTITY_UNCONFIRMED");
+        }
       }
       if (
         current.buildId !== options.build.buildId ||

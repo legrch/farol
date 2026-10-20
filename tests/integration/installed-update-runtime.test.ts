@@ -21,6 +21,7 @@ import type { ReleaseManifest } from "../../src/modules/release/domain/github-re
 
 const mocks = vi.hoisted(() => ({
   discover: vi.fn(),
+  find: vi.fn(),
   download: vi.fn(),
   archiveDownload: vi.fn(),
   importLocal: vi.fn(),
@@ -64,6 +65,7 @@ vi.mock("../../src/modules/release/app/github-release", async (original) => ({
     typeof import("../../src/modules/release/app/github-release")
   >()),
   discoverGithubUpdate: mocks.discover,
+  findGithubReleaseManifest: mocks.find,
   downloadAndVerifyGithubUpdate: mocks.download,
 }));
 vi.mock(
@@ -6415,6 +6417,350 @@ describe("selected shared slot (redirected disposable filesystem, mocked helper)
       await controller!.close();
     },
   );
+
+  it("never adopts a baseline for the shared slot", async () => {
+    const fixture = await shared();
+    await fs.rm(fixture.physical + ".receipt.json");
+    mocks.find.mockResolvedValue({
+      ok: true,
+      value: {
+        ...manifest,
+        version: build.version,
+        buildVersion: build.buildVersion!,
+        buildId: build.buildId,
+        sourceCommit: build.sourceCommit,
+        sourceTreeDigest: build.sourceTreeDigest,
+        artifactSha256: source.digest,
+        archiveName: `Farol-${build.version}-darwin-arm64.zip`,
+      },
+    });
+    const controller = (await createInstalledUpdateRuntime(options()))!;
+    await controller.initialize();
+    await controller.check();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_SOURCE_IDENTITY_UNCONFIRMED",
+    });
+    expect(mocks.find).not.toHaveBeenCalled();
+    expect(mocks.discover).not.toHaveBeenCalled();
+    await expect(
+      fs.lstat(path.join(userData, "installed-updates/adopted-baseline.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await controller.close();
+  });
+});
+
+describe("first-launch adoption in the user slot (disposable files; GitHub and native ports doubled)", () => {
+  const adoptedFile = () =>
+    path.join(userData, "installed-updates/adopted-baseline.json");
+  // The release manifest published for exactly the running build.
+  const published = () => ({
+    ...manifest,
+    version: build.version,
+    buildVersion: build.buildVersion!,
+    buildId: build.buildId,
+    sourceCommit: build.sourceCommit,
+    sourceTreeDigest: build.sourceTreeDigest,
+    artifactSha256: source.digest,
+    archiveName: `Farol-${build.version}-darwin-arm64.zip`,
+  });
+  // A recipient drags the app in: there is no owner-tool receipt.
+  async function dragged(value: unknown = { ok: true, value: published() }) {
+    await fs.rm(slot + ".receipt.json");
+    mocks.find.mockResolvedValue(value);
+  }
+  async function checked(manual = false) {
+    const controller = (await createInstalledUpdateRuntime(options()))!;
+    await controller.initialize();
+    await controller.check(manual);
+    return controller;
+  }
+  async function noRecord() {
+    await expect(fs.lstat(adoptedFile())).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  }
+
+  it("records one private baseline from the published manifest and proceeds to availability", async () => {
+    await dragged();
+    const controller = await checked();
+    expect(controller.snapshot()).toMatchObject({ phase: "available" });
+    expect(mocks.find).toHaveBeenCalledExactlyOnceWith(
+      { version: build.version, buildVersion: build.buildVersion },
+      "owner-beta",
+      expect.anything(),
+    );
+    const stat = await fs.lstat(adoptedFile());
+    expect(stat.mode & 0o777).toBe(0o600);
+    expect(stat.nlink).toBe(1);
+    expect(JSON.parse(await fs.readFile(adoptedFile(), "utf8"))).toEqual({
+      schema: "farol.next.adopted-baseline/1",
+      slot,
+      userData,
+      manifest: published(),
+      adoptedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u),
+    });
+    expect(
+      (await fs.readdir(path.dirname(adoptedFile()))).filter((name) =>
+        name.startsWith("adopted-baseline.json."),
+      ),
+    ).toEqual([]);
+    await controller.close();
+  });
+
+  it.each([
+    ["digest", { digest: "0".repeat(64) }],
+    ["build identity", { buildId: "0".repeat(64) }],
+  ])(
+    "refuses a copy whose measured %s differs, writing nothing",
+    async (_name, measured) => {
+      await dragged();
+      mocks.exec.mockImplementation(async () => ({
+        stdout: JSON.stringify({ ...source, ...measured }),
+      }));
+      const controller = await checked();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_ADOPTION_TREE_MISMATCH",
+      });
+      expect(mocks.discover).not.toHaveBeenCalled();
+      await noRecord();
+      await controller.close();
+    },
+  );
+
+  it("refuses a version that is not published, writing nothing", async () => {
+    await dragged({ ok: false, code: "release_not_found" });
+    const controller = await checked();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_ADOPTION_RELEASE_NOT_FOUND",
+    });
+    expect(mocks.discover).not.toHaveBeenCalled();
+    await noRecord();
+    await controller.close();
+  });
+
+  it.each([
+    ["buildId", { buildId: "7".repeat(64) }],
+    ["sourceCommit", { sourceCommit: "7".repeat(40) }],
+    ["sourceTreeDigest", { sourceTreeDigest: "7".repeat(64) }],
+    ["channel", { channel: "stable" }],
+    ["version", { version: "0.1.0-owner.beta.2" }],
+    ["buildVersion", { buildVersion: "9" }],
+  ])(
+    "refuses a manifest whose %s is not the running build",
+    async (_name, drift) => {
+      await dragged({ ok: true, value: { ...published(), ...drift } });
+      const before = mocks.exec.mock.calls.length;
+      const controller = await checked();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_ADOPTION_RELEASE_MISMATCH",
+      });
+      // Nothing was measured: the published statement is refused first.
+      expect(mocks.exec).toHaveBeenCalledTimes(before);
+      expect(mocks.discover).not.toHaveBeenCalled();
+      await noRecord();
+      await controller.close();
+    },
+  );
+
+  it("leaves an owner-tool receipt untouched and never calls adoption", async () => {
+    mocks.find.mockResolvedValue({ ok: true, value: published() });
+    const receipt = await fs.readFile(slot + ".receipt.json");
+    const controller = await checked();
+    expect(controller.snapshot()).toMatchObject({ phase: "available" });
+    expect(mocks.find).not.toHaveBeenCalled();
+    await noRecord();
+    expect(await fs.readFile(slot + ".receipt.json")).toEqual(receipt);
+    await controller.close();
+  });
+
+  it("reuses the record in a later lifetime without adopting again", async () => {
+    await dragged();
+    const first = await checked();
+    await first.close();
+    const bytes = await fs.readFile(adoptedFile());
+    const inode = (await fs.lstat(adoptedFile())).ino;
+    const second = await checked(true);
+    expect(second.snapshot()).toMatchObject({ phase: "available" });
+    expect(mocks.find).toHaveBeenCalledTimes(1);
+    expect(await fs.readFile(adoptedFile())).toEqual(bytes);
+    expect((await fs.lstat(adoptedFile())).ino).toBe(inode);
+    await second.close();
+  });
+
+  it.each([
+    [
+      "build identity",
+      (record: Record<string, any>) => {
+        record.manifest.buildId = "8".repeat(64);
+      },
+    ],
+    [
+      "slot",
+      (record: Record<string, any>) => {
+        record.slot = "/elsewhere/Farol.app";
+      },
+    ],
+    [
+      "profile",
+      (record: Record<string, any>) => {
+        record.userData = "/elsewhere/profile";
+      },
+    ],
+    [
+      "unknown field",
+      (record: Record<string, any>) => {
+        record.extra = true;
+      },
+    ],
+  ])("fences a tampered %s without adopting over it", async (_name, tamper) => {
+    await dragged();
+    const first = await checked();
+    await first.close();
+    const record = JSON.parse(await fs.readFile(adoptedFile(), "utf8"));
+    tamper(record);
+    await fs.writeFile(adoptedFile(), JSON.stringify(record));
+    const tampered = await fs.readFile(adoptedFile());
+    const second = await checked(true);
+    expect(second.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_SOURCE_IDENTITY_UNCONFIRMED",
+    });
+    expect(mocks.find).toHaveBeenCalledTimes(1);
+    expect(await fs.readFile(adoptedFile())).toEqual(tampered);
+    await second.close();
+  });
+
+  it("keeps a record another writer created first and does not replace it", async () => {
+    await dragged();
+    const winner = {
+      schema: "farol.next.adopted-baseline/1",
+      slot,
+      userData,
+      manifest: published(),
+      adoptedAt: "2026-10-21T00:00:00.000Z",
+    };
+    mocks.find.mockImplementation(async () => {
+      await fs.writeFile(adoptedFile(), `${JSON.stringify(winner)}\n`, {
+        mode: 0o600,
+      });
+      return { ok: true, value: published() };
+    });
+    const controller = await checked();
+    expect(controller.snapshot()).toMatchObject({ phase: "available" });
+    expect(JSON.parse(await fs.readFile(adoptedFile(), "utf8"))).toEqual(
+      winner,
+    );
+    expect(
+      (await fs.readdir(path.dirname(adoptedFile()))).filter((name) =>
+        name.startsWith("adopted-baseline.json."),
+      ),
+    ).toEqual([]);
+    await controller.close();
+  });
+
+  it("lets the update receipt win over an adopted baseline after an update", async () => {
+    await dragged();
+    const controller = await prepared();
+    expect(mocks.find).toHaveBeenCalledTimes(1);
+    const adopted = await fs.readFile(adoptedFile());
+    await controller.restart();
+    const retained = JSON.parse(await fs.readFile(ready, "utf8"));
+    const op = retained.operation;
+    await fs.writeFile(
+      path.join(userData, "installed-updates", op.operationId, "journal.json"),
+      JSON.stringify({
+        schema: "farol.installed-update-journal/1",
+        ...op,
+        phase: "completed",
+      }),
+      { mode: 0o600 },
+    );
+    await fs.mkdir(
+      path.join(userData, "installed-updates", op.operationId, "previous.app"),
+    );
+    mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => ({
+      stdout: JSON.stringify(
+        args[0]!.endsWith("update-obligations.mjs")
+          ? {
+              drained: true,
+              obligationCount: 0,
+              unreadableCount: 0,
+              changedCount: 0,
+            }
+          : args[1]!.endsWith("previous.app")
+            ? source
+            : target,
+      ),
+    }));
+    const updatedBuild = {
+      ...build,
+      version: manifest.version,
+      buildVersion: manifest.buildVersion,
+      buildId: manifest.buildId,
+    };
+    const updated = (await createInstalledUpdateRuntime({
+      ...options(),
+      build: updatedBuild,
+      goCoreArtifact: compiledFor(updatedBuild),
+    }))!;
+    await updated.initialize();
+    const receipt = JSON.parse(
+      await fs.readFile(
+        path.join(userData, "installed-updates/last-update.json"),
+        "utf8",
+      ),
+    );
+    expect(receipt.runningBuildId).toBe(manifest.buildId);
+    // The adopted record describes the old build. The running build would be
+    // refused against it, so a successful check proves the receipt was used.
+    mocks.discover.mockResolvedValueOnce({ ok: true, value: null });
+    await updated.check(true);
+    expect(updated.snapshot().phase).toBe("idle");
+    expect(mocks.find).toHaveBeenCalledTimes(1);
+    expect(await fs.readFile(adoptedFile())).toEqual(adopted);
+    await updated.close();
+  });
+
+  it.each([
+    ["a closed network code", { ok: false, code: "network_failure" }],
+    ["a rejected request", new Error("offline")],
+  ])(
+    "writes nothing after %s and adopts once the network returns",
+    async (_name, outcome) => {
+      await dragged();
+      if (outcome instanceof Error) mocks.find.mockRejectedValue(outcome);
+      else mocks.find.mockResolvedValue(outcome);
+      const offline = await checked();
+      expect(offline.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_ADOPTION_NETWORK_FAILURE",
+      });
+      await noRecord();
+      mocks.find.mockResolvedValue({ ok: true, value: published() });
+      await offline.check(true);
+      expect(offline.snapshot()).toMatchObject({ phase: "available" });
+      expect(
+        JSON.parse(await fs.readFile(adoptedFile(), "utf8")),
+      ).toMatchObject({ schema: "farol.next.adopted-baseline/1" });
+      await offline.close();
+    },
+  );
+
+  it("does not adopt when the measurement itself cannot be read", async () => {
+    await dragged();
+    mocks.exec.mockRejectedValue(new Error("unreadable"));
+    const controller = await checked();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_ADOPTION_TREE_UNREADABLE",
+    });
+    await noRecord();
+    await controller.close();
+  });
 });
 
 describe("immutable operation binding recovery (disposable bytes, mocked effects)", () => {
