@@ -281,6 +281,13 @@ def affected(root, changes):
         # Until an audited ownership ledger exists, widen all production changes.
         if not test_file(path) or not mapped:
             broaden.append({"path": path, "reason": "OWNERSHIP_NOT_YET_AUDITED"})
+        if path.endswith("_test.go"):
+            # The textual graph cannot see JS/TS tests that read Go source as
+            # data, so a Go test change keeps every non-Go test, as the
+            # compiler-derived route does.
+            for consumer in tests:
+                if not consumer.endswith(".go"):
+                    broaden.append({"path": consumer, "reason": "GO_SOURCE_CONSUMER_OWNERSHIP_UNAUDITED"})
     if unresolved and changes["paths"]:
         broaden.append({"path": "*", "reason": "UNRESOLVED_IMPORTS", "files": sorted(set(unresolved))})
     if broaden:

@@ -212,10 +212,15 @@ class Repository(unittest.TestCase):
                    'func TestValue(t *testing.T) {}\nfunc TestMain(m *testing.M) { m.Run() }\n')
         changes = self.changes()
         self.assertEqual([row["path"] for row in changes["paths"]], ["modules/a/value_test.go"])
+        everything = {p for p in testops.source_files(self.root) if testops.test_file(p)}
         plan = testops.compiler_affected(self.root, changes, self.compiler_metadata())
         self.assertEqual(plan["status"], "NEEDS_REVIEW")
-        self.assertEqual({row["path"] for row in plan["selected"]},
-                         {p for p in testops.source_files(self.root) if testops.test_file(p)})
+        self.assertEqual({row["path"] for row in plan["selected"]}, everything)
+        self.assertIn({"path": consumer, "reason": "GO_SOURCE_CONSUMER_OWNERSHIP_UNAUDITED"}, plan["broadened"])
+        # The default textual route must be at least as conservative.
+        plan = testops.affected(self.root, changes)
+        self.assertEqual(plan["status"], "NEEDS_REVIEW")
+        self.assertEqual({row["path"] for row in plan["selected"]}, everything)
         self.assertIn({"path": consumer, "reason": "GO_SOURCE_CONSUMER_OWNERSHIP_UNAUDITED"}, plan["broadened"])
 
     def test_go_test_change_retains_unconfigured_javascript_source_consumer(self):
