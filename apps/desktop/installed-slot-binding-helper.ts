@@ -1,9 +1,14 @@
-import {
-  parseCoreArtifactDeclaration,
-  verifyCoreExecutable,
-} from "./bridge/attested-core.ts";
+import { createCoreArtifactVerifier } from "../../src/pkg/kernel/infra/core-artifact.ts";
+import { BridgeError } from "./bridge/client.ts";
 import type { BuildIdentity } from "../../src/pkg/build-info/identity";
 import type { InstalledGoSlotBindingHelper } from "../../src/modules/release/infra/native/installed-update-helper";
+
+const verification = createCoreArtifactVerifier({
+  refuse: (code): never => {
+    throw new BridgeError("refused", code);
+  },
+  isRefusal: (error) => error instanceof BridgeError,
+});
 
 // Trusted Electron composition only. Resource custody comes from the existing
 // installed execution snapshot/controller, independently of the measured file.
@@ -17,7 +22,9 @@ export function installedGoSlotBindingHelper(
     beforeEffect(): void;
   }>,
 ): InstalledGoSlotBindingHelper {
-  const artifact = parseCoreArtifactDeclaration(input.compiledArtifact);
+  const artifact = verification.parseCoreArtifactDeclaration(
+    input.compiledArtifact,
+  );
   if (
     input.build.sourceDirty ||
     artifact.build.buildId !== input.build.buildId ||
@@ -35,11 +42,10 @@ export function installedGoSlotBindingHelper(
       beforeEffect();
       await recheck();
       beforeEffect();
-      const executable = verifyCoreExecutable(artifact, {
+      const executable = verification.verifyCoreExecutable(artifact, {
         artifactRoot: directory,
         build: artifact.build,
         binary: artifact.binary,
-        profileId: "installed-slot-binding",
       });
       await recheck();
       beforeEffect();
