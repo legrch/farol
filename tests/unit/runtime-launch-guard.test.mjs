@@ -45,7 +45,7 @@ const issue = (result, prefix) =>
   result.issues.some((x) => x.startsWith(prefix));
 
 describe("semantic runtime launch ratchet", () => {
-  it("retains all three unresolved Python callsites by function, not a zero-Python assertion", () => {
+  it("retains both unresolved Python callsites by function, not a zero-Python assertion", () => {
     const rows = RUNTIME_LAUNCH_MANIFEST.launches.filter((row) =>
       ["legacy-python-active", "go-with-legacy-python"].includes(
         row.classification,
@@ -54,19 +54,21 @@ describe("semantic runtime launch ratchet", () => {
     expect(rows.map((row) => `${row.file}:${row.symbol}`).sort()).toEqual([
       "src/modules/computer/infra/native/native-readonly-workspace.ts:runHelper",
       "src/modules/computer/infra/native/workspace-snapshot.ts:spawnSnapshotHelper",
-      "src/modules/release/infra/native/installed-update-helper.ts:publishInstalledOperationBinding",
     ]);
-    // The update helper is the attested Go executable alone; it has no
-    // interpreter, so its row names only the Go resource.
-    expect(
-      RUNTIME_LAUNCH_MANIFEST.launches.find(
-        (row) => row.id === "release.update-go",
-      ),
-    ).toMatchObject({
-      symbol: "startInstalledUpdateHelper",
-      classification: "app-owned-go-executable",
-      resources: ["farol-backend"],
-    });
+    // The update helper and the slot-binding publisher are the attested Go
+    // executable alone; neither has an interpreter, so each row names only the
+    // Go resource.
+    for (const [id, symbol] of [
+      ["release.update-go", "startInstalledUpdateHelper"],
+      ["release.slot-binding", "publishInstalledOperationBinding"],
+    ])
+      expect(
+        RUNTIME_LAUNCH_MANIFEST.launches.find((row) => row.id === id),
+      ).toMatchObject({
+        symbol,
+        classification: "app-owned-go-executable",
+        resources: ["farol-backend"],
+      });
     expect(
       RUNTIME_LAUNCH_MANIFEST.boundaries.map((row) => row.classification),
     ).toContain("optional-user-hook-runtime");

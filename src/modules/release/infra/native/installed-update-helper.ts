@@ -1,5 +1,4 @@
 import { spawn, execFile } from "node:child_process";
-import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -8,10 +7,6 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { legacyPredecessorRequiresStateRecovery } from "../../domain/predecessor-state";
 
-const HELPER_SHA256 =
-  "f2f864871ed29536f345f5d9e13e8e74d59a3b4be6f7b7028ef915743b167f85";
-// Bound the pinned helper including private descriptor-copy relaunch support.
-const MAX_HELPER_BYTES = 96 * 1024;
 const APP_NAME = "Farol.app";
 const execFileAsync = promisify(execFile);
 const sha = /^[0-9a-f]{64}$/u;
@@ -144,81 +139,6 @@ function assertInput(input: InstalledUpdateRequest): void {
     )
   )
     throw new Error("INSTALLED_UPDATE_PREDECESSOR_STATE_UNQUALIFIED");
-}
-
-async function helperBytes(
-  helperPath: string,
-  checkPreflight: () => void,
-): Promise<Buffer> {
-  if (
-    !path.isAbsolute(helperPath) ||
-    path.normalize(helperPath) !== helperPath
-  ) {
-    throw new Error("INSTALLED_UPDATE_HELPER_INVALID");
-  }
-  const expected = await fs.lstat(helperPath, { bigint: true });
-  checkPreflight();
-  if (
-    !expected.isFile() ||
-    expected.nlink !== 1n ||
-    expected.size < 1n ||
-    expected.size > BigInt(MAX_HELPER_BYTES) ||
-    expected.uid !== BigInt(process.geteuid?.() ?? -1) ||
-    (expected.mode & 0o022n) !== 0n
-  ) {
-    throw new Error("INSTALLED_UPDATE_HELPER_INVALID");
-  }
-  const matches = (value: typeof expected): boolean =>
-    value.isFile() &&
-    value.dev === expected.dev &&
-    value.ino === expected.ino &&
-    value.mode === expected.mode &&
-    value.nlink === expected.nlink &&
-    value.uid === expected.uid &&
-    value.gid === expected.gid &&
-    value.size === expected.size &&
-    value.mtimeNs === expected.mtimeNs &&
-    value.ctimeNs === expected.ctimeNs;
-  const handle = await fs.open(
-    helperPath,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-  );
-  try {
-    checkPreflight();
-    const opened = await handle.stat({ bigint: true });
-    checkPreflight();
-    if (!matches(opened)) {
-      throw new Error("INSTALLED_UPDATE_HELPER_INVALID");
-    }
-    // The extra byte detects growth without reading beyond the checked bound.
-    const buffer = Buffer.alloc(Number(expected.size) + 1);
-    let size = 0;
-    while (size < buffer.length) {
-      const { bytesRead } = await handle.read(
-        buffer,
-        size,
-        buffer.length - size,
-        size,
-      );
-      checkPreflight();
-      if (bytesRead === 0) break;
-      size += bytesRead;
-    }
-    const bytes = buffer.subarray(0, size);
-    const final = await handle.stat({ bigint: true });
-    checkPreflight();
-    if (
-      size !== Number(expected.size) ||
-      !matches(final) ||
-      createHash("sha256").update(bytes).digest("hex") !== HELPER_SHA256
-    ) {
-      throw new Error("INSTALLED_UPDATE_HELPER_INVALID");
-    }
-    return bytes;
-  } finally {
-    await handle.close();
-    checkPreflight();
-  }
 }
 
 /** Capture once while the exact installed app process is still alive. */
@@ -1098,7 +1018,7 @@ export interface InstalledGoSlotBindingHelper {
 }
 
 export async function publishInstalledOperationBinding(
-  helperPath: string | InstalledGoSlotBindingHelper,
+  go: InstalledGoSlotBindingHelper,
   operation: InstalledBoundOperation,
   installLocation: InstalledAppLocation,
   beforeEffect: () => void = () => undefined,
@@ -1159,42 +1079,21 @@ export async function publishInstalledOperationBinding(
       )
         throw new Error("UPDATE_SLOT_BINDING_CHANGED");
     };
-    // A selected Go capability never falls back to Python when attestation or
-    // execution fails. The string form remains the explicit legacy consumer.
-    const go = typeof helperPath === "string" ? null : helperPath;
-    const helper = go
-      ? null
-      : await helperBytes(helperPath as string, beforeEffect);
-    const executable = go ? await go.qualify() : "/usr/bin/python3";
+    // The attested Go publisher is the only one; a failed attestation or
+    // execution refuses and never reaches a Python helper.
+    const executable = await go.qualify();
     if (
-      go &&
-      (!path.isAbsolute(executable) ||
-        path.normalize(executable) !== executable ||
-        !sha.test(go.buildId))
+      !path.isAbsolute(executable) ||
+      path.normalize(executable) !== executable ||
+      !sha.test(go.buildId)
     )
       throw new Error("UPDATE_SLOT_BINDING_INVALID");
     await recheck();
     beforeEffect();
     // Inherit only the pinned operation directory; all writes occur relative to fd4.
-    const program = `import os,sys
-namespace={"__name__":"slot_binding"}
-exec(compile(sys.stdin.buffer.read(),"<attested-helper>","exec"),namespace)
-data=bytearray()
-while len(data)<=8192:
- chunk=os.read(3,8193-len(data))
- if not chunk: break
- data.extend(chunk)
-try:
- namespace["publish_slot_binding"](4,bytes(data))
- os.write(1,b"SLOT_BINDING_OK\\n")
-except namespace["Refusal"]:
- sys.exit(70)
-`;
     const child = spawn(
       executable,
-      go
-        ? ["publish-installed-slot-binding", "--build-id", go.buildId]
-        : ["-I", "-S", "-B", "-c", program],
+      ["publish-installed-slot-binding", "--build-id", go.buildId],
       {
         cwd: "/",
         env: { LANG: "C.UTF-8", PATH: "/usr/bin:/bin" },
@@ -1246,7 +1145,7 @@ except namespace["Refusal"]:
     );
     try {
       beforeEffect();
-      child.stdin!.end(helper ?? undefined);
+      child.stdin!.end();
       (child.stdio[3] as Writable).end(bytes);
     } catch (error) {
       stop(error);
@@ -1261,7 +1160,7 @@ except namespace["Refusal"]:
       Buffer.concat(stdout).toString() !== "SLOT_BINDING_OK\n"
     )
       throw new Error("UPDATE_SLOT_BINDING_UNCONFIRMED");
-    if (go && (await go.qualify()) !== executable)
+    if ((await go.qualify()) !== executable)
       throw new Error("UPDATE_SLOT_BINDING_UNCONFIRMED");
     await recheck();
     beforeEffect();

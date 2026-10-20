@@ -238,7 +238,7 @@ beforeEach(async () => {
     recheck: mocks.recheckExecution,
   }));
   // Runtime composition seams; native no-overwrite publication is independently
-  // exercised by disposable Python fixtures, not by this mocked transport.
+  // exercised by the Go publisher's own tests, not by this mocked transport.
   mocks.publishBinding.mockImplementation(
     async (_helper, op, location, before) => {
       before();

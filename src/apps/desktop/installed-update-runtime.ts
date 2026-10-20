@@ -1917,7 +1917,6 @@ async function createRuntime(
   const root = path.join(options.userData, "installed-updates");
   const installLocation: InstalledAppLocation =
     slot === "/Applications/Farol.app" ? "shared" : "legacy";
-  const bindingHelper = path.join(options.directory, "update-helper.py");
   const verifyBinding = (op: z.infer<typeof Operation>) =>
     readOperationBinding(root, op, installLocation);
   await privateDirectory(root);
@@ -2000,13 +1999,16 @@ async function createRuntime(
       beforeEffect,
     });
   };
+  // Only the attested Go publisher writes the slot binding. A build without the
+  // compiled Go core refuses before admission, so this guard is never reached.
   const selectBindingHelper = async (
     expected: z.infer<typeof AcceptedBuild>,
     beforeEffect: () => void,
-  ) =>
-    options.goCoreArtifact === undefined
-      ? bindingHelper
-      : selectGoHelper(expected, beforeEffect);
+  ) => {
+    if (options.goCoreArtifact === undefined)
+      throw new Error("UPDATE_HELPER_GO_CORE_REQUIRED");
+    return selectGoHelper(expected, beforeEffect);
+  };
   // The only update helper is the attested Go one. A legacy build refuses with a
   // closed reason and a failed qualification refuses too; neither starts Python.
   const selectUpdateHelper = async (

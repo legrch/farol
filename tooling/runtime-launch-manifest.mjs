@@ -73,8 +73,8 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
       "publishInstalledOperationBinding",
       "spawn",
       "executable",
-      "go-with-legacy-python",
-      ["farol-backend", "update-helper.py"],
+      "app-owned-go-executable",
+      ["farol-backend"],
     ),
     launch(
       "computer.workspace-python",
