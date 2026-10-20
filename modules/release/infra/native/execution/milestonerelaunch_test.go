@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	stdruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -19,11 +18,11 @@ import (
 // These witnesses run the application Milestone's relaunch end to end over the
 // real installation runtime in the owner's slot (legacy) mode: a real apply to
 // `verified`, the journal writes, the self measurement, the argument capability
-// and the post-launch image verification. Only three things are symbolic, as in
+// and the pre-launch image verification. Only three things are symbolic, as in
 // the other composition witnesses: route/lease/admission, the OS launch seam
-// (the unexported Config.launch, which stands in for /usr/bin/open and the
-// kernel reads), and the measured self identity. They do not qualify
-// LaunchServices or the selected helper.
+// (the unexported Config.open, which stands in for /usr/bin/open), and the
+// measured self identity. They do not qualify LaunchServices or the selected
+// helper.
 //
 // The shared-install path cannot run end to end here: its Applications parent
 // must be root-owned (installmove.SharedApplicationsParent requires uid 0), so
@@ -31,22 +30,28 @@ import (
 // TestNativeHelperCapturePrivatePublication; its binding is covered below by
 // TestLaunchTargetBindsTheCaptureToTheInstallLocation and launchBound.
 
-// recordingLaunch is the scripted OS seam that also records the one open.
-type recordingLaunch struct {
-	*fakeLaunch
+// recordingOpen is the scripted stand-in for /usr/bin/open. It records every
+// call and, like the production open, runs the operation fence before and after
+// the child; err is what a nonzero status returns.
+type recordingOpen struct {
 	f         *relaunchLifecycle
+	opens     int
 	arguments [][]string
 	phases    []string // journal phase observed at each open
-	openErr   error
+	err       error
 }
 
-func (p *recordingLaunch) open(ctx context.Context, until time.Time, arguments []string, fence func(context.Context) error) error {
+func (p *recordingOpen) open(ctx context.Context, _ time.Time, arguments []string, fence func(context.Context) error) error {
+	p.opens++
 	p.arguments = append(p.arguments, append([]string(nil), arguments...))
 	p.phases = append(p.phases, p.f.diskPhase(p.f.t))
-	if err := p.fakeLaunch.open(ctx, until, arguments, fence); err != nil {
+	if err := fence(ctx); err != nil {
 		return err
 	}
-	return p.openErr
+	if p.err != nil {
+		return p.err
+	}
+	return fence(ctx)
 }
 
 // relaunchLifecycle is a lifecycle fixture whose target carries a scratch
@@ -54,7 +59,7 @@ func (p *recordingLaunch) open(ctx context.Context, until time.Time, arguments [
 type relaunchLifecycle struct {
 	*lifecycleFixture
 	t    *testing.T
-	fake *recordingLaunch
+	fake *recordingOpen
 	app  string // the installed image a launch must run
 
 	measures, builds int
@@ -65,15 +70,15 @@ type relaunchLifecycle struct {
 
 const relaunchSelfStart = "declared fixture helper birth"
 
-// newRelaunchLifecycle builds the fixture over platform (nil leaves the native
-// platform selected, for the gated native lane).
-func newRelaunchLifecycle(t *testing.T, platform func(*relaunchLifecycle) launchPlatform) *relaunchLifecycle {
+// newRelaunchLifecycle builds the fixture over open, the stand-in for
+// /usr/bin/open. exe is the target's executable: empty keeps the inert image,
+// the gated native lane passes a real scratch program.
+func newRelaunchLifecycle(t *testing.T, exe string, open func(*relaunchLifecycle) openFunc) *relaunchLifecycle {
 	t.Helper()
-	exe := scratchExecutable(t, "good", stdruntime.GOARCH, "")
 	f := &relaunchLifecycle{lifecycleFixture: newLifecycleFixtureWithExecutable(t, newCompositionFixture(t), exe), t: t}
 	f.app = filepath.Join(f.config.Files.Applications.Name(), "Farol.app")
-	if platform != nil {
-		f.config.launch = platform(f)
+	if open != nil {
+		f.config.open = open(f)
 	}
 	original := f.config.Reverify
 	f.config.Reverify = func(ctx context.Context, request port.HelperRequest) error {
@@ -114,13 +119,12 @@ func newRelaunchLifecycle(t *testing.T, platform func(*relaunchLifecycle) launch
 
 func newFakeRelaunchLifecycle(t *testing.T) *relaunchLifecycle {
 	t.Helper()
-	var recording *recordingLaunch
-	f := newRelaunchLifecycle(t, func(f *relaunchLifecycle) launchPlatform {
-		recording = &recordingLaunch{fakeLaunch: newFakeLaunch(), f: f}
-		return recording
+	var recording *recordingOpen
+	f := newRelaunchLifecycle(t, "", func(f *relaunchLifecycle) openFunc {
+		recording = &recordingOpen{f: f}
+		return recording.open
 	})
 	f.fake = recording
-	f.accepting(recording.fakeLaunch)
 	return f
 }
 
@@ -158,20 +162,6 @@ func (f *relaunchLifecycle) run(t *testing.T, m *executionapp.Milestone, ready *
 		return e
 	})
 	return result, err
-}
-
-// accepting makes the scripted kernel report exactly one process of the verified
-// image, derived from the held directory the runtime will launch.
-func (f *relaunchLifecycle) accepting(fake *fakeLaunch) {
-	fake.candidatesFn = servesOne(pidOurs)
-	fake.imageFn = func(int, int) (liveImage, error) {
-		held, err := os.Open(f.app)
-		must(f.t, err)
-		defer held.Close()
-		want, err := expectedLaunchImage(held)
-		must(f.t, err)
-		return liveImage{Image: launchImage{CDHash: want.CDHashes[0], Device: want.Device, Inode: want.Inode}, Start: startOurs}, nil
-	}
 }
 
 type relaunchHintWire struct {
@@ -252,8 +242,8 @@ func TestMilestoneRelaunchApplyCompletes(t *testing.T) {
 	if want := []string{"verified", "launch_requested", "completed"}; !containsInOrder(f.phases, want) {
 		t.Fatalf("journal order %v does not contain %v", f.phases, want)
 	}
-	if f.measures != 1 || f.builds != 1 || f.fake.opens != 1 || len(f.fake.kills) != 0 {
-		t.Fatal("measure, arguments and open must each run once", f.measures, f.builds, f.fake.opens, f.fake.kills)
+	if f.measures != 1 || f.builds != 1 || f.fake.opens != 1 {
+		t.Fatal("measure, arguments and open must each run once", f.measures, f.builds, f.fake.opens)
 	}
 	for step, phases := range map[string][]string{"measure": f.atMeasure, "arguments": f.atBuild, "open": f.fake.phases} {
 		if len(phases) != 1 || phases[0] != "launch_requested" {
@@ -285,7 +275,7 @@ func TestMilestoneRelaunchApplyCompletes(t *testing.T) {
 // launch_requested and nothing is retained as unknown.
 func TestMilestoneRelaunchCleanLaunchFailure(t *testing.T) {
 	f := newFakeRelaunchLifecycle(t)
-	f.fake.openErr = fail("launch_failed", false, false, nil)
+	f.fake.err = fail("launch_failed", false, false, errors.New("open exited with status 1"))
 	m, ready := f.prepare(t, "apply", true)
 	result, err := f.run(t, m, ready)
 	if err != nil {
@@ -300,44 +290,31 @@ func TestMilestoneRelaunchCleanLaunchFailure(t *testing.T) {
 	}
 }
 
-// PR #57 verification is strict: zero, ambiguous or mismatched candidates are
-// uncertain. The journal stays launch_requested and is never completed, which is
-// the deliberate divergence from Python (it writes completed after any zero exit).
-func TestMilestoneRelaunchUncertainVerificationNeverCompletes(t *testing.T) {
-	for name, script := range map[string]func(*relaunchLifecycle){
-		"no candidate": func(f *relaunchLifecycle) {
-			f.fake.candidatesFn = func(int) ([]int, error) { return nil, nil }
-		},
-		"ambiguous candidates": func(f *relaunchLifecycle) {
-			f.fake.candidatesFn = func(int) ([]int, error) { return []int{pidOurs, pidOurs + 1}, nil }
-		},
-		"mismatched image": func(f *relaunchLifecycle) {
-			inner := f.fake.imageFn
-			f.fake.imageFn = func(pid, call int) (liveImage, error) {
-				live, err := inner(pid, call)
-				live.Image = substituteHash(live.Image)
-				return live, err
-			}
-			f.fake.startFn = func(int, int) (processStart, error) { return startOurs, nil }
-		},
+// An open whose outcome is unknown (a timeout, a lost fence, an unclean child)
+// keeps its uncertain classification: the journal stays launch_requested, it is
+// never completed and never reported as the clean launch_failed.
+func TestMilestoneRelaunchUnknownOpenOutcomeNeverCompletes(t *testing.T) {
+	for name, cause := range map[string]error{
+		"timeout":       context.DeadlineExceeded,
+		"unclean child": errors.New("open exited without joined output"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFakeRelaunchLifecycle(t)
-			script(f)
+			f.fake.err = fail("launch_failed", true, true, cause)
 			m, ready := f.prepare(t, "apply", true)
 			result, err := f.run(t, m, ready)
 			var failure *executionapp.Failure
 			if result != nil || !errors.As(err, &failure) {
-				t.Fatal("unverified launch did not fail", result, describe(err))
+				t.Fatal("an unknown open outcome did not fail", result, describe(err))
 			}
-			if failure.Code == "launch_failed" || failure.Phase == "completed" {
-				t.Fatal("an unverified launch was reported as clean or complete", failure)
+			if failure.Code == "launch_failed" && !failure.Uncertain || failure.Phase == "completed" {
+				t.Fatal("an unknown open outcome was reported as clean or complete", failure)
 			}
 			if got := f.diskPhase(t); got != "launch_requested" {
-				t.Fatal("unverified launch moved the journal to", got)
+				t.Fatal("an unknown open outcome moved the journal to", got)
 			}
 			if f.fake.opens != 1 || !failure.Uncertain && f.owner.retained() == nil {
-				t.Fatal("unverified launch was neither uncertain nor retained", f.fake.opens, failure)
+				t.Fatal("an unknown open outcome was neither uncertain nor retained", f.fake.opens, failure)
 			}
 		})
 	}
@@ -365,7 +342,7 @@ func TestMilestoneRelaunchRollbackNeverLaunches(t *testing.T) {
 		t.Fatal("rollback with relaunch did not settle rolled_back", result)
 	}
 	f.physical(t, f.repo, "rolled_back")
-	if f.measures != 0 || f.builds != 0 || f.fake.opens != 0 || f.fake.calls.candidates != 0 {
+	if f.measures != 0 || f.builds != 0 || f.fake.opens != 0 {
 		t.Fatal("rollback launched", f.measures, f.builds, f.fake.opens)
 	}
 	lifecycleRequireTree(t, f.app, f.source)
@@ -388,8 +365,8 @@ func TestMilestoneRelaunchWithoutCapabilitiesRefusesBeforeOpen(t *testing.T) {
 			if result != nil || !errors.As(err, &failure) {
 				t.Fatal("launch without a capability succeeded", result, describe(err))
 			}
-			if f.fake.opens != 0 || f.fake.calls.candidates != 0 {
-				t.Fatal("a launch was attempted", f.fake.opens, f.fake.calls.candidates)
+			if f.fake.opens != 0 {
+				t.Fatal("a launch was attempted", f.fake.opens)
 			}
 			if got := f.diskPhase(t); got != "launch_requested" {
 				t.Fatal("journal phase", got)
@@ -440,8 +417,11 @@ func TestLaunchTargetBindsTheCaptureToTheInstallLocation(t *testing.T) {
 		}, "launch_image_unexpected"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fake := newFakeLaunch()
-			fx := newRelaunchFixture(t, fake, scratchExecutable(t, "good", stdruntime.GOARCH, ""))
+			opens := 0
+			fx := newRelaunchFixture(t, func(context.Context, time.Time, []string, func(context.Context) error) error {
+				opens++
+				return nil
+			}, "")
 			location := "legacy"
 			if tc.shared {
 				location = "shared"
@@ -458,8 +438,8 @@ func TestLaunchTargetBindsTheCaptureToTheInstallLocation(t *testing.T) {
 				return method
 			})
 			failure := recoveryFailure(t, method)
-			if failure.Code != tc.code || failure.Uncertain || fake.opens != 0 || fx.phase(t) != "launch_requested" {
-				t.Fatalf("binding not enforced: %+v opens=%d phase=%s scope=%v", failure, fake.opens, fx.phase(t), scope)
+			if failure.Code != tc.code || failure.Uncertain || opens != 0 || fx.phase(t) != "launch_requested" {
+				t.Fatalf("binding not enforced: %+v opens=%d phase=%s scope=%v", failure, opens, fx.phase(t), scope)
 			}
 		})
 	}

@@ -205,11 +205,9 @@ func TestLiveHelperRelaunchTerminalMapping(t *testing.T) {
 			`{"phase": "launch_requested", "error": "launch_failed", "operationId": "` + id + `"}` + "\n", 70},
 		{"launch_failed as a failure", nil, &executionapp.Failure{Phase: "launch_requested", Code: "launch_failed"},
 			`{"phase": "launch_requested", "error": "launch_failed", "operationId": "` + id + `"}` + "\n", 70},
-		{"unverified launch stays unknown", nil, &executionapp.Failure{Phase: "launch_requested", Code: "launch_unverified", Uncertain: true},
+		{"unknown open outcome stays unknown", nil, &executionapp.Failure{Phase: "launch_requested", Code: "launch_failed", Uncertain: true},
 			liveHelperUnknownLine, 79},
-		{"ambiguous image stays unknown", nil, &executionapp.Failure{Phase: "launch_requested", Code: "launch_image_ambiguous", Uncertain: true},
-			liveHelperUnknownLine, 79},
-		{"mismatched image stays unknown", nil, errors.Join(errors.New("launch_image_mismatch"), &executionapp.Failure{Phase: "launch_requested", Code: "launch_image_mismatch"}),
+		{"unclassified launch error stays unknown", nil, errors.Join(errors.New("open outcome unknown"), &executionapp.Failure{Phase: "launch_requested", Code: "launch_unavailable"}),
 			liveHelperUnknownLine, 79},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -21,10 +22,9 @@ import (
 	"github.com/legrch/farol/modules/release/infra/native/helperprotocol"
 )
 
-// Scratch executables are tiny non-GUI Go programs built and ad-hoc signed by
-// the test run. They sleep, hold no state and are only ever started by a test
-// that kills the exact pid it started. Building and signing here is test-only
-// setup; production derives the expected hash without any tool.
+// Scratch executables are tiny non-GUI Go programs built by the test run for
+// the gated native lane only. They sleep, hold no state and are only ever
+// started by a test that kills the exact pid it started.
 var scratch struct {
 	mu    sync.Mutex
 	dir   string
@@ -50,9 +50,8 @@ var id = "unset"
 func main() { _ = id; time.Sleep(10 * time.Minute) }
 `
 
-// scratchExecutable builds, once per id and architecture, a signed executable.
-// digests selects codesign digest algorithms ("" is the default).
-func scratchExecutable(t *testing.T, id, arch, digests string) string {
+// scratchExecutable builds, once per id, a sleeping executable for the host.
+func scratchExecutable(t *testing.T, id string) string {
 	t.Helper()
 	if stdruntime.GOOS != "darwin" {
 		t.Skip("scratch Mach-O fixtures need Darwin")
@@ -61,9 +60,6 @@ func scratchExecutable(t *testing.T, id, arch, digests string) string {
 	if err != nil {
 		t.Skip("go tool unavailable")
 	}
-	if _, err := os.Stat("/usr/bin/codesign"); err != nil {
-		t.Skip("codesign unavailable")
-	}
 	scratch.mu.Lock()
 	defer scratch.mu.Unlock()
 	if scratch.dir == "" {
@@ -71,35 +67,22 @@ func scratchExecutable(t *testing.T, id, arch, digests string) string {
 		must(t, err)
 		scratch.dir, scratch.built = dir, make(map[string]string)
 	}
-	key := id + "|" + arch + "|" + digests
-	if path, ok := scratch.built[key]; ok {
+	if path, ok := scratch.built[id]; ok {
 		return path
 	}
-	dir := filepath.Join(scratch.dir, hex.EncodeToString([]byte(key)))
+	dir := filepath.Join(scratch.dir, hex.EncodeToString([]byte(id)))
 	must(t, os.Mkdir(dir, 0700))
 	must(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte(scratchSource), 0600))
 	must(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module scratch\n\ngo 1.26\n"), 0600))
 	path := filepath.Join(dir, "scratch")
 	build := exec.Command(goTool, "build", "-o", path, "-ldflags", "-X main.id="+id, ".")
 	build.Dir = dir
-	build.Env = append(os.Environ(), "GOOS=darwin", "GOARCH="+arch, "CGO_ENABLED=0", "GOFLAGS=", "GOTOOLCHAIN=local", "GOPROXY=off", "GO111MODULE=on")
+	build.Env = append(os.Environ(), "GOOS=darwin", "GOARCH="+stdruntime.GOARCH, "CGO_ENABLED=0", "GOFLAGS=", "GOTOOLCHAIN=local", "GOPROXY=off", "GO111MODULE=on")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("scratch build failed: %v\n%s", err, out)
 	}
-	signScratch(t, path, digests)
-	scratch.built[key] = path
+	scratch.built[id] = path
 	return path
-}
-
-func signScratch(t *testing.T, path, digests string) {
-	t.Helper()
-	args := []string{"--force", "--sign", "-"}
-	if digests != "" {
-		args = append(args, "--digest-algorithm="+digests)
-	}
-	if out, err := exec.Command("/usr/bin/codesign", append(args, path)...).CombinedOutput(); err != nil {
-		t.Fatalf("codesign failed: %v\n%s", err, out)
-	}
 }
 
 func copyFile(t *testing.T, from, to string, mode os.FileMode) {
@@ -159,8 +142,9 @@ func treeDigest(t *testing.T, root string) string {
 }
 
 // writeBundle installs a scratch application bundle whose only executable is a
-// copy of exe. Identity documents are the original-helper vectors, which pass
-// the real identity policy for version 1.2.3-preview.4.
+// copy of exe (an inert file when exe is empty). Identity documents are the
+// original-helper vectors, which pass the real identity policy for version
+// 1.2.3-preview.4.
 func writeBundle(t *testing.T, path, exe string) {
 	t.Helper()
 	for _, dir := range []string{"Contents/MacOS", "Contents/Resources/app"} {
@@ -171,8 +155,15 @@ func writeBundle(t *testing.T, path, exe string) {
 		must(t, err)
 		must(t, os.WriteFile(filepath.Join(path, document.to), data, 0600))
 	}
+	if exe == "" {
+		must(t, os.WriteFile(filepath.Join(path, "Contents/MacOS/Sleeper"), []byte("inert"), 0700))
+		return
+	}
 	copyFile(t, exe, filepath.Join(path, "Contents/MacOS/Sleeper"), 0700)
 }
+
+// openFunc is the shape of Config.open.
+type openFunc = func(ctx context.Context, until time.Time, arguments []string, fence func(context.Context) error) error
 
 // relaunchFixture is a disposable slot-mode install: the real journal at
 // launch_requested, a scratch bundle that passes the real tree and identity
@@ -183,7 +174,7 @@ type relaunchFixture struct {
 	self port.HelperSelfIdentity
 }
 
-func newRelaunchFixture(t *testing.T, platform launchPlatform, exe string) *relaunchFixture {
+func newRelaunchFixture(t *testing.T, open openFunc, exe string) *relaunchFixture {
 	t.Helper()
 	f := newCompositionFixtureAt(t, t.TempDir())
 	app := filepath.Join(f.config.Files.Applications.Name(), "Farol.app")
@@ -215,24 +206,8 @@ func newRelaunchFixture(t *testing.T, platform launchPlatform, exe string) *rela
 		}
 		return []string{"/usr/bin/open", "-a", app, "--args", "--farol-installed-update-relaunch=" + string(hint)}, nil
 	}
-	f.config.launch = platform
+	f.config.open = open
 	return rf
-}
-
-// launch runs the self measurement and the one LaunchTarget call. It returns
-// the method's own result and the scope's retained result separately.
-func (f *relaunchFixture) launch(t *testing.T) (method, scope error) {
-	t.Helper()
-	scope = f.with(context.Background(), func(native port.HelperRecoveryRuntime) error {
-		effects := native.(port.HelperRelaunchEffects)
-		self, err := effects.SelfIdentity(context.Background())
-		if err != nil {
-			t.Fatal("self measurement", err)
-		}
-		method = effects.LaunchTarget(context.Background(), self, nil)
-		return method
-	})
-	return method, scope
 }
 
 func (f *relaunchFixture) phase(t *testing.T) string {
@@ -244,23 +219,12 @@ func (f *relaunchFixture) phase(t *testing.T) string {
 	return wire.Phase
 }
 
-// scratchUniversal returns a signed two-slice executable (arm64, amd64) and the
-// code-directory hash of each slice in file order, as the signing tool reports.
-func scratchUniversal(t *testing.T) (string, [][20]byte) {
+// recoveryFailure requires err to be a classified recovery failure.
+func recoveryFailure(t *testing.T, err error) *port.HelperRecoveryFailure {
 	t.Helper()
-	if _, err := os.Stat("/usr/bin/lipo"); err != nil {
-		t.Skip("lipo unavailable")
+	var failure *port.HelperRecoveryFailure
+	if !errors.As(err, &failure) || failure == nil {
+		t.Fatalf("not a classified recovery failure: %v", err)
 	}
-	arm := scratchExecutable(t, "golden", "arm64", "")
-	intel := scratchExecutable(t, "golden", "amd64", "")
-	scratch.mu.Lock()
-	path := filepath.Join(scratch.dir, "universal")
-	scratch.mu.Unlock()
-	if _, err := os.Stat(path); err != nil {
-		if out, err := exec.Command("/usr/bin/lipo", "-create", arm, intel, "-output", path).CombinedOutput(); err != nil {
-			t.Fatalf("lipo failed: %v\n%s", err, out)
-		}
-		signScratch(t, path, "")
-	}
-	return path, [][20]byte{codesignCDHash(t, path, "arm64"), codesignCDHash(t, path, "x86_64")}
+	return failure
 }
