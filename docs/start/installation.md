@@ -12,7 +12,7 @@ If you already have a working accepted installation, keep it and use [First conn
 - A ChatGPT account/workspace offering Developer mode and Tunnel connections for the setup described by Farol.
 - A compatible connection helper and the native tools required by the exact package. Their clean-machine distribution and supported macOS matrix still need qualification.
 
-There is no qualified Intel, Windows or Linux package. Electron includes its Node runtime; end users do not need a separate Node, npm or Go installation. Some installed update, search and Git-hook paths still depend on external Python or Command Line Tools. These are unresolved distribution prerequisites, not a request to install the [source development toolchain](../development/setup.md).
+There is no qualified Intel, Windows or Linux package. Electron includes its Node runtime; end users do not need a separate Node, npm or Go installation. Updates and file search run through the bundled Go backend; ordinary Git and user Git hooks may still depend on Command Line Tools or their own toolchains. These are unresolved distribution prerequisites, not a request to install the [source development toolchain](../development/setup.md).
 
 ## Inspect the download
 

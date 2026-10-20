@@ -34,7 +34,7 @@ The assessed public ZIP is 332,772,616 bytes, SHA-256 `5ca2bd9003f2b9c79d35e5aca
 
 Current source derives the advertised **macOS 13.0** floor from authenticated Electron 44.4.2 metadata; the separate source package agrees. The installed internal package still advertises 12.0 in its outer plist, while its bundled Electron requires 13.0. Neither declaration proves support on every Mac at that version. A clean-machine support and prerequisite matrix remains open; Intel, Windows and Linux are not qualified.
 
-Electron/Node and the Go backend are packaged. Installed update helpers, slot/handoff binding and workspace search still have external Python or Command Line Tools dependencies. Ordinary Git qualification is tied to selected native resources. TypeScript agent orchestration and Release policy also remain active; the existence of Go modules does not prove those routes have switched.
+Electron/Node and the Go backend are packaged. In Go-aware builds the installed update helpers, slot/handoff binding, Computer file operations and Settings search run through the Go backend with no Python fallback; the Python resources stay packaged for explicit legacy/dev paths until their deletion packet ([runtime dependencies](../development/runtime-dependencies.md)). This is source selection, not installed acceptance. Ordinary Git qualification is tied to selected native resources. TypeScript agent orchestration and Release policy also remain active; the existence of Go modules does not prove those routes have switched.
 
 ## Acceptance still required
 

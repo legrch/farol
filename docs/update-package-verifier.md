@@ -26,8 +26,10 @@ historical parity-test oracle, not the installed extractor.
 The adapter supplies the bundled verifier as `verifierPath`, an owner-private
 staging parent, and a resolver from its opaque download handle to its private
 archive path. The installed Electron executable runs the trusted verifier entry
-in Node mode. The extracted app is never executed for verification. The other
-Computer and install/swap helpers retain their documented Python requirement.
+in Node mode. The extracted app is never executed for verification. In Go-aware
+builds the install/swap helpers are the attested Go entries; see
+[runtime dependencies](development/runtime-dependencies.md) for the remaining
+legacy/dev Python paths.
 
 `createUpdatePackageVerifier().verifyPackage(handle, manifest)` rehashes
 the actual regular archive through an `O_NOFOLLOW` descriptor, checks its

@@ -35,7 +35,7 @@ Before any custody effect, hold one generation-owned promotion lease across
 fresh source/package verification, genuine activation drain, expected normal
 receipt and updater metadata snapshots, and app/backend/connector/helper process
 proof. A completed-looking journal or diagnostic lease record is not terminal
-proof. Python stdin helpers must be correlated through the existing operation,
+proof. Helper processes must be correlated through the existing operation,
 helper process-start and lease structures. Unknown or unexpected records refuse
 the operation.
 
