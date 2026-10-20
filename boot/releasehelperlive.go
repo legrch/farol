@@ -121,7 +121,20 @@ func liveHelperMeasureSelf(ctx context.Context, until time.Time) (releaseport.He
 	if err != nil {
 		return releaseport.HelperSelfIdentity{}, err
 	}
-	start, captureErr := processwait.Capture(ctx, until, probe, liveHelperClock{})
+	return liveHelperMeasureWith(ctx, until, pid, probe, liveHelperClock{})
+}
+
+// liveHelperProbe is the native probe's surface: an observation and the join of
+// that original observation.
+type liveHelperProbe interface {
+	releaseport.ProcessProbe
+	Join() error
+}
+
+// liveHelperMeasureWith is the measurement over an injected probe and clock, so
+// every path's join can be witnessed deterministically.
+func liveHelperMeasureWith(ctx context.Context, until time.Time, pid int, probe liveHelperProbe, clock releaseport.ProcessWaitClock) (releaseport.HelperSelfIdentity, error) {
+	start, captureErr := processwait.Capture(ctx, until, probe, clock)
 	joinErr := probe.Join()
 	if joinErr != nil || captureErr != nil {
 		if f, ok := captureErr.(*processwait.Failure); ok && f != nil && !f.Uncertain && joinErr == nil {

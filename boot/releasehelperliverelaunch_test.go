@@ -238,3 +238,58 @@ func TestLiveHelperRelaunchTerminalMapping(t *testing.T) {
 		})
 	}
 }
+
+// liveRelaunchProbe scripts one observation and counts the joins of it.
+type liveRelaunchProbe struct {
+	observation releaseport.ProcessObservation
+	observeErr  error
+	joinErr     error
+	observed    int
+	joined      int
+}
+
+func (p *liveRelaunchProbe) Observe(context.Context, time.Time) (releaseport.ProcessObservation, error) {
+	p.observed++
+	return p.observation, p.observeErr
+}
+func (p *liveRelaunchProbe) Join() error { p.joined++; return p.joinErr }
+
+// The measurement joins the original observation on EVERY path, and a join
+// failure is never a clean identity. A clean observation refusal is the one
+// launch_helper_identity refusal; everything else stays opaque and uncertain.
+func TestLiveHelperMeasureJoinsTheObservationOnEveryPath(t *testing.T) {
+	until := time.Now().Add(time.Second)
+	present := releaseport.ProcessObservation{Presence: releaseport.ProcessPresent, Start: "Mon Oct 19 12:00:00 2026"}
+	for _, tc := range []struct {
+		name    string
+		probe   liveRelaunchProbe
+		ok      bool
+		refusal bool // a clean launch_helper_identity refusal
+	}{
+		{"present", liveRelaunchProbe{observation: present}, true, false},
+		{"absent", liveRelaunchProbe{observation: releaseport.ProcessObservation{Presence: releaseport.ProcessAbsent}}, false, true},
+		{"observation failed", liveRelaunchProbe{observeErr: &releaseport.ProcessProbeFailure{Kind: releaseport.ProcessProbeStartFailure}}, false, false},
+		{"join failed after a good observation", liveRelaunchProbe{observation: present, joinErr: &releaseport.ProcessProbeFailure{Kind: releaseport.ProcessProbeCleanupUnknown}}, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			probe := tc.probe
+			self, err := liveHelperMeasureWith(context.Background(), until, 4321, &probe, liveHelperClock{})
+			if probe.joined != 1 {
+				t.Fatalf("the original observation was joined %d times", probe.joined)
+			}
+			if tc.ok {
+				if err != nil || self != (releaseport.HelperSelfIdentity{PID: 4321, ProcessStart: "Mon Oct 19 12:00:00 2026"}) {
+					t.Fatal("identity", self, err)
+				}
+				return
+			}
+			if err == nil || self != (releaseport.HelperSelfIdentity{}) {
+				t.Fatal("an unqualified measurement produced an identity", self, err)
+			}
+			var refusal *releaseport.HelperRecoveryFailure
+			if got := errors.As(err, &refusal) && refusal.Code == "launch_helper_identity" && !refusal.Uncertain && !refusal.Internal; got != tc.refusal {
+				t.Fatalf("classification: clean launch_helper_identity refusal = %v, want %v (%v)", got, tc.refusal, err)
+			}
+		})
+	}
+}
