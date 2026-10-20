@@ -45,7 +45,7 @@ const issue = (result, prefix) =>
   result.issues.some((x) => x.startsWith(prefix));
 
 describe("semantic runtime launch ratchet", () => {
-  it("retains all three unresolved Python callsites by function, not a zero-Python assertion", () => {
+  it("retains both unresolved Python callsites by function, not a zero-Python assertion", () => {
     const rows = RUNTIME_LAUNCH_MANIFEST.launches.filter((row) =>
       ["legacy-python-active", "go-with-legacy-python"].includes(
         row.classification,
@@ -54,19 +54,21 @@ describe("semantic runtime launch ratchet", () => {
     expect(rows.map((row) => `${row.file}:${row.symbol}`).sort()).toEqual([
       "src/modules/computer/infra/native/native-readonly-workspace.ts:runHelper",
       "src/modules/computer/infra/native/workspace-snapshot.ts:spawnSnapshotHelper",
-      "src/modules/release/infra/native/installed-update-helper.ts:publishInstalledOperationBinding",
     ]);
-    // The update helper is the attested Go executable alone; it has no
-    // interpreter, so its row names only the Go resource.
-    expect(
-      RUNTIME_LAUNCH_MANIFEST.launches.find(
-        (row) => row.id === "release.update-go",
-      ),
-    ).toMatchObject({
-      symbol: "startInstalledUpdateHelper",
-      classification: "app-owned-go-executable",
-      resources: ["farol-backend"],
-    });
+    // The update helper and the slot-binding publisher are the attested Go
+    // executable alone; neither has an interpreter, so each row names only the
+    // Go resource.
+    for (const [id, symbol] of [
+      ["release.update-go", "startInstalledUpdateHelper"],
+      ["release.slot-binding", "publishInstalledOperationBinding"],
+    ])
+      expect(
+        RUNTIME_LAUNCH_MANIFEST.launches.find((row) => row.id === id),
+      ).toMatchObject({
+        symbol,
+        classification: "app-owned-go-executable",
+        resources: ["farol-backend"],
+      });
     expect(
       RUNTIME_LAUNCH_MANIFEST.boundaries.map((row) => row.classification),
     ).toContain("optional-user-hook-runtime");
@@ -494,6 +496,48 @@ describe("bounded owned executable closure", () => {
     await expect(verifyRuntimeExecutableClosure(f)).rejects.toThrow(
       "EXECUTABLE_KIND_MISMATCH",
     );
+  });
+  it("accepts the bridge set without the retired update helper and no other subset", async () => {
+    const f = await packageFixture();
+    await fs.unlink(path.join(f.directory, "update-helper.py"));
+    const { "update-helper.py": _retired, ...entrySha256 } = f.entrySha256;
+    const full = [...BUILD_ENTRIES, ...GO_CORE_ENTRIES].sort();
+    const bridge = full.filter((entry) => entry !== "update-helper.py");
+    await expect(
+      verifyRuntimeExecutableClosure({ ...f, entrySha256, entries: bridge }),
+    ).resolves.toMatchObject({ nativeQualification: false });
+    // The default ledger still requires the file, and a ledger that names it
+    // cannot be satisfied by its absence.
+    await expect(
+      verifyRuntimeExecutableClosure({ ...f, entrySha256 }),
+    ).rejects.toThrow("BUILD_ENTRY_SET_INVALID");
+    await expect(
+      verifyRuntimeExecutableClosure({ ...f, entries: bridge }),
+    ).rejects.toThrow("BUILD_ENTRY_SET_INVALID");
+    // A bridge ledger never admits the retired file beside it unchecked.
+    await f.write(
+      "update-helper.py",
+      Buffer.from("# synthetic Python source\n"),
+    );
+    await expect(
+      verifyRuntimeExecutableClosure({ ...f, entrySha256, entries: bridge }),
+    ).rejects.toThrow("RUNTIME_LAUNCH_PACKAGE_ENTRY_UNMANIFESTED");
+    await fs.unlink(path.join(f.directory, "update-helper.py"));
+    for (const removed of ["computer-safe-open.py", "update-archive.py"])
+      await expect(
+        verifyRuntimeExecutableClosure({
+          ...f,
+          entrySha256,
+          entries: bridge.filter((entry) => entry !== removed),
+        }),
+      ).rejects.toThrow("RUNTIME_LAUNCH_ENTRY_SET_INVALID");
+    await expect(
+      verifyRuntimeExecutableClosure({
+        ...f,
+        entrySha256,
+        entries: [...bridge, "surprise"].sort(),
+      }),
+    ).rejects.toThrow("RUNTIME_LAUNCH_ENTRY_SET_INVALID");
   });
   it("uses existing ledger expectations and never repairs a byte mismatch", async () => {
     const f = await packageFixture();

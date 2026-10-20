@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BUILD_ENTRIES,
   LEGACY_BUILD_ENTRIES,
+  bridgeEntrySets,
 } from "../../tooling/build-contract.mjs";
 import { GO_CORE_ENTRIES } from "../../tooling/go-core-artifact.mjs";
 import { TREE_DIGEST_VERSION } from "../../tooling/artifact-digest.mjs";
@@ -87,6 +88,12 @@ beforeEach(() => {
     });
   }
 });
+
+function withoutEntries(...removed) {
+  return [...BUILD_ENTRIES, ...GO_CORE_ENTRIES].filter(
+    (entry) => !removed.includes(entry),
+  );
+}
 
 async function refusesBeforeObservation(input, code) {
   await expect(verifyPackageContent(input)).rejects.toThrow(code);
@@ -233,6 +240,31 @@ describe("shared package Go version admission", () => {
       { schema: 3 },
       "PACKAGE_EMBEDDED_MANIFEST_INVALID",
     ],
+    // Bridge rule: only the retired Python update helper may be absent.
+    [
+      "embedded schema after the bridge set",
+      withoutEntries("update-helper.py"),
+      { schema: 3 },
+      "PACKAGE_EMBEDDED_MANIFEST_INVALID",
+    ],
+    [
+      "resource set without the safe-open helper",
+      withoutEntries("computer-safe-open.py"),
+      { schema: 4 },
+      "PACKAGE_RESOURCE_SET_INVALID",
+    ],
+    [
+      "bridge set missing another entry",
+      withoutEntries("update-helper.py", "update-archive.py"),
+      { schema: 4 },
+      "PACKAGE_RESOURCE_SET_INVALID",
+    ],
+    [
+      "bridge set with an added entry",
+      [...withoutEntries("update-helper.py"), "update-helper"],
+      { schema: 4 },
+      "PACKAGE_RESOURCE_SET_INVALID",
+    ],
     [
       "unattested Go manifest",
       [...BUILD_ENTRIES, ...GO_CORE_ENTRIES],
@@ -274,4 +306,20 @@ describe("shared package Go version admission", () => {
       expect(observations.spawnSync).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("update-helper bridge entry sets", () => {
+  it("offers exactly the full set and the set without the retired helper", () => {
+    const full = [...BUILD_ENTRIES, ...GO_CORE_ENTRIES].sort();
+    expect(bridgeEntrySets(full)).toEqual([
+      full,
+      full.filter((entry) => entry !== "update-helper.py"),
+    ]);
+    expect(Object.isFrozen(bridgeEntrySets(full)[1])).toBe(true);
+  });
+  it("refuses to derive a bridge from a set that already lacks the helper", () => {
+    expect(() => bridgeEntrySets(withoutEntries("update-helper.py"))).toThrow(
+      "BUILD_ENTRY_BRIDGE_INVALID",
+    );
+  });
 });

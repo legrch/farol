@@ -209,8 +209,9 @@ publication) and spawns `run-closed-release-helper` under a transferred promotio
 or `run-live-release-helper` otherwise. A build without the compiled Go core refuses
 apply and restore with `UPDATE_HELPER_GO_CORE_REQUIRED` before any admission, copy,
 binding or process and must be updated by hand; a Go capability that fails to qualify
-refuses with the existing not-started outcome. Neither ever falls back to Python, whose
-`update_helper.py` stays in the tree and package until a separate deletion packet. The
+refuses with the existing not-started outcome. Neither ever falls back to Python, and slot-binding publication has no Python path
+either. `update_helper.py` stays in the tree and package under the
+[bridge rule](installed-update-helper.md#retiring-the-python-helper-bridge-rule). The
 supervised maintainer controller uses the accepted target package's own Go declaration
 and build identity exactly as the full package verifier checked the bundled binary
 against them, captured once by the resource observation inside its tree-digest

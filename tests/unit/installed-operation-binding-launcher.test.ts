@@ -15,9 +15,13 @@ import {
   installedSlotBindingBytes,
 } from "../../src/modules/release/infra/native/installed-update-helper";
 
-// Exact checked-in helper bytes; all owner-directory metadata, process streams
-// and process lifetime are pure fixtures. No real app/profile/process is used.
-const helper = path.resolve("resources/native/update_helper.py");
+// All owner-directory metadata, process streams and process lifetime are pure
+// fixtures. No real app/profile/process or bundled backend is used.
+const backend = "/private/accepted/farol-backend";
+const goHelper = () => ({
+  buildId: "5".repeat(64),
+  qualify: vi.fn(async () => backend),
+});
 const home = "/Users/binding-fixture";
 const root = path.join(
   home,
@@ -126,68 +130,48 @@ it.each(["shared", "legacy"] as const)(
   "inherits only the pinned operation descriptor and canonical %s bytes",
   async (location) => {
     const operationPromise = publishInstalledOperationBinding(
-      helper,
+      goHelper(),
       operation,
       location,
     );
     await started();
     expect(fake.spawn).toHaveBeenCalledTimes(1);
     const [executable, args, options] = fake.spawn.mock.calls[0]!;
-    expect(executable).toBe("/usr/bin/python3");
-    expect(args.slice(0, 4)).toEqual(["-I", "-S", "-B", "-c"]);
-    expect(args[4]).toContain(
-      'namespace["publish_slot_binding"](4,bytes(data))',
-    );
-    expect(args[4]).not.toContain(home);
+    expect(executable).toBe(backend);
+    expect(args.join(" ")).not.toContain(home);
     expect(options.stdio).toEqual(["pipe", "pipe", "pipe", "pipe", 42]);
     expect(Buffer.concat(request)).toEqual(
       installedSlotBindingBytes(operation, location),
     );
-    expect(Buffer.concat(code)).toEqual(await fs.readFile(helper));
+    expect(Buffer.concat(code)).toHaveLength(0);
     finish();
     await operationPromise;
     expect(close).toHaveBeenCalledOnce();
   },
 );
 it("rejects warnings without changing the exact output contract", async () => {
-  const result = publishInstalledOperationBinding(helper, operation, "shared");
+  const result = publishInstalledOperationBinding(
+    goHelper(),
+    operation,
+    "shared",
+  );
   await started();
   finish("fixture native warning\n");
   await expect(result).rejects.toThrow("UPDATE_SLOT_BINDING_UNCONFIRMED");
   expect(fake.spawn).toHaveBeenCalledOnce();
 });
 it("rejects displacement of the named directory after pinned publication", async () => {
-  const result = publishInstalledOperationBinding(helper, operation, "shared");
+  const result = publishInstalledOperationBinding(
+    goHelper(),
+    operation,
+    "shared",
+  );
   await started();
   displaced = true;
   finish();
   await expect(result).rejects.toThrow("UPDATE_SLOT_BINDING_CHANGED");
   expect(close).toHaveBeenCalledOnce();
 });
-it("waits for the same child's close after a timeout and never retries", async () => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  let settled = false;
-  const result = publishInstalledOperationBinding(
-    helper,
-    operation,
-    "shared",
-  ).catch((error) => {
-    settled = true;
-    return error;
-  });
-  await started();
-  await vi.advanceTimersByTimeAsync(5000);
-  expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-  expect(settled).toBe(false);
-  expect(close).not.toHaveBeenCalled();
-  child.emit("close", null, "SIGKILL");
-  expect(await result).toMatchObject({
-    message: "UPDATE_SLOT_BINDING_UNCONFIRMED",
-  });
-  expect(fake.spawn).toHaveBeenCalledOnce();
-  expect(close).toHaveBeenCalledOnce();
-});
-
 it("runs the qualified bundled Go capability with original fd ownership and no Python input", async () => {
   const qualify = vi.fn(async () => "/private/accepted/farol-backend");
   const buildId = "5".repeat(64);

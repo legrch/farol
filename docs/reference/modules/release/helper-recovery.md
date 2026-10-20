@@ -4,8 +4,8 @@
 and `reconcile` behavior in Go. The desktop now selects the Go helpers: its
 updater spawns the attested `farol-backend` in `run-closed-release-helper` or
 `run-live-release-helper` mode and never falls back to
-`resources/native/update_helper.py`, which stays in the tree and package until a
-separate deletion packet. A build without the compiled Go core refuses updates
+`resources/native/update_helper.py`, which stays in the tree and package under the
+[bridge rule](../../../installed-update-helper.md#retiring-the-python-helper-bridge-rule). A build without the compiled Go core refuses updates
 (`UPDATE_HELPER_GO_CORE_REQUIRED`) and is updated manually. This service itself has
 no CLI, new journal, background recovery loop or relaunch route.
 

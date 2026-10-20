@@ -32,6 +32,28 @@ export const BUILD_ENTRIES = Object.freeze(
   ].sort(),
 );
 
+// Bridge rule (Sparkle's minimum-autoupdate pattern). An installed predecessor
+// verifies a target package with its own bundled update-package.mjs, which
+// requires an exact resource set. The desktop no longer dispatches the Python
+// update helper, so a Go-core target may omit it; every current build still
+// ships it. A release may drop the file only after a release carrying this
+// tolerance has shipped and been installed, or the installed verifiers refuse it.
+export const RETIRED_UPDATE_HELPER_ENTRY = "update-helper.py";
+
+// The closed alternatives for one Go-core entry set: exactly that set, or that
+// set minus the retired update helper. Nothing else is accepted.
+export function bridgeEntrySets(entries) {
+  const sorted = [...entries].sort();
+  if (!sorted.includes(RETIRED_UPDATE_HELPER_ENTRY))
+    throw new Error("BUILD_ENTRY_BRIDGE_INVALID");
+  return Object.freeze([
+    Object.freeze(sorted),
+    Object.freeze(
+      sorted.filter((entry) => entry !== RETIRED_UPDATE_HELPER_ENTRY),
+    ),
+  ]);
+}
+
 const CAPABILITY_BOUNDARY_ENTRIES = Object.freeze([
   "computer-mcp.cjs",
   "main.cjs",

@@ -32,8 +32,8 @@ those entries, and native/packaged/installed/recovery/OTA gates remain separate.
 helper's inherited-lease and closed-predecessor observations. The selected Go
 helper entries compose it (`boot/releasehelperclosed.go`,
 `boot/releasehelperlive.go`). Normal apply/recover/rollback no longer uses
-`resources/native/update_helper.py`, which stays in the tree until a separate
-deletion packet; this source foundation introduces no new journal, admission
+`resources/native/update_helper.py`, which stays shipped under the
+[bridge rule](../../../installed-update-helper.md#retiring-the-python-helper-bridge-rule); this source foundation introduces no new journal, admission
 owner or install engine.
 
 The verifier borrows the exact home, state and inherited lease descriptors.

@@ -7,6 +7,7 @@ import { TREE_DIGEST_VERSION, treeDigest } from "./artifact-digest.mjs";
 import {
   BUILD_ENTRIES,
   LEGACY_BUILD_ENTRIES,
+  bridgeEntrySets,
   verifyBuildEntries,
   verifyInputManifest,
 } from "./build-contract.mjs";
@@ -91,11 +92,11 @@ export async function verifyPackageContent({
       ),
     "PACKAGE_GO_CORE_REQUIRED",
   );
-  const entries = layout.core
-    ? [...BUILD_ENTRIES, ...GO_CORE_ENTRIES].sort()
-    : layout.branded
-      ? BUILD_ENTRIES
-      : LEGACY_BUILD_ENTRIES;
+  // A Go-core target may omit the retired Python update helper (the bridge rule
+  // in build-contract.mjs); older layouts keep their exact set.
+  const acceptedEntrySets = layout.core
+    ? bridgeEntrySets([...BUILD_ENTRIES, ...GO_CORE_ENTRIES])
+    : [layout.branded ? BUILD_ENTRIES : LEGACY_BUILD_ENTRIES];
   assertArtifactPath?.();
   requireValue(
     artifact.product === "Farol Next Preview",
@@ -184,17 +185,23 @@ export async function verifyPackageContent({
   );
 
   const resources = path.join(appPath, "Contents/Resources/app");
-  const expectedResourceEntries = [
-    ...entries,
-    "THIRD_PARTY_NOTICES.txt",
-    "build-manifest.json",
-    "package.json",
-  ].sort();
-  requireValue(
-    (await fs.readdir(resources)).sort().join("\0") ===
-      expectedResourceEntries.join("\0"),
-    "PACKAGE_RESOURCE_SET_INVALID",
+  const observedResourceEntries = (await fs.readdir(resources))
+    .sort()
+    .join("\0");
+  // The selected set binds every later entry check: the embedded entry list,
+  // its digests and the executable closure.
+  const entries = acceptedEntrySets.find(
+    (candidate) =>
+      [
+        ...candidate,
+        "THIRD_PARTY_NOTICES.txt",
+        "build-manifest.json",
+        "package.json",
+      ]
+        .sort()
+        .join("\0") === observedResourceEntries,
   );
+  requireValue(entries !== undefined, "PACKAGE_RESOURCE_SET_INVALID");
   const embedded = JSON.parse(
     await fs.readFile(path.join(resources, "build-manifest.json"), "utf8"),
   );
@@ -246,6 +253,7 @@ export async function verifyPackageContent({
     await verifyRuntimeExecutableClosure({
       directory: resources,
       entrySha256: embedded.entrySha256,
+      entries,
     });
   if (!layout.core && Object.hasOwn(embedded, "core"))
     throw new Error("PACKAGE_CORE_SCHEMA_MISMATCH");
