@@ -182,8 +182,16 @@ func withLiveReleaseHelperDependencies(ctx context.Context, files liveHelperFile
 		return closedHelperFail(true)
 	}
 	return refusal.finish(func() (err error) {
-		defer func() { err = closedHelperJoin(exposed, err, routes.Close()) }()
-		return routes.WithFiles(effective, refusal.settle(func(borrow helperroutes.Files) (err error) {
+		routesClosed := false
+		closeRoutes := func() error {
+			if routesClosed {
+				return nil
+			}
+			routesClosed = true
+			return routes.Close()
+		}
+		defer func() { err = closedHelperJoin(exposed, err, closeRoutes()) }()
+		return refusal.beforeCallback(routes.WithFiles(effective, refusal.settle(func(borrow helperroutes.Files) (err error) {
 			admission, err := deps.admission(borrow, request, expected, until)
 			if err != nil {
 				return refusal.refuse(err)
@@ -300,7 +308,7 @@ func withLiveReleaseHelperDependencies(ctx context.Context, files liveHelperFile
 				return err
 			}
 			return nil
-		}))
+		})), closeRoutes)
 	}())
 }
 

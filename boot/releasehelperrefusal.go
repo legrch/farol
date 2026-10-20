@@ -109,6 +109,8 @@ type closedHelperRefusalPath struct {
 	// sent is the refusal whose frame was written inside the borrowed route
 	// scope (see settle). It is read only after that scope returned.
 	sent *closedHelperRefused
+	// entered is set when the route scope actually invoked the callback.
+	entered bool
 }
 
 // refuse turns a pre-ACK failure into its outcome. A provably clean refusal
@@ -145,6 +147,7 @@ func (p *closedHelperRefusalPath) refuse(err error) error {
 // (finish). It never converts anything else.
 func (p *closedHelperRefusalPath) settle(fn func(helperroutes.Files) error) func(helperroutes.Files) error {
 	return func(files helperroutes.Files) error {
+		p.entered = true
 		err := fn(files)
 		if refused, ok := err.(*closedHelperRefused); ok && refused != nil {
 			p.sent = refused
@@ -164,4 +167,21 @@ func (p *closedHelperRefusalPath) finish(outer error) error {
 		return closedHelperFail(true, outer, p.sent)
 	}
 	return p.sent
+}
+
+// beforeCallback judges an error that WithFiles returned WITHOUT entering the
+// callback (its own pre-borrow verification, for example a pinned directory
+// replaced since OpenExisting). Such an error is a direct classification, not a
+// callback cause, so it takes the same refusal path, but only after the routes
+// closed successfully: a cleanup failure, a wrapped, joined, internal or
+// uncertain error, an elapsed bound or an already-sent frame stay unknown. The
+// caller's deferred cleanup must not close the routes a second time.
+func (p *closedHelperRefusalPath) beforeCallback(err error, closeRoutes func() error) error {
+	if err == nil || p.entered {
+		return err
+	}
+	if closeErr := closeRoutes(); closeErr != nil {
+		return closedHelperFail(*p.exposed, err, closeErr)
+	}
+	return p.refuse(err)
 }

@@ -36,6 +36,8 @@ const (
 	siteAdmission refusalSite = "admission" // Admission construction.
 	siteConfirm   refusalSite = "confirm"   // Live only: process identity.
 	siteAcquire   refusalSite = "acquire"   // Live only: update lock.
+	// siteRoutes is an error WithFiles returns before invoking the callback.
+	siteRoutes refusalSite = "routes"
 )
 
 type refusalRun struct {
@@ -55,6 +57,8 @@ type refusalInput struct {
 	emitErr, channelClose error
 	retainBeforeReady     bool
 	expireBeforeReady     bool
+	routeClose            error // Routes Close result.
+	expireAtRoutes        bool
 }
 
 type refusalHarness struct {
@@ -79,8 +83,14 @@ func closedRefusalRun(t *testing.T, in refusalInput) refusalRun {
 			f.event("admission")
 			return nil, in.err
 		}
+	case siteRoutes:
+		f.routesPreErr, f.routeClose = in.err, in.routeClose
 	default:
 		t.Fatal("site", in.site)
+	}
+	if in.expireAtRoutes {
+		until = time.Now().Add(60 * time.Millisecond)
+		f.beforeRoutes = func() { time.Sleep(90 * time.Millisecond) }
 	}
 	if in.retainBeforeReady {
 		f.beforeReady = func(context.Context) { f.readyHelper.retainUnknown(errors.New("sticky")) }
@@ -113,8 +123,14 @@ func liveRefusalRun(t *testing.T, in refusalInput) refusalRun {
 		f.confirmErr = in.err
 	case siteAcquire:
 		f.acquireErr = in.err
+	case siteRoutes:
+		f.routesPreErr, f.routeClose = in.err, in.routeClose
 	default:
 		t.Fatal("site", in.site)
+	}
+	if in.expireAtRoutes {
+		until = time.Now().Add(60 * time.Millisecond)
+		f.beforeRoutes = func() { time.Sleep(90 * time.Millisecond) }
 	}
 	if in.retainBeforeReady {
 		f.beforeReady = func(h closedReleaseHelper) { h.retainUnknown(errors.New("sticky")) }
@@ -165,6 +181,7 @@ func TestHelperCleanPreACKRefusalSendsOneRefusedFrame(t *testing.T) {
 		{name: "slot-binding-at-custody-fence", in: refusalInput{site: siteCheck, err: &slotbinding.VerificationFailure{Code: "slot_binding_changed"}}, phase: "refused", code: "slot_binding_changed"},
 		{name: "custody-code", in: refusalInput{site: siteCheck, err: handoff.ErrProcessRunning}, phase: "refused", code: "closed_process_running"},
 		{name: "route-refusal", in: refusalInput{site: siteAdmission, err: &helperroutes.Error{Code: helperroutes.CodeChanged}}, phase: "refused", code: "changed"},
+		{name: "route-verification-before-callback", in: refusalInput{site: siteRoutes, err: &helperroutes.Error{Code: helperroutes.CodeChanged}}, phase: "refused", code: "changed"},
 		{name: "live-identity-mismatch", in: refusalInput{site: siteConfirm, err: &processwait.Failure{Code: "process_identity"}}, phase: "refused", code: "process_identity", liveOnly: true},
 		{name: "live-update-busy", in: refusalInput{site: siteAcquire, err: &helperlocks.Failure{Code: "update_busy"}}, phase: "refused", code: "update_busy", liveOnly: true},
 	}
@@ -214,6 +231,13 @@ func TestHelperPreACKFailuresStayUnknownWithoutAFrame(t *testing.T) {
 		"opaque-check":    {site: siteCheck, err: errors.New("opaque")},
 		"opaque-ctor":     {site: siteAdmission, err: errors.New("opaque")},
 		"cancel-in-check": {site: siteCheck, err: context.Canceled},
+		// WithFiles failed before invoking the callback.
+		"routes-close-fails": {site: siteRoutes, err: &helperroutes.Error{Code: helperroutes.CodeChanged}, routeClose: errors.New("close failed")},
+		"routes-bound":       {site: siteRoutes, err: &helperroutes.Error{Code: helperroutes.CodeChanged}, expireAtRoutes: true},
+		"routes-internal":    {site: siteRoutes, err: &helperroutes.Error{Code: helperroutes.CodeChanged, Internal: true}},
+		"routes-uncertain":   {site: siteRoutes, err: &handoff.Failure{Code: handoff.ErrPathReplaced, Uncertain: true}},
+		"routes-joined":      {site: siteRoutes, err: errors.Join(&helperroutes.Error{Code: helperroutes.CodeChanged})},
+		"routes-opaque":      {site: siteRoutes, err: errors.New("opaque")},
 	}
 	for _, h := range refusalHarnesses {
 		for name, in := range cases {

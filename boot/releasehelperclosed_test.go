@@ -33,10 +33,13 @@ type closedHelperFixture struct {
 	beforeRead, afterEmit, beforeCheck                   func()
 	beforeContinue                                       func()
 	beforeClose                                          func()
-	until                                                time.Time
-	captured                                             releaseport.HelperRequest
-	slot                                                 []byte
-	routesFiles                                          helperroutes.Files
+	// Routes seam: an error WithFiles returns WITHOUT invoking the callback.
+	routesPreErr error
+	beforeRoutes func()
+	until        time.Time
+	captured     releaseport.HelperRequest
+	slot         []byte
+	routesFiles  helperroutes.Files
 	// Readiness seam: configured outcome plus what the seam observed.
 	readyErr, readyCause                   error
 	readyPanic                             any
@@ -122,6 +125,12 @@ type closedHelperFixtureRoutes struct{ f *closedHelperFixture }
 
 func (r closedHelperFixtureRoutes) WithFiles(ctx context.Context, fn func(helperroutes.Files) error) error {
 	r.f.event("with-files")
+	if r.f.beforeRoutes != nil {
+		r.f.beforeRoutes()
+	}
+	if r.f.routesPreErr != nil {
+		return r.f.routesPreErr
+	}
 	return fn(r.f.routesFiles)
 }
 func (r closedHelperFixtureRoutes) Close() error { r.f.event("routes-close"); return r.f.routeClose }

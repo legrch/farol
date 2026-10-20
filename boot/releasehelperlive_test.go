@@ -48,6 +48,8 @@ type liveHelperFixture struct {
 	checkErr                                                      error
 	readyErr, channelClose                                        error
 	beforeReady                                                   func(closedReleaseHelper)
+	routesPreErr, routeClose                                      error
+	beforeRoutes                                                  func()
 	readyCalls, execCalls                                         int
 	framesAtReady                                                 int
 	execFn                                                        func(context.Context, closedHelperExecution) (*executionapp.Result, error)
@@ -88,9 +90,15 @@ type liveHelperFixtureRoutes struct{ f *liveHelperFixture }
 
 func (r liveHelperFixtureRoutes) WithFiles(_ context.Context, fn func(helperroutes.Files) error) error {
 	r.f.event("with-files")
+	if r.f.beforeRoutes != nil {
+		r.f.beforeRoutes()
+	}
+	if r.f.routesPreErr != nil {
+		return r.f.routesPreErr
+	}
 	return fn(helperroutes.Files{})
 }
-func (r liveHelperFixtureRoutes) Close() error { r.f.event("routes-close"); return nil }
+func (r liveHelperFixtureRoutes) Close() error { r.f.event("routes-close"); return r.f.routeClose }
 
 type liveHelperFixtureAdmission struct{ f *liveHelperFixture }
 
