@@ -13,6 +13,42 @@ func WithInstallation(ctx context.Context, config Config, fn func(port.HelperIns
 	return withInstallation(ctx, config, config.Files.Reverify, fn)
 }
 
+// AdmittedInstallation is the installation runtime together with its read-only
+// projection: the exact pair the application Milestone's AdmittedRuntime asks
+// for. It is declared here, structurally, so this package never imports the
+// application service. The value is the package's one concrete runtime.
+type AdmittedInstallation interface {
+	port.HelperInstallationRuntime
+	port.HelperInstallationObservation
+}
+
+var _ AdmittedInstallation = (*runtime)(nil)
+
+// WithAdmittedInstallation exposes the installation runtime under the same real
+// route borrow, original owner and joined return as WithInstallation. It adds no
+// authority: the callback receives the very runtime WithInstallation constructs,
+// through its read-only projection as well, so trusted composition need not
+// type-assert a port. It is scoped, single-owner and unusable after return.
+func WithAdmittedInstallation(ctx context.Context, config Config, fn func(AdmittedInstallation) error) error {
+	return withAdmittedInstallation(ctx, config, config.Files.Reverify, fn)
+}
+
+func withAdmittedInstallation(ctx context.Context, config Config, routes func(context.Context) error, fn func(AdmittedInstallation) error) error {
+	if fn == nil {
+		return fail("internal", true, false, nil)
+	}
+	return withInstallation(ctx, config, routes, func(native port.HelperInstallationRuntime) error {
+		// withInstallation hands out only this package's concrete runtime, which
+		// also implements the read-only projection. A failed assertion is an
+		// internal defect, never a weaker substitute.
+		admitted, ok := native.(AdmittedInstallation)
+		if !ok {
+			return fail("internal", true, false, nil)
+		}
+		return fn(admitted)
+	})
+}
+
 // The route seam remains private and grants no production alternate root.
 func withInstallation(ctx context.Context, config Config, routes func(context.Context) error, fn func(port.HelperInstallationRuntime) error) error {
 	if config.Rejection == nil || fn == nil {
