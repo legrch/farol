@@ -905,6 +905,7 @@ func TestClosedHelperReadinessErrorsAndNilResultAreContained(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			f := newClosedHelperFixture(t)
 			deps := f.deps()
+			var captured closedReleaseHelper
 			switch mode {
 			case "opaque":
 				f.readyErr = cause
@@ -913,7 +914,8 @@ func TestClosedHelperReadinessErrorsAndNilResultAreContained(t *testing.T) {
 			case "uncertain":
 				f.readyErr = &executionapp.Failure{Code: "canceled", Phase: "refused", Uncertain: true, Cause: cause}
 			case "nil-result":
-				deps.ready = func(context.Context, *executionapp.Milestone, closedReleaseHelper) (*executionapp.Readiness, error) {
+				deps.ready = func(_ context.Context, _ *executionapp.Milestone, helper closedReleaseHelper) (*executionapp.Readiness, error) {
+					captured = helper
 					return nil, nil
 				}
 			case "missing-seam":
@@ -924,8 +926,11 @@ func TestClosedHelperReadinessErrorsAndNilResultAreContained(t *testing.T) {
 			if mode == "opaque" || mode == "uncertain" {
 				closedHelperFailureCheck(t, err, cause)
 			}
-			if mode != "nil-result" && mode != "missing-seam" && !closedHelperReadyFailure(t, err).uncertain {
+			if !closedHelperReadyFailure(t, err).uncertain {
 				t.Fatal("unproven readiness failure was classified as a clean refusal")
+			}
+			if mode == "nil-result" && (captured.state == nil || captured.unknown() == nil) {
+				t.Fatal("a nil readiness result did not retain uncertainty in its preflight scope")
 			}
 			if len(f.frames) != 0 || f.acquired != 0 {
 				t.Fatal("failure exposed a frame or acquired the update lock")

@@ -307,7 +307,7 @@ func withClosedReleaseHelperDependencies(ctx context.Context, files closedHelper
 			var readiness *executionapp.Readiness
 			err = closedHelperCall(func() (e error) {
 				if deps.ready == nil {
-					return closedHelperFail(false)
+					return closedHelperFail(true)
 				}
 				readiness, e = deps.ready(effective, milestone, closedReleaseHelper{preflight})
 				return e
@@ -322,7 +322,11 @@ func withClosedReleaseHelperDependencies(ctx context.Context, files closedHelper
 				return closedHelperFail(false, err)
 			}
 			if readiness == nil {
-				return closedHelperFail(false)
+				// A seam that reports success without a result is an internal defect,
+				// retained as unknown exactly like an error or panic.
+				err = closedHelperFail(true)
+				preflight.retainUnknown(err)
+				return err
 			}
 			frame, err := protocol.BuildHandoff(effective, protocolapp.ClosedPredecessorReady, nil)
 			if err != nil {
