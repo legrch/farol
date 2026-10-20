@@ -7007,6 +7007,42 @@ describe("first-launch adoption in the user slot (disposable files; GitHub and n
     await controller.close();
   });
 
+  // An existing file whose JSON content is null is present evidence, not
+  // absence: adoption needs the name to be missing (ENOENT).
+  it.each([
+    ["the adopted record", () => adoptedFile()],
+    ["the promotion receipt", () => slot + ".receipt.json"],
+    [
+      "the update receipt",
+      () => path.join(userData, "installed-updates/last-update.json"),
+    ],
+    ["the repair receipt", () => slot + ".repair.json"],
+    [
+      "the repair journal",
+      () => path.join(path.dirname(slot), ".farol-closed-repair.json"),
+    ],
+  ])("never adopts over %s when it holds JSON null", async (_name, locate) => {
+    await dragged();
+    await fs.mkdir(path.dirname(adoptedFile()), { mode: 0o700 });
+    const file = locate();
+    await fs.writeFile(file, "null\n", { mode: 0o600 });
+    const controller = await checked();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_SOURCE_IDENTITY_UNCONFIRMED",
+    });
+    expect(mocks.find).not.toHaveBeenCalled();
+    expect(mocks.discover).not.toHaveBeenCalled();
+    expect(await fs.readFile(file, "utf8")).toBe("null\n");
+    if (file !== adoptedFile()) await noRecord();
+    expect(
+      (await fs.readdir(path.dirname(adoptedFile()))).filter((entry) =>
+        entry.startsWith("adopted-baseline.json."),
+      ),
+    ).toEqual([]);
+    await controller.close();
+  });
+
   it("does not adopt when the measurement itself cannot be read", async () => {
     await dragged();
     mocks.exec.mockRejectedValue(new Error("unreadable"));

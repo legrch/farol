@@ -1500,6 +1500,16 @@ async function readRecord(
   observeDigest?.(digest!);
   return value;
 }
+// True only when lstat proves the name does not exist (ENOENT). Any other
+// outcome, including an existing file whose JSON content is null, is presence.
+async function recordAbsent(file: string): Promise<boolean> {
+  try {
+    await fs.lstat(file);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
+}
 async function writeRecord(
   file: string,
   value: unknown,
@@ -2369,7 +2379,13 @@ async function createRuntime(
     const raw = await readRecord(adoptedFile, true, (value) => {
       digest = value;
     });
-    if (raw === null) throw new Error("UPDATE_BASELINE_ADOPTION_REQUIRED");
+    if (raw === null) {
+      // Adoption needs real absence. A present file holding JSON null is a
+      // tampered record: refuse, never adopt over it.
+      if (await recordAbsent(adoptedFile))
+        throw new Error("UPDATE_BASELINE_ADOPTION_REQUIRED");
+      throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+    }
     // A record that does not parse, carries an invalid manifest or names another
     // slot or profile is tampered or foreign: refuse, never adopt over it.
     const record = AdoptedBaseline.parse(raw);
@@ -2532,7 +2548,23 @@ async function createRuntime(
       }
       const file = slot + ".receipt.json";
       const receiptRaw = await readRecord(file);
-      if (receiptRaw === null && !repair && adoptionApplies) {
+      if (
+        receiptRaw === null &&
+        !repair &&
+        adoptionApplies &&
+        // Every other piece of baseline evidence must be truly absent. A file
+        // that exists with JSON null keeps main's behaviour and never adopts.
+        (
+          await Promise.all(
+            [
+              receiptFile,
+              file,
+              slot + ".repair.json",
+              path.join(path.dirname(slot), ".farol-closed-repair.json"),
+            ].map(recordAbsent),
+          )
+        ).every(Boolean)
+      ) {
         // No owner-tool receipt: only a previously adopted baseline can anchor
         // this copy. Its absence is the one condition that permits adoption.
         expected = await readAdoptedExpectation();
