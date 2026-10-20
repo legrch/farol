@@ -190,7 +190,9 @@ type liveNativeOutcome struct {
 func (f *liveNativeFixture) run(t *testing.T, request map[string]any, quit bool, args ...string) liveNativeOutcome {
 	t.Helper()
 	requestBytes := closedHelperJSON(t, request)
-	if request["action"] != "recover" {
+	// Offline recover is refused before any slot binding exists, so the test must
+	// not manufacture one (BuildSlotBinding is a recover-with-relaunch protocol).
+	if request["action"] != "recover" || request["relaunch"] == true {
 		protocol, err := protocolapp.Bind(context.Background(), requestBytes, inputapp.New(inputnative.JSONDecoder{}), protocolnative.JSONCodec{})
 		if err != nil {
 			t.Fatal(err)
@@ -493,32 +495,78 @@ func TestLiveHelperNativeMissingQuitReceiptIsRefused(t *testing.T) {
 	f.noEffect(t)
 }
 
-// Recover (with or without relaunch) is a later packet: refused before any IO, no
-// frame, no update lock, no operation ID.
-func TestLiveHelperNativeRecoverRefusedBeforeAnyEffect(t *testing.T) {
+// Offline recover (relaunch false) has no production caller: refused before any IO,
+// no frame, no update lock, no operation ID.
+func TestLiveHelperNativeOfflineRecoverRefusedBeforeAnyEffect(t *testing.T) {
 	liveNativeRequire(t)
-	for name, mutate := range map[string]func(map[string]any){
-		"recover":          func(r map[string]any) { r["action"] = "recover" },
-		"recover-relaunch": func(r map[string]any) { r["action"], r["relaunch"] = "recover", true },
-	} {
-		t.Run(name, func(t *testing.T) {
-			f := newLiveNativeFixture(t, true)
-			f.arm(t, "")
-			request := f.request("apply", false)
-			mutate(request)
-			o := f.run(t, request, true)
-			if o.waitingFrame {
-				t.Fatal("refused request exposed a frame", o.ack)
-			}
-			f.requireTerminal(t, o.execNativeOutcome, "{\"phase\": \"unknown\", \"error\": \"internal\"}\n", 79)
-			f.noEffect(t)
-			if f.exists(filepath.Join(f.update, "lock")) {
-				t.Fatal("refused request reached the update lock")
-			}
-			if err := f.pred.cmd.Process.Signal(syscall.Signal(0)); err != nil {
-				t.Fatal("predecessor was disturbed", err)
-			}
-		})
+	f := newLiveNativeFixture(t, true)
+	f.arm(t, "")
+	request := f.request("recover", false)
+	o := f.run(t, request, true)
+	if o.waitingFrame {
+		t.Fatal("refused request exposed a frame", o.ack)
+	}
+	f.requireTerminal(t, o.execNativeOutcome, "{\"phase\": \"unknown\", \"error\": \"internal\"}\n", 79)
+	f.noEffect(t)
+	if f.exists(filepath.Join(f.update, "lock")) {
+		t.Fatal("refused request reached the update lock")
+	}
+	if err := f.pred.cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatal("predecessor was disturbed", err)
+	}
+}
+
+// Recover WITH relaunch on the real compiled entry and real owners. With no
+// operation journal the production readiness (the recovery Inspect lane) refuses
+// BEFORE the frame: only the refused frame is sent, nothing is written and the
+// desktop is not told to quit.
+func TestLiveHelperNativeRecoverWithoutAJournalIsRefusedBeforeTheFrame(t *testing.T) {
+	liveNativeRequire(t)
+	f := newLiveNativeFixture(t, true)
+	f.arm(t, "")
+	request := f.request("recover", true)
+	o := f.run(t, request, true)
+	if o.waitingFrame {
+		t.Fatal("a recovery without a journal exposed waiting_for_exit", o.ack)
+	}
+	f.wantRefusal(t, request, o, "refused", "journal_invalid")
+	f.noEffect(t)
+	if err := f.pred.cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatal("predecessor was disturbed", err)
+	}
+}
+
+// Recover with relaunch over a REAL verified journal and trees: the frame is sent,
+// the scratch predecessor exits, the production recovery policy reconciles the
+// pair (verified), and the run reaches the launch attempt. The inert oracle images
+// have no Contents/MacOS executable, so, exactly as in the apply relaunch lane, the
+// launch image cannot be pinned and the run stops BEFORE /usr/bin/open is built or
+// executed: nothing starts, the journal stays launch_requested and the outcome is
+// unknown (79), never completed. The launch itself is exercised over scratch bundles
+// in modules/release/infra/native/execution (FAROL_RELAUNCH_NATIVE=1).
+func TestLiveHelperNativeRecoverWithRelaunchStopsBeforeOpen(t *testing.T) {
+	liveNativeRequire(t)
+	f := newLiveNativeFixture(t, true)
+	id := strings.Repeat("1", 32)
+	apps := filepath.Join(f.home, "Applications", "Farol.app")
+	f.arm(t, "")
+	apply := f.request("apply", false)
+	o := f.run(t, apply, true)
+	f.requireTerminal(t, o.execNativeOutcome, `{"phase": "verified", "operationId": "`+id+`"}`+"\n", 0)
+
+	f.arm(t, "")
+	request := f.request("recover", true)
+	o = f.run(t, request, true)
+	f.wantWaitingFrame(t, request, o.ack)
+	f.requireTerminal(t, o.execNativeOutcome, `{"phase": "unknown", "error": "internal", "operationId": "`+id+`"}`+"\n", 79)
+	if got := f.phase(t); got != "launch_requested" {
+		t.Fatal("journal phase", got)
+	}
+	if execNativeRead(t, filepath.Join(apps, "Contents/Info.plist")) != execNativeTestdata(t, "oracle.bplist") {
+		t.Fatal("installed app is not the target")
+	}
+	if f.exists(filepath.Join(f.operation, "launch-Farol.app")) {
+		t.Fatal("a legacy install published a private capture")
 	}
 }
 

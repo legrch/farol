@@ -282,15 +282,13 @@ func TestLiveHelperFrameIsWaitingForExitForThisRequest(t *testing.T) {
 	}
 }
 
-// Recover, a closed predecessor and a legacy-optional location are all refused
-// before ANY routes, lock, frame or effect. Relaunch apply and rollback are
-// accepted (releasehelperliverelaunch_test.go).
+// Offline recover, a closed predecessor and a legacy-optional location are all
+// refused before ANY routes, lock, frame or effect. Relaunch apply and rollback
+// are accepted (releasehelperliverelaunch_test.go), as is recover WITH relaunch
+// (releasehelperliverecover_test.go).
 func TestLiveHelperRefusalsBeforeAnyEffect(t *testing.T) {
 	for name, m := range map[string]func(map[string]any){
 		"recover": func(r map[string]any) { r["action"] = "recover" },
-		"recover-relaunch": func(r map[string]any) {
-			r["action"], r["relaunch"] = "recover", true
-		},
 		"closed-predecessor": func(r map[string]any) {
 			c := closedHelperRequestFixture()
 			r["predecessor"], r["leaseIdentity"] = c["predecessor"], c["leaseIdentity"]
