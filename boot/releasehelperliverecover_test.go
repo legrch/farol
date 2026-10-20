@@ -239,7 +239,9 @@ func TestLiveHelperRecoverHintNamesTheRecoverAction(t *testing.T) {
 }
 
 // The adapter is the ORIGINAL recovery owner and never a typed-nil interface.
-type recoveryObservationStub struct{ releaseport.HelperRecoveryObservation }
+type recoveryObservationStub struct {
+	releaseport.HelperRecoveryObservation
+}
 
 func TestHelperRecoveryPoliciesAdaptTheOriginalOwner(t *testing.T) {
 	request := releaseport.HelperRequest{Action: "recover", Relaunch: true}
