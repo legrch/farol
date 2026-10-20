@@ -23,6 +23,7 @@ import {
   promotionUserData,
 } from "./promotion-obligations.mjs";
 import { captureSupervisedUpdateResources } from "./supervised-update-resources.mjs";
+import { readSupervisedGoCore } from "./supervised-update-go-core.mjs";
 import { preserveClosedInstalledPair } from "./supervised-update-backup.mjs";
 import { observeUpdateSlot } from "./update-slot-observer.mjs";
 
@@ -235,6 +236,7 @@ export async function runSupervisedUpdate(raw, publish = () => {}) {
   let backup = null;
   let partialBackupRoot = null;
   let helper = null;
+  let goCore = null;
   let quitAttempted = false;
   let quitConfirmed = false;
   let restartAttempted = false;
@@ -293,6 +295,14 @@ export async function runSupervisedUpdate(raw, publish = () => {}) {
         ),
       "UPDATE_RESOURCE_OVERLAP",
     );
+    // The Python helper is retired. Obtain the accepted target package's own
+    // compiled Go declaration now, before anything is asked to quit: a package
+    // without one refuses here and never reaches a Python alternative.
+    goCore = await readSupervisedGoCore({
+      appPath: resources.app,
+      expected: input.expected,
+    });
+    requireValue(await resources.verify(), "UPDATE_RESOURCES_CHANGED");
     const parent = await fs.lstat(input.recoveryParent);
     requireValue(
       parent.isDirectory() &&
@@ -351,6 +361,8 @@ export async function runSupervisedUpdate(raw, publish = () => {}) {
           (await resources.verify()) && (await backup.verify()),
       },
       preservedSettingsSha256: backup.settingsSha256,
+      goCoreArtifact: goCore.goCoreArtifact,
+      goCoreBuild: goCore.goCoreBuild,
       ...(input.replaceReady ? { replaceReady: input.replaceReady } : {}),
       localArchive: { path: input.archivePath, manifest },
       copyApp: (source, destination) =>

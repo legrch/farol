@@ -4,7 +4,13 @@ import os from "node:os";
 import path from "node:path";
 let text = "";
 for await (const chunk of process.stdin) text += chunk;
-const { home, helperPath, request, moduleURL } = JSON.parse(text);
+const { home, executable, request, moduleURL } = JSON.parse(text);
+// The parent already qualified this disposable executable; the caller under
+// test only needs a capability that names it.
+const selection = {
+  kind: "go",
+  helper: { buildId: "7".repeat(64), qualify: async () => executable },
+};
 const { captureInstalledProcessStart, startInstalledUpdateHelper } =
   await import(moduleURL);
 const user = os.userInfo();
@@ -26,7 +32,7 @@ await fs.writeFile(
   { mode: 0o600 },
 );
 const launched = await startInstalledUpdateHelper(
-  helperPath,
+  selection,
   { ...request, pid: process.pid, processStart },
   { readinessTimeoutMs: 5000 },
 );

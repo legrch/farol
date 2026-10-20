@@ -36,7 +36,19 @@ const mocks = vi.hoisted(() => ({
   publishBinding: vi.fn(),
   captureExecution: vi.fn(),
   recheckExecution: vi.fn(),
+  goAdapter: vi.fn(),
 }));
+// Observe, never replace, the adapter that attests the Go executable: it is
+// the one seam both the slot publisher and the update helper are built from.
+vi.mock(
+  "../../apps/desktop/installed-slot-binding-helper",
+  async (original) => ({
+    ...(await original<
+      typeof import("../../apps/desktop/installed-slot-binding-helper")
+    >()),
+    installedGoSlotBindingHelper: mocks.goAdapter,
+  }),
+);
 vi.mock("../../src/apps/desktop/installed-execution-snapshot", () => ({
   captureInstalledExecutionSnapshot: mocks.captureExecution,
 }));
@@ -156,11 +168,28 @@ const ineligibleTargets = [
   { version: manifest.version, buildVersion: "1" },
 ];
 const repos = ["legrch/farol", "legrch/farol-releases"] as const;
+// A compiled-core declaration for a build identity. Source composition only:
+// attestation of the executable itself is mocked at the helper seams here and
+// measured for real in the adapter and native lanes.
+function compiledFor(selected: typeof build) {
+  return {
+    schema: "farol-core-artifact/1",
+    build: {
+      buildId: selected.buildId,
+      sourceSHA: selected.sourceCommit,
+      sourceTreeDigest: selected.sourceTreeDigest,
+      platform: { goos: "darwin", goarch: "arm64" },
+    },
+    binary: { path: "farol-backend", size: 128, sha256: "a".repeat(64) },
+  };
+}
 function options() {
   return {
     directory: path.join(slot, "Contents/Resources/app"),
     userData,
     build,
+    // Every update runs the attested Go helper; a legacy build refuses.
+    goCoreArtifact: compiledFor(build),
     copyApp: mocks.copyApp,
     physicalFiles: fs,
     removeDirectory: (directory: string, force: boolean) =>
@@ -174,7 +203,7 @@ async function prepared(selectedBuild = build, goCoreArtifact?: unknown) {
   const controller = await createInstalledUpdateRuntime({
     ...options(),
     build: selectedBuild,
-    ...(goCoreArtifact === undefined ? {} : { goCoreArtifact }),
+    goCoreArtifact: goCoreArtifact ?? compiledFor(selectedBuild),
   });
   expect(controller).not.toBeNull();
   await controller!.initialize();
@@ -186,6 +215,13 @@ async function prepared(selectedBuild = build, goCoreArtifact?: unknown) {
 }
 beforeEach(async () => {
   vi.resetAllMocks();
+  mocks.goAdapter.mockImplementation(
+    (
+      await vi.importActual<
+        typeof import("../../apps/desktop/installed-slot-binding-helper")
+      >("../../apps/desktop/installed-slot-binding-helper")
+    ).installedGoSlotBindingHelper,
+  );
   mocks.captureStart.mockResolvedValue("fixture-start");
   mocks.recheckExecution.mockResolvedValue(undefined);
   mocks.captureExecution.mockImplementation(async (input) => ({
@@ -436,9 +472,22 @@ describe("supervised installed updater (native files/lease, mocked package/proce
       },
     };
     const observeClosed = vi.fn(async () => proof);
+    // The supervised controller executes the accepted TARGET package's Go
+    // helper: its declaration and canonical build identity, not the source's.
+    const controllerBuild = {
+      ...build,
+      version: "0.3.0-owner.beta.1",
+      buildVersion: "18",
+      sourceCommit: "3".repeat(40),
+    };
+    controllerBuild.buildId = createHash("sha256")
+      .update(canonicalBuildIdentityPayload(controllerBuild))
+      .digest("hex");
     return {
       directory,
       userData,
+      goCoreArtifact: compiledFor(controllerBuild),
+      goCoreBuild: controllerBuild,
       localArchive: { path: path.join(root, "selected.zip"), manifest },
       copyApp: mocks.copyApp,
       removeDirectory: (directory: string, force: boolean) =>
@@ -661,6 +710,23 @@ describe("supervised installed updater (native files/lease, mocked package/proce
         lastQuitSha256: "a".repeat(64),
       },
     });
+    // The closed helper is the accepted TARGET package's attested Go binary,
+    // measured in the controller-verified resources, over the transferred lease.
+    expect(mocks.helper.mock.calls[0]![0]).toMatchObject({
+      kind: "go",
+      helper: {
+        buildId: input.goCoreBuild.buildId,
+        qualify: expect.any(Function),
+      },
+    });
+    expect(mocks.helper.mock.calls[0]![2].promotionLease).toBeDefined();
+    expect(mocks.goAdapter).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        build: input.goCoreBuild,
+        directory: input.directory,
+      }),
+    );
+    expect(mocks.captureExecution).not.toHaveBeenCalled();
     expect(input.observeHelper).toHaveBeenCalledExactlyOnceWith(
       originalOperation,
     );
@@ -677,6 +743,33 @@ describe("supervised installed updater (native files/lease, mocked package/proce
       helper: { pid: 123 },
     });
     await controller!.close();
+  });
+
+  it("refuses a supervised package without a Go declaration before any helper", async () => {
+    const { goCoreArtifact: _omitted, ...input } = await selected();
+    const controller = await createSupervisedInstalledUpdateRuntime(input);
+    expect(controller).not.toBeNull();
+    await controller!.initialize();
+    await controller!.prepareLocal();
+    await controller!.restart();
+    expect(controller!.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: "UPDATE_HELPER_GO_CORE_REQUIRED",
+    });
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(mocks.publishBinding).not.toHaveBeenCalled();
+    expect(JSON.stringify(mocks.exec.mock.calls)).not.toMatch(/python/u);
+    await controller!.close();
+  });
+
+  it("refuses a target build that is not a canonical identity", async () => {
+    const input = await selected();
+    expect(
+      await createSupervisedInstalledUpdateRuntime({
+        ...input,
+        goCoreBuild: { ...input.goCoreBuild, buildId: "0".repeat(64) },
+      }),
+    ).toBeNull();
   });
 
   it.each(["verified", "launch_requested", "completed"])(
@@ -3467,9 +3560,17 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
             uid: -1,
           });
         return actual.startInstalledUpdateHelper(
-          failure === "helper"
-            ? path.join(root, "missing-helper.py")
-            : path.join(process.cwd(), "resources/native/update_helper.py"),
+          {
+            kind: "go",
+            helper: {
+              buildId: build.buildId,
+              qualify: async () => {
+                if (failure === "helper")
+                  throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
+                return path.join(root, "never-spawned-farol-backend");
+              },
+            },
+          },
           request,
         );
       });
@@ -4285,14 +4386,17 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
         args[1]!.endsWith("previous.app") ? source : target,
       ),
     }));
+    const updatedBuild = {
+      ...build,
+      version: manifest.version,
+      buildVersion: manifest.buildVersion,
+      buildId: manifest.buildId,
+    };
     const updatedOptions = {
       ...options(),
-      build: {
-        ...build,
-        version: manifest.version,
-        buildVersion: manifest.buildVersion,
-        buildId: manifest.buildId,
-      },
+      build: updatedBuild,
+      // The running target's own declaration selects its Go helper on rollback.
+      goCoreArtifact: compiledFor(updatedBuild),
     };
     mocks.reclaimArchive.mockResolvedValueOnce({
       ok: false,
@@ -4363,6 +4467,21 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       target,
       relaunch: true,
     });
+    // Restore runs the attested Go helper of the build that is running now, over
+    // that build's private execution image; no interpreter path is passed.
+    expect(mocks.helper.mock.calls[1]![0]).toMatchObject({
+      kind: "go",
+      helper: { buildId: manifest.buildId, qualify: expect.any(Function) },
+    });
+    expect(mocks.goAdapter).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        build: expect.objectContaining({ buildId: manifest.buildId }),
+        directory: path.join(
+          userData,
+          "private-execution/Farol.app/Contents/Resources/app",
+        ),
+      }),
+    );
     await next!.restore("rollback");
     expect(mocks.helper).toHaveBeenCalledTimes(2);
     const opRoot = path.join(userData, "installed-updates", op.operationId);
@@ -6389,6 +6508,23 @@ describe("immutable operation binding recovery (disposable bytes, mocked effects
     await controller.restart();
     expect(mocks.publishBinding).toHaveBeenCalledTimes(1);
     expect(mocks.helper).toHaveBeenCalledTimes(1);
+    // The same private execution image supplies the update helper: apply is
+    // dispatched with a Go capability for the running build, never a path.
+    expect(mocks.helper.mock.calls[0]![0]).toMatchObject({
+      kind: "go",
+      helper: { buildId: build.buildId, qualify: expect.any(Function) },
+    });
+    expect(mocks.captureExecution).toHaveBeenCalledTimes(1);
+    expect(mocks.goAdapter).toHaveBeenCalledTimes(2);
+    expect(mocks.goAdapter).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        build,
+        directory: path.join(
+          userData,
+          "private-execution/Farol.app/Contents/Resources/app",
+        ),
+      }),
+    );
     const request = mocks.helper.mock.calls[0]![1];
     expect(
       await fs.readFile(
@@ -6483,6 +6619,128 @@ describe("immutable operation binding recovery (disposable bytes, mocked effects
     expect(mocks.publishBinding).toHaveBeenCalledTimes(1);
     expect(mocks.helper).not.toHaveBeenCalled();
     expect(release).not.toHaveBeenCalled();
+    await controller.close();
+  });
+});
+
+describe("attested Go update helper (no Python alternative; mocked launch seam)", () => {
+  async function legacy() {
+    const { goCoreArtifact: _omitted, ...rest } = options();
+    const controller = await createInstalledUpdateRuntime(rest);
+    expect(controller).not.toBeNull();
+    await controller!.initialize();
+    await controller!.check();
+    await controller!.download();
+    expect(controller!.snapshot().phase).toBe("ready");
+    return controller!;
+  }
+
+  it("refuses a legacy build's apply with a closed reason before any copy, binding or process", async () => {
+    const controller = await legacy();
+    await controller.restart();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: "UPDATE_HELPER_GO_CORE_REQUIRED",
+    });
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(mocks.publishBinding).not.toHaveBeenCalled();
+    expect(mocks.goAdapter).not.toHaveBeenCalled();
+    expect(mocks.copyApp).not.toHaveBeenCalled();
+    expect(mocks.captureExecution).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    // No interpreter is started on any path of the refused attempt.
+    expect(JSON.stringify(mocks.exec.mock.calls)).not.toMatch(/python/u);
+    expect(JSON.parse(await fs.readFile(ready, "utf8")).operation).toBeNull();
+    await controller.close();
+  });
+
+  it("refuses a legacy build's restore with the same closed reason", async () => {
+    const first = await prepared();
+    await first.restart();
+    const op = JSON.parse(await fs.readFile(ready, "utf8")).operation;
+    await fs.writeFile(
+      path.join(userData, "installed-updates", op.operationId, "journal.json"),
+      JSON.stringify({
+        schema: "farol.installed-update-journal/1",
+        ...op,
+        phase: "prepared",
+      }),
+      { mode: 0o600 },
+    );
+    mocks.exec.mockImplementation(async (file: unknown, args: string[]) =>
+      file === "/bin/ps"
+        ? Promise.reject({ code: 1, stdout: "", stderr: "" })
+        : {
+            stdout: JSON.stringify(
+              args[0]!.endsWith("update-obligations.mjs")
+                ? {
+                    drained: true,
+                    obligationCount: 0,
+                    unreadableCount: 0,
+                    changedCount: 0,
+                  }
+                : args[1]!.endsWith("staged.app")
+                  ? target
+                  : source,
+            ),
+          },
+    );
+    const { goCoreArtifact: _omitted, ...rest } = options();
+    const next = await createInstalledUpdateRuntime(rest);
+    await next!.initialize();
+    expect(next!.snapshot()).toMatchObject({ phase: "recovery" });
+    const dispatched = mocks.helper.mock.calls.length;
+    await next!.restore("recover");
+    await next!.restore("rollback");
+    expect(mocks.helper).toHaveBeenCalledTimes(dispatched);
+    expect(next!.snapshot()).toMatchObject({
+      phase: "recovery",
+      blockedBy: "UPDATE_HELPER_GO_CORE_REQUIRED",
+    });
+    expect(JSON.stringify(mocks.exec.mock.calls)).not.toMatch(/python/u);
+    await next!.close();
+  });
+
+  it("refuses with the existing not-started reason, never Python, when the Go capability fails to qualify", async () => {
+    const controller = await prepared();
+    const actual = await vi.importActual<
+      typeof import("../../src/modules/release/infra/native/installed-update-helper")
+    >("../../src/modules/release/infra/native/installed-update-helper");
+    const adapter = mocks.goAdapter.getMockImplementation()!;
+    // The slot publisher's capability is built; the update helper's is not.
+    mocks.goAdapter
+      .mockImplementationOnce(adapter)
+      .mockImplementationOnce(() => {
+        throw new Error("UPDATE_SLOT_BINDING_GO_BUILD_MISMATCH");
+      });
+    const selections: unknown[] = [];
+    mocks.helper.mockImplementationOnce(async (selection, request) => {
+      selections.push(selection);
+      return actual.startInstalledUpdateHelper(selection, request);
+    });
+    await controller.restart();
+    expect(selections).toEqual([
+      { kind: "refused", reason: "helper_preflight_failed" },
+    ]);
+    expect(controller.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: "UPDATE_HELPER_NOT_STARTED",
+    });
+    expect(JSON.stringify(mocks.exec.mock.calls)).not.toMatch(/python/u);
+    expect(JSON.parse(await fs.readFile(ready, "utf8")).operation).toBeNull();
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(quit).not.toHaveBeenCalled();
+    await controller.close();
+  });
+
+  it("dispatches the live helper, with no promotion lease, for an ordinary update", async () => {
+    const controller = await prepared();
+    await controller.restart();
+    const [selection, , launch] = mocks.helper.mock.calls[0]!;
+    expect(selection).toMatchObject({ kind: "go" });
+    // An ordinary installed update has no promotion lease to hand over.
+    expect(launch.promotionLease).toBeUndefined();
     await controller.close();
   });
 });

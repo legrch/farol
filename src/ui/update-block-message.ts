@@ -16,6 +16,8 @@ const messages: Readonly<Record<string, string>> = {
   UPDATE_WORK_PENDING: "Finish or cancel active work before restarting.",
   UPDATE_WORK_DRAIN_UNCONFIRMED:
     "Farol could not confirm that local work has finished. Review its current result before restarting.",
+  UPDATE_HELPER_GO_CORE_REQUIRED:
+    "This Farol build can’t update itself any more. Install the current Farol build manually.",
   UPDATE_STATE_UNREADABLE: "Farol couldn’t read its update status.",
   UPDATE_VERIFICATION_RECOVERY_REQUIRED:
     "An earlier package check did not finish. Its files are saved. Review Diagnostics to recover that check before updating.",

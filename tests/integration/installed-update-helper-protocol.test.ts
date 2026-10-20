@@ -1,16 +1,20 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import fs from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   startInstalledUpdateHelper,
+  type InstalledUpdateHelperSelection,
   type InstalledUpdateOperation,
   type InstalledUpdateRequest,
   type PromotionLeaseTransfer,
 } from "../../src/modules/release/infra/native/installed-update-helper.js";
+import {
+  FIXTURE_GO_EXECUTABLE,
+  fakeGoHelper,
+  goSelection,
+} from "./fixtures/installed-update-go-helper";
 
 vi.mock("node:child_process", async (original) => ({
   ...(await original<typeof import("node:child_process")>()),
@@ -24,10 +28,10 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
-const helperPath = path.join(
-  process.cwd(),
-  "resources/native/update_helper.py",
-);
+// A Go capability double: its qualification is the only preflight and it reads
+// no file. The spawn double below receives `[FIXTURE_GO_EXECUTABLE, mode]`.
+const goHelper = fakeGoHelper();
+const selection = goSelection(goHelper);
 const request: InstalledUpdateRequest = {
   action: "apply",
   operationId: "a".repeat(32),
@@ -59,7 +63,8 @@ const event = (selected: InstalledUpdateRequest = request) => ({
 // installed-update-helper-readiness.test.mjs.
 class Transport extends EventEmitter {
   readonly pid = 765432;
-  readonly stdin = new Writable({ write: (_chunk, _encoding, done) => done() });
+  // Node reports a null stdin for an "ignore" stdio entry.
+  readonly stdin = null;
   readonly stdout = new PassThrough();
   readonly requests: Buffer[] = [];
   readonly requestPipe = new Writable({
@@ -108,6 +113,7 @@ async function launch(
     deadlineAt?: number;
     canStartEffect?(): boolean;
   }> = {},
+  selected: InstalledUpdateHelperSelection = selection,
 ) {
   const child = transport ?? new Transport();
   let seen!: () => void;
@@ -121,13 +127,13 @@ async function launch(
     });
     return child as unknown as ChildProcess;
   });
-  const pending = startInstalledUpdateHelper(helperPath, input, {
+  const pending = startInstalledUpdateHelper(selected, input, {
     readinessTimeoutMs,
     ...(recordSpawn ? { recordSpawn } : {}),
     ...(promotionLease ? { promotionLease } : {}),
     ...quitOptions,
   });
-  // The real byte/permission preflight may refuse before invoking our spawn
+  // The capability's qualification may refuse before invoking our spawn
   // double. Surface that result instead of leaving the fixture waiting forever.
   await Promise.race([
     spawned,
@@ -139,12 +145,191 @@ async function launch(
 }
 
 describe("installed helper bounded readiness protocol", () => {
-  it("ends the fixture when helper preflight refuses before spawn", async () => {
-    vi.spyOn(fs, "open").mockRejectedValueOnce(
-      new Error("fixture read refused"),
-    );
-    await expect(launch()).rejects.toThrow("HELPER_FIXTURE_DID_NOT_SPAWN");
+  it("ends the fixture when helper qualification refuses before spawn", async () => {
+    const refusing = fakeGoHelper(async () => {
+      throw new Error("fixture qualification refused");
+    });
+    await expect(
+      launch(
+        1000,
+        request,
+        undefined,
+        undefined,
+        undefined,
+        {},
+        goSelection(refusing),
+      ),
+    ).rejects.toThrow("HELPER_FIXTURE_DID_NOT_SPAWN");
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("spawns the qualified Go executable in live mode with stdin ignored", async () => {
+    const { child, pending } = await launch();
+    expect(spawn).toHaveBeenCalledOnce();
+    const [executable, args, options] = vi.mocked(spawn).mock.calls[0]!;
+    expect(executable).toBe(FIXTURE_GO_EXECUTABLE);
+    expect(args).toEqual(["run-live-release-helper"]);
+    expect(options).toMatchObject({
+      cwd: "/",
+      env: { LANG: "C.UTF-8", PATH: "/usr/bin:/bin" },
+      detached: true,
+      // No program on stdin and nothing on stderr; fd3 request, fd4 ACK.
+      stdio: ["ignore", "pipe", "ignore", "pipe", "pipe"],
+    });
+    expect(Object.keys(options as object).sort()).toEqual([
+      "cwd",
+      "detached",
+      "env",
+      "stdio",
+    ]);
+    expect(goHelper.qualified).toBeGreaterThan(0);
+    child.ack.end(`${JSON.stringify(event())}\n`);
+    const result = await pending;
+    expect(result.status).toBe("ready");
+    child.finish(0);
+    await result.operation.completion;
+  });
+
+  it("spawns the closed mode with the borrowed lease and continuation descriptors", async () => {
+    const lease = leaseFixture();
+    const { child, pending } = await launch(
+      1000,
+      closedApplyRequest,
+      async () => undefined,
+      lease,
+    );
+    const [executable, args, options] = vi.mocked(spawn).mock.calls[0]!;
+    expect(executable).toBe(FIXTURE_GO_EXECUTABLE);
+    expect(args).toEqual(["run-closed-release-helper"]);
+    expect((options as { stdio: unknown[] }).stdio).toEqual([
+      "ignore",
+      "pipe",
+      "ignore",
+      "pipe",
+      "pipe",
+      lease.descriptor,
+      "pipe",
+    ]);
+    child.ack.end(
+      `${JSON.stringify(closedEvent(lease, closedApplyRequest))}\n`,
+    );
+    await tick();
+    child.finish(0);
+    const result = await pending;
+    expect(["continued", "terminal"]).toContain(result.status);
+    expect(Buffer.concat(child.continues).length).toBeGreaterThan(0);
+  });
+
+  it("refuses a legacy build or an unselected capability without any process", async () => {
+    for (const reason of [
+      "helper_go_core_required",
+      "helper_preflight_failed",
+    ] as const) {
+      const result = await startInstalledUpdateHelper(
+        { kind: "refused", reason },
+        request,
+      );
+      expect(result).toMatchObject({ status: "not_started", reason });
+      expect(result.operation.pid).toBeNull();
+      expect(await result.operation.completion).toEqual({
+        code: null,
+        signal: null,
+        terminal: null,
+        protocolError: reason,
+      });
+    }
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["relative", "farol-backend"],
+    ["unnormalized", "/fixture/../fixture/farol-backend"],
+    ["empty", ""],
+  ])(
+    "refuses a %s qualified executable path before spawn",
+    async (_name, executable) => {
+      const result = await startInstalledUpdateHelper(
+        goSelection(fakeGoHelper(executable)),
+        request,
+      );
+      expect(result).toMatchObject({
+        status: "not_started",
+        reason: "helper_preflight_failed",
+      });
+      expect(spawn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a capability whose build identity is not a digest", async () => {
+    const result = await startInstalledUpdateHelper(
+      goSelection({
+        buildId: "not-a-digest",
+        qualify: async () => FIXTURE_GO_EXECUTABLE,
+      }),
+      request,
+    );
+    expect(result).toMatchObject({
+      status: "not_started",
+      reason: "helper_preflight_failed",
+    });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("re-qualifies the executable after the child closes and fails closed on drift", async () => {
+    let calls = 0;
+    const drifting = fakeGoHelper(async () =>
+      ++calls === 1 ? FIXTURE_GO_EXECUTABLE : "/fixture/replaced-farol-backend",
+    );
+    const { child, pending } = await launch(
+      1000,
+      request,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      goSelection(drifting),
+    );
+    child.ack.end(`${JSON.stringify(event())}\n`);
+    const result = await pending;
+    child.finish(0);
+    const finished = await result.operation.completion;
+    expect(calls).toBe(2);
+    expect(finished).toMatchObject({
+      code: 0,
+      protocolError: "helper_executable_changed",
+    });
+  });
+
+  it("fails closed when the post-close qualification throws, and keeps a clean close clean", async () => {
+    let calls = 0;
+    const failing = fakeGoHelper(async () => {
+      if (++calls === 2) throw new Error("fixture resources changed");
+      return FIXTURE_GO_EXECUTABLE;
+    });
+    const first = await launch(
+      1000,
+      request,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      goSelection(failing),
+    );
+    first.child.ack.end(`${JSON.stringify(event())}\n`);
+    const unchanged = await first.pending;
+    first.child.finish(0);
+    expect(await unchanged.operation.completion).toMatchObject({
+      protocolError: "helper_executable_changed",
+    });
+    vi.mocked(spawn).mockReset();
+    const clean = await launch();
+    clean.child.ack.end(`${JSON.stringify(event())}\n`);
+    const ready = await clean.pending;
+    clean.child.finish(0);
+    expect(await ready.operation.completion).toMatchObject({
+      code: 0,
+      protocolError: null,
+    });
   });
 
   it("keeps ordinary live rollback on its correlated Quit handoff", async () => {
@@ -176,10 +361,7 @@ describe("installed helper bounded readiness protocol", () => {
         }),
     );
     const { child, pending } = await launch(1000, request, recordSpawn);
-    const before = {
-      programEnded: child.stdin.writableEnded,
-      requestEnded: child.requestPipe.writableEnded,
-    };
+    const before = { requestEnded: child.requestPipe.writableEnded };
     const calls = recordSpawn.mock.calls.length;
     persist?.();
     await tick();
@@ -188,8 +370,8 @@ describe("installed helper bounded readiness protocol", () => {
     child.finish(0);
     await result.operation.completion;
     expect(calls).toBe(1);
-    expect(before).toEqual({ programEnded: false, requestEnded: false });
-    expect(child.stdin.writableEnded).toBe(true);
+    expect(before).toEqual({ requestEnded: false });
+    expect(child.requestPipe.writableEnded).toBe(true);
     expect(result.status).toBe("ready");
   });
 
@@ -216,9 +398,7 @@ describe("installed helper bounded readiness protocol", () => {
         status: "outcome_unknown",
         reason: mode === "failed" ? "spawn_record_failed" : "readiness_timeout",
       });
-      expect(child.stdin.destroyed).toBe(true);
       expect(child.requestPipe.destroyed).toBe(true);
-      expect(child.stdin.writableEnded).toBe(false);
       expect(child.requestPipe.writableEnded).toBe(false);
       expect(spawn).toHaveBeenCalledTimes(1);
     },
@@ -230,7 +410,6 @@ describe("installed helper bounded readiness protocol", () => {
       const child = new Transport();
       Object.defineProperty(child, "pid", { value: undefined });
       const requestWrite = vi.spyOn(child.requestPipe, "end");
-      const programWrite = vi.spyOn(child.stdin, "end");
       let seen!: () => void;
       const observed = new Promise<void>((resolve) => {
         seen = resolve;
@@ -241,14 +420,14 @@ describe("installed helper bounded readiness protocol", () => {
             "error",
             Object.assign(new Error("fixture spawn failure"), {
               code,
-              syscall: "spawn /usr/bin/python3",
+              syscall: `spawn ${FIXTURE_GO_EXECUTABLE}`,
             }),
           );
           seen();
         });
         return child as unknown as ChildProcess;
       });
-      const pending = startInstalledUpdateHelper(helperPath, request, {
+      const pending = startInstalledUpdateHelper(selection, request, {
         readinessTimeoutMs: 1000,
       });
       let settled = false;
@@ -275,7 +454,6 @@ describe("installed helper bounded readiness protocol", () => {
         protocolError: "helper_spawn_failed",
       });
       expect(result.operation.pid).toBeNull();
-      expect(programWrite).not.toHaveBeenCalled();
       expect(requestWrite).not.toHaveBeenCalled();
       expect(spawn).toHaveBeenCalledTimes(1);
     },
@@ -290,13 +468,13 @@ describe("installed helper bounded readiness protocol", () => {
           "error",
           Object.assign(new Error("fixture"), {
             code: "ENOENT",
-            syscall: "spawn /usr/bin/python3",
+            syscall: `spawn ${FIXTURE_GO_EXECUTABLE}`,
           }),
         ),
       );
       return child as unknown as ChildProcess;
     });
-    const result = await startInstalledUpdateHelper(helperPath, request, {
+    const result = await startInstalledUpdateHelper(selection, request, {
       readinessTimeoutMs: 10,
     });
     expect(result).toMatchObject({
@@ -317,7 +495,7 @@ describe("installed helper bounded readiness protocol", () => {
       "error",
       Object.assign(new Error("fixture"), {
         code: "EPERM",
-        syscall: "spawn /usr/bin/python3",
+        syscall: `spawn ${FIXTURE_GO_EXECUTABLE}`,
       }),
     );
     child.finish(79, "unknown");
@@ -538,11 +716,11 @@ describe("normal-Quit deadline fencing (Node transport doubles and test clocks o
   ])(
     "rejects an invalid paired context %j before preflight",
     async (options) => {
-      const open = vi.spyOn(fs, "open");
+      goHelper.qualified = 0;
       await expect(
-        startInstalledUpdateHelper(helperPath, request, options),
+        startInstalledUpdateHelper(selection, request, options),
       ).rejects.toThrow("INSTALLED_UPDATE_QUIT_CONTEXT_INVALID");
-      expect(open).not.toHaveBeenCalled();
+      expect(goHelper.qualified).toBe(0);
       expect(spawn).not.toHaveBeenCalled();
     },
   );
@@ -552,7 +730,7 @@ describe("normal-Quit deadline fencing (Node transport doubles and test clocks o
     async (input) => {
       await expect(
         startInstalledUpdateHelper(
-          helperPath,
+          selection,
           {
             ...input,
             relaunch: true,
@@ -569,8 +747,8 @@ describe("normal-Quit deadline fencing (Node transport doubles and test clocks o
     async (mode) => {
       clock();
       if (mode === "expired") vi.setSystemTime(deadlineAt);
-      const open = vi.spyOn(fs, "open");
-      const result = await startInstalledUpdateHelper(helperPath, request, {
+      goHelper.qualified = 0;
+      const result = await startInstalledUpdateHelper(selection, request, {
         deadlineAt,
         canStartEffect: () => {
           if (mode === "throws") throw new Error("fixture callback failure");
@@ -591,17 +769,17 @@ describe("normal-Quit deadline fencing (Node transport doubles and test clocks o
         terminal: null,
         protocolError: reason,
       });
-      expect(open).not.toHaveBeenCalled();
+      // An expired or revoked fence stops before the capability is even asked.
+      expect(goHelper.qualified).toBe(0);
       expect(spawn).not.toHaveBeenCalled();
     },
   );
 
-  it.each(["open", "close", "owner-home"])(
+  it.each(["qualify", "owner-home"])(
     "rechecks after %s preflight before spawn",
     async (stage) => {
       clock();
-      const originalOpen = fs.open.bind(fs);
-      const close = vi.fn();
+      let selected = selection;
       if (stage === "owner-home") {
         const originalUserInfo = os.userInfo.bind(os);
         vi.spyOn(os, "userInfo").mockImplementationOnce(() => {
@@ -610,20 +788,16 @@ describe("normal-Quit deadline fencing (Node transport doubles and test clocks o
           return user;
         });
       } else {
-        vi.spyOn(fs, "open").mockImplementationOnce(async (...args) => {
-          const handle = await originalOpen(...args);
-          const originalClose = handle.close.bind(handle);
-          vi.spyOn(handle, "close").mockImplementationOnce(async () => {
-            await originalClose();
-            close();
-            if (stage === "close") vi.setSystemTime(deadlineAt);
-          });
-          if (stage === "open") vi.setSystemTime(deadlineAt);
-          return handle;
-        });
+        // The deadline passes while the attestation itself runs.
+        selected = goSelection(
+          fakeGoHelper(async () => {
+            vi.setSystemTime(deadlineAt);
+            return FIXTURE_GO_EXECUTABLE;
+          }),
+        );
       }
       const result = await startInstalledUpdateHelper(
-        helperPath,
+        selected,
         request,
         quitOptions(),
       );
@@ -633,7 +807,6 @@ describe("normal-Quit deadline fencing (Node transport doubles and test clocks o
       });
       expect((await result.operation.completion).code).toBeNull();
       expect(spawn).not.toHaveBeenCalled();
-      if (stage !== "owner-home") expect(close).toHaveBeenCalledOnce();
     },
   );
 
@@ -647,7 +820,7 @@ describe("normal-Quit deadline fencing (Node transport doubles and test clocks o
           reply = resolve;
         }),
     );
-    const pending = startInstalledUpdateHelper(helperPath, closedApplyRequest, {
+    const pending = startInstalledUpdateHelper(selection, closedApplyRequest, {
       ...quitOptions(),
       promotionLease: lease,
       recordSpawn: async () => undefined,
@@ -674,7 +847,7 @@ describe("normal-Quit deadline fencing (Node transport doubles and test clocks o
       return true;
     });
     const result = await startInstalledUpdateHelper(
-      helperPath,
+      selection,
       closedApplyRequest,
       {
         ...quitOptions(),
@@ -702,7 +875,7 @@ describe("normal-Quit deadline fencing (Node transport doubles and test clocks o
       return child as unknown as ChildProcess;
     });
     const result = await startInstalledUpdateHelper(
-      helperPath,
+      selection,
       request,
       quitOptions(),
     );
@@ -710,7 +883,6 @@ describe("normal-Quit deadline fencing (Node transport doubles and test clocks o
       status: "outcome_unknown",
       reason: "quit_deadline_expired",
     });
-    expect(child.stdin.writableEnded).toBe(false);
     expect(child.requestPipe.destroyed).toBe(true);
     expect(child.requests).toEqual([]);
     await retainCompletion(child, result.operation);
@@ -765,41 +937,13 @@ describe("normal-Quit deadline fencing (Node transport doubles and test clocks o
             : "quit_deadline_expired",
       });
       expect(result.operation).toBe(recorded);
-      expect(child.stdin.destroyed).toBe(true);
       expect(child.requestPipe.destroyed).toBe(true);
-      expect(child.stdin.writableEnded).toBe(false);
       expect(child.requests).toEqual([]);
       expect(child.continues).toEqual([]);
       if (lease) expect(lease.release).not.toHaveBeenCalled();
       await retainCompletion(child, result.operation);
     },
   );
-
-  it("does not send a request when the deadline expires after writing the program", async () => {
-    clock();
-    const child = new Transport();
-    // The write itself supplies a synchronous boundary before timer dispatch.
-    vi.spyOn(child.stdin, "end").mockImplementationOnce(() => {
-      vi.setSystemTime(deadlineAt);
-      return child.stdin;
-    });
-    const { pending } = await launch(
-      1000,
-      request,
-      undefined,
-      undefined,
-      child,
-      quitOptions(),
-    );
-    const result = await pending;
-    expect(result).toMatchObject({
-      status: "outcome_unknown",
-      reason: "quit_deadline_expired",
-    });
-    expect(child.requests).toEqual([]);
-    expect(child.requestPipe.destroyed).toBe(true);
-    await retainCompletion(child, result.operation);
-  });
 
   it.each(["verify", "release", "revoked"])(
     "never continues after late transfer %s even before timer dispatch",
@@ -1006,7 +1150,7 @@ function closedTransferProtocol(action: "apply" | "rollback") {
     if (kind === "verify-throws")
       lease.verify.mockRejectedValue(new Error("lost verification"));
     const result = await startInstalledUpdateHelper(
-      helperPath,
+      selection,
       kind === "live-lease" ? request : closedRequest,
       {
         ...(kind === "missing-lease" ? {} : { promotionLease: lease }),
@@ -1034,7 +1178,7 @@ function closedTransferProtocol(action: "apply" | "rollback") {
     await tick();
     const options = vi.mocked(spawn).mock.calls[0]![2];
     expect(options).toMatchObject({
-      stdio: ["pipe", "pipe", "ignore", "pipe", "pipe", 17, "pipe"],
+      stdio: ["ignore", "pipe", "ignore", "pipe", "pipe", 17, "pipe"],
     });
     expect(record).toHaveBeenCalledOnce();
     expect(child.requestPipe.writableEnded).toBe(true);

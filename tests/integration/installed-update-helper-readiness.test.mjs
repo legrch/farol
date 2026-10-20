@@ -9,11 +9,12 @@ import {
   captureInstalledProcessStart,
   startInstalledUpdateHelper,
 } from "../../src/modules/release/infra/native/installed-update-helper.ts";
+import { referenceGoHelper } from "./fixtures/installed-update-go-helper.ts";
 
-const helperPath = path.join(
-  process.cwd(),
-  "resources/native/update_helper.py",
-);
+// Real children over real descriptors. The executable is the disposable
+// reference wrapper around the retired Python program, so the launcher's
+// readiness handoff is proven without a build. The compiled Go entry is driven
+// by installed-update-helper-go-native.test.mjs.
 const roots = [];
 const apps = [];
 const helpers = [];
@@ -107,6 +108,8 @@ async function fixture() {
   );
   const user = os.userInfo();
   vi.spyOn(os, "userInfo").mockReturnValue({ ...user, homedir: home });
+  const selection = await referenceGoHelper(root);
+  const executable = await selection.helper.qualify();
   const request = {
     action: "apply",
     operationId,
@@ -122,7 +125,7 @@ async function fixture() {
     waitSeconds: 5,
     relaunch: false,
   };
-  return { home, app, appPath, state, op, request };
+  return { home, app, appPath, state, op, request, selection, executable };
 }
 async function quit(f) {
   await fs.writeFile(
@@ -144,11 +147,13 @@ async function quit(f) {
 describe("installed update readiness handoff", () => {
   it("completes when the caller quits immediately after launcher readiness", async () => {
     const f = await fixture();
-    const launched = await startInstalledUpdateHelper(helperPath, f.request, {
+    const launched = await startInstalledUpdateHelper(f.selection, f.request, {
       readinessTimeoutMs: 5000,
     });
     helpers.push(launched);
-    expect(launched.status).toBe("ready");
+    expect(launched.status, JSON.stringify(launched.operation.observe())).toBe(
+      "ready",
+    );
     // No arbitrary grace period: the caller may quit as soon as this resolves.
     await quit(f);
     const finished = await launched.operation.completion;
@@ -191,7 +196,7 @@ describe("installed update readiness handoff", () => {
     caller.stdin.end(
       JSON.stringify({
         home: f.home,
-        helperPath,
+        executable: f.executable,
         request: f.request,
         moduleURL,
       }),
@@ -219,7 +224,7 @@ describe("installed update readiness handoff", () => {
   it("reports refusal before readiness and keeps the caller alive", async () => {
     const f = await fixture();
     const launched = await startInstalledUpdateHelper(
-      helperPath,
+      f.selection,
       { ...f.request, target: { ...f.request.target, digest: "0".repeat(64) } },
       { readinessTimeoutMs: 5000 },
     );

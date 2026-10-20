@@ -45,6 +45,7 @@ import {
   startInstalledUpdateHelper,
   type InstalledUpdateOperation,
   type InstalledUpdateLaunch,
+  type InstalledUpdateHelperSelection,
 } from "../../modules/release/infra/native/installed-update-helper";
 import {
   BuildIdentitySchema,
@@ -1584,9 +1585,13 @@ export type InstalledUpdateRuntimeOptions = Readonly<{
   directory: string;
   userData: string;
   build: BuildIdentity;
-  // Independent builder declaration from the trusted host. Absent only for
-  // explicit legacy/controller composition; a selected Go failure never falls back.
+  // Independent builder declaration from the trusted host. Absent only for a
+  // legacy build, which no longer updates: the Go release helpers are the only
+  // update path and a selected Go failure never falls back to Python.
   goCoreArtifact?: unknown;
+  // The build that declaration belongs to when it is not the running build:
+  // the supervised controller executes the accepted target package's helper.
+  goCoreBuild?: BuildIdentity;
   // Selected by the trusted supervisory caller, never renderer request data.
   // This is a source for the existing staging/retention owner, not a Ready record.
   localArchive?: Readonly<{ path: string; manifest: unknown }>;
@@ -1740,6 +1745,20 @@ export async function createSupervisedInstalledUpdateRuntime(
       .digest("hex") !== build.buildId
   )
     return null;
+  // The accepted target package's own build supplies the Go helper. It must be
+  // a canonical identity; the declaration is measured against it at launch.
+  let goCoreBuild: BuildIdentity | undefined;
+  if (options.goCoreBuild !== undefined) {
+    const parsed = BuildIdentitySchema.safeParse(options.goCoreBuild);
+    if (
+      !parsed.success ||
+      createHash("sha256")
+        .update(canonicalBuildIdentityPayload(parsed.data))
+        .digest("hex") !== parsed.data.buildId
+    )
+      return null;
+    goCoreBuild = parsed.data;
+  }
   const verifyOriginalState = async () => {
     if (build.version !== "0.2.0-owner.beta.3") return true;
     if (!Digest.safeParse(options.preservedSettingsSha256).success)
@@ -1800,6 +1819,7 @@ export async function createSupervisedInstalledUpdateRuntime(
     {
       ...options,
       build,
+      ...(goCoreBuild ? { goCoreBuild } : {}),
       acquireAdmission: async (settled) => {
         if (admitted)
           return { ok: false, code: "UPDATE_SUPERVISOR_ALREADY_USED" };
@@ -1942,11 +1962,10 @@ async function createRuntime(
     return execution;
   };
   let bindingExecution: Promise<InstalledExecutionSnapshot> | undefined;
-  const selectBindingHelper = async (
+  const selectGoHelper = async (
     expected: z.infer<typeof AcceptedBuild>,
     beforeEffect: () => void,
   ) => {
-    if (options.goCoreArtifact === undefined) return bindingHelper;
     beforeEffect();
     let captured = await requireExecution();
     if (!captured && !supervised) {
@@ -1969,7 +1988,7 @@ async function createRuntime(
     const image = captured;
     return installedGoSlotBindingHelper({
       compiledArtifact: options.goCoreArtifact,
-      build: options.build,
+      build: options.goCoreBuild ?? options.build,
       directory: image?.directory ?? options.directory,
       recheck: async () => {
         beforeEffect();
@@ -1980,6 +1999,32 @@ async function createRuntime(
       },
       beforeEffect,
     });
+  };
+  const selectBindingHelper = async (
+    expected: z.infer<typeof AcceptedBuild>,
+    beforeEffect: () => void,
+  ) =>
+    options.goCoreArtifact === undefined
+      ? bindingHelper
+      : selectGoHelper(expected, beforeEffect);
+  // The only update helper is the attested Go one. A legacy build refuses with a
+  // closed reason and a failed qualification refuses too; neither starts Python.
+  const selectUpdateHelper = async (
+    expected: z.infer<typeof AcceptedBuild>,
+    beforeEffect: () => void,
+  ): Promise<InstalledUpdateHelperSelection> => {
+    if (options.goCoreArtifact === undefined)
+      return { kind: "refused", reason: "helper_go_core_required" };
+    try {
+      return {
+        kind: "go",
+        helper: await selectGoHelper(expected, beforeEffect),
+      };
+    } catch {
+      // An expired Quit deadline is the caller's refusal, not a helper fault.
+      beforeEffect();
+      return { kind: "refused", reason: "helper_preflight_failed" };
+    }
   };
   const context = (directory: string) => {
     const verifier = createUpdatePackageVerifier({
@@ -3596,6 +3641,8 @@ async function createRuntime(
           status: "blocked",
           code: "UPDATE_SUPERVISED_RESTORE_UNQUALIFIED",
         };
+      if (options.goCoreArtifact === undefined)
+        return { status: "blocked", code: "UPDATE_HELPER_GO_CORE_REQUIRED" };
       if (admissionReleaseUnconfirmed)
         return {
           status: "blocked",
@@ -3657,7 +3704,7 @@ async function createRuntime(
           await writeRecord(restoreFile, restoreIntent);
           keepAdmission = true;
           const handoff = await startInstalledUpdateHelper(
-            path.join(options.directory, "update-helper.py"),
+            await selectUpdateHelper(current, () => undefined),
             {
               action,
               ...op,
@@ -3782,6 +3829,10 @@ async function createRuntime(
       return { status: "unknown", code: "UPDATE_HANDOFF_UNRECONCILED" };
     if (!retained || retained.handle !== update.handle)
       return { status: "blocked", code: "UPDATE_PACKAGE_NOT_READY" };
+    // The Python helper is retired. A build without its compiled Go core can
+    // run no update helper, so refuse before any admission, copy or binding.
+    if (options.goCoreArtifact === undefined)
+      return { status: "blocked", code: "UPDATE_HELPER_GO_CORE_REQUIRED" };
     const confirmedManifest = confirmation
       ? parseRetainedGithubReleaseManifest(retained)
       : null;
@@ -4048,9 +4099,12 @@ async function createRuntime(
         // have persisted dispatch, so keep admission even when its sync fails.
         keepAdmission = true;
         await wait(() => writeRecord(readyFile, retained, ensureActive));
+        const helper = await wait(() =>
+          selectUpdateHelper(source, ensureActive),
+        );
         const handoff = await wait(() =>
           startInstalledUpdateHelper(
-            path.join(options.directory, "update-helper.py"),
+            helper,
             {
               action: "apply",
               installLocation:

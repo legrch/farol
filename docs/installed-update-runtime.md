@@ -202,9 +202,18 @@ and stay within the installer's limits.
 The archive helper is an attested, offline-built native executable. Its resource
 filename remains `update-archive.py` for package compatibility; it is executed
 directly, not through Python. The package includes its Go and Unicode dependency
-notices. The React/Go Dev's external Computer file route now uses Go. Install/swap
-helpers retain their existing reviewed Python boundary; this remains a transitional
-release dependency. These source changes do not replace the installed 0.1.11 app.
+notices. The React/Go Dev's external Computer file route now uses Go. The install/swap
+helper is the attested Go `farol-backend` too: the runtime selects it with
+`selectUpdateHelper` (the same private execution image and adapter as slot-binding
+publication) and spawns `run-closed-release-helper` under a transferred promotion lease
+or `run-live-release-helper` otherwise. A build without the compiled Go core refuses
+apply and restore with `UPDATE_HELPER_GO_CORE_REQUIRED` before any admission, copy,
+binding or process and must be updated by hand; a Go capability that fails to qualify
+refuses with the existing not-started outcome. Neither ever falls back to Python, whose
+`update_helper.py` stays in the tree and package until a separate deletion packet. The
+supervised maintainer controller reads the accepted target package's own Go declaration
+and refuses before the predecessor quits when there is none. These source changes do not
+replace the installed 0.1.11 app.
 
 A pre-readiness refusal is retryable only after that same helper's classified
 terminal exit confirms it never crossed the mutation handoff. The app rechecks

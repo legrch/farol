@@ -83,7 +83,10 @@ describe("trusted installed slot selection (pure fixtures)", () => {
         relaunch: false,
       } as unknown as InstalledUpdateRequest;
       await expect(
-        startInstalledUpdateHelper("/no-helper-read", request),
+        startInstalledUpdateHelper(
+          { kind: "refused", reason: "helper_go_core_required" },
+          request,
+        ),
       ).rejects.toThrow("INSTALLED_UPDATE_INPUT_INVALID");
     },
   );

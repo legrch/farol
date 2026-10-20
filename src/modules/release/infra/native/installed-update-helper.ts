@@ -261,12 +261,39 @@ export interface InstalledUpdateOperation {
 
 type QuitEffectRefusal = "quit_deadline_expired" | "quit_effect_not_allowed";
 
+/**
+ * The attested Go release helper: `farol-backend` from an immutable execution
+ * image. `qualify` re-measures the executable against the build's compiled
+ * declaration and returns its absolute path. It is the trusted host's adapter,
+ * never renderer data. There is no interpreter alternative.
+ */
+export interface InstalledGoUpdateHelper {
+  readonly buildId: string;
+  qualify(): Promise<string>;
+}
+
+/**
+ * Closed outcome of selecting the update helper. A build without a compiled Go
+ * core no longer updates, and a Go capability that cannot be selected refuses;
+ * neither ever falls back to the retired Python helper.
+ */
+export type InstalledUpdateHelperSelection =
+  | Readonly<{ kind: "go"; helper: InstalledGoUpdateHelper }>
+  | Readonly<{
+      kind: "refused";
+      reason: "helper_go_core_required" | "helper_preflight_failed";
+    }>;
+
+const GO_LIVE_HELPER_MODE = "run-live-release-helper";
+const GO_CLOSED_HELPER_MODE = "run-closed-release-helper";
+
 export type InstalledUpdateLaunch =
   | Readonly<{
       status: "not_started";
       reason:
         | "helper_spawn_failed"
         | "helper_preflight_failed"
+        | "helper_go_core_required"
         | "owner_home_invalid"
         | "promotion_lease_unconfirmed"
         | "spawn_record_required"
@@ -430,13 +457,16 @@ function parseTerminal(
 }
 
 /**
+ * Spawns the attested Go release helper: `run-closed-release-helper` when a
+ * promotion lease is transferred, otherwise `run-live-release-helper`.
  * Only `ready` authorizes normal Quit for apply/rollback or live recover. Every post-spawn
  * outcome retains the same child via its observation/completion handle.
- * Offline `recover` has no live-app handoff and returns a terminal result instead.
  * Closed apply/rollback use their explicit transfer barrier and never grant live-app Quit.
+ * The Go live helper relaunches after a recover and has no offline recover mode,
+ * so an offline recover is refused by the helper, not simulated here.
  */
 export async function startInstalledUpdateHelper(
-  helperPath: string,
+  selection: InstalledUpdateHelperSelection,
   input: InstalledUpdateRequest,
   options: Readonly<{
     readinessTimeoutMs?: number;
@@ -543,6 +573,7 @@ export async function startInstalledUpdateHelper(
   const beforeSpawn = (
     reason:
       | "helper_preflight_failed"
+      | "helper_go_core_required"
       | "owner_home_invalid"
       | "promotion_lease_unconfirmed"
       | "spawn_record_required"
@@ -569,6 +600,10 @@ export async function startInstalledUpdateHelper(
   };
   const initialRefusal = effectRefusal();
   if (initialRefusal) return beforeSpawn(initialRefusal);
+  // A legacy build, or a Go capability the host could not select, starts no
+  // process at all. The retired interpreter is never an alternative.
+  if (selection.kind === "refused") return beforeSpawn(selection.reason);
+  const goHelper = selection.helper;
   if (
     Boolean(pinned.predecessor) !== Boolean(lease) ||
     (lease &&
@@ -597,10 +632,18 @@ export async function startInstalledUpdateHelper(
       clearTimeout(deadline);
     }
   }
-  let bytes: Buffer;
+  let executable: string;
   try {
-    bytes = await helperBytes(helperPath, checkPreflight);
     checkPreflight();
+    executable = await goHelper.qualify();
+    checkPreflight();
+    if (
+      typeof executable !== "string" ||
+      !path.isAbsolute(executable) ||
+      path.normalize(executable) !== executable ||
+      !sha.test(goHelper.buildId)
+    )
+      throw new Error("INSTALLED_UPDATE_HELPER_INVALID");
   } catch {
     return beforeSpawn(preflightRefusal ?? "helper_preflight_failed");
   }
@@ -624,14 +667,20 @@ export async function startInstalledUpdateHelper(
   };
   const spawnRefusal = effectRefusal();
   if (spawnRefusal) return beforeSpawn(spawnRefusal);
-  const child = spawn("/usr/bin/python3", ["-I", "-S", "-B", "-"], {
-    cwd: "/",
-    env: { LANG: "C.UTF-8", PATH: "/usr/bin:/bin" },
-    detached: true,
-    stdio: lease
-      ? ["pipe", "pipe", "ignore", "pipe", "pipe", lease.descriptor, "pipe"]
-      : ["pipe", "pipe", "ignore", "pipe", "pipe"],
-  });
+  // fd3 request, fd4 ACK, fd5 borrowed promotion lease, fd6 continuation; fd1
+  // carries the one terminal line. Stdin and stderr carry nothing.
+  const child = spawn(
+    executable,
+    [lease ? GO_CLOSED_HELPER_MODE : GO_LIVE_HELPER_MODE],
+    {
+      cwd: "/",
+      env: { LANG: "C.UTF-8", PATH: "/usr/bin:/bin" },
+      detached: true,
+      stdio: lease
+        ? ["ignore", "pipe", "ignore", "pipe", "pipe", lease.descriptor, "pipe"]
+        : ["ignore", "pipe", "ignore", "pipe", "pipe"],
+    },
+  );
   let handoff: InstalledUpdateHandoff | null = null;
   let exit: InstalledUpdateCompletion | null = null;
   let protocolError: string | null = null;
@@ -670,9 +719,8 @@ export async function startInstalledUpdateHelper(
     if (settled) return;
     settled = true;
     if (!requestSent) {
-      // Python has received no program. Closing only our pipes lets it exit
+      // The helper has received no request. Closing only our pipe lets it exit
       // without executing an install; retain its handle for terminal readback.
-      child.stdin?.destroy();
       (child.stdio[3] as Writable | null)?.destroy();
     }
     if (lease && result.status !== "continued" && result.status !== "terminal")
@@ -826,7 +874,7 @@ export async function startInstalledUpdateHelper(
     if (
       !spawned &&
       child.pid === undefined &&
-      error.syscall === "spawn /usr/bin/python3" &&
+      error.syscall === `spawn ${executable}` &&
       [
         "ENOENT",
         "EACCES",
@@ -838,12 +886,15 @@ export async function startInstalledUpdateHelper(
         "ENFILE",
       ].includes(error.code ?? "")
     ) {
-      // Node emitted an exec failure before the spawn event. No program or
-      // request bytes have been written. Still require terminal channel closure.
+      // Node emitted an exec failure before the spawn event. No request bytes
+      // have been written. Still require terminal channel closure.
       spawnFailed = true;
     } else unknown("helper_process_error");
   });
-  child.once("close", (code, signal) => {
+  const handleClose = (
+    code: number | null,
+    signal: NodeJS.Signals | null,
+  ): void => {
     if (
       spawnFailed &&
       !spawned &&
@@ -899,6 +950,23 @@ export async function startInstalledUpdateHelper(
     ) {
       finish({ status: "terminal", operation, result: exit });
     } else if (!settled) unknown("helper_exited_before_readiness");
+  };
+  child.once("close", (code, signal) => {
+    void (async () => {
+      // The image the child ran must still be the attested one after its exit,
+      // or its terminal line cannot be trusted. An exec that never started has
+      // nothing to re-measure.
+      if (spawned) {
+        let unchanged = false;
+        try {
+          unchanged = (await goHelper.qualify()) === executable;
+        } catch {
+          unchanged = false;
+        }
+        if (!unchanged) protocolError ??= "helper_executable_changed";
+      }
+      handleClose(code, signal);
+    })();
   });
   const write = (stream: Writable | null, data: Buffer | string): boolean => {
     if (!canSendEffect()) return false;
@@ -912,7 +980,6 @@ export async function startInstalledUpdateHelper(
   };
   const sendRequest = () => {
     if (!canSendEffect()) return;
-    if (!write(child.stdin, bytes)) return;
     requestSent = write(
       child.stdio[3] as Writable | null,
       JSON.stringify(request),

@@ -15,19 +15,28 @@ import (
 // closedReleaseHelperCommand is the executable entry of the closed release
 // helper. It is flat, kebab-case and verb-first like its siblings
 // (record-native-terminal, publish-installed-slot-binding) and keeps the
-// composition's own name (closedReleaseHelper). It is UNSELECTED: the desktop
-// still spawns resources/native/update_helper.py, and no launcher, resource,
-// manifest or package step names this mode.
+// composition's own name (closedReleaseHelper). The desktop selects it, with
+// the promotion lease on fd5, for every closed apply and rollback; there is no
+// interpreter alternative (installed-update-helper.ts).
 const closedReleaseHelperCommand = "run-closed-release-helper"
 
-// closedHelperEntryBudget is the original absolute bound of one helper process.
-// The Python helper takes its only wait budget from the request's waitSeconds,
-// which arrives inside the one-shot request and cannot be read before request
-// work. The request schema admits at most 120 seconds (helperinput service), so
-// the entry fixes the bound at process start plus that maximum: it is captured
-// before any request IO, never restarted, and no later phase or context can
-// extend it. It is deliberately not tightened by waitSeconds.
-const closedHelperEntryBudget = 120 * time.Second
+// closedHelperEntryBudget is the original absolute bound of one helper process,
+// shared by the closed and live entries. The request's waitSeconds (at most 120
+// seconds, helperinput service) arrives inside the one-shot request and cannot
+// be read before request work, so the entry fixes the bound at process start:
+// it is captured before any request IO, never restarted, and no later phase or
+// context can extend it. It is deliberately not tightened by waitSeconds.
+//
+// The desktop owns the waits that precede execution, all of them inside this one
+// bound: readiness for the acknowledgement (at most 300 seconds, the launcher's
+// readinessTimeoutMs ceiling), then the helper's own wait for the predecessor
+// to exit or for the continuation frame (at most the 120 seconds waitSeconds
+// admits). A bound of only 120 seconds from process start let a maximal
+// desktop wait spend the entire budget before execution or relaunch began.
+// 600 seconds is those two maxima plus 180 seconds for the staged copy,
+// verification, promotion and relaunch, which is the same order as the 180
+// second budget the desktop gives its own trusted measurements.
+const closedHelperEntryBudget = 600 * time.Second
 
 // closedHelperDescriptors are the fixed trusted-launch roles of the Python
 // helper's channel layout (see installed-update-helper.ts): fd3 request, fd4

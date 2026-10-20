@@ -1,9 +1,13 @@
 # Go installed-helper recovery policy
 
 `app/services/helperrecovery` prepares the existing helper's `inspect_recovery`
-and `reconcile` behavior in Go. The selected updater still invokes
-`resources/native/update_helper.py`. This service has no CLI, selected runtime
-adapter, new journal, background recovery loop or relaunch route.
+and `reconcile` behavior in Go. The desktop now selects the Go helpers: its
+updater spawns the attested `farol-backend` in `run-closed-release-helper` or
+`run-live-release-helper` mode and never falls back to
+`resources/native/update_helper.py`, which stays in the tree and package until a
+separate deletion packet. A build without the compiled Go core refuses updates
+(`UPDATE_HELPER_GO_CORE_REQUIRED`) and is updated manually. This service itself has
+no CLI, new journal, background recovery loop or relaunch route.
 
 The existing input application owner parses one independently captured request
 through a consumer-owned port. Recovery then uses the same operation's verified
@@ -113,7 +117,7 @@ production inherited-role authentication, original application quiescence or
 admission, full helper CLI composition, relaunch, install/apply/recover/rollback,
 package, OTA or Python retirement. Existing source/native evidence is unchanged.
 
-## Unselected closed-predecessor boot scope
+## Closed-predecessor boot scope
 
 `boot/releasehelperclosed.go` composes the existing request parser, protocol and
 JSON codecs, byte-channel owners, physical routes, slot verifier, handoff verifier,
@@ -122,7 +126,8 @@ closed `apply` and `rollback` requests with explicit `legacy` or `shared`
 `installLocation` and their physical slot binding are supported. Missing closed
 proof or the optional-location legacy branch refuses before native admission.
 Pre-ACK application readiness joins closed custody here. Execution is composed
-but unselected (see the end of this section); relaunch is refused.
+and is selected by the desktop's closed apply/rollback (see the end of this
+section); relaunch is refused.
 
 The trusted launch supplies actual, distinct `os.File` owners for request fd3,
 ACK fd4 and continuation fd6. Their ownership transfers on call, including
@@ -190,16 +195,21 @@ shared with the live helper below, a single-consume `execute` composes the exist
 under one writer admission and one gate, then runs `Milestone.Execute` once
 through `WithAdmittedInstallation`. The admission refuses unless the update lock
 was actually acquired, and custody is rechecked before and after Execute: a
-failed fence is unknown, never success. Execution is unselected: the
-`farol run-closed-release-helper` entry below and the live `farol run-live-release-helper`
-entry both call it through this scope, no desktop, launcher, resource or package step
-names either entry, and Python stays the selected helper. The pure
+failed fence is unknown, never success. The desktop launcher
+(`startInstalledUpdateHelper`) selects the `farol run-closed-release-helper` entry
+below when it transfers the promotion lease and the live `farol run-live-release-helper`
+entry otherwise; both call it through this scope, and Python is no longer an
+alternative. Both entries share one absolute process budget
+(`closedHelperEntryBudget`, 600 seconds): the desktop's 300 second readiness ceiling,
+the request's 120 second maximum wait, and 180 seconds for the staged copy, promotion
+and relaunch. A 120 second budget from process start let a maximal wait spend the whole
+bound before execution began. It is captured before any request IO and never extended. The pure
 `closedHelperTerminal` maps its outcome to the Python contract: success
 `{"phase","operationId"}` exit 0; a result code or a direct, clean application
 refusal `{"phase","error","operationId"}` exit 70; everything else
 (internal, uncertain, wrapped or non-Failure errors, malformed phase or code)
 `{"phase":"unknown","error":"internal","operationId"}` exit 79.
-`boot/releasehelperclosedentry.go` is the unselected executable entry
+`boot/releasehelperclosedentry.go` is the executable entry
 `farol run-closed-release-helper`. It accepts no further argv (any extra argument
 exits 2 with no descriptor or stdout use), wraps fd3 request, fd4 ACK, fd5
 borrowed lease and fd6 continuation only there, and fixes its original absolute
@@ -239,7 +249,7 @@ the compiled entry under the same gate with real digest-matching trees: apply to
 changed staged trees send the refused frame and exit 70) and the relaunch and
 extra-argv refusals.
 
-`boot/releasehelperlive.go` and `boot/releasehelperliveentry.go` add the unselected
+`boot/releasehelperlive.go` and `boot/releasehelperliveentry.go` add the
 live-predecessor sibling `farol run-live-release-helper` for apply and rollback, each
 with or without `relaunch` (Quit-and-install and "Install update now"), and for
 `recover` with `relaunch: true` (the desktop's Recover button): fd3 request and
@@ -262,7 +272,7 @@ helper still refuses recover. A recovery relaunches only when it settled `verifi
 (then it follows the relaunch contract below, with the hint action `recover` and phase
 `completed`); `cancelled` and `rolled_back` outcomes exit 0 and never launch. A live
 rollback gets no post-Quit reconcile: its preflight phase set plus `Readiness.Recheck`
-matches Python. This is unselected like the rest of the sibling.
+matches Python.
 
 Relaunch follows `update_helper.py` run() (1382-1403) through the existing
 `Milestone.Execute`: only a verified apply or recovery launches. After `verified` it captures the
@@ -283,7 +293,7 @@ ID signing step.
 Its pre-ACK refusals (update lock, marker, readiness, process identity, custody
 fences, slot binding) follow the same refused-frame rule: a provably clean
 refusal sends one `refused` frame instead of `waiting_for_exit` and exits 70.
-Nothing selects it: the desktop still spawns `update_helper.py`.
+The desktop selects it with no Python fallback.
 `releasehelperlivenative_test.go` runs the compiled entry against a scratch
 `/bin/cat` predecessor under `FAROL_LIVE_HELPER_NATIVE=1`. It has no apply or recover
 relaunch case on the compiled entry, since `/usr/bin/open` is the only launch seam.
@@ -392,11 +402,11 @@ LaunchServices, a physical shared or installed image, or a packaged run.
 This is independently buildable source foundation. This library does not itself
 provide transport/ACK, terminal classification, physical installation and recovery
 qualification, resource manifests, generated bindings or product selection. Boot
-composes the readiness gate, ACK and terminal mapping only in the unselected closed
+composes the readiness gate, ACK and terminal mapping only in the closed
 and live helper entries above; the relaunch capabilities are composed only in the live
 helper for a relaunch request, the closed helper refuses relaunch and recover, and
-offline recover is refused by both. Resource manifests, generated bindings and product selection are withheld: the
-desktop still spawns `update_helper.py`, and the Python helper remains selected. Pure
+offline recover is refused by both. The desktop selects these entries and the
+Python helper is retired from the update path (its file remains until deletion). Pure
 application/input tests and race/vet are policy evidence; native and boot tests run
 their physical cases only in their gated lanes and are otherwise compile-only. Neither
 establishes native admission, a live filesystem/process, full CI, package, installed,

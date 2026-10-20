@@ -16,6 +16,10 @@ const ports = vi.hoisted(() => ({
   slot: vi.fn(),
   observe: vi.fn(),
   ready: vi.fn(),
+  goCore: vi.fn(),
+}));
+vi.mock("../../tooling/supervised-update-go-core.mjs", () => ({
+  readSupervisedGoCore: ports.goCore,
 }));
 vi.mock("../../src/apps/desktop/installed-predecessor.ts", () => ({
   captureInstalledPredecessor: ports.capture,
@@ -56,6 +60,7 @@ let input;
 let predecessor;
 let runtime;
 let resource;
+let goCore;
 let backup;
 let operation;
 let selected;
@@ -155,6 +160,11 @@ beforeEach(async () => {
   });
   resource = { app: input.appPath, verify: vi.fn(async () => true) };
   ports.resources.mockResolvedValue(resource);
+  goCore = {
+    goCoreArtifact: { schema: "farol-core-artifact/1", fixture: true },
+    goCoreBuild: { buildId: target.buildId, fixture: true },
+  };
+  ports.goCore.mockResolvedValue(goCore);
   backup = {
     root: "private-copy",
     app: "private-copy/Farol.app",
@@ -224,6 +234,50 @@ describe("supervised update composition (mocked lifecycle)", () => {
       input.replaceReady.buildId,
     );
     expect(events.indexOf("backup")).toBeLessThan(events.indexOf("stage"));
+  });
+
+  it("hands the accepted target package's own Go declaration and build to the runtime", async () => {
+    expect((await runSupervisedUpdate(input)).status).toBe("verified_closed");
+    expect(ports.goCore).toHaveBeenCalledExactlyOnceWith({
+      appPath: resource.app,
+      expected: input.expected,
+    });
+    expect(selected.goCoreArtifact).toBe(goCore.goCoreArtifact);
+    expect(selected.goCoreBuild).toBe(goCore.goCoreBuild);
+    // Read from the verified resources, then those resources are verified again.
+    expect(resource.verify.mock.invocationCallOrder[0]).toBeGreaterThan(
+      ports.goCore.mock.invocationCallOrder[0],
+    );
+  });
+
+  it.each([
+    ["no compiled core", "UPDATE_HELPER_GO_CORE_REQUIRED"],
+    ["an invalid declaration", "GO_CORE_ARTIFACT_INVALID"],
+  ])(
+    "refuses a target package with %s before the predecessor is asked to quit",
+    async (_name, code) => {
+      ports.goCore.mockRejectedValue(new Error(code));
+      expect(await runSupervisedUpdate(input)).toMatchObject({
+        status: "blocked",
+        code,
+        predecessorClosed: false,
+        helper: null,
+      });
+      expect(predecessor.requestQuit).not.toHaveBeenCalled();
+      expect(ports.acquire).not.toHaveBeenCalled();
+      expect(ports.backup).not.toHaveBeenCalled();
+      expect(ports.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses resources that change after the declaration is read", async () => {
+    resource.verify.mockResolvedValueOnce(false);
+    expect(await runSupervisedUpdate(input)).toMatchObject({
+      status: "blocked",
+      code: "UPDATE_RESOURCES_CHANGED",
+    });
+    expect(predecessor.requestQuit).not.toHaveBeenCalled();
+    expect(ports.create).not.toHaveBeenCalled();
   });
 
   it("refuses an unconfirmed original Ready before Quit or staging", async () => {

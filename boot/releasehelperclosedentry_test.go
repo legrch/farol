@@ -236,3 +236,28 @@ func TestWriteClosedHelperTerminalIgnoresVanishedObserver(t *testing.T) {
 	defer write.Close()
 	writeClosedHelperTerminal(write, []byte("{}\n")) // EPIPE must neither panic nor kill the process.
 }
+
+// The desktop's waits before execution all spend the one original bound: the
+// launcher's readiness ceiling, then the helper's wait for the predecessor or
+// the continuation frame (the request admits at most 120 seconds). A bound that
+// only covers those waits starves the staged copy, promotion and relaunch.
+func TestHelperEntryBudgetCoversEveryDesktopWaitPlusExecution(t *testing.T) {
+	const (
+		desktopReadinessCeiling = 300 * time.Second // installed-update-helper.ts readinessTimeoutMs
+		requestWaitCeiling      = 120 * time.Second // helperinput waitSeconds
+		executionFloor          = 120 * time.Second
+	)
+	if closedHelperEntryBudget < desktopReadinessCeiling+requestWaitCeiling+executionFloor {
+		t.Fatalf("entry budget %s starves execution after maximal desktop waits", closedHelperEntryBudget)
+	}
+	// Both entries share the same absolute bound, captured before any argument or
+	// descriptor use and never restarted.
+	before := time.Now()
+	var out, diag bytes.Buffer
+	if code := runLiveReleaseHelper([]string{"x"}, &out, &diag); code != 2 || out.Len() != 0 {
+		t.Fatal("live entry did not refuse extra argv", code)
+	}
+	if time.Since(before) > time.Second {
+		t.Fatal("refusal waited on the budget")
+	}
+}
