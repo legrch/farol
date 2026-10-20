@@ -350,8 +350,9 @@ The native execution runtime now implements the relaunch effects: private
 capture of the verified shared install image (itself an operation effect, with
 failed images retained), self-measurement and relaunch-argument building. Both
 self-measurement and argument building are optional `Config` capabilities that
-only trusted composition installs; boot does not install them yet. With a
-relaunch request and no installed capability, the runtime refuses without marking
+only trusted composition installs. The live helper (`farol run-live-release-helper`)
+installs them only for a relaunch request; the closed helper supplies none and still
+refuses relaunch. With a relaunch request and no installed capability, the runtime refuses without marking
 completed. The arguments it dispatches must name the image it verified (the
 private capture for a shared install, the owner's `~/Applications` slot
 otherwise); any other application path refuses before an effect.
@@ -369,9 +370,10 @@ dispatch, Wait or successful launch.
 
 This is independently buildable source foundation. Boot/CLI composition, the
 complete pre-ACK readiness gate, transport/ACK and terminal classification,
-physical installation and recovery qualification, composed relaunch/capture
-capabilities, resource manifests, generated bindings and product selection are withheld. The
-Python helper remains selected. Pure application/input tests and race/vet are
+physical installation and recovery qualification, resource manifests, generated bindings and
+product selection are withheld. The relaunch capabilities are composed only in the live helper
+for a relaunch request; the closed helper refuses relaunch, and recover remains refused. The
+desktop still spawns `update_helper.py`, and the Python helper remains selected. Pure application/input tests and race/vet are
 policy evidence; native/boot test compilation is compile-only. Neither establishes
 native admission, a live filesystem/process, full CI, package, installed, OTA or
 release acceptance. Root owns independent review, integration and those gates.
