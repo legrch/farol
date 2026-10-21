@@ -327,6 +327,7 @@ import ctypes, ctypes.util, json, struct, sys
 libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
 request = json.load(sys.stdin)
 roots = request["roots"]
+SYSTEM_PREFIXES = ("/System/", "/usr/", "/bin/", "/sbin/", "/Library/", "/Applications/", "/opt/", "/private/var/db/", "/private/var/protected/")
 out = []
 for pid in request["pids"]:
     mib = (ctypes.c_int * 3)(1, 49, pid)
@@ -346,7 +347,15 @@ for pid in request["pids"]:
     # exec path, argv, then environment entries (K=V)
     environment = [part for part in parts[1:] if part][argc:]
     matched = sorted({root for root in roots for text in strings if root in text})
-    out.append({"pid": pid, "status": "match" if matched else "clear", "roots": matched, "envVisible": any(b"=" in part for part in environment)})
+    visible = any(b"=" in part for part in environment)
+    exe = parts[0].decode("utf8", "replace")
+    system = exe.startswith(SYSTEM_PREFIXES)
+    entry = {"pid": pid, "status": "match" if matched else "clear", "roots": matched, "envVisible": visible, "systemOwned": system}
+    # The executable path leaves the scanner only for a process whose environment
+    # is withheld and that no system or application prefix claims.
+    if not matched and not visible and not system:
+        entry["exe"] = exe
+    out.append(entry)
 print(json.dumps(out))
 `;
 async function uidPids() {
@@ -354,13 +363,13 @@ async function uidPids() {
     "-U",
     String(process.getuid()),
     "-o",
-    "pid=",
+    "pid=,ppid=",
   ]);
   return listed.stdout
     .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => /^[0-9]+$/u.test(line))
-    .map(Number);
+    .map((line) => /^\s*([0-9]+)\s+([0-9]+)\s*$/u.exec(line))
+    .filter((match) => match !== null)
+    .map((match) => ({ pid: Number(match[1]), ppid: Number(match[2]) }));
 }
 async function inspectProcesses(pids, roots) {
   const answer = await runInventory("scan", ["-I", "-c", SCAN_SCRIPT], {
@@ -382,44 +391,89 @@ async function inspectProcesses(pids, roots) {
       : entry,
   );
 }
+// Classes of new (not in the start snapshot) processes:
+//   survivor      argv or environment contains a root of this run
+//   unverifiable  its arguments cannot be read, OR its environment is withheld
+//                 and both hold: argv names no system or application owner (the
+//                 executable is outside /System, /usr, /bin, /sbin, /Library,
+//                 /Applications, /opt, /private/var/db), and its parent chain
+//                 reaches no pre-existing process other than launchd (pid 1) and
+//                 this test process, so a reparented orphan (ppid 1) qualifies
+//   excluded      environment withheld but owned by a system/application
+//                 binary, or descended from a pre-existing process that is not
+//                 this test: counted, never detailed
+//   clear / gone  everything else
 async function orphanReport(
   roots,
   preexisting,
   {
     listPids = uidPids,
     inspect = inspectProcesses,
+    ours = new Set([process.pid]),
     tries = 100,
     interval = 50,
   } = {},
 ) {
-  if (roots.size === 0)
-    return {
-      scanned: 0,
-      excluded: preexisting.size,
-      matches: [],
-      unverifiable: [],
-      envWithheld: 0,
-    };
+  const empty = (extra = {}) => ({
+    startSnapshot: preexisting.size,
+    scanned: 0,
+    matches: [],
+    unverifiable: [],
+    excluded: { systemOwned: 0, otherParent: 0 },
+    clear: 0,
+    gone: 0,
+    ...extra,
+  });
+  if (roots.size === 0) return empty();
   let report;
   for (let attempt = 0; ; attempt += 1) {
-    const candidates = (await listPids()).filter(
-      (pid) => !preexisting.has(pid),
-    );
+    const listed = await listPids();
+    const parent = new Map(listed.map((entry) => [entry.pid, entry.ppid]));
+    const candidates = listed.filter((entry) => !preexisting.has(entry.pid));
     const results =
-      candidates.length === 0 ? [] : await inspect(candidates, [...roots]);
-    report = {
-      scanned: candidates.length,
-      excluded: preexisting.size,
-      matches: results
-        .filter((entry) => entry.status === "match")
-        .map((entry) => ({ pid: entry.pid, roots: entry.roots })),
-      unverifiable: results
-        .filter((entry) => entry.status === "unreadable")
-        .map((entry) => ({ pid: entry.pid, errno: entry.errno })),
-      envWithheld: results.filter(
-        (entry) => entry.status === "clear" && entry.envVisible === false,
-      ).length,
+      candidates.length === 0
+        ? []
+        : await inspect(
+            candidates.map((entry) => entry.pid),
+            [...roots],
+          );
+    // A chain that reaches a pre-existing process other than this test belongs
+    // to someone else; one that ends at launchd or at a vanished parent does not.
+    const belongsToSomeoneElse = (pid) => {
+      const visited = new Set();
+      for (
+        let current = parent.get(pid);
+        current !== undefined && current > 1 && !visited.has(current);
+        current = parent.get(current)
+      ) {
+        if (ours.has(current)) return false;
+        if (preexisting.has(current)) return true;
+        visited.add(current);
+      }
+      return false;
     };
+    report = empty({ scanned: candidates.length });
+    for (const entry of results) {
+      if (entry.status === "match")
+        report.matches.push({ pid: entry.pid, roots: entry.roots });
+      else if (entry.status === "unreadable")
+        report.unverifiable.push({
+          pid: entry.pid,
+          reason: "UNREADABLE",
+          errno: entry.errno,
+        });
+      else if (entry.status === "gone") report.gone += 1;
+      else if (entry.envVisible !== false) report.clear += 1;
+      else if (entry.systemOwned === true) report.excluded.systemOwned += 1;
+      else if (belongsToSomeoneElse(entry.pid))
+        report.excluded.otherParent += 1;
+      else
+        report.unverifiable.push({
+          pid: entry.pid,
+          reason: "ENV_WITHHELD",
+          exe: entry.exe ?? null,
+        });
+    }
     if (
       (report.matches.length === 0 && report.unverifiable.length === 0) ||
       attempt >= tries
@@ -428,37 +482,84 @@ async function orphanReport(
     await new Promise((r) => setTimeout(r, interval));
   }
 }
-// The one teardown, run for every exit path. A launch that failed before it
-// returned a handle has no instance; its disposable root is covered by the
-// orphan scan like every other root of the run.
+// The one teardown, run for every exit path, and it never throws: any failure
+// becomes an unverified result carrying a named error. A launch that failed
+// before it returned a handle has no instance; its disposable root is covered
+// by the orphan scan like every other root of the run.
 async function verifyTeardown(targets, deps = {}) {
   const { roots = new Set(), preexisting = new Set(), ...rest } = deps;
   const reports = [];
   for (const target of targets)
     reports.push(await tearDownReport(target, rest));
-  const orphans = await orphanReport(roots, preexisting, rest);
+  let orphans = null;
+  let error = null;
+  try {
+    orphans = await orphanReport(roots, preexisting, rest);
+  } catch (caught) {
+    error = caught instanceof Error ? caught.message : "ORPHAN_SCAN_FAILED";
+  }
   const survivors = [
     ...reports.flatMap((report) => report.survivors),
-    ...orphans.matches.map((entry) => ({
+    ...(orphans?.matches ?? []).map((entry) => ({
       kind: "orphan",
       pid: entry.pid,
       reason: "ORPHAN_REMAINS",
       roots: entry.roots,
     })),
-    ...orphans.unverifiable.map((entry) => ({
+    ...(orphans?.unverifiable ?? []).map((entry) => ({
       kind: "scan",
       pid: entry.pid,
-      reason: "UNVERIFIABLE",
+      reason: entry.reason,
       errno: entry.errno,
+      exe: entry.exe,
     })),
   ];
   return {
     verified:
-      reports.every((report) => report.verified) && survivors.length === 0,
+      error === null &&
+      reports.every((report) => report.verified) &&
+      survivors.length === 0,
     survivors,
     instances: reports,
     orphanScan: orphans,
+    error,
   };
+}
+// Closes a run on every path. The teardown verification, the server close and
+// the receipt are independent: none can prevent the others. A verification that
+// throws becomes an unverified teardown with its error, a server that will not
+// close is recorded, and the original failure stays the reported error.
+async function settleRun({
+  receipt,
+  failure,
+  verify,
+  closeServer,
+  checkpoint,
+}) {
+  let teardown;
+  try {
+    teardown = await verify();
+  } catch (error) {
+    teardown = {
+      verified: false,
+      survivors: [],
+      instances: [],
+      orphanScan: null,
+      error: error instanceof Error ? error.message : "TEARDOWN_FAILED",
+    };
+  }
+  try {
+    await closeServer();
+  } catch (error) {
+    teardown = {
+      ...teardown,
+      verified: false,
+      serverError:
+        error instanceof Error ? error.message : "SERVER_CLOSE_FAILED",
+    };
+  }
+  concludeReceipt(receipt, failure, teardown);
+  await checkpoint();
 }
 function teardownTargets(instances, launches) {
   const started = new Set(instances.map((entry) => entry.home));
@@ -490,9 +591,11 @@ function concludeReceipt(receipt, failure, teardown) {
       ? failure instanceof Error
         ? failure.message
         : "OWNER_PREVIEW_ISOLATION_FAILED"
-      : `OWNER_PREVIEW_ISOLATION_TEARDOWN_UNVERIFIED:${teardown.survivors
-          .map((entry) => `${entry.kind}:${entry.pid}:${entry.reason}`)
-          .join(",")}`;
+      : (teardown.error ?? teardown.serverError)
+        ? `OWNER_PREVIEW_ISOLATION_TEARDOWN_ERROR:${teardown.error ?? teardown.serverError}`
+        : `OWNER_PREVIEW_ISOLATION_TEARDOWN_UNVERIFIED:${teardown.survivors
+            .map((entry) => `${entry.kind}:${entry.pid}:${entry.reason}`)
+            .join(",")}`;
 }
 
 // null is the explicit "already exited" outcome: the documented ps no-match for
@@ -1620,61 +1723,202 @@ async function treeSelfCheck() {
   assert.match(broken.error, /INVENTORY_ERROR:pgrep/u);
   // Orphan rule, decided on argv and environment together. A reparented helper
   // whose root is only in its environment is found; a process that existed
-  // before the run is never inspected; an unreadable one is unverifiable and
-  // keeps the teardown unverified; a vanished one is ignored.
+  // before the run is never inspected; an unreadable one is unverifiable; a
+  // vanished one is ignored. A new process whose environment is withheld is
+  // unverifiable only if no system or application binary owns it and its parent
+  // chain reaches no pre-existing process other than launchd and this test.
   const roots = new Set(["/root-a", "/root-b"]);
   const inspected = [];
+  const table = {
+    // pid: [ppid, scanner answer]
+    11: [1, { status: "match", roots: ["/root-a"], envVisible: true }],
+    12: [1, { status: "clear", envVisible: true, systemOwned: false }],
+    13: [1, { status: "unreadable", errno: 22 }],
+    14: [1, { status: "gone", errno: 3 }],
+    // withheld environment, reparented orphan (ppid 1): unverifiable
+    15: [
+      1,
+      {
+        status: "clear",
+        envVisible: false,
+        systemOwned: false,
+        exe: "/x/orphan",
+      },
+    ],
+    // withheld environment under a pre-existing, non-launchd parent: excluded
+    16: [
+      9,
+      {
+        status: "clear",
+        envVisible: false,
+        systemOwned: false,
+        exe: "/x/other",
+      },
+    ],
+    // ... through a chain of new processes that ends at that parent: excluded
+    17: [
+      16,
+      {
+        status: "clear",
+        envVisible: false,
+        systemOwned: false,
+        exe: "/x/other2",
+      },
+    ],
+    // withheld environment owned by a system binary: excluded
+    18: [1, { status: "clear", envVisible: false, systemOwned: true }],
+    // withheld environment under this test process: still unverifiable
+    19: [
+      77,
+      {
+        status: "clear",
+        envVisible: false,
+        systemOwned: false,
+        exe: "/x/ours",
+      },
+    ],
+    // withheld environment whose parent has vanished: unverifiable
+    20: [
+      4242,
+      {
+        status: "clear",
+        envVisible: false,
+        systemOwned: false,
+        exe: "/x/lost",
+      },
+    ],
+    // pre-existing, never inspected
+    10: [1, { status: "match", roots: ["/root-a"], envVisible: true }],
+    9: [1, { status: "clear", envVisible: true, systemOwned: false }],
+    77: [9, { status: "clear", envVisible: true, systemOwned: false }],
+  };
   const scanDeps = {
     ...clean,
-    listPids: async () => [10, 11, 12, 13, 14, 15],
+    ours: new Set([77]),
+    listPids: async () =>
+      Object.entries(table).map(([pid, [ppid]]) => ({
+        pid: Number(pid),
+        ppid,
+      })),
     inspect: async (pids, scanned) => {
       inspected.push(...pids);
       assert.deepEqual(scanned, ["/root-a", "/root-b"]);
-      return pids.map((pid) => ({
-        pid,
-        ...{
-          11: { status: "match", roots: ["/root-a"] },
-          12: { status: "clear", envVisible: true },
-          13: { status: "unreadable", errno: 22 },
-          14: { status: "gone", errno: 3 },
-          15: { status: "clear", envVisible: false },
-        }[pid],
-      }));
+      return pids.map((pid) => ({ pid, ...table[pid][1] }));
     },
   };
-  const orphan = await orphanReport(roots, new Set([10]), scanDeps);
-  assert.deepEqual(inspected.slice(0, 5), [11, 12, 13, 14, 15]);
-  assert.equal(inspected.includes(10), false);
+  const preexisting = new Set([9, 10, 77]);
+  const orphan = await orphanReport(roots, preexisting, scanDeps);
+  assert.equal(inspected.includes(10) || inspected.includes(9), false);
   assert.deepEqual(orphan.matches, [{ pid: 11, roots: ["/root-a"] }]);
-  assert.deepEqual(orphan.unverifiable, [{ pid: 13, errno: 22 }]);
-  assert.equal(orphan.envWithheld, 1);
-  assert.equal(orphan.excluded, 1);
+  assert.deepEqual(
+    orphan.unverifiable.map((entry) => `${entry.pid}:${entry.reason}`),
+    ["13:UNREADABLE", "15:ENV_WITHHELD", "19:ENV_WITHHELD", "20:ENV_WITHHELD"],
+  );
+  assert.deepEqual(orphan.excluded, { systemOwned: 1, otherParent: 2 });
+  assert.equal(orphan.clear, 1);
+  assert.equal(orphan.gone, 1);
+  assert.equal(orphan.scanned, 10);
+  assert.equal(orphan.startSnapshot, 3);
+  // Excluded processes are only counted: no pid or path of theirs is recorded.
+  assert.equal(JSON.stringify(orphan).includes("/x/other"), false);
   const scanned = await verifyTeardown([instance(1)], {
     ...scanDeps,
     roots,
-    preexisting: new Set([10]),
+    preexisting,
   });
   assert.equal(scanned.verified, false);
   assert.deepEqual(
     scanned.survivors.map(
       (entry) => `${entry.kind}:${entry.pid}:${entry.reason}`,
     ),
-    ["orphan:11:ORPHAN_REMAINS", "scan:13:UNVERIFIABLE"],
+    [
+      "orphan:11:ORPHAN_REMAINS",
+      "scan:13:UNREADABLE",
+      "scan:15:ENV_WITHHELD",
+      "scan:19:ENV_WITHHELD",
+      "scan:20:ENV_WITHHELD",
+    ],
   );
-  // A pre-existing match is excluded, so the same scan is clean without it.
-  const excluded = await orphanReport(roots, new Set([10, 11, 13]), {
+  // Without the survivor, the unreadable and the orphan, the same machine is
+  // clean: everything left is excluded, clear or gone.
+  const quiet = await orphanReport(roots, preexisting, {
     ...scanDeps,
-    inspect: async (pids) =>
-      pids.map((pid) => ({ pid, status: "clear", envVisible: true })),
+    listPids: async () =>
+      [9, 10, 12, 14, 16, 17, 18, 77].map((pid) => ({
+        pid,
+        ppid: table[pid][0],
+      })),
   });
-  assert.deepEqual([excluded.matches, excluded.unverifiable], [[], []]);
+  assert.deepEqual([quiet.matches, quiet.unverifiable], [[], []]);
+  assert.deepEqual(quiet.excluded, { systemOwned: 1, otherParent: 2 });
   // No roots means nothing to find and no scan at all.
   assert.deepEqual(
     await orphanReport(new Set(), new Set(), {
       listPids: async () => assert.fail("scanned without roots"),
     }),
-    { scanned: 0, excluded: 0, matches: [], unverifiable: [], envWithheld: 0 },
+    {
+      startSnapshot: 0,
+      scanned: 0,
+      matches: [],
+      unverifiable: [],
+      excluded: { systemOwned: 0, otherParent: 0 },
+      clear: 0,
+      gone: 0,
+    },
   );
+  // An orphan-inventory failure is an unverified teardown with an error, not a
+  // throw; settleRun then still closes the server and writes the receipt as
+  // UNKNOWN, with the original failure as the reported error.
+  const exploding = await verifyTeardown([instance(1)], {
+    ...clean,
+    roots,
+    preexisting,
+    listPids: async () => {
+      throw new Error("OWNER_PREVIEW_ISOLATION_INVENTORY_ERROR:ps-uid:1:boom");
+    },
+  });
+  assert.equal(exploding.verified, false);
+  assert.match(exploding.error, /INVENTORY_ERROR:ps-uid/u);
+  for (const original of [new Error("ORIGINAL"), null]) {
+    const calls = [];
+    const written = { status: "UNKNOWN" };
+    await settleRun({
+      receipt: written,
+      failure: original,
+      verify: async () => {
+        throw new Error("OWNER_PREVIEW_ISOLATION_INVENTORY_ERROR:pgrep:2:x");
+      },
+      closeServer: async () => calls.push("server-closed"),
+      checkpoint: async () => calls.push("checkpoint"),
+    });
+    assert.deepEqual(calls, ["server-closed", "checkpoint"]);
+    assert.equal(written.status, "UNKNOWN");
+    assert.equal(written.teardown.verified, false);
+    assert.match(written.teardown.error, /INVENTORY_ERROR:pgrep/u);
+    assert.equal(
+      written.error,
+      original === null
+        ? "OWNER_PREVIEW_ISOLATION_TEARDOWN_ERROR:OWNER_PREVIEW_ISOLATION_INVENTORY_ERROR:pgrep:2:x"
+        : "ORIGINAL",
+    );
+  }
+  // A server that will not close is recorded and does not stop the receipt.
+  const stuckServer = { status: "UNKNOWN" };
+  let checkpointed = false;
+  await settleRun({
+    receipt: stuckServer,
+    failure: null,
+    verify: async () => ({ verified: true, survivors: [], instances: [] }),
+    closeServer: async () => {
+      throw new Error("close failed");
+    },
+    checkpoint: async () => {
+      checkpointed = true;
+    },
+  });
+  assert.equal(checkpointed, true);
+  assert.equal(stuckServer.status, "UNKNOWN");
+  assert.match(stuckServer.error, /TEARDOWN_ERROR:close failed/u);
   // The real scanner on real processes: a child whose root sits only in its
   // environment is found, one without it is clear, a vanished pid is gone, and
   // another process's environment never comes back.
@@ -1693,16 +1937,34 @@ async function treeSelfCheck() {
       [withRoot.pid, without.pid, gone.pid],
       [rootText],
     );
-    assert.deepEqual(found, [
+    const pick = ({ pid, status, roots, envVisible, systemOwned }) => ({
+      pid,
+      status,
+      roots,
+      envVisible,
+      owned: typeof systemOwned,
+    });
+    assert.deepEqual(found.slice(0, 2).map(pick), [
       {
         pid: withRoot.pid,
         status: "match",
         roots: [rootText],
         envVisible: true,
+        owned: "boolean",
       },
-      { pid: without.pid, status: "clear", roots: [], envVisible: true },
-      { pid: gone.pid, status: "gone", errno: found[2].errno },
+      {
+        pid: without.pid,
+        status: "clear",
+        roots: [],
+        envVisible: true,
+        owned: "boolean",
+      },
     ]);
+    assert.deepEqual(found[2], {
+      pid: gone.pid,
+      status: "gone",
+      errno: found[2].errno,
+    });
   } finally {
     await Promise.all(
       [withRoot, without].map((child) =>
@@ -1869,13 +2131,12 @@ export async function runOwnerPreviewIsolation(
   const instances = [];
   let server;
   let failure = null;
-  let teardown = null;
   // Everything this run creates that a survivor could carry: every disposable
   // root, every launched child outside the instances (the probe), and the uid's
   // pids that already existed when the run began.
   const run = { roots: new Set(), extraTargets: [], preexisting: new Set() };
   try {
-    run.preexisting = new Set(await uidPids());
+    run.preexisting = new Set((await uidPids()).map((entry) => entry.pid));
     const temporary = await fs.realpath(os.tmpdir());
     const previewExecutable = path.join(
       verified.appPath,
@@ -2097,22 +2358,32 @@ export async function runOwnerPreviewIsolation(
     }
   } finally {
     // The single teardown, for every exit path: success, failure, or a launch
-    // that failed half way. Survivors are reported, never signalled.
-    teardown = await verifyTeardown(
-      [...teardownTargets(instances, receipt.launches), ...run.extraTargets],
-      { roots: run.roots, preexisting: run.preexisting },
-    );
+    // that failed half way. It cannot throw out of here (see settleRun); the
+    // server is closed and the receipt written in every case. Survivors are
+    // reported, never signalled.
     for (const instance of instances) writeQuit(instance);
-    if (server) {
-      server.closeAllConnections();
-      await new Promise((resolve) => server.close(resolve));
-    }
+    receipt.profilesRetained = [
+      ...new Set(receipt.launches.map((record) => record.home).filter(Boolean)),
+    ];
+    await settleRun({
+      receipt,
+      failure,
+      verify: () =>
+        verifyTeardown(
+          [
+            ...teardownTargets(instances, receipt.launches),
+            ...run.extraTargets,
+          ],
+          { roots: run.roots, preexisting: run.preexisting },
+        ),
+      closeServer: async () => {
+        if (!server) return;
+        server.closeAllConnections();
+        await new Promise((resolve) => server.close(resolve));
+      },
+      checkpoint,
+    });
   }
-  receipt.profilesRetained = [
-    ...new Set(receipt.launches.map((record) => record.home).filter(Boolean)),
-  ];
-  concludeReceipt(receipt, failure, teardown);
-  await checkpoint();
   if (receipt.status !== "PASS")
     throw new Error(
       `OWNER_PREVIEW_ISOLATION_UNCONFIRMED: ${receiptFile}: ${receipt.error}`,

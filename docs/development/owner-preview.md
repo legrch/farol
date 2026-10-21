@@ -245,25 +245,41 @@ longer a descendant, and a disposable root normally reaches a process through
 `HOME`, not its arguments. At teardown every process of the current uid that did
 not exist when the run started (the uid's pid set is snapshotted at run start and
 excluded) is inspected through the fail-closed runner (`ps -U <uid>`) and the
-`KERN_PROCARGS2` reader. Any such process whose argv or environment contains a
-disposable root of this run (every instance home, every launched-but-failed home,
-the probe directory) is a survivor (`ORPHAN_REMAINS`). A process whose arguments
-cannot be read is `unverifiable` (`UNVERIFIABLE`, with the errno) and keeps
-`teardown.verified` false; a process that has exited (the OS answers `EINVAL` as
-well as `ESRCH` for a just-exited pid, so an unreadable pid the kernel no longer
-knows counts as exited) is ignored. Matching happens inside the scanner, which
-takes the roots on stdin: only matching pids and this run's own root strings come
-back, so no other process's arguments or environment are read into the test,
-logged or recorded. Known limit: the OS withholds the environment of hardened and
-system binaries (they read as argv only); such processes are counted in
-`orphanScan.envWithheld`, not hidden.
+`KERN_PROCARGS2` reader, and each new process falls in exactly one class:
+
+- **survivor** (`ORPHAN_REMAINS`): its argv or environment contains a disposable
+  root of this run (every instance home, every launched-but-failed home, the
+  probe directory);
+- **unverifiable**, which keeps `teardown.verified` false: its arguments cannot be
+  read (`UNREADABLE`, with the errno), or its environment is withheld
+  (`ENV_WITHHELD`) and **both** hold: (a) its executable is not under a system or
+  application prefix (`/System`, `/usr`, `/bin`, `/sbin`, `/Library`,
+  `/Applications`, `/opt`, `/private/var/db`, `/private/var/protected`), so argv
+  names no non-test owner; and (b) its parent chain reaches no pre-existing
+  process other than launchd (pid 1) and this test process, so a reparented
+  orphan (ppid 1) or one whose parent has vanished qualifies;
+- **excluded**, counted and never detailed: environment withheld but owned by a
+  system or application binary (`excluded.systemOwned`), or descended from a
+  pre-existing process that is not this test (`excluded.otherParent`);
+- **clear** (environment visible, no root) or **gone** (exited; the OS answers
+  `EINVAL` as well as `ESRCH` for a just-exited pid, so an unreadable pid the
+  kernel no longer knows counts as exited).
+
+Matching happens inside the scanner, which takes the roots on stdin: only
+matching pids, this run's own root strings and, for an unverifiable process, its
+pid and executable path come back; no other process's arguments or environment
+are read into the test, logged or recorded. The receipt keeps only the counts
+`{startSnapshot, scanned, clear, gone, excluded, ...}` plus the survivors and
+unverifiable entries. Known limit: the OS withholds the environment of hardened
+and system binaries, so a root carried only in such a process's environment is
+not seen; rule (a) and (b) decide when that is unverifiable rather than ignored.
 
 That teardown proof runs once, in a `finally`, on every exit path (success,
 failure, or a launch that failed half way; a launch with no handle still gets the
 orphan check on its disposable root). The receipt records
 `teardown: { verified, survivors[], instances[] }`. A failed run keeps its
 original error and stays UNKNOWN; an unverified teardown also keeps a successful
-run UNKNOWN (`TEARDOWN_UNVERIFIED`). A survivor is reported with its pid and
+run UNKNOWN (`TEARDOWN_UNVERIFIED`). The teardown itself never throws out of its `finally`: an inventory failure becomes `teardown.verified: false` with a named `error` (`TEARDOWN_ERROR`), and the server is closed and the receipt written in every case. A survivor is reported with its pid and
 reason and is never signalled: the only signals are the existing exact-pid quit
 requests.
 Receipts are under `_output/preview/isolation/<generation>/`.
