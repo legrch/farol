@@ -494,14 +494,12 @@ function Search({
     { label: "ChatGPT", area: "chatgpt" as const, page: "general" as const },
     { label: "Activity", area: "activity" as const, page: "general" as const },
     { label: "Setup", area: "setup" as const, page: "general" as const },
-    ...setupSteps
-      .slice(1)
-      .map(([setupStep, label]) => ({
-        label,
-        area: "setup" as const,
-        setupStep,
-        page: "general" as const,
-      })),
+    ...setupSteps.slice(1).map(([setupStep, label]) => ({
+      label,
+      area: "setup" as const,
+      setupStep,
+      page: "general" as const,
+    })),
     ...pages.map(([page, label]) => ({
       label,
       area: "settings" as const,
@@ -1184,7 +1182,7 @@ export function Shell() {
       data-sidebar-resizing={state.sidebarResizing}
       style={
         {
-          "--rail-width": `${shellRailWidth(window.innerWidth)}px`,
+          "--rail-width": `${destination.area === "setup" ? 0 : shellRailWidth(window.innerWidth)}px`,
           "--toolbar-height": `${shellGeometry.windowBar}px`,
           "--page-list-width": `${state.sidebarWidth}px`,
           "--side-width": `${sideVisible && !sidebarOverlay ? state.sidebarWidth : 0}px`,
@@ -1208,15 +1206,17 @@ export function Shell() {
           >
             <Icon name="forward" />
           </button>
-          <button
-            ref={sidebarTrigger}
-            title="Show or hide page list"
-            aria-label="Toggle sidebar"
-            aria-expanded={sideVisible}
-            onClick={() => facade.toggleSidebar(compactWindow)}
-          >
-            <Icon name="sidebar" />
-          </button>
+          {destination.area !== "setup" && (
+            <button
+              ref={sidebarTrigger}
+              title="Show or hide page list"
+              aria-label="Toggle sidebar"
+              aria-expanded={sideVisible}
+              onClick={() => facade.toggleSidebar(compactWindow)}
+            >
+              <Icon name="sidebar" />
+            </button>
+          )}
         </div>
         <div className="toolbar-title">
           {(settings ||
@@ -1272,86 +1272,87 @@ export function Shell() {
           </button>
         )}
       </header>
-      <nav className="rail" aria-label="Sections">
-        {(["home", "chatgpt", "activity"] as const).map((area) => (
-          <button
-            key={area}
-            aria-label={
-              area === "chatgpt"
-                ? "ChatGPT"
-                : area === "home"
-                  ? "Home"
-                  : "Activity"
-            }
-            title={
-              area === "chatgpt"
-                ? "ChatGPT"
-                : area === "home"
-                  ? "Home"
-                  : "Activity"
-            }
-            aria-current={destination.area === area ? "page" : undefined}
-            onClick={() => facade.navigate({ area })}
-          >
-            <Icon name={area} />
-          </button>
-        ))}
-        <button
-          aria-label="Setup"
-          title="Setup"
-          aria-current={destination.area === "setup" ? "page" : undefined}
-          onClick={() => facade.navigate({ area: "setup" })}
-        >
-          <Icon name="setup" />
-        </button>
-        {unresolved && (
-          <button
-            aria-label="Review unresolved actions"
-            title="Actions need observation or result delivery"
-            className="attention-action"
-            onClick={() =>
-              facade.navigate({ area: "settings", page: "diagnostics" })
-            }
-          >
-            <Icon name="attention" />
-          </button>
-        )}
-        <div className="rail-footer">
-          {updateRailLabel && (
+      {destination.area !== "setup" && (
+        <nav className="rail" aria-label="Sections">
+          {(["home", "chatgpt", "activity"] as const).map((area) => (
             <button
-              className="update-action"
-              aria-label={updateRailLabel}
-              title={updateRailLabel}
-              onClick={() => facade.overlay("update")}
+              key={area}
+              aria-label={
+                area === "chatgpt"
+                  ? "ChatGPT"
+                  : area === "home"
+                    ? "Home"
+                    : "Activity"
+              }
+              title={
+                area === "chatgpt"
+                  ? "ChatGPT"
+                  : area === "home"
+                    ? "Home"
+                    : "Activity"
+              }
+              aria-current={destination.area === area ? "page" : undefined}
+              onClick={() => facade.navigate({ area })}
             >
-              <Icon
-                name={
-                  state.update.phase === "failed" ||
-                  state.update.phase === "recovery"
-                    ? "attention"
-                    : "download"
-                }
-              />
-              {"notice" in state.update &&
-                state.update.notice &&
-                !state.update.notice.seen && (
-                  <span className="update-dot" aria-hidden="true" />
-                )}
+              <Icon name={area} />
+            </button>
+          ))}
+          <button
+            aria-label="Setup"
+            title="Setup"
+            onClick={() => facade.navigate({ area: "setup" })}
+          >
+            <Icon name="setup" />
+          </button>
+          {unresolved && (
+            <button
+              aria-label="Review unresolved actions"
+              title="Actions need observation or result delivery"
+              className="attention-action"
+              onClick={() =>
+                facade.navigate({ area: "settings", page: "diagnostics" })
+              }
+            >
+              <Icon name="attention" />
             </button>
           )}
-          <button
-            className="rail-bottom"
-            aria-label="Settings"
-            title="Settings"
-            aria-current={settings ? "page" : undefined}
-            onClick={() =>
-              facade.navigate({ area: "settings", page: "general" })
-            }
-          >
-            <Icon name="settings" />
-          </button>
-        </div>
-      </nav>
+          <div className="rail-footer">
+            {updateRailLabel && (
+              <button
+                className="update-action"
+                aria-label={updateRailLabel}
+                title={updateRailLabel}
+                onClick={() => facade.overlay("update")}
+              >
+                <Icon
+                  name={
+                    state.update.phase === "failed" ||
+                    state.update.phase === "recovery"
+                      ? "attention"
+                      : "download"
+                  }
+                />
+                {"notice" in state.update &&
+                  state.update.notice &&
+                  !state.update.notice.seen && (
+                    <span className="update-dot" aria-hidden="true" />
+                  )}
+              </button>
+            )}
+            <button
+              className="rail-bottom"
+              aria-label="Settings"
+              title="Settings"
+              aria-current={settings ? "page" : undefined}
+              onClick={() =>
+                facade.navigate({ area: "settings", page: "general" })
+              }
+            >
+              <Icon name="settings" />
+            </button>
+          </div>
+        </nav>
+      )}
       {sideVisible && (
         <aside
           ref={sidebarPanel}

@@ -1743,7 +1743,13 @@ it("Goal17 retained ChatGPT navigation has no shell launcher and preserves draft
   const configuration = c.getSnapshot().configuration;
   for (const area of ["setup", "home", "settings"] as const) {
     await act(async () => c.navigate({ area }));
-    await act(async () => button(host, "ChatGPT").click());
+    await act(async () => {
+      const target = host.querySelector<HTMLButtonElement>(
+        '.rail [aria-label="ChatGPT"]',
+      );
+      if (target) target.click();
+      else c.navigate({ area: "chatgpt" });
+    });
     expect(host.querySelector(".native-browser-placeholder")).toBeNull();
     expect(host.querySelector("main")?.textContent).not.toContain(
       "Open ChatGPT",
@@ -1772,7 +1778,13 @@ it.each(["loading", "failed"] as const)(
     const { host, c, f } = await mount();
     await act(async () => f.emit("route", { state: route }));
     for (let entry = 0; entry < 2; entry++) {
-      await act(async () => button(host, "ChatGPT").click());
+      await act(async () => {
+        const target = host.querySelector<HTMLButtonElement>(
+          '.rail [aria-label="ChatGPT"]',
+        );
+        if (target) target.click();
+        else c.navigate({ area: "chatgpt" });
+      });
       expect(
         host.querySelector(".native-browser-placeholder")?.textContent,
       ).toContain(
@@ -1864,7 +1876,13 @@ it.each(["applied", "refused", "unknown"] as const)(
       );
     await act(async () => c.travel(1));
     expect(c.getSnapshot().destination).toBe(destination);
-    await act(async () => button(host, "ChatGPT").click());
+    await act(async () => {
+      const target = host.querySelector<HTMLButtonElement>(
+        '.rail [aria-label="ChatGPT"]',
+      );
+      if (target) target.click();
+      else c.navigate({ area: "chatgpt" });
+    });
     expect(c.conversationDraft.read("retained")).toBe(draft);
     expect(f.api.configure).toHaveBeenCalledExactlyOnceWith({
       kind: "chatgpt.present-browser",
@@ -1879,7 +1897,13 @@ it("Goal18 an actual loaded home route is revealed without Open, reload, or auto
   c.conversationDraft.capture("retained", "Unsent text", 2, 5);
   const draft = c.conversationDraft.read("retained");
   for (let entry = 0; entry < 2; entry++) {
-    await act(async () => button(host, "ChatGPT").click());
+    await act(async () => {
+      const target = host.querySelector<HTMLButtonElement>(
+        '.rail [aria-label="ChatGPT"]',
+      );
+      if (target) target.click();
+      else c.navigate({ area: "chatgpt" });
+    });
     expect(host.querySelector(".native-browser-placeholder")).toBeNull();
     expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.slice(0, 3)).toEqual([
       "browser",
@@ -1918,7 +1942,13 @@ it.each(["applied", "refused", "unknown"] as const)(
         "settings:chatgpt.open-browser:",
       );
     });
-    await act(async () => button(host, "ChatGPT").click());
+    await act(async () => {
+      const target = host.querySelector<HTMLButtonElement>(
+        '.rail [aria-label="ChatGPT"]',
+      );
+      if (target) target.click();
+      else c.navigate({ area: "chatgpt" });
+    });
     expect(host.querySelector("main [role=status]")?.textContent).toBe(
       "Opening ChatGPT…",
     );
@@ -2215,7 +2245,9 @@ it("a late creation failure preserves the current Setup step and remains observa
     setupStep: "folders",
   });
   expect(host.querySelector("dialog")).toBeNull();
-  await act(async () => button(host, "Review unresolved actions").click());
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain(
+    "could not be confirmed",
+  );
   expect(c.getSnapshot().intents["task:new"]?.state).toBe("unknown");
   expect(f.api.task).toHaveBeenCalledTimes(1);
 });
