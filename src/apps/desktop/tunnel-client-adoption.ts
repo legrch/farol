@@ -100,6 +100,46 @@ async function secureDirectory(
   return "safe";
 }
 
+type OpenFile = Awaited<ReturnType<typeof fsPromises.open>>;
+
+// Copies at most `limit + 1` bytes (a longer source is not the reviewed build),
+// writing each chunk completely, then reads the written file back from the
+// start and returns the size and SHA-256 of what is actually on disk.
+async function copyThenReadBack(
+  source: OpenFile,
+  output: OpenFile,
+  limit: number,
+): Promise<Readonly<{ bytes: number; sha256: string }>> {
+  const buffer = Buffer.allocUnsafe(64 * 1_024);
+  let position = 0;
+  while (position <= limit) {
+    const { bytesRead } = await source.read(buffer, 0, buffer.length, position);
+    if (bytesRead === 0) break;
+    let offset = 0;
+    while (offset < bytesRead) {
+      const { bytesWritten } = await output.write(
+        buffer,
+        offset,
+        bytesRead - offset,
+        position + offset,
+      );
+      if (bytesWritten === 0) throw new Error("TUNNEL_CLIENT_COPY_STALLED");
+      offset += bytesWritten;
+    }
+    position += bytesRead;
+  }
+  await output.sync();
+  const digest = createHash("sha256");
+  let bytes = 0;
+  for (;;) {
+    const { bytesRead } = await output.read(buffer, 0, buffer.length, bytes);
+    if (bytesRead === 0) break;
+    digest.update(buffer.subarray(0, bytesRead));
+    bytes += bytesRead;
+  }
+  return { bytes, sha256: digest.digest("hex") };
+}
+
 export async function adoptReviewedTunnelClient(
   sourcePath: string,
   dependencies: TunnelClientAdoptionDependencies,
@@ -141,7 +181,7 @@ export async function adoptReviewedTunnelClient(
     try {
       output = await fsPromises.open(
         partial,
-        fsConstants.O_WRONLY |
+        fsConstants.O_RDWR |
           fsConstants.O_CREAT |
           fsConstants.O_EXCL |
           NO_FOLLOW |
@@ -152,31 +192,15 @@ export async function adoptReviewedTunnelClient(
       return { ok: false, reason: "write-failed" };
     }
     written = true;
-    const digest = createHash("sha256");
-    let total = 0;
+    let copied;
     try {
-      const buffer = Buffer.allocUnsafe(64 * 1_024);
-      for (;;) {
-        const { bytesRead } = await source.read(
-          buffer,
-          0,
-          buffer.length,
-          total,
-        );
-        if (bytesRead === 0) break;
-        total += bytesRead;
-        // Never copy more than the reviewed build: a growing source is not it.
-        if (total > expected.bytes) break;
-        const chunk = buffer.subarray(0, bytesRead);
-        digest.update(chunk);
-        await output.write(chunk);
-      }
-      await output.sync();
+      copied = await copyThenReadBack(source, output, expected.bytes);
     } finally {
       await output.close();
     }
-    // The decision is made on the bytes that were written, not on the source.
-    if (total !== expected.bytes || digest.digest("hex") !== expected.sha256)
+    // The decision is made on the bytes read back from the written file, not
+    // on what was read from the source or what each write reported.
+    if (copied.bytes !== expected.bytes || copied.sha256 !== expected.sha256)
       return { ok: false, reason: "source-not-reviewed" };
     try {
       await fsPromises.chmod(partial, 0o755);
