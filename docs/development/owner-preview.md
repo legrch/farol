@@ -192,7 +192,15 @@ resolves `appData`, so a launch without `FAROL_NEXT_E2E_APP_DATA` would select
 the owner's real profile; the witness reads that value with a probe application
 whose `userData` is fixed to a disposable path, and does not launch the product
 that way. A Codex child needs a live provider and is asserted absent, not
-witnessed. Every inventory fails closed: each owned process (parent, Go backend, Node
+witnessed. Environment rule per owned process: `HOME` must be set and inside that
+instance's own disposable root (`OWNED_PROCESS_HOME_MISSING`,
+`HOME_OUTSIDE_INSTANCE_ROOT`). `CODEX_HOME` is not required to be absent: if it
+is present it must lie inside that instance's own profile, never `~/.codex`, an
+owner location or the other instance's root (`CODEX_HOME_OUTSIDE_INSTANCE_ROOT`).
+The receipt records per process whether each was present. The one observed
+exception is the Node runtime child, spawned with an explicit minimal
+environment that has no `HOME`; it is reported under `findings` as
+`RUNTIME_CHILD_HOME_UNSET` rather than failing the run. Every inventory fails closed: each owned process (parent, Go backend, Node
 runtime child) must yield a readable, non-empty environment and a clean per-pid
 `lsof` listing, and a non-zero exit or stderr output from `lsof`, `ps` or the
 environment probe is an error. Only a pid the kernel confirms gone is reported,

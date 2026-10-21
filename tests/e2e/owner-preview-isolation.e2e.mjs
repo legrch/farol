@@ -533,10 +533,13 @@ async function observe(instance, expected) {
     processes.push({
       pid,
       outcome: "observed",
+      role: required.get(pid) ?? "helper",
       command: text,
       environment: {
         keys: Object.keys(environment).sort(),
+        homePresent: "HOME" in environment,
         home: environment.HOME ?? null,
+        codexHomePresent: "CODEX_HOME" in environment,
         codexHome: environment.CODEX_HOME ?? null,
         runtimeIdentity: environment.FAROL_NEXT_RUNTIME_IDENTITY ?? null,
         namesOwnerLocation: Object.values(environment).some(touchesOwner),
@@ -615,20 +618,41 @@ async function assertInstance(observed, instance, identity, other) {
     assert.equal(entry.command.includes(other.app), false);
     assert.equal(touchesOwner(entry.command), false);
     // Every live process has a readable, non-empty environment (see
-    // environmentOf); none of them may name an owner location or leave HOME or
-    // CODEX_HOME outside this instance.
+    // environmentOf). HOME must be set and inside THIS instance's disposable
+    // root; the one exception is the Node runtime child, which the shell spawns
+    // with an explicit minimal environment that never includes HOME (see
+    // startRuntime in main.ts) and is recorded as a finding in the receipt.
+    // CODEX_HOME, if present, must lie inside this instance's own profile (the
+    // stricter form of "own root"): never ~/.codex, an owner location, or the
+    // other instance's root.
     assert.ok(entry.environment.keys.length > 0, `ENV_EMPTY:${entry.pid}`);
     assert.equal(entry.environment.namesOwnerLocation, false);
-    assert.ok(
-      entry.environment.home === null ||
+    if (entry.environment.homePresent) {
+      assert.ok(
         inside(entry.environment.home, instance.home),
-      `HOME:${entry.pid}:${entry.environment.home}`,
-    );
-    assert.ok(
-      entry.environment.codexHome === null ||
-        inside(entry.environment.codexHome, identity.userData),
-      `CODEX_HOME:${entry.pid}`,
-    );
+        `HOME_OUTSIDE_INSTANCE_ROOT:${entry.role}:${entry.pid}`,
+      );
+      assert.equal(inside(entry.environment.home, other.home), false);
+    } else {
+      assert.equal(
+        entry.role,
+        "runtime",
+        `OWNED_PROCESS_HOME_MISSING:${entry.role}:${entry.pid}`,
+      );
+      assert.ok(
+        entry.environment.keys.includes("ELECTRON_RUN_AS_NODE"),
+        `RUNTIME_CHILD_NOT_NODE_MODE:${entry.pid}`,
+      );
+    }
+    if (entry.environment.codexHomePresent) {
+      const codexHome = entry.environment.codexHome;
+      assert.ok(
+        inside(codexHome, identity.userData) &&
+          !touchesOwner(codexHome) &&
+          !inside(codexHome, other.home),
+        `CODEX_HOME_OUTSIDE_INSTANCE_ROOT:${entry.role}:${entry.pid}`,
+      );
+    }
   }
   const parent = live.find((entry) => entry.pid === instance.pid);
   assert.equal(parent.environment.home, instance.home);
@@ -868,6 +892,22 @@ export async function runOwnerPreviewIsolation(repositoryRoot, generation) {
           openPathCount: entry.paths.length,
         },
       ]),
+    );
+    receipt.findings = Object.entries(observed).flatMap(([kind, entry]) =>
+      entry.processes
+        .filter(
+          (process_) =>
+            process_.outcome === "observed" &&
+            process_.role === "runtime" &&
+            !process_.environment.homePresent,
+        )
+        .map((process_) => ({
+          code: "RUNTIME_CHILD_HOME_UNSET",
+          kind,
+          pid: process_.pid,
+          detail:
+            "The Node runtime child is spawned with an explicit minimal environment and no HOME; it cannot name the owner's home through its environment. Not a failure of this witness, but HOME is not set for every owned process.",
+        })),
     );
     await checkpoint();
     for (const instance of instances)
