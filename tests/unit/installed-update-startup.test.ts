@@ -1726,15 +1726,58 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
       "an unknown field",
       (f: ReturnType<typeof adoptionFixture>) => f.record({ extra: true }),
     ],
+    [
+      "a missing field",
+      (f: ReturnType<typeof adoptionFixture>) => {
+        const { adoptedAt: _omitted, ...rest } = f.record();
+        return rest;
+      },
+    ],
+    ["a non-object value", () => 42],
+    ["an array", () => []],
+    [
+      "a manifest that is not an object",
+      (f: ReturnType<typeof adoptionFixture>) => f.record({ manifest: "x" }),
+    ],
   ])(
-    "refuses a tampered record (%s) without adopting over it",
+    "refuses a tampered record (%s) with the exact unconfirmed code",
     async (_n, make) => {
       const f = adoptionFixture();
       const tampered = make(f);
       f.records.set(adoptedFile, tampered);
-      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow();
+      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+        /^UPDATE_ACCEPTED_SOURCE_UNCONFIRMED$/u,
+      );
       expect(adoptionMocks.find).not.toHaveBeenCalled();
       noEffectsExceptRecord(f, tampered);
+    },
+  );
+
+  it.each([
+    [
+      "malformed JSON bytes",
+      () => new SyntaxError("Unexpected token } in JSON"),
+    ],
+    ["a changed file", () => new Error("UPDATE_RECORD_CHANGED")],
+    ["an unsafe file", () => new Error("UPDATE_RECORD_INVALID")],
+  ])(
+    "refuses an adopted record that cannot be read (%s) with the exact unconfirmed code",
+    async (_n, failure) => {
+      const f = adoptionFixture();
+      f.records.set(adoptedFile, f.record());
+      const base = f.options.observation!.readRecord;
+      (f.options.observation as { readRecord: typeof base }).readRecord = vi.fn(
+        async (file: string, ...rest: [boolean?, ...unknown[]]) => {
+          if (file === adoptedFile) throw failure();
+          return (base as (...a: unknown[]) => Promise<unknown>)(file, ...rest);
+        },
+      ) as typeof base;
+      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+        /^UPDATE_ACCEPTED_SOURCE_UNCONFIRMED$/u,
+      );
+      expect(adoptionMocks.find).not.toHaveBeenCalled();
+      expect(captureMock).not.toHaveBeenCalled();
+      expect(f.write).not.toHaveBeenCalled();
     },
   );
   function noEffectsExceptRecord(
@@ -1775,19 +1818,67 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
       noEffects(f);
     });
 
-    it("a retained download without an operation does not strand an adopted copy", async () => {
+    const retainedDownload = (
+      f: ReturnType<typeof adoptionFixture>,
+      overrides: Record<string, unknown> = {},
+    ) => ({
+      schema: "farol.ready-update/1",
+      handle: "/private/retained.zip",
+      manifest: structuredClone(f.published),
+      operation: null,
+      ...overrides,
+    });
+
+    it("a genuinely valid retained download does not strand an adopted copy", async () => {
       const f = adoptionFixture();
       f.records.set(adoptedFile, f.record());
-      f.records.set(path.join(root, "ready.json"), {
-        schema: "farol.ready-update/1",
-        handle: "/private/retained.zip",
-        manifest: {},
-        operation: null,
-      });
+      f.records.set(path.join(root, "ready.json"), retainedDownload(f));
       const guard = await waitForInstalledUpdateRelaunch(f.options);
       expect(guard!.resourcesOrigin).toMatchObject({ kind: "shared-slot" });
       expect(adoptionMocks.find).not.toHaveBeenCalled();
     });
+
+    it("a valid retained download still lets an unrecorded copy adopt", async () => {
+      const f = adoptionFixture();
+      f.records.set(path.join(root, "ready.json"), retainedDownload(f));
+      await waitForInstalledUpdateRelaunch(f.options);
+      expect(f.log).toEqual(["find", "capture", "write"]);
+    });
+
+    it.each([
+      ["an empty manifest object", { manifest: {} }],
+      ["an empty handle", { handle: "" }],
+      ["an oversized handle", { handle: "h".repeat(4097) }],
+      [
+        "an invalid manifest",
+        (f: ReturnType<typeof adoptionFixture>) => ({
+          manifest: { ...f.published, artifactSha256: "nope" },
+        }),
+      ],
+      ["a null manifest", { manifest: null }],
+    ])(
+      "refuses malformed retained evidence (%s) with no adoption, capture or write",
+      async (_name, drift) => {
+        for (const recorded of [false, true]) {
+          captureMock.mockClear();
+          adoptionMocks.find.mockClear();
+          const f = adoptionFixture();
+          if (recorded) f.records.set(adoptedFile, f.record());
+          const before = structuredClone(f.records.get(adoptedFile));
+          f.records.set(
+            path.join(root, "ready.json"),
+            retainedDownload(f, typeof drift === "function" ? drift(f) : drift),
+          );
+          await expect(
+            waitForInstalledUpdateRelaunch(f.options),
+          ).rejects.toThrow();
+          expect(adoptionMocks.find).not.toHaveBeenCalled();
+          expect(captureMock).not.toHaveBeenCalled();
+          expect(f.write).not.toHaveBeenCalled();
+          expect(f.records.get(adoptedFile)).toEqual(before);
+        }
+      },
+    );
   });
 
   it("keeps the update-receipt path unchanged and offline even beside an adopted record", async () => {

@@ -767,7 +767,11 @@ async function observeSharedSlotStartup(
       saved === null &&
       repair === null &&
       repairJournal === null &&
-      (ready !== null || (await absent(path.join(root, "ready.json")))) &&
+      // Absent, or the very retained-download record the updater itself
+      // accepts (valid manifest, non-empty handle). Anything malformed refuses.
+      (ready === null
+        ? await absent(path.join(root, "ready.json"))
+        : parseRetainedGithubReleaseManifest(Retained.parse(ready)).ok) &&
       (
         await Promise.all(
           [

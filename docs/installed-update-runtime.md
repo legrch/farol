@@ -258,10 +258,15 @@ and closed-repair branches. It requires a clean build with a `buildVersion` on t
 `github-stable` or `github-owner-beta` channel, and every other piece of baseline
 evidence to be truly absent (`ENOENT`): the receipt, `last-update.json`, the repair
 receipt and the repair journal. A present file, even holding JSON `null`, keeps the
-pre-adoption refusal. A `ready.json` that is a plain retained download with no
-operation or preparation does not block adoption: the recipient may quit between
-downloading and installing an update, and that must not strand the copy. Any other
-`ready.json` is handled by its existing branch.
+pre-adoption refusal. A `ready.json` that is a genuinely valid retained download with no
+operation or preparation (the record the updater itself accepts:
+`parseRetainedGithubReleaseManifest` ok, so a valid release manifest and a
+non-empty handle) does not block adoption: the recipient may quit between
+downloading and installing an update, and that must not strand the copy. A
+malformed one refuses startup as before, and a `ready.json` with an operation is
+handled by its existing branch. A present adopted record that cannot be read or
+decoded (malformed JSON, unknown or missing fields, wrong type) is tampered and
+fails with exactly `UPDATE_ACCEPTED_SOURCE_UNCONFIRMED`.
 
 1. A valid `adopted-baseline.json` in the private root, with
    `slot === "/Applications/Farol.app"` and the running profile, supplies the

@@ -109,22 +109,31 @@ export async function readAdoptedRecord(input: {
   read: RecordReader;
   absent: (file: string) => Promise<boolean>;
 }): Promise<AdoptedRecordState> {
+  const unconfirmed = () => new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
   let digest: string | undefined;
-  const raw = await input.read(input.file, true, (value) => {
-    digest = value;
-  });
+  let raw: unknown | null;
+  try {
+    raw = await input.read(input.file, true, (value) => {
+      digest = value;
+    });
+  } catch {
+    // Real absence is null, not an error. A present record that cannot be read
+    // or decoded (malformed JSON, wrong type, unsafe file) is tampered.
+    throw unconfirmed();
+  }
   if (raw === null) {
     if (await input.absent(input.file)) return { kind: "absent" };
-    throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+    throw unconfirmed();
   }
-  const record = AdoptedBaseline.parse(raw);
-  const parsed = parseGithubReleaseManifest(record.manifest);
+  const record = AdoptedBaseline.safeParse(raw);
+  if (!record.success) throw unconfirmed();
+  const parsed = parseGithubReleaseManifest(record.data.manifest);
   if (
     !parsed.ok ||
-    record.slot !== input.slot ||
-    record.userData !== input.userData
+    record.data.slot !== input.slot ||
+    record.data.userData !== input.userData
   )
-    throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+    throw unconfirmed();
   if (!manifestDescribesRunningBuild(parsed.value, input.build))
     return { kind: "superseded", digest: digest ?? null };
   return {

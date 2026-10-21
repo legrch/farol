@@ -6612,6 +6612,31 @@ describe("selected shared slot (redirected disposable filesystem, mocked helper)
       await controller.close();
     });
 
+    it.each([
+      ["malformed JSON", "{not json"],
+      ["a JSON string", '"x"'],
+      ["an empty file", ""],
+      ["an array", "[]"],
+    ])(
+      "reports an unconfirmed source for %s bytes in the shared record",
+      async (_name, raw) => {
+        await dragged();
+        await fs.mkdir(path.dirname(adoptedFile()), {
+          recursive: true,
+          mode: 0o700,
+        });
+        await fs.writeFile(adoptedFile(), raw, { mode: 0o600 });
+        const controller = await checked();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_SOURCE_IDENTITY_UNCONFIRMED",
+        });
+        expect(mocks.find).not.toHaveBeenCalled();
+        expect(await fs.readFile(adoptedFile(), "utf8")).toBe(raw);
+        await controller.close();
+      },
+    );
+
     it("lets an owner-tool receipt win and ignores a stray shared record", async () => {
       await shared();
       await writeAdopted(recordFor());
@@ -6808,6 +6833,28 @@ describe("first-launch adoption in the user slot (disposable files; GitHub and n
     expect(await fs.readFile(adoptedFile())).toEqual(tampered);
     await second.close();
   });
+
+  it.each([
+    ["malformed JSON", "{not json"],
+    ["JSON null", "null"],
+    ["a JSON string", '"x"'],
+    ["an empty file", ""],
+  ])(
+    "fences %s bytes in the record without adopting over them",
+    async (_name, raw) => {
+      await dragged();
+      await fs.mkdir(path.dirname(adoptedFile()), { mode: 0o700 });
+      await fs.writeFile(adoptedFile(), raw, { mode: 0o600 });
+      const controller = await checked();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_SOURCE_IDENTITY_UNCONFIRMED",
+      });
+      expect(mocks.find).not.toHaveBeenCalled();
+      expect(await fs.readFile(adoptedFile(), "utf8")).toBe(raw);
+      await controller.close();
+    },
+  );
 
   it("accepts a record another writer already published for this build and does not rewrite it", async () => {
     await dragged();
