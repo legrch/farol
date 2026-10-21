@@ -1,9 +1,9 @@
 {
   "name": "farol-next-preview",
-  "version": "0.2.7",
+  "version": "0.2.8-owner.beta.7",
   "farolRelease": {
-    "updateChannel": "github-stable",
-    "buildVersion": "36"
+    "updateChannel": "github-owner-beta",
+    "buildVersion": "43"
   },
   "private": true,
   "description": "Isolated local preview of the Farol Next modular monolith.",
