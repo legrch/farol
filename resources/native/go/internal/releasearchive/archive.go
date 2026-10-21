@@ -25,7 +25,6 @@ const (
 	chunk       = 1024 * 1024
 )
 
-// Schema-5 archive input only; new packages use brandedApp.
 const previewApp = "Farol Next Preview.app"
 const brandedApp = "Farol.app"
 

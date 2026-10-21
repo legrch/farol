@@ -27,7 +27,7 @@ export const ELECTRON_RUNTIME = Object.freeze({
   }),
   treeDigestVersion: TREE_DIGEST_VERSION,
   extractedTreeDigest:
-    "74c981ff1037632abb28499d4f8127cddafd459130109c7a3c7695be94de2e12",
+    "60551daa876998dc62293edc75eb1aca819690077fe9d48910459ce175796074",
 });
 
 const HEX64 = /^[a-f0-9]{64}$/u;

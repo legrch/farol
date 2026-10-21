@@ -14,13 +14,13 @@ import { trustedOwnerHome } from "./promotion-destination.mjs";
 import {
   activationObligations,
   assertActivationDrained,
-  promotionUserData,
 } from "./promotion-obligations.mjs";
 import * as leases from "./promotion-lease.mjs";
 import { readArtifactManifest } from "./promote-preview.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
 
 // Explicit old-beta selectors for this legacy install reader.
+const LEGACY_PROFILE_DIRECTORY = "Farol Next Preview";
 const LEGACY_STATE_DIRECTORY = "farol-next-state";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -205,7 +205,11 @@ export async function runPreviewRetirementCli(args, dependencies = {}) {
     const options = parsePreviewRetirementOptions(args);
     const home =
       dependencies.home ?? trustedOwnerHome(os.userInfo(), process.geteuid());
-    const userData = promotionUserData(home);
+    const userData = path.join(
+      home,
+      "Library/Application Support",
+      LEGACY_PROFILE_DIRECTORY,
+    );
     for (const p of [
       home,
       path.join(home, "Applications"),

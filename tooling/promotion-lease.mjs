@@ -60,11 +60,21 @@ const ROLES = new Set(["promotion", "admission"]);
 // serialised into a log or a receipt never carries a descriptor.
 const holds = new WeakMap();
 
+// Old install readers retain their original state and lock directory.
+const LEGACY_PROFILE_DIRECTORY = "Farol Next Preview";
+const LEGACY_STATE_DIRECTORY = "farol-next-state";
+
+export function promotionStateDirectory(userData) {
+  return path.basename(userData) === LEGACY_PROFILE_DIRECTORY
+    ? LEGACY_STATE_DIRECTORY
+    : "farol-state";
+}
+
 export function promotionLeasePath(userData) {
   if (!path.isAbsolute(userData)) {
     throw new Error("PROMOTION_LEASE_ROOT_NOT_ABSOLUTE");
   }
-  return path.join(userData, "farol-state", FILE_NAME);
+  return path.join(userData, promotionStateDirectory(userData), FILE_NAME);
 }
 
 function assertPlatform() {

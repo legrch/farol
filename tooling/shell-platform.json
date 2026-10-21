@@ -229,7 +229,7 @@
   "runtime": {
     "version": "44.4.2",
     "treeDigestVersion": "farol.tree-digest/v2",
-    "treeSHA256": "74c981ff1037632abb28499d4f8127cddafd459130109c7a3c7695be94de2e12",
+    "treeSHA256": "60551daa876998dc62293edc75eb1aca819690077fe9d48910459ce175796074",
     "distributionSHA256": "52f8354eacad1dbe43ee12345b0fa9e1fc7de137f77571abbe12efbbc896aad8"
   },
   "gitRuntimeResources": {

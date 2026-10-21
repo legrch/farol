@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promotionStateDirectory } from "./promotion-lease.ts";
 import { ProductTaskSchema } from "../../modules/chat/contract/product-task.ts";
 import { ProductSettingsSchema } from "../../pkg/product-settings/contract.ts";
 import {
@@ -303,7 +304,7 @@ export async function activationObligations(
   if (!path.isAbsolute(userData)) {
     throw new Error("PROMOTION_USER_DATA_NOT_ABSOLUTE");
   }
-  const state = path.join(userData, "farol-state");
+  const state = path.join(userData, promotionStateDirectory(userData));
   const obligations: string[] = [];
   const unreadable: string[] = [];
 
