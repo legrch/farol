@@ -218,9 +218,10 @@ that scans each string in it. A string is a finding if it equals an environment
 value observed in this run (when that value is path-like or at least 12
 characters; short enumerations such as `normal` are not secrets) unless it is a
 path inside this run's disposable roots or the checkout, which are recorded by
-design, or a value the run itself wrote into a launch environment (such as the
-Preview kind `owner-preview`, the locale or the fixture origin; the test proof is
-never declared and always stays guarded); or if it holds a path that is an owner location, or that lies under the
+design, or the value of an explicitly listed public launch key (the Preview
+kind `owner-preview`, the locale, the fixed `PATH`, the E2E flags and the fixture
+origin; host-derived values such as `HOME`, `TMPDIR` and the app-data roots, and
+the test proof, are never listed and always stay guarded); or if it holds a path that is an owner location, or that lies under the
 owner's home without being inside the disposable roots or the checkout. A finding
 is redacted (a whole value, or only the offending path inside a failure message,
 so the failure code survives), reported by JSON pointer and code only, the
