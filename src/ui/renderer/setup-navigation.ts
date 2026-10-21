@@ -1,3 +1,4 @@
+import { allFoldersChecked } from "../folder-access-state";
 import { signInPresentation } from "./sign-in-presentation";
 import { computerSetup } from "./computer-setup";
 import { dependencyFences } from "./command-eligibility";
@@ -29,7 +30,13 @@ export function setupChecklist(snapshot: WindowSnapshot) {
       snapshot.configuration?.status === "ready",
     signedIn: signIn.signedIn,
     hasWorkspaces: setup.facts.hasFolder,
-    workspacesVerified: setup.workspacesVerified,
+    workspacesVerified:
+      setup.workspacesVerified &&
+      snapshot.configuration?.status === "ready" &&
+      allFoldersChecked(
+        snapshot.configuration.settings,
+        snapshot.buildId ?? "",
+      ),
     localConnectionCurrent: setup.localConnectionCurrent,
     externalAccessVerified: setup.externalAccessVerified,
     computerReady: setup.ready,

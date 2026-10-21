@@ -2,8 +2,8 @@
 export const setupSections = [
   ["overview", "Overview"],
   ["signin", "Sign in"],
-  ["folders", "Folders"],
-  ["connection", "Connection"],
+  ["folders", "Workspaces"],
+  ["connection", "Connect this Mac"],
   ["attachment", "Add to ChatGPT"],
 ] as const;
 export type SetupSection = (typeof setupSections)[number][0];
@@ -56,13 +56,13 @@ export function projectSetupChecklist(input: SetupChecklistInput) {
         "signin",
         "Sign in",
         "Use your own ChatGPT account.",
-        true,
+        false,
         input.signedIn,
         input.signInActivity,
       ],
       [
         "connection",
-        "Connection",
+        "Connect this Mac",
         "Create a tunnel and connect this Mac.",
         false,
         input.localConnectionCurrent,
@@ -70,9 +70,9 @@ export function projectSetupChecklist(input: SetupChecklistInput) {
       ],
       [
         "folders",
-        "Folders",
-        "Choose folders and access for each one.",
-        !input.hasWorkspaces,
+        "Workspaces",
+        "Choose workspaces and access for each one.",
+        false,
         input.hasWorkspaces && input.workspacesVerified,
         input.computerActivity,
       ],
@@ -111,7 +111,7 @@ export function projectSetupChecklist(input: SetupChecklistInput) {
         action: state === "needed" ? "Set up" : "Review",
       };
     });
-  // Embedded sign-in is optional; configured workspaces still require file proof.
+  // Every guided step requires its own real evidence.
   const ready =
     input.current &&
     input.computerReady &&

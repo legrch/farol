@@ -298,3 +298,73 @@
 .attachment-result {
   margin-top: 20px;
 }
+
+.setup-wizard {
+  max-width: 760px;
+  margin: 24px auto;
+  padding: 0 24px 32px;
+}
+.setup-wizard-intro h1 {
+  font-size: 28px;
+  letter-spacing: -0.7px;
+  margin: 0 0 12px;
+}
+.setup-welcome {
+  max-width: 520px;
+}
+.setup-welcome ol {
+  counter-reset: welcome;
+  list-style: none;
+  padding: 8px 0 20px;
+}
+.setup-welcome li {
+  counter-increment: welcome;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 18px 0;
+}
+.setup-welcome li::before {
+  content: counter(welcome);
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--button);
+  color: var(--muted);
+}
+.setup-welcome > button {
+  display: block;
+  margin: 12px 0;
+}
+.setup-progress {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  padding: 0 0 18px;
+  margin: 0 0 32px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+.setup-progress li[aria-current="step"] {
+  font-weight: 600;
+  color: var(--fg);
+}
+.setup-progress li[data-check-state="verified"] > span {
+  color: var(--good);
+}
+.setup-wizard-footer {
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+@container (max-width: 460px) {
+  .setup-progress {
+    gap: 12px;
+  }
+  .setup-wizard-intro h1 {
+    font-size: 24px;
+  }
+}

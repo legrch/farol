@@ -19,7 +19,7 @@ import type { RendererFacade, SettingsPage, WindowSnapshot } from "./contract";
 import { computerSetup } from "./computer-setup";
 import { TaskEditor } from "./task";
 import { Home, HomeNavigation, homeTitle } from "./home";
-import { Setup, SetupNavigation } from "./setup";
+import { Setup } from "./setup";
 import { setupSteps } from "./setup-navigation";
 import { designIconPath, designIconViewBox } from "./design-icons";
 import { UpdateNotice, acknowledgeUpdateNotice } from "./update-notice";
@@ -1099,7 +1099,8 @@ export function Shell() {
   }, []);
   const pageList = pageListMode(destination, state.sidebar);
   const sideVisible =
-    pageList === "overlay" || (pageList === "full" && !compactWindow);
+    destination.area !== "setup" &&
+    (pageList === "overlay" || (pageList === "full" && !compactWindow));
   const sidebarOverlay = sideVisible && pageList === "overlay";
   useLayoutEffect(() => {
     const previous = previousSidebar.current;
@@ -1359,17 +1360,12 @@ export function Shell() {
               ? "Settings"
               : destination.area === "home"
                 ? "Home"
-                : destination.area === "setup"
-                  ? "Setup"
-                  : destination.area === "chatgpt"
-                    ? "ChatGPT"
-                    : "Activity"}
+                : destination.area === "chatgpt"
+                  ? "ChatGPT"
+                  : "Activity"}
           </h2>
           {destination.area === "home" && (
             <HomeNavigation snapshot={state} facade={facade} />
-          )}
-          {destination.area === "setup" && (
-            <SetupNavigation snapshot={state} facade={facade} />
           )}
           {settings && (
             <nav aria-label="Settings navigation">
