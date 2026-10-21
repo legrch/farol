@@ -741,7 +741,8 @@ async function checkNetworkLoss(run) {
     "NETWORK_LOSS_NOT_RECOVERED",
     TRANSPORT_TICK_MILLIS * 2 + 10000,
   );
-  loss.recoveredAfterMillis = Date.now() - restoredAt;
+  const recoveredAt = Date.now();
+  loss.recoveredAfterMillis = recoveredAt - restoredAt;
   loss.recoveredStatus = {
     state: recovered.connectionStatus.state,
     label: recovered.connectionStatus.label,
@@ -751,13 +752,19 @@ async function checkNetworkLoss(run) {
     (value) => value === "recent_transport",
     "NETWORK_LOSS_UI_NOT_RECOVERED",
   );
-  // The ladder's fourth probe finds the transport healthy and ends it without
-  // an effectful recovery. Wait for it (a healthy /readyz after the restore).
+  // The next tick's own healthy /readyz and /health stamps come right after
+  // the status turned recent; wait for both before reading the ledger.
   const final = await poll(
     runningReceipt,
-    (value) => value.readyRequests > readyBefore,
-    "NETWORK_LOSS_HEALTHY_PROBE_NOT_OBSERVED",
-    LADDER_DELAYS_MILLIS[3] + 10000,
+    (value) =>
+      value.loss.log.filter(
+        (v) => v.at > restoredAt && v.kind === "ok GET /readyz",
+      ).length >= 2 &&
+      value.loss.log.some(
+        (v) => v.at > restoredAt && v.kind === "ok GET /health?details=true",
+      ),
+    "NETWORK_LOSS_NEXT_TICK_NOT_OBSERVED",
+    5000,
   );
   const events = final.loss.log.map((value) => ({
     atMillis: value.at - lostAt,
@@ -775,24 +782,79 @@ async function checkNetworkLoss(run) {
     readyRequestsAfter: final.readyRequests,
     events,
   };
-  const probes = events.filter((value) => value.kind === "GET /readyz");
-  loss.readyzProbeOffsetsMillis = probes.map((value) => value.atMillis);
-  await save();
-  // Bounded backoff: one ladder only, never hammered. The product cannot probe
-  // more than its ladder length in one tick, and none came before the first
-  // tick or after the restore.
-  assert.ok(
-    final.loss.readyz >= 2 && final.loss.readyz <= LADDER_DELAYS_MILLIS.length,
-    `NETWORK_LOSS_PROBES:${final.loss.readyz}`,
+  const failed = events.filter((value) => value.kind === "GET /readyz");
+  const served = events.filter((value) => value.kind === "ok GET /readyz");
+  const servedHealth = events.filter(
+    (value) => value.kind === "ok GET /health?details=true",
   );
-  assert.equal(final.loss.readyz, probes.length);
-  assert.ok(probes.every((value) => value.atMillis <= loss.windowMillis));
-  for (let index = 1; index < probes.length; index++)
+  const offsets = failed.map((value) => value.atMillis);
+  // The fourth ladder probe is the first healthy /readyz after the restore.
+  const fourth = served.find((value) => value.atMillis > restoredAt - lostAt);
+  const nextTick = servedHealth.find(
+    (value) => value.atMillis > restoredAt - lostAt,
+  );
+  assert.ok(fourth && nextTick, "NETWORK_LOSS_FOURTH_PROBE_MISSING");
+  loss.readyzProbeOffsetsMillis = [...offsets, fourth.atMillis];
+  loss.ladderIntervalsMillis = loss.readyzProbeOffsetsMillis
+    .slice(1)
+    .map((value, index) => value - loss.readyzProbeOffsetsMillis[index]);
+  loss.nextTickStatusReadOffsetMillis = nextTick.atMillis;
+  loss.recoveredOffsetMillis = recoveredAt - lostAt;
+  await save();
+  // Exact ladder, grounded in measured runs: intervals land 0 to 10 ms after
+  // their documented delay (a timer never fires early). Allow 50 ms early and
+  // 750 ms late for a loaded Mac; a skipped, early or hammering step is far
+  // outside that, and the next 30 s tick is 9 s away from the fourth probe.
+  const EARLY = 50,
+    LATE = 750,
+    TICK_SLACK = 1000;
+  assert.equal(
+    failed.length,
+    LADDER_DELAYS_MILLIS.length - 1,
+    `NETWORK_LOSS_FAILED_PROBES:${failed.length}`,
+  );
+  assert.equal(final.loss.readyz, failed.length);
+  // First probe: the next 30 s tick after the cut, measured from the outage
+  // start (the harness cut the transport this long after the aligned tick).
+  const expectedFirst = TRANSPORT_TICK_MILLIS - (lostAt - tick.at);
+  loss.expectedFirstProbeOffsetMillis = expectedFirst;
+  assert.ok(
+    Math.abs(offsets[0] - expectedFirst) <= TICK_SLACK,
+    `NETWORK_LOSS_FIRST_PROBE_OFFSET:${offsets[0]}:${expectedFirst}`,
+  );
+  loss.ladderIntervalsMillis.forEach((interval, index) => {
+    const delayMillis = LADDER_DELAYS_MILLIS[index + 1];
     assert.ok(
-      probes[index].atMillis - probes[index - 1].atMillis >=
-        LADDER_DELAYS_MILLIS[index] - 250,
-      `NETWORK_LOSS_BACKOFF_TOO_FAST:${index}`,
+      interval >= delayMillis - EARLY && interval <= delayMillis + LATE,
+      `NETWORK_LOSS_LADDER_INTERVAL:${index + 1}:${interval}:${delayMillis}`,
     );
+  });
+  assert.equal(
+    loss.ladderIntervalsMillis.length,
+    LADDER_DELAYS_MILLIS.length - 1,
+  );
+  // The fourth probe is the only healthy /readyz before the next tick.
+  assert.ok(
+    served.filter((value) => value.atMillis > restoredAt - lostAt).length ===
+      2 &&
+      served.filter((value) => value.atMillis > restoredAt - lostAt)[1]
+        .atMillis -
+        offsets[0] >=
+        TRANSPORT_TICK_MILLIS - TICK_SLACK,
+    "NETWORK_LOSS_EXTRA_PROBE",
+  );
+  // Status turns recent only from the next tick's status read (/health), 30 s
+  // after the first probe, not from the fourth probe or any harness action.
+  assert.ok(
+    Math.abs(nextTick.atMillis - offsets[0] - TRANSPORT_TICK_MILLIS) <=
+      TICK_SLACK,
+    `NETWORK_LOSS_NEXT_TICK:${nextTick.atMillis - offsets[0]}`,
+  );
+  assert.ok(
+    loss.recoveredOffsetMillis >= nextTick.atMillis - 50 &&
+      loss.recoveredOffsetMillis - fourth.atMillis >= TICK_SLACK,
+    `NETWORK_LOSS_RECOVERY_ORDER:${loss.recoveredOffsetMillis}`,
+  );
   // Status reads while lost: product tick(s) plus this harness's one settle.
   const ticksInWindow = Math.ceil(loss.windowMillis / TRANSPORT_TICK_MILLIS);
   assert.ok(

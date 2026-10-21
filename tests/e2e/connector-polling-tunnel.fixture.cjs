@@ -245,6 +245,13 @@ if (process.argv[2] === "run") {
           request.socket,
           `${request.method} ${request.url}`.slice(0, 64),
         );
+      // After the first lost connection the ledger also stamps requests that
+      // were served, so a harness can place the first healthy probe in time.
+      if (record.loss && record.loss.log.length < 256)
+        record.loss.log.push({
+          at: Date.now(),
+          kind: `ok ${request.method} ${request.url}`.slice(0, 64),
+        });
       if (request.method === "GET" && request.url === "/readyz") {
         if (++record.readyRequests > 512) process.exit(65);
         save();
