@@ -142,7 +142,7 @@ export function goChatRequestIntentSHA256(
 }
 function relayInstruction(turn: CodexCallerRelayTurn): string {
   return [
-    "This Codex task's native tools are available only through the Farol connector tool farol_next_caller_tools,",
+    "This Codex task's native tools are available only through the Farol connector tool farol_host_tools,",
     `with ticket ${turn.ticket} and binding ${turn.binding}.`,
     'Describe them first with operation "describe". Invoke one tool at a time with operation "invoke" and a new stable operationId.',
     "Never repeat an invoke whose result you did not receive.",
@@ -432,7 +432,7 @@ export function createGoChatResponses(
         .slice(0, 16);
       const call: ChatCallerFunction = {
         itemId: `fc_${randomUUID()}`,
-        callId: `farol_next_call_${tag}${randomBytes(8).toString("hex")}`,
+        callId: `farol_call_${tag}${randomBytes(8).toString("hex")}`,
         name: resolved.name,
         arguments: resolved.encodedArguments,
         ...(resolved.namespace === null

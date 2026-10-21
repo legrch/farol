@@ -2843,7 +2843,7 @@ export class ProductConfigurationService {
             ...host,
             liveVerification: {
               ...parsed.data,
-              dynamicTool: "farol_next_ping",
+              dynamicTool: "farol_ping",
               verifiedAt,
             },
           },

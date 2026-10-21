@@ -119,7 +119,7 @@ function refusedBeforeSubmit(code: string): CodexChatGptConversationResult {
 // tool, bound to this one turn; the relay admits nothing else.
 function toolRelayInstruction(ticket: string, binding: string): string {
   return [
-    "This Codex task's native tools are available only through the Farol connector tool farol_next_caller_tools,",
+    "This Codex task's native tools are available only through the Farol connector tool farol_host_tools,",
     `with ticket ${ticket} and binding ${binding}.`,
     'Describe them first with operation "describe". Invoke one tool at a time with operation "invoke" and a new stable operationId.',
     "Never repeat an invoke whose result you did not receive.",

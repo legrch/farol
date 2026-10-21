@@ -51,7 +51,7 @@ const CodexHostLiveVerificationSchema = z.strictObject({
   executableSha256: Sha256Schema,
   schemaSha256: Sha256Schema,
   buildId: Sha256Schema,
-  dynamicTool: z.literal("farol_next_ping"),
+  dynamicTool: z.literal("farol_ping"),
   verifiedAt: CanonicalTimestampSchema,
 });
 

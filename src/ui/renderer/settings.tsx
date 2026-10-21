@@ -2405,8 +2405,8 @@ function Connection({
   const verificationRequest = externalChallenge
     ? `Please use the ${connectorName} connector to call ` +
       (externalChallenge.workspaceId === null
-        ? "farol_next_connector_verify_catalogue exactly once with "
-        : "farol_next_connector_verify exactly once with ") +
+        ? "farol_connector_verify_catalogue exactly once with "
+        : "farol_connector_verify exactly once with ") +
       JSON.stringify({
         challenge: externalChallenge.value,
         ...(externalChallenge.workspaceId === null

@@ -405,7 +405,7 @@ export function createGoComputerMcpServer(
   if (options.verification) {
     const verification = options.verification;
     server.registerTool(
-      "farol_next_connector_verify_catalogue",
+      "farol_connector_verify_catalogue",
       {
         title: "Verify Farol without workspace access",
         description:
@@ -424,7 +424,7 @@ export function createGoComputerMcpServer(
         })),
     );
     server.registerTool(
-      "farol_next_connector_verify",
+      "farol_connector_verify",
       {
         title: "Verify the current Go Computer connector",
         description:

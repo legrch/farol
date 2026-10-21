@@ -5556,8 +5556,8 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
     }
     const prompt =
       workspaceId === null
-        ? `Use the selected ${appName} app to call farol_next_connector_verify_catalogue once with challenge "${challenge.value}". No workspace is configured. Do not read files or run commands. Reply briefly with the result.`
-        : `Use the selected ${appName} app to call farol_next_connector_verify once with challenge "${challenge.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`;
+        ? `Use the selected ${appName} app to call farol_connector_verify_catalogue once with challenge "${challenge.value}". No workspace is configured. Do not read files or run commands. Reply briefly with the result.`
+        : `Use the selected ${appName} app to call farol_connector_verify once with challenge "${challenge.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`;
     let claimed = false;
     const result = await chatGptRoute.runReadonlyTask(
       prompt,

@@ -3657,7 +3657,7 @@ function connectorChallengeCard(
   const title = document.createElement("strong");
   title.textContent = "Verify from ChatGPT";
   const instruction = document.createElement("p");
-  instruction.textContent = `Attach tunnel ${connector.tunnelId ?? "(not set)"} in ChatGPT Settings. Ask the connector to call farol_next_connector_verify once with:`;
+  instruction.textContent = `Attach tunnel ${connector.tunnelId ?? "(not set)"} in ChatGPT Settings. Ask the connector to call farol_connector_verify once with:`;
   const values = document.createElement("dl");
   for (const [label, value] of [
     ["challenge", challenge.value],

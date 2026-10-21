@@ -78,7 +78,7 @@ const MAX_TOOLS = 512;
 const MAX_ACTIVE_TURNS = 8;
 const MAX_TOOL_OUTPUT_CHARACTERS = 512 * 1_024;
 const TURN_LIFETIME_MS = 15 * 60 * 1_000;
-const CALL_ID_PREFIX = "farol_next_call_";
+const CALL_ID_PREFIX = "farol_call_";
 
 const identitySchema = z
   .object({
@@ -613,7 +613,7 @@ function currentCallId(value: unknown, tag: string): value is string {
   return (
     typeof value === "string" &&
     value.startsWith(currentCallPrefix(tag)) &&
-    /^farol_next_call_[a-f0-9]{32}$/u.test(value)
+    /^farol_call_[a-f0-9]{32}$/u.test(value)
   );
 }
 

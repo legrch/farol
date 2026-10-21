@@ -1729,7 +1729,7 @@ export function createReadonlyComputerMcpServer(
 
   if (connectorVerification) {
     server.registerTool(
-      "farol_next_connector_verify",
+      "farol_connector_verify",
       {
         title: "Verify the Farol Computer connector",
         description:
@@ -1753,7 +1753,7 @@ export function createReadonlyComputerMcpServer(
 
   if (callerRelay) {
     server.registerTool(
-      "farol_next_caller_tools",
+      "farol_host_tools",
       {
         title: "Use the active Codex task's native tools",
         description:

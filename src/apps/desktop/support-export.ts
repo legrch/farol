@@ -200,7 +200,7 @@ export function createSupportExport(input: SupportExportInput) {
 
   return {
     schema: 2 as const,
-    kind: "farol_next_support" as const,
+    kind: "farol_support" as const,
     generatedAt: input.generatedAt,
     build: input.build,
     runtime: input.runtime,
