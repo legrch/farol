@@ -4,6 +4,7 @@ import {
   GITHUB_RELEASE_REPOSITORY,
   MAX_ARCHIVE_BYTES,
   MAX_MANIFEST_BYTES,
+  MAX_NEWER_FORMAT_SKIPS,
   MAX_RELEASES_JSON_BYTES,
   RELEASE_MANIFEST_ASSET,
   RETAINED_GITHUB_RELEASE_REPOSITORY,
@@ -29,6 +30,7 @@ import {
 const SHA256 = /^[a-f0-9]{64}$/u;
 const SHA1 = /^[a-f0-9]{40}$/u;
 const BUILD_VERSION = /^[1-9][0-9]*$/u;
+const RELEASE_MANIFEST_SCHEMA = /^farol\.github-release\/([1-9][0-9]{0,3})$/u;
 
 type RecordValue = Record<string, unknown>;
 type Release = Readonly<{
@@ -192,10 +194,23 @@ function parseManifest(value: unknown): Outcome<RetainedReleaseManifest> {
   return { ok: true, value: data as RetainedReleaseManifest };
 }
 
+/**
+ * True only for a manifest that names a release format newer than this client
+ * parses: an object whose `schema` is exactly `farol.github-release/N`, N > 1.
+ * Nothing else in such a manifest is read or trusted.
+ */
+function declaresNewerReleaseFormat(value: unknown): boolean {
+  const data = object(value);
+  if (!data || typeof data.schema !== "string") return false;
+  const match = RELEASE_MANIFEST_SCHEMA.exec(data.schema);
+  return match !== null && Number(match[1]) > 1;
+}
+
 /** Producer and live discovery validation: only the selected new release feed. */
 export function parseGithubReleaseManifest(
   value: unknown,
 ): Outcome<ReleaseManifest> {
+  if (declaresNewerReleaseFormat(value)) return failure("release_format_newer");
   const parsed = parseManifest(value);
   if (!parsed.ok) return parsed;
   if (parsed.value.repository !== GITHUB_RELEASE_REPOSITORY)
@@ -360,7 +375,7 @@ export async function discoverGithubUpdate(
     return failure("invalid_installed_version");
   const catalogue = await fetchReleaseCatalogue(ports);
   if (!catalogue.ok) return catalogue;
-  let chosen: Release | null = null;
+  const eligible: Release[] = [];
   for (const raw of catalogue.value) {
     const parsed = parseRelease(raw);
     if (!parsed.ok) return parsed;
@@ -373,35 +388,61 @@ export async function discoverGithubUpdate(
     );
     if (comparison === null) return failure("invalid_release_metadata");
     if (comparison <= 0) continue;
-    if (!chosen || compareReleaseVersions(release.version, chosen.version)! > 0)
-      chosen = release;
-    else if (compareReleaseVersions(release.version, chosen.version) === 0)
-      return failure("invalid_release_metadata");
+    eligible.push(release);
   }
-  if (!chosen) return { ok: true, value: null };
-  const fetchedManifest = await fetchReleaseManifest(chosen, ports);
-  if (!fetchedManifest.ok) return fetchedManifest;
-  const { manifest, asset: manifestAsset } = fetchedManifest.value;
-  if (manifest.version !== chosen.version || manifest.channel !== channel)
-    return failure("release_mismatch");
-  if (BigInt(manifest.buildVersion) <= BigInt(installed.buildVersion))
-    return failure("release_mismatch");
-  const archiveAsset = chosen.assets.find(
-    (asset) => asset.name === manifest.archiveName,
+  // Strictly descending by version. Every version already parsed, so a null
+  // comparison cannot occur; an equal pair is an ambiguous duplicate that must
+  // abort instead of letting catalogue order pick a release.
+  eligible.sort(
+    (left, right) => compareReleaseVersions(right.version, left.version) ?? 0,
   );
-  if (!archiveAsset) return failure("missing_asset");
-  if (archiveAsset.size !== manifest.archiveSize)
-    return failure("release_mismatch");
-  return {
-    ok: true,
-    value: {
-      manifest,
-      manifestAsset,
-      archiveAsset,
-      tag: chosen.tag,
-      ...(chosen.notes ? { notes: chosen.notes } : {}),
-    },
-  };
+  for (let index = 1; index < eligible.length; index += 1)
+    if (
+      compareReleaseVersions(
+        eligible[index - 1]!.version,
+        eligible[index]!.version,
+      ) !== 1
+    )
+      return failure("invalid_release_metadata");
+  // A release in a manifest format this client cannot read is skipped so an
+  // older bridge release stays reachable. Any other failure fails closed, and
+  // the walk is bounded.
+  let skipped = 0;
+  for (const chosen of eligible) {
+    if (skipped >= MAX_NEWER_FORMAT_SKIPS)
+      return failure("release_format_newer");
+    const fetchedManifest = await fetchReleaseManifest(chosen, ports);
+    if (!fetchedManifest.ok) {
+      if (fetchedManifest.code !== "release_format_newer")
+        return fetchedManifest;
+      skipped += 1;
+      continue;
+    }
+    const { manifest, asset: manifestAsset } = fetchedManifest.value;
+    if (manifest.version !== chosen.version || manifest.channel !== channel)
+      return failure("release_mismatch");
+    if (BigInt(manifest.buildVersion) <= BigInt(installed.buildVersion))
+      return failure("release_mismatch");
+    const archiveAsset = chosen.assets.find(
+      (asset) => asset.name === manifest.archiveName,
+    );
+    if (!archiveAsset) return failure("missing_asset");
+    if (archiveAsset.size !== manifest.archiveSize)
+      return failure("release_mismatch");
+    return {
+      ok: true,
+      value: {
+        manifest,
+        manifestAsset,
+        archiveAsset,
+        tag: chosen.tag,
+        ...(chosen.notes ? { notes: chosen.notes } : {}),
+      },
+    };
+  }
+  return skipped > 0
+    ? failure("release_format_newer")
+    : { ok: true, value: null };
 }
 
 /**

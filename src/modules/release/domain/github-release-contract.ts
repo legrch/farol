@@ -9,6 +9,9 @@ export const MAX_RELEASES_JSON_BYTES = 1_048_576;
 export const MAX_MANIFEST_BYTES = 16_384;
 export const MAX_ARCHIVE_BYTES = 2_147_483_648;
 export const FAROL_BUNDLE_ID = "local.farol.next.preview";
+// Discovery skips at most this many consecutive releases whose manifest is of a
+// newer format than this client understands before it stops looking lower.
+export const MAX_NEWER_FORMAT_SKIPS = 4;
 
 export type GithubReleaseErrorCode =
   | "invalid_installed_version"
@@ -16,6 +19,7 @@ export type GithubReleaseErrorCode =
   | "release_catalogue_incomplete"
   | "release_not_found"
   | "invalid_manifest"
+  | "release_format_newer"
   | "release_mismatch"
   | "wrong_provenance"
   | "missing_asset"

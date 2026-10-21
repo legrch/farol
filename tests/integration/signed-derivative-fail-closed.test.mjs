@@ -185,12 +185,17 @@ it.each([
       m.stage = "signed-pre-notarization";
     },
   ],
-])("public release parsers refuse %s metadata", (_name, mutate) => {
+])("public release parsers refuse %s metadata", (name, mutate) => {
   const manifest = release();
   mutate(manifest);
+  // A newer release schema is still refused, but classified apart so the
+  // updater can reach a lower bridge release and tell the owner what to do.
   expect(parseGithubReleaseManifest(manifest)).toEqual({
     ok: false,
-    code: "invalid_manifest",
+    code:
+      name === "new release schema"
+        ? "release_format_newer"
+        : "invalid_manifest",
   });
   expect(parseRetainedGithubReleaseManifest(retained(manifest))).toEqual({
     ok: false,

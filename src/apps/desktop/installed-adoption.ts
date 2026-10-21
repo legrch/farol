@@ -168,7 +168,16 @@ export async function resolveAdoptionManifest(input: {
     return { ok: false, code: "UPDATE_ADOPTION_NETWORK_FAILURE" };
   }
   if (!found.ok)
-    return { ok: false, code: `UPDATE_ADOPTION_${found.code.toUpperCase()}` };
+    return {
+      ok: false,
+      // The installed release's own manifest being of a format this client
+      // cannot read is a statement that it does not match what this client
+      // understands: the existing mismatch refusal, never a success.
+      code:
+        found.code === "release_format_newer"
+          ? "UPDATE_ADOPTION_RELEASE_MISMATCH"
+          : `UPDATE_ADOPTION_${found.code.toUpperCase()}`,
+    };
   if (!manifestDescribesRunningBuild(found.value, input.build))
     return { ok: false, code: "UPDATE_ADOPTION_RELEASE_MISMATCH" };
   return { ok: true, value: found.value };
