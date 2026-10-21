@@ -14,10 +14,8 @@ describe("startup notice interactivity", () => {
   it("allows the modal notice only for an interactive launch", () => {
     expect(startupNoticeAllowed({})).toBe(true);
     expect(startupNoticeAllowed({ CI: "false" })).toBe(true);
-    expect(startupNoticeAllowed({ FAROL_NEXT_E2E: "1" })).toBe(false);
-    expect(startupNoticeAllowed({ FAROL_NEXT_NONINTERACTIVE: "1" })).toBe(
-      false,
-    );
+    expect(startupNoticeAllowed({ FAROL_E2E: "1" })).toBe(false);
+    expect(startupNoticeAllowed({ FAROL_NONINTERACTIVE: "1" })).toBe(false);
     expect(startupNoticeAllowed({ CI: "true" })).toBe(false);
     expect(startupNoticeAllowed({ CI: "1" })).toBe(false);
   });
@@ -83,7 +81,7 @@ describe("desktop startup failure boundary", () => {
     terminateDesktopStartup(failure, "dev", { write, exit });
     expect(effect).toHaveBeenCalledOnce();
     expect(write.mock.calls[0]?.[0]).toContain(
-      "FAROL_NEXT_STARTUP_FAILURE_STAGE:go-core",
+      "FAROL_STARTUP_FAILURE_STAGE:go-core",
     );
     expect(write.mock.calls[0]?.[0]).toContain(
       `${DESKTOP_STARTUP_FAILURE_PREFIX}GO_CORE_INVALID_COMPUTER_PUBLICATION`,
@@ -114,7 +112,7 @@ describe("desktop startup failure boundary", () => {
     const write = vi.fn<(message: string) => void>();
     terminateDesktopStartup(failure, "dev", { write, exit: () => undefined });
     expect(write.mock.calls[0]?.[0]).toContain(
-      "FAROL_NEXT_STARTUP_FAILURE_STAGE:main-window",
+      "FAROL_STARTUP_FAILURE_STAGE:main-window",
     );
     expect(write.mock.calls[0]?.[0]).toContain("DESKTOP_STARTUP_FAILED");
     expect(write.mock.calls[0]?.[0]).not.toContain("/Users/");
@@ -130,7 +128,7 @@ describe("desktop startup failure boundary", () => {
       terminateDesktopStartup(failure, "dev", { write, exit: () => undefined });
       expect(write.mock.calls[0]?.[0]).toContain("GO_CORE_FAILURE");
       expect(write.mock.calls[0]?.[0]).toContain(
-        "FAROL_NEXT_STARTUP_FAILURE_STAGE:go-core",
+        "FAROL_STARTUP_FAILURE_STAGE:go-core",
       );
       expect(write.mock.calls[0]?.[0]).not.toContain("PRIVATE_PAYLOAD");
       expect(write.mock.calls[0]?.[0]).not.toContain("unlisted_private_code");

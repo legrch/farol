@@ -28,7 +28,7 @@ describe.skipIf(process.platform === "win32")(
         );
         console.info("Retained unsafe legacy record fixture:", root);
         const userData = path.join(root, "Farol Dev");
-        const state = path.join(userData, "farol-next-state");
+        const state = path.join(userData, "farol-state");
         const file = path.join(state, relative!);
         await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
         const created = spawnSync("/usr/bin/mkfifo", ["-m", "600", file], {

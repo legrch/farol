@@ -111,7 +111,7 @@ func TestLiveHelperProductionDependenciesMeasureThisProcess(t *testing.T) {
 // always phase "completed" with this helper's pid and process start.
 func TestLiveHelperRelaunchArgumentsAreTheProtocolOwners(t *testing.T) {
 	self := releaseport.HelperSelfIdentity{PID: 4321, ProcessStart: "helper birth"}
-	capture := liveRelaunchHome + "/Library/Application Support/Farol Next Preview/installed-updates/" + strings.Repeat("1", 32) + "/launch-Farol.app"
+	capture := liveRelaunchHome + "/Library/Application Support/io.github.legrch.farol/installed-updates/" + strings.Repeat("1", 32) + "/launch-Farol.app"
 	for _, tc := range []struct {
 		name     string
 		location string

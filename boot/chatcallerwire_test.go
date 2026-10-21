@@ -17,7 +17,7 @@ func chatCallerInput(h chatHandle) wire.ChatCallerBegin {
 	identity := `{"rootTurnId":"root","sessionId":"session","threadId":"thread","turnId":"turn"}`
 	hash := sha256.Sum256([]byte(identity))
 	tag := hex.EncodeToString(hash[:])[:16]
-	return wire.ChatCallerBegin{HandleId: h.id, ProducerOperationId: "producer-operation", RelayBinding: strings.Repeat("a", 64), RequestSHA256: strings.Repeat("b", 64), Scope: wire.ChatCallerScope{SessionId: "session", ThreadId: "thread", TurnId: "turn", RootTurnId: "root", Model: "chatgpt"}, Call: wire.ChatCallerFunction{ItemId: "fc_original", CallId: "farol_next_call_" + tag + strings.Repeat("c", 16), Name: "read_file", Arguments: `{"path":"note.md"}`}}
+	return wire.ChatCallerBegin{HandleId: h.id, ProducerOperationId: "producer-operation", RelayBinding: strings.Repeat("a", 64), RequestSHA256: strings.Repeat("b", 64), Scope: wire.ChatCallerScope{SessionId: "session", ThreadId: "thread", TurnId: "turn", RootTurnId: "root", Model: "chatgpt"}, Call: wire.ChatCallerFunction{ItemId: "fc_original", CallId: "farol_call_" + tag + strings.Repeat("c", 16), Name: "read_file", Arguments: `{"path":"note.md"}`}}
 }
 func chatCallerAccept(token wire.ChatCallerHandle, in wire.ChatCallerBegin) wire.ChatCallerAccept {
 	return wire.ChatCallerAccept{Handle: token, Scope: in.Scope, Calls: []wire.ChatCallerFunction{in.Call}, Outputs: []wire.ChatCallerFunctionOutput{{CallId: in.Call.CallId, Raw: json.RawMessage(`[{"type":"input_text","text":"external 🍐 output"}]`)}}}

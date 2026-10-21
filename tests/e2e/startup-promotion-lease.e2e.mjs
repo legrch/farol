@@ -59,7 +59,7 @@ const save = () =>
   );
 await save();
 const profile = await fs.realpath(
-  await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-e2e-home-")),
+  await fs.mkdtemp(path.join(os.tmpdir(), "farol-e2e-home-")),
 );
 report.profile = profile;
 await fs.chmod(profile, 0o700);
@@ -67,7 +67,7 @@ const appData = path.join(profile, "app-data");
 const userData = path.join(appData, "Farol Dev");
 await fs.mkdir(appData, { mode: 0o700 });
 const proof = randomUUID();
-await fs.writeFile(path.join(profile, ".farol-next-e2e-root"), proof, {
+await fs.writeFile(path.join(profile, ".farol-e2e-root"), proof, {
   mode: 0o600,
 });
 const lease = await acquirePromotionLease(
@@ -76,7 +76,7 @@ const lease = await acquirePromotionLease(
   "promotion",
 );
 assert.ok(lease, "STARTUP_LEASE_HOLDER_REFUSED");
-const marker = path.join(userData, "farol-next-state/running.json");
+const marker = path.join(userData, "farol-state/running.json");
 await assert.rejects(fs.lstat(marker), { code: "ENOENT" });
 let child;
 let closed = false;
@@ -99,11 +99,11 @@ try {
         PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
         LANG: "C",
         TMPDIR: os.tmpdir(),
-        FAROL_NEXT_ENVIRONMENT: "dev",
-        FAROL_NEXT_E2E: "1",
-        FAROL_NEXT_E2E_APP_DATA: appData,
-        FAROL_NEXT_E2E_TEST_ROOT: profile,
-        FAROL_NEXT_E2E_TEST_PROOF: proof,
+        FAROL_ENVIRONMENT: "dev",
+        FAROL_E2E: "1",
+        FAROL_E2E_APP_DATA: appData,
+        FAROL_E2E_TEST_ROOT: profile,
+        FAROL_E2E_TEST_PROOF: proof,
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -162,17 +162,11 @@ try {
   const result = await completion;
   assert.equal(result.exitCode, 1, "STARTUP_LEASE_REFUSAL_EXIT");
   assert.equal(result.signal, null);
-  assert.match(
-    result.stderr,
-    /FAROL_NEXT_STARTUP_FAILURE:STARTUP_PROMOTION_BUSY/u,
-  );
-  assert.match(
-    result.stderr,
-    /FAROL_NEXT_SECOND_INSTANCE_RESULT:startup-failed/u,
-  );
+  assert.match(result.stderr, /FAROL_STARTUP_FAILURE:STARTUP_PROMOTION_BUSY/u);
+  assert.match(result.stderr, /FAROL_SECOND_INSTANCE_RESULT:startup-failed/u);
   assert.doesNotMatch(
     result.stdout + result.stderr,
-    /FAROL_NEXT_SECOND_INSTANCE_RESULT:primary-started/u,
+    /FAROL_SECOND_INSTANCE_RESULT:primary-started/u,
   );
   await assert.rejects(fs.lstat(marker), { code: "ENOENT" });
   report.checks = [

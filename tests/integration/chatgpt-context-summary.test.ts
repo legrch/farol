@@ -21,13 +21,13 @@ const binding: ContextBinding = {
   taskId: "thread-context-1",
   hostThreadId: "thread-context-1",
   sessionId: "thread-context-1",
-  providerProfileId: "profile-isolated-next",
-  modelId: "farol-next/mind",
+  providerProfileId: "profile-isolated-farol",
+  modelId: "legacy-route/mind",
   mode: "mind",
 };
 
 const content: CheckpointContent = {
-  goal: "Finish Farol Next safely.",
+  goal: "Finish Farol safely.",
   activeConstraints: ["Do not publish."],
   latestCorrections: ["Use the corrected workspace."],
   keyDecisions: ["Preserve outcome unknown."],
@@ -121,7 +121,7 @@ describe("ChatGPT summary-only context driver", () => {
 
   async function storeRoot(): Promise<string> {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-summary-driver-"),
+      path.join(os.tmpdir(), "farol-summary-driver-"),
     );
     roots.push(root);
     return root;
@@ -515,7 +515,7 @@ describe("ChatGPT summary-only context driver", () => {
 
   it("A12 releases an owned fallback that shows no conversation once its source is proven", async () => {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-summary-driver-"),
+      path.join(os.tmpdir(), "farol-summary-driver-"),
     );
     roots.push(root);
     let fallbackUrls: ReturnType<typeof vi.fn>[] = [];
@@ -1413,7 +1413,7 @@ describe("HR-014/F1 retained-source retirement recovery", () => {
 
   async function stateRoot(): Promise<string> {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-summary-retire-"),
+      path.join(os.tmpdir(), "farol-summary-retire-"),
     );
     roots.push(root);
     return root;

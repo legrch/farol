@@ -94,8 +94,8 @@ describe("fresh disposable review profile producer/consumer", () => {
     expect(end).toBeGreaterThan(begin);
     const env = {
       HOME: "/Users/fixture-owner",
-      FAROL_NEXT_ENVIRONMENT: "dev",
-      FAROL_NEXT_ACCEPTANCE_PROFILE: review.marker,
+      FAROL_ENVIRONMENT: "dev",
+      FAROL_ACCEPTANCE_PROFILE: review.marker,
     };
     const selected = runInNewContext(
       transformSync(`${source.slice(begin, end)}\ndesktopAppData;`, {
@@ -128,7 +128,7 @@ describe("fresh disposable review profile producer/consumer", () => {
       "Farol Dev",
       "Farol DEV",
       "Farol Dev Acceptance",
-      "Farol Next Preview",
+      "Farol",
     ]) {
       // Case-insensitive filesystems collapse the first two fixture names.
       fs.mkdirSync(path.join(root, name), { recursive: true });
@@ -153,7 +153,7 @@ describe("fresh disposable review profile producer/consumer", () => {
       "Farol Dev",
       "Farol DEV",
       "Farol Dev Acceptance",
-      "Farol Next Preview",
+      "Farol",
     ]) {
       expect(fs.readFileSync(path.join(root, name, "sentinel"), "utf8")).toBe(
         "untouched",

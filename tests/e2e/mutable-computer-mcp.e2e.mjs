@@ -66,7 +66,7 @@ async function connect(entryFile, launchFile) {
     stderr += String(chunk);
   });
   const client = new Client({
-    name: "farol-next-mutable-e2e",
+    name: "farol-mutable-e2e",
     version: "1.0.0",
   });
   await client.connect(transport);
@@ -74,7 +74,7 @@ async function connect(entryFile, launchFile) {
 }
 
 const root = await fs.realpath(
-  await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-mutable-mcp-")),
+  await fs.mkdtemp(path.join(os.tmpdir(), "farol-mutable-mcp-")),
 );
 const launchRoot = path.join(root, "launch");
 const workspaceRoot = path.join(root, "workspace");

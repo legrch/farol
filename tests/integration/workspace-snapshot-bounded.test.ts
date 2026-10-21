@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { NEXT_SAFE_OPEN_HELPER } from "../../src/modules/computer/infra/native/native-readonly-workspace";
+import { SAFE_OPEN_HELPER } from "../../src/modules/computer/infra/native/native-readonly-workspace";
 import {
   createWorkspaceSnapshot,
   type WorkspaceSnapshotOptions,
@@ -33,7 +33,7 @@ function options(
 ): WorkspaceSnapshotOptions {
   return {
     helperPath: sourceHelper,
-    helper: NEXT_SAFE_OPEN_HELPER,
+    helper: SAFE_OPEN_HELPER,
     attestInterpreter: async () => "/usr/bin/python3",
     runtimeDirectory,
     ...overrides,
@@ -60,11 +60,11 @@ async function initRepo(dir: string): Promise<void> {
 
 beforeEach(async () => {
   root = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-bounded-src-")),
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-bounded-src-")),
   );
   await fs.chmod(root, 0o700);
   runtimeDirectory = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-bounded-runtime-")),
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-bounded-runtime-")),
   );
 });
 

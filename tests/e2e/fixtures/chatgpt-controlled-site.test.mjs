@@ -680,7 +680,7 @@ describe("legacy fixture extraction compatibility", () => {
       "__farolSubmitCount",
       "__farolTaskProgress",
       "Preserve the current task context",
-      "farol-next-e2e-conversation:",
+      "farol-e2e-conversation:",
     ])
       expect(html).toContain(marker);
     const origin = new URL(fixture.url).origin;

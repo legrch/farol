@@ -46,8 +46,8 @@ func newFixture(t *testing.T) fixture {
 	root := t.TempDir()
 	must(t, os.Chmod(root, 0700))
 	f := fixture{root: root, home: root + "/home", fs: nativeFilesystem()}
-	f.preview = f.home + "/Library/Application Support/Farol Next Preview"
-	f.state = f.preview + "/farol-next-state"
+	f.preview = f.home + "/Library/Application Support/io.github.legrch.farol"
+	f.state = f.preview + "/farol-state"
 	f.update = f.preview + "/installed-updates"
 	f.operation = f.update + "/" + operationID
 	for _, p := range []string{f.home + "/Applications", f.operation, f.state} {
@@ -134,7 +134,7 @@ func TestProductionPhysicalRootHasNoCloudRelaxation(t *testing.T) {
 }
 
 func TestMissingNeverCreatedAndSymlinksNeverFollowed(t *testing.T) {
-	for _, leaf := range []string{"home", "home/Applications", "home/Library", "home/Library/Application Support", "home/Library/Application Support/Farol Next Preview", "home/Library/Application Support/Farol Next Preview/farol-next-state", "home/Library/Application Support/Farol Next Preview/installed-updates", "home/Library/Application Support/Farol Next Preview/installed-updates/" + operationID} {
+	for _, leaf := range []string{"home", "home/Applications", "home/Library", "home/Library/Application Support", "home/Library/Application Support/io.github.legrch.farol", "home/Library/Application Support/io.github.legrch.farol/farol-state", "home/Library/Application Support/io.github.legrch.farol/installed-updates", "home/Library/Application Support/io.github.legrch.farol/installed-updates/" + operationID} {
 		for _, kind := range []string{"missing", "symlink", "file"} {
 			t.Run(leaf+"/"+kind, func(t *testing.T) {
 				f := newFixture(t)

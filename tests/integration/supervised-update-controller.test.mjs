@@ -94,8 +94,8 @@ beforeEach(async () => {
     schema: "farol.github-release/1",
     repository: "legrch/farol",
     channel: "owner-beta",
-    product: "Farol Next Preview",
-    bundleId: "local.farol.next.preview",
+    product: "Farol",
+    bundleId: "io.github.legrch.farol",
     version: target.version,
     buildVersion: "16",
     sourceCommit: "a".repeat(40),
@@ -230,7 +230,7 @@ describe("supervised update composition (mocked lifecycle)", () => {
     });
     expect((await runSupervisedUpdate(input)).status).toBe("verified_closed");
     expect(ports.ready).toHaveBeenCalledWith(
-      path.join(root, "Library/Application Support/Farol Next Preview"),
+      path.join(root, "Library/Application Support/io.github.legrch.farol"),
       input.replaceReady,
     );
     expect(selected.replaceReady).toEqual(input.replaceReady);
@@ -416,7 +416,7 @@ describe("supervised update composition (mocked lifecycle)", () => {
     async (name) => {
       const directory = path.join(
         root,
-        "Library/Application Support/Farol Next Preview/installed-updates",
+        "Library/Application Support/io.github.legrch.farol/installed-updates",
       );
       await fs.mkdir(directory, { recursive: true, mode: 0o700 });
       const file = path.join(directory, name);

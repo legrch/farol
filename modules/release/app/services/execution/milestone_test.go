@@ -219,7 +219,7 @@ type milestoneLaunch struct {
 }
 
 func newMilestoneLaunch(request port.HelperRequest, r *milestoneRuntime) *milestoneLaunch {
-	return &milestoneLaunch{runtime: r, self: port.HelperSelfIdentity{PID: 4321, ProcessStart: "symbolic helper birth"}, path: request.Home + "/Library/Application Support/Farol Next Preview/installed-updates/" + request.OperationID + "/launch-Farol.app"}
+	return &milestoneLaunch{runtime: r, self: port.HelperSelfIdentity{PID: 4321, ProcessStart: "symbolic helper birth"}, path: request.Home + "/Library/Application Support/io.github.legrch.farol/installed-updates/" + request.OperationID + "/launch-Farol.app"}
 }
 func (l *milestoneLaunch) CapturePrivateTarget(context.Context) (string, error) {
 	err := l.runtime.call("capture", func() error { return nil })

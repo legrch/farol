@@ -31,8 +31,8 @@ const manifest: ReleaseManifest = {
   schema: "farol.github-release/1",
   repository: "legrch/farol",
   channel: "stable",
-  product: "Farol Next Preview",
-  bundleId: "local.farol.next.preview",
+  product: "Farol",
+  bundleId: "io.github.legrch.farol",
   version,
   buildVersion: "2",
   sourceCommit,
@@ -100,8 +100,8 @@ function ports(
       ok: true as const,
       value: {
         identity: {
-          product: "Farol Next Preview",
-          bundleId: "local.farol.next.preview",
+          product: "Farol",
+          bundleId: "io.github.legrch.farol",
           version,
           buildVersion: "2",
           updateChannel: "github-stable",
@@ -112,7 +112,7 @@ function ports(
           signing: "unsigned",
           notarized: false,
         },
-        stagedAppPath: "/fixture/stage/Farol Next Preview.app",
+        stagedAppPath: "/fixture/stage/Farol.app",
         stagingRoot: "/fixture/stage",
       },
     })),
@@ -1169,7 +1169,7 @@ describe("staged archive verification", () => {
       value: {
         handle: "staged-opaque-handle",
         manifest,
-        stagedAppPath: "/fixture/stage/Farol Next Preview.app",
+        stagedAppPath: "/fixture/stage/Farol.app",
         stagingRoot: "/fixture/stage",
       },
     });
@@ -1244,8 +1244,8 @@ describe("staged archive verification", () => {
         ok: true as const,
         value: {
           identity: {
-            product: "Farol Next Preview",
-            bundleId: "local.farol.next.preview",
+            product: "Farol",
+            bundleId: "io.github.legrch.farol",
             version,
             buildVersion: "2",
             updateChannel: "github-stable",
@@ -1256,7 +1256,7 @@ describe("staged archive verification", () => {
             signing: "unsigned",
             notarized: false,
           },
-          stagedAppPath: "/fixture/stage/Farol Next Preview.app",
+          stagedAppPath: "/fixture/stage/Farol.app",
           stagingRoot: "/fixture/stage",
         },
       })),

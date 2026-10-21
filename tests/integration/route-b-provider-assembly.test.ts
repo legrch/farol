@@ -325,7 +325,7 @@ async function assembly(
     });
     expect(foreign.status).toBe(409);
     await expect(foreign.json()).resolves.toEqual({
-      error: { code: "FAROL_NEXT_CONTINUATION_FOREIGN" },
+      error: { code: "FAROL_CONTINUATION_FOREIGN" },
     });
     expect(finished).toBe(false);
     expect(sends).toBe(1);
@@ -344,7 +344,7 @@ async function assembly(
     const repeated = await post(continuation);
     expect(repeated.status).toBe(409);
     await expect(repeated.json()).resolves.toEqual({
-      error: { code: "FAROL_NEXT_CONTINUATION_NOT_FOUND" },
+      error: { code: "FAROL_CONTINUATION_NOT_FOUND" },
     });
     expect(runs).toBe(1);
     expect(sends).toBe(1);
@@ -404,7 +404,7 @@ async function assembly(
     const replay = await post(lostBody);
     expect(replay.status).toBe(409);
     await expect(replay.json()).resolves.toEqual({
-      error: { code: "FAROL_NEXT_TURN_ALREADY_SUBMITTED" },
+      error: { code: "FAROL_TURN_ALREADY_SUBMITTED" },
     });
     expect(runs).toBe(2);
     expect(sends).toBe(2);

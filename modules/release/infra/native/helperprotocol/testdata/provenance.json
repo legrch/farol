@@ -1,5 +1,5 @@
 {
-  "helperSHA256": "f2f864871ed29536f345f5d9e13e8e74d59a3b4be6f7b7028ef915743b167f85",
+  "helperSHA256": "9bd3bf1e06984deeae37cdc61c30063d01b466d26a518952c599fba9c1142c02",
   "observerSHA256": "36e0d516cec7eb6b828cf49c9467625d6a664324072e3f8bd9d0a413994d2115",
   "producer": "Exact offline Python correlation AST only; json.dumps separators=(comma,colon), ensure_ascii=True plus LF; fixed nested producer order.",
   "observer": "Exact TypeScript correlation/parseHandoff via Node stripTypeScriptTypes and VM; actual continue JSON.stringify expression; no app/helper runtime.",

@@ -96,7 +96,7 @@ async function exitedChildPid() {
 // as they must for the real candidate), and the fixture file the entry
 // reads its seams from.
 async function fixture() {
-  const root = await temporary("farol-next-promote-cli-");
+  const root = await temporary("farol-promote-cli-");
   const home = path.join(root, "home");
   await fs.mkdir(path.join(home, "Applications"), {
     recursive: true,
@@ -114,9 +114,9 @@ async function fixture() {
   );
   const artifact = {
     schema: 6,
-    product: "Farol Next Preview",
+    product: "Farol",
     version: "0.1.0-preview.0",
-    bundleId: "local.farol.next.preview",
+    bundleId: "io.github.legrch.farol",
     buildId: "b".repeat(64),
     builtAt: "2026-09-20T10:00:00.000Z",
     sourceCommit: "c".repeat(40),
@@ -226,7 +226,7 @@ async function seedProfile(
   userData,
   { tasks = [task(), task({ taskId: "task-b", lifecycle: "completed" })] } = {},
 ) {
-  const state = path.join(userData, "farol-next-state");
+  const state = path.join(userData, "farol-state");
   await new PrivateLiveTaskStore({
     root: path.join(state, "live-tasks"),
   }).save({ revision: 1, tasks });
@@ -272,7 +272,7 @@ describe("promote-preview CLI as a process: the composition around a seeded prof
     expect(planned.code).toBe(0);
     const plan = JSON.parse(planned.stdout);
     expect(plan).toMatchObject({
-      schema: "farol.next.promotion-plan/1",
+      schema: "farol.promotion-plan/1",
       operation: "plan-only",
       destination: f.destination,
       receipt: f.receipt,
@@ -516,12 +516,12 @@ describe("promote-preview CLI as a process: the real entry point's own refusals"
   const ownerProfile = promotionUserData(os.userInfo().homedir);
 
   it("refuses a relative, an owner-profile, or an --apply --user-data before touching anything", async () => {
-    const scratch = await temporary("farol-next-promote-real-");
+    const scratch = await temporary("farol-promote-real-");
     const cases = [
       [["--user-data", "relative/profile"], "PROMOTION_USER_DATA_NOT_ABSOLUTE"],
       [["--user-data", ownerProfile], "PROMOTION_USER_DATA_IS_OWNER_PROFILE"],
       [
-        ["--user-data", path.join(ownerProfile, "farol-next-state")],
+        ["--user-data", path.join(ownerProfile, "farol-state")],
         "PROMOTION_USER_DATA_IS_OWNER_PROFILE",
       ],
       [
@@ -544,7 +544,7 @@ describe("promote-preview CLI as a process: the real entry point's own refusals"
       expect(result.code, arguments_.join(" ")).toBe(1);
       expect(result.stdout, arguments_.join(" ")).toBe("");
       expect(result.stderr, arguments_.join(" ")).toBe(
-        `Farol Next Preview promotion refused: ${code}\n`,
+        `Farol promotion refused: ${code}\n`,
       );
     }
   }, 30_000);

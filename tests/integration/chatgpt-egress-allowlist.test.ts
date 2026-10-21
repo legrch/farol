@@ -162,7 +162,7 @@ describe("ChatGPT route network egress allowlist", () => {
     const { contents, windowOpenHandler } = await openedRoute(fixture);
 
     expect(
-      navigationRefused(contents, `${fixture}/chatgpt/c/farol-next-e2e`),
+      navigationRefused(contents, `${fixture}/chatgpt/c/farol-e2e`),
     ).toEqual([false, false]);
 
     for (const url of [

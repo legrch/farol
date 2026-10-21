@@ -19,7 +19,7 @@ afterEach(async () => {
 
 async function temporaryRoot(): Promise<string> {
   const root = await fs.mkdtemp(
-    path.join(os.tmpdir(), "farol-next-chatgpt-journal-"),
+    path.join(os.tmpdir(), "farol-chatgpt-journal-"),
   );
   roots.push(root);
   return root;

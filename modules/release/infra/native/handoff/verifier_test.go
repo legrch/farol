@@ -59,7 +59,7 @@ func fileIdentity(t *testing.T, f *os.File) Identity {
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	f := &fixture{t: t, homePath: t.TempDir()}
-	f.statePath = filepath.Join(f.homePath, "Library", "Application Support", "Farol Next Preview", "farol-next-state")
+	f.statePath = filepath.Join(f.homePath, "Library", "Application Support", "io.github.legrch.farol", "farol-state")
 	if err := os.MkdirAll(f.statePath, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func fixtureRoute(ctx context.Context, path string) (int, int, error) {
 		return -1, -1, ErrHomeType
 	}
 	parent := home
-	for _, part := range []string{"Library", "Application Support", "Farol Next Preview", "farol-next-state"} {
+	for _, part := range []string{"Library", "Application Support", "io.github.legrch.farol", "farol-state"} {
 		next, err := openDirectory(ctx, parent, part, false)
 		if parent != home {
 			unix.Close(parent)

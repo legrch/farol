@@ -108,7 +108,7 @@ it("selects private MCP, safe-open and renderer resources from actual callers", 
     `${getter}; ${stripTypeScriptTypes(helper)}`,
     {
       ...context,
-      NEXT_SAFE_OPEN_HELPER: {},
+      SAFE_OPEN_HELPER: {},
       NativeReadonlyWorkspace: class {
         constructor(readonly options: object) {}
       },

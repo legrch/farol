@@ -35,7 +35,7 @@ async function fixture() {
   );
   console.info("Retained startup final-transition fixture:", root);
   const userData = path.join(root, "Farol Dev");
-  const state = path.join(userData, "farol-next-state");
+  const state = path.join(userData, "farol-state");
   const core = path.join(state, "go-core");
   const chat = path.join(core, "chat");
   const operationId = randomUUID();

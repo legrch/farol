@@ -15,13 +15,13 @@ import (
 // Independent pinned v2 vectors were accepted by the original checked_tree
 // in a one-time build-only oracle. These Go tests never launch an interpreter.
 var composedTrees = []struct{ file, digest string }{
-	{"oracle.xml", "aa5be957bca1b602513cc520d48ebabb39a79adfffe07ee47434fbc33f4a62bd"},
-	{"oracle.bplist", "d0bd0b78217c34f9a0f86dad465ac033ec6a63cd1ba5bdeeffcac545d08bee2d"},
-	{"oracle-utf16.xml", "5086cd4a28cf6b8c743cc733f7d2e9414dc5b8b080da1d5a8d8f4d45621cfe35"},
-	{"oracle-uid.bplist", "ecef6399434dbe29029f2c8b84ebdd84df5aae35d67f0b3fa2ac7938d5f3082b"},
-	{"oracle-padded.bplist", "448abb19d79c5e960c5760ce0a2f822a7ba17ac38d007696cdcac3ae24d008c6"},
-	{"oracle-signed128.bplist", "bd644dd68b03085827b21c1af267a6ce56e6cad1e6c930dde8a35948a59af8e8"},
-	{"oracle-width3.bplist", "482cfe7a3d135f1a1cce65813b3a2f1211dd943bad9679fb18ac8a2856e597f8"},
+	{"oracle.xml", "6fffca33b1a4831aecd152a758c4b819e7cc60a844afda73b906b874a8d3f6f3"},
+	{"oracle.bplist", "5655e32d0fd60f4acc2347182e9a779ab89266ecd8f970d78132233996e6e60f"},
+	{"oracle-utf16.xml", "d4a4b6f152d0ecc8d293b582f4d0308af27bd1ee18e844e7eaf3f52bc838f689"},
+	{"oracle-uid.bplist", "f7a5e9e74fe0b87f85cb43afe77a9effefdfa400ceed479626291690cc116062"},
+	{"oracle-padded.bplist", "2ae1df67c9cc3d7cafb82bfb9ed325bf7232a27b18a1f24124d623239128d46a"},
+	{"oracle-signed128.bplist", "99085c303becc021ceabe945f9d0b68e5952a5ee59d2b835da8cd4d1d055b2c7"},
+	{"oracle-width3.bplist", "727b301b3e3faa2e90eb6d83a352a723773647490782ba472993bcf30e506178"},
 }
 
 func appFixture(t *testing.T, name string) (*os.File, *os.File, string) {

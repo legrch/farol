@@ -17,11 +17,9 @@ const temporaryRoot = await fs.mkdtemp(
   path.join(tempParent, "onboarding-visual-"),
 );
 const e2eRootProof = randomUUID();
-await fs.writeFile(
-  path.join(temporaryRoot, ".farol-next-e2e-root"),
-  e2eRootProof,
-  { mode: 0o600 },
-);
+await fs.writeFile(path.join(temporaryRoot, ".farol-e2e-root"), e2eRootProof, {
+  mode: 0o600,
+});
 const home = path.join(temporaryRoot, "home");
 const appData = path.join(temporaryRoot, "app-data");
 const workspaceRoot = path.join(temporaryRoot, "approved-folder");
@@ -62,14 +60,14 @@ try {
       LANG: "en_US.UTF-8",
       LC_ALL: "en_US.UTF-8",
       PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-      FAROL_NEXT_ENVIRONMENT: "dev",
-      FAROL_NEXT_E2E: "1",
-      FAROL_NEXT_E2E_APP_DATA: appData,
-      FAROL_NEXT_E2E_TEST_ROOT: temporaryRoot,
-      FAROL_NEXT_E2E_TEST_PROOF: e2eRootProof,
-      FAROL_NEXT_E2E_WORKSPACE_ROOT: workspaceRoot,
-      FAROL_NEXT_E2E_TUNNEL_CLIENT: tunnelFixture,
-      FAROL_NEXT_E2E_CHATGPT_URL: `http://127.0.0.1:${chatGptAddress.port}/`,
+      FAROL_ENVIRONMENT: "dev",
+      FAROL_E2E: "1",
+      FAROL_E2E_APP_DATA: appData,
+      FAROL_E2E_TEST_ROOT: temporaryRoot,
+      FAROL_E2E_TEST_PROOF: e2eRootProof,
+      FAROL_E2E_WORKSPACE_ROOT: workspaceRoot,
+      FAROL_E2E_TUNNEL_CLIENT: tunnelFixture,
+      FAROL_E2E_CHATGPT_URL: `http://127.0.0.1:${chatGptAddress.port}/`,
     },
     timeout: 15000,
   });
@@ -427,7 +425,7 @@ try {
     },
   );
   const taskCountBeforeRecovery = (
-    await window.evaluate(() => window.farolNext.bootstrap())
+    await window.evaluate(() => window.farol.bootstrap())
   ).tasks.length;
   await window.locator("#sign-in-return").click();
   await window.locator("#guided-onboarding").waitFor({ state: "visible" });
@@ -465,7 +463,7 @@ try {
     draft: "retained-synthetic-draft",
   });
   assert.equal(
-    (await window.evaluate(() => window.farolNext.bootstrap())).tasks.length,
+    (await window.evaluate(() => window.farol.bootstrap())).tasks.length,
     taskCountBeforeRecovery,
     "APP_RECOVERY_CREATED_UNRELATED_TASK",
   );
@@ -520,7 +518,7 @@ try {
   );
   assert.equal(await window.locator(".onboarding-folder-card").count(), 1);
   await application.evaluate((_electron, selectedRoot) => {
-    process.env.FAROL_NEXT_E2E_WORKSPACE_ROOT = selectedRoot;
+    process.env.FAROL_E2E_WORKSPACE_ROOT = selectedRoot;
   }, secondWorkspaceRoot);
   await window.locator("#onboarding-add-folder").click();
   await window
@@ -616,7 +614,7 @@ try {
     "Activate and check",
   );
   const savedConfiguration = (
-    await window.evaluate(() => window.farolNext.bootstrap())
+    await window.evaluate(() => window.farol.bootstrap())
   ).configuration;
   assert.equal(savedConfiguration.status, "ready");
   assert.equal(
@@ -648,7 +646,7 @@ try {
     "",
   );
   const keptConfiguration = (
-    await window.evaluate(() => window.farolNext.bootstrap())
+    await window.evaluate(() => window.farol.bootstrap())
   ).configuration;
   assert.deepEqual(
     keptConfiguration,
@@ -668,7 +666,7 @@ try {
     .waitFor({ state: "visible" });
   await window.locator('[data-onboarding-step="tunnel"]').click();
   const activeConfiguration = (
-    await window.evaluate(() => window.farolNext.bootstrap())
+    await window.evaluate(() => window.farol.bootstrap())
   ).configuration;
   assert.equal(activeConfiguration.status, "ready");
   const runtimeGeneration =
@@ -683,7 +681,7 @@ try {
     .locator('#onboarding-primary:not(:disabled):text("Continue")')
     .waitFor();
   const checkedConfiguration = (
-    await window.evaluate(() => window.farolNext.bootstrap())
+    await window.evaluate(() => window.farol.bootstrap())
   ).configuration;
   assert.equal(
     checkedConfiguration.settings.connectors.secureMcp.runtime
@@ -737,21 +735,21 @@ try {
   });
   await window.locator('[data-onboarding-step="folder"]').click();
   await application.evaluate(() => {
-    process.env.FAROL_NEXT_E2E_CANCEL_WORKSPACE_PICKER = "1";
+    process.env.FAROL_E2E_CANCEL_WORKSPACE_PICKER = "1";
   });
   await window.locator("#onboarding-add-folder").click();
   await window
     .locator('#onboarding-form[aria-busy="false"]')
     .waitFor({ state: "attached" });
   await application.evaluate(() => {
-    delete process.env.FAROL_NEXT_E2E_CANCEL_WORKSPACE_PICKER;
+    delete process.env.FAROL_E2E_CANCEL_WORKSPACE_PICKER;
   });
   assert.equal(
     await window.locator("#onboarding-folder-confirmation").isVisible(),
     false,
   );
   const cancelledConfiguration = (
-    await window.evaluate(() => window.farolNext.bootstrap())
+    await window.evaluate(() => window.farol.bootstrap())
   ).configuration;
   assert.equal(
     cancelledConfiguration.settings.connectors.secureMcp.runtime
@@ -768,7 +766,7 @@ try {
         "false",
   );
   const addedWhileRunning = (
-    await window.evaluate(() => window.farolNext.bootstrap())
+    await window.evaluate(() => window.farol.bootstrap())
   ).configuration;
   assert.equal(
     addedWhileRunning.settings.connectors.secureMcp.runtime.state,
@@ -787,7 +785,7 @@ try {
     path: path.join(output, "13-folder-added-while-connected.png"),
   });
   const tasksBeforeBrowser = (
-    await window.evaluate(() => window.farolNext.bootstrap())
+    await window.evaluate(() => window.farol.bootstrap())
   ).tasks.length;
   await window.locator("#onboarding-return").click();
   await window.locator('[data-panel="browser"].active').waitFor();
@@ -808,7 +806,7 @@ try {
   );
   assert.deepEqual(plainBrowser, { visible: true, pageTop: 52 });
   assert.equal(
-    (await window.evaluate(() => window.farolNext.bootstrap())).tasks.length,
+    (await window.evaluate(() => window.farol.bootstrap())).tasks.length,
     tasksBeforeBrowser,
     "OPENING_BROWSER_CREATED_A_TASK",
   );
@@ -819,7 +817,7 @@ try {
   assert.equal(await window.locator("#task-tabs .task-tab-close").count(), 0);
   await window.screenshot({ path: path.join(output, "14-browser-home.png") });
   const created = await window.evaluate(() =>
-    window.farolNext.task({ kind: "task.create-chatgpt" }),
+    window.farol.task({ kind: "task.create-chatgpt" }),
   );
   assert.equal(created.ok, true, "SYNTHETIC_CHATGPT_TASK_NOT_CREATED");
   await window.locator("#task-tabs .task-tab").waitFor({ state: "visible" });
@@ -945,7 +943,7 @@ try {
     () => document.documentElement.dataset.sidebar === "full",
   );
   const savedBeforeConflict = await window.evaluate(() =>
-    localStorage.getItem("farol.next.navigation-shortcuts.v1"),
+    localStorage.getItem("farol.navigation-shortcuts.v1"),
   );
   await window.locator('[data-shortcut-section="browser"]').selectOption("4");
   await window.locator("#apply-shortcuts").click();
@@ -955,7 +953,7 @@ try {
   );
   assert.equal(
     await window.evaluate(() =>
-      localStorage.getItem("farol.next.navigation-shortcuts.v1"),
+      localStorage.getItem("farol.navigation-shortcuts.v1"),
     ),
     savedBeforeConflict,
   );
@@ -968,7 +966,7 @@ try {
   assert.equal(
     await window.evaluate(
       () =>
-        JSON.parse(localStorage.getItem("farol.next.navigation-shortcuts.v1"))
+        JSON.parse(localStorage.getItem("farol.navigation-shortcuts.v1"))
           .browser,
     ),
     4,
@@ -1001,7 +999,7 @@ try {
   assert.equal(
     await window.evaluate(
       () =>
-        JSON.parse(localStorage.getItem("farol.next.navigation-shortcuts.v1"))
+        JSON.parse(localStorage.getItem("farol.navigation-shortcuts.v1"))
           .browser,
     ),
     1,
@@ -1065,14 +1063,14 @@ try {
       LANG: "en_US.UTF-8",
       LC_ALL: "en_US.UTF-8",
       PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-      FAROL_NEXT_ENVIRONMENT: "dev",
-      FAROL_NEXT_E2E: "1",
-      FAROL_NEXT_E2E_APP_DATA: failedAppData,
-      FAROL_NEXT_E2E_TEST_ROOT: temporaryRoot,
-      FAROL_NEXT_E2E_TEST_PROOF: e2eRootProof,
-      FAROL_NEXT_E2E_WORKSPACE_ROOT: workspaceRoot,
-      FAROL_NEXT_E2E_TUNNEL_CLIENT: tunnelFixture,
-      FAROL_NEXT_E2E_CHATGPT_URL: failedUrl,
+      FAROL_ENVIRONMENT: "dev",
+      FAROL_E2E: "1",
+      FAROL_E2E_APP_DATA: failedAppData,
+      FAROL_E2E_TEST_ROOT: temporaryRoot,
+      FAROL_E2E_TEST_PROOF: e2eRootProof,
+      FAROL_E2E_WORKSPACE_ROOT: workspaceRoot,
+      FAROL_E2E_TUNNEL_CLIENT: tunnelFixture,
+      FAROL_E2E_CHATGPT_URL: failedUrl,
     },
     timeout: 15000,
   });
@@ -1102,7 +1100,7 @@ try {
     JSON.stringify({
       failedFixtureListening: chatGptFixture.listening,
       failedWindowState: await failedWindow.evaluate(async () => {
-        const state = await window.farolNext.bootstrap();
+        const state = await window.farol.bootstrap();
         return {
           environment: state.environment,
           taskCount: state.tasks.length,

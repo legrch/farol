@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ReadonlyComputerCallResponseSchema } from "../../src/modules/computer/contract/readonly-computer-contract";
 import {
   NativeReadonlyWorkspace,
-  NEXT_SAFE_OPEN_HELPER,
+  SAFE_OPEN_HELPER,
 } from "../../src/modules/computer/infra/native/native-readonly-workspace";
 import { approvedRootOf } from "../fixtures/root-identity";
 
@@ -18,7 +18,7 @@ const native = () =>
       import.meta.dirname,
       "../../resources/native/safe_open.py",
     ),
-    helper: NEXT_SAFE_OPEN_HELPER,
+    helper: SAFE_OPEN_HELPER,
     attestInterpreter: async () => "/usr/bin/python3",
   });
 const descriptor = () => ({

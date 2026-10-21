@@ -20,7 +20,7 @@ function recordFile(key: string): string {
 
 beforeEach(async () => {
   root = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-turn-journal-")),
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-turn-journal-")),
   );
 });
 

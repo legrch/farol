@@ -25,7 +25,7 @@ const goHelper = () => ({
 const home = "/Users/binding-fixture";
 const root = path.join(
   home,
-  "Library/Application Support/Farol Next Preview/installed-updates",
+  "Library/Application Support/io.github.legrch.farol/installed-updates",
 );
 const operation = {
   operationId: "a".repeat(32),

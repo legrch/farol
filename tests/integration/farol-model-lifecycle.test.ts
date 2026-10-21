@@ -20,7 +20,7 @@ const roots: string[] = [];
 const lifecycles: FarolModelLifecycle[] = [];
 
 // The one model the endpoint serves (main.ts passes ROUTE_B_MODEL).
-const MODEL = "farol-next/mind";
+const MODEL = "legacy-route/mind";
 
 afterEach(async () => {
   await Promise.all(lifecycles.splice(0).map((lifecycle) => lifecycle.stop()));

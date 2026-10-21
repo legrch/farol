@@ -19,7 +19,7 @@ import {
 } from "../../src/modules/computer/domain/execution-authority";
 import {
   NativeReadonlyWorkspace,
-  NEXT_SAFE_OPEN_HELPER,
+  SAFE_OPEN_HELPER,
 } from "../../src/modules/computer/infra/native/native-readonly-workspace";
 import { ReadonlyComputerContractHandler } from "../../src/modules/computer/infra/readonly-contract-handler";
 import { InMemoryAuthorityRepository } from "../../src/modules/computer/infra/repo/in-memory-authorities";
@@ -171,7 +171,7 @@ function contract(
   currentApproval: ComputerApproval,
   workspace: ReadonlyWorkspace = new NativeReadonlyWorkspace({
     helperPath: sourceHelper,
-    helper: NEXT_SAFE_OPEN_HELPER,
+    helper: SAFE_OPEN_HELPER,
     attestInterpreter: async () => "/usr/bin/python3",
   }),
 ) {
@@ -186,7 +186,7 @@ function contract(
 }
 
 beforeEach(async () => {
-  root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-computer-"));
+  root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-computer-"));
   root = await fs.realpath(root);
   await fs.chmod(root, 0o700);
   await fs.writeFile(path.join(root, "README.md"), "Farol read target\n", {

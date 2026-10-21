@@ -253,7 +253,7 @@ describe("completion-ledger-validate: CLI wiring", () => {
 
   it("exits 0 on a consistent fixture and non-zero on a drifted one, printing rule names", async () => {
     tempDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-completion-ledger-validate-"),
+      path.join(os.tmpdir(), "farol-completion-ledger-validate-"),
     );
     const catalogPath = path.join(tempDir, "catalog.json");
     const cleanLedgerPath = path.join(tempDir, "clean-ledger.json");

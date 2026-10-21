@@ -113,7 +113,7 @@ func TestSlotBindingOriginalPythonASTGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(original)
-	if hex.EncodeToString(digest[:]) != "f2f864871ed29536f345f5d9e13e8e74d59a3b4be6f7b7028ef915743b167f85" {
+	if hex.EncodeToString(digest[:]) != "9bd3bf1e06984deeae37cdc61c30063d01b466d26a518952c599fba9c1142c02" {
 		t.Fatal("original slot producer source identity changed")
 	}
 	raw, err := os.ReadFile("testdata/slot-binding-golden.json")
@@ -238,7 +238,7 @@ import sys
 import types
 
 source = pathlib.Path(sys.argv[1]).read_bytes()
-digest = "f2f864871ed29536f345f5d9e13e8e74d59a3b4be6f7b7028ef915743b167f85"
+digest = "9bd3bf1e06984deeae37cdc61c30063d01b466d26a518952c599fba9c1142c02"
 assert hashlib.sha256(source).hexdigest() == digest, "original producer changed"
 functions = ["fail", "slot_binding_bytes", "canonical_slot_binding", "verify_slot_binding",
              "components", "valid_inode", "parse_request"]

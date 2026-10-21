@@ -40,7 +40,7 @@ if (
   path.basename(userData) !==
     (fixture.Input.InstalledEmpty === true ||
     fixture.Input.InstalledPreserved === true
-      ? "Farol Next Preview"
+      ? "Farol"
       : "Farol Dev") ||
   path.dirname(path.dirname(userData)) !== path.join(root, "_output/tmp") ||
   !path.basename(path.dirname(userData)).startsWith("retirement-boot-")
@@ -121,7 +121,7 @@ try {
     throw Error("HOST_FIXTURE_QUIT_SCOPE_INVALID");
   if (quitAbsent)
     await assert.rejects(
-      fs.lstat(path.join(userData, "farol-next-state", "last-quit.json")),
+      fs.lstat(path.join(userData, "farol-state", "last-quit.json")),
       { code: "ENOENT" },
     );
   if (unacknowledged || installed || preservedProfile) {
@@ -203,7 +203,7 @@ try {
           },
     processesAbsent: () => {
       assertClosedConnectorProcesses(
-        path.join(userData, "farol-next-state/secure-mcp-connector"),
+        path.join(userData, "farol-state/secure-mcp-connector"),
       );
       assertClosedConnectorProcesses(fixture.Profile.Root);
     },

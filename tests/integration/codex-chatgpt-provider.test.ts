@@ -69,7 +69,7 @@ class SseReader {
   }
 }
 
-function requestBody(model = "farol-next/mind") {
+function requestBody(model = "legacy-route/mind") {
   return {
     model,
     stream: true,
@@ -128,7 +128,7 @@ function compactionMetadata() {
   });
 }
 
-describe("Farol Next Codex to ChatGPT provider transport", () => {
+describe("Farol Codex to ChatGPT provider transport", () => {
   let runtime: CodexChatGptProviderRuntime | null = null;
 
   afterEach(async () => {
@@ -361,7 +361,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       },
     };
     runtime = await startCodexChatGptProvider({
-      model: "farol-next/mind",
+      model: "legacy-route/mind",
       token: "route-b-test-token",
       conversation,
       turns: memoryJournal(),
@@ -392,14 +392,14 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
     expect(released).toBe(1);
 
     // Refused before the hold: no hold, nothing to release.
-    const wrongModel = await post(requestBody("farol-next/other"));
+    const wrongModel = await post(requestBody("legacy-route/other"));
     expect(wrongModel.status).toBe(422);
     expect(holds).toHaveLength(1);
     // Refused after the hold, before anything runs: released again.
     const replayed = await post(requestBody());
     expect(replayed.status).toBe(409);
     await expect(replayed.json()).resolves.toEqual({
-      error: { code: "FAROL_NEXT_TURN_ALREADY_SUBMITTED" },
+      error: { code: "FAROL_TURN_ALREADY_SUBMITTED" },
     });
     expect(holds).toHaveLength(2);
     expect(released).toBe(2);
@@ -413,7 +413,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
     const conversation: CodexChatGptConversation = {
       run: vi.fn(async (input, observer) => {
         expect(input).toMatchObject({
-          requestedModel: "farol-next/mind",
+          requestedModel: "legacy-route/mind",
           prompt: "Say hello",
           identity: {
             sessionId: "session-route-b",
@@ -447,7 +447,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       }),
     };
     runtime = await startCodexChatGptProvider({
-      model: "farol-next/mind",
+      model: "legacy-route/mind",
       token: "route-b-test-token",
       conversation,
       turns: memoryJournal(),
@@ -478,7 +478,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
     releaseCompletion();
     await expect(stream.until("response.completed")).resolves.toMatchObject({
       response: {
-        model: "farol-next/mind",
+        model: "legacy-route/mind",
         status: "completed",
         output: [
           {
@@ -499,7 +499,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       let displayDelivered = false;
       let runSettled = false;
       runtime = await startCodexChatGptProvider({
-        model: "farol-next/mind",
+        model: "legacy-route/mind",
         token: "route-b-test-token",
         turns: memoryJournal(),
         conversation: {
@@ -629,7 +629,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       run: vi.fn(async (_input, observer) => {
         observedToolOutput = await observer.onToolCall({
           name: "exec_command",
-          arguments: { cmd: "printf FAROL_NEXT_NATIVE_TOOL_OK" },
+          arguments: { cmd: "printf FAROL_NATIVE_TOOL_OK" },
         });
         await observer.onTextDelta({
           sequence: 1,
@@ -648,7 +648,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       }),
     };
     runtime = await startCodexChatGptProvider({
-      model: "farol-next/mind",
+      model: "legacy-route/mind",
       token: "route-b-test-token",
       conversation,
       turns: memoryJournal(),
@@ -672,8 +672,8 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
     expect(toolCall).toMatchObject({
       type: "function_call",
       name: "exec_command",
-      arguments: JSON.stringify({ cmd: "printf FAROL_NEXT_NATIVE_TOOL_OK" }),
-      call_id: expect.stringMatching(/^farol_next_call_[a-f0-9]{32}$/u),
+      arguments: JSON.stringify({ cmd: "printf FAROL_NATIVE_TOOL_OK" }),
+      call_id: expect.stringMatching(/^farol_call_[a-f0-9]{32}$/u),
     });
     expect(observedToolOutput).toBe("");
 
@@ -685,7 +685,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
         {
           type: "function_call_output",
           call_id: toolCall?.call_id,
-          output: "FAROL_NEXT_NATIVE_TOOL_OK",
+          output: "FAROL_NATIVE_TOOL_OK",
         },
       ],
       previous_response_id: null,
@@ -707,7 +707,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
     });
     expect(foreign.status).toBe(409);
     await expect(foreign.json()).resolves.toEqual({
-      error: { code: "FAROL_NEXT_CONTINUATION_FOREIGN" },
+      error: { code: "FAROL_CONTINUATION_FOREIGN" },
     });
 
     const changedCall = await fetch(`${runtime.baseUrl}/v1/responses`, {
@@ -727,10 +727,10 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
     });
     expect(changedCall.status).toBe(409);
     await expect(changedCall.json()).resolves.toEqual({
-      error: { code: "FAROL_NEXT_CONTINUATION_INVALID" },
+      error: { code: "FAROL_CONTINUATION_INVALID" },
     });
     expect(runtime.diagnostics()).toMatchObject({
-      lastRefusalCode: "FAROL_NEXT_CONTINUATION_CALL_INVALID",
+      lastRefusalCode: "FAROL_CONTINUATION_CALL_INVALID",
     });
     expect(observedToolOutput).toBe("");
     expect(conversation.run).toHaveBeenCalledTimes(1);
@@ -760,7 +760,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
         ],
       },
     });
-    expect(observedToolOutput).toBe("FAROL_NEXT_NATIVE_TOOL_OK");
+    expect(observedToolOutput).toBe("FAROL_NATIVE_TOOL_OK");
     expect(conversation.run).toHaveBeenCalledTimes(1);
     expect(runtime.diagnostics()).toMatchObject({ responseRequests: 4 });
 
@@ -774,7 +774,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
     });
     expect(duplicate.status).toBe(409);
     await expect(duplicate.json()).resolves.toEqual({
-      error: { code: "FAROL_NEXT_CONTINUATION_NOT_FOUND" },
+      error: { code: "FAROL_CONTINUATION_NOT_FOUND" },
     });
     expect(conversation.run).toHaveBeenCalledTimes(1);
     expect(runtime.diagnostics()).toMatchObject({
@@ -836,7 +836,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
         },
       };
       runtime = await startCodexChatGptProvider({
-        model: "farol-next/mind",
+        model: "legacy-route/mind",
         token: "route-b-test-token",
         conversation,
         turns: memoryJournal(),
@@ -851,7 +851,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       });
       const result = await response.text();
       expect(result).toContain("response.failed");
-      expect(result).toContain("FAROL_NEXT_PROVIDER_STREAM_INVALID");
+      expect(result).toContain("FAROL_PROVIDER_STREAM_INVALID");
       expect(result).not.toContain("response.completed");
       expect(runtime.diagnostics().activeTurns).toBe(0);
     },
@@ -882,7 +882,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
         }),
       };
       runtime = await startCodexChatGptProvider({
-        model: "farol-next/mind",
+        model: "legacy-route/mind",
         token: "route-b-test-token",
         conversation,
         turns,
@@ -904,7 +904,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
           body: JSON.stringify(requestBody()),
         });
       const result = await (await post()).text();
-      expect(result).toContain("FAROL_NEXT_PROVIDER_RESULT_INVALID");
+      expect(result).toContain("FAROL_PROVIDER_RESULT_INVALID");
       expect(result).not.toContain("response.completed");
       expect(delivered).not.toHaveBeenCalled();
       expect(release).not.toHaveBeenCalled();
@@ -941,7 +941,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       },
     };
     runtime = await startCodexChatGptProvider({
-      model: "farol-next/mind",
+      model: "legacy-route/mind",
       token: "route-b-test-token",
       conversation,
       turns: memoryJournal(),
@@ -1001,7 +1001,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
           item: {
             id: "cmp_fixture",
             type: "compaction" as const,
-            encrypted_content: "farol-next-checkpoint-v1:fixture",
+            encrypted_content: "farol-checkpoint-v1:fixture",
           },
         },
       })
@@ -1012,7 +1012,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
           item: {
             id: "cmp_fixture_native",
             type: "compaction" as const,
-            encrypted_content: "farol-next-checkpoint-v1:fixture-native",
+            encrypted_content: "farol-checkpoint-v1:fixture-native",
           },
         },
       })
@@ -1021,7 +1021,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
         error: { code: "HOST_COMPACTION_TRIGGER_MISSING" },
       });
     const options = {
-      model: "farol-next/mind",
+      model: "legacy-route/mind",
       token: "route-b-test-token",
       conversation,
       compaction: { compact },
@@ -1030,7 +1030,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
     runtime = await startCodexChatGptProvider(options);
 
     const unaryBody = {
-      model: "farol-next/mind",
+      model: "legacy-route/mind",
       input: compactionHistory(),
     };
     const unary = await fetch(`${runtime.baseUrl}/v1/responses/compact`, {
@@ -1054,7 +1054,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
     });
 
     const streamedBody = {
-      model: "farol-next/mind",
+      model: "legacy-route/mind",
       stream: true,
       input: [...compactionHistory(), { type: "compaction_trigger" }],
     };
@@ -1075,18 +1075,18 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       item: {
         id: "cmp_fixture",
         type: "compaction",
-        encrypted_content: "farol-next-checkpoint-v1:fixture",
+        encrypted_content: "farol-checkpoint-v1:fixture",
       },
     });
     await expect(stream.until("response.completed")).resolves.toMatchObject({
       response: {
-        model: "farol-next/mind",
+        model: "legacy-route/mind",
         status: "completed",
         output: [
           {
             id: "cmp_fixture",
             type: "compaction",
-            encrypted_content: "farol-next-checkpoint-v1:fixture",
+            encrypted_content: "farol-checkpoint-v1:fixture",
           },
         ],
       },
@@ -1105,7 +1105,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       request_kind: "compaction",
     });
     const installedBody = {
-      model: "farol-next/mind",
+      model: "legacy-route/mind",
       stream: true,
       input: compactionHistory(),
       tools: [],
@@ -1132,7 +1132,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       item: {
         id: "cmp_fixture_native",
         type: "compaction",
-        encrypted_content: "farol-next-checkpoint-v1:fixture-native",
+        encrypted_content: "farol-checkpoint-v1:fixture-native",
       },
     });
 
@@ -1194,7 +1194,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
 
   it("EV-05 runs one logical initial request once across completion, lost delivery and restart", async () => {
     const journalRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-provider-turns-"),
+      path.join(os.tmpdir(), "farol-provider-turns-"),
     );
     try {
       let hold: Promise<void> | null = null;
@@ -1219,7 +1219,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       );
       const start = () =>
         startCodexChatGptProvider({
-          model: "farol-next/mind",
+          model: "legacy-route/mind",
           token: "route-b-test-token",
           conversation: { run },
           turns: new PrivateProviderTurnJournal({ root: journalRoot }),
@@ -1250,7 +1250,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
         },
       });
       const alreadySubmitted = {
-        error: { code: "FAROL_NEXT_TURN_ALREADY_SUBMITTED" },
+        error: { code: "FAROL_TURN_ALREADY_SUBMITTED" },
       };
       runtime = await start();
 
@@ -1300,7 +1300,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       const changed = await post(withTurn("turn-complete", "Say goodbye"));
       expect(changed.status).toBe(409);
       await expect(changed.json()).resolves.toEqual({
-        error: { code: "FAROL_NEXT_TURN_INTENT_CONFLICT" },
+        error: { code: "FAROL_TURN_INTENT_CONFLICT" },
       });
       expect(run).toHaveBeenCalledTimes(2);
 
@@ -1325,7 +1325,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       run: vi.fn(),
     };
     runtime = await startCodexChatGptProvider({
-      model: "farol-next/mind",
+      model: "legacy-route/mind",
       token: "route-b-test-token",
       conversation,
       turns: memoryJournal(),
@@ -1344,11 +1344,11 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
         authorization: "Bearer route-b-test-token",
         "content-type": "application/json",
       },
-      body: JSON.stringify(requestBody("farol-next/unknown")),
+      body: JSON.stringify(requestBody("legacy-route/unknown")),
     });
     expect(unsupported.status).toBe(422);
     await expect(unsupported.json()).resolves.toEqual({
-      error: { code: "FAROL_NEXT_MODEL_UNAVAILABLE" },
+      error: { code: "FAROL_MODEL_UNAVAILABLE" },
     });
     expect(conversation.run).not.toHaveBeenCalled();
   });
@@ -1364,9 +1364,9 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
     });
     for (const model of [
       "farol/chatgpt",
-      "farol-next/chatgpt",
-      "farol-next/mind",
-      "farol-next/drive",
+      "legacy-route/chatgpt",
+      "legacy-route/mind",
+      "legacy-route/drive",
       "chatgpt-gpt-5.5",
       "deepseek",
     ]) {
@@ -1380,7 +1380,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       });
       expect(response.status).toBe(422);
       await expect(response.json()).resolves.toEqual({
-        error: { code: "FAROL_NEXT_MODEL_UNAVAILABLE" },
+        error: { code: "FAROL_MODEL_UNAVAILABLE" },
       });
     }
     expect(conversation.run).not.toHaveBeenCalled();

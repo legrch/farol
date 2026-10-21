@@ -79,7 +79,7 @@ describe("closed Computer maintenance profile selection (synthetic metadata)", (
       closedRecoveryUserData(home, false, () => {
         throw new Error("MUST_NOT_INSPECT_DEV");
       }),
-    ).toBe(`${appData}/Farol Next Preview`);
+    ).toBe(`${appData}/io.github.legrch.farol`);
   });
   it("keeps ordinary Dev separate from production and acceptance profiles", () => {
     expect(
@@ -139,7 +139,7 @@ describe("closed Computer maintenance profile selection (synthetic metadata)", (
   it.each([
     `${appData}/unrelated`,
     `${home}/other/Farol Dev`,
-    `${appData}/Farol Next Preview`,
+    `${appData}/io.github.legrch.farol`,
     `${appData}/Farol Dev/child`,
   ])(
     "refuses canonicalization outside both fixed Dev entries (%s)",
@@ -186,7 +186,7 @@ describe("closed Computer maintenance profile selection (synthetic metadata)", (
 
 describe("closed recovery process checks across physical Dev spellings", () => {
   const appData = "/private/tmp/synthetic-owner/Library/Application Support";
-  const suffix = "/farol-next-state/secure-mcp-connector";
+  const suffix = "/farol-state/secure-mcp-connector";
   it("checks both fixed Dev aliases so canonicalization cannot miss a child", () => {
     const observed = [];
     assertClosedRecoveryProcesses(
@@ -217,7 +217,7 @@ describe("closed recovery process checks across physical Dev spellings", () => {
   });
   it("does not inspect Dev for default production maintenance", () => {
     const observed = [];
-    const production = `${appData}/Farol Next Preview${suffix}`;
+    const production = `${appData}/io.github.legrch.farol${suffix}`;
     assertClosedRecoveryProcesses(production, false, (root) =>
       observed.push(root),
     );
@@ -238,7 +238,7 @@ describe("closed recovery process checks across physical Dev spellings", () => {
   it("refuses a non-Dev process root before any probe", () => {
     expect(() =>
       assertClosedRecoveryProcesses(
-        `${appData}/Farol Next Preview${suffix}`,
+        `${appData}/io.github.legrch.farol${suffix}`,
         true,
         () => {
           throw new Error("MUST_NOT_PROBE");

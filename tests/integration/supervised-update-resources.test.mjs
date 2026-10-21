@@ -73,8 +73,8 @@ async function fixture() {
   const artifact = {
     schema: 7,
     treeDigestVersion: TREE_DIGEST_VERSION,
-    product: "Farol Next Preview",
-    bundleId: "local.farol.next.preview",
+    product: "Farol",
+    bundleId: "io.github.legrch.farol",
     ...expected,
     builtAt: "2026-10-05T00:00:00.000Z",
     sourceDirty: false,

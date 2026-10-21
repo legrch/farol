@@ -26,7 +26,7 @@ afterEach(async () => {
 describe("connector verification MCP tool", () => {
   it("executes one correlated native list and returns only content-free proof", async () => {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-connector-mcp-proof-"),
+      path.join(os.tmpdir(), "farol-connector-mcp-proof-"),
     );
     roots.push(root);
     const challenge = "00000000-0000-4000-8000-000000000001";
@@ -76,11 +76,11 @@ describe("connector verification MCP tool", () => {
     try {
       const listed = await client.listTools();
       expect(listed.tools.map((tool) => tool.name)).toContain(
-        "farol_next_connector_verify",
+        "farol_connector_verify",
       );
 
       const refused = await client.callTool({
-        name: "farol_next_connector_verify",
+        name: "farol_connector_verify",
         arguments: {
           challenge: "00000000-0000-4000-8000-000000000002",
           workspaceId: "workspace-route-a",
@@ -90,7 +90,7 @@ describe("connector verification MCP tool", () => {
       expect(execute).not.toHaveBeenCalled();
 
       const verified = await client.callTool({
-        name: "farol_next_connector_verify",
+        name: "farol_connector_verify",
         arguments: { challenge, workspaceId: "workspace-route-a" },
       });
       expect(verified.isError).not.toBe(true);

@@ -206,7 +206,7 @@ test("unaccepted source or runtime refusal happens before package or profile eff
 
 test("fixed launcher strips inherited hooks, fixes marker, and rejects caller flags", () => {
   assert.match(PREVIEW_LAUNCHER, /exec \/usr\/bin\/env -i/u);
-  assert.match(PREVIEW_LAUNCHER, /FAROL_NEXT_ENVIRONMENT=owner-preview/u);
+  assert.match(PREVIEW_LAUNCHER, /FAROL_ENVIRONMENT=owner-preview/u);
   assert.match(PREVIEW_LAUNCHER, /\[ "\$#" -eq 0 \]/u);
   assert.ok(!PREVIEW_LAUNCHER.includes('"$@"'));
   for (const hook of [
@@ -214,7 +214,7 @@ test("fixed launcher strips inherited hooks, fixes marker, and rejects caller fl
     "NODE_PATH",
     "ELECTRON_RUN_AS_NODE",
     "CODEX_HOME",
-    "FAROL_NEXT_E2E",
+    "FAROL_E2E",
   ])
     assert.ok(!PREVIEW_LAUNCHER.includes(hook));
 });

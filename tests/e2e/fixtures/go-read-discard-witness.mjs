@@ -285,7 +285,7 @@ export function approvedSettingsWitness(
   const readiness = settings.setup.chatgpt.verified;
   assert.equal(readiness?.buildId, buildId);
   assert.equal(readiness?.protocol, "chatgpt-page-readiness/1");
-  assert.equal(readiness?.profile, "chatgpt.next-partition/1");
+  assert.equal(readiness?.profile, "chatgpt.app-partition/1");
   for (const key of ["computer", "chatgpt"])
     assert.equal(settings.setup[key].outcomeUnknown, false);
   return workspace;
@@ -642,7 +642,7 @@ export function readWitnessSelfTest(pass, reject) {
         verified: {
           buildId: "build",
           protocol: "chatgpt-page-readiness/1",
-          profile: "chatgpt.next-partition/1",
+          profile: "chatgpt.app-partition/1",
         },
         outcomeUnknown: false,
       },

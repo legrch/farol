@@ -66,7 +66,7 @@ beforeAll(async () => {
   // `os.tmpdir()` is a symlink on macOS; the owner's approved root is always
   // the resolved path, so resolve it here rather than compare across the link.
   workspaceRoot = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-agent-scope-")),
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-agent-scope-")),
   );
   await fs.mkdir(at("docs", "drafts"), { recursive: true });
   await fs.mkdir(at("private"), { recursive: true });
@@ -112,7 +112,7 @@ function codexHost() {
       executableSha256: EXECUTABLE_SHA,
       schemaSha256: SCHEMA_SHA,
       buildId: BUILD_ID,
-      dynamicTool: "farol_next_ping" as const,
+      dynamicTool: "farol_ping" as const,
       verifiedAt: TIMESTAMP,
     },
     agentVerification: {

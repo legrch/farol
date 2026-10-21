@@ -30,7 +30,7 @@ describe("compaction identity carriers share one admission owner", () => {
       }),
     ).toMatchObject({
       ok: false,
-      error: { code: "FAROL_NEXT_COMPACTION_TURN_ACTIVE" },
+      error: { code: "FAROL_COMPACTION_TURN_ACTIVE" },
     });
     expect(compact).not.toHaveBeenCalled();
     expect(admission.owns("thread-active")).toBe(true);

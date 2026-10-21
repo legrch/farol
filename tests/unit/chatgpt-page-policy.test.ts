@@ -6,7 +6,7 @@ import {
   classifyChatGptPage,
 } from "../../src/apps/desktop/chatgpt-page-policy";
 
-describe("Farol Next ChatGPT page policy", () => {
+describe("Farol ChatGPT page policy", () => {
   it("keeps an explicit visible sign-in requirement even if a guest composer exists", () => {
     expect(
       classifyChatGptPage({
@@ -17,8 +17,8 @@ describe("Farol Next ChatGPT page policy", () => {
     ).toEqual({ state: "signed_out", code: "CHATGPT_SIGN_IN_REQUIRED" });
   });
   it("owns a partition distinct from both preview tasks and Legacy", () => {
-    expect(CHATGPT_PARTITION).toBe("persist:farol-next-chatgpt");
-    expect(CHATGPT_PARTITION).not.toBe("persist:farol-next-preview");
+    expect(CHATGPT_PARTITION).toBe("persist:farol-app-chatgpt");
+    expect(CHATGPT_PARTITION).not.toBe("persist:farol-runtime");
     expect(CHATGPT_PARTITION).not.toBe("persist:farol-chatgpt");
   });
 
@@ -64,17 +64,17 @@ describe("Farol Next ChatGPT page policy", () => {
     ).toBe("https://chatgpt.com/c/12345678-abcd-4abc-8abc-123456789012");
     expect(
       canonicalChatGptConversationUrl(
-        "http://127.0.0.1:43123/chatgpt/c/farol-next-e2e",
+        "http://127.0.0.1:43123/chatgpt/c/farol-e2e",
         fixture,
       ),
-    ).toBe("http://127.0.0.1:43123/chatgpt/c/farol-next-e2e");
+    ).toBe("http://127.0.0.1:43123/chatgpt/c/farol-e2e");
     for (const refused of [
       "https://chatgpt.com/",
       "https://chatgpt.com/share/12345678",
       "https://chatgpt.com/c/short",
       "https://chatgpt.com.evil.test/c/12345678",
       "https://accounts.openai.com/c/12345678",
-      "http://127.0.0.1:43124/chatgpt/c/farol-next-e2e",
+      "http://127.0.0.1:43124/chatgpt/c/farol-e2e",
     ]) {
       expect(canonicalChatGptConversationUrl(refused, fixture)).toBeNull();
     }

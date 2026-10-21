@@ -24,7 +24,7 @@ import {
 import { Sha256WorkspaceMutationDigester } from "../../src/modules/computer/infra/native/sha256-workspace-mutation-digester";
 import {
   NativeReadonlyWorkspace,
-  NEXT_SAFE_OPEN_HELPER,
+  SAFE_OPEN_HELPER,
 } from "../../src/modules/computer/infra/native/native-readonly-workspace";
 import { InMemoryAuthorityRepository } from "../../src/modules/computer/infra/repo/in-memory-authorities";
 import { InMemoryComputerApprovalRepository } from "../../src/modules/computer/infra/repo/in-memory-computer-approvals";
@@ -206,10 +206,10 @@ function customService(
 
 beforeEach(async () => {
   root = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-action-mutation-")),
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-action-mutation-")),
   );
   stateRoot = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-mutation-state-")),
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-mutation-state-")),
   );
   await fs.chmod(root, 0o700);
   await fs.chmod(stateRoot, 0o700);
@@ -228,7 +228,7 @@ describe("authorized mutable Computer action", () => {
   it("composes authority, durable admission and the attested native mutation", async () => {
     const native = new NativeReadonlyWorkspace({
       helperPath: sourceHelper,
-      helper: NEXT_SAFE_OPEN_HELPER,
+      helper: SAFE_OPEN_HELPER,
       attestInterpreter: async () => "/usr/bin/python3",
     });
     await expect(
@@ -251,7 +251,7 @@ describe("authorized mutable Computer action", () => {
   it("composes authority, durable admission and the attested native mutation for a text edit", async () => {
     const native = new NativeReadonlyWorkspace({
       helperPath: sourceHelper,
-      helper: NEXT_SAFE_OPEN_HELPER,
+      helper: SAFE_OPEN_HELPER,
       attestInterpreter: async () => "/usr/bin/python3",
     });
     await expect(

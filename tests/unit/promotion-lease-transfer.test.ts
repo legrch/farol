@@ -14,7 +14,7 @@ const fake = vi.hoisted(() => ({
   fileInode: 30n,
   mode: 0o600,
   links: 1n,
-  canonical: "/private/fixture/farol-next-state/promotion.lease",
+  canonical: "/private/fixture/farol-state/promotion.lease",
   closeError: false,
   handle: undefined as unknown as {
     fd: number;
@@ -75,7 +75,7 @@ beforeEach(() => {
   fake.fileInode = 30n;
   fake.mode = 0o600;
   fake.links = 1n;
-  fake.canonical = "/private/fixture/farol-next-state/promotion.lease";
+  fake.canonical = "/private/fixture/farol-state/promotion.lease";
   fake.closeError = false;
 });
 afterEach(() => {

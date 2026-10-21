@@ -13,7 +13,7 @@ it("promotion cannot ignore an older filename and its pending obligations", asyn
     path.join(os.tmpdir(), "farol-config-promotion-"),
   );
   try {
-    const root = path.join(userData, "farol-next-state");
+    const root = path.join(userData, "farol-state");
     await new ProductConfigurationService(
       new ProductSettingsStore({ root }),
     ).initialize();

@@ -8,7 +8,7 @@ afterEach(() => vi.restoreAllMocks());
 it.each(["fifo", "symlink", "regular"])(
   "legacy %s presence blocks promotion without opening the node",
   async (kind) => {
-    const old = "/fixture/preview/farol-next-state/product-settings.json";
+    const old = "/fixture/preview/farol-state/product-settings.json";
     const open = vi.spyOn(fs, "open").mockImplementation(async (file) => {
       if (file === old) throw new Error("LEGACY_MUST_NOT_BE_OPENED");
       throw Object.assign(new Error("absent fixture state"), {

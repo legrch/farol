@@ -52,14 +52,14 @@ assertRuntimeObservation(
 const temporary = await fs.realpath(os.tmpdir()),
   proof = randomUUID();
 const home = await fs.realpath(
-  await fs.mkdtemp(path.join(temporary, "farol-next-e2e-home-")),
+  await fs.mkdtemp(path.join(temporary, "farol-e2e-home-")),
 );
 const auxiliary = await fs.realpath(
   await fs.mkdtemp(path.join(temporary, "farol-guided-setup-")),
 );
 for (const directory of [home, auxiliary]) {
   await fs.chmod(directory, 0o700);
-  await fs.writeFile(path.join(directory, ".farol-next-e2e-root"), proof, {
+  await fs.writeFile(path.join(directory, ".farol-e2e-root"), proof, {
     mode: 0o600,
     flag: "wx",
   });
@@ -84,7 +84,7 @@ await fs.copyFile(
   new URL("./tunnel-client.fixture.cjs", import.meta.url),
   path.join(auxiliary, "tunnel-client.fixture.cjs"),
 );
-const state = path.join(userData, "farol-next-state"),
+const state = path.join(userData, "farol-state"),
   tunnelStore = pollingTunnelStore(path.join(state, "secure-mcp-connector"));
 const evidence = path.join(
   root,
@@ -292,14 +292,14 @@ async function launch(ordinal) {
       TMPDIR: temporary,
       PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
       LANG: "en_US.UTF-8",
-      FAROL_NEXT_ENVIRONMENT: "dev",
-      FAROL_NEXT_E2E: "1",
-      FAROL_NEXT_E2E_APP_DATA: appData,
-      FAROL_NEXT_E2E_TEST_ROOT: home,
-      FAROL_NEXT_E2E_TEST_PROOF: proof,
-      FAROL_NEXT_E2E_WORKSPACE_ROOT: workspace,
-      FAROL_NEXT_E2E_CHATGPT_URL: site.url,
-      FAROL_NEXT_E2E_TUNNEL_CLIENT: executable,
+      FAROL_ENVIRONMENT: "dev",
+      FAROL_E2E: "1",
+      FAROL_E2E_APP_DATA: appData,
+      FAROL_E2E_TEST_ROOT: home,
+      FAROL_E2E_TEST_PROOF: proof,
+      FAROL_E2E_WORKSPACE_ROOT: workspace,
+      FAROL_E2E_CHATGPT_URL: site.url,
+      FAROL_E2E_TUNNEL_CLIENT: executable,
     },
     timeout: 15000,
   };
@@ -347,7 +347,7 @@ async function launch(ordinal) {
   assert.equal(actual.userData, userData);
   await waitForReactShell(run.page);
   await poll(
-    () => run.page.evaluate(() => window.farolNext.bootstrap()),
+    () => run.page.evaluate(() => window.farol.bootstrap()),
     (value) => value.configuration?.status === "ready",
     "POLLING_SETTINGS_NOT_READY",
   );
@@ -370,11 +370,10 @@ async function launch(ordinal) {
   await save();
   return run;
 }
-const bootstrap = (run) =>
-  run.page.evaluate(() => window.farolNext.bootstrap());
+const bootstrap = (run) => run.page.evaluate(() => window.farol.bootstrap());
 async function configure(run, command) {
   const result = await bounded(
-    run.page.evaluate((value) => window.farolNext.configure(value), command),
+    run.page.evaluate((value) => window.farol.configure(value), command),
     `POLLING_CONFIGURE_UNKNOWN:${command.kind}`,
     20000,
   );

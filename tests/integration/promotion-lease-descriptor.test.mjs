@@ -11,6 +11,18 @@ import {
   releasePromotionLease,
 } from "../../tooling/promotion-lease.mjs";
 
+it.each([
+  ["io.github.legrch.farol", "farol-state"],
+  ["Farol Dev", "farol-state"],
+  ["Farol Preview", "farol-state"],
+  ["Farol Next Preview", "farol-next-state"],
+])("keeps the %s lock in its exact named state directory", (profile, state) => {
+  const root = path.join("/synthetic/app-data", profile);
+  const expected = path.join(root, state, "promotion.lease");
+  expect(desktop.promotionLeasePath(root)).toBe(expected);
+  expect(tooling.promotionLeasePath(root)).toBe(expected);
+});
+
 it("keeps the exact inherited kernel lease held after the launcher releases its descriptor", async () => {
   const root = await fs.mkdtemp(
     path.join(await fs.realpath(os.tmpdir()), "farol-inherited-lease-"),

@@ -67,7 +67,7 @@ function validBuildManifest(overrides = {}) {
   return {
     schema: 4,
     sourceMode: "head-exact",
-    product: "Farol Next Preview",
+    product: "Farol",
     buildId: "c".repeat(64),
     builtAt: "2026-09-16T10:00:00.000Z",
     sourceCommit: "a".repeat(40),

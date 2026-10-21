@@ -43,6 +43,7 @@ with zipfile.ZipFile(sys.argv[1], "w", compression=zipfile.ZIP_DEFLATED) as arch
         info.compress_type = zipfile.ZIP_DEFLATED
         archive.writestr(info, (entry.get("data", "") * entry.get("repeat", 1)).encode())
 `;
+// Explicit schema-5 archive fixture; branded generation is tested separately.
 const app = "Farol Next Preview.app";
 const base = [
   { name: "artifact.json", data: "{}" },
@@ -200,7 +201,7 @@ describe("shared package verifier entry", () => {
     await expect(
       verifyPackageContent({
         artifact: { schema: 4 },
-        appPath: "/tmp/Farol Next Preview.app",
+        appPath: "/tmp/Farol.app",
         expectedVersion: "0.1.0-preview.0",
         expectedChannel: "local-preview-only",
       }),
@@ -230,8 +231,8 @@ describe("private handle verification", () => {
           nodeExecutable: process.execPath,
         });
         const manifest = {
-          product: "Farol Next Preview",
-          bundleId: "local.farol.next.preview",
+          product: "Farol",
+          bundleId: "io.github.legrch.farol",
           version: "0.1.0-owner.beta.1",
           buildVersion: "2",
           channel: "owner-beta",
@@ -289,7 +290,7 @@ archive = root / "archive.zip"
 stage = root / "stage"
 stage.mkdir(mode=0o700)
 with zipfile.ZipFile(archive, "w") as z:
-    for name in ["artifact.json", "Farol Next Preview.app/Contents/Info.plist", "Farol Next Preview.app/extra"]:
+    for name in ["artifact.json", "Farol.app/Contents/Info.plist", "Farol.app/extra"]:
         if scenario == "zip64-member-local":
             with z.open(name, "w", force_zip64=True) as member:
                 member.write(b"")
@@ -369,7 +370,7 @@ installer = module("installer", installer_path)
 a = zipfile.ZipInfo("artifact.json")
 a.file_size = 2
 a.compress_size = 2
-b = zipfile.ZipInfo("Farol Next Preview.app/Contents/large")
+b = zipfile.ZipInfo("Farol.app/Contents/large")
 b.file_size = installer.MAX_BYTES + 1
 b.compress_size = b.file_size
 class Entries:

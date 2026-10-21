@@ -296,21 +296,21 @@ describe("standalone owner protection", () => {
     const home = fixture();
     const result = await run(
       home,
-      "from pathlib import Path; p=Path.home()/'Library/Application Support/Farol Dev/farol-next-state/running.json'; p.parent.mkdir(parents=True); p.write_text('synthetic marker')",
+      "from pathlib import Path; p=Path.home()/'Library/Application Support/Farol Dev/farol-state/running.json'; p.parent.mkdir(parents=True); p.write_text('synthetic marker')",
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Farol Dev/farol-next-state/running.json");
+    expect(result.stderr).toContain("Farol Dev/farol-state/running.json");
   });
   it("catches replacement of a new-product profile directory by identity", async () => {
     const home = fixture();
     const profile = path.join(
       home,
-      "Library/Application Support/Farol Next Preview",
+      "Library/Application Support/io.github.legrch.farol",
     );
     fs.mkdirSync(profile, { recursive: true });
     const result = await run(
       home,
-      "from pathlib import Path; p=Path.home()/'Library/Application Support/Farol Next Preview'; p.rename(p.with_name('old')); p.mkdir()",
+      "from pathlib import Path; p=Path.home()/'Library/Application Support/io.github.legrch.farol'; p.rename(p.with_name('old')); p.mkdir()",
     );
     expect(result.status).toBe(1);
   });
@@ -320,7 +320,7 @@ describe("standalone owner protection", () => {
       "tooling/dev.mjs",
       [],
       "Farol Dev",
-      "Farol Next Preview",
+      "io.github.legrch.farol",
       {},
     ],
     [
@@ -328,31 +328,31 @@ describe("standalone owner protection", () => {
       "tooling/dev.mjs",
       ["--acceptance-profile"],
       "Farol Dev Acceptance/Farol Dev",
-      "Farol Next Preview",
+      "io.github.legrch.farol",
       {},
     ],
     [
       "packaged preview",
       "tooling/run-preview.mjs",
       [],
-      "Farol Next Preview",
+      "io.github.legrch.farol",
       "Farol Dev",
-      { FAROL_NEXT_OWNER_LAUNCH: "1" },
+      { FAROL_OWNER_LAUNCH: "1" },
     ],
     [
       "hidden packaged preview",
       "tooling/run-preview.mjs",
       ["--hidden"],
-      "Farol Next Preview",
+      "io.github.legrch.farol",
       "Farol Dev",
-      { FAROL_NEXT_OWNER_LAUNCH: "1" },
+      { FAROL_OWNER_LAUNCH: "1" },
     ],
   ])(
     "allows %s startup markers but still catches another profile",
     async (_label, script, args, allowed, denied, environment) => {
       const home = fixture();
       const writeMarker = (profile) =>
-        `from pathlib import Path; p=Path.home()/'Library/Application Support/${profile}/farol-next-state/running.json'; p.parent.mkdir(parents=True, exist_ok=True); p.write_text('synthetic marker')`;
+        `from pathlib import Path; p=Path.home()/'Library/Application Support/${profile}/farol-state/running.json'; p.parent.mkdir(parents=True, exist_ok=True); p.write_text('synthetic marker')`;
       const allowedResult = await runOwnerLaunch(
         home,
         script,
@@ -370,7 +370,7 @@ describe("standalone owner protection", () => {
       );
       expect(deniedResult.status).toBe(1);
       expect(deniedResult.stderr).toContain(
-        `${denied}/farol-next-state/running.json`,
+        `${denied}/farol-state/running.json`,
       );
     },
   );
@@ -378,19 +378,19 @@ describe("standalone owner protection", () => {
     const home = fixture();
     const profile = path.join(
       home,
-      "Library/Application Support/Farol Next Preview",
+      "Library/Application Support/io.github.legrch.farol",
     );
     fs.mkdirSync(profile, { recursive: true });
     const result = await runOwnerLaunch(
       home,
       "tooling/dev.mjs",
       [],
-      "from pathlib import Path; p=Path.home()/'Library/Application Support/Farol Next Preview'; p.rename(p.with_name('old')); p.mkdir()",
+      "from pathlib import Path; p=Path.home()/'Library/Application Support/io.github.legrch.farol'; p.rename(p.with_name('old')); p.mkdir()",
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Farol Next Preview");
+    expect(result.stderr).toContain("io.github.legrch.farol");
   });
-  it.each(["Farol Dev", "Farol Next Preview"])(
+  it.each(["Farol Dev", "io.github.legrch.farol"])(
     "keeps the full guard for check-only Dev touching %s",
     async (profile) => {
       const home = fixture();
@@ -398,12 +398,10 @@ describe("standalone owner protection", () => {
         home,
         "tooling/dev.mjs",
         ["--check"],
-        `from pathlib import Path; p=Path.home()/'Library/Application Support/${profile}/farol-next-state/running.json'; p.parent.mkdir(parents=True); p.write_text('synthetic marker')`,
+        `from pathlib import Path; p=Path.home()/'Library/Application Support/${profile}/farol-state/running.json'; p.parent.mkdir(parents=True); p.write_text('synthetic marker')`,
       );
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        `${profile}/farol-next-state/running.json`,
-      );
+      expect(result.stderr).toContain(`${profile}/farol-state/running.json`);
     },
   );
   it("ordinary shared NEW launch still rejects a synthetic V0 settings mutation", async () => {
@@ -434,7 +432,7 @@ describe("standalone owner protection", () => {
     for (const profile of [
       "Farol Dev",
       "Farol DEV",
-      "Farol Next Preview",
+      "io.github.legrch.farol",
       "Farol Dev Acceptance",
       "Farol Dev Acceptance/Farol Dev",
     ])

@@ -36,7 +36,7 @@ describe("owner Preview runtime isolation", () => {
       codexHomePath: identity.codexHome,
       processHomePath: path.join(
         identity.userData,
-        "farol-next-private",
+        "farol-private",
         "process-home",
       ),
     });
@@ -65,7 +65,8 @@ describe("owner Preview runtime isolation", () => {
     expect(() =>
       desktopAppDataPath("owner-preview", appData, {
         enabled: true,
-        override: "/Users/owner/Library/Application Support/Farol Next Preview",
+        override:
+          "/Users/owner/Library/Application Support/io.github.legrch.farol",
       }),
     ).toThrow("DESKTOP_E2E_APP_DATA_INVALID");
   });

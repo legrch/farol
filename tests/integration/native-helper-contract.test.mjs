@@ -27,7 +27,7 @@ describe("native helper contract", () => {
 
   it("rejects changed bytes and writable helper modes", async () => {
     const directory = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-native-helper-"),
+      path.join(os.tmpdir(), "farol-native-helper-"),
     );
     temporary.push(directory);
     const changed = path.join(directory, "changed.py");

@@ -103,9 +103,7 @@ async function execute(
 
 beforeEach(async () => {
   processMock.spawn.mockReset();
-  root = await fs.mkdtemp(
-    path.join(os.tmpdir(), "farol-next-command-failure-"),
-  );
+  root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-command-failure-"));
   root = await fs.realpath(root);
   await fs.chmod(root, 0o700);
   await fs.mkdir(path.join(root, ".git"), { mode: 0o700 });

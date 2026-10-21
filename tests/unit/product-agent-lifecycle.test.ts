@@ -128,7 +128,7 @@ function codexHostOf(
             executableSha256: options.executableSha256 ?? EXECUTABLE_SHA,
             schemaSha256: options.schemaSha256 ?? SCHEMA_SHA,
             buildId: BUILD_ID,
-            dynamicTool: "farol_next_ping" as const,
+            dynamicTool: "farol_ping" as const,
             verifiedAt: TIMESTAMP,
             ...options.live,
           },
@@ -224,7 +224,7 @@ function settingsOf(
           computerVerified === null
             ? null
             : {
-                profile: "farol-next",
+                profile: "farol",
                 configRevision: computerVerified.configRevision,
                 workspaceId: computerVerified.workspaceId,
                 runtimeGeneration: "next-1",

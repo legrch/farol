@@ -55,11 +55,11 @@ await fs.chmod(profile, 0o700);
 const home = path.join(profile, "home"),
   appData = path.join(profile, "app-data");
 const userData = path.join(appData, "Farol Dev"),
-  stateRoot = path.join(userData, "farol-next-state");
+  stateRoot = path.join(userData, "farol-state");
 for (const dir of [home, stateRoot])
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
 const proof = randomUUID();
-await fs.writeFile(path.join(profile, ".farol-next-e2e-root"), proof, {
+await fs.writeFile(path.join(profile, ".farol-e2e-root"), proof, {
   mode: 0o600,
   flag: "wx",
 });
@@ -203,7 +203,7 @@ async function injectComputerStoreRefusal() {
   assert.equal(path.dirname(profile), temp);
   assert.ok(path.basename(profile).startsWith("farol-dev-onboarding-startup-"));
   const directories = await faultDirectories();
-  const marker = await faultFile(path.join(profile, ".farol-next-e2e-root"));
+  const marker = await faultFile(path.join(profile, ".farol-e2e-root"));
   assert.equal(marker.bytes.toString("utf8"), proof);
   const identity = await faultFile(
     path.join(stateRoot, "go-core", "profile.json"),
@@ -289,7 +289,7 @@ async function injectComputerStoreRefusal() {
     files: new Map([
       [computerSnapshot, replacement],
       [retainedComputerSnapshot, retained],
-      [path.join(profile, ".farol-next-e2e-root"), marker],
+      [path.join(profile, ".farol-e2e-root"), marker],
     ]),
   };
   report.computerStoreFault.stage = "malformed-replacement-original-retained";
@@ -564,11 +564,11 @@ function launchOptions(extra = {}) {
       PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
       LANG: "en_US.UTF-8",
       LC_ALL: "en_US.UTF-8",
-      FAROL_NEXT_ENVIRONMENT: "dev",
-      FAROL_NEXT_E2E: "1",
-      FAROL_NEXT_E2E_APP_DATA: appData,
-      FAROL_NEXT_E2E_TEST_ROOT: profile,
-      FAROL_NEXT_E2E_TEST_PROOF: proof,
+      FAROL_ENVIRONMENT: "dev",
+      FAROL_E2E: "1",
+      FAROL_E2E_APP_DATA: appData,
+      FAROL_E2E_TEST_ROOT: profile,
+      FAROL_E2E_TEST_PROOF: proof,
     },
     timeout: 15000,
   };
@@ -582,7 +582,7 @@ async function crashNormalHost() {
   try {
     await save();
     application = await electron.launch(
-      launchOptions({ FAROL_NEXT_E2E_CHATGPT_URL: fixture.url }),
+      launchOptions({ FAROL_E2E_CHATGPT_URL: fixture.url }),
     );
     const child = application.process();
     original.pid = child.pid;
@@ -592,7 +592,7 @@ async function crashNormalHost() {
     await page.locator(".desktop").waitFor({ state: "visible" });
     let ready = false;
     for (let n = 0; n < 100; n++) {
-      const snapshot = await page.evaluate(() => window.farolNext.bootstrap());
+      const snapshot = await page.evaluate(() => window.farol.bootstrap());
       if (
         snapshot.runtimeState === "ready" &&
         snapshot.configuration.status === "ready"
@@ -813,7 +813,7 @@ try {
     );
     launch.api = await page.evaluate(() => ({
       recovery: Object.keys(window.farolRecovery ?? {}).sort(),
-      normal: typeof window.farolNext,
+      normal: typeof window.farol,
     }));
     assert.deepEqual(launch.api, {
       recovery: ["quit", "read", "state"],

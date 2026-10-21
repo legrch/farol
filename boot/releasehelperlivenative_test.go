@@ -86,8 +86,8 @@ func newLiveNativeFixture(t *testing.T, trees bool) *liveNativeFixture {
 		t.Fatal(err)
 	}
 	f := &liveNativeFixture{execNativeFixture: execNativeFixture{dir: dir, home: filepath.Join(dir, "home")}}
-	support := filepath.Join(f.home, "Library", "Application Support", "Farol Next Preview")
-	f.statePath = filepath.Join(support, "farol-next-state")
+	support := filepath.Join(f.home, "Library", "Application Support", "io.github.legrch.farol")
+	f.statePath = filepath.Join(support, "farol-state")
 	f.update = filepath.Join(support, "installed-updates")
 	f.operation = filepath.Join(f.update, strings.Repeat("1", 32))
 	apps := filepath.Join(f.home, "Applications")

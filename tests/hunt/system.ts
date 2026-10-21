@@ -57,7 +57,7 @@ export type SystemState = Readonly<{
   visibleDeltaCount: number;
 }>;
 
-const FIXTURE_ROOT = "/farol-next-hunt/fixture";
+const FIXTURE_ROOT = "/farol-hunt/fixture";
 const COMPUTER_APPROVAL: ComputerApproval = {
   ownerId: HUNT_IDENTITY.ownerId,
   computerId: "hunt-computer",
@@ -147,7 +147,7 @@ function applyComputer(
       path:
         command.target === "fixture-status"
           ? `${FIXTURE_ROOT}/status.txt`
-          : "/farol-next-hunt/outside.txt",
+          : "/farol-hunt/outside.txt",
     },
   };
 

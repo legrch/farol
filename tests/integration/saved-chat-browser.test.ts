@@ -6,7 +6,7 @@ vi.mock("electron", () => ({
 }));
 
 import {
-  NextSavedChatBrowser,
+  SavedChatBrowser,
   type SavedChatRouteFactory,
 } from "../../src/apps/desktop/saved-chat-browser";
 
@@ -14,8 +14,8 @@ const url = "https://chatgpt.com/c/12345678-1234-4123-8123-123456789abc";
 
 function routes(
   partition:
-    | "persist:farol-next-chatgpt"
-    | "persist:farol-dev-chatgpt" = "persist:farol-next-chatgpt",
+    | "persist:farol-app-chatgpt"
+    | "persist:farol-dev-chatgpt" = "persist:farol-app-chatgpt",
   requiredAppName?: string,
 ) {
   const created: Array<{
@@ -97,12 +97,12 @@ function routes(
 describe("hidden Next saved-chat browser adapter", () => {
   it("closes the one sending helper before a fresh read-only reopen", async () => {
     const state = routes();
-    const browser = new NextSavedChatBrowser(
+    const browser = new SavedChatBrowser(
       "https://chatgpt.com/",
       null,
       state.factory,
       {
-        partition: "persist:farol-next-chatgpt",
+        partition: "persist:farol-app-chatgpt",
       },
       Date.now,
       undefined,
@@ -140,12 +140,12 @@ describe("hidden Next saved-chat browser adapter", () => {
   it("never retries an unknown submit and disposes its own hidden route", async () => {
     const state = routes();
     state.setSubmit(null);
-    const browser = new NextSavedChatBrowser(
+    const browser = new SavedChatBrowser(
       "https://chatgpt.com/",
       null,
       state.factory,
       {
-        partition: "persist:farol-next-chatgpt",
+        partition: "persist:farol-app-chatgpt",
       },
       Date.now,
       undefined,
@@ -164,12 +164,12 @@ describe("hidden Next saved-chat browser adapter", () => {
   it("closes signed-out surfaces and refuses unrecorded reopen URLs", async () => {
     const state = routes();
     state.setObserved("signed_out");
-    const browser = new NextSavedChatBrowser(
+    const browser = new SavedChatBrowser(
       "https://chatgpt.com/",
       null,
       state.factory,
       {
-        partition: "persist:farol-next-chatgpt",
+        partition: "persist:farol-app-chatgpt",
       },
     );
     expect(await browser.prepare()).toBe("sign_in_required");
@@ -184,11 +184,11 @@ describe("hidden Next saved-chat browser adapter", () => {
 
   it("does not click Send when account admission is revoked after insertion", async () => {
     const state = routes();
-    const browser = new NextSavedChatBrowser(
+    const browser = new SavedChatBrowser(
       "https://chatgpt.com/",
       null,
       state.factory,
-      { partition: "persist:farol-next-chatgpt" },
+      { partition: "persist:farol-app-chatgpt" },
       Date.now,
       undefined,
       () => false,
@@ -209,11 +209,11 @@ describe("hidden Next saved-chat browser adapter", () => {
 
   it("does not click Send after the MCP caller disconnects before submission", async () => {
     const state = routes();
-    const browser = new NextSavedChatBrowser(
+    const browser = new SavedChatBrowser(
       "https://chatgpt.com/",
       null,
       state.factory,
-      { partition: "persist:farol-next-chatgpt" },
+      { partition: "persist:farol-app-chatgpt" },
       Date.now,
       undefined,
       () => true,
@@ -228,12 +228,12 @@ describe("hidden Next saved-chat browser adapter", () => {
   it("does not promote a malformed fresh helper proof", async () => {
     const state = routes();
     state.setReaderProof({ verified: true });
-    const browser = new NextSavedChatBrowser(
+    const browser = new SavedChatBrowser(
       "https://chatgpt.com/",
       null,
       state.factory,
       {
-        partition: "persist:farol-next-chatgpt",
+        partition: "persist:farol-app-chatgpt",
       },
     );
     expect(await browser.prepare()).toBe("ready");
@@ -246,7 +246,7 @@ describe("hidden Next saved-chat browser adapter", () => {
 
   it("uses the selected Dev profile and app binding instead of a hardcoded preview session", async () => {
     const state = routes("persist:farol-dev-chatgpt", "Farol Dev");
-    const browser = new NextSavedChatBrowser(
+    const browser = new SavedChatBrowser(
       "https://chatgpt.com/",
       null,
       state.factory,

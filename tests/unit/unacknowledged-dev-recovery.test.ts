@@ -27,7 +27,7 @@ function input() {
 }
 
 describe("unacknowledged empty Dev mode boundaries", () => {
-  it.each(["Farol", "Farol Next", "Farol Dev Review"])(
+  it.each(["Farol", "Farol", "Farol Dev Review"])(
     "refuses profile %s before host effects",
     async (name) => {
       await expect(

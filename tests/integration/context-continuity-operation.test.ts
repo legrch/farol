@@ -27,9 +27,9 @@ import { PrivateContextStore } from "../../src/modules/chat/infra/repo/private-c
 // process that actually restarted would have nothing else to read from.
 
 const OWNER_ID = "owner-preview";
-const PROVIDER_PROFILE_ID = "profile-isolated-next";
+const PROVIDER_PROFILE_ID = "profile-isolated-farol";
 const THREAD_ID = "thread-context-operation-1";
-const MODEL_ID = "farol-next/mind";
+const MODEL_ID = "legacy-route/mind";
 
 const binding: ContextBinding = {
   ownerId: OWNER_ID,
@@ -42,7 +42,7 @@ const binding: ContextBinding = {
 };
 
 const checkpointContent: CheckpointContent = {
-  goal: "Finish the exact Farol Next task without losing the epoch.",
+  goal: "Finish the exact Farol task without losing the epoch.",
   activeConstraints: ["Do not repeat an unknown write."],
   latestCorrections: ["Keep Watch Rail."],
   keyDecisions: ["Store the checkpoint before handoff."],
@@ -209,7 +209,7 @@ describe("context continuity operation resilience", () => {
 
   async function stateRoot(): Promise<string> {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-context-operation-"),
+      path.join(os.tmpdir(), "farol-context-operation-"),
     );
     roots.push(root);
     return root;
@@ -226,7 +226,7 @@ describe("context continuity operation resilience", () => {
     const interrupted = await first.compact(input);
     expect(interrupted).toMatchObject({
       ok: false,
-      error: { code: "FAROL_NEXT_COMPACTION_STATE_FAILED" },
+      error: { code: "FAROL_COMPACTION_STATE_FAILED" },
     });
     expect(summary.request).toHaveBeenCalledTimes(1);
 
@@ -375,7 +375,7 @@ describe("context continuity operation resilience", () => {
     expect(refused).toHaveLength(1);
     expect(refused[0]).toMatchObject({
       ok: false,
-      error: { code: "FAROL_NEXT_COMPACTION_STATE_FAILED" },
+      error: { code: "FAROL_COMPACTION_STATE_FAILED" },
     });
 
     // The loser was refused before it ever reached the summarizer: exactly

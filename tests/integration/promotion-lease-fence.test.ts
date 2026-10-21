@@ -57,9 +57,7 @@ afterEach(async () => {
 });
 
 async function userData(): Promise<string> {
-  const root = await fs.mkdtemp(
-    path.join(os.tmpdir(), "farol-next-lease-fence-"),
-  );
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-lease-fence-"));
   roots.push(root);
   return root;
 }
@@ -71,7 +69,7 @@ async function userData(): Promise<string> {
  */
 function journalFor(root: string): PrivateChatGptTaskJournal {
   return new PrivateChatGptTaskJournal({
-    root: path.join(root, "farol-next-state", "chatgpt-task-journal"),
+    root: path.join(root, "farol-state", "chatgpt-task-journal"),
   });
 }
 

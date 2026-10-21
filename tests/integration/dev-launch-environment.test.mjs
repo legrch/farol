@@ -8,11 +8,11 @@ import { devLaunchEnvironment, launchPreview } from "../../tooling/dev.mjs";
 // inherits nothing. `task dev` used to spawn Electron with no `env` option
 // at all, so the caller's whole environment reached the product — measured
 // by spawning a child through each launcher's own shape and asking it what
-// it could see. The development one saw `FAROL_NEXT_E2E`,
-// `FAROL_NEXT_E2E_WORKSPACE_ROOT` and `FAROL_MODEL_E2E_SYNTHETIC_REPLY`;
+// it could see. The development one saw `FAROL_E2E`,
+// `FAROL_E2E_WORKSPACE_ROOT` and `FAROL_MODEL_E2E_SYNTHETIC_REPLY`;
 // the packaged one saw nothing.
 //
-// Those variables are not diagnostics. Behind `FAROL_NEXT_E2E=1` they
+// Those variables are not diagnostics. Behind `FAROL_E2E=1` they
 // replace the file and directory pickers with paths from the environment,
 // answer model turns with a fabricated reply, fail live-task commits, drop
 // guarded-edit replies, and widen the ChatGPT egress allowlist to a
@@ -23,7 +23,7 @@ import { devLaunchEnvironment, launchPreview } from "../../tooling/dev.mjs";
 // launches Electron with Playwright's `electron.launch({ env })` and its
 // own explicit environment, so they still set exactly what they mean to.
 
-const SENTINEL = "FAROL_NEXT_E2E_SENTINEL";
+const SENTINEL = "FAROL_E2E_SENTINEL";
 
 /** What a child process can see of the E2E seam family. */
 const PROBE = `process.stdout.write(JSON.stringify(Object.keys(process.env).filter((key) => key.startsWith("FAROL_")).sort()))`;
@@ -71,12 +71,12 @@ describe("development launcher environment", () => {
         LC_ALL: "C",
         TMPDIR: "/private/tmp/owner/",
         PATH: "/tmp/poisoned-bin",
-        FAROL_NEXT_E2E: "1",
-        FAROL_NEXT_PROFILE_MODE: "arbitrary-profile",
-        FAROL_NEXT_ACCEPTANCE_PROFILE: "1",
-        FAROL_NEXT_E2E_APP_DATA: "/private/tmp/inherited-app-data",
-        FAROL_NEXT_E2E_WORKSPACE_ROOT: "/private/tmp/inherited-root",
-        FAROL_NEXT_E2E_CHATGPT_URL: "http://127.0.0.1:43123/chatgpt",
+        FAROL_E2E: "1",
+        FAROL_PROFILE_MODE: "arbitrary-profile",
+        FAROL_ACCEPTANCE_PROFILE: "1",
+        FAROL_E2E_APP_DATA: "/private/tmp/inherited-app-data",
+        FAROL_E2E_WORKSPACE_ROOT: "/private/tmp/inherited-root",
+        FAROL_E2E_CHATGPT_URL: "http://127.0.0.1:43123/chatgpt",
         FAROL_MODEL_E2E_SYNTHETIC_REPLY: "a fabricated answer",
         [SENTINEL]: "1",
         DYLD_INSERT_LIBRARIES: "/tmp/inject.dylib",
@@ -95,7 +95,7 @@ describe("development launcher environment", () => {
       // `#!/usr/bin/env node` shim, then the system directories the
       // packaged launcher pins. Never the caller's own PATH.
       PATH: "/declared/node/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-      FAROL_NEXT_ENVIRONMENT: "dev",
+      FAROL_ENVIRONMENT: "dev",
     });
   });
 
@@ -103,23 +103,23 @@ describe("development launcher environment", () => {
     const environment = devLaunchEnvironment(
       {
         HOME: "/Users/owner",
-        FAROL_NEXT_ACCEPTANCE_PROFILE: "1",
-        FAROL_NEXT_PROFILE_MODE: "shared-new",
-        FAROL_NEXT_E2E: "1",
+        FAROL_ACCEPTANCE_PROFILE: "1",
+        FAROL_PROFILE_MODE: "shared-new",
+        FAROL_E2E: "1",
       },
       "/declared/node/bin",
       true,
     );
-    expect(environment.FAROL_NEXT_ACCEPTANCE_PROFILE).toBe("1");
-    expect(environment.FAROL_NEXT_PROFILE_MODE).toBeUndefined();
-    expect(environment.FAROL_NEXT_E2E).toBeUndefined();
+    expect(environment.FAROL_ACCEPTANCE_PROFILE).toBe("1");
+    expect(environment.FAROL_PROFILE_MODE).toBeUndefined();
+    expect(environment.FAROL_E2E).toBeUndefined();
   });
 
   it("hides a sentinel from a real child that the inherited shape reveals", async () => {
     poison({
       [SENTINEL]: "1",
-      FAROL_NEXT_E2E: "1",
-      FAROL_NEXT_E2E_APP_DATA: "/private/tmp/inherited-app-data",
+      FAROL_E2E: "1",
+      FAROL_E2E_APP_DATA: "/private/tmp/inherited-app-data",
       FAROL_MODEL_E2E_SYNTHETIC_REPLY: "a fabricated answer",
     });
 
@@ -130,13 +130,13 @@ describe("development launcher environment", () => {
     expect(inherited).toContain("FAROL_MODEL_E2E_SYNTHETIC_REPLY");
 
     expect(await farolKeysVisibleTo({ env: devLaunchEnvironment() })).toEqual([
-      "FAROL_NEXT_ENVIRONMENT",
+      "FAROL_ENVIRONMENT",
     ]);
   });
 
   it("is what the preview launch actually spawns Electron with", async () => {
-    poison({ [SENTINEL]: "1", FAROL_NEXT_E2E: "1", LC_ALL: "C" });
-    const root = "/tmp/farol-next-dev-root";
+    poison({ [SENTINEL]: "1", FAROL_E2E: "1", LC_ALL: "C" });
+    const root = "/tmp/farol-dev-root";
     let received;
     const stop = new Error("SPAWN_INTERCEPTED");
 
@@ -162,7 +162,7 @@ describe("development launcher environment", () => {
       "the dev launcher must spawn Electron with an explicit environment",
     ).toBeTypeOf("object");
     expect(Object.keys(received.options.env).sort()).toEqual([
-      "FAROL_NEXT_ENVIRONMENT",
+      "FAROL_ENVIRONMENT",
       "HOME",
       "LANG",
       "LC_ALL",
@@ -170,8 +170,8 @@ describe("development launcher environment", () => {
       "TMPDIR",
     ]);
     expect(received.options.env[SENTINEL]).toBeUndefined();
-    expect(received.options.env.FAROL_NEXT_E2E).toBeUndefined();
-    expect(received.options.env.FAROL_NEXT_E2E_APP_DATA).toBeUndefined();
+    expect(received.options.env.FAROL_E2E).toBeUndefined();
+    expect(received.options.env.FAROL_E2E_APP_DATA).toBeUndefined();
     expect(
       received.options.env.PATH.startsWith(path.dirname(process.execPath)),
     ).toBe(true);
@@ -182,7 +182,7 @@ describe("development launcher environment", () => {
     const stop = new Error("SPAWN_INTERCEPTED");
     await expect(
       launchPreview(
-        "/tmp/farol-next-dev-root",
+        "/tmp/farol-dev-root",
         (command, args, options) => {
           received = { command, args, options };
           throw stop;
@@ -194,9 +194,9 @@ describe("development launcher environment", () => {
       "_output/build/app/main.cjs",
       "--preview-window-mode=secondary-visible",
     ]);
-    expect(received.options.env.FAROL_NEXT_ACCEPTANCE_PROFILE).toBe("1");
-    expect(received.options.env.FAROL_NEXT_PROFILE_MODE).toBeUndefined();
-    expect(received.options.env.FAROL_NEXT_E2E).toBeUndefined();
+    expect(received.options.env.FAROL_ACCEPTANCE_PROFILE).toBe("1");
+    expect(received.options.env.FAROL_PROFILE_MODE).toBeUndefined();
+    expect(received.options.env.FAROL_E2E).toBeUndefined();
   });
 
   it("places ordinary Farol Dev on a secondary display", async () => {
@@ -204,7 +204,7 @@ describe("development launcher environment", () => {
     const stop = new Error("SPAWN_INTERCEPTED");
     await expect(
       launchPreview(
-        "/tmp/farol-next-dev-root",
+        "/tmp/farol-dev-root",
         (command, args, options) => {
           received = { command, args, options };
           throw stop;
@@ -217,9 +217,9 @@ describe("development launcher environment", () => {
       "_output/build/app/main.cjs",
       "--preview-window-mode=secondary-visible",
     ]);
-    expect(received.options.env.FAROL_NEXT_ENVIRONMENT).toBe("dev");
-    expect(received.options.env.FAROL_NEXT_PROFILE_MODE).toBeUndefined();
-    expect(received.options.env.FAROL_NEXT_ACCEPTANCE_PROFILE).toBeUndefined();
+    expect(received.options.env.FAROL_ENVIRONMENT).toBe("dev");
+    expect(received.options.env.FAROL_PROFILE_MODE).toBeUndefined();
+    expect(received.options.env.FAROL_ACCEPTANCE_PROFILE).toBeUndefined();
   });
 
   it("selects the built-in display and carries explicit primary-screen permission", async () => {
@@ -244,9 +244,9 @@ describe("development launcher environment", () => {
       "--built-in-display-only",
       "--allow-primary-display",
     ]);
-    expect(received.options.env.FAROL_NEXT_ENVIRONMENT).toBe("dev");
-    expect(received.options.env.FAROL_NEXT_ACCEPTANCE_PROFILE).toBeUndefined();
-    expect(received.options.env.FAROL_NEXT_E2E).toBeUndefined();
+    expect(received.options.env.FAROL_ENVIRONMENT).toBe("dev");
+    expect(received.options.env.FAROL_ACCEPTANCE_PROFILE).toBeUndefined();
+    expect(received.options.env.FAROL_E2E).toBeUndefined();
   });
 });
 
@@ -255,9 +255,9 @@ describe("fresh review environment (CPU-only)", () => {
   it("selects only the launcher marker and strips saved-chat opt-in without changing HOME", () => {
     const environment = {
       HOME: "/Users/owner",
-      FAROL_NEXT_SAVED_CHAT_PREVIEW: "1",
-      FAROL_NEXT_ACCEPTANCE_PROFILE: "review:inherited",
-      FAROL_NEXT_E2E: "1",
+      FAROL_SAVED_CHAT_PREVIEW: "1",
+      FAROL_ACCEPTANCE_PROFILE: "review:inherited",
+      FAROL_E2E: "1",
     };
     const sealed = devLaunchEnvironment(
       environment,
@@ -266,12 +266,12 @@ describe("fresh review environment (CPU-only)", () => {
       marker,
     );
     expect(sealed.HOME).toBe(environment.HOME);
-    expect(sealed.FAROL_NEXT_ACCEPTANCE_PROFILE).toBe(marker);
-    expect(sealed.FAROL_NEXT_SAVED_CHAT_PREVIEW).toBeUndefined();
-    expect(sealed.FAROL_NEXT_E2E).toBeUndefined();
-    expect(
-      devLaunchEnvironment(environment).FAROL_NEXT_SAVED_CHAT_PREVIEW,
-    ).toBe("1");
+    expect(sealed.FAROL_ACCEPTANCE_PROFILE).toBe(marker);
+    expect(sealed.FAROL_SAVED_CHAT_PREVIEW).toBeUndefined();
+    expect(sealed.FAROL_E2E).toBeUndefined();
+    expect(devLaunchEnvironment(environment).FAROL_SAVED_CHAT_PREVIEW).toBe(
+      "1",
+    );
   });
   it.each([
     "1",
@@ -306,7 +306,7 @@ describe("fresh review environment (CPU-only)", () => {
       "_output/build/app/main.cjs",
       "--preview-window-mode=secondary-visible",
     ]);
-    expect(received.options.env.FAROL_NEXT_ACCEPTANCE_PROFILE).toBe(marker);
-    expect(received.options.env.FAROL_NEXT_E2E).toBeUndefined();
+    expect(received.options.env.FAROL_ACCEPTANCE_PROFILE).toBe(marker);
+    expect(received.options.env.FAROL_E2E).toBeUndefined();
   });
 });

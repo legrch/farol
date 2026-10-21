@@ -55,7 +55,7 @@ func preservedProfileFixtureAt(t *testing.T, base string, unresolved bool, withF
 		}
 	}
 	t.Log("retained fixture:", base)
-	root := filepath.Join(base, "Farol Dev", "farol-next-state", "go-core")
+	root := filepath.Join(base, "Farol Dev", "farol-state", "go-core")
 	for _, name := range []string{"computer/mutations", "chat", "task"} {
 		if err := os.MkdirAll(filepath.Join(root, name), 0700); err != nil {
 			t.Fatal(err)

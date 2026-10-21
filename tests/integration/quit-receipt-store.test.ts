@@ -66,7 +66,7 @@ async function stateRoot(): Promise<string> {
     await fs.mkdtemp(path.join(os.tmpdir(), "farol-quit-receipt-")),
   );
   roots.push(base);
-  return path.join(base, "farol-next-state");
+  return path.join(base, "farol-state");
 }
 
 const AT = "2026-09-20T18:00:00.000Z";
@@ -240,7 +240,7 @@ describe("quit receipt store", () => {
     roots.push(base);
     // Two missing segments, not one: `stateRoot()` always leaves exactly
     // the leaf undone, which is not the same claim as "the whole chain".
-    const root = path.join(base, "nested", "farol-next-state");
+    const root = path.join(base, "nested", "farol-state");
 
     await writeQuitReceipt(root, RECEIPT, AT);
 

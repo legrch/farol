@@ -63,7 +63,7 @@ beforeEach(() => {
   spawned = new Promise((resolve) => {
     resolveSpawned = resolve;
   });
-  lease = { file: "/private/controlled/farol-next-state/promotion.lease" };
+  lease = { file: "/private/controlled/farol-state/promotion.lease" };
   transfer = {
     descriptor: 31,
     identity: { device: "10", inode: "30" },
@@ -417,7 +417,7 @@ async function cli() {
     path.join(path.dirname(app), "artifact.json"),
     JSON.stringify({
       schema: 6,
-      product: "Farol Next Preview",
+      product: "Farol",
       version: "0.1.0-preview.0",
       buildId: "b".repeat(64),
       artifactPath: app,
@@ -544,7 +544,7 @@ describe("Python inherited descriptor identity guards (no installer run)", () =>
         ),
       );
       roots.push(root);
-      const parent = path.join(root, "farol-next-state");
+      const parent = path.join(root, "farol-state");
       await fs.mkdir(parent, { mode: 0o700 });
       const file = path.join(parent, "promotion.lease");
       await fs.writeFile(file, "controlled descriptor only\n", { mode: 0o600 });
@@ -716,7 +716,7 @@ describe.skipIf(process.platform !== "linux")(
           ),
         );
         roots.push(root);
-        const parent = path.join(root, "farol-next-state");
+        const parent = path.join(root, "farol-state");
         await fs.mkdir(parent, { mode: 0o700 });
         const file = path.join(parent, "promotion.lease");
         await fs.writeFile(file, "controlled POSIX lease only\n", {

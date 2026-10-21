@@ -113,7 +113,7 @@ describe("account observation bound to physical surface", () => {
           ...f.first,
           binding: {
             ...f.first.binding,
-            partition: "persist:farol-next-chatgpt",
+            partition: "persist:farol-app-chatgpt",
           },
         });
       if (variant === "gone") f.setCurrent(null);

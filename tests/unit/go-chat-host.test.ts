@@ -110,7 +110,7 @@ function fixture() {
   };
   const host = createDesktopChatBrowser({
     context,
-    partition: "persist:farol-next-chatgpt",
+    partition: "persist:farol-app-chatgpt",
     create,
     nowMillis: () => 1000,
     driver: (selected) => {

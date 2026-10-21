@@ -45,7 +45,7 @@ const entry = packaged
   : path.join(root, "_output/build/app/main.cjs");
 const ownerState = path.join(
   os.homedir(),
-  "Library/Application Support/Farol Next Preview/farol-next-state",
+  "Library/Application Support/io.github.legrch.farol/farol-state",
 );
 const observations = [];
 let primaryFailure;
@@ -90,11 +90,11 @@ try {
       : ["dev", "preview"]) {
     for (const fault of ["legacy-name", "corrupt", "unsafe"]) {
       const profile = await fs.realpath(
-        await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-e2e-home-")),
+        await fs.mkdtemp(path.join(os.tmpdir(), "farol-e2e-home-")),
       );
       await fs.chmod(profile, 0o700);
       const proof = randomUUID();
-      await fs.writeFile(path.join(profile, ".farol-next-e2e-root"), proof, {
+      await fs.writeFile(path.join(profile, ".farol-e2e-root"), proof, {
         mode: 0o600,
       });
       const appData = path.join(profile, "app-data");
@@ -102,7 +102,7 @@ try {
         environment === "dev"
           ? path.join(appData, "Farol Dev")
           : path.join(profile, "user-data");
-      const stateRoot = path.join(userData, "farol-next-state");
+      const stateRoot = path.join(userData, "farol-state");
       await fs.mkdir(appData, { mode: 0o700 });
       await fs.mkdir(stateRoot, { recursive: true, mode: 0o700 });
       const file = path.join(
@@ -150,12 +150,12 @@ try {
             PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
             TMPDIR: os.tmpdir(),
             LANG: "en_US.UTF-8",
-            FAROL_NEXT_E2E: "1",
-            FAROL_NEXT_E2E_APP_DATA: appData,
-            FAROL_NEXT_E2E_TEST_ROOT: profile,
-            FAROL_NEXT_E2E_TEST_PROOF: proof,
-            FAROL_NEXT_E2E_CHATGPT_URL: fixtureUrl,
-            ...(environment === "dev" ? { FAROL_NEXT_ENVIRONMENT: "dev" } : {}),
+            FAROL_E2E: "1",
+            FAROL_E2E_APP_DATA: appData,
+            FAROL_E2E_TEST_ROOT: profile,
+            FAROL_E2E_TEST_PROOF: proof,
+            FAROL_E2E_CHATGPT_URL: fixtureUrl,
+            ...(environment === "dev" ? { FAROL_ENVIRONMENT: "dev" } : {}),
           },
           timeout: 15000,
         };
@@ -201,9 +201,7 @@ try {
         await readOwnedStartupMarker(stateRoot, profile, owned.child.pid);
         stage = "configuration-ui";
         await waitForReactShell(window);
-        const bootstrap = await window.evaluate(() =>
-          window.farolNext.bootstrap(),
-        );
+        const bootstrap = await window.evaluate(() => window.farol.bootstrap());
         assert.deepEqual(bootstrap.configuration, {
           status: "error",
           error: expected,
@@ -251,8 +249,7 @@ try {
           )
           .waitFor();
         assert.deepEqual(
-          (await window.evaluate(() => window.farolNext.bootstrap()))
-            .configuration,
+          (await window.evaluate(() => window.farol.bootstrap())).configuration,
           { status: "error", error: expected },
           "REFRESH_RESET_CONFIGURATION_FAULT",
         );
@@ -306,8 +303,7 @@ try {
           );
         }
         assert.deepEqual(
-          (await window.evaluate(() => window.farolNext.bootstrap()))
-            .configuration,
+          (await window.evaluate(() => window.farol.bootstrap())).configuration,
           { status: "error", error: expected },
           "NAVIGATION_RESET_CONFIGURATION_FAULT",
         );

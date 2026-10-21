@@ -37,7 +37,7 @@ export async function setupStep(page, step, label) {
 }
 
 export async function readSetupSettings(page) {
-  const bootstrap = await page.evaluate(() => window.farolNext.bootstrap());
+  const bootstrap = await page.evaluate(() => window.farol.bootstrap());
   assert.equal(bootstrap.configuration.status, "ready");
   return bootstrap.configuration.settings;
 }

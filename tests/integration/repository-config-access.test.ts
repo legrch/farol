@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   NativeReadonlyWorkspace,
-  NEXT_SAFE_OPEN_HELPER,
+  SAFE_OPEN_HELPER,
 } from "../../src/modules/computer/infra/native/native-readonly-workspace";
 import { approvedRootOf } from "../fixtures/root-identity";
 
@@ -34,7 +34,7 @@ describe("native repository config filesystem", () => {
             import.meta.dirname,
             "../../resources/native/safe_open.py",
           ),
-          helper: NEXT_SAFE_OPEN_HELPER,
+          helper: SAFE_OPEN_HELPER,
           attestInterpreter: async () => "/usr/bin/python3",
           homeDirectory: home,
         }),

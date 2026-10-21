@@ -58,7 +58,7 @@ func retirementStorageFixtureAt(t *testing.T, mutations, desktopLayout bool, des
 		if len(desktopName) == 1 {
 			name = desktopName[0]
 		}
-		root = filepath.Join(root, name, "farol-next-state", "go-core")
+		root = filepath.Join(root, name, "farol-state", "go-core")
 		if err := os.MkdirAll(root, 0700); err != nil {
 			t.Fatal(err)
 		}

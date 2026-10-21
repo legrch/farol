@@ -112,10 +112,10 @@ export async function startChatGptFixture(options = {}) {
           const existingConversationId = pathParts.length === 3 && pathParts[0] === 'chatgpt' && pathParts[1] === 'c'
             ? pathParts[2]
             : null;
-          const conversationId = existingConversationId || requestedTask || 'farol-next-e2e';
+          const conversationId = existingConversationId || requestedTask || 'farol-e2e';
           const conversationPath = '/chatgpt/c/' + conversationId;
-          const conversationStorageKey = 'farol-next-e2e-conversation:' + conversationPath;
-          const messageSequenceStorageKey = 'farol-next-e2e-message-sequence:' + conversationPath;
+          const conversationStorageKey = 'farol-e2e-conversation:' + conversationPath;
+          const messageSequenceStorageKey = 'farol-e2e-message-sequence:' + conversationPath;
           window.__farolTaskProgress = [];
           window.__farolSubmitCount = 0;
           window.__farolAttachmentProof = [];
@@ -125,7 +125,7 @@ export async function startChatGptFixture(options = {}) {
             send.disabled = composer.textContent.trim().length === 0 || attachmentLoading;
           };
           const render = () => {
-            const authenticated = localStorage.getItem('farol-next-e2e-authenticated') === '1';
+            const authenticated = localStorage.getItem('farol-e2e-authenticated') === '1';
             login.hidden = authenticated;
             expire.hidden = !authenticated;
             composer.hidden = !authenticated;
@@ -189,11 +189,11 @@ export async function startChatGptFixture(options = {}) {
             updateSend();
           });
           login.addEventListener('click', () => {
-            localStorage.setItem('farol-next-e2e-authenticated', '1');
+            localStorage.setItem('farol-e2e-authenticated', '1');
             render();
           });
           expire.addEventListener('click', () => {
-            localStorage.removeItem('farol-next-e2e-authenticated');
+            localStorage.removeItem('farol-e2e-authenticated');
             render();
           });
           stop.addEventListener('click', () => {

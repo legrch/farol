@@ -15,7 +15,7 @@ const recordEntries = async (directory: string) =>
   (await fs.readdir(directory)).filter((entry) => entry.endsWith(".json"));
 
 const makeRoot = async () =>
-  fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-")));
+  fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "farol-fence-")));
 
 afterEach(async () => {
   if (root) await fs.rm(root, { recursive: true, force: true });
@@ -246,7 +246,7 @@ describe("private execution fence", () => {
 
   it("releases preflight denials but retains an ambiguous submitted effect lock", async () => {
     root = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-fence-")),
     );
     const fence = new PrivateExecutionFence({ root });
     const lock = path.join(root, "execution-fence-mutation.lock");
@@ -278,7 +278,7 @@ describe("private execution fence", () => {
 
   it("serializes an admitted mutation with a later summary raise across instances", async () => {
     root = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-fence-")),
     );
     const connector = new PrivateExecutionFence({ root });
     const desktop = new PrivateExecutionFence({ root });
@@ -327,7 +327,7 @@ describe("private execution fence", () => {
 
   it("admits with no fence, refuses while any operation is raised, and admits again once every one is lowered", async () => {
     root = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-fence-")),
     );
     const writer = new PrivateExecutionFence({ root });
     // The connector's process reads the same root with its own instance.
@@ -368,7 +368,7 @@ describe("private execution fence", () => {
 
   it("fails closed on a record it cannot read, and a start keeps exactly the operations the store still holds", async () => {
     root = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-fence-")),
     );
     const fence = new PrivateExecutionFence({ root });
     const directory = path.join(root, EXECUTION_FENCE_DIRECTORY);

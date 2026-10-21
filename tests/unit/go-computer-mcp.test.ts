@@ -401,7 +401,7 @@ it("registers verification only for the selected Go port and keeps it inside the
     },
   });
   const response = await client.callTool({
-    name: "farol_next_connector_verify",
+    name: "farol_connector_verify",
     arguments: { challenge: "challenge", workspaceId: "workspace" },
   });
   expect(response.isError).not.toBe(true);
@@ -416,7 +416,7 @@ it("registers verification only for the selected Go port and keeps it inside the
     new BridgeError("unavailable", "go_owner_unavailable"),
   );
   const refused = await client.callTool({
-    name: "farol_next_connector_verify",
+    name: "farol_connector_verify",
     arguments: { challenge: "challenge", workspaceId: "workspace" },
   });
   expect(refused.isError).toBe(true);
@@ -1484,7 +1484,7 @@ describe("Go Computer mutation MCP (pure/in-memory only)", () => {
     for (const alias of [
       "computer_write",
       "computer_edit",
-      "farol_next_computer_search",
+      "farol_computer_search",
     ])
       expect(names).not.toContain(alias);
     const expectedSha256 = "b".repeat(64);
@@ -1705,7 +1705,7 @@ it("routes explicit empty catalogue verification through the same admission fenc
     },
   });
   const out = await client.callTool({
-    name: "farol_next_connector_verify_catalogue",
+    name: "farol_connector_verify_catalogue",
     arguments: { challenge: "challenge" },
   });
   expect(out.isError).not.toBe(true);

@@ -252,9 +252,9 @@ describe("provider dispatch without a listening transport", () => {
         compaction: { compact },
       });
       for (const model of [
-        "farol-next/mind",
-        "farol-next/drive",
-        "farol-next/chatgpt",
+        "legacy-route/mind",
+        "legacy-route/drive",
+        "legacy-route/chatgpt",
         "farol/chatgpt",
         "chatgpt-release-a",
         "deepseek",
@@ -272,7 +272,7 @@ describe("provider dispatch without a listening transport", () => {
         await finished;
         expect(response.statusCode).toBe(422);
         expect(JSON.parse(response.chunks.join(""))).toEqual({
-          error: { code: "FAROL_NEXT_MODEL_UNAVAILABLE" },
+          error: { code: "FAROL_MODEL_UNAVAILABLE" },
         });
       }
       expect(compact).not.toHaveBeenCalled();

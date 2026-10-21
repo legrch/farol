@@ -217,7 +217,7 @@ if (development) {
   );
   assert.equal(artifact.buildId, buildIdentity.buildId);
   assert.equal(artifact.builtAt, buildIdentity.builtAt);
-  executable = path.join(appPath, "Contents/MacOS/Farol Next Preview");
+  executable = path.join(appPath, "Contents/MacOS/Farol");
 }
 
 // The predecessor is identified by its own manifest and qualified by the
@@ -567,7 +567,7 @@ if (development) {
   cases.push("development-build-identity");
 } else {
   const corruptRoot = await fs.mkdtemp(
-    path.join(temporaryRoot, "farol-next-corruption-"),
+    path.join(temporaryRoot, "farol-corruption-"),
   );
   try {
     const malformedMetadata = path.join(corruptRoot, "malformed-artifact.json");
@@ -767,7 +767,7 @@ if (development) {
       "/usr/libexec/PlistBuddy",
       [
         "-c",
-        "Set :CFBundleIdentifier local.farol.next.preview.foreign",
+        "Set :CFBundleIdentifier io.github.legrch.farol.foreign",
         helperPlist,
       ],
       { encoding: "utf8" },
@@ -813,7 +813,7 @@ if (development) {
       `${launcherClone.stdout}${launcherClone.stderr}`,
     );
     await fs.appendFile(
-      path.join(wrongLauncherApp, "Contents/MacOS/Farol Next Preview"),
+      path.join(wrongLauncherApp, "Contents/MacOS/Farol"),
       "\n# deterministic tamper probe\n",
     );
     const wrongLauncherMetadata = path.join(
@@ -881,9 +881,7 @@ if (development) {
     cases.push("tampered-runtime-rejected");
   } finally {
     const real = path.resolve(corruptRoot);
-    assert.ok(
-      real.startsWith(`${temporaryRoot}${path.sep}farol-next-corruption-`),
-    );
+    assert.ok(real.startsWith(`${temporaryRoot}${path.sep}farol-corruption-`));
     await fs.rm(real, { recursive: true, force: true });
   }
 }
@@ -1060,18 +1058,16 @@ async function isolatedProfileEnvironment(isolatedHome) {
   const isolatedAppData = path.join(isolatedHome, "farol-e2e-app-data");
   await fs.mkdir(isolatedAppData, { recursive: true, mode: 0o700 });
   const e2eRootProof = randomUUID();
-  await fs.writeFile(
-    path.join(isolatedHome, ".farol-next-e2e-root"),
-    e2eRootProof,
-    { mode: 0o600 },
-  );
+  await fs.writeFile(path.join(isolatedHome, ".farol-e2e-root"), e2eRootProof, {
+    mode: 0o600,
+  });
   return {
     isolatedAppData,
     environment: {
-      FAROL_NEXT_E2E: "1",
-      FAROL_NEXT_E2E_APP_DATA: isolatedAppData,
-      FAROL_NEXT_E2E_TEST_ROOT: isolatedHome,
-      FAROL_NEXT_E2E_TEST_PROOF: e2eRootProof,
+      FAROL_E2E: "1",
+      FAROL_E2E_APP_DATA: isolatedAppData,
+      FAROL_E2E_TEST_ROOT: isolatedHome,
+      FAROL_E2E_TEST_PROOF: e2eRootProof,
     },
   };
 }
@@ -1083,15 +1079,15 @@ async function launch(
   options = {},
 ) {
   const isolatedHome = await fs.realpath(
-    await fs.mkdtemp(path.join(temporaryRoot, "farol-next-e2e-home-")),
+    await fs.mkdtemp(path.join(temporaryRoot, "farol-e2e-home-")),
   );
   const profile = await isolatedProfileEnvironment(isolatedHome);
   const isolatedAppData = profile.isolatedAppData;
-  const userData = path.join(isolatedHome, "Farol Next Preview user-data");
+  const userData = path.join(isolatedHome, "Farol user-data");
   let seededChatGptOperationId = null;
   if (options.seedChatGptDispatchIntent === true) {
     seededChatGptOperationId = randomUUID();
-    const stateRoot = path.join(userData, "farol-next-state");
+    const stateRoot = path.join(userData, "farol-state");
     const journalRoot = path.join(stateRoot, "chatgpt-task-journal");
     await fs.mkdir(journalRoot, { recursive: true, mode: 0o700 });
     await fs.chmod(stateRoot, 0o700);
@@ -1123,7 +1119,7 @@ async function launch(
     // file already exists. Both fail, so recovery holds no record at all.
     const launchRoot = path.join(
       userData,
-      "farol-next-state",
+      "farol-state",
       "secure-mcp-connector",
       "computer-authority",
     );
@@ -1138,15 +1134,13 @@ async function launch(
   await fs.mkdir(workspacePath, { mode: 0o700 });
   const workspaceRoot = await fs.realpath(workspacePath);
   const workspaceFile = path.join(workspaceRoot, "README.md");
-  const supportExport = path.join(isolatedHome, "Farol-Next-Support.json");
+  const supportExport = path.join(isolatedHome, "Farol-Support.json");
   const codexFixture = path.join(isolatedHome, "codex-fixture.cjs");
   const attachmentImage = path.join(isolatedHome, "evidence.png");
   const attachmentDocument = path.join(isolatedHome, "notes.md");
-  await fs.writeFile(
-    workspaceFile,
-    "Farol Next workspace verification fixture\n",
-    { mode: 0o600 },
-  );
+  await fs.writeFile(workspaceFile, "Farol workspace verification fixture\n", {
+    mode: 0o600,
+  });
   const gitLookup = spawnSync("/usr/bin/xcrun", ["--find", "git"], {
     encoding: "utf8",
   });
@@ -1281,7 +1275,7 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
           dynamicTools[1] === (productAgentThread
             ? "farol_agent_computer"
             : "farol_agent_workspace_probe")
-        : dynamicTools.length === 1 && dynamicTools[0] === "farol_next_ping";
+        : dynamicTools.length === 1 && dynamicTools[0] === "farol_ping";
       const valid = message.params?.model === "gpt-6-astra" &&
         message.params?.allowProviderModelFallback === false &&
         message.params?.sandbox === "read-only" &&
@@ -1398,7 +1392,7 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
       }
       const nonce = /nonce ([a-z0-9-]+)/u.exec(text)?.[1];
       send({ id: message.id, result: { turn: { id: "turn-e2e-parent", status: "inProgress", items: [] } } });
-      send({ id: "tool-e2e", method: "item/tool/call", params: { threadId: "thread-e2e-parent", turnId: "turn-e2e-parent", callId: "call-e2e-ping", tool: "farol_next_ping", arguments: { nonce } } });
+      send({ id: "tool-e2e", method: "item/tool/call", params: { threadId: "thread-e2e-parent", turnId: "turn-e2e-parent", callId: "call-e2e-ping", tool: "farol_ping", arguments: { nonce } } });
       return;
     }
     if (message.method === "turn/interrupt") {
@@ -1539,18 +1533,18 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
     ...profile.environment,
     // This lane intentionally tests the retained five-stage qualification
     // journey. Normal packaged sidebar Setup has a separate native regression.
-    ...(options.environment?.FAROL_NEXT_ENVIRONMENT === "dev"
+    ...(options.environment?.FAROL_ENVIRONMENT === "dev"
       ? {}
-      : { FAROL_NEXT_E2E_LEGACY_SETUP: "1" }),
-    FAROL_NEXT_E2E_WORKSPACE_FILE: workspaceFile,
-    FAROL_NEXT_E2E_WORKSPACE_ROOT: workspaceRoot,
-    FAROL_NEXT_E2E_SUPPORT_EXPORT: supportExport,
-    FAROL_NEXT_E2E_ATTACHMENTS: JSON.stringify([
+      : { FAROL_E2E_LEGACY_SETUP: "1" }),
+    FAROL_E2E_WORKSPACE_FILE: workspaceFile,
+    FAROL_E2E_WORKSPACE_ROOT: workspaceRoot,
+    FAROL_E2E_SUPPORT_EXPORT: supportExport,
+    FAROL_E2E_ATTACHMENTS: JSON.stringify([
       attachmentImage,
       attachmentDocument,
     ]),
-    FAROL_NEXT_E2E_CHATGPT_URL: chatGptFixture.url,
-    FAROL_NEXT_E2E_CODEX_EXECUTABLE: codexFixture,
+    FAROL_E2E_CHATGPT_URL: chatGptFixture.url,
+    FAROL_E2E_CODEX_EXECUTABLE: codexFixture,
     HOME: isolatedHome,
     LANG: "en_US.UTF-8",
     PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -1638,10 +1632,7 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
       let lastStage = "absent";
       while (Date.now() < deadline) {
         lastStage = await fs
-          .readFile(
-            path.join(isolatedHome, ".farol-next-startup-stage"),
-            "utf8",
-          )
+          .readFile(path.join(isolatedHome, ".farol-startup-stage"), "utf8")
           .then((value) => value.trim())
           .catch((error) =>
             error?.code === "ENOENT" ? "absent" : "unreadable",
@@ -1678,7 +1669,7 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
 async function waitForChatGptJournalPhase(userData, phase) {
   const journalPath = path.join(
     userData,
-    "farol-next-state",
+    "farol-state",
     "chatgpt-task-journal",
     "chatgpt-task-journal.json",
   );
@@ -1700,10 +1691,10 @@ async function waitForChatGptJournalPhase(userData, phase) {
 
 async function proveSecondLaunchDuringStartup() {
   const isolatedHome = await fs.realpath(
-    await fs.mkdtemp(path.join(temporaryRoot, "farol-next-e2e-home-")),
+    await fs.mkdtemp(path.join(temporaryRoot, "farol-e2e-home-")),
   );
   const profile = await isolatedProfileEnvironment(isolatedHome);
-  const userData = path.join(isolatedHome, "Farol Next Preview user-data");
+  const userData = path.join(isolatedHome, "Farol user-data");
   const windowMode = "hidden";
   const launchArgs = [
     ...launchPrefix,
@@ -1751,10 +1742,7 @@ async function proveSecondLaunchDuringStartup() {
         let lastStage = "absent";
         while (Date.now() < deadline) {
           lastStage = await fs
-            .readFile(
-              path.join(isolatedHome, ".farol-next-startup-stage"),
-              "utf8",
-            )
+            .readFile(path.join(isolatedHome, ".farol-startup-stage"), "utf8")
             .then(
               (value) =>
                 /^(lock-primary|before-ready|ready|run-marker|before-delay|startup-complete)\n$/u.exec(
@@ -1794,33 +1782,30 @@ async function proveSecondLaunchDuringStartup() {
       // Only the product's fixed, content-free acknowledgement code is
       // retained. Full child output may include private filesystem paths.
       const acknowledgementCode =
-        /FAROL_NEXT_SECOND_INSTANCE_ACK_FAILED:([A-Za-z0-9:-]+)/u.exec(
+        /FAROL_SECOND_INSTANCE_ACK_FAILED:([A-Za-z0-9:-]+)/u.exec(
           secondLaunchOutput,
         )?.[1] ?? "none";
       const startupFailure =
-        /FAROL_NEXT_STARTUP_FAILURE:([A-Z][A-Z0-9_]{2,63})/u.exec(
+        /FAROL_STARTUP_FAILURE:([A-Z][A-Z0-9_]{2,63})/u.exec(
           primaryOutput,
         )?.[1] ?? "none";
       const primaryResult =
-        /FAROL_NEXT_SECOND_INSTANCE_RESULT:([a-z-]+)/u.exec(
-          primaryOutput,
-        )?.[1] ?? "none";
+        /FAROL_SECOND_INSTANCE_RESULT:([a-z-]+)/u.exec(primaryOutput)?.[1] ??
+        "none";
       const primaryAckFailure =
-        /FAROL_NEXT_SECOND_INSTANCE_ACK_FAILED:([A-Za-z0-9:-]+)/u.exec(
+        /FAROL_SECOND_INSTANCE_ACK_FAILED:([A-Za-z0-9:-]+)/u.exec(
           primaryOutput,
         )?.[1] ?? "none";
       const primaryStage =
-        [...primaryOutput.matchAll(/FAROL_NEXT_STARTUP_STAGE:([a-z-]+)/gu)].at(
+        [...primaryOutput.matchAll(/FAROL_STARTUP_STAGE:([a-z-]+)/gu)].at(
           -1,
         )?.[1] ?? "none";
       const secondaryStage =
-        [
-          ...secondLaunchOutput.matchAll(
-            /FAROL_NEXT_STARTUP_STAGE:([a-z-]+)/gu,
-          ),
-        ].at(-1)?.[1] ?? "none";
+        [...secondLaunchOutput.matchAll(/FAROL_STARTUP_STAGE:([a-z-]+)/gu)].at(
+          -1,
+        )?.[1] ?? "none";
       const persistedStage = await fs
-        .readFile(path.join(isolatedHome, ".farol-next-startup-stage"), "utf8")
+        .readFile(path.join(isolatedHome, ".farol-startup-stage"), "utf8")
         .then(
           (value) =>
             /^(lock-primary|before-ready|ready|run-marker|before-delay|startup-complete)\n$/u.exec(
@@ -1829,7 +1814,7 @@ async function proveSecondLaunchDuringStartup() {
         )
         .catch((error) => (error?.code === "ENOENT" ? "absent" : "unreadable"));
       const runMarker = await fs
-        .stat(path.join(userData, "farol-next-state", "running.json"))
+        .stat(path.join(userData, "farol-state", "running.json"))
         .then(() => "present")
         .catch((error) => (error?.code === "ENOENT" ? "absent" : "unreadable"));
       phases.note(
@@ -1847,11 +1832,11 @@ async function proveSecondLaunchDuringStartup() {
       return BigInt(match[1]);
     };
     const secondaryLockAt = await readOrderStage(
-      ".farol-next-secondary-lock-stage",
+      ".farol-secondary-lock-stage",
       "lock-secondary",
     );
     const delayCompleteAt = await readOrderStage(
-      ".farol-next-delay-complete-stage",
+      ".farol-delay-complete-stage",
       "delay-complete",
     );
     assert.ok(
@@ -1881,10 +1866,10 @@ async function proveSecondLaunchDuringStartup() {
     const bootstrap = await phases.step(
       "startup-second-launch.bootstrap",
       LAUNCH_PHASE_BUDGET_MS,
-      () => instance.window.evaluate(() => window.farolNext.bootstrap()),
+      () => instance.window.evaluate(() => window.farol.bootstrap()),
     );
     assert.equal(bootstrap.runtimeState, "ready");
-    assert.equal(bootstrap.runtimeIdentity, "farol-next-preview-runtime");
+    assert.equal(bootstrap.runtimeIdentity, "farol-runtime");
     assert.equal(
       (
         await phases.step(
@@ -1919,10 +1904,10 @@ async function proveSecondLaunchDuringStartup() {
 
 async function proveSecondLaunchRejectsFailedStartup() {
   const isolatedHome = await fs.realpath(
-    await fs.mkdtemp(path.join(temporaryRoot, "farol-next-e2e-home-")),
+    await fs.mkdtemp(path.join(temporaryRoot, "farol-e2e-home-")),
   );
   const profile = await isolatedProfileEnvironment(isolatedHome);
-  const userData = path.join(isolatedHome, "Farol Next Preview user-data");
+  const userData = path.join(isolatedHome, "Farol user-data");
   const launchArgs = [
     ...launchPrefix,
     "--demo",
@@ -1961,7 +1946,7 @@ async function proveSecondLaunchRejectsFailedStartup() {
       "reopen-failed",
     );
     const window = await application.firstWindow({ timeout: 15_000 });
-    const bootstrap = await window.evaluate(() => window.farolNext.bootstrap());
+    const bootstrap = await window.evaluate(() => window.farol.bootstrap());
     assert.equal(bootstrap.runtimeState, "failed");
     assert.equal((await taskSurfaces(application)).length, 0);
   } finally {
@@ -2018,7 +2003,7 @@ async function repeatLaunch(instance) {
     0,
     `E2E_SECOND_LAUNCH_FAILED:${signal ?? ""}:${stdout}${stderr}`,
   );
-  const result = /FAROL_NEXT_SECOND_INSTANCE_RESULT:(\S+)/u.exec(stderr)?.[1];
+  const result = /FAROL_SECOND_INSTANCE_RESULT:(\S+)/u.exec(stderr)?.[1];
   assert.equal(result, "reopened", `E2E_SECOND_LAUNCH_NOT_REOPENED:${stderr}`);
   assert.ok(
     elapsed < 2_000,
@@ -2028,7 +2013,7 @@ async function repeatLaunch(instance) {
 
 async function rejectMismatchedBuildLaunch(instance) {
   const temporary = await fs.mkdtemp(
-    path.join(temporaryRoot, "farol-next-mismatched-build-"),
+    path.join(temporaryRoot, "farol-mismatched-build-"),
   );
   try {
     let mismatchedExecutable;
@@ -2058,10 +2043,7 @@ async function rejectMismatchedBuildLaunch(instance) {
         encoding: "utf8",
       });
       assert.equal(copied.status, 0, `${copied.stdout}${copied.stderr}`);
-      mismatchedExecutable = path.join(
-        copiedApp,
-        "Contents/MacOS/Farol Next Preview",
-      );
+      mismatchedExecutable = path.join(copiedApp, "Contents/MacOS/Farol");
       mismatchedArguments = instance.launchArgs;
       manifestPath = path.join(
         copiedApp,
@@ -2086,7 +2068,7 @@ async function rejectMismatchedBuildLaunch(instance) {
     assert.equal(mismatched.signal, null);
     assert.match(
       mismatched.stderr,
-      /FAROL_NEXT_STARTUP_FAILURE:INSTANCE_BUILD_IDENTITY_INVALID/u,
+      /FAROL_STARTUP_FAILURE:INSTANCE_BUILD_IDENTITY_INVALID/u,
     );
     assert.equal(parseOwnerLaunchResult(output), "startup-failed");
     assert.doesNotMatch(mismatched.stderr, /App threw an error during load/u);
@@ -2148,7 +2130,7 @@ async function establishOwnedInactiveBaseline(targetApplication) {
         `--fixture-user-data=${userData}`,
       ],
       env: {
-        FAROL_NEXT_E2E: "1",
+        FAROL_E2E: "1",
         HOME: home,
         LANG: "en_US.UTF-8",
         PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -2409,7 +2391,7 @@ async function stopProfileBoundHelpers(instance, label) {
     typeof profile !== "string" ||
     !path
       .resolve(profile)
-      .startsWith(`${temporaryRoot}${path.sep}farol-next-e2e-home-`)
+      .startsWith(`${temporaryRoot}${path.sep}farol-e2e-home-`)
   ) {
     throw new Error(`E2E_HELPER_PROFILE_UNVERIFIED:${label}`);
   }
@@ -2550,7 +2532,7 @@ async function requestProductQuit(instance, expectedUnconfirmed = null) {
       `E2E_PRODUCT_QUIT_NONZERO_EXIT:${code ?? "null"}:${signal ?? "null"}`,
     );
   }
-  const stateRoot = path.join(instance.userData, "farol-next-state");
+  const stateRoot = path.join(instance.userData, "farol-state");
   let receiptText;
   try {
     receiptText = await fs.readFile(
@@ -2708,11 +2690,7 @@ async function close(instance, options = {}) {
           quitEvents,
           quitReceipt: await fs
             .access(
-              path.join(
-                instance.userData,
-                "farol-next-state",
-                "last-quit.json",
-              ),
+              path.join(instance.userData, "farol-state", "last-quit.json"),
             )
             .then(
               () => "present-unverified",
@@ -2838,9 +2816,7 @@ async function close(instance, options = {}) {
     instance.chatGptFixture = null;
     if (provedQuit) {
       const real = path.resolve(instance.isolatedHome);
-      assert.ok(
-        real.startsWith(`${temporaryRoot}${path.sep}farol-next-e2e-home-`),
-      );
+      assert.ok(real.startsWith(`${temporaryRoot}${path.sep}farol-e2e-home-`));
       await fs.rm(real, { recursive: true, force: true });
     }
   }
@@ -2875,7 +2851,7 @@ async function restart(instance) {
   const bootstrap = await phases.step(
     `${label}.bootstrap`,
     LAUNCH_PHASE_BUDGET_MS,
-    () => instance.window.evaluate(() => window.farolNext.bootstrap()),
+    () => instance.window.evaluate(() => window.farol.bootstrap()),
   );
   const expectedTaskViewCount = bootstrap.demoMode
     ? instance.expectedTaskViewCount
@@ -2894,10 +2870,10 @@ async function restart(instance) {
 
 async function proveStartupRuntimeDeath(stage) {
   const isolatedHome = await fs.realpath(
-    await fs.mkdtemp(path.join(temporaryRoot, "farol-next-e2e-home-")),
+    await fs.mkdtemp(path.join(temporaryRoot, "farol-e2e-home-")),
   );
   const profile = await isolatedProfileEnvironment(isolatedHome);
-  const userData = path.join(isolatedHome, "Farol Next Preview user-data");
+  const userData = path.join(isolatedHome, "Farol user-data");
   const application = await electron.launch({
     executablePath: executable,
     args: [
@@ -2950,7 +2926,7 @@ async function proveStartupRuntimeDeath(stage) {
               .filter(
                 (metric) =>
                   metric.type === "Utility" &&
-                  ["Farol Next Runtime", "Farol Dev Runtime"].includes(
+                  ["Farol Runtime", "Farol Dev Runtime"].includes(
                     metric.name,
                   ) &&
                   metric.serviceName === "node.mojom.NodeService",
@@ -3283,7 +3259,7 @@ async function proveTaskCapabilityIsolation(application) {
       return {
         readStatus: read.status,
         controlStatus: control.status,
-        privilegedBridge: typeof window.farolNext
+        privilegedBridge: typeof window.farol
       };
     })()`);
   });
@@ -3724,7 +3700,7 @@ async function finishSetupByDoubleClick(instance) {
 async function createFixtureChat(page) {
   await returnToChat(page);
   const result = await page.evaluate(() =>
-    window.farolNext.task({ kind: "task.create-chatgpt" }),
+    window.farol.task({ kind: "task.create-chatgpt" }),
   );
   assert.equal(result.ok, true);
   assert.ok(result.selectedTaskId);
@@ -3821,7 +3797,7 @@ async function waitForSetup(instance, predicate, arg) {
     // identity and age are recorded beside the reading.
     const provenance = await instance.window
       .evaluate(async () => {
-        const value = await window.farolNext.bootstrap();
+        const value = await window.farol.bootstrap();
         const settings =
           value.configuration.status === "ready"
             ? value.configuration.settings
@@ -3847,7 +3823,7 @@ async function waitForSetup(instance, predicate, arg) {
       .catch(() => null);
     if (home) {
       home.entries = await fs
-        .readdir(path.join(instance.userData, "farol-next-state"))
+        .readdir(path.join(instance.userData, "farol-state"))
         .catch(() => null);
     }
     // The failure message is capped, and the readings that matter here are
@@ -3894,7 +3870,7 @@ async function waitForSetup(instance, predicate, arg) {
       }
       return contents;
     };
-    const stateRoot = path.join(instance.userData, "farol-next-state");
+    const stateRoot = path.join(instance.userData, "farol-state");
     const settingsText = await fs
       .readFile(path.join(stateRoot, "config.json"), "utf8")
       .catch(() => null);
@@ -4018,7 +3994,7 @@ async function completeSetup(
             nodeIntegration: preferences.nodeIntegration,
             isolatedSession:
               contents.session ===
-              session.fromPartition("persist:farol-next-chatgpt"),
+              session.fromPartition("persist:farol-app-chatgpt"),
           };
         },
         instance.chatGptFixture.url,
@@ -4050,7 +4026,7 @@ async function completeSetup(
             nodeIntegration: preferences.nodeIntegration,
             isolatedSession:
               contents.session ===
-              session.fromPartition("persist:farol-next-chatgpt"),
+              session.fromPartition("persist:farol-app-chatgpt"),
           };
         },
         `${new URL(instance.chatGptFixture.url).origin}/chatgpt-popup`,
@@ -4131,7 +4107,7 @@ async function completeSetup(
           "Verify folder",
       );
       let bootstrap = await instance.window.evaluate(() =>
-        window.farolNext.bootstrap(),
+        window.farol.bootstrap(),
       );
       assert.equal(
         bootstrap.configuration.settings.computer.workspaces.length,
@@ -4149,7 +4125,7 @@ async function completeSetup(
           "Verified",
       );
       bootstrap = await instance.window.evaluate(() =>
-        window.farolNext.bootstrap(),
+        window.farol.bootstrap(),
       );
       assert.equal(
         bootstrap.configuration.settings.setup.computer.verified.workspaceId,
@@ -4174,7 +4150,7 @@ async function completeSetup(
         .isHidden());
       if (hostWasDiscovered) {
         const selectedFixture = await instance.window.evaluate(() =>
-          window.farolNext.configure({ kind: "host.select-codex" }),
+          window.farol.configure({ kind: "host.select-codex" }),
         );
         assert.equal(selectedFixture.ok, true, JSON.stringify(selectedFixture));
         await assertSameFixtureExecutable(
@@ -4200,7 +4176,7 @@ async function completeSetup(
             "Run live check",
       );
       let bootstrap = await instance.window.evaluate(() =>
-        window.farolNext.bootstrap(),
+        window.farol.bootstrap(),
       );
       await assertSameFixtureExecutable(
         bootstrap.configuration.settings.nativeHosts.codex.executablePath,
@@ -4225,7 +4201,7 @@ async function completeSetup(
             "Run live check again",
       );
       bootstrap = await instance.window.evaluate(() =>
-        window.farolNext.bootstrap(),
+        window.farol.bootstrap(),
       );
       assert.equal(
         bootstrap.configuration.settings.setup.hosts.verified.configRevision,
@@ -4253,7 +4229,7 @@ async function completeSetup(
             "Agent verified",
       );
       const bootstrap = await instance.window.evaluate(() =>
-        window.farolNext.bootstrap(),
+        window.farol.bootstrap(),
       );
       const settings = bootstrap.configuration.settings;
       const proof = settings.nativeHosts.codex.agentVerification;
@@ -4355,12 +4331,12 @@ async function runLiveTaskPersistenceFaultProof() {
     "E2E_PERSISTENCE_FAULT_REQUIRES_DEVELOPMENT_BUILD",
   );
   const instance = await launch([], "hidden", "ordinary", {
-    environment: { FAROL_NEXT_E2E_LIVE_TASK_SAVE_SUCCESSES: "1" },
+    environment: { FAROL_E2E_LIVE_TASK_SAVE_SUCCESSES: "1" },
   });
   try {
     await completeSetup(instance, false, false, true, false);
     const created = await instance.window.evaluate(() =>
-      window.farolNext.task({ kind: "task.create-chatgpt" }),
+      window.farol.task({ kind: "task.create-chatgpt" }),
     );
     assert.equal(created.ok, true, JSON.stringify(created));
     assert.ok(created.selectedTaskId);
@@ -4397,7 +4373,7 @@ async function runLiveTaskPersistenceFaultProof() {
     await waitForPageState(
       instance.window,
       async (selectedTaskId) =>
-        (await window.farolNext.bootstrap()).tasks.find(
+        (await window.farol.bootstrap()).tasks.find(
           (task) => task.taskId === selectedTaskId,
         )?.lifecycle === "outcome_unknown",
       taskId,
@@ -4438,7 +4414,7 @@ async function runLiveTaskPersistenceFaultProof() {
 
     const rename = await instance.window.evaluate(
       ({ selectedTaskId }) =>
-        window.farolNext.task({
+        window.farol.task({
           kind: "task.rename",
           taskId: selectedTaskId,
           label: "Must not look durable",
@@ -4452,7 +4428,7 @@ async function runLiveTaskPersistenceFaultProof() {
 
     const persistedPath = path.join(
       instance.userData,
-      "farol-next-state",
+      "farol-state",
       "live-tasks",
       "live-tasks.json",
     );
@@ -4590,7 +4566,7 @@ async function lifecycleMetrics(instance) {
           }
         }).length,
         downloadListenerCount: session
-          .fromPartition("persist:farol-next-chatgpt")
+          .fromPartition("persist:farol-app-chatgpt")
           .listenerCount("will-download"),
         processMetrics,
         processCount: processMetrics.length,
@@ -4709,7 +4685,7 @@ async function lifecycleBatch(instance, count, timings, overlayKind = null) {
   for (let index = 0; index < count; index += 1) {
     const startedAt = performance.now();
     const created = await instance.window.evaluate(() =>
-      window.farolNext.task({ kind: "task.create-chatgpt" }),
+      window.farol.task({ kind: "task.create-chatgpt" }),
     );
     const createTotalMs = performance.now() - startedAt;
     assert.equal(created.ok, true, JSON.stringify(created));
@@ -4728,7 +4704,7 @@ async function lifecycleBatch(instance, count, timings, overlayKind = null) {
     }
   }
   const admitted = await instance.window.evaluate(() =>
-    window.farolNext.bootstrap(),
+    window.farol.bootstrap(),
   );
   assert.equal(admitted.tasks.length, count);
   assert.equal(
@@ -4751,7 +4727,7 @@ async function lifecycleBatch(instance, count, timings, overlayKind = null) {
   assert.equal(
     await instance.application.evaluate(({ session }) =>
       session
-        .fromPartition("persist:farol-next-chatgpt")
+        .fromPartition("persist:farol-app-chatgpt")
         .listenerCount("will-download"),
     ),
     1,
@@ -4782,7 +4758,7 @@ async function lifecycleBatch(instance, count, timings, overlayKind = null) {
     const startedAt = performance.now();
     const closed = await instance.window.evaluate(
       (selectedTaskId) =>
-        window.farolNext.task({ kind: "task.close", taskId: selectedTaskId }),
+        window.farol.task({ kind: "task.close", taskId: selectedTaskId }),
       taskId,
     );
     if (timings) timings.closeMs.push(performance.now() - startedAt);
@@ -4790,7 +4766,7 @@ async function lifecycleBatch(instance, count, timings, overlayKind = null) {
   }
   await waitForLifecycleQuiescence(instance);
   const quiescent = await instance.window.evaluate(() =>
-    window.farolNext.bootstrap(),
+    window.farol.bootstrap(),
   );
   assert.deepEqual(quiescent.tasks, []);
 }
@@ -4950,7 +4926,7 @@ async function runLifecycleSoak() {
 
     await restart(instance);
     const restarted = await instance.window.evaluate(() =>
-      window.farolNext.bootstrap(),
+      window.farol.bootstrap(),
     );
     assert.deepEqual(restarted.tasks, []);
     const afterRestart = await lifecycleMetrics(instance);
@@ -5057,7 +5033,7 @@ async function runLifecycleSoak() {
 // Context checkpoints and bundle placement are outside this lane: the first
 // needs an agent-backed conversation, the second is the promotion test's.
 function durableStateFiles(userData) {
-  const state = path.join(userData, "farol-next-state");
+  const state = path.join(userData, "farol-state");
   return {
     settings: path.join(state, "config.json"),
     tasks: path.join(state, "live-tasks", "live-tasks.json"),
@@ -5129,9 +5105,7 @@ async function runningGeneration(instance) {
 }
 
 async function generationSnapshot(instance) {
-  const state = await instance.window.evaluate(() =>
-    window.farolNext.bootstrap(),
-  );
+  const state = await instance.window.evaluate(() => window.farol.bootstrap());
   return {
     settings: state.configuration.settings,
     tasks: state.tasks.map(
@@ -5224,7 +5198,7 @@ async function relaunchAs(instance, generation) {
     .locator('#runtime-pill[data-state="ready"]')
     .waitFor({ state: "attached" });
   const bootstrap = await instance.window.evaluate(() =>
-    window.farolNext.bootstrap(),
+    window.farol.bootstrap(),
   );
   instance.presentation = await waitForWindowPresentation(
     instance.application,
@@ -5242,7 +5216,7 @@ async function discardInstance(instance) {
   await stopChatGptFixture(instance.chatGptFixture);
   instance.chatGptFixture = null;
   const real = path.resolve(instance.isolatedHome);
-  assert.ok(real.startsWith(`${temporaryRoot}${path.sep}farol-next-e2e-home-`));
+  assert.ok(real.startsWith(`${temporaryRoot}${path.sep}farol-e2e-home-`));
   await fs.rm(real, { recursive: true, force: true });
 }
 
@@ -5261,7 +5235,7 @@ async function runTwoGenerationStateProof() {
     await completeSetup(instance, false, true, true, true, "ordinary");
     for (let index = 0; index < 2; index += 1) {
       const created = await instance.window.evaluate(() =>
-        window.farolNext.task({ kind: "task.create-chatgpt" }),
+        window.farol.task({ kind: "task.create-chatgpt" }),
       );
       assert.equal(created.ok, true, JSON.stringify(created));
     }
@@ -5270,7 +5244,7 @@ async function runTwoGenerationStateProof() {
     const [kept, turn] = created.tasks;
     const renamed = await instance.window.evaluate(
       (taskId) =>
-        window.farolNext.task({
+        window.farol.task({
           kind: "task.rename",
           taskId,
           label: "Generation A task",
@@ -5279,8 +5253,7 @@ async function runTwoGenerationStateProof() {
     );
     assert.equal(renamed.ok, true, JSON.stringify(renamed));
     const pinned = await instance.window.evaluate(
-      (taskId) =>
-        window.farolNext.task({ kind: "task.pin", taskId, pinned: true }),
+      (taskId) => window.farol.task({ kind: "task.pin", taskId, pinned: true }),
       kept.taskId,
     );
     assert.equal(pinned.ok, true, JSON.stringify(pinned));
@@ -5289,7 +5262,7 @@ async function runTwoGenerationStateProof() {
     // turn, then the compaction fixture has the provider write the
     // checkpoint. The handoff is an obligation B inherits unconfirmed.
     const keptActivated = await instance.window.evaluate(
-      (taskId) => window.farolNext.task({ kind: "task.activate", taskId }),
+      (taskId) => window.farol.task({ kind: "task.activate", taskId }),
       kept.taskId,
     );
     assert.equal(keptActivated.ok, true, JSON.stringify(keptActivated));
@@ -5322,18 +5295,18 @@ async function runTwoGenerationStateProof() {
     await waitForPageState(
       instance.window,
       async (taskId) =>
-        (await window.farolNext.bootstrap()).tasks.find(
+        (await window.farol.bootstrap()).tasks.find(
           (task) => task.taskId === taskId,
         )?.lifecycle === "completed",
       kept.taskId,
     );
     await instance.window.evaluate((taskId) => {
-      void window.farolNext.control(taskId, "compact-context-fixture");
+      void window.farol.control(taskId, "compact-context-fixture");
     }, kept.taskId);
     await waitForPageState(
       instance.window,
       async (taskId) =>
-        (await window.farolNext.bootstrap()).tasks.find(
+        (await window.farol.bootstrap()).tasks.find(
           (task) => task.taskId === taskId,
         )?.context?.phase === "handoff_offered",
       kept.taskId,
@@ -5389,7 +5362,7 @@ async function runTwoGenerationStateProof() {
 
     // A dies with a provider turn running: the obligation is on disk.
     const activated = await instance.window.evaluate(
-      (taskId) => window.farolNext.task({ kind: "task.activate", taskId }),
+      (taskId) => window.farol.task({ kind: "task.activate", taskId }),
       turn.taskId,
     );
     assert.equal(activated.ok, true, JSON.stringify(activated));
@@ -5410,7 +5383,7 @@ async function runTwoGenerationStateProof() {
     await waitForPageState(
       instance.window,
       async (taskId) =>
-        (await window.farolNext.bootstrap()).tasks.find(
+        (await window.farol.bootstrap()).tasks.find(
           (task) => task.taskId === taskId,
         )?.lifecycle === "running",
       turn.taskId,
@@ -5539,14 +5512,14 @@ async function runTwoGenerationStateProof() {
     // B completes the handoff A offered: the checkpoint A's provider wrote is
     // installed by B's code, and the retained source is retired.
     const confirmed = await instance.window.evaluate(
-      (taskId) => window.farolNext.control(taskId, "confirm-context-fixture"),
+      (taskId) => window.farol.control(taskId, "confirm-context-fixture"),
       kept.taskId,
     );
     assert.deepEqual(confirmed, { ok: true, phase: "active" });
     await waitForPageState(
       instance.window,
       async (taskId) => {
-        const task = (await window.farolNext.bootstrap()).tasks.find(
+        const task = (await window.farol.bootstrap()).tasks.find(
           (candidate) => candidate.taskId === taskId,
         );
         return task?.context?.phase === "active" && task.context.epoch === 2;
@@ -5576,7 +5549,7 @@ async function runTwoGenerationStateProof() {
     // B's own change survives B's restart, which rewrites nothing.
     const relabelled = await instance.window.evaluate(
       (taskId) =>
-        window.farolNext.task({
+        window.farol.task({
           kind: "task.rename",
           taskId,
           label: "Generation B label",
@@ -5730,13 +5703,13 @@ const ordinary = await launch([], "hidden", "ordinary");
 ordinaryStartupSegment: try {
   if (!segmentSelected("ordinary-startup")) break ordinaryStartupSegment;
   const ordinaryBootstrap = await ordinary.window.evaluate(() =>
-    window.farolNext.bootstrap(),
+    window.farol.bootstrap(),
   );
   assert.equal(ordinaryBootstrap.demoMode, false);
   assert.deepEqual(ordinaryBootstrap.tasks, []);
   assert.equal((await taskSurfaces(ordinary.application)).length, 0);
   const ordinarySnapshot = await ordinary.window.evaluate(() =>
-    window.farolNext.snapshot(),
+    window.farol.snapshot(),
   );
   assert.deepEqual(ordinarySnapshot.tasks, []);
   assert.equal(
@@ -5799,7 +5772,7 @@ liveTasksSegment: try {
       index,
     );
     const state = await ordinaryLiveTasks.window.evaluate(() =>
-      window.farolNext.bootstrap(),
+      window.farol.bootstrap(),
     );
     assert.equal(state.taskRevision, index);
     assert.equal(state.tasks.length, index);
@@ -5840,7 +5813,7 @@ liveTasksSegment: try {
   assert.equal(taskSurfaceIds.size, 5);
   assert.equal(await newTask.isDisabled(), true);
   const capacity = await ordinaryLiveTasks.window.evaluate(() =>
-    window.farolNext.task({ kind: "task.create-chatgpt" }),
+    window.farol.task({ kind: "task.create-chatgpt" }),
   );
   assert.deepEqual(capacity, {
     ok: false,
@@ -5971,12 +5944,12 @@ liveTasksSegment: try {
   assert.equal(longLabel.length, 80, "label uses the full 80-character limit");
   const renamedLong = await ordinaryLiveTasks.window.evaluate(
     ({ taskId, label }) =>
-      window.farolNext.task({ kind: "task.rename", taskId, label }),
+      window.farol.task({ kind: "task.rename", taskId, label }),
     { taskId: selectedLiveTaskId, label: longLabel },
   );
   assert.equal(renamedLong.ok, true, "long RU/EN label accepted");
   const uxMeasurements = {
-    schema: "farol.next.ux-measurements/1",
+    schema: "farol.ux-measurements/1",
     label: longLabel,
     breakpoint: "(max-width: 979px) selects the rail",
     widths: {},
@@ -6260,7 +6233,7 @@ liveTasksSegment: try {
   );
   const renamedBack = await ordinaryLiveTasks.window.evaluate(
     ({ taskId, label }) =>
-      window.farolNext.task({ kind: "task.rename", taskId, label }),
+      window.farol.task({ kind: "task.rename", taskId, label }),
     { taskId: selectedLiveTaskId, label: originalLabel },
   );
   assert.equal(renamedBack.ok, true);
@@ -6289,7 +6262,7 @@ liveTasksSegment: try {
             nodeIntegration: preferences.nodeIntegration,
             isolatedSession:
               contents.session ===
-              session.fromPartition("persist:farol-next-chatgpt"),
+              session.fromPartition("persist:farol-app-chatgpt"),
           };
         }),
     new URL(ordinaryLiveTasks.chatGptFixture.url).origin,
@@ -6307,14 +6280,14 @@ liveTasksSegment: try {
   assert.equal(
     await ordinaryLiveTasks.application.evaluate(({ session }) =>
       session
-        .fromPartition("persist:farol-next-chatgpt")
+        .fromPartition("persist:farol-app-chatgpt")
         .listenerCount("will-download"),
     ),
     1,
   );
 
   const admittedState = await ordinaryLiveTasks.window.evaluate(() =>
-    window.farolNext.bootstrap(),
+    window.farol.bootstrap(),
   );
   const pinnedTask = admittedState.tasks[4];
   const agentCancellationTask = admittedState.tasks[1];
@@ -6339,7 +6312,7 @@ liveTasksSegment: try {
     true,
   );
   const managedState = await ordinaryLiveTasks.window.evaluate(() =>
-    window.farolNext.bootstrap(),
+    window.farol.bootstrap(),
   );
   assert.equal(managedState.tasks[0].taskId, pinnedTask.taskId);
   assert.equal(managedState.tasks[0].label, "Pinned continuity task");
@@ -6361,7 +6334,7 @@ liveTasksSegment: try {
     taskSurfaceIds.get(pinnedTask.taskId),
   );
   const idleCancel = await ordinaryLiveTasks.window.evaluate(
-    (taskId) => window.farolNext.task({ kind: "task.cancel", taskId }),
+    (taskId) => window.farol.task({ kind: "task.cancel", taskId }),
     pinnedTask.taskId,
   );
   assert.deepEqual(idleCancel, {
@@ -6404,7 +6377,7 @@ liveTasksSegment: try {
   await waitForPageState(
     ordinaryLiveTasks.window,
     async (taskId) =>
-      (await window.farolNext.bootstrap()).tasks.find(
+      (await window.farol.bootstrap()).tasks.find(
         (task) => task.taskId === taskId,
       )?.lifecycle === "completed",
     pinnedTask.taskId,
@@ -6429,7 +6402,7 @@ liveTasksSegment: try {
   await waitForPageState(
     ordinaryLiveTasks.window,
     async (taskId) =>
-      (await window.farolNext.bootstrap()).tasks.find(
+      (await window.farol.bootstrap()).tasks.find(
         (task) => task.taskId === taskId,
       )?.lifecycle === "running",
     cancellableTask.taskId,
@@ -6450,7 +6423,7 @@ liveTasksSegment: try {
   await ordinaryLiveTasks.window.locator("#task-menu-cancel").click();
   await waitForTaskMenuNote(ordinaryLiveTasks, "Provider stop confirmed.");
   const cancelledState = await ordinaryLiveTasks.window.evaluate(() =>
-    window.farolNext.bootstrap(),
+    window.farol.bootstrap(),
   );
   assert.equal(
     cancelledState.tasks.find((task) => task.taskId === cancellableTask.taskId)
@@ -6504,7 +6477,7 @@ liveTasksSegment: try {
   assert.equal(
     await ordinaryLiveTasks.application.evaluate(({ session }) =>
       session
-        .fromPartition("persist:farol-next-chatgpt")
+        .fromPartition("persist:farol-app-chatgpt")
         .listenerCount("will-download"),
     ),
     1,
@@ -6566,7 +6539,7 @@ liveTasksSegment: try {
         "Delivered",
     );
     const productAgentBootstrap = await ordinaryLiveTasks.window.evaluate(() =>
-      window.farolNext.bootstrap(),
+      window.farol.bootstrap(),
     );
     productAgentTask = productAgentBootstrap.tasks.find(
       (task) => task.taskId === pinnedTask.taskId,
@@ -6639,7 +6612,7 @@ liveTasksSegment: try {
         "Cancelled",
     );
     const cancelledAgentBootstrap = await ordinaryLiveTasks.window.evaluate(
-      () => window.farolNext.bootstrap(),
+      () => window.farol.bootstrap(),
     );
     assert.deepEqual(
       cancelledAgentBootstrap.tasks.find(
@@ -6672,7 +6645,7 @@ liveTasksSegment: try {
 
     const productAgentInputRoot = path.join(
       ordinaryLiveTasks.userData,
-      "farol-next-state",
+      "farol-state",
       "product-agent-inputs",
     );
     const productAgentInputFiles = (
@@ -6758,7 +6731,7 @@ liveTasksSegment: try {
 
     assignmentRoot = path.join(
       ordinaryLiveTasks.userData,
-      "farol-next-state",
+      "farol-state",
       "native-agent-assignments",
       "assignments",
     );
@@ -6804,7 +6777,7 @@ liveTasksSegment: try {
     );
   } else {
     const before = await ordinaryLiveTasks.window.evaluate(() =>
-      window.farolNext.bootstrap(),
+      window.farol.bootstrap(),
     );
     assert.equal(before.nativeAgent, false);
     const hostStartsPath = path.join(
@@ -6827,7 +6800,7 @@ liveTasksSegment: try {
       });
     const assignmentDirectory = path.join(
       ordinaryLiveTasks.userData,
-      "farol-next-state",
+      "farol-state",
       "native-agent-assignments",
       "assignments",
     );
@@ -6841,7 +6814,7 @@ liveTasksSegment: try {
         });
     const productInputDirectory = path.join(
       ordinaryLiveTasks.userData,
-      "farol-next-state",
+      "farol-state",
       "product-agent-inputs",
     );
     const hostStartsBefore = await readHostStarts();
@@ -6851,7 +6824,7 @@ liveTasksSegment: try {
     for (const kind of ["task.start-agent", "task.rejoin-agent"]) {
       const result = await ordinaryLiveTasks.window.evaluate(
         ({ kind, taskId, workspaceId }) =>
-          window.farolNext.task({
+          window.farol.task({
             kind,
             taskId,
             ...(kind === "task.start-agent"
@@ -6874,7 +6847,7 @@ liveTasksSegment: try {
       assert.equal(result.error, "AGENT_NOT_READY", kind);
     }
     const after = await ordinaryLiveTasks.window.evaluate(() =>
-      window.farolNext.bootstrap(),
+      window.farol.bootstrap(),
     );
     assert.equal(after.nativeAgent, false);
     assert.equal(after.taskRevision, before.taskRevision);
@@ -6892,7 +6865,7 @@ liveTasksSegment: try {
 
   const liveTaskRoot = path.join(
     ordinaryLiveTasks.userData,
-    "farol-next-state",
+    "farol-state",
     "live-tasks",
   );
   const liveTaskPath = path.join(liveTaskRoot, "live-tasks.json");
@@ -6953,12 +6926,12 @@ liveTasksSegment: try {
   assert.equal((await fs.stat(liveTaskPath)).mode & 0o777, 0o600);
 
   await ordinaryLiveTasks.window.evaluate((taskId) => {
-    void window.farolNext.control(taskId, "compact-context-fixture");
+    void window.farol.control(taskId, "compact-context-fixture");
   }, pinnedTask.taskId);
   await waitForPageState(
     ordinaryLiveTasks.window,
     async (taskId) => {
-      const state = await window.farolNext.bootstrap();
+      const state = await window.farol.bootstrap();
       return (
         state.tasks.find((task) => task.taskId === taskId)?.context?.phase ===
           "checkpoint_requested" &&
@@ -6971,7 +6944,7 @@ liveTasksSegment: try {
   await waitForPageState(
     ordinaryLiveTasks.window,
     async (taskId) => {
-      const state = await window.farolNext.bootstrap();
+      const state = await window.farol.bootstrap();
       return (
         state.tasks.find((task) => task.taskId === taskId)?.context?.phase ===
         "handoff_offered"
@@ -6980,7 +6953,7 @@ liveTasksSegment: try {
     pinnedTask.taskId,
   );
   const repeatedCompaction = await ordinaryLiveTasks.window.evaluate(
-    (taskId) => window.farolNext.control(taskId, "compact-context-fixture"),
+    (taskId) => window.farol.control(taskId, "compact-context-fixture"),
     pinnedTask.taskId,
   );
   assert.deepEqual(repeatedCompaction, { ok: true, phase: "handoff_offered" });
@@ -7039,7 +7012,7 @@ liveTasksSegment: try {
   );
   const contextRoot = path.join(
     ordinaryLiveTasks.userData,
-    "farol-next-state",
+    "farol-state",
     "context-continuity",
   );
   const contextTaskRoot = path.join(contextRoot, "tasks");
@@ -7075,7 +7048,7 @@ liveTasksSegment: try {
     await ordinaryLiveTasks.window.locator("#task-menu-agent").click();
     await waitForTaskMenuNote(ordinaryLiveTasks, "Agent assignment admitted.");
     const expiringAgentState = await ordinaryLiveTasks.window.evaluate(() =>
-      window.farolNext.bootstrap(),
+      window.farol.bootstrap(),
     );
     const expiringAgentTask = expiringAgentState.tasks.find(
       (task) => task.taskId === agentCancellationTask.taskId,
@@ -7128,7 +7101,7 @@ liveTasksSegment: try {
     await waitForPageState(
       ordinaryLiveTasks.window,
       async (taskId) => {
-        const state = await window.farolNext.bootstrap();
+        const state = await window.farol.bootstrap();
         return (
           state.tasks.find((task) => task.taskId === taskId)?.agent?.phase ===
           "cancelled"
@@ -7138,7 +7111,7 @@ liveTasksSegment: try {
     );
     await waitForWindowCount(ordinaryLiveTasks.application, 1);
     const recoveredState = await ordinaryLiveTasks.window.evaluate(() =>
-      window.farolNext.bootstrap(),
+      window.farol.bootstrap(),
     );
     assert.ok(recoveredState.taskRevision > handoffLiveTaskRecord.revision);
     assert.deepEqual(
@@ -7184,7 +7157,7 @@ liveTasksSegment: try {
     );
     await waitForWindowCount(ordinaryLiveTasks.application, 1);
     const recoveredState = await ordinaryLiveTasks.window.evaluate(() =>
-      window.farolNext.bootstrap(),
+      window.farol.bootstrap(),
     );
     assert.equal(recoveredState.nativeAgent, false);
     assert.deepEqual(
@@ -7229,14 +7202,14 @@ liveTasksSegment: try {
     "INSTALLING CONTEXT",
   );
   const confirmedContext = await ordinaryLiveTasks.window.evaluate(
-    (taskId) => window.farolNext.control(taskId, "confirm-context-fixture"),
+    (taskId) => window.farol.control(taskId, "confirm-context-fixture"),
     pinnedTask.taskId,
   );
   assert.deepEqual(confirmedContext, { ok: true, phase: "active" });
   await waitForPageState(
     ordinaryLiveTasks.window,
     async (taskId) => {
-      const state = await window.farolNext.bootstrap();
+      const state = await window.farol.bootstrap();
       const task = state.tasks.find((candidate) => candidate.taskId === taskId);
       return task?.context?.phase === "active" && task.context.epoch === 2;
     },
@@ -7269,7 +7242,7 @@ liveTasksSegment: try {
     0,
   );
   const freshContextSurface = await ordinaryLiveTasks.window.evaluate(
-    (taskId) => window.farolNext.task({ kind: "task.activate", taskId }),
+    (taskId) => window.farol.task({ kind: "task.activate", taskId }),
     pinnedTask.taskId,
   );
   assert.equal(freshContextSurface.ok, true);
@@ -7330,7 +7303,7 @@ devNewTaskAffordanceSegment: {
   }
   segmentMark("dev-new-task-affordance", "start");
   const devNewTask = await launch([], "secondary-visible", "ordinary", {
-    environment: { FAROL_NEXT_ENVIRONMENT: "dev" },
+    environment: { FAROL_ENVIRONMENT: "dev" },
   });
   try {
     const resolvedProfile = await devNewTask.application.evaluate(
@@ -7476,10 +7449,10 @@ devNewTaskAffordanceSegment: {
     );
     await devNewTask.window.locator("#onboarding-recheck").click();
     await waitForPageState(devNewTask.window, async () => {
-      const state = await window.farolNext.bootstrap();
+      const state = await window.farol.bootstrap();
       return (
         state.configuration.settings.setup.chatgpt.verified?.profile ===
-        "chatgpt.next-partition/1"
+        "chatgpt.app-partition/1"
       );
     });
     await devNewTask.window.locator("#onboarding-back").click();
@@ -7501,7 +7474,7 @@ devNewTaskAffordanceSegment: {
     await newTask.waitFor({ state: "hidden" });
 
     const initial = await devNewTask.window.evaluate(() =>
-      window.farolNext.bootstrap(),
+      window.farol.bootstrap(),
     );
     assert.deepEqual(initial.tasks, []);
     assert.equal(initial.liveProvider, false);
@@ -7537,7 +7510,7 @@ devNewTaskAffordanceSegment: {
       await waitForPageState(
         devNewTask.window,
         async (count) => {
-          const state = await window.farolNext.bootstrap();
+          const state = await window.farol.bootstrap();
           const button = document.querySelector("#new-task");
           return (
             state.taskRevision === count &&
@@ -7550,7 +7523,7 @@ devNewTaskAffordanceSegment: {
         index,
       );
       const state = await devNewTask.window.evaluate(() =>
-        window.farolNext.bootstrap(),
+        window.farol.bootstrap(),
       );
       assert.equal(state.taskRevision, index);
       assert.equal(state.tasks.length, index);
@@ -7589,7 +7562,7 @@ devNewTaskAffordanceSegment: {
       assert.equal(providerSurface.state.userText, "");
       assert.equal(providerSurface.state.submitCount, 0);
       if (index === 2)
-        cases.push("dev-task-api-next-admission-with-hidden-toolbar");
+        cases.push("dev-task-api-farol-admission-with-hidden-toolbar");
     }
     cases.push("dev-task-api-capacity-is-enforced");
     segmentMark("dev-new-task-affordance", "pass");
@@ -7635,10 +7608,10 @@ chatgptRecoverySegment: try {
   await waitForPageState(
     interruptedChatGptTask.window,
     async () =>
-      (await window.farolNext.bootstrap()).chatgptRecoveryPending === false,
+      (await window.farol.bootstrap()).chatgptRecoveryPending === false,
   );
   const recoveredBootstrap = await interruptedChatGptTask.window.evaluate(() =>
-    window.farolNext.bootstrap(),
+    window.farol.bootstrap(),
   );
   assert.equal(recoveredBootstrap.chatgptRecoveryPending, false);
   assert.equal(
@@ -7683,7 +7656,7 @@ demoMainSegment: try {
   }
   assert.equal(await normal.window.locator("#task-tabs .task-tab").count(), 2);
   const runningBootstrap = await normal.window.evaluate(() =>
-    window.farolNext.bootstrap(),
+    window.farol.bootstrap(),
   );
   assert.equal(runningBootstrap.demoMode, true);
   assert.deepEqual(runningBootstrap.build, buildIdentity);
@@ -7845,8 +7818,7 @@ demoMainSegment: try {
   const resourceIdentity = await normal.application.evaluate(
     ({ app, session }) => ({
       userData: app.getPath("userData"),
-      taskStorage: session.fromPartition("persist:farol-next-preview")
-        .storagePath,
+      taskStorage: session.fromPartition("persist:farol-runtime").storagePath,
     }),
   );
   const isolatedRoot = await fs.realpath(normal.isolatedHome);
@@ -7860,10 +7832,7 @@ demoMainSegment: try {
       `${isolatedRoot}${path.sep}`,
     ),
   );
-  assert.equal(
-    path.basename(resourceIdentity.userData),
-    "Farol Next Preview user-data",
-  );
+  assert.equal(path.basename(resourceIdentity.userData), "Farol user-data");
   await waitForTask(
     normal.application,
     "task-atlantic",
@@ -8139,7 +8108,7 @@ demoMainSegment: try {
   const reviewReadOnlyTask = normal.window
     .locator("#connection-readiness")
     .getByRole("button", { name: "Review read-only task…", exact: true });
-  const retainedConversationUrl = `${normal.chatGptFixture.url}/c/farol-next-e2e`;
+  const retainedConversationUrl = `${normal.chatGptFixture.url}/c/farol-e2e`;
   await reviewReadOnlyTask.click();
   const contextPreview = normal.window.locator("#context-preview");
   await contextPreview.waitFor({ state: "visible" });
@@ -8255,7 +8224,7 @@ demoMainSegment: try {
   );
   assert.deepEqual(
     await fs.readdir(
-      path.join(normal.userData, "farol-next-state", "attachment-staging"),
+      path.join(normal.userData, "farol-state", "attachment-staging"),
     ),
     [],
   );
@@ -8292,7 +8261,7 @@ demoMainSegment: try {
   );
   const conversationPath = path.join(
     normal.userData,
-    "farol-next-state",
+    "farol-state",
     "chatgpt-conversation",
     "chatgpt-conversation.json",
   );
@@ -8337,7 +8306,7 @@ demoMainSegment: try {
     .getByText("Computer name saved.", { exact: true })
     .waitFor();
   const renamedConfiguration = await normal.window.evaluate(() =>
-    window.farolNext.bootstrap(),
+    window.farol.bootstrap(),
   );
   assert.equal(
     renamedConfiguration.configuration.settings.nativeHosts.codex
@@ -8417,7 +8386,7 @@ demoMainSegment: try {
     .waitFor();
   await workspaceCard
     .locator(".workspace-query-evidence")
-    .getByText("Farol Next workspace verification fixture", { exact: true })
+    .getByText("Farol workspace verification fixture", { exact: true })
     .waitFor();
   await normal.window
     .locator("#settings-feedback")
@@ -8430,7 +8399,7 @@ demoMainSegment: try {
       .workspaceId;
   const deniedCommand = await normal.window.evaluate(
     async ({ selectedWorkspaceId }) =>
-      window.farolNext.configure({
+      window.farol.configure({
         kind: "computer.run-git-status",
         workspaceId: selectedWorkspaceId,
       }),
@@ -8526,7 +8495,7 @@ demoMainSegment: try {
     "workspace-command-exact-head",
   );
   const commandConfiguration = await normal.window.evaluate(() =>
-    window.farolNext.bootstrap(),
+    window.farol.bootstrap(),
   );
   assert.equal(
     commandConfiguration.configuration.settings.computer.commands,
@@ -8632,7 +8601,7 @@ demoMainSegment: try {
     .waitFor();
   assert.equal(
     await fs.readFile(normal.workspaceFile, "utf8"),
-    "Farol Next guarded workspace mutation fixture\n",
+    "Farol guarded workspace mutation fixture\n",
   );
   await workspaceCard
     .getByRole("button", { name: "Git status", exact: true })
@@ -8673,7 +8642,7 @@ demoMainSegment: try {
     .getByText("General settings applied.", { exact: true })
     .waitFor();
   const configuredBootstrap = await normal.window.evaluate(() =>
-    window.farolNext.bootstrap(),
+    window.farol.bootstrap(),
   );
   assert.equal(configuredBootstrap.configuration.status, "ready");
   assert.equal(
@@ -8698,12 +8667,12 @@ demoMainSegment: try {
     .click();
   await normal.window
     .locator("#settings-feedback")
-    .getByText(/^Saved Farol-Next-Support\.json · \d+ bytes · [a-f0-9]{12}\.$/u)
+    .getByText(/^Saved Farol-Support\.json · \d+ bytes · [a-f0-9]{12}\.$/u)
     .waitFor();
   const supportExportText = await fs.readFile(normal.supportExport, "utf8");
   const supportExport = JSON.parse(supportExportText);
   assert.equal(supportExport.schema, 2);
-  assert.equal(supportExport.kind, "farol_next_support");
+  assert.equal(supportExport.kind, "farol_support");
   assert.equal(supportExport.build.buildId, buildIdentity.buildId);
   assert.equal(supportExport.build.sourceCommit, buildIdentity.sourceCommit);
   assert.equal(supportExport.configuration.status, "ready");
@@ -9092,10 +9061,10 @@ demoMainSegment: try {
     );
   }
   const reopenedBootstrap = await normal.window.evaluate(() =>
-    window.farolNext.bootstrap(),
+    window.farol.bootstrap(),
   );
   assert.equal(reopenedBootstrap.runtimeState, "ready");
-  assert.equal(reopenedBootstrap.runtimeIdentity, "farol-next-preview-runtime");
+  assert.equal(reopenedBootstrap.runtimeIdentity, "farol-runtime");
   assert.equal((await taskSurfaces(normal.application)).length, 2);
   assert.equal(
     await runtimeProcessId(normal.application),
@@ -9114,7 +9083,7 @@ demoMainSegment: try {
     () => document.documentElement.dataset.sidebar === "rail",
   );
   const restartedBootstrap = await normal.window.evaluate(() =>
-    window.farolNext.bootstrap(),
+    window.farol.bootstrap(),
   );
   assert.equal(restartedBootstrap.configuration.status, "ready");
   assert.equal(restartedBootstrap.chatgptConversationState, "retained");
@@ -9145,7 +9114,7 @@ demoMainSegment: try {
   );
   assert.equal(
     restartedSettings.setup.chatgpt.verified.profile,
-    "chatgpt.next-partition/1",
+    "chatgpt.app-partition/1",
   );
   await assertSameFixtureExecutable(
     restartedSettings.nativeHosts.codex.executablePath,
@@ -9212,7 +9181,7 @@ demoMainSegment: try {
     .click();
   await normal.window
     .locator("#computer-feedback")
-    .getByText("ChatGPT composer verified in the isolated Next partition.", {
+    .getByText("ChatGPT composer verified in the isolated Farol partition.", {
       exact: true,
     })
     .waitFor();
@@ -9274,7 +9243,7 @@ demoMainSegment: try {
     currentStep: "verify",
     dismissed: true,
   });
-  const settingsRoot = path.join(normal.userData, "farol-next-state");
+  const settingsRoot = path.join(normal.userData, "farol-state");
   const settingsPath = path.join(settingsRoot, "config.json");
   assert.equal((await fs.stat(settingsRoot)).mode & 0o777, 0o700);
   assert.equal((await fs.stat(settingsPath)).mode & 0o777, 0o600);
@@ -9325,7 +9294,7 @@ demoMainSegment: try {
     "workspace-exclusion-effective",
     "settings-controls-persist-after-restart",
     "setup-position-and-dismissal-persist",
-    "chatgpt-next-partition-readiness",
+    "chatgpt-app-partition-readiness",
     "chatgpt-popup-and-expiry-recovery",
     "chatgpt-session-persists-after-restart",
     "mismatched-build-second-launch-rejected",
@@ -9499,8 +9468,8 @@ processDeathSegment: try {
   });
   cases.push(
     "utility-process-sigkill-state",
-    "isolated-start-order-next-then-legacy",
-    "next-only-failure-preserves-legacy-fixture",
+    "isolated-start-order-farol-then-legacy",
+    "farol-only-failure-preserves-legacy-fixture",
   );
 } finally {
   if (nextFirstLegacy) await closeLegacyAppFixture(nextFirstLegacy);
@@ -9532,7 +9501,7 @@ if (segmentSelected("process-death")) {
 async function readSummaryFenceRecovery(userData) {
   return JSON.parse(
     await fs.readFile(
-      path.join(userData, "farol-next-state", "summary-fence-recovery.json"),
+      path.join(userData, "farol-state", "summary-fence-recovery.json"),
       "utf8",
     ),
   );
@@ -9542,7 +9511,7 @@ function secureMcpLaunchRootEntries(userData) {
   return fs.readdir(
     path.join(
       userData,
-      "farol-next-state",
+      "farol-state",
       "secure-mcp-connector",
       "computer-authority",
     ),
@@ -9577,7 +9546,7 @@ fenceUnheldSegment: try {
     heldFalseFence.application,
   );
   const refusal = await heldFalseFence.window.evaluate(() =>
-    window.farolNext.configure({ kind: "connector.start" }),
+    window.farol.configure({ kind: "connector.start" }),
   );
   assert.equal(refusal.ok, false);
   assert.equal(refusal.error, "COMPUTER_FENCE_UNHELD");
@@ -9641,7 +9610,7 @@ fenceReconciledSegment: try {
   assert.equal(recovery.status, "reconciled");
 
   const result = await reconciledFence.window.evaluate(() =>
-    window.farolNext.configure({ kind: "connector.start" }),
+    window.farol.configure({ kind: "connector.start" }),
   );
   // Nothing configures a tunnel client or credential in this fixture, so the
   // connector still fails to start; only the exact refusal code matters here.
@@ -9715,7 +9684,7 @@ ux34SettingsWidthsSegment: {
     }
     assert.equal(saveFeedback, "Computer name saved.");
     const renamedComputer = await settingsWidths.window.evaluate(() =>
-      window.farolNext.bootstrap(),
+      window.farol.bootstrap(),
     );
     assert.equal(renamedComputer.configuration?.status, "ready");
     assert.equal(
@@ -9840,7 +9809,7 @@ ux34SettingsWidthsSegment: {
     // break at. Give the step a real approved folder, reopen Setup on it,
     // and measure the list at the supported minimum width.
     const added = await settingsWidths.window.evaluate(() =>
-      window.farolNext.configure({ kind: "computer.add-workspace" }),
+      window.farol.configure({ kind: "computer.add-workspace" }),
     );
     assert.equal(added.ok, true, "the fixture workspace is approved");
     await settingsWidths.window.locator("#open-connections").click();
@@ -10127,7 +10096,7 @@ async function reopenSignInFixtureWindow(instance) {
       "Check connection",
   );
   const admitted = await instance.window.evaluate(() =>
-    window.farolNext.bootstrap(),
+    window.farol.bootstrap(),
   );
   assert.equal(
     admitted.chatgptSignInOutcome,
@@ -10198,11 +10167,11 @@ async function waitForSignInReturnOutcome(
 ) {
   await waitForWindowCount(instance.application, 1);
   const observed = await waitForPageState(instance.window, async () => {
-    const value = await window.farolNext.bootstrap();
+    const value = await window.farol.bootstrap();
     return value.configuration.status === "ready";
   }).then(() =>
     instance.window.evaluate(async () => {
-      const value = await window.farolNext.bootstrap();
+      const value = await window.farol.bootstrap();
       return {
         recorded: value.configuration.settings.setup.chatgpt,
         outcome: value.chatgptSignInOutcome ?? null,
@@ -10266,7 +10235,7 @@ async function waitForSignInReturnOutcome(
     }
   }
   const afterReturn = await instance.window.evaluate(() =>
-    window.farolNext.bootstrap(),
+    window.farol.bootstrap(),
   );
   assert.equal(afterReturn.configuration.status, "ready");
   if (afterReturn.configuration.status === "ready") {
@@ -10370,7 +10339,7 @@ ux34SignInReturnSegment: {
     // missing Return notification is told apart from an ignored one.
     await signIn.window.evaluate(() => {
       window.__farolShellActions = [];
-      window.farolNext.onShellAction((value) =>
+      window.farol.onShellAction((value) =>
         window.__farolShellActions.push(value),
       );
     });
@@ -10415,11 +10384,11 @@ ux34SignInReturnSegment: {
     await waitForPageState(
       signIn.window,
       async () =>
-        (await window.farolNext.bootstrap())?.chatgptSignInBlocked?.kind !==
+        (await window.farol.bootstrap())?.chatgptSignInBlocked?.kind !==
         undefined,
     );
     const blockedBootstrap = await signIn.window.evaluate(() =>
-      window.farolNext.bootstrap(),
+      window.farol.bootstrap(),
     );
     assert.deepEqual(blockedBootstrap.chatgptSignInBlocked, {
       kind: "navigation-blocked",
@@ -10469,7 +10438,7 @@ ux34SignInReturnSegment: {
     await waitForPageState(
       signIn.window,
       async () =>
-        (await window.farolNext.bootstrap())?.chatgptSignInBlocked?.kind !==
+        (await window.farol.bootstrap())?.chatgptSignInBlocked?.kind !==
         undefined,
     );
     const postBlockedNavDiagnostics = {
@@ -10543,7 +10512,7 @@ n04bModelSegment: {
   try {
     const modelEndpointState = path.join(
       instance.userData,
-      "farol-next-private",
+      "farol-private",
       "model-endpoint",
     );
     const configPath = path.join(
@@ -10572,14 +10541,14 @@ n04bModelSegment: {
       ];
       for (const command of modelActions) {
         const result = await instance.window.evaluate(
-          (value) => window.farolNext.configure(value),
+          (value) => window.farol.configure(value),
           command,
         );
         assert.equal(result.ok, false, `${command.kind} is closed over IPC`);
         assert.equal(result.error, "MODEL_ENDPOINT_UNAVAILABLE");
       }
       const start = await instance.window.evaluate(() =>
-        window.farolNext.task({
+        window.farol.task({
           kind: "task.start-agent",
           taskId: "unqualified-agent-task",
           workspaceId: "unqualified-agent-workspace",
@@ -10590,7 +10559,7 @@ n04bModelSegment: {
       assert.equal(start.ok, false);
       assert.equal(start.error, "AGENT_NOT_READY");
       const rejoin = await instance.window.evaluate(() =>
-        window.farolNext.task({
+        window.farol.task({
           kind: "task.rejoin-agent",
           taskId: "unqualified-agent-task",
         }),
@@ -10647,7 +10616,7 @@ n04bModelSegment: {
     cases.push("n04b-model-agent-stays-off-after-restart-with-saved-provider");
 
     const rollback = await instance.window.evaluate(() =>
-      window.farolNext.configure({ kind: "model.rollback" }),
+      window.farol.configure({ kind: "model.rollback" }),
     );
     assert.equal(rollback.ok, true);
     assert.equal(rollback.evidence?.kind, "model.config-rollback");
@@ -10667,7 +10636,7 @@ n04bModelSegment: {
 // top of `tunnel-client.fixture.cjs`.
 async function startTunnelClientFixture() {
   const fixtureRoot = await fs.mkdtemp(
-    path.join(temporaryRoot, "farol-next-e2e-tunnel-"),
+    path.join(temporaryRoot, "farol-e2e-tunnel-"),
   );
   const source = await fs.readFile(
     path.join(root, "tests/e2e/tunnel-client.fixture.cjs"),
@@ -10693,7 +10662,7 @@ async function startTunnelClientFixture() {
 function tunnelInitRecordPath(userData) {
   return path.join(
     userData,
-    "farol-next-state",
+    "farol-state",
     "secure-mcp-connector",
     "state",
     "farol-e2e-tunnel-init.json",
@@ -10717,7 +10686,7 @@ n09ConnectorSegment: {
   if (!segmentSelected("n09-connector")) break n09ConnectorSegment;
   const tunnelFixture = await startTunnelClientFixture();
   const connector = await launch([], "hidden", "demo", {
-    environment: { FAROL_NEXT_E2E_TUNNEL_CLIENT: tunnelFixture.executable },
+    environment: { FAROL_E2E_TUNNEL_CLIENT: tunnelFixture.executable },
   });
   let authorityTransitionDiagnostic = "";
   let authorityTransitionLine = "";
@@ -10854,10 +10823,10 @@ n09ConnectorSegment: {
 
     await connector.window
       .locator("#settings-connector-tunnel")
-      .fill("tunnel_farol_next_e2e");
+      .fill("tunnel_farol_e2e");
     await connector.window
       .locator("#settings-connector-key")
-      .fill("farol-next-e2e-runtime-key-0001");
+      .fill("farol-e2e-runtime-key-0001");
     await clickRowButton("Save route");
     await connectorFeedback(/^Connector route saved\.$/u);
     // The one an owner could not discover from this surface.
@@ -10922,10 +10891,10 @@ n09ConnectorSegment: {
     assert.equal(initArgv.includes("--tunnel-id"), true);
     assert.equal(
       initArgv[initArgv.indexOf("--tunnel-id") + 1],
-      "tunnel_farol_next_e2e",
+      "tunnel_farol_e2e",
     );
     const runtimeSnapshot = await connector.window.evaluate(() =>
-      window.farolNext.bootstrap(),
+      window.farol.bootstrap(),
     );
     const runtime =
       runtimeSnapshot.configuration.settings.connectors.secureMcp.runtime;
@@ -10972,7 +10941,7 @@ n09ConnectorSegment: {
     await clickRowButton("Stop");
     await connectorFeedback(/^Connector stopped and runtime proof cleared\.$/u);
     const stopped = await connector.window.evaluate(() =>
-      window.farolNext.bootstrap(),
+      window.farol.bootstrap(),
     );
     assert.equal(
       stopped.configuration.settings.connectors.secureMcp.runtime,
@@ -11001,7 +10970,7 @@ n09ConnectorSegment: {
 //
 // Read this before reading the case. Farol's attachment proof is a local
 // challenge and a local receipt: the connector is asked to call
-// `farol_next_connector_verify` once with the challenge Farol minted, the
+// `farol_connector_verify` once with the challenge Farol minted, the
 // production MCP server records a write-once receipt, and
 // `connector.check-attachment` decides the verdict from that receipt. This
 // segment plays the connector's part by speaking MCP over stdio to the same
@@ -11024,7 +10993,7 @@ n09ConnectorAttachmentSegment: {
   }
   const attachFixture = await startTunnelClientFixture();
   const attaching = await launch([], "hidden", "demo", {
-    environment: { FAROL_NEXT_E2E_TUNNEL_CLIENT: attachFixture.executable },
+    environment: { FAROL_E2E_TUNNEL_CLIENT: attachFixture.executable },
   });
   let peer = null;
   try {
@@ -11050,10 +11019,10 @@ n09ConnectorAttachmentSegment: {
     await feedback(/^tunnel-client \S+ verified/u);
     await attaching.window
       .locator("#settings-connector-tunnel")
-      .fill("tunnel_farol_next_attach");
+      .fill("tunnel_farol_attach");
     await attaching.window
       .locator("#settings-connector-key")
-      .fill("farol-next-e2e-runtime-key-0002");
+      .fill("farol-e2e-runtime-key-0002");
     await row.getByRole("button", { name: "Save route", exact: true }).click();
     await feedback(/^Connector route saved\.$/u);
     await row
@@ -11085,7 +11054,7 @@ n09ConnectorAttachmentSegment: {
     const launchContract = await fs.realpath(
       path.join(
         attaching.userData,
-        "farol-next-state",
+        "farol-state",
         "secure-mcp-connector",
         "computer-authority",
         "computer-launch.json",
@@ -11137,7 +11106,7 @@ n09ConnectorAttachmentSegment: {
       peerStderr += String(chunk);
     });
     peer = new Client({
-      name: "farol-next-e2e-connector-peer",
+      name: "farol-e2e-connector-peer",
       version: "1.0.0",
     });
     try {
@@ -11150,13 +11119,13 @@ n09ConnectorAttachmentSegment: {
     }
     assert.equal(
       (await peer.listTools()).tools.some(
-        (tool) => tool.name === "farol_next_connector_verify",
+        (tool) => tool.name === "farol_connector_verify",
       ),
       true,
       "the verify tool exists only because this launch contract pinned a challenge",
     );
     const verified = await peer.callTool({
-      name: "farol_next_connector_verify",
+      name: "farol_connector_verify",
       arguments: {
         challenge: challengeValue,
         workspaceId: challengeWorkspaceId,
@@ -11191,7 +11160,7 @@ n09ConnectorAttachmentSegment: {
     // is a refusal, and neither may leave a second receipt.
     const replayed = await peer
       .callTool({
-        name: "farol_next_connector_verify",
+        name: "farol_connector_verify",
         arguments: {
           challenge: challengeValue,
           workspaceId: challengeWorkspaceId,
@@ -11224,7 +11193,7 @@ n09ConnectorAttachmentSegment: {
           .length === 0,
     );
     const attached = await attaching.window.evaluate(() =>
-      window.farolNext.bootstrap(),
+      window.farol.bootstrap(),
     );
     const secureMcp = attached.configuration.settings.connectors.secureMcp;
     assert.equal(secureMcp.challenge, null);
@@ -11333,7 +11302,7 @@ n12AgentDraftSegment: {
       // "browser", which is exactly the shape this case keeps failing in.
       const layouts = [];
       globalThis.__farolE2ELayouts = layouts;
-      window.farolNext.onLayout((value) => {
+      window.farol.onLayout((value) => {
         layouts.push({
           seq: ++globalThis.__farolE2ESeq,
           at: Date.now(),
@@ -11345,7 +11314,7 @@ n12AgentDraftSegment: {
         });
         if (layouts.length > 32) layouts.shift();
       });
-      window.farolNext.onShellAction((value) => {
+      window.farol.onShellAction((value) => {
         observed.push({
           seq: ++globalThis.__farolE2ESeq,
           at: Date.now(),
@@ -11363,8 +11332,8 @@ n12AgentDraftSegment: {
     const subfolder = path.join(draft.workspaceRoot, "notes");
     await fs.mkdir(subfolder, { mode: 0o700 });
     for (const [name, body] of [
-      ["keep.md", "Farol Next agent subfolder fixture\n"],
-      ["scope.md", "Farol Next agent exclusion fixture\n"],
+      ["keep.md", "Farol agent subfolder fixture\n"],
+      ["scope.md", "Farol agent exclusion fixture\n"],
     ]) {
       await fs.writeFile(path.join(subfolder, name), body, { mode: 0o600 });
     }
@@ -11406,7 +11375,7 @@ n12AgentDraftSegment: {
       ),
     );
     const selectedHost = await draft.window.evaluate(() =>
-      window.farolNext.bootstrap(),
+      window.farol.bootstrap(),
     );
     await assertSameFixtureExecutable(
       selectedHost.configuration.settings.nativeHosts.codex.executablePath,
@@ -11418,7 +11387,7 @@ n12AgentDraftSegment: {
       })
       .click({ timeout: 20_000 });
     await settingsFeedback(
-      /^gpt-6-astra host turn completed with 1 correlated Farol Next tool call/u,
+      /^gpt-6-astra host turn completed with 1 correlated Farol tool call/u,
     );
     await hostRow
       .getByRole("button", { name: "Verify Agent", exact: true })
@@ -11673,9 +11642,7 @@ n12AgentDraftSegment: {
           document.querySelectorAll("#task-tabs .task-tab").length === count,
         expected,
       );
-      const state = await draft.window.evaluate(() =>
-        window.farolNext.bootstrap(),
-      );
+      const state = await draft.window.evaluate(() => window.farol.bootstrap());
       return state.tasks.at(-1).taskId;
     };
     const openDraftMenu = async () => {
@@ -11687,7 +11654,7 @@ n12AgentDraftSegment: {
     };
     const agentInputRoot = path.join(
       draft.userData,
-      "farol-next-state",
+      "farol-state",
       "product-agent-inputs",
     );
     const deliveredEnvelopes = async () =>
@@ -11703,7 +11670,7 @@ n12AgentDraftSegment: {
       timeout: 20_000,
     });
     const signInRequest = await draft.window.evaluate(() =>
-      window.farolNext.configure({ kind: "chatgpt.open-sign-in" }),
+      window.farol.configure({ kind: "chatgpt.open-sign-in" }),
     );
     assert.equal(signInRequest.ok, true);
     const signInPage = await signInWindow;
@@ -11980,7 +11947,7 @@ n12AgentDraftSegment: {
       cases.push("n12-agent-draft-survives-to-a-single-submission");
     } else {
       const beforeRefusal = await draft.window.evaluate(() =>
-        window.farolNext.bootstrap(),
+        window.farol.bootstrap(),
       );
       await draft.window.locator("#task-menu-agent").click({ timeout: 20_000 });
       await waitForTaskMenuNote(
@@ -11993,7 +11960,7 @@ n12AgentDraftSegment: {
         "a default-off Agent refusal preserves the owner's draft",
       );
       const afterRefusal = await draft.window.evaluate(() =>
-        window.farolNext.bootstrap(),
+        window.farol.bootstrap(),
       );
       assert.equal(afterRefusal.taskRevision, beforeRefusal.taskRevision);
       assert.deepEqual(await deliveredEnvelopes(), []);
@@ -12073,13 +12040,13 @@ n11AgentScopeSegment: {
         observed.push({ name, at: Date.now(), ...(action ? { action } : {}) });
         if (observed.length > 64) observed.shift();
       };
-      window.farolNext.onRuntimeState(record("runtimeState"));
-      window.farolNext.onTaskSurfaceState(record("taskSurfaceState"));
-      window.farolNext.onTasksState(record("tasksState"));
-      window.farolNext.onRuntimeEvent(record("runtimeEvent"));
-      window.farolNext.onLayout(record("layout"));
-      window.farolNext.onWindowState(record("windowState"));
-      window.farolNext.onShellAction(record("shellAction"));
+      window.farol.onRuntimeState(record("runtimeState"));
+      window.farol.onTaskSurfaceState(record("taskSurfaceState"));
+      window.farol.onTasksState(record("tasksState"));
+      window.farol.onRuntimeEvent(record("runtimeEvent"));
+      window.farol.onLayout(record("layout"));
+      window.farol.onWindowState(record("windowState"));
+      window.farol.onShellAction(record("shellAction"));
     });
     // A real subfolder with its own file, and an excludable sibling, so the
     // narrowing below is a claim about real paths rather than strings.
@@ -12087,14 +12054,14 @@ n11AgentScopeSegment: {
     await fs.mkdir(subfolder, { mode: 0o700 });
     await fs.writeFile(
       path.join(subfolder, "keep.md"),
-      "Farol Next agent subfolder fixture\n",
+      "Farol agent subfolder fixture\n",
       { mode: 0o600 },
     );
     // A second file in the same subfolder, so excluding one does not empty
     // the scope and turn this into a test of the empty case instead.
     await fs.writeFile(
       path.join(subfolder, "scope.md"),
-      "Farol Next agent exclusion fixture\n",
+      "Farol agent exclusion fixture\n",
       { mode: 0o600 },
     );
 
@@ -12162,7 +12129,7 @@ n11AgentScopeSegment: {
       ),
     );
     const selectedHost = await agentScope.window.evaluate(() =>
-      window.farolNext.bootstrap(),
+      window.farol.bootstrap(),
     );
     await assertSameFixtureExecutable(
       selectedHost.configuration.settings.nativeHosts.codex.executablePath,
@@ -12178,7 +12145,7 @@ n11AgentScopeSegment: {
     await clickHostButton(liveAction.label);
     // The live check reports the turn it ran, not the command's name.
     await settingsFeedback(
-      /^gpt-6-astra host turn completed with 1 correlated Farol Next tool call/u,
+      /^gpt-6-astra host turn completed with 1 correlated Farol tool call/u,
     );
     await clickHostButton("Verify Agent");
     await agentScope.window.waitForFunction(() => {
@@ -12208,7 +12175,7 @@ n11AgentScopeSegment: {
         expected,
       );
       const state = await agentScope.window.evaluate(() =>
-        window.farolNext.bootstrap(),
+        window.farol.bootstrap(),
       );
       return state.tasks.at(-1).taskId;
     };
@@ -12380,7 +12347,7 @@ n11AgentScopeSegment: {
           // it does, stop: the submission happened.
           const alreadySubmitted = await agentScope.window
             .evaluate(async (taskId) => {
-              const value = await window.farolNext.bootstrap();
+              const value = await window.farol.bootstrap();
               const task = value.tasks.find(
                 (candidate) => candidate.taskId === taskId,
               );
@@ -12430,7 +12397,7 @@ n11AgentScopeSegment: {
     };
     const agentInputRoot = path.join(
       agentScope.userData,
-      "farol-next-state",
+      "farol-state",
       "product-agent-inputs",
     );
     const deliveredAgentInput = async () => {
@@ -12588,7 +12555,7 @@ n11AgentScopeSegment: {
 // panel's own `Add folder…`, a workspace `Remove`, and the guarded edit's
 // `Cancel` had no covering case at all. Each is a real click on the real
 // control in the real panel: the folder picker is answered through the same
-// `FAROL_NEXT_E2E_WORKSPACE_ROOT` seam `launch()` already uses for the first
+// `FAROL_E2E_WORKSPACE_ROOT` seam `launch()` already uses for the first
 // folder, and nothing else is substituted — the click, the
 // `computer.add-workspace` / `computer.remove-workspace` /
 // `computer.cancel-workspace-edit` handlers, their validation and the
@@ -12619,11 +12586,11 @@ n10ComputerPanelSegment: {
     const secondLabel = path.basename(secondRoot);
     await fs.writeFile(
       path.join(secondRoot, "NOTES.md"),
-      "Farol Next second workspace fixture\n",
+      "Farol second workspace fixture\n",
       { mode: 0o600 },
     );
     await panel.application.evaluate(({ app }, root) => {
-      process.env.FAROL_NEXT_E2E_WORKSPACE_ROOT = root;
+      process.env.FAROL_E2E_WORKSPACE_ROOT = root;
       return app.isReady();
     }, secondRoot);
 
@@ -12651,7 +12618,7 @@ n10ComputerPanelSegment: {
       .waitFor();
     assert.equal(await workspaceList.locator(".workspace-card").count(), 2);
     const twoWorkspaces = await panel.window.evaluate(() =>
-      window.farolNext.bootstrap(),
+      window.farol.bootstrap(),
     );
     assert.deepEqual(
       twoWorkspaces.configuration.settings.computer.workspaces
@@ -12688,7 +12655,7 @@ n10ComputerPanelSegment: {
       1,
     );
     const afterRemoval = await panel.window.evaluate(() =>
-      window.farolNext.bootstrap(),
+      window.farol.bootstrap(),
     );
     assert.deepEqual(
       afterRemoval.configuration.settings.computer.workspaces.map(
@@ -12747,7 +12714,7 @@ n10ComputerPanelSegment: {
       "a cancelled guarded edit leaves the file byte-identical",
     );
     assert.equal(
-      (await panel.window.evaluate(() => window.farolNext.bootstrap()))
+      (await panel.window.evaluate(() => window.farol.bootstrap()))
         .configuration.settings.computer.pendingEdit,
       null,
       "a cancelled preview never becomes a durable pending operation",
@@ -12776,7 +12743,7 @@ n10ComputerPanelSegment: {
     await lostReview.getByText(/README\.md · \d+ bytes · source/u).waitFor();
     const settingsPath = path.join(
       panel.userData,
-      "farol-next-state",
+      "farol-state",
       "config.json",
     );
     // Filling and submitting is ONE attempt, retried as a unit, for the same
@@ -12836,10 +12803,7 @@ n10ComputerPanelSegment: {
     );
     assert.equal(productPendingEdit.relativePath, "README.md");
     const editedBytes = await fs.readFile(panel.workspaceFile, "utf8");
-    assert.equal(
-      editedBytes,
-      "Farol Next workspace lost-reply mutation fixture\n",
-    );
+    assert.equal(editedBytes, "Farol workspace lost-reply mutation fixture\n");
     const editedStat = await fs.stat(panel.workspaceFile);
 
     // Restore exactly what the product wrote, and nothing else.
@@ -12938,7 +12902,7 @@ n10ComputerPanelSegment: {
     // second seam. The delivered control is the row above, and the segment's
     // earlier guarded edits.
     const droppedReply = await launch([], "hidden", "demo", {
-      environment: { FAROL_NEXT_E2E_WORKSPACE_EDIT_REPLY_DELIVERIES: "0" },
+      environment: { FAROL_E2E_WORKSPACE_EDIT_REPLY_DELIVERIES: "0" },
     });
     try {
       // The marker the seam writes, read from the main process's own stderr.
@@ -12955,7 +12919,7 @@ n10ComputerPanelSegment: {
           const lines = carry.split("\n");
           carry = lines.pop() ?? "";
           for (const line of lines) {
-            if (line.includes("farol-next-e2e:reply-dropped")) {
+            if (line.includes("farol-e2e:reply-dropped")) {
               markers.push(line.trim());
             }
           }
@@ -13003,7 +12967,7 @@ n10ComputerPanelSegment: {
 
       const droppedSettingsPath = path.join(
         droppedReply.userData,
-        "farol-next-state",
+        "farol-state",
         "config.json",
       );
       // The product's own operation records, at the root
@@ -13012,7 +12976,7 @@ n10ComputerPanelSegment: {
       // it again".
       const mutationRecordRoot = path.join(
         droppedReply.userData,
-        "farol-next-state",
+        "farol-state",
         "workspace-mutations",
         "mutations",
       );
@@ -13039,7 +13003,7 @@ n10ComputerPanelSegment: {
       let settledRevision = null;
       for (let attempt = 0; attempt < 100; attempt += 1) {
         const revision = (
-          await droppedReply.window.evaluate(() => window.farolNext.bootstrap())
+          await droppedReply.window.evaluate(() => window.farol.bootstrap())
         ).configuration.settings.revision;
         if (revision === settledRevision) break;
         settledRevision = revision;
@@ -13094,8 +13058,7 @@ n10ComputerPanelSegment: {
       // (1) The real edit at the real boundary: the product's own record
       // names the operation, the file carries the new bytes, and exactly one
       // operation record exists that did not before.
-      const droppedBytes =
-        "Farol Next workspace dropped-reply mutation fixture\n";
+      const droppedBytes = "Farol workspace dropped-reply mutation fixture\n";
       assert.notEqual(droppedBytes, beforeBytes);
       let submittedEdit = null;
       for (let attempt = 0; attempt < 200 && submittedEdit === null;) {
@@ -13142,7 +13105,7 @@ n10ComputerPanelSegment: {
       assert.deepEqual(
         markers,
         [
-          `farol-next-e2e:reply-dropped computer.apply-workspace-edit ${submittedEdit.operationId}`,
+          `farol-e2e:reply-dropped computer.apply-workspace-edit ${submittedEdit.operationId}`,
         ],
         "exactly one reply was dropped, and it was this operation's",
       );
@@ -13204,7 +13167,7 @@ n10ComputerPanelSegment: {
       // count the panel renders.
       const observed = await droppedReply.window.evaluate(
         (operationId) =>
-          window.farolNext.configure({
+          window.farol.configure({
             kind: "computer.observe-workspace-edit",
             operationId,
           }),
@@ -13266,7 +13229,7 @@ n10ComputerPanelSegment: {
       // this waits for the service's own truth before asking it to refuse.
       for (let attempt = 0; attempt < 200; attempt += 1) {
         const snapshot = await droppedReply.window.evaluate(() =>
-          window.farolNext.bootstrap(),
+          window.farol.bootstrap(),
         );
         if (snapshot.configuration.settings.computer.pendingEdit === null) {
           break;
@@ -13275,7 +13238,7 @@ n10ComputerPanelSegment: {
       }
       const afterAcknowledgement = await droppedReply.window.evaluate(
         (operationId) =>
-          window.farolNext.configure({
+          window.farol.configure({
             kind: "computer.observe-workspace-edit",
             operationId,
           }),
@@ -13305,7 +13268,7 @@ n10ComputerPanelSegment: {
       // Redelivery and acknowledgement are ordinary replies: the seam counts
       // and drops apply replies only, so the restarted process dropped none.
       assert.deepEqual(markers, [
-        `farol-next-e2e:reply-dropped computer.apply-workspace-edit ${submittedEdit.operationId}`,
+        `farol-e2e:reply-dropped computer.apply-workspace-edit ${submittedEdit.operationId}`,
       ]);
       cases.push("n10-computer-dropped-reply-recovered-after-restart");
     } finally {
@@ -13323,7 +13286,7 @@ n10ComputerPanelSegment: {
     // (shell.ts `configureProduct` queues `acknowledgeWorkspaceEdit` as a
     // microtask beside the render, and nothing awaits it), so the seam is a
     // renderer-side hold gated on the one bootstrap field main publishes for
-    // it. That field joins the FAROL_NEXT_E2E family under the P3 residual:
+    // it. That field joins the FAROL_E2E family under the P3 residual:
     // null in every production build, armed only by this lane, and carrying
     // no authority of its own.
     //
@@ -13331,7 +13294,7 @@ n10ComputerPanelSegment: {
     // guarded edit whose reply IS delivered, whose acknowledgement IS sent,
     // and whose record is therefore cleared with no notice after a restart.
     const heldAck = await launch([], "hidden", "demo", {
-      environment: { FAROL_NEXT_E2E_HOLD_WORKSPACE_EDIT_ACK: "0" },
+      environment: { FAROL_E2E_HOLD_WORKSPACE_EDIT_ACK: "0" },
     });
     let heldAuthorityDiagnostic = "";
     let heldAuthorityLine = "";
@@ -13349,7 +13312,7 @@ n10ComputerPanelSegment: {
       const watchAckDiagnostics = (instance) => {
         instance.window.on("console", (message) => {
           const text = message.text();
-          if (text.startsWith("farol-next-e2e:ack-held")) {
+          if (text.startsWith("farol-e2e:ack-held")) {
             ackDiagnostics.push(text.trim());
           }
         });
@@ -13389,12 +13352,12 @@ n10ComputerPanelSegment: {
 
       const heldSettingsPath = path.join(
         heldAck.userData,
-        "farol-next-state",
+        "farol-state",
         "config.json",
       );
       const heldRecordRoot = path.join(
         heldAck.userData,
-        "farol-next-state",
+        "farol-state",
         "workspace-mutations",
         "mutations",
       );
@@ -13415,7 +13378,7 @@ n10ComputerPanelSegment: {
       let heldRevision = null;
       for (let attempt = 0; attempt < 100; attempt += 1) {
         const revision = (
-          await heldAck.window.evaluate(() => window.farolNext.bootstrap())
+          await heldAck.window.evaluate(() => window.farol.bootstrap())
         ).configuration.settings.revision;
         if (revision === heldRevision) break;
         heldRevision = revision;
@@ -13468,7 +13431,7 @@ n10ComputerPanelSegment: {
         .waitFor();
 
       // (2) The edit really happened, once.
-      const heldBytes = "Farol Next workspace held-ack mutation fixture\n";
+      const heldBytes = "Farol workspace held-ack mutation fixture\n";
       assert.notEqual(heldBytes, heldBefore);
       let heldOnDisk = null;
       for (let attempt = 0; attempt < 200 && heldOnDisk === null;) {
@@ -13505,7 +13468,7 @@ n10ComputerPanelSegment: {
       assert.equal(heldEdit.relativePath, "README.md");
       assert.deepEqual(
         ackDiagnostics,
-        [`farol-next-e2e:ack-held ${heldEdit.operationId}`],
+        [`farol-e2e:ack-held ${heldEdit.operationId}`],
         "exactly one acknowledgement was held, and it was this operation's",
       );
       await heldAck.window.waitForTimeout(500);
@@ -13520,7 +13483,7 @@ n10ComputerPanelSegment: {
       // (4) The restart is an ordinary process: the loss happened once, and
       // recovery must not depend on the seam that caused it. Disarming the
       // hold here is what makes the rest of this row the production path.
-      delete heldAck.launchEnvironment.FAROL_NEXT_E2E_HOLD_WORKSPACE_EDIT_ACK;
+      delete heldAck.launchEnvironment.FAROL_E2E_HOLD_WORKSPACE_EDIT_ACK;
       await restart(heldAck);
       watchAckDiagnostics(heldAck);
       await heldAck.window.locator('[data-section="settings"]').click();
@@ -13545,7 +13508,7 @@ n10ComputerPanelSegment: {
       // (5) The same operation and the same receipt, redelivered.
       const heldObserved = await heldAck.window.evaluate(
         (operationId) =>
-          window.farolNext.configure({
+          window.farol.configure({
             kind: "computer.observe-workspace-edit",
             operationId,
           }),
@@ -13593,7 +13556,7 @@ n10ComputerPanelSegment: {
       // this waits for the service's own truth before asking it to refuse.
       for (let attempt = 0; attempt < 200; attempt += 1) {
         const snapshot = await heldAck.window.evaluate(() =>
-          window.farolNext.bootstrap(),
+          window.farol.bootstrap(),
         );
         if (snapshot.configuration.settings.computer.pendingEdit === null) {
           break;
@@ -13602,7 +13565,7 @@ n10ComputerPanelSegment: {
       }
       const heldAgain = await heldAck.window.evaluate(
         (operationId) =>
-          window.farolNext.configure({
+          window.farol.configure({
             kind: "computer.observe-workspace-edit",
             operationId,
           }),
@@ -13622,7 +13585,7 @@ n10ComputerPanelSegment: {
         "recovery read the record it already had and wrote no new one",
       );
       assert.deepEqual(ackDiagnostics, [
-        `farol-next-e2e:ack-held ${heldEdit.operationId}`,
+        `farol-e2e:ack-held ${heldEdit.operationId}`,
       ]);
       cases.push("n10-computer-held-ack-recovered-after-restart");
     } finally {

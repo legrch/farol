@@ -11,7 +11,7 @@ import {
 const hash = (character) => character.repeat(64);
 const tree = (character) => ({
   kind: "tree",
-  version: "farol.next.tree-digest/v2",
+  version: "farol.tree-digest/v2",
   sha256: hash(character),
 });
 const file = (character) => ({
@@ -26,7 +26,7 @@ const inventory = [
     "electron-code",
     true,
   ],
-  ["Contents/MacOS/Farol Next Preview", "bootstrap", false],
+  ["Contents/MacOS/Farol", "bootstrap", false],
   ["Contents/Resources/app/farol-core", "backend", false],
   ["Contents/Resources/app/update-archive.py", "archive-helper", false],
 ];
@@ -727,7 +727,7 @@ describe("closed bounded data schema", () => {
     [
       "tree version",
       (d) => {
-        d.signed.appTree.version = "farol.next.tree-digest/v1";
+        d.signed.appTree.version = "farol.tree-digest/v1";
       },
     ],
     [

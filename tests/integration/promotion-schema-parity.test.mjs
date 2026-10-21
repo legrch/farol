@@ -29,9 +29,9 @@ afterEach(async () => {
 });
 
 async function userData() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-parity-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-parity-"));
   roots.push(root);
-  await fs.mkdir(path.join(root, "farol-next-state"), {
+  await fs.mkdir(path.join(root, "farol-state"), {
     recursive: true,
     mode: 0o700,
   });
@@ -154,7 +154,7 @@ function promotionOutcome(report, name) {
 async function verifyCorpus({ name, file, corpus, load, refusal }) {
   for (const [label, text, expected] of corpus) {
     const root = await userData();
-    await write(path.join(root, "farol-next-state", ...file), text);
+    await write(path.join(root, "farol-state", ...file), text);
     const store = await storeOutcome(() => load(root));
     const report = await activationObligations(root);
     const promotion = promotionOutcome(report, name);
@@ -179,7 +179,7 @@ describe("promotion reads each state file exactly as its owner does", () => {
       refusal: "LIVE_TASK_STATE_CORRUPT",
       load: (root) =>
         new PrivateLiveTaskStore({
-          root: path.join(root, "farol-next-state", "live-tasks"),
+          root: path.join(root, "farol-state", "live-tasks"),
         }).load(),
       corpus: [
         ["valid", JSON.stringify(validTasks), "accept"],
@@ -243,7 +243,7 @@ describe("promotion reads each state file exactly as its owner does", () => {
       refusal: "CHATGPT_TASK_JOURNAL_CORRUPT",
       load: (root) =>
         new PrivateChatGptTaskJournal({
-          root: path.join(root, "farol-next-state", "chatgpt-task-journal"),
+          root: path.join(root, "farol-state", "chatgpt-task-journal"),
         }).load(),
       corpus: [
         ["valid", JSON.stringify(validJournal), "accept"],
@@ -314,7 +314,7 @@ describe("promotion reads each state file exactly as its owner does", () => {
       refusal: "SETTINGS_CORRUPT",
       load: (root) =>
         new ProductSettingsStore({
-          root: path.join(root, "farol-next-state"),
+          root: path.join(root, "farol-state"),
         }).load(),
       corpus: [
         ["valid", JSON.stringify(validSettings), "accept"],

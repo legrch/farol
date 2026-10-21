@@ -100,12 +100,12 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
     fs.writeFile(receiptFile, jsonBytes(receipt), { mode: 0o600 });
   try {
     const temporary = await fs.realpath(os.tmpdir());
-    home = await fs.mkdtemp(path.join(temporary, "farol-next-e2e-home-"));
+    home = await fs.mkdtemp(path.join(temporary, "farol-e2e-home-"));
     await fs.chmod(home, 0o700);
     appData = path.join(home, "farol-e2e-app-data");
     await fs.mkdir(appData, { mode: 0o700 });
     proof = randomUUID();
-    await fs.writeFile(path.join(home, ".farol-next-e2e-root"), proof, {
+    await fs.writeFile(path.join(home, ".farol-e2e-root"), proof, {
       flag: "wx",
       mode: 0o600,
     });
@@ -141,12 +141,12 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
       LANG: "en_US.UTF-8",
       PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
       ELECTRON_FORCE_IS_PACKAGED: "true",
-      FAROL_NEXT_ENVIRONMENT: "owner-preview",
-      FAROL_NEXT_E2E: "1",
-      FAROL_NEXT_E2E_APP_DATA: appData,
-      FAROL_NEXT_E2E_TEST_ROOT: home,
-      FAROL_NEXT_E2E_TEST_PROOF: proof,
-      FAROL_NEXT_E2E_CHATGPT_URL: fixtureOrigin,
+      FAROL_ENVIRONMENT: "owner-preview",
+      FAROL_E2E: "1",
+      FAROL_E2E_APP_DATA: appData,
+      FAROL_E2E_TEST_ROOT: home,
+      FAROL_E2E_TEST_PROOF: proof,
+      FAROL_E2E_CHATGPT_URL: fixtureOrigin,
     };
     for (let cycle = 0; cycle < 2; cycle += 1) {
       currentLaunch = null;
@@ -189,7 +189,7 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
         .locator(".desktop")
         .waitFor({ state: "attached", timeout: 15000 });
       const bootstrap = await deadline(
-        page.evaluate(() => window.farolNext.bootstrap()),
+        page.evaluate(() => window.farol.bootstrap()),
         "bootstrap",
       );
       assert.equal(bootstrap.environment, "owner-preview");
@@ -273,9 +273,7 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
           ),
       );
       const update = await deadline(
-        page.evaluate(() =>
-          window.farolNext.installedUpdate({ kind: "status" }),
-        ),
+        page.evaluate(() => window.farol.installedUpdate({ kind: "status" })),
         "update-status",
       );
       assert.equal(
@@ -322,7 +320,7 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
       await checkpoint();
       assert.equal(code, 0);
       assert.equal(signal, null);
-      const state = path.join(identity.userData, "farol-next-state");
+      const state = path.join(identity.userData, "farol-state");
       const quit = parseQuitReceipt(
         (
           await regularBytes(path.join(state, "last-quit.json"), 8192)
@@ -375,13 +373,11 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
     // checkpoint would lose evidence if that publication is interrupted.
     await physicalDirectory(home, { privateMode: true });
     assert.equal(
-      (
-        await regularBytes(path.join(home, ".farol-next-e2e-root"), 64)
-      ).toString(),
+      (await regularBytes(path.join(home, ".farol-e2e-root"), 64)).toString(),
       proof,
     );
     assert.equal(path.dirname(home), await fs.realpath(os.tmpdir()));
-    assert.match(path.basename(home), /^farol-next-e2e-home-[A-Za-z0-9]{6,}$/u);
+    assert.match(path.basename(home), /^farol-e2e-home-[A-Za-z0-9]{6,}$/u);
     receipt.profileRetained = home;
     receipt.cleanup = "exact-owned-profile-retained-after-two-drained-quits";
     receipt.status = "PASS";

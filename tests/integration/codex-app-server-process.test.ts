@@ -96,9 +96,9 @@ lines.on("line", (line) => {
     process.stdout.write(JSON.stringify({ id: message.id, result: { userAgent: "codex-fixture/1" } }) + "\\n");
   } else if (message.method === "model/list") {
     process.stdout.write(JSON.stringify({ id: message.id, result: {
-      data: [{ id: "farol-next/mind" }],
+      data: [{ id: "legacy-route/mind" }],
       args: process.argv.slice(2),
-      providerTokenPresent: process.env.FAROL_NEXT_PROVIDER_TOKEN === "private-route-token",
+      providerTokenPresent: process.env.FAROL_PROVIDER_TOKEN === "private-route-token",
       inheritedApiKey: Object.hasOwn(process.env, "OPENAI_API_KEY")
     } }) + "\\n");
   }
@@ -132,7 +132,7 @@ lines.on("line", (line) => {
       "-c",
       'model_provider="farol"',
       "-c",
-      'model_providers.farol={ name = "Farol", base_url = "http://127.0.0.1:43123/v1", wire_api = "responses", env_key = "FAROL_NEXT_PROVIDER_TOKEN", requires_openai_auth = false, request_max_retries = 0, stream_max_retries = 0, stream_idle_timeout_ms = 120000 }',
+      'model_providers.farol={ name = "Farol", base_url = "http://127.0.0.1:43123/v1", wire_api = "responses", env_key = "FAROL_PROVIDER_TOKEN", requires_openai_auth = false, request_max_retries = 0, stream_max_retries = 0, stream_idle_timeout_ms = 120000 }',
     ]);
     await client.close();
   });

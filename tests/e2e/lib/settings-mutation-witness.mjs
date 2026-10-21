@@ -461,7 +461,7 @@ async function page(window, name) {
     .waitFor({ timeout: 5000 });
 }
 async function current(window, observed) {
-  const bootstrap = await window.evaluate(() => window.farolNext.bootstrap());
+  const bootstrap = await window.evaluate(() => window.farol.bootstrap());
   assert.equal(bootstrap.configuration.status, "ready");
   assert.deepEqual(
     bootstrap.configuration.settings,
@@ -751,7 +751,7 @@ export async function reopenMutationJourney(io) {
     .waitFor({ state: "detached", timeout: 20000 });
   await window.waitForFunction(
     async () => {
-      const bootstrap = await window.farolNext.bootstrap();
+      const bootstrap = await window.farol.bootstrap();
       return (
         bootstrap.configuration?.status === "ready" &&
         bootstrap.configuration.settings.computer.pendingEdit === null

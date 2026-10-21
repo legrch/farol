@@ -16,7 +16,7 @@ func (f relaunchCodecFunc) Relaunch(h port.HelperRelaunchHint) ([]byte, error) {
 func TestRelaunchBindsTargetAndOwnHelperWithoutDispatch(t *testing.T) {
 	r := requestFixture()
 	s := bindFixture(t, r, codecFixture{})
-	path := r.Home + "/Library/Application Support/Farol Next Preview/installed-updates/" + r.OperationID + "/launch-Farol.app"
+	path := r.Home + "/Library/Application Support/io.github.legrch.farol/installed-updates/" + r.OperationID + "/launch-Farol.app"
 	originalPath := path
 	helper := port.HelperSelfIdentity{PID: 5678, ProcessStart: "original helper"}
 	encoded := []byte(`{"synthetic":"hint"}`)
@@ -49,7 +49,7 @@ func TestRelaunchRefusalsAndCancellation(t *testing.T) {
 	s := bindFixture(t, r, codecFixture{})
 	helper := port.HelperSelfIdentity{PID: 5678, ProcessStart: "helper"}
 	codec := relaunchCodecFunc(func(port.HelperRelaunchHint) ([]byte, error) { return []byte(`{}`), nil })
-	correct := r.Home + "/Library/Application Support/Farol Next Preview/installed-updates/" + r.OperationID + "/launch-Farol.app"
+	correct := r.Home + "/Library/Application Support/io.github.legrch.farol/installed-updates/" + r.OperationID + "/launch-Farol.app"
 	for _, completion := range []string{"", "verified", "launch_requested", "rolled_back", "cancel_completed", "rollback_completed"} {
 		_, err := s.BuildRelaunchArguments(context.Background(), completion, helper, &correct, codec)
 		requireFailure(t, err, "launch_phase", false)

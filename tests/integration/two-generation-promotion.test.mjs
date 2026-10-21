@@ -28,7 +28,7 @@ import { latestPredecessorDirectory } from "../e2e/predecessor-package-path.mjs"
 // runtime pinned in `tooling/runtime-contract.mjs`, so a preserved older
 // generation is restored as bytes, not re-qualified by the newer tooling.
 const nextRoot = path.resolve(import.meta.dirname, "../..");
-const enabled = process.env.FAROL_NEXT_TWO_GENERATION === "1";
+const enabled = process.env.FAROL_TWO_GENERATION === "1";
 const roots = [];
 const unclosedChildren = new Set();
 
@@ -160,7 +160,7 @@ describe("Q-07/Q-08 two identified generations", () => {
   );
 
   it.skipIf(enabled)(
-    "is recorded as not run unless FAROL_NEXT_TWO_GENERATION=1 selects it",
+    "is recorded as not run unless FAROL_TWO_GENERATION=1 selects it",
     () => {
       expect(enabled).toBe(false);
     },

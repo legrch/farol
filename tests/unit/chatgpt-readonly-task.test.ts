@@ -5,7 +5,7 @@ import {
   buildChatGptReadonlyTaskPrompt,
 } from "../../src/apps/desktop/chatgpt-readonly-task";
 
-describe("Farol Next ChatGPT read-only task", () => {
+describe("Farol ChatGPT read-only task", () => {
   it("builds a bounded prompt that treats selected file content as data", () => {
     const prompt = buildChatGptReadonlyTaskPrompt({
       workspaceLabel: "Owner workspace",
@@ -31,7 +31,7 @@ describe("Farol Next ChatGPT read-only task", () => {
 
     expect(prompt.contextCharacters).toBe(MAX_CHATGPT_CONTEXT_CHARACTERS);
     expect(prompt.contextTruncated).toBe(true);
-    expect(prompt.text).toContain("Context truncated by Farol Next: yes");
+    expect(prompt.text).toContain("Context truncated by Farol: yes");
     expect(prompt.text).not.toContain(source);
   });
 

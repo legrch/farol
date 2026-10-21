@@ -153,7 +153,7 @@ export async function runtimeProcessSnapshots(application) {
       .filter(
         (metric) =>
           metric.type === "Utility" &&
-          ["Farol Next Runtime", "Farol Dev Runtime"].includes(metric.name) &&
+          ["Farol Runtime", "Farol Dev Runtime"].includes(metric.name) &&
           metric.serviceName === "node.mojom.NodeService",
       )
       .map((metric) => metric.pid),

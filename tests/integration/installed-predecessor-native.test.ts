@@ -18,9 +18,9 @@ it.each(["graceful", "unclean"])(
     );
     const profile = path.join(
       home,
-      "Library/Application Support/Farol Next Preview",
+      "Library/Application Support/io.github.legrch.farol",
     );
-    const state = path.join(profile, "farol-next-state");
+    const state = path.join(profile, "farol-state");
     await fs.mkdir(state, { recursive: true, mode: 0o700 });
     await fs.chmod(profile, 0o700);
     const selectedHome = vi

@@ -74,7 +74,7 @@ const home: PhysicalBinding = {
   viewId: "view",
   viewGeneration: 1,
   documentGeneration: 1,
-  partition: "persist:farol-next-chatgpt",
+  partition: "persist:farol-app-chatgpt",
 };
 const saved: PhysicalBinding = {
   ...home,

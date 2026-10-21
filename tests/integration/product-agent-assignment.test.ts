@@ -517,7 +517,7 @@ describe("LIF-02 start then immediate rejoin", () => {
 describe("LIF-10 a retained result reaches the parent after restart", () => {
   it("redelivers the stored result once through rejoin without a new assignment", async () => {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-agent-restart-"),
+      path.join(os.tmpdir(), "farol-agent-restart-"),
     );
     try {
       const fixture = dependencies();

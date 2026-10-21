@@ -967,7 +967,7 @@ async function ready(window, active, observe) {
   for (let attempt = 0; attempt < 100; attempt++) {
     active();
     const value = await bounded(
-      window.evaluate(() => window.farolNext.bootstrap()),
+      window.evaluate(() => window.farol.bootstrap()),
       3000,
       "BOOTSTRAP_READ_UNKNOWN",
     );
@@ -1016,7 +1016,7 @@ async function native(selected, inputs, report, save) {
   const require = createRequire(import.meta.url);
   const { _electron: electron } = require(playwrightDirectory);
   const executable = selected.packaged
-    ? path.join(selected.packaged, "Contents/MacOS/Farol Next Preview")
+    ? path.join(selected.packaged, "Contents/MacOS/Farol")
     : path.join(
         selected.dependencyRoot,
         "electron/dist/Electron.app/Contents/MacOS/Electron",
@@ -1107,7 +1107,7 @@ async function native(selected, inputs, report, save) {
   if (selected.chatTwoTurn) {
     // Fresh private Dev only, before app startup. Every field besides tasks is
     // the existing normal default; authority still comes from normal commands.
-    const seedRoot = path.join(appData, "Farol Dev", "farol-next-state");
+    const seedRoot = path.join(appData, "Farol Dev", "farol-state");
     await fs.mkdir(seedRoot, { recursive: true, mode: 0o700 });
     await fs.chmod(path.dirname(seedRoot), 0o700);
     const seeded = conversationSeed(randomUUID());
@@ -1138,7 +1138,7 @@ async function native(selected, inputs, report, save) {
     };
   }
   const proof = randomUUID();
-  await fs.writeFile(path.join(temporary, ".farol-next-e2e-root"), proof, {
+  await fs.writeFile(path.join(temporary, ".farol-e2e-root"), proof, {
     mode: 0o600,
     flag: "wx",
   });
@@ -1667,22 +1667,22 @@ async function native(selected, inputs, report, save) {
       playwrightVersion: playwright.value.version,
     };
     const environment = {
-      FAROL_NEXT_E2E: "1",
-      FAROL_NEXT_E2E_APP_DATA: appData,
-      FAROL_NEXT_E2E_TEST_ROOT: temporary,
-      FAROL_NEXT_E2E_TEST_PROOF: proof,
-      FAROL_NEXT_E2E_TUNNEL_CLIENT: tunnelClient,
-      FAROL_NEXT_E2E_CHATGPT_URL: site.url,
+      FAROL_E2E: "1",
+      FAROL_E2E_APP_DATA: appData,
+      FAROL_E2E_TEST_ROOT: temporary,
+      FAROL_E2E_TEST_PROOF: proof,
+      FAROL_E2E_TUNNEL_CLIENT: tunnelClient,
+      FAROL_E2E_CHATGPT_URL: site.url,
       ...(hasWorkspace
         ? {
-            FAROL_NEXT_E2E_WORKSPACE_ROOT: workspaceRoot,
-            FAROL_NEXT_E2E_WORKSPACE_FILE: path.join(
+            FAROL_E2E_WORKSPACE_ROOT: workspaceRoot,
+            FAROL_E2E_WORKSPACE_FILE: path.join(
               workspaceRoot,
               readCanary.relativePath,
             ),
           }
         : {}),
-      ...(selected.packaged ? {} : { FAROL_NEXT_ENVIRONMENT: "dev" }),
+      ...(selected.packaged ? {} : { FAROL_ENVIRONMENT: "dev" }),
       HOME: home,
       TMPDIR: temp,
       PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -1774,9 +1774,9 @@ async function native(selected, inputs, report, save) {
       );
       assert.equal(
         bootstrap.applicationId,
-        selected.packaged ? "local.farol.next.preview" : "local.farol.dev",
+        selected.packaged ? "io.github.legrch.farol" : "local.farol.dev",
       );
-      stateRoot = path.join(paths.userData, "farol-next-state");
+      stateRoot = path.join(paths.userData, "farol-state");
       launch.profile = paths;
       if (launch.ordinal === 2)
         assert.deepEqual(
@@ -1870,7 +1870,7 @@ async function native(selected, inputs, report, save) {
     // without granting a folder or manufacturing a Go admission.
     const renamed = await bounded(
       window.evaluate(() =>
-        window.farolNext.configure({
+        window.farol.configure({
           kind: "computer.rename",
           name: "Startup regression computer",
         }),
@@ -1930,7 +1930,7 @@ async function native(selected, inputs, report, save) {
         await hidden();
         const reply = await bounded(
           window.evaluate(
-            (command) => window.farolNext.configure(command),
+            (command) => window.farol.configure(command),
             command,
           ),
           20000,
@@ -1965,7 +1965,7 @@ async function native(selected, inputs, report, save) {
         await hidden();
         const reply = await bounded(
           window.evaluate(
-            (command) => window.farolNext.configure(command),
+            (command) => window.farol.configure(command),
             command,
           ),
           20000,
@@ -2168,7 +2168,7 @@ async function native(selected, inputs, report, save) {
         const editReport = (report.editSnapshot = {
           limits: snapshotLimits,
           controlPath:
-            "Existing normal window.farolNext.configure; React Settings has no Prepare/edit/Cancel controls. Real edit UI acceptance remains open.",
+            "Existing normal window.farol.configure; React Settings has no Prepare/edit/Cancel controls. Real edit UI acceptance remains open.",
           executorOrigin:
             "Source-bound normal packaged main -> readGoWorkspaceSnapshot -> GoCoreHost.snapshotSettingsWorkspace -> GoComputerAuthority.snapshotSettings -> computer.settings.snapshot; no independent Go RPC counter",
           sourceBinding: {
@@ -2729,7 +2729,7 @@ async function native(selected, inputs, report, save) {
         const successor = launch;
         const originals = historyOriginals(report.chatTwoTurn);
         const bootstrap = await bounded(
-          reopened.window.evaluate(() => window.farolNext.bootstrap()),
+          reopened.window.evaluate(() => window.farol.bootstrap()),
           5000,
           "HISTORY_BOOTSTRAP_UNKNOWN",
         );
@@ -2820,7 +2820,7 @@ async function native(selected, inputs, report, save) {
             await reopened.hidden();
             const reply = await bounded(
               reopened.window.evaluate(
-                (command) => window.farolNext.configure(command),
+                (command) => window.farol.configure(command),
                 command,
               ),
               20000,

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   NativeReadonlyWorkspace,
-  NEXT_SAFE_OPEN_HELPER,
+  SAFE_OPEN_HELPER,
   DEFAULT_DENIED_PATHS,
 } from "../../src/modules/computer/infra/native/native-readonly-workspace";
 import type { ReadonlyWorkspaceRequest } from "../../src/modules/computer/app/port/readonly-workspace";
@@ -32,13 +32,13 @@ function request(
 function reader(helperPath = sourceHelper): NativeReadonlyWorkspace {
   return new NativeReadonlyWorkspace({
     helperPath,
-    helper: NEXT_SAFE_OPEN_HELPER,
+    helper: SAFE_OPEN_HELPER,
     attestInterpreter: async () => "/usr/bin/python3",
   });
 }
 
 beforeEach(async () => {
-  root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-workspace-"));
+  root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-workspace-"));
   // Admission stores the physical root once. The operation adapter never
   // resolves a caller path and then opens it; every component is walked from
   // the already-open root descriptor.
@@ -75,7 +75,7 @@ describe("native readonly Computer workspace", () => {
       );
       const native = new NativeReadonlyWorkspace({
         helperPath: sourceHelper,
-        helper: NEXT_SAFE_OPEN_HELPER,
+        helper: SAFE_OPEN_HELPER,
         attestInterpreter: async () => "/usr/bin/python3",
         homeDirectory: root,
       });
@@ -154,7 +154,7 @@ describe("native readonly Computer workspace", () => {
   it("attests the signed Apple Python chain before native execution", async () => {
     const workspace = new NativeReadonlyWorkspace({
       helperPath: sourceHelper,
-      helper: NEXT_SAFE_OPEN_HELPER,
+      helper: SAFE_OPEN_HELPER,
     });
 
     await expect(
@@ -290,9 +290,7 @@ describe("native readonly Computer workspace", () => {
   });
 
   it("refuses symlink leaves, symlink ancestors and denied credential paths", async () => {
-    const outside = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-outside-"),
-    );
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "farol-outside-"));
     try {
       await fs.writeFile(path.join(outside, "secret.txt"), "outside\n", {
         mode: 0o600,
@@ -325,9 +323,7 @@ describe("native readonly Computer workspace", () => {
   });
 
   it("refuses a direct-read hardlink without disclosing its bytes", async () => {
-    const outside = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-hardlink-"),
-    );
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "farol-hardlink-"));
     try {
       const canary = "outside-hardlink-canary";
       const outsideFile = path.join(outside, "canary.txt");
@@ -426,9 +422,7 @@ describe("native readonly Computer workspace", () => {
       "descriptor-bound\n",
       { mode: 0o600 },
     );
-    const outside = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-swap-"),
-    );
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "farol-swap-"));
     try {
       await fs.mkdir(path.join(outside, "nested"), { mode: 0o700 });
       await fs.writeFile(
@@ -688,7 +682,7 @@ describe("native readonly Computer workspace", () => {
     function homeReader(): NativeReadonlyWorkspace {
       return new NativeReadonlyWorkspace({
         helperPath: sourceHelper,
-        helper: NEXT_SAFE_OPEN_HELPER,
+        helper: SAFE_OPEN_HELPER,
         attestInterpreter: async () => "/usr/bin/python3",
         homeDirectory: home,
       });

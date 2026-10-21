@@ -17,17 +17,17 @@ afterEach(async () => {
 
 async function stateRoot(): Promise<string> {
   const root = await fs.mkdtemp(
-    path.join(os.tmpdir(), "farol-next-connector-credential-"),
+    path.join(os.tmpdir(), "farol-connector-credential-"),
   );
   roots.push(root);
   return path.join(root, "private", "connector");
 }
 
-describe("Farol Next connector credential store", () => {
+describe("Farol connector credential store", () => {
   it("stores only a private file reference for tunnel-client", async () => {
     const root = await stateRoot();
     const store = new PrivateConnectorKeyStore({ root });
-    const value = "sk-runtime-farol-next-example-1234567890";
+    const value = "sk-runtime-farol-example-1234567890";
 
     expect(await store.status()).toBe("missing");
     await store.store(value);

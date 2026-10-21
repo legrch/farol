@@ -91,7 +91,7 @@ describe("bounded E2E child process", () => {
 
   it("bounds inherited pipes and terminates its fixture descendant", async () => {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-bounded-child-"),
+      path.join(os.tmpdir(), "farol-bounded-child-"),
     );
     roots.push(root);
     const pidFile = path.join(root, "descendant.pid");

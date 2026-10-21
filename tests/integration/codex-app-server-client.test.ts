@@ -53,7 +53,7 @@ describe("Codex App Server client", () => {
     const process = new FakeProcess();
     const client = new CodexAppServerClient(process, {
       requestTimeoutMs: 1_000,
-      clientInfo: { name: "farol-next", version: "0.1.0" },
+      clientInfo: { name: "farol", version: "0.1.0" },
     });
 
     const initialized = client.initialize();
@@ -62,7 +62,7 @@ describe("Codex App Server client", () => {
       id: 1,
       method: "initialize",
       params: {
-        clientInfo: { name: "farol-next", version: "0.1.0" },
+        clientInfo: { name: "farol", version: "0.1.0" },
         capabilities: { experimentalApi: true },
       },
     });
@@ -97,7 +97,7 @@ describe("Codex App Server client", () => {
     const client = new CodexAppServerClient(process, {
       requestTimeoutMs: 1_000,
       shutdownTimeoutMs: 5,
-      clientInfo: { name: "farol-next", version: "0.1.0" },
+      clientInfo: { name: "farol", version: "0.1.0" },
     });
 
     await client.close();
@@ -109,7 +109,7 @@ describe("Codex App Server client", () => {
     const process = new FakeProcess();
     const client = new CodexAppServerClient(process, {
       requestTimeoutMs: 1_000,
-      clientInfo: { name: "farol-next", version: "0.1.0" },
+      clientInfo: { name: "farol", version: "0.1.0" },
     });
     client.handleServerRequest("item/tool/call", async (params) => ({
       success: true,
@@ -134,7 +134,7 @@ describe("Codex App Server client", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         callId: "call-1",
-        namespace: "farol_next",
+        namespace: "farol",
         tool: "workspace_read",
         arguments: { workspaceId: "workspace-1", path: "README.md" },
       },
@@ -151,7 +151,7 @@ describe("Codex App Server client", () => {
               threadId: "thread-1",
               turnId: "turn-1",
               callId: "call-1",
-              namespace: "farol_next",
+              namespace: "farol",
               tool: "workspace_read",
               arguments: {
                 workspaceId: "workspace-1",
@@ -169,7 +169,7 @@ describe("Codex App Server client", () => {
     const process = new FakeProcess();
     const client = new CodexAppServerClient(process, {
       requestTimeoutMs: 1_000,
-      clientInfo: { name: "farol-next", version: "0.1.0" },
+      clientInfo: { name: "farol", version: "0.1.0" },
     });
     const completed = new Promise<unknown>((resolve) => {
       client.handleNotification("turn/completed", resolve);
@@ -194,7 +194,7 @@ describe("Codex App Server client", () => {
     const process = new FakeProcess();
     const client = new CodexAppServerClient(process, {
       requestTimeoutMs: 1_000,
-      clientInfo: { name: "farol-next", version: "0.1.0" },
+      clientInfo: { name: "farol", version: "0.1.0" },
     });
 
     const pending = client.request("model/list", {});
@@ -208,7 +208,7 @@ describe("Codex App Server client", () => {
     const process = new FakeProcess();
     const client = new CodexAppServerClient(process, {
       requestTimeoutMs: 1_000,
-      clientInfo: { name: "farol-next", version: "0.1.0" },
+      clientInfo: { name: "farol", version: "0.1.0" },
     });
 
     const pending = client.request("turn/start", {});
@@ -230,7 +230,7 @@ describe("Codex App Server client", () => {
     const process = new BackpressuredProcess();
     const client = new CodexAppServerClient(process, {
       requestTimeoutMs: 1_000,
-      clientInfo: { name: "farol-next", version: "0.1.0" },
+      clientInfo: { name: "farol", version: "0.1.0" },
     });
 
     const pending = client.request("model/list", {});
@@ -249,7 +249,7 @@ describe("Codex App Server client", () => {
     const process = new FakeProcess();
     const client = new CodexAppServerClient(process, {
       requestTimeoutMs: 1_000,
-      clientInfo: { name: "farol-next", version: "0.1.0" },
+      clientInfo: { name: "farol", version: "0.1.0" },
     });
     const startedAt = Date.now();
     const pending = client.request("thread/read", {}, { timeoutMs: 5 });
@@ -265,7 +265,7 @@ describe("Codex App Server client", () => {
     const client = new CodexAppServerClient(process, {
       requestTimeoutMs: 1_000,
       maxFrameBytes: 64,
-      clientInfo: { name: "farol-next", version: "0.1.0" },
+      clientInfo: { name: "farol", version: "0.1.0" },
     });
 
     const pending = client.request("model/list", {});

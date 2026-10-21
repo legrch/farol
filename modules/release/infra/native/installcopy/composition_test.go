@@ -23,8 +23,8 @@ import (
 // interpreter, publishes a namespace, acquires admission or selects a helper.
 func TestCopyRequiresIndependentExpectedTreeAndIdentity(t *testing.T) {
 	for _, vector := range []struct{ file, digest string }{
-		{"oracle.xml", "aa5be957bca1b602513cc520d48ebabb39a79adfffe07ee47434fbc33f4a62bd"},
-		{"oracle.bplist", "d0bd0b78217c34f9a0f86dad465ac033ec6a63cd1ba5bdeeffcac545d08bee2d"},
+		{"oracle.xml", "6fffca33b1a4831aecd152a758c4b819e7cc60a844afda73b906b874a8d3f6f3"},
+		{"oracle.bplist", "5655e32d0fd60f4acc2347182e9a779ab89266ecd8f970d78132233996e6e60f"},
 	} {
 		t.Run(vector.file, func(t *testing.T) {
 			parentPath, sourcePath, targetPath := copyFixture(t, vector.file)

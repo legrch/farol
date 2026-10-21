@@ -38,13 +38,13 @@ const binding: ContextBinding = {
   taskId: "task-atlantic",
   hostThreadId: "thread-atlantic",
   sessionId: "session-atlantic",
-  providerProfileId: "profile-isolated-next",
+  providerProfileId: "profile-isolated-farol",
   modelId: "chatgpt-web/high",
   mode: "high",
 };
 
 const content: CheckpointContent = {
-  goal: "Continue the exact Farol Next task.",
+  goal: "Continue the exact Farol task.",
   activeConstraints: ["Do not repeat an outcome-unknown write."],
   latestCorrections: ["Use Watch Rail."],
   keyDecisions: ["Persist before retiring the old epoch."],
@@ -156,9 +156,7 @@ describe("private context persistence", () => {
   });
 
   async function root(): Promise<string> {
-    const created = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-context-"),
-    );
+    const created = await fs.mkdtemp(path.join(os.tmpdir(), "farol-context-"));
     roots.push(created);
     return created;
   }
@@ -1290,8 +1288,8 @@ describe("private context persistence", () => {
   it("keeps one task's context intact through three consecutive ordinary cycles, each carried by a new store instance", async () => {
     const stateRoot = await root();
     const ownerId = "owner-preview";
-    const providerProfileId = "profile-isolated-next";
-    const modelId = "farol-next/mind";
+    const providerProfileId = "profile-isolated-farol";
+    const modelId = "legacy-route/mind";
     const threadId = "thread-three-cycles";
     const taskBinding: ContextBinding = {
       ownerId,

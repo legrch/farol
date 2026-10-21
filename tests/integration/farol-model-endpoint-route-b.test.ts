@@ -91,7 +91,7 @@ async function compose(
   const root = await tempRoot("farol-model-endpoint-route-b-");
   const controller = createCodexContextController({
     ownerId: "owner-desktop",
-    providerProfileId: "profile-isolated-next",
+    providerProfileId: "profile-isolated-farol",
     stateRoot: path.join(root, "context-continuity"),
     summaryRoutes: {
       retained: (binding) => (binding.taskId === threadId ? task : null),
@@ -285,7 +285,7 @@ describe("Farol Model endpoint dispatches through the real Route B provider (pac
     expect(first.status).toBe(200);
     const firstStream = await first.text();
     const call =
-      /"type":"function_call"[^}]*"call_id":"(farol_next_call_[a-f0-9]{32})"/u.exec(
+      /"type":"function_call"[^}]*"call_id":"(farol_call_[a-f0-9]{32})"/u.exec(
         firstStream,
       );
     expect(call).not.toBeNull();

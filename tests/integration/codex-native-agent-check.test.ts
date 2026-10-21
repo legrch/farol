@@ -79,7 +79,7 @@ function settings(selectedAccess: "read" | "write" = "read") {
           executableSha256,
           schemaSha256,
           buildId,
-          dynamicTool: "farol_next_ping",
+          dynamicTool: "farol_ping",
           verifiedAt: "2026-09-16T10:00:00.000Z",
         },
         agentVerification: null,

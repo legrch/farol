@@ -4,7 +4,7 @@ import type { EmptyRecoverySelectionInput } from "../../apps/desktop/bridge/empt
 
 const profile = {
   profileId: "profile",
-  root: "/synthetic/Farol Dev/farol-next-state/go-core",
+  root: "/synthetic/Farol Dev/farol-state/go-core",
   home: "/synthetic",
   device: "1",
   inode: "2",

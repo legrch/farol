@@ -1988,7 +1988,7 @@ function homeComputerSettings() {
     },
   ];
   const witness = {
-    profile: "farol-next",
+    profile: "farol",
     configRevision: 1,
     workspaceId,
     runtimeGeneration,

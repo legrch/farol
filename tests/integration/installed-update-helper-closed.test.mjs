@@ -245,11 +245,11 @@ async function bundle(at, version, buildId, payload) {
   await fs.mkdir(path.join(at, "Contents/Resources/app"), { recursive: true });
   await fs.writeFile(
     path.join(at, "Contents/Info.plist"),
-    `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>local.farol.next.preview</string><key>CFBundleShortVersionString</key><string>${version.split("-", 1)[0]}</string></dict></plist>`,
+    `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>io.github.legrch.farol</string><key>CFBundleShortVersionString</key><string>${version.split("-", 1)[0]}</string></dict></plist>`,
   );
   await fs.writeFile(
     path.join(at, "Contents/Resources/app/build-identity.json"),
-    JSON.stringify({ bundleId: "local.farol.next.preview", version, buildId }),
+    JSON.stringify({ bundleId: "io.github.legrch.farol", version, buildId }),
   );
   await fs.writeFile(path.join(at, "Contents/payload"), payload);
   return { digest: await treeDigest(at), version, buildId };
@@ -274,9 +274,9 @@ async function fixture({
   const app = path.join(home, "Applications/Farol.app");
   const profile = path.join(
     home,
-    "Library/Application Support/Farol Next Preview",
+    "Library/Application Support/io.github.legrch.farol",
   );
-  const state = path.join(profile, "farol-next-state");
+  const state = path.join(profile, "farol-state");
   const operationId = "c".repeat(32);
   const op = path.join(profile, "installed-updates", operationId);
   const source = await bundle(
@@ -606,7 +606,7 @@ describe("closed installed helper (disposable native filesystem and child fixtur
       connectors: {
         secureMcp: {
           generation: 1,
-          profile: "farol-next",
+          profile: "farol",
           tunnelId: null,
           tunnelClient: null,
           credential: "missing",
@@ -648,8 +648,8 @@ describe("closed installed helper (disposable native filesystem and child fixtur
         schema: "farol.github-release/1",
         repository: "legrch/farol",
         channel: "owner-beta",
-        product: "Farol Next Preview",
-        bundleId: "local.farol.next.preview",
+        product: "Farol",
+        bundleId: "io.github.legrch.farol",
         version: f.request.target.version,
         buildVersion: "18",
         sourceCommit: "3".repeat(40),

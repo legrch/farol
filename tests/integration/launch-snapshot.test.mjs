@@ -22,7 +22,7 @@ afterEach(async () => {
 describe("isolated owner launch snapshot", () => {
   it("copies the candidate and freezes the manifest outside the mutable package", async () => {
     const sourceRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-launch-source-"),
+      path.join(os.tmpdir(), "farol-launch-source-"),
     );
     try {
       const sourceApp = path.join(sourceRoot, "Farol.app");
@@ -63,7 +63,7 @@ describe("isolated owner launch snapshot", () => {
         TMPDIR: "/private/tmp/owner/",
         DYLD_INSERT_LIBRARIES: "/tmp/inject.dylib",
         ELECTRON_RUN_AS_NODE: "1",
-        FAROL_NEXT_OWNER_LAUNCH: "1",
+        FAROL_OWNER_LAUNCH: "1",
         NODE_OPTIONS: "--require=/tmp/inject.cjs",
       }),
     ).toEqual({
@@ -77,18 +77,18 @@ describe("isolated owner launch snapshot", () => {
 
   it("passes only an exact saved-chat owner opt-in, never a malformed value", () => {
     expect(
-      ownerLaunchEnvironment({ FAROL_NEXT_SAVED_CHAT_PREVIEW: "1" }),
-    ).toHaveProperty("FAROL_NEXT_SAVED_CHAT_PREVIEW", "1");
-    for (const value of ["0", "true", "1\nFAROL_NEXT_E2E=1"]) {
+      ownerLaunchEnvironment({ FAROL_SAVED_CHAT_PREVIEW: "1" }),
+    ).toHaveProperty("FAROL_SAVED_CHAT_PREVIEW", "1");
+    for (const value of ["0", "true", "1\nFAROL_E2E=1"]) {
       expect(
-        ownerLaunchEnvironment({ FAROL_NEXT_SAVED_CHAT_PREVIEW: value }),
-      ).not.toHaveProperty("FAROL_NEXT_SAVED_CHAT_PREVIEW");
+        ownerLaunchEnvironment({ FAROL_SAVED_CHAT_PREVIEW: value }),
+      ).not.toHaveProperty("FAROL_SAVED_CHAT_PREVIEW");
     }
   });
 
   it("refuses cleanup descriptors that do not name an owned snapshot", async () => {
     const unrelated = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-launch-unrelated-"),
+      path.join(os.tmpdir(), "farol-launch-unrelated-"),
     );
     try {
       await expect(
@@ -96,7 +96,7 @@ describe("isolated owner launch snapshot", () => {
           appPath: path.join(unrelated, "Farol.app"),
           artifactFile: path.join(unrelated, "artifact.json"),
           artifactSha256: "b".repeat(64),
-          prefix: `farol-next-launch-${"b".repeat(12)}-`,
+          prefix: `farol-launch-${"b".repeat(12)}-`,
           root: unrelated,
           temporaryRoot: path.dirname(unrelated),
         }),

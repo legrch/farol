@@ -57,11 +57,11 @@ const executable = path.join(
   "dist/Electron.app/Contents/MacOS/Electron",
 );
 const directory = await fs.realpath(
-  await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-e2e-home-")),
+  await fs.mkdtemp(path.join(os.tmpdir(), "farol-e2e-home-")),
 );
 const proof = randomUUID();
 await fs.mkdir(output, { recursive: true, mode: 0o700 });
-await fs.writeFile(path.join(directory, ".farol-next-e2e-root"), proof, {
+await fs.writeFile(path.join(directory, ".farol-e2e-root"), proof, {
   mode: 0o600,
 });
 await fs.mkdir(path.join(directory, "app-data"), { mode: 0o700 });
@@ -187,13 +187,13 @@ try {
       TMPDIR: os.tmpdir(),
       PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
       LANG: "en_US.UTF-8",
-      FAROL_NEXT_E2E: "1",
-      FAROL_NEXT_ENVIRONMENT: "dev",
-      FAROL_NEXT_E2E_APP_DATA: path.join(directory, "app-data"),
-      FAROL_NEXT_E2E_TEST_ROOT: directory,
-      FAROL_NEXT_E2E_TEST_PROOF: proof,
-      FAROL_NEXT_E2E_WORKSPACE_ROOT: workspace,
-      FAROL_NEXT_E2E_CHATGPT_URL: fixtureUrl,
+      FAROL_E2E: "1",
+      FAROL_ENVIRONMENT: "dev",
+      FAROL_E2E_APP_DATA: path.join(directory, "app-data"),
+      FAROL_E2E_TEST_ROOT: directory,
+      FAROL_E2E_TEST_PROOF: proof,
+      FAROL_E2E_WORKSPACE_ROOT: workspace,
+      FAROL_E2E_CHATGPT_URL: fixtureUrl,
     },
     timeout: 15000,
   });
@@ -237,9 +237,7 @@ try {
     "OWNED_WINDOW_UNCONFIRMED",
   );
   await waitForReactShell(page);
-  const initialProjection = await page.evaluate(() =>
-    window.farolNext.bootstrap(),
-  );
+  const initialProjection = await page.evaluate(() => window.farol.bootstrap());
   assert.equal(
     initialProjection.environment,
     "dev",
@@ -479,7 +477,7 @@ try {
   const taskId = "renderer-composition-fixture";
   await app.evaluate(({ BrowserWindow }, taskId) => {
     const contents = BrowserWindow.getAllWindows()[0].webContents;
-    contents.send("farol-next:tasks-state", {
+    contents.send("farol:tasks-state", {
       revision: 1,
       tasks: [
         {
@@ -540,14 +538,14 @@ try {
   await app.evaluate(({ BrowserWindow }, taskId) => {
     const contents = BrowserWindow.getAllWindows()[0].webContents;
     for (let n = 0; n < 24; n++) {
-      contents.send("farol-next:layout", {
+      contents.send("farol:layout", {
         section: "browser",
         taskId,
         setupOpen: false,
         sidebar: "full",
         overlay: "none",
       });
-      contents.send("farol-next:window-state", {
+      contents.send("farol:window-state", {
         focused: false,
         fullScreen: false,
         trafficLightPosition: { x: 14, y: 18 },
@@ -611,7 +609,7 @@ try {
   const isolated = await page.evaluate(() => ({
     node: typeof process === "undefined",
     require: typeof require === "undefined",
-    ipc: "ipcRenderer" in window.farolNext,
+    ipc: "ipcRenderer" in window.farol,
   }));
   assert.deepEqual(isolated, { node: true, require: true, ipc: false });
   const providerIsolation = await app.evaluate(
@@ -619,7 +617,7 @@ try {
       webContents
         .fromId(id)
         .executeJavaScript(
-          "({api: typeof window.farolNext, node: typeof process, require: typeof require})",
+          "({api: typeof window.farol, node: typeof process, require: typeof require})",
         ),
     browserId,
   );

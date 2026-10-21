@@ -6,7 +6,7 @@ import {
   candidatePaths,
 } from "../../tooling/candidate-contract.mjs";
 
-const root = "/tmp/farol-next-candidate";
+const root = "/tmp/farol-candidate";
 const exactIdentity = {
   commit: "a".repeat(40),
   treeDigest: "b".repeat(64),
@@ -32,13 +32,13 @@ describe("owner preview candidate contract", () => {
     expect(() =>
       assertCanonicalArtifactPath(root, {
         ...exactArtifact,
-        artifactPath: "/tmp/foreign/Farol Next Preview.app",
+        artifactPath: "/tmp/foreign/Farol.app",
       }),
     ).toThrow("PACKAGE_ARTIFACT_PATH_INVALID");
     expect(() =>
       assertCanonicalArtifactPath(root, {
         ...exactArtifact,
-        artifactPath: "_output/package/Farol Next Preview.app",
+        artifactPath: "_output/package/Farol.app",
       }),
     ).toThrow("PACKAGE_ARTIFACT_PATH_INVALID");
   });
