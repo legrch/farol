@@ -71,8 +71,9 @@ inputs are ignored build outputs, never public release assets.
 
 All GitHub Actions are pinned to commit SHAs. npm, Go, and Electron downloads
 use caches. Repository contents permission is read-only by default; only the
-separate release publication job receives `contents: write`, and its GitHub
-token is available only to the publication step.
+separate release publication job receives `contents: write`. The workflow
+explicitly exports `GH_TOKEN` only for the publication step; the job-scoped
+automatic GitHub token remains governed by GitHub Actions permissions.
 
 ## Lead activation and provisional timing
 
