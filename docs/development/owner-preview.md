@@ -171,6 +171,28 @@ updater construction. Synthetic/acceptance/recovery seams remain Dev-only. The s
 packaged behavior must still pass the smoke. The helper does not edit those
 contracts, Go Recovery, the installed profile, a tunnel or an updater helper.
 
+## Isolation witness (R07)
+
+[`owner-preview-isolation.e2e.mjs`](../../tests/e2e/owner-preview-isolation.e2e.mjs)
+is a separate explicit entrypoint (`node tests/e2e/owner-preview-isolation.e2e.mjs
+--generation <64hex>`); the build and run commands do not invoke it. It runs one
+disposable normal instance and one Preview at the same time, hidden, each in its
+own disposable root, and reads what the operating system reports for their exact
+pids: open files, listening sockets, the Go backend and Node runtime children,
+their arguments and environments (`KERN_PROCARGS2`, same user). It asserts that
+roots, Chromium storage, bundle bytes, runtime identity and loopback ports differ,
+that no process or open file names another instance's root or an owner location
+(`~/Library/Application Support/Farol*`, `~/.farol`, `~/.codex`,
+`/Applications/Farol.app`), and that both instances exit drained.
+
+Known blockers, recorded in the receipt under `blocked` rather than worked
+around: a bundled Electron ignores the `HOME` it is started with when it
+resolves `appData`, so a launch without `FAROL_NEXT_E2E_APP_DATA` would select
+the owner's real profile; the witness reads that value with a probe application
+whose `userData` is fixed to a disposable path, and does not launch the product
+that way. A Codex child needs a live provider and is asserted absent, not
+witnessed. Receipts are under `_output/preview/isolation/<generation>/`.
+
 ## Verification and remaining gates
 
 Allowed source-only checks for this packet:
