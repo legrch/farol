@@ -205,6 +205,41 @@ async function runInventory(tool, args, context = {}) {
   if (spec.noMatch(result, context)) return { outcome: "no_match" };
   throw fail(result.code, result.stderr);
 }
+// The witness runs only as the direct child of the owner-untouched guard, the
+// way `task test:e2e:owner-preview-isolation` starts it: the parent's command
+// line must be the guard script followed by `--` and exactly this witness
+// invocation. A direct `node` run, or one through npm or a shell, has another
+// parent and is refused before anything is read or launched. This stops an
+// unguarded run by mistake; it is not a defence against a deliberate imitation.
+const GUARD_SCRIPT = "scripts/assert-owner-untouched.py";
+function guardedInvocation(parentCommand, generation) {
+  const tokens = parentCommand.trim().split(/\s+/u);
+  const marker = tokens.indexOf("--");
+  if (marker < 2) return false;
+  const script = tokens[marker - 1];
+  const rest = tokens.slice(marker + 1);
+  return (
+    (script === `./${GUARD_SCRIPT}` || script.endsWith(`/${GUARD_SCRIPT}`)) &&
+    rest.length === 4 &&
+    path.basename(rest[0]) === "node" &&
+    rest[1] === "tests/e2e/owner-preview-isolation.e2e.mjs" &&
+    rest[2] === "--generation" &&
+    rest[3] === generation
+  );
+}
+async function requireOwnerGuardParent(generation) {
+  const parent = process.ppid;
+  const answer = await runInventory(
+    "ps",
+    ["-o", "command=", "-p", String(parent)],
+    { gone: () => isGone(parent) },
+  );
+  if (
+    answer.outcome !== "ok" ||
+    !guardedInvocation(parsePsCommand(answer.stdout), generation)
+  )
+    throw new Error("OWNER_PREVIEW_ISOLATION_UNGUARDED");
+}
 // Only a pid the kernel no longer knows may have an empty inventory.
 function isGone(pid) {
   try {
@@ -1919,6 +1954,31 @@ async function assertInstance(observed, instance, identity, other) {
 // rejects a malformed row in the middle and an unexpectedly empty listing, and
 // never repeats the row it rejected.
 function parserSelfCheck() {
+  const generation = "a".repeat(64);
+  const invocation = `node tests/e2e/owner-preview-isolation.e2e.mjs --generation ${generation}`;
+  const guard = `/usr/bin/python3 -I ./${GUARD_SCRIPT} --`;
+  for (const [parent, expected] of [
+    [`${guard} ${invocation}`, true],
+    [
+      `/Library/Developer/CommandLineTools/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python -I ./${GUARD_SCRIPT} -- /opt/node/bin/${invocation}`,
+      true,
+    ],
+    [`/usr/bin/python3 -I /x/farol/${GUARD_SCRIPT} -- ${invocation}`, true],
+    [
+      `npm run test:e2e:owner-preview-isolation -- --generation ${generation}`,
+      false,
+    ],
+    [`/bin/zsh -c ${invocation}`, false],
+    ["-zsh", false],
+    [`${guard} npm run x -- --generation ${generation}`, false],
+    [`${guard} ${invocation.replace(generation, "b".repeat(64))}`, false],
+    [`${guard} ${invocation} --extra`, false],
+    [
+      `/usr/bin/python3 -I ./scripts/not-assert-owner-untouched.py -- ${invocation}`,
+      false,
+    ],
+  ])
+    assert.equal(guardedInvocation(parent, generation), expected, parent);
   const secret = "SECRETROW=do-not-echo";
   const scan = (pids) => (text) => validateScan(JSON.parse(text), pids);
   const procargs = (text) => validateProcessAnswer(JSON.parse(text));
@@ -3669,8 +3729,9 @@ if (
       !/^[a-f0-9]{64}$/u.test(process.argv[3])
     )
       throw new Error(
-        "Usage: node tests/e2e/owner-preview-isolation.e2e.mjs --generation <64hex>",
+        "Usage: task test:e2e:owner-preview-isolation -- --generation <64hex>",
       );
+    await requireOwnerGuardParent(process.argv[3]);
     const root = await fs.realpath(
       path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url)))),
     );

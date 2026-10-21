@@ -59,7 +59,6 @@
     "test:e2e:guided-setup:package": "node tests/e2e/guided-setup-selection.e2e.mjs --packaged",
     "test:e2e:setup-config-error": "node tests/e2e/setup-config-error.e2e.mjs",
     "test:e2e:setup-config-error:package": "node tests/e2e/setup-config-error.e2e.mjs --packaged",
-    "test:e2e:owner-preview-isolation": "node tests/e2e/owner-preview-isolation.e2e.mjs",
     "test:renderer": "vitest run --config vitest.renderer.config.ts",
     "test:cloud": "node tooling/test-scopes.mjs --scope=cloud",
     "ci:cloud": "npm run check:toolchain && npm run typecheck && npm run lint && npm run format:check && npm run architecture && npm run runtime:check && npm run docs:check && npm run test:cloud"

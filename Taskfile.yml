@@ -259,7 +259,7 @@ tasks:
   test:e2e:owner-preview-isolation:
     desc: Witness normal and Owner Preview isolation on live disposable instances (pass --generation <64hex>)
     cmds:
-      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run test:e2e:owner-preview-isolation -- {{.CLI_ARGS}}
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tests/e2e/owner-preview-isolation.e2e.mjs {{.CLI_ARGS}}
 
   test:e2e:update:package:
     desc: Check real source and bundled package identities against the updater contract

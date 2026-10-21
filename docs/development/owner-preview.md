@@ -176,7 +176,11 @@ contracts, Go Recovery, the installed profile, a tunnel or an updater helper.
 [`owner-preview-isolation.e2e.mjs`](../../tests/e2e/owner-preview-isolation.e2e.mjs)
 is a separate explicit entrypoint, run only through the owner-untouched guard
 (`task test:e2e:owner-preview-isolation -- --generation <64hex>`); the build and
-run commands do not invoke it. It runs one
+run commands do not invoke it, and there is no npm script for it. The witness
+refuses to start (`UNGUARDED`) unless its direct parent's command line is the
+guard script followed by `--` and exactly this invocation, so a direct `node`,
+npm or shell run stops before anything is read or launched; this prevents an
+unguarded run by mistake, not a deliberate imitation. It runs one
 disposable normal instance and one Preview at the same time, hidden, each in its
 own disposable root, and reads what the operating system reports for their exact
 pids: open files, listening sockets, the Go backend and Node runtime children,
