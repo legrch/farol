@@ -404,8 +404,11 @@ exactly one class:
   orphan (ppid 1) or one whose parent has vanished qualifies;
 - **excluded**, counted and never detailed: descended from a pre-existing
   process that is not this test (`excluded.otherParent`, decided before any read),
-  or environment withheld but owned by a system or application binary
-  (`excluded.systemOwned`);
+  environment withheld but owned by a system or application binary
+  (`excluded.systemOwned`), or executing a binary outside the checkout (where
+  both bundles are built) and the disposable roots, such as an app the owner
+  opened from the Dock during the run: its environment is never read, only its
+  executable path and argv are matched (`excluded.foreignExecutable`);
 - **clear** (environment visible, no root) or **gone** (exited; the OS answers
   `EINVAL` as well as `ESRCH` for a just-exited pid, so an unreadable pid the
   kernel no longer knows counts as exited).
@@ -418,6 +421,10 @@ are read into the test, logged or recorded. The receipt keeps only the counts
 unverifiable entries. Known limit: the OS withholds the environment of hardened
 and system binaries, so a root carried only in such a process's environment is
 not seen; rule (a) and (b) decide when that is unverifiable rather than ignored.
+Likewise a root carried only in the environment of a foreign-executable process
+(a binary from outside the checkout and the roots that the app started and that
+then reparented) is not seen: the witness does not read unrelated processes'
+environments to find it.
 
 That teardown proof runs once, in a `finally`, on every exit path (success,
 failure, or a launch that failed half way; a launch with no handle still gets the

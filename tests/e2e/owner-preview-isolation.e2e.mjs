@@ -725,6 +725,7 @@ function validateScan(results, pids) {
         !Array.isArray(entry.roots) ||
         !entry.roots.every((root) => typeof root === "string") ||
         typeof entry.envVisible !== "boolean" ||
+        typeof entry.envRead !== "boolean" ||
         typeof entry.systemOwned !== "boolean"
       )
         throw bad(index);
@@ -858,12 +859,17 @@ async function tearDownReport(
 // inside the scanner: only the matching pid and the run's own root strings come
 // back, never another process's arguments or environment. A process whose
 // environment the OS withholds (a hardened or system binary) reads as argv
-// only; those are counted (`envWithheld`), not hidden.
+// only; those are counted (`envWithheld`), not hidden. The environment is read
+// at all only for a process executing a binary of this run: one under the
+// checkout (both bundles are built there) or a disposable root. Any other new
+// process (an app the owner opened from the Dock meanwhile) is judged by its
+// executable path and argv alone and only counted (`excluded.foreignExecutable`).
 const SCAN_SCRIPT = `
 import ctypes, ctypes.util, json, struct, sys
 libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
 request = json.load(sys.stdin)
 roots = request["roots"]
+scopes = [scope.rstrip("/") + "/" for scope in request["scopes"]]
 SYSTEM_PREFIXES = ("/System/", "/usr/", "/bin/", "/sbin/", "/Library/", "/Applications/", "/opt/", "/private/var/db/", "/private/var/protected/")
 out = []
 for pid in request["pids"]:
@@ -880,17 +886,20 @@ for pid in request["pids"]:
     raw = buf.raw[:size.value]
     argc = struct.unpack("i", raw[:4])[0]
     parts = raw[4:].split(b"\\0")
-    strings = [part.decode("utf8", "replace") for part in parts if part]
-    # exec path, argv, then environment entries (K=V)
-    environment = [part for part in parts[1:] if part][argc:]
-    matched = sorted({root for root in roots for text in strings if root in text})
-    visible = any(b"=" in part for part in environment)
     exe = parts[0].decode("utf8", "replace")
+    # exec path, argv, then environment entries (K=V); the environment only for
+    # an executable inside the run's scopes
+    present = [part for part in parts[1:] if part]
+    read = any(exe.startswith(scope) for scope in scopes)
+    searched = [parts[0]] + present[:argc] + (present[argc:] if read else [])
+    strings = [part.decode("utf8", "replace") for part in searched]
+    matched = sorted({root for root in roots for text in strings if root in text})
+    visible = read and any(b"=" in part for part in present[argc:])
     system = exe.startswith(SYSTEM_PREFIXES)
-    entry = {"pid": pid, "status": "match" if matched else "clear", "roots": matched, "envVisible": visible, "systemOwned": system}
+    entry = {"pid": pid, "status": "match" if matched else "clear", "roots": matched, "envVisible": visible, "envRead": read, "systemOwned": system}
     # The executable path leaves the scanner only for a process whose environment
     # is withheld and that no system or application prefix claims.
-    if not matched and not visible and not system:
+    if read and not matched and not visible and not system:
         entry["exe"] = exe
     out.append(entry)
 print(json.dumps(out))
@@ -904,9 +913,9 @@ async function uidPids() {
   ]);
   return parseUidListing(listed.stdout);
 }
-async function inspectProcesses(pids, roots) {
+async function inspectProcesses(pids, roots, scopes = roots) {
   const answer = await runInventory("scan", ["-I", "-c", SCAN_SCRIPT], {
-    input: JSON.stringify({ pids, roots }),
+    input: JSON.stringify({ pids, roots, scopes }),
   });
   let results;
   try {
@@ -945,6 +954,7 @@ async function orphanReport(
   {
     listPids = uidPids,
     inspect = inspectProcesses,
+    scopes = [],
     ours = new Set([process.pid]),
     tries = 100,
     interval = 50,
@@ -956,7 +966,7 @@ async function orphanReport(
     inspected: 0,
     matches: [],
     unverifiable: [],
-    excluded: { systemOwned: 0, otherParent: 0 },
+    excluded: { systemOwned: 0, otherParent: 0, foreignExecutable: 0 },
     clear: 0,
     gone: 0,
     ...extra,
@@ -993,6 +1003,7 @@ async function orphanReport(
         : await inspect(
             candidates.map((entry) => entry.pid),
             [...roots],
+            [...roots, ...scopes],
           );
     report = empty({
       scanned: fresh.length,
@@ -1000,6 +1011,7 @@ async function orphanReport(
       excluded: {
         systemOwned: 0,
         otherParent: fresh.length - candidates.length,
+        foreignExecutable: 0,
       },
     });
     for (const entry of results) {
@@ -1012,6 +1024,7 @@ async function orphanReport(
           errno: entry.errno,
         });
       else if (entry.status === "gone") report.gone += 1;
+      else if (entry.envRead === false) report.excluded.foreignExecutable += 1;
       else if (entry.envVisible !== false) report.clear += 1;
       else if (entry.systemOwned === true) report.excluded.systemOwned += 1;
       else
@@ -2025,6 +2038,7 @@ function parserSelfCheck() {
           status: "clear",
           roots: [],
           envVisible: true,
+          envRead: true,
           systemOwned: false,
         },
         { pid: 2, status: "gone", errno: 3 },
@@ -2035,6 +2049,7 @@ function parserSelfCheck() {
           status: "clear",
           roots: [],
           envVisible: true,
+          envRead: true,
           systemOwned: false,
         },
         { pid: 2, status: secret },
@@ -2047,6 +2062,7 @@ function parserSelfCheck() {
             status: "clear",
             roots: "x",
             envVisible: true,
+            envRead: true,
             systemOwned: false,
           },
           { pid: 2, status: "gone", errno: 3 },
@@ -2054,6 +2070,16 @@ function parserSelfCheck() {
         JSON.stringify([
           { pid: 2, status: "gone", errno: 3 },
           { pid: 1, status: "gone", errno: 3 },
+        ]),
+        JSON.stringify([
+          {
+            pid: 1,
+            status: "clear",
+            roots: [],
+            envVisible: true,
+            systemOwned: false,
+          },
+          { pid: 2, status: "gone", errno: 3 },
         ]),
       ],
     },
@@ -3063,6 +3089,17 @@ async function treeSelfCheck() {
         exe: "/x/lost",
       },
     ],
+    // a binary outside the checkout and the roots (an app opened from the
+    // Dock meanwhile): argv only, its environment never read, only counted
+    21: [
+      1,
+      {
+        status: "clear",
+        envVisible: false,
+        envRead: false,
+        systemOwned: false,
+      },
+    ],
     // pre-existing, never inspected
     10: [1, { status: "match", roots: ["/root-a"], envVisible: true }],
     9: [1, { status: "clear", envVisible: true, systemOwned: false }],
@@ -3076,9 +3113,11 @@ async function treeSelfCheck() {
         pid: Number(pid),
         ppid,
       })),
-    inspect: async (pids, scanned) => {
+    scopes: ["/checkout"],
+    inspect: async (pids, scanned, scopes) => {
       inspected.push(...pids);
       assert.deepEqual(scanned, ["/root-a", "/root-b"]);
+      assert.deepEqual(scopes, ["/root-a", "/root-b", "/checkout"]);
       return pids.map((pid) => ({ pid, ...table[pid][1] }));
     },
   };
@@ -3090,18 +3129,22 @@ async function treeSelfCheck() {
     assert.equal(inspected.includes(never), false, `inspected ${never}`);
   assert.deepEqual(
     [...new Set(inspected)].sort((x, y) => x - y),
-    [11, 12, 13, 14, 15, 18, 19, 20],
+    [11, 12, 13, 14, 15, 18, 19, 20, 21],
   );
-  assert.equal(orphan.inspected, 8);
+  assert.equal(orphan.inspected, 9);
   assert.deepEqual(orphan.matches, [{ pid: 11, roots: ["/root-a"] }]);
   assert.deepEqual(
     orphan.unverifiable.map((entry) => `${entry.pid}:${entry.reason}`),
     ["13:UNREADABLE", "15:ENV_WITHHELD", "19:ENV_WITHHELD", "20:ENV_WITHHELD"],
   );
-  assert.deepEqual(orphan.excluded, { systemOwned: 1, otherParent: 2 });
+  assert.deepEqual(orphan.excluded, {
+    systemOwned: 1,
+    otherParent: 2,
+    foreignExecutable: 1,
+  });
   assert.equal(orphan.clear, 1);
   assert.equal(orphan.gone, 1);
-  assert.equal(orphan.scanned, 10);
+  assert.equal(orphan.scanned, 11);
   assert.equal(orphan.startSnapshot, 3);
   // Excluded processes are only counted: no pid or path of theirs is recorded.
   assert.equal(JSON.stringify(orphan).includes("/x/other"), false);
@@ -3128,13 +3171,17 @@ async function treeSelfCheck() {
   const quiet = await orphanReport(roots, preexisting, {
     ...scanDeps,
     listPids: async () =>
-      [9, 10, 12, 14, 16, 17, 18, 77].map((pid) => ({
+      [9, 10, 12, 14, 16, 17, 18, 21, 77].map((pid) => ({
         pid,
         ppid: table[pid][0],
       })),
   });
   assert.deepEqual([quiet.matches, quiet.unverifiable], [[], []]);
-  assert.deepEqual(quiet.excluded, { systemOwned: 1, otherParent: 2 });
+  assert.deepEqual(quiet.excluded, {
+    systemOwned: 1,
+    otherParent: 2,
+    foreignExecutable: 1,
+  });
   // No roots means nothing to find and no scan at all.
   assert.deepEqual(
     await orphanReport(new Set(), new Set(), {
@@ -3146,7 +3193,7 @@ async function treeSelfCheck() {
       inspected: 0,
       matches: [],
       unverifiable: [],
-      excluded: { systemOwned: 0, otherParent: 0 },
+      excluded: { systemOwned: 0, otherParent: 0, foreignExecutable: 0 },
       clear: 0,
       gone: 0,
     },
@@ -3221,6 +3268,21 @@ async function treeSelfCheck() {
     const found = await inspectProcesses(
       [withRoot.pid, without.pid, gone.pid],
       [rootText],
+      [path.dirname(process.execPath)],
+    );
+    const foreign = await inspectProcesses(
+      [withRoot.pid],
+      [rootText],
+      ["/farol-selfcheck-no-such-scope"],
+    );
+    assert.deepEqual(
+      foreign.map(({ status, roots, envVisible, envRead }) => ({
+        status,
+        roots,
+        envVisible,
+        envRead,
+      })),
+      [{ status: "clear", roots: [], envVisible: false, envRead: false }],
     );
     const pick = ({ pid, status, roots, envVisible, systemOwned }) => ({
       pid,
@@ -3701,6 +3763,7 @@ export async function runOwnerPreviewIsolation(
         verifyTeardown(teardownTargets(instances, receipt.launches), {
           roots: run.roots,
           preexisting: run.preexisting,
+          scopes: [repositoryRoot],
         }),
       closeServer: async () => {
         if (!server) return;
