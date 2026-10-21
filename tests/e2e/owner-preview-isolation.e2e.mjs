@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter, once } from "node:events";
 import { lstatSync, readlinkSync } from "node:fs";
@@ -91,6 +91,9 @@ const INVENTORY = {
     command: "/usr/bin/python3",
     noMatch: () => false,
   },
+  // Same-uid pid list and the process scan: no documented no-match at all.
+  psUid: { label: "ps-uid", command: PS, noMatch: () => false },
+  scan: { label: "scan", command: "/usr/bin/python3", noMatch: () => false },
 };
 async function runInventory(tool, args, context = {}) {
   const spec = typeof tool === "string" ? INVENTORY[tool] : tool;
@@ -100,11 +103,15 @@ async function runInventory(tool, args, context = {}) {
     );
   let result;
   try {
-    const { stdout, stderr } = await execFileAsync(spec.command, args, {
+    const pending = execFileAsync(spec.command, args, {
       encoding: "utf8",
       timeout: 15000,
       maxBuffer: 16 * 1024 * 1024,
     });
+    // Input travels on stdin, never in argv or the environment, so the scanner
+    // cannot find its own request.
+    if (context.input !== undefined) pending.child.stdin.end(context.input);
+    const { stdout, stderr } = await pending;
     result = { code: 0, stdout, stderr };
   } catch (error) {
     if (typeof error.code !== "number")
@@ -261,27 +268,16 @@ async function stableTree(
   }
   throw new Error(`OWNER_PREVIEW_ISOLATION_TREE_UNSTABLE:${label}`);
 }
-// Teardown proof for one instance, reported and never thrown (except the
+// Teardown proof for one process tree, reported and never thrown (except the
 // result's own `error` for an inventory failure): every pid ever seen has
-// exited, a rescan from the original parent finds no descendant, and no
-// process anywhere still carries the instance's unique disposable root in its
-// arguments (an orphan reparented away from the tree is no longer a
-// descendant). A survivor is reported with its reason and is never signalled.
-// The dependencies are injectable for the self-check.
+// exited and a rescan from the original parent finds no descendant. A survivor
+// is reported with its reason and is never signalled. The dependencies are
+// injectable for the self-check.
 async function tearDownReport(
   instance,
   {
     alive = (pid) => !isGone(pid),
     rescan = descendants,
-    orphans = async (home) => {
-      const found = await runInventory("pgrep", ["-f", home]);
-      return found.outcome === "no_match"
-        ? []
-        : found.stdout
-            .split("\n")
-            .filter((line) => /^[0-9]+$/u.test(line))
-            .map(Number);
-    },
     tries = 100,
     interval = 50,
   } = {},
@@ -293,27 +289,16 @@ async function tearDownReport(
     )
       survivors.push({ kind: instance.kind, pid, reason });
   };
-  const wait = () => new Promise((r) => setTimeout(r, interval));
   let error = null;
   try {
     for (const pid of instance.seen) {
       for (let attempt = 0; attempt < tries && alive(pid); attempt += 1)
-        await wait();
+        await new Promise((r) => setTimeout(r, interval));
       if (alive(pid)) survivor(pid, "PID_REMAINS");
     }
     if (instance.pid !== null)
       for (const pid of await rescan(instance.pid))
         if (pid !== instance.pid) survivor(pid, "NEW_DESCENDANT");
-    let orphaned = await orphans(instance.home);
-    for (
-      let attempt = 0;
-      attempt < tries && orphaned.length > 0;
-      attempt += 1
-    ) {
-      await wait();
-      orphaned = await orphans(instance.home);
-    }
-    for (const pid of orphaned) survivor(pid, "ORPHAN_REMAINS");
   } catch (caught) {
     error = caught instanceof Error ? caught.message : "TEARDOWN_FAILED";
   }
@@ -325,17 +310,154 @@ async function tearDownReport(
     error,
   };
 }
+
+// Orphan rule. A reparented helper is no longer a descendant, and a disposable
+// root normally reaches a process through HOME (its environment), not argv. So
+// the decision looks at argv AND environment together: every process of the
+// current uid that did not exist when the run started is inspected, and any
+// whose argv or environment contains a disposable root of this run is a
+// survivor. A process whose arguments cannot be read is `unverifiable` and keeps
+// the teardown unverified; one that has exited is ignored. Matching happens
+// inside the scanner: only the matching pid and the run's own root strings come
+// back, never another process's arguments or environment. A process whose
+// environment the OS withholds (a hardened or system binary) reads as argv
+// only; those are counted (`envWithheld`), not hidden.
+const SCAN_SCRIPT = `
+import ctypes, ctypes.util, json, struct, sys
+libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+request = json.load(sys.stdin)
+roots = request["roots"]
+out = []
+for pid in request["pids"]:
+    mib = (ctypes.c_int * 3)(1, 49, pid)
+    size = ctypes.c_size_t(0)
+    ok = libc.sysctl(mib, 3, None, ctypes.byref(size), None, 0) == 0
+    if ok:
+        buf = ctypes.create_string_buffer(size.value)
+        ok = libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) == 0
+    if not ok:
+        errno = ctypes.get_errno()
+        out.append({"pid": pid, "status": "gone" if errno == 3 else "unreadable", "errno": errno})
+        continue
+    raw = buf.raw[:size.value]
+    argc = struct.unpack("i", raw[:4])[0]
+    parts = raw[4:].split(b"\\0")
+    strings = [part.decode("utf8", "replace") for part in parts if part]
+    # exec path, argv, then environment entries (K=V)
+    environment = [part for part in parts[1:] if part][argc:]
+    matched = sorted({root for root in roots for text in strings if root in text})
+    out.append({"pid": pid, "status": "match" if matched else "clear", "roots": matched, "envVisible": any(b"=" in part for part in environment)})
+print(json.dumps(out))
+`;
+async function uidPids() {
+  const listed = await runInventory("psUid", [
+    "-U",
+    String(process.getuid()),
+    "-o",
+    "pid=",
+  ]);
+  return listed.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^[0-9]+$/u.test(line))
+    .map(Number);
+}
+async function inspectProcesses(pids, roots) {
+  const answer = await runInventory("scan", ["-I", "-c", SCAN_SCRIPT], {
+    input: JSON.stringify({ pids, roots }),
+  });
+  const results = JSON.parse(answer.stdout);
+  if (
+    !Array.isArray(results) ||
+    results.length !== pids.length ||
+    results.some((entry, index) => entry.pid !== pids[index])
+  )
+    throw new Error("OWNER_PREVIEW_ISOLATION_SCAN_INCOMPLETE");
+  // This macOS answers EINVAL, not ESRCH, for a pid that has just exited: an
+  // unreadable pid the kernel no longer knows is gone, anything else stays
+  // unreadable.
+  return results.map((entry) =>
+    entry.status === "unreadable" && isGone(entry.pid)
+      ? { ...entry, status: "gone" }
+      : entry,
+  );
+}
+async function orphanReport(
+  roots,
+  preexisting,
+  {
+    listPids = uidPids,
+    inspect = inspectProcesses,
+    tries = 100,
+    interval = 50,
+  } = {},
+) {
+  if (roots.size === 0)
+    return {
+      scanned: 0,
+      excluded: preexisting.size,
+      matches: [],
+      unverifiable: [],
+      envWithheld: 0,
+    };
+  let report;
+  for (let attempt = 0; ; attempt += 1) {
+    const candidates = (await listPids()).filter(
+      (pid) => !preexisting.has(pid),
+    );
+    const results =
+      candidates.length === 0 ? [] : await inspect(candidates, [...roots]);
+    report = {
+      scanned: candidates.length,
+      excluded: preexisting.size,
+      matches: results
+        .filter((entry) => entry.status === "match")
+        .map((entry) => ({ pid: entry.pid, roots: entry.roots })),
+      unverifiable: results
+        .filter((entry) => entry.status === "unreadable")
+        .map((entry) => ({ pid: entry.pid, errno: entry.errno })),
+      envWithheld: results.filter(
+        (entry) => entry.status === "clear" && entry.envVisible === false,
+      ).length,
+    };
+    if (
+      (report.matches.length === 0 && report.unverifiable.length === 0) ||
+      attempt >= tries
+    )
+      return report;
+    await new Promise((r) => setTimeout(r, interval));
+  }
+}
 // The one teardown, run for every exit path. A launch that failed before it
-// returned a handle has no instance; its disposable root still gets the orphan
-// check.
-async function verifyTeardown(targets, deps) {
+// returned a handle has no instance; its disposable root is covered by the
+// orphan scan like every other root of the run.
+async function verifyTeardown(targets, deps = {}) {
+  const { roots = new Set(), preexisting = new Set(), ...rest } = deps;
   const reports = [];
   for (const target of targets)
-    reports.push(await tearDownReport(target, deps));
+    reports.push(await tearDownReport(target, rest));
+  const orphans = await orphanReport(roots, preexisting, rest);
+  const survivors = [
+    ...reports.flatMap((report) => report.survivors),
+    ...orphans.matches.map((entry) => ({
+      kind: "orphan",
+      pid: entry.pid,
+      reason: "ORPHAN_REMAINS",
+      roots: entry.roots,
+    })),
+    ...orphans.unverifiable.map((entry) => ({
+      kind: "scan",
+      pid: entry.pid,
+      reason: "UNVERIFIABLE",
+      errno: entry.errno,
+    })),
+  ];
   return {
-    verified: reports.every((report) => report.verified),
-    survivors: reports.flatMap((report) => report.survivors),
+    verified:
+      reports.every((report) => report.verified) && survivors.length === 0,
+    survivors,
     instances: reports,
+    orphanScan: orphans,
   };
 }
 function teardownTargets(instances, launches) {
@@ -613,10 +735,11 @@ async function disposableRoot(temporary) {
 // real profile, which this witness may not touch. Read the value with an
 // application that fixes its own userData to a disposable path before ready
 // and never opens a window; nothing is read from or written to the result.
-async function probeNativeAppData(executable, temporary) {
+async function probeNativeAppData(executable, temporary, run) {
   const directory = await fs.mkdtemp(
     path.join(temporary, "farol-next-e2e-probe-"),
   );
+  run.roots.add(directory);
   await fs.chmod(directory, 0o700);
   const userData = path.join(directory, "user-data");
   await fs.writeFile(
@@ -638,20 +761,51 @@ app.whenReady().then(() => {
   );
   const home = path.join(directory, "home");
   await fs.mkdir(home, { mode: 0o700 });
-  const output = (
-    await execFileAsync(executable, [directory], {
-      encoding: "utf8",
-      timeout: 30000,
-      env: {
-        HOME: home,
-        TMPDIR: temporary,
-        LANG: "en_US.UTF-8",
-        PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-        PROBE_USER_DATA: userData,
-      },
-    })
-  ).stdout;
-  const line = output.split("\n").find((entry) => entry.startsWith("PROBE:"));
+  // The probe is a launched Electron like any other: its pid is recorded the
+  // moment it exists and its tree joins the teardown. It is never signalled;
+  // one that does not finish is left for the teardown to report.
+  const child = spawn(executable, [directory], {
+    env: {
+      HOME: home,
+      TMPDIR: temporary,
+      LANG: "en_US.UTF-8",
+      PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+      PROBE_USER_DATA: userData,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const target = {
+    kind: "probe",
+    pid: child.pid,
+    home: directory,
+    seen: new Set([child.pid]),
+  };
+  run.extraTargets.push(target);
+  let stdout = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", () => {});
+  let finished = null;
+  child.once("error", (error) => {
+    finished = { error };
+  });
+  child.once("exit", (code, signal) => {
+    finished = { code, signal };
+  });
+  const limit = Date.now() + 30000;
+  while (finished === null && Date.now() < limit) {
+    await scanTree(target);
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  await scanTree(target);
+  if (finished === null)
+    throw new Error("OWNER_PREVIEW_ISOLATION_PROBE_TIMEOUT");
+  if (finished.error || finished.code !== 0)
+    throw new Error(
+      `OWNER_PREVIEW_ISOLATION_PROBE_FAILED:${finished.error?.code ?? finished.code ?? finished.signal}`,
+    );
+  const line = stdout.split("\n").find((entry) => entry.startsWith("PROBE:"));
   assert.ok(line, "OWNER_PREVIEW_ISOLATION_PROBE_SILENT");
   return { ...JSON.parse(line.slice("PROBE:".length)), disposableHome: home };
 }
@@ -668,6 +822,7 @@ async function launch(
   const preview = kind === "owner-preview";
   const app = preview ? verified.appPath : verified.baseApp;
   const root = await disposableRoot(temporary);
+  options.run.roots.add(root.home);
   // Known before any process exists, so a failed launch still names its profile.
   record.home = root.home;
   const executable = path.join(
@@ -1410,7 +1565,7 @@ async function treeSelfCheck() {
     /OWNER_PREVIEW_ISOLATION_TREE_UNSTABLE:x/u,
   );
   assert.equal(counter, 5);
-  // Teardown: every pid ever seen gone, nothing new below the parent, no orphan.
+  // Teardown: every pid ever seen gone, nothing new below the parent.
   const instance = (...pids) => ({
     kind: "selfcheck",
     pid: 1,
@@ -1421,7 +1576,8 @@ async function treeSelfCheck() {
   const clean = {
     alive: () => false,
     rescan: async () => [1],
-    orphans: async () => [],
+    listPids: async () => [],
+    inspect: async () => [],
     ...fast,
   };
   const reasons = async (target, deps) =>
@@ -1437,32 +1593,123 @@ async function treeSelfCheck() {
     await reasons(instance(1, 2), { ...clean, rescan: async () => [1, 9] }),
     ["9:NEW_DESCENDANT"],
   );
+  // A probe Electron whose helper outlives the probe parent: the probe is a
+  // teardown target like an instance, so the surviving helper is reported.
+  const probe = {
+    kind: "probe",
+    pid: 20,
+    home: "/probe-root",
+    seen: new Set([20, 21]),
+  };
   assert.deepEqual(
-    await reasons(instance(1, 2), { ...clean, orphans: async () => [7] }),
-    ["7:ORPHAN_REMAINS"],
+    await reasons(probe, {
+      ...clean,
+      alive: (pid) => pid === 21,
+      rescan: async () => [20],
+    }),
+    ["21:PID_REMAINS"],
   );
   // An inventory failure is an unverified teardown, not a pass.
   const broken = await tearDownReport(instance(1), {
     ...clean,
-    orphans: async () => {
+    rescan: async () => {
       throw new Error("OWNER_PREVIEW_ISOLATION_INVENTORY_ERROR:pgrep:2:x");
     },
   });
   assert.equal(broken.verified, false);
   assert.match(broken.error, /INVENTORY_ERROR:pgrep/u);
-  // A failed launch has no pid: only its disposable root is checked.
-  const orphanOnly = await tearDownReport(
-    { kind: "owner-preview", pid: null, home: "/h2", seen: new Set() },
-    {
-      ...clean,
-      rescan: async () => assert.fail("no rescan without a pid"),
-      orphans: async (home) => (home === "/h2" ? [5] : []),
+  // Orphan rule, decided on argv and environment together. A reparented helper
+  // whose root is only in its environment is found; a process that existed
+  // before the run is never inspected; an unreadable one is unverifiable and
+  // keeps the teardown unverified; a vanished one is ignored.
+  const roots = new Set(["/root-a", "/root-b"]);
+  const inspected = [];
+  const scanDeps = {
+    ...clean,
+    listPids: async () => [10, 11, 12, 13, 14, 15],
+    inspect: async (pids, scanned) => {
+      inspected.push(...pids);
+      assert.deepEqual(scanned, ["/root-a", "/root-b"]);
+      return pids.map((pid) => ({
+        pid,
+        ...{
+          11: { status: "match", roots: ["/root-a"] },
+          12: { status: "clear", envVisible: true },
+          13: { status: "unreadable", errno: 22 },
+          14: { status: "gone", errno: 3 },
+          15: { status: "clear", envVisible: false },
+        }[pid],
+      }));
     },
-  );
+  };
+  const orphan = await orphanReport(roots, new Set([10]), scanDeps);
+  assert.deepEqual(inspected.slice(0, 5), [11, 12, 13, 14, 15]);
+  assert.equal(inspected.includes(10), false);
+  assert.deepEqual(orphan.matches, [{ pid: 11, roots: ["/root-a"] }]);
+  assert.deepEqual(orphan.unverifiable, [{ pid: 13, errno: 22 }]);
+  assert.equal(orphan.envWithheld, 1);
+  assert.equal(orphan.excluded, 1);
+  const scanned = await verifyTeardown([instance(1)], {
+    ...scanDeps,
+    roots,
+    preexisting: new Set([10]),
+  });
+  assert.equal(scanned.verified, false);
   assert.deepEqual(
-    orphanOnly.survivors.map((e) => e.pid),
-    [5],
+    scanned.survivors.map(
+      (entry) => `${entry.kind}:${entry.pid}:${entry.reason}`,
+    ),
+    ["orphan:11:ORPHAN_REMAINS", "scan:13:UNVERIFIABLE"],
   );
+  // A pre-existing match is excluded, so the same scan is clean without it.
+  const excluded = await orphanReport(roots, new Set([10, 11, 13]), {
+    ...scanDeps,
+    inspect: async (pids) =>
+      pids.map((pid) => ({ pid, status: "clear", envVisible: true })),
+  });
+  assert.deepEqual([excluded.matches, excluded.unverifiable], [[], []]);
+  // No roots means nothing to find and no scan at all.
+  assert.deepEqual(
+    await orphanReport(new Set(), new Set(), {
+      listPids: async () => assert.fail("scanned without roots"),
+    }),
+    { scanned: 0, excluded: 0, matches: [], unverifiable: [], envWithheld: 0 },
+  );
+  // The real scanner on real processes: a child whose root sits only in its
+  // environment is found, one without it is clear, a vanished pid is gone, and
+  // another process's environment never comes back.
+  const rootText = `/farol-selfcheck-root-${randomUUID()}`;
+  const spawnIdle = (environment) =>
+    spawn(process.execPath, ["-e", "setTimeout(() => {}, 2000)"], {
+      env: environment,
+      stdio: "ignore",
+    });
+  const withRoot = spawnIdle({ HOME: rootText });
+  const without = spawnIdle({ HOME: "/somewhere/else" });
+  const gone = spawn("/usr/bin/true");
+  await once(gone, "exit");
+  try {
+    const found = await inspectProcesses(
+      [withRoot.pid, without.pid, gone.pid],
+      [rootText],
+    );
+    assert.deepEqual(found, [
+      {
+        pid: withRoot.pid,
+        status: "match",
+        roots: [rootText],
+        envVisible: true,
+      },
+      { pid: without.pid, status: "clear", roots: [], envVisible: true },
+      { pid: gone.pid, status: "gone", errno: found[2].errno },
+    ]);
+  } finally {
+    await Promise.all(
+      [withRoot, without].map((child) =>
+        child.exitCode === null ? once(child, "exit") : null,
+      ),
+    );
+  }
   // A failing run that leaves one survivor: the receipt lists it, the status
   // stays UNKNOWN, and the original failure stays the reported error.
   const failing = {
@@ -1490,7 +1737,7 @@ async function treeSelfCheck() {
   concludeReceipt(passing, null, await verifyTeardown([instance(1, 2)], clean));
   assert.equal(passing.status, "PASS");
   assert.equal(passing.teardown.verified, true);
-  // Launch records without an instance still get their root checked.
+  // Launch records without an instance still get a target.
   const targets = teardownTargets(
     [{ home: "/a", kind: "normal", pid: 1, seen: new Set([1]) }],
     [
@@ -1623,7 +1870,12 @@ export async function runOwnerPreviewIsolation(
   let server;
   let failure = null;
   let teardown = null;
+  // Everything this run creates that a survivor could carry: every disposable
+  // root, every launched child outside the instances (the probe), and the uid's
+  // pids that already existed when the run began.
+  const run = { roots: new Set(), extraTargets: [], preexisting: new Set() };
   try {
+    run.preexisting = new Set(await uidPids());
     const temporary = await fs.realpath(os.tmpdir());
     const previewExecutable = path.join(
       verified.appPath,
@@ -1632,7 +1884,7 @@ export async function runOwnerPreviewIsolation(
 
     // 1. Override-free resolution. Observed without a profile: where the native
     // appData lands for a process whose HOME is disposable.
-    const probe = await probeNativeAppData(previewExecutable, temporary);
+    const probe = await probeNativeAppData(previewExecutable, temporary, run);
     const realAppData = path.join(
       os.userInfo().homedir,
       "Library/Application Support",
@@ -1684,7 +1936,7 @@ export async function runOwnerPreviewIsolation(
           temporary,
           fixtureOrigin,
           record,
-          options,
+          { ...options, run },
         );
       } catch (error) {
         record.status = "failed";
@@ -1847,7 +2099,8 @@ export async function runOwnerPreviewIsolation(
     // The single teardown, for every exit path: success, failure, or a launch
     // that failed half way. Survivors are reported, never signalled.
     teardown = await verifyTeardown(
-      teardownTargets(instances, receipt.launches),
+      [...teardownTargets(instances, receipt.launches), ...run.extraTargets],
+      { roots: run.roots, preexisting: run.preexisting },
     );
     for (const instance of instances) writeQuit(instance);
     if (server) {

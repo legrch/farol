@@ -235,10 +235,28 @@ and socket paths must be disjoint.
 Process tree: a tree is a moving snapshot. It is rescanned until two consecutive
 snapshots agree on the pid set (bounded; `TREE_UNSTABLE` otherwise), every
 per-pid check runs on the union of all pids ever seen, and after the quits every
-such pid must be gone (`PID_REMAINS`), a rescan from the original parent must
-find no descendant (`NEW_DESCENDANT`), and no process may still carry the
-instance's unique disposable root in its arguments (`ORPHAN_REMAINS`, a `pgrep -f`
-on that root; a reparented orphan is no longer a descendant).
+such pid must be gone (`PID_REMAINS`) and a rescan from the original parent must
+find no descendant (`NEW_DESCENDANT`). Every Electron the test starts is a tree
+of its own, including the native-appData probe: its pid is recorded the moment
+it exists, its descendants are followed while it runs, and it is never signalled.
+
+Orphan rule, decided on argv and environment together. A reparented helper is no
+longer a descendant, and a disposable root normally reaches a process through
+`HOME`, not its arguments. At teardown every process of the current uid that did
+not exist when the run started (the uid's pid set is snapshotted at run start and
+excluded) is inspected through the fail-closed runner (`ps -U <uid>`) and the
+`KERN_PROCARGS2` reader. Any such process whose argv or environment contains a
+disposable root of this run (every instance home, every launched-but-failed home,
+the probe directory) is a survivor (`ORPHAN_REMAINS`). A process whose arguments
+cannot be read is `unverifiable` (`UNVERIFIABLE`, with the errno) and keeps
+`teardown.verified` false; a process that has exited (the OS answers `EINVAL` as
+well as `ESRCH` for a just-exited pid, so an unreadable pid the kernel no longer
+knows counts as exited) is ignored. Matching happens inside the scanner, which
+takes the roots on stdin: only matching pids and this run's own root strings come
+back, so no other process's arguments or environment are read into the test,
+logged or recorded. Known limit: the OS withholds the environment of hardened and
+system binaries (they read as argv only); such processes are counted in
+`orphanScan.envWithheld`, not hidden.
 
 That teardown proof runs once, in a `finally`, on every exit path (success,
 failure, or a launch that failed half way; a launch with no handle still gets the
