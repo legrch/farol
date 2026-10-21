@@ -37,7 +37,11 @@ export function setupChecklist(snapshot: WindowSnapshot) {
         snapshot.configuration.settings,
         snapshot.buildId ?? "",
       ),
-    localConnectionCurrent: setup.localConnectionCurrent,
+    localConnectionCurrent:
+      setup.localConnectionCurrent &&
+      !["refused", "unknown"].includes(
+        snapshot.intents["settings:connector.check-health:"]?.state ?? "",
+      ),
     externalAccessVerified: setup.externalAccessVerified,
     computerReady: setup.ready,
     signInActivity: signIn.outcomeUnknown

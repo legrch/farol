@@ -1,3 +1,4 @@
+import { SetupWalkthrough } from "../../../apps/desktop/renderer/setup-walkthrough";
 import { unavailableConnectionStatus } from "../../../apps/desktop/renderer/connection-status";
 import { connectorSetupPresentation } from "../connector-setup-presentation";
 import { ConnectionGuide } from "./connection-guide";
@@ -1959,7 +1960,219 @@ function ThisMac({ settings, snapshot, facade, actions }: PageProps) {
     </>
   );
 }
-function Connection({
+function Connection(props: PageProps) {
+  if (props.setupStep !== "connection") return <LegacyConnection {...props} />;
+  return <ConnectMac {...props} />;
+}
+function ConnectMac({ settings, snapshot, facade, actions }: PageProps) {
+  const connector = settings.connectors.secureMcp;
+  const [tunnelId, setTunnelId] = useState(connector.tunnelId ?? "");
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const running = useRef(false);
+  const composing = useRef(false);
+  const feedback = useSettingsFeedback(facade);
+  const result = feedback.pages["setup:connection"]?.result;
+  const setup = computerSetup(snapshot);
+  const failed = result?.state === "refused" || result?.state === "unknown";
+  const connected = setup.localConnectionCurrent && !failed;
+  const valid =
+    key.length > 0
+      ? ProductConfigurationCommandSchema.safeParse({
+          kind: "connector.configure",
+          tunnelId,
+          runtimeKey: key,
+        }).success
+      : connector.credential === "stored" && tunnelId === connector.tunnelId;
+  async function connect() {
+    if (running.current || composing.current || !valid) return;
+    running.current = true;
+    setBusy(true);
+    const secret = key;
+    setKey("");
+    try {
+      let current = facade.getSnapshot();
+      if (current.configuration?.status !== "ready") return;
+      if (!current.configuration.settings.connectors.secureMcp.tunnelClient) {
+        if (
+          (await actions.run({ kind: "connector.discover-client" }))?.state !==
+          "applied"
+        )
+          return;
+        current = facade.getSnapshot();
+        if (
+          current.configuration?.status !== "ready" ||
+          !current.configuration.settings.connectors.secureMcp.tunnelClient
+        )
+          return;
+      }
+      if (secret) {
+        if (
+          current.configuration.settings.connectors.secureMcp.runtime !==
+            null &&
+          (await actions.run({ kind: "connector.stop" }))?.state !== "applied"
+        )
+          return;
+        if (
+          (
+            await actions.run({
+              kind: "connector.save-and-connect",
+              operationId: crypto.randomUUID(),
+              buildId: current.buildId ?? "",
+              tunnelId,
+              runtimeKey: secret,
+            })
+          )?.state !== "applied"
+        )
+          return;
+      } else if (!computerSetup(current).localConnectionCurrent) {
+        const kind =
+          current.configuration.settings.connectors.secureMcp.runtime === null
+            ? "connector.start"
+            : "connector.repair";
+        if ((await actions.run({ kind }))?.state !== "applied") return;
+      }
+      await actions.run({ kind: "connector.check-health" });
+    } finally {
+      running.current = false;
+      setBusy(false);
+    }
+  }
+  const helperMissing =
+    Boolean(result?.id.includes("discover-client")) && !connector.tunnelClient;
+  return (
+    <>
+      <section aria-label="Create a tunnel and a key">
+        <h3>1. Create a tunnel and a key</h3>
+        <SetupWalkthrough />
+        <Command
+          actions={actions}
+          command={{ kind: "onboarding.open-help", destination: "tunnels" }}
+        >
+          Open OpenAI Tunnels
+        </Command>
+      </section>
+      <form
+        className="connection-credentials"
+        autoComplete="off"
+        onCompositionStart={() => {
+          composing.current = true;
+        }}
+        onCompositionEnd={() => {
+          composing.current = false;
+        }}
+        onSubmit={(event) => {
+          event.preventDefault();
+          void connect();
+        }}
+      >
+        <label className="setting-row">
+          Tunnel ID
+          <input
+            className="field"
+            value={tunnelId}
+            maxLength={160}
+            onChange={(event) => setTunnelId(event.currentTarget.value)}
+            required
+            disabled={busy}
+          />
+        </label>
+        <label className="setting-row">
+          Key
+          <input
+            className="field"
+            type="password"
+            autoComplete="new-password"
+            spellCheck={false}
+            maxLength={512}
+            value={key}
+            placeholder={
+              connector.credential === "stored" ? "Key saved" : "Paste your key"
+            }
+            onChange={(event) => setKey(event.currentTarget.value)}
+            disabled={busy}
+          />
+        </label>
+        <button
+          className="primary"
+          disabled={
+            busy || !valid || !actions.allowed("connector.save-and-connect")
+          }
+        >
+          {busy ? "Connecting…" : "Connect"}
+        </button>
+      </form>
+      {connected && (
+        <p className="setup-success" role="status">
+          ✓ Connected
+        </p>
+      )}
+      {(failed || helperMissing) && (
+        <SetupFailure
+          result={result ?? null}
+          actions={actions}
+          helperMissing={helperMissing}
+        />
+      )}
+      {!connected && !failed && !helperMissing && !busy && (
+        <p className="description">
+          Enter your tunnel ID and key, then connect.
+        </p>
+      )}
+    </>
+  );
+}
+function SetupFailure({
+  result,
+  actions,
+  helperMissing = false,
+}: {
+  result: Intent | null;
+  actions: Actions;
+  helperMissing?: boolean;
+}) {
+  const unknown =
+    result?.state === "unknown" || result?.code === "SETTINGS_WRITE_FAILED";
+  const keyRejected =
+    /(?:CREDENTIAL|KEY|AUTH)/u.test(result?.code ?? "") && !unknown;
+  return (
+    <div className="notice setup-failure" role="alert">
+      <p>
+        {unknown
+          ? "Farol could not confirm the last action. Check its saved result before continuing; do not repeat it."
+          : helperMissing
+            ? "This Mac could not find a usable connection helper. Install tunnel-client for this account."
+            : keyRejected
+              ? "OpenAI did not accept this key. It may be revoked or belong to another tunnel."
+              : "This Mac could not complete the check. Check the setup guide before trying again."}
+      </p>
+      {unknown ? (
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => void actions.refresh()}
+        >
+          Refresh status
+        </button>
+      ) : (
+        <Command
+          actions={actions}
+          command={{
+            kind: "onboarding.open-help",
+            destination: keyRejected ? "tunnels" : "setup-guide",
+          }}
+        >
+          {keyRejected
+            ? "Create a new key in OpenAI Tunnels"
+            : helperMissing
+              ? "How to install tunnel-client"
+              : "Read the setup guide"}
+        </Command>
+      )}
+    </div>
+  );
+}
+function LegacyConnection({
   settings,
   snapshot,
   facade,
