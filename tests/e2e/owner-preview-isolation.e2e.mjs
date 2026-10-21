@@ -1434,6 +1434,8 @@ async function launch(
     FAROL_NEXT_E2E_CHATGPT_URL: fixtureOrigin,
     ...(preview ? { FAROL_NEXT_ENVIRONMENT: "owner-preview" } : {}),
   };
+  for (const [key, value] of Object.entries(environment))
+    if (key !== "FAROL_NEXT_E2E_TEST_PROOF") options?.run?.declared?.add(value);
   const instance = {
     kind,
     app,
@@ -1614,11 +1616,18 @@ function assertProcessEnvironment(entry) {
 // design. A finding is redacted (a whole value, or just the offending path inside
 // a failure message) and reported by JSON pointer and code only; the caller
 // writes the scrubbed receipt and then fails closed.
-function guardReceipt(receipt, { envValues, roots, repositoryRoot }) {
+function guardReceipt(
+  receipt,
+  { envValues, declared = new Set(), roots, repositoryRoot },
+) {
   const homeForms = formsOf(os.userInfo().homedir);
+  // A value this run wrote into a launch environment itself (an instance kind,
+  // a locale, the fixture origin) is public by construction, not a secret; the
+  // test proof is never declared, so it stays guarded.
   const guarded = new Set(
     [...envValues].filter(
-      (value) => value.length >= 12 || path.isAbsolute(value),
+      (value) =>
+        !declared.has(value) && (value.length >= 12 || path.isAbsolute(value)),
     ),
   );
   const recorded = (candidate) => {
@@ -2535,6 +2544,25 @@ async function scannerSelfCheck() {
       const clean = guardReceipt(carrying, guard);
       assert.deepEqual(clean.violations, []);
       assert.deepEqual(clean.receipt, carrying);
+      // A value the run declared in a launch environment (the Preview kind is
+      // 13 characters) is public: the same receipt passes with it declared and
+      // is a finding without; a proof is never declared and always a finding.
+      const kinded = { launches: [{ kind: "owner-preview" }], proof };
+      const observed = new Set([...guard.envValues, "owner-preview"]);
+      assert.deepEqual(
+        guardReceipt(kinded, {
+          ...guard,
+          envValues: observed,
+          declared: new Set(["owner-preview"]),
+        }).violations.map((entry) => `${entry.code}@${entry.pointer}`),
+        ["ENV_VALUE@/proof"],
+      );
+      assert.deepEqual(
+        guardReceipt(kinded, { ...guard, envValues: observed }).violations.map(
+          (entry) => `${entry.code}@${entry.pointer}`,
+        ),
+        ["ENV_VALUE@/launches/0/kind", "ENV_VALUE@/proof"],
+      );
       // A receipt that did carry a value, a proof, an owner path or the home is
       // scrubbed, reported by pointer and code, and the text holds none of them.
       const leaky = {
@@ -3523,6 +3551,7 @@ export async function runOwnerPreviewIsolation(
     roots: new Set(),
     preexisting: new Set(),
     envValues: new Set(),
+    declared: new Set(),
   };
   ownerState.exempt = run.roots;
   partialInventory.lsofMounts.clear();
@@ -3534,6 +3563,7 @@ export async function runOwnerPreviewIsolation(
       receipt.lsofPartialMounts = [...partialInventory.lsofMounts].sort();
     const guarded = guardReceipt(receipt, {
       envValues: run.envValues,
+      declared: run.declared,
       roots: run.roots,
       repositoryRoot,
     });
