@@ -1,4 +1,4 @@
-# Farol Next preview design
+# Farol preview design
 
 > [!NOTE]
 > The Watch Rail layout and interaction details below describe the historical

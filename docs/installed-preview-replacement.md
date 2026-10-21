@@ -7,7 +7,7 @@ remain parent-owned. This document grants no production execution authority.
 ## Startup fence
 
 The fixed intent slot is
-`<userData>/farol-next-state/installed-replacement.pending`. The desktop checks
+`<userData>/farol-state/installed-replacement.pending`. The desktop checks
 it after acquiring its existing generation-owned promotion lease, before the
 startup critical callback, and again through that callback's verifier before
 publishing the running marker. Any entry blocks startup, including symlinks,

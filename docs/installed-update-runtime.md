@@ -88,7 +88,7 @@ writable. Group write is allowed only for the standard macOS administrator group
 exception applies only to that shared parent: app, state and staging ownership
 checks remain strict. Parent identity is rechecked before placement/publication
 and update mutations. UserData remains the OS-account
-`Library/Application Support/Farol Next Preview` directory.
+`Library/Application Support/io.github.legrch.farol` directory.
 
 The updater is enabled only for the selected installed slot and
 its existing owner data directory. Temporary `task run` copies do not update the
@@ -210,7 +210,7 @@ Adoption runs these steps and writes nothing unless all of them pass:
    build must equal the manifest's `artifactSha256`, `version` and `buildId`,
    else `UPDATE_ADOPTION_TREE_MISMATCH`.
 5. The runtime creates `adopted-baseline.json` next to `last-update.json`
-   (`farol.next.adopted-baseline/1`: `slot`, `userData`, the full manifest and
+   (`farol.adopted-baseline/1`: `slot`, `userData`, the full manifest and
    `adoptedAt`) through the existing private record writer: one atomic rename
    publish. A crash before the rename leaves only a stray temporary file and no
    record, so the next check adopts normally. The app is single-instance, and a
@@ -300,13 +300,13 @@ fails with exactly `UPDATE_ACCEPTED_SOURCE_UNCONFIRMED`.
 Any failure writes nothing. The four user-actionable failures (network, release not
 found, tree mismatch, release mismatch) are also shown in a native error box, since
 the process has no window yet, then the process exits 1; there is no retry loop.
-The box is modal, so a non-interactive launch (`FAROL_NEXT_E2E=1`, a set `CI`,
-or `FAROL_NEXT_NONINTERACTIVE=1`) gets no box and exits at once, with the same
+The box is modal, so a non-interactive launch (`FAROL_E2E=1`, a set `CI`,
+or `FAROL_NONINTERACTIVE=1`) gets no box and exits at once, with the same
 stderr report.
 Once the app is running, the shared-slot updater accepts the same valid record in
 `readAcceptedSource()` and reports no `UPDATE_SOURCE_IDENTITY_UNCONFIRMED`.
 
-The record lives per user, in `~/Library/Application Support/Farol Next Preview/
+The record lives per user, in `~/Library/Application Support/io.github.legrch.farol/
 installed-updates/`. The first launch needs the network; later launches read the
 record offline. Adoption is trust on first use, as above. One limitation is
 unchanged: a second macOS user cannot launch a shared copy owned by another uid,
@@ -550,7 +550,7 @@ normal promotion receipt and configuration. The whole old updater directory is
 retained intact under the exact operation's quarantine; its unknown result is
 preserved rather than declared reconciled or deleted.
 
-Repair writes a separate `farol.next.closed-repair/1` receipt. The updater accepts
+Repair writes a separate `farol.closed-repair/1` receipt. The updater accepts
 that installed baseline only after checking the fixed slot, exact build/source,
 fixed private predecessor location and both physical package identities. The
 normal promotion receipt is never rewritten to claim a non-overwriting install,

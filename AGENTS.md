@@ -5,8 +5,14 @@ live at the repository root. No sibling V0 checkout or private knowledge vault
 is required to build, test, or package it.
 
 The permanent model route is `provider = farol`, `model = chatgpt`.
-Existing preview bundle IDs, state roots, partitions, process names, and receipt
-schemas are compatibility boundaries. Do not rename them as a source-layout fix.
+The product name is Farol. The owner-approved 2026-10-22 identity cutover drops
+the old beta naming from current bundles, storage, partitions, tools, environment
+keys and schemas. Breaking updates from old betas are accepted; reinstall them.
+Production uses bundle and data directory `io.github.legrch.farol`, runtime
+partition `persist:farol-runtime`, and ChatGPT partition
+`persist:farol-app-chatgpt`. Keep Dev and Owner Preview isolated. Explicit legacy
+install readers and rejection fixtures may retain old literals; never target V0
+identities. See [identity cutover](docs/identity-cutover.md).
 
 - The accepted target is React + TypeScript for Farol-owned UI, plain TypeScript
   for Electron/preload/browser adapters, and Go for backend policy, application,

@@ -26,7 +26,7 @@ identity accepted by `assertBuildIdentity` in `build-identity-contract.mjs`, wit
 type FileDigest = { kind: "file"; size: number; sha256: string };
 type TreeDigest = {
   kind: "tree";
-  version: "farol.next.tree-digest/v2";
+  version: "farol.tree-digest/v2";
   sha256: string;
 };
 type ContentDigest = FileDigest | TreeDigest;

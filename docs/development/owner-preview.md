@@ -84,7 +84,7 @@ The recipe permits precisely these differences from the canonical snapshot:
 
 - Outer `Contents/Info.plist`: only the string values of `CFBundleDisplayName`,
   `CFBundleName`, `CFBundleIdentifier` and `CFBundleIconFile`.
-- Existing `Contents/MacOS/Farol Next Preview`: a fixed launcher that rejects
+- Existing `Contents/MacOS/Farol`: a fixed launcher that rejects
   arguments, starts with `env -i`, and sets the exact `owner-preview` marker.
   Its executable basename and mode stay unchanged.
 - Added `Contents/Resources/farol-preview.icns`, and added
@@ -94,7 +94,7 @@ The recipe permits precisely these differences from the canonical snapshot:
 Every other file, directory, link target and mode must match. This includes
 vendor Electron, Go resources, original production/Dev branding, embedded source
 and build identity, original resource manifests and build entries. There is no
-global Next/ID rename and no rewrite to impersonate a canonical package.
+global Farol/ID rename and no rewrite to impersonate a canonical package.
 
 The verifier independently re-verifies the hidden base, renders expected Preview
 assets from the SHA-pinned SVG using fixed local `rsvg-convert` and `iconutil`
@@ -251,18 +251,18 @@ started on a throwaway app, from a shell with a disposable `HOME`, and the app
 printed three values once ready:
 
 ```text
-command shape  env HOME=<TMPDIR>/farol-next-e2e-probe-<random>/home \
+command shape  env HOME=<TMPDIR>/farol-e2e-probe-<random>/home \
                  <package>/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron <throwaway-app-dir>
                (main.js called app.setPath("userData", <disposable dir>) before
                ready, opened no window, then printed and quit)
-process.env.HOME            <TMPDIR>/farol-next-e2e-probe-<random>/home   (the disposable value)
+process.env.HOME            <TMPDIR>/farol-e2e-probe-<random>/home   (the disposable value)
 app.getPath("appData")      <account-home>/Library/Application Support    (the account's real one)
 app.getPath("home")         <account-home>                                (the account's real one)
 ```
 
 `<account-home>` is the macOS account's real home directory, redacted. So a disposable `HOME` is visible to the process, yet Electron's native `appData`
 and `home` still point at the account's real directories. A launch without
-`FAROL_NEXT_E2E_APP_DATA` would therefore select the owner's real `Farol Preview`
+`FAROL_E2E_APP_DATA` would therefore select the owner's real `Farol Preview`
 profile. In-tree corroboration: the product already pins `app.getPath("home")` to
 the proven E2E home because, in its own words, "on macOS Electron's native home
 may ignore the child's HOME environment"
