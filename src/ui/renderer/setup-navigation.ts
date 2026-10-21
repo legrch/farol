@@ -63,7 +63,8 @@ export function setupChecklist(snapshot: WindowSnapshot) {
       entry.step === "signin"
         ? {
             ...entry,
-            status: signIn.label,
+            status:
+              entry.state === "verified" ? "Sign-in checked" : signIn.label,
             action:
               signIn.signedIn || signIn.outcomeUnknown
                 ? ("Review" as const)

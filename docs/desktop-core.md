@@ -1,5 +1,13 @@
 # Desktop/Core checkpoint K0
 
+> Current UI note (2026-10-22): the Setup and Settings redesign retires the
+> Diagnostics page and its standalone Chat/account/history acceptance forms.
+> Their renderer components and component-only tests are removed; backend, IPC,
+> controller and retained-result capabilities remain. Historical witnesses below
+> still describe their pinned candidates, not the new Setup UI. Native journeys
+> that require those forms or their old source-input paths must be migrated and
+> qualified against the current UI before they can provide new acceptance.
+
 K0 is an additive backend foundation. The installed Electron application still uses its existing backend. Only the trusted host imports `apps/desktop/bridge/client.ts`; React and remote pages do not receive this client or its pipe.
 
 The accepted Go migration layout places the Core-owned host client, framed decoder and generated TypeScript wire under `apps/desktop/bridge`. This is the explicit migration exception to the legacy `src/` source layout. `tooling/tsconfig.desktop-core.json` makes these modules direct strict compiler roots, independently of test imports. Desktop owns the trusted Electron host integration point and its frontend directory move; K0 supplies the importable client and disposable process witness. Lead owns reconciliation of repository-wide layout instructions during integration.

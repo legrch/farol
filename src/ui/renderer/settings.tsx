@@ -434,6 +434,20 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
     setupStep,
   };
   const pageFeedback = feedback.pages[feedbackPage(snapshot.destination)];
+  const signInUnknown =
+    setupStep === "signin" &&
+    signInPresentation(snapshot, retained(snapshot)).outcomeUnknown;
+  const pausedWithoutResult =
+    setupStep &&
+    pageFeedback?.result?.state !== "unknown" &&
+    pageFeedback?.result?.state !== "refused" &&
+    (computerFences.unknown ||
+      feedback.unretained ||
+      signInUnknown ||
+      snapshot.status !== "current" ||
+      snapshot.runtime !== "ready" ||
+      !snapshot.buildId ||
+      configuration?.status !== "ready");
   return (
     <div
       className="settings-page"
@@ -444,7 +458,7 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
         composing.current = false;
       }}
     >
-      {configuration?.status !== "ready" ? (
+      {!setupStep && configuration?.status !== "ready" ? (
         <div className="notice" role="status">
           <p>Farol could not read the current settings.</p>
           <button
@@ -458,6 +472,22 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
       ) : null}
       {setupStep ? (
         <>
+          {pausedWithoutResult && (
+            <div className="notice setup-failure" role="alert">
+              <p>
+                {signInUnknown
+                  ? "The sign-in result could not be confirmed. Refresh its saved result before continuing; do not repeat it."
+                  : actions.computerPauseReason}
+              </p>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => void actions.refresh()}
+              >
+                Refresh status
+              </button>
+            </div>
+          )}
           {setupStep === "folders" ? (
             <Folders {...props} />
           ) : (
@@ -516,83 +546,87 @@ function General({ snapshot, facade, actions }: PageProps) {
           Open Setup
         </button>
       </section>
-      <Group title="Updates" showTitle={false}>
-        <label className="setting-row">
-          Install updates automatically
-          <input
-            type="checkbox"
-            aria-label="Install updates automatically"
-            checked={
-              snapshot.environment === "preview" &&
-              automaticUpdateEnabled(snapshot.update)
-            }
-            disabled={!automaticUpdateAvailable(snapshot)}
-            onChange={(event) => {
-              if (automaticUpdateAvailable(facade.getSnapshot()))
-                void facade.setAutomaticDownloads(event.currentTarget.checked);
-            }}
-          />
-        </label>
-        {preferenceUnknown ? (
-          <p className="description" role="status">
-            The update preference could not be confirmed. Wait for its saved
-            result before changing it again.
-          </p>
-        ) : preference?.status !== "confirmed" ? (
-          <p className="description">
-            The update preference is unavailable in this session.
-          </p>
-        ) : updateIntent?.state === "refused" ? (
-          <p className="description" role="status">
-            The update preference could not be saved.
-          </p>
-        ) : null}
-        <div className="setting-row">
-          <span>Version</span>
-          <span>
-            {snapshot.installedVersion?.version ?? "Unavailable"}
-            {snapshot.installedVersion?.buildVersion
-              ? ` · ${snapshot.installedVersion.buildVersion}`
-              : ""}
-          </span>
-          <button
-            type="button"
-            className="text-button"
-            disabled={
-              checking ||
-              snapshot.environment !== "preview" ||
-              snapshot.status !== "current" ||
-              snapshot.runtime !== "ready" ||
-              !updateCheckAllowed(snapshot.update) ||
-              snapshot.intents.update?.state === "unknown" ||
-              snapshot.intents.update?.state === "pending"
-            }
-            onClick={async () => {
-              if (!updateCheckAllowed(facade.getSnapshot().update)) return;
-              setChecking(true);
-              try {
-                const result = await facade.update("check");
-                setUpdateMessage(
-                  result.state === "applied"
-                    ? "Update check completed."
-                    : result.state === "unknown"
-                      ? "The update check could not be confirmed. Do not repeat it."
-                      : "The update check could not be completed.",
-                );
-              } finally {
-                setChecking(false);
+      <div className="settings-update-controls">
+        <Group title="Updates" showTitle={false}>
+          <label className="setting-row">
+            Install updates automatically
+            <input
+              type="checkbox"
+              aria-label="Install updates automatically"
+              checked={
+                snapshot.environment === "preview" &&
+                automaticUpdateEnabled(snapshot.update)
               }
-            }}
-          >
-            {checking ? "Checking…" : "Check for updates"}
-          </button>
-        </div>
-        {updateMessage && (
-          <p className="description" role="status">
-            {updateMessage}
-          </p>
-        )}
-      </Group>
+              disabled={!automaticUpdateAvailable(snapshot)}
+              onChange={(event) => {
+                if (automaticUpdateAvailable(facade.getSnapshot()))
+                  void facade.setAutomaticDownloads(
+                    event.currentTarget.checked,
+                  );
+              }}
+            />
+          </label>
+          {preferenceUnknown ? (
+            <p className="description" role="status">
+              The update preference could not be confirmed. Wait for its saved
+              result before changing it again.
+            </p>
+          ) : preference?.status !== "confirmed" ? (
+            <p className="description">
+              The update preference is unavailable in this session.
+            </p>
+          ) : updateIntent?.state === "refused" ? (
+            <p className="description" role="status">
+              The update preference could not be saved.
+            </p>
+          ) : null}
+          <div className="setting-row">
+            <span>Version</span>
+            <span>
+              {snapshot.installedVersion?.version ?? "Unavailable"}
+              {snapshot.installedVersion?.buildVersion
+                ? ` · ${snapshot.installedVersion.buildVersion}`
+                : ""}
+            </span>
+            <button
+              type="button"
+              className="text-button"
+              disabled={
+                checking ||
+                snapshot.environment !== "preview" ||
+                snapshot.status !== "current" ||
+                snapshot.runtime !== "ready" ||
+                !updateCheckAllowed(snapshot.update) ||
+                snapshot.intents.update?.state === "unknown" ||
+                snapshot.intents.update?.state === "pending"
+              }
+              onClick={async () => {
+                if (!updateCheckAllowed(facade.getSnapshot().update)) return;
+                setChecking(true);
+                try {
+                  const result = await facade.update("check");
+                  setUpdateMessage(
+                    result.state === "applied"
+                      ? "Update check completed."
+                      : result.state === "unknown"
+                        ? "The update check could not be confirmed. Do not repeat it."
+                        : "The update check could not be completed.",
+                  );
+                } finally {
+                  setChecking(false);
+                }
+              }}
+            >
+              {checking ? "Checking…" : "Check for updates"}
+            </button>
+          </div>
+          {updateMessage && (
+            <p className="description" role="status">
+              {updateMessage}
+            </p>
+          )}
+        </Group>
+      </div>
       <Group title="Something wrong?">
         <p className="description">
           Save a support file and attach it to a GitHub issue. It holds no
@@ -747,6 +781,7 @@ function Folders(props: PageProps) {
       const evidence = before.evidence;
       if (
         picked?.state !== "applied" ||
+        before.destination !== picking.destination ||
         evidence === picking.evidence ||
         !soleIntent(picking, before, "computer.choose-workspace") ||
         evidence?.value.kind !== "computer.workspace-pick" ||
@@ -764,6 +799,7 @@ function Folders(props: PageProps) {
       const selection = current.evidence?.value;
       if (
         result?.state !== "applied" ||
+        current.destination !== picking.destination ||
         current.evidence === before.evidence ||
         !soleIntent(before, current, "computer.add-workspace") ||
         selection?.kind !== "computer.workspace-selection" ||
@@ -895,7 +931,7 @@ function Folders(props: PageProps) {
                 <input
                   type="checkbox"
                   aria-label={`Commands for ${folderDisplayName(workspace)}`}
-                  checked={settings.computer.commands === "workspace"}
+                  checked={settings.computer.commands !== "none"}
                   disabled={
                     paused || !actions.allowed("computer.update-commands")
                   }
@@ -971,6 +1007,12 @@ function Folders(props: PageProps) {
         tests and builds; each run still asks you first. Command access is
         shared by all workspaces.
       </p>
+      {settings.computer.commands === "verification" && (
+        <p className="description">
+          This profile currently allows Git checks only. Turn Commands off and
+          on to allow workspace commands.
+        </p>
+      )}
       {settings.computer.workspaces.length === 0 && (
         <p className="description">Add a workspace to continue.</p>
       )}
@@ -1024,10 +1066,34 @@ function ConnectMac({ settings, snapshot, facade, actions }: PageProps) {
           runtimeKey: key,
         }).success
       : connector.credential === "stored" && tunnelId === connector.tunnelId;
+  const fieldError =
+    !valid && (tunnelId.length > 0 || key.length > 0)
+      ? !ProductConfigurationCommandSchema.safeParse({
+          kind: "connector.configure",
+          tunnelId,
+          runtimeKey: null,
+        }).success
+        ? "Copy the complete tunnel ID from OpenAI Tunnels, without spaces."
+        : key.length === 0
+          ? "Paste the key shown when you created it in OpenAI."
+          : "Paste the complete key without spaces or line breaks."
+      : null;
   async function connect() {
     if (running.current || composing.current || !valid) return;
     running.current = true;
     setBusy(true);
+    const origin = facade.getSnapshot();
+    const stillHere = () => {
+      const latest = facade.getSnapshot();
+      return (
+        latest.destination === origin.destination &&
+        latest.buildId === origin.buildId &&
+        latest.configuration?.status === "ready" &&
+        origin.configuration?.status === "ready" &&
+        latest.configuration.settings.computer.computerId ===
+          origin.configuration.settings.computer.computerId
+      );
+    };
     const secret = key;
     setKey("");
     try {
@@ -1041,6 +1107,7 @@ function ConnectMac({ settings, snapshot, facade, actions }: PageProps) {
           return;
         current = facade.getSnapshot();
         if (
+          !stillHere() ||
           current.configuration?.status !== "ready" ||
           !current.configuration.settings.connectors.secureMcp.tunnelClient
         )
@@ -1053,6 +1120,7 @@ function ConnectMac({ settings, snapshot, facade, actions }: PageProps) {
           (await actions.run({ kind: "connector.stop" }))?.state !== "applied"
         )
           return;
+        if (!stillHere()) return;
         if (
           (
             await actions.run({
@@ -1072,7 +1140,7 @@ function ConnectMac({ settings, snapshot, facade, actions }: PageProps) {
             : "connector.repair";
         if ((await actions.run({ kind }))?.state !== "applied") return;
       }
-      await actions.run({ kind: "connector.check-health" });
+      if (stillHere()) await actions.run({ kind: "connector.check-health" });
     } finally {
       running.current = false;
       setBusy(false);
@@ -1142,6 +1210,11 @@ function ConnectMac({ settings, snapshot, facade, actions }: PageProps) {
           {busy ? "Connecting…" : "Connect"}
         </button>
       </form>
+      {fieldError && (
+        <p className="description" role="status">
+          {fieldError}
+        </p>
+      )}
       {connected && (
         <p className="setup-success" role="status">
           ✓ Connected
@@ -1228,7 +1301,9 @@ function SignInStep({ snapshot, facade, actions }: PageProps) {
       ? snapshot.configuration.settings.setup.chatgpt
       : null;
   const verified =
-    signIn.signedIn &&
+    !signIn.pending &&
+    !signIn.outcomeUnknown &&
+    snapshot.signInObservation?.state !== "signed_out" &&
     saved?.verified?.buildId === snapshot.buildId &&
     saved.reachable === "reachable";
   const feedback = useSettingsFeedback(facade);
@@ -1237,7 +1312,7 @@ function SignInStep({ snapshot, facade, actions }: PageProps) {
     <section aria-label="ChatGPT sign-in">
       {verified ? (
         <p className="setup-success" role="status">
-          ✓ Signed in
+          ✓ Sign-in checked
         </p>
       ) : result?.state === "unknown" || result?.state === "refused" ? (
         <SetupFailure result={result} actions={actions} />
@@ -1310,6 +1385,17 @@ function AddToChatGPT({ settings, snapshot, facade, actions }: PageProps) {
         )
           return;
       }
+      const latest = facade.getSnapshot();
+      if (
+        latest.destination !== current.destination ||
+        latest.buildId !== current.buildId ||
+        latest.configuration?.status !== "ready" ||
+        latest.configuration.settings.connectors.secureMcp.generation !==
+          saved.generation ||
+        latest.configuration.settings.connectors.secureMcp.tunnelId !==
+          saved.tunnelId
+      )
+        return;
       const pending = actions.run(
         { kind: "connector.verify-app" },
         (current) => computerSetup(current).canVerifyEmbeddedApp,

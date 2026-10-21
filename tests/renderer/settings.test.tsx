@@ -299,6 +299,29 @@ describe("Connection", () => {
     expect(h.button("Continue")?.disabled).toBe(true);
     expect(h.host.textContent).not.toContain("✓ Connected");
   });
+  it("does not save credentials after navigating away during helper discovery", async () => {
+    const h = await mount({ step: "connection" });
+    const fields = h.host.querySelectorAll<HTMLInputElement>(
+      ".connection-credentials input",
+    );
+    await change(fields[0]!, "synthetic-tunnel");
+    await change(fields[1]!, "synthetic-key-do-not-retain");
+    const wait = deferred<unknown>();
+    h.reply(() => wait.promise);
+    await h.click("Connect");
+    await h.navigate("folders");
+    await act(async () =>
+      wait.resolve({
+        ok: true,
+        snapshot: {
+          status: "ready",
+          settings: { ...readySettings(), revision: 2 },
+        },
+      }),
+    );
+    expect(h.f.api.configure).toHaveBeenCalledTimes(1);
+    expect(h.c.getSnapshot().destination.setupStep).toBe("folders");
+  });
   it("does not dispatch a composing credential or duplicate pending Connect", async () => {
     const h = await mount({ step: "connection" });
     const fields = h.host.querySelectorAll<HTMLInputElement>(

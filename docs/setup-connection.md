@@ -8,7 +8,7 @@ Setup uses your own ChatGPT account and the workspaces you approve on this Mac. 
 
 Choose **Sign in**, or **Open ChatGPT** if Farol cannot recognize the existing page. Finish signing in and return to Setup. When your signed-in page is recognized, choose **Check sign-in**. This saves the existing account-readiness check needed by the embedded ChatGPT test. Opening a page alone is not a passed check.
 
-When **✓ Signed in** appears, choose **Continue**. There is no skip in this guided flow. A connection used outside Farol can still have independent external verification; that does not replace this flow's sign-in check.
+When **✓ Sign-in checked** appears, choose **Continue**. There is no skip in this guided flow. A connection used outside Farol can still have independent external verification; that does not replace this flow's sign-in check.
 
 ## 2. Workspaces
 

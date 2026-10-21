@@ -44,7 +44,9 @@ export function SetupNavigation({ snapshot }: Props) {
           data-check-state={entry.state}
         >
           <span aria-hidden="true">
-            {entry.state === "verified" ? "✓" : index + 1}
+            {entry.state === "verified" && entry.step !== selected
+              ? "✓"
+              : index + 1}
           </span>{" "}
           {entry.label}
         </li>
@@ -125,7 +127,13 @@ export function Setup({ snapshot, facade }: Props) {
             className="primary"
             disabled={!passed || (step === "attachment" && !checklist.ready)}
             onClick={() => {
-              const current = setupChecklist(facade.getSnapshot());
+              const latest = facade.getSnapshot();
+              if (
+                latest.destination.area !== "setup" ||
+                visibleSetupSection(latest.destination.setupStep) !== step
+              )
+                return;
+              const current = setupChecklist(latest);
               if (
                 current.entries.find((entry) => entry.step === step)?.state !==
                 "verified"

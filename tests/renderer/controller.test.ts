@@ -3374,7 +3374,7 @@ describe("bounded Setup sign-in observation", () => {
     return { f, c, wait, data, command: observationCommand(f) };
   }
   it.each(["authenticated", "signed_out", "unknown"] as const)(
-    "uses current %s evidence over exact fresh saved readiness without changing publication or intent eligibility",
+    "keeps current %s observation distinct from saved Setup evidence without changing publication or eligibility",
     async (state) => {
       const h = await pending();
       try {
@@ -3400,7 +3400,7 @@ describe("bounded Setup sign-in observation", () => {
               : "Sign-in not checked",
         );
         expect(setupChecklist(after).entries[0]?.status).toBe(
-          signInPresentation(after).label,
+          state === "signed_out" ? "Signed out" : "Sign-in checked",
         );
         expect(after.route).toBe("loading");
       } finally {
@@ -3805,7 +3805,7 @@ describe("bounded Setup sign-in observation", () => {
         h.c.navigate({ area: "setup", setupStep: "overview" });
         expect(h.c.getSnapshot().signInObservation).toBe(sample);
         expect(setupChecklist(h.c.getSnapshot()).entries[0]?.status).toBe(
-          label,
+          state === "signed_out" ? "Signed out" : "Sign-in checked",
         );
         h.c.navigate({ area: "settings", page: "connection" });
         expect(h.c.getSnapshot().signInObservation).toBe(sample);

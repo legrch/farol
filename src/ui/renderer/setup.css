@@ -287,3 +287,20 @@
 .settings-setup-status .description {
   margin-top: 8px;
 }
+.setup-progress li {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.workspace-row-path strong {
+  overflow-wrap: anywhere;
+}
+.settings-update-controls .setting-row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.settings-update-controls label.setting-row {
+  justify-content: space-between;
+}

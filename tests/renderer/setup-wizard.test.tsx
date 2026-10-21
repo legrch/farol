@@ -29,7 +29,7 @@ describe("linear Setup", () => {
       [...line.querySelectorAll("li")].map((x) => x.textContent?.trim()),
     ).toEqual([
       "✓ Sign in",
-      "✓ Workspaces",
+      "2 Workspaces",
       "✓ Connect this Mac",
       "4 Add to ChatGPT",
     ]);
@@ -102,6 +102,22 @@ describe("linear Setup", () => {
     expect(h.button("Connect")?.disabled).toBe(true);
     expect(h.f.api.configure).toHaveBeenCalledTimes(1);
   });
+  it.each(["signin", "folders", "connection", "attachment"] as const)(
+    "shows one recovery action for an unconfirmed %s check without a local reply",
+    async (step) => {
+      const value = readySettings();
+      value.setup.connect.outcomeUnknown = true;
+      const h = await mount({ step, value });
+      const alert = h.host.querySelector('[role="alert"]')!;
+      expect(alert).toBeTruthy();
+      expect(alert.querySelectorAll("button")).toHaveLength(1);
+      expect(alert.textContent).toContain("could not be confirmed");
+      expect(
+        h.button(step === "attachment" ? "Start using Farol" : "Continue")
+          ?.disabled,
+      ).toBe(true);
+    },
+  );
   it("maps legacy Finish to the welcome screen without effects", async () => {
     const h = await mount({ step: "finish" });
     expect(h.host.textContent).toContain("Welcome to Farol");
@@ -173,6 +189,18 @@ describe("Add to ChatGPT", () => {
     expect(h.button("Start using Farol")?.disabled).toBe(false);
     await h.click("Start using Farol");
     expect(h.c.getSnapshot().destination.area).toBe("home");
+  });
+  it("does not submit the ChatGPT test or steal navigation after a late app selection", async () => {
+    const h = await mount({ step: "attachment", value: readySettings() });
+    const waiting = deferred<unknown>();
+    h.reply(() => waiting.promise);
+    await h.click("Test in ChatGPT");
+    await h.navigate("folders");
+    await act(async () =>
+      waiting.resolve({ ok: true, snapshot: h.configuration() }),
+    );
+    expect(h.c.getSnapshot().destination.setupStep).toBe("folders");
+    expect(h.f.api.configure).toHaveBeenCalledTimes(1);
   });
   it("shows one recovery action after an unknown app check and never repeats it", async () => {
     const value = readySettings();
