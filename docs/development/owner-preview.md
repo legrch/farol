@@ -434,6 +434,14 @@ original error and stays UNKNOWN; an unverified teardown also keeps a successful
 run UNKNOWN (`TEARDOWN_UNVERIFIED`). The teardown itself never throws out of its `finally`: an inventory failure becomes `teardown.verified: false` with a named `error` (`TEARDOWN_ERROR`), and the server is closed and the receipt written in every case. A survivor is reported with its pid and
 reason and is never signalled: the only signals are the existing exact-pid quit
 requests.
+Outbound browser requests are routed from the moment each instance's handle
+exists, before the other instance launches and before any observation: only the
+local fixture, `file:` and `devtools:` pass, anything else is aborted and its
+origin recorded, and a recorded origin fails the run. A route that cannot be
+installed fails that instance. A request issued before the handle exists, or
+made by the main process or a child over its own sockets, is outside this route;
+while open at an observation, those sockets are covered by the per-pid `lsof`
+checks, where a non-loopback peer fails.
 Receipts are under `_output/preview/isolation/<generation>/`.
 
 ## Verification and remaining gates

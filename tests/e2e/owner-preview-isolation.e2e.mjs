@@ -1470,6 +1470,27 @@ async function launch(
   assert.ok(Number.isInteger(instance.pid) && instance.pid > 0);
   instance.seen.add(instance.pid);
   instance.known.add(instance.pid);
+  // The outbound route is installed the moment the handle exists, before the
+  // other instance is launched and before any observation, so the whole
+  // remaining startup of this browser context is covered. A route that cannot
+  // be installed is kept as a failure of this instance, never a silent gap.
+  instance.outbound = [];
+  instance.routeFailure = null;
+  try {
+    await instance.handle.context().route("**/*", (route) => {
+      const url = route.request().url();
+      if (
+        url.startsWith(`${fixtureOrigin}/`) ||
+        url.startsWith("file:") ||
+        url.startsWith("devtools:")
+      )
+        return route.continue();
+      instance.outbound.push(new URL(url).origin);
+      return route.abort();
+    });
+  } catch {
+    instance.routeFailure = "ROUTE_UNAVAILABLE";
+  }
   return instance;
 }
 
@@ -1671,18 +1692,11 @@ function guardReceipt(receipt, { envValues, roots, repositoryRoot }) {
 
 // One snapshot of everything the operating system says about an instance.
 async function observe(instance, expected) {
-  const outbound = [];
-  await instance.handle.context().route("**/*", (route) => {
-    const url = route.request().url();
-    if (
-      url.startsWith(`${expected.fixtureOrigin}/`) ||
-      url.startsWith("file:") ||
-      url.startsWith("devtools:")
-    )
-      return route.continue();
-    outbound.push(new URL(url).origin);
-    return route.abort();
-  });
+  if (instance.routeFailure !== null)
+    throw new Error(
+      `OWNER_PREVIEW_ISOLATION_${instance.routeFailure}:${instance.kind}`,
+    );
+  const outbound = instance.outbound;
   const page = await instance.handle.firstWindow({ timeout: 20000 });
   await page.locator(".desktop").waitFor({ state: "attached", timeout: 20000 });
   const bootstrap = await deadline(
