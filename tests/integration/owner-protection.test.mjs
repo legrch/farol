@@ -416,6 +416,36 @@ describe("standalone owner protection", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(".farol/state/settings.json");
   });
+  it("prints its protected roots read-only for tests that must never name them", async () => {
+    const home = fixture();
+    const result = await ownedRun(
+      "/usr/bin/python3",
+      ["-I", "scripts/assert-owner-untouched.py", "--print-protected-roots"],
+      {
+        cwd: root,
+        env: { HOME: home, PATH: "/usr/bin:/bin", LANG: "en_US.UTF-8" },
+        encoding: "utf8",
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const printed = JSON.parse(result.stdout);
+    expect(printed.schema).toBe(1);
+    const roots = [...printed.watched, ...printed.presence];
+    for (const profile of [
+      "Farol Dev",
+      "Farol DEV",
+      "Farol Next Preview",
+      "Farol Dev Acceptance",
+      "Farol Dev Acceptance/Farol Dev",
+    ])
+      expect(printed.presence).toContain(
+        path.join(home, "Library/Application Support", profile),
+      );
+    expect(roots.every((entry) => path.isAbsolute(entry))).toBe(true);
+    expect(roots.every((entry) => entry.startsWith(`${home}/`))).toBe(true);
+    // Printing writes nothing and starts no child.
+    expect(fs.readdirSync(home)).toEqual([]);
+  });
   it("preserves a failing child exit code", async () => {
     expect((await run(fixture(), "raise SystemExit(17)")).status).toBe(17);
   });
