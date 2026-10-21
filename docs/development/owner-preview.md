@@ -182,9 +182,31 @@ own disposable root, and reads what the operating system reports for their exact
 pids: open files, listening sockets, the Go backend and Node runtime children,
 their arguments and environments (`KERN_PROCARGS2`, same user). It asserts that
 roots, Chromium storage, bundle bytes, runtime identity and loopback ports differ,
-that no process or open file names another instance's root or an owner location
-(`~/Library/Application Support/Farol*`, `~/.farol`, `~/.codex`,
-`/Applications/Farol.app`), and that both instances exit drained.
+that no string observed for an owned process names another instance's root or an
+owner location (`~/Library/Application Support/Farol*`, `~/.farol`, `~/.codex`,
+`/Applications/Farol.app`, and the guard's own list), and that both instances exit
+drained.
+
+The string rule, in one classifier: every string observed for an owned process
+goes through it, with no exceptions by field. That is each argv element and the
+executable path, **each environment value** (all of them, not only `HOME` and
+`CODEX_HOME`), each open-file path and each unix socket path. Argv and
+environment values are text, so path-like substrings are extracted first, from
+the whole value, from each whitespace-separated token and from each quoted piece:
+surrounding quotes are stripped; for `--flag=/path`, `-f=/path` or `NAME=/path` the
+part after the first `=` is taken; the result is split on `:` (PATH-like lists);
+a `file://` prefix is dropped; what is an absolute path is kept. Files and sockets
+already are paths. Each path is compared in its literal and canonical form with
+boundary-aware containment, and the string takes the strongest class of its
+paths: **`other_instance`** (inside the other instance's roots or bundle),
+**`owner`** (an owner location: the guard's list plus the `Farol*` prefix rule),
+**`own`** (inside this instance's roots or bundle) or **`neutral`**. An
+`other_instance` or `owner` string fails the run with
+`STRING_OTHER_INSTANCE` or `STRING_OWNER`, naming the field kind, role and pid
+(and the key for an environment value) but never an environment value. `HOME` and
+`CODEX_HOME` keep their extra requirement on top: inside this instance's own root.
+The receipt records the number of strings per instance, kind and class
+(`observations[kind].classification.counts`), never the strings themselves.
 
 Receipt status: `PASS` is reserved for a run with no blocked dimension.
 Because override-free resolution is never observed, a run that passes every

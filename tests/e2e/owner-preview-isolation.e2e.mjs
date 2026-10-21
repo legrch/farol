@@ -365,6 +365,125 @@ async function mkdtempIn(parent, prefix, mkdtemp = fs.mkdtemp) {
   return mkdtemp(path.join(parent, prefix));
 }
 
+// One classifier for every string observed for an owned process: each argv
+// element (and the executable path), each environment value (all of them), each
+// open-file path and each unix socket path. Argv and environment values are text,
+// so path-like substrings are extracted first; files and sockets already are
+// paths. The rule for extraction, applied in this order to the whole value, to
+// each whitespace-separated token and to each quoted piece: strip surrounding
+// quotes; for `--flag=/path`, `-f=/path` or `NAME=/path` take what follows the
+// first `=`; split on `:` (PATH-like lists); strip a `file://` prefix; keep what
+// is an absolute path. Each path is compared in its literal and canonical form,
+// with the boundary-aware containment of `contains`, and the string takes the
+// strongest class of its paths:
+//   other_instance  inside the other instance's roots or bundle
+//   owner           an owner location (guard list plus the Farol* prefix rule)
+//   own             inside this instance's roots or bundle
+//   neutral         anything else
+// other_instance and owner are violations with a named code that names the field
+// kind and, for an environment value, its key but never its value.
+function extractPaths(text) {
+  const found = new Set();
+  const take = (candidate) => {
+    const cleaned = candidate
+      .replace(/^["']+|["']+$/gu, "")
+      .replace(/^file:\/\//u, "");
+    if (path.isAbsolute(cleaned)) found.add(cleaned);
+  };
+  const visit = (token) => {
+    let value = token.replace(/^["']+|["']+$/gu, "");
+    const assigned =
+      /^(?:-{1,2}[A-Za-z0-9][\w-]*|[A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(value);
+    if (assigned !== null) value = assigned[1];
+    take(value);
+    for (const part of value.split(":")) take(part);
+  };
+  visit(text);
+  for (const token of text.split(/\s+/u)) if (token !== "") visit(token);
+  for (const quoted of text.matchAll(/(["'])(.*?)\1/gu)) visit(quoted[2]);
+  return [...found];
+}
+const CLASS_RANK = { neutral: 0, own: 1, owner: 2, other_instance: 3 };
+function classificationContext(instance, other) {
+  return {
+    own: [...formsOf(instance.home), ...formsOf(instance.app)],
+    other: [...formsOf(other.home), ...formsOf(other.app)],
+  };
+}
+function classifyPath(candidate, context) {
+  let real;
+  try {
+    real = canonical(candidate, true);
+  } catch {
+    real = path.resolve(candidate);
+  }
+  const forms = [...new Set([candidate, real])];
+  if (forms.some((form) => context.other.some((root) => contains(form, root))))
+    return "other_instance";
+  let owner;
+  try {
+    owner = touchesOwner(candidate, { reported: true });
+  } catch (error) {
+    if (/DISPOSABLE_ROOT_UNSAFE/u.test(error.message)) throw error;
+    owner = touchesOwner(path.resolve(candidate), { text: true });
+  }
+  if (owner) return "owner";
+  if (forms.some((form) => context.own.some((root) => contains(form, root))))
+    return "own";
+  return "neutral";
+}
+function classifyStrings(items, context) {
+  const counts = {};
+  const violations = [];
+  for (const item of items) {
+    const paths =
+      item.kind === "file" || item.kind === "socket"
+        ? [item.text]
+        : extractPaths(item.text);
+    let strongest = "neutral";
+    for (const candidate of paths) {
+      const found = classifyPath(candidate, context);
+      if (CLASS_RANK[found] > CLASS_RANK[strongest]) strongest = found;
+    }
+    counts[item.kind] ??= { own: 0, other_instance: 0, owner: 0, neutral: 0 };
+    counts[item.kind][strongest] += 1;
+    if (strongest === "other_instance" || strongest === "owner")
+      violations.push({
+        code: `OWNER_PREVIEW_ISOLATION_STRING_${strongest.toUpperCase()}`,
+        kind: item.kind,
+        role: item.role,
+        pid: item.pid,
+        key: item.key ?? null,
+        // An environment value is never named: it may hold a secret.
+        value: item.kind === "env" ? undefined : item.text,
+      });
+  }
+  return { counts, violations };
+}
+const violationMessage = (violation) =>
+  `${violation.code}:${violation.kind}:${violation.role}:${violation.pid}` +
+  `${violation.key ? `:${violation.key}` : ""}` +
+  `${violation.value === undefined ? "" : `:${violation.value}`}`;
+// The strings of one live process, for the classifier. They live only in memory:
+// the receipt gets counts and violations, never environment values.
+function processStrings(pid, role, process_, files) {
+  return [
+    { kind: "argv", text: process_.exe },
+    ...process_.argv.map((text) => ({ kind: "argv", text })),
+    ...Object.entries(process_.env).map(([key, text]) => ({
+      kind: "env",
+      key,
+      text,
+    })),
+    ...files
+      .filter((file) => file.name?.startsWith("/"))
+      .map((file) => ({
+        kind: file.type === "unix" ? "socket" : "file",
+        text: file.name,
+      })),
+  ].map((item) => ({ pid, role, ...item }));
+}
+
 async function descendants(parent) {
   const tree = [parent];
   for (let index = 0; index < tree.length; index += 1) {
@@ -803,14 +922,16 @@ try:
         if b"=" in p:
             k, v = p.split(b"=", 1)
             env[k.decode("utf8", "replace")] = v.decode("utf8", "replace")
+    argv = [p.decode("utf8", "replace") for p in parts[i:i + argc]]
+    exe = parts[0].decode("utf8", "replace")
 except Exception:
     fail("parse")
-print(json.dumps({"status": "ok", "env": env}))
+print(json.dumps({"status": "ok", "env": env, "argv": argv, "exe": exe}))
 `;
-// Fail closed: a readable, non-empty environment, or null for a pid that has
-// exited. An unreadable or empty environment of a live pid is an error, never
-// a skipped check.
-async function environmentOf(pid) {
+// Fail closed: a readable process with a non-empty environment, or null for a
+// pid that has exited. An unreadable or empty environment of a live pid is an
+// error, never a skipped check. Returns { env, argv, exe }.
+async function readProcess(pid) {
   const probed = await runInventory("probe", [
     "-I",
     "-c",
@@ -825,7 +946,10 @@ async function environmentOf(pid) {
     );
   if (Object.keys(answer.env).length === 0)
     throw new Error(`OWNER_PREVIEW_ISOLATION_ENV_EMPTY:${pid}`);
-  return answer.env;
+  return { env: answer.env, argv: answer.argv, exe: answer.exe };
+}
+async function environmentOf(pid) {
+  return (await readProcess(pid))?.env ?? null;
 }
 // lsof -F: records start at `p`; each file starts at `f`.
 function parseLsof(output) {
@@ -1217,6 +1341,7 @@ async function observe(instance, expected) {
   ]);
   const processes = [];
   const files = [];
+  const strings = [];
   const handled = new Set();
   for (let round = 0; ; round += 1) {
     await stableTree(() => scanTree(instance), {
@@ -1231,7 +1356,8 @@ async function observe(instance, expected) {
     for (const pid of todo) {
       handled.add(pid);
       const text = await command(pid);
-      const environment = text === null ? null : await environmentOf(pid);
+      const read = text === null ? null : await readProcess(pid);
+      const environment = read === null ? null : read.env;
       const inventory = environment === null ? null : await openFiles(pid);
       if (
         text === null ||
@@ -1247,6 +1373,14 @@ async function observe(instance, expected) {
         continue;
       }
       files.push(...inventory.files);
+      strings.push(
+        ...processStrings(
+          pid,
+          required.get(pid) ?? "helper",
+          read,
+          inventory.files,
+        ),
+      );
       processes.push({
         pid,
         outcome: "observed",
@@ -1259,9 +1393,6 @@ async function observe(instance, expected) {
           codexHomePresent: "CODEX_HOME" in environment,
           codexHome: environment.CODEX_HOME ?? null,
           runtimeIdentity: environment.FAROL_NEXT_RUNTIME_IDENTITY ?? null,
-          namesOwnerLocation: Object.values(environment).some((value) =>
-            touchesOwner(value),
-          ),
         },
         openFileCount: inventory.files.length,
       });
@@ -1286,6 +1417,10 @@ async function observe(instance, expected) {
     listeners: listenerReport(files).accepted,
     connections: listenerReport(files).connections,
     listenerViolations: listenerReport(files).violations,
+    classification: classifyStrings(
+      strings,
+      classificationContext(instance, expected.other),
+    ),
     unixPaths: files
       .filter((file) => file.type === "unix" && file.name?.startsWith("/"))
       .map((file) => file.name),
@@ -1342,8 +1477,6 @@ async function assertInstance(observed, instance, identity, other) {
       entry.command.includes(instance.app) || entry.pid === instance.pid,
       `FOREIGN_PROCESS:${entry.command.slice(0, 120)}`,
     );
-    assert.equal(entry.command.includes(other.app), false);
-    assert.equal(touchesOwner(entry.command, { text: true }), false);
     // Every live process has a readable, non-empty environment (see
     // environmentOf). HOME must be set and inside THIS instance's disposable
     // root; the one exception is the Node runtime child, which the shell spawns
@@ -1353,7 +1486,6 @@ async function assertInstance(observed, instance, identity, other) {
     // stricter form of "own root"): never ~/.codex, an owner location, or the
     // other instance's root.
     assert.ok(entry.environment.keys.length > 0, `ENV_EMPTY:${entry.pid}`);
-    assert.equal(entry.environment.namesOwnerLocation, false);
     if (entry.environment.homePresent) {
       assert.ok(
         inside(entry.environment.home, instance.home),
@@ -1433,23 +1565,10 @@ async function assertInstance(observed, instance, identity, other) {
     observed.paths.some((entry) => inside(entry, identity.userData, true)),
     "OWN_PROFILE_NOT_OPEN",
   );
-  for (const entry of observed.paths) {
-    assert.equal(
-      touchesOwner(entry, { reported: true }),
-      false,
-      `OWNER_PATH_OPEN:${entry}`,
-    );
-    assert.equal(
-      inside(entry, other.home, true),
-      false,
-      `FOREIGN_HOME:${entry}`,
-    );
-    assert.equal(
-      inside(entry, other.app, true),
-      false,
-      `FOREIGN_BUNDLE:${entry}`,
-    );
-  }
+  // Every string observed for an owned process went through the one classifier
+  // (see classifyStrings): any other_instance or owner string fails here.
+  const [first] = observed.classification.violations;
+  if (first !== undefined) throw new Error(violationMessage(first));
 }
 
 // The scanners below judge live observations; prove they can fail first.
@@ -1629,6 +1748,124 @@ async function scannerSelfCheck() {
       // A real sibling that shares a prefix with a real owner location.
       assert.equal(touchesOwner(path.join(home, ".codex-backup/x")), false);
       assert.equal(touchesOwner(path.join(home, ".codex/x")), true);
+    }
+    // The one classifier, on stand-in instance roots inside the throwaway
+    // directory and the real owner locations. Own, other-instance, owner and
+    // neutral strings; environment values are never named in a failure.
+    {
+      const ownRoot = path.join(sandbox, "classify-own");
+      const otherRoot = path.join(sandbox, "classify-other");
+      await fs.mkdir(ownRoot);
+      await fs.mkdir(otherRoot);
+      const context = classificationContext(
+        { home: ownRoot, app: path.join(ownRoot, "App.app") },
+        { home: otherRoot, app: path.join(otherRoot, "App.app") },
+      );
+      const one = (item) =>
+        classifyStrings([{ pid: 1, role: "helper", ...item }], context);
+      const classOf = (item) => {
+        const { counts, violations } = one(item);
+        return (
+          violations[0]?.code ??
+          Object.keys(counts[item.kind]).find(
+            (name) => counts[item.kind][name] === 1,
+          )
+        );
+      };
+      // extraction: flags, assignments, lists, quotes, file URLs.
+      for (const expected of ["/x/y", "/z", "/q r/s", "/f/g", "/h"])
+        assert.ok(
+          extractPaths('--a=/x/y:/z "/q r/s" file:///f/g NAME=/h --b').includes(
+            expected,
+          ),
+          expected,
+        );
+      assert.deepEqual(extractPaths("en_US.UTF-8"), []);
+      // a non-HOME env var pointing into the other instance's root fails
+      assert.equal(
+        classOf({ kind: "env", key: "SOME_SETTING", text: `${otherRoot}/x` }),
+        "OWNER_PREVIEW_ISOLATION_STRING_OTHER_INSTANCE",
+      );
+      // an argv --user-data-dir=<other root> fails, so does a quoted path
+      assert.equal(
+        classOf({ kind: "argv", text: `--user-data-dir=${otherRoot}/profile` }),
+        "OWNER_PREVIEW_ISOLATION_STRING_OTHER_INSTANCE",
+      );
+      assert.equal(
+        classOf({ kind: "argv", text: `--config="${otherRoot}/with space/c"` }),
+        "OWNER_PREVIEW_ISOLATION_STRING_OTHER_INSTANCE",
+      );
+      // title-rewritten argv carrying NAME=<path>
+      assert.equal(
+        classOf({ kind: "argv", text: `Farol HOME=${otherRoot}` }),
+        "OWNER_PREVIEW_ISOLATION_STRING_OTHER_INSTANCE",
+      );
+      // a PATH entry inside the owner home's .codex fails
+      assert.equal(
+        classOf({
+          kind: "env",
+          key: "PATH",
+          text: `/usr/bin:${home}/.codex/bin`,
+        }),
+        "OWNER_PREVIEW_ISOLATION_STRING_OWNER",
+      );
+      // files and sockets are paths
+      assert.equal(
+        classOf({ kind: "file", text: `${otherRoot}/data` }),
+        "OWNER_PREVIEW_ISOLATION_STRING_OTHER_INSTANCE",
+      );
+      assert.equal(
+        classOf({ kind: "socket", text: `${home}/.farol/hub.sock` }),
+        "OWNER_PREVIEW_ISOLATION_STRING_OWNER",
+      );
+      // own and neutral pass
+      assert.equal(classOf({ kind: "env", key: "HOME", text: ownRoot }), "own");
+      assert.equal(
+        classOf({ kind: "argv", text: `--user-data-dir=${ownRoot}/p` }),
+        "own",
+      );
+      for (const text of ["/usr/bin/true", "en_US.UTF-8", "/usr/bin:/bin"])
+        assert.equal(classOf({ kind: "env", key: "PATH", text }), "neutral");
+      assert.equal(
+        classOf({ kind: "file", text: "/private/var/db/analyticsd/x" }),
+        "neutral",
+      );
+      // a sibling that merely shares a prefix with the other root is neutral
+      assert.equal(
+        classOf({ kind: "env", key: "X", text: `${otherRoot}-sibling/x` }),
+        "neutral",
+      );
+      // counts per kind and class, and the failure text never holds a value
+      const mixed = classifyStrings(
+        [
+          {
+            pid: 7,
+            role: "backend",
+            kind: "env",
+            key: "SECRETISH",
+            text: `${otherRoot}/token-123`,
+          },
+          { pid: 7, role: "backend", kind: "env", key: "HOME", text: ownRoot },
+          { pid: 7, role: "backend", kind: "argv", text: "/usr/bin/true" },
+          { pid: 7, role: "backend", kind: "file", text: `${otherRoot}/f` },
+        ],
+        context,
+      );
+      assert.deepEqual(mixed.counts, {
+        env: { own: 1, other_instance: 1, owner: 0, neutral: 0 },
+        argv: { own: 0, other_instance: 0, owner: 0, neutral: 1 },
+        file: { own: 0, other_instance: 1, owner: 0, neutral: 0 },
+      });
+      const [envViolation, fileViolation] = mixed.violations;
+      assert.equal(
+        violationMessage(envViolation),
+        "OWNER_PREVIEW_ISOLATION_STRING_OTHER_INSTANCE:env:backend:7:SECRETISH",
+      );
+      assert.equal(violationMessage(envViolation).includes("token-123"), false);
+      assert.equal(
+        violationMessage(fileViolation),
+        `OWNER_PREVIEW_ISOLATION_STRING_OTHER_INSTANCE:file:backend:7:${otherRoot}/f`,
+      );
     }
     // With the real guard roots back, a normal temporary parent still works and
     // creates exactly one root.
@@ -2492,7 +2729,10 @@ export async function runOwnerPreviewIsolation(
     };
     const observed = {};
     for (const instance of instances)
-      observed[instance.kind] = await observe(instance, { fixtureOrigin });
+      observed[instance.kind] = await observe(instance, {
+        fixtureOrigin,
+        other: instance === normal ? owner : normal,
+      });
     receipt.observations = Object.fromEntries(
       Object.entries(observed).map(([kind, entry]) => [
         kind,
@@ -2513,6 +2753,7 @@ export async function runOwnerPreviewIsolation(
           listeners: entry.listeners,
           connections: entry.connections,
           listenerViolations: entry.listenerViolations,
+          classification: entry.classification,
           unixPaths: entry.unixPaths,
           openPathCount: entry.paths.length,
         },
