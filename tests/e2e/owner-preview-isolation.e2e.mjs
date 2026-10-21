@@ -639,7 +639,18 @@ function concludeReceipt(receipt, failure, teardown) {
   receipt.teardown = teardown;
   receipt.finishedAt = new Date().toISOString();
   if (failure === null && teardown.verified) {
-    receipt.status = "PASS";
+    // Plain PASS is reserved for a run with no blocked dimension. When a
+    // dimension could not be observed, only the exercised subset passed and the
+    // status says so, naming what was not observed.
+    const blocked = (receipt.blocked ?? []).map(
+      (entry) => entry.code ?? entry.dimension,
+    );
+    if (blocked.length === 0) receipt.status = "PASS";
+    else {
+      receipt.status = "PASS_WITH_BLOCKED";
+      receipt.blockedDimensions = blocked;
+      receipt.statusNote = `Only the exercised subset passed; not observed: ${blocked.join(", ")}`;
+    }
     return;
   }
   receipt.status = "UNKNOWN";
@@ -2028,6 +2039,33 @@ async function treeSelfCheck() {
   concludeReceipt(passing, null, await verifyTeardown([instance(1, 2)], clean));
   assert.equal(passing.status, "PASS");
   assert.equal(passing.teardown.verified, true);
+  // Passed with a blocked dimension is not a plain PASS: PASS_WITH_BLOCKED names
+  // what was not observed. With nothing blocked it is PASS; a failure or an
+  // unverified teardown stays UNKNOWN whatever is blocked.
+  const blockedRow = {
+    dimension: "override-free-resolution",
+    status: "not_observed",
+    code: "NATIVE_APPDATA_IGNORES_HOME",
+  };
+  const verifiedTeardown = await verifyTeardown([instance(1, 2)], clean);
+  const withBlocked = { status: "UNKNOWN", blocked: [blockedRow] };
+  concludeReceipt(withBlocked, null, verifiedTeardown);
+  assert.equal(withBlocked.status, "PASS_WITH_BLOCKED");
+  assert.deepEqual(withBlocked.blockedDimensions, [
+    "NATIVE_APPDATA_IGNORES_HOME",
+  ]);
+  assert.match(withBlocked.statusNote, /Only the exercised subset passed/u);
+  const nothingBlocked = { status: "UNKNOWN", blocked: [] };
+  concludeReceipt(nothingBlocked, null, verifiedTeardown);
+  assert.equal(nothingBlocked.status, "PASS");
+  assert.equal(nothingBlocked.blockedDimensions, undefined);
+  const failedBlocked = { status: "UNKNOWN", blocked: [blockedRow] };
+  concludeReceipt(failedBlocked, new Error("BOOM"), verifiedTeardown);
+  assert.equal(failedBlocked.status, "UNKNOWN");
+  assert.equal(failedBlocked.error, "BOOM");
+  const leakedBlocked = { status: "UNKNOWN", blocked: [blockedRow] };
+  concludeReceipt(leakedBlocked, null, failed);
+  assert.equal(leakedBlocked.status, "UNKNOWN");
   // Launch records without an instance still get a target.
   const targets = teardownTargets(
     [{ home: "/a", kind: "normal", pid: 1, seen: new Set([1]) }],
@@ -2394,7 +2432,7 @@ export async function runOwnerPreviewIsolation(
       checkpoint,
     });
   }
-  if (receipt.status !== "PASS")
+  if (!["PASS", "PASS_WITH_BLOCKED"].includes(receipt.status))
     throw new Error(
       `OWNER_PREVIEW_ISOLATION_UNCONFIRMED: ${receiptFile}: ${receipt.error}`,
       { cause: failure ?? undefined },

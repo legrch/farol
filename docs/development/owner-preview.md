@@ -186,6 +186,14 @@ that no process or open file names another instance's root or an owner location
 (`~/Library/Application Support/Farol*`, `~/.farol`, `~/.codex`,
 `/Applications/Farol.app`), and that both instances exit drained.
 
+Receipt status: `PASS` is reserved for a run with no blocked dimension.
+Because override-free resolution is never observed, a run that passes every
+exercised check with a verified teardown ends as **`PASS_WITH_BLOCKED`**, with
+`blockedDimensions[]` and a `statusNote` saying that only the exercised subset
+passed and naming what was not observed. The command exits 0 for both, so the
+guarded task stays usable; `UNKNOWN` keeps its meaning (a failure or an
+unverified teardown, whatever is blocked).
+
 Override-free resolution is **not witnessed**, and the receipt keeps the row
 (`blocked[]`, `status: not_observed`, reference
 `NATIVE_APPDATA_IGNORES_HOME (documented)`) so it is not silently dropped. It is
