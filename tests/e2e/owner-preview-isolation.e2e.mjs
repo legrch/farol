@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { lstatSync, readlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -460,8 +460,8 @@ async function launch(
     ...root,
     handle: null,
     pid: null,
-    quitRequested: false,
     terminal: null,
+    quit: { requested: false, expired: false, promise: null },
   };
   instance.handle = await electron.launch({
     // Test seam: an unlaunchable executable for one kind, to show the
@@ -479,23 +479,59 @@ async function launch(
     timeout: 20000,
   });
   instance.owned = instance.handle.process();
+  watchExit(instance);
   instance.pid = instance.owned.pid;
   assert.ok(Number.isInteger(instance.pid) && instance.pid > 0);
   return instance;
 }
 
-async function requestQuit(instance) {
-  if (
-    instance.quitRequested ||
-    instance.owned.exitCode !== null ||
-    instance.owned.signalCode !== null
-  )
-    return;
-  instance.quitRequested = true;
-  const exit = once(instance.owned, "exit");
-  void instance.handle.evaluate(({ app }) => app.quit()).catch(() => {});
-  const [code, signal] = await deadline(exit, `${instance.kind}-quit`);
-  instance.terminal = { code, signal };
+// Quit outcome, one derivation. The terminal state is whatever the process
+// object actually reported (exit code or signal), recorded by a listener that
+// is attached at launch and never written from anywhere else. The outcome is a
+// pure function of that state and of whether a quit was requested and its wait
+// expired: "observed" only with a recorded exit code or signal, "timed_out"
+// when the wait expired without one, "not_requested", and "unknown" otherwise.
+function watchExit(instance) {
+  const note = (code, signal) => {
+    instance.terminal ??= { code, signal };
+  };
+  const { exitCode, signalCode } = instance.owned;
+  if (exitCode !== null || signalCode !== null) note(exitCode, signalCode);
+  else instance.owned.once("exit", note);
+}
+function quitOutcome(instance) {
+  if (instance.terminal !== null) return "observed";
+  if (!instance.quit.requested) return "not_requested";
+  if (instance.quit.expired) return "timed_out";
+  return "unknown";
+}
+// The only writer of a launch record's quit fields.
+function writeQuit(instance) {
+  instance.record.quit = quitOutcome(instance);
+  instance.record.terminal = instance.terminal;
+  instance.record.quitWaitExpired = instance.quit.expired;
+  return instance.record.quit;
+}
+// One orderly quit per instance; never retried, signalled or killed. Every
+// call returns the first call's outcome (the same promise): a second request
+// cannot report success on its own, and a timeout does not throw.
+function requestQuit(instance, milliseconds = 20000) {
+  instance.quit.promise ??= (async () => {
+    if (instance.terminal === null) {
+      instance.quit.requested = true;
+      const exited = new Promise((resolve) =>
+        instance.owned.once("exit", resolve),
+      );
+      void instance.handle.evaluate(({ app }) => app.quit()).catch(() => {});
+      try {
+        await deadline(exited, `${instance.kind}-quit`, milliseconds);
+      } catch {
+        instance.quit.expired = true;
+      }
+    }
+    return quitOutcome(instance);
+  })();
+  return instance.quit.promise;
 }
 
 // One snapshot of everything the operating system says about an instance.
@@ -956,6 +992,79 @@ async function scannerSelfCheck() {
     outcome: "exited",
     files: [],
   });
+  await quitSelfCheck();
+}
+
+// The recorded quit outcome follows the actual terminal state and nothing else.
+async function quitSelfCheck() {
+  const fake = (exit) => {
+    const owned = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      signalCode: null,
+    });
+    const instance = {
+      kind: "selfcheck",
+      owned,
+      handle: { evaluate: async () => exit?.(owned) },
+      terminal: null,
+      record: {},
+      quit: { requested: false, expired: false, promise: null },
+    };
+    watchExit(instance);
+    return instance;
+  };
+  // Never asked: not_requested, no terminal.
+  const idle = fake();
+  assert.equal(quitOutcome(idle), "not_requested");
+  assert.equal(writeQuit(idle), "not_requested");
+  assert.equal(idle.record.terminal, null);
+  // A quit that never completes times out; cleanup asking again returns the
+  // same outcome and the record says timed_out, not observed.
+  const stuck = fake();
+  assert.equal(await requestQuit(stuck, 30), "timed_out");
+  assert.equal(await requestQuit(stuck, 30), "timed_out");
+  assert.equal(stuck.quit.promise, requestQuit(stuck));
+  assert.equal(writeQuit(stuck), "timed_out");
+  assert.deepEqual(
+    [stuck.record.terminal, stuck.record.quitWaitExpired],
+    [null, true],
+  );
+  // A confirmed exit is observed with its code; a double request is the same.
+  const clean = fake((owned) => {
+    owned.exitCode = 0;
+    owned.emit("exit", 0, null);
+  });
+  const first = requestQuit(clean, 1000);
+  const second = requestQuit(clean, 1000);
+  assert.equal(first, second);
+  assert.equal(await first, "observed");
+  assert.equal(writeQuit(clean), "observed");
+  assert.deepEqual(clean.record.terminal, { code: 0, signal: null });
+  // A signal counts as an observed terminal state, too.
+  const killed = fake((owned) => owned.emit("exit", null, "SIGTERM"));
+  assert.equal(await requestQuit(killed, 1000), "observed");
+  assert.deepEqual(killed.terminal, { code: null, signal: "SIGTERM" });
+  // Already exited before any request: observed, and nothing is asked.
+  let asked = false;
+  const gone = fake();
+  gone.owned.exitCode = 1;
+  gone.owned.emit("exit", 1, null);
+  gone.handle.evaluate = async () => {
+    asked = true;
+  };
+  assert.equal(await requestQuit(gone, 30), "observed");
+  assert.equal(asked, false);
+  // Requested, not expired, no terminal: unknown. Nothing else is observed.
+  const odd = fake();
+  odd.quit.requested = true;
+  assert.equal(quitOutcome(odd), "unknown");
+  // A late exit after a timeout is a fact about the process: the derived
+  // record becomes observed while the original request still reports timed_out.
+  const late = fake();
+  assert.equal(await requestQuit(late, 30), "timed_out");
+  late.owned.emit("exit", 0, null);
+  assert.equal(writeQuit(late), "observed");
+  assert.equal(await requestQuit(late), "timed_out");
 }
 
 // Receipt inputs cannot contain observations or a PASS override.
@@ -1164,8 +1273,16 @@ export async function runOwnerPreviewIsolation(
         observed[entry.kind].processes.map((p) => p.pid),
       ),
     );
-    await Promise.all(instances.map((instance) => requestQuit(instance)));
-    for (const instance of instances) {
+    const outcomes = await Promise.all(
+      instances.map((instance) => requestQuit(instance)),
+    );
+    for (const [index, instance] of instances.entries()) {
+      assert.equal(writeQuit(instance), outcomes[index]);
+      assert.equal(
+        outcomes[index],
+        "observed",
+        `OWNER_PREVIEW_ISOLATION_QUIT_${outcomes[index].toUpperCase()}:${instance.kind}`,
+      );
       assert.equal(instance.terminal.code, 0);
       assert.equal(instance.terminal.signal, null);
       const state = path.join(
@@ -1194,10 +1311,7 @@ export async function runOwnerPreviewIsolation(
       }
       assert.equal(gone, true, `OWNER_PREVIEW_ISOLATION_PID_REMAINS:${pid}`);
     }
-    for (const instance of instances) {
-      instance.record.quit = "observed";
-      instance.record.terminal = instance.terminal;
-    }
+    for (const instance of instances) writeQuit(instance);
     receipt.terminals = instances.map((entry) => ({
       kind: entry.kind,
       ...entry.terminal,
@@ -1209,20 +1323,18 @@ export async function runOwnerPreviewIsolation(
     await checkpoint();
     return { receiptFile, receipt };
   } catch (error) {
-    // One orderly quit per known owned app; never retry, signal or kill.
+    // One orderly quit per known owned app; never retry, signal or kill. The
+    // record is derived from the actual terminal state, never assumed.
     for (const instance of instances) {
       try {
         await requestQuit(instance);
-        instance.record.quit = "observed";
-        instance.record.terminal = instance.terminal;
       } catch (cleanupError) {
-        // An outcome-unknown quit keeps the launch record: the pid stays named.
-        instance.record.quit = "unknown";
         receipt.cleanupError =
           cleanupError instanceof Error
             ? cleanupError.message
             : "OWNER_PREVIEW_ISOLATION_QUIT_UNKNOWN";
       }
+      writeQuit(instance);
     }
     receipt.status = "UNKNOWN";
     receipt.error =
