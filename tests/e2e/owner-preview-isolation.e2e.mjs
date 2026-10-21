@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { realpathSync } from "node:fs";
+import { lstatSync, readlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -110,31 +110,60 @@ function isGone(pid) {
     throw error;
   }
 }
-// Containment is decided on canonical paths: resolve `..` and trailing slashes,
-// realpath the nearest existing ancestor (so a symlinked root cannot hide a
-// path and a not-yet-existing leaf still resolves), then compare on a
-// separator boundary. A relative path is never inside anything.
-function canonical(value) {
-  const rest = [];
-  let current = path.resolve(value);
-  for (;;) {
-    try {
-      return path.join(realpathSync(current), ...rest.reverse());
-    } catch (error) {
-      const parent = path.dirname(current);
-      if (
-        (error.code !== "ENOENT" && error.code !== "ENOTDIR") ||
-        parent === current
-      )
-        return path.join(current, ...rest.reverse());
-      rest.push(path.basename(current));
-      current = parent;
+// Containment is decided on canonical paths, resolved the way the kernel does:
+// component by component, with every existing prefix realpathed (symlinks
+// followed) BEFORE the next component is applied, so `alias/..` means the
+// parent of alias's target, never the parent of alias. `..` is never collapsed
+// lexically. Once a component does not exist the rest is appended literally,
+// and a rest that still contains `..` cannot be resolved: that fails closed.
+// A relative path is never inside anything.
+//
+// `reported` marks a path the kernel itself reported (an lsof name), which is
+// already real: where a directory cannot be traversed (EACCES or EPERM, e.g. a
+// system path), its remainder is taken literally, provided it contains no `..`.
+function canonical(value, reported = false) {
+  const unresolvable = (detail) =>
+    new Error(`OWNER_PREVIEW_ISOLATION_PATH_UNRESOLVABLE:${detail}`);
+  const split = (text) =>
+    text.split("/").filter((part) => part !== "" && part !== ".");
+  const pending = split(value).reverse();
+  let resolved = "/";
+  let links = 0;
+  while (pending.length > 0) {
+    const component = pending.pop();
+    if (component === "..") {
+      resolved = path.dirname(resolved);
+      continue;
     }
+    const next = path.join(resolved, component);
+    let info;
+    try {
+      info = lstatSync(next);
+    } catch (error) {
+      const missing = error.code === "ENOENT" || error.code === "ENOTDIR";
+      const untraversable = error.code === "EACCES" || error.code === "EPERM";
+      if (!missing && !(reported && untraversable))
+        throw unresolvable(`${error.code}:${value.slice(0, 120)}`);
+      const rest = [component, ...pending.reverse()];
+      if (rest.includes(".."))
+        throw unresolvable(`DOTDOT_AFTER_MISSING:${value.slice(0, 120)}`);
+      return path.join(resolved, ...rest);
+    }
+    if (info.isSymbolicLink()) {
+      links += 1;
+      if (links > 40) throw unresolvable(`SYMLINK_LOOP:${value.slice(0, 120)}`);
+      const target = readlinkSync(next);
+      if (target.startsWith("/")) resolved = "/";
+      pending.push(...split(target).reverse());
+      continue;
+    }
+    resolved = next;
   }
+  return resolved;
 }
-function inside(child, parent) {
+function inside(child, parent, reported = false) {
   if (!path.isAbsolute(child) || !path.isAbsolute(parent)) return false;
-  const target = canonical(child);
+  const target = canonical(child, reported);
   const root = canonical(parent);
   return (
     target === root ||
@@ -157,10 +186,16 @@ function ownerLocations() {
     "/Applications/Farol.app",
   ];
 }
-function touchesOwner(value) {
+// `text` marks a command line: it is matched as given, never as a path.
+// `reported` marks a path the kernel reported (see canonical).
+function touchesOwner(value, { text = false, reported = false } = {}) {
   // Check the text as given and, for an absolute path, its canonical form, so
-  // `/tmp/x/../../Users/.../.codex` cannot hide an owner location.
-  const forms = path.isAbsolute(value) ? [value, canonical(value)] : [value];
+  // `/tmp/x/../../Users/.../.codex` or a symlink then `..` cannot hide an owner
+  // location.
+  const forms =
+    !text && path.isAbsolute(value)
+      ? [value, canonical(value, reported)]
+      : [value];
   return ownerLocations().some((location) =>
     forms.some((form) => form.includes(location)),
   );
@@ -385,10 +420,20 @@ app.whenReady().then(() => {
   return { ...JSON.parse(line.slice("PROBE:".length)), disposableHome: home };
 }
 
-async function launch(electron, kind, verified, temporary, fixtureOrigin) {
+async function launch(
+  electron,
+  kind,
+  verified,
+  temporary,
+  fixtureOrigin,
+  record,
+  options,
+) {
   const preview = kind === "owner-preview";
   const app = preview ? verified.appPath : verified.baseApp;
   const root = await disposableRoot(temporary);
+  // Known before any process exists, so a failed launch still names its profile.
+  record.home = root.home;
   const executable = path.join(
     app,
     "Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron",
@@ -419,7 +464,12 @@ async function launch(electron, kind, verified, temporary, fixtureOrigin) {
     terminal: null,
   };
   instance.handle = await electron.launch({
-    executablePath: executable,
+    // Test seam: an unlaunchable executable for one kind, to show the
+    // partial-launch receipt. Never set by the command-line entrypoint.
+    executablePath:
+      options.failLaunchOf === kind
+        ? "/nonexistent/farol-isolation-launch-failure"
+        : executable,
     args: [
       appRoot,
       "--preview-window-mode=hidden",
@@ -577,7 +627,9 @@ async function observe(instance, expected) {
         codexHomePresent: "CODEX_HOME" in environment,
         codexHome: environment.CODEX_HOME ?? null,
         runtimeIdentity: environment.FAROL_NEXT_RUNTIME_IDENTITY ?? null,
-        namesOwnerLocation: Object.values(environment).some(touchesOwner),
+        namesOwnerLocation: Object.values(environment).some((value) =>
+          touchesOwner(value),
+        ),
       },
       openFileCount: inventory.files.length,
     });
@@ -651,7 +703,7 @@ async function assertInstance(observed, instance, identity, other) {
       `FOREIGN_PROCESS:${entry.command.slice(0, 120)}`,
     );
     assert.equal(entry.command.includes(other.app), false);
-    assert.equal(touchesOwner(entry.command), false);
+    assert.equal(touchesOwner(entry.command, { text: true }), false);
     // Every live process has a readable, non-empty environment (see
     // environmentOf). HOME must be set and inside THIS instance's disposable
     // root; the one exception is the Node runtime child, which the shell spawns
@@ -737,13 +789,25 @@ async function assertInstance(observed, instance, identity, other) {
   );
   // Files: this instance reaches its own roots and no other root.
   assert.ok(
-    observed.paths.some((entry) => inside(entry, identity.userData)),
+    observed.paths.some((entry) => inside(entry, identity.userData, true)),
     "OWN_PROFILE_NOT_OPEN",
   );
   for (const entry of observed.paths) {
-    assert.equal(touchesOwner(entry), false, `OWNER_PATH_OPEN:${entry}`);
-    assert.equal(inside(entry, other.home), false, `FOREIGN_HOME:${entry}`);
-    assert.equal(inside(entry, other.app), false, `FOREIGN_BUNDLE:${entry}`);
+    assert.equal(
+      touchesOwner(entry, { reported: true }),
+      false,
+      `OWNER_PATH_OPEN:${entry}`,
+    );
+    assert.equal(
+      inside(entry, other.home, true),
+      false,
+      `FOREIGN_HOME:${entry}`,
+    );
+    assert.equal(
+      inside(entry, other.app, true),
+      false,
+      `FOREIGN_BUNDLE:${entry}`,
+    );
   }
 }
 
@@ -787,12 +851,65 @@ async function scannerSelfCheck() {
     assert.equal(inside(`${a2}/x`, a), false);
     assert.equal(inside(`${a}/`, a), true);
     assert.equal(inside(a, `${a}/`), true);
+    await fs.mkdir(path.join(a, "c"));
     assert.equal(inside(`${a}/c/../d`, a), true);
     assert.equal(inside(`${a}/not-created-yet/x`, a), true);
     assert.equal(inside(`${link}/x`, a), true);
     assert.equal(inside(a, link), true);
     assert.equal(inside(b, link), false);
     assert.equal(inside(`${link}/../instance-b`, a), false);
+    // `..` follows a symlink's target, never the link's own parent: with
+    // alias -> <owner home>/Library, `alias/../.codex` is the owner's ~/.codex,
+    // not a sibling of alias.
+    const ownerAlias = path.join(sandbox, "alias-to-owner-library");
+    await fs.symlink(path.join(home, "Library"), ownerAlias);
+    assert.equal(touchesOwner(`${ownerAlias}/../.codex/config.toml`), true);
+    assert.equal(touchesOwner(`${ownerAlias}/../.farol`), true);
+    assert.equal(
+      touchesOwner(`${sandbox}/instance-a/../.codex/config.toml`),
+      false,
+    );
+    // symlink then `..` into the other instance's root.
+    const deep = path.join(b, "deep");
+    await fs.mkdir(deep);
+    const otherAlias = path.join(a, "alias-into-b");
+    await fs.symlink(deep, otherAlias);
+    assert.equal(inside(`${otherAlias}/../x`, b), true);
+    assert.equal(inside(`${otherAlias}/../x`, a), false);
+    assert.equal(inside(`${otherAlias}/../../instance-a/y`, a), true);
+    assert.equal(inside(`${otherAlias}/..`, b), true);
+    // A relative symlink is followed from the directory that holds it.
+    const relative = path.join(a, "relative-to-b");
+    await fs.symlink("../instance-b", relative);
+    assert.equal(inside(`${relative}/deep/z`, b), true);
+    assert.equal(inside(`${relative}/deep/z`, a), false);
+    // Past a missing component the rest is literal, and a `..` there fails closed.
+    assert.throws(
+      () => inside(`${a}/missing/../x`, a),
+      /OWNER_PREVIEW_ISOLATION_PATH_UNRESOLVABLE:DOTDOT_AFTER_MISSING/u,
+    );
+    assert.throws(
+      () => touchesOwner(`${ownerAlias}/missing/../.codex`),
+      /PATH_UNRESOLVABLE/u,
+    );
+    // A kernel-reported path under a directory that cannot be traversed is
+    // taken literally; an unreported one, or one with `..`, fails closed.
+    const sealed = path.join(a, "sealed");
+    await fs.mkdir(sealed, { mode: 0o000 });
+    try {
+      assert.equal(inside(`${sealed}/file`, a, true), true);
+      assert.equal(inside(`${sealed}/file`, b, true), false);
+      assert.throws(() => inside(`${sealed}/file`, a), /EACCES/u);
+      assert.throws(
+        () => inside(`${sealed}/file/../x`, a, true),
+        /DOTDOT_AFTER_MISSING/u,
+      );
+    } finally {
+      await fs.chmod(sealed, 0o700);
+    }
+    const loop = path.join(a, "loop");
+    await fs.symlink(loop, loop);
+    assert.throws(() => inside(`${loop}/x`, a), /SYMLINK_LOOP/u);
     assert.equal(
       touchesOwner(
         `${a}/${"../".repeat(40)}${home.slice(1)}/.codex/config.toml`,
@@ -842,7 +959,11 @@ async function scannerSelfCheck() {
 }
 
 // Receipt inputs cannot contain observations or a PASS override.
-export async function runOwnerPreviewIsolation(repositoryRoot, generation) {
+export async function runOwnerPreviewIsolation(
+  repositoryRoot,
+  generation,
+  options = {},
+) {
   requireOwnerPreviewRuntimeIntegration();
   await scannerSelfCheck();
   const verified = await verifyOwnerPreview(repositoryRoot, generation);
@@ -861,6 +982,7 @@ export async function runOwnerPreviewIsolation(repositoryRoot, generation) {
     generation,
     startedAt: new Date().toISOString(),
     blocked: [],
+    launches: [],
     observations: {},
     limits: [
       "disposable roots; no authentication/provider/tunnel",
@@ -920,17 +1042,39 @@ export async function runOwnerPreviewIsolation(repositoryRoot, generation) {
     await deadline(once(server, "listening"), "fixture-listen");
     const fixtureOrigin = `http://127.0.0.1:${server.address().port}`;
     const { _electron: electron } = await import("playwright-core");
-    for (const kind of ["normal", "owner-preview"])
-      instances.push(
-        await launch(electron, kind, verified, temporary, fixtureOrigin),
-      );
+    // Each launch is recorded and checkpointed as soon as it exists, before the
+    // next instance starts, so a later failure still names every process that
+    // was launched. A failed launch keeps its profile and error; its pid is
+    // unknown because Playwright returned no handle.
+    for (const kind of ["normal", "owner-preview"]) {
+      const record = { kind, status: "starting", pid: null, home: null };
+      receipt.launches.push(record);
+      await checkpoint();
+      let instance;
+      try {
+        instance = await launch(
+          electron,
+          kind,
+          verified,
+          temporary,
+          fixtureOrigin,
+          record,
+          options,
+        );
+      } catch (error) {
+        record.status = "failed";
+        record.error =
+          error instanceof Error ? error.message.split("\n")[0] : "FAILED";
+        await checkpoint();
+        throw error;
+      }
+      record.status = "running";
+      record.pid = instance.pid;
+      instance.record = record;
+      instances.push(instance);
+      await checkpoint();
+    }
     const [normal, owner] = instances;
-    receipt.launches = instances.map((entry) => ({
-      kind: entry.kind,
-      pid: entry.pid,
-      home: entry.home,
-    }));
-    await checkpoint();
     assert.notEqual(normal.home, owner.home);
     assert.notEqual(normal.pid, owner.pid);
 
@@ -974,10 +1118,12 @@ export async function runOwnerPreviewIsolation(repositoryRoot, generation) {
         )
         .map((process_) => ({
           code: "RUNTIME_CHILD_HOME_UNSET",
+          severity: "info",
           kind,
           pid: process_.pid,
           detail:
-            "The Node runtime child is spawned with an explicit minimal environment and no HOME; it cannot name the owner's home through its environment. Not a failure of this witness, but HOME is not set for every owned process.",
+            "Informational observation, not an open defect. The Node runtime child is spawned with an explicit minimal environment and no HOME. Its host scope is limited to node:crypto, node:events and node:http, enforced at build by assertPreviewRuntimeHostScope, so it has no fs, os or child_process access to reach a home directory.",
+          reference: "tooling/preview-runtime-scope.mjs",
         })),
     );
     await checkpoint();
@@ -1048,6 +1194,10 @@ export async function runOwnerPreviewIsolation(repositoryRoot, generation) {
       }
       assert.equal(gone, true, `OWNER_PREVIEW_ISOLATION_PID_REMAINS:${pid}`);
     }
+    for (const instance of instances) {
+      instance.record.quit = "observed";
+      instance.record.terminal = instance.terminal;
+    }
     receipt.terminals = instances.map((entry) => ({
       kind: entry.kind,
       ...entry.terminal,
@@ -1063,7 +1213,11 @@ export async function runOwnerPreviewIsolation(repositoryRoot, generation) {
     for (const instance of instances) {
       try {
         await requestQuit(instance);
+        instance.record.quit = "observed";
+        instance.record.terminal = instance.terminal;
       } catch (cleanupError) {
+        // An outcome-unknown quit keeps the launch record: the pid stays named.
+        instance.record.quit = "unknown";
         receipt.cleanupError =
           cleanupError instanceof Error
             ? cleanupError.message

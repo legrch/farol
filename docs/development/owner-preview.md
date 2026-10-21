@@ -199,8 +199,17 @@ is present it must lie inside that instance's own profile, never `~/.codex`, an
 owner location or the other instance's root (`CODEX_HOME_OUTSIDE_INSTANCE_ROOT`).
 The receipt records per process whether each was present. The one observed
 exception is the Node runtime child, spawned with an explicit minimal
-environment that has no `HOME`; it is reported under `findings` as
-`RUNTIME_CHILD_HOME_UNSET` rather than failing the run. Every inventory fails closed: each owned process (parent, Go backend, Node
+environment that has no `HOME`. The receipt reports it under `findings` as
+`RUNTIME_CHILD_HOME_UNSET` with `severity: info` rather than failing the run,
+and it is not an open defect: the runtime's host scope is limited to the three
+builtins `node:crypto`, `node:events` and `node:http`, enforced at build by
+`assertPreviewRuntimeHostScope` in `tooling/preview-runtime-scope.mjs`, so the
+runtime has no filesystem, `os` or child-process access with which to reach a
+home directory. Path containment is decided on canonical paths resolved the way
+the kernel does (each existing prefix is realpathed before the next component,
+including `..`); a `..` after a missing component cannot be resolved and fails
+closed. Each launch is recorded and checkpointed in the receipt as soon as it
+exists, so a later failure still names every launched pid. Every inventory fails closed: each owned process (parent, Go backend, Node
 runtime child) must yield a readable, non-empty environment and a clean per-pid
 `lsof` listing, and a non-zero exit or stderr output from `lsof`, `ps` or the
 environment probe is an error. Only a pid the kernel confirms gone is reported,
