@@ -114,13 +114,18 @@ async function snapshotBundlePaths(directory) {
   return found;
 }
 
+// `lsregister -u` exits 1 with -10814 for a bundle LaunchServices has no record
+// of (a helper the run never started). That is the state we want, not a failure.
+const NOT_REGISTERED = /-10814/u;
+
 function runLsregisterUnregister(lsregister, bundlePath) {
   return new Promise((resolve) => {
     execFile(
       lsregister,
       ["-u", bundlePath],
       { env: { PATH: SAFE_PATH }, timeout: 15_000 },
-      (error) => resolve(error === null),
+      (error, stdout, stderr) =>
+        resolve(error === null || NOT_REGISTERED.test(`${stdout}${stderr}`)),
     );
   });
 }
@@ -130,18 +135,16 @@ function runLsregisterUnregister(lsregister, bundlePath) {
 // the directory does not unregister them. Unregister each exact path the
 // snapshot owns before the directory goes away. Never a prefix or global
 // unregister, and never fatal: the launch outcome must not depend on it.
-export async function unregisterLaunchSnapshot(
-  snapshot,
+//
+// Private on purpose: it trusts `realRoot`, which only `removeLaunchSnapshot`
+// supplies after validating the descriptor and resolving the real path. A path
+// that does not resolve to itself inside `realRoot` is refused, not unregistered.
+async function unregisterSnapshotBundles(
+  realRoot,
   { lsregister = LSREGISTER, unregister = runLsregisterUnregister } = {},
 ) {
-  const result = { unregistered: [], failed: [] };
-  let bundles;
-  try {
-    bundles = await snapshotBundlePaths(snapshot.root);
-  } catch (error) {
-    if (error?.code === "ENOENT") return result;
-    throw error;
-  }
+  const result = { unregistered: [], failed: [], refused: [] };
+  const bundles = await snapshotBundlePaths(realRoot);
   if (bundles.length === 0) return result;
   try {
     await fs.access(lsregister);
@@ -149,6 +152,19 @@ export async function unregisterLaunchSnapshot(
     return result;
   }
   for (const bundlePath of bundles) {
+    let resolved = null;
+    try {
+      resolved = await fs.realpath(bundlePath);
+    } catch {
+      // Gone or unreadable: not a path this run can vouch for.
+    }
+    if (
+      resolved !== bundlePath ||
+      !bundlePath.startsWith(`${realRoot}${path.sep}`)
+    ) {
+      result.refused.push(bundlePath);
+      continue;
+    }
     ((await unregister(lsregister, bundlePath))
       ? result.unregistered
       : result.failed
@@ -172,16 +188,26 @@ export async function removeLaunchSnapshot(snapshot, options) {
   ) {
     throw new Error("LAUNCH_SNAPSHOT_CLEANUP_INVALID");
   }
+  let realRoot;
   try {
     const info = await fs.lstat(snapshot.root);
     if (!info.isDirectory() || info.isSymbolicLink()) {
       throw new Error("LAUNCH_SNAPSHOT_CLEANUP_INVALID");
     }
+    realRoot = await fs.realpath(snapshot.root);
+    const realTemporaryRoot = await fs.realpath(snapshot.temporaryRoot);
+    if (
+      realRoot !== path.join(realTemporaryRoot, path.basename(snapshot.root))
+    ) {
+      throw new Error("LAUNCH_SNAPSHOT_CLEANUP_INVALID");
+    }
   } catch (error) {
-    if (error?.code === "ENOENT") return { unregistered: [], failed: [] };
+    if (error?.code === "ENOENT") {
+      return { unregistered: [], failed: [], refused: [] };
+    }
     throw error;
   }
-  const outcome = await unregisterLaunchSnapshot(snapshot, options);
+  const outcome = await unregisterSnapshotBundles(realRoot, options);
   await fs.rm(snapshot.root, { recursive: true, force: true });
   return outcome;
 }

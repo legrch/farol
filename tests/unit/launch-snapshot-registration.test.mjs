@@ -2,10 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import * as launchSnapshot from "../../tooling/launch-snapshot.mjs";
 import {
   createLaunchSnapshot,
   removeLaunchSnapshot,
-  unregisterLaunchSnapshot,
 } from "../../tooling/launch-snapshot.mjs";
 
 // macOS LaunchServices registers a bundle, and each nested helper bundle, the
@@ -73,6 +73,7 @@ describe("launch snapshot LaunchServices cleanup", () => {
     expect(outcome).toEqual({
       unregistered: [helper, runtime, outer],
       failed: [],
+      refused: [],
     });
     await expect(fs.stat(snapshot.root)).rejects.toMatchObject({
       code: "ENOENT",
@@ -87,7 +88,7 @@ describe("launch snapshot LaunchServices cleanup", () => {
     await fs.mkdir(sibling);
     await fs.symlink(outside, path.join(snapshot.root, "Link.app"));
     const calls = [];
-    await unregisterLaunchSnapshot(snapshot, {
+    await removeLaunchSnapshot(snapshot, {
       lsregister: process.execPath,
       unregister: async (_tool, bundlePath) => {
         calls.push(bundlePath);
@@ -100,12 +101,105 @@ describe("launch snapshot LaunchServices cleanup", () => {
       expect(bundlePath).not.toContain("Outside.app");
       expect(bundlePath).not.toContain("Link.app");
     }
-    await removeLaunchSnapshot(snapshot, {
-      lsregister: process.execPath,
-      unregister: async () => true,
-    });
     await expect(fs.stat(sibling)).resolves.toBeDefined();
     await expect(fs.stat(outside)).resolves.toBeDefined();
+  });
+
+  it("exposes no unregister entry point that skips the ownership validation", () => {
+    expect(launchSnapshot.unregisterLaunchSnapshot).toBeUndefined();
+    expect(Object.keys(launchSnapshot).sort()).toEqual(
+      [
+        "createLaunchSnapshot",
+        "ownerLaunchArguments",
+        "ownerLaunchEnvironment",
+        "removeLaunchSnapshot",
+      ].sort(),
+    );
+  });
+
+  it("unregisters only canonical paths, even when the temporary root is reached through a symlink", async () => {
+    const { root, snapshot } = await fixtureSnapshot();
+    const alias = path.join(root, "alias");
+    await fs.symlink(snapshot.temporaryRoot, alias);
+    const viaAlias = {
+      ...snapshot,
+      root: path.join(alias, path.basename(snapshot.root)),
+      temporaryRoot: alias,
+    };
+    viaAlias.appPath = path.join(viaAlias.root, "Farol.app");
+    viaAlias.artifactFile = path.join(viaAlias.root, "artifact.json");
+    const calls = [];
+    await removeLaunchSnapshot(viaAlias, {
+      lsregister: process.execPath,
+      unregister: async (_tool, bundlePath) => {
+        calls.push(bundlePath);
+        return true;
+      },
+    });
+    expect(calls.length).toBe(3);
+    for (const bundlePath of calls) {
+      expect(bundlePath.startsWith(`${snapshot.root}${path.sep}`)).toBe(true);
+      expect(bundlePath).not.toContain(`${path.sep}alias${path.sep}`);
+    }
+  });
+
+  it("refuses a snapshot root that is itself a symlink, and unregisters nothing", async () => {
+    const { root, snapshot, temporaryRoot } = await fixtureSnapshot();
+    const victim = path.join(root, "Victim");
+    await fs.mkdir(path.join(victim, "Real.app"), { recursive: true });
+    const link = path.join(
+      temporaryRoot,
+      `farol-next-launch-${"e".repeat(12)}-link`,
+    );
+    await fs.symlink(victim, link);
+    let called = false;
+    await expect(
+      removeLaunchSnapshot(
+        {
+          ...snapshot,
+          root: link,
+          appPath: path.join(link, "Farol.app"),
+          artifactFile: path.join(link, "artifact.json"),
+        },
+        {
+          lsregister: process.execPath,
+          unregister: async () => {
+            called = true;
+            return true;
+          },
+        },
+      ),
+    ).rejects.toThrow("LAUNCH_SNAPSHOT_CLEANUP_INVALID");
+    expect(called).toBe(false);
+    await expect(fs.stat(path.join(victim, "Real.app"))).resolves.toBeDefined();
+  });
+
+  it("refuses a descriptor whose root is not directly under its temporary root", async () => {
+    const { root, snapshot } = await fixtureSnapshot();
+    const elsewhere = path.join(root, "elsewhere");
+    await fs.mkdir(elsewhere);
+    const moved = path.join(elsewhere, path.basename(snapshot.root));
+    await fs.cp(snapshot.root, moved, { recursive: true });
+    let called = false;
+    await expect(
+      removeLaunchSnapshot(
+        {
+          ...snapshot,
+          root: moved,
+          appPath: path.join(moved, "Farol.app"),
+          artifactFile: path.join(moved, "artifact.json"),
+        },
+        {
+          lsregister: process.execPath,
+          unregister: async () => {
+            called = true;
+            return true;
+          },
+        },
+      ),
+    ).rejects.toThrow("LAUNCH_SNAPSHOT_CLEANUP_INVALID");
+    expect(called).toBe(false);
+    await expect(fs.stat(moved)).resolves.toBeDefined();
   });
 
   it("reports a failed unregister but still removes the snapshot", async () => {
@@ -121,6 +215,23 @@ describe("launch snapshot LaunchServices cleanup", () => {
     });
   });
 
+  it.each([
+    [
+      "a bundle it has no record of",
+      'echo "failed to scan: -10814" >&2; exit 1',
+      true,
+    ],
+    ["any other failure", 'echo "boom" >&2; exit 2', false],
+    ["success", "exit 0", true],
+  ])("the real runner treats %s correctly", async (_name, body, ok) => {
+    const { root, snapshot } = await fixtureSnapshot();
+    const tool = path.join(root, "fake-lsregister");
+    await fs.writeFile(tool, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    const outcome = await removeLaunchSnapshot(snapshot, { lsregister: tool });
+    expect(outcome[ok ? "unregistered" : "failed"]).toContain(snapshot.appPath);
+    expect(outcome[ok ? "failed" : "unregistered"]).toEqual([]);
+  });
+
   it("skips quietly where lsregister does not exist", async () => {
     const { snapshot } = await fixtureSnapshot();
     const outcome = await removeLaunchSnapshot(snapshot, {
@@ -129,7 +240,7 @@ describe("launch snapshot LaunchServices cleanup", () => {
         throw new Error("must not run");
       },
     });
-    expect(outcome).toEqual({ unregistered: [], failed: [] });
+    expect(outcome).toEqual({ unregistered: [], failed: [], refused: [] });
   });
 
   it("does not unregister when the descriptor is not an owned snapshot", async () => {
