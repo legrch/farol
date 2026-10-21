@@ -58,7 +58,8 @@ async function privateDirectory(directory) {
   }
   await physicalDirectory(directory, { privateMode: true });
 }
-// ps, pgrep and lsof exit 1 for "nothing matched"; that is an answer.
+// pgrep exits 1 when a process has no children; that is its answer. Nothing
+// else is allowed to exit non-zero: see `strict`.
 async function query(command, args) {
   try {
     return (
@@ -71,6 +72,40 @@ async function query(command, args) {
   } catch (error) {
     if (error.code === 1 && typeof error.stdout === "string")
       return error.stdout;
+    throw error;
+  }
+}
+// An inventory is only evidence when the tool finished cleanly: any non-zero
+// exit, signal, timeout or stderr output is an error carrying `code`.
+async function strict(command, args, code) {
+  let result;
+  try {
+    result = await execFileAsync(command, args, {
+      encoding: "utf8",
+      timeout: 15000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+  } catch (error) {
+    throw new Error(
+      `${code}:${error.code ?? error.signal ?? "FAILED"}:${String(
+        error.stderr ?? "",
+      )
+        .trim()
+        .slice(0, 200)}`,
+      { cause: error },
+    );
+  }
+  if (result.stderr.trim() !== "")
+    throw new Error(`${code}:STDERR:${result.stderr.trim().slice(0, 200)}`);
+  return result.stdout;
+}
+// Only a pid the kernel no longer knows may have an empty inventory.
+function isGone(pid) {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    if (error.code === "ESRCH") return true;
     throw error;
   }
 }
@@ -105,8 +140,22 @@ async function descendants(parent) {
   }
   return tree;
 }
+// null is the explicit "already exited" outcome; any other failure throws.
 async function command(pid) {
-  return (await query(PS, ["-o", "command=", "-p", String(pid)])).trim();
+  try {
+    const text = (
+      await strict(
+        PS,
+        ["-o", "command=", "-p", String(pid)],
+        "OWNER_PREVIEW_ISOLATION_PS_INCOMPLETE",
+      )
+    ).trim();
+    if (text === "") throw new Error("OWNER_PREVIEW_ISOLATION_PS_EMPTY");
+    return text;
+  } catch (error) {
+    if (isGone(pid)) return null;
+    throw error;
+  }
 }
 // ps cannot show an environment on this macOS; KERN_PROCARGS2 can, for a
 // process of the same user. The values stay in memory: only key names and the
@@ -115,33 +164,56 @@ const PROCARGS_SCRIPT = `
 import ctypes, ctypes.util, json, struct, sys
 libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
 pid = int(sys.argv[1])
+def fail(reason):
+    print(json.dumps({"status": "error", "reason": reason}))
+    sys.exit(0)
 mib = (ctypes.c_int * 3)(1, 49, pid)
 size = ctypes.c_size_t(0)
 if libc.sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0:
-    print("null"); sys.exit(0)
+    fail("errno-" + str(ctypes.get_errno()))
 buf = ctypes.create_string_buffer(size.value)
 if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) != 0:
-    print("null"); sys.exit(0)
-raw = buf.raw[:size.value]
-argc = struct.unpack("i", raw[:4])[0]
-parts = raw[4:].split(b"\\0")
-i = 1
-while i < len(parts) and parts[i] == b"": i += 1
-env = {}
-for p in parts[i + argc:]:
-    if b"=" in p:
-        k, v = p.split(b"=", 1)
-        env[k.decode("utf8", "replace")] = v.decode("utf8", "replace")
-print(json.dumps(env))
+    fail("errno-" + str(ctypes.get_errno()))
+try:
+    raw = buf.raw[:size.value]
+    argc = struct.unpack("i", raw[:4])[0]
+    parts = raw[4:].split(b"\\0")
+    i = 1
+    while i < len(parts) and parts[i] == b"": i += 1
+    env = {}
+    for p in parts[i + argc:]:
+        if b"=" in p:
+            k, v = p.split(b"=", 1)
+            env[k.decode("utf8", "replace")] = v.decode("utf8", "replace")
+except Exception:
+    fail("parse")
+print(json.dumps({"status": "ok", "env": env}))
 `;
+// Fail closed: a readable, non-empty environment, or null for a pid that has
+// exited. An unreadable or empty environment of a live pid is an error, never
+// a skipped check.
 async function environmentOf(pid) {
-  const output = (
-    await query("/usr/bin/python3", ["-I", "-c", PROCARGS_SCRIPT, String(pid)])
-  ).trim();
-  const environment = JSON.parse(output);
-  return environment === null || Object.keys(environment).length === 0
-    ? null
-    : environment;
+  let answer;
+  try {
+    answer = JSON.parse(
+      await strict(
+        "/usr/bin/python3",
+        ["-I", "-c", PROCARGS_SCRIPT, String(pid)],
+        "OWNER_PREVIEW_ISOLATION_ENV_UNREADABLE",
+      ),
+    );
+  } catch (error) {
+    if (isGone(pid)) return null;
+    throw error;
+  }
+  if (isGone(pid) && answer.status !== "ok") return null;
+  if (answer.status !== "ok")
+    throw new Error(
+      `OWNER_PREVIEW_ISOLATION_ENV_UNREADABLE:${pid}:${answer.reason}`,
+    );
+  if (Object.keys(answer.env).length === 0)
+    throw new Error(`OWNER_PREVIEW_ISOLATION_ENV_EMPTY:${pid}`);
+  return answer.env;
 }
 // lsof -F: records start at `p`; each file starts at `f`.
 function parseLsof(output) {
@@ -185,10 +257,28 @@ function listeners(files) {
       };
     });
 }
-async function openFiles(pids) {
-  return parseLsof(
-    await query(LSOF, ["-nP", "-a", "-p", pids.join(","), "-F", "pftPnT"]),
-  );
+// One lsof per pid, each required to finish cleanly and to name its own pid.
+// A pid confirmed gone is the only empty inventory; it is reported as such.
+async function openFiles(pid) {
+  let output;
+  try {
+    output = await strict(
+      LSOF,
+      ["-nP", "-a", "-p", String(pid), "-F", "pftPnT"],
+      "OWNER_PREVIEW_ISOLATION_LSOF_INCOMPLETE",
+    );
+  } catch (error) {
+    if (isGone(pid)) return { pid, outcome: "exited", files: [] };
+    throw error;
+  }
+  const files = parseLsof(output);
+  if (
+    output.split("\n")[0] !== `p${pid}` ||
+    files.length === 0 ||
+    files.some((file) => file.pid !== pid)
+  )
+    throw new Error(`OWNER_PREVIEW_ISOLATION_LSOF_INCOMPLETE:${pid}:SHAPE`);
+  return { pid, outcome: "listed", files };
 }
 
 async function disposableRoot(temporary) {
@@ -388,6 +478,7 @@ async function observe(instance, expected) {
     tree = await descendants(instance.pid);
     for (const pid of tree.slice(1)) {
       const text = await command(pid);
+      if (text === null) continue;
       if (/farol-backend serve /u.test(text)) backend = { pid, command: text };
       else if (text.endsWith(` ${runtimeScript}`))
         runtimeChild = { pid, command: text };
@@ -400,31 +491,57 @@ async function observe(instance, expected) {
     runtimeChild,
     `OWNER_PREVIEW_ISOLATION_NO_RUNTIME:${instance.kind}`,
   );
-  let files = [];
+  // Wait for the runtime child's listener, one strict lsof per attempt.
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    tree = await descendants(instance.pid);
-    files = await openFiles(tree);
-    if (listeners(files).some((entry) => entry.pid === runtimeChild.pid)) break;
+    const inventory = await openFiles(runtimeChild.pid);
+    if (inventory.outcome === "exited") break;
+    if (listeners(inventory.files).length > 0) break;
     await new Promise((r) => setTimeout(r, 200));
   }
+  // One pass over the final tree. Each pid yields a command, a readable
+  // non-empty environment and a clean lsof inventory, or the explicit
+  // "exited" outcome. The parent, the backend and the runtime child may not
+  // exit: for them any gap is an error, never a skipped check.
+  tree = await descendants(instance.pid);
+  const required = new Map([
+    [instance.pid, "parent"],
+    [backend.pid, "backend"],
+    [runtimeChild.pid, "runtime"],
+  ]);
+  for (const pid of required.keys())
+    assert.ok(tree.includes(pid), `OWNER_PREVIEW_ISOLATION_NOT_IN_TREE:${pid}`);
   const processes = [];
+  const files = [];
   for (const pid of tree) {
     const text = await command(pid);
-    const environment = await environmentOf(pid);
+    const environment = text === null ? null : await environmentOf(pid);
+    const inventory = environment === null ? null : await openFiles(pid);
+    if (
+      text === null ||
+      environment === null ||
+      inventory.outcome === "exited"
+    ) {
+      assert.equal(
+        required.has(pid),
+        false,
+        `OWNER_PREVIEW_ISOLATION_OWNED_PROCESS_EXITED:${required.get(pid)}:${pid}`,
+      );
+      processes.push({ pid, outcome: "exited" });
+      continue;
+    }
+    files.push(...inventory.files);
     processes.push({
       pid,
+      outcome: "observed",
       command: text,
-      environment:
-        environment === null
-          ? { readable: false }
-          : {
-              readable: true,
-              keys: Object.keys(environment).sort(),
-              home: environment.HOME ?? null,
-              codexHome: environment.CODEX_HOME ?? null,
-              runtimeIdentity: environment.FAROL_NEXT_RUNTIME_IDENTITY ?? null,
-              namesOwnerLocation: Object.values(environment).some(touchesOwner),
-            },
+      environment: {
+        keys: Object.keys(environment).sort(),
+        home: environment.HOME ?? null,
+        codexHome: environment.CODEX_HOME ?? null,
+        runtimeIdentity: environment.FAROL_NEXT_RUNTIME_IDENTITY ?? null,
+        namesOwnerLocation: Object.values(environment).some(touchesOwner),
+      },
+      openFileCount: inventory.files.length,
     });
   }
   return {
@@ -478,29 +595,42 @@ async function assertInstance(observed, instance, identity, other) {
   assert.deepEqual(observed.outbound, []);
   // Every process descends from the launched parent and runs bytes from this
   // instance's own bundle, never the other instance's or the installed app.
-  for (const entry of observed.processes) {
+  const live = observed.processes.filter(
+    (entry) => entry.outcome === "observed",
+  );
+  for (const required of [
+    instance.pid,
+    observed.backend.pid,
+    observed.runtimeChild.pid,
+  ])
+    assert.ok(
+      live.some((entry) => entry.pid === required),
+      `OWNER_PREVIEW_ISOLATION_OWNED_PROCESS_NOT_OBSERVED:${required}`,
+    );
+  for (const entry of live) {
     assert.ok(
       entry.command.includes(instance.app) || entry.pid === instance.pid,
       `FOREIGN_PROCESS:${entry.command.slice(0, 120)}`,
     );
     assert.equal(entry.command.includes(other.app), false);
     assert.equal(touchesOwner(entry.command), false);
-    if (entry.environment.readable) {
-      assert.equal(entry.environment.namesOwnerLocation, false);
-      assert.ok(
-        entry.environment.home === null ||
-          inside(entry.environment.home, instance.home),
-        `HOME:${entry.pid}:${entry.environment.home}`,
-      );
-      assert.ok(
-        entry.environment.codexHome === null ||
-          inside(entry.environment.codexHome, identity.userData),
-        `CODEX_HOME:${entry.pid}`,
-      );
-    }
+    // Every live process has a readable, non-empty environment (see
+    // environmentOf); none of them may name an owner location or leave HOME or
+    // CODEX_HOME outside this instance.
+    assert.ok(entry.environment.keys.length > 0, `ENV_EMPTY:${entry.pid}`);
+    assert.equal(entry.environment.namesOwnerLocation, false);
+    assert.ok(
+      entry.environment.home === null ||
+        inside(entry.environment.home, instance.home),
+      `HOME:${entry.pid}:${entry.environment.home}`,
+    );
+    assert.ok(
+      entry.environment.codexHome === null ||
+        inside(entry.environment.codexHome, identity.userData),
+      `CODEX_HOME:${entry.pid}`,
+    );
   }
-  const parent = observed.processes.find((entry) => entry.pid === instance.pid);
-  assert.equal(parent.environment.readable, true, "PARENT_ENV_UNREADABLE");
+  const parent = live.find((entry) => entry.pid === instance.pid);
   assert.equal(parent.environment.home, instance.home);
   assert.equal(
     await fs.realpath(runtime.executable),
@@ -522,9 +652,7 @@ async function assertInstance(observed, instance, identity, other) {
     ),
   );
   assert.equal(
-    observed.processes.some((entry) =>
-      /(^|\/)codex(\s|$)/u.test(entry.command),
-    ),
+    live.some((entry) => /(^|\/)codex(\s|$)/u.test(entry.command)),
     false,
     "A Codex child needs a live provider and cannot be witnessed here",
   );
@@ -537,7 +665,7 @@ async function assertInstance(observed, instance, identity, other) {
     );
   // The Node runtime child serves its loopback port under this instance's
   // runtime identity; it is not the other channel's and not the owner's.
-  const runtimeProcess = observed.processes.find(
+  const runtimeProcess = live.find(
     (entry) => entry.pid === observed.runtimeChild.pid,
   );
   assert.equal(
@@ -561,7 +689,7 @@ async function assertInstance(observed, instance, identity, other) {
 }
 
 // The scanners below judge live observations; prove they can fail first.
-function scannerSelfCheck() {
+async function scannerSelfCheck() {
   const home = os.userInfo().homedir;
   assert.equal(touchesOwner(path.join(home, ".codex/config.toml")), true);
   assert.equal(
@@ -593,12 +721,35 @@ function scannerSelfCheck() {
     ],
   );
   assert.equal(LOOPBACK.has("*"), false);
+  // The inventories fail closed: a bad exit or any stderr is an error, a live
+  // pid yields a real environment and file list, and only a pid the kernel no
+  // longer knows is reported as exited.
+  await assert.rejects(strict("/usr/bin/false", [], "SELF"), /^Error: SELF:1/u);
+  await assert.rejects(
+    strict("/bin/sh", ["-c", "echo warning >&2"], "SELF"),
+    /^Error: SELF:STDERR:warning/u,
+  );
+  const environment = await environmentOf(process.pid);
+  assert.ok(environment !== null && Object.keys(environment).length > 0);
+  const inventory = await openFiles(process.pid);
+  assert.equal(inventory.outcome, "listed");
+  assert.ok(inventory.files.length > 0);
+  const finished = execFile("/usr/bin/true");
+  await once(finished, "exit");
+  assert.equal(isGone(finished.pid), true);
+  assert.equal(await command(finished.pid), null);
+  assert.equal(await environmentOf(finished.pid), null);
+  assert.deepEqual(await openFiles(finished.pid), {
+    pid: finished.pid,
+    outcome: "exited",
+    files: [],
+  });
 }
 
 // Receipt inputs cannot contain observations or a PASS override.
 export async function runOwnerPreviewIsolation(repositoryRoot, generation) {
   requireOwnerPreviewRuntimeIntegration();
-  scannerSelfCheck();
+  await scannerSelfCheck();
   const verified = await verifyOwnerPreview(repositoryRoot, generation);
   const namespace = path.join(repositoryRoot, "_output/preview/isolation");
   await privateDirectory(namespace);

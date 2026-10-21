@@ -174,8 +174,9 @@ contracts, Go Recovery, the installed profile, a tunnel or an updater helper.
 ## Isolation witness (R07)
 
 [`owner-preview-isolation.e2e.mjs`](../../tests/e2e/owner-preview-isolation.e2e.mjs)
-is a separate explicit entrypoint (`node tests/e2e/owner-preview-isolation.e2e.mjs
---generation <64hex>`); the build and run commands do not invoke it. It runs one
+is a separate explicit entrypoint, run only through the owner-untouched guard
+(`task test:e2e:owner-preview-isolation -- --generation <64hex>`); the build and
+run commands do not invoke it. It runs one
 disposable normal instance and one Preview at the same time, hidden, each in its
 own disposable root, and reads what the operating system reports for their exact
 pids: open files, listening sockets, the Go backend and Node runtime children,
@@ -191,7 +192,11 @@ resolves `appData`, so a launch without `FAROL_NEXT_E2E_APP_DATA` would select
 the owner's real profile; the witness reads that value with a probe application
 whose `userData` is fixed to a disposable path, and does not launch the product
 that way. A Codex child needs a live provider and is asserted absent, not
-witnessed. Receipts are under `_output/preview/isolation/<generation>/`.
+witnessed. Every inventory fails closed: each owned process (parent, Go backend, Node
+runtime child) must yield a readable, non-empty environment and a clean per-pid
+`lsof` listing, and a non-zero exit or stderr output from `lsof`, `ps` or the
+environment probe is an error. Only a pid the kernel confirms gone is reported,
+explicitly, as exited. Receipts are under `_output/preview/isolation/<generation>/`.
 
 ## Verification and remaining gates
 
