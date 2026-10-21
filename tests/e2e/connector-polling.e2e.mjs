@@ -3,7 +3,10 @@ import { readNativePreviewEcho } from "./lib/native-preview-echo.mjs";
 // Exact attested Dev Electron/Go, synthetic loopback child and disposable roots.
 // No installed profile, live provider/control plane, actual OS sleep or effect.
 // --go-callback-delay adds one original Go SIGSTOP/SIGCONT while the real main
-// loop is blocked. A failure retains its original profile/report; never replay.
+// loop is blocked. --network-loss closes the helper's loopback connections (no
+// HTTP status) for a bounded window, then restores them; the product must show a
+// degraded status, probe on its documented backoff and recover on its own.
+// A failure retains its original profile/report; never replay.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -30,11 +33,13 @@ const args = process.argv.slice(2);
 assert.ok(
   JSON.stringify(args) === '["--run-native"]' ||
     JSON.stringify(args) === '["--run-native","--go-callback-delay"]' ||
-    JSON.stringify(args) === '["--run-native","--health-status"]',
+    JSON.stringify(args) === '["--run-native","--health-status"]' ||
+    JSON.stringify(args) === '["--run-native","--network-loss"]',
   "POLLING_NATIVE_ARGUMENTS",
 );
 const goDelay = args.includes("--go-callback-delay");
 const healthStatus = args.includes("--health-status");
+const networkLoss = args.includes("--network-loss");
 assert.equal(process.platform, "darwin");
 const root = process.cwd(),
   source = sourceIdentity(root),
@@ -92,9 +97,12 @@ const report = {
   home,
   auxiliary,
   healthStatus,
-  fault: goDelay
-    ? "original-Go-paused-main-loop-delay-resume"
-    : "HTTP-polling-and-main-loop-delay",
+  networkLoss,
+  fault: networkLoss
+    ? "synthetic-loopback-connection-loss-and-restore"
+    : goDelay
+      ? "original-Go-paused-main-loop-delay-resume"
+      : "HTTP-polling-and-main-loop-delay",
   status: "preparing",
   launches: [],
   limits:
@@ -617,6 +625,227 @@ async function checkHealthStatus(run, mode, expected) {
   await save();
 }
 
+// Product contract this scenario measures (apps/desktop/connector-transport-watch.ts):
+// the 30 s transport timer starts one observation ladder of /readyz probes at
+// delays 0, 1 s, 5 s and 15 s after the previous one, then at most one recovery
+// per original runtime. The same timer also samples /health for the status.
+const LADDER_DELAYS_MILLIS = [0, 1000, 5000, 15000];
+const TRANSPORT_TICK_MILLIS = 30000;
+const settleConnection = (run) =>
+  bounded(
+    run.application.evaluate(
+      () =>
+        new Promise((resolve, reject) => {
+          if (!process.emit("farol-e2e-observe-connection", resolve))
+            reject(new Error("HEALTH_OBSERVER_SEAM_UNAVAILABLE"));
+        }),
+    ),
+    "NETWORK_LOSS_OBSERVATION_UNSETTLED",
+  );
+const runningReceipt = async () =>
+  (await receiptList()).find((value) => value.phase === "running");
+async function checkNetworkLoss(run) {
+  const loss = { ladderDelaysMillis: LADDER_DELAYS_MILLIS };
+  run.observations.push({ networkLoss: loss });
+  const settingsHash = hash(await fs.readFile(path.join(state, "config.json")));
+  const runtimeBefore = (await bootstrap(run)).configuration.settings.connectors
+    .secureMcp.runtime;
+  await tunnelStore.controlHealth("recent");
+  await tunnelStore.controlNetwork("reachable");
+  const baseline = await settleConnection(run);
+  assert.equal(baseline.settled, true);
+  assert.equal(baseline.view.state, "recent_transport");
+  loss.baseline = { state: baseline.view.state, label: baseline.view.label };
+  const helper = await runningReceipt();
+  assert.ok(helper);
+  assert.equal(helper.loss, undefined);
+  // Align to the product's own timer: startup polls /readyz in a burst, the
+  // transport tick then probes it once per 30 s. Cut the transport just after
+  // a tick so the next tick lands inside the window.
+  let last = (await runningReceipt()).readyRequests,
+    changedAt = Date.now();
+  const tick = await poll(
+    async () => {
+      const value = (await runningReceipt()).readyRequests;
+      const now = Date.now();
+      const quiet = now - changedAt;
+      const moved = value !== last;
+      if (moved) {
+        last = value;
+        changedAt = now;
+      }
+      return { moved, quiet, at: now };
+    },
+    (value) => value.moved && value.quiet >= 1500,
+    "NETWORK_LOSS_TRANSPORT_TICK_NOT_OBSERVED",
+    TRANSPORT_TICK_MILLIS * 2 + 10000,
+  );
+  loss.alignedTickAt = tick.at;
+  await delay(1200);
+  const readyBefore = (await runningReceipt()).readyRequests;
+  loss.readyRequestsBeforeLoss = readyBefore;
+  await save();
+  const lostAt = Date.now();
+  await tunnelStore.controlNetwork("lost");
+  loss.lostAt = lostAt;
+  await save();
+  // Live degraded status while the transport is unreachable, before any tick.
+  const duringSettlement = await settleConnection(run);
+  assert.equal(duringSettlement.settled, true);
+  loss.duringLoss = {
+    afterMillis: Date.now() - lostAt,
+    state: duringSettlement.view.state,
+    label: duringSettlement.view.label,
+    detail: duringSettlement.view.detail,
+    attention: duringSettlement.view.attention,
+  };
+  await save();
+  assert.notEqual(duringSettlement.view.state, "recent_transport");
+  assert.notEqual(duringSettlement.view.state, "stopped");
+  const card = run.page.locator(".connection-live-status");
+  loss.duringLoss.uiState = await poll(
+    () => card.getAttribute("data-state"),
+    (value) => value !== "recent_transport",
+    "NETWORK_LOSS_UI_STILL_GREEN",
+  );
+  // The product's own ladder: wait for its third probe (delays 0, 1 s, 5 s),
+  // then restore well before the fourth (15 s later).
+  const probed = await poll(
+    runningReceipt,
+    (value) => (value.loss?.readyz ?? 0) >= 3,
+    "NETWORK_LOSS_LADDER_NOT_OBSERVED",
+    TRANSPORT_TICK_MILLIS + 25000,
+  );
+  const restoredAt = Date.now();
+  await tunnelStore.controlNetwork("reachable");
+  loss.restoredAt = restoredAt;
+  loss.windowMillis = restoredAt - lostAt;
+  loss.atRestore = {
+    readyz: probed.loss.readyz,
+    health: probed.loss.health,
+    connections: probed.loss.connections,
+    requests: probed.loss.requests,
+  };
+  await save();
+  // No click, no seam, no restart: only the product's own timers may recover.
+  const recovered = await poll(
+    () => bootstrap(run),
+    (value) => value.connectionStatus?.state === "recent_transport",
+    "NETWORK_LOSS_NOT_RECOVERED",
+    TRANSPORT_TICK_MILLIS * 2 + 10000,
+  );
+  loss.recoveredAfterMillis = Date.now() - restoredAt;
+  loss.recoveredStatus = {
+    state: recovered.connectionStatus.state,
+    label: recovered.connectionStatus.label,
+  };
+  await poll(
+    () => card.getAttribute("data-state"),
+    (value) => value === "recent_transport",
+    "NETWORK_LOSS_UI_NOT_RECOVERED",
+  );
+  // The ladder's fourth probe finds the transport healthy and ends it without
+  // an effectful recovery. Wait for it (a healthy /readyz after the restore).
+  const final = await poll(
+    runningReceipt,
+    (value) => value.readyRequests > readyBefore,
+    "NETWORK_LOSS_HEALTHY_PROBE_NOT_OBSERVED",
+    LADDER_DELAYS_MILLIS[3] + 10000,
+  );
+  const events = final.loss.log.map((value) => ({
+    atMillis: value.at - lostAt,
+    kind: value.kind,
+  }));
+  loss.final = {
+    counters: {
+      connections: final.loss.connections,
+      requests: final.loss.requests,
+      readyz: final.loss.readyz,
+      health: final.loss.health,
+      metrics: final.loss.metrics,
+      other: final.loss.other,
+    },
+    readyRequestsAfter: final.readyRequests,
+    events,
+  };
+  const probes = events.filter((value) => value.kind === "GET /readyz");
+  loss.readyzProbeOffsetsMillis = probes.map((value) => value.atMillis);
+  await save();
+  // Bounded backoff: one ladder only, never hammered. The product cannot probe
+  // more than its ladder length in one tick, and none came before the first
+  // tick or after the restore.
+  assert.ok(
+    final.loss.readyz >= 2 && final.loss.readyz <= LADDER_DELAYS_MILLIS.length,
+    `NETWORK_LOSS_PROBES:${final.loss.readyz}`,
+  );
+  assert.equal(final.loss.readyz, probes.length);
+  assert.ok(probes.every((value) => value.atMillis <= loss.windowMillis));
+  for (let index = 1; index < probes.length; index++)
+    assert.ok(
+      probes[index].atMillis - probes[index - 1].atMillis >=
+        LADDER_DELAYS_MILLIS[index] - 250,
+      `NETWORK_LOSS_BACKOFF_TOO_FAST:${index}`,
+    );
+  // Status reads while lost: product tick(s) plus this harness's one settle.
+  const ticksInWindow = Math.ceil(loss.windowMillis / TRANSPORT_TICK_MILLIS);
+  assert.ok(
+    final.loss.health <= 2 + ticksInWindow,
+    `NETWORK_LOSS_HEALTH_READS:${final.loss.health}`,
+  );
+  assert.equal(final.loss.metrics, 0);
+  assert.equal(final.loss.other, 0);
+  loss.attemptsPerSecond = Number(
+    (
+      (final.loss.requests + final.loss.connections) /
+      (loss.windowMillis / 1000)
+    ).toFixed(3),
+  );
+  // No second owner/tunnel generation: the same helper, backend and runtime.
+  const receipts = await receiptList();
+  assert.equal(receipts.length, run.ordinal);
+  assert.ok(
+    receipts.some(
+      (value) =>
+        value.id === helper.id &&
+        value.pid === helper.pid &&
+        value.phase === "running",
+    ),
+  );
+  assert.deepEqual(
+    children(run.pid).filter((value) => value.pid === run.backend.pid),
+    [run.backend],
+  );
+  const after = await bootstrap(run);
+  assert.equal(after.configuration.status, "ready");
+  assert.deepEqual(
+    after.configuration.settings.connectors.secureMcp.runtime,
+    runtimeBefore,
+  );
+  assert.equal(
+    hash(await fs.readFile(path.join(state, "config.json"))),
+    settingsHash,
+  );
+  assert.ok(
+    !run.lifecycle.some(
+      (value) =>
+        value.source === "connector-tunnel" ||
+        value.event === "child-close" ||
+        value.event === "failure",
+    ),
+    "NETWORK_LOSS_TUNNEL_LIFECYCLE_EVENT",
+  );
+  loss.originalHelperPid = helper.pid;
+  loss.backendPid = run.backend.pid;
+  loss.receipts = receipts;
+  loss.lifecycle = run.lifecycle;
+  loss.limits =
+    "Synthetic loopback helper closes connections (no HTTP status) for a bounded window; the Mac, its network and any real tunnel are untouched. Probes the product's /readyz ladder and /health status reads only; no live control plane, OS sleep or sustained outage (which would trigger the one-shot recovery).";
+  assert.equal(site.driver.snapshot().attemptedSends, 0);
+  assert.equal(site.driver.snapshot().acceptedSends, 0);
+  await hidden(run);
+  await save();
+}
+
 async function blockMain(run) {
   return bounded(
     run.application.evaluate(() => {
@@ -719,223 +948,248 @@ try {
     (values) => values.length === 1 && values[0].phase === "running",
     "POLLING_HELPER_NOT_RUNNING",
   );
-  if (healthStatus) {
+  if (networkLoss) {
     await diagnosticPage(first);
     await first.page
       .locator(".contextual-sidebar")
       .getByRole("button", { name: "Connection", exact: true })
       .click();
     await first.page.locator(".connection-live-status").waitFor();
-    for (const [mode, expected] of [
-      ["http503", "unavailable"],
-      ["http504", "unavailable"],
-      ["auth401", "action_required"],
-      ["stale", "unobserved"],
-      ["first-poll", "checking"],
-      ["backpressure", "checking"],
-      ["future-failure", "unobserved"],
-      ["malformed", "unobserved"],
-      ["unsupported", "unobserved"],
-      ["missing", "unobserved"],
-      ["hold", "unobserved"],
-    ]) {
-      await checkHealthStatus(first, "recent", "recent_transport");
-      await checkHealthStatus(first, mode, expected);
-    }
-    await tunnelStore.controlHealth("recent");
-  }
-  await diagnosticPage(first);
-  for (const [mode, expected] of [
-    ["recent", "The helper reported a recent server poll."],
-    ["stale", "Server polling was delayed."],
-    ["no_success", "The helper had not reported a successful server poll."],
-    ["http503", "Server polling could not be confirmed."],
-    ["http504", "Server polling could not be confirmed."],
-    ["missing", "Server polling could not be confirmed."],
-  ])
-    await check(first, mode, expected);
-  if (goDelay) {
-    const exact = children(first.pid).find(
-      (value) => value.pid === first.backend.pid,
+    await checkNetworkLoss(first);
+    await tunnelStore.controlNetwork("reachable");
+    await quit(first);
+    assert.deepEqual(
+      await fs.readFile(path.join(workspace, "sentinel.txt")),
+      canary,
     );
-    assert.deepEqual(exact, first.backend);
-    assert.equal(process.kill(first.backend.pid, "SIGSTOP"), true);
-    first.goStopRequested = true;
+    report.status =
+      "passed-hidden-Go-network-loss-bounded-backoff-auto-recovery-same-generation";
     await save();
-    await check(
-      first,
-      "recent",
-      "The connection check expired. No polling result was published.",
-      async () => {
-        await delay(100);
-        const blocked = blockMain(first);
-        await delay(300);
-        assert.deepEqual(
-          children(first.pid).find((value) => value.pid === first.backend.pid),
-          first.backend,
-        );
-        assert.equal(process.kill(first.backend.pid, "SIGCONT"), true);
-        first.goContinueRequested = true;
-        first.mainDelay = await blocked;
-        await save();
-      },
-    );
   } else {
-    await check(
-      first,
-      "hold",
-      "Server polling could not be confirmed.",
-      async () => {
-        first.mainDelay = await blockMain(first);
-        assert.ok(first.mainDelay.finished - first.mainDelay.started >= 16000);
-        await save();
-      },
-    );
-  }
-  await control("recent");
-  first.settingsBeforeQuit = (await bootstrap(first)).configuration.settings;
-  await quit(first);
-  const second = await launch(2);
-  await poll(
-    () => bootstrap(second),
-    (value) =>
-      value.configuration?.status === "ready" &&
-      value.configuration.settings.connectors.secureMcp.runtime?.state ===
-        "ready",
-    "POLLING_RESUME_NOT_READY",
-    20000,
-  );
-  await poll(
-    receiptList,
-    (values) =>
-      values.length === 2 &&
-      values.filter((value) => value.phase === "running").length === 1,
-    "POLLING_SECOND_HELPER_MISSING",
-  );
-  const restored = (await bootstrap(second)).configuration.settings;
-  assert.deepEqual(
-    restored.computer.workspaces,
-    first.settingsBeforeQuit.computer.workspaces,
-  );
-  assert.equal(
-    restored.computer.computerId,
-    first.settingsBeforeQuit.computer.computerId,
-  );
-  await diagnosticPage(second);
-  await check(second, "recent", "The helper reported a recent server poll.");
-  const helperBeforeStop = healthStatus
-    ? (await receiptList()).find((value) => value.phase === "running")
-    : undefined;
-  await configure(second, { kind: "connector.stop" });
-  if (healthStatus) {
-    assert.ok(helperBeforeStop, "OWNER_STOP_ORIGINAL_HELPER_MISSING");
-    const settlement = await bounded(
-      second.application.evaluate(
-        () =>
-          new Promise((resolve, reject) => {
-            if (!process.emit("farol-e2e-observe-connection", resolve))
-              reject(new Error("HEALTH_OBSERVER_SEAM_UNAVAILABLE"));
-          }),
-      ),
-      "OWNER_STOP_OBSERVATION_UNSETTLED",
-    );
-    assert.equal(settlement.settled, true);
-    assert.equal(settlement.view.state, "stopped");
-    assert.equal(settlement.view.label, "Stopped by owner");
-    assert.ok(
-      settlement.view.detail.includes("Polling history is not included"),
-    );
-    assert.ok(
-      settlement.view.delivery.includes(
-        "Response upload history is not included",
-      ),
-    );
-    assert.ok(
-      !settlement.view.detail.includes("No successful server poll observed"),
-    );
-    assert.ok(
-      !settlement.view.delivery.includes(
-        "No accepted response upload observed",
-      ),
-    );
-    const current = await poll(
-      () => bootstrap(second),
-      (value) => value.connectionStatus?.state === "stopped",
-      "OWNER_STOP_STATUS_NOT_PUBLISHED",
-    );
-    const card = second.page.locator(".connection-live-status");
+    if (healthStatus) {
+      await diagnosticPage(first);
+      await first.page
+        .locator(".contextual-sidebar")
+        .getByRole("button", { name: "Connection", exact: true })
+        .click();
+      await first.page.locator(".connection-live-status").waitFor();
+      for (const [mode, expected] of [
+        ["http503", "unavailable"],
+        ["http504", "unavailable"],
+        ["auth401", "action_required"],
+        ["stale", "unobserved"],
+        ["first-poll", "checking"],
+        ["backpressure", "checking"],
+        ["future-failure", "unobserved"],
+        ["malformed", "unobserved"],
+        ["unsupported", "unobserved"],
+        ["missing", "unobserved"],
+        ["hold", "unobserved"],
+      ]) {
+        await checkHealthStatus(first, "recent", "recent_transport");
+        await checkHealthStatus(first, mode, expected);
+      }
+      await tunnelStore.controlHealth("recent");
+    }
+    await diagnosticPage(first);
+    for (const [mode, expected] of [
+      ["recent", "The helper reported a recent server poll."],
+      ["stale", "Server polling was delayed."],
+      ["no_success", "The helper had not reported a successful server poll."],
+      ["http503", "Server polling could not be confirmed."],
+      ["http504", "Server polling could not be confirmed."],
+      ["missing", "Server polling could not be confirmed."],
+    ])
+      await check(first, mode, expected);
+    if (goDelay) {
+      const exact = children(first.pid).find(
+        (value) => value.pid === first.backend.pid,
+      );
+      assert.deepEqual(exact, first.backend);
+      assert.equal(process.kill(first.backend.pid, "SIGSTOP"), true);
+      first.goStopRequested = true;
+      await save();
+      await check(
+        first,
+        "recent",
+        "The connection check expired. No polling result was published.",
+        async () => {
+          await delay(100);
+          const blocked = blockMain(first);
+          await delay(300);
+          assert.deepEqual(
+            children(first.pid).find(
+              (value) => value.pid === first.backend.pid,
+            ),
+            first.backend,
+          );
+          assert.equal(process.kill(first.backend.pid, "SIGCONT"), true);
+          first.goContinueRequested = true;
+          first.mainDelay = await blocked;
+          await save();
+        },
+      );
+    } else {
+      await check(
+        first,
+        "hold",
+        "Server polling could not be confirmed.",
+        async () => {
+          first.mainDelay = await blockMain(first);
+          assert.ok(
+            first.mainDelay.finished - first.mainDelay.started >= 16000,
+          );
+          await save();
+        },
+      );
+    }
+    await control("recent");
+    first.settingsBeforeQuit = (await bootstrap(first)).configuration.settings;
+    await quit(first);
+    const second = await launch(2);
     await poll(
-      () => card.getAttribute("data-state"),
-      (value) => value === "stopped",
-      "OWNER_STOP_UI_NOT_CURRENT",
+      () => bootstrap(second),
+      (value) =>
+        value.configuration?.status === "ready" &&
+        value.configuration.settings.connectors.secureMcp.runtime?.state ===
+          "ready",
+      "POLLING_RESUME_NOT_READY",
+      20000,
     );
-    const cardText = await card.innerText();
-    assert.ok(cardText.includes("Stopped by owner"));
-    assert.ok(cardText.includes("Polling history is not included"));
-    assert.ok(cardText.includes("Response upload history is not included"));
-    assert.equal(
-      current.configuration.settings.connectors.secureMcp.runtime,
-      null,
-    );
-    const stoppedReceipts = await poll(
+    await poll(
       receiptList,
       (values) =>
         values.length === 2 &&
-        values.every(
-          (value) => value.phase === "exited" && value.exitCode === 0,
-        ),
-      "OWNER_STOP_HELPER_NOT_CLOSED",
+        values.filter((value) => value.phase === "running").length === 1,
+      "POLLING_SECOND_HELPER_MISSING",
     );
-    assert.ok(absent(helperBeforeStop.pid));
-    assert.ok(absent(helperBeforeStop.parentPid));
+    const restored = (await bootstrap(second)).configuration.settings;
     assert.deepEqual(
-      children(second.pid).filter((value) => value.pid === second.backend.pid),
-      [second.backend],
+      restored.computer.workspaces,
+      first.settingsBeforeQuit.computer.workspaces,
     );
-    assert.equal(site.driver.snapshot().attemptedSends, 0);
-    assert.equal(site.driver.snapshot().acceptedSends, 0);
-    // A second explicit Stop has no active Go binding. Retain the original
-    // confirmed negative observation without starting another helper.
+    assert.equal(
+      restored.computer.computerId,
+      first.settingsBeforeQuit.computer.computerId,
+    );
+    await diagnosticPage(second);
+    await check(second, "recent", "The helper reported a recent server poll.");
+    const helperBeforeStop = healthStatus
+      ? (await receiptList()).find((value) => value.phase === "running")
+      : undefined;
     await configure(second, { kind: "connector.stop" });
-    const repeatSettlement = await bounded(
-      second.application.evaluate(
-        () =>
-          new Promise((resolve, reject) => {
-            if (!process.emit("farol-e2e-observe-connection", resolve))
-              reject(new Error("HEALTH_OBSERVER_SEAM_UNAVAILABLE"));
-          }),
-      ),
-      "OWNER_STOP_REPEAT_UNSETTLED",
+    if (healthStatus) {
+      assert.ok(helperBeforeStop, "OWNER_STOP_ORIGINAL_HELPER_MISSING");
+      const settlement = await bounded(
+        second.application.evaluate(
+          () =>
+            new Promise((resolve, reject) => {
+              if (!process.emit("farol-e2e-observe-connection", resolve))
+                reject(new Error("HEALTH_OBSERVER_SEAM_UNAVAILABLE"));
+            }),
+        ),
+        "OWNER_STOP_OBSERVATION_UNSETTLED",
+      );
+      assert.equal(settlement.settled, true);
+      assert.equal(settlement.view.state, "stopped");
+      assert.equal(settlement.view.label, "Stopped by owner");
+      assert.ok(
+        settlement.view.detail.includes("Polling history is not included"),
+      );
+      assert.ok(
+        settlement.view.delivery.includes(
+          "Response upload history is not included",
+        ),
+      );
+      assert.ok(
+        !settlement.view.detail.includes("No successful server poll observed"),
+      );
+      assert.ok(
+        !settlement.view.delivery.includes(
+          "No accepted response upload observed",
+        ),
+      );
+      const current = await poll(
+        () => bootstrap(second),
+        (value) => value.connectionStatus?.state === "stopped",
+        "OWNER_STOP_STATUS_NOT_PUBLISHED",
+      );
+      const card = second.page.locator(".connection-live-status");
+      await poll(
+        () => card.getAttribute("data-state"),
+        (value) => value === "stopped",
+        "OWNER_STOP_UI_NOT_CURRENT",
+      );
+      const cardText = await card.innerText();
+      assert.ok(cardText.includes("Stopped by owner"));
+      assert.ok(cardText.includes("Polling history is not included"));
+      assert.ok(cardText.includes("Response upload history is not included"));
+      assert.equal(
+        current.configuration.settings.connectors.secureMcp.runtime,
+        null,
+      );
+      const stoppedReceipts = await poll(
+        receiptList,
+        (values) =>
+          values.length === 2 &&
+          values.every(
+            (value) => value.phase === "exited" && value.exitCode === 0,
+          ),
+        "OWNER_STOP_HELPER_NOT_CLOSED",
+      );
+      assert.ok(absent(helperBeforeStop.pid));
+      assert.ok(absent(helperBeforeStop.parentPid));
+      assert.deepEqual(
+        children(second.pid).filter(
+          (value) => value.pid === second.backend.pid,
+        ),
+        [second.backend],
+      );
+      assert.equal(site.driver.snapshot().attemptedSends, 0);
+      assert.equal(site.driver.snapshot().acceptedSends, 0);
+      // A second explicit Stop has no active Go binding. Retain the original
+      // confirmed negative observation without starting another helper.
+      await configure(second, { kind: "connector.stop" });
+      const repeatSettlement = await bounded(
+        second.application.evaluate(
+          () =>
+            new Promise((resolve, reject) => {
+              if (!process.emit("farol-e2e-observe-connection", resolve))
+                reject(new Error("HEALTH_OBSERVER_SEAM_UNAVAILABLE"));
+            }),
+        ),
+        "OWNER_STOP_REPEAT_UNSETTLED",
+      );
+      assert.equal(repeatSettlement.settled, true);
+      assert.equal(repeatSettlement.view.state, "stopped");
+      assert.equal((await receiptList()).length, 2);
+      await hidden(second);
+      second.observations.push({
+        ownerStop: {
+          repeatSettlement,
+          settlement,
+          view: current.connectionStatus,
+          helperBeforeStop,
+          receipts: stoppedReceipts,
+          originalBackendPid: second.backend.pid,
+          limits:
+            "Actual hidden Electron/Go/UI and owned helper closure; synthetic control plane, no Tray/OS-sleep/live-provider/installed acceptance.",
+        },
+      });
+      await save();
+    }
+    await quit(second);
+    assert.deepEqual(
+      await fs.readFile(path.join(workspace, "sentinel.txt")),
+      canary,
     );
-    assert.equal(repeatSettlement.settled, true);
-    assert.equal(repeatSettlement.view.state, "stopped");
-    assert.equal((await receiptList()).length, 2);
-    await hidden(second);
-    second.observations.push({
-      ownerStop: {
-        repeatSettlement,
-        settlement,
-        view: current.connectionStatus,
-        helperBeforeStop,
-        receipts: stoppedReceipts,
-        originalBackendPid: second.backend.pid,
-        limits:
-          "Actual hidden Electron/Go/UI and owned helper closure; synthetic control plane, no Tray/OS-sleep/live-provider/installed acceptance.",
-      },
-    });
+    report.status = goDelay
+      ? "passed-hidden-Go-polling-expired-observation-clean-reopen"
+      : healthStatus
+        ? "passed-hidden-Go-health-status-original-child-no-send-clean-reopen"
+        : "passed-hidden-Go-polling-original-child-HTTP-delay-clean-reopen";
     await save();
   }
-  await quit(second);
-  assert.deepEqual(
-    await fs.readFile(path.join(workspace, "sentinel.txt")),
-    canary,
-  );
-  report.status = goDelay
-    ? "passed-hidden-Go-polling-expired-observation-clean-reopen"
-    : healthStatus
-      ? "passed-hidden-Go-health-status-original-child-no-send-clean-reopen"
-      : "passed-hidden-Go-polling-original-child-HTTP-delay-clean-reopen";
-  await save();
 } catch (error) {
   report.status = "failed-or-unknown";
   report.failure = {

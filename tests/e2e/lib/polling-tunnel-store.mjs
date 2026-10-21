@@ -29,6 +29,16 @@ export function pollingTunnelStore(connectorRoot) {
       });
       await fs.rename(file + ".tmp", file);
     },
+    // "lost" closes every connection to the helper's loopback transport before
+    // any HTTP status; "reachable" restores it. Disposable fixture only.
+    async controlNetwork(mode) {
+      assert.ok(["lost", "reachable"].includes(mode));
+      const file = path.join(root, "network-control.json");
+      await fs.writeFile(file + ".tmp", JSON.stringify({ mode }) + "\n", {
+        mode: 0o600,
+      });
+      await fs.rename(file + ".tmp", file);
+    },
     async control(mode) {
       const file = path.join(root, "polling-control.json");
       await fs.writeFile(file + ".tmp", JSON.stringify({ mode }) + "\n", {
