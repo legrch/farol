@@ -130,8 +130,10 @@ Shell runtime within one separate 10-second budget
 (`CORE_QUALIFICATION_BUDGET_MS`). That work hashes about 320 MiB, which takes
 about 0.3 seconds on an idle Mac but measured 2 seconds on a busy launch. The
 former 2-second budget therefore refused one start in fifteen. The two budgets
-run in sequence, so a cold launch is bounded at 25 seconds before it either
-becomes ready or refuses. The qualification budget is liveness only: digests and
+run in sequence, so a cold launch spends at most 25 seconds of budget before it
+either becomes ready or refuses. The qualification deadline is checked between
+filesystem operations and does not interrupt one that is already pending, so a
+stalled filesystem call can hold a launch past that sum. The qualification budget is liveness only: digests and
 the final file-identity recheck decide integrity. A spent budget refuses with
 `core_resources_deadline_expired` or `shell_runtime_deadline_expired`, never
 with the unqualified code, and is not retried; the user opens the app again.

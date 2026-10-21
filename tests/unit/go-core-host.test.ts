@@ -830,6 +830,9 @@ describe("normal Go host startup", () => {
     const before = performance.now();
     const host = await startDesktopGoCore(input);
     const deadline = ports.resources.mock.calls[0]![3] as number;
+    // The deadline is created after `before`, so a correct host always gives
+    // at least the full budget from `before`; setup time only adds to it. The
+    // 1 ms only absorbs floating-point rounding. The old 2 s budget fails here.
     expect(deadline - before).toBeGreaterThanOrEqual(
       CORE_QUALIFICATION_BUDGET_MS - 1,
     );
