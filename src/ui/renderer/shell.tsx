@@ -40,11 +40,7 @@ import {
 const pages: readonly [SettingsPage, string][] = [
   ["general", "General"],
   ["appearance", "Appearance"],
-  ["folders", "Workspaces"],
-  ["computer", "This Mac"],
-  ["connection", "Connection"],
   ["shortcuts", "Keyboard shortcuts"],
-  ["diagnostics", "Diagnostics"],
 ];
 export function Icon({ name }: { name: string }) {
   return (
@@ -498,6 +494,14 @@ function Search({
     { label: "ChatGPT", area: "chatgpt" as const, page: "general" as const },
     { label: "Activity", area: "activity" as const, page: "general" as const },
     { label: "Setup", area: "setup" as const, page: "general" as const },
+    ...setupSteps
+      .slice(1)
+      .map(([setupStep, label]) => ({
+        label,
+        area: "setup" as const,
+        setupStep,
+        page: "general" as const,
+      })),
     ...pages.map(([page, label]) => ({
       label,
       area: "settings" as const,
@@ -1341,7 +1345,7 @@ export function Shell() {
             title="Settings"
             aria-current={settings ? "page" : undefined}
             onClick={() =>
-              facade.navigate({ area: "settings", page: "appearance" })
+              facade.navigate({ area: "settings", page: "general" })
             }
           >
             <Icon name="settings" />

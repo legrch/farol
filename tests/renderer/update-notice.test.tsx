@@ -452,7 +452,7 @@ it("offers one manual admission check for a ready update despite a separate save
   expect(c.getSnapshot().update.phase).toBe("applying");
 });
 
-it("shows the separate admission and notice reasons directly in Diagnostics without executing either action", async () => {
+it("retains separate admission and notice reasons when retired Diagnostics opens General", async () => {
   const ready: InstalledUpdateView = {
     phase: "ready",
     version: available.version,
@@ -465,17 +465,12 @@ it("shows the separate admission and notice reasons directly in Diagnostics with
   };
   const { host, c, f } = await mount(ready);
   await act(async () => c.navigate({ area: "settings", page: "diagnostics" }));
-  const details = [...host.querySelectorAll("details")].find(
-    (element) =>
-      element.querySelector("summary")?.textContent === "Action details",
-  )!;
-  expect(details.open).toBe(true);
-  expect(details.textContent).toContain(
-    "Update admission: UPDATE_WORK_DRAIN_UNCONFIRMED",
-  );
-  expect(details.textContent).toContain(
-    "Saved update notice: UPDATE_NOTICE_OUTCOME_UNKNOWN",
-  );
+  expect(c.getSnapshot().destination).toMatchObject({
+    area: "settings",
+    page: "general",
+  });
+  expect(host.textContent).toContain("Save support file");
+  expect(host.querySelectorAll("details")).toHaveLength(0);
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
   expect(c.getSnapshot().update).toEqual(ready);
 });

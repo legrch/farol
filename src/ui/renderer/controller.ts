@@ -2059,6 +2059,26 @@ export class WindowController implements RendererFacade {
   }
   navigate(destination: Partial<Destination>): void {
     if (this.disposed || this.state.update.phase === "applying") return;
+    // Keep old shortcuts and links useful after the Settings pages retire.
+    if (
+      destination.area === "settings" ||
+      (destination.area === undefined && destination.page !== undefined)
+    ) {
+      destination = { ...destination, area: "settings" };
+      if (destination.page === "folders" || destination.page === "computer")
+        destination = { ...destination, area: "setup", setupStep: "folders" };
+      else if (destination.page === "connection")
+        destination = {
+          ...destination,
+          area: "setup",
+          setupStep: "connection",
+        };
+      else if (
+        destination.page === "diagnostics" ||
+        destination.page === "model"
+      )
+        destination = { ...destination, page: "general" };
+    }
     if (destination.taskId !== undefined) this.taskSelectionRevision++;
     this.presentationRevision++;
     const wasSignIn = this.isSignInEntry();
@@ -2080,7 +2100,7 @@ export class WindowController implements RendererFacade {
         ? this.state.destination.workspaceId
         : undefined;
     if (
-      next.area === "settings" &&
+      (next.area === "settings" || next.area === "setup") &&
       next.page === "folders" &&
       workspaceId !== undefined
     )

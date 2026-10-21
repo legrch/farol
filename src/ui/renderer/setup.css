@@ -1,16 +1,4 @@
-/* Reference: home-sidebar-2026-10-06 connection-line/step-icon geometry.
-   Existing shared theme tokens remain authoritative; no native geometry changes. */
-.setup-visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-  border: 0;
-}
+/* The approved Setup flow uses the shared renderer theme and control tokens. */
 .setup-wizard {
   container-type: inline-size;
 }
@@ -20,88 +8,6 @@
 .setup-wizard-intro > .description {
   font-size: 13px;
   line-height: 1.6;
-}
-.setup-checklist-row {
-  display: grid;
-  grid-template-columns: 35px minmax(0, 1fr) auto;
-  gap: 14px;
-  align-items: center;
-  padding: 21px 0;
-  border-bottom: 1px solid var(--line);
-}
-.setup-check-mark {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: var(--button);
-  color: var(--muted);
-}
-.setup-check-mark > svg {
-  width: 18px;
-  height: 18px;
-}
-.setup-check-mark[data-check-state="verified"] {
-  color: var(--good);
-}
-.setup-check-mark[data-check-state="unknown"] {
-  color: var(--warn);
-}
-.setup-checklist-copy {
-  min-width: 0;
-}
-.setup-checklist-copy h2 {
-  font-size: 14px;
-  letter-spacing: -0.2px;
-}
-.setup-checklist-copy p {
-  margin-top: 5px;
-}
-.setup-check-status {
-  color: var(--muted);
-  font-size: 12px;
-}
-.setup-check-status[data-check-state="unknown"] {
-  color: var(--warn);
-}
-.setup-optional-tag {
-  font-size: 11px;
-  font-weight: 400;
-  color: var(--muted);
-  margin-left: 8px;
-}
-.setup-review-button {
-  border: 1px solid var(--line);
-  background: var(--button);
-  white-space: nowrap;
-}
-.setup-checklist-note {
-  margin: 26px 0;
-  line-height: 1.6;
-}
-.connection-guide {
-  margin: 14px 0;
-}
-.connection-guide > summary {
-  width: fit-content;
-  max-width: 100%;
-  cursor: pointer;
-  color: var(--accent);
-  padding: 8px 0;
-}
-.connection-guide-content {
-  max-width: 680px;
-  line-height: 1.6;
-  color: var(--muted);
-}
-.connection-guide-content li {
-  margin: 10px 0;
-}
-.connection-guide-content strong {
-  color: var(--fg);
 }
 .setup-wizard .setup-panel[hidden] {
   display: none;
@@ -113,192 +19,6 @@
   gap: 16px;
   margin-top: 30px;
 }
-.setup-checklist-navigation .setup-check-mark {
-  width: 18px;
-  height: 18px;
-  background: transparent;
-}
-.setup-checklist-navigation button {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-@container (max-width: 460px) {
-  .setup-checklist-row {
-    grid-template-columns: 28px minmax(0, 1fr);
-    gap: 12px;
-    padding: 18px 0;
-  }
-  .setup-checklist-row > .setup-check-mark {
-    width: 28px;
-    height: 28px;
-  }
-  .setup-review-button {
-    grid-column: 2;
-    justify-self: start;
-  }
-  .setup-wizard-footer {
-    flex-wrap: wrap;
-  }
-}
-
-/* The setup workspace uses the approved single-detail composition. Existing
-   grants remain selectable; the picker wraps instead of adding another sidebar. */
-.setup-wizard .workspace-layout {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-}
-.setup-wizard .workspace-picker {
-  flex-direction: row;
-  flex-wrap: wrap;
-  width: 100%;
-  gap: 12px;
-}
-.setup-wizard .workspace-picker:has(> :only-child) {
-  display: none;
-}
-.setup-wizard .workspace-choice {
-  flex: 1 1 160px;
-  border-radius: 8px;
-}
-.setup-wizard .workspace-choice-path {
-  display: none;
-}
-.setup-wizard .workspace-detail {
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  width: 100%;
-}
-.setup-wizard .workspace-heading {
-  margin-bottom: 8px;
-  align-items: baseline;
-}
-.setup-wizard .workspace-heading h3 {
-  font-size: 18px;
-  overflow-wrap: anywhere;
-}
-.setup-wizard .workspace-remove {
-  flex: none;
-}
-.setup-wizard .workspace-path {
-  margin: 8px 0 14px;
-  color: var(--muted);
-}
-.setup-wizard .workspace-detail > form {
-  padding: 16px 0;
-  border-block: 1px solid var(--line);
-  margin: 18px 0;
-}
-.setup-wizard .workspace-detail > form .setting-row {
-  padding: 0;
-}
-.setup-wizard .workspace-detail .badges {
-  color: var(--fg);
-  font-size: 12px;
-}
-.workspace-technical > summary,
-.workspace-activity > summary {
-  width: fit-content;
-  max-width: 100%;
-  padding: 8px 0;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 12px;
-}
-.workspace-technical > summary:hover,
-.workspace-activity > summary:hover {
-  color: var(--fg);
-}
-.setup-wizard .workspace-removal-note {
-  margin-top: 16px;
-  font-size: 12px;
-}
-@container (max-width: 460px) {
-  .setup-wizard .workspace-heading {
-    flex-wrap: wrap;
-  }
-  .setup-wizard .workspace-detail .setting-row {
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  .setup-wizard .workspace-detail .field {
-    max-width: 100%;
-  }
-}
-.setup-wizard .workspace-add {
-  padding-top: 12px;
-}
-
-.setup-wizard .control-row[hidden] {
-  display: none;
-}
-
-.workspace-folder-icon {
-  width: 20px;
-  height: 20px;
-  flex: none;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5;
-}
-.setup-wizard .workspace-choice {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  column-gap: 10px;
-  text-align: left;
-  padding: 14px;
-}
-.setup-wizard .workspace-choice .workspace-folder-icon {
-  grid-row: 1 / 3;
-}
-.setup-wizard .workspace-choice > span {
-  grid-column: 2;
-}
-.setup-wizard .workspace-heading h3 {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.connection-check-return {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  white-space: nowrap;
-}
-.connection-check-return svg {
-  width: 16px;
-  height: 16px;
-}
-
-.setup-wizard .settings-group .settings-group {
-  margin: 18px 0 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-.connection-app-target {
-  margin: 16px 0;
-}
-.connection-app-target > summary,
-.attachment-result > summary {
-  padding: 8px 0;
-  color: var(--muted);
-  cursor: pointer;
-}
-.connection-app-target form {
-  margin-top: 8px;
-}
-.connection-app-target form > button {
-  margin-top: 12px;
-}
-.attachment-result {
-  margin-top: 20px;
-}
-
 .setup-wizard {
   max-width: 760px;
   margin: 24px auto;
@@ -551,4 +271,19 @@
 }
 .setup-test {
   margin-top: 30px;
+}
+.settings-setup-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 20px;
+  justify-content: space-between;
+  padding: 20px;
+  margin: 20px 0;
+  background: var(--button);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.settings-setup-status .description {
+  margin-top: 8px;
 }

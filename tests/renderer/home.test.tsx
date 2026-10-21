@@ -236,7 +236,7 @@ it("routes the inspected workspace identity to its explicit Settings destination
   expect(h.content().textContent).toContain("Second needs an access check");
   await h.click("Manage workspaces");
   expect(h.c.getSnapshot().destination).toMatchObject({
-    area: "settings",
+    area: "setup",
     page: "folders",
     workspaceId: second.workspaceId,
   });
@@ -464,7 +464,7 @@ it("shows a ready empty Home from verified Computer evidence without inventing w
     .querySelector<HTMLButtonElement>(".home-candidate-status-row")!;
   await act(async () => connection.click());
   expect(h.c.getSnapshot().destination).toMatchObject({
-    area: "settings",
+    area: "setup",
     page: "connection",
   });
   noEffects(h.f);
@@ -585,7 +585,7 @@ it("derives unknown and refused attention without rerunning operations", async (
   expect(h.c.getSnapshot().destination.homeSelection).toBeNull();
   expect(h.c.getSnapshot().destination).toMatchObject({
     area: "settings",
-    page: "diagnostics",
+    page: "general",
   });
   noEffects(h.f);
 });
@@ -615,7 +615,7 @@ it("keeps unknown action identity and directs its review to retained Diagnostics
   await h.click("Inspect action details");
   expect(h.c.getSnapshot().destination).toMatchObject({
     area: "settings",
-    page: "diagnostics",
+    page: "general",
   });
   noEffects(h.f);
 });
@@ -647,7 +647,7 @@ it.each(["pending", "delivery"] as const)(
     await h.click("Inspect action details");
     expect(h.c.getSnapshot().destination).toMatchObject({
       area: "settings",
-      page: "diagnostics",
+      page: "general",
     });
     await act(async () => h.c.travel(-1));
     await h.set({
@@ -682,8 +682,8 @@ it("shows missing attention and event inspectors without substituting another re
   noEffects(h.f);
 });
 it.each([
-  ["Manage connection", "settings", "connection"],
-  ["Manage workspaces", "settings", "folders"],
+  ["Manage connection", "setup", "connection"],
+  ["Manage workspaces", "setup", "folders"],
   ["Open Setup", "setup", null],
 ] as const)(
   "leaves Home only through the named %s destination",
@@ -870,7 +870,7 @@ it("opens the exact unchecked workspace directly from Home without a review-page
   ].find((row) => row.textContent?.includes("Atlas needs an access check"))!;
   await act(async () => row.click());
   expect(h.c.getSnapshot().destination).toMatchObject({
-    area: "settings",
+    area: "setup",
     page: "folders",
     workspaceId: folder.workspaceId,
   });

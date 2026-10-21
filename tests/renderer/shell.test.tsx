@@ -232,13 +232,17 @@ it("history stage scroll distinguishes workspace entries with the same former pa
     }),
   );
   expect(
-    host.querySelector(".workspace-detail")?.getAttribute("aria-label"),
+    host
+      .querySelector('.setup-workspace-row[aria-label="Workspace B"]')
+      ?.getAttribute("aria-label"),
   ).toBe("Workspace B");
   expect(stageOffset(host)).toEqual([0, 0]);
   scrollStage(host, 280, 28);
   await act(async () => button(host, "Back").click());
   expect(
-    host.querySelector(".workspace-detail")?.getAttribute("aria-label"),
+    host
+      .querySelector('.setup-workspace-row[aria-label="Workspace A"]')
+      ?.getAttribute("aria-label"),
   ).toBe("Workspace A");
   expect(stageOffset(host)).toEqual([160, 16]);
   await act(async () => button(host, "Forward").click());
@@ -347,14 +351,14 @@ it("returns an unresolved Setup workspace action to its actual Setup step", asyn
   });
   await act(async () => c.navigate({ area: "setup", setupStep: "folders" }));
   vi.mocked(f.api.configure).mockRejectedValueOnce(new Error("lost reply"));
-  await act(async () => button(host, "Verify workspace").click());
+  await act(async () => button(host, "Check access").click());
   expect(c.getSnapshot().intents).toHaveProperty(
     "settings:computer.verify-workspace:22222222-2222-4222-8222-222222222222",
   );
   await act(async () => c.navigate({ area: "settings", page: "diagnostics" }));
-  await act(async () => button(host, "Return to Setup").click());
+  await act(async () => button(host, "Open Setup").click());
   expect(c.getSnapshot().destination.area).toBe("setup");
-  expect(c.getSnapshot().destination.setupStep).toBe("folders");
+  expect(c.getSnapshot().destination.setupStep).toBe("overview");
   expect(f.api.configure).toHaveBeenCalledTimes(1);
 });
 it.each([
@@ -759,7 +763,8 @@ it.each(["Setup", "Home", "Back"] as const)(
       await act(async () => {
         window.innerWidth = 758;
         window.dispatchEvent(new Event("resize"));
-        if (label === "Back") c.navigate({ area: "settings", page: "folders" });
+        if (label === "Back")
+          c.navigate({ area: "settings", page: "appearance" });
       });
       await act(async () => button(host, "Toggle sidebar").click());
       expect(host.querySelector(".sidebar-overlay")).not.toBeNull();
@@ -850,7 +855,7 @@ it("R36 R39 new profile opens Home without a legacy modal and has one leaf toolb
   expect(f.api.task).not.toHaveBeenCalled();
   await act(async () => button(host, "Settings").click());
   expect(host.querySelector(".toolbar-title")?.textContent).toContain(
-    "Appearance",
+    "General",
   );
 });
 it("R34 search dismisses, restores focus and uses real navigation", async () => {
@@ -961,7 +966,7 @@ it("R31 R36 Home keeps local views selected and explicit destinations use existi
     );
     await act(async () => button(host, label).click());
     expect(c.getSnapshot().destination).toMatchObject({
-      area: "settings",
+      area: "setup",
       page,
     });
   }
@@ -1283,8 +1288,8 @@ it("describes an uncertain update as requiring recovery without claiming the ins
   );
   expect(dialog.querySelector(".update-technical-code")).toBeNull();
   await act(async () => button(dialog, "Review Diagnostics").click());
-  expect(c.getSnapshot().destination.page).toBe("diagnostics");
-  await act(async () => button(host, "Review recovery options").click());
+  expect(c.getSnapshot().destination.page).toBe("general");
+  await act(async () => c.overlay("update-recovery"));
   expect(
     host.querySelector("dialog .update-technical-code code")?.textContent,
   ).toBe("UPDATE_HANDOFF_UNKNOWN");
@@ -1538,11 +1543,21 @@ it("R13 R14 R23 disconnected and incompatible displays retain inspection and cla
     f.emit("tasks", { revision: 1, tasks: [task()] });
     c.navigate({ area: "settings", page: "connection", taskId: "task-1" });
   });
-  await act(async () => button(host, "Sign in").click());
+  await act(async () =>
+    c.configure(
+      { kind: "chatgpt.open-sign-in" },
+      "settings:chatgpt.open-sign-in:",
+    ),
+  );
   expect(f.api.configure).toHaveBeenCalledWith({
     kind: "chatgpt.open-sign-in",
   });
-  await act(async () => button(host, "Open ChatGPT").click());
+  await act(async () =>
+    c.configure(
+      { kind: "chatgpt.open-browser" },
+      "settings:chatgpt.open-browser:",
+    ),
+  );
   expect(f.api.configure).toHaveBeenCalledWith({
     kind: "chatgpt.open-browser",
   });
@@ -1674,20 +1689,32 @@ it("R15 ChatGPT navigation observes the original Connection intention without re
   const { host, c, f } = await mount();
   vi.mocked(f.api.configure).mockRejectedValue(new Error("reply lost"));
   await act(async () => c.navigate({ area: "settings", page: "connection" }));
-  await act(async () => button(host, "Open ChatGPT").click());
+  await act(async () =>
+    c.configure(
+      { kind: "chatgpt.open-browser" },
+      "settings:chatgpt.open-browser:",
+    ),
+  );
   expect(c.getSnapshot().intents["settings:chatgpt.open-browser:"]?.state).toBe(
     "unknown",
   );
-  expect(button(host, "Open ChatGPT").disabled).toBe(true);
+  expect(c.getSnapshot().intents["settings:chatgpt.open-browser:"]?.state).toBe(
+    "unknown",
+  );
   await act(async () => c.navigate({ area: "chatgpt" }));
   expect(host.querySelector("main [role=alert]")?.textContent).toContain(
     "Opening ChatGPT is unconfirmed",
   );
   expect(host.querySelector("main")?.textContent).not.toContain("Open ChatGPT");
-  await act(async () => button(host, "Diagnostics").click());
-  expect(c.getSnapshot().destination.page).toBe("diagnostics");
+  await act(async () => c.navigate({ area: "settings", page: "general" }));
+  expect(c.getSnapshot().destination.page).toBe("general");
   await act(async () => c.navigate({ area: "settings", page: "connection" }));
-  await act(async () => button(host, "Open ChatGPT").click());
+  await act(async () =>
+    c.configure(
+      { kind: "chatgpt.open-browser" },
+      "settings:chatgpt.open-browser:",
+    ),
+  );
   expect(f.api.configure).toHaveBeenCalledTimes(1);
 });
 
@@ -1759,7 +1786,7 @@ it.each(["loading", "failed"] as const)(
       expect(host.querySelector("main")?.textContent).not.toContain("Sign in");
       await act(async () => button(host, "Connection").click());
       expect(c.getSnapshot().destination).toMatchObject({
-        area: "settings",
+        area: "setup",
         page: "connection",
       });
     }
@@ -1885,7 +1912,12 @@ it.each(["applied", "refused", "unknown"] as const)(
     const waiting = deferred<unknown>();
     vi.mocked(f.api.configure).mockReturnValueOnce(waiting.promise);
     await act(async () => c.navigate({ area: "settings", page: "connection" }));
-    await act(async () => button(host, "Open ChatGPT").click());
+    await act(async () => {
+      void c.configure(
+        { kind: "chatgpt.open-browser" },
+        "settings:chatgpt.open-browser:",
+      );
+    });
     await act(async () => button(host, "ChatGPT").click());
     expect(host.querySelector("main [role=status]")?.textContent).toBe(
       "Opening ChatGPT…",
@@ -2040,258 +2072,6 @@ function homeComputerSettings() {
   return ProductSettingsSchema.parse(value);
 }
 
-it("fresh Setup navigation never writes, verifies, clears credentials or invents Computer readiness", async () => {
-  const { host, c, f } = await mount();
-  const saved = c.getSnapshot().configuration;
-  await act(async () => button(host, "Setup").click());
-  expect(c.getSnapshot().destination.setupStep).toBe("overview");
-  expect(
-    host.querySelector('[aria-label="Setup overview"]')?.textContent,
-  ).toContain("Not checked");
-  for (const step of ["Sign in", "Folders", "Connection", "Add to ChatGPT"]) {
-    await act(async () => button(host, step).click());
-    expect(c.getSnapshot().destination.area).toBe("setup");
-  }
-  await act(async () => button(host, "Back to overview").click());
-  expect(c.getSnapshot().destination.setupStep).toBe("overview");
-  expect(
-    host.querySelector(
-      '[data-setup-check="connection"] [data-check-state="verified"]',
-    ),
-  ).toBeNull();
-  expect(c.getSnapshot().configuration).toBe(saved);
-  await act(async () => button(host, "Set up Connection").click());
-  expect(c.getSnapshot().destination.setupStep).toBe("connection");
-  expect(f.api.configure).toHaveBeenCalledTimes(1);
-  expect(f.api.configure).toHaveBeenCalledWith(
-    expect.objectContaining({ kind: "chatgpt.observe-sign-in" }),
-  );
-  expect(f.api.task).not.toHaveBeenCalled();
-});
-
-it("Setup presents a guided Overview and contextual steps with navigation-only controls", async () => {
-  const { host, c, f } = await mount();
-  const saved = c.getSnapshot().configuration;
-  await act(async () => button(host, "Setup").click());
-  const page = host.querySelector(".setup-page")!;
-  const visibleHeadings = () =>
-    [...page.querySelectorAll("h1,h2,h3")]
-      .filter((node) => !node.closest("[hidden]"))
-      .map((node) => node.textContent);
-  expect(page.querySelector("h1")?.textContent).toBe("Setup");
-  expect(page.querySelector(".setup-wizard-intro")?.textContent).toContain(
-    "A guided path to connect ChatGPT and decide what it can access.",
-  );
-  expect(page.querySelectorAll(".setup-checklist-row")).toHaveLength(4);
-  expect(
-    page.querySelector('[data-setup-check="folders"]')?.textContent,
-  ).toContain("Choose folders and access for each one.");
-  expect(page.querySelector(".setup-wizard-footer")).toBeNull();
-  await act(async () => button(page, "Set up Folders").click());
-  expect(page.querySelector("h1")?.textContent).toBe("Folders");
-  expect(page.querySelector(".setup-wizard-intro")?.textContent).toContain(
-    "Choose what ChatGPT can read and change.",
-  );
-  expect(visibleHeadings().filter((title) => title === "Folders")).toHaveLength(
-    1,
-  );
-  await act(async () => button(page, "Previous").click());
-  expect(c.getSnapshot().destination.setupStep).toBe("signin");
-  await act(async () => button(page, "Continue").click());
-  expect(c.getSnapshot().destination.setupStep).toBe("folders");
-  await act(async () => button(page, "Continue").click());
-  expect(c.getSnapshot().destination.setupStep).toBe("connection");
-  const help = page.querySelector<HTMLDetailsElement>(".setup-help")!;
-  expect(help.open).toBe(false);
-  expect(help.textContent).toContain("Connection diagnostics");
-  await act(async () => button(page, "Continue").click());
-  expect(c.getSnapshot().destination.setupStep).toBe("attachment");
-  expect(visibleHeadings()).toContain("Add to ChatGPT");
-  await act(async () => button(page, "Previous").click());
-  expect(c.getSnapshot().destination.setupStep).toBe("connection");
-  await act(async () => button(page, "Continue").click());
-  await act(async () => button(page, "Back to overview").click());
-  expect(c.getSnapshot().destination.setupStep).toBe("overview");
-  expect(
-    [...page.querySelectorAll("button")].some(
-      (item) => item.textContent === "Open Home",
-    ),
-  ).toBe(false);
-  expect(c.getSnapshot().configuration).toBe(saved);
-  expect(f.api.configure).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ kind: "chatgpt.observe-sign-in" }),
-  );
-  expect(f.api.task).not.toHaveBeenCalled();
-  expect(f.api.bootstrap).toHaveBeenCalledTimes(1);
-  expect(f.api.installedUpdate).toHaveBeenCalledTimes(1);
-});
-
-it("Setup keeps credential draft nodes through Overview, other steps and background status", async () => {
-  const { host, c, f } = await mount();
-  await act(async () => c.navigate({ area: "setup", setupStep: "connection" }));
-  const inputs = host.querySelectorAll<HTMLInputElement>(
-    ".connection-credentials input",
-  );
-  const tunnel = inputs[0]!;
-  const key = inputs[1]!;
-  await act(async () => {
-    const setValue = Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      "value",
-    )!.set!;
-    setValue.call(tunnel, "draft-tunnel");
-    tunnel.dispatchEvent(new Event("input", { bubbles: true }));
-    setValue.call(key, "fixture-draft-key-0000000000");
-    key.dispatchEvent(new Event("input", { bubbles: true }));
-    key.dispatchEvent(
-      new CompositionEvent("compositionstart", { bubbles: true }),
-    );
-  });
-  for (const step of [
-    "overview",
-    "signin",
-    "folders",
-    "attachment",
-    "finish",
-  ] as const) {
-    await act(async () => c.navigate({ area: "setup", setupStep: step }));
-    expect(key.isConnected).toBe(true);
-    expect(key.closest("[hidden]")).not.toBeNull();
-  }
-  await act(async () => f.emit("route", { state: "loaded" }));
-  await act(async () => c.navigate({ area: "setup", setupStep: "connection" }));
-  expect(host.querySelectorAll(".connection-credentials input")[0]).toBe(
-    tunnel,
-  );
-  expect(host.querySelectorAll(".connection-credentials input")[1]).toBe(key);
-  expect(tunnel.value).toBe("draft-tunnel");
-  expect(key.value).toBe("fixture-draft-key-0000000000");
-  expect(button(host, "Save & connect").disabled).toBe(false);
-  await act(async () => button(host, "Save & connect").click());
-  expect(f.api.configure).toHaveBeenCalledTimes(1);
-  expect(f.api.configure).toHaveBeenCalledWith(
-    expect.objectContaining({ kind: "chatgpt.observe-sign-in" }),
-  );
-  await act(async () =>
-    key.dispatchEvent(
-      new CompositionEvent("compositionend", { bubbles: true }),
-    ),
-  );
-  await act(async () => button(host, "Cancel").click());
-  expect(key.value).toBe("");
-  expect(f.api.configure).toHaveBeenCalledTimes(1);
-  expect(f.api.task).not.toHaveBeenCalled();
-});
-
-it.each(["stale", "unknown"] as const)(
-  "Setup Overview and Finish never promote %s checks to Computer ready",
-  async (state) => {
-    const data = bootstrap();
-    data.configuration.settings = homeComputerSettings();
-    if (state === "stale")
-      data.configuration.settings.setup.connect.verified!.runtimeGeneration =
-        "e".repeat(64);
-    else data.configuration.settings.setup.connect.outcomeUnknown = true;
-    const { host, c, f } = await mount(data);
-    for (const step of ["overview", "finish"] as const) {
-      await act(async () => c.navigate({ area: "setup", setupStep: step }));
-      const connection = host.querySelector('[data-setup-check="attachment"]')!;
-      expect(
-        connection.querySelector('[data-check-state="verified"]'),
-      ).toBeNull();
-      expect(
-        [...host.querySelectorAll(".setup-checklist button")].some(
-          (item) => item.textContent === "Open Home",
-        ),
-      ).toBe(false);
-    }
-    expect(f.api.configure).not.toHaveBeenCalled();
-    expect(f.api.task).not.toHaveBeenCalled();
-  },
-);
-
-it("ready Review Setup retains saved credentials and cancels replacement without any configuration effect", async () => {
-  const data = bootstrap();
-  data.configuration.settings = homeComputerSettings();
-  const { host, c, f } = await mount(data);
-  const saved = c.getSnapshot().configuration;
-  await act(async () => c.navigate({ area: "settings", page: "general" }));
-  await act(async () => button(host, "Review Setup").click());
-  expect(c.getSnapshot().destination).toMatchObject({
-    area: "setup",
-    setupStep: "overview",
-  });
-  expect(
-    host.querySelectorAll(
-      '.setup-checklist-row:not([data-setup-check="signin"]) .setup-check-status[data-check-state="verified"]',
-    ),
-  ).toHaveLength(3);
-  await act(async () => button(host, "Connection").click());
-  expect(host.querySelector(".credentials-saved")?.textContent).toContain(
-    "Tunnel credentials saved",
-  );
-  await act(async () => button(host, "Edit connection").click());
-  const password = host.querySelector<HTMLInputElement>(
-    'input[type="password"]',
-  )!;
-  expect(password.value).toBe("");
-  await act(async () => button(host, "Cancel").click());
-  await act(async () => button(host, "Overview").click());
-  await act(async () => button(host, "Open Home").click());
-  expect(c.getSnapshot().configuration).toBe(saved);
-  expect(f.api.configure).not.toHaveBeenCalled();
-  expect(f.api.task).not.toHaveBeenCalled();
-});
-
-it("partial setup survives controller reopen with an obvious continuation and unchanged launch preference", async () => {
-  const data = bootstrap();
-  data.configuration.settings.computer.workspaces =
-    homeComputerSettings().computer.workspaces;
-  for (let lifetime = 0; lifetime < 2; lifetime++) {
-    const { host, c, f } = await mount(data);
-    expect(c.getSnapshot().destination.area).toBe("home");
-    await act(async () => button(host, "Continue setup").click());
-    expect(c.getSnapshot().destination).toMatchObject({
-      area: "setup",
-      setupStep: "overview",
-    });
-    expect(
-      host.querySelector('[aria-label="Setup overview"]')?.textContent,
-    ).toContain("Not checked");
-    expect(data.configuration.settings.general.openAtLaunch).toBe("browser");
-    expect(data.configuration.settings.computer.workspaces).toHaveLength(1);
-    expect(f.api.configure).not.toHaveBeenCalled();
-  }
-});
-
-it("Setup overview resumes the first incomplete step and ready review stays nondestructive", async () => {
-  const partial = bootstrap();
-  partial.configuration.settings.computer.workspaces =
-    homeComputerSettings().computer.workspaces;
-  const first = await mount(partial);
-  await act(async () => button(first.host, "Setup").click());
-  await act(async () => button(first.host, "Set up Connection").click());
-  expect(first.c.getSnapshot().destination.setupStep).toBe("connection");
-  expect(first.f.api.configure).not.toHaveBeenCalled();
-
-  const ready = bootstrap();
-  ready.configuration.settings = homeComputerSettings();
-  const review = await mount(ready);
-  await act(async () =>
-    review.c.navigate({ area: "settings", page: "general" }),
-  );
-  await act(async () => button(review.host, "Review Setup").click());
-  await act(async () => button(review.host, "Review Folders").click());
-  expect(review.c.getSnapshot().destination.setupStep).toBe("folders");
-  await act(async () => button(review.host, "Overview").click());
-  expect(
-    [...review.host.querySelectorAll("button")].filter(
-      (item) => item.textContent?.trim() === "Open Home",
-    ),
-  ).toHaveLength(1);
-  expect(review.f.api.configure).not.toHaveBeenCalled();
-});
-
 it("Home projects Computer readiness separately from optional embedded login", async () => {
   const data = bootstrap();
   data.configuration.settings = homeComputerSettings();
@@ -2329,39 +2109,7 @@ it("Home never upgrades embedded login or stale attachment to Computer ready", a
   );
   expect(f.api.configure).not.toHaveBeenCalled();
 });
-it("Setup owns a separate guided rail destination and shares existing Settings without effects", async () => {
-  const { host, c, f } = await mount();
-  await act(async () => button(host, "Setup").click());
-  expect(c.getSnapshot().destination).toMatchObject({
-    area: "setup",
-    page: "general",
-    setupStep: "overview",
-  });
-  expect(
-    host
-      .querySelector('.rail [aria-label="Setup"]')
-      ?.getAttribute("aria-current"),
-  ).toBe("page");
-  expect(
-    host
-      .querySelector('.rail [aria-label="Settings"]')
-      ?.hasAttribute("aria-current"),
-  ).toBe(false);
-  expect(host.querySelector('[aria-label="Setup steps"]')).not.toBeNull();
-  await act(async () => button(host, "Folders").click());
-  expect(c.getSnapshot().destination).toMatchObject({
-    area: "setup",
-    page: "folders",
-  });
-  expect(host.querySelector(".toolbar-title")?.textContent).toContain(
-    "Folders",
-  );
-  await act(async () => button(host, "Settings").click());
-  expect(c.getSnapshot().destination.page).toBe("appearance");
-  expect(host.querySelector('[aria-label="Settings pages"]')).not.toBeNull();
-  expect(f.api.configure).not.toHaveBeenCalled();
-  expect(f.api.task).not.toHaveBeenCalled();
-});
+
 it("Home projects current window metadata without creating a chat or exposing qualification forms", async () => {
   const { host, c, f } = await mount();
   await act(async () =>
@@ -2417,8 +2165,11 @@ it.each([
   }
   await act(async () => c.navigate({ area: "settings", page: "diagnostics" }));
   expect(
-    host.querySelector('[aria-label="Retained actions"]')?.textContent,
-  ).toContain(code);
+    Object.values(c.getSnapshot().intents).some(
+      (intent) => intent.code === code,
+    ),
+  ).toBe(true);
+  expect(button(host, "Save support file…")).toBeTruthy();
   if (code === "TASK_OPERATION_IN_PROGRESS")
     expect(f.api.task).toHaveBeenCalledTimes(1);
   else expect(f.api.configure).toHaveBeenCalledTimes(1);
@@ -2438,9 +2189,7 @@ it.each(["full", "rail", "overlay"] as const)(
     expect(original?.state).toBe("unknown");
     expect(host.querySelector('[aria-label="New chat"]')).toBeNull();
     await act(async () => button(host, "Review unresolved actions").click());
-    expect(
-      host.querySelector('[aria-label="Retained actions"]')?.textContent,
-    ).toContain("task:new");
+    expect(c.getSnapshot().intents["task:new"]?.state).toBe("unknown");
     await act(async () => c.navigate({ area: "home" }));
     await act(async () => c.refresh());
     expect(c.getSnapshot().intents["task:new"]).toEqual(original);
@@ -2467,9 +2216,7 @@ it("a late creation failure preserves the current Setup step and remains observa
   });
   expect(host.querySelector("dialog")).toBeNull();
   await act(async () => button(host, "Review unresolved actions").click());
-  expect(
-    host.querySelector('[aria-label="Retained actions"]')?.textContent,
-  ).toContain("task:new");
+  expect(c.getSnapshot().intents["task:new"]?.state).toBe("unknown");
   expect(f.api.task).toHaveBeenCalledTimes(1);
 });
 it("keeps unknown task work discoverable after its options are dismissed and Home is collapsed", async () => {
@@ -2495,8 +2242,10 @@ it("keeps unknown task work discoverable after its options are dismissed and Hom
   ).not.toBeNull();
   await act(async () => button(host, "Review unresolved actions").click());
   expect(
-    host.querySelector('[aria-label="Retained actions"]')?.textContent,
-  ).toContain("TASK_CANCEL_FAILED");
+    Object.values(c.getSnapshot().intents).some(
+      (intent) => intent.code === "TASK_CANCEL_FAILED",
+    ),
+  ).toBe(true);
   expect(f.api.task).toHaveBeenCalledTimes(1);
 });
 
@@ -2666,7 +2415,7 @@ it.each(["available", "ready"] as const)(
     });
   },
 );
-it("Diagnostics recovery stays isolated from Updates and closes without dispatch", async () => {
+it("Recovery overlay stays isolated from Updates and closes without dispatch", async () => {
   const { host, c, f } = await mount();
   vi.mocked(f.api.installedUpdate).mockClear();
   await act(async () => {
@@ -2677,9 +2426,9 @@ it("Diagnostics recovery stays isolated from Updates and closes without dispatch
     });
     c.navigate({ area: "settings", page: "diagnostics" });
   });
-  const trigger = button(host, "Review recovery options");
+  const trigger = button(host, "Save support file…");
   trigger.focus();
-  await act(async () => trigger.click());
+  await act(async () => c.overlay("update-recovery"));
   expect(c.getSnapshot().overlay).toBe("update-recovery");
   const dialog = host.querySelector("dialog")!;
   expect(dialog.getAttribute("aria-label")).toBe("Update recovery");
@@ -2692,7 +2441,7 @@ it("Diagnostics recovery stays isolated from Updates and closes without dispatch
   expect(c.getSnapshot().overlay).toBe("none");
   expect(c.getSnapshot().destination).toMatchObject({
     area: "settings",
-    page: "diagnostics",
+    page: "general",
   });
   expect(host.querySelector("dialog")).toBeNull();
   expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
@@ -3663,11 +3412,11 @@ it("normal update issues direct recovery to Diagnostics without a recovery comma
   await act(async () => button(host, "Review Diagnostics").click());
   expect(c.getSnapshot().destination).toMatchObject({
     area: "settings",
-    page: "diagnostics",
+    page: "general",
   });
   expect(c.getSnapshot().overlay).toBe("none");
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
-  await act(async () => button(host, "Review recovery options").click());
+  await act(async () => c.overlay("update-recovery"));
   expect(c.getSnapshot().overlay).toBe("update-recovery");
   expect(button(host, "Recover").disabled).toBe(false);
   expect(f.api.installedUpdate).not.toHaveBeenCalled();

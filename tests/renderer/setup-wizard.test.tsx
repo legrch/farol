@@ -1,823 +1,239 @@
-import { StrictMode, act, useSyncExternalStore } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Setup, SetupNavigation } from "../../src/ui/renderer/setup";
-import { WindowController } from "../../src/ui/renderer/controller";
-import { Shell } from "../../src/ui/renderer/shell";
-import { Services } from "../../src/ui/renderer/services";
-import type { SetupStep } from "../../src/ui/renderer/contract";
-import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
-import { bootstrap, deferred, fixture, settings, signInReply } from "./fixture";
-// Controlled DOM/IPC fixtures only; not sign-in, native dialog or live-provider proof.
-(
-  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
-).IS_REACT_ACT_ENVIRONMENT = true;
-const roots: Root[] = [];
-const controllers: WindowController[] = [];
-afterEach(async () => {
-  await act(async () => {
-    for (const root of roots.splice(0)) root.unmount();
-  });
-  for (const controller of controllers.splice(0)) controller.dispose();
-  document.body.replaceChildren();
-  vi.restoreAllMocks();
-});
-function attachmentSettings() {
-  const value = settings();
-  const buildId = "3".repeat(64);
-  const runtimeGeneration = "a".repeat(64);
-  const workspaceId = "22222222-2222-4222-8222-222222222222";
-  const verifiedAt = "2026-10-02T20:00:00.000Z";
-  value.computer.workspaces = [
-    {
-      workspaceId,
-      root: "/approved/project",
-      label: "Project",
-      access: "read",
-      excludedPaths: [],
-      rootIdentity: { device: "1", inode: "2" },
-      accessCheck: {
-        buildId,
-        computerGeneration: 1,
-        verifiedAt,
-        rootIdentity: { device: "1", inode: "2" },
-      },
-    },
-  ];
-  value.setup.computer.verified = {
-    profile: "farol",
-    configRevision: 1,
-    workspaceId,
-    runtimeGeneration,
-    buildId,
-    protocol: "secure-mcp",
-    verifiedAt,
-  };
-  // Published current workspace/runtime/challenge data; attachment and embedded
-  // sign-in remain unverified. No admission function or controller is bypassed.
-  Object.assign(value.connectors.secureMcp, {
-    tunnelId: "synthetic-tunnel",
-    credential: "stored",
-    tunnelClient: {
-      executablePath: "/approved/tunnel",
-      executableSha256: "b".repeat(64),
-      version: "1.0.0",
-      protocol: "openai-tunnel-client/v1",
-      verifiedAt,
-    },
-    runtime: {
-      state: "ready",
-      connectorGeneration: 1,
-      computerGeneration: 1,
-      runtimeGeneration,
-      buildId,
-      observedAt: verifiedAt,
-    },
-    challenge: {
-      value: "33333333-3333-4333-8333-333333333333",
-      challengeSha256: "c".repeat(64),
-      computerGeneration: 1,
-      runtimeGeneration,
-      buildId,
-      preparedAt: verifiedAt,
-    },
-  });
-  return ProductSettingsSchema.parse(value);
-}
-function verifiedAttachmentSettings(empty = false) {
-  const value = attachmentSettings();
-  const connector = value.connectors.secureMcp;
-  const runtime = connector.runtime!;
-  value.setup.connect.verified = {
-    ...value.setup.computer.verified!,
-    configRevision: connector.generation,
-    workspaceId: empty ? null : value.setup.computer.verified!.workspaceId,
-  };
-  value.setup.connect.reachable = "reachable";
-  connector.attachment = {
-    tunnelId: connector.tunnelId!,
-    workspaceId: value.setup.connect.verified.workspaceId,
-    connectorGeneration: connector.generation,
-    computerGeneration: value.computer.generation,
-    runtimeGeneration: runtime.runtimeGeneration,
-    buildId: runtime.buildId,
-    challengeSha256: connector.challenge!.challengeSha256,
-    receiptSha256: "d".repeat(64),
-    verifiedAt: runtime.observedAt,
-  };
-  connector.challenge = null;
-  if (empty) {
-    value.computer.workspaces = [];
-    value.setup.computer.verified = null;
-    value.setup.computer.reachable = "unknown";
-  }
-  return ProductSettingsSchema.parse(value);
-}
-async function mount(
-  step: SetupStep = "overview",
-  shell = false,
-  value = settings(),
-) {
-  const f = fixture();
-  const configuration = { status: "ready" as const, settings: value };
-  vi.mocked(f.api.bootstrap).mockResolvedValue({
-    ...bootstrap(),
-    environment: "dev",
-    configuration,
-  });
-  vi.mocked(f.api.configure).mockImplementation(async (command) =>
-    command.kind === "chatgpt.observe-sign-in"
-      ? signInReply(command, "signed_out", configuration)
-      : { ok: true, snapshot: configuration },
-  );
-  const c = new WindowController(f.api);
-  controllers.push(c);
-  await c.start();
-  c.navigate({ area: "setup", setupStep: step });
-  const host = document.createElement("div");
-  document.body.append(host);
-  const root = createRoot(host);
-  roots.push(root);
-  function View() {
-    const snapshot = useSyncExternalStore(c.subscribe, c.getSnapshot);
-    if (shell)
-      return (
-        <Services value={c}>
-          <Shell />
-        </Services>
-      );
-    return (
-      <>
-        <SetupNavigation snapshot={snapshot} facade={c} />
-        <Setup snapshot={snapshot} facade={c} />
-      </>
-    );
-  }
-  await act(async () =>
-    root.render(
-      <StrictMode>
-        <View />
-      </StrictMode>,
-    ),
-  );
-  const visible = (e: Element) => !e.closest("[hidden]");
-  const button = (text: string) =>
-    [...host.querySelectorAll<HTMLButtonElement>("button")]
-      .sort(
-        (a, b) =>
-          Number(Boolean(a.closest("nav"))) - Number(Boolean(b.closest("nav"))),
-      )
-      .find(
-        (e) =>
-          visible(e) &&
-          (e.textContent?.trim() === text ||
-            e.getAttribute("aria-label") === text),
-      )!;
-  const click = async (text: string) => {
-    const b = button(text);
-    expect(b).toBeTruthy();
-    await act(async () => b.click());
-  };
-  return {
-    f,
-    c,
-    host,
-    button,
-    click,
-    visible,
-    configuration,
-    async remount() {
-      await act(async () => root.render(null));
-      await act(async () =>
-        root.render(
-          <StrictMode>
-            <View />
-          </StrictMode>,
-        ),
-      );
-    },
-  };
-}
-describe("reference-aligned Setup wizard", () => {
-  it("opens Home with valid empty-catalogue proof and optional unverified workspaces", async () => {
-    const value = verifiedAttachmentSettings(true);
-    const before = structuredClone(value);
-    const h = await mount("overview", false, value);
-    const folders = h.host.querySelector('[data-setup-check="folders"]')!;
-    expect(folders.querySelector(".setup-optional-tag")?.textContent).toBe(
-      "Optional",
-    );
-    expect(folders.textContent).toContain("No workspace access enabled");
-    expect(folders.querySelector('[data-check-state="verified"]')).toBeNull();
-    expect(
-      h
-        .button("Folders")
-        .querySelector("[data-check-state]")
-        ?.getAttribute("data-check-state"),
-    ).toBe("needed");
-    expect(h.button("Open Home").disabled).toBe(false);
-    expect(h.host.textContent).not.toContain("Verify a workspace");
+import { mount, readySettings } from "./setup-fixture";
+import { deferred } from "./fixture";
+
+// Actual renderer/controller with scripted responses, never live verification.
+describe("linear Setup", () => {
+  it("welcomes with four steps, one Start setup and no side menu", async () => {
+    const h = await mount({ shell: true });
+    expect(h.host.textContent).toContain("Welcome to Farol");
+    expect(h.host.querySelectorAll(".setup-welcome li")).toHaveLength(4);
+    expect(h.host.querySelector(".contextual-sidebar")).toBeNull();
+    expect(h.host.querySelector(".setup-progress")).toBeNull();
+    expect(h.button("Start setup")).toBeTruthy();
+    expect(h.button("Read the setup guide")).toBeTruthy();
     expect(h.f.api.configure).not.toHaveBeenCalled();
-    expect(h.c.getSnapshot().configuration).toEqual({
-      status: "ready",
-      settings: before,
-    });
-    await h.click("Open Home");
-    expect(h.c.getSnapshot().destination.area).toBe("home");
-    expect(h.f.api.configure).not.toHaveBeenCalled();
+    await h.click("Start setup");
+    expect(h.c.getSnapshot().destination.setupStep).toBe("signin");
+    expect(h.button("Continue")?.disabled).toBe(true);
   });
-  it("retains verified file badges for configured workspaces with current proof", async () => {
-    const h = await mount("overview", false, verifiedAttachmentSettings());
-    const folders = h.host.querySelector('[data-setup-check="folders"]')!;
-    expect(folders.querySelector(".setup-optional-tag")).toBeNull();
-    expect(
-      folders.querySelector('[data-check-state="verified"]'),
-    ).not.toBeNull();
-    expect(h.button("Open Home").disabled).toBe(false);
-    expect(h.f.api.configure).not.toHaveBeenCalled();
-  });
-  it.each(["missing", "stale", "unbound"] as const)(
-    "keeps configured workspaces required with %s file proof",
-    async (proof) => {
-      const value = verifiedAttachmentSettings();
-      if (proof === "missing") value.setup.computer.verified = null;
-      else if (proof === "stale")
-        value.setup.computer.verified!.buildId = "4".repeat(64);
-      else delete value.computer.workspaces[0]!.rootIdentity;
-      const h = await mount("overview", false, value);
-      const folders = h.host.querySelector('[data-setup-check="folders"]')!;
-      expect(folders.querySelector(".setup-optional-tag")).toBeNull();
-      expect(folders.querySelector('[data-check-state="verified"]')).toBeNull();
-      expect(h.button("Open Home")).toBeUndefined();
-      expect(h.f.api.configure).not.toHaveBeenCalled();
-    },
-  );
-  it.each(["pending", "unknown"] as const)(
-    "keeps Open Home gated by %s checks even with valid empty proof",
-    async (state) => {
-      const h = await mount(
-        "overview",
-        false,
-        verifiedAttachmentSettings(true),
-      );
-      const wait = deferred<unknown>();
-      vi.mocked(h.f.api.configure).mockReturnValueOnce(wait.promise);
-      await act(async () => {
-        void h.c.configure(
-          { kind: "connector.check-health" },
-          "settings:connector.check-health:",
-        );
-      });
-      if (state === "unknown")
-        await act(async () => {
-          wait.reject(new Error("fixture reply lost"));
-        });
-      expect(h.button("Open Home")).toBeUndefined();
-      const folders = h.host.querySelector('[data-setup-check="folders"]')!;
-      expect(folders.querySelector(".setup-optional-tag")?.textContent).toBe(
-        "Optional",
-      );
-      expect(
-        h
-          .button("Folders")
-          .querySelector("[data-check-state]")
-          ?.getAttribute("data-check-state"),
-      ).toBe(state);
-      expect(folders.querySelector('[data-check-state="verified"]')).toBeNull();
-      expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
-        kind: "connector.check-health",
-      });
-      if (state === "pending")
-        await act(async () => {
-          wait.resolve({ ok: true, snapshot: h.configuration });
-        });
-    },
-  );
-  it.each(["missing", "stale", "generation", "unknown"] as const)(
-    "does not admit %s empty-catalogue proof",
-    async (proof) => {
-      const value = verifiedAttachmentSettings(true);
-      if (proof === "missing") value.connectors.secureMcp.attachment = null;
-      else if (proof === "stale")
-        value.connectors.secureMcp.attachment!.buildId = "4".repeat(64);
-      else if (proof === "generation") value.computer.generation++;
-      else value.setup.connect.outcomeUnknown = true;
-      const h = await mount("overview", false, value);
-      expect(h.button("Open Home")).toBeUndefined();
-      expect(
-        h.host.querySelector('[data-setup-check="folders"] .setup-optional-tag')
-          ?.textContent,
-      ).toBe("Optional");
-      expect(
-        h.host.querySelector(
-          '[data-setup-check="folders"] [data-check-state="verified"]',
-        ),
-      ).toBeNull();
-      expect(h.f.api.configure).not.toHaveBeenCalled();
-    },
-  );
-  it.each([false, true])(
-    "offers external verification without embedded sign-in (empty catalogue: %s)",
-    async (empty) => {
-      const value = attachmentSettings();
-      if (empty) {
-        value.computer.workspaces = [];
-        value.setup.computer.verified = null;
-      }
-      const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
-      const writeText = vi.fn().mockResolvedValue(undefined);
-      Object.defineProperty(navigator, "clipboard", {
-        configurable: true,
-        value: { writeText },
-      });
-      try {
-        const h = await mount("attachment", false, value);
-        expect(h.button("Copy verification request")).toBeUndefined();
-        expect(h.button("Check in ChatGPT once").disabled).toBe(true);
-        expect(h.host.querySelector(".attachment-request")).toBeNull();
-        await h.click("Use ChatGPT outside Farol");
-        expect(
-          h.button("Use ChatGPT outside Farol").getAttribute("aria-expanded"),
-        ).toBe("true");
-        expect(h.button("Copy verification request").disabled).toBe(false);
-        await h.click("Copy verification request");
-        expect(writeText).toHaveBeenCalledTimes(1);
-        const request = writeText.mock.calls[0]![0] as string;
-        expect(request).toContain(value.connectors.secureMcp.challenge!.value);
-        if (empty) {
-          expect(h.host.textContent).toContain(
-            "No workspace access is enabled.",
-          );
-          expect(request).not.toContain("workspaceId");
-        } else {
-          expect(request).toContain(value.computer.workspaces[0]!.workspaceId);
-        }
-        expect(h.host.textContent).toContain("Farol has not sent it");
-        expect(h.f.api.configure).not.toHaveBeenCalled();
-        await h.click("Use ChatGPT outside Farol");
-        expect(h.button("Copy verification request")).toBeUndefined();
-        expect(writeText).toHaveBeenCalledTimes(1);
-        await h.click("Check attachment");
-        expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
-          kind: "connector.check-attachment",
-        });
-      } finally {
-        if (original) Object.defineProperty(navigator, "clipboard", original);
-        else Reflect.deleteProperty(navigator, "clipboard");
-      }
-    },
-  );
-  it.each(["missing", "stale", "unknown"] as const)(
-    "withholds the external Setup alternative for a %s challenge",
-    async (condition) => {
-      const value = attachmentSettings();
-      if (condition === "missing") value.connectors.secureMcp.challenge = null;
-      if (condition === "stale")
-        value.connectors.secureMcp.challenge!.buildId = "4".repeat(64);
-      if (condition === "unknown") value.setup.connect.outcomeUnknown = true;
-      const h = await mount("attachment", false, value);
-      expect(h.button("Use ChatGPT outside Farol")).toBeUndefined();
-      expect(h.button("Copy verification request")).toBeUndefined();
-      expect(h.host.querySelector(".attachment-request")).toBeNull();
-      expect(h.f.api.configure).not.toHaveBeenCalled();
-    },
-  );
-  it.each(["refused", "unknown"] as const)(
-    "keeps pending and late attachment %s feedback on its Setup origin across Shell navigation and remount",
-    async (outcome) => {
-      const h = await mount("attachment", true, attachmentSettings());
-      const id = "settings:connector.check-attachment:";
-      const wait = deferred<unknown>();
-      const notice = () =>
-        [
-          ...h.host.querySelectorAll(
-            '.connection-action-feedback[role="status"], .settings-page > [role="status"]',
-          ),
-        ].find(h.visible)?.textContent;
-      const stepTo = async (label: string) => {
-        const button = h.host.querySelector<HTMLButtonElement>(
-          `nav[aria-label="Setup steps"] button[aria-label="${label}"]`,
-        )!;
-        expect(button).toBeTruthy();
-        await act(async () => button.click());
-      };
-      expect(h.button("Check attachment").disabled).toBe(false);
-      expect(h.button("Copy verification request")).toBeUndefined();
-      vi.mocked(h.f.api.configure).mockReturnValueOnce(wait.promise);
-      await h.click("Check attachment");
-      expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
-        kind: "connector.check-attachment",
-      });
-      expect(notice()).toContain("Saving or checking");
-      const pending = structuredClone(h.c.getSnapshot().intents[id]);
-      expect(pending?.state).toBe("pending");
-      await stepTo("Sign in");
-      expect(h.c.getSnapshot().destination).toMatchObject({
-        area: "setup",
-        page: "connection",
-        setupStep: "signin",
-      });
-      expect(notice()).toBeUndefined();
-      // Attachment checks are shared writers: hiding feedback must not weaken
-      // the original pending/UNKNOWN fences on optional sign-in.
-      expect(h.button("Sign in").disabled).toBe(true);
-      await h.click("Sign in");
-      await stepTo("Add to ChatGPT");
-      expect(notice()).toContain("Saving or checking");
-      await h.remount();
-      expect(notice()).toContain("Saving or checking");
-      expect(h.c.getSnapshot().intents[id]).toEqual(pending);
-      await h.click("Check attachment");
-      await stepTo("Sign in");
-      await act(async () => {
-        if (outcome === "unknown")
-          wait.reject(new Error("attachment reply lost"));
-        else
-          wait.resolve({
-            ok: false,
-            error: "CONNECTOR_ATTACHMENT_NOT_FOUND",
-            snapshot: h.configuration,
-          });
-      });
-      expect(notice()).toBeUndefined();
-      const receipt = structuredClone(h.c.getSnapshot().intents[id]);
-      expect(receipt).toMatchObject({
-        id,
-        state: outcome,
-        code:
-          outcome === "unknown"
-            ? "CONFIGURATION_OUTCOME_UNKNOWN"
-            : "CONNECTOR_ATTACHMENT_NOT_FOUND",
-      });
-      await h.remount();
-      expect(notice()).toBeUndefined();
-      expect(h.button("Sign in").disabled).toBe(outcome === "unknown");
-      await stepTo("Add to ChatGPT");
-      const originalNotice = notice();
-      expect(originalNotice).toContain(
-        outcome === "unknown"
-          ? "Outcome unknown"
-          : "This action could not be completed",
-      );
-      expect(h.host.textContent).not.toContain(
-        "Attachment checked · Computer ready",
-      );
-      expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
-      await h.remount();
-      expect(notice()).toBe(originalNotice);
-      expect(h.c.getSnapshot().intents[id]).toEqual(receipt);
-      if (outcome === "unknown") {
-        expect(h.button("Check attachment").disabled).toBe(true);
-        await h.click("Check attachment");
-      }
-      // A normal Settings Connection destination shares the legacy page value,
-      // but must not inherit Setup's pending/late presentation either.
-      await h.click("Settings");
-      await h.click("Connection");
-      expect(notice()).toBeUndefined();
-      await h.click("Diagnostics");
-      const retained = h.host.querySelector('[aria-label="Retained actions"]')!;
-      expect(retained.textContent).toContain(id);
-      expect(retained.textContent).toContain(receipt!.code);
-      if (outcome === "unknown") {
-        const observation = h.host.querySelector(
-          '[aria-label="Actions needing observation"]',
-        )!;
-        expect(observation.textContent).toContain(id);
-        await h.click("Return to Setup");
-        expect(h.c.getSnapshot().destination).toMatchObject({
-          area: "setup",
-          setupStep: "attachment",
-        });
-        expect(notice()).toBe(originalNotice);
-      } else {
-        await h.click("General");
-        await h.click("Review Setup");
-        await stepTo("Sign in");
-        expect(notice()).toBeUndefined();
-        await h.click("Sign in");
-        expect(notice()).toContain("Sign-in request opened");
-        expect(notice()).toContain(
-          "opening it does not confirm an authenticated account",
-        );
-        await stepTo("Add to ChatGPT");
-        expect(notice()).toBe(originalNotice);
-        expect(h.c.getSnapshot().intents[id]).toEqual(receipt);
-      }
-      expect(
-        vi
-          .mocked(h.f.api.configure)
-          .mock.calls.map(([command]) => command)
-          .filter((command) => command.kind !== "chatgpt.observe-sign-in"),
-      ).toEqual([
-        { kind: "connector.check-attachment" },
-        ...(outcome === "refused" ? [{ kind: "chatgpt.open-sign-in" }] : []),
-      ]);
-      expect(h.f.api.task).not.toHaveBeenCalled();
-    },
-  );
-  it("retains the original unknown receipt across real Review Setup navigation without dispatching commands", async () => {
-    const h = await mount("connection", true);
-    const operationId = "11111111-2222-4333-8444-555555555555";
-    const intention = `settings:connector.save-and-connect:${operationId}`;
-    const configuration = {
-      status: "ready" as const,
-      settings: settings(),
-    };
-    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
-      ok: false,
-      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
-      snapshot: configuration,
-      connectorAttempt: {
-        method: "computer.connector.open",
-        requestId: "22222222-3333-4444-8555-666666666666",
-        operationId: "33333333-4444-4555-8666-777777777777",
-        outcome: "unknown",
-      },
-      connectorSetup: {
-        kind: "connector.save-and-connect",
-        operationId,
-        buildId: "3".repeat(64),
-        state: "unknown",
-        stoppedAt: "connection",
-        credentials: "saved",
-        connection: "unknown",
-        code: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
-        externalVerification: "not-proven",
-        connectorAttempt: {
-          method: "computer.connector.open",
-          requestId: "22222222-3333-4444-8555-666666666666",
-          operationId: "33333333-4444-4555-8666-777777777777",
-          outcome: "unknown",
-        },
-      },
+  it("uses one read-only progress line with current and real completed states", async () => {
+    const h = await mount({
+      step: "folders",
+      value: readySettings(),
+      shell: true,
     });
-    await act(async () => {
-      await h.c.configure(
-        {
-          kind: "connector.save-and-connect",
-          operationId,
-          buildId: "3".repeat(64),
-          tunnelId: "synthetic-tunnel",
-          runtimeKey: "synthetic-local-draft-do-not-retain",
-        },
-        intention,
-      );
-    });
-    const retained = structuredClone(h.c.getSnapshot().intents);
-    expect(retained[intention]?.state).toBe("unknown");
-    expect(retained[intention]?.connectorSetup?.operationId).toBe(operationId);
-    expect(retained[intention]?.connectorAttempt).toEqual({
-      method: "computer.connector.open",
-      requestId: "22222222-3333-4444-8555-666666666666",
-      operationId: "33333333-4444-4555-8666-777777777777",
-      outcome: "unknown",
-    });
-    expect(h.f.api.configure).toHaveBeenCalledTimes(1);
-    vi.mocked(h.f.api.configure).mockClear();
-    // Shell startup already observed update status before this review begins.
-    vi.mocked(h.f.api.installedUpdate).mockClear();
-    await h.click("Settings");
-    await h.click("General");
-    await h.click("Review Setup");
-    for (const label of [
-      "Overview",
-      "Sign in",
-      "Folders",
-      "Connection",
-      "Add to ChatGPT",
-    ]) {
-      const button = h.host.querySelector<HTMLButtonElement>(
-        `nav[aria-label="Setup steps"] button[aria-label="${label}"]`,
-      )!;
-      expect(button).toBeTruthy();
-      await act(async () => button.click());
-      expect(h.c.getSnapshot().intents).toEqual(retained);
-    }
-    await act(async () => h.c.refresh());
-    await h.click("Back to overview");
-    expect(h.c.getSnapshot().intents).toEqual(retained);
+    const line = h.host.querySelector('[aria-label="Setup progress"]')!;
     expect(
-      vi.mocked(h.f.api.configure).mock.calls.map(([command]) => command.kind),
-    ).toEqual(["chatgpt.observe-sign-in"]);
-    expect(h.f.api.task).not.toHaveBeenCalled();
-    expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
-    expect(JSON.stringify(h.c.getSnapshot())).not.toContain(
-      "synthetic-local-draft-do-not-retain",
-    );
-    expect(h.button("Open Home")).toBeUndefined();
-  });
-  it("renders the same five section names without conflicting counters", async () => {
-    const h = await mount();
-    const nav = h.host.querySelector('nav[aria-label="Setup steps"]')!;
-    expect(
-      [...nav.querySelectorAll("button")].map((x) =>
-        x.getAttribute("aria-label"),
-      ),
+      [...line.querySelectorAll("li")].map((x) => x.textContent?.trim()),
     ).toEqual([
-      "Overview",
-      "Sign in",
-      "Folders",
-      "Connection",
-      "Add to ChatGPT",
+      "✓ Sign in",
+      "✓ Workspaces",
+      "✓ Connect this Mac",
+      "4 Add to ChatGPT",
     ]);
-    expect(
-      h.host.querySelectorAll(
-        ".setup-step-number,.setup-overview-number,.setup-eyebrow",
-      ).length,
-    ).toBe(0);
-    expect(
-      [...h.host.querySelectorAll("[data-setup-check]")].map((x) =>
-        x.getAttribute("data-setup-check"),
-      ),
-    ).toEqual(["signin", "folders", "connection", "attachment"]);
-    expect(h.f.api.configure).not.toHaveBeenCalled();
+    expect(line.querySelector('[aria-current="step"]')?.textContent).toContain(
+      "Workspaces",
+    );
+    expect(line.querySelectorAll("button")).toHaveLength(0);
+    expect(h.host.querySelector(".contextual-sidebar")).toBeNull();
+    expect(h.host.querySelectorAll("details")).toHaveLength(0);
   });
-  it("shows Sign in as a real Setup route, not a Settings or ChatGPT redirect", async () => {
-    const h = await mount();
-    await h.click("Set up Sign in");
-    expect(h.c.getSnapshot().destination).toMatchObject({
-      area: "setup",
-      setupStep: "signin",
-      page: "connection",
-    });
-    expect(h.button("Sign in")).toBeTruthy();
-    expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
-      kind: "chatgpt.observe-sign-in",
-      observationId: expect.any(String),
-      buildId: "3".repeat(64),
-    });
-  });
-  it("opens sign-in only on the owner's explicit click", async () => {
-    const h = await mount("signin");
-    await h.click("Sign in");
-    expect(h.f.api.configure).toHaveBeenCalledTimes(2);
-    expect(h.f.api.configure).toHaveBeenLastCalledWith({
-      kind: "chatgpt.open-sign-in",
-    });
-    expect(h.host.querySelector('[data-setup-step="signin"]')).toBeTruthy();
-  });
-  it("leaves embedded sign-in optional and navigation effect-free", async () => {
-    const h = await mount("signin");
+  it.each(["signin", "folders", "connection", "attachment"] as const)(
+    "gates %s on its actual check",
+    async (step) => {
+      const h = await mount({ step });
+      expect(
+        h.button(step === "attachment" ? "Start using Farol" : "Continue")
+          ?.disabled,
+      ).toBe(true);
+      await h.click(step === "attachment" ? "Start using Farol" : "Continue");
+      expect(h.c.getSnapshot().destination.setupStep).toBe(step);
+      await h.publish(readySettings(true));
+      if (step === "signin") {
+        await h.navigate("folders");
+        await h.navigate("signin");
+      }
+      // A signed-out current page must still block sign-in even with an older saved witness.
+      expect(
+        h.button(step === "attachment" ? "Start using Farol" : "Continue")
+          ?.disabled,
+      ).toBe(step === "signin");
+    },
+  );
+  it("requires durable sign-in verification in addition to a current signed-in page", async () => {
+    const h = await mount({ step: "signin", signIn: "authenticated" });
+    expect(h.button("Continue")?.disabled).toBe(true);
+    expect(h.button("Check sign-in")).toBeTruthy();
+    h.reply(() => ({
+      ok: true,
+      snapshot: { status: "ready", settings: readySettings() },
+    }));
+    await h.click("Check sign-in");
+    expect(h.button("Continue")?.disabled).toBe(false);
     await h.click("Continue");
     expect(h.c.getSnapshot().destination.setupStep).toBe("folders");
-    expect(
-      vi.mocked(h.f.api.configure).mock.calls.map(([command]) => command.kind),
-    ).toEqual(["chatgpt.observe-sign-in"]);
-    await h.click("Previous");
+    await h.click("Back");
     expect(h.c.getSnapshot().destination.setupStep).toBe("signin");
+    expect(h.button("Skip for now")).toBeUndefined();
   });
-  it("does not expose credentials or connector controls on the Sign in step", async () => {
-    const h = await mount("signin");
-    for (const name of ["Tunnel ID", "Runtime key"]) {
-      expect(
-        [...h.host.querySelectorAll("label")]
-          .filter(h.visible)
-          .some((x) => x.textContent?.includes(name)),
-      ).toBe(false);
-    }
-    expect(h.button("Stop connection")).toBeUndefined();
+  it("withdraws Continue on background workspace identity changes", async () => {
+    const h = await mount({ step: "folders", value: readySettings() });
+    expect(h.button("Continue")?.disabled).toBe(false);
+    const changed = readySettings();
+    changed.revision = 2;
+    changed.computer.workspaces[0]!.rootIdentity = { device: "7", inode: "8" };
+    await h.publish(changed);
+    expect(h.button("Continue")?.disabled).toBe(true);
   });
-  it("returns to Overview after Check rather than another numbered Finish", async () => {
-    const h = await mount("attachment");
-    await h.click("Back to overview");
-    expect(h.c.getSnapshot().destination.setupStep).toBe("overview");
-    expect(h.f.api.configure).not.toHaveBeenCalled();
-  });
-  it("keeps legacy Finish destinations usable without creating a sixth sidebar entry", async () => {
-    const h = await mount("finish");
-    expect(h.host.querySelector('[data-setup-step="overview"]')).toBeTruthy();
-    expect(h.host.querySelector('nav button[aria-label="Finish"]')).toBeNull();
-    expect(
-      h.host
-        .querySelector('nav button[aria-label="Overview"]')
-        ?.getAttribute("aria-current"),
-    ).toBe("step");
-    expect(h.f.api.configure).not.toHaveBeenCalled();
-  });
-  it("Continue retains the settled current document sample on real Overview and sidebar until a document event", async () => {
-    const h = await mount("signin");
-    vi.mocked(h.f.api.configure).mockImplementation(async (command) =>
-      command.kind === "chatgpt.observe-sign-in"
-        ? signInReply(command, "authenticated", h.configuration)
-        : {},
-    );
-    await act(async () =>
-      h.f.emit("action", {
-        action: "sign-in-returned",
-        source: "auth-window-closed",
-        eventId: crypto.randomUUID(),
-        authWindowGeneration: 1,
-      }),
-    );
-    const sample = h.c.getSnapshot().signInObservation;
-    const calls = vi.mocked(h.f.api.configure).mock.calls.length;
-    await h.click("Continue");
-    expect(h.c.getSnapshot().signInObservation).toBe(sample);
-    expect(
-      h.host
-        .querySelector('[aria-label="Sign in"]')
-        ?.getAttribute("aria-description"),
-    ).toBe("Signed in");
-    await act(async () =>
-      h.c.navigate({ area: "setup", setupStep: "overview" }),
-    );
-    expect(
-      h.host.querySelector('[data-setup-check="signin"] .setup-check-status')
-        ?.textContent,
-    ).toBe("Signed in");
+  it("keeps unknown checks blocked across navigation, refresh and remount", async () => {
+    const value = readySettings();
+    const h = await mount({ step: "connection", value });
+    h.reply(() => {
+      throw new Error("scripted loss");
+    });
+    await h.click("Connect");
+    expect(h.button("Continue")?.disabled).toBe(true);
     await h.remount();
-    expect(h.c.getSnapshot().signInObservation).toBe(sample);
-    expect(h.f.api.configure).toHaveBeenCalledTimes(calls);
-    await act(async () => h.f.emit("route", { state: "loading" }));
-    expect(
-      h.host.querySelector('[data-setup-check="signin"] .setup-check-status')
-        ?.textContent,
-    ).toBe("Sign-in not checked");
-    expect(
-      h.host.querySelector(
-        '[aria-label="Sign in"] [data-check-state="verified"]',
-      ),
-    ).toBeNull();
+    await h.navigate("folders");
+    expect(h.button("Continue")?.disabled).toBe(true);
+    await h.navigate("connection");
+    expect(h.button("Connect")?.disabled).toBe(true);
+    expect(h.f.api.configure).toHaveBeenCalledTimes(1);
   });
-  it("a real authenticated leave and signed-out return observes fresh once per entry without an effect retry", async () => {
-    const h = await mount("signin");
-    vi.mocked(h.f.api.configure).mockImplementation(async (command) =>
-      command.kind === "chatgpt.observe-sign-in"
-        ? signInReply(command, "authenticated", h.configuration)
-        : {},
-    );
-    await act(async () =>
-      h.f.emit("action", {
-        action: "sign-in-returned",
-        source: "auth-window-closed",
-        eventId: crypto.randomUUID(),
-        authWindowGeneration: 1,
-      }),
-    );
-    const authenticated = h.c.getSnapshot().signInObservation;
-    await h.click("Continue");
-    expect(h.c.getSnapshot().signInObservation).toBe(authenticated);
-    vi.mocked(h.f.api.configure).mockImplementation(async (command) =>
-      command.kind === "chatgpt.observe-sign-in"
-        ? signInReply(command, "signed_out", h.configuration)
-        : {},
-    );
-    await h.click("Previous");
-    const signedOut = h.c.getSnapshot().signInObservation;
-    expect(signedOut?.state).toBe("signed_out");
-    expect(signedOut?.observationId).not.toBe(authenticated?.observationId);
-    expect(h.button("Sign in").disabled).toBe(false);
-    expect(h.button("Skip for now")).toBeTruthy();
-    await h.remount();
-    await act(async () => h.c.navigate({ area: "setup", setupStep: "signin" }));
-    expect(h.c.getSnapshot().signInObservation).toBe(signedOut);
-    expect(
-      vi.mocked(h.f.api.configure).mock.calls.map(([command]) => command.kind),
-    ).toEqual([
-      "chatgpt.observe-sign-in",
-      "chatgpt.observe-sign-in",
-      "chatgpt.observe-sign-in",
-    ]);
-    expect(h.c.getSnapshot().intents).toEqual({});
-    expect(h.f.api.task).not.toHaveBeenCalled();
+  it("maps legacy Finish to the welcome screen without effects", async () => {
+    const h = await mount({ step: "finish" });
+    expect(h.host.textContent).toContain("Welcome to Farol");
+    expect(h.f.api.configure).not.toHaveBeenCalled();
   });
 });
 
-// Scripted reply; this proves navigation and one-shot guards, not provider access.
-it("shows an explicit return from an admitted connection check without replaying it", async () => {
-  const value = attachmentSettings();
-  value.setup.chatgpt.verified = value.setup.computer.verified;
-  value.connectors.secureMcp.chatgptApp = {
-    name: "Farol",
-    tunnelId: "synthetic-tunnel",
-    connectorGeneration: 1,
-  };
-  const h = await mount("attachment", true, value);
-  const wait = deferred<unknown>();
-  vi.mocked(h.f.api.configure).mockReturnValueOnce(wait.promise);
-  expect(h.button("Check in ChatGPT once").disabled).toBe(false);
-  await h.click("Check in ChatGPT once");
-  expect(h.c.getSnapshot().destination).toMatchObject({
-    area: "chatgpt",
-    taskId: "",
-    connectionCheckReturn: true,
+describe("Add to ChatGPT", () => {
+  it("shows exact values and the honest bounded test description", async () => {
+    const h = await mount({ step: "attachment", value: readySettings() });
+    expect(h.host.querySelector(".setup-app-values")?.textContent).toBe(
+      "NameFarolConnectionTunnel · synthetic-tunnelSign-inNone",
+    );
+    expect(h.host.textContent).toContain("without reading file contents");
+    expect(h.host.querySelectorAll("details")).toHaveLength(0);
+    await h.click("Open ChatGPT Apps");
+    expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
+      kind: "onboarding.open-help",
+      destination: "chatgpt",
+    });
   });
-  expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
-    kind: "connector.verify-app",
+  it("selects Farol for the current tunnel and runs the existing check exactly once", async () => {
+    const h = await mount({
+      step: "attachment",
+      value: readySettings(),
+      shell: true,
+      signIn: "authenticated",
+    });
+    let value = readySettings();
+    const wait = deferred<unknown>();
+    h.reply((command) => {
+      if (command.kind === "connector.select-chatgpt-app") {
+        value = structuredClone(value);
+        value.revision = 2;
+        value.connectors.secureMcp.chatgptApp = {
+          name: "Farol",
+          tunnelId: "synthetic-tunnel",
+          connectorGeneration: 1,
+        };
+        return { ok: true, snapshot: { status: "ready", settings: value } };
+      }
+      return wait.promise;
+    });
+    expect(h.button("Test in ChatGPT")?.disabled).toBe(false);
+    await h.click("Test in ChatGPT");
+    expect(h.c.getSnapshot().destination).toMatchObject({
+      area: "chatgpt",
+      connectionCheckReturn: true,
+    });
+    expect(h.button("Back to setup")).toBeTruthy();
+    await h.click("Back to setup");
+    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
+    expect(
+      vi
+        .mocked(h.f.api.configure)
+        .mock.calls.filter(([c]) => c.kind === "connector.verify-app"),
+    ).toHaveLength(1);
+    await act(async () =>
+      wait.resolve({
+        ok: true,
+        snapshot: {
+          status: "ready",
+          settings: { ...readySettings(true), revision: 3 },
+        },
+      }),
+    );
+    expect(h.host.textContent).toContain("✓ Everything works");
+    expect(h.host.textContent).toContain("No file contents were read");
+    expect(h.button("Start using Farol")?.disabled).toBe(false);
+    await h.click("Start using Farol");
+    expect(h.c.getSnapshot().destination.area).toBe("home");
   });
-  await h.click("Back to setup");
-  expect(h.c.getSnapshot().destination.setupStep).toBe("attachment");
-  expect(h.c.getSnapshot().destination.connectionCheckReturn).toBeUndefined();
-  expect(h.button("Check in ChatGPT once").disabled).toBe(true);
-  await act(async () =>
-    wait.resolve({
-      ok: false,
-      code: "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN",
-      snapshot: h.configuration,
-    }),
+  it("shows one recovery action after an unknown app check and never repeats it", async () => {
+    const value = readySettings();
+    value.connectors.secureMcp.chatgptApp = {
+      name: "Farol",
+      tunnelId: "synthetic-tunnel",
+      connectorGeneration: 1,
+    };
+    const h = await mount({ step: "attachment", value });
+    h.reply(() => {
+      throw new Error("lost result");
+    });
+    await h.click("Test in ChatGPT");
+    await h.navigate("attachment");
+    const failure = h.host.querySelector('[role="alert"]')!;
+    expect(failure.querySelectorAll("button")).toHaveLength(1);
+    expect(failure.textContent).not.toContain("Diagnostics");
+    expect(h.button("Start using Farol")?.disabled).toBe(true);
+    await h.remount();
+    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
+    expect(h.f.api.configure).toHaveBeenCalledTimes(1);
+  });
+});
+
+const originalMatchMedia = window.matchMedia;
+afterEach(() => {
+  window.matchMedia = originalMatchMedia;
+});
+describe("walkthrough motion", () => {
+  it.each(["connection", "attachment"] as const)(
+    "renders static numbered frames for %s when motion is reduced",
+    async (step) => {
+      window.matchMedia = vi.fn().mockReturnValue({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      });
+      const h = await mount({ step, value: readySettings() });
+      const frames = h.host.querySelectorAll(".walkthrough-static > li");
+      expect(frames.length).toBe(step === "connection" ? 9 : 6);
+      expect(frames[0]?.textContent).toMatch(/^1\./u);
+      expect(h.host.querySelector(".walkthrough-cursor")).toBeNull();
+      expect(h.button("Pause walkthrough")).toBeUndefined();
+      expect(h.host.textContent).toContain(
+        step === "connection" ? "Read and Use" : "Sign-inNone",
+      );
+    },
   );
-  expect(h.button("Check in ChatGPT once").disabled).toBe(true);
-  expect(h.f.api.configure).toHaveBeenCalledTimes(1);
-  expect(h.f.api.task).not.toHaveBeenCalled();
+  it("animates offline scenes and supports pausing without any IPC", async () => {
+    const h = await mount({ step: "connection" });
+    const before = h.host.querySelector("figcaption")?.textContent;
+    vi.useFakeTimers();
+    // Remount starts this component's interval under the fake clock.
+    await h.remount();
+    await act(async () => vi.advanceTimersByTime(2400));
+    expect(h.host.querySelector("figcaption")?.textContent).not.toBe(before);
+    await h.click("Pause walkthrough");
+    const paused = h.host.querySelector("figcaption")?.textContent;
+    await act(async () => vi.advanceTimersByTime(5000));
+    expect(h.host.querySelector("figcaption")?.textContent).toBe(paused);
+    vi.useRealTimers();
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+  });
 });

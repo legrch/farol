@@ -29,7 +29,8 @@ export function setupChecklist(snapshot: WindowSnapshot) {
       Boolean(snapshot.buildId) &&
       snapshot.configuration?.status === "ready",
     signedIn:
-      signIn.signedIn &&
+      !signIn.outcomeUnknown &&
+      snapshot.signInObservation?.state !== "signed_out" &&
       snapshot.configuration?.status === "ready" &&
       snapshot.configuration.settings.setup.chatgpt.verified?.buildId ===
         snapshot.buildId &&

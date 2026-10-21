@@ -1091,8 +1091,8 @@ describe("F0 window owner", () => {
       const c = new WindowController(f.api);
       await c.start();
       expect(c.getSnapshot().destination).toMatchObject({
-        area,
-        page,
+        area: page === "computer" ? "setup" : area,
+        page: page === "computer" ? "folders" : page,
         taskId: "retained",
       });
       for (const area of ["home", "setup", "chatgpt"] as const) {
@@ -1191,9 +1191,10 @@ describe("F0 window owner", () => {
       await started;
       if (owner === "pending navigation")
         expect(c.getSnapshot().destination).toEqual({
-          area: "settings",
-          page: "computer",
+          area: "setup",
+          page: "folders",
           taskId: "newer",
+          setupStep: "folders",
         });
       else if (
         owner === "task selection" ||
@@ -1542,7 +1543,7 @@ describe("F0 window owner", () => {
       selectedTaskId: "task-1",
     });
     await action;
-    expect(c.getSnapshot().destination.area).toBe("settings");
+    expect(c.getSnapshot().destination.area).toBe("setup");
     expect(f.api.task).toHaveBeenCalledTimes(1);
     c.dispose();
   });
@@ -1778,7 +1779,12 @@ describe("F0 window owner", () => {
       start: { area: "settings", page: "general" },
       section: "computer",
       rail: false,
-      expected: { area: "settings", page: "computer", taskId: "" },
+      expected: {
+        area: "setup",
+        page: "folders",
+        setupStep: "folders",
+        taskId: "",
+      },
     },
     {
       name: "Appearance to Settings General",
@@ -1857,7 +1863,7 @@ describe("F0 window owner", () => {
   );
   it.each([
     { section: "browser", area: "chatgpt", page: "general" },
-    { section: "computer", area: "settings", page: "computer" },
+    { section: "computer", area: "setup", page: "folders" },
     { section: "activity", area: "activity", page: "general" },
     { section: "settings", area: "settings", page: "general" },
   ])(
@@ -2048,7 +2054,7 @@ describe("F0 window owner", () => {
     f.emit("action", action);
     expect(c.getSnapshot()).toBe(done);
     f.emit("action", sectionIntent("computer", 2));
-    expect(c.getSnapshot().destination.page).toBe("computer");
+    expect(c.getSnapshot().destination.page).toBe("folders");
     c.dispose();
   });
   it("R35 stale state cannot navigate or replay the refused intent after recovery", async () => {
@@ -2100,9 +2106,10 @@ describe("F0 window owner", () => {
     });
     await started;
     expect(c.getSnapshot().destination).toEqual({
-      area: "settings",
-      page: "computer",
+      area: "setup",
+      page: "folders",
       taskId: "task-1",
+      setupStep: "folders",
     });
     expect(c.getSnapshot().sidebar).toBe("rail");
     expect(destinations).not.toContain("chatgpt");
@@ -2526,8 +2533,8 @@ it("R06 R35 configured launch preferences are lifecycle-owned while a new profil
   const c = new WindowController(f.api);
   await c.start();
   expect(c.getSnapshot().destination).toMatchObject({
-    area: "settings",
-    page: "computer",
+    area: "setup",
+    page: "folders",
   });
   expect(c.getSnapshot().sidebar).toBe("rail");
   expect(f.api.configure).not.toHaveBeenCalled();

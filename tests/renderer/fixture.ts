@@ -26,28 +26,30 @@ const readiness = {
   outcomeUnknown: false,
 };
 export function settings(revision = 1) {
-  return ProductSettingsSchema.parse({
-    schema: 1,
-    revision,
-    general: {
-      openAtLaunch: "browser",
-      sidebarDefault: "full",
-      activityDetail: "summary",
-    },
-    computer: {
-      computerId: "11111111-1111-4111-8111-111111111111",
-      generation: 1,
-      name: "This Mac",
-      workspaces: [],
-    },
-    setup: {
-      chatgpt: readiness,
-      computer: readiness,
-      connect: readiness,
-      hosts: readiness,
-      verify: readiness,
-    },
-  });
+  return structuredClone(
+    ProductSettingsSchema.parse({
+      schema: 1,
+      revision,
+      general: {
+        openAtLaunch: "browser",
+        sidebarDefault: "full",
+        activityDetail: "summary",
+      },
+      computer: {
+        computerId: "11111111-1111-4111-8111-111111111111",
+        generation: 1,
+        name: "This Mac",
+        workspaces: [],
+      },
+      setup: {
+        chatgpt: readiness,
+        computer: readiness,
+        connect: readiness,
+        hosts: readiness,
+        verify: readiness,
+      },
+    }),
+  );
 }
 export function bootstrap() {
   return {
