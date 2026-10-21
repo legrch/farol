@@ -16,6 +16,7 @@ if (process.argv[2] === "run") {
   const healthControl = path.join(root, "health-control.json");
   const file = path.join(root, `polling-tunnel-${id}.json`);
   const controlFile = path.join(root, "polling-control.json");
+  const networkControl = path.join(root, "network-control.json");
   const record = {
     id,
     pid: process.pid,
@@ -191,9 +192,66 @@ if (process.argv[2] === "run") {
     record.exitCode = code;
     save();
   });
+  // Connection-level loss of this helper's loopback transport. A lost transport
+  // closes the socket without any HTTP response; it never answers 5xx. The
+  // loss ledger appears in the receipt only after the first lost connection, so
+  // every other mode leaves the receipt shape unchanged.
+  const lost = () => {
+    try {
+      const data = fs.readFileSync(networkControl);
+      return data.length <= 1024 && JSON.parse(data).mode === "lost";
+    } catch {
+      return false;
+    }
+  };
+  const note = (label) => {
+    const loss = (record.loss ??= {
+      connections: 0,
+      requests: 0,
+      readyz: 0,
+      health: 0,
+      metrics: 0,
+      other: 0,
+      log: [],
+    });
+    if (label === null) loss.connections++;
+    else {
+      loss.requests++;
+      loss[
+        label === "GET /readyz"
+          ? "readyz"
+          : label === "GET /health?details=true"
+            ? "health"
+            : label === "GET /metrics"
+              ? "metrics"
+              : "other"
+      ]++;
+    }
+    if (loss.log.length < 256)
+      loss.log.push({ at: Date.now(), kind: label ?? "connection" });
+    save();
+  };
+  // The request line classifies the attempt; the socket is then closed with no
+  // HTTP response at all.
+  const refuse = (socket, label) => {
+    note(label);
+    socket.destroy();
+  };
   const create = http.createServer;
-  http.createServer = (listener) =>
-    create((request, response) => {
+  http.createServer = (listener) => {
+    const server = create((request, response) => {
+      if (lost())
+        return refuse(
+          request.socket,
+          `${request.method} ${request.url}`.slice(0, 64),
+        );
+      // After the first lost connection the ledger also stamps requests that
+      // were served, so a harness can place the first healthy probe in time.
+      if (record.loss && record.loss.log.length < 256)
+        record.loss.log.push({
+          at: Date.now(),
+          kind: `ok ${request.method} ${request.url}`.slice(0, 64),
+        });
       if (request.method === "GET" && request.url === "/readyz") {
         if (++record.readyRequests > 512) process.exit(65);
         save();
@@ -231,5 +289,10 @@ if (process.argv[2] === "run") {
         `commands_poll_cycles_total 10\ncommands_poll_errors_total ${selected === "stale" ? 3 : 0}\ncommands_poll_last_successful_timestamp_seconds ${last}\n`,
       );
     });
+    server.on("connection", (socket) => {
+      if (lost()) note(null);
+    });
+    return server;
+  };
 }
 require("./tunnel-client.fixture.cjs");
