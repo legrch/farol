@@ -29,7 +29,7 @@ path inside the snapshot, never a prefix or global unregister. Every `.app` it f
 is accounted for as unregistered, failed (including when `lsregister` is missing) or
 refused (a path that does not resolve to itself inside the snapshot), and a directory
 it could not read is named in the errors. Anything but a clean unregister is printed
-on stderr, including a snapshot directory that could not be deleted. Cleanup never fails the launch or changes its exit status; only a descriptor that does not name an owned snapshot is refused, before anything is touched. An ungraceful launcher kill or host
+on stderr, including a snapshot directory that could not be deleted. If the snapshot directory is already gone, the launcher still unregisters the exact bundle paths recorded when it created the snapshot, and says the directory was already gone. Cleanup never fails the launch or changes its exit status; only a descriptor that does not name an owned snapshot is refused, before anything is touched. An ungraceful launcher kill or host
 shutdown can leave its private temporary directory behind; it is never reused as a
 candidate or promotion source. If the candidate is absent or stale, the command says
 to commit the intended source and run `task package`; it never falls back to old

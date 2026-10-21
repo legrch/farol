@@ -76,6 +76,7 @@ describe("launch snapshot LaunchServices cleanup", () => {
       refused: [],
       errors: [],
       removed: true,
+      rootMissing: false,
     });
     await expect(fs.stat(snapshot.root)).rejects.toMatchObject({
       code: "ENOENT",
@@ -146,6 +147,82 @@ describe("launch snapshot LaunchServices cleanup", () => {
       expect(bundlePath.startsWith(`${realRoot}${path.sep}`)).toBe(true);
       expect(bundlePath).not.toContain(`${path.sep}alias${path.sep}`);
     }
+  });
+
+  describe("a snapshot root that is already gone", () => {
+    it("still unregisters the recorded bundle paths of an issued descriptor, and says so", async () => {
+      const { snapshot } = await fixtureSnapshot();
+      const outer = snapshot.appPath;
+      const runtime = path.join(
+        outer,
+        "Contents/Frameworks/Electron Runtime.app",
+      );
+      const helper = path.join(
+        runtime,
+        "Contents/Frameworks/Electron Helper.app",
+      );
+      await fs.rm(snapshot.root, { recursive: true });
+      const calls = [];
+      const outcome = await removeLaunchSnapshot(snapshot, {
+        lsregister: process.execPath,
+        unregister: async (_tool, bundlePath) => {
+          calls.push(bundlePath);
+          return true;
+        },
+      });
+      expect(calls).toEqual([helper, runtime, outer]);
+      expect(outcome.unregistered).toEqual([helper, runtime, outer]);
+      expect(outcome.removed).toBe(false);
+      expect(outcome.rootMissing).toBe(true);
+      expect(outcome.errors).toEqual([
+        `snapshot root already gone: ${snapshot.root}`,
+      ]);
+    });
+
+    it("is reported on stderr by the launcher step, not hidden", async () => {
+      const { snapshot } = await fixtureSnapshot();
+      await fs.rm(snapshot.root, { recursive: true });
+      const written = [];
+      await launchSnapshot.finishLaunchSnapshot(snapshot, {
+        remove: (descriptor) =>
+          removeLaunchSnapshot(descriptor, {
+            lsregister: process.execPath,
+            unregister: async () => true,
+          }),
+        write: (text) => written.push(text),
+      });
+      expect(written.join("")).toContain("snapshot root already gone");
+    });
+
+    it("makes no lsregister call for an unissued descriptor and reports it refused, not removed", async () => {
+      const { root, temporaryRoot } = await fixtureSnapshot();
+      const sha = "8".repeat(64);
+      const prefix = `farol-next-launch-${sha.slice(0, 12)}-`;
+      const gone = path.join(temporaryRoot, `${prefix}gone`);
+      const forged = {
+        appPath: path.join(gone, "Farol.app"),
+        artifactFile: path.join(gone, "artifact.json"),
+        artifactSha256: sha,
+        prefix,
+        root: gone,
+        temporaryRoot,
+      };
+      const calls = [];
+      const outcome = await removeLaunchSnapshot(forged, {
+        lsregister: process.execPath,
+        unregister: async (_tool, bundlePath) => {
+          calls.push(bundlePath);
+          return true;
+        },
+      });
+      expect(root).toBeDefined();
+      expect(calls).toEqual([]);
+      expect(outcome.refused).toEqual([
+        "descriptor not issued by this process",
+      ]);
+      expect(outcome.removed).toBe(false);
+      expect(outcome.rootMissing).toBe(true);
+    });
   });
 
   describe("only a descriptor this process issued is unregistered", () => {
@@ -519,6 +596,20 @@ describe("launch snapshot LaunchServices cleanup", () => {
         },
       },
       {
+        name: "issued descriptor whose root is already gone",
+        options: () => ({
+          lsregister: process.execPath,
+          unregister: async () => true,
+        }),
+        rootGone: true,
+        expected: {
+          unregistered: 3,
+          errors: 1,
+          errorMatches: "already gone",
+          notRemoved: true,
+        },
+      },
+      {
         name: "readdir failure mid-walk",
         options: () => ({
           lsregister: process.execPath,
@@ -572,6 +663,9 @@ describe("launch snapshot LaunchServices cleanup", () => {
             ),
         );
       }
+      if (scenario.rootGone) {
+        await fs.rm(snapshot.root, { recursive: true });
+      }
       if (scenario.failRemove) {
         const original = fs.rm.bind(fs);
         spies.push(
@@ -611,7 +705,8 @@ describe("launch snapshot LaunchServices cleanup", () => {
       expect(outcome.errors.length).toBe(want.errors ?? 0);
       if (want.errorMatches)
         expect(outcome.errors[0]).toContain(want.errorMatches);
-      expect(outcome.removed).toBe(!want.kept);
+      expect(outcome.removed).toBe(!want.kept && !want.notRemoved);
+      expect(outcome.rootMissing).toBe(Boolean(want.notRemoved));
       if (want.kept) {
         await expect(fs.stat(snapshot.root)).resolves.toBeDefined();
       } else {

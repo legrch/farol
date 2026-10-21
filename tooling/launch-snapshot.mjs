@@ -56,10 +56,13 @@ export function ownerLaunchEnvironment(environment = process.env) {
   return launchEnvironment;
 }
 
-// The exact descriptor objects `createLaunchSnapshot` returned in this process.
-// Module-private, so no caller can add to it: a descriptor that merely has the
-// right fields, or a copy of an issued one, is not in it.
-const issuedSnapshots = new WeakSet();
+// The exact descriptor objects `createLaunchSnapshot` returned in this process,
+// each with the exact bundle paths it created (the product `.app` and the nested
+// `.app` bundles, deepest first, real-path form). Module-private, so no caller
+// can add to it: a descriptor that merely has the right fields, or a copy of an
+// issued one, is not in it. The recorded paths let cleanup unregister a
+// snapshot even when its directory was deleted before the launcher got there.
+const issuedSnapshots = new WeakMap();
 
 const NOT_ISSUED = "descriptor not issued by this process";
 
@@ -102,7 +105,8 @@ export async function createLaunchSnapshot({
       root,
       temporaryRoot: resolvedTemporaryRoot,
     });
-    issuedSnapshots.add(snapshot);
+    const bundles = await snapshotBundlePaths(await fs.realpath(root), []);
+    issuedSnapshots.set(snapshot, Object.freeze({ bundles }));
     return snapshot;
   } catch (error) {
     // Best effort: a failed delete must not replace the creation error.
@@ -188,12 +192,35 @@ function runLsregisterUnregister(lsregister, bundlePath) {
 // Private on purpose: it trusts `realRoot`, which only `removeLaunchSnapshot`
 // supplies after validating the descriptor and resolving the real path. A path
 // that does not resolve to itself inside `realRoot` is refused, not unregistered.
-async function unregisterSnapshotBundles(
-  realRoot,
+async function unregisterSnapshotBundles(realRoot, options, result) {
+  const bundles = await snapshotBundlePaths(realRoot, result.errors);
+  await unregisterBundlePaths(bundles, options, result, async (bundlePath) => {
+    let resolved = null;
+    try {
+      resolved = await fs.realpath(bundlePath);
+    } catch {
+      // Gone or unreadable: not a path this run can vouch for.
+    }
+    // The resolve-then-unregister window is not closed against a concurrent
+    // rewrite, deliberately: exploiting it needs a same-uid process able to
+    // modify this private 0700 snapshot, and such a process can already run
+    // `lsregister -u` on any path itself, so no privilege boundary is crossed.
+    // This check stops an accidental foreign path, not a same-user attacker.
+    return (
+      resolved === bundlePath && bundlePath.startsWith(`${realRoot}${path.sep}`)
+    );
+  });
+}
+
+// Shared by both entry points above. `verify`, when given, must approve each
+// path before it is unregistered; the recorded paths of an issued descriptor
+// need none, because this module recorded them itself.
+async function unregisterBundlePaths(
+  bundles,
   { lsregister = LSREGISTER, unregister = runLsregisterUnregister } = {},
   result,
+  verify = null,
 ) {
-  const bundles = await snapshotBundlePaths(realRoot, result.errors);
   if (bundles.length === 0) return;
   try {
     await fs.access(lsregister);
@@ -207,21 +234,7 @@ async function unregisterSnapshotBundles(
     return;
   }
   for (const bundlePath of bundles) {
-    let resolved = null;
-    try {
-      resolved = await fs.realpath(bundlePath);
-    } catch {
-      // Gone or unreadable: not a path this run can vouch for.
-    }
-    // The resolve-then-unregister window is not closed against a concurrent
-    // rewrite, deliberately: exploiting it needs a same-uid process able to
-    // modify this private 0700 snapshot, and such a process can already run
-    // `lsregister -u` on any path itself, so no privilege boundary is crossed.
-    // This check stops an accidental foreign path, not a same-user attacker.
-    if (
-      resolved !== bundlePath ||
-      !bundlePath.startsWith(`${realRoot}${path.sep}`)
-    ) {
+    if (verify && !(await verify(bundlePath))) {
       result.refused.push(bundlePath);
       continue;
     }
@@ -253,7 +266,30 @@ function emptyOutcome() {
     refused: [],
     errors: [],
     removed: false,
+    rootMissing: false,
   };
+}
+
+// The validated root is already gone (something deleted it before the launcher's
+// cleanup ran), which leaves LaunchServices' records behind. An issued
+// descriptor still unregisters the exact bundle paths recorded when it was
+// created; an unissued one is refused. Never a silent success: `removed` is
+// false and `errors` names the missing root.
+async function cleanUpMissingRoot(snapshot, options) {
+  const outcome = emptyOutcome();
+  outcome.rootMissing = true;
+  outcome.errors.push(`snapshot root already gone: ${snapshot.root}`);
+  const record = issuedSnapshots.get(snapshot);
+  if (record === undefined) {
+    outcome.refused.push(NOT_ISSUED);
+    return outcome;
+  }
+  try {
+    await unregisterBundlePaths(record.bundles, options, outcome);
+  } catch (error) {
+    outcome.errors.push(error?.message ?? "unregister failed");
+  }
+  return outcome;
 }
 
 // Validation first: a descriptor that does not name an owned snapshot, or a
@@ -263,7 +299,8 @@ function emptyOutcome() {
 // Once validation has passed this function never throws: the walk, the tool
 // check, each unregister and the final delete are best effort, and every
 // failure comes back in the outcome (`errors`, `failed`, `refused`, and
-// `removed: false` when the directory is still there).
+// `removed: false` when the directory is still there). A root that is already
+// missing is not a success: see `cleanUpMissingRoot`.
 //
 // Unregistering from LaunchServices happens only for a descriptor this process
 // got from `createLaunchSnapshot`. A shape-valid descriptor that was not issued
@@ -300,9 +337,7 @@ export async function removeLaunchSnapshot(snapshot, options) {
       throw new Error("LAUNCH_SNAPSHOT_CLEANUP_INVALID");
     }
   } catch (error) {
-    if (error?.code === "ENOENT") {
-      return { ...emptyOutcome(), removed: true };
-    }
+    if (error?.code === "ENOENT") return cleanUpMissingRoot(snapshot, options);
     throw error;
   }
   const outcome = emptyOutcome();
@@ -346,7 +381,7 @@ export async function finishLaunchSnapshot(
       problems.push(`refused: ${outcome.refused.join(", ")}`);
     }
     problems.push(...outcome.errors);
-    if (outcome.removed !== true)
+    if (outcome.removed !== true && outcome.rootMissing !== true)
       problems.push("snapshot directory not removed");
   } catch (error) {
     problems.push(`cleanup refused: ${error?.message ?? "unknown failure"}`);
