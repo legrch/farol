@@ -368,3 +368,38 @@
     font-size: 24px;
   }
 }
+.setup-workspace-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  padding: 22px 0;
+  border-bottom: 1px solid var(--line);
+}
+.workspace-row-path {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.workspace-row-path p {
+  overflow-wrap: anywhere;
+  margin-top: 6px;
+}
+.setup-workspace-row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.workspace-row-result {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-basis: 100%;
+  font-size: 12px;
+}
+.setup-success {
+  color: var(--good);
+}
+.setup-workspaces {
+  margin-bottom: 20px;
+}

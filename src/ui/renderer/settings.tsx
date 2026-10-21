@@ -1,7 +1,6 @@
 import { unavailableConnectionStatus } from "../../../apps/desktop/renderer/connection-status";
 import { connectorSetupPresentation } from "../connector-setup-presentation";
 import { ConnectionGuide } from "./connection-guide";
-import { designIconPath, designIconViewBox } from "./design-icons";
 import {
   defaultNavigationShortcuts,
   parseNavigationShortcuts,
@@ -1096,47 +1095,6 @@ async function continueWorkspaceSetup(
 }
 function Folders(props: PageProps) {
   const { settings, facade, snapshot, actions } = props;
-  const requestedId = snapshot.destination.workspaceId ?? null;
-  const [selection, setSelection] = useState({
-    requestedId,
-    id: requestedId,
-  });
-  const selectionRevision = useRef(0);
-  // Honor a new destination immediately, while retaining ordinary local selection.
-  const selectedId =
-    selection.requestedId === requestedId
-      ? selection.id
-      : (requestedId ?? selection.id);
-  useEffect(() => {
-    // History may restore the same destination object after another inspection.
-    selectionRevision.current += 1;
-    setSelection((previous) =>
-      previous.requestedId === requestedId
-        ? previous
-        : { requestedId, id: requestedId ?? previous.id },
-    );
-  }, [requestedId]);
-  const selectWorkspace = (id: string) => {
-    selectionRevision.current += 1;
-    setSelection({ requestedId, id });
-  };
-  const explicitSelection = requestedId !== null && selectedId === requestedId;
-  const selected =
-    settings.computer.workspaces.find(
-      (item) => item.workspaceId === selectedId,
-    ) ??
-    (explicitSelection
-      ? undefined
-      : props.setupStep
-        ? settings.computer.workspaces.find(
-            (item) =>
-              item.workspaceId ===
-              settings.setup.computer.verified?.workspaceId,
-          )
-        : undefined) ??
-    (explicitSelection ? undefined : settings.computer.workspaces[0]);
-  const unavailableSelection = explicitSelection && !selected;
-  const detailId = useId();
   const [adding, setAdding] = useState(false);
   let flow = folderSetupByWindow.get(facade);
   if (!flow) {
@@ -1149,7 +1107,6 @@ function Folders(props: PageProps) {
     folderFlow.busy = true;
     setAdding(true);
     try {
-      const selectionAtDispatch = selectionRevision.current;
       const picking = facade.getSnapshot();
       const picked = await actions.run({ kind: "computer.choose-workspace" });
       const before = facade.getSnapshot();
@@ -1185,11 +1142,6 @@ function Folders(props: PageProps) {
         )
       )
         return;
-      if (
-        selectionAtDispatch === selectionRevision.current &&
-        current.destination === picking.destination
-      )
-        selectWorkspace(selection.workspaceId);
       await folderFlow.access.run(
         {
           settings: () => {
@@ -1213,7 +1165,7 @@ function Folders(props: PageProps) {
                 : "unknown";
           },
         },
-        { workspaceId: selection.workspaceId, connectWhenConfigured: true },
+        { workspaceId: selection.workspaceId, connectWhenConfigured: false },
         onboardingFacts(current.configuration.settings, current.buildId ?? ""),
       );
     } finally {
@@ -1221,131 +1173,191 @@ function Folders(props: PageProps) {
       setAdding(false);
     }
   }
+
+  async function update(
+    workspaceId: string,
+    plan: { access?: "read" | "write"; commands?: "none" | "workspace" } = {},
+  ) {
+    if (folderFlow.busy || folderFlow.access.requiresReadback()) return;
+    folderFlow.busy = true;
+    setAdding(true);
+    const current = facade.getSnapshot();
+    try {
+      await folderFlow.access.run(
+        {
+          settings: () => {
+            const value = facade.getSnapshot().configuration;
+            return value?.status === "ready" ? value.settings : null;
+          },
+          buildId: () => facade.getSnapshot().buildId ?? "",
+          issueCheckId: () => crypto.randomUUID(),
+          run: async (command) => {
+            const outcome = await actions.runClassified(command);
+            return outcome.state === "not-sent" ||
+              outcome.result?.state === "refused"
+              ? "refused"
+              : outcome.result?.state === "applied"
+                ? "applied"
+                : "unknown";
+          },
+        },
+        { workspaceId, ...plan, connectWhenConfigured: false },
+        onboardingFacts(
+          current.configuration?.status === "ready"
+            ? current.configuration.settings
+            : null,
+          current.buildId ?? "",
+        ),
+      );
+    } finally {
+      folderFlow.busy = false;
+      setAdding(false);
+    }
+  }
+  const paused =
+    adding || folderFlow.busy || folderFlow.access.requiresReadback();
   return (
     <>
-      {!props.setupStep && <h2>Workspaces</h2>}
-      {!props.setupStep && (
-        <p className="description">
-          Choose the workspaces Farol may access. Each workspace has its own
-          access level and check. Removing a workspace revokes access and keeps
-          its files.
-        </p>
-      )}
-      {(selected || unavailableSelection) && (
-        <div className="workspace-layout">
-          <nav className="workspace-picker" aria-label="Approved workspaces">
-            {settings.computer.workspaces.map((workspace) => (
-              <button
-                key={workspace.workspaceId}
-                type="button"
-                className="workspace-choice"
-                aria-label={`Select workspace ${folderDisplayName(workspace)}`}
-                aria-current={
-                  workspace.workspaceId === selected?.workspaceId
-                    ? "true"
-                    : undefined
-                }
-                aria-controls={detailId}
-                onClick={() => selectWorkspace(workspace.workspaceId)}
-              >
-                <svg
-                  className="workspace-folder-icon"
-                  viewBox={designIconViewBox}
-                  aria-hidden="true"
-                >
-                  <path d={designIconPath("folders")} />
-                </svg>
+      <div className="setup-workspaces" aria-label="Approved workspaces">
+        {settings.computer.workspaces.map((workspace) => {
+          const checked = workspaceChecked(snapshot, workspace);
+          return (
+            <article
+              className="setup-workspace-row"
+              key={workspace.workspaceId}
+              aria-label={`Workspace ${folderDisplayName(workspace)}`}
+            >
+              <div className="workspace-row-path">
                 <strong>{folderDisplayName(workspace)}</strong>
-                <span>
-                  {workspace.access === "read" ? "Read-only" : "Read & write"}
-                </span>
-                <span className="workspace-choice-path">{workspace.root}</span>
+                <p className="description">{workspace.root}</p>
+              </div>
+              <label>
+                Access
+                <select
+                  className="field"
+                  aria-label={`Access for ${folderDisplayName(workspace)}`}
+                  value={workspace.access}
+                  disabled={
+                    paused ||
+                    !actions.allowed(
+                      "computer.update-access",
+                      workspace.workspaceId,
+                    )
+                  }
+                  onChange={(event) =>
+                    void update(workspace.workspaceId, {
+                      access:
+                        event.currentTarget.value === "read" ? "read" : "write",
+                    })
+                  }
+                >
+                  <option value="read">Read only</option>
+                  <option value="write">Read &amp; write</option>
+                </select>
+              </label>
+              <label className="workspace-commands">
+                <input
+                  type="checkbox"
+                  aria-label={`Commands for ${folderDisplayName(workspace)}`}
+                  checked={settings.computer.commands === "workspace"}
+                  disabled={
+                    paused || !actions.allowed("computer.update-commands")
+                  }
+                  onChange={(event) =>
+                    void update(workspace.workspaceId, {
+                      commands: event.currentTarget.checked
+                        ? "workspace"
+                        : "none",
+                    })
+                  }
+                />
+                Commands
+              </label>
+              <div className="workspace-row-result" role="status">
+                {checked ? (
+                  <span className="setup-success">✓ Works</span>
+                ) : (
+                  <>
+                    <span>
+                      {actions.computerPauseReason ??
+                        "Workspace access has not passed its check."}
+                    </span>
+                    <button
+                      type="button"
+                      className="text-button"
+                      disabled={
+                        paused ||
+                        !actions.allowed(
+                          "computer.verify-workspace",
+                          workspace.workspaceId,
+                        )
+                      }
+                      onClick={() => void update(workspace.workspaceId)}
+                    >
+                      Check access
+                    </button>
+                  </>
+                )}
+              </div>
+              <button
+                type="button"
+                className="text-button"
+                disabled={
+                  paused ||
+                  !actions.allowed(
+                    "computer.remove-workspace",
+                    workspace.workspaceId,
+                  )
+                }
+                onClick={() =>
+                  void actions.run({
+                    kind: "computer.remove-workspace",
+                    workspaceId: workspace.workspaceId,
+                  })
+                }
+              >
+                Remove {folderDisplayName(workspace)}
               </button>
-            ))}
-          </nav>
-          {selected ? (
-            <WorkspaceDetail
-              key={selected.workspaceId}
-              {...props}
-              workspace={selected}
-              detailId={detailId}
-            />
-          ) : (
-            <p id={detailId} className="notice" role="status">
-              Selected workspace is no longer available. Choose an available
-              workspace to inspect its access.
-            </p>
-          )}
-        </div>
+            </article>
+          );
+        })}
+      </div>
+      <button
+        type="button"
+        className="subtle"
+        disabled={paused || !actions.allowed("computer.choose-workspace")}
+        onClick={() => void choose()}
+      >
+        {adding ? "Checking workspace…" : "+ Add workspace"}
+      </button>
+      <p className="description">
+        Adding a workspace checks it at once. Commands lets ChatGPT run git,
+        tests and builds; each run still asks you first. Command access is
+        shared by all workspaces.
+      </p>
+      {settings.computer.workspaces.length === 0 && (
+        <p className="description">Add a workspace to continue.</p>
       )}
-      <div className="workspace-add">
-        <div className="control-row">
+      {folderFlow.access.requiresReadback() && (
+        <div role="status">
+          <p>
+            The last workspace check could not be confirmed. Check its saved
+            result before continuing.
+          </p>
           <button
             type="button"
-            className="primary"
-            disabled={
-              adding ||
-              folderFlow.busy ||
-              folderFlow.access.requiresReadback() ||
-              !actions.allowed("computer.choose-workspace")
-            }
-            onClick={() => void choose()}
+            className="text-button"
+            onClick={() => void actions.refresh()}
           >
-            {adding ? "Connecting workspace…" : "Add workspace…"}
+            Refresh status
           </button>
-          {folderFlow.access.requiresReadback() && (
-            <button
-              type="button"
-              className="subtle"
-              onClick={() => void actions.refresh()}
-            >
-              Refresh status
-            </button>
-          )}
         </div>
-        <p className="description">
-          Added workspaces use Read &amp; write. Farol checks access and
-          connects automatically when the connection is configured. Change
-          access or enable commands in workspace settings.
-        </p>
-        {!actions.allowed("computer.add-workspace") && (
-          <p className="description">
-            Workspace selection and approval are paused.{" "}
-            {actions.computerPauseReason}
-          </p>
-        )}
-        {settings.computer.workspaces.length === 0 && (
-          <p className="description">
-            No workspaces approved. Add a workspace to give ChatGPT access to
-            this Mac's files.
-          </p>
-        )}
-      </div>
+      )}
     </>
   );
 }
 // Draft admission binds presentation to the exact Computer scope. Local
 // selection is never a Computer grant or a replacement for the host guards.
-function workspaceScope(snapshot: WindowSnapshot, workspaceId: string) {
-  if (snapshot.configuration?.status !== "ready") return null;
-  const settings = snapshot.configuration.settings;
-  const workspace = settings.computer.workspaces.find(
-    (item) => item.workspaceId === workspaceId,
-  );
-  return workspace
-    ? JSON.stringify([
-        snapshot.buildId,
-        settings.computer.generation,
-        workspace.workspaceId,
-        workspace.root,
-        workspace.rootIdentity,
-        workspace.access,
-        workspace.excludedPaths,
-        workspace.gitHistoryApproved,
-        workspace.gitMetadata,
-      ])
-    : null;
-}
 function workspaceChecked(
   snapshot: WindowSnapshot,
   workspace: ApprovedProductWorkspace,
@@ -1363,397 +1375,6 @@ function workspaceChecked(
         snapshot.buildId,
       ),
     )
-  );
-}
-function workspaceCurrent(
-  snapshot: WindowSnapshot,
-  workspace: ApprovedProductWorkspace,
-) {
-  const settings =
-    snapshot.configuration?.status === "ready"
-      ? snapshot.configuration.settings
-      : null;
-  const verified = settings?.setup.computer.verified;
-  return (
-    workspaceChecked(snapshot, workspace) &&
-    settings?.setup.computer.reachable === "reachable" &&
-    verified?.workspaceId === workspace.workspaceId &&
-    verified.buildId === snapshot.buildId &&
-    verified.configRevision === settings?.computer.generation
-  );
-}
-function WorkspaceDetail({
-  workspace,
-  snapshot,
-  facade,
-  actions,
-  detailId,
-  setupStep,
-}: PageProps & { workspace: ApprovedProductWorkspace; detailId: string }) {
-  const name = folderDisplayName(workspace);
-  const scope = workspaceScope(snapshot, workspace.workspaceId);
-  const [draft, setDraft] = useState<{
-    access: ApprovedProductWorkspace["access"];
-    scope: string | null;
-  } | null>(null);
-  const [removal, setRemoval] = useState<{ scope: string | null } | null>(null);
-  const [stopReview, setStopReview] = useState(false);
-  const [stopResult, setStopResult] = useState<Intent | null>(null);
-  const feedback = useSettingsFeedback(facade);
-  const receipts = Object.values(feedback.intents).filter(
-    (intent) =>
-      intent.id.endsWith(`:${workspace.workspaceId}`) &&
-      /^settings:computer\.(?:check-folder|verify-workspace|update-access|remove-workspace):/u.test(
-        intent.id,
-      ),
-  );
-  const stopRequired = receipts.some(
-    (intent) =>
-      intent.state === "refused" && intent.code === "CONNECTOR_STOP_REQUIRED",
-  );
-  const checked =
-    workspaceChecked(snapshot, workspace) &&
-    (!setupStep || !actions.computerPauseReason);
-  const current = workspaceCurrent(snapshot, workspace);
-  const setupCurrent = current && !actions.computerPauseReason;
-  const completedReceipts = receipts.filter(
-    (intent) =>
-      intent.state === "applied" &&
-      (!/settings:computer\.(?:check-folder|verify-workspace):/u.test(
-        intent.id,
-      ) ||
-        checked),
-  );
-  const attentionReceipts = receipts.filter(
-    (intent) => !completedReceipts.includes(intent),
-  );
-  const receipt = (intent: Intent) => (
-    <p key={intent.id} className="notice" role="status">
-      {intent.id.startsWith("settings:computer.update-access:")
-        ? "Save access: "
-        : intent.id.startsWith("settings:computer.remove-workspace:")
-          ? "Remove workspace: "
-          : "Verify workspace: "}
-      {intent.state === "applied"
-        ? actionFeedback(intent, snapshot)
-        : (Object.values(feedback.pages).find(
-            (entry) => entry.result === intent,
-          )?.text ?? actionFeedback(intent, snapshot))}
-    </p>
-  );
-  const removalDescriptionId = useId();
-  const verifyKind = current
-    ? "computer.check-folder"
-    : "computer.verify-workspace";
-  const stale = draft !== null && (scope === null || draft.scope !== scope);
-  const removalStale =
-    removal !== null && (scope === null || removal.scope !== scope);
-  const access = draft?.access ?? workspace.access;
-  const changed = access !== workspace.access;
-  const admitScope = (latest: WindowSnapshot) =>
-    scope !== null && workspaceScope(latest, workspace.workspaceId) === scope;
-  return (
-    <section
-      id={detailId}
-      className="workspace-detail"
-      aria-label={`Workspace ${name}`}
-    >
-      <div className="workspace-heading">
-        <h3>
-          <svg
-            className="workspace-folder-icon"
-            viewBox={designIconViewBox}
-            aria-hidden="true"
-          >
-            <path d={designIconPath("folders")} />
-          </svg>
-          {name}
-        </h3>
-        <button
-          type="button"
-          className="subtle workspace-remove"
-          aria-label={`Remove workspace ${name}`}
-          aria-describedby={removalDescriptionId}
-          disabled={
-            !actions.allowed("computer.remove-workspace", workspace.workspaceId)
-          }
-          onClick={() => setRemoval({ scope })}
-        >
-          <svg
-            aria-hidden="true"
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-          >
-            <path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7" />
-          </svg>
-          Remove
-        </button>
-      </div>
-      <p className="workspace-path">
-        <code>{workspace.root}</code>
-      </p>
-      <p className="description">
-        Saved access:{" "}
-        {workspace.access === "read"
-          ? "Read-only"
-          : "Read & write · approval required"}
-        .
-      </p>
-      <p className="badges">
-        {checked ? "Access checked" : "Check access needed"}
-        {setupCurrent ? " · Current workspace" : ""}
-      </p>
-      {actions.computerPauseReason && (
-        <p className="notice workspace-pause" role="status">
-          Workspace changes are paused. {actions.computerPauseReason}
-        </p>
-      )}
-      <form
-        onKeyDown={(event) => {
-          if (event.key === "Escape") {
-            event.preventDefault();
-            setDraft(null);
-          }
-        }}
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!draft || !changed || stale) return;
-          void actions
-            .run(
-              {
-                kind: "computer.update-access",
-                workspaceId: workspace.workspaceId,
-                access,
-              },
-              admitScope,
-            )
-            .then((result) => {
-              // A refused/unknown save retains its draft and existing fence.
-              if (result?.state === "applied") {
-                setDraft((latest) => (latest === draft ? null : latest));
-              }
-            });
-        }}
-      >
-        <label className="setting-row">
-          Workspace access
-          <select
-            className="field"
-            value={access}
-            onChange={(event) =>
-              setDraft({
-                access: event.currentTarget
-                  .value as ApprovedProductWorkspace["access"],
-                scope: draft ? draft.scope : scope,
-              })
-            }
-          >
-            <option value="read">Read-only</option>
-            <option value="write">Read &amp; write</option>
-          </select>
-        </label>
-        <p className="description">
-          Changes with Read &amp; write still require approval.
-        </p>
-        {stale && (
-          <p className="notice" role="status">
-            Workspace access or identity changed while this draft was open.
-            Cancel to review the saved access before editing again.
-          </p>
-        )}
-        <div className="control-row" hidden={Boolean(setupStep && !draft)}>
-          <button
-            type="submit"
-            className="primary"
-            disabled={
-              !changed ||
-              !draft ||
-              stale ||
-              !actions.allowed("computer.update-access", workspace.workspaceId)
-            }
-          >
-            Save
-          </button>
-          <button
-            type="button"
-            className="subtle"
-            disabled={!draft && !setupStep}
-            onClick={() => {
-              setDraft(null);
-            }}
-          >
-            Cancel
-          </button>
-        </div>
-      </form>
-      {removal && (
-        <div
-          className="notice workspace-removal"
-          role="group"
-          aria-label={`Confirm removal of ${name}`}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              event.preventDefault();
-              setRemoval(null);
-            }
-          }}
-        >
-          <p>
-            Remove {name}? This revokes Farol access to this workspace and keeps
-            its files on disk.
-          </p>
-          {removalStale && (
-            <p role="status">
-              Workspace access or identity changed. Cancel and review the
-              workspace before removing it.
-            </p>
-          )}
-          <div className="control-row">
-            <button
-              type="button"
-              className="subtle"
-              disabled={
-                removalStale ||
-                !actions.allowed(
-                  "computer.remove-workspace",
-                  workspace.workspaceId,
-                )
-              }
-              onClick={() => {
-                void actions
-                  .run(
-                    {
-                      kind: "computer.remove-workspace",
-                      workspaceId: workspace.workspaceId,
-                    },
-                    admitScope,
-                  )
-                  .then((result) => {
-                    if (result?.state === "applied") setRemoval(null);
-                  });
-              }}
-            >
-              Confirm removal
-            </button>
-            <button
-              type="button"
-              className="subtle"
-              onClick={() => setRemoval(null)}
-            >
-              Keep workspace
-            </button>
-          </div>
-        </div>
-      )}
-      <div className="workspace-feedback" aria-label="Workspace action status">
-        {attentionReceipts.map(receipt)}
-        {stopRequired && (
-          <div className="workspace-stop-review">
-            <p className="description">
-              The last access action was refused because the connection was
-              running. If it has since stopped, review and submit the change
-              again. Farol will not repeat it automatically.
-            </p>
-            {!stopReview ? (
-              <button
-                type="button"
-                className="subtle"
-                disabled={!actions.allowed("connector.stop")}
-                onClick={() => setStopReview(true)}
-              >
-                Review stop connection
-              </button>
-            ) : (
-              <div role="group" aria-label="Confirm stop connection">
-                <p className="notice">
-                  Stopping disconnects Farol from ChatGPT. Finish current work
-                  before continuing. Your workspace draft stays here; submit it
-                  separately after the stop is confirmed.
-                </p>
-                <button
-                  type="button"
-                  className="subtle"
-                  disabled={!actions.allowed("connector.stop")}
-                  onClick={() => {
-                    setStopReview(false);
-                    void actions
-                      .run({ kind: "connector.stop" })
-                      .then(setStopResult);
-                  }}
-                >
-                  Stop connection
-                </button>
-                <button
-                  type="button"
-                  className="text-button"
-                  onClick={() => setStopReview(false)}
-                >
-                  Keep connection
-                </button>
-              </div>
-            )}
-            {stopResult && (
-              <p role="status" className="notice">
-                {stopResult.state === "applied"
-                  ? "Connection stop confirmed. Review the workspace and submit its change separately."
-                  : actionFeedback(stopResult)}
-              </p>
-            )}
-          </div>
-        )}
-        {receipts.some(
-          (intent) => intent.state === "unknown" || intent.state === "refused",
-        ) && (
-          <button
-            type="button"
-            className="text-button"
-            onClick={() =>
-              facade.navigate({ area: "settings", page: "diagnostics" })
-            }
-          >
-            Workspace diagnostics
-          </button>
-        )}
-        <details className="workspace-technical">
-          <summary>Access details and activity</summary>
-          <p className="description">
-            {setupStep && setupCurrent
-              ? "Current workspace for Connection. Access is checked for this build and saved scope. Continue when ready."
-              : current
-                ? "Current workspace for Connection. Verify workspace checks access without changing its binding."
-                : "Verify workspace checks access and prepares this workspace for Connection."}
-          </p>
-          <p className="description">
-            Farol checks access and restores the connection after saving.
-          </p>
-          {completedReceipts.map(receipt)}
-        </details>
-      </div>
-      {(!setupStep || !setupCurrent) && (
-        <Command
-          actions={actions}
-          className="primary"
-          disabled={Boolean(draft || removal)}
-          command={{ kind: verifyKind, workspaceId: workspace.workspaceId }}
-          admit={(latest) =>
-            admitScope(latest) &&
-            workspaceCurrent(latest, workspace) === current
-          }
-        >
-          Verify workspace
-        </Command>
-      )}
-      <p
-        id={removalDescriptionId}
-        className="description workspace-removal-note"
-      >
-        Remove revokes Farol access. Files on disk are kept.
-      </p>
-    </section>
   );
 }
 function FolderOptions({
