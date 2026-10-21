@@ -28,10 +28,9 @@ import (
 // the existing Go owners. The desktop selects it (`run-live-release-helper`)
 // whenever no promotion lease is transferred. It accepts apply and rollback, each
 // with or without relaunch, and recover with relaunch only (offline recover
-// refuses before any IO). Relaunch launches only after an apply or a recovery
-// settled verified (Milestone.Execute); a rollback with relaunch true, and a
-// recovery that settled cancelled or rolled_back, never launch, exactly as
-// Python. Recover alone attaches the boot-adapted recovery policy owner
+// refuses before any IO). Requested relaunch follows verified target installation
+// or restoration of the source as rolled_back (Milestone.Execute). Cancelled
+// recovery stays closed. Recover alone attaches the boot-adapted recovery policy owner
 // (releasehelperrecovery.go) to its Milestone. The closed composition
 // (releasehelperclosed*.go) still refuses relaunch and recover; the scope state,
 // readiness, execution and terminal classification are the same owners it uses.
@@ -40,7 +39,7 @@ import (
 //
 //	parse -> validate -> routes -> custody check -> update lock -> original
 //	running marker -> pre-ACK readiness -> predecessor identity -> waiting_for_exit
-//	-> wait for that exact process to exit -> promotion lease + Quit proof ->
+//	-> wait for that exact process to exit -> promotion lease + diagnostic Quit observation ->
 //	custody check -> callback scope (Execute once).
 //
 // There is no continuation channel and no inherited lease: fd3 is the request
@@ -68,8 +67,8 @@ type liveHelperAdmission interface {
 	Confirm(context.Context) error
 	// Wait observes that exact process exit within the original bound.
 	Wait(context.Context, time.Time) error
-	// Quit acquires the promotion lease and verifies the confirmed Quit receipt
-	// (Python owner_lease + confirmed_quit).
+	// Quit acquires the promotion lease after observed exit. Drain status is
+	// diagnostic only; it does not prevent application bundle replacement.
 	Quit(context.Context) error
 }
 
@@ -274,6 +273,12 @@ func withLiveReleaseHelperDependencies(ctx context.Context, files liveHelperFile
 		}
 		defer func() { err = closedHelperJoin(exposed, err, closeRoutes()) }()
 		return refusal.beforeCallback(routes.WithFiles(effective, refusal.settle(func(borrow helperroutes.Files) (err error) {
+			writeReleaseHelperLog(borrow.Operation, "starting", "")
+			defer func() {
+				if err != nil {
+					writeReleaseHelperLog(borrow.Operation, "failed", helperLogCode(err))
+				}
+			}()
 			admission, err := deps.admission(borrow, request, expected, until)
 			if err != nil {
 				return refusal.refuse(err)
@@ -359,6 +364,7 @@ func withLiveReleaseHelperDependencies(ctx context.Context, files liveHelperFile
 			if budget := deps.now().Add(time.Duration(request.WaitSeconds) * time.Second); budget.Before(waitUntil) {
 				waitUntil = budget
 			}
+			writeReleaseHelperLog(borrow.Operation, "waiting_for_exit", "")
 			if err = admission.Wait(effective, waitUntil); err != nil {
 				return closedHelperFail(true, err)
 			}
@@ -368,6 +374,7 @@ func withLiveReleaseHelperDependencies(ctx context.Context, files liveHelperFile
 			if err = check(); err != nil {
 				return err
 			}
+			writeReleaseHelperLog(borrow.Operation, "predecessor_exited", "")
 			state := &closedReleaseHelperState{active: true, files: borrow, request: closedHelperRequestCopy(request), original: effective, until: until, admission: admission, milestone: milestone, readiness: readiness, execution: deps.execute, relaunch: relaunch, updateHeld: true}
 			scoped = state
 			defer func() {
@@ -417,6 +424,7 @@ const (
 )
 
 type liveHelperNativeAdmission struct {
+	quitNote          string
 	files             helperroutes.Files
 	until             time.Time
 	live              *handoff.Live
@@ -480,10 +488,8 @@ func (a *liveHelperNativeAdmission) Check(ctx context.Context) error {
 		if err := a.promotion.Verify(ctx); err != nil {
 			return err
 		}
-		// Rechecks bind to the first physically verified receipt bytes.
-		if err := a.live.VerifyQuit(ctx, false); err != nil {
-			return err
-		}
+		// The original process exit and held promotion lease admit the swap.
+		// A drain receipt is diagnostic and cannot revoke that observed exit.
 	}
 	return closedHelperBounds(ctx, a.until)
 }
@@ -531,7 +537,8 @@ func (a *liveHelperNativeAdmission) Quit(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err = a.live.VerifyQuit(ctx, false); err != nil {
+	a.quitNote, err = a.live.ObserveUpdateQuit(ctx)
+	if err != nil {
 		return err
 	}
 	a.phase.Store(liveHelperPhaseQuit)

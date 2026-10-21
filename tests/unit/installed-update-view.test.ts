@@ -408,3 +408,17 @@ describe("installed update view", () => {
     expect(f.onCommand).not.toHaveBeenCalled();
   });
 });
+
+it("reassures after a settled failure using the actual installed version", () => {
+  const f = fixture();
+  f.view.setInstalledIdentity("0.2.8-owner.beta.5");
+  f.view.render({
+    phase: "failed",
+    code: "UPDATE_HELPER_EXITED",
+    recoveryRequired: false,
+  });
+  expect(f.node("summary").textContent).toContain(
+    "The update didn't finish. Farol 0.2.8-owner.beta.5 is still installed and works.",
+  );
+  expect(f.node("summary").textContent).not.toContain("Recovery required");
+});

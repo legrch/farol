@@ -183,26 +183,24 @@ func TestRejectedTargetRestoresSourceBeforeSettledResult(t *testing.T) {
 	if err != nil || result == nil || result.Result != (Result{Phase: "rolled_back", Code: "target_verification"}) || !r.reject || r.phase != "rolled_back" || len(r.trees) != 2 || r.trees[port.App].build != r.request.Source || r.trees[port.Failed].build != r.request.Target {
 		t.Fatalf("settlement=%#v err=%v state=%#v", result, err, r)
 	}
-	want := []string{"entries", "verify:2:alpha-1", "write:rollback_started", "fence", "exchange:0:2", "fence", "rename:2:3", "reject", "verify:0:alpha-1", "write:rolled_back"}
+	want := []string{"read", "entries", "verify:2:alpha-1", "write:rollback_started", "fence", "exchange:0:2", "fence", "rename:2:3", "reject", "verify:0:alpha-1", "write:rolled_back"}
 	if !reflect.DeepEqual(r.trace[10:], want) {
 		t.Fatalf("rejection order: %v", r.trace)
 	}
 }
 
-func TestTargetVerificationErrorsDoNotBecomeAutomaticRollback(t *testing.T) {
+func TestTargetVerificationReadErrorRollsBackKnownPair(t *testing.T) {
 	s, r := bindFixture(t, "apply")
-	cause := errors.Join(&port.HelperRecoveryFailure{Code: "tree", Phase: "refused"}, errors.New("opaque verification I/O"))
 	r.before = func(name string) error {
 		if name == "matches" {
-			return cause
+			return errors.New("verification I/O failure")
 		}
 		return nil
 	}
 	result, err := s.Apply(context.Background(), ApplyCommand{})
-	if result != nil || !errors.Is(err, cause) || r.reject || r.phase != "new_installed" || len(r.trees) != 2 || r.trees[port.App].build != r.request.Target || r.trees[port.Previous].build != r.request.Source {
-		t.Fatal("opaque target failure was treated as a negative verification")
+	if err != nil || result == nil || result.Result.Phase != "rolled_back" || result.Result.Code != "apply_failed" || r.trees[port.App].build != r.request.Source || r.phase != "rolled_back" {
+		t.Fatal("known pair was not restored after verification error", result, err, r.trace)
 	}
-	failureFixture(t, err, "internal", "new_installed", true, true)
 }
 
 func TestAutomaticRollbackNeverDisplacesReplacementOrCompletesWithoutRecord(t *testing.T) {
@@ -480,6 +478,34 @@ func TestCancellationAfterPortReturnNeverPublishesResult(t *testing.T) {
 			f, ok := err.(*Failure)
 			if !ok || f.Code != "canceled" || f.Internal || f.Uncertain != (point != "entries") {
 				t.Fatalf("late cancellation %#v", err)
+			}
+		})
+	}
+}
+
+// Inject each controlled post-swap failure once. The real runtime independently
+// refuses compensation for unknown effects or lost custody; this symbolic
+// table proves the application does not abandon a pair it can still restore.
+func TestControlledPostSwapFailuresAlwaysSettle(t *testing.T) {
+	for _, point := range []string{"verify:1:alpha-1", "fence", "rename:1:2", "write:new_installed", "matches", "write:verified"} {
+		t.Run(point, func(t *testing.T) {
+			s, r := bindFixture(t, "apply")
+			injected, exchanged := false, false
+			r.after = func(name string) {
+				if name == "exchange:0:1" {
+					exchanged = true
+				}
+			}
+			r.before = func(name string) error {
+				if exchanged && !injected && name == point {
+					injected = true
+					return errors.New("controlled failure")
+				}
+				return nil
+			}
+			result, err := s.Apply(context.Background(), ApplyCommand{})
+			if !injected || err != nil || result == nil || r.phase != "rolled_back" || r.trees[port.App].build != r.request.Source {
+				t.Fatal("controlled error did not settle", result, err, r.phase, r.trace)
 			}
 		})
 	}

@@ -278,7 +278,7 @@ func record(value release.Journal) records.Journal {
 	mapBuild := func(b release.Build) records.Build {
 		return records.Build{Digest: b.Digest, Version: b.Version, BuildID: b.BuildID}
 	}
-	return records.Journal{Schema: "farol.installed-update-journal/1", Operation: records.Operation{ID: value.Operation.ID, Source: mapBuild(value.Operation.Source), Target: mapBuild(value.Operation.Target)}, Phase: value.Phase}
+	return records.Journal{Schema: "farol.installed-update-journal/1", Operation: records.Operation{ID: value.Operation.ID, Source: mapBuild(value.Operation.Source), Target: mapBuild(value.Operation.Target)}, Phase: value.Phase, Note: value.Note}
 }
 
 func (r *Repo) revision(state *fileState, data []byte) string {

@@ -238,6 +238,7 @@ const DownloadIntent = z.strictObject({
 });
 const Journal = Operation.extend({
   schema: z.literal("farol.installed-update-journal/1"),
+  note: z.literal("predecessor_drain_unconfirmed").optional(),
   phase: z.enum([
     "prepared",
     "predecessor_saved",
@@ -1059,6 +1060,19 @@ async function observeCompletedPrivateLaunch(
   });
 }
 
+/** Classify measured content; this value grants no journal-write authority. */
+export function installedUpdateContentSettlement(
+  current: { digest: string; version: string; buildId: string },
+  source: { digest: string; version: string; buildId: string },
+  target: { digest: string; version: string; buildId: string },
+): "completed" | "rolled_back" | null {
+  return sameBuild(current, target)
+    ? "completed"
+    : sameBuild(current, source)
+      ? "rolled_back"
+      : null;
+}
+
 /** Observe one explicit updater relaunch before the first startup lease acquire. */
 export async function waitForInstalledUpdateRelaunch(
   options: InstalledUpdateRelaunchOptions,
@@ -1115,7 +1129,8 @@ export async function waitForInstalledUpdateRelaunch(
   )
     throw new Error("UPDATE_RELAUNCH_IDENTITY_MISMATCH");
   if (
-    (hint.action === "apply" && hint.phase !== "completed") ||
+    (hint.action === "apply" &&
+      !["completed", "rollback_completed"].includes(hint.phase)) ||
     (hint.action === "rollback" && hint.phase !== "rollback_completed")
   )
     throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
@@ -2439,7 +2454,7 @@ async function createRuntime(
   const restoreFile = path.join(root, "restore-pending.json");
   let restorable: z.infer<typeof Retained> | null = null;
   let restoreKind: "recover" | "rollback" | null = null;
-  let declinedBuildId: string | null = null;
+
   const runTrusted = async (
     entry: string,
     args: string[],
@@ -2762,17 +2777,6 @@ async function createRuntime(
     const status = await observeInstalledHelper(record.helper);
     return status === "ended" || status === "changed";
   };
-  const confirmedRejectedTarget = async (
-    op: z.infer<typeof Operation>,
-    record: z.infer<typeof Retained>,
-  ) => {
-    await verifyBinding(op);
-    return (
-      (await confirmRejectedTarget(root, op, () =>
-        originalHelperEnded(record),
-      )) !== null
-    );
-  };
   const removeDownloadStage = async (
     download: z.infer<typeof DownloadStage>,
   ) => {
@@ -2896,7 +2900,8 @@ async function createRuntime(
     for await (const entry of await fs.opendir(directory)) {
       if (
         entry.name !== "staged.app" &&
-        entry.name !== INSTALLED_SLOT_BINDING_FILE
+        entry.name !== INSTALLED_SLOT_BINDING_FILE &&
+        entry.name !== "helper.log.jsonl"
       )
         throw new Error("UPDATE_PREPARATION_UNRECONCILED");
     }
@@ -3502,21 +3507,55 @@ async function createRuntime(
             return known("UPDATE_RESTORE_OUTCOME_UNKNOWN");
           restoreExitedUnchanged = true;
         }
-        let settled = false;
+        const interrupted = [
+          "prepared",
+          "predecessor_saved",
+          "new_installed",
+          "rollback_started",
+        ].includes(journal.phase);
+        if (interrupted) {
+          if (!(await originalHelperEnded(retained)))
+            return known("UPDATE_HELPER_EXIT_UNCONFIRMED");
+          const phase = installedUpdateContentSettlement(
+            current,
+            op.source,
+            op.target,
+          );
+          if (!phase) return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+          // Recheck the same content and journal before publishing settlement.
+          // Content decides success; companion bundles are retained as evidence.
+          if (
+            !sameBuild(await readBuild(slot), current) ||
+            (await readJournal(op)).phase !== journal.phase
+          )
+            return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+          journal.phase = phase;
+          await writeRecord(
+            path.join(root, op.operationId, "journal.json"),
+            journal,
+          );
+        }
+        if (
+          sameBuild(current, op.source) &&
+          !(await originalHelperEnded(retained))
+        )
+          return known("UPDATE_HELPER_EXIT_UNCONFIRMED");
+        let settled = interrupted;
         let rollbackVersion: string | undefined;
         if (sameBuild(current, op.target)) {
-          const predecessorName =
-            (await optionalBuild(op, "previous.app")) !== null
-              ? "previous.app"
-              : "staged.app";
-          const predecessor = await optionalBuild(op, predecessorName);
-          if (!predecessor || !sameBuild(predecessor, op.source))
+          let predecessor: z.infer<typeof AcceptedBuild> | null = null;
+          try {
+            predecessor = await optionalBuild(op, "previous.app");
+          } catch {
+            /* Preserved evidence is not installed content. */
+          }
+          if (!interrupted && predecessor && !sameBuild(predecessor, op.source))
             return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
-          settled =
-            predecessorName === "previous.app" &&
-            TARGET_PHASES.includes(journal.phase);
+          settled ||= TARGET_PHASES.includes(journal.phase);
           if (
             settled &&
+            predecessor &&
+            sameBuild(predecessor, op.source) &&
             !legacyPredecessorRequiresStateRecovery(
               op.source.version,
               op.target.version,
@@ -3524,24 +3563,9 @@ async function createRuntime(
           )
             rollbackVersion = op.source.version;
         } else if (sameBuild(current, op.source)) {
-          const rolledBack = ROLLED_BACK_PHASES.includes(journal.phase);
-          const rejected =
-            journal.phase === "rolled_back" &&
-            (await confirmedRejectedTarget(op, retained));
-          if (!rejected) {
-            const other = rolledBack
-              ? await optionalBuild(op, "failed.app")
-              : journal.phase === "rollback_started"
-                ? ((await optionalBuild(op, "failed.app")) ??
-                  (await optionalBuild(op, "previous.app")))
-                : await optionalBuild(op, "staged.app");
-            if (!other || !sameBuild(other, op.target))
-              return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
-          }
-          settled = [...ROLLED_BACK_PHASES, ...CANCELLED_PHASES].includes(
+          settled ||= [...ROLLED_BACK_PHASES, ...CANCELLED_PHASES].includes(
             journal.phase,
           );
-          if (settled) declinedBuildId = op.target.buildId;
         } else return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
         restorable = retained;
         restoreKind = settled
@@ -3591,7 +3615,15 @@ async function createRuntime(
         });
         if (fromReady) await fs.unlink(readyFile);
         if (pending) await fs.unlink(restoreFile);
+        const failedApply =
+          fromReady && !pending && sameBuild(current, op.source);
         retained = null;
+        if (failedApply)
+          return {
+            ok: false,
+            code: "UPDATE_ROLLED_BACK",
+            recoveryRequired: false,
+          };
         return {
           ok: true,
           update: null,
@@ -3698,7 +3730,6 @@ async function createRuntime(
         };
       }
       candidate =
-        found.value?.manifest.buildId === declinedBuildId ||
         found.value?.manifest.version === preferences.skipped?.version
           ? null
           : found.value;
@@ -3821,8 +3852,6 @@ async function createRuntime(
               )
             )
               return known("UPDATE_LOCAL_VERSION_MISMATCH");
-            if (manifest.buildId === declinedBuildId)
-              return known("UPDATE_LOCAL_TARGET_DECLINED");
             return stageSelectedUpdate(manifest, async (verifyPackage) => {
               const imported = await transport.importLocal(
                 localArchive.path,

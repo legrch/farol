@@ -1,6 +1,7 @@
 package apptree
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -30,12 +31,13 @@ const (
 )
 
 type fingerprint struct {
-	// Access time is excluded because observing a tree may update it. Compare
-	// change/modify timestamps, size and link count as well as object identity.
-	device, inode                                  uint64
-	mode, uid, gid                                 uint32
-	links                                          uint64
-	size, mtimeSec, mtimeNano, ctimeSec, ctimeNano int64
+	// Timestamps are not content. macOS may touch a freshly installed bundle
+	// while it is being verified. Keep physical identity and safe file shape;
+	// the tree digest and build documents establish accepted content.
+	device, inode  uint64
+	mode, uid, gid uint32
+	links          uint64
+	size           int64
 }
 
 func (s fingerprint) kind() byte {
@@ -123,6 +125,7 @@ func openDirOwned(ctx context.Context, parent int, name string, want fingerprint
 type entry struct {
 	stat fingerprint
 	link string
+	sum  []byte
 }
 type inventory struct {
 	entries         map[string]entry
@@ -323,11 +326,19 @@ func (s *inventory) walk(ctx context.Context, fd int, prefix string, depth int, 
 				return refuse(CodeLimit)
 			}
 			s.bytes += st.size
-			if !again {
-				sum, e := s.read(ctx, fd, name, st, nil)
-				if e != nil {
+			sum, e := s.read(ctx, fd, name, st, nil)
+			if e != nil {
+				return e
+			}
+			if again {
+				if !bytes.Equal(sum, rec.sum) {
+					return refuse(CodeChanged)
+				}
+			} else {
+				if e := s.retain(len(sum)); e != nil {
 					return e
 				}
+				rec.sum = sum
 				s.digest.Write(sum)
 			}
 		}

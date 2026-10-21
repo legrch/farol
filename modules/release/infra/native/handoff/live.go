@@ -259,3 +259,20 @@ func recordFields(data []byte) (map[string]json.RawMessage, error) {
 	}
 	return fields, nil
 }
+
+// ObserveUpdateQuit is diagnostic after the original process has actually exited.
+// An unclean drain affects profile work, not the application bundle being swapped.
+// Offline recovery retains its separate strict VerifyQuit contract.
+func (l *Live) ObserveUpdateQuit(ctx context.Context) (note string, err error) {
+ err = l.run(ctx, func(ctx context.Context, _ int, state int) error {
+  if !l.state.stopped || !l.state.markerCaptured { return ErrProcessUnknown }
+  if _, present, e := named(ctx, state, "running.json", ErrProcessUnknown); e != nil || present {
+   note = "predecessor_drain_unconfirmed"
+  }
+  data, e := readQuit(ctx, state)
+  if e != nil { note = "predecessor_drain_unconfirmed"; return nil }
+  if _, e := quitTimestamp(data); e != nil { note = "predecessor_drain_unconfirmed" }
+  return nil
+ })
+ return
+}

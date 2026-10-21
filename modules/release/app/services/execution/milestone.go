@@ -53,7 +53,8 @@ func (s *Milestone) Inspect(ctx context.Context, observation port.HelperInstalla
 // Execute is called only AFTER actual native admission. Apply/rollback and live
 // recovery require the pre-ACK observation, then repeat it before the first
 // effect. Offline recovery keeps the original crash-gap reconciliation path.
-// Unknown errors never trigger another policy, compensation or relaunch.
+// Unknown native effects remain fenced. Apply compensates a confirmed swap
+// only while its original runtime retains known custody.
 func (s *Milestone) Execute(ctx context.Context, native AdmittedRuntime, ready *Readiness, launch port.HelperRelaunchEffects) (*Result, error) {
 	if s == nil || s.attempt == nil {
 		return nil, &Failure{Code: "internal", Phase: "refused", Internal: true}
@@ -142,6 +143,23 @@ func (s *Milestone) Execute(ctx context.Context, native AdmittedRuntime, ready *
 		}
 		result.Phase = o.phase
 	}
+	if s.request.Relaunch && result.Phase == "rolled_back" {
+		previous, ok := launch.(port.HelperRollbackRelaunchEffects)
+		if !ok {
+			return nil, o.refuse("launch_unavailable")
+		}
+		if err := o.write("rollback_launch_requested"); err != nil {
+			return nil, err
+		}
+		if err := o.call(true, func() error { return previous.LaunchPrevious(o.ctx) }); err != nil {
+			return nil, err
+		}
+		if err := o.write("rollback_completed"); err != nil {
+			return nil, err
+		}
+		result.Phase = o.phase
+	}
+
 	if err := o.fence(); err != nil {
 		return nil, err
 	}

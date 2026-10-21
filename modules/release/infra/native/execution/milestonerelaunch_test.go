@@ -320,9 +320,8 @@ func TestMilestoneRelaunchUnknownOpenOutcomeNeverCompletes(t *testing.T) {
 	}
 }
 
-// Rollback may ask for relaunch (the desktop's Roll back button does), but only
-// a verified apply launches: nothing is measured, built or opened.
-func TestMilestoneRelaunchRollbackNeverLaunches(t *testing.T) {
+// Rollback launches the accepted source from its restored absolute slot.
+func TestMilestoneRelaunchRollbackLaunchesRestoredSource(t *testing.T) {
 	f := newFakeRelaunchLifecycle(t)
 	m, ready := f.prepare(t, "apply", false)
 	result, err := f.run(t, m, ready)
@@ -338,12 +337,16 @@ func TestMilestoneRelaunchRollbackNeverLaunches(t *testing.T) {
 	if err != nil {
 		t.Fatal(describe(err))
 	}
-	if result == nil || *result != (executionapp.Result{Phase: "rolled_back"}) {
+	if result == nil || *result != (executionapp.Result{Phase: "rollback_completed"}) {
 		t.Fatal("rollback with relaunch did not settle rolled_back", result)
 	}
-	f.physical(t, f.repo, "rolled_back")
-	if f.measures != 0 || f.builds != 0 || f.fake.opens != 0 {
-		t.Fatal("rollback launched", f.measures, f.builds, f.fake.opens)
+	f.physical(t, f.repo, "rollback_completed")
+	if f.measures != 1 || f.builds != 0 || f.fake.opens != 1 || f.fake.arguments[0][2] != f.app {
+		t.Fatal("restored source did not launch once", f.measures, f.builds, f.fake.opens)
+	}
+	hint := relaunchHintOf(t, f.fake.arguments[0][4])
+	if hint.BuildID != f.config.Request.Source.BuildID || hint.Phase != "rollback_completed" {
+		t.Fatal("wrong source launch hint", hint)
 	}
 	lifecycleRequireTree(t, f.app, f.source)
 }
@@ -443,4 +446,56 @@ func TestLaunchTargetBindsTheCaptureToTheInstallLocation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPostSwapContentMismatchRollsBackAndRelaunchesPrevious(t *testing.T) {
+	f := newFakeRelaunchLifecycle(t)
+	m, ready := f.prepare(t, "apply", true)
+	reverify := f.config.Reverify
+	changed := false
+	f.config.Reverify = func(ctx context.Context, request port.HelperRequest) error {
+		if err := reverify(ctx, request); err != nil {
+			return err
+		}
+		if !changed && f.diskPhase(t) == "new_installed" {
+			changed = true
+			return os.WriteFile(filepath.Join(f.app, "Contents/Info.plist"), []byte("invalid target content"), 0644)
+		}
+		return nil
+	}
+	result, err := f.run(t, m, ready)
+	if err != nil {
+		t.Fatal(describe(err))
+	}
+	if !changed || result == nil || result.Phase != "rollback_completed" || result.Code != "target_verification" || f.fake.opens != 1 || f.fake.arguments[0][2] != f.app {
+		t.Fatal(result, f.fake.arguments)
+	}
+	lifecycleRequireTree(t, f.app, f.source)
+	f.physical(t, f.repo, "rollback_completed")
+}
+
+func TestPostSwapMetadataOnlyChangeVerifiesAndRelaunchesTarget(t *testing.T) {
+	f := newFakeRelaunchLifecycle(t)
+	m, ready := f.prepare(t, "apply", true)
+	reverify := f.config.Reverify
+	changed := false
+	f.config.Reverify = func(ctx context.Context, request port.HelperRequest) error {
+		if err := reverify(ctx, request); err != nil {
+			return err
+		}
+		if !changed && f.diskPhase(t) == "new_installed" {
+			changed = true
+			stamp := time.Now().Add(time.Hour)
+			return os.Chtimes(f.app, stamp, stamp)
+		}
+		return nil
+	}
+	result, err := f.run(t, m, ready)
+	if err != nil {
+		t.Fatal(describe(err))
+	}
+	if !changed || result == nil || result.Phase != "completed" || f.fake.opens != 1 {
+		t.Fatal(result, f.fake.arguments)
+	}
+	lifecycleRequireTree(t, f.app, f.target)
 }

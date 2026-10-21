@@ -30,6 +30,7 @@ vi.mock(
 );
 import fs from "node:fs/promises";
 import {
+  installedUpdateContentSettlement,
   waitForInstalledUpdateRelaunch,
   type InstalledUpdateRelaunchOptions,
 } from "../../src/apps/desktop/installed-update-runtime";
@@ -1006,6 +1007,7 @@ describe("installed updater startup correlation (pure ports only)", () => {
     ["cancel_completed", "recover"],
     ["rollback_completed", "recover"],
     ["rollback_completed", "rollback"],
+    ["rollback_completed", "apply"],
   ] as const)(
     "binds %s/%s to the executing build and preserved companion",
     async (phase, action) => {
@@ -1966,4 +1968,30 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
     expect(adoptionMocks.find).not.toHaveBeenCalled();
     noEffects(f);
   });
+});
+
+describe("interrupted installed update content settlement", () => {
+  const source = {
+    digest: "1".repeat(64),
+    version: "0.2.8-owner.beta.5",
+    buildId: "2".repeat(64),
+  };
+  const target = {
+    digest: "3".repeat(64),
+    version: "0.2.8-owner.beta.6",
+    buildId: "4".repeat(64),
+  };
+  it.each([
+    [target, "completed"],
+    [source, "rolled_back"],
+    [{ ...target, digest: source.digest }, null],
+    [{ ...source, buildId: target.buildId }, null],
+  ] as const)(
+    "settles only matching content and identity %j",
+    (current, expected) => {
+      expect(installedUpdateContentSettlement(current, source, target)).toBe(
+        expected,
+      );
+    },
+  );
 });

@@ -75,6 +75,7 @@ export function createInstalledUpdateView(
   const railCopy = required("installed-update-notice-copy");
   const railMark = required("installed-update-notice-mark");
   let installedIdentity: string | null = null;
+  let installedVersion: string | null = null;
   let lastView: InstalledUpdateView | null = null;
   function text(node: HTMLElement, value: string): void {
     if (node.textContent !== value) node.textContent = value;
@@ -140,15 +141,20 @@ export function createInstalledUpdateView(
 
   const presenter = {
     setInstalledIdentity(version: string, buildVersion?: string): void {
+      installedVersion = version;
       installedIdentity = `${updateName(version)}${buildVersion ? ` (build ${buildVersion})` : ""}`;
       if (lastView) presenter.render(lastView);
     },
     render(view: InstalledUpdateView): void {
       lastView = view;
+      const failure =
+        view.phase === "failed" && !view.recoveryRequired && installedVersion
+          ? `The update didn't finish. Farol ${installedVersion} is still installed and works.`
+          : description(view);
       const message =
         installedIdentity && view.phase !== "unavailable"
-          ? `Installed: ${installedIdentity}. ${description(view)}`
-          : description(view);
+          ? `Installed: ${installedIdentity}. ${failure}`
+          : failure;
       const ready = view.phase === "ready";
       const available = view.phase === "available";
       const applying = view.phase === "applying";

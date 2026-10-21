@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"errors"
 
 	"github.com/legrch/farol/modules/release/app/port"
 )
@@ -11,7 +12,7 @@ type ApplyResult struct{ Result Result }
 
 // Apply runs only after the existing owner admits mutation following the
 // original process/continuation proof. Rechecking trees supplies no such proof.
-func (s *Service) Apply(ctx context.Context, _ ApplyCommand) (*ApplyResult, error) {
+func (s *Service) Apply(ctx context.Context, _ ApplyCommand) (result *ApplyResult, failure error) {
 	o, err := s.operation(ctx, "apply")
 	if err != nil {
 		return nil, err
@@ -45,6 +46,36 @@ func (s *Service) Apply(ctx context.Context, _ ApplyCommand) (*ApplyResult, erro
 	if err := o.exchange(port.App, port.Staged, e.App.Identity, e.Staged.Identity); err != nil {
 		return nil, err
 	}
+	// The exchange returned success. On every later failure, compensate only
+	// while the original runtime can still fence its route and identify the pair.
+	// Unknown native effects remain fenced; startup reconciles their actual bytes.
+	defer func() {
+		if failure == nil || o.ctx.Err() != nil {
+			return
+		}
+		original := failure
+		phase, err := o.runtime.ReadPhase(o.ctx)
+		if err == nil {
+			o.phase = phase
+			result, err = o.reject(e.Staged.Identity, e.App.Identity)
+		}
+		if err != nil {
+			if refused, ok := err.(*Failure); ok {
+				copy := *refused
+				copy.Cause = errors.Join(original, copy.Cause)
+				failure = &copy
+			} else {
+				failure = errors.Join(original, err)
+			}
+			return
+		}
+		result.Result.Code = "apply_failed"
+		var refused *Failure
+		if errors.As(original, &refused) && refused.Code == "target_verification" {
+			result.Result.Code = "target_verification"
+		}
+		failure = nil
+	}()
 	if err := o.verify(port.Staged, o.request.Source); err != nil {
 		return nil, err
 	}
@@ -66,7 +97,7 @@ func (s *Service) Apply(ctx context.Context, _ ApplyCommand) (*ApplyResult, erro
 		return nil, err
 	}
 	if !match {
-		return o.reject(e.Staged.Identity, e.App.Identity)
+		return nil, o.refuse("target_verification")
 	}
 	if err := o.write("verified"); err != nil {
 		return nil, err
@@ -82,10 +113,18 @@ func (o *operation) reject(target, source port.HelperIdentity) (*ApplyResult, er
 	if !owned(e.App) || e.App.Identity != target {
 		return nil, o.refuse("target_uncertain")
 	}
-	if !owned(e.Previous) || e.Previous.Identity != source || e.Staged.Present || e.Failed.Present || e.RejectedTarget.Present {
+	predecessor := port.Previous
+	if !e.Previous.Present && owned(e.Staged) && e.Staged.Identity == source {
+		predecessor = port.Staged
+	}
+	pair := e.Previous
+	if predecessor == port.Staged {
+		pair = e.Staged
+	}
+	if !owned(pair) || pair.Identity != source || (predecessor == port.Previous && e.Staged.Present) || e.Failed.Present || e.RejectedTarget.Present {
 		return nil, o.refuse("rollback_pair")
 	}
-	if err := o.verify(port.Previous, o.request.Source); err != nil {
+	if err := o.verify(predecessor, o.request.Source); err != nil {
 		return nil, err
 	}
 	if err := o.write("rollback_started"); err != nil {
@@ -94,13 +133,20 @@ func (o *operation) reject(target, source port.HelperIdentity) (*ApplyResult, er
 	if err := o.fence(); err != nil {
 		return nil, err
 	}
-	if err := o.exchange(port.App, port.Previous, target, source); err != nil {
+	// Reverse operand order for an early rollback: this is compensation, not
+	// another attempt at the original App/Staged exchange.
+	if predecessor == port.Staged {
+		err = o.exchange(port.Staged, port.App, source, target)
+	} else {
+		err = o.exchange(port.App, port.Previous, target, source)
+	}
+	if err != nil {
 		return nil, err
 	}
 	if err := o.fence(); err != nil {
 		return nil, err
 	}
-	if err := o.rename(port.Previous, port.Failed, target); err != nil {
+	if err := o.rename(predecessor, port.Failed, target); err != nil {
 		return nil, err
 	}
 	if err := o.call(true, func() error { return o.runtime.RejectTarget(o.ctx, target) }); err != nil {

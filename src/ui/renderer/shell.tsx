@@ -617,15 +617,17 @@ function Update({
           : update.phase === "available"
             ? `Version ${updateVersionLabel(update.version)} is available to download.`
             : update.phase === "failed"
-              ? updateResultMessage(
-                  "failed",
-                  update.recoveryRequired,
-                  update.code,
-                )
+              ? !update.recoveryRequired && snapshot.installedVersion
+                ? `The update didn't finish. Farol ${snapshot.installedVersion.version} is still installed and works.`
+                : updateResultMessage(
+                    "failed",
+                    update.recoveryRequired,
+                    update.code,
+                  )
               : update.phase === "unavailable"
                 ? updateResultMessage("unavailable")
                 : update.phase === "recovery"
-                  ? `Recovery required for ${update.version}`
+                  ? "The update didn’t finish. Check Diagnostics to confirm the installed application."
                   : update.phase === "applying"
                     ? `Applying version ${update.version}…`
                     : update.phase === "checking"

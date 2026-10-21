@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"github.com/legrch/farol/modules/release/infra/native/helperprotocol"
 	"os"
 
 	"github.com/legrch/farol/modules/release/app/port"
@@ -212,4 +213,51 @@ func launchBound(request port.HelperRequest, shared bool, capturePath string, ar
 		expected = capturePath
 	}
 	return expected != "" && arguments[2] == expected
+}
+
+// LaunchPrevious never opens previous.app: rollback has restored the accepted
+// source into the canonical absolute slot before this method is reachable.
+func (r *runtime) LaunchPrevious(ctx context.Context) error {
+	self, err := r.SelfIdentity(ctx)
+	if err != nil {
+		return err
+	}
+	return r.invoke(ctx, "launch:previous", func(c context.Context) error {
+		verify := func(ctx context.Context) error {
+			if err := r.fence(ctx); err != nil {
+				return err
+			}
+			view, err := r.reader.ReadHelper(ctx)
+			if err != nil {
+				return err
+			}
+			if view == nil || view.Value == nil || view.Value.Operation != operation(r.config.Request) || view.Value.Phase != "rollback_launch_requested" {
+				return fail("launch_phase", false, false, nil)
+			}
+			negative, err := r.tree(ctx, port.App, r.config.Request.Source)
+			if err != nil {
+				return err
+			}
+			if negative {
+				return fail("tree_mismatch", false, false, nil)
+			}
+			return nil
+		}
+		if err := verify(c); err != nil {
+			return err
+		}
+		hint, err := (helperprotocol.JSONCodec{}).Relaunch(port.HelperRelaunchHint{OperationID: r.config.Request.OperationID, Action: r.config.Request.Action, Phase: "rollback_completed", BuildID: r.config.Request.Source.BuildID, Helper: self})
+		if err != nil {
+			return err
+		}
+		app := r.config.Request.Home + "/Applications/Farol.app"
+		if r.config.Files.SharedParent {
+			app = "/Applications/Farol.app"
+		}
+		open := r.config.open
+		if open == nil {
+			open = helperprocess.Open
+		}
+		return open(c, r.until, []string{"/usr/bin/open", "-a", app, "--args", "--farol-installed-update-relaunch=" + string(hint)}, verify)
+	})
 }

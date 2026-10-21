@@ -263,3 +263,24 @@ func TestInstallationComposesActualJournalAndRejectionWithSameOwner(t *testing.T
 		})
 	}
 }
+
+func TestQuitDiagnosticNotePersistsAcrossJournalPhases(t *testing.T) {
+	f, _ := installationFixture(t)
+	f.config.QuitNote = "predecessor_drain_unconfirmed"
+	phases := []string{}
+	f.config.PhaseLog = func(phase, code string) { phases = append(phases, phase) }
+	err := installScope(f, context.Background(), func(native port.HelperInstallationRuntime) error {
+		if err := native.Prepare(context.Background()); err != nil {
+			return err
+		}
+		return native.WritePhase(context.Background(), "new_installed")
+	})
+	must(t, err)
+	data, err := os.ReadFile(filepath.Join(f.path, "journal.json"))
+	must(t, err)
+	value, err := records.DecodeJournal(data, records.Operation{ID: f.config.Request.OperationID, Source: records.Build{Digest: f.config.Request.Source.Digest, Version: f.config.Request.Source.Version, BuildID: f.config.Request.Source.BuildID}, Target: records.Build{Digest: f.config.Request.Target.Digest, Version: f.config.Request.Target.Version, BuildID: f.config.Request.Target.BuildID}})
+	must(t, err)
+	if value.Note != "predecessor_drain_unconfirmed" || len(phases) != 2 || phases[1] != "new_installed" {
+		t.Fatal(value, phases)
+	}
+}

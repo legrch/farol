@@ -242,6 +242,15 @@ func (l *milestoneLaunch) LaunchTarget(_ context.Context, self port.HelperSelfId
 	})
 }
 
+func (l *milestoneLaunch) LaunchPrevious(context.Context) error {
+	return l.runtime.call("launch-previous", func() error {
+		if l.runtime.phase != "rollback_launch_requested" || l.runtime.trees[port.App].build != l.runtime.request.Source {
+			return errors.New("source not restored before launch")
+		}
+		return l.err
+	})
+}
+
 func TestHelperMilestoneApplyThroughDurableLaunch(t *testing.T) {
 	for _, location := range []string{"legacy", "shared"} {
 		t.Run(location, func(t *testing.T) {
@@ -312,10 +321,10 @@ func TestHelperMilestoneKnownLaunchFailureDoesNotCompleteOrReplay(t *testing.T) 
 	requireExecutionCode(t, err, "execution_attempt_unknown", true)
 }
 
-func TestHelperMilestoneCompensatesOnlyConfirmedNegative(t *testing.T) {
+func TestHelperMilestoneCompensatesAndRelaunchesPrevious(t *testing.T) {
 	for _, opaque := range []bool{false, true} {
 		t.Run(fmt.Sprint(opaque), func(t *testing.T) {
-			request, r := milestoneFixture("apply", true)
+			request, r := milestoneFixture("apply", false)
 			request.Relaunch = true
 			r.request = request
 			m, _ := testMilestone(context.Background(), request)
@@ -323,25 +332,24 @@ func TestHelperMilestoneCompensatesOnlyConfirmedNegative(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			cause := errors.New("private tree query failed")
 			r.before = func(name string) error {
 				if name == "matches" {
 					if opaque {
-						return cause
+						return errors.New("verification read failed")
 					}
 					r.match = false
 				}
 				return nil
 			}
 			result, err := m.Execute(context.Background(), r, ready, newMilestoneLaunch(request, r))
+			code := "target_verification"
 			if opaque {
-				requireExecutionCode(t, err, "internal", true)
-				if result != nil || !errors.Is(err, cause) || r.reject || r.phase != "new_installed" {
-					t.Fatal("opaque verification failure authorized compensation")
-				}
-			} else if err != nil || result == nil || *result != (Result{Phase: "rolled_back", Code: "target_verification"}) || !r.reject {
-				t.Fatal("confirmed negative was not durably compensated", result, err)
+				code = "apply_failed"
 			}
+			if err != nil || result == nil || *result != (Result{Phase: "rollback_completed", Code: code}) || !r.reject {
+				t.Fatal("failed update did not restore and relaunch source", result, err, r.trace)
+			}
+			indexTrace(t, r.trace, "launch-previous")
 			for _, s := range r.trace {
 				if s == "launch" || s == "capture" {
 					t.Fatal("failed target launched")
@@ -375,7 +383,7 @@ func TestHelperMilestoneRecoverRollbackAndHistoricalLaunch(t *testing.T) {
 				t.Fatal(err)
 			}
 			result, err := m.Execute(context.Background(), r, ready, newMilestoneLaunch(request, r))
-			want := map[string]string{"prepared": "cancelled", "verified": "completed", "launch_requested": "launch_requested", "completed": "completed", "rollback": "rolled_back"}[state]
+			want := map[string]string{"prepared": "cancelled", "verified": "completed", "launch_requested": "launch_requested", "completed": "completed", "rollback": "rollback_completed"}[state]
 			if err != nil || result == nil || result.Phase != want {
 				t.Fatal(result, err)
 			}

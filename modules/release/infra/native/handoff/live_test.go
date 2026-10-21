@@ -304,3 +304,34 @@ func TestLiveNativeCopiesShareObservationConsumption(t *testing.T) {
 		})
 	}
 }
+
+// Disposable profile route and a scripted waiter; no installed app is accessed.
+func TestUpdateQuitProceedsAfterNonCleanDrain(t *testing.T) {
+	for _, leftover := range []bool{false, true} {
+		t.Run(fmt.Sprint(leftover), func(t *testing.T) {
+			f := newFixture(t)
+			f.writeQuit(`{"schema":1,"at":"2026-10-15T12:00:01Z","drained":false,"unconfirmed":["work"]}`)
+			if leftover {
+				if err := os.WriteFile(filepath.Join(f.statePath, "running.json"), []byte(`{}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			l, err := NewLive(f.homePath, f.home, f.state, f.v.expected.StateIdentity, 42, f.v.expected.ProcessStart, &liveBoundWaiter{}, time.Now().Add(time.Minute))
+			if err != nil {
+				t.Fatal(err)
+			}
+			l.route.reopen = fixtureRoute
+			l.state.markerCaptured = true
+			if _, err := l.ObserveUpdateQuit(context.Background()); err == nil {
+				t.Fatal("absence was not observed")
+			}
+			if err := l.WaitExit(context.Background(), time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			note, err := l.ObserveUpdateQuit(context.Background())
+			if err != nil || note != "predecessor_drain_unconfirmed" {
+				t.Fatal(note, err)
+			}
+		})
+	}
+}

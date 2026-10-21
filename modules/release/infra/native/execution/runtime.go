@@ -23,9 +23,11 @@ import (
 // It must not reenter this runtime or the journal gate. The caller retains every
 // borrowed owner through With's actual return. No field alone grants authority.
 type Config struct {
-	Request port.HelperRequest
-	Files   helperroutes.Files
-	Journal port.HelperJournalRepository
+	QuitNote string
+	PhaseLog func(phase, code string)
+	Request  port.HelperRequest
+	Files    helperroutes.Files
+	Journal  port.HelperJournalRepository
 	// Rejection is required only by WithInstallation. It borrows the same
 	// operation descriptor and original JournalAdmission/gate as Journal.
 	Rejection port.HelperTargetRejectionRepository
@@ -275,6 +277,13 @@ func (r *runtime) invoke(ctx context.Context, effect string, fn func(context.Con
 		}
 	}
 	if err != nil {
+		if r.config.PhaseLog != nil {
+			code := "internal"
+			if f, ok := err.(*port.HelperRecoveryFailure); ok {
+				code = f.Code
+			}
+			r.config.PhaseLog("failed", code)
+		}
 		r.view = nil
 	}
 	return err
@@ -401,12 +410,15 @@ func (r *runtime) WritePhase(ctx context.Context, phase string) error {
 }
 
 func (r *runtime) persistJournal(ctx context.Context, revision, phase string) error {
-	value := release.Journal{Operation: operation(r.config.Request), Phase: phase}
+	value := release.Journal{Operation: operation(r.config.Request), Phase: phase, Note: r.config.QuitNote}
+	if value.Note == "" && r.view != nil && r.view.Value != nil {
+		value.Note = r.view.Value.Note
+	}
 	if _, err := records.EncodeJournal(records.Journal{Schema: "farol.installed-update-journal/1", Operation: records.Operation{
 		ID:     value.Operation.ID,
 		Source: records.Build{Digest: value.Operation.Source.Digest, Version: value.Operation.Source.Version, BuildID: value.Operation.Source.BuildID},
 		Target: records.Build{Digest: value.Operation.Target.Digest, Version: value.Operation.Target.Version, BuildID: value.Operation.Target.BuildID},
-	}, Phase: phase}); err != nil {
+	}, Phase: phase, Note: value.Note}); err != nil {
 		return fail("journal_invalid", false, false, err)
 	}
 	view, err := r.config.Journal.CompareAndSwap(ctx, revision, value)
@@ -419,6 +431,9 @@ func (r *runtime) persistJournal(ctx context.Context, revision, phase string) er
 	}
 	v, owned := *view, *view.Value
 	v.Value, r.view = &owned, &v
+	if r.config.PhaseLog != nil {
+		r.config.PhaseLog(phase, "")
+	}
 	return r.persistedFence(ctx)
 }
 
