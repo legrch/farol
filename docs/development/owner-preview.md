@@ -186,13 +186,22 @@ that no process or open file names another instance's root or an owner location
 (`~/Library/Application Support/Farol*`, `~/.farol`, `~/.codex`,
 `/Applications/Farol.app`), and that both instances exit drained.
 
-Known blockers, recorded in the receipt under `blocked` rather than worked
-around: a bundled Electron ignores the `HOME` it is started with when it
-resolves `appData`, so a launch without `FAROL_NEXT_E2E_APP_DATA` would select
-the owner's real profile; the witness reads that value with a probe application
-whose `userData` is fixed to a disposable path, and does not launch the product
-that way. A Codex child needs a live provider and is asserted absent, not
-witnessed. Environment rule per owned process: `HOME` must be set and inside that
+Override-free resolution is **not witnessed**, and the receipt keeps the row
+(`blocked[]`, `status: not_observed`, reference
+`NATIVE_APPDATA_IGNORES_HOME (documented)`) so it is not silently dropped. It is
+a documented fact, not a runtime measurement: on 2026-10-21 a bundled Electron
+(44.4.2, the version pinned in `package.json` and shipped in the package) started
+with a disposable `HOME` still reported the account's real
+`~/Library/Application Support` as its native `appData` (measured in receipt
+`344594de-13f1-4ef2-816b-488aa9a4bbb9` under
+`_output/preview/isolation/5201873407968a0db209fd6a2e8e23f920cd48ea860556d8f3255ae595bb1786/`).
+A launch without `FAROL_NEXT_E2E_APP_DATA` would therefore select the owner's
+real `Farol Preview` profile. The witness does not launch that way and does not
+measure it again: any process whose defaults point at the owner's real home
+could create files there, so the measurement is not repeated. A Codex child
+needs a live provider and is asserted absent, not witnessed.
+
+Environment rule per owned process: `HOME` must be set and inside that
 instance's own disposable root (`OWNED_PROCESS_HOME_MISSING`,
 `HOME_OUTSIDE_INSTANCE_ROOT`). `CODEX_HOME` is not required to be absent: if it
 is present it must lie inside that instance's own profile, never `~/.codex`, an
@@ -237,8 +246,7 @@ snapshots agree on the pid set (bounded; `TREE_UNSTABLE` otherwise), every
 per-pid check runs on the union of all pids ever seen, and after the quits every
 such pid must be gone (`PID_REMAINS`) and a rescan from the original parent must
 find no descendant (`NEW_DESCENDANT`). Every Electron the test starts is a tree
-of its own, including the native-appData probe: its pid is recorded the moment
-it exists, its descendants are followed while it runs, and it is never signalled.
+of its own and a teardown target: it is never signalled.
 
 Owner locations come from one source of truth: the roots the owner guard itself
 fingerprints, read at the start of the run from
@@ -260,8 +268,7 @@ excluded) is inspected through the fail-closed runner (`ps -U <uid>`) and the
 `KERN_PROCARGS2` reader, and each new process falls in exactly one class:
 
 - **survivor** (`ORPHAN_REMAINS`): its argv or environment contains a disposable
-  root of this run (every instance home, every launched-but-failed home, the
-  probe directory);
+  root of this run (every instance home and every launched-but-failed home);
 - **unverifiable**, which keeps `teardown.verified` false: its arguments cannot be
   read (`UNREADABLE`, with the errno), or its environment is withheld
   (`ENV_WITHHELD`) and **both** hold: (a) its executable is not under a system or

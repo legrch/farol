@@ -11,7 +11,6 @@ import { promisify } from "node:util";
 import {
   desktopAppDataPath,
   desktopIdentity,
-  ownerPreviewIdentity,
 } from "../../src/apps/desktop/desktop-environment.ts";
 import { parseQuitReceipt } from "../../src/apps/desktop/quit-receipt.ts";
 import { requireOwnerPreviewRuntimeIntegration } from "../../tooling/owner-preview-contract.mjs";
@@ -877,86 +876,6 @@ async function disposableRoot(temporary) {
   return { home, appData, proof };
 }
 
-// The native appData of a bundled Electron ignores the HOME it is started
-// with. A launch without the E2E override would therefore select the owner's
-// real profile, which this witness may not touch. Read the value with an
-// application that fixes its own userData to a disposable path before ready
-// and never opens a window; nothing is read from or written to the result.
-async function probeNativeAppData(executable, temporary, run) {
-  const directory = await fs.mkdtemp(
-    path.join(temporary, "farol-next-e2e-probe-"),
-  );
-  run.roots.add(directory);
-  await fs.chmod(directory, 0o700);
-  const userData = path.join(directory, "user-data");
-  await fs.writeFile(
-    path.join(directory, "package.json"),
-    JSON.stringify({ name: "farol-isolation-probe", main: "main.js" }),
-    { flag: "wx", mode: 0o600 },
-  );
-  await fs.writeFile(
-    path.join(directory, "main.js"),
-    `const { app } = require("electron");
-app.setPath("userData", process.env.PROBE_USER_DATA);
-app.setPath("sessionData", process.env.PROBE_USER_DATA);
-app.whenReady().then(() => {
-  process.stdout.write("PROBE:" + JSON.stringify({ appData: app.getPath("appData"), home: app.getPath("home"), envHome: process.env.HOME }) + "\\n");
-  app.quit();
-});
-`,
-    { flag: "wx", mode: 0o600 },
-  );
-  const home = path.join(directory, "home");
-  await fs.mkdir(home, { mode: 0o700 });
-  // The probe is a launched Electron like any other: its pid is recorded the
-  // moment it exists and its tree joins the teardown. It is never signalled;
-  // one that does not finish is left for the teardown to report.
-  const child = spawn(executable, [directory], {
-    env: {
-      HOME: home,
-      TMPDIR: temporary,
-      LANG: "en_US.UTF-8",
-      PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-      PROBE_USER_DATA: userData,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const target = {
-    kind: "probe",
-    pid: child.pid,
-    home: directory,
-    seen: new Set([child.pid]),
-  };
-  run.extraTargets.push(target);
-  let stdout = "";
-  child.stdout.on("data", (chunk) => {
-    stdout += chunk;
-  });
-  child.stderr.on("data", () => {});
-  let finished = null;
-  child.once("error", (error) => {
-    finished = { error };
-  });
-  child.once("exit", (code, signal) => {
-    finished = { code, signal };
-  });
-  const limit = Date.now() + 30000;
-  while (finished === null && Date.now() < limit) {
-    await scanTree(target);
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  await scanTree(target);
-  if (finished === null)
-    throw new Error("OWNER_PREVIEW_ISOLATION_PROBE_TIMEOUT");
-  if (finished.error || finished.code !== 0)
-    throw new Error(
-      `OWNER_PREVIEW_ISOLATION_PROBE_FAILED:${finished.error?.code ?? finished.code ?? finished.signal}`,
-    );
-  const line = stdout.split("\n").find((entry) => entry.startsWith("PROBE:"));
-  assert.ok(line, "OWNER_PREVIEW_ISOLATION_PROBE_SILENT");
-  return { ...JSON.parse(line.slice("PROBE:".length)), disposableHome: home };
-}
-
 async function launch(
   electron,
   kind,
@@ -1783,16 +1702,16 @@ async function treeSelfCheck() {
     await reasons(instance(1, 2), { ...clean, rescan: async () => [1, 9] }),
     ["9:NEW_DESCENDANT"],
   );
-  // A probe Electron whose helper outlives the probe parent: the probe is a
-  // teardown target like an instance, so the surviving helper is reported.
-  const probe = {
-    kind: "probe",
+  // A launched tree whose helper outlives its parent is reported: every tree
+  // the test starts is a teardown target like an instance.
+  const extra = {
+    kind: "extra",
     pid: 20,
-    home: "/probe-root",
+    home: "/extra-root",
     seen: new Set([20, 21]),
   };
   assert.deepEqual(
-    await reasons(probe, {
+    await reasons(extra, {
       ...clean,
       alive: (pid) => pid === 21,
       rescan: async () => [20],
@@ -2221,42 +2140,23 @@ export async function runOwnerPreviewIsolation(
   let server;
   let failure = null;
   // Everything this run creates that a survivor could carry: every disposable
-  // root, every launched child outside the instances (the probe), and the uid's
-  // pids that already existed when the run began.
-  const run = { roots: new Set(), extraTargets: [], preexisting: new Set() };
+  // root, and the uid's pids that already existed when the run began.
+  const run = { roots: new Set(), preexisting: new Set() };
   ownerState.exempt = run.roots;
   try {
     run.preexisting = new Set((await uidPids()).map((entry) => entry.pid));
     const temporary = await fs.realpath(os.tmpdir());
-    const previewExecutable = path.join(
-      verified.appPath,
-      "Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron",
-    );
-
-    // 1. Override-free resolution. Observed without a profile: where the native
-    // appData lands for a process whose HOME is disposable.
-    const probe = await probeNativeAppData(previewExecutable, temporary, run);
-    const realAppData = path.join(
-      os.userInfo().homedir,
-      "Library/Application Support",
-    );
-    assert.equal(probe.envHome, probe.disposableHome);
-    assert.equal(
-      probe.appData,
-      realAppData,
-      "native appData unexpectedly follows HOME",
-    );
-    assert.notEqual(
-      probe.appData,
-      path.join(probe.disposableHome, "Library/Application Support"),
-    );
+    // 1. Override-free resolution is not witnessed. A bundled Electron resolves
+    // its native appData to the account's real Application Support whatever HOME
+    // it is started with (measured 2026-10-21, see docs/development/owner-
+    // preview.md), so a launch without the E2E override would select the owner's
+    // real profile. Nothing here launches that way or measures it again; the row
+    // stays in the receipt so it is not silently dropped.
     receipt.blocked.push({
       dimension: "override-free-resolution",
+      status: "not_observed",
       code: "NATIVE_APPDATA_IGNORES_HOME",
-      detail:
-        "A bundled Electron started with a disposable HOME still reports the owner's real Application Support as appData, so a launch without FAROL_NEXT_E2E_APP_DATA would select the owner's real profile. Not launched.",
-      nativeAppData: probe.appData,
-      wouldSelect: ownerPreviewIdentity(probe.appData).userData,
+      reference: "NATIVE_APPDATA_IGNORES_HOME (documented)",
     });
     await checkpoint();
 
@@ -2459,13 +2359,10 @@ export async function runOwnerPreviewIsolation(
       receipt,
       failure,
       verify: () =>
-        verifyTeardown(
-          [
-            ...teardownTargets(instances, receipt.launches),
-            ...run.extraTargets,
-          ],
-          { roots: run.roots, preexisting: run.preexisting },
-        ),
+        verifyTeardown(teardownTargets(instances, receipt.launches), {
+          roots: run.roots,
+          preexisting: run.preexisting,
+        }),
       closeServer: async () => {
         if (!server) return;
         server.closeAllConnections();
