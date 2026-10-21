@@ -261,14 +261,56 @@ function touchesOwner(value, { text = false, reported = false } = {}) {
   const forms = isPath ? [value, canonical(value, reported)] : [value];
   // Inside this run's own disposable roots (after following symlinks) is never
   // an owner location; a symlink out of them is judged by where it leads.
-  if (
-    isPath &&
-    [...ownerState.exempt].some((root) => inside(forms[1], root, true))
-  )
+  const exemptRoot = isPath
+    ? [...ownerState.exempt].find((root) => inside(forms[1], root, true))
+    : undefined;
+  if (exemptRoot !== undefined) {
+    // Exempting a root that is itself an owner location would hide a write
+    // there: that is a hard failure, never an exemption.
+    const conflict = ownerConflict(exemptRoot);
+    if (conflict !== null)
+      throw new Error(
+        `OWNER_PREVIEW_ISOLATION_DISPOSABLE_ROOT_UNSAFE:${conflict}:${exemptRoot}`,
+      );
     return false;
+  }
   return ownerLocations().some((location) =>
     forms.some((form) => form.includes(location)),
   );
+}
+
+// A disposable root, or the parent it is created in, may never be an owner
+// location: not equal to the owner's home, not inside a guard root, ~/.farol,
+// ~/.codex, the installed app or any `Farol*` Application Support profile, and
+// not an ancestor of one (a parent that contains an owner location would put the
+// run's files beside it). Returns a code, or null when the path is clear.
+function ownerConflict(target) {
+  const resolved = canonical(target);
+  const home = canonical(os.userInfo().homedir);
+  if (resolved === home) return "OWNER_HOME";
+  const prefix = canonical(path.join(home, "Library/Application Support"));
+  const farolPrefix = path.join(prefix, "Farol");
+  if (resolved.startsWith(farolPrefix)) return "INSIDE_FAROL_PROFILE";
+  if (inside(farolPrefix, resolved)) return "CONTAINS_OWNER_LOCATION";
+  for (const location of ownerLocations()) {
+    const place = canonical(location);
+    if (inside(resolved, place)) return "INSIDE_OWNER_LOCATION";
+    if (inside(place, resolved)) return "CONTAINS_OWNER_LOCATION";
+  }
+  return null;
+}
+function assertSafeTemporaryParent(parent) {
+  const conflict = ownerConflict(parent);
+  if (conflict !== null)
+    throw new Error(
+      `OWNER_PREVIEW_ISOLATION_TEMP_PARENT_UNSAFE:${conflict}:${parent}`,
+    );
+}
+// The only way a disposable root is created: the parent is checked first, and
+// nothing is created if it conflicts with an owner location.
+async function mkdtempIn(parent, prefix, mkdtemp = fs.mkdtemp) {
+  assertSafeTemporaryParent(parent);
+  return mkdtemp(path.join(parent, prefix));
 }
 
 async function descendants(parent) {
@@ -881,7 +923,7 @@ async function openFiles(pid) {
 }
 
 async function disposableRoot(temporary) {
-  const home = await fs.mkdtemp(path.join(temporary, "farol-next-e2e-home-"));
+  const home = await mkdtempIn(temporary, "farol-next-e2e-home-");
   await fs.chmod(home, 0o700);
   const appData = path.join(home, "farol-e2e-app-data");
   await fs.mkdir(appData, { mode: 0o700 });
@@ -913,6 +955,11 @@ async function launch(
   const preview = kind === "owner-preview";
   const app = preview ? verified.appPath : verified.baseApp;
   const root = await disposableRoot(temporary);
+  const conflict = ownerConflict(root.home);
+  if (conflict !== null)
+    throw new Error(
+      `OWNER_PREVIEW_ISOLATION_DISPOSABLE_ROOT_UNSAFE:${conflict}:${root.home}`,
+    );
   options.run.roots.add(root.home);
   // Known before any process exists, so a failed launch still names its profile.
   record.home = root.home;
@@ -1401,7 +1448,7 @@ async function scannerSelfCheck() {
   // Containment is canonical: `..` escapes, sibling prefixes, trailing slashes
   // and a symlinked root.
   const sandbox = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-e2e-selfcheck-")),
+    await mkdtempIn(os.tmpdir(), "farol-next-e2e-selfcheck-"),
   );
   try {
     const a = path.join(sandbox, "instance-a");
@@ -1409,24 +1456,74 @@ async function scannerSelfCheck() {
     const b = path.join(sandbox, "instance-b");
     for (const directory of [a, a2, b]) await fs.mkdir(directory);
     // This run's own disposable roots are never owner locations; a symlink out
-    // of them is judged by where it leads. (Stand-in guard roots, so nothing of
+    // of them is judged by where it leads; and an exempted root that is itself
+    // an owner location is a hard failure. (Stand-in guard roots, so nothing of
     // the owner's is touched.)
     const savedRoots = ownerState.guardRoots;
     const savedExempt = ownerState.exempt;
-    ownerState.guardRoots = [path.join(b, "guarded")];
+    ownerState.guardRoots = [path.join(a2, "guarded")];
     try {
-      assert.equal(touchesOwner(`${b}/guarded/x`), true);
-      assert.equal(touchesOwner(`${a}/guarded/x`), false);
-      ownerState.exempt = new Set([b]);
+      assert.equal(touchesOwner(`${a2}/guarded/x`), true);
       assert.equal(touchesOwner(`${b}/guarded/x`), false);
-      await fs.mkdir(path.join(b, "guarded"));
-      await fs.symlink(path.join(b, "guarded"), path.join(a, "escape"));
-      ownerState.exempt = new Set([a]);
-      assert.equal(touchesOwner(`${a}/escape/x`), true);
+      ownerState.exempt = new Set([b]);
+      assert.equal(touchesOwner(`${b}/x`), false);
+      await fs.mkdir(path.join(a2, "guarded"));
+      await fs.symlink(path.join(a2, "guarded"), path.join(b, "escape"));
+      assert.equal(touchesOwner(`${b}/escape/x`), true);
+      for (const root of [
+        a2,
+        path.join(a2, "guarded"),
+        path.join(a2, "guarded/in"),
+      ]) {
+        ownerState.exempt = new Set([root]);
+        assert.throws(
+          () => touchesOwner(`${root}/x`),
+          /DISPOSABLE_ROOT_UNSAFE/u,
+          root,
+        );
+      }
+      // A temporary parent under a guard root, equal to the owner's home, or
+      // containing an owner location is refused before anything is created.
+      let created = 0;
+      const spy = async (stem) => {
+        created += 1;
+        return `${stem}fake`;
+      };
+      for (const unsafe of [
+        path.join(a2, "guarded"),
+        path.join(a2, "guarded/tmp"),
+        home,
+        path.dirname(home),
+        "/",
+        path.join(home, ".codex/tmp"),
+        path.join(support, "Farol Dev Acceptance/tmp"),
+        path.join(support, "Farol Future Channel"),
+        support,
+      ])
+        await assert.rejects(
+          mkdtempIn(unsafe, "x-", spy),
+          /TEMP_PARENT_UNSAFE/u,
+          unsafe,
+        );
+      assert.equal(created, 0);
     } finally {
       ownerState.guardRoots = savedRoots;
       ownerState.exempt = savedExempt;
     }
+    // With the real guard roots back, a normal temporary parent still works and
+    // creates exactly one root.
+    let normalCreated = 0;
+    const normalSpy = async (stem) => {
+      normalCreated += 1;
+      return `${stem}fake`;
+    };
+    assert.equal(
+      await mkdtempIn(sandbox, "x-", normalSpy),
+      path.join(sandbox, "x-fake"),
+    );
+    assert.equal(normalCreated, 1);
+    assert.equal(ownerConflict(os.tmpdir()), null);
+    assert.equal(ownerConflict(sandbox), null);
     const link = path.join(sandbox, "link-to-a");
     await fs.symlink(a, link);
     assert.equal(inside(`${a}/../instance-b`, a), false);
@@ -2166,6 +2263,9 @@ export async function runOwnerPreviewIsolation(
   requireOwnerPreviewRuntimeIntegration();
   ownerState.guardRoots = await loadProtectedRoots(repositoryRoot);
   ownerState.exempt = new Set();
+  // The temporary parent is checked before anything at all is created in it.
+  const temporary = await fs.realpath(os.tmpdir());
+  assertSafeTemporaryParent(temporary);
   await scannerSelfCheck();
   const verified = await verifyOwnerPreview(repositoryRoot, generation);
   const namespace = path.join(repositoryRoot, "_output/preview/isolation");
@@ -2206,7 +2306,6 @@ export async function runOwnerPreviewIsolation(
   ownerState.exempt = run.roots;
   try {
     run.preexisting = new Set((await uidPids()).map((entry) => entry.pid));
-    const temporary = await fs.realpath(os.tmpdir());
     // 1. Override-free resolution is not witnessed. A bundled Electron resolves
     // its native appData to the account's real Application Support whatever HOME
     // it is started with (measured 2026-10-21, see docs/development/owner-

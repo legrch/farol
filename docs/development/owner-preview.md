@@ -294,7 +294,13 @@ all of `~/.farol` and `~/.codex`, `/Applications/Farol.app`, and any directory
 under `~/Library/Application Support` whose name starts with `Farol`, so profiles
 added later (the Dev Acceptance profile and its nested profiles included) are
 covered. A path inside one of this run's own disposable roots, after following
-symlinks, is never an owner location.
+symlinks, is never an owner location, and that exemption can never cover an owner
+location: before anything is created, the temporary parent is resolved
+component by component and the run is refused (`TEMP_PARENT_UNSAFE`, nothing
+created) if it equals the owner's home, lies inside a guard root, `~/.farol`,
+`~/.codex`, `/Applications/Farol.app` or a `Farol*` Application Support profile,
+or contains any of them; a disposable root that is itself an owner location is a
+hard failure (`DISPOSABLE_ROOT_UNSAFE`) at creation and again at exemption time.
 
 Orphan rule, decided on argv and environment together. A reparented helper is no
 longer a descendant, and a disposable root normally reaches a process through
