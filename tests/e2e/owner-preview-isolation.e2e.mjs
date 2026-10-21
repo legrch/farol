@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -109,8 +110,37 @@ function isGone(pid) {
     throw error;
   }
 }
-const inside = (child, parent) =>
-  child === parent || child.startsWith(`${parent}${path.sep}`);
+// Containment is decided on canonical paths: resolve `..` and trailing slashes,
+// realpath the nearest existing ancestor (so a symlinked root cannot hide a
+// path and a not-yet-existing leaf still resolves), then compare on a
+// separator boundary. A relative path is never inside anything.
+function canonical(value) {
+  const rest = [];
+  let current = path.resolve(value);
+  for (;;) {
+    try {
+      return path.join(realpathSync(current), ...rest.reverse());
+    } catch (error) {
+      const parent = path.dirname(current);
+      if (
+        (error.code !== "ENOENT" && error.code !== "ENOTDIR") ||
+        parent === current
+      )
+        return path.join(current, ...rest.reverse());
+      rest.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+function inside(child, parent) {
+  if (!path.isAbsolute(child) || !path.isAbsolute(parent)) return false;
+  const target = canonical(child);
+  const root = canonical(parent);
+  return (
+    target === root ||
+    target.startsWith(root.endsWith(path.sep) ? root : `${root}${path.sep}`)
+  );
+}
 
 // Owner locations a disposable run must never name. The installed Farol.app may
 // be running on this machine; none of its files may appear either.
@@ -128,7 +158,12 @@ function ownerLocations() {
   ];
 }
 function touchesOwner(value) {
-  return ownerLocations().some((location) => value.includes(location));
+  // Check the text as given and, for an absolute path, its canonical form, so
+  // `/tmp/x/../../Users/.../.codex` cannot hide an owner location.
+  const forms = path.isAbsolute(value) ? [value, canonical(value)] : [value];
+  return ownerLocations().some((location) =>
+    forms.some((form) => form.includes(location)),
+  );
 }
 
 async function descendants(parent) {
@@ -732,6 +767,42 @@ async function scannerSelfCheck() {
   );
   assert.equal(inside("/a/bc", "/a/b"), false);
   assert.equal(inside("/a/b/c", "/a/b"), true);
+  assert.equal(inside("relative/path", "/a/b"), false);
+  // Containment is canonical: `..` escapes, sibling prefixes, trailing slashes
+  // and a symlinked root.
+  const sandbox = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-e2e-selfcheck-")),
+  );
+  try {
+    const a = path.join(sandbox, "instance-a");
+    const a2 = path.join(sandbox, "instance-a2");
+    const b = path.join(sandbox, "instance-b");
+    for (const directory of [a, a2, b]) await fs.mkdir(directory);
+    const link = path.join(sandbox, "link-to-a");
+    await fs.symlink(a, link);
+    assert.equal(inside(`${a}/../instance-b`, a), false);
+    assert.equal(inside(`${a}/../instance-b`, b), true);
+    assert.equal(inside(`${a}/../../elsewhere`, a), false);
+    assert.equal(inside(a2, a), false);
+    assert.equal(inside(`${a2}/x`, a), false);
+    assert.equal(inside(`${a}/`, a), true);
+    assert.equal(inside(a, `${a}/`), true);
+    assert.equal(inside(`${a}/c/../d`, a), true);
+    assert.equal(inside(`${a}/not-created-yet/x`, a), true);
+    assert.equal(inside(`${link}/x`, a), true);
+    assert.equal(inside(a, link), true);
+    assert.equal(inside(b, link), false);
+    assert.equal(inside(`${link}/../instance-b`, a), false);
+    assert.equal(
+      touchesOwner(
+        `${a}/${"../".repeat(40)}${home.slice(1)}/.codex/config.toml`,
+      ),
+      true,
+    );
+    assert.equal(touchesOwner(`${a}/../instance-b/file`), false);
+  } finally {
+    await fs.rm(sandbox, { recursive: true });
+  }
   const parsed = listeners(
     parseLsof(
       "p1\nf5\nPTCP\nn*:8080\nTST=LISTEN\nf6\nPUDP\nn*:5353\nf7\nPTCP\nn127.0.0.1:1->127.0.0.1:2\nTST=ESTABLISHED\n",
