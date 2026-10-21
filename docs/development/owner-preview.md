@@ -305,6 +305,16 @@ never parsed. Each owned process (parent, Go backend, Node runtime child) must
 yield a readable, non-empty environment and a clean per-pid `lsof` listing; only
 a pid the kernel confirms gone is reported, explicitly, as exited.
 
+Parsing is fail-closed too: every inventory parser (the uid process listing, the
+process-tree listing, `pgrep`, `lsof` records, the process command line, the
+scanner's and the `KERN_PROCARGS2` reader's JSON) declares its exact row grammar;
+blank lines and a documented header (row 0 only) are the only lines it may skip,
+any other row that does not match is an inventory error naming the command and
+the row index but never the row, and a listing that is empty where it cannot be,
+or that lacks an entry that must be there (this test's own pid in the uid
+listing, a known live instance process in its tree), is an error, not an empty
+answer.
+
 Sockets: a qualifying listener is **TCP LISTEN on 127.0.0.1 only**. Every
 network socket on an owned pid is classified and none is ignored. A TCP record
 must carry a recognised state (`MISSING_TCP_STATE`, `UNKNOWN_TCP_STATE`;

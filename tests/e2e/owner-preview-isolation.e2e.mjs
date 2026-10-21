@@ -484,6 +484,151 @@ function processStrings(pid, role, process_, files) {
   ].map((item) => ({ pid, role, ...item }));
 }
 
+// Every inventory parser declares its exact row grammar. Blank lines and a
+// documented header (row 0 only) are the only lines it may skip; any other row
+// that does not match is an inventory error naming the command and the row index
+// but never the row (it could hold environment data). A listing that is empty
+// where it cannot legitimately be, or that lacks an entry that must be there, is
+// an error, not an empty answer.
+function parseRows(
+  output,
+  { command: tool, header = null, row, map, allowEmpty = false },
+) {
+  const rows = [];
+  output.split("\n").forEach((line, index) => {
+    if (line.trim() === "") return;
+    if (header !== null && index === 0 && header.test(line)) return;
+    const match = row.exec(line);
+    if (match === null)
+      throw new Error(
+        `OWNER_PREVIEW_ISOLATION_INVENTORY_ROW_INVALID:${tool}:${index}`,
+      );
+    rows.push(map(match));
+  });
+  if (rows.length === 0 && !allowEmpty)
+    throw new Error(`OWNER_PREVIEW_ISOLATION_INVENTORY_EMPTY:${tool}`);
+  return rows;
+}
+// ps -U <uid> -o pid=,ppid=   rows: `<pid> <ppid>`; no header. Must list this
+// test's own pid.
+function parseUidListing(output, self = process.pid) {
+  const rows = parseRows(output, {
+    command: "ps-uid",
+    row: /^\s*([0-9]+)\s+([0-9]+)\s*$/u,
+    map: (match) => ({ pid: Number(match[1]), ppid: Number(match[2]) }),
+  });
+  if (!rows.some((entry) => entry.pid === self))
+    throw new Error(
+      "OWNER_PREVIEW_ISOLATION_INVENTORY_INCOMPLETE:ps-uid:SELF_MISSING",
+    );
+  return rows;
+}
+// pgrep -P <ppid> -f .   rows: `<pid>`; no header. A listing that exited 0 has
+// at least one row; "no children" is the documented exit-1 no-match instead.
+const parsePgrepPids = (output) =>
+  parseRows(output, {
+    command: "pgrep",
+    row: /^([0-9]+)$/u,
+    map: (match) => Number(match[1]),
+  });
+// ps -o command= -p <pid>   exactly one non-blank row; no header.
+function parsePsCommand(output) {
+  const rows = parseRows(output, {
+    command: "ps",
+    row: /^(.+)$/u,
+    map: (match) => match[1],
+  });
+  if (rows.length !== 1)
+    throw new Error("OWNER_PREVIEW_ISOLATION_INVENTORY_ROW_COUNT:ps");
+  return rows[0].trim();
+}
+// lsof -F pftPnT   one `<letter><value>` per line. `p` opens a process, `f` a
+// file of the current process; `t`, `P`, `n` and `T` (a `NAME=value` subfield)
+// belong to the current file. No other letter, and no field before its opener.
+function parseLsof(output) {
+  const bad = (index) =>
+    new Error(`OWNER_PREVIEW_ISOLATION_INVENTORY_ROW_INVALID:lsof:${index}`);
+  const files = [];
+  let pid = null;
+  let current = null;
+  output.split("\n").forEach((line, index) => {
+    if (line === "") return;
+    const field = line[0];
+    const value = line.slice(1);
+    if (field === "p") {
+      if (!/^[0-9]+$/u.test(value)) throw bad(index);
+      pid = Number(value);
+      current = null;
+    } else if (field === "f") {
+      if (pid === null || value === "") throw bad(index);
+      current = { pid, fd: value };
+      files.push(current);
+    } else if (
+      current !== null &&
+      (field === "t" || field === "P" || field === "n")
+    ) {
+      if (field === "t") current.type = value;
+      else if (field === "P") current.protocol = value;
+      else current.name = value;
+    } else if (current !== null && field === "T" && /^[A-Z]+=/u.test(value)) {
+      if (value.startsWith("ST=")) current.state = value;
+    } else throw bad(index);
+  });
+  if (files.length === 0)
+    throw new Error("OWNER_PREVIEW_ISOLATION_INVENTORY_EMPTY:lsof");
+  return files;
+}
+// The scanner's JSON answer: one object per requested pid, in order.
+const SCAN_STATUSES = new Set(["match", "clear", "gone", "unreadable"]);
+function validateScan(results, pids) {
+  const bad = (index) =>
+    new Error(`OWNER_PREVIEW_ISOLATION_INVENTORY_ROW_INVALID:scan:${index}`);
+  if (!Array.isArray(results) || results.length !== pids.length)
+    throw new Error("OWNER_PREVIEW_ISOLATION_SCAN_INCOMPLETE");
+  results.forEach((entry, index) => {
+    if (
+      entry === null ||
+      typeof entry !== "object" ||
+      entry.pid !== pids[index] ||
+      !SCAN_STATUSES.has(entry.status)
+    )
+      throw bad(index);
+    if (entry.status === "match" || entry.status === "clear") {
+      if (
+        !Array.isArray(entry.roots) ||
+        !entry.roots.every((root) => typeof root === "string") ||
+        typeof entry.envVisible !== "boolean" ||
+        typeof entry.systemOwned !== "boolean"
+      )
+        throw bad(index);
+    } else if (!Number.isInteger(entry.errno)) throw bad(index);
+  });
+  return results;
+}
+// The KERN_PROCARGS2 reader's JSON answer for one pid.
+function validateProcessAnswer(answer) {
+  const bad = () =>
+    new Error("OWNER_PREVIEW_ISOLATION_INVENTORY_ROW_INVALID:procargs:0");
+  if (answer === null || typeof answer !== "object") throw bad();
+  if (answer.status !== "ok") {
+    if (answer.status !== "error" || typeof answer.reason !== "string")
+      throw bad();
+    return answer;
+  }
+  const strings = (value) =>
+    Array.isArray(value) && value.every((item) => typeof item === "string");
+  if (
+    answer.env === null ||
+    typeof answer.env !== "object" ||
+    Array.isArray(answer.env) ||
+    !Object.values(answer.env).every((value) => typeof value === "string") ||
+    !strings(answer.argv) ||
+    typeof answer.exe !== "string"
+  )
+    throw bad();
+  return answer;
+}
+
 async function descendants(parent) {
   const tree = [parent];
   for (let index = 0; index < tree.length; index += 1) {
@@ -494,15 +639,24 @@ async function descendants(parent) {
       ".",
     ]);
     if (found.outcome === "no_match") continue;
-    for (const line of found.stdout.split("\n"))
-      if (/^[0-9]+$/u.test(line)) tree.push(Number(line));
+    tree.push(...parsePgrepPids(found.stdout));
   }
   return tree;
 }
 // Every scan of an instance's tree feeds the set of pids ever seen.
-async function scanTree(instance) {
-  const tree = await descendants(instance.pid);
+async function scanTree(
+  instance,
+  { scan = descendants, alive = (pid) => !isGone(pid) } = {},
+) {
+  const tree = await scan(instance.pid);
   for (const pid of tree) instance.seen.add(pid);
+  // A listing that omits a known, live member of the tree is incomplete, not a
+  // smaller tree.
+  for (const pid of instance.known ?? [])
+    if (!tree.includes(pid) && alive(pid))
+      throw new Error(
+        `OWNER_PREVIEW_ISOLATION_TREE_INCOMPLETE:${instance.kind}:${pid}`,
+      );
   return tree;
 }
 // A process tree is only a snapshot. Rescan until two consecutive snapshots,
@@ -621,23 +775,19 @@ async function uidPids() {
     "-o",
     "pid=,ppid=",
   ]);
-  return listed.stdout
-    .split("\n")
-    .map((line) => /^\s*([0-9]+)\s+([0-9]+)\s*$/u.exec(line))
-    .filter((match) => match !== null)
-    .map((match) => ({ pid: Number(match[1]), ppid: Number(match[2]) }));
+  return parseUidListing(listed.stdout);
 }
 async function inspectProcesses(pids, roots) {
   const answer = await runInventory("scan", ["-I", "-c", SCAN_SCRIPT], {
     input: JSON.stringify({ pids, roots }),
   });
-  const results = JSON.parse(answer.stdout);
-  if (
-    !Array.isArray(results) ||
-    results.length !== pids.length ||
-    results.some((entry, index) => entry.pid !== pids[index])
-  )
+  let results;
+  try {
+    results = JSON.parse(answer.stdout);
+  } catch {
     throw new Error("OWNER_PREVIEW_ISOLATION_SCAN_INCOMPLETE");
+  }
+  validateScan(results, pids);
   // This macOS answers EINVAL, not ESRCH, for a pid that has just exited: an
   // unreadable pid the kernel no longer knows is gone, anything else stays
   // unreadable.
@@ -890,9 +1040,7 @@ async function command(pid) {
     },
   );
   if (answer.outcome === "no_match") return null;
-  const text = answer.stdout.trim();
-  if (text === "") throw new Error("OWNER_PREVIEW_ISOLATION_PS_EMPTY");
-  return text;
+  return parsePsCommand(answer.stdout);
 }
 // ps cannot show an environment on this macOS; KERN_PROCARGS2 can, for a
 // process of the same user. The values stay in memory: only key names and the
@@ -938,7 +1086,15 @@ async function readProcess(pid) {
     PROCARGS_SCRIPT,
     String(pid),
   ]);
-  const answer = JSON.parse(probed.stdout);
+  let answer;
+  try {
+    answer = validateProcessAnswer(JSON.parse(probed.stdout));
+  } catch (error) {
+    if (/ROW_INVALID/u.test(error.message)) throw error;
+    throw new Error(
+      "OWNER_PREVIEW_ISOLATION_INVENTORY_ROW_INVALID:procargs:json",
+    );
+  }
   if (answer.status !== "ok" && isGone(pid)) return null;
   if (answer.status !== "ok")
     throw new Error(
@@ -950,30 +1106,6 @@ async function readProcess(pid) {
 }
 async function environmentOf(pid) {
   return (await readProcess(pid))?.env ?? null;
-}
-// lsof -F: records start at `p`; each file starts at `f`.
-function parseLsof(output) {
-  const files = [];
-  let pid = null;
-  let current = null;
-  for (const line of output.split("\n")) {
-    if (line === "") continue;
-    const field = line[0];
-    const value = line.slice(1);
-    if (field === "p") {
-      pid = Number(value);
-      current = null;
-    } else if (field === "f") {
-      current = { pid, fd: value };
-      files.push(current);
-    } else if (current) {
-      if (field === "t") current.type = value;
-      else if (field === "P") current.protocol = value;
-      else if (field === "n") current.name = value;
-      else if (field === "T" && value.startsWith("ST=")) current.state = value;
-    }
-  }
-  return files;
 }
 // Every network socket on an owned pid is classified; nothing is ignored.
 // UDP is a violation. Every TCP record must carry a recognised state: a
@@ -1166,8 +1298,10 @@ async function launch(
     handle: null,
     pid: null,
     terminal: null,
-    // Every pid ever seen in this instance's process tree.
+    // Every pid ever seen in this instance's process tree, and the members that
+    // must appear in every listing of it while they are alive.
     seen: new Set(),
+    known: new Set(),
     quit: { requested: false, expired: false, promise: null },
   };
   instance.handle = await electron.launch({
@@ -1190,6 +1324,7 @@ async function launch(
   instance.pid = instance.owned.pid;
   assert.ok(Number.isInteger(instance.pid) && instance.pid > 0);
   instance.seen.add(instance.pid);
+  instance.known.add(instance.pid);
   return instance;
 }
 
@@ -1467,6 +1602,8 @@ async function observe(instance, expected) {
     runtimeChild,
     `OWNER_PREVIEW_ISOLATION_NO_RUNTIME:${instance.kind}`,
   );
+  instance.known.add(backend.pid);
+  instance.known.add(runtimeChild.pid);
   // Wait for the runtime child's listener, one strict lsof per attempt.
   for (let attempt = 0; attempt < 40; attempt += 1) {
     const inventory = await openFiles(runtimeChild.pid);
@@ -1681,9 +1818,154 @@ async function assertInstance(observed, instance, identity, other) {
   if (first !== undefined) throw new Error(violationMessage(first));
 }
 
+// Parser grammars, table-driven: every inventory parser accepts a valid sample,
+// rejects a malformed row in the middle and an unexpectedly empty listing, and
+// never repeats the row it rejected.
+function parserSelfCheck() {
+  const secret = "SECRETROW=do-not-echo";
+  const scan = (pids) => (text) => validateScan(JSON.parse(text), pids);
+  const procargs = (text) => validateProcessAnswer(JSON.parse(text));
+  const table = {
+    "ps-uid": {
+      parse: (text) => parseUidListing(text, 77),
+      valid: "   77     1\n  100    77\n",
+      malformed: `77 1\n${secret}\n100 77\n`,
+      empty: "\n  \n",
+      rejected: ["100 77\n"], // lacks this test's own pid
+    },
+    pgrep: {
+      parse: parsePgrepPids,
+      valid: "11\n12\n",
+      malformed: `11\n${secret}\n12\n`,
+      empty: "",
+    },
+    ps: {
+      parse: parsePsCommand,
+      valid: "/bin/tool --flag value\n",
+      malformed: "/bin/tool one\n/bin/tool two\n", // exactly one row
+      empty: "\n",
+    },
+    lsof: {
+      parse: parseLsof,
+      valid: "p5\nf3\ntIPv4\nPTCP\nn127.0.0.1:1\nTST=LISTEN\nTQR=0\n",
+      malformed: `p5\nf3\nPTCP\nz${secret}\nn/x\n`,
+      empty: "",
+      rejected: [
+        "n/orphan-field-before-any-file\n",
+        "f3\nn/file-before-any-process\n",
+        "p5\nf3\nTnot-a-subfield\n",
+        "pabc\nf3\n",
+      ],
+    },
+    scan: {
+      parse: scan([1, 2]),
+      valid: JSON.stringify([
+        {
+          pid: 1,
+          status: "clear",
+          roots: [],
+          envVisible: true,
+          systemOwned: false,
+        },
+        { pid: 2, status: "gone", errno: 3 },
+      ]),
+      malformed: JSON.stringify([
+        {
+          pid: 1,
+          status: "clear",
+          roots: [],
+          envVisible: true,
+          systemOwned: false,
+        },
+        { pid: 2, status: secret },
+      ]),
+      empty: "[]",
+      rejected: [
+        JSON.stringify([
+          {
+            pid: 1,
+            status: "clear",
+            roots: "x",
+            envVisible: true,
+            systemOwned: false,
+          },
+          { pid: 2, status: "gone", errno: 3 },
+        ]),
+        JSON.stringify([
+          { pid: 2, status: "gone", errno: 3 },
+          { pid: 1, status: "gone", errno: 3 },
+        ]),
+      ],
+    },
+    procargs: {
+      parse: procargs,
+      valid: JSON.stringify({
+        status: "ok",
+        env: { A: "b" },
+        argv: ["x"],
+        exe: "/x",
+      }),
+      malformed: JSON.stringify({
+        status: "ok",
+        env: { A: 1 },
+        argv: [secret],
+        exe: "/x",
+      }),
+      empty: "null",
+      rejected: [
+        JSON.stringify({ status: "ok", env: {}, argv: "x", exe: "/x" }),
+      ],
+    },
+  };
+  for (const [name, entry] of Object.entries(table)) {
+    assert.doesNotThrow(() => entry.parse(entry.valid), `${name}: valid`);
+    for (const [label, sample] of [
+      ["malformed", entry.malformed],
+      ["empty", entry.empty],
+      ...(entry.rejected ?? []).map((text) => ["rejected", text]),
+    ]) {
+      let failure = null;
+      try {
+        entry.parse(sample);
+      } catch (error) {
+        failure = error;
+      }
+      assert.ok(failure, `${name}: ${label} must be an inventory error`);
+      assert.match(
+        failure.message,
+        /^OWNER_PREVIEW_ISOLATION_/u,
+        `${name}: ${label}`,
+      );
+      assert.equal(
+        failure.message.includes("SECRETROW"),
+        false,
+        `${name}: row echoed`,
+      );
+    }
+  }
+  // A malformed row names its command and index.
+  assert.throws(
+    () => parsePgrepPids(`11\n${secret}\n12\n`),
+    /^Error: OWNER_PREVIEW_ISOLATION_INVENTORY_ROW_INVALID:pgrep:1$/u,
+  );
+  // A documented header (row 0 only) and blank lines are the only skips, and a
+  // header-only listing is fine where an empty listing is legitimate.
+  const spec = {
+    command: "generic",
+    header: /^PID$/u,
+    row: /^(\d+)$/u,
+    map: (match) => Number(match[1]),
+  };
+  assert.deepEqual(parseRows("PID\n\n5\n6\n", spec), [5, 6]);
+  assert.deepEqual(parseRows("PID\n", { ...spec, allowEmpty: true }), []);
+  assert.throws(() => parseRows("PID\n", spec), /INVENTORY_EMPTY:generic/u);
+  assert.throws(() => parseRows("5\nPID\n6\n", spec), /ROW_INVALID:generic:1/u);
+}
+
 // The scanners below judge live observations; prove they can fail first.
 async function scannerSelfCheck() {
   const home = os.userInfo().homedir;
+  parserSelfCheck();
   assert.equal(touchesOwner(path.join(home, ".codex/config.toml")), true);
   assert.equal(
     touchesOwner(
@@ -2336,6 +2618,25 @@ async function scannerSelfCheck() {
 // A process tree is a moving snapshot: stability, the union of pids ever seen
 // and teardown verification are checked on a fake tree.
 async function treeSelfCheck() {
+  // A listing that omits a known member that is still alive is incomplete.
+  const grown = {
+    kind: "selfcheck",
+    pid: 1,
+    seen: new Set(),
+    known: new Set([1, 2]),
+  };
+  assert.deepEqual(
+    await scanTree(grown, { scan: async () => [1, 2], alive: () => true }),
+    [1, 2],
+  );
+  await assert.rejects(
+    scanTree(grown, { scan: async () => [1], alive: () => true }),
+    /TREE_INCOMPLETE:selfcheck:2/u,
+  );
+  assert.deepEqual(
+    await scanTree(grown, { scan: async () => [1], alive: (pid) => pid === 1 }),
+    [1],
+  );
   const sequence = (...snapshots) => {
     const seen = new Set();
     let index = 0;
