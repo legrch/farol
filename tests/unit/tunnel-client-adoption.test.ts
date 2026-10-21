@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -120,6 +121,16 @@ describe("adoptReviewedTunnelClient", () => {
   it("refuses a source of another size without writing anything", async () => {
     await fs.writeFile(source, Buffer.concat([REVIEWED, Buffer.from("x")]));
     expect(await adopt()).toEqual({ ok: false, reason: "source-not-reviewed" });
+    expect(await leftovers()).toEqual([]);
+  });
+
+  it("refuses a FIFO source without waiting for a writer", async () => {
+    const fifo = path.join(root, "fifo");
+    execFileSync("/usr/bin/mkfifo", [fifo]);
+    expect(await adopt(fifo)).toEqual({
+      ok: false,
+      reason: "source-not-a-regular-file",
+    });
     expect(await leftovers()).toEqual([]);
   });
 

@@ -113,7 +113,9 @@ async function copyThenReadBack(
   const buffer = Buffer.allocUnsafe(64 * 1_024);
   let position = 0;
   while (position <= limit) {
-    const { bytesRead } = await source.read(buffer, 0, buffer.length, position);
+    // Read no further than one byte past the reviewed size.
+    const want = Math.min(buffer.length, limit + 1 - position);
+    const { bytesRead } = await source.read(buffer, 0, want, position);
     if (bytesRead === 0) break;
     let offset = 0;
     while (offset < bytesRead) {
@@ -154,9 +156,12 @@ export async function adoptReviewedTunnelClient(
 
   let source;
   try {
+    // O_NONBLOCK: the source belongs to another account and may have been
+    // replaced by a FIFO, whose open must not wait for a writer; anything that
+    // is not a regular file is refused right after the open.
     source = await fsPromises.open(
       sourcePath,
-      fsConstants.O_RDONLY | NO_FOLLOW | CLOSE_ON_EXEC,
+      fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | NO_FOLLOW | CLOSE_ON_EXEC,
     );
   } catch {
     return { ok: false, reason: "source-unreadable" };
