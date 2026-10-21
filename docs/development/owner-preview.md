@@ -301,7 +301,13 @@ documented no-match, with no output: `pgrep` exit 1 (no children); `lsof` and
 `ps` exit 1, only for a pid the kernel confirms gone. Any other exit, a signal,
 a timeout, stderr output, or partial output beside a failure is an inventory
 error naming the command, exit code and stderr, and a failed command's stdout is
-never parsed. Each owned process (parent, Go backend, Node runtime child) must
+never parsed. One `lsof` stderr is tolerated: its verbatim warning that it could
+not `stat()` an NFS mount (OrbStack's volume stalls intermittently on this Mac),
+only when every stderr line belongs to that warning and each named mount is
+clear, in both directions, of the owner's home, the owner locations and the
+run's disposable roots, judged without `stat()`ing the mount. Each accepted
+mount is recorded in the receipt as `lsofPartialMounts`; any other type, text
+or mount is still an inventory error. Each owned process (parent, Go backend, Node runtime child) must
 yield a readable, non-empty environment and a clean per-pid `lsof` listing; only
 a pid the kernel confirms gone is reported, explicitly, as exited.
 

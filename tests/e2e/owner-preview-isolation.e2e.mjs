@@ -69,13 +69,74 @@ async function privateDirectory(directory) {
 // Anything else (another exit code, a signal, a timeout, stderr output, or
 // partial stdout beside a failure) is an inventory error naming the command,
 // the exit code and the stderr. A failed command's stdout is never returned.
+//
+// lsof alone has one tolerated stderr: its verbatim warning that it could not
+// stat() an NFS mount (OrbStack's volume on this Mac stalls intermittently),
+// after which it still lists the pid but may describe files on that mount less
+// fully. The warning is removed from stderr before the rules above apply, only
+// when every stderr line belongs to it and every named mount is clear of the
+// owner's home, the owner locations and this run's disposable roots, in both
+// directions, judged without stat()ing the mount itself. Each accepted mount is
+// recorded in the receipt (`lsofPartialMounts`). Another type, other text, or a
+// mount that is not clear is still an inventory error.
 const emptyFailure = (result) =>
   result.code === 1 && result.stdout === "" && result.stderr === "";
+const LSOF_MOUNT_WARNING =
+  /^lsof: WARNING: can.t stat\(\) nfs file system (\/[^\n]+)\n {6}Output information may be incomplete\.\n(?: {6}assuming "dev=[0-9a-f]+" from mount table\n)?/u;
+function lsofMountWarnings(stderr) {
+  const mounts = [];
+  let rest = stderr;
+  while (rest !== "") {
+    const match = LSOF_MOUNT_WARNING.exec(rest);
+    if (match === null) return null;
+    mounts.push(match[1]);
+    rest = rest.slice(match[0].length);
+  }
+  return mounts;
+}
+// Mounts lsof could not stat() during this run, in display form.
+const partialInventory = { lsofMounts: new Set() };
+function partialMountConflict(mount) {
+  if (
+    /[\u0000-\u001f\u007f]/u.test(mount) ||
+    mount !== path.normalize(mount) ||
+    mount.endsWith("/")
+  )
+    return "MOUNT_PATH_INVALID";
+  let real;
+  try {
+    real = path.join(canonical(path.dirname(mount)), path.basename(mount));
+  } catch {
+    return "MOUNT_PATH_UNRESOLVABLE";
+  }
+  const built = ownerBuilt();
+  const disposable = [...ownerState.exempt].flatMap(formsOf);
+  const overlaps = (a, b) => contains(a, b) || contains(b, a);
+  for (const candidate of new Set([mount, real])) {
+    if (built.home.some((home) => contains(home, candidate)))
+      return "CONTAINS_OWNER_HOME";
+    if (
+      built.roots.some((root) => overlaps(candidate, root)) ||
+      built.farolPrefixes.some(
+        (prefix) => candidate.startsWith(prefix) || contains(prefix, candidate),
+      )
+    )
+      return "OWNER_LOCATION";
+    if (disposable.some((root) => overlaps(candidate, root)))
+      return "DISPOSABLE_ROOT";
+  }
+  return null;
+}
+function displayMount(mount) {
+  const home = os.userInfo().homedir;
+  return contains(mount, home) ? `~${mount.slice(home.length)}` : mount;
+}
 const INVENTORY = {
   pgrep: { label: "pgrep", command: PGREP, noMatch: emptyFailure },
   lsof: {
     label: "lsof",
     command: LSOF,
+    warnings: lsofMountWarnings,
     noMatch: (result, context) =>
       emptyFailure(result) && context.gone?.() === true,
   },
@@ -122,6 +183,22 @@ async function runInventory(tool, args, context = {}) {
       stdout: String(error.stdout ?? ""),
       stderr: String(error.stderr ?? ""),
     };
+  }
+  const mounts =
+    spec.warnings !== undefined && result.stderr !== ""
+      ? spec.warnings(result.stderr)
+      : null;
+  if (mounts !== null) {
+    for (const mount of mounts) {
+      const conflict = partialMountConflict(mount);
+      if (conflict !== null)
+        throw new Error(
+          `OWNER_PREVIEW_ISOLATION_INVENTORY_PARTIAL_MOUNT_UNSAFE:${spec.label}:${conflict}`,
+        );
+    }
+    for (const mount of mounts)
+      partialInventory.lsofMounts.add(displayMount(mount));
+    result = { ...result, stderr: "" };
   }
   if (result.code === 0 && result.stderr === "")
     return { outcome: "ok", stdout: result.stdout };
@@ -2573,6 +2650,82 @@ async function scannerSelfCheck() {
     await refused(tool, "exit 1", {});
   }
   await refused("probe", "exit 1", gone);
+  // lsof's verbatim NFS stat() warning is the one tolerated stderr, for a
+  // mount clear of the owner and of the disposable roots; it is recorded.
+  const warn = (mount, { type = "nfs", assuming = false, tail = "" } = {}) =>
+    `printf 'lsof: WARNING: can\\047t stat() ${type} file system %s\\n      Output information may be incomplete.\\n${
+      assuming ? '      assuming "dev=31000002" from mount table\\n' : ""
+    }${tail}' '${mount}' >&2`;
+  const savedExempt = ownerState.exempt;
+  const disposable = path.join(os.tmpdir(), "farol-selfcheck-disposable");
+  ownerState.exempt = new Set([disposable]);
+  partialInventory.lsofMounts.clear();
+  try {
+    assert.deepEqual(
+      await run("lsof", `echo 123; ${warn("/Volumes/selfcheck-nfs")}`, live),
+      { outcome: "ok", stdout: "123\n" },
+    );
+    assert.deepEqual(
+      await run(
+        "lsof",
+        `echo 1; ${warn(`${home}/selfcheck-orb`, { assuming: true })}; ${warn("/Volumes/selfcheck-two")}`,
+        live,
+      ),
+      { outcome: "ok", stdout: "1\n" },
+    );
+    assert.deepEqual(
+      await run("lsof", `${warn("/Volumes/selfcheck-nfs")}; exit 1`, gone),
+      { outcome: "no_match" },
+    );
+    await refused("lsof", `${warn("/Volumes/selfcheck-nfs")}; exit 1`, live);
+    assert.deepEqual([...partialInventory.lsofMounts].sort(), [
+      "/Volumes/selfcheck-nfs",
+      "/Volumes/selfcheck-two",
+      "~/selfcheck-orb",
+    ]);
+    partialInventory.lsofMounts.clear();
+    for (const script of [
+      warn("/Volumes/selfcheck-smb", { type: "smbfs" }),
+      warn("/Volumes/selfcheck-nfs", { tail: "extra\\n" }),
+      `${warn("/Volumes/selfcheck-nfs")}; echo other >&2`,
+      `echo lsof: WARNING: something else >&2`,
+    ])
+      await refused("lsof", `echo 1; ${script}`, live);
+    for (const tool of ["pgrep", "ps", "probe"])
+      await refused(tool, `echo 1; ${warn("/Volumes/selfcheck-nfs")}`, live);
+    const unsafe = (mount, code) =>
+      assert.rejects(
+        run("lsof", `echo 1; ${warn(mount)}`, live),
+        new RegExp(`PARTIAL_MOUNT_UNSAFE:lsof:${code}$`, "u"),
+        mount,
+      );
+    await unsafe(home, "CONTAINS_OWNER_HOME");
+    await unsafe("/Users", "CONTAINS_OWNER_HOME");
+    await unsafe(path.join(home, ".codex/mnt"), "OWNER_LOCATION");
+    await unsafe(
+      path.join(home, "Library/Application Support/FarolMount"),
+      "OWNER_LOCATION",
+    );
+    await unsafe(path.join(home, "Library"), "OWNER_LOCATION");
+    await unsafe(path.join(disposable, "mnt"), "DISPOSABLE_ROOT");
+    await unsafe(os.tmpdir(), "DISPOSABLE_ROOT");
+    await unsafe("/Volumes/selfcheck-nfs/", "MOUNT_PATH_INVALID");
+    await unsafe("/Volumes//selfcheck-nfs", "MOUNT_PATH_INVALID");
+    await unsafe("/Volumes/x/../selfcheck-nfs", "MOUNT_PATH_INVALID");
+    // An unsafe mount records nothing, not even the safe one beside it.
+    await assert.rejects(
+      run(
+        "lsof",
+        `echo 1; ${warn("/Volumes/selfcheck-nfs")}; ${warn(home)}`,
+        live,
+      ),
+      /PARTIAL_MOUNT_UNSAFE/u,
+    );
+    assert.equal(partialInventory.lsofMounts.size, 0);
+  } finally {
+    ownerState.exempt = savedExempt;
+    partialInventory.lsofMounts.clear();
+  }
   await assert.rejects(
     runInventory({ ...INVENTORY.pgrep, command: "/nonexistent/inventory" }, []),
     /INVENTORY_ERROR:pgrep:ENOENT/u,
@@ -3173,10 +3326,13 @@ export async function runOwnerPreviewIsolation(
     envValues: new Set(),
   };
   ownerState.exempt = run.roots;
+  partialInventory.lsofMounts.clear();
   // Every write of the receipt goes through the guard. A receipt that holds an
   // observed environment value or an owner path is scrubbed, written with the
   // finding, and the run fails closed.
   const writeReceipt = async (flag) => {
+    if (partialInventory.lsofMounts.size > 0)
+      receipt.lsofPartialMounts = [...partialInventory.lsofMounts].sort();
     const guarded = guardReceipt(receipt, {
       envValues: run.envValues,
       roots: run.roots,
