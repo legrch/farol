@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +6,8 @@ import { PRODUCT_APP_NAME } from "./package-layout.mjs";
 
 const APP_NAME = PRODUCT_APP_NAME;
 const SAFE_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+const LSREGISTER =
+  "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
 
 function textValue(value, fallback) {
   return typeof value === "string" && value.length > 0 && !value.includes("\0")
@@ -98,7 +101,63 @@ export async function createLaunchSnapshot({
   }
 }
 
-export async function removeLaunchSnapshot(snapshot) {
+// Every `*.app` inside the snapshot (the product bundle, `Electron Runtime.app`
+// and its helpers), deepest first, as exact paths. Symlinks are not followed.
+async function snapshotBundlePaths(directory) {
+  const found = [];
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const entryPath = path.join(directory, entry.name);
+    found.push(...(await snapshotBundlePaths(entryPath)));
+    if (entry.name.endsWith(".app")) found.push(entryPath);
+  }
+  return found;
+}
+
+function runLsregisterUnregister(lsregister, bundlePath) {
+  return new Promise((resolve) => {
+    execFile(
+      lsregister,
+      ["-u", bundlePath],
+      { env: { PATH: SAFE_PATH }, timeout: 15_000 },
+      (error) => resolve(error === null),
+    );
+  });
+}
+
+// Running a bundle out of the snapshot makes LaunchServices register it, and
+// its nested helper bundles, under the production bundle identifier; deleting
+// the directory does not unregister them. Unregister each exact path the
+// snapshot owns before the directory goes away. Never a prefix or global
+// unregister, and never fatal: the launch outcome must not depend on it.
+export async function unregisterLaunchSnapshot(
+  snapshot,
+  { lsregister = LSREGISTER, unregister = runLsregisterUnregister } = {},
+) {
+  const result = { unregistered: [], failed: [] };
+  let bundles;
+  try {
+    bundles = await snapshotBundlePaths(snapshot.root);
+  } catch (error) {
+    if (error?.code === "ENOENT") return result;
+    throw error;
+  }
+  if (bundles.length === 0) return result;
+  try {
+    await fs.access(lsregister);
+  } catch {
+    return result;
+  }
+  for (const bundlePath of bundles) {
+    ((await unregister(lsregister, bundlePath))
+      ? result.unregistered
+      : result.failed
+    ).push(bundlePath);
+  }
+  return result;
+}
+
+export async function removeLaunchSnapshot(snapshot, options) {
   if (!snapshot || typeof snapshot !== "object") {
     throw new Error("LAUNCH_SNAPSHOT_CLEANUP_INVALID");
   }
@@ -119,8 +178,10 @@ export async function removeLaunchSnapshot(snapshot) {
       throw new Error("LAUNCH_SNAPSHOT_CLEANUP_INVALID");
     }
   } catch (error) {
-    if (error?.code === "ENOENT") return;
+    if (error?.code === "ENOENT") return { unregistered: [], failed: [] };
     throw error;
   }
+  const outcome = await unregisterLaunchSnapshot(snapshot, options);
   await fs.rm(snapshot.root, { recursive: true, force: true });
+  return outcome;
 }

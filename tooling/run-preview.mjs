@@ -176,7 +176,14 @@ async function main() {
       );
     }
   } finally {
-    if (snapshot) await removeLaunchSnapshot(snapshot);
+    if (snapshot) {
+      const { failed } = await removeLaunchSnapshot(snapshot);
+      if (failed.length > 0) {
+        process.stderr.write(
+          `could not unregister launch snapshot bundles from LaunchServices: ${failed.join(", ")}\n`,
+        );
+      }
+    }
   }
 }
 
