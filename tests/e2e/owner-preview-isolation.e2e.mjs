@@ -3297,11 +3297,18 @@ async function treeSelfCheck() {
   // environment is found, one without it is clear, a vanished pid is gone, and
   // another process's environment never comes back.
   const rootText = `/farol-selfcheck-root-${randomUUID()}`;
+  // Each idle child lives until this test closes its stdin, not for a fixed
+  // time: a loaded machine cannot let it exit before the last inspection, and
+  // ending it needs no signal.
   const spawnIdle = (environment) =>
-    spawn(process.execPath, ["-e", "setTimeout(() => {}, 2000)"], {
-      env: environment,
-      stdio: "ignore",
-    });
+    spawn(
+      process.execPath,
+      [
+        "-e",
+        'process.stdin.on("end", () => process.exit(0)); process.stdin.resume()',
+      ],
+      { env: environment, stdio: ["pipe", "ignore", "ignore"] },
+    );
   const withRoot = spawnIdle({ HOME: rootText });
   const without = spawnIdle({ HOME: "/somewhere/else" });
   const gone = spawn("/usr/bin/true");
@@ -3356,9 +3363,12 @@ async function treeSelfCheck() {
     });
   } finally {
     await Promise.all(
-      [withRoot, without].map((child) =>
-        child.exitCode === null ? once(child, "exit") : null,
-      ),
+      [withRoot, without].map((child) => {
+        if (child.exitCode !== null || child.signalCode !== null) return null;
+        const exited = once(child, "exit");
+        child.stdin.end();
+        return exited;
+      }),
     );
   }
   // A failing run that leaves one survivor: the receipt lists it, the status
