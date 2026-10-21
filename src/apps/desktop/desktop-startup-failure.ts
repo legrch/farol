@@ -72,6 +72,54 @@ const PREVIOUS_DRAIN_FAILURE_CODES = new Set([
   "GO_CORE_PREVIOUS_HOST_DRAIN_UNCONFIRMED",
 ]);
 
+// First-launch adoption failures are the one startup failure a recipient can
+// act on, and the process has no window yet: these are shown in a native error
+// box and repeated in the stderr remedy. Keyed by closed code, never by text.
+const USER_NOTICES: ReadonlyMap<
+  string,
+  Readonly<{ title: string; message: string }>
+> = new Map([
+  [
+    "UPDATE_ADOPTION_NETWORK_FAILURE",
+    {
+      title: "Farol can't verify this copy yet",
+      message:
+        "Connect to the internet to verify Farol on first launch, then open Farol again.",
+    },
+  ],
+  [
+    "UPDATE_ADOPTION_RELEASE_NOT_FOUND",
+    {
+      title: "Farol isn't a published release",
+      message:
+        "This copy of Farol isn't a published release. Download Farol from its releases page.",
+    },
+  ],
+  [
+    "UPDATE_ADOPTION_TREE_MISMATCH",
+    {
+      title: "Farol doesn't match its release",
+      message:
+        "This copy of Farol doesn't match its published release. Download it again.",
+    },
+  ],
+  [
+    "UPDATE_ADOPTION_RELEASE_MISMATCH",
+    {
+      title: "Farol doesn't match its release",
+      message:
+        "This copy of Farol doesn't match its published release. Download it again.",
+    },
+  ],
+]);
+
+/** The user-facing notice for a recoverable startup code, or null. */
+export function desktopStartupFailureNotice(
+  code: string,
+): Readonly<{ title: string; message: string }> | null {
+  return USER_NOTICES.get(code) ?? null;
+}
+
 export function desktopStartupFailureCode(error: unknown): string {
   if (error instanceof BridgeError) {
     if (BRIDGE_FAILURE_CODES.has(error.code))
@@ -104,18 +152,21 @@ export function desktopStartupFailureReport(
       : environment === "owner-preview"
         ? "Farol Preview"
         : "Farol";
-  const remedy = PREVIOUS_DRAIN_FAILURE_CODES.has(code)
-    ? "The previous session did not confirm shutdown. Preserve the existing profile and its recovery records; rebuilding the app does not settle this state. Use a qualified recovery procedure before reopening that profile."
-    : DISPLAY_PRECONDITION_CODES.has(code)
-      ? "The visible-test display requirements are not met. Check available displays and the requested viewport before launching again. Use hidden mode only for an equivalent check."
-      : environment === "owner-preview" &&
-          code === "OWNER_PREVIEW_PROFILE_DIRECTORY_UNSAFE"
-        ? "The Preview profile or its parent is aliased or unsafe. Preserve the existing directories and resolve their physical separation before another launch; rebuilding does not repair this state."
-        : environment === "dev" && code === "DEV_PROFILE_DIRECTORY_AMBIGUOUS"
-          ? "Two distinct Dev profiles exist. Stop here and choose a profile explicitly; neither was moved or merged."
-          : environment === "dev"
-            ? "Fix the reported local build or configuration issue, then run 'task dev' again."
-            : "Rebuild the exact candidate, then launch it again.";
+  const notice = desktopStartupFailureNotice(code);
+  const remedy = notice
+    ? notice.message
+    : PREVIOUS_DRAIN_FAILURE_CODES.has(code)
+      ? "The previous session did not confirm shutdown. Preserve the existing profile and its recovery records; rebuilding the app does not settle this state. Use a qualified recovery procedure before reopening that profile."
+      : DISPLAY_PRECONDITION_CODES.has(code)
+        ? "The visible-test display requirements are not met. Check available displays and the requested viewport before launching again. Use hidden mode only for an equivalent check."
+        : environment === "owner-preview" &&
+            code === "OWNER_PREVIEW_PROFILE_DIRECTORY_UNSAFE"
+          ? "The Preview profile or its parent is aliased or unsafe. Preserve the existing directories and resolve their physical separation before another launch; rebuilding does not repair this state."
+          : environment === "dev" && code === "DEV_PROFILE_DIRECTORY_AMBIGUOUS"
+            ? "Two distinct Dev profiles exist. Stop here and choose a profile explicitly; neither was moved or merged."
+            : environment === "dev"
+              ? "Fix the reported local build or configuration issue, then run 'task dev' again."
+              : "Rebuild the exact candidate, then launch it again.";
   return (
     `${product} main-process startup failed before the app became ready (${code}). ${remedy}\n` +
     (error instanceof StartupBoundaryFailure
@@ -126,16 +177,42 @@ export function desktopStartupFailureReport(
   );
 }
 
+// A native notice is modal: it holds the exit until someone dismisses it. A
+// launch nobody is watching (E2E harness, CI, an explicit non-interactive
+// run) must never get one, or it would block instead of exiting.
+export function startupNoticeAllowed(env: NodeJS.ProcessEnv): boolean {
+  return (
+    env.FAROL_NEXT_E2E !== "1" &&
+    env.FAROL_NEXT_NONINTERACTIVE !== "1" &&
+    (env.CI === undefined || env.CI === "" || env.CI === "false")
+  );
+}
+
 export function terminateDesktopStartup(
   error: unknown,
   environment: DesktopEnvironment,
   sink: Readonly<{
     write: (message: string) => void;
     exit: (code: number) => void;
+    // Optional native notice for recoverable first-launch failures only. It is
+    // shown once and never retried. It cannot skip the exit, but a modal notice
+    // delays it until dismissed, so callers pass it only for an interactive
+    // launch (`startupNoticeAllowed`).
+    notify?: (title: string, message: string) => void;
   }>,
 ): void {
   try {
     sink.write(desktopStartupFailureReport(error, environment));
+    const notice = desktopStartupFailureNotice(
+      desktopStartupFailureCode(error),
+    );
+    if (notice && sink.notify) {
+      try {
+        sink.notify(notice.title, notice.message);
+      } catch {
+        // The report above already carries the remedy; the exit still follows.
+      }
+    }
   } finally {
     // Startup has not been accepted as ready, so there is no useful process
     // to keep alive. Electron's default uncaught-exception path can otherwise

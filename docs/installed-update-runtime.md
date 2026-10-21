@@ -178,7 +178,7 @@ receipt and its exact source/target digest. Version and build labels alone canno
 turn modified installed bytes into an accepted predecessor. Missing, redirected,
 malformed or mismatched evidence blocks preparation without launching a helper.
 
-### First-launch adoption (user slot only)
+### First-launch adoption (user slot at the first check; shared slot at startup)
 
 A copy that was downloaded and dragged into `~/Applications/Farol.app` has no
 private promotion receipt and no update receipt. Instead of refusing every check
@@ -188,10 +188,10 @@ That error means: no `last-update.json`, no closed-repair receipt or journal, no
 `<slot>.receipt.json` and no `adopted-baseline.json`, in the user slot. "No" means
 the name does not exist (`ENOENT`). A file that exists but holds JSON `null` is
 present, keeps the pre-adoption behaviour for that evidence and is never adopted
-over. The shared
-`/Applications/Farol.app` slot never adopts and keeps its startup refusal.
-Adoption belongs to the ordinary desktop runtime, user slot only; never shared or
-supervised. The supervised runtime neither looks up a release, nor writes, nor
+over. Writing at the first check belongs to the ordinary desktop runtime in the user
+slot only. The shared `/Applications/Farol.app` slot adopts once, at startup (below),
+and its runtime only reads a valid record; it never looks up a release or writes one
+itself. The supervised runtime neither looks up a release, nor writes, nor
 reads `adopted-baseline.json`, and behaves exactly as before adoption existed.
 
 Adoption runs these steps and writes nothing unless all of them pass:
@@ -242,6 +242,74 @@ GitHub release for its exact version published at the time of the first check. I
 detects a corrupt or partial copy, the wrong version, and later drift of the
 installed tree. It does not detect a deliberately tampered download, because the
 manifest comes from the same account and channel that served the download.
+
+#### Shared slot: adoption at startup
+
+A recipient who drags Farol into `/Applications/Farol.app` has no promotion
+receipt, so the ordinary shared-slot startup (`observeSharedSlotStartup`, run
+before `app.whenReady()` and before any backend binary is spawned) used to find no
+accepted baseline and exit with `DESKTOP_STARTUP_FAILED`, showing the user nothing.
+AttestedCore's immutable-tree contract needs the baseline before the private
+resource image is captured, so this slot adopts at startup, not at the first check.
+
+Startup enters adoption only inside the final branch that reads
+`/Applications/Farol.app.receipt.json`, after the `ready.json`, `last-update.json`
+and closed-repair branches. It requires a clean build with a `buildVersion` on the
+`github-stable` or `github-owner-beta` channel, and every other piece of baseline
+evidence to be truly absent (`ENOENT`): the receipt, `last-update.json`, the repair
+receipt and the repair journal. A present file, even holding JSON `null`, keeps the
+pre-adoption refusal. A `ready.json` that is a genuinely valid retained download with no
+operation or preparation (the record the updater itself accepts:
+`parseRetainedGithubReleaseManifest` ok, so a valid release manifest and a
+non-empty handle) does not block adoption: the recipient may quit between
+downloading and installing an update, and that must not strand the copy. A
+malformed one refuses startup as before, and a `ready.json` with an operation is
+handled by its existing branch. A present adopted record that cannot be read or
+decoded (malformed JSON, unknown or missing fields, wrong type) is tampered and
+fails with exactly `UPDATE_ACCEPTED_SOURCE_UNCONFIRMED`.
+
+1. A valid `adopted-baseline.json` in the private root, with
+   `slot === "/Applications/Farol.app"` and the running profile, supplies the
+   expectation. The network is not touched. A user-slot record is not valid here,
+   and a shared-slot record is not valid for the user slot.
+2. A record that does not parse, has an invalid manifest or names another slot or
+   profile is tampered: startup fails with `UPDATE_ACCEPTED_SOURCE_UNCONFIRMED`, as
+   before, and never adopts over it.
+3. With no record, or a valid record that describes another published build
+   (superseded, for example by a newer release dragged over the old copy), startup
+   builds the transport with `createGithubUpdateTransport` (plain Node https, which
+   works before Electron is ready; its package verifier is never used) and runs the
+   same lookup and manifest match as above, failing with
+   `UPDATE_ADOPTION_NETWORK_FAILURE`, `UPDATE_ADOPTION_RELEASE_NOT_FOUND`,
+   `UPDATE_ADOPTION_RELEASE_MISMATCH` or another `UPDATE_ADOPTION_<CODE>`.
+4. It measures the installed tree in-process and requires its digest to equal the
+   manifest's `artifactSha256`, else `UPDATE_ADOPTION_TREE_MISMATCH`, before any
+   capture.
+5. The expectation is `{digest: manifest.artifactSha256, version, buildId}`. It
+   comes from the manifest, never from the slot being measured. The existing
+   `captureInstalledExecutionSnapshot` runs with that `expectedDigest`.
+6. Only after the capture succeeds is `adopted-baseline.json` written, with
+   `slot: "/Applications/Farol.app"`, through the same atomic private record writer
+   into the profile's updater root. Nothing is ever written under `/Applications`.
+   A superseded record is replaced only if its bytes are unchanged; a record that
+   another writer published meanwhile must describe this build, else startup
+   fails. A failed write is the closed failure `UPDATE_ADOPTION_RECORD_UNWRITTEN`.
+
+Any failure writes nothing. The four user-actionable failures (network, release not
+found, tree mismatch, release mismatch) are also shown in a native error box, since
+the process has no window yet, then the process exits 1; there is no retry loop.
+The box is modal, so a non-interactive launch (`FAROL_NEXT_E2E=1`, a set `CI`,
+or `FAROL_NEXT_NONINTERACTIVE=1`) gets no box and exits at once, with the same
+stderr report.
+Once the app is running, the shared-slot updater accepts the same valid record in
+`readAcceptedSource()` and reports no `UPDATE_SOURCE_IDENTITY_UNCONFIRMED`.
+
+The record lives per user, in `~/Library/Application Support/Farol Next Preview/
+installed-updates/`. The first launch needs the network; later launches read the
+record offline. Adoption is trust on first use, as above. One limitation is
+unchanged: a second macOS user cannot launch a shared copy owned by another uid,
+because the immutable execution snapshot and the slot ownership checks require the
+launching user to own the slot.
 
 A durable ready record binds the verified archive to an operation before helper
 dispatch. Only the helper's exact readiness acknowledgment permits normal Quit.

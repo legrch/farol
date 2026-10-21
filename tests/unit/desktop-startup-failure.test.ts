@@ -3,10 +3,25 @@ import {
   DESKTOP_LAUNCH_RESULT_PREFIX,
   DESKTOP_STARTUP_FAILURE_PREFIX,
   desktopStartupFailureCode,
+  desktopStartupFailureNotice,
   runDesktopStartupBoundary,
+  startupNoticeAllowed,
   terminateDesktopStartup,
 } from "../../src/apps/desktop/desktop-startup-failure";
 import { BridgeError } from "../../apps/desktop/bridge/client";
+
+describe("startup notice interactivity", () => {
+  it("allows the modal notice only for an interactive launch", () => {
+    expect(startupNoticeAllowed({})).toBe(true);
+    expect(startupNoticeAllowed({ CI: "false" })).toBe(true);
+    expect(startupNoticeAllowed({ FAROL_NEXT_E2E: "1" })).toBe(false);
+    expect(startupNoticeAllowed({ FAROL_NEXT_NONINTERACTIVE: "1" })).toBe(
+      false,
+    );
+    expect(startupNoticeAllowed({ CI: "true" })).toBe(false);
+    expect(startupNoticeAllowed({ CI: "1" })).toBe(false);
+  });
+});
 
 describe("desktop startup failure boundary", () => {
   it("preserves an unsafe Preview profile without suggesting a rebuild or retry", () => {
@@ -232,5 +247,101 @@ describe("desktop startup failure boundary", () => {
     });
     expect(write.mock.calls[0]?.[0]).not.toContain(privateMessage);
     expect(write.mock.calls[0]?.[0]).not.toContain("/Users/");
+  });
+
+  describe("first-launch adoption failures reach the user", () => {
+    const notices = [
+      [
+        "UPDATE_ADOPTION_NETWORK_FAILURE",
+        "Connect to the internet to verify Farol on first launch, then open Farol again.",
+      ],
+      [
+        "UPDATE_ADOPTION_RELEASE_NOT_FOUND",
+        "This copy of Farol isn't a published release. Download Farol from its releases page.",
+      ],
+      [
+        "UPDATE_ADOPTION_TREE_MISMATCH",
+        "This copy of Farol doesn't match its published release. Download it again.",
+      ],
+      [
+        "UPDATE_ADOPTION_RELEASE_MISMATCH",
+        "This copy of Farol doesn't match its published release. Download it again.",
+      ],
+    ] as const;
+
+    it.each(notices)(
+      "maps %s to its notice and remedy and notifies once",
+      (code, message) => {
+        expect(desktopStartupFailureNotice(code)?.message).toBe(message);
+        const write = vi.fn<(message: string) => void>();
+        const exit = vi.fn<(code: number) => void>();
+        const notify = vi.fn<(title: string, message: string) => void>();
+        terminateDesktopStartup(new Error(code), "preview", {
+          write,
+          exit,
+          notify,
+        });
+        const report = write.mock.calls[0]?.[0];
+        expect(report).toContain(message);
+        expect(report).not.toContain("Rebuild the exact candidate");
+        expect(report).toContain(`${DESKTOP_STARTUP_FAILURE_PREFIX}${code}`);
+        expect(notify).toHaveBeenCalledExactlyOnceWith(
+          expect.any(String),
+          message,
+        );
+        expect(notify.mock.calls[0]![0].length).toBeGreaterThan(0);
+        expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+      },
+    );
+
+    it("never notifies for any other code and keeps the generic remedy", () => {
+      for (const failure of [
+        new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED"),
+        new Error("UPDATE_ADOPTION_RECORD_UNWRITTEN"),
+        new Error("private /Users/owner/path"),
+        new BridgeError("refused", "invalid_computer_publication"),
+      ]) {
+        const write = vi.fn<(message: string) => void>();
+        const exit = vi.fn<(code: number) => void>();
+        const notify = vi.fn();
+        terminateDesktopStartup(failure, "preview", { write, exit, notify });
+        expect(
+          desktopStartupFailureNotice(desktopStartupFailureCode(failure)),
+        ).toBeNull();
+        expect(notify).not.toHaveBeenCalled();
+        expect(write.mock.calls[0]?.[0]).toContain(
+          "Rebuild the exact candidate",
+        );
+        expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+      }
+    });
+
+    it("exits with code 1 and still reports when the notice throws", () => {
+      const write = vi.fn<(message: string) => void>();
+      const exit = vi.fn<(code: number) => void>();
+      const notify = vi.fn(() => {
+        throw new Error("dialog unavailable");
+      });
+      expect(() =>
+        terminateDesktopStartup(
+          new Error("UPDATE_ADOPTION_NETWORK_FAILURE"),
+          "preview",
+          { write, exit, notify },
+        ),
+      ).not.toThrow();
+      expect(write).toHaveBeenCalledOnce();
+      expect(notify).toHaveBeenCalledOnce();
+      expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+    });
+
+    it("works without a notify hook", () => {
+      const exit = vi.fn<(code: number) => void>();
+      terminateDesktopStartup(
+        new Error("UPDATE_ADOPTION_NETWORK_FAILURE"),
+        "preview",
+        { write: () => undefined, exit },
+      );
+      expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+    });
   });
 });
