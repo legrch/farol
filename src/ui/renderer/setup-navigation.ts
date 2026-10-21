@@ -28,7 +28,12 @@ export function setupChecklist(snapshot: WindowSnapshot) {
       snapshot.runtime === "ready" &&
       Boolean(snapshot.buildId) &&
       snapshot.configuration?.status === "ready",
-    signedIn: signIn.signedIn,
+    signedIn:
+      signIn.signedIn &&
+      snapshot.configuration?.status === "ready" &&
+      snapshot.configuration.settings.setup.chatgpt.verified?.buildId ===
+        snapshot.buildId &&
+      snapshot.configuration.settings.setup.chatgpt.reachable === "reachable",
     hasWorkspaces: setup.facts.hasFolder,
     workspacesVerified:
       setup.workspacesVerified &&

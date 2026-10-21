@@ -88,8 +88,69 @@ const tunnelFrames: readonly Frame[] = [
     cursor: [82, 45],
   },
 ];
+const chatgptFrames = (tunnelId: string): readonly Frame[] => [
+  {
+    caption: "Open ChatGPT Settings → Apps",
+    page: "Apps",
+    button: "Create app",
+    fields: [],
+    cursor: [16, 46],
+  },
+  {
+    caption: "Choose Create app",
+    page: "Create app",
+    button: "Create",
+    fields: [["Name", ""]],
+    cursor: [82, 20],
+  },
+  {
+    caption: "Name the app “Farol”",
+    page: "Create app",
+    button: "Create",
+    fields: [["Name", "Farol"]],
+    cursor: [48, 48],
+  },
+  {
+    caption: "Choose Tunnel and enter your tunnel ID",
+    page: "Create app",
+    button: "Create",
+    fields: [
+      ["Name", "Farol"],
+      ["Connection", "Tunnel"],
+      ["Tunnel ID", tunnelId || "Your tunnel ID"],
+    ],
+    cursor: [48, 60],
+  },
+  {
+    caption: "Set sign-in to None, then Create",
+    page: "Create app",
+    button: "Create",
+    fields: [
+      ["Name", "Farol"],
+      ["Connection", "Tunnel"],
+      ["Sign-in", "None"],
+    ],
+    cursor: [78, 78],
+  },
+  {
+    caption: "Return to Farol and test in ChatGPT",
+    page: "Apps",
+    button: "Farol",
+    fields: [["App", "Farol"]],
+    cursor: [82, 45],
+  },
+];
 /** Illustrations only. No provider pages, requests, credentials or screenshots. */
-export function SetupWalkthrough() {
+export function SetupWalkthrough({
+  kind = "tunnel",
+  tunnelId = "",
+}: {
+  kind?: "tunnel" | "chatgpt";
+  tunnelId?: string;
+}) {
+  const frames = kind === "tunnel" ? tunnelFrames : chatgptFrames(tunnelId);
+  const label =
+    kind === "tunnel" ? "Create a tunnel and a key" : "Add to ChatGPT";
   const [reduced, setReduced] = useState(
     () =>
       typeof window.matchMedia === "function" &&
@@ -108,37 +169,34 @@ export function SetupWalkthrough() {
   useEffect(() => {
     if (reduced || paused) return;
     const timer = window.setInterval(
-      () => setScene((value) => (value + 1) % tunnelFrames.length),
+      () => setScene((value) => (value + 1) % frames.length),
       2400,
     );
     return () => window.clearInterval(timer);
-  }, [reduced, paused]);
+  }, [reduced, paused, frames.length]);
   if (reduced)
     return (
       <ol
         className="walkthrough-static"
-        aria-label="Create a tunnel and a key: numbered frames"
+        aria-label={`${label}: numbered frames`}
       >
-        {tunnelFrames.map((frame, index) => (
+        {frames.map((frame, index) => (
           <li key={index}>
             <strong>
               {index + 1}. {frame.caption}
             </strong>
-            <FrameView frame={frame} animated={false} />
+            <FrameView frame={frame} animated={false} kind={kind} />
           </li>
         ))}
       </ol>
     );
-  const frame = tunnelFrames[scene]!;
+  const frame = frames[scene % frames.length]!;
   return (
-    <figure
-      className="setup-walkthrough"
-      aria-label="Create a tunnel and a key walkthrough"
-    >
-      <FrameView frame={frame} animated />
+    <figure className="setup-walkthrough" aria-label={`${label} walkthrough`}>
+      <FrameView frame={frame} animated kind={kind} />
       <figcaption>
         <span>
-          {scene + 1} / {tunnelFrames.length}
+          {scene + 1} / {frames.length}
         </span>{" "}
         {frame.caption}
       </figcaption>
@@ -153,20 +211,29 @@ export function SetupWalkthrough() {
     </figure>
   );
 }
-function FrameView({ frame, animated }: { frame: Frame; animated: boolean }) {
+function FrameView({
+  frame,
+  animated,
+  kind,
+}: {
+  frame: Frame;
+  animated: boolean;
+  kind: "tunnel" | "chatgpt";
+}) {
   return (
     <div
       className="walkthrough-scene"
       aria-hidden={animated ? "true" : undefined}
     >
       <div className="walkthrough-address">
-        platform.openai.com ›{" "}
-        {frame.page.includes("key") ? "API keys" : "Tunnels"}
+        {kind === "chatgpt"
+          ? "chatgpt.com › Settings › Apps"
+          : `platform.openai.com › ${frame.page.includes("key") ? "API keys" : "Tunnels"}`}
       </div>
       <div className="walkthrough-body">
         <div className="walkthrough-nav">
-          <span>Tunnels</span>
-          <span>API keys</span>
+          <span>{kind === "chatgpt" ? "General" : "Tunnels"}</span>
+          <span>{kind === "chatgpt" ? "Apps" : "API keys"}</span>
           <span>Usage</span>
           <span>Settings</span>
         </div>

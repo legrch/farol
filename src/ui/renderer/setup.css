@@ -533,3 +533,22 @@
     transition: none;
   }
 }
+.setup-app-values {
+  margin: 18px 0;
+}
+.setup-app-values > div {
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr);
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.setup-app-values dt {
+  color: var(--muted);
+}
+.setup-app-values dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.setup-test {
+  margin-top: 30px;
+}

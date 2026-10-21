@@ -1,7 +1,5 @@
 import { SetupWalkthrough } from "../../../apps/desktop/renderer/setup-walkthrough";
-import { unavailableConnectionStatus } from "../../../apps/desktop/renderer/connection-status";
 import { connectorSetupPresentation } from "../connector-setup-presentation";
-import { ConnectionGuide } from "./connection-guide";
 import {
   defaultNavigationShortcuts,
   parseNavigationShortcuts,
@@ -1961,7 +1959,8 @@ function ThisMac({ settings, snapshot, facade, actions }: PageProps) {
   );
 }
 function Connection(props: PageProps) {
-  if (props.setupStep !== "connection") return <LegacyConnection {...props} />;
+  if (props.setupStep === "signin") return <SignInStep {...props} />;
+  if (props.setupStep === "attachment") return <AddToChatGPT {...props} />;
   return <ConnectMac {...props} />;
 }
 function ConnectMac({ settings, snapshot, facade, actions }: PageProps) {
@@ -2172,904 +2171,187 @@ function SetupFailure({
     </div>
   );
 }
-function LegacyConnection({
-  settings,
-  snapshot,
-  facade,
-  actions,
-  setupStep,
-}: PageProps) {
-  const connector = settings.connectors.secureMcp;
-  const liveConnectionStatus =
-    snapshot.connectionStatus ?? unavailableConnectionStatus;
-  const setup = computerSetup(snapshot);
+function SignInStep({ snapshot, facade, actions }: PageProps) {
+  const signIn = signInPresentation(snapshot);
+  const saved =
+    snapshot.configuration?.status === "ready"
+      ? snapshot.configuration.settings.setup.chatgpt
+      : null;
+  const verified =
+    signIn.signedIn &&
+    saved?.verified?.buildId === snapshot.buildId &&
+    saved.reachable === "reachable";
   const feedback = useSettingsFeedback(facade);
-  const signIn = signInPresentation(
-    snapshot,
-    Object.values(feedback.intents).map(
-      (intent) => settledEdit(intent, snapshot) ?? intent,
-    ),
-  );
-  const connectionFeedback = feedback.pages[feedbackPage(snapshot.destination)];
-  const feedbackId = connectionFeedback?.result?.id ?? "";
-  const localFeedback =
-    /^settings:connector\.(?:check-health|start|repair|save-and-connect):/u.test(
-      feedbackId,
-    )
-      ? connectionFeedback
-      : null;
-  const attachmentFeedback =
-    /^settings:connector\.(?:verify-app|check-attachment):/u.test(feedbackId)
-      ? connectionFeedback
-      : null;
-  const embeddedStatus = feedback.unretained ? "Outcome unknown" : signIn.label;
-  const embeddedSignedIn = signIn.signedIn && !feedback.unretained;
-  const openExistingSession =
-    setupStep === "signin" &&
-    signIn.unknown &&
-    !signIn.outcomeUnknown &&
-    !signIn.pending &&
-    !feedback.unretained;
-  const attachmentReady = setup.ready && !actions.computerPauseReason;
-  const externalChallenge = actions.computerPauseReason
-    ? null
-    : setup.externalChallenge;
-  const connectorName =
-    snapshot.environment === "dev"
-      ? "Farol Dev"
-      : snapshot.environment === "owner-preview"
-        ? "Farol Preview"
-        : "Farol";
-  const [copiedVerification, setCopiedVerification] = useState<string | null>(
-    null,
-  );
-  const [copyError, setCopyError] = useState<string | null>(null);
-  const [externalVerificationOpen, setExternalVerificationOpen] =
-    useState(false);
-  const showExternalVerification =
-    externalChallenge &&
-    (!setupStep || (setupStep === "attachment" && externalVerificationOpen));
-  const verificationIdentity = externalChallenge
-    ? JSON.stringify([
-        externalChallenge.tunnelId,
-        externalChallenge.workspaceId,
-        externalChallenge.value,
-      ])
-    : null;
-  const verificationRequest = externalChallenge
-    ? `Please use the ${connectorName} connector to call ` +
-      (externalChallenge.workspaceId === null
-        ? "farol_connector_verify_catalogue exactly once with "
-        : "farol_connector_verify exactly once with ") +
-      JSON.stringify({
-        challenge: externalChallenge.value,
-        ...(externalChallenge.workspaceId === null
-          ? {}
-          : { workspaceId: externalChallenge.workspaceId }),
-      }) +
-      ". Report the result; do not write files."
-    : null;
-  const [tunnelId, setTunnelId] = useState(connector.tunnelId ?? "");
-  const [key, setKey] = useState("");
-  const [keyVisible, setKeyVisible] = useState(false);
-  const [replacing, setReplacing] = useState(false);
-  const saved = connector.credential === "stored";
-  const editing = !saved || replacing;
-  const replacementUnconfirmed = Object.values(snapshot.intents).some(
-    (intent) =>
-      (intent.id.startsWith(intention("connector.save-and-connect")) ||
-        intent.id === intention("connector.configure")) &&
-      intent.state === "unknown" &&
-      intent.connectorSetup?.credentials !== "saved",
-  );
-  const keyComposing = useRef(false);
-  const credentialFeedbackId = useId();
-  const credentialInput = ProductConfigurationCommandSchema.safeParse({
-    kind: "connector.configure",
-    tunnelId,
-    runtimeKey: key,
-  });
-  const tunnelInvalid =
-    !credentialInput.success &&
-    credentialInput.error.issues.some((issue) => issue.path[0] === "tunnelId");
-  const keyInvalid =
-    !credentialInput.success &&
-    credentialInput.error.issues.some(
-      (issue) => issue.path[0] === "runtimeKey",
-    );
-  const credentialFeedback = tunnelInvalid
-    ? "Enter the Tunnel ID from Tunnels: 1–160 letters, numbers, periods, underscores, colons or hyphens, without spaces or line breaks."
-    : keyInvalid
-      ? "Enter the complete runtime key: 20–512 printable ASCII characters, without spaces or line breaks."
-      : "Credential format is valid. Save & connect starts the local connection; verification in ChatGPT is still needed.";
-  const credentialPauseReason = !actions.allowed("connector.save-and-connect")
-    ? actions.computerPauseReason
-    : null;
-  const connectionStatus =
-    setup.label === "Outcome unknown" ||
-    setup.label === "Connection check pending"
-      ? setup.label
-      : setup.ready
-        ? "Computer ready"
-        : setup.localConnectionCurrent
-          ? "Connected to this Mac · ChatGPT check needed"
-          : !saved
-            ? "Connection details needed"
-            : !connector.tunnelClient
-              ? "Connection helper needed"
-              : setup.facts.hasFolder && !setup.workspacesVerified
-                ? "Workspace verification needed"
-                : setup.canStart
-                  ? "Ready to connect"
-                  : setup.canReconnect
-                    ? "Connection needs recovery"
-                    : setup.label;
-  const connectionDiagnostics = (
-    <button
-      type="button"
-      className="text-button"
-      onClick={() => facade.navigate({ area: "settings", page: "diagnostics" })}
-    >
-      Connection diagnostics
-    </button>
-  );
+  const result = feedback.pages["setup:signin"]?.result;
   return (
-    <>
-      {!setupStep && <h2>Connection</h2>}
-      <div hidden={setupStep !== undefined && setupStep !== "connection"}>
-        <Group title="Tunnel">
-          {setupStep === "connection" && (
-            <div className="control-row">
-              <Command
-                actions={actions}
-                command={{
-                  kind: "onboarding.open-help",
-                  destination: "tunnels",
-                }}
-              >
-                Open Tunnels
-              </Command>
-              <Command
-                actions={actions}
-                command={{
-                  kind: "onboarding.open-help",
-                  destination: "setup-guide",
-                }}
-              >
-                Connection guide
-              </Command>
-            </div>
-          )}
-          <p className="badges" role="status">
-            {connectionStatus}
-          </p>
-          {saved && !setup.ready && (
-            <p className="description">
-              {setupStep && setup.localConnectionCurrent
-                ? "This Mac is connected. Continue to add the app in ChatGPT."
-                : setup.next}
-            </p>
-          )}
-          {saved && (
-            <div
-              className="credentials-saved"
-              data-unconfirmed={replacementUnconfirmed}
-              role="status"
-            >
-              <strong>
-                {replacementUnconfirmed
-                  ? "Credential replacement unconfirmed"
-                  : "Tunnel credentials saved"}
-              </strong>
-              <p className="description">
-                {replacementUnconfirmed
-                  ? "Do not submit another replacement. Review the existing result in Diagnostics."
-                  : "The saved key stays private. Edit only when these details change."}
-              </p>
-              {!replacing && (
-                <button
-                  type="button"
-                  className="subtle"
-                  disabled={!actions.allowed("connector.save-and-connect")}
-                  onClick={() => {
-                    setTunnelId(connector.tunnelId ?? "");
-                    setKey("");
-                    setKeyVisible(false);
-                    setReplacing(true);
-                  }}
-                >
-                  Edit connection
-                </button>
-              )}
-            </div>
-          )}
-          {editing && (
-            <form
-              className="connection-credentials"
-              autoComplete="off"
-              onCompositionStart={() => {
-                keyComposing.current = true;
-              }}
-              onCompositionEnd={() => {
-                keyComposing.current = false;
-              }}
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (
-                  keyComposing.current ||
-                  !actions.allowed("connector.save-and-connect")
-                )
-                  return;
-                const command: ProductConfigurationCommand = {
-                  kind: "connector.save-and-connect",
-                  operationId: crypto.randomUUID(),
-                  buildId: snapshot.buildId ?? "",
-                  tunnelId,
-                  runtimeKey: key,
-                };
-                if (
-                  !key.trim() ||
-                  !ProductConfigurationCommandSchema.safeParse(command).success
-                )
-                  return;
-                setKey("");
-                setKeyVisible(false);
-                void actions.run(command).then((result) => {
-                  if (
-                    result?.state === "applied" ||
-                    result?.connectorSetup?.credentials === "saved"
-                  )
-                    setReplacing(false);
-                });
-              }}
-            >
-              <label className="setting-row">
-                Tunnel ID
-                <input
-                  className="field"
-                  value={tunnelId}
-                  aria-describedby={`${credentialFeedbackId} ${credentialFeedbackId}-pause`}
-                  aria-invalid={tunnelId.length > 0 && tunnelInvalid}
-                  onChange={(event) => setTunnelId(event.currentTarget.value)}
-                  required
-                  maxLength={160}
-                />
-              </label>
-              <label className="setting-row">
-                Runtime key
-                <input
-                  id={`${credentialFeedbackId}-key`}
-                  className="field"
-                  type={keyVisible ? "text" : "password"}
-                  autoComplete="new-password"
-                  spellCheck={false}
-                  value={key}
-                  placeholder={
-                    saved ? "••••••••••••" : "Paste your runtime key"
-                  }
-                  aria-description={
-                    saved
-                      ? "A key is saved. Enter a new key to replace it."
-                      : undefined
-                  }
-                  aria-describedby={`${credentialFeedbackId} ${credentialFeedbackId}-pause`}
-                  aria-invalid={key.length > 0 && keyInvalid}
-                  onChange={(event) => {
-                    setKey(event.currentTarget.value);
-                    if (event.currentTarget.value.length === 0)
-                      setKeyVisible(false);
-                  }}
-                  maxLength={512}
-                  required
-                />
-              </label>
-              <button
-                type="button"
-                className="text-button"
-                aria-controls={`${credentialFeedbackId}-key`}
-                aria-pressed={keyVisible}
-                disabled={key.length === 0}
-                onClick={() => setKeyVisible((visible) => !visible)}
-              >
-                {keyVisible ? "Hide runtime key" : "Show runtime key"}
-              </button>
-              <p
-                id={credentialFeedbackId}
-                className="description credential-entry-feedback"
-                role="status"
-              >
-                {credentialFeedback}
-              </p>
-              <p
-                id={`${credentialFeedbackId}-pause`}
-                className="description credential-pause-feedback"
-                role="status"
-              >
-                {credentialPauseReason &&
-                  `Saving is paused. ${credentialPauseReason}`}
-              </p>
-              <p className="description">
-                The key stays private and is cleared from this field when
-                submitted.
-              </p>
-              <button
-                className="primary"
-                disabled={
-                  !key.trim() ||
-                  !ProductConfigurationCommandSchema.safeParse({
-                    kind: "connector.configure",
-                    tunnelId,
-                    runtimeKey: key,
-                  }).success ||
-                  !actions.allowed("connector.save-and-connect")
-                }
-              >
-                Save & connect
-              </button>
-              <button
-                type="button"
-                className="subtle"
-                onClick={() => {
-                  setKey("");
-                  setKeyVisible(false);
-                  setTunnelId(connector.tunnelId ?? "");
-                  setReplacing(false);
-                }}
-              >
-                Cancel
-              </button>
-            </form>
-          )}
-          {!saved && !connector.tunnelClient && (
-            <Command
-              actions={actions}
-              command={{ kind: "connector.discover-client" }}
-            >
-              Find connection helper
-            </Command>
-          )}
-          {saved &&
-            !replacing &&
-            setup.facts.hasFolder &&
-            !setup.workspacesVerified && (
-              <button
-                type="button"
-                className="text-button"
-                onClick={() =>
-                  facade.navigate(
-                    setupStep
-                      ? { area: "setup", setupStep: "folders" }
-                      : { area: "settings", page: "folders" },
-                  )
-                }
-              >
-                Verify a workspace
-              </button>
-            )}
-          {saved && !replacing && connector.tunnelClient && setup.canStart && (
-            <Command
-              actions={actions}
-              admit={(current) => computerSetup(current).canStart}
-              command={{ kind: "connector.start" }}
-              className="primary"
-            >
-              Connect this Mac
-            </Command>
-          )}
-          {saved &&
-            !replacing &&
-            connector.tunnelClient &&
-            !setup.localConnectionCurrent &&
-            setup.canReconnect && (
-              <Command
-                actions={actions}
-                admit={(current) => computerSetup(current).canReconnect}
-                command={{ kind: "connector.repair" }}
-                className="primary"
-              >
-                Reconnect
-              </Command>
-            )}
-          <div
-            className="notice connection-live-status"
-            role="status"
-            aria-live="polite"
-            data-state={liveConnectionStatus.state}
-          >
-            <strong>
-              {liveConnectionStatus.marker} {liveConnectionStatus.label}
-            </strong>
-            <p>{liveConnectionStatus.detail}</p>
-            <p>{liveConnectionStatus.delivery}</p>
-          </div>
-          {saved && !replacing && setup.localConnectionCurrent && (
-            <Command
-              actions={actions}
-              command={{ kind: "connector.check-health" }}
-              className="primary"
-            >
-              Check connection
-            </Command>
-          )}
-          {localFeedback && (
-            <p className="notice connection-action-feedback" role="status">
-              {localFeedback.text}
-            </p>
-          )}
-          {saved && !replacing && !connector.tunnelClient && (
-            <Command
-              actions={actions}
-              command={{ kind: "connector.discover-client" }}
-              className="primary"
-            >
-              Find connection helper
-            </Command>
-          )}
-          {setupStep ? (
-            <details className="setup-help">
-              <summary>Connection help</summary>
-              <p className="description">
-                Review detailed status or an unconfirmed result in Diagnostics.
-                Opening help does not repeat an action.
-              </p>
-              {connectionDiagnostics}
-            </details>
-          ) : (
-            connectionDiagnostics
-          )}
-        </Group>
-      </div>
-      <div hidden={setupStep !== undefined && setupStep !== "attachment"}>
-        <Group title="Add to ChatGPT">
-          {!setupStep && (
-            <p className="description">
-              Attach this {connectorName} connection in ChatGPT, then ask
-              ChatGPT to verify it, or use the connection check below.
-            </p>
-          )}
-          {setupStep === "attachment" && !attachmentReady && (
-            <p className="description">
-              Add the app using this tunnel in ChatGPT Plugins, then check the
-              connection below.
-            </p>
-          )}
-          {!setupStep && !attachmentReady && (
-            <ol className="attachment-steps">
-              <li>
-                {actions.computerPauseReason ? (
-                  "Review the existing attachment result in Connection diagnostics before changing the connection."
-                ) : (
-                  <>
-                    Open Tunnels in ChatGPT and attach this {connectorName}
-                    {" connection."}
-                  </>
-                )}
-              </li>
-              {externalChallenge && !setupStep && (
-                <li>
-                  Copy the current verification request and send it in ChatGPT.
-                </li>
-              )}
-              <li>Return here to check the recorded attachment result.</li>
-            </ol>
-          )}
-          {setupStep && !attachmentReady && !externalChallenge && (
-            <p className="notice" role="status">
-              No current verification request is available.{" "}
-              {actions.computerPauseReason ??
-                ((setup.facts.hasFolder && !setup.workspacesVerified) ||
-                !setup.localConnectionCurrent
-                  ? setup.next
-                  : connector.challenge
-                    ? "The saved request no longer matches this build or connection. Review Connection diagnostics before requesting new verification."
-                    : "The local connection has no current request. Check attachment to observe a retained result; review Connection diagnostics if none is confirmed.")}
-            </p>
-          )}
-          {setupStep && attachmentReady && (
-            <p className="description">
-              {setup.facts.hasFolder
-                ? "The retained attachment check matches this build, connection and workspace."
-                : "The retained attachment check matches this build and connection. No workspace access is enabled."}{" "}
-              Return to Overview to see the current checks.
-            </p>
-          )}
-          <div className="control-row">
-            <Command
-              actions={actions}
-              command={{ kind: "onboarding.open-help", destination: "tunnels" }}
-            >
-              Open Tunnels
-            </Command>
-            <Command
-              actions={actions}
-              command={{
-                kind: "onboarding.open-help",
-                destination: "setup-guide",
-              }}
-            >
-              Open connection guide
-            </Command>
-          </div>
-          {!setupStep && <ConnectionGuide />}
-          {attachmentFeedback && (
-            <p className="notice connection-action-feedback" role="status">
-              {attachmentFeedback.text}
-            </p>
-          )}
-          {setupStep === "attachment" && (
-            <EmbeddedConnectionCheck
-              settings={settings}
-              snapshot={snapshot}
-              facade={facade}
-              actions={actions}
-              setupStep={setupStep}
-            />
-          )}
-          {setupStep === "attachment" && externalChallenge && (
-            <button
-              type="button"
-              className="text-button"
-              aria-expanded={externalVerificationOpen}
-              onClick={() => setExternalVerificationOpen((open) => !open)}
-            >
-              Use ChatGPT outside Farol
-            </button>
-          )}
-          {showExternalVerification && (
-            <div
-              className="connector-challenge"
-              data-connector-challenge="pending"
-            >
-              {setupStep === "attachment" && (
-                <p className="description">
-                  Use your own ChatGPT window, then return here to check
-                  attachment. Sign-in inside Farol is optional.
-                </p>
-              )}
-              <button
-                type="button"
-                className="primary"
-                onClick={async () => {
-                  // Copy is the owner's explicit local action. It neither
-                  // submits a provider message nor changes connector state.
-                  try {
-                    if (!navigator.clipboard?.writeText)
-                      throw new Error("CLIPBOARD_UNAVAILABLE");
-                    await navigator.clipboard.writeText(verificationRequest!);
-                    setCopiedVerification(verificationIdentity);
-                    setCopyError(null);
-                  } catch {
-                    setCopiedVerification(null);
-                    setCopyError(verificationIdentity);
-                  }
-                }}
-              >
-                Copy verification request
-              </button>
-              {copiedVerification === verificationIdentity && (
-                <p className="description" role="status">
-                  Copied. Paste the request in ChatGPT; Farol has not sent it.
-                </p>
-              )}
-              {copyError === verificationIdentity && (
-                <p className="notice" role="status">
-                  Copy was unavailable. Open Technical details to select the
-                  current request manually.
-                </p>
-              )}
-              <details className="attachment-technical">
-                <summary>Technical details</summary>
-                <p>
-                  Attach tunnel {externalChallenge.tunnelId} in ChatGPT
-                  Settings.
-                </p>
-                <p>
-                  {externalChallenge.workspaceId === null
-                    ? "No workspace access is enabled."
-                    : `Verified workspace: ${externalChallenge.root}`}
-                </p>
-                <p>Use this request once to verify the current connection:</p>
-                <pre className="attachment-request">
-                  <code>{verificationRequest}</code>
-                </pre>
-                <dl>
-                  <div>
-                    <dt>challenge</dt>
-                    <dd>
-                      <code>{externalChallenge.value}</code>
-                    </dd>
-                  </div>
-                  {externalChallenge.workspaceId !== null && (
-                    <div>
-                      <dt>workspaceId</dt>
-                      <dd>
-                        <code>{externalChallenge.workspaceId}</code>
-                      </dd>
-                    </div>
-                  )}
-                </dl>
-                <small>
-                  {externalChallenge.workspaceId === null
-                    ? "The check confirms an empty workspace catalogue. It does not read files or run commands."
-                    : "The check lists only the approved root and returns counts, never names or file contents."}
-                </small>
-              </details>
-            </div>
-          )}
-          <details
-            className="attachment-result"
-            open={!setupStep || attachmentReady}
-          >
-            <summary>Saved connection result</summary>
-            <p className="badges" role="status">
-              {attachmentReady
-                ? "Attachment checked · Computer ready"
-                : "Attachment check needed"}
-            </p>
-            {(!setupStep || !attachmentReady) && (
-              <Command
-                actions={actions}
-                command={{ kind: "connector.check-attachment" }}
-                disabled={!setup.canCheckAttachment}
-                admit={(current) => computerSetup(current).canCheckAttachment}
-              >
-                Check attachment
-              </Command>
-            )}
-          </details>
-        </Group>
-      </div>
-      <div hidden={setupStep !== undefined && setupStep !== "signin"}>
-        <Group title="Embedded ChatGPT · optional" showTitle={!setupStep}>
-          <p className="badges">{embeddedStatus}</p>
+    <section aria-label="ChatGPT sign-in">
+      {verified ? (
+        <p className="setup-success" role="status">
+          ✓ Signed in
+        </p>
+      ) : result?.state === "unknown" || result?.state === "refused" ? (
+        <SetupFailure result={result} actions={actions} />
+      ) : (
+        <>
           <p className="description">
-            Embedded sign-in is optional for external Computer access. It has
-            its own check.
+            {signIn.pending
+              ? "Checking sign-in…"
+              : signIn.signedIn
+                ? "Your account is signed in. Check it once to continue."
+                : "Sign in to your ChatGPT account, then return here."}
           </p>
-          {setupStep === "signin" && embeddedSignedIn && (
-            <p className="description">
-              Current sign-in was observed. Continue when ready.
-            </p>
-          )}
-          {setupStep === "signin" && embeddedStatus === "Outcome unknown" && (
-            <p className="notice" role="status">
-              Outcome unknown. Review the existing result in Diagnostics; do not
-              repeat sign-in.
-            </p>
-          )}
-          {(!setupStep || !embeddedSignedIn) && (
-            <div className="control-row">
-              <Command
-                actions={actions}
-                className={setupStep === "signin" ? "primary" : "subtle"}
-                command={{
-                  kind: openExistingSession
-                    ? "chatgpt.open-browser"
-                    : "chatgpt.open-sign-in",
-                }}
-              >
-                {openExistingSession ? "Open ChatGPT" : "Sign in"}
-              </Command>
-              {!setupStep && (
-                <>
-                  <Command
-                    actions={actions}
-                    command={{ kind: "chatgpt.open-browser" }}
-                  >
-                    Open ChatGPT
-                  </Command>
-                  <Command
-                    actions={actions}
-                    command={{ kind: "chatgpt.verify" }}
-                  >
-                    Check sign-in
-                  </Command>
-                </>
-              )}
-              {setupStep === "signin" && (
-                <button
-                  type="button"
-                  className="subtle"
-                  onClick={() =>
-                    facade.navigate({ area: "setup", setupStep: "folders" })
-                  }
-                >
-                  Skip for now
-                </button>
-              )}
-            </div>
-          )}
-        </Group>
-      </div>
-    </>
-  );
-}
-function ConnectionDiagnostics({
-  settings,
-  snapshot,
-  facade,
-  actions,
-}: PageProps) {
-  const setup = computerSetup(snapshot);
-  return (
-    <>
-      <Group title="Connection controls">
-        <p className="description">
-          These controls change or stop the local connection. An uncertain
-          result must be inspected before another action.
-        </p>
-        <div className="control-row">
           <Command
             actions={actions}
-            command={{ kind: "connector.select-client" }}
-          >
-            Choose tunnel client…
-          </Command>
-          <Command
-            actions={actions}
-            command={{ kind: "connector.check-health" }}
-          >
-            Check local connection
-          </Command>
-          <Command
-            actions={actions}
-            command={{ kind: "connector.repair" }}
-            disabled={!setup.canReconnect}
-            admit={(current) => computerSetup(current).canReconnect}
-          >
-            Reconnect
-          </Command>
-          <Command actions={actions} command={{ kind: "connector.stop" }}>
-            Stop connection
-          </Command>
-        </div>
-      </Group>
-      <EmbeddedConnectionCheck
-        settings={settings}
-        snapshot={snapshot}
-        facade={facade}
-        actions={actions}
-      />
-    </>
-  );
-}
-function EmbeddedConnectionCheck({
-  settings,
-  snapshot,
-  facade,
-  actions,
-  setupStep,
-}: PageProps) {
-  const connector = settings.connectors.secureMcp;
-  const setup = computerSetup(snapshot);
-  const [appName, setAppName] = useState(connector.chatgptApp?.name ?? "");
-  const appCheckStarted = useRef(false);
-  const [appCheckAttempted, setAppCheckAttempted] = useState(false);
-  return (
-    <Group title="Connection verification details" showTitle={!setupStep}>
-      <details open={setupStep === "attachment"}>
-        <summary>Check in ChatGPT</summary>
-        <p className="description">
-          Select the existing ChatGPT app attached to this tunnel. Check in
-          ChatGPT sends one short message and verifies a local receipt; Farol
-          selects the app in a Temporary Chat using Instant. The check confirms
-          folder access without reading file contents.
-        </p>
-        <details className="connection-app-target" open={!connector.chatgptApp}>
-          <summary>
-            {connector.chatgptApp
-              ? `App: ${connector.chatgptApp.name}`
-              : "Choose the ChatGPT app"}
-          </summary>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!connector.tunnelId) return;
-              void actions.run({
-                kind: "connector.select-chatgpt-app",
-                name: appName,
-                tunnelId: connector.tunnelId,
-                connectorGeneration: connector.generation,
-              });
+            className="primary"
+            command={{
+              kind: signIn.signedIn
+                ? "chatgpt.verify"
+                : signIn.unknown && !signIn.outcomeUnknown
+                  ? "chatgpt.open-browser"
+                  : "chatgpt.open-sign-in",
             }}
           >
-            <label className="setting-row">
-              ChatGPT app name
-              <input
-                className="field"
-                value={appName}
-                onChange={(event) => setAppName(event.currentTarget.value)}
-                required
-                maxLength={64}
-              />
-            </label>
-            <button
-              className="primary"
-              disabled={
-                !connector.tunnelId ||
-                !actions.allowed("connector.select-chatgpt-app")
-              }
-            >
-              Select ChatGPT app
-            </button>
-          </form>
-        </details>
-        <button
-          type="button"
-          className="primary"
-          disabled={
-            appCheckAttempted ||
-            !actions.allowed("connector.verify-app") ||
-            !setup.canVerifyEmbeddedApp ||
-            !connector.chatgptApp ||
-            connector.chatgptApp.connectorGeneration !== connector.generation ||
-            connector.chatgptApp.tunnelId !== connector.tunnelId
-          }
-          onClick={() => {
-            if (appCheckStarted.current) return;
-            appCheckStarted.current = true;
-            setAppCheckAttempted(true);
-            void actions.run({ kind: "connector.verify-app" }, (current) => {
-              const latest = computerSetup(current);
-              return (
-                latest.canVerifyEmbeddedApp &&
-                current.configuration?.status === "ready" &&
-                current.configuration.settings.connectors.secureMcp.chatgptApp
-                  ?.connectorGeneration ===
-                  current.configuration.settings.connectors.secureMcp
-                    .generation &&
-                current.configuration.settings.connectors.secureMcp.chatgptApp
-                  ?.tunnelId ===
-                  current.configuration.settings.connectors.secureMcp.tunnelId
-              );
-            });
-            if (
-              setupStep === "attachment" &&
-              facade.getSnapshot().intents["settings:connector.verify-app:"]
-                ?.state === "pending"
-            ) {
-              facade.navigate({
-                area: "chatgpt",
-                taskId: "",
-                connectionCheckReturn: true,
-              });
-            }
-          }}
+            {signIn.signedIn
+              ? "Check sign-in"
+              : signIn.unknown && !signIn.outcomeUnknown
+                ? "Open ChatGPT"
+                : "Sign in"}
+          </Command>
+        </>
+      )}
+    </section>
+  );
+}
+function AddToChatGPT({ settings, snapshot, facade, actions }: PageProps) {
+  const connector = settings.connectors.secureMcp;
+  const setup = computerSetup(snapshot);
+  const busy = useRef(false);
+  const [checking, setChecking] = useState(false);
+  const feedback = useSettingsFeedback(facade);
+  const result = feedback.pages["setup:attachment"]?.result;
+  const failed = result?.state === "refused" || result?.state === "unknown";
+  async function test() {
+    if (
+      busy.current ||
+      !computerSetup(facade.getSnapshot()).canVerifyEmbeddedApp
+    )
+      return;
+    busy.current = true;
+    setChecking(true);
+    try {
+      const current = facade.getSnapshot();
+      if (current.configuration?.status !== "ready") return;
+      const saved = current.configuration.settings.connectors.secureMcp;
+      if (!saved.tunnelId) return;
+      if (
+        saved.chatgptApp?.name !== "Farol" ||
+        saved.chatgptApp.tunnelId !== saved.tunnelId ||
+        saved.chatgptApp.connectorGeneration !== saved.generation
+      ) {
+        if (
+          (
+            await actions.run({
+              kind: "connector.select-chatgpt-app",
+              name: "Farol",
+              tunnelId: saved.tunnelId,
+              connectorGeneration: saved.generation,
+            })
+          )?.state !== "applied"
+        )
+          return;
+      }
+      const pending = actions.run(
+        { kind: "connector.verify-app" },
+        (current) => computerSetup(current).canVerifyEmbeddedApp,
+      );
+      if (
+        facade.getSnapshot().intents["settings:connector.verify-app:"]
+          ?.state === "pending"
+      )
+        facade.navigate({
+          area: "chatgpt",
+          taskId: "",
+          connectionCheckReturn: true,
+        });
+      await pending;
+    } finally {
+      busy.current = false;
+      setChecking(false);
+    }
+  }
+  return (
+    <>
+      <section aria-label="Create the ChatGPT app">
+        <SetupWalkthrough kind="chatgpt" tunnelId={connector.tunnelId ?? ""} />
+        <p className="description">
+          In ChatGPT, create an app with these values:
+        </p>
+        <dl className="setup-app-values">
+          <div>
+            <dt>Name</dt>
+            <dd>Farol</dd>
+          </div>
+          <div>
+            <dt>Connection</dt>
+            <dd>Tunnel · {connector.tunnelId ?? "Connect this Mac first"}</dd>
+          </div>
+          <div>
+            <dt>Sign-in</dt>
+            <dd>None</dd>
+          </div>
+        </dl>
+        <Command
+          actions={actions}
+          command={{ kind: "onboarding.open-help", destination: "chatgpt" }}
         >
-          Check in ChatGPT once
-        </button>
-        {!setupStep && (
-          <>
-            <p className="description">
-              External verification uses the challenge in Connection and does
-              not require embedded sign-in. Health checks do not prove ChatGPT
-              attachment.
+          Open ChatGPT Apps
+        </Command>
+      </section>
+      <section className="setup-test" aria-label="Test in ChatGPT">
+        <h3>Test in ChatGPT</h3>
+        <p className="description">
+          Farol sends one short message in a Temporary Chat using Instant and
+          checks the reply from this Mac. It checks workspace access without
+          reading file contents.
+        </p>
+        {setup.ready ? (
+          <div className="setup-success" role="status">
+            <strong>✓ Everything works</strong>
+            <p>
+              ChatGPT used Farol, reached this Mac and verified{" "}
+              {setup.facts.hasFolder
+                ? "access to the approved workspace"
+                : "the workspace list"}
+              . No file contents were read.
             </p>
+          </div>
+        ) : (
+          <>
+            {failed ? (
+              <SetupFailure result={result ?? null} actions={actions} />
+            ) : (
+              <p className="description">
+                {setup.canVerifyEmbeddedApp
+                  ? "Create the app above, then run the check once."
+                  : "Finish sign-in, workspace and connection checks before testing in ChatGPT."}
+              </p>
+            )}
             <button
               type="button"
-              className="text-button"
-              onClick={() =>
-                facade.navigate({ area: "settings", page: "connection" })
+              className="primary"
+              disabled={
+                checking ||
+                !actions.allowed("connector.verify-app") ||
+                !setup.canVerifyEmbeddedApp
               }
+              onClick={() => void test()}
             >
-              Continue attachment setup
+              {checking ? "Testing in ChatGPT…" : "Test in ChatGPT"}
             </button>
-            <div className="control-row">
-              <Command
-                actions={actions}
-                command={{
-                  kind: "onboarding.open-help",
-                  destination: "tunnels",
-                }}
-              >
-                Tunnel setup help
-              </Command>
-            </div>
           </>
         )}
-        {!setupStep && <ConnectionGuide />}
-      </details>
-    </Group>
+      </section>
+    </>
   );
 }
 function Model({ settings, snapshot, facade, actions }: PageProps) {
@@ -3669,12 +2951,6 @@ function Diagnostics({ snapshot, settings, facade, actions }: PageProps) {
           </button>
         ))}
       </details>
-      <ConnectionDiagnostics
-        snapshot={snapshot}
-        settings={settings}
-        facade={facade}
-        actions={actions}
-      />
       <details>
         <summary>Protocol limits</summary>
         <p className="description">
