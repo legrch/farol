@@ -11,7 +11,7 @@ import {
   createLaunchSnapshot,
   ownerLaunchEnvironment,
   ownerLaunchArguments,
-  removeLaunchSnapshot,
+  finishLaunchSnapshot,
 } from "./launch-snapshot.mjs";
 import { createOwnerLaunchResultCollector } from "./owner-launch-result.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
@@ -176,15 +176,7 @@ async function main() {
       );
     }
   } finally {
-    if (snapshot) {
-      const { failed, refused, errors } = await removeLaunchSnapshot(snapshot);
-      const unregistered = [...failed, ...refused, ...errors];
-      if (unregistered.length > 0) {
-        process.stderr.write(
-          `could not unregister launch snapshot bundles from LaunchServices: ${unregistered.join(", ")}\n`,
-        );
-      }
-    }
+    if (snapshot) await finishLaunchSnapshot(snapshot);
   }
 }
 

@@ -96,7 +96,8 @@ export async function createLaunchSnapshot({
       temporaryRoot: resolvedTemporaryRoot,
     });
   } catch (error) {
-    await fs.rm(root, { recursive: true, force: true });
+    // Best effort: a failed delete must not replace the creation error.
+    await fs.rm(root, { recursive: true, force: true }).catch(() => {});
     throw error;
   }
 }
@@ -209,9 +210,23 @@ async function unregisterSnapshotBundles(
 }
 
 function emptyOutcome() {
-  return { unregistered: [], failed: [], refused: [], errors: [] };
+  return {
+    unregistered: [],
+    failed: [],
+    refused: [],
+    errors: [],
+    removed: false,
+  };
 }
 
+// Validation first: a descriptor that does not name an owned snapshot, or a
+// root that is a symlink or does not resolve directly under its temporary root,
+// throws `LAUNCH_SNAPSHOT_CLEANUP_INVALID` (or the underlying fs error) before
+// any side effect, because it guards against deleting the wrong directory.
+// Once validation has passed this function never throws: the walk, the tool
+// check, each unregister and the final delete are best effort, and every
+// failure comes back in the outcome (`errors`, `failed`, `refused`, and
+// `removed: false` when the directory is still there).
 export async function removeLaunchSnapshot(snapshot, options) {
   if (!snapshot || typeof snapshot !== "object") {
     throw new Error("LAUNCH_SNAPSHOT_CLEANUP_INVALID");
@@ -242,7 +257,7 @@ export async function removeLaunchSnapshot(snapshot, options) {
     }
   } catch (error) {
     if (error?.code === "ENOENT") {
-      return emptyOutcome();
+      return { ...emptyOutcome(), removed: true };
     }
     throw error;
   }
@@ -251,8 +266,48 @@ export async function removeLaunchSnapshot(snapshot, options) {
     await unregisterSnapshotBundles(realRoot, options, outcome);
   } catch (error) {
     outcome.errors.push(error?.message ?? "unregister failed");
-  } finally {
+  }
+  try {
     await fs.rm(snapshot.root, { recursive: true, force: true });
+    outcome.removed = true;
+  } catch (error) {
+    outcome.errors.push(
+      `remove ${snapshot.root}: ${error?.code ?? error?.message ?? "failed"}`,
+    );
   }
   return outcome;
+}
+
+// The launcher's cleanup step. It reports on stderr and never throws or sets an
+// exit status: cleaning up must not change what the launch itself did. A
+// descriptor refused by validation is reported too, and nothing is deleted.
+export async function finishLaunchSnapshot(
+  snapshot,
+  {
+    remove = removeLaunchSnapshot,
+    write = (text) => process.stderr.write(text),
+  } = {},
+) {
+  const problems = [];
+  try {
+    const outcome = await remove(snapshot);
+    if (outcome.failed.length > 0) {
+      problems.push(`not unregistered: ${outcome.failed.join(", ")}`);
+    }
+    if (outcome.refused.length > 0) {
+      problems.push(`refused: ${outcome.refused.join(", ")}`);
+    }
+    problems.push(...outcome.errors);
+    if (outcome.removed !== true)
+      problems.push("snapshot directory not removed");
+  } catch (error) {
+    problems.push(`cleanup refused: ${error?.message ?? "unknown failure"}`);
+  }
+  if (problems.length > 0) {
+    try {
+      write(`launch snapshot cleanup problems: ${problems.join("; ")}\n`);
+    } catch {
+      // Nowhere left to report; the launch outcome still stands.
+    }
+  }
 }

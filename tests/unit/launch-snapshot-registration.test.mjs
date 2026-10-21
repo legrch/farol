@@ -75,6 +75,7 @@ describe("launch snapshot LaunchServices cleanup", () => {
       failed: [],
       refused: [],
       errors: [],
+      removed: true,
     });
     await expect(fs.stat(snapshot.root)).rejects.toMatchObject({
       code: "ENOENT",
@@ -111,6 +112,7 @@ describe("launch snapshot LaunchServices cleanup", () => {
     expect(Object.keys(launchSnapshot).sort()).toEqual(
       [
         "createLaunchSnapshot",
+        "finishLaunchSnapshot",
         "ownerLaunchArguments",
         "ownerLaunchEnvironment",
         "removeLaunchSnapshot",
@@ -375,6 +377,20 @@ describe("launch snapshot LaunchServices cleanup", () => {
         },
       },
       {
+        name: "failing final delete",
+        options: () => ({
+          lsregister: process.execPath,
+          unregister: async () => true,
+        }),
+        failRemove: true,
+        expected: {
+          unregistered: 3,
+          errors: 1,
+          errorMatches: "remove ",
+          kept: true,
+        },
+      },
+      {
         name: "readdir failure mid-walk",
         options: () => ({
           lsregister: process.execPath,
@@ -428,8 +444,23 @@ describe("launch snapshot LaunchServices cleanup", () => {
             ),
         );
       }
+      if (scenario.failRemove) {
+        const original = fs.rm.bind(fs);
+        spies.push(
+          vi
+            .spyOn(fs, "rm")
+            .mockImplementation((target, ...rest) =>
+              target === snapshot.root
+                ? Promise.reject(
+                    Object.assign(new Error("busy"), { code: "EBUSY" }),
+                  )
+                : original(target, ...rest),
+            ),
+        );
+      }
       let outcome;
       try {
+        // Once validation has passed, nothing may throw.
         outcome = await removeLaunchSnapshot(
           snapshot,
           await scenario.options(root),
@@ -452,9 +483,84 @@ describe("launch snapshot LaunchServices cleanup", () => {
       expect(outcome.errors.length).toBe(want.errors ?? 0);
       if (want.errorMatches)
         expect(outcome.errors[0]).toContain(want.errorMatches);
-      await expect(fs.stat(snapshot.root)).rejects.toMatchObject({
-        code: "ENOENT",
+      expect(outcome.removed).toBe(!want.kept);
+      if (want.kept) {
+        await expect(fs.stat(snapshot.root)).resolves.toBeDefined();
+      } else {
+        await expect(fs.stat(snapshot.root)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
+    });
+  });
+
+  describe("the launcher's cleanup step never changes the launch outcome", () => {
+    it("reports a failed delete on stderr, does not throw and leaves the exit status alone", async () => {
+      const { snapshot } = await fixtureSnapshot();
+      const original = fs.rm.bind(fs);
+      const spy = vi
+        .spyOn(fs, "rm")
+        .mockImplementation((target, ...rest) =>
+          target === snapshot.root
+            ? Promise.reject(
+                Object.assign(new Error("busy"), { code: "EBUSY" }),
+              )
+            : original(target, ...rest),
+        );
+      const written = [];
+      const exitCode = process.exitCode;
+      try {
+        await expect(
+          launchSnapshot.finishLaunchSnapshot(snapshot, {
+            write: (text) => written.push(text),
+          }),
+        ).resolves.toBeUndefined();
+      } finally {
+        spy.mockRestore();
+      }
+      expect(process.exitCode).toBe(exitCode);
+      expect(written.join("")).toContain(`remove ${snapshot.root}: EBUSY`);
+      expect(written.join("")).toContain("snapshot directory not removed");
+    });
+
+    it("reports a refused descriptor instead of throwing, and deletes nothing", async () => {
+      const { root } = await fixtureSnapshot();
+      const written = [];
+      await expect(
+        launchSnapshot.finishLaunchSnapshot(
+          { root },
+          { write: (text) => written.push(text) },
+        ),
+      ).resolves.toBeUndefined();
+      expect(written.join("")).toContain("LAUNCH_SNAPSHOT_CLEANUP_INVALID");
+      await expect(fs.stat(root)).resolves.toBeDefined();
+    });
+
+    it("stays silent after a clean removal", async () => {
+      const { snapshot } = await fixtureSnapshot();
+      const written = [];
+      await launchSnapshot.finishLaunchSnapshot(snapshot, {
+        remove: (descriptor) =>
+          removeLaunchSnapshot(descriptor, {
+            lsregister: process.execPath,
+            unregister: async () => true,
+          }),
+        write: (text) => written.push(text),
       });
+      expect(written).toEqual([]);
+    });
+
+    it("run-preview runs cleanup only through that step, in its finally", async () => {
+      const source = await fs.readFile(
+        path.join(process.cwd(), "tooling/run-preview.mjs"),
+        "utf8",
+      );
+      expect(source).toContain("await finishLaunchSnapshot(snapshot)");
+      expect(source).not.toContain("removeLaunchSnapshot");
+      const finallyAt = source.lastIndexOf("} finally {");
+      expect(source.indexOf("finishLaunchSnapshot(snapshot)")).toBeGreaterThan(
+        finallyAt,
+      );
     });
   });
 
