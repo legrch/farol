@@ -40,8 +40,13 @@ build. Cross-compilation and a rendered window cannot qualify profile custody,
 filesystem mutation, process confinement, installation or updater recovery.
 Native Linux and Windows acceptance require separately implemented and reviewed
 platform adapters, followed by tests on those operating systems. Keep this
-workflow's first proposed revision unaccepted until its actual hosted source
-gate and independent review pass; a syntax check is not a gate run.
+workflow's first proposed revision unaccepted until the identical source gate
+passes in a provisioned Linux executor and independent review passes; a syntax
+check is not a gate run. A new manual workflow must be on the default branch
+before GitHub offers its dispatch entry. Validate the same gate before source
+integration, then have the owner verify dispatch after integration; do not merge
+merely to obtain a green workflow receipt. Until then, hosted workflow execution
+remains NOT RUN.
 
 ## Selection and evidence
 
