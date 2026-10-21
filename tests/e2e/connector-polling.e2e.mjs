@@ -719,11 +719,15 @@ async function checkNetworkLoss(run) {
     "NETWORK_LOSS_LADDER_NOT_OBSERVED",
     TRANSPORT_TICK_MILLIS + 25000,
   );
+  // Still degraded when the third probe fails, not only right after the cut.
+  const degraded = (await bootstrap(run)).connectionStatus;
+  assert.notEqual(degraded.state, "recent_transport");
   const restoredAt = Date.now();
   await tunnelStore.controlNetwork("reachable");
   loss.restoredAt = restoredAt;
   loss.windowMillis = restoredAt - lostAt;
   loss.atRestore = {
+    state: degraded.state,
     readyz: probed.loss.readyz,
     health: probed.loss.health,
     connections: probed.loss.connections,
@@ -837,7 +841,7 @@ async function checkNetworkLoss(run) {
   loss.originalHelperPid = helper.pid;
   loss.backendPid = run.backend.pid;
   loss.receipts = receipts;
-  loss.lifecycle = run.lifecycle;
+  loss.lifecycle = [...run.lifecycle];
   loss.limits =
     "Synthetic loopback helper closes connections (no HTTP status) for a bounded window; the Mac, its network and any real tunnel are untouched. Probes the product's /readyz ladder and /health status reads only; no live control plane, OS sleep or sustained outage (which would trigger the one-shot recovery).";
   assert.equal(site.driver.snapshot().attemptedSends, 0);
