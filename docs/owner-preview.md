@@ -22,7 +22,14 @@ matches `_output/package/artifact.json`, copies the candidate into a private uni
 temporary launch snapshot, verifies that final launch path, and launches only those
 verified bytes. A concurrent `task package` can replace the canonical package but
 cannot replace the running snapshot. The snapshot and its frozen manifest are removed
-when the owner launcher observes that launch exit. An ungraceful launcher kill or host
+when the owner launcher observes that launch exit. Running the snapshot makes
+LaunchServices register its bundle and nested helper bundles under the product
+bundle identifier, so the launcher first runs `lsregister -u` on each exact `.app`
+path inside the snapshot, never a prefix or global unregister. Every `.app` it finds
+is accounted for as unregistered, failed (including when `lsregister` is missing) or
+refused (a path that does not resolve to itself inside the snapshot), and a directory
+it could not read is named in the errors. Anything but a clean unregister is printed
+on stderr, including a snapshot directory that could not be deleted. If the snapshot directory is already gone, the launcher still unregisters the exact bundle paths recorded when it created the snapshot, and says the directory was already gone. Cleanup never fails the launch or changes its exit status; only a descriptor that does not name an owned snapshot is refused, before anything is touched. An ungraceful launcher kill or host
 shutdown can leave its private temporary directory behind; it is never reused as a
 candidate or promotion source. If the candidate is absent or stale, the command says
 to commit the intended source and run `task package`; it never falls back to old

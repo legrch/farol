@@ -11,7 +11,7 @@ import {
   createLaunchSnapshot,
   ownerLaunchEnvironment,
   ownerLaunchArguments,
-  removeLaunchSnapshot,
+  finishLaunchSnapshot,
 } from "./launch-snapshot.mjs";
 import { createOwnerLaunchResultCollector } from "./owner-launch-result.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
@@ -176,7 +176,7 @@ async function main() {
       );
     }
   } finally {
-    if (snapshot) await removeLaunchSnapshot(snapshot);
+    if (snapshot) await finishLaunchSnapshot(snapshot);
   }
 }
 
