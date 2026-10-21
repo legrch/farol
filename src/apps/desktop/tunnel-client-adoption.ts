@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fsPromises from "node:fs/promises";
@@ -22,11 +23,13 @@ import {
  * a mismatching or partial copy is removed and never renamed into place.
  *
  * The destination is trusted only when nobody else can change it: the home
- * directory and every directory below it on the way to the copy must be a real
- * directory (never a symlink), owned by this user and not group- or
- * world-writable. A missing directory is created one level at a time, private
- * (0700), and checked again. Otherwise another account could replace the copy
- * between its verification and its use.
+ * directory and every directory below it on the way to the copy, and the copy
+ * itself, must be a real entry (never a symlink) owned by this user, with no
+ * group or world write bit and no ACL entry that allows anyone a change. A
+ * deny-only ACL (macOS homes carry "everyone deny delete") is fine. A missing
+ * directory is created one level at a time, private (0700), and checked again.
+ * Otherwise another account could replace the copy between its verification
+ * and its use.
  */
 
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
@@ -53,6 +56,54 @@ export type TunnelClientAdoptionDependencies = Readonly<{
 }>;
 
 type DirectoryOutcome = "safe" | "unsafe" | "failed";
+
+// ACL permissions that let a principal change a directory or file.
+const ACL_CHANGE = new Set([
+  "write",
+  "append",
+  "add_file",
+  "add_subdirectory",
+  "delete_child",
+  "delete",
+  "writeattr",
+  "writeextattr",
+  "writesecurity",
+  "chown",
+]);
+const ACL_ENTRY =
+  /^ *\d+: (?:\S+:)?\S+ (?:inherited )?(allow|deny) ([a-z_,]+)$/u;
+
+// `ls -lde` prints the mode line, then one line per ACL entry. Any entry that
+// allows a change, or any line that does not parse, is unsafe.
+export function aclVerdict(listing: string): "safe" | "unsafe" {
+  const lines = listing.split("\n").filter((line) => line !== "");
+  for (const line of lines.slice(1)) {
+    const entry = ACL_ENTRY.exec(line);
+    if (entry === null) return "unsafe";
+    if (
+      entry[1] === "allow" &&
+      (entry[2] ?? "").split(",").some((right) => ACL_CHANGE.has(right))
+    )
+      return "unsafe";
+  }
+  return lines.length === 0 ? "unsafe" : "safe";
+}
+
+async function aclOutcome(entryPath: string): Promise<DirectoryOutcome> {
+  try {
+    const listing = await new Promise<string>((resolve, reject) => {
+      execFile(
+        "/bin/ls",
+        ["-lde", entryPath],
+        { timeout: 5_000, maxBuffer: 64 * 1_024, encoding: "utf8" },
+        (error, stdout) => (error ? reject(error) : resolve(stdout)),
+      );
+    });
+    return aclVerdict(listing);
+  } catch {
+    return "failed";
+  }
+}
 
 function privateDirectory(
   info: Readonly<{
@@ -96,6 +147,8 @@ async function secureDirectory(
       }
     }
     if (!privateDirectory(info)) return "unsafe";
+    const acl = await aclOutcome(current);
+    if (acl !== "safe") return acl;
   }
   return "safe";
 }
@@ -209,6 +262,10 @@ export async function adoptReviewedTunnelClient(
       return { ok: false, reason: "source-not-reviewed" };
     try {
       await fsPromises.chmod(partial, 0o755);
+      // The copy may have inherited an ACL; it must allow nobody a change.
+      const acl = await aclOutcome(partial);
+      if (acl === "unsafe") return { ok: false, reason: "destination-unsafe" };
+      if (acl === "failed") return { ok: false, reason: "write-failed" };
       await fsPromises.rename(partial, target.path);
     } catch {
       return { ok: false, reason: "write-failed" };

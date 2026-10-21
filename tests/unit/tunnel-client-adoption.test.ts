@@ -7,7 +7,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { reviewedTunnelClientPath } from "../../src/apps/desktop/executable-discovery";
-import { adoptReviewedTunnelClient } from "../../src/apps/desktop/tunnel-client-adoption";
+import {
+  aclVerdict,
+  adoptReviewedTunnelClient,
+} from "../../src/apps/desktop/tunnel-client-adoption";
 
 const REVIEWED = Buffer.from(
   "reviewed tunnel-client build bytes\n".repeat(4_000),
@@ -98,6 +101,35 @@ describe("adoptReviewedTunnelClient", () => {
     expect(await adopt()).toEqual({ ok: false, reason: "destination-unsafe" });
     await fs.chmod(home, 0o700);
     expect((await adopt()).ok).toBe(true);
+  });
+
+  it("refuses a directory whose ACL lets anyone change it", async () => {
+    await fs.mkdir(path.join(home, ".local"), { mode: 0o700 });
+    execFileSync("/bin/chmod", [
+      "+a",
+      "everyone allow add_file,delete_child",
+      path.join(home, ".local"),
+    ]);
+    expect(await adopt()).toEqual({ ok: false, reason: "destination-unsafe" });
+    execFileSync("/bin/chmod", ["-N", path.join(home, ".local")]);
+    expect((await adopt()).ok).toBe(true);
+  });
+
+  it("reads ACL listings fail closed", () => {
+    const mode = "drwx------  3 me  staff  96 Oct 21 23:02 /x";
+    expect(aclVerdict(`${mode}\n`)).toBe("safe");
+    expect(aclVerdict(`${mode}\n 0: group:everyone deny delete\n`)).toBe(
+      "safe",
+    );
+    expect(
+      aclVerdict(`${mode}\n 0: group:everyone allow add_file,delete_child\n`),
+    ).toBe("unsafe");
+    expect(
+      aclVerdict(`${mode}\n 0: user:bob inherited allow write,append\n`),
+    ).toBe("unsafe");
+    expect(aclVerdict(`${mode}\n 0: user:me allow read,search\n`)).toBe("safe");
+    expect(aclVerdict(`${mode}\n garbled entry\n`)).toBe("unsafe");
+    expect(aclVerdict("")).toBe("unsafe");
   });
 
   it("replaces a stale copy at the target atomically", async () => {
