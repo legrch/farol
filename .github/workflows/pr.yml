@@ -1,0 +1,101 @@
+name: Pull request checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      docs_only: ${{ steps.paths.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: paths
+        name: Classify the complete merge candidate
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node tooling/ci-paths.mjs
+
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Check every candidate including docs-only changes
+        run: |
+          npm run format:check
+          npm run docs:check
+          node node_modules/vitest/vitest.mjs run tests/tooling/delivery-policy.test.mjs tests/tooling/ci-policy.test.mjs
+          task scan:secrets
+
+  portable:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Run the portable source profile
+        run: task ci:cloud
+
+  native:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+        with:
+          native: "true"
+      - name: Run deferred Darwin cases and Go platform checks
+        run: |
+          /usr/bin/python3 -I scripts/assert-owner-untouched.py -- node tooling/ci-native.mjs
+          task test:core
+
+  required:
+    if: always()
+    needs: [changes, checks, portable, native]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require successful checks or verified docs-only skips
+        env:
+          CHECKS: ${{ needs.checks.result }}
+          CHANGES: ${{ needs.changes.result }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+          PORTABLE: ${{ needs.portable.result }}
+          NATIVE: ${{ needs.native.result }}
+        run: |
+          test "$CHANGES" = success
+          test "$CHECKS" = success
+          if [ "$DOCS_ONLY" = true ]; then
+            test "$PORTABLE" = skipped
+            test "$NATIVE" = skipped
+          else
+            test "$PORTABLE" = success
+            test "$NATIVE" = success
+          fi

@@ -1,9 +1,20 @@
 // Small source selection map for unit/component, integration and fast scopes.
 // Full assembled E2E and live qualification keep their existing separate gates.
 import path from "node:path";
-import { cloudSelection, cloudPattern } from "./cloud-test-prerequisites.mjs";
+import {
+  cloudSelection,
+  cloudPattern,
+  cloudDeferredFiles,
+  cloudMixedFiles,
+} from "./cloud-test-prerequisites.mjs";
 
-export const scopes = Object.freeze(["unit", "integration", "fast", "cloud"]);
+export const scopes = Object.freeze([
+  "unit",
+  "integration",
+  "fast",
+  "cloud",
+  "native",
+]);
 // Whole mixed files stay integration: actual OS/compiler semantics or real
 // production collaborators, despite their legacy unit-directory placement.
 export const integrationUnitFiles = Object.freeze([
@@ -187,7 +198,22 @@ export function planTests(scope, files) {
     plan.push({ id, runner: "go", cwd, packages, timeoutMs: 180000 });
   };
   let cloud;
-  if (scope === "cloud") {
+  if (scope === "native") {
+    // Reuse the Cloud inventory, including entire mixed files: their portable
+    // cases intentionally overlap so no native case depends on a name filter.
+    cloudSelection([...classified.nodeUnit, ...classified.integration]);
+    const files = [...cloudDeferredFiles, ...cloudMixedFiles].map(
+      (entry) => entry.file,
+    );
+    for (let start = 0; start < files.length; start += 8) {
+      vitest(
+        "node-native-" + String(start / 8 + 1),
+        files.slice(start, start + 8),
+      );
+      plan.at(-1).timeoutMs = 300000;
+      plan.at(-1).workers = 2;
+    }
+  } else if (scope === "cloud") {
     cloud = cloudSelection([...classified.nodeUnit, ...classified.integration]);
     const mixed = new Map(cloud.mixedFiles.map((entry) => [entry.file, entry]));
     const ordinary = cloud.selected.filter((file) => !mixed.has(file));

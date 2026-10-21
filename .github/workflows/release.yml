@@ -1,0 +1,92 @@
+name: Tagged prerelease
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+# Avoid overlapping publication. Do not cancel an issued release build/upload.
+concurrency:
+  group: tagged-prerelease
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+        with:
+          native: "true"
+      - name: Verify version, accepted-main ancestry and remote tag identity
+        run: node tooling/verify-release-tag.mjs
+      - name: Provision approved backend build inputs
+        run: node tooling/ci-go-inputs.mjs
+      - name: Run the full unchanged source gate including secret scans
+        run: task ci
+      - name: Build the exact clean candidate
+        run: |
+          test -z "$(git status --porcelain=v1)"
+          task package -- --go-inputs="$GITHUB_WORKSPACE/_output/go-build-inputs.json"
+      - name: D16 — Developer ID signing and notarization placeholder
+        run: |
+          echo 'UNSIGNED / NOT NOTARIZED: D16 requires a separate signing and notarization decision.'
+          # Future signing must preserve package attestation and archive verification.
+      - name: Prepare and verify the three public assets
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node tooling/verify-release-tag.mjs
+          mkdir -p _output/release
+          /usr/bin/python3 -I tooling/prepare-release-archive.py "$(git rev-parse HEAD)" "$GITHUB_WORKSPACE/_output/release/$RELEASE_TAG"
+          node tooling/verify-release-assets.mjs "$GITHUB_WORKSPACE/_output/release/$RELEASE_TAG"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: public-release-assets
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            _output/release/${{ github.ref_name }}/Farol-*-darwin-arm64.zip
+            _output/release/${{ github.ref_name }}/farol-release.json
+            _output/release/${{ github.ref_name }}/SHA256SUMS
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.20.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: public-release-assets
+          path: _output/public-release
+      - name: Recheck exact source and downloaded assets
+        run: |
+          node tooling/verify-release-tag.mjs
+          node tooling/verify-release-assets.mjs _output/public-release
+      - name: Create one unsigned prerelease without overwriting existing assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          version="$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).version')"
+          gh release create "$RELEASE_TAG" --verify-tag --prerelease --latest=false \
+            --title "Farol $RELEASE_TAG (unsigned prerelease)" \
+            --notes 'Unsigned and not notarized. Developer ID signing/notarization is deferred under D16. These assets establish package preparation, not installed/live acceptance.' \
+            "_output/public-release/Farol-$version-darwin-arm64.zip" \
+            _output/public-release/farol-release.json _output/public-release/SHA256SUMS
