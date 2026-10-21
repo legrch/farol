@@ -22,14 +22,17 @@ import {
  * reviewed build, owned by this user and not group/world-writable, or nothing:
  * a mismatching or partial copy is removed and never renamed into place.
  *
- * The destination is trusted only when nobody else can change it: the home
- * directory and every directory below it on the way to the copy, and the copy
- * itself, must be a real entry (never a symlink) owned by this user, with no
- * group or world write bit and no ACL entry that allows anyone a change. A
- * deny-only ACL (macOS homes carry "everyone deny delete") is fine. A missing
- * directory is created one level at a time, private (0700), and checked again.
- * Otherwise another account could replace the copy between its verification
- * and its use.
+ * The destination is trusted only when nobody but root and this user can
+ * change any part of its path (the rule ssh's StrictModes applies). The home
+ * directory is first resolved to its real path; then every directory from `/`
+ * down to the copy, and the copy itself, must be a real entry (never a
+ * symlink) with no group or world write bit and no ACL entry that allows anyone
+ * a change. The ancestors of home may belong to root or this user; home and
+ * everything below it must belong to this user. A deny-only ACL (macOS homes
+ * carry "everyone deny delete") is fine. A missing directory is created one
+ * level at a time, private (0700), and checked again. Otherwise another
+ * account could redirect or replace the copy between its verification and its
+ * use.
  */
 
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
@@ -105,25 +108,42 @@ async function aclOutcome(entryPath: string): Promise<DirectoryOutcome> {
   }
 }
 
-function privateDirectory(
+function protectedDirectory(
   info: Readonly<{
     isDirectory(): boolean;
     isSymbolicLink(): boolean;
     uid: number;
     mode: number;
   }>,
+  rootMayOwn: boolean,
 ): boolean {
   const effectiveUser = process.geteuid?.();
   return (
     !info.isSymbolicLink() &&
     info.isDirectory() &&
-    (effectiveUser === undefined || info.uid === effectiveUser) &&
+    (effectiveUser === undefined ||
+      info.uid === effectiveUser ||
+      (rootMayOwn && info.uid === 0)) &&
     (info.mode & 0o022) === 0
   );
 }
 
-// Walks from home to `directory`, creating what is missing, and accepts the
-// path only when every component is a private directory of this user.
+async function protectedEntry(
+  entryPath: string,
+  rootMayOwn: boolean,
+): Promise<DirectoryOutcome> {
+  let info;
+  try {
+    info = await fsPromises.lstat(entryPath);
+  } catch {
+    return "failed";
+  }
+  if (!protectedDirectory(info, rootMayOwn)) return "unsafe";
+  return aclOutcome(entryPath);
+}
+
+// Checks every ancestor of the canonical home from `/`, then walks from home to
+// `directory`, creating what is missing; every component must be protected.
 async function secureDirectory(
   home: string,
   directory: string,
@@ -131,6 +151,15 @@ async function secureDirectory(
   const relative = path.relative(home, directory);
   if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative))
     return "unsafe";
+  const ancestors: string[] = [];
+  for (let current = path.dirname(home); ; current = path.dirname(current)) {
+    ancestors.unshift(current);
+    if (current === path.dirname(current)) break;
+  }
+  for (const ancestor of ancestors) {
+    const outcome = await protectedEntry(ancestor, true);
+    if (outcome !== "safe") return outcome;
+  }
   let current = home;
   for (const component of ["", ...relative.split(path.sep)]) {
     if (component !== "") current = path.join(current, component);
@@ -146,7 +175,7 @@ async function secureDirectory(
         return "failed";
       }
     }
-    if (!privateDirectory(info)) return "unsafe";
+    if (!protectedDirectory(info, false)) return "unsafe";
     const acl = await aclOutcome(current);
     if (acl !== "safe") return acl;
   }
@@ -199,8 +228,15 @@ export async function adoptReviewedTunnelClient(
   sourcePath: string,
   dependencies: TunnelClientAdoptionDependencies,
 ): Promise<TunnelClientAdoption> {
+  // Every later check and write uses the real path of home, never a symlink.
+  let home;
+  try {
+    home = await fsPromises.realpath(dependencies.home);
+  } catch {
+    return { ok: false, reason: "destination-unsafe" };
+  }
   const target = reviewedTunnelClientPath(
-    dependencies.home,
+    home,
     dependencies.arch,
     dependencies.reviewedDigests,
   );
@@ -231,7 +267,7 @@ export async function adoptReviewedTunnelClient(
       return { ok: false, reason: "source-not-a-regular-file" };
     if (info.size !== expected.bytes)
       return { ok: false, reason: "source-not-reviewed" };
-    const secured = await secureDirectory(dependencies.home, directory);
+    const secured = await secureDirectory(home, directory);
     if (secured === "unsafe")
       return { ok: false, reason: "destination-unsafe" };
     if (secured === "failed") return { ok: false, reason: "write-failed" };

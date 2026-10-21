@@ -115,6 +115,46 @@ describe("adoptReviewedTunnelClient", () => {
     expect((await adopt()).ok).toBe(true);
   });
 
+  it("checks the ancestors of home, which may belong only to root or this user", async () => {
+    // The test home's ancestors (the per-user temp tree) pass; a home under a
+    // group-writable parent does not.
+    const shared = path.join(root, "shared");
+    await fs.mkdir(shared, { mode: 0o700 });
+    await fs.chmod(shared, 0o775);
+    const nested = path.join(shared, "home");
+    await fs.mkdir(nested, { mode: 0o700 });
+    expect(
+      await adoptReviewedTunnelClient(source, {
+        home: nested,
+        arch: "arm64",
+        reviewedDigests: digests,
+      }),
+    ).toEqual({ ok: false, reason: "destination-unsafe" });
+    await fs.chmod(shared, 0o700);
+    expect(
+      (
+        await adoptReviewedTunnelClient(source, {
+          home: nested,
+          arch: "arm64",
+          reviewedDigests: digests,
+        })
+      ).ok,
+    ).toBe(true);
+  });
+
+  it("resolves a symlinked home to its real path before writing", async () => {
+    const alias = path.join(root, "home-alias");
+    await fs.symlink(home, alias);
+    const adopted = await adoptReviewedTunnelClient(source, {
+      home: alias,
+      arch: "arm64",
+      reviewedDigests: digests,
+    });
+    expect(adopted.ok).toBe(true);
+    if (adopted.ok)
+      expect(adopted.path.startsWith(await fs.realpath(home))).toBe(true);
+  });
+
   it("reads ACL listings fail closed", () => {
     const mode = "drwx------  3 me  staff  96 Oct 21 23:02 /x";
     expect(aclVerdict(`${mode}\n`)).toBe("safe");
