@@ -5,8 +5,20 @@ import path from "node:path";
 import { parseCoreArtifactDeclaration } from "./attested-core.ts";
 import { BridgeError } from "./client.ts";
 
+// One startup budget bounds resource and Shell qualification together. It is
+// liveness only: integrity comes from the digests and the final stat recheck,
+// never from the clock. Startup on a busy Mac measured 2 s for work that takes
+// 0.3 s idle, so the budget leaves room for a slow launch.
+export const CORE_QUALIFICATION_BUDGET_MS = 10_000;
+
 const refuse = (): never => {
   throw new BridgeError("refused", "core_resources_unqualified");
+};
+// A spent budget is a different fact from changed or wrong bytes, and the
+// startup report must be able to say which one stopped the launch.
+class DeadlineExpired extends Error {}
+const expire = (): never => {
+  throw new DeadlineExpired();
 };
 function record(
   value: unknown,
@@ -111,9 +123,9 @@ export async function verifyCoreResources(
       backend?.sha256 !== core.binary.sha256
     )
       refuse();
+    if (Number.isFinite(deadline) && deadline <= performance.now()) expire();
     if (
       !Number.isFinite(deadline) ||
-      deadline <= performance.now() ||
       deadline > performance.now() + 30_000 ||
       !path.isAbsolute(root) ||
       root === "/" ||
@@ -122,7 +134,7 @@ export async function verifyCoreResources(
     )
       refuse();
     const checkTime = (): void => {
-      if (performance.now() >= deadline) refuse();
+      if (performance.now() >= deadline) expire();
     };
     const uid = process.getuid?.();
     if (uid === undefined) refuse();
@@ -190,7 +202,9 @@ export async function verifyCoreResources(
     )
       refuse();
     checkTime();
-  } catch {
+  } catch (error) {
+    if (error instanceof DeadlineExpired)
+      throw new BridgeError("refused", "core_resources_deadline_expired");
     refuse();
   }
 }

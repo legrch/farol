@@ -58,6 +58,7 @@ async function fixture() {
 const verify = (f, declared = f.declared) =>
   verifyCoreResources(f.root, declared, f.core, performance.now() + 2000);
 const refused = { state: "refused", code: "core_resources_unqualified" };
+const expired = { state: "refused", code: "core_resources_deadline_expired" };
 
 describe("compiled core resource closure", () => {
   it("verifies the producer's complete dependency set without a self-hash cycle", async () => {
@@ -159,8 +160,21 @@ describe("compiled core resource closure", () => {
     const open = vi.spyOn(fs, "open");
     await expect(
       verifyCoreResources(f.root, f.declared, f.core, performance.now() - 1),
-    ).rejects.toMatchObject(refused);
+    ).rejects.toMatchObject(expired);
     expect(open).not.toHaveBeenCalled();
+  });
+  it("reports a budget spent while hashing apart from changed bytes", async () => {
+    const f = await fixture();
+    const original = fs.open.bind(fs);
+    const now = performance.now();
+    vi.spyOn(performance, "now").mockReturnValue(now);
+    vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+      vi.mocked(performance.now).mockReturnValue(now + 101);
+      return original(file, flags, mode);
+    });
+    await expect(
+      verifyCoreResources(f.root, f.declared, f.core, now + 100),
+    ).rejects.toMatchObject(expired);
   });
   it("detects replacement of an earlier dependency before final publication", async () => {
     const f = await fixture();

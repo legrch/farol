@@ -12,7 +12,10 @@ import {
   desktopCoreExpectation,
   readDesktopCoreDeclaration,
 } from "../bridge/desktop-artifact.ts";
-import { verifyCoreResources } from "../bridge/core-resources.ts";
+import {
+  CORE_QUALIFICATION_BUDGET_MS,
+  verifyCoreResources,
+} from "../bridge/core-resources.ts";
 import { qualifyProfileLaunch } from "../bridge/profile.ts";
 import { openExistingNativeProfileStorage } from "../bridge/profile-storage.ts";
 import { GoComputerAuthority } from "../go-computer-authority.ts";
@@ -78,7 +81,7 @@ export async function startDesktopGoRecovery(
     selection.artifactRoot,
     selection.compiledResources,
     expected,
-    performance.now() + 2000,
+    performance.now() + CORE_QUALIFICATION_BUDGET_MS,
   );
   const storage = openExistingNativeProfileStorage(
     selection.stateRoot,

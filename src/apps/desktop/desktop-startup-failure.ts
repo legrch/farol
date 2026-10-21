@@ -33,6 +33,10 @@ const BRIDGE_FAILURE_CODES = new Set([
   "backend_unavailable",
   "backend_cleanup_unconfirmed",
   "profile_cleanup_unconfirmed",
+  "core_resources_unqualified",
+  "core_resources_deadline_expired",
+  "shell_runtime_unqualified",
+  "shell_runtime_deadline_expired",
 ]);
 class StartupBoundaryFailure extends Error {
   constructor(
@@ -66,6 +70,12 @@ const DISPLAY_PRECONDITION_CODES = new Set([
   "WINDOW_PRIMARY_DISPLAY_MISSING",
   "WINDOW_DISPLAY_GEOMETRY_INVALID",
   "VISIBLE_TEST_VIEWPORT_UNAVAILABLE",
+]);
+// The app's own files were not changed; checking them took longer than the
+// startup budget. Rebuilding would not help, and a later launch usually passes.
+const QUALIFICATION_DEADLINE_CODES = new Set([
+  "GO_CORE_CORE_RESOURCES_DEADLINE_EXPIRED",
+  "GO_CORE_SHELL_RUNTIME_DEADLINE_EXPIRED",
 ]);
 const PREVIOUS_DRAIN_FAILURE_CODES = new Set([
   "DESKTOP_PREVIOUS_QUIT_UNCONFIRMED",
@@ -155,18 +165,21 @@ export function desktopStartupFailureReport(
   const notice = desktopStartupFailureNotice(code);
   const remedy = notice
     ? notice.message
-    : PREVIOUS_DRAIN_FAILURE_CODES.has(code)
-      ? "The previous session did not confirm shutdown. Preserve the existing profile and its recovery records; rebuilding the app does not settle this state. Use a qualified recovery procedure before reopening that profile."
-      : DISPLAY_PRECONDITION_CODES.has(code)
-        ? "The visible-test display requirements are not met. Check available displays and the requested viewport before launching again. Use hidden mode only for an equivalent check."
-        : environment === "owner-preview" &&
-            code === "OWNER_PREVIEW_PROFILE_DIRECTORY_UNSAFE"
-          ? "The Preview profile or its parent is aliased or unsafe. Preserve the existing directories and resolve their physical separation before another launch; rebuilding does not repair this state."
-          : environment === "dev" && code === "DEV_PROFILE_DIRECTORY_AMBIGUOUS"
-            ? "Two distinct Dev profiles exist. Stop here and choose a profile explicitly; neither was moved or merged."
-            : environment === "dev"
-              ? "Fix the reported local build or configuration issue, then run 'task dev' again."
-              : "Rebuild the exact candidate, then launch it again.";
+    : QUALIFICATION_DEADLINE_CODES.has(code)
+      ? "Checking the app's files took longer than the startup allows. Open the app again; if the Mac is busy, wait for it to settle first."
+      : PREVIOUS_DRAIN_FAILURE_CODES.has(code)
+        ? "The previous session did not confirm shutdown. Preserve the existing profile and its recovery records; rebuilding the app does not settle this state. Use a qualified recovery procedure before reopening that profile."
+        : DISPLAY_PRECONDITION_CODES.has(code)
+          ? "The visible-test display requirements are not met. Check available displays and the requested viewport before launching again. Use hidden mode only for an equivalent check."
+          : environment === "owner-preview" &&
+              code === "OWNER_PREVIEW_PROFILE_DIRECTORY_UNSAFE"
+            ? "The Preview profile or its parent is aliased or unsafe. Preserve the existing directories and resolve their physical separation before another launch; rebuilding does not repair this state."
+            : environment === "dev" &&
+                code === "DEV_PROFILE_DIRECTORY_AMBIGUOUS"
+              ? "Two distinct Dev profiles exist. Stop here and choose a profile explicitly; neither was moved or merged."
+              : environment === "dev"
+                ? "Fix the reported local build or configuration issue, then run 'task dev' again."
+                : "Rebuild the exact candidate, then launch it again.";
   return (
     `${product} main-process startup failed before the app became ready (${code}). ${remedy}\n` +
     (error instanceof StartupBoundaryFailure

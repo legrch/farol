@@ -7,7 +7,10 @@ import {
 } from "../../../src/apps/desktop/dev-profile-directory";
 import type { BuildIdentity } from "../../../src/pkg/build-info/identity";
 import { verifyCoreExecutable } from "../bridge/attested-core";
-import { verifyCoreResources } from "../bridge/core-resources";
+import {
+  CORE_QUALIFICATION_BUDGET_MS,
+  verifyCoreResources,
+} from "../bridge/core-resources";
 import {
   desktopCoreExpectation,
   readDesktopCoreDeclaration,
@@ -61,7 +64,7 @@ export async function runStartupPreservedMaintenance(
       artifactRoot,
       compiledResources,
       expected,
-      performance.now() + 2000,
+      performance.now() + CORE_QUALIFICATION_BUDGET_MS,
     );
     return verifyCoreExecutable(declaration, {
       artifactRoot,

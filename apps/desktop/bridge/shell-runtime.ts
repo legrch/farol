@@ -13,6 +13,11 @@ const maximumBytes = 1024 * 1024 * 1024;
 const refuse = (): never => {
   throw new BridgeError("refused", "shell_runtime_unqualified");
 };
+// A spent budget is reported apart from changed or wrong bytes.
+class DeadlineExpired extends Error {}
+const expire = (): never => {
+  throw new DeadlineExpired();
+};
 function same(before: BigIntStats, after: BigIntStats): boolean {
   return (
     before.dev === after.dev &&
@@ -64,9 +69,9 @@ export async function attestShellRuntime(
       : nodeFilesystem;
     const support = parseShellSupportDeclaration(independentlyTrustedSupport);
     const now = performance.now();
+    if (Number.isFinite(deadline) && deadline <= now) expire();
     if (
       !Number.isFinite(deadline) ||
-      deadline <= now ||
       deadline > now + 30_000 ||
       typeof appRoot !== "string" ||
       appRoot.length > 4096 ||
@@ -78,7 +83,7 @@ export async function attestShellRuntime(
     )
       refuse();
     const checkTime = (): void => {
-      if (performance.now() >= deadline) refuse();
+      if (performance.now() >= deadline) expire();
     };
     const observed = new Map<string, BigIntStats>();
     const uid = process.getuid?.();
@@ -225,7 +230,9 @@ export async function attestShellRuntime(
       device: String(root.dev),
       inode: String(root.ino),
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof DeadlineExpired)
+      throw new BridgeError("refused", "shell_runtime_deadline_expired");
     return refuse();
   }
 }

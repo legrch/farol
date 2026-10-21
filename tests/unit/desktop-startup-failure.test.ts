@@ -220,6 +220,37 @@ describe("desktop startup failure boundary", () => {
     }
   }
 
+  // A packaged launch on a busy Mac refused with a bare GO_CORE_REFUSED and a
+  // rebuild remedy; a spent qualification budget must name itself instead.
+  it.each([
+    ["core_resources_deadline_expired", true],
+    ["shell_runtime_deadline_expired", true],
+    ["core_resources_unqualified", false],
+    ["shell_runtime_unqualified", false],
+  ] as const)(
+    "names Go-core qualification refusal %s",
+    async (bridgeCode, spentBudget) => {
+      const failure = await runDesktopStartupBoundary("go-core", () => {
+        throw new BridgeError("refused", bridgeCode);
+      }).catch((error: unknown) => error);
+      const write = vi.fn<(message: string) => void>();
+      const exit = vi.fn<(code: number) => void>();
+      terminateDesktopStartup(failure, "preview", { write, exit });
+      const report = write.mock.calls[0]?.[0];
+      expect(report).toContain(
+        `${DESKTOP_STARTUP_FAILURE_PREFIX}GO_CORE_${bridgeCode.toUpperCase()}`,
+      );
+      expect(report).not.toContain("GO_CORE_REFUSED");
+      if (spentBudget) {
+        expect(report).toContain("Open the app again");
+        expect(report).not.toContain("Rebuild");
+      } else {
+        expect(report).toContain("Rebuild the exact candidate");
+      }
+      expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+    },
+  );
+
   it("retains the exact-candidate remedy for an unrelated build identity failure", () => {
     const write = vi.fn<(message: string) => void>();
     terminateDesktopStartup(
