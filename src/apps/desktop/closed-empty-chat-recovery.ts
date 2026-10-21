@@ -283,7 +283,7 @@ export async function recoverInstalledEmptyChat(
     input.selectionInput.Interrupted !== undefined ||
     input.selectionInput.Mutations.length !== 0 ||
     !/^[a-f0-9]{64}$/u.test(input.expectedQuitSha256) ||
-    path.basename(input.userData) !== "Farol"
+    path.basename(input.userData) !== "io.github.legrch.farol"
   )
     throw Error("INSTALLED_EMPTY_RECOVERY_SELECTION_INVALID");
   return recoverSelectedEmptyChat(input, input.expectedQuitSha256, false, true);
@@ -304,7 +304,7 @@ export async function recoverInstalledPreservedChat(
     input.selectionInput.Preserved.length < 1 ||
     input.selectionInput.Preserved.length > 128 ||
     !/^[a-f0-9]{64}$/u.test(input.expectedQuitSha256) ||
-    path.basename(input.userData) !== "Farol"
+    path.basename(input.userData) !== "io.github.legrch.farol"
   )
     throw Error("INSTALLED_PRESERVED_RECOVERY_SELECTION_INVALID");
   return recoverSelectedEmptyChat(

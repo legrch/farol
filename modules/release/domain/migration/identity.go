@@ -20,7 +20,7 @@ type Identity struct {
 func FinalIdentity(profile Profile) (Identity, error) {
 	switch profile {
 	case Production:
-		return Identity{"Farol", "io.github.legrch.farol", "io.github.legrch.farol", "persist:farol-app-chatgpt"}, nil
+		return Identity{"Farol", "io.github.legrch.farol", "io.github.legrch.farol", "persist:farol"}, nil
 	case Development:
 		return Identity{"Farol Dev", "io.github.legrch.farol.dev", "Farol Dev", "persist:farol-dev"}, nil
 	default:

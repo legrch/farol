@@ -146,5 +146,5 @@ func emptyRecoveryInstalledRoot(root string) bool {
 		return false
 	}
 	state := filepath.Dir(root)
-	return filepath.Base(state) == "farol-state" && filepath.Base(filepath.Dir(state)) == "Farol"
+	return filepath.Base(state) == "farol-state" && filepath.Base(filepath.Dir(state)) == "io.github.legrch.farol"
 }
