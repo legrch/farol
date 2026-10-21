@@ -292,8 +292,14 @@ Orphan rule, decided on argv and environment together. A reparented helper is no
 longer a descendant, and a disposable root normally reaches a process through
 `HOME`, not its arguments. At teardown every process of the current uid that did
 not exist when the run started (the uid's pid set is snapshotted at run start and
-excluded) is inspected through the fail-closed runner (`ps -U <uid>`) and the
-`KERN_PROCARGS2` reader, and each new process falls in exactly one class:
+excluded) is listed through the fail-closed runner (`ps -U <uid> -o pid=,ppid=`).
+**Ancestry is decided first, from that pid/ppid table alone**: a new process whose
+parent chain reaches a pre-existing process other than launchd (pid 1) and this
+test process belongs to someone else, is only counted (`excluded.otherParent`),
+and its arguments and environment are never read. **Only the remaining
+candidates** (this test's own tree, and new processes whose chain ends at launchd
+or at a vanished parent) go to the `KERN_PROCARGS2` reader, and each falls in
+exactly one class:
 
 - **survivor** (`ORPHAN_REMAINS`): its argv or environment contains a disposable
   root of this run (every instance home and every launched-but-failed home);
@@ -305,9 +311,10 @@ excluded) is inspected through the fail-closed runner (`ps -U <uid>`) and the
   names no non-test owner; and (b) its parent chain reaches no pre-existing
   process other than launchd (pid 1) and this test process, so a reparented
   orphan (ppid 1) or one whose parent has vanished qualifies;
-- **excluded**, counted and never detailed: environment withheld but owned by a
-  system or application binary (`excluded.systemOwned`), or descended from a
-  pre-existing process that is not this test (`excluded.otherParent`);
+- **excluded**, counted and never detailed: descended from a pre-existing
+  process that is not this test (`excluded.otherParent`, decided before any read),
+  or environment withheld but owned by a system or application binary
+  (`excluded.systemOwned`);
 - **clear** (environment visible, no root) or **gone** (exited; the OS answers
   `EINVAL` as well as `ESRCH` for a just-exited pid, so an unreadable pid the
   kernel no longer knows counts as exited).

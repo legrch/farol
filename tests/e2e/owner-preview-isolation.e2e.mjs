@@ -434,7 +434,10 @@ async function inspectProcesses(pids, roots) {
       : entry,
   );
 }
-// Classes of new (not in the start snapshot) processes:
+// Order of operations: ancestry first, from the pid/ppid inventory alone; only
+// the remaining candidates (this test's own tree, and new processes whose chain
+// ends at launchd or at a vanished parent) have their arguments and environment
+// read. Classes of new (not in the start snapshot) processes:
 //   survivor      argv or environment contains a root of this run
 //   unverifiable  its arguments cannot be read, OR its environment is withheld
 //                 and both hold: argv names no system or application owner (the
@@ -460,6 +463,7 @@ async function orphanReport(
   const empty = (extra = {}) => ({
     startSnapshot: preexisting.size,
     scanned: 0,
+    inspected: 0,
     matches: [],
     unverifiable: [],
     excluded: { systemOwned: 0, otherParent: 0 },
@@ -472,16 +476,11 @@ async function orphanReport(
   for (let attempt = 0; ; attempt += 1) {
     const listed = await listPids();
     const parent = new Map(listed.map((entry) => [entry.pid, entry.ppid]));
-    const candidates = listed.filter((entry) => !preexisting.has(entry.pid));
-    const results =
-      candidates.length === 0
-        ? []
-        : await inspect(
-            candidates.map((entry) => entry.pid),
-            [...roots],
-          );
-    // A chain that reaches a pre-existing process other than this test belongs
-    // to someone else; one that ends at launchd or at a vanished parent does not.
+    const fresh = listed.filter((entry) => !preexisting.has(entry.pid));
+    // Ancestry first, from the pid/ppid inventory alone. A chain that reaches a
+    // pre-existing process other than this test belongs to someone else: it is
+    // counted and its arguments and environment are never read. One that ends
+    // at launchd or at a vanished parent, or reaches this test, is a candidate.
     const belongsToSomeoneElse = (pid) => {
       const visited = new Set();
       for (
@@ -495,7 +494,24 @@ async function orphanReport(
       }
       return false;
     };
-    report = empty({ scanned: candidates.length });
+    const candidates = fresh.filter(
+      (entry) => !belongsToSomeoneElse(entry.pid),
+    );
+    const results =
+      candidates.length === 0
+        ? []
+        : await inspect(
+            candidates.map((entry) => entry.pid),
+            [...roots],
+          );
+    report = empty({
+      scanned: fresh.length,
+      inspected: candidates.length,
+      excluded: {
+        systemOwned: 0,
+        otherParent: fresh.length - candidates.length,
+      },
+    });
     for (const entry of results) {
       if (entry.status === "match")
         report.matches.push({ pid: entry.pid, roots: entry.roots });
@@ -508,8 +524,6 @@ async function orphanReport(
       else if (entry.status === "gone") report.gone += 1;
       else if (entry.envVisible !== false) report.clear += 1;
       else if (entry.systemOwned === true) report.excluded.systemOwned += 1;
-      else if (belongsToSomeoneElse(entry.pid))
-        report.excluded.otherParent += 1;
       else
         report.unverifiable.push({
           pid: entry.pid,
@@ -1814,7 +1828,15 @@ async function treeSelfCheck() {
   };
   const preexisting = new Set([9, 10, 77]);
   const orphan = await orphanReport(roots, preexisting, scanDeps);
-  assert.equal(inspected.includes(10) || inspected.includes(9), false);
+  // Ancestry first: pre-existing processes and new ones under a pre-existing
+  // parent (16 directly, 17 through 16) are never passed to the argv/env reader.
+  for (const never of [9, 10, 77, 16, 17])
+    assert.equal(inspected.includes(never), false, `inspected ${never}`);
+  assert.deepEqual(
+    [...new Set(inspected)].sort((x, y) => x - y),
+    [11, 12, 13, 14, 15, 18, 19, 20],
+  );
+  assert.equal(orphan.inspected, 8);
   assert.deepEqual(orphan.matches, [{ pid: 11, roots: ["/root-a"] }]);
   assert.deepEqual(
     orphan.unverifiable.map((entry) => `${entry.pid}:${entry.reason}`),
@@ -1865,6 +1887,7 @@ async function treeSelfCheck() {
     {
       startSnapshot: 0,
       scanned: 0,
+      inspected: 0,
       matches: [],
       unverifiable: [],
       excluded: { systemOwned: 0, otherParent: 0 },
