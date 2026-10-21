@@ -209,7 +209,7 @@ function sharedCodexSocketRefusalMessage(error: string): string | null {
 }
 
 // `bootstrap.productName` carries the unchanged release identity
-// ("Farol Next Preview"). Visible production branding is "Farol";
+// ("Farol"). Visible production branding is "Farol";
 // only Dev shows an edition mark. The window bar shows navigation.
 let displayProductName = "Farol";
 let displayEdition = "";
@@ -274,13 +274,13 @@ function chatGptSignInBlockedMessage(
 
 const bootstrapSchema = z.strictObject({
   schema: z.literal(3),
-  productName: z.literal("Farol Next Preview"),
-  bundleId: z.literal("local.farol.next.preview"),
+  productName: z.literal("Farol"),
+  bundleId: z.literal("io.github.legrch.farol"),
   environment: z.enum(["preview", "dev", "owner-preview"]),
   displayName: z.enum(["Farol", "Farol Dev", "Farol Preview"]),
   displayEdition: z.enum(["", "Development"]),
   applicationId: z.enum([
-    "local.farol.next.preview",
+    "io.github.legrch.farol",
     "local.farol.dev",
     "local.farol.owner.preview",
   ]),
@@ -297,7 +297,7 @@ const bootstrapSchema = z.strictObject({
   tasks: z.array(ProductTaskSchema).max(5),
   partition: z.string(),
   chatgptPartition: z.enum([
-    "persist:farol-next-chatgpt",
+    "persist:farol-app-chatgpt",
     "persist:farol-dev-chatgpt",
     "persist:farol-owner-preview-chatgpt",
   ]),
@@ -376,7 +376,7 @@ const activityLabels: Readonly<Record<string, string>> = {
 
 declare global {
   interface Window {
-    farolNext: Readonly<{
+    farol: Readonly<{
       installedUpdate(command: unknown): Promise<unknown>;
       onInstalledUpdateState(listener: (state: unknown) => void): () => void;
       onConfigurationChanged(listener: () => void): () => void;
@@ -426,7 +426,7 @@ function applyProductIdentity(): void {
         ? "local.farol.dev"
         : ownerPreview
           ? "local.farol.owner.preview"
-          : "local.farol.next.preview")
+          : "io.github.legrch.farol")
   ) {
     throw new Error("UI_DESKTOP_IDENTITY_INVALID");
   }
@@ -471,7 +471,7 @@ let sidebarOverlayOpen = false;
 let shellOverlay: ShellOverlay = "none";
 let settingsCategory: "preferences" | "shortcuts" | "model" | "diagnostics" =
   "preferences";
-const navigationShortcutStorageKey = "farol.next.navigation-shortcuts.v1";
+const navigationShortcutStorageKey = "farol.navigation-shortcuts.v1";
 function storedNavigationShortcuts(): NavigationShortcuts {
   try {
     return (
@@ -930,7 +930,7 @@ function notifyHost(): void {
   const serialized = JSON.stringify(layout);
   if (serialized === lastHostLayout) return;
   lastHostLayout = serialized;
-  window.farolNext.layout(
+  window.farol.layout(
     layout.section,
     layout.taskId,
     layout.setupOpen,
@@ -1023,7 +1023,7 @@ function renderBuildIdentity(): void {
   container.title = `${bootstrap.build.buildId}\nBuilt ${bootstrap.build.builtAt}`;
   container.setAttribute(
     "aria-label",
-    `Farol Next ${bootstrap.build.version}, build ${bootstrap.build.sourceCommit.slice(0, 8)}, built ${formatted}`,
+    `Farol ${bootstrap.build.version}, build ${bootstrap.build.sourceCommit.slice(0, 8)}, built ${formatted}`,
   );
 }
 
@@ -2868,7 +2868,7 @@ async function acknowledgeChatGptTaskResult(
   try {
     transport = {
       settled: "fulfilled",
-      value: await window.farolNext.configure({
+      value: await window.farol.configure({
         kind: "chatgpt.ack-task-result",
         operationId,
       }),
@@ -2911,7 +2911,7 @@ async function acknowledgeWorkspaceEdit(operationId: string): Promise<void> {
   if (ackHold !== null) {
     workspaceEditAcksAttempted += 1;
     if (workspaceEditAcksAttempted > ackHold) {
-      console.debug("farol-next-e2e:ack-held", operationId);
+      console.debug("farol-e2e:ack-held", operationId);
       return;
     }
   }
@@ -2919,7 +2919,7 @@ async function acknowledgeWorkspaceEdit(operationId: string): Promise<void> {
   try {
     transport = {
       settled: "fulfilled",
-      value: await window.farolNext.configure({
+      value: await window.farol.configure({
         kind: "computer.ack-workspace-edit",
         operationId,
       }),
@@ -3061,7 +3061,7 @@ async function configureProduct(
                           command.kind === "host.verify-codex"
                         ? "Verifying the selected Codex executable and bounded App Server contract…"
                         : command.kind === "host.run-codex-smoke"
-                          ? "Running one bounded gpt-6-astra host turn with a correlated Farol Next tool…"
+                          ? "Running one bounded gpt-6-astra host turn with a correlated Farol tool…"
                           : command.kind === "host.run-codex-agent-check"
                             ? "Running Main → Agent → Critic with one preserved read-only TaskGrant…"
                             : command.kind === "host.remove-codex"
@@ -3113,7 +3113,7 @@ async function configureProduct(
   try {
     transport = {
       settled: "fulfilled",
-      value: await window.farolNext.configure(command),
+      value: await window.farol.configure(command),
     };
   } catch {
     transport = { settled: "rejected" };
@@ -3248,7 +3248,7 @@ async function configureProduct(
                                                 ? "The tracked files are too large to snapshot for one check. Nothing was read."
                                                 : parsed.error ===
                                                     "WORKSPACE_SNAPSHOT_CROSS_VOLUME"
-                                                  ? "The workspace and Farol Next's runtime directory are on different volumes, so the private snapshot cannot be made. Nothing was read."
+                                                  ? "The workspace and Farol's runtime directory are on different volumes, so the private snapshot cannot be made. Nothing was read."
                                                   : parsed.error ===
                                                       "WORKSPACE_SNAPSHOT_CLONE_UNSUPPORTED"
                                                     ? "This volume cannot make file clones (it is not APFS), so the private snapshot cannot be made. Nothing was read."
@@ -3266,7 +3266,7 @@ async function configureProduct(
                                                             ? "The isolated Codex host for Route B did not start. Nothing was sent."
                                                             : parsed.error ===
                                                                 "ROUTE_B_UNAVAILABLE"
-                                                              ? "Route B is not running in this app. Restart Farol Next and check again."
+                                                              ? "Route B is not running in this app. Restart Farol and check again."
                                                               : parsed.error ===
                                                                   "WORKSPACE_GIT_METADATA_NOT_APPROVED"
                                                                 ? "This worktree's Git metadata lives outside the workspace and has not been approved. Verify the workspace again to approve it."
@@ -3384,7 +3384,7 @@ async function configureProduct(
   } else if (evidence?.kind === "chatgpt.readiness") {
     settingsFeedback =
       evidence.state === "authenticated"
-        ? "ChatGPT composer verified in the isolated Next partition."
+        ? "ChatGPT composer verified in the isolated Farol partition."
         : evidence.state === "signed_out"
           ? "The isolated ChatGPT page is reachable and needs sign-in."
           : evidence.state === "unreachable"
@@ -3455,7 +3455,7 @@ async function configureProduct(
   } else if (evidence?.kind === "host.route-b") {
     settingsFeedback = `Route B answered through ChatGPT on ${evidence.model} · ${evidence.observedCharacters} characters in ${evidence.deltaCount} ${evidence.deltaCount === 1 ? "update" : "updates"}.`;
   } else if (evidence?.kind === "host.codex-live") {
-    settingsFeedback = `${evidence.model} host turn completed with ${evidence.dynamicToolCalls} correlated Farol Next tool call · executable ${evidence.executableSha256.slice(0, 12)} · schema ${evidence.schemaSha256.slice(0, 12)}.`;
+    settingsFeedback = `${evidence.model} host turn completed with ${evidence.dynamicToolCalls} correlated Farol tool call · executable ${evidence.executableSha256.slice(0, 12)} · schema ${evidence.schemaSha256.slice(0, 12)}.`;
   } else if (evidence?.kind === "host.codex-agent-lineage") {
     settingsFeedback = `Main → Agent → Critic verified on ${evidence.model} · one model turn · same-child bounded rejoin · durable delivery acknowledged · workspace enforcement ${evidence.workspaceEnforcement.replace("_", " ")}.`;
   } else if (evidence?.kind === "connector.client-probe") {
@@ -3616,9 +3616,7 @@ async function configureProduct(
 // probing the browser, or replaying any configuration action.
 async function refreshSettingsAfterReturn(): Promise<boolean> {
   try {
-    const incoming = bootstrapSchema.safeParse(
-      await window.farolNext.bootstrap(),
-    );
+    const incoming = bootstrapSchema.safeParse(await window.farol.bootstrap());
     if (
       incoming.success &&
       incoming.data.build.buildId === bootstrap.build.buildId &&
@@ -3687,7 +3685,7 @@ function renderSettingsNavigation(): void {
   required<HTMLElement>("#settings-description").textContent =
     enabled && bootstrap.environment === "dev"
       ? "Preferences are saved in this Farol Dev profile."
-      : "Changes are saved to Farol Next state only and read back before they are shown as applied.";
+      : "Changes are saved to Farol state only and read back before they are shown as applied.";
   required<HTMLElement>("#settings-nav").hidden =
     !enabled || section !== "settings" || setupJourney.open;
   document
@@ -3770,7 +3768,7 @@ async function applyShortcutDraft(): Promise<void> {
   shortcutSaveBusy = true;
   let applied: unknown;
   try {
-    applied = await window.farolNext.setNavigationShortcuts(parsed);
+    applied = await window.farol.setNavigationShortcuts(parsed);
   } catch {
     shortcutSaveBusy = false;
     feedback.textContent =
@@ -4363,7 +4361,7 @@ function renderSettings(): void {
           ? "Recheck the host contract before deliberately running another live turn"
           : bootstrap.environment === "dev"
             ? "Advanced only: run one gpt-6-astra host/tool turn required for Agent qualification, not basic setup"
-            : "Run one gpt-6-astra turn with the bounded Farol Next ping tool";
+            : "Run one gpt-6-astra turn with the bounded Farol ping tool";
         live.addEventListener("click", () => {
           void configureProduct(
             { kind: "host.run-codex-smoke" },
@@ -4677,11 +4675,11 @@ function modelPortConflictText(
 ): string {
   switch (occupant) {
     case "farol":
-      return `Port ${port} is in use by another running Farol Model endpoint. Quit the other Farol Next, then restart this one.`;
+      return `Port ${port} is in use by another running Farol Model endpoint. Quit the other Farol, then restart this one.`;
     case "foreign":
-      return `Port ${port} is in use by something that is not this Farol. Free the port or quit that program, then restart Farol Next.`;
+      return `Port ${port} is in use by something that is not this Farol. Free the port or quit that program, then restart Farol.`;
     case "vacated":
-      return `Port ${port} was busy when Farol started and is free now. Restart Farol Next to use it.`;
+      return `Port ${port} was busy when Farol started and is free now. Restart Farol to use it.`;
     default:
       return `Port ${port} was already in use when Farol started. Check status to find out by what.`;
   }
@@ -5051,7 +5049,7 @@ function renderSetup(): void {
     );
     liveSummary.textContent = connector.tunnelClient
       ? readinessDetail(readiness)
-      : "Farol Next looks for the installed tunnel-client itself and verifies its profile, doctor, and run surface before saving it.";
+      : "Farol looks for the installed tunnel-client itself and verifies its profile, doctor, and run surface before saving it.";
     if (!connector.tunnelClient) {
       ensureDiscovery("connect");
       liveSummary.append(
@@ -5179,7 +5177,7 @@ function renderSetup(): void {
       ? bootstrap.environment === "dev"
         ? devHostSetupSummary(host, readiness)
         : `${readinessDetail(readiness)} Codex ${host.version} is selected; a live check uses gpt-6-astra without provider fallback and stores no prompt or response.`
-      : "Farol Next looks for the installed Codex executable itself, in a small set of known locations. It never searches your shell PATH or infers a host from configuration files.";
+      : "Farol looks for the installed Codex executable itself, in a small set of known locations. It never searches your shell PATH or infers a host from configuration files.";
     if (!host) {
       ensureDiscovery("hosts");
       liveSummary.append(
@@ -5754,7 +5752,7 @@ async function runTaskMenuCommand(
   render();
   try {
     const parsed = ProductTaskCommandResultSchema.safeParse(
-      await window.farolNext.task(command),
+      await window.farol.task(command),
     );
     if (!parsed.success) {
       taskMenuTrace.settle("invalid");
@@ -5814,7 +5812,7 @@ function selectTask(taskId: string): void {
   setShellOverlay("none");
   render();
   if (task.provider === "chatgpt") {
-    void window.farolNext.task({ kind: "task.activate", taskId });
+    void window.farol.task({ kind: "task.activate", taskId });
   }
 }
 
@@ -5962,7 +5960,7 @@ function applyHostLayout(layout: z.infer<typeof ShellLayoutSchema>): void {
 
 async function start(): Promise<void> {
   const updaterView = createInstalledUpdateView(document, (kind) => {
-    void window.farolNext.installedUpdate({ kind }).then(renderUpdate, () => {
+    void window.farol.installedUpdate({ kind }).then(renderUpdate, () => {
       updaterView.render({
         phase: "failed",
         code: "UPDATE_STATUS_UNKNOWN",
@@ -5975,9 +5973,9 @@ async function start(): Promise<void> {
     if (parsed.success) updaterView.render(parsed.data);
   };
   updaterView.render({ phase: "unavailable", code: "UPDATE_NOT_INSTALLED" });
-  window.farolNext.onInstalledUpdateState(renderUpdate);
-  void window.farolNext.installedUpdate({ kind: "status" }).then(renderUpdate);
-  window.farolNext.onLayout((value) => {
+  window.farol.onInstalledUpdateState(renderUpdate);
+  void window.farol.installedUpdate({ kind: "status" }).then(renderUpdate);
+  window.farol.onLayout((value) => {
     const parsed = ShellLayoutSchema.safeParse(value);
     if (!parsed.success) return;
     if (!bootstrapReady) {
@@ -5987,7 +5985,7 @@ async function start(): Promise<void> {
     applyHostLayout(parsed.data);
   });
   watchTaskMenuNode();
-  window.farolNext.onShellAction((value) => {
+  window.farol.onShellAction((value) => {
     const parsed = ShellActionSchema.safeParse(value);
     if (!parsed.success || !bootstrapReady) return;
     // Every arrival, whichever branch takes it. `close-overlay` reaches
@@ -6070,20 +6068,20 @@ async function start(): Promise<void> {
       void refreshSettingsAfterReturn();
     } else closeOverlay();
   });
-  window.farolNext.onWindowState((value) => {
+  window.farol.onWindowState((value) => {
     const parsed = WindowStateSchema.safeParse(value);
     if (!parsed.success) return;
     windowState = parsed.data;
     if (bootstrapReady) renderWindowState();
   });
-  window.farolNext.onConfigurationChanged(() => {
+  window.farol.onConfigurationChanged(() => {
     if (!bootstrapReady) {
       configurationRefreshPending = true;
       return;
     }
     void refreshSettingsAfterReturn();
   });
-  window.farolNext.onRuntimeEvent((value) => {
+  window.farol.onRuntimeEvent((value) => {
     const parsed = ClientEventSchema.safeParse(value);
     if (!parsed.success) return;
     if (!bootstrapReady) {
@@ -6092,7 +6090,7 @@ async function start(): Promise<void> {
     }
     recordEvent(parsed.data);
   });
-  window.farolNext.onRuntimeState((value) => {
+  window.farol.onRuntimeState((value) => {
     const parsed = RuntimeStatusSchema.safeParse(value);
     if (!parsed.success) return;
     if (!bootstrapReady) {
@@ -6101,7 +6099,7 @@ async function start(): Promise<void> {
     }
     applyRuntimeStatus(parsed.data);
   });
-  window.farolNext.onBrowserRouteState((value) => {
+  window.farol.onBrowserRouteState((value) => {
     const parsed = BrowserRouteStatusSchema.safeParse(value);
     if (!parsed.success) return;
     browserHomeStatus =
@@ -6112,7 +6110,7 @@ async function start(): Promise<void> {
           : "opening";
     if (bootstrapReady) render();
   });
-  window.farolNext.onTaskSurfaceState((value) => {
+  window.farol.onTaskSurfaceState((value) => {
     const parsed = TaskSurfaceStatusSchema.safeParse(value);
     if (!parsed.success) return;
     if (!bootstrapReady) {
@@ -6121,7 +6119,7 @@ async function start(): Promise<void> {
     }
     applyTaskSurfaceStatus(parsed.data);
   });
-  window.farolNext.onTasksState((value) => {
+  window.farol.onTasksState((value) => {
     const parsed = ProductTasksStateSchema.safeParse(value);
     if (!parsed.success) return;
     if (!bootstrapReady) {
@@ -6131,7 +6129,7 @@ async function start(): Promise<void> {
     applyTasksState(parsed.data);
   });
 
-  bootstrap = bootstrapSchema.parse(await window.farolNext.bootstrap());
+  bootstrap = bootstrapSchema.parse(await window.farol.bootstrap());
   if (bootstrap.updateChannel === "github-owner-beta")
     updaterView.setInstalledIdentity(
       bootstrap.build.version,
@@ -6140,7 +6138,7 @@ async function start(): Promise<void> {
   if (bootstrap.environment === "dev" && !bootstrap.demoMode) {
     try {
       const applied =
-        await window.farolNext.setNavigationShortcuts(navigationShortcuts);
+        await window.farol.setNavigationShortcuts(navigationShortcuts);
       if (
         typeof applied !== "object" ||
         applied === null ||
@@ -6305,7 +6303,7 @@ async function start(): Promise<void> {
   required<HTMLButtonElement>("#sign-in-return").addEventListener(
     "click",
     () => {
-      void window.farolNext.configure({ kind: "chatgpt.sign-in-return" });
+      void window.farol.configure({ kind: "chatgpt.sign-in-return" });
     },
   );
   required<HTMLButtonElement>("#browser-retry").addEventListener(
@@ -6355,7 +6353,7 @@ async function start(): Promise<void> {
       // seconds later, and by then the owner may be somewhere else.
       const overlayAtDispatch = shellOverlay;
       const parsed = ProductTaskCommandResultSchema.safeParse(
-        await window.farolNext.task({ kind: "task.create-chatgpt" }),
+        await window.farol.task({ kind: "task.create-chatgpt" }),
       );
       if (!parsed.success) {
         taskAdmissionFeedback = "The task route returned an invalid result.";
@@ -6669,7 +6667,7 @@ async function start(): Promise<void> {
     "click",
     async () => {
       if (!computerTargetTaskId) return;
-      const result = await window.farolNext.control(
+      const result = await window.farol.control(
         computerTargetTaskId,
         "release-tool",
       );
@@ -6680,7 +6678,7 @@ async function start(): Promise<void> {
   required<HTMLButtonElement>("#finish-demo").addEventListener(
     "click",
     async () => {
-      await window.farolNext.control(selectedTaskId, "finish-demo");
+      await window.farol.control(selectedTaskId, "finish-demo");
     },
   );
   required<HTMLButtonElement>("#dossier-route").addEventListener(
@@ -6688,7 +6686,7 @@ async function start(): Promise<void> {
     () => {
       const task = taskById(selectedTaskId);
       if (task?.provider === "chatgpt") {
-        void window.farolNext.task({
+        void window.farol.task({
           kind: "task.activate",
           taskId: selectedTaskId,
         });

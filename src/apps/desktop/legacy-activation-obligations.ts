@@ -33,7 +33,7 @@ import {
   processAlive,
 } from "./run-marker.ts";
 
-// What a Next generation under one user-data root still owes before another
+// What a Farol generation under one user-data root still owes before another
 // generation may take its place: a task that is running or whose outcome is
 // unknown, a native Agent that is running or whose result the parent has not
 // acknowledged, a ChatGPT turn dispatched but not delivered, a guarded edit
@@ -63,8 +63,7 @@ import {
 // drives one corpus through the owning stores and through this reader and
 // holds both to the same accept/reject decision.
 
-export const PROMOTION_OBLIGATIONS_SCHEMA =
-  "farol.next.promotion-obligations/1";
+export const PROMOTION_OBLIGATIONS_SCHEMA = "farol.promotion-obligations/1";
 
 // `config.json`'s decode bound. `ProductSettingsStore`
 // (`src/apps/desktop/product-configuration.ts`) keeps its `MAXIMUM_BYTES`
@@ -304,7 +303,7 @@ export async function activationObligations(
   if (!path.isAbsolute(userData)) {
     throw new Error("PROMOTION_USER_DATA_NOT_ABSOLUTE");
   }
-  const state = path.join(userData, "farol-next-state");
+  const state = path.join(userData, "farol-state");
   const obligations: string[] = [];
   const unreadable: string[] = [];
 
@@ -421,7 +420,7 @@ export function promotionUserData(home: string): string {
     home,
     "Library",
     "Application Support",
-    "Farol Next Preview",
+    "io.github.legrch.farol",
   );
 }
 

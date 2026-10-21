@@ -57,7 +57,7 @@ export async function selectStartupLegacyPreparation(
     /[\0\r\n]/u.test(userData)
   )
     throw Error("STARTUP_LEGACY_PREPARATION_SELECTION_INVALID");
-  const state = path.join(userData, "farol-next-state");
+  const state = path.join(userData, "farol-state");
   const root = path.join(state, "chatgpt-task-journal");
   try {
     await fs.lstat(root);

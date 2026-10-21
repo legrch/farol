@@ -16,7 +16,7 @@ if (process.argv.includes("--farol-startup-recovery")) {
     }),
   );
 } else {
-  contextBridge.exposeInMainWorld("farolNext", {
+  contextBridge.exposeInMainWorld("farol", {
     installedUpdate: (command: unknown) =>
       ipcRenderer.invoke(channels.installedUpdate, command) as Promise<unknown>,
     onInstalledUpdateState: (listener: (state: unknown) => void) => {

@@ -518,7 +518,7 @@ export async function loadReadonlyComputerLaunchContract(
     throw new Error("COMPUTER_LAUNCH_FILE_UNTRUSTED");
   const result = await workspace.execute({
     workspace: {
-      workspaceId: "farol-next-computer-launch",
+      workspaceId: "farol-computer-launch",
       root: path.dirname(file),
       deniedPaths: [],
       approvedRoot: {

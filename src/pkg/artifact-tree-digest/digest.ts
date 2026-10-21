@@ -10,7 +10,7 @@ import path from "node:path";
 // symlink target (a directory record has no payload; its children follow as
 // records with their own full paths).  The stream starts with this version
 // tag, and promotion-apply.py implements the identical encoding.
-export const TREE_DIGEST_VERSION = "farol.next.tree-digest/v2";
+export const TREE_DIGEST_VERSION = "farol.tree-digest/v2";
 
 const KIND_CODES = Object.freeze({
   file: 0x66,

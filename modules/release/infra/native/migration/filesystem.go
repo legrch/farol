@@ -85,7 +85,7 @@ func (f *filesystem) read() (physical, error) {
 	if err != nil {
 		return physical{}, err
 	}
-	destination, err := f.root.inspect("Farol")
+	destination, err := f.root.inspect("io.github.legrch.farol")
 	if err != nil {
 		return physical{}, err
 	}
@@ -147,7 +147,7 @@ func (f *filesystem) move(expected migration.Object, admission func(physical) er
 	if _, err := f.before(expected); err != nil {
 		return physical{}, err
 	}
-	if err := f.rename(f.root.fd, migration.AlphaDirectory, "Farol"); err != nil {
+	if err := f.rename(f.root.fd, migration.AlphaDirectory, "io.github.legrch.farol"); err != nil {
 		return physical{}, uncertain()
 	}
 	if err := f.sync(f.root.fd); err != nil {

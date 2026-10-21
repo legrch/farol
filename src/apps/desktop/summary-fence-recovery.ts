@@ -21,8 +21,8 @@ export type SummaryFenceRecoveryPorts = Readonly<{
 // every required fence: it holds the connector closed until a later start
 // reconciles for real, which removes it as stale.
 export const FENCE_RECOVERY_SENTINEL = Object.freeze({
-  operationId: "farol-next-fence-recovery-unreconciled",
-  taskId: "farol-next-desktop",
+  operationId: "farol-fence-recovery-unreconciled",
+  taskId: "farol-desktop",
 });
 
 export type SummaryFenceRecovery =

@@ -140,7 +140,7 @@ await fs.cp(electronApp, runtimeApp, {
 });
 const mainPlist = path.join(appPath, "Contents/Info.plist");
 await fs.writeFile(mainPlist, infoPlist, { mode: 0o644 });
-const launcherPath = path.join(appPath, "Contents/MacOS/Farol Next Preview");
+const launcherPath = path.join(appPath, "Contents/MacOS/Farol");
 await fs.writeFile(launcherPath, launcher, { mode: 0o755 });
 await fs.chmod(launcherPath, 0o755);
 
@@ -169,7 +169,7 @@ await fs.writeFile(
   path.join(appResources, "package.json"),
   `${JSON.stringify(
     {
-      name: "farol-next-preview-app",
+      name: "farol-app",
       version: previewVersion,
       private: true,
       productName: "Farol",
@@ -215,7 +215,7 @@ const nativeNotices = await fs.readFile(
 );
 await fs.writeFile(
   path.join(appResources, "THIRD_PARTY_NOTICES.txt"),
-  `Farol Next Preview direct runtime notice\n\n${reactNotices.join("\n\n")}\n\nGeist ${GEIST_VERSION} (SIL Open Font License 1.1)\n${geistHashes}\n\n${geistLicense}\n\n@modelcontextprotocol/server 2.0.0 (MIT)\n${mcpServerLicense}\n\n@modelcontextprotocol/core 2.0.0 (MIT)\n${mcpCoreLicense}\n\nZod 4.6.5 (MIT)\n${zodLicense}\n\nws 8.22.0 (MIT)\n${wsLicense}\n\n${nativeNotices}\n\nElectron's own license and Chromium notices are retained in Contents/Resources.\n`,
+  `Farol direct runtime notice\n\n${reactNotices.join("\n\n")}\n\nGeist ${GEIST_VERSION} (SIL Open Font License 1.1)\n${geistHashes}\n\n${geistLicense}\n\n@modelcontextprotocol/server 2.0.0 (MIT)\n${mcpServerLicense}\n\n@modelcontextprotocol/core 2.0.0 (MIT)\n${mcpCoreLicense}\n\nZod 4.6.5 (MIT)\n${zodLicense}\n\nws 8.22.0 (MIT)\n${wsLicense}\n\n${nativeNotices}\n\nElectron's own license and Chromium notices are retained in Contents/Resources.\n`,
 );
 if ((await treeDigest(runtimeApp)) !== electronSourceSha256) {
   throw new Error("PACKAGE_RUNTIME_COPY_MISMATCH");
@@ -225,10 +225,10 @@ execFileSync("/usr/bin/plutil", ["-lint", mainPlist], { stdio: "inherit" });
 const artifact = {
   schema: manifest.schema === 4 ? GO_PACKAGE_SCHEMA : PACKAGE_SCHEMA,
   treeDigestVersion: TREE_DIGEST_VERSION,
-  product: "Farol Next Preview",
+  product: "Farol",
   version: previewVersion,
   buildVersion: buildIdentity.buildVersion ?? "1",
-  bundleId: "local.farol.next.preview",
+  bundleId: "io.github.legrch.farol",
   buildId: buildIdentity.buildId,
   builtAt: buildIdentity.builtAt,
   sourceCommit: manifest.sourceCommit,

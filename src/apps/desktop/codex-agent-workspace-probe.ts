@@ -280,7 +280,7 @@ export class CodexAgentWorkspaceProbe
     const outside = await action.execute({
       ...base,
       callId: `${request.callId}-outside`,
-      workspaceId: "farol-next-ungranted-workspace",
+      workspaceId: "farol-ungranted-workspace",
       operation: { kind: "workspace.list", relativePath: "." },
     });
     if (!deniedBeforeNativeAccess(outside)) {

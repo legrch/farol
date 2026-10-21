@@ -186,7 +186,7 @@ function providerArguments(baseUrl: string): string[] {
     "-c",
     `model_provider="${FAROL_PROVIDER_ID}"`,
     "-c",
-    `model_providers.${FAROL_PROVIDER_ID}={ name = "Farol", base_url = "${baseUrl}", wire_api = "responses", env_key = "FAROL_NEXT_PROVIDER_TOKEN", requires_openai_auth = false, request_max_retries = 0, stream_max_retries = 0, stream_idle_timeout_ms = 120000 }`,
+    `model_providers.${FAROL_PROVIDER_ID}={ name = "Farol", base_url = "${baseUrl}", wire_api = "responses", env_key = "FAROL_PROVIDER_TOKEN", requires_openai_auth = false, request_max_retries = 0, stream_max_retries = 0, stream_idle_timeout_ms = 120000 }`,
   ];
 }
 
@@ -230,7 +230,7 @@ export async function launchCodexAppServer(
     environment.CODEX_HOME = input.codexHomePath;
   }
   if (input.providerRoute) {
-    environment.FAROL_NEXT_PROVIDER_TOKEN = input.providerRoute.token;
+    environment.FAROL_PROVIDER_TOKEN = input.providerRoute.token;
   }
 
   const provider = input.providerRoute
@@ -245,7 +245,7 @@ export async function launchCodexAppServer(
     });
     child.stderr.resume();
     return new CodexAppServerClient(child, {
-      clientInfo: { name: "farol-next", version: input.clientVersion },
+      clientInfo: { name: "farol", version: input.clientVersion },
       requestTimeoutMs: 30_000,
     });
   };

@@ -37,7 +37,7 @@ export interface ShellSupportDeclaration {
   }>;
   readonly runtime: Readonly<{
     version: string;
-    treeDigestVersion: "farol.next.tree-digest/v2";
+    treeDigestVersion: "farol.tree-digest/v2";
     treeSHA256: string;
     distributionSHA256: string;
   }>;
@@ -457,7 +457,7 @@ export function parseShellSupportDeclaration(
       qualification.network !== "none" ||
       mechanism.path !== "/usr/bin/sandbox-exec" ||
       watchdog.relativePath !== watchdogPath ||
-      runtime.treeDigestVersion !== "farol.next.tree-digest/v2"
+      runtime.treeDigestVersion !== "farol.tree-digest/v2"
     )
       return refuse();
     const imported = pins(support.imports, true);

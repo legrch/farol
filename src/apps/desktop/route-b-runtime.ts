@@ -46,12 +46,12 @@ export type RouteBTaskSurfaces = Readonly<{
   ): void | Promise<void>;
 }>;
 
-// The caller relay the Farol Next connector reaches: each turn that offers
+// The caller relay the Farol connector reaches: each turn that offers
 // host tools opens one relay turn bound to exactly that tool catalogue.
 export type RouteBToolRelay = Pick<CodexCallerRelayRuntime, "openTurn">;
 
 export type RouteBRuntimeOptions = Readonly<{
-  // Private Next state directory; the provider's turn journal lives inside it.
+  // Private Farol state directory; the provider's turn journal lives inside it.
   stateRoot: string;
   surfaces: RouteBTaskSurfaces;
   // An explicit startup selection; never a fallback from a Go operation.
@@ -115,11 +115,11 @@ function refusedBeforeSubmit(code: string): CodexChatGptConversationResult {
   };
 }
 
-// ChatGPT reaches the host's own tools only through the Farol Next connector
+// ChatGPT reaches the host's own tools only through the Farol connector
 // tool, bound to this one turn; the relay admits nothing else.
 function toolRelayInstruction(ticket: string, binding: string): string {
   return [
-    "This Codex task's native tools are available only through the Farol Next connector tool farol_next_caller_tools,",
+    "This Codex task's native tools are available only through the Farol connector tool farol_next_caller_tools,",
     `with ticket ${ticket} and binding ${binding}.`,
     'Describe them first with operation "describe". Invoke one tool at a time with operation "invoke" and a new stable operationId.',
     "Never repeat an invoke whose result you did not receive.",
@@ -241,7 +241,7 @@ export function admittedCompaction(
     compact: async (input) => {
       const threadId = compactionThread(input);
       if (threadId && !admission.beginSummary(threadId)) {
-        return failure("FAROL_NEXT_COMPACTION_TURN_ACTIVE");
+        return failure("FAROL_COMPACTION_TURN_ACTIVE");
       }
       try {
         return await inner.compact(input);
@@ -329,7 +329,7 @@ async function runAdmitted(
         onTextDelta: (delta) => observer.onTextDelta(delta),
         onVisibleItem: async (item) => {
           if (!observer.onVisibleItem) {
-            throw new Error("FAROL_NEXT_VISIBLE_OUTPUT_UNSUPPORTED");
+            throw new Error("FAROL_VISIBLE_OUTPUT_UNSUPPORTED");
           }
           await observer.onVisibleItem(item);
         },
@@ -369,9 +369,7 @@ export async function startRouteBRuntime(
           compact: (input) => {
             const threadId = compactionThread(input);
             if (threadId && transport.owns(threadId)) {
-              return Promise.resolve(
-                failure("FAROL_NEXT_COMPACTION_TURN_ACTIVE"),
-              );
+              return Promise.resolve(failure("FAROL_COMPACTION_TURN_ACTIVE"));
             }
             return options.compaction.compact(input);
           },

@@ -108,7 +108,7 @@
     {
       name: "ChatGPT",
       title: "Keep the signed-in route separate",
-      copy: "Farol Next will use its own authenticated Browser route. This lab never borrows or changes the installed provider profile.",
+      copy: "Farol will use its own authenticated Browser route. This lab never borrows or changes the installed provider profile.",
       status: "Not connected",
       tone: "blocked",
       details: [

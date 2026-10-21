@@ -224,7 +224,7 @@ export function createGoComputerMcpServer(
   if (typeof fence?.acquireAdmission !== "function")
     throw new BridgeError("refused", "invalid_computer_mcp_fence");
   const server = new McpServer({
-    name: "farol-next-computer",
+    name: "farol-computer",
     version: "0.1.0-preview.0",
   });
   const stopping = async (): Promise<boolean> => {

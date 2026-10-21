@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 
-// The run marker: `farol-next-state/running.json`, written by the desktop
+// The run marker: `farol-state/running.json`, written by the desktop
 // as the first thing it does once Electron is ready and removed only after a
 // quit whose drain was confirmed (`QuitDrainReceipt.drained === true`). Its
 // presence therefore means one of two things and nothing else: this

@@ -104,7 +104,7 @@ export class ActivityLog {
   }
 }
 
-const SETUP_CHECK_STORAGE_KEY = "farol.next.setup-check-history.v1";
+const SETUP_CHECK_STORAGE_KEY = "farol.setup-check-history.v1";
 const SETUP_CHECK_HISTORY_LIMIT = 64;
 export type SetupCheckOperation =
   "connector.check-health" | "connector.verify-app";

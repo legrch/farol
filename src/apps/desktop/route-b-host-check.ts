@@ -5,7 +5,7 @@ import { ROUTE_B_MODEL } from "./route-b-runtime";
 
 // One harmless turn: it asks for a fixed word and touches no tool.
 export const ROUTE_B_CHECK_PROMPT =
-  "This is a Farol Next connection check. Reply with the single word READY and nothing else.";
+  "This is a Farol connection check. Reply with the single word READY and nothing else.";
 
 // The check's host runs under the launcher's bounded profile: execution,
 // browser, interactive-input and ambient MCP capabilities are disabled and
@@ -63,7 +63,7 @@ export type RouteBHostCheckResult =
 
 /**
  * Proves Route B end to end with a host this process launches: an isolated
- * Codex App Server whose own Codex home lives in Next's private runtime
+ * Codex App Server whose own Codex home lives in Farol's private runtime
  * directory (never the owner's), whose model provider is the running Route B
  * endpoint, whose capabilities are bounded and verified before readiness,
  * and which runs one harmless turn through it. A host that does not apply

@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 
-import type { SavedChatBrowser } from "../../modules/chat/app/service/persistent-chatgpt-handoff";
+import type { SavedChatBrowser as SavedChatBrowserPort } from "../../modules/chat/app/service/persistent-chatgpt-handoff";
 import type { ChatGptRoute, ChatGptRouteOptions } from "./chatgpt-route";
 import { canonicalChatGptConversationUrl } from "./chatgpt-page-policy";
 
@@ -21,8 +21,8 @@ export type SavedChatRouteFactory = (
   options: ChatGptRouteOptions,
 ) => SavedChatRoute;
 
-/** Hidden, dedicated Next-partition browser route; never uses the V0 profile. */
-export class NextSavedChatBrowser implements SavedChatBrowser {
+/** Hidden, dedicated Farol partition browser route; never uses the V0 profile. */
+export class SavedChatBrowser implements SavedChatBrowserPort {
   private sender: SavedChatRoute | null = null;
 
   constructor(
@@ -88,7 +88,7 @@ export class NextSavedChatBrowser implements SavedChatBrowser {
     message: string,
     expectedDigest: string,
     stillConnected: () => boolean = () => true,
-  ): ReturnType<SavedChatBrowser["sendOnce"]> {
+  ): ReturnType<SavedChatBrowserPort["sendOnce"]> {
     const sender = this.sender;
     if (sender === null)
       return { status: "not_sent", code: "SAVED_CHAT_SURFACE_MISSING" };
@@ -150,7 +150,7 @@ export class NextSavedChatBrowser implements SavedChatBrowser {
     conversationUrl: string,
     firstMessageDigest: string,
     requestedTitleDigest: string,
-  ): ReturnType<SavedChatBrowser["reopen"]> {
+  ): ReturnType<SavedChatBrowserPort["reopen"]> {
     if (
       this.sender !== null ||
       canonicalChatGptConversationUrl(conversationUrl, this.e2eOrigin) !==

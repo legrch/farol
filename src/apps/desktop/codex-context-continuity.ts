@@ -177,10 +177,10 @@ function normalizeSessionFailure(
     if (session.blockedCode === "COMPACTION_BUDGET_EXCEEDED") {
       return "COMPACTION_BUDGET_EXCEEDED";
     }
-    return "FAROL_NEXT_COMPACTION_SUMMARY_BLOCKED";
+    return "FAROL_COMPACTION_SUMMARY_BLOCKED";
   }
   if (session.phase === "outcome_unknown") {
-    return "FAROL_NEXT_COMPACTION_SUMMARY_OUTCOME_UNKNOWN";
+    return "FAROL_COMPACTION_SUMMARY_OUTCOME_UNKNOWN";
   }
   return null;
 }
@@ -297,7 +297,7 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
         return replay.ok ? replay : failure(replay.error.code);
       }
     } catch {
-      return failure("FAROL_NEXT_COMPACTION_SOURCE_STORE_FAILED");
+      return failure("FAROL_COMPACTION_SOURCE_STORE_FAILED");
     }
     let source: StoredContextSource | null;
     try {
@@ -321,10 +321,10 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
         source = created;
       }
     } catch {
-      return failure("FAROL_NEXT_COMPACTION_SOURCE_STORE_FAILED");
+      return failure("FAROL_COMPACTION_SOURCE_STORE_FAILED");
     }
     if (!source) {
-      return failure("FAROL_NEXT_COMPACTION_SOURCE_UNAVAILABLE");
+      return failure("FAROL_COMPACTION_SOURCE_UNAVAILABLE");
     }
     if (!sourceMatchesRequest(source, request)) {
       return failure("HOST_COMPACTION_SOURCE_MISMATCH");
@@ -346,7 +346,7 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
     const preflight = this.handoffPreflights.get(selectedOperationId);
     this.handoffPreflights.delete(selectedOperationId);
     if (!compacted.ok) {
-      return failure("FAROL_NEXT_COMPACTION_STATE_FAILED");
+      return failure("FAROL_COMPACTION_STATE_FAILED");
     }
     const classified = normalizeSessionFailure(compacted.value.session);
     if (classified) {
@@ -415,7 +415,7 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
       try {
         session = await this.options.store.load(binding);
       } catch {
-        return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+        return failure("FAROL_COMPACTION_RECONCILIATION_FAILED");
       }
       if (!session) return success({ trustedContext: null });
       if (!sameContextBinding(session.binding, binding)) {
@@ -424,7 +424,7 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
       const classified = normalizeSessionFailure(session);
       if (classified) return failure(classified);
       if (session.phase !== "active") {
-        return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+        return failure("FAROL_COMPACTION_RECONCILIATION_FAILED");
       }
       // A session that never completed a compaction admits the turn under
       // first-turn rules: there is no checkpoint to carry.
@@ -445,7 +445,7 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
           session.lastCheckpointId,
         );
       } catch {
-        return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+        return failure("FAROL_COMPACTION_RECONCILIATION_FAILED");
       }
       const completed = session.lastCompletedRequest;
       if (
@@ -480,7 +480,7 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
         transportedCheckpoint.operationId,
       );
     } catch {
-      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+      return failure("FAROL_COMPACTION_RECONCILIATION_FAILED");
     }
     // Every later turn of the epoch still carries the compaction item in the
     // host's history. It is the stored checkpoint of the active epoch, so the
@@ -527,7 +527,7 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
       sourceBoundary: checkpoint.sourceBoundary,
     });
     if (!compacted.ok) {
-      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+      return failure("FAROL_COMPACTION_RECONCILIATION_FAILED");
     }
     const classified = normalizeSessionFailure(compacted.value.session);
     if (classified) return failure(classified);
@@ -536,7 +536,7 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
       compacted.value.session.lastCompletedOperationId !==
         checkpoint.operationId
     ) {
-      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+      return failure("FAROL_COMPACTION_RECONCILIATION_FAILED");
     }
     try {
       await this.options.store.deleteSource(
@@ -544,7 +544,7 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
         checkpoint.operationId,
       );
     } catch {
-      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+      return failure("FAROL_COMPACTION_RECONCILIATION_FAILED");
     }
     this.confirmations.delete(checkpoint.checkpointId);
     return success(this.deliverable(checkpoint));
@@ -576,17 +576,17 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
       (input.itemId !== null &&
         (input.itemId.length < 1 || input.itemId.length > 160))
     ) {
-      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+      return failure("FAROL_COMPACTION_RECONCILIATION_FAILED");
     }
 
     let session: ContextSession | null;
     try {
       session = await this.options.store.load(binding);
     } catch {
-      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+      return failure("FAROL_COMPACTION_RECONCILIATION_FAILED");
     }
     if (!session || !sameContextBinding(session.binding, binding)) {
-      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+      return failure("FAROL_COMPACTION_RECONCILIATION_FAILED");
     }
     const request = session.operation ?? session.lastCompletedRequest;
     if (
@@ -594,18 +594,18 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
       operationIdFor(input.threadId, input.turnId, request.sourceBoundary) !==
         request.operationId
     ) {
-      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+      return failure("FAROL_COMPACTION_RECONCILIATION_FAILED");
     }
     const checkpointId =
       session.operation?.checkpointId ?? session.lastCheckpointId;
     if (!checkpointId) {
-      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+      return failure("FAROL_COMPACTION_RECONCILIATION_FAILED");
     }
     let checkpoint;
     try {
       checkpoint = await this.options.store.get(binding, checkpointId);
     } catch {
-      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+      return failure("FAROL_COMPACTION_RECONCILIATION_FAILED");
     }
     if (
       !checkpoint ||
@@ -613,7 +613,7 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
       checkpoint.operationId !== request.operationId ||
       checkpoint.sourceBoundary !== request.sourceBoundary
     ) {
-      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+      return failure("FAROL_COMPACTION_RECONCILIATION_FAILED");
     }
     if (
       session.phase === "active" &&
@@ -622,13 +622,13 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
       try {
         await this.options.store.deleteSource(binding, request.operationId);
       } catch {
-        return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+        return failure("FAROL_COMPACTION_RECONCILIATION_FAILED");
       }
       this.confirmations.delete(checkpoint.checkpointId);
       return success(session);
     }
     if (!session.operation) {
-      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+      return failure("FAROL_COMPACTION_RECONCILIATION_FAILED");
     }
 
     const hostContextRef = `host-${hash([
@@ -650,12 +650,12 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
       compacted.value.session.phase !== "active" ||
       compacted.value.session.lastCompletedOperationId !== request.operationId
     ) {
-      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+      return failure("FAROL_COMPACTION_RECONCILIATION_FAILED");
     }
     try {
       await this.options.store.deleteSource(binding, request.operationId);
     } catch {
-      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+      return failure("FAROL_COMPACTION_RECONCILIATION_FAILED");
     }
     this.confirmations.delete(checkpoint.checkpointId);
     return success(compacted.value.session);

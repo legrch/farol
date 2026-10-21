@@ -169,7 +169,7 @@ export async function runCodexHostSmoke(
       dynamicToolCalls += 1;
       return {
         success: true,
-        contentItems: [{ type: "inputText", text: "FAROL_NEXT_PING_OK" }],
+        contentItems: [{ type: "inputText", text: "FAROL_PING_OK" }],
       };
     },
   );
@@ -212,7 +212,7 @@ export async function runCodexHostSmoke(
             type: "function",
             name: "farol_next_ping",
             description:
-              "Return the fixed Farol Next host verification marker for the exact supplied nonce.",
+              "Return the fixed Farol host verification marker for the exact supplied nonce.",
             inputSchema: {
               type: "object",
               additionalProperties: false,
@@ -222,7 +222,7 @@ export async function runCodexHostSmoke(
           },
         ],
         baseInstructions:
-          "This is a bounded Farol Next native-host verification turn. Follow the user request exactly and do not inspect files or use any tool other than farol_next_ping.",
+          "This is a bounded Farol native-host verification turn. Follow the user request exactly and do not inspect files or use any tool other than farol_next_ping.",
       }),
     );
     if (
@@ -241,7 +241,7 @@ export async function runCodexHostSmoke(
         input: [
           {
             type: "text",
-            text: `Call farol_next_ping exactly once with nonce ${input.nonce}. Then reply only FAROL_NEXT_HOST_OK. Do not use any other tool.`,
+            text: `Call farol_next_ping exactly once with nonce ${input.nonce}. Then reply only FAROL_HOST_OK. Do not use any other tool.`,
           },
         ],
       }),

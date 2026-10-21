@@ -2,7 +2,7 @@ import { assertBuildIdentity } from "./build-identity-contract.mjs";
 
 export const SIGNED_DERIVATIVE_SCHEMA = "farol.signed-derivative/1";
 const prefix = "SIGNED_DERIVATIVE_";
-const treeVersion = "farol.next.tree-digest/v2";
+const treeVersion = "farol.tree-digest/v2";
 const roles = ["bootstrap", "backend", "archive-helper", "electron-code"];
 const failures = new WeakSet();
 

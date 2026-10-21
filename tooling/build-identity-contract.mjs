@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
-const product = "Farol Next Preview";
-const bundleId = "local.farol.next.preview";
+const product = "Farol";
+const bundleId = "io.github.legrch.farol";
 const previewChannel = "local-preview-only";
 const exactKeys = Object.freeze(
   [

@@ -601,7 +601,7 @@ function defaultSettings(id: () => string): ProductSettings {
     connectors: {
       secureMcp: {
         generation: 1,
-        profile: "farol-next",
+        profile: "farol",
         tunnelId: null,
         tunnelClient: null,
         credential: "missing",
@@ -612,9 +612,9 @@ function defaultSettings(id: () => string): ProductSettings {
     },
     setup: {
       journey: { currentStep: "chatgpt", dismissed: false },
-      chatgpt: readiness("Sign in to the isolated Farol Next browser."),
+      chatgpt: readiness("Sign in to the isolated Farol browser."),
       computer: readiness("Add a read-only workspace."),
-      connect: readiness("Configure the Next-only Computer connection."),
+      connect: readiness("Configure the Farol-only Computer connection."),
       hosts: readiness("Review one scoped native host integration."),
       verify: readiness("Run each configured capability check."),
     },
@@ -2566,7 +2566,7 @@ export class ProductConfigurationService {
             configured: false,
             reachable: "reachable",
             verified: null,
-            needsAction: "Sign in to ChatGPT in the isolated Next window.",
+            needsAction: "Sign in to ChatGPT in the isolated Farol window.",
             unavailable: null,
           };
           break;

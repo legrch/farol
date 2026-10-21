@@ -20,7 +20,7 @@ import { evaluateEligibility, observerFor } from "./evidence-eligibility.mjs";
 // row -- so this tool checks the cited case by name, not the lane's summary
 // label.
 
-export const EVIDENCE_BINDINGS_SCHEMA = "farol.next.evidence-bindings/v1";
+export const EVIDENCE_BINDINGS_SCHEMA = "farol.evidence-bindings/v1";
 
 const HEADER_FIELDS = Object.freeze([
   "sourceCommit",

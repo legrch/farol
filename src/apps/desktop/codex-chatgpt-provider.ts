@@ -142,13 +142,13 @@ export type CodexChatGptConversation = Readonly<{
 
 export type CodexChatGptCompactionErrorCode =
   | HostCompactionErrorCode
-  | "FAROL_NEXT_COMPACTION_SOURCE_STORE_FAILED"
-  | "FAROL_NEXT_COMPACTION_SOURCE_UNAVAILABLE"
-  | "FAROL_NEXT_COMPACTION_SUMMARY_BLOCKED"
-  | "FAROL_NEXT_COMPACTION_SUMMARY_OUTCOME_UNKNOWN"
-  | "FAROL_NEXT_COMPACTION_STATE_FAILED"
-  | "FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED"
-  | "FAROL_NEXT_COMPACTION_TURN_ACTIVE";
+  | "FAROL_COMPACTION_SOURCE_STORE_FAILED"
+  | "FAROL_COMPACTION_SOURCE_UNAVAILABLE"
+  | "FAROL_COMPACTION_SUMMARY_BLOCKED"
+  | "FAROL_COMPACTION_SUMMARY_OUTCOME_UNKNOWN"
+  | "FAROL_COMPACTION_STATE_FAILED"
+  | "FAROL_COMPACTION_RECONCILIATION_FAILED"
+  | "FAROL_COMPACTION_TURN_ACTIVE";
 
 export type CodexChatGptCompaction = Readonly<{
   compact(
@@ -416,14 +416,14 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += bytes.length;
     if (size > MAX_REQUEST_BYTES) {
-      throw new Error("FAROL_NEXT_REQUEST_TOO_LARGE");
+      throw new Error("FAROL_REQUEST_TOO_LARGE");
     }
     chunks.push(bytes);
   }
   try {
     return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
   } catch {
-    throw new Error("FAROL_NEXT_REQUEST_INVALID");
+    throw new Error("FAROL_REQUEST_INVALID");
   }
 }
 
@@ -477,13 +477,13 @@ async function writeChunk(
   value: string,
 ): Promise<void> {
   if (response.destroyed || response.writableEnded) {
-    throw new Error("FAROL_NEXT_HOST_DELIVERY_LOST");
+    throw new Error("FAROL_HOST_DELIVERY_LOST");
   }
   if (response.write(value)) return;
   await Promise.race([
     once(response, "drain"),
     once(response, "close").then(() => {
-      throw new Error("FAROL_NEXT_HOST_DELIVERY_LOST");
+      throw new Error("FAROL_HOST_DELIVERY_LOST");
     }),
   ]);
 }
@@ -686,7 +686,7 @@ class ResponseRound {
   }
 
   async visible(item: VisibleOutputItem): Promise<void> {
-    if (this.ended) throw new Error("FAROL_NEXT_HOST_DELIVERY_LOST");
+    if (this.ended) throw new Error("FAROL_HOST_DELIVERY_LOST");
     if (item.channel !== "status") {
       await this.appendText(
         item.text,
@@ -744,7 +744,7 @@ class ResponseRound {
     phase: "commentary" | "final_answer" | null,
     separateBlock: boolean,
   ): Promise<void> {
-    if (this.ended) throw new Error("FAROL_NEXT_HOST_DELIVERY_LOST");
+    if (this.ended) throw new Error("FAROL_HOST_DELIVERY_LOST");
     if (this.textStarted && this.textPhase !== phase) await this.finishText();
     const separator = separateBlock && this.textStarted ? "\n\n" : "";
     if (!this.textStarted) {
@@ -823,7 +823,7 @@ class ResponseRound {
     current: () => boolean,
   ): Promise<void> {
     const requireCurrent = () => {
-      if (!current()) throw new Error("FAROL_NEXT_HOST_DELIVERY_LOST");
+      if (!current()) throw new Error("FAROL_HOST_DELIVERY_LOST");
     };
     requireCurrent();
     await this.finishText();
@@ -875,7 +875,7 @@ class ResponseRound {
   async completeFinal(): Promise<void> {
     await this.finishText();
     if (this.output.length < 1) {
-      await this.fail("FAROL_NEXT_PROVIDER_RESULT_INVALID");
+      await this.fail("FAROL_PROVIDER_RESULT_INVALID");
       return;
     }
     await this.complete();
@@ -951,7 +951,7 @@ class ActiveProviderTurn {
     this.binding = bindingFingerprint(data);
     this.registry = CodexNativeToolRegistry.parse(data.tools);
     this.lifetime = setTimeout(
-      () => this.cancel("FAROL_NEXT_TURN_EXPIRED"),
+      () => this.cancel("FAROL_TURN_EXPIRED"),
       TURN_LIFETIME_MS,
     );
     this.lifetime.unref?.();
@@ -975,8 +975,7 @@ class ActiveProviderTurn {
   }
 
   async serveInitial(response: ServerResponse): Promise<boolean> {
-    if (this.state !== "created")
-      throw new Error("FAROL_NEXT_TURN_STATE_INVALID");
+    if (this.state !== "created") throw new Error("FAROL_TURN_STATE_INVALID");
     let writer: ResponseRound;
     try {
       writer = await this.attach(response);
@@ -1003,7 +1002,7 @@ class ActiveProviderTurn {
             (this.sequence > 0 || this.issued.size > 0));
         const code =
           this.streamFailure?.message ??
-          (invalidResult ? "FAROL_NEXT_PROVIDER_RESULT_INVALID" : null);
+          (invalidResult ? "FAROL_PROVIDER_RESULT_INVALID" : null);
         const settled: CodexChatGptConversationResult = code
           ? { ...result, state: "outcome_unknown", code }
           : result;
@@ -1014,7 +1013,7 @@ class ActiveProviderTurn {
         this.push({
           kind: "final",
           result: null,
-          code: "FAROL_NEXT_CONVERSATION_FAILED",
+          code: "FAROL_CONVERSATION_FAILED",
         }),
       );
     return this.finishRound(writer);
@@ -1029,7 +1028,7 @@ class ActiveProviderTurn {
     const pending = this.pending;
     if (!pending || pending.callId !== delivery.callId) {
       this.detach(writer);
-      throw new Error("FAROL_NEXT_CONTINUATION_INVALID");
+      throw new Error("FAROL_CONTINUATION_INVALID");
     }
     pending.outputCanonical = delivery.outputCanonical;
     this.pending = null;
@@ -1057,7 +1056,7 @@ class ActiveProviderTurn {
 
   private async attach(response: ServerResponse): Promise<ResponseRound> {
     if (this.writer || this.state === "ended") {
-      throw new Error("FAROL_NEXT_TURN_STATE_INVALID");
+      throw new Error("FAROL_TURN_STATE_INVALID");
     }
     const writer = new ResponseRound(response, this.input.requestedModel);
     this.writer = writer;
@@ -1075,7 +1074,7 @@ class ActiveProviderTurn {
       while (event.kind === "visible") {
         try {
           if (this.state === "ended") {
-            throw new Error("FAROL_NEXT_HOST_DELIVERY_LOST");
+            throw new Error("FAROL_HOST_DELIVERY_LOST");
           }
           await writer.visible(event.item);
           event.delivered.resolve();
@@ -1083,7 +1082,7 @@ class ActiveProviderTurn {
           event.delivered.reject(
             error instanceof Error
               ? error
-              : new Error("FAROL_NEXT_HOST_DELIVERY_LOST"),
+              : new Error("FAROL_HOST_DELIVERY_LOST"),
           );
           throw error;
         } finally {
@@ -1109,7 +1108,7 @@ class ActiveProviderTurn {
           this.streamFailure?.message ??
             event.code ??
             event.result?.code ??
-            "FAROL_NEXT_PROVIDER_RESULT_INVALID",
+            "FAROL_PROVIDER_RESULT_INVALID",
         );
       }
       this.state = "ended";
@@ -1134,7 +1133,7 @@ class ActiveProviderTurn {
   }
 
   private failStream(): never {
-    this.streamFailure ??= new Error("FAROL_NEXT_PROVIDER_STREAM_INVALID");
+    this.streamFailure ??= new Error("FAROL_PROVIDER_STREAM_INVALID");
     throw this.streamFailure;
   }
 
@@ -1194,7 +1193,7 @@ class ActiveProviderTurn {
   private async requestTool(request: CodexNativeToolRequest): Promise<string> {
     if (this.streamFailure) throw this.streamFailure;
     if (this.state !== "running" || this.pending !== null) {
-      throw new Error("FAROL_NEXT_TOOL_CALL_STATE_INVALID");
+      throw new Error("FAROL_TOOL_CALL_STATE_INVALID");
     }
     const resolved = this.registry.resolve(request);
     const callId = `${currentCallPrefix(this.tag)}${randomBytes(8).toString("hex")}`;
@@ -1218,16 +1217,16 @@ class ActiveProviderTurn {
     outputCanonical: string;
   }> {
     if (this.state !== "running" || !this.pending) {
-      throw new Error("FAROL_NEXT_CONTINUATION_STATE_INVALID");
+      throw new Error("FAROL_CONTINUATION_STATE_INVALID");
     }
     if (turnKey(identityFromRequest(data)) !== this.key) {
-      throw new Error("FAROL_NEXT_CONTINUATION_IDENTITY_INVALID");
+      throw new Error("FAROL_CONTINUATION_IDENTITY_INVALID");
     }
     if (bindingFingerprint(data) !== this.binding) {
-      throw new Error("FAROL_NEXT_CONTINUATION_BINDING_INVALID");
+      throw new Error("FAROL_CONTINUATION_BINDING_INVALID");
     }
     if (!Array.isArray(data.input)) {
-      throw new Error("FAROL_NEXT_CONTINUATION_INPUT_INVALID");
+      throw new Error("FAROL_CONTINUATION_INPUT_INVALID");
     }
     const calls = new Map<string, Record<string, unknown>>();
     const outputs = new Map<string, Record<string, unknown>>();
@@ -1236,12 +1235,12 @@ class ActiveProviderTurn {
       const callId = String(item.call_id);
       const target = item.type === "function_call" ? calls : outputs;
       if (target.has(callId)) {
-        throw new Error("FAROL_NEXT_CONTINUATION_CARDINALITY_INVALID");
+        throw new Error("FAROL_CONTINUATION_CARDINALITY_INVALID");
       }
       target.set(callId, item);
     }
     if (calls.size !== this.issued.size || outputs.size !== this.issued.size) {
-      throw new Error("FAROL_NEXT_CONTINUATION_CARDINALITY_INVALID");
+      throw new Error("FAROL_CONTINUATION_CARDINALITY_INVALID");
     }
     let pendingOutput: string | null = null;
     let pendingCanonical: string | null = null;
@@ -1256,22 +1255,22 @@ class ActiveProviderTurn {
         call.arguments !== issued.encodedArguments ||
         (call.namespace ?? null) !== issued.namespace
       ) {
-        throw new Error("FAROL_NEXT_CONTINUATION_CALL_INVALID");
+        throw new Error("FAROL_CONTINUATION_CALL_INVALID");
       }
       const normalized = outputText(output.output);
       if (normalized === null) {
-        throw new Error("FAROL_NEXT_CONTINUATION_OUTPUT_INVALID");
+        throw new Error("FAROL_CONTINUATION_OUTPUT_INVALID");
       }
       const canonical = canonicalJson(output.output);
       if (issued === this.pending) {
         pendingOutput = normalized;
         pendingCanonical = canonical;
       } else if (issued.outputCanonical !== canonical) {
-        throw new Error("FAROL_NEXT_CONTINUATION_REPLAY_INVALID");
+        throw new Error("FAROL_CONTINUATION_REPLAY_INVALID");
       }
     }
     if (pendingOutput === null || pendingCanonical === null) {
-      throw new Error("FAROL_NEXT_CONTINUATION_OUTPUT_INVALID");
+      throw new Error("FAROL_CONTINUATION_OUTPUT_INVALID");
     }
     return {
       callId: this.pending.callId,
@@ -1294,7 +1293,7 @@ class ActiveProviderTurn {
   private next(): Promise<TurnEvent> {
     const event = this.events.shift();
     if (event) return Promise.resolve(event);
-    if (this.waiter) throw new Error("FAROL_NEXT_TURN_STATE_INVALID");
+    if (this.waiter) throw new Error("FAROL_TURN_STATE_INVALID");
     this.waiter = deferred<TurnEvent>();
     return this.waiter.promise;
   }
@@ -1310,12 +1309,12 @@ async function handleResponses(
 ): Promise<void> {
   const parsed = responseRequestSchema.safeParse(raw);
   if (!parsed.success) {
-    onRefusal("FAROL_NEXT_REQUEST_INVALID");
-    refusal(response, 400, "FAROL_NEXT_REQUEST_INVALID");
+    onRefusal("FAROL_REQUEST_INVALID");
+    refusal(response, 400, "FAROL_REQUEST_INVALID");
     return;
   }
   if (parsed.data.model !== options.model) {
-    refusal(response, 422, "FAROL_NEXT_MODEL_UNAVAILABLE");
+    refusal(response, 422, "FAROL_MODEL_UNAVAILABLE");
     return;
   }
   const identity = identityFromRequest(parsed.data);
@@ -1333,7 +1332,7 @@ async function handleResponses(
             ? options.threads.hold(identity)
             : () => undefined;
           if (!release) {
-            const code = "FAROL_NEXT_COMPACTION_TURN_ACTIVE";
+            const code = "FAROL_COMPACTION_TURN_ACTIVE";
             onRefusal(code);
             refusal(response, 409, code);
             return null;
@@ -1357,9 +1356,9 @@ async function handleResponses(
     } catch (error) {
       if (!response.headersSent && !response.destroyed) {
         const code =
-          error instanceof Error && /^FAROL_NEXT_[A-Z_]+$/u.test(error.message)
+          error instanceof Error && /^FAROL_[A-Z_]+$/u.test(error.message)
             ? error.message
-            : "FAROL_NEXT_GO_OUTCOME_UNKNOWN";
+            : "FAROL_GO_OUTCOME_UNKNOWN";
         onRefusal(code);
         refusal(
           response,
@@ -1377,7 +1376,7 @@ async function handleResponses(
   const existing = turns.get(key);
   if (existing) {
     if (!existing.hasContinuation(parsed.data)) {
-      refusal(response, 409, "FAROL_NEXT_CONTINUATION_REQUIRED");
+      refusal(response, 409, "FAROL_CONTINUATION_REQUIRED");
       return;
     }
     try {
@@ -1385,14 +1384,14 @@ async function handleResponses(
     } catch (error) {
       if (error instanceof Error && !response.headersSent) {
         onRefusal(
-          /^FAROL_NEXT_CONTINUATION_[A-Z_]+$/u.test(error.message)
+          /^FAROL_CONTINUATION_[A-Z_]+$/u.test(error.message)
             ? error.message
-            : "FAROL_NEXT_CONTINUATION_INVALID",
+            : "FAROL_CONTINUATION_INVALID",
         );
-        refusal(response, 409, "FAROL_NEXT_CONTINUATION_INVALID");
+        refusal(response, 409, "FAROL_CONTINUATION_INVALID");
         return;
       }
-      existing.cancel("FAROL_NEXT_HOST_DELIVERY_LOST");
+      existing.cancel("FAROL_HOST_DELIVERY_LOST");
       throw error;
     }
     return;
@@ -1403,18 +1402,18 @@ async function handleResponses(
       turn.ownsForeignContinuation(parsed.data),
     )
   ) {
-    refusal(response, 409, "FAROL_NEXT_CONTINUATION_FOREIGN");
+    refusal(response, 409, "FAROL_CONTINUATION_FOREIGN");
     return;
   }
   if (
     Array.isArray(parsed.data.input) &&
     parsed.data.input.some((entry) => currentCallEntry(entry, tag))
   ) {
-    refusal(response, 409, "FAROL_NEXT_CONTINUATION_NOT_FOUND");
+    refusal(response, 409, "FAROL_CONTINUATION_NOT_FOUND");
     return;
   }
   if (turns.size >= MAX_ACTIVE_TURNS) {
-    refusal(response, 503, "FAROL_NEXT_PROVIDER_BUSY");
+    refusal(response, 503, "FAROL_PROVIDER_BUSY");
     return;
   }
   // From here the thread is in use: its context is prepared, the request is
@@ -1424,8 +1423,8 @@ async function handleResponses(
     ? options.threads.hold(identity)
     : () => undefined;
   if (!release) {
-    onRefusal("FAROL_NEXT_COMPACTION_TURN_ACTIVE");
-    refusal(response, 409, "FAROL_NEXT_COMPACTION_TURN_ACTIVE");
+    onRefusal("FAROL_COMPACTION_TURN_ACTIVE");
+    refusal(response, 409, "FAROL_COMPACTION_TURN_ACTIVE");
     return;
   }
   try {
@@ -1472,7 +1471,7 @@ async function prepareInitialInput(
   }
   const prompt = promptFromInput(data.input, trustedContext);
   if (prompt === null) {
-    refusal(response, 422, "FAROL_NEXT_INPUT_UNSUPPORTED");
+    refusal(response, 422, "FAROL_INPUT_UNSUPPORTED");
     return null;
   }
   try {
@@ -1481,9 +1480,9 @@ async function prepareInitialInput(
     onRefusal(
       error instanceof Error && /^CODEX_TOOL_[A-Z_]+$/u.test(error.message)
         ? error.message
-        : "FAROL_NEXT_TOOL_CATALOGUE_INVALID",
+        : "FAROL_TOOL_CATALOGUE_INVALID",
     );
-    refusal(response, 422, "FAROL_NEXT_TOOL_CATALOGUE_INVALID");
+    refusal(response, 422, "FAROL_TOOL_CATALOGUE_INVALID");
     return null;
   }
   // A host may repeat an initial request after a terminal answer, a lost
@@ -1510,17 +1509,17 @@ async function prepareInitialInput(
             ),
         );
       } catch {
-        onRefusal("FAROL_NEXT_TURN_JOURNAL_UNAVAILABLE");
-        refusal(response, 503, "FAROL_NEXT_TURN_JOURNAL_UNAVAILABLE");
+        onRefusal("FAROL_TURN_JOURNAL_UNAVAILABLE");
+        refusal(response, 503, "FAROL_TURN_JOURNAL_UNAVAILABLE");
         return false;
       }
       if (admission !== "admitted") {
         const code =
           admission === "replayed"
-            ? "FAROL_NEXT_TURN_ALREADY_SUBMITTED"
+            ? "FAROL_TURN_ALREADY_SUBMITTED"
             : admission === "conflict"
-              ? "FAROL_NEXT_TURN_INTENT_CONFLICT"
-              : "FAROL_NEXT_TURN_STATE_UNKNOWN";
+              ? "FAROL_TURN_INTENT_CONFLICT"
+              : "FAROL_TURN_STATE_UNKNOWN";
         onRefusal(code);
         refusal(response, 409, code);
         return false;
@@ -1552,8 +1551,7 @@ async function serveInitialRequest(
   if (!prepared || !(await prepared.admit())) return;
   const prompt = prepared.prompt;
   const contextDelivered = prepared.completed;
-  if (!options.conversation)
-    throw new Error("FAROL_NEXT_PROVIDER_OPTIONS_INVALID");
+  if (!options.conversation) throw new Error("FAROL_PROVIDER_OPTIONS_INVALID");
   let turn: ActiveProviderTurn;
   try {
     turn = new ActiveProviderTurn(
@@ -1581,16 +1579,16 @@ async function serveInitialRequest(
     onRefusal(
       error instanceof Error && /^CODEX_TOOL_[A-Z_]+$/u.test(error.message)
         ? error.message
-        : "FAROL_NEXT_TOOL_CATALOGUE_INVALID",
+        : "FAROL_TOOL_CATALOGUE_INVALID",
     );
-    refusal(response, 422, "FAROL_NEXT_TOOL_CATALOGUE_INVALID");
+    refusal(response, 422, "FAROL_TOOL_CATALOGUE_INVALID");
     return;
   }
   turns.set(key, turn);
   try {
     await turn.serveInitial(response);
   } catch (error) {
-    turn.cancel("FAROL_NEXT_HOST_DELIVERY_LOST");
+    turn.cancel("FAROL_HOST_DELIVERY_LOST");
     throw error;
   }
 }
@@ -1605,11 +1603,11 @@ async function handleCompaction(
   // Compaction is a new request on the selected route, even when it reads a
   // historical checkpoint. Never relabel a stale alias as the current model.
   if (!record(raw) || raw.model !== options.model) {
-    refusal(response, 422, "FAROL_NEXT_MODEL_UNAVAILABLE");
+    refusal(response, 422, "FAROL_MODEL_UNAVAILABLE");
     return;
   }
   if (!options.compaction) {
-    refusal(response, 501, "FAROL_NEXT_COMPACTION_UNAVAILABLE");
+    refusal(response, 501, "FAROL_COMPACTION_UNAVAILABLE");
     return;
   }
   const result = await options.compaction.compact({
@@ -1627,7 +1625,7 @@ async function handleCompaction(
       handoff.variant !== "unary_replacement_history") ||
     (endpoint === "responses" && handoff.variant !== "streamed_compaction_item")
   ) {
-    refusal(response, 500, "FAROL_NEXT_COMPACTION_RESULT_INVALID");
+    refusal(response, 500, "FAROL_COMPACTION_RESULT_INVALID");
     return;
   }
   if (handoff.variant === "unary_replacement_history") {
@@ -1675,19 +1673,15 @@ async function readProviderBody(
   if (
     request.headers["content-type"]?.split(";", 1)[0] !== "application/json"
   ) {
-    refusal(response, 415, "FAROL_NEXT_CONTENT_TYPE_INVALID");
+    refusal(response, 415, "FAROL_CONTENT_TYPE_INVALID");
     return { ok: false };
   }
   try {
     return { ok: true, value: await readBody(request) };
   } catch (error) {
     const code =
-      error instanceof Error ? error.message : "FAROL_NEXT_REQUEST_INVALID";
-    refusal(
-      response,
-      code === "FAROL_NEXT_REQUEST_TOO_LARGE" ? 413 : 400,
-      code,
-    );
+      error instanceof Error ? error.message : "FAROL_REQUEST_INVALID";
+    refusal(response, code === "FAROL_REQUEST_TOO_LARGE" ? 413 : 400, code);
     return { ok: false };
   }
 }
@@ -1700,14 +1694,14 @@ export async function startCodexChatGptProvider(
     // The production route supplies CHATGPT_MODEL_ID exclusively; its exact
     // request-model guard never treats these strings as aliases of chatgpt.
     (options.model !== CHATGPT_MODEL_ID &&
-      options.model !== "farol-next/mind" &&
-      options.model !== "farol-next/drive") ||
+      options.model !== "legacy-route/mind" &&
+      options.model !== "legacy-route/drive") ||
     Boolean(options.conversation) === Boolean(options.goResponses) ||
     options.token.length < 16 ||
     options.token.length > 512 ||
     /[\r\n]/u.test(options.token)
   ) {
-    throw new Error("FAROL_NEXT_PROVIDER_OPTIONS_INVALID");
+    throw new Error("FAROL_PROVIDER_OPTIONS_INVALID");
   }
 
   let modelRequests = 0;
@@ -1733,7 +1727,7 @@ export async function startCodexChatGptProvider(
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       if (!authorized(request, options.token)) {
         unauthorizedRequests += 1;
-        refusal(response, 401, "FAROL_NEXT_PROVIDER_UNAUTHORIZED");
+        refusal(response, 401, "FAROL_PROVIDER_UNAUTHORIZED");
         return;
       }
       if (request.method === "GET" && url.pathname === "/v1/models") {
@@ -1796,11 +1790,11 @@ export async function startCodexChatGptProvider(
         );
         return;
       }
-      refusal(response, 404, "FAROL_NEXT_PROVIDER_NOT_FOUND");
+      refusal(response, 404, "FAROL_PROVIDER_NOT_FOUND");
     })().catch(() => {
       failedRequests += 1;
       if (!response.headersSent) {
-        refusal(response, 500, "FAROL_NEXT_PROVIDER_FAILED");
+        refusal(response, 500, "FAROL_PROVIDER_FAILED");
       } else if (!response.writableEnded) {
         response.end();
       }
@@ -1811,7 +1805,7 @@ export async function startCodexChatGptProvider(
   const address = server.address();
   if (address === null || typeof address === "string") {
     server.close();
-    throw new Error("FAROL_NEXT_PROVIDER_BIND_FAILED");
+    throw new Error("FAROL_PROVIDER_BIND_FAILED");
   }
   const port = address.port;
   return {
@@ -1842,7 +1836,7 @@ export async function startCodexChatGptProvider(
     close: async () => {
       await options.goResponses?.close();
       for (const turn of [...turns.values()]) {
-        turn.cancel("FAROL_NEXT_PROVIDER_CLOSED");
+        turn.cancel("FAROL_PROVIDER_CLOSED");
       }
       turns.clear();
       server.closeAllConnections();

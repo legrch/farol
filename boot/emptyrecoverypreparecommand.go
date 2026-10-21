@@ -132,7 +132,7 @@ func emptyRecoveryDevRoot(root string) bool {
 		return false
 	}
 	state := filepath.Dir(root)
-	if filepath.Base(state) != "farol-next-state" {
+	if filepath.Base(state) != "farol-state" {
 		return false
 	}
 	name := filepath.Base(filepath.Dir(state))
@@ -146,5 +146,5 @@ func emptyRecoveryInstalledRoot(root string) bool {
 		return false
 	}
 	state := filepath.Dir(root)
-	return filepath.Base(state) == "farol-next-state" && filepath.Base(filepath.Dir(state)) == "Farol Next Preview"
+	return filepath.Base(state) == "farol-state" && filepath.Base(filepath.Dir(state)) == "Farol"
 }

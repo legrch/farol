@@ -39,7 +39,7 @@ import { evaluateBindings } from "./evidence-bindings.mjs";
 //     reported in `unresolved` and dropped.
 
 export const APPLY_VERDICTS_SCHEMA =
-  "farol.next.completion-ledger-apply-verdicts/v1";
+  "farol.completion-ledger-apply-verdicts/v1";
 
 // The only verdict values evaluateBindings() can produce today (see
 // evidence-bindings.mjs's evaluateRequirement). currentProofSummary must only

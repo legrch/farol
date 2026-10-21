@@ -454,7 +454,7 @@ func (v *Verifier) verify(ctx context.Context, parent, app int) (result Observat
 		}
 	}()
 	s := inventory{entries: make(map[string]entry), digest: sha256.New(), buffer: make([]byte, 1<<20), cleanup: v.cleanup}
-	s.digest.Write([]byte("farol.next.tree-digest/v2\x00"))
+	s.digest.Write([]byte("farol.tree-digest/v2\x00"))
 	if e = s.walk(ctx, root, "", 0, false); e != nil {
 		return Observation{}, e
 	}

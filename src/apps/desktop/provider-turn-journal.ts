@@ -42,7 +42,7 @@ function sha256(value: string): string {
  * identity whose answer the host lost is refused as already submitted, never
  * run again, and the answer stays visible in the task's conversation. The
  * duplicate protection must outlive any host retry of the same identity:
- * the hosts this product launches on the Next route carry zero request and
+ * the hosts this product launches on the Farol route carry zero request and
  * stream retries (codex-app-server-process.ts), and Codex turn identities
  * are unique per user turn, so the retention window below is a storage
  * bound well past any process lifetime, not the guarantee itself.

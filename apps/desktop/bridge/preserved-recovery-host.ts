@@ -146,7 +146,7 @@ async function recoverPreservedChat(
   });
   const { desktopState, processesAbsent, attest } = input;
   const { userData, executable, profile, exact } = selected;
-  const state = path.join(userData, "farol-next-state");
+  const state = path.join(userData, "farol-state");
   const legacyPreparation =
     admission.kind === "startup" ? admission.legacyPreparation : undefined;
   if (legacyPreparation !== undefined)

@@ -8,9 +8,9 @@ const canonicalTimestamp = z.string().refine((value) => {
 export const BuildIdentitySchema = z
   .strictObject({
     schema: z.literal(1),
-    product: z.literal("Farol Next Preview"),
+    product: z.literal("Farol"),
     version: z.string().regex(/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u),
-    bundleId: z.literal("local.farol.next.preview"),
+    bundleId: z.literal("io.github.legrch.farol"),
     updateChannel: z.enum([
       "local-preview-only",
       "github-owner-beta",

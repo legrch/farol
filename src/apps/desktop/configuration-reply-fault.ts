@@ -9,7 +9,7 @@
 // decides whether the command runs: by the time it is asked, the edit, its
 // receipt and its pending record are all on disk.
 //
-// It is inert outside the E2E lane. Both `FAROL_NEXT_E2E` and a delivery
+// It is inert outside the E2E lane. Both `FAROL_E2E` and a delivery
 // budget must be set before a reply can be dropped, exactly as the live-task
 // save fault in main.ts requires both before it can fail a commit. Only a
 // successful `computer.apply-workspace-edit` reply is ever counted or dropped:
@@ -21,13 +21,12 @@ import type { ProductConfigurationResult } from "../../pkg/product-settings/cont
 export type ConfigurationReplyDecision = "deliver" | "drop";
 
 export const WORKSPACE_EDIT_REPLY_DELIVERIES_ENV =
-  "FAROL_NEXT_E2E_WORKSPACE_EDIT_REPLY_DELIVERIES";
+  "FAROL_E2E_WORKSPACE_EDIT_REPLY_DELIVERIES";
 
 export const WORKSPACE_EDIT_REPLY_FAULT_INVALID =
   "WORKSPACE_EDIT_E2E_REPLY_FAULT_INVALID";
 
-export const WORKSPACE_EDIT_ACK_HOLD_ENV =
-  "FAROL_NEXT_E2E_HOLD_WORKSPACE_EDIT_ACK";
+export const WORKSPACE_EDIT_ACK_HOLD_ENV = "FAROL_E2E_HOLD_WORKSPACE_EDIT_ACK";
 
 export const WORKSPACE_EDIT_ACK_HOLD_INVALID =
   "WORKSPACE_EDIT_E2E_ACK_HOLD_INVALID";
@@ -46,7 +45,7 @@ export function e2eBudget(
   name: string,
   invalidCode: string,
 ): number | null {
-  if (env.FAROL_NEXT_E2E !== "1") return null;
+  if (env.FAROL_E2E !== "1") return null;
   const raw = env[name];
   if (raw === undefined) return null;
   const budget = Number(raw);

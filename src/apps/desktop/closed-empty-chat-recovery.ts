@@ -283,7 +283,7 @@ export async function recoverInstalledEmptyChat(
     input.selectionInput.Interrupted !== undefined ||
     input.selectionInput.Mutations.length !== 0 ||
     !/^[a-f0-9]{64}$/u.test(input.expectedQuitSha256) ||
-    path.basename(input.userData) !== "Farol Next Preview"
+    path.basename(input.userData) !== "Farol"
   )
     throw Error("INSTALLED_EMPTY_RECOVERY_SELECTION_INVALID");
   return recoverSelectedEmptyChat(input, input.expectedQuitSha256, false, true);
@@ -304,7 +304,7 @@ export async function recoverInstalledPreservedChat(
     input.selectionInput.Preserved.length < 1 ||
     input.selectionInput.Preserved.length > 128 ||
     !/^[a-f0-9]{64}$/u.test(input.expectedQuitSha256) ||
-    path.basename(input.userData) !== "Farol Next Preview"
+    path.basename(input.userData) !== "Farol"
   )
     throw Error("INSTALLED_PRESERVED_RECOVERY_SELECTION_INVALID");
   return recoverSelectedEmptyChat(
@@ -394,7 +394,7 @@ async function recoverSelectedEmptyChat(
     selectionInput: input.selectionInput,
   });
   const { userData, profile, exact, selectionInput } = selected;
-  const state = path.join(userData, "farol-next-state");
+  const state = path.join(userData, "farol-state");
   if (
     profile.root !== path.join(state, "go-core") ||
     !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(exact.operationId) ||
@@ -725,7 +725,7 @@ export async function completeKnownEmptyChat(
     failure: input.failure,
   });
   const { profile, exact, selectionInput, failure } = selected;
-  const state = path.join(input.userData, "farol-next-state");
+  const state = path.join(input.userData, "farol-state");
   const archive = path.join(profile.root, `chat-retired-${exact.operationId}`);
   const pending = path.join(state, "go-core.empty-recovery.pending");
   const running = path.join(state, "running.json");

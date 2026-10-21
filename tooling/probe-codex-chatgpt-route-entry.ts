@@ -40,7 +40,7 @@ if (
 }
 
 const scratch = await fs.mkdtemp(
-  path.join(os.tmpdir(), "farol-next-route-b-native-"),
+  path.join(os.tmpdir(), "farol-route-b-native-"),
 );
 const privateHome = path.join(scratch, "home");
 const runtimeRoot = path.join(scratch, "runtime");
@@ -59,7 +59,7 @@ let nativeToolErrorCode: string | null = null;
 let summarySubmissions = 0;
 let summaryResets = 0;
 let summaryConversationUrl: string | null =
-  "https://chatgpt.com/c/farol-next-native-context";
+  "https://chatgpt.com/c/farol-native-context";
 const checkpointContent = {
   goal: "Preserve the deterministic native context route.",
   activeConstraints: ["No paid or external provider fallback."],
@@ -238,7 +238,7 @@ try {
     result = await runCodexChatGptHostRoute(client, {
       model: CHATGPT_MODEL_ID,
       cwd: runtimeRoot,
-      prompt: "Return the exact fixed marker FAROL_NEXT_ROUTE_B_OK.",
+      prompt: "Return the exact fixed marker FAROL_ROUTE_B_OK.",
       timeoutMs: 30_000,
     });
   } catch (error) {
@@ -293,7 +293,7 @@ try {
     continuation = await continueCodexChatGptHostThread(client, {
       model: CHATGPT_MODEL_ID,
       threadId: result.threadId,
-      prompt: "Continue after compaction and return FAROL_NEXT_ROUTE_B_OK.",
+      prompt: "Continue after compaction and return FAROL_ROUTE_B_OK.",
       timeoutMs: 30_000,
     });
   } catch (error) {

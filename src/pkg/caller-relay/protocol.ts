@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const CALLER_RELAY_PROTOCOL = "farol-next-caller-relay/v1" as const;
+export const CALLER_RELAY_PROTOCOL = "farol-caller-relay/v1" as const;
 export const CALLER_RELAY_MAX_FRAME_BYTES = 768 * 1_024;
 
 const HexDigestSchema = z.string().regex(/^[a-f0-9]{64}$/u);

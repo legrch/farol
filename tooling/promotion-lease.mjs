@@ -25,7 +25,7 @@ import path from "node:path";
 // a shape it cannot recover) instead of removing it.
 //
 // Where the lease file lives, and what the fence is therefore for. The lease
-// is `farol-next-state/promotion.lease` inside the app's own private user
+// is `farol-state/promotion.lease` inside the app's own private user
 // data directory (mode 0700, owner-only): it is not inside any approved
 // workspace folder, so the adversary the Git snapshot route defends against
 // -- a process writing inside an approved root -- cannot reach it at all.
@@ -37,7 +37,7 @@ import path from "node:path";
 // depth, not the boundary: it turns "two holders wrote" into "the second
 // holder refused" even in that case, and costs one `lstat` per write.
 
-export const PROMOTION_LEASE_SCHEMA = "farol.next.promotion-lease/1";
+export const PROMOTION_LEASE_SCHEMA = "farol.promotion-lease/1";
 
 const FILE_NAME = "promotion.lease";
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
@@ -64,7 +64,7 @@ export function promotionLeasePath(userData) {
   if (!path.isAbsolute(userData)) {
     throw new Error("PROMOTION_LEASE_ROOT_NOT_ABSOLUTE");
   }
-  return path.join(userData, "farol-next-state", FILE_NAME);
+  return path.join(userData, "farol-state", FILE_NAME);
 }
 
 function assertPlatform() {

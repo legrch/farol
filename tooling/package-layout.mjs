@@ -1,4 +1,4 @@
-// Hidden NEW identity remains stable; the installed human-facing name changes.
+// New packages use Farol; schema 5 retains its explicit legacy app name.
 // Only these explicit package generations are accepted, never an arbitrary
 // basename supplied by a release manifest or workspace.
 export const PRODUCT_APP_NAME = "Farol.app";
@@ -17,7 +17,7 @@ export function packageLayout(schema) {
   if (schema === 5)
     return Object.freeze({
       appName: LEGACY_APP_NAME,
-      displayName: "Farol Next Preview",
+      displayName: LEGACY_APP_NAME.slice(0, -4),
       branded: false,
     });
   if (schema === PACKAGE_SCHEMA)

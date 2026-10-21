@@ -20,7 +20,7 @@ import path from "node:path";
 // No run deletes or rewrites another run's files, so a failed attempt stays
 // addressable after a later attempt starts or crashes.
 
-export const EVIDENCE_ATTEMPT_SCHEMA = "farol.next.evidence-attempt/v1";
+export const EVIDENCE_ATTEMPT_SCHEMA = "farol.evidence-attempt/v1";
 
 const ATTEMPT_ID = /^\d{8}T\d{9}Z-[0-9a-f]{8}$/u;
 const RECEIPTS = new Set([

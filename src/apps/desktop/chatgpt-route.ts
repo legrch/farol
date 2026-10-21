@@ -1347,7 +1347,7 @@ export type ChatGptRouteOptions = Readonly<{
   e2eOrigin: string | null;
   parent: () => BrowserWindow | null;
   partition?:
-    | "persist:farol-next-chatgpt"
+    | "persist:farol-app-chatgpt"
     | "persist:farol-dev-chatgpt"
     | "persist:farol-owner-preview-chatgpt";
   requiredAppName?: string;
@@ -1593,7 +1593,7 @@ export class ChatGptRoute {
 
   constructor(private readonly options: ChatGptRouteOptions) {
     this.entryUrl = options.initialUrl;
-    this.displayTitle = options.title ?? "ChatGPT · Farol Next";
+    this.displayTitle = options.title ?? "ChatGPT · Farol";
     if (
       !allowedChatGptPageUrl(options.homeUrl, options.e2eOrigin) ||
       !allowedChatGptPageUrl(options.initialUrl, options.e2eOrigin) ||
@@ -2243,7 +2243,7 @@ export class ChatGptRoute {
     if (!this.signInMode) return;
     this.signInMode = false;
     if (activeSignInRoute === this) activeSignInRoute = null;
-    this.setTitle(this.options.title ?? "ChatGPT · Farol Next");
+    this.setTitle(this.options.title ?? "ChatGPT · Farol");
     const candidate = this.routeWindow;
     if (candidate && !candidate.isDestroyed()) {
       void candidate.webContents

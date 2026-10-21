@@ -22,7 +22,7 @@ export type {
 export function startPreviewRuntime(
   scenario: PreviewScenario = "normal",
   mode: PreviewMode = "empty",
-  identity: PreviewRuntimeIdentity = "farol-next-preview-runtime",
+  identity: PreviewRuntimeIdentity = "farol-runtime",
 ): Promise<PreviewRuntime> {
   return startChatPreviewRuntime(
     scenario,

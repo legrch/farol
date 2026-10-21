@@ -142,7 +142,7 @@ export async function runInstalledRecovery(preserved = false) {
     throw Error("INSTALLED_EMPTY_RECOVERY_PACKAGE_INVALID");
   const home = trustedOwnerHome(os.userInfo(), process.geteuid());
   const userData = closedRecoveryUserData(home, false);
-  const profileRoot = path.join(userData, "farol-next-state", "go-core");
+  const profileRoot = path.join(userData, "farol-state", "go-core");
   const info = await fs.lstat(profileRoot);
   if (
     !info.isDirectory() ||
@@ -199,7 +199,7 @@ export async function runInstalledRecovery(preserved = false) {
       coldPlan = await qualifyColdMachineRecoveryPlan({
         planPath: options["--cold-restart-plan"],
         expectedPlanSHA256: options["--cold-restart-plan-sha"],
-        stateRoot: path.join(userData, "farol-next-state"),
+        stateRoot: path.join(userData, "farol-state"),
         expectedRunSHA256: options["--expected-run"],
         expectedQuitSHA256: options["--expected-quit"],
         expectedConfigSHA256: options["--expected-config"],
@@ -296,7 +296,7 @@ export async function runInstalledRecovery(preserved = false) {
       attest,
       processesAbsent: () => {
         assertInstalledEmptyRecoveryProcesses(
-          path.join(userData, "farol-next-state", "secure-mcp-connector"),
+          path.join(userData, "farol-state", "secure-mcp-connector"),
           assertClosedConnectorProcesses,
         );
       },

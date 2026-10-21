@@ -14,7 +14,7 @@ export type TaskExecutionFence = Readonly<{
 
 /**
  * Closing a task deletes its private context state: sessions, checkpoints,
- * sources and summaries live only in Next-owned storage and must not outlive
+ * sources and summaries live only in Farol-owned storage and must not outlive
  * the task. The caller refuses the close while this process owns the task's
  * thread; a transition phase an earlier run left behind has no owner and
  * nothing resumes it, so it does not keep the task from closing. The task's

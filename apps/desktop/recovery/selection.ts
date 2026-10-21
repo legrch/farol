@@ -127,7 +127,7 @@ export async function selectStartupPreservedRecovery(
   )
     refused();
   await assertCurrent();
-  const state = path.join(userData, "farol-next-state");
+  const state = path.join(userData, "farol-state");
   const storage = openExistingNativeProfileStorage(state, computerId);
   const computer = path.join(storage.root, "computer");
   const mutations = path.join(computer, "mutations");

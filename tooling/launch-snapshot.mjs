@@ -50,8 +50,8 @@ export function ownerLaunchEnvironment(environment = process.env) {
   }
   // Deliberate per-launch owner opt-in for the account-writing saved-chat
   // preview. No other inherited Farol/E2E seam crosses this allowlist.
-  if (environment.FAROL_NEXT_SAVED_CHAT_PREVIEW === "1") {
-    launchEnvironment.FAROL_NEXT_SAVED_CHAT_PREVIEW = "1";
+  if (environment.FAROL_SAVED_CHAT_PREVIEW === "1") {
+    launchEnvironment.FAROL_SAVED_CHAT_PREVIEW = "1";
   }
   return launchEnvironment;
 }
@@ -80,7 +80,7 @@ export async function createLaunchSnapshot({
     throw new Error("LAUNCH_SNAPSHOT_INPUT_INVALID");
   }
   const resolvedTemporaryRoot = path.resolve(temporaryRoot);
-  const prefix = `farol-next-launch-${artifactSha256.slice(0, 12)}-`;
+  const prefix = `farol-launch-${artifactSha256.slice(0, 12)}-`;
   const root = await fs.mkdtemp(path.join(resolvedTemporaryRoot, prefix));
   const appPath = path.join(root, APP_NAME);
   const artifactFile = path.join(root, "artifact.json");
@@ -312,7 +312,7 @@ export async function removeLaunchSnapshot(snapshot, options) {
   if (!snapshot || typeof snapshot !== "object") {
     throw new Error("LAUNCH_SNAPSHOT_CLEANUP_INVALID");
   }
-  const expectedPrefix = `farol-next-launch-${snapshot.artifactSha256?.slice(0, 12)}-`;
+  const expectedPrefix = `farol-launch-${snapshot.artifactSha256?.slice(0, 12)}-`;
   if (
     !/^[a-f0-9]{64}$/u.test(snapshot.artifactSha256 ?? "") ||
     snapshot.prefix !== expectedPrefix ||

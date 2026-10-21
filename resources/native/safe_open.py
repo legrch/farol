@@ -1,4 +1,4 @@
-"""Descriptor-bound filesystem helper for Farol Next Computer.
+"""Descriptor-bound filesystem helper for Farol Computer.
 
 This reviewed helper started from the Farol Hub safe-open implementation at
 commit 59ae5c4's parent.  Next packages and attests its own bytes, sends them to

@@ -66,7 +66,7 @@ func closedHelperOperationBinding(request releaseport.HelperRequest, files helpe
 		Device: files.OperationIdentity.Device, Inode: files.OperationIdentity.Inode,
 		ParentDevice: files.UpdateIdentity.Device, ParentInode: files.UpdateIdentity.Inode,
 	}
-	directory := request.Home + "/Library/Application Support/Farol Next Preview/installed-updates/" + request.OperationID
+	directory := request.Home + "/Library/Application Support/io.github.legrch.farol/installed-updates/" + request.OperationID
 	return operation, binding, directory
 }
 

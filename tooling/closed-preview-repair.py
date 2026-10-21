@@ -18,15 +18,20 @@ import stat
 import struct
 import sys
 
-APP_NAME = "Farol Next Preview.app"
+# Explicit old-beta selectors for this legacy install reader.
+LEGACY_PRODUCT_NAME = "Farol Next Preview"
+LEGACY_BUNDLE_ID = "local.farol.next.preview"
+LEGACY_STATE_DIRECTORY = "farol-next-state"
+
+APP_NAME = LEGACY_PRODUCT_NAME + ".app"
 NORMAL_RECEIPT = APP_NAME + ".receipt.json"
 REPAIR_RECEIPT = APP_NAME + ".repair.json"
 JOURNAL = ".farol-closed-repair.json"
-SCHEMA = "farol.next.closed-repair/1"
+SCHEMA = "farol.closed-repair/1"
 MAX_ENTRIES = 100_000
 MAX_BYTES = 1024 * 1024 * 1024
 MAX_DEPTH = 128
-TREE_DIGEST_VERSION = "farol.next.tree-digest/v2"
+TREE_DIGEST_VERSION = "farol.tree-digest/v2"
 KIND_CODES = {"file": b"f", "directory": b"d", "symlink": b"l"}
 EXIT_INVALID = "INPUT_INVALID"
 EXIT_PATH = "PATH_UNSAFE"
@@ -474,7 +479,7 @@ def bundle(fd):
         value = strict_json(raw)
         keys = "schema product version bundleId updateChannel builtAt sourceCommit sourceTreeDigest sourceDirty buildId"
         shape(value, keys + (" buildVersion" if "buildVersion" in value else ""))
-        if (type(value["schema"]) is not int or value["schema"] != 1) or value["product"] != "Farol Next Preview" or value["bundleId"] != "local.farol.next.preview" or value["sourceDirty"] is not False or value["updateChannel"] not in ("local-preview-only", "github-owner-beta"):
+        if (type(value["schema"]) is not int or value["schema"] != 1) or value["product"] != LEGACY_PRODUCT_NAME or value["bundleId"] != LEGACY_BUNDLE_ID or value["sourceDirty"] is not False or value["updateChannel"] not in ("local-preview-only", "github-owner-beta"):
             refuse("BUILD_IDENTITY_INVALID")
         canonical_at(value["builtAt"])
         hex_value(value["sourceCommit"], 40)
@@ -537,7 +542,7 @@ def normal_anchor(applications, home, user_data, actual, metadata):
     shape(value, "schema operation product version sourceCommit sourceTreeDigest sourceDirty artifactSha256 source destination receipt overwrite legacyMutation activation verifiedDestinationSha256")
     shape(value["activation"], "userData drained obligations")
     slot = home + "/Applications/" + APP_NAME
-    if value["schema"] != "farol.next.promotion-plan/1" or value["operation"] != "applied" or value["product"] != "Farol Next Preview" or value["destination"] != slot or value["receipt"] != slot + ".receipt.json" or value["overwrite"] is not False or value["legacyMutation"] is not False or value["activation"] != {"userData": user_data, "drained": True, "obligations": []} or value["activation"]["drained"] is not True or value["sourceDirty"] is not False or value["version"] != actual["version"] or value["verifiedDestinationSha256"] != actual["digest"] or value["artifactSha256"] != actual["digest"] or value["sourceCommit"] != metadata["sourceCommit"] or value["sourceTreeDigest"] != metadata["sourceTreeDigest"]:
+    if value["schema"] != "farol.promotion-plan/1" or value["operation"] != "applied" or value["product"] != LEGACY_PRODUCT_NAME or value["destination"] != slot or value["receipt"] != slot + ".receipt.json" or value["overwrite"] is not False or value["legacyMutation"] is not False or value["activation"] != {"userData": user_data, "drained": True, "obligations": []} or value["activation"]["drained"] is not True or value["sourceDirty"] is not False or value["version"] != actual["version"] or value["verifiedDestinationSha256"] != actual["digest"] or value["artifactSha256"] != actual["digest"] or value["sourceCommit"] != metadata["sourceCommit"] or value["sourceTreeDigest"] != metadata["sourceTreeDigest"]:
         refuse("PREDECESSOR_UNACCEPTED")
     components(value["source"])
 
@@ -659,7 +664,7 @@ def retained_download_only(updates, user_data, ready, pending, cleanup):
     # No extractor/verifier is launched and unknown contents are never replayed.
     manifest = ready["manifest"]
     shape(manifest, "schema repository channel product bundleId version buildVersion sourceCommit sourceTreeDigest buildId artifactSha256 archiveSha256 archiveName archiveSize platform arch signing notarized sourceDirty")
-    if manifest["schema"] != "farol.github-release/1" or manifest["repository"] != "legrch/farol-releases" or manifest["product"] != "Farol Next Preview" or manifest["bundleId"] != "local.farol.next.preview" or manifest["channel"] not in ("stable", "owner-beta") or manifest["platform"] != "darwin" or manifest["arch"] != "arm64" or manifest["signing"] != "unsigned" or manifest["notarized"] is not False or manifest["sourceDirty"] is not False:
+    if manifest["schema"] != "farol.github-release/1" or manifest["repository"] != "legrch/farol-releases" or manifest["product"] != LEGACY_PRODUCT_NAME or manifest["bundleId"] != LEGACY_BUNDLE_ID or manifest["channel"] not in ("stable", "owner-beta") or manifest["platform"] != "darwin" or manifest["arch"] != "arm64" or manifest["signing"] != "unsigned" or manifest["notarized"] is not False or manifest["sourceDirty"] is not False:
         refuse("DOWNLOAD_READY_INVALID")
     version = manifest["version"]
     pattern = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)" + (r"-owner\.beta\.(0|[1-9][0-9]*)" if manifest["channel"] == "owner-beta" else "")
@@ -832,7 +837,7 @@ def run(request):
     if sys.platform != "darwin":
         refuse("PLATFORM_UNSUPPORTED")
     home = request["home"]
-    user_data = home + "/Library/Application Support/Farol Next Preview"
+    user_data = home + "/Library/Application Support/" + LEGACY_PRODUCT_NAME
     home_fd = open_absolute_directory(home)
     os.close(home_fd)
     for location in (home + "/Library", home + "/Library/Application Support"):
@@ -840,7 +845,7 @@ def run(request):
         os.close(checked)
     applications = open_absolute_directory(home + "/Applications")
     profile = open_absolute_directory(user_data)
-    state = open_directory(profile, "farol-next-state")
+    state = open_directory(profile, LEGACY_STATE_DIRECTORY)
     descriptors = [applications, profile, state]
     locks = []
     container = None
@@ -849,7 +854,7 @@ def run(request):
             require_safe_directory(os.fstat(fd), final=True)
             if stat.S_IMODE(os.fstat(fd).st_mode) & 0o077:
                 refuse(EXIT_PATH)
-        anchors = [(home + "/Applications", applications), (user_data, profile), (user_data + "/farol-next-state", state)]
+        anchors = [(home + "/Applications", applications), (user_data, profile), (user_data + "/" + LEGACY_STATE_DIRECTORY, state)]
         def guard():
             for location, pinned in anchors:
                 reopened = open_absolute_directory(location)
@@ -869,7 +874,7 @@ def run(request):
         action = request["action"]
         if prior is not None:
             shape(prior, "schema phase receipt sourceInode targetInode updatesInode")
-            if prior["schema"] != "farol.next.closed-repair-journal/1":
+            if prior["schema"] != "farol.closed-repair-journal/1":
                 refuse("JOURNAL_INVALID")
             receipt = repair_receipt(prior["receipt"], home, user_data)
             for pair in (prior["sourceInode"], prior["targetInode"], prior["updatesInode"]):
@@ -909,7 +914,7 @@ def run(request):
                 updates_inode = updates_check(profile, user_data)
                 op = os.urandom(16).hex()
                 receipt = {"schema": SCHEMA, "operationId": op, "phase": "installed", "destination": home + "/Applications/" + APP_NAME, "userData": user_data, "source": actual, "target": request["target"], "sourceCommit": request["sourceCommit"], "sourceTreeDigest": request["sourceTreeDigest"], "sourceDirty": False, "previous": home + "/Applications/.farol-repair-" + op + "/previous.app", "quarantine": user_data + "/installed-updates-quarantine-" + op, "quarantined": updates_inode is not None, "quitDigest": request["quitDigest"]}
-                journal = {"schema": "farol.next.closed-repair-journal/1", "phase": "allocate_intent", "receipt": receipt, "sourceInode": source_inode, "targetInode": None, "updatesInode": updates_inode}
+                journal = {"schema": "farol.closed-repair-journal/1", "phase": "allocate_intent", "receipt": receipt, "sourceInode": source_inode, "targetInode": None, "updatesInode": updates_inode}
                 guard()
                 publish(applications, JOURNAL, journal)
         receipt = journal["receipt"]

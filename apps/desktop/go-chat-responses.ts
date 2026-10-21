@@ -102,13 +102,13 @@ export function extractGoChatRequestSelection(
   request: unknown,
 ): GoChatRequestSelection {
   if (!object(request) || request.model !== "chatgpt")
-    fail("FAROL_NEXT_MODEL_UNAVAILABLE");
+    fail("FAROL_MODEL_UNAVAILABLE");
   if (!Object.hasOwn(request, "reasoning"))
     return Object.freeze({ model: "chatgpt" });
   const reasoning = request.reasoning;
-  if (!object(reasoning)) fail("FAROL_NEXT_REASONING_INVALID");
+  if (!object(reasoning)) fail("FAROL_REASONING_INVALID");
   if (Object.keys(reasoning).some((key) => key !== "effort"))
-    fail("FAROL_NEXT_REASONING_UNSUPPORTED");
+    fail("FAROL_REASONING_UNSUPPORTED");
   if (!Object.hasOwn(reasoning, "effort"))
     return Object.freeze({ model: "chatgpt" });
   const effort = reasoning.effort;
@@ -119,7 +119,7 @@ export function extractGoChatRequestSelection(
     effort.length > 40 ||
     /[^A-Za-z0-9_-]/u.test(effort)
   )
-    fail("FAROL_NEXT_REASONING_INVALID");
+    fail("FAROL_REASONING_INVALID");
   return Object.freeze({ model: "chatgpt", effort });
 }
 
@@ -142,7 +142,7 @@ export function goChatRequestIntentSHA256(
 }
 function relayInstruction(turn: CodexCallerRelayTurn): string {
   return [
-    "This Codex task's native tools are available only through the Farol Next connector tool farol_next_caller_tools,",
+    "This Codex task's native tools are available only through the Farol connector tool farol_next_caller_tools,",
     `with ticket ${turn.ticket} and binding ${turn.binding}.`,
     'Describe them first with operation "describe". Invoke one tool at a time with operation "invoke" and a new stable operationId.',
     "Never repeat an invoke whose result you did not receive.",
@@ -228,8 +228,7 @@ export function createGoChatResponses(
       },
     };
     const lost = () => {
-      if (!settled)
-        void withdraw(c, new Error("FAROL_NEXT_HOST_DELIVERY_LOST"));
+      if (!settled) void withdraw(c, new Error("FAROL_HOST_DELIVERY_LOST"));
     };
     const finished = () => {
       if (settled) return;
@@ -250,30 +249,27 @@ export function createGoChatResponses(
     !sink.response.destroyed && !sink.response.writableEnded;
   const attach = (c: Connection, response: ServerResponse) => {
     if (!current(c) || c.sink || c.waitingSink)
-      fail("FAROL_NEXT_CONTINUATION_STATE_INVALID");
+      fail("FAROL_CONTINUATION_STATE_INVALID");
     const sink = bind(c, response);
     c.sink = sink;
-    if (!live(sink))
-      void withdraw(c, new Error("FAROL_NEXT_HOST_DELIVERY_LOST"));
+    if (!live(sink)) void withdraw(c, new Error("FAROL_HOST_DELIVERY_LOST"));
     return sink;
   };
   const attachContinuation = async (
     c: Connection,
     response: ServerResponse,
   ) => {
-    if (!current(c) || c.waitingSink)
-      fail("FAROL_NEXT_CONTINUATION_STATE_INVALID");
+    if (!current(c) || c.waitingSink) fail("FAROL_CONTINUATION_STATE_INVALID");
     const original = c.sink;
     if (!original) return attach(c, response);
     // A caller can parse issued bytes before their original HTTP response
     // finishes locally. Fence the new response without rebinding the old one.
     const waiting = bind(c, response);
     c.waitingSink = waiting;
-    if (!live(waiting))
-      void withdraw(c, new Error("FAROL_NEXT_HOST_DELIVERY_LOST"));
+    if (!live(waiting)) void withdraw(c, new Error("FAROL_HOST_DELIVERY_LOST"));
     await original.done.promise;
     if (!current(c) || c.sink || c.waitingSink !== waiting || !live(waiting))
-      fail("FAROL_NEXT_HOST_DELIVERY_LOST");
+      fail("FAROL_HOST_DELIVERY_LOST");
     delete c.waitingSink;
     c.sink = waiting;
     return waiting;
@@ -288,8 +284,8 @@ export function createGoChatResponses(
   };
   const end = (c: Connection) => {
     const sink = c.sink;
-    if (!sink) fail("FAROL_NEXT_HOST_DELIVERY_LOST");
-    if (!current(c) || sink.ending) fail("FAROL_NEXT_HOST_DELIVERY_LOST");
+    if (!sink) fail("FAROL_HOST_DELIVERY_LOST");
+    if (!current(c) || sink.ending) fail("FAROL_HOST_DELIVERY_LOST");
     // end() requests local completion; only this response's finish event may
     // resolve done/release its observers. Close/error before finish withdraws.
     sink.ending = true;
@@ -303,20 +299,20 @@ export function createGoChatResponses(
       sink.response.destroyed ||
       sink.response.writableEnded
     )
-      fail("FAROL_NEXT_HOST_DELIVERY_LOST");
+      fail("FAROL_HOST_DELIVERY_LOST");
     headers(sink);
     let drained!: () => void;
     let lost!: () => void;
     const pending = new Promise<void>((resolve, reject) => {
       drained = resolve;
-      lost = () => reject(new Error("FAROL_NEXT_HOST_DELIVERY_LOST"));
+      lost = () => reject(new Error("FAROL_HOST_DELIVERY_LOST"));
     });
     void pending.catch(() => undefined);
     sink.response.on("drain", drained);
     c.fence.signal.addEventListener("abort", lost, { once: true });
     try {
       if (!sink.response.write(bytes, "utf8")) await pending;
-      if (!current(c)) fail("FAROL_NEXT_HOST_DELIVERY_LOST");
+      if (!current(c)) fail("FAROL_HOST_DELIVERY_LOST");
     } finally {
       sink.response.off("drain", drained);
       c.fence.signal.removeEventListener("abort", lost);
@@ -334,7 +330,7 @@ export function createGoChatResponses(
       if (!current(c)) done();
     });
   const drainFrames = async (c: Connection, beforeBegin = false) => {
-    if (!c.handle) fail("FAROL_NEXT_GO_HANDLE_MISSING");
+    if (!c.handle) fail("FAROL_GO_HANDLE_MISSING");
     const batch = await options.chat.events(c.handle.handleId, c.cursor);
     let terminal = false;
     for (const frame of batch.frames) {
@@ -357,7 +353,7 @@ export function createGoChatResponses(
         ].includes(frame.kind) ||
         (object(frame.data.item) && frame.data.item.type === "function_call")
       )
-        fail("FAROL_NEXT_GO_FRAME_INVALID");
+        fail("FAROL_GO_FRAME_INVALID");
       await write(
         c,
         `event: ${frame.kind}\ndata: ${JSON.stringify(frame.data)}\n\n`,
@@ -373,7 +369,7 @@ export function createGoChatResponses(
     c.pump = (async () => {
       while (current(c) && !c.barrier && c.sink) {
         const handle = c.handle;
-        if (!handle) fail("FAROL_NEXT_GO_HANDLE_MISSING");
+        if (!handle) fail("FAROL_GO_HANDLE_MISSING");
         c.io = (async () => {
           // Send Empty is not provider acceptance: Go can already retain a
           // response.failed and an unknown result after the physical send.
@@ -384,7 +380,7 @@ export function createGoChatResponses(
             // Result reads return Unsettled, not an observable request state.
             const result = await options.chat.result(handle.handleId);
             if (!isDeepStrictEqual(result.handle, handle))
-              fail("FAROL_NEXT_GO_HANDLE_CROSSED");
+              fail("FAROL_GO_HANDLE_CROSSED");
             if (result.complete) c.completed?.();
             c.relay?.close();
             c.barrier = true;
@@ -415,15 +411,14 @@ export function createGoChatResponses(
     onToolCall: () => void,
   ): Promise<CodexCallerRelayOwnedResult> => {
     if (!current(c) || c.barrier || c.caller || !c.handle || !c.sink)
-      fail("FAROL_NEXT_TOOL_CALL_STATE_INVALID");
+      fail("FAROL_TOOL_CALL_STATE_INVALID");
     // Transport barrier BEFORE Begin, including the preceding text-done frames.
     c.barrier = true;
     try {
       await c.io;
-      if (!current(c) || !c.sink) fail("FAROL_NEXT_HOST_DELIVERY_LOST");
+      if (!current(c) || !c.sink) fail("FAROL_HOST_DELIVERY_LOST");
       // These frames existed before Begin; no caller tool group exists yet.
-      if (await drainFrames(c, true))
-        fail("FAROL_NEXT_TOOL_CALL_STATE_INVALID");
+      if (await drainFrames(c, true)) fail("FAROL_TOOL_CALL_STATE_INVALID");
       const tag = createHash("sha256")
         .update(
           canonicalJson({
@@ -452,9 +447,9 @@ export function createGoChatResponses(
         relayBinding: invocation.binding,
         requestSHA256: invocation.requestSHA256,
       });
-      if (!current(c)) fail("FAROL_NEXT_HOST_DELIVERY_LOST");
+      if (!current(c)) fail("FAROL_HOST_DELIVERY_LOST");
       await options.caller.claim(token);
-      if (!current(c) || !c.sink) fail("FAROL_NEXT_HOST_DELIVERY_LOST");
+      if (!current(c) || !c.sink) fail("FAROL_HOST_DELIVERY_LOST");
       c.caller = {
         token,
         call,
@@ -487,16 +482,16 @@ export function createGoChatResponses(
             receipt.outputSHA256 !== accepted.receipt.outputSHA256 ||
             String(receipt.outputBytes) !== accepted.receipt.outputBytes
           )
-            fail("FAROL_NEXT_CALLER_RECEIPT_CROSSED");
+            fail("FAROL_CALLER_RECEIPT_CROSSED");
           returned = true;
           try {
             await options.caller.returned(accepted.receipt);
-            if (!current(c)) fail("FAROL_NEXT_HOST_DELIVERY_LOST");
+            if (!current(c)) fail("FAROL_HOST_DELIVERY_LOST");
             // Keep the barrier raised while the old pump unwinds. Otherwise
             // its pause can resume Observe and close the relay before this
             // original parsed receipt callback publishes its acknowledgement.
             await c.pump;
-            if (!current(c)) fail("FAROL_NEXT_HOST_DELIVERY_LOST");
+            if (!current(c)) fail("FAROL_HOST_DELIVERY_LOST");
             delete c.caller;
             c.barrier = false;
             setImmediate(() => pump(c));
@@ -526,7 +521,7 @@ export function createGoChatResponses(
         c.started ||
         !current(c)
       )
-        fail("FAROL_NEXT_GO_PREPARED_OWNER_CROSSED");
+        fail("FAROL_GO_PREPARED_OWNER_CROSSED");
       c.started = true;
       try {
         await options.chat.send(prepared.handle.handleId, deadline());
@@ -557,7 +552,7 @@ export function createGoChatResponses(
 
   return {
     async serve(input) {
-      if (closed) fail("FAROL_NEXT_PROVIDER_CLOSED");
+      if (closed) fail("FAROL_PROVIDER_CLOSED");
       const requestSelection = extractGoChatRequestSelection(input.request);
       const previous = connections.get(input.key);
       if (previous) {
@@ -565,7 +560,7 @@ export function createGoChatResponses(
           previous.requestSelection.model !== requestSelection.model ||
           previous.requestSelection.effort !== requestSelection.effort
         )
-          fail("FAROL_NEXT_CONTINUATION_SELECTION_CONFLICT");
+          fail("FAROL_CONTINUATION_SELECTION_CONFLICT");
         const caller = previous.caller;
         if (
           !current(previous) ||
@@ -573,7 +568,7 @@ export function createGoChatResponses(
           caller.submitted ||
           !Array.isArray(input.request.input)
         )
-          fail("FAROL_NEXT_CONTINUATION_REQUIRED");
+          fail("FAROL_CONTINUATION_REQUIRED");
         const entries = input.request.input.filter(
           (item) =>
             object(item) &&
@@ -600,7 +595,7 @@ export function createGoChatResponses(
           (call.namespace ?? null) !== (caller.call.namespace ?? null) ||
           output.call_id !== caller.call.callId
         )
-          fail("FAROL_NEXT_CONTINUATION_CALL_INVALID");
+          fail("FAROL_CONTINUATION_CALL_INVALID");
         const accepted = {
           handle: caller.token,
           scope: { ...input.identity, model: "chatgpt" as const },
@@ -608,12 +603,12 @@ export function createGoChatResponses(
           outputs: [{ callId: caller.call.callId, raw: output.output as Json }],
         };
         if (!validate("ChatCallerAccept", accepted))
-          fail("FAROL_NEXT_CONTINUATION_OUTPUT_INVALID");
+          fail("FAROL_CONTINUATION_OUTPUT_INVALID");
         caller.submitted = true;
         try {
           const sink = await attachContinuation(previous, input.response);
           const result = await options.caller.output(accepted);
-          if (!current(previous)) fail("FAROL_NEXT_HOST_DELIVERY_LOST");
+          if (!current(previous)) fail("FAROL_HOST_DELIVERY_LOST");
           caller.output.resolve(result);
           await sink.done.promise;
         } catch (error) {
@@ -631,7 +626,7 @@ export function createGoChatResponses(
               item.type === "function_call_output"),
         )
       )
-        fail("FAROL_NEXT_CONTINUATION_NOT_FOUND");
+        fail("FAROL_CONTINUATION_NOT_FOUND");
       // No implicit next user turn: this adapter has no business result ACK or
       // settled browser quiescence witness for a previously retained thread.
       if (
@@ -639,7 +634,7 @@ export function createGoChatResponses(
           (c) => c.scope.threadId === input.identity.threadId,
         )
       )
-        fail("FAROL_NEXT_GO_THREAD_UNSETTLED");
+        fail("FAROL_GO_THREAD_UNSETTLED");
       const c: Connection = {
         key: input.key,
         scope: { ...input.identity, model: "chatgpt" },
@@ -660,11 +655,11 @@ export function createGoChatResponses(
         if (prepared.completed) c.completed = prepared.completed;
         const onToolCall = input.onToolCall;
         if (input.request.tools.length) {
-          if (!options.relay) fail("FAROL_NEXT_GO_CALLER_RELAY_UNAVAILABLE");
+          if (!options.relay) fail("FAROL_GO_CALLER_RELAY_UNAVAILABLE");
           c.relay = options.relay.openTurn({
             identity: input.identity,
             tools: input.request.tools,
-            invoke: async () => fail("FAROL_NEXT_GO_LEGACY_EXECUTOR_DISABLED"),
+            invoke: async () => fail("FAROL_GO_LEGACY_EXECUTOR_DISABLED"),
             invokeOwned: (resolved, context) =>
               invoke(c, resolved, context, onToolCall),
           });
@@ -683,7 +678,7 @@ export function createGoChatResponses(
           prompt,
         };
         if (!validate("ChatCreate", create) || "previousHandle" in target)
-          fail("FAROL_NEXT_GO_REQUEST_UNSUPPORTED");
+          fail("FAROL_GO_REQUEST_UNSUPPORTED");
         if (
           target.selection.provider !== "farol" ||
           target.selection.alias !== requestSelection.model ||
@@ -691,14 +686,14 @@ export function createGoChatResponses(
             (requestSelection.effort ?? "") ||
           !isDeepStrictEqual(target.resolution.resolved, target.selection)
         )
-          fail("FAROL_NEXT_GO_SELECTION_CONFLICT");
+          fail("FAROL_GO_SELECTION_CONFLICT");
         admitted = await prepared.admit();
         if (!admitted) {
           c.relay?.close();
           return;
         }
         if (closed || input.response.destroyed)
-          fail("FAROL_NEXT_HOST_DELIVERY_LOST");
+          fail("FAROL_HOST_DELIVERY_LOST");
         // The durable external guard is retained on every subsequent failure,
         // including a lost Create reply. Submission reads do not release it.
         const sink = attach(c, input.response);
@@ -706,7 +701,7 @@ export function createGoChatResponses(
           c.handle = await options.chat.create(create);
           handles.set(c.handle.handleId, c);
           if (!current(c))
-            await withdraw(c, new Error("FAROL_NEXT_HOST_DELIVERY_LOST"));
+            await withdraw(c, new Error("FAROL_HOST_DELIVERY_LOST"));
         })();
         creating.add(creation);
         try {
@@ -734,7 +729,7 @@ export function createGoChatResponses(
       closed = true;
       await Promise.all(
         [...connections.values()].map((c) =>
-          withdraw(c, new Error("FAROL_NEXT_PROVIDER_CLOSED")),
+          withdraw(c, new Error("FAROL_PROVIDER_CLOSED")),
         ),
       );
       await preparing;

@@ -90,7 +90,7 @@ func (r *runtime) CapturePrivateTarget(ctx context.Context) (string, error) {
 		if negative {
 			return fail("tree_mismatch", false, false, nil)
 		}
-		r.capturePath = r.config.Request.Home + "/Library/Application Support/Farol Next Preview/installed-updates/" + r.config.Request.OperationID + "/launch-Farol.app"
+		r.capturePath = r.config.Request.Home + "/Library/Application Support/io.github.legrch.farol/installed-updates/" + r.config.Request.OperationID + "/launch-Farol.app"
 		path = r.capturePath
 		return r.fence(c)
 	})

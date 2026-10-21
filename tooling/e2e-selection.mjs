@@ -38,7 +38,7 @@ export const SELECTABLE_SEGMENTS = Object.freeze([
     cases: [
       "dev-new-task-disabled-at-capacity",
       "dev-new-task-first-is-reachable",
-      "dev-new-task-next-is-reachable",
+      "dev-new-task-farol-is-reachable",
     ],
   }),
   Object.freeze({
@@ -115,7 +115,7 @@ export const SELECTABLE_SEGMENTS = Object.freeze([
     cases: [
       "fault-scenarios",
       "isolated-start",
-      "next-only",
+      "farol-only",
       "quit-terminates",
       "utility-process",
     ],

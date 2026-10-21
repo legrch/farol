@@ -32,7 +32,7 @@ export type CodexContextRuntimeOptions = CodexContextControllerOptions &
   Readonly<{
     // Historical fixture routes remain distinct; production supplies only
     // CHATGPT_MODEL_ID and never rewrites an old saved context binding.
-    model: typeof CHATGPT_MODEL_ID | "farol-next/mind" | "farol-next/drive";
+    model: typeof CHATGPT_MODEL_ID | "legacy-route/mind" | "legacy-route/drive";
     token: string;
     conversation: CodexChatGptConversation;
     // Private directory for the provider's durable initial-request journal.

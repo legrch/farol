@@ -1,9 +1,8 @@
 import type { DesktopEnvironment } from "./desktop-environment";
 import { BridgeError } from "../../../apps/desktop/bridge/client";
 
-export const DESKTOP_STARTUP_FAILURE_PREFIX = "FAROL_NEXT_STARTUP_FAILURE:";
-export const DESKTOP_LAUNCH_RESULT_PREFIX =
-  "FAROL_NEXT_SECOND_INSTANCE_RESULT:";
+export const DESKTOP_STARTUP_FAILURE_PREFIX = "FAROL_STARTUP_FAILURE:";
+export const DESKTOP_LAUNCH_RESULT_PREFIX = "FAROL_SECOND_INSTANCE_RESULT:";
 
 const SAFE_FAILURE_CODE = /^[A-Z][A-Z0-9_]{2,63}$/u;
 const STARTUP_PHASES = [
@@ -183,7 +182,7 @@ export function desktopStartupFailureReport(
   return (
     `${product} main-process startup failed before the app became ready (${code}). ${remedy}\n` +
     (error instanceof StartupBoundaryFailure
-      ? `FAROL_NEXT_STARTUP_FAILURE_STAGE:${error.phase}\n`
+      ? `FAROL_STARTUP_FAILURE_STAGE:${error.phase}\n`
       : "") +
     `${DESKTOP_STARTUP_FAILURE_PREFIX}${code}\n` +
     `${DESKTOP_LAUNCH_RESULT_PREFIX}startup-failed\n`
@@ -195,8 +194,8 @@ export function desktopStartupFailureReport(
 // run) must never get one, or it would block instead of exiting.
 export function startupNoticeAllowed(env: NodeJS.ProcessEnv): boolean {
   return (
-    env.FAROL_NEXT_E2E !== "1" &&
-    env.FAROL_NEXT_NONINTERACTIVE !== "1" &&
+    env.FAROL_E2E !== "1" &&
+    env.FAROL_NONINTERACTIVE !== "1" &&
     (env.CI === undefined || env.CI === "" || env.CI === "false")
   );
 }
