@@ -124,13 +124,15 @@ describe("launch snapshot LaunchServices cleanup", () => {
     const { root, snapshot } = await fixtureSnapshot();
     const alias = path.join(root, "alias");
     await fs.symlink(snapshot.temporaryRoot, alias);
-    const viaAlias = {
-      ...snapshot,
-      root: path.join(alias, path.basename(snapshot.root)),
+    // A descriptor issued by createLaunchSnapshot, with the root reached via the alias.
+    const viaAlias = await createLaunchSnapshot({
+      sourceApp: path.join(root, "Farol.app"),
+      artifactBytes: Buffer.from("{}\n"),
+      artifactSha256: "1".repeat(64),
       temporaryRoot: alias,
-    };
-    viaAlias.appPath = path.join(viaAlias.root, "Farol.app");
-    viaAlias.artifactFile = path.join(viaAlias.root, "artifact.json");
+    });
+    expect(viaAlias.root.startsWith(`${alias}${path.sep}`)).toBe(true);
+    const realRoot = await fs.realpath(viaAlias.root);
     const calls = [];
     await removeLaunchSnapshot(viaAlias, {
       lsregister: process.execPath,
@@ -141,9 +143,88 @@ describe("launch snapshot LaunchServices cleanup", () => {
     });
     expect(calls.length).toBe(3);
     for (const bundlePath of calls) {
-      expect(bundlePath.startsWith(`${snapshot.root}${path.sep}`)).toBe(true);
+      expect(bundlePath.startsWith(`${realRoot}${path.sep}`)).toBe(true);
       expect(bundlePath).not.toContain(`${path.sep}alias${path.sep}`);
     }
+  });
+
+  describe("only a descriptor this process issued is unregistered", () => {
+    const forgedFor = async (root, temporaryRoot) => {
+      // Every field a shape check looks at, for a directory the caller chose.
+      const sha = "7".repeat(64);
+      const prefix = `farol-next-launch-${sha.slice(0, 12)}-`;
+      const victimRoot = path.join(temporaryRoot, `${prefix}forged`);
+      const bundle = path.join(victimRoot, "Farol.app");
+      await fs.mkdir(path.join(bundle, "Contents/Frameworks/Other.app"), {
+        recursive: true,
+      });
+      return {
+        appPath: bundle,
+        artifactFile: path.join(victimRoot, "artifact.json"),
+        artifactSha256: sha,
+        prefix,
+        root: victimRoot,
+        temporaryRoot,
+      };
+    };
+
+    it("makes no lsregister call for a forged descriptor and reports it refused", async () => {
+      const { root, temporaryRoot } = await fixtureSnapshot();
+      const forged = await forgedFor(root, temporaryRoot);
+      const calls = [];
+      const outcome = await removeLaunchSnapshot(forged, {
+        lsregister: process.execPath,
+        unregister: async (_tool, bundlePath) => {
+          calls.push(bundlePath);
+          return true;
+        },
+      });
+      expect(calls).toEqual([]);
+      expect(outcome.unregistered).toEqual([]);
+      expect(outcome.failed).toEqual([]);
+      expect(outcome.refused).toEqual([
+        "descriptor not issued by this process",
+      ]);
+      // Deletion keeps its validated behaviour for a shape-valid descriptor.
+      expect(outcome.removed).toBe(true);
+      await expect(fs.stat(forged.root)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+
+    it("treats a copy of an issued descriptor as not issued", async () => {
+      const { snapshot } = await fixtureSnapshot();
+      const calls = [];
+      const outcome = await removeLaunchSnapshot(
+        { ...snapshot },
+        {
+          lsregister: process.execPath,
+          unregister: async (_tool, bundlePath) => {
+            calls.push(bundlePath);
+            return true;
+          },
+        },
+      );
+      expect(calls).toEqual([]);
+      expect(outcome.refused).toEqual([
+        "descriptor not issued by this process",
+      ]);
+    });
+
+    it("still unregisters the exact descriptor createLaunchSnapshot returned", async () => {
+      const { snapshot } = await fixtureSnapshot();
+      const calls = [];
+      const outcome = await removeLaunchSnapshot(snapshot, {
+        lsregister: process.execPath,
+        unregister: async (_tool, bundlePath) => {
+          calls.push(bundlePath);
+          return true;
+        },
+      });
+      expect(calls).toHaveLength(3);
+      expect(outcome.unregistered).toHaveLength(3);
+      expect(outcome.refused).toEqual([]);
+    });
   });
 
   it("refuses a snapshot root that is itself a symlink, and unregisters nothing", async () => {

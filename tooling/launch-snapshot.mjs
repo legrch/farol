@@ -56,6 +56,13 @@ export function ownerLaunchEnvironment(environment = process.env) {
   return launchEnvironment;
 }
 
+// The exact descriptor objects `createLaunchSnapshot` returned in this process.
+// Module-private, so no caller can add to it: a descriptor that merely has the
+// right fields, or a copy of an issued one, is not in it.
+const issuedSnapshots = new WeakSet();
+
+const NOT_ISSUED = "descriptor not issued by this process";
+
 export async function createLaunchSnapshot({
   sourceApp,
   artifactBytes,
@@ -87,7 +94,7 @@ export async function createLaunchSnapshot({
       preserveTimestamps: true,
       verbatimSymlinks: true,
     });
-    return Object.freeze({
+    const snapshot = Object.freeze({
       appPath,
       artifactFile,
       artifactSha256,
@@ -95,6 +102,8 @@ export async function createLaunchSnapshot({
       root,
       temporaryRoot: resolvedTemporaryRoot,
     });
+    issuedSnapshots.add(snapshot);
+    return snapshot;
   } catch (error) {
     // Best effort: a failed delete must not replace the creation error.
     await fs.rm(root, { recursive: true, force: true }).catch(() => {});
@@ -255,6 +264,13 @@ function emptyOutcome() {
 // check, each unregister and the final delete are best effort, and every
 // failure comes back in the outcome (`errors`, `failed`, `refused`, and
 // `removed: false` when the directory is still there).
+//
+// Unregistering from LaunchServices happens only for a descriptor this process
+// got from `createLaunchSnapshot`. A shape-valid descriptor that was not issued
+// here makes no lsregister call and is reported as `refused`. Deleting is
+// deliberately unchanged for it: the validated directory is still removed, so
+// cleanup of a snapshot left by another process keeps working. The only
+// repository caller, `run-preview`, always passes the descriptor it created.
 export async function removeLaunchSnapshot(snapshot, options) {
   if (!snapshot || typeof snapshot !== "object") {
     throw new Error("LAUNCH_SNAPSHOT_CLEANUP_INVALID");
@@ -290,10 +306,14 @@ export async function removeLaunchSnapshot(snapshot, options) {
     throw error;
   }
   const outcome = emptyOutcome();
-  try {
-    await unregisterSnapshotBundles(realRoot, options, outcome);
-  } catch (error) {
-    outcome.errors.push(error?.message ?? "unregister failed");
+  if (issuedSnapshots.has(snapshot)) {
+    try {
+      await unregisterSnapshotBundles(realRoot, options, outcome);
+    } catch (error) {
+      outcome.errors.push(error?.message ?? "unregister failed");
+    }
+  } else {
+    outcome.refused.push(NOT_ISSUED);
   }
   try {
     await fs.rm(snapshot.root, { recursive: true, force: true });
