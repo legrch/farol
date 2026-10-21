@@ -24,6 +24,7 @@ installation changed, which is failure 1 whatever the command said.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import signal
 import stat
@@ -440,6 +441,15 @@ def _spawn_child(command: list[str]) -> None:
 def main(argv: list[str]) -> int:
     global _CHILD, _PHASE, _FORWARD_ERROR
 
+    if argv == ["--print-protected-roots"]:
+        # Read-only: the paths this guard fingerprints, so a test that must never
+        # name an owner location reads the same declaration instead of copying it.
+        sys.stdout.write(json.dumps({
+            "schema": 1,
+            "watched": sorted(str(path) for path in WATCHED),
+            "presence": sorted(str(path) for path in MTIME_ONLY),
+        }) + "\n")
+        return 0
     if not argv or argv[0] != "--" or len(argv) < 2:
         sys.stderr.write("usage: assert-owner-untouched.py -- <command> [arguments...]\n")
         return 2

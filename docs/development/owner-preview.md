@@ -240,6 +240,18 @@ find no descendant (`NEW_DESCENDANT`). Every Electron the test starts is a tree
 of its own, including the native-appData probe: its pid is recorded the moment
 it exists, its descendants are followed while it runs, and it is never signalled.
 
+Owner locations come from one source of truth: the roots the owner guard itself
+fingerprints, read at the start of the run from
+`python3 -I scripts/assert-owner-untouched.py --print-protected-roots` (a
+read-only flag that prints JSON and starts nothing). If that cannot be read the
+witness fails closed (`GUARD_ROOTS_INVALID`, or the inventory error), so the two
+lists cannot diverge. The witness adds only what the guard does not enumerate:
+all of `~/.farol` and `~/.codex`, `/Applications/Farol.app`, and any directory
+under `~/Library/Application Support` whose name starts with `Farol`, so profiles
+added later (the Dev Acceptance profile and its nested profiles included) are
+covered. A path inside one of this run's own disposable roots, after following
+symlinks, is never an owner location.
+
 Orphan rule, decided on argv and environment together. A reparented helper is no
 longer a descendant, and a disposable root normally reaches a process through
 `HOME`, not its arguments. At teardown every process of the current uid that did

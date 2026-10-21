@@ -91,6 +91,8 @@ const INVENTORY = {
     command: "/usr/bin/python3",
     noMatch: () => false,
   },
+  // The owner guard's own declaration of what it protects: read-only, no no-match.
+  guard: { label: "guard", command: "/usr/bin/python3", noMatch: () => false },
   // Same-uid pid list and the process scan: no documented no-match at all.
   psUid: { label: "ps-uid", command: PS, noMatch: () => false },
   scan: { label: "scan", command: "/usr/bin/python3", noMatch: () => false },
@@ -199,17 +201,54 @@ function inside(child, parent, reported = false) {
 }
 
 // Owner locations a disposable run must never name. The installed Farol.app may
-// be running on this machine; none of its files may appear either.
+// be running on this machine; none of its files may appear either. One source of
+// truth: the roots the owner guard itself fingerprints are read from the guard
+// (`--print-protected-roots`) at the start of the run and the witness fails
+// closed if they cannot be read, so the two lists cannot diverge. The witness
+// adds only what the guard does not enumerate: the whole of ~/.farol and
+// ~/.codex, the installed app, and any profile whose directory under
+// ~/Library/Application Support starts with `Farol`, including profiles added
+// later. A path inside one of this run's own disposable roots is never an owner
+// location.
+const ownerState = { guardRoots: null, exempt: new Set() };
+async function loadProtectedRoots(
+  repositoryRoot,
+  script = path.join(repositoryRoot, "scripts/assert-owner-untouched.py"),
+) {
+  const answer = await runInventory("guard", [
+    "-I",
+    script,
+    "--print-protected-roots",
+  ]);
+  let printed;
+  try {
+    printed = JSON.parse(answer.stdout);
+  } catch {
+    throw new Error("OWNER_PREVIEW_ISOLATION_GUARD_ROOTS_INVALID:JSON");
+  }
+  const roots = [
+    ...new Set([...(printed.watched ?? []), ...(printed.presence ?? [])]),
+  ];
+  if (
+    printed.schema !== 1 ||
+    !Array.isArray(printed.watched) ||
+    !Array.isArray(printed.presence) ||
+    roots.length === 0 ||
+    !roots.every((root) => typeof root === "string" && path.isAbsolute(root))
+  )
+    throw new Error("OWNER_PREVIEW_ISOLATION_GUARD_ROOTS_INVALID:SHAPE");
+  return roots;
+}
 function ownerLocations() {
+  if (ownerState.guardRoots === null)
+    throw new Error("OWNER_PREVIEW_ISOLATION_GUARD_ROOTS_UNLOADED");
   const home = os.userInfo().homedir;
   return [
-    path.join(home, "Library/Application Support/Farol"),
-    path.join(home, "Library/Application Support/Farol Next Preview"),
-    path.join(home, "Library/Application Support/Farol Preview"),
-    path.join(home, "Library/Application Support/Farol Dev"),
-    path.join(home, "Library/Application Support/Farol DEV"),
+    ...ownerState.guardRoots,
     path.join(home, ".farol"),
     path.join(home, ".codex"),
+    // Last component starts with `Farol`: every present and future profile.
+    path.join(home, "Library/Application Support/Farol"),
     "/Applications/Farol.app",
   ];
 }
@@ -219,10 +258,15 @@ function touchesOwner(value, { text = false, reported = false } = {}) {
   // Check the text as given and, for an absolute path, its canonical form, so
   // `/tmp/x/../../Users/.../.codex` or a symlink then `..` cannot hide an owner
   // location.
-  const forms =
-    !text && path.isAbsolute(value)
-      ? [value, canonical(value, reported)]
-      : [value];
+  const isPath = !text && path.isAbsolute(value);
+  const forms = isPath ? [value, canonical(value, reported)] : [value];
+  // Inside this run's own disposable roots (after following symlinks) is never
+  // an owner location; a symlink out of them is judged by where it leads.
+  if (
+    isPath &&
+    [...ownerState.exempt].some((root) => inside(forms[1], root, true))
+  )
+    return false;
   return ownerLocations().some((location) =>
     forms.some((form) => form.includes(location)),
   );
@@ -1383,6 +1427,30 @@ async function scannerSelfCheck() {
     touchesOwner("/private/var/folders/x/T/farol-next-e2e-home-a/f"),
     false,
   );
+  // Every root the owner guard prints is an owner location, the nested
+  // acceptance profiles included, and so is any later `Farol*` profile.
+  const support = path.join(home, "Library/Application Support");
+  assert.ok(
+    ownerState.guardRoots.includes(path.join(support, "Farol Dev Acceptance")),
+    "the guard no longer declares the Dev Acceptance profile",
+  );
+  for (const root of ownerState.guardRoots) {
+    assert.equal(touchesOwner(root), true, root);
+    assert.equal(touchesOwner(path.join(root, "x/y")), true, root);
+  }
+  for (const profile of [
+    "Farol Dev Acceptance/Farol Dev/farol-next-state/running.json",
+    "Farol Dev Acceptance/Farol DEV",
+    "Farol Preview/Cookies",
+    "Farol Future Channel/anything",
+  ])
+    assert.equal(touchesOwner(path.join(support, profile)), true, profile);
+  assert.equal(touchesOwner(path.join(support, "Code/User")), false);
+  // A failed read of the guard's declaration is an error, never a smaller list.
+  await assert.rejects(
+    loadProtectedRoots("/x", "/nonexistent/assert-owner-untouched.py"),
+    /INVENTORY_ERROR:guard/u,
+  );
   assert.equal(inside("/a/bc", "/a/b"), false);
   assert.equal(inside("/a/b/c", "/a/b"), true);
   assert.equal(inside("relative/path", "/a/b"), false);
@@ -1396,6 +1464,25 @@ async function scannerSelfCheck() {
     const a2 = path.join(sandbox, "instance-a2");
     const b = path.join(sandbox, "instance-b");
     for (const directory of [a, a2, b]) await fs.mkdir(directory);
+    // This run's own disposable roots are never owner locations; a symlink out
+    // of them is judged by where it leads. (Stand-in guard roots, so nothing of
+    // the owner's is touched.)
+    const savedRoots = ownerState.guardRoots;
+    const savedExempt = ownerState.exempt;
+    ownerState.guardRoots = [path.join(b, "guarded")];
+    try {
+      assert.equal(touchesOwner(`${b}/guarded/x`), true);
+      assert.equal(touchesOwner(`${a}/guarded/x`), false);
+      ownerState.exempt = new Set([b]);
+      assert.equal(touchesOwner(`${b}/guarded/x`), false);
+      await fs.mkdir(path.join(b, "guarded"));
+      await fs.symlink(path.join(b, "guarded"), path.join(a, "escape"));
+      ownerState.exempt = new Set([a]);
+      assert.equal(touchesOwner(`${a}/escape/x`), true);
+    } finally {
+      ownerState.guardRoots = savedRoots;
+      ownerState.exempt = savedExempt;
+    }
     const link = path.join(sandbox, "link-to-a");
     await fs.symlink(a, link);
     assert.equal(inside(`${a}/../instance-b`, a), false);
@@ -2097,6 +2184,8 @@ export async function runOwnerPreviewIsolation(
   options = {},
 ) {
   requireOwnerPreviewRuntimeIntegration();
+  ownerState.guardRoots = await loadProtectedRoots(repositoryRoot);
+  ownerState.exempt = new Set();
   await scannerSelfCheck();
   const verified = await verifyOwnerPreview(repositoryRoot, generation);
   const namespace = path.join(repositoryRoot, "_output/preview/isolation");
@@ -2135,6 +2224,7 @@ export async function runOwnerPreviewIsolation(
   // root, every launched child outside the instances (the probe), and the uid's
   // pids that already existed when the run began.
   const run = { roots: new Set(), extraTargets: [], preexisting: new Set() };
+  ownerState.exempt = run.roots;
   try {
     run.preexisting = new Set((await uidPids()).map((entry) => entry.pid));
     const temporary = await fs.realpath(os.tmpdir());
