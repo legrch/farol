@@ -127,18 +127,39 @@ async function snapshotBundlePaths(directory, errors, found = []) {
   return found;
 }
 
-// `lsregister -u` exits 1 with -10814 for a bundle LaunchServices has no record
-// of (a helper the run never started). That is the state we want, not a failure.
-const NOT_REGISTERED = /-10814/u;
+// Measured 2026-10-21 on macOS 27.0.1 (26A434): `lsregister -u <path>` on a
+// bundle LaunchServices has never registered exits 1, writes nothing to stdout,
+// and writes exactly this to stderr, with no trailing newline:
+//   failed to scan <path>: -10814\n from spotlight
+// That is the state we want, so only that exact status and message count as
+// "not registered". Any other exit status, verb, path, extra output or error
+// code, even one that mentions -10814, is a failure and keeps its raw message.
+function notRegisteredMessage(bundlePath) {
+  return `failed to scan ${bundlePath}: -10814\n from spotlight`;
+}
 
+// Resolves `true` when the bundle is unregistered or was not registered;
+// otherwise a string with the raw failure for the outcome's `errors`.
 function runLsregisterUnregister(lsregister, bundlePath) {
   return new Promise((resolve) => {
     execFile(
       lsregister,
       ["-u", bundlePath],
       { env: { PATH: SAFE_PATH }, timeout: 15_000 },
-      (error, stdout, stderr) =>
-        resolve(error === null || NOT_REGISTERED.test(`${stdout}${stderr}`)),
+      (error, stdout, stderr) => {
+        if (error === null) return resolve(true);
+        if (
+          error.code === 1 &&
+          stdout === "" &&
+          stderr === notRegisteredMessage(bundlePath)
+        ) {
+          return resolve(true);
+        }
+        const output = `${stdout}${stderr}`.trim();
+        resolve(
+          `exit ${error.code ?? error.signal ?? "error"}: ${output || error.message}`,
+        );
+      },
     );
   });
 }
@@ -196,10 +217,17 @@ async function unregisterSnapshotBundles(
       continue;
     }
     try {
-      ((await unregister(lsregister, bundlePath))
-        ? result.unregistered
-        : result.failed
-      ).push(bundlePath);
+      // `true` is success; anything else is a failure, and a string is its raw
+      // message, kept in `errors` next to the path.
+      const done = await unregister(lsregister, bundlePath);
+      if (done === true) {
+        result.unregistered.push(bundlePath);
+      } else {
+        result.failed.push(bundlePath);
+        if (typeof done === "string" && done !== "") {
+          result.errors.push(`${bundlePath}: ${done}`);
+        }
+      }
     } catch (error) {
       result.failed.push(bundlePath);
       result.errors.push(

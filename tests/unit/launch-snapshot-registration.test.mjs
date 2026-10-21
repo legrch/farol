@@ -218,14 +218,44 @@ describe("launch snapshot LaunchServices cleanup", () => {
     });
   });
 
+  // Fixture bytes measured 2026-10-21 on macOS 27.0.1 (26A434) with the real
+  // `lsregister -u` on a never-registered bundle: exit 1, empty stdout, stderr
+  // exactly `failed to scan <path>: -10814\n from spotlight` (no trailing newline).
+  const MEASURED = `printf 'failed to scan %s: -10814\\n from spotlight' "$2" >&2; exit 1`;
   it.each([
+    ["the measured not-registered message (exit 1)", MEASURED, true],
+    ["success", "exit 0", true],
     [
-      "a bundle it has no record of",
+      "the near miss `failed to scan: -10814` (exit 1)",
       'echo "failed to scan: -10814" >&2; exit 1',
-      true,
+      false,
+    ],
+    [
+      "the measured message with another exit status",
+      MEASURED.replace("exit 1", "exit 2"),
+      false,
+    ],
+    [
+      "the measured message plus stdout output",
+      `echo extra; ${MEASURED}`,
+      false,
+    ],
+    [
+      "the measured message plus a trailing line",
+      `printf 'failed to scan %s: -10814\\n from spotlight\\nmore' "$2" >&2; exit 1`,
+      false,
+    ],
+    [
+      "another verb with -10814",
+      `printf 'failed to register %s: -10814\\n from spotlight' "$2" >&2; exit 1`,
+      false,
+    ],
+    [
+      "the measured message naming another path",
+      `printf 'failed to scan /elsewhere/X.app: -10814\\n from spotlight' >&2; exit 1`,
+      false,
     ],
     ["any other failure", 'echo "boom" >&2; exit 2', false],
-    ["success", "exit 0", true],
   ])("the real runner treats %s correctly", async (_name, body, ok) => {
     const { root, snapshot } = await fixtureSnapshot();
     const tool = path.join(root, "fake-lsregister");
@@ -233,6 +263,13 @@ describe("launch snapshot LaunchServices cleanup", () => {
     const outcome = await removeLaunchSnapshot(snapshot, { lsregister: tool });
     expect(outcome[ok ? "unregistered" : "failed"]).toContain(snapshot.appPath);
     expect(outcome[ok ? "failed" : "unregistered"]).toEqual([]);
+    if (!ok) {
+      // A failure keeps its raw message, next to the path.
+      expect(outcome.errors).toHaveLength(3);
+      expect(outcome.errors.join("\n")).toContain(`${snapshot.appPath}: exit `);
+    } else {
+      expect(outcome.errors).toEqual([]);
+    }
   });
 
   it("removes the snapshot and reports the error when a directory cannot be read mid-walk", async () => {
@@ -330,9 +367,9 @@ describe("launch snapshot LaunchServices cleanup", () => {
         expected: { unregistered: 3 },
       },
       {
-        name: "-10814 (no record) from the real runner",
+        name: "measured not-registered message from the real runner",
         options: async (root) => ({
-          lsregister: await fakeTool(root, 'echo "-10814" >&2; exit 1'),
+          lsregister: await fakeTool(root, MEASURED),
         }),
         expected: { unregistered: 3 },
       },
@@ -341,7 +378,17 @@ describe("launch snapshot LaunchServices cleanup", () => {
         options: async (root) => ({
           lsregister: await fakeTool(root, "echo boom >&2; exit 2"),
         }),
-        expected: { failed: 3 },
+        expected: { failed: 3, errors: 3 },
+      },
+      {
+        name: "near miss `failed to scan: -10814` from the real runner",
+        options: async (root) => ({
+          lsregister: await fakeTool(
+            root,
+            'echo "failed to scan: -10814" >&2; exit 1',
+          ),
+        }),
+        expected: { failed: 3, errors: 3 },
       },
       {
         name: "thrown runner",
