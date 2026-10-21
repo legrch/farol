@@ -45,6 +45,7 @@ async function fixture() {
 const run = (f) =>
   attestShellRuntime(f.app, f.declaration, performance.now() + 10_000);
 const refused = { state: "refused", code: "shell_runtime_unqualified" };
+const expired = { state: "refused", code: "shell_runtime_deadline_expired" };
 
 describe("Shell nested runtime qualification", () => {
   it("uses physical archive bytes in an Electron host with virtualized fs", async () => {
@@ -200,11 +201,15 @@ describe("Shell nested runtime qualification", () => {
     await expect(
       attestShellRuntime(alias, f.declaration, performance.now() + 10_000),
     ).rejects.toMatchObject(refused);
-    for (const deadline of [NaN, Infinity, -1, performance.now() + 31_000]) {
+    for (const deadline of [NaN, Infinity, performance.now() + 31_000]) {
       await expect(
         attestShellRuntime(f.app, f.declaration, deadline),
       ).rejects.toMatchObject(refused);
     }
+    // An already spent budget is a deadline, not unqualified bytes.
+    await expect(
+      attestShellRuntime(f.app, f.declaration, -1),
+    ).rejects.toMatchObject(expired);
   });
   it("consumes the original deadline while hashing rather than renewing it", async () => {
     const f = await fixture();
@@ -218,6 +223,6 @@ describe("Shell nested runtime qualification", () => {
     });
     await expect(
       attestShellRuntime(f.app, f.declaration, now + 100),
-    ).rejects.toMatchObject(refused);
+    ).rejects.toMatchObject(expired);
   });
 });

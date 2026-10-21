@@ -23,6 +23,7 @@ import {
 } from "../../apps/desktop/bridge/attested-core.ts";
 import type { BrowserDriver } from "../../apps/desktop/bridge/browser.ts";
 import { BridgeError, type Client } from "../../apps/desktop/bridge/client.ts";
+import { CORE_QUALIFICATION_BUDGET_MS } from "../../apps/desktop/bridge/core-resources.ts";
 import type {
   Json,
   Outcome,
@@ -89,7 +90,10 @@ vi.mock("../../apps/desktop/bridge/profile-storage.ts", () => ({
 vi.mock("../../apps/desktop/bridge/profile.ts", () => ({
   qualifyProfileLaunch: ports.qualify,
 }));
-vi.mock("../../apps/desktop/bridge/core-resources.ts", () => ({
+vi.mock("../../apps/desktop/bridge/core-resources.ts", async (original) => ({
+  ...(await original<
+    typeof import("../../apps/desktop/bridge/core-resources.ts")
+  >()),
   verifyCoreResources: ports.resources,
 }));
 vi.mock("../../apps/desktop/bridge/shell-runtime.ts", () => ({
@@ -815,6 +819,29 @@ describe("normal Go host startup", () => {
     await expect(startDesktopGoCore(input)).rejects.toBe(failure);
     expect(ports.provision).not.toHaveBeenCalled();
     expect(start).not.toHaveBeenCalled();
+  });
+
+  // Measured: a busy packaged launch spent 2 s on qualification that takes
+  // 0.3 s idle, and the former 2 s budget refused one launch in fifteen.
+  it("gives resource and Shell qualification one startup budget, not two seconds", async () => {
+    const input = shellSelection();
+    const f = transport();
+    start.mockResolvedValue(f.client);
+    const before = performance.now();
+    const host = await startDesktopGoCore(input);
+    const deadline = ports.resources.mock.calls[0]![3] as number;
+    // The deadline is created after `before`, so a correct host always gives
+    // at least the full budget from `before`; setup time only adds to it. The
+    // 1 ms only absorbs floating-point rounding. The old 2 s budget fails here.
+    expect(deadline - before).toBeGreaterThanOrEqual(
+      CORE_QUALIFICATION_BUDGET_MS - 1,
+    );
+    expect(deadline - performance.now()).toBeLessThanOrEqual(
+      CORE_QUALIFICATION_BUDGET_MS,
+    );
+    expect(CORE_QUALIFICATION_BUDGET_MS).toBe(10_000);
+    expect(ports.runtime.mock.calls[0]![2]).toBe(deadline);
+    await host.close();
   });
 
   it("stops selected Shell at a failed resource check", async () => {

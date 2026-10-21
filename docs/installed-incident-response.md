@@ -125,6 +125,21 @@ budget on a cold launch. Ordinary operation deadlines remain unchanged. A late
 or missing startup response stays outcome-unknown; increasing the budget never
 retries a failed startup or settles its retained run marker.
 
+Before that spawn, the host qualifies its compiled resources and the nested
+Shell runtime within one separate 10-second budget
+(`CORE_QUALIFICATION_BUDGET_MS`). That work hashes about 320 MiB, which takes
+about 0.3 seconds on an idle Mac but measured 2 seconds on a busy launch. The
+former 2-second budget therefore refused one start in fifteen. The two budgets
+run in sequence, so a cold launch spends at most 25 seconds of budget before it
+either becomes ready or refuses. The qualification deadline is checked between
+filesystem operations and does not interrupt one that is already pending, so a
+stalled filesystem call can hold a launch past that sum. The qualification budget is liveness only: digests and
+the final file-identity recheck decide integrity. A spent budget refuses with
+`core_resources_deadline_expired` or `shell_runtime_deadline_expired`, never
+with the unqualified code, and is not retried; the user opens the app again.
+Qualification time is not taken from the child's budget, because a shortened
+handshake would turn a slow but working launch into an outcome-unknown failure.
+
 ## Idle settings poll after a desktop delay
 
 A delayed desktop event loop can make an expired timer run before an original settings or browser poll reply already waiting on stdout. The client allows both reciprocal poll lanes one IO observation turn for that original response, retaining its exact correlation and sending no replacement request; the storage pump retains its own empty-poll check. Only a validated empty response of the correct poll shape from the same Go generation can resume polling after the deadline. The fired timeout remains authoritative even if the wall clock moves backward. A late command never reaches physical storage, even when the command's own deadline would still permit it. Missing, malformed, crossed or changed-generation responses still fence delivery; ordinary RPC, storage-write and reply-ACK deadlines keep their existing unknown-outcome behavior. No fence is cleared and no write is replayed.

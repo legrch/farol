@@ -20,7 +20,10 @@ vi.mock("../../apps/desktop/bridge/desktop-artifact", () => ({
   desktopCoreExpectation: ports.expected,
   readDesktopCoreDeclaration: ports.declaration,
 }));
-vi.mock("../../apps/desktop/bridge/core-resources", () => ({
+vi.mock("../../apps/desktop/bridge/core-resources", async (original) => ({
+  ...(await original<
+    typeof import("../../apps/desktop/bridge/core-resources")
+  >()),
   verifyCoreResources: ports.resources,
 }));
 vi.mock("../../apps/desktop/bridge/attested-core", () => ({

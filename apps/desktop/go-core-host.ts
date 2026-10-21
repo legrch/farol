@@ -45,7 +45,10 @@ import {
 } from "./bridge/wire.ts";
 import { qualifyProfileLaunch } from "./bridge/profile.ts";
 import { openNativeProfileStorage } from "./bridge/profile-storage.ts";
-import { verifyCoreResources } from "./bridge/core-resources.ts";
+import {
+  CORE_QUALIFICATION_BUDGET_MS,
+  verifyCoreResources,
+} from "./bridge/core-resources.ts";
 import { bindShellSupportDeclaration } from "./bridge/shell-support.ts";
 import { attestShellRuntime } from "./bridge/shell-runtime.ts";
 import { encodeShellLaunch } from "./bridge/shell-launch.ts";
@@ -621,7 +624,8 @@ export async function startDesktopGoCore(
       selection.compiledResources === null)
   )
     throw new BridgeError("refused", "shell_host_resources_missing");
-  const qualificationDeadline = performance.now() + 2000;
+  const qualificationDeadline =
+    performance.now() + CORE_QUALIFICATION_BUDGET_MS;
   // New builds carry this independent closure. Older fixture/host selections
   // remain compatible; Shell activation must require the completed closure.
   if (
