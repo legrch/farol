@@ -3,8 +3,10 @@
 The 2026-10-22 unsigned beta update contract automatically settles an interrupted
 journal from the installed tree digest and build identity once the original
 helper is confirmed ended. Target content completes the update; source content
-records rollback and permits a later update attempt. Only content matching
-neither accepted build requires an error. Companion bundles are retained as
+records rollback and permits a later update attempt. The existing rollback
+receipt keeps that target deferred for scheduled automatic installation across
+restarts; an explicit Download/Restart can retry it. A newer target is unaffected.
+Only content matching neither accepted build requires an error. Companion bundles are retained as
 recovery evidence; a matching `previous.app` enables manual rollback. A helper
 exit before journal creation clears the pending operation and unfinished copy,
 including when `helper.log.jsonl` exists. No recovery view is shown for these

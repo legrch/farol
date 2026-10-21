@@ -2454,6 +2454,7 @@ async function createRuntime(
   const restoreFile = path.join(root, "restore-pending.json");
   let restorable: z.infer<typeof Retained> | null = null;
   let restoreKind: "recover" | "rollback" | null = null;
+  let declinedBuildId: string | null = null;
 
   const runTrusted = async (
     entry: string,
@@ -3566,6 +3567,9 @@ async function createRuntime(
           settled ||= [...ROLLED_BACK_PHASES, ...CANCELLED_PHASES].includes(
             journal.phase,
           );
+          // The durable rollback receipt is re-read on every startup. Offer the
+          // target for deliberate retry, while scheduled checks keep it deferred.
+          if (settled) declinedBuildId = op.target.buildId;
         } else return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
         restorable = retained;
         restoreKind = settled
@@ -3740,6 +3744,7 @@ async function createRuntime(
             version: candidate.manifest.version,
             buildId: candidate.manifest.buildId,
             deferred:
+              candidate.manifest.buildId === declinedBuildId ||
               candidate.manifest.version === preferences.deferredVersion,
             ...(candidate.notes ? { notes: candidate.notes } : {}),
           }

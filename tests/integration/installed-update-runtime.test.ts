@@ -4427,6 +4427,81 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     }
   }
 
+  it.each(["new_installed", "rollback_completed"])(
+    "defers automatic retry after %s while allowing deliberate retry across restarts",
+    async (phase) => {
+      const first = await prepared();
+      await first.restart();
+      const op = JSON.parse(await fs.readFile(ready, "utf8")).operation;
+      await first.close();
+      const updateRoot = path.join(userData, "installed-updates");
+      await fs.writeFile(
+        path.join(updateRoot, op.operationId, "journal.json"),
+        JSON.stringify({
+          schema: "farol.installed-update-journal/1",
+          ...op,
+          phase,
+        }),
+        { mode: 0o600 },
+      );
+      await fs.writeFile(
+        path.join(updateRoot, "automatic-update-preference.json"),
+        JSON.stringify({
+          schema: "farol.installed-automatic-update-preference/2",
+          scope: "download-and-install",
+          enabled: true,
+        }),
+        { mode: 0o600 },
+      );
+      mocks.exec.mockImplementation(async (file: string, args: string[]) => {
+        if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+        return {
+          stdout: JSON.stringify(
+            args[0]!.endsWith("update-obligations.mjs")
+              ? {
+                  drained: true,
+                  obligationCount: 0,
+                  unreadableCount: 0,
+                  changedCount: 0,
+                }
+              : args[1]!.endsWith("staged.app")
+                ? target
+                : source,
+          ),
+        };
+      });
+      for (const lifetime of [0, 1]) {
+        const next = (await createInstalledUpdateRuntime(options()))!;
+        await next.initialize();
+        expect(next.automaticUpdatePreference()).toMatchObject({
+          status: "confirmed",
+          enabled: true,
+          scope: "download-and-install",
+        });
+        await next.scheduledCheck();
+        await next.scheduledCheck();
+        expect(next.snapshot()).toMatchObject({
+          phase: "available",
+          version: manifest.version,
+          deferred: true,
+        });
+        expect(mocks.download).toHaveBeenCalledTimes(1);
+        expect(mocks.helper).toHaveBeenCalledTimes(1);
+        if (lifetime === 1) {
+          // An explicit Download and Restart is a new deliberate attempt.
+          await next.check(true);
+          await next.download();
+          expect(next.snapshot()).toMatchObject({ phase: "ready" });
+          await next.restart();
+          expect(next.snapshot()).toMatchObject({ phase: "applying" });
+          expect(mocks.download).toHaveBeenCalledTimes(2);
+          expect(mocks.helper).toHaveBeenCalledTimes(2);
+        }
+        await next.close();
+      }
+    },
+  );
+
   it.each(repos)("recovers %s retained records", async (repository) => {
     const controller = await prepared();
     await controller.restart();
