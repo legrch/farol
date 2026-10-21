@@ -189,17 +189,45 @@ that no process or open file names another instance's root or an owner location
 Override-free resolution is **not witnessed**, and the receipt keeps the row
 (`blocked[]`, `status: not_observed`, reference
 `NATIVE_APPDATA_IGNORES_HOME (documented)`) so it is not silently dropped. It is
-a documented fact, not a runtime measurement: on 2026-10-21 a bundled Electron
-(44.4.2, the version pinned in `package.json` and shipped in the package) started
-with a disposable `HOME` still reported the account's real
-`~/Library/Application Support` as its native `appData` (measured in receipt
-`344594de-13f1-4ef2-816b-488aa9a4bbb9` under
-`_output/preview/isolation/5201873407968a0db209fd6a2e8e23f920cd48ea860556d8f3255ae595bb1786/`).
-A launch without `FAROL_NEXT_E2E_APP_DATA` would therefore select the owner's
-real `Farol Preview` profile. The witness does not launch that way and does not
-measure it again: any process whose defaults point at the owner's real home
-could create files there, so the measurement is not repeated. A Codex child
-needs a live provider and is asserted absent, not witnessed.
+a documented fact, not a runtime measurement, and the measurement is quoted here
+so the claim can be read without any receipt.
+
+_Measured 2026-10-21 on macOS (Darwin 27.0.0), Electron 44.4.2 (the version pinned
+in `package.json` and shipped in the package)._ The packaged Electron runtime was
+started on a throwaway app, from a shell with a disposable `HOME`, and the app
+printed three values once ready:
+
+```text
+command shape  env HOME=<TMPDIR>/farol-next-e2e-probe-<random>/home \
+                 <package>/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron <throwaway-app-dir>
+               (main.js called app.setPath("userData", <disposable dir>) before
+               ready, opened no window, then printed and quit)
+process.env.HOME            <TMPDIR>/farol-next-e2e-probe-<random>/home   (the disposable value)
+app.getPath("appData")      <account-home>/Library/Application Support    (the account's real one)
+app.getPath("home")         <account-home>                                (the account's real one)
+```
+
+`<account-home>` is the macOS account's real home directory, redacted. So a disposable `HOME` is visible to the process, yet Electron's native `appData`
+and `home` still point at the account's real directories. A launch without
+`FAROL_NEXT_E2E_APP_DATA` would therefore select the owner's real `Farol Preview`
+profile. In-tree corroboration: the product already pins `app.getPath("home")` to
+the proven E2E home because, in its own words, "on macOS Electron's native home
+may ignore the child's HOME environment"
+([`src/apps/desktop/main.ts`](../../src/apps/desktop/main.ts), line 580).
+
+_Mechanism (a reading, not a measurement):_ Electron resolves `appData` on macOS
+through the platform's per-account directory lookup rather than from `$HOME`.
+Electron documents the macOS default only as `~/Library/Application Support`
+([`app.getPath(name)`](https://www.electronjs.org/docs/latest/api/app#appgetpathname));
+the independence from `$HOME` is inferred from the measurement above.
+
+Private reference, not in the repository: receipt
+`344594de-13f1-4ef2-816b-488aa9a4bbb9` in the author's untracked `_output`
+(generation `5201873407968a0db209fd6a2e8e23f920cd48ea860556d8f3255ae595bb1786`).
+
+The witness does not launch without the override and does not measure it again:
+any process whose defaults point at the owner's real home could create files
+there. A Codex child needs a live provider and is asserted absent, not witnessed.
 
 Environment rule per owned process: `HOME` must be set and inside that
 instance's own disposable root (`OWNED_PROCESS_HOME_MISSING`,
