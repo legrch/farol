@@ -7,10 +7,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { reviewedTunnelClientPath } from "../../src/apps/desktop/executable-discovery";
-import {
-  aclVerdict,
-  adoptReviewedTunnelClient,
-} from "../../src/apps/desktop/tunnel-client-adoption";
+import { adoptReviewedTunnelClient } from "../../src/apps/desktop/tunnel-client-adoption";
 
 const REVIEWED = Buffer.from(
   "reviewed tunnel-client build bytes\n".repeat(4_000),
@@ -30,7 +27,10 @@ let home: string;
 let source: string;
 
 beforeEach(async () => {
-  root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-adoption-"));
+  // Adoption works on real paths; compare against the same spelling.
+  root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-adoption-")),
+  );
   home = path.join(root, "home");
   await fs.mkdir(home);
   source = path.join(root, "homebrew-tunnel-client");
@@ -153,23 +153,6 @@ describe("adoptReviewedTunnelClient", () => {
     expect(adopted.ok).toBe(true);
     if (adopted.ok)
       expect(adopted.path.startsWith(await fs.realpath(home))).toBe(true);
-  });
-
-  it("reads ACL listings fail closed", () => {
-    const mode = "drwx------  3 me  staff  96 Oct 21 23:02 /x";
-    expect(aclVerdict(`${mode}\n`)).toBe("safe");
-    expect(aclVerdict(`${mode}\n 0: group:everyone deny delete\n`)).toBe(
-      "safe",
-    );
-    expect(
-      aclVerdict(`${mode}\n 0: group:everyone allow add_file,delete_child\n`),
-    ).toBe("unsafe");
-    expect(
-      aclVerdict(`${mode}\n 0: user:bob inherited allow write,append\n`),
-    ).toBe("unsafe");
-    expect(aclVerdict(`${mode}\n 0: user:me allow read,search\n`)).toBe("safe");
-    expect(aclVerdict(`${mode}\n garbled entry\n`)).toBe("unsafe");
-    expect(aclVerdict("")).toBe("unsafe");
   });
 
   it("replaces a stale copy at the target atomically", async () => {

@@ -1507,7 +1507,7 @@ describe("owner setup entry feedback", () => {
     });
     await h.click("Find connection helper");
     expect(h.host.textContent).toContain(
-      "another macOS user owns it and it is not the reviewed build",
+      "another macOS user owns it and Farol could not make its own checked copy",
     );
     expect(h.host.textContent).not.toContain("candidate(s) found");
     expect(() => h.button("Connect this Mac")).toThrow();
