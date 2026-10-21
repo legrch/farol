@@ -1396,6 +1396,19 @@ async function disposableRoot(temporary) {
   return { home, appData, proof };
 }
 
+// Launch environment keys whose values are fixed public constants of this
+// witness, so the receipt guard may record them (the Preview kind is 13
+// characters). An explicit allowlist: host-derived values (HOME, TMPDIR, the
+// app-data and test roots) and the test proof are never declared and stay
+// guarded, and a key added later stays guarded until it is listed here.
+const PUBLIC_LAUNCH_KEYS = Object.freeze([
+  "LANG",
+  "PATH",
+  "ELECTRON_FORCE_IS_PACKAGED",
+  "FAROL_NEXT_E2E",
+  "FAROL_NEXT_E2E_CHATGPT_URL",
+  "FAROL_NEXT_ENVIRONMENT",
+]);
 async function launch(
   electron,
   kind,
@@ -1434,6 +1447,9 @@ async function launch(
     FAROL_NEXT_E2E_CHATGPT_URL: fixtureOrigin,
     ...(preview ? { FAROL_NEXT_ENVIRONMENT: "owner-preview" } : {}),
   };
+  for (const key of PUBLIC_LAUNCH_KEYS)
+    if (environment[key] !== undefined)
+      options?.run?.declared?.add(environment[key]);
   const instance = {
     kind,
     app,
@@ -1614,11 +1630,18 @@ function assertProcessEnvironment(entry) {
 // design. A finding is redacted (a whole value, or just the offending path inside
 // a failure message) and reported by JSON pointer and code only; the caller
 // writes the scrubbed receipt and then fails closed.
-function guardReceipt(receipt, { envValues, roots, repositoryRoot }) {
+function guardReceipt(
+  receipt,
+  { envValues, declared = new Set(), roots, repositoryRoot },
+) {
   const homeForms = formsOf(os.userInfo().homedir);
+  // A value of a PUBLIC_LAUNCH_KEYS entry (the instance kind, the locale, the
+  // fixture origin) is a public constant of this witness, not a secret; host
+  // values and the test proof are never declared, so they stay guarded.
   const guarded = new Set(
     [...envValues].filter(
-      (value) => value.length >= 12 || path.isAbsolute(value),
+      (value) =>
+        !declared.has(value) && (value.length >= 12 || path.isAbsolute(value)),
     ),
   );
   const recorded = (candidate) => {
@@ -2535,6 +2558,31 @@ async function scannerSelfCheck() {
       const clean = guardReceipt(carrying, guard);
       assert.deepEqual(clean.violations, []);
       assert.deepEqual(clean.receipt, carrying);
+      // A value the run declared in a launch environment (the Preview kind is
+      // 13 characters) is public: the same receipt passes with it declared and
+      // is a finding without; a proof is never declared and always a finding.
+      assert.equal(PUBLIC_LAUNCH_KEYS.includes("TMPDIR"), false);
+      assert.equal(PUBLIC_LAUNCH_KEYS.includes("HOME"), false);
+      assert.equal(
+        PUBLIC_LAUNCH_KEYS.includes("FAROL_NEXT_E2E_TEST_PROOF"),
+        false,
+      );
+      const kinded = { launches: [{ kind: "owner-preview" }], proof };
+      const observed = new Set([...guard.envValues, "owner-preview"]);
+      assert.deepEqual(
+        guardReceipt(kinded, {
+          ...guard,
+          envValues: observed,
+          declared: new Set(["owner-preview"]),
+        }).violations.map((entry) => `${entry.code}@${entry.pointer}`),
+        ["ENV_VALUE@/proof"],
+      );
+      assert.deepEqual(
+        guardReceipt(kinded, { ...guard, envValues: observed }).violations.map(
+          (entry) => `${entry.code}@${entry.pointer}`,
+        ),
+        ["ENV_VALUE@/launches/0/kind", "ENV_VALUE@/proof"],
+      );
       // A receipt that did carry a value, a proof, an owner path or the home is
       // scrubbed, reported by pointer and code, and the text holds none of them.
       const leaky = {
@@ -3269,11 +3317,18 @@ async function treeSelfCheck() {
   // environment is found, one without it is clear, a vanished pid is gone, and
   // another process's environment never comes back.
   const rootText = `/farol-selfcheck-root-${randomUUID()}`;
+  // Each idle child lives until this test closes its stdin, not for a fixed
+  // time: a loaded machine cannot let it exit before the last inspection, and
+  // ending it needs no signal.
   const spawnIdle = (environment) =>
-    spawn(process.execPath, ["-e", "setTimeout(() => {}, 2000)"], {
-      env: environment,
-      stdio: "ignore",
-    });
+    spawn(
+      process.execPath,
+      [
+        "-e",
+        'process.stdin.on("end", () => process.exit(0)); process.stdin.resume()',
+      ],
+      { env: environment, stdio: ["pipe", "ignore", "ignore"] },
+    );
   const withRoot = spawnIdle({ HOME: rootText });
   const without = spawnIdle({ HOME: "/somewhere/else" });
   const gone = spawn("/usr/bin/true");
@@ -3328,9 +3383,12 @@ async function treeSelfCheck() {
     });
   } finally {
     await Promise.all(
-      [withRoot, without].map((child) =>
-        child.exitCode === null ? once(child, "exit") : null,
-      ),
+      [withRoot, without].map((child) => {
+        if (child.exitCode !== null || child.signalCode !== null) return null;
+        const exited = once(child, "exit");
+        child.stdin.end();
+        return exited;
+      }),
     );
   }
   // A failing run that leaves one survivor: the receipt lists it, the status
@@ -3523,6 +3581,7 @@ export async function runOwnerPreviewIsolation(
     roots: new Set(),
     preexisting: new Set(),
     envValues: new Set(),
+    declared: new Set(),
   };
   ownerState.exempt = run.roots;
   partialInventory.lsofMounts.clear();
@@ -3534,6 +3593,7 @@ export async function runOwnerPreviewIsolation(
       receipt.lsofPartialMounts = [...partialInventory.lsofMounts].sort();
     const guarded = guardReceipt(receipt, {
       envValues: run.envValues,
+      declared: run.declared,
       roots: run.roots,
       repositoryRoot,
     });
