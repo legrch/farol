@@ -209,7 +209,7 @@ function inside(child, parent, reported = false) {
 // ~/Library/Application Support starts with `Farol`, including profiles added
 // later. A path inside one of this run's own disposable roots is never an owner
 // location.
-const ownerState = { guardRoots: null, exempt: new Set() };
+const ownerState = { guardRoots: null, built: null, exempt: new Set() };
 async function loadProtectedRoots(
   repositoryRoot,
   script = path.join(repositoryRoot, "scripts/assert-owner-untouched.py"),
@@ -238,32 +238,70 @@ async function loadProtectedRoots(
     throw new Error("OWNER_PREVIEW_ISOLATION_GUARD_ROOTS_INVALID:SHAPE");
   return roots;
 }
-function ownerLocations() {
-  if (ownerState.guardRoots === null)
-    throw new Error("OWNER_PREVIEW_ISOLATION_GUARD_ROOTS_UNLOADED");
+// Containment is boundary-aware: equal, or the root followed by the separator.
+const contains = (candidate, root) =>
+  candidate === root ||
+  candidate.startsWith(root.endsWith(path.sep) ? root : `${root}${path.sep}`);
+// An owner location is held in both its literal and its canonical form, built
+// once when the guard roots are set, so a protected location that is itself a
+// symlink is matched by a path under its target as well as under its name.
+const formsOf = (literal) => [...new Set([literal, canonical(literal, true)])];
+function setGuardRoots(guardRoots) {
   const home = os.userInfo().homedir;
-  return [
-    ...ownerState.guardRoots,
+  const literals = [
+    ...guardRoots,
     path.join(home, ".farol"),
     path.join(home, ".codex"),
-    // Last component starts with `Farol`: every present and future profile.
-    path.join(home, "Library/Application Support/Farol"),
     "/Applications/Farol.app",
   ];
+  ownerState.guardRoots = guardRoots;
+  ownerState.built = {
+    home: formsOf(home),
+    roots: [...new Set(literals.flatMap(formsOf))],
+    // Last component starts with `Farol`: every present and future profile.
+    farolPrefixes: formsOf(
+      path.join(home, "Library/Application Support/Farol"),
+    ),
+  };
 }
-// `text` marks a command line: it is matched as given, never as a path.
+function ownerBuilt() {
+  if (ownerState.built === null)
+    throw new Error("OWNER_PREVIEW_ISOLATION_GUARD_ROOTS_UNLOADED");
+  return ownerState.built;
+}
+// A root named inside free text (a command line), ended by a non-name character
+// so `.codex-backup` is not `.codex`. A `Farol*` prefix needs no end.
+function namesRoot(text, built) {
+  const named = (root) => {
+    for (
+      let at = text.indexOf(root);
+      at !== -1;
+      at = text.indexOf(root, at + 1)
+    ) {
+      const next = text[at + root.length];
+      if (next === undefined || !/[A-Za-z0-9._-]/u.test(next)) return true;
+    }
+    return false;
+  };
+  return (
+    built.roots.some(named) ||
+    built.farolPrefixes.some((prefix) => text.includes(prefix))
+  );
+}
+// `text` marks a command line: it is matched as text, never as a path.
 // `reported` marks a path the kernel reported (see canonical).
 function touchesOwner(value, { text = false, reported = false } = {}) {
-  // Check the text as given and, for an absolute path, its canonical form, so
-  // `/tmp/x/../../Users/.../.codex` or a symlink then `..` cannot hide an owner
-  // location.
-  const isPath = !text && path.isAbsolute(value);
-  const forms = isPath ? [value, canonical(value, reported)] : [value];
+  const built = ownerBuilt();
+  if (text || !path.isAbsolute(value)) return namesRoot(value, built);
+  // An absolute value (a path, or a PATH-like list of paths) is judged as text
+  // and by where each path really leads, so `/tmp/x/../../Users/.../.codex` or a
+  // symlink then `..` cannot hide an owner location.
+  const real = canonical(value, reported);
   // Inside this run's own disposable roots (after following symlinks) is never
   // an owner location; a symlink out of them is judged by where it leads.
-  const exemptRoot = isPath
-    ? [...ownerState.exempt].find((root) => inside(forms[1], root, true))
-    : undefined;
+  const exemptRoot = [...ownerState.exempt].find((root) =>
+    inside(real, root, true),
+  );
   if (exemptRoot !== undefined) {
     // Exempting a root that is itself an owner location would hide a write
     // there: that is a hard failure, never an exemption.
@@ -274,8 +312,20 @@ function touchesOwner(value, { text = false, reported = false } = {}) {
       );
     return false;
   }
-  return ownerLocations().some((location) =>
-    forms.some((form) => form.includes(location)),
+  const leads = [
+    real,
+    ...value
+      .split(":")
+      .filter((part) => part !== value && path.isAbsolute(part))
+      .map((part) => canonical(part, true)),
+  ];
+  return (
+    namesRoot(value, built) ||
+    leads.some(
+      (lead) =>
+        built.roots.some((root) => contains(lead, root)) ||
+        built.farolPrefixes.some((prefix) => lead.startsWith(prefix)),
+    )
   );
 }
 
@@ -283,19 +333,21 @@ function touchesOwner(value, { text = false, reported = false } = {}) {
 // location: not equal to the owner's home, not inside a guard root, ~/.farol,
 // ~/.codex, the installed app or any `Farol*` Application Support profile, and
 // not an ancestor of one (a parent that contains an owner location would put the
-// run's files beside it). Returns a code, or null when the path is clear.
+// run's files beside it). Both sides are compared in literal and canonical form.
+// Returns a code, or null when the path is clear.
 function ownerConflict(target) {
-  const resolved = canonical(target);
-  const home = canonical(os.userInfo().homedir);
-  if (resolved === home) return "OWNER_HOME";
-  const prefix = canonical(path.join(home, "Library/Application Support"));
-  const farolPrefix = path.join(prefix, "Farol");
-  if (resolved.startsWith(farolPrefix)) return "INSIDE_FAROL_PROFILE";
-  if (inside(farolPrefix, resolved)) return "CONTAINS_OWNER_LOCATION";
-  for (const location of ownerLocations()) {
-    const place = canonical(location);
-    if (inside(resolved, place)) return "INSIDE_OWNER_LOCATION";
-    if (inside(place, resolved)) return "CONTAINS_OWNER_LOCATION";
+  const built = ownerBuilt();
+  const candidates = [...new Set([target, canonical(target)])];
+  for (const candidate of candidates) {
+    if (built.home.includes(candidate)) return "OWNER_HOME";
+    if (built.farolPrefixes.some((prefix) => candidate.startsWith(prefix)))
+      return "INSIDE_FAROL_PROFILE";
+    for (const root of built.roots) {
+      if (contains(candidate, root)) return "INSIDE_OWNER_LOCATION";
+      if (contains(root, candidate)) return "CONTAINS_OWNER_LOCATION";
+    }
+    for (const prefix of built.farolPrefixes)
+      if (contains(prefix, candidate)) return "CONTAINS_OWNER_LOCATION";
   }
   return null;
 }
@@ -1461,7 +1513,7 @@ async function scannerSelfCheck() {
     // the owner's is touched.)
     const savedRoots = ownerState.guardRoots;
     const savedExempt = ownerState.exempt;
-    ownerState.guardRoots = [path.join(a2, "guarded")];
+    setGuardRoots([path.join(a2, "guarded")]);
     try {
       assert.equal(touchesOwner(`${a2}/guarded/x`), true);
       assert.equal(touchesOwner(`${b}/guarded/x`), false);
@@ -1507,8 +1559,76 @@ async function scannerSelfCheck() {
         );
       assert.equal(created, 0);
     } finally {
-      ownerState.guardRoots = savedRoots;
+      setGuardRoots(savedRoots);
       ownerState.exempt = savedExempt;
+    }
+    // Both sides are canonical: a protected location that is itself a symlink is
+    // matched by a path under its target as well as under its name, a candidate
+    // that is a symlink into an owner root is caught, and a sibling that merely
+    // shares a prefix is not. (Stand-in roots inside the throwaway directory.)
+    {
+      const ownerReal = path.join(sandbox, "owner-real");
+      const ownerLink = path.join(sandbox, "owner-link");
+      await fs.mkdir(path.join(ownerReal, "inner"), { recursive: true });
+      await fs.symlink(ownerReal, ownerLink);
+      const candidateLink = path.join(sandbox, "candidate-link");
+      await fs.symlink(path.join(ownerReal, "inner"), candidateLink);
+      const before = ownerState.guardRoots;
+      setGuardRoots([ownerLink]);
+      try {
+        assert.equal(touchesOwner(`${ownerReal}/x`), true, "under the target");
+        assert.equal(touchesOwner(`${ownerLink}/x`), true, "under the name");
+        assert.equal(
+          touchesOwner(`${candidateLink}/f`),
+          true,
+          "symlinked candidate",
+        );
+        assert.equal(touchesOwner(`${ownerReal}-sibling/x`), false);
+        assert.equal(touchesOwner(`${sandbox}/owner-realX`), false);
+        assert.equal(touchesOwner(`${sandbox}/owner-linked/x`), false);
+        // A PATH-like list is judged member by member.
+        assert.equal(touchesOwner(`/usr/bin:${ownerReal}/bin`), true);
+        assert.equal(touchesOwner(`/usr/bin:${ownerReal}-sibling/bin`), false);
+        // Command text: the root counts only when a non-name character ends it.
+        assert.equal(touchesOwner(`--home ${ownerReal}`, { text: true }), true);
+        assert.equal(
+          touchesOwner(`--home ${ownerLink} --x`, { text: true }),
+          true,
+        );
+        assert.equal(
+          touchesOwner(`--home ${ownerReal}-sibling`, { text: true }),
+          false,
+        );
+        // The temporary-parent refusal compares both sides the same way.
+        assert.equal(
+          ownerConflict(`${ownerReal}/tmp`),
+          "INSIDE_OWNER_LOCATION",
+        );
+        assert.equal(
+          ownerConflict(`${ownerLink}/tmp`),
+          "INSIDE_OWNER_LOCATION",
+        );
+        assert.equal(ownerConflict(candidateLink), "INSIDE_OWNER_LOCATION");
+        assert.equal(ownerConflict(sandbox), "CONTAINS_OWNER_LOCATION");
+        assert.equal(ownerConflict(`${ownerReal}-sibling`), null);
+        // The exemption of a disposable root: a root that is the target of an
+        // owner symlink is an owner location and cannot be exempted.
+        const savedExempt = ownerState.exempt;
+        ownerState.exempt = new Set([ownerReal]);
+        try {
+          assert.throws(
+            () => touchesOwner(`${ownerReal}/x`),
+            /DISPOSABLE_ROOT_UNSAFE:INSIDE_OWNER_LOCATION/u,
+          );
+        } finally {
+          ownerState.exempt = savedExempt;
+        }
+      } finally {
+        setGuardRoots(before);
+      }
+      // A real sibling that shares a prefix with a real owner location.
+      assert.equal(touchesOwner(path.join(home, ".codex-backup/x")), false);
+      assert.equal(touchesOwner(path.join(home, ".codex/x")), true);
     }
     // With the real guard roots back, a normal temporary parent still works and
     // creates exactly one root.
@@ -2261,7 +2381,7 @@ export async function runOwnerPreviewIsolation(
   options = {},
 ) {
   requireOwnerPreviewRuntimeIntegration();
-  ownerState.guardRoots = await loadProtectedRoots(repositoryRoot);
+  setGuardRoots(await loadProtectedRoots(repositoryRoot));
   ownerState.exempt = new Set();
   // The temporary parent is checked before anything at all is created in it.
   const temporary = await fs.realpath(os.tmpdir());

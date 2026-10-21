@@ -293,7 +293,17 @@ lists cannot diverge. The witness adds only what the guard does not enumerate:
 all of `~/.farol` and `~/.codex`, `/Applications/Farol.app`, and any directory
 under `~/Library/Application Support` whose name starts with `Farol`, so profiles
 added later (the Dev Acceptance profile and its nested profiles included) are
-covered. A path inside one of this run's own disposable roots, after following
+covered. Matching is boundary-aware and uses both sides canonically: every owner location
+is held in its literal and its canonical form, built once when the guard's roots
+are read, and a candidate path is compared in its literal form and as resolved
+component by component, so a protected location that is itself a symlink is
+matched under its target as well as under its name, and `~/.codex-backup` is not
+`~/.codex`. Containment means equal, or the root followed by the path separator
+(a `Farol*` profile is a prefix rule); in command text a root counts only when a
+non-name character ends it. The temporary-parent refusal and the exemption use
+the same rule.
+
+A path inside one of this run's own disposable roots, after following
 symlinks, is never an owner location, and that exemption can never cover an owner
 location: before anything is created, the temporary parent is resolved
 component by component and the run is refused (`TEMP_PARENT_UNSAFE`, nothing
