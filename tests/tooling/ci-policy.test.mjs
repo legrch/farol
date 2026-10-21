@@ -104,7 +104,10 @@ describe("CI safety and selection", () => {
       const calls = [];
       const git = (...args) => {
         calls.push(args);
-        if (args[0] === "rev-parse") return head;
+        if (args[0] === "rev-parse")
+          return annotated && args[1] === `refs/tags/v${version}`
+            ? "b".repeat(40)
+            : head;
         if (args[0] === "merge-base") return "";
         return (
           `${annotated ? "b".repeat(40) : head}\trefs/tags/v${version}` +
@@ -121,6 +124,13 @@ describe("CI safety and selection", () => {
     }
   });
   it("refuses moved remote tags and non-main source", () => {
+    expect(() =>
+      verifyReleaseTag(`v${version}`, (...args) =>
+        args[0] === "ls-remote"
+          ? `${"b".repeat(40)}\trefs/tags/v${version}\n${head}\trefs/tags/v${version}^{}`
+          : head,
+      ),
+    ).toThrow("RELEASE_REMOTE_TAG_CHANGED");
     expect(() =>
       verifyReleaseTag(`v${version}`, (...args) =>
         args[0] === "ls-remote"

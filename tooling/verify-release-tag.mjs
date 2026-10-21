@@ -20,6 +20,7 @@ export function verifyReleaseTag(
   const head = git("rev-parse", "HEAD");
   const tagged = git("rev-parse", `refs/tags/${tag}^{commit}`);
   if (tagged !== head) throw Error("RELEASE_TAG_HEAD_MISMATCH");
+  const tagObject = git("rev-parse", `refs/tags/${tag}`);
   git("merge-base", "--is-ancestor", head, "refs/remotes/origin/main");
   const remote = git(
     "ls-remote",
@@ -35,7 +36,8 @@ export function verifyReleaseTag(
   );
   const remoteCommit =
     refs.get(`refs/tags/${tag}^{}`) ?? refs.get(`refs/tags/${tag}`);
-  if (remoteCommit !== head) throw Error("RELEASE_REMOTE_TAG_CHANGED");
+  if (remoteCommit !== head || refs.get(`refs/tags/${tag}`) !== tagObject)
+    throw Error("RELEASE_REMOTE_TAG_CHANGED");
   return head;
 }
 
