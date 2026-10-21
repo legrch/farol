@@ -2,9 +2,9 @@
   "schema": "farol.next.resource-manifest/1",
   "product": {
     "name": "Farol Next Preview",
-    "version": "0.2.7",
+    "version": "0.2.8-owner.beta.3",
     "bundleId": "local.farol.next.preview",
-    "updateChannel": "github-stable"
+    "updateChannel": "github-owner-beta"
   },
   "application": {
     "singleInstanceScope": "userData",
