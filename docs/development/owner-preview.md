@@ -220,11 +220,25 @@ never parsed. Each owned process (parent, Go backend, Node runtime child) must
 yield a readable, non-empty environment and a clean per-pid `lsof` listing; only
 a pid the kernel confirms gone is reported, explicitly, as exited.
 
-Sockets: a qualifying listener is **TCP LISTEN on 127.0.0.1 only**. Any other
-network listener on an owned pid fails with a named code (`UDP_SOCKET`,
-`IPV6_LISTENER` including `::1`, `WILDCARD_LISTENER`, `HOSTNAME_LISTENER`,
-`NON_LOOPBACK_ADDRESS`, `UNPARSABLE_LISTENER`); connected and unix sockets are not
-listeners and the two instances' port sets and socket paths must be disjoint.
+Sockets: a qualifying listener is **TCP LISTEN on 127.0.0.1 only**. Every
+network socket on an owned pid is classified and none is ignored. A TCP record
+must carry a recognised state (`MISSING_TCP_STATE`, `UNKNOWN_TCP_STATE`;
+checked before the address, so a wildcard with no state still fails). Any other
+listener fails with a named code (`UDP_SOCKET`, `IPV6_LISTENER` including `::1`,
+`WILDCARD_LISTENER`, `HOSTNAME_LISTENER`, `NON_LOOPBACK_ADDRESS`,
+`UNPARSABLE_LISTENER`). A recognised non-listening state (`ESTABLISHED`,
+`CLOSE_WAIT`, `TIME_WAIT`, `SYN_SENT`, ...) is a connection, not a listener; its
+peer must be `127.0.0.1` (`NON_LOOPBACK_PEER`) and never the other instance's
+listener. Unix sockets are not network sockets, and the two instances' port sets
+and socket paths must be disjoint.
+
+Process tree: a tree is a moving snapshot. It is rescanned until two consecutive
+snapshots agree on the pid set (bounded; `TREE_UNSTABLE` otherwise), every
+per-pid check runs on the union of all pids ever seen, and after the quits every
+such pid must be gone (`PID_REMAINS`), a rescan from the original parent must
+find no descendant (`NEW_DESCENDANT`), and no process may still carry the
+instance's unique disposable root in its arguments (`ORPHAN_REMAINS`, a `pgrep -f`
+on that root; a reparented orphan is no longer a descendant).
 Receipts are under `_output/preview/isolation/<generation>/`.
 
 ## Verification and remaining gates

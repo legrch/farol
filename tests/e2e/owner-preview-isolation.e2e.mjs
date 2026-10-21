@@ -236,6 +236,81 @@ async function descendants(parent) {
   }
   return tree;
 }
+// Every scan of an instance's tree feeds the set of pids ever seen.
+async function scanTree(instance) {
+  const tree = await descendants(instance.pid);
+  for (const pid of tree) instance.seen.add(pid);
+  return tree;
+}
+// A process tree is only a snapshot. Rescan until two consecutive snapshots,
+// an interval apart, agree on the pid set; fail with a named code if that does
+// not happen within the bound. Pids that appeared in any snapshot stay in the
+// caller's `seen` set (the scan function records them), so a helper that exits
+// again is still checked and still verified gone at teardown.
+async function stableTree(
+  scan,
+  { interval = 150, maxScans = 40, label = "tree" } = {},
+) {
+  let previous = null;
+  for (let attempt = 0; attempt < maxScans; attempt += 1) {
+    const current = await scan();
+    const key = [...current].sort((x, y) => x - y).join(",");
+    if (key === previous) return current;
+    previous = key;
+    await new Promise((r) => setTimeout(r, interval));
+  }
+  throw new Error(`OWNER_PREVIEW_ISOLATION_TREE_UNSTABLE:${label}`);
+}
+// After the quits: every pid ever seen is gone; a rescan from the original
+// parent finds no descendant; and no process anywhere still carries the
+// instance's unique disposable root in its arguments (an orphan reparented away
+// from the tree). The dependencies are injectable for the self-check.
+async function assertTornDown(
+  instance,
+  {
+    alive = (pid) => !isGone(pid),
+    rescan = descendants,
+    orphans = async (home) => {
+      const found = await runInventory("pgrep", ["-f", home]);
+      return found.outcome === "no_match"
+        ? []
+        : found.stdout
+            .split("\n")
+            .filter((line) => /^[0-9]+$/u.test(line))
+            .map(Number);
+    },
+    tries = 100,
+    interval = 50,
+  } = {},
+) {
+  for (const pid of instance.seen) {
+    for (let attempt = 0; attempt < tries && alive(pid); attempt += 1)
+      await new Promise((r) => setTimeout(r, interval));
+    assert.equal(
+      alive(pid),
+      false,
+      `OWNER_PREVIEW_ISOLATION_PID_REMAINS:${instance.kind}:${pid}`,
+    );
+  }
+  const again = (await rescan(instance.pid)).filter(
+    (pid) => pid !== instance.pid,
+  );
+  assert.deepEqual(
+    again,
+    [],
+    `OWNER_PREVIEW_ISOLATION_NEW_DESCENDANT:${instance.kind}:${again.join(",")}`,
+  );
+  let orphaned = await orphans(instance.home);
+  for (let attempt = 0; attempt < tries && orphaned.length > 0; attempt += 1) {
+    await new Promise((r) => setTimeout(r, interval));
+    orphaned = await orphans(instance.home);
+  }
+  assert.deepEqual(
+    orphaned,
+    [],
+    `OWNER_PREVIEW_ISOLATION_ORPHAN_REMAINS:${instance.kind}:${orphaned.join(",")}`,
+  );
+}
 // null is the explicit "already exited" outcome: the documented ps no-match for
 // a pid the kernel no longer knows. Every other failure is an inventory error.
 async function command(pid) {
@@ -327,12 +402,33 @@ function parseLsof(output) {
   }
   return files;
 }
-// A qualifying listener is a TCP socket in LISTEN state bound to 127.0.0.1 and
-// nothing else. Every other network listener on an owned pid is a violation with
-// a named code: UDP, IPv6 (including ::1), the wildcard, a hostname, another
-// IPv4 address or an unparsable line. Connected sockets are not listeners; unix
-// sockets are not network sockets and are compared separately.
-function classifyListener(file) {
+// Every network socket on an owned pid is classified; nothing is ignored.
+// UDP is a violation. Every TCP record must carry a recognised state: a
+// missing or unrecognised state is a violation (MISSING_TCP_STATE,
+// UNKNOWN_TCP_STATE), checked before the address so a wildcard address without
+// a state cannot slip through. LISTEN qualifies only on 127.0.0.1 over IPv4;
+// IPv6 (including ::1), the wildcard, a hostname, another address or an
+// unparsable name is a violation with its own code. A recognised non-listening
+// state (ESTABLISHED, CLOSE_WAIT, TIME_WAIT, ...) is a connection, not a
+// listener, and its peer must be 127.0.0.1 too. Unix sockets are not network
+// sockets and are compared separately.
+const TCP_STATES = new Set([
+  "CLOSED",
+  "IDLE",
+  "BOUND",
+  "SYN_SENT",
+  "SYN_RCDV",
+  "SYN_RECEIVED",
+  "ESTABLISHED",
+  "CLOSE_WAIT",
+  "FIN_WAIT_1",
+  "CLOSING",
+  "LAST_ACK",
+  "FIN_WAIT_2",
+  "TIME_WAIT",
+]);
+const TCP_STATES_WITHOUT_PEER = new Set(["CLOSED", "IDLE", "BOUND"]);
+function classifySocket(file) {
   const network =
     file.type === "IPv4" ||
     file.type === "IPv6" ||
@@ -343,18 +439,47 @@ function classifyListener(file) {
     pid: file.pid,
     code,
     protocol: file.protocol ?? null,
+    state: file.state ?? null,
     name: file.name ?? null,
   });
   if (file.protocol === "UDP") return violation("UDP_SOCKET");
   if (file.protocol !== "TCP") return violation("UNPARSABLE_LISTENER");
-  if (file.state !== "ST=LISTEN") return null;
+  if (file.state === undefined) return violation("MISSING_TCP_STATE");
+  const state = file.state.slice("ST=".length);
+  if (state !== "LISTEN" && !TCP_STATES.has(state))
+    return violation("UNKNOWN_TCP_STATE");
+  if (state !== "LISTEN") {
+    const peer = /^(.+):(\d{1,5})->(.+):(\d{1,5})$/u.exec(file.name ?? "");
+    if (peer === null) {
+      if (
+        TCP_STATES_WITHOUT_PEER.has(state) &&
+        /^(.*):(\d{1,5})$/u.test(file.name ?? "")
+      )
+        return { pid: file.pid, kind: "connection", state, remotePort: null };
+      return violation("UNPARSABLE_SOCKET");
+    }
+    if (file.type !== "IPv4" || peer[3] !== "127.0.0.1")
+      return violation("NON_LOOPBACK_PEER");
+    return {
+      pid: file.pid,
+      kind: "connection",
+      state,
+      remotePort: Number(peer[4]),
+    };
+  }
   if (file.type === "IPv6") return violation("IPV6_LISTENER");
   const match = /^(.*):(\d{1,5})$/u.exec(file.name ?? "");
   if (file.type !== "IPv4" || match === null)
     return violation("UNPARSABLE_LISTENER");
   const host = match[1];
   if (host === "127.0.0.1")
-    return { pid: file.pid, protocol: "TCP", host, port: Number(match[2]) };
+    return {
+      pid: file.pid,
+      kind: "listener",
+      protocol: "TCP",
+      host,
+      port: Number(match[2]),
+    };
   if (host === "*") return violation("WILDCARD_LISTENER");
   if (/^\[.*\]$/u.test(host) || host.includes(":"))
     return violation("IPV6_LISTENER");
@@ -364,13 +489,21 @@ function classifyListener(file) {
 }
 function listenerReport(files) {
   const accepted = [];
+  const connections = [];
   const violations = [];
   for (const file of files) {
-    const entry = classifyListener(file);
+    const entry = classifySocket(file);
     if (entry === null) continue;
-    (entry.code === undefined ? accepted : violations).push(entry);
+    if (entry.code !== undefined) violations.push(entry);
+    else if (entry.kind === "listener") {
+      const { kind, ...listener } = entry;
+      accepted.push(listener);
+    } else {
+      const { kind, ...connection } = entry;
+      connections.push(connection);
+    }
   }
-  return { accepted, violations };
+  return { accepted, connections, violations };
 }
 // One lsof per pid, each required to finish cleanly and to name its own pid.
 // A pid confirmed gone is the only empty inventory; it is reported as such.
@@ -502,6 +635,8 @@ async function launch(
     handle: null,
     pid: null,
     terminal: null,
+    // Every pid ever seen in this instance's process tree.
+    seen: new Set(),
     quit: { requested: false, expired: false, promise: null },
   };
   instance.handle = await electron.launch({
@@ -523,6 +658,7 @@ async function launch(
   watchExit(instance);
   instance.pid = instance.owned.pid;
   assert.ok(Number.isInteger(instance.pid) && instance.pid > 0);
+  instance.seen.add(instance.pid);
   return instance;
 }
 
@@ -551,6 +687,7 @@ function writeQuit(instance) {
   instance.record.quit = quitOutcome(instance);
   instance.record.terminal = instance.terminal;
   instance.record.quitWaitExpired = instance.quit.expired;
+  instance.record.seenPids = [...instance.seen].sort((x, y) => x - y);
   return instance.record.quit;
 }
 // One orderly quit per instance; never retried, signalled or killed. Every
@@ -637,7 +774,7 @@ async function observe(instance, expected) {
     attempt < 100 && (backend === null || runtimeChild === null);
     attempt += 1
   ) {
-    tree = await descendants(instance.pid);
+    tree = await scanTree(instance);
     for (const pid of tree.slice(1)) {
       const text = await command(pid);
       if (text === null) continue;
@@ -660,57 +797,74 @@ async function observe(instance, expected) {
     if (listenerReport(inventory.files).accepted.length > 0) break;
     await new Promise((r) => setTimeout(r, 200));
   }
-  // One pass over the final tree. Each pid yields a command, a readable
-  // non-empty environment and a clean lsof inventory, or the explicit
-  // "exited" outcome. The parent, the backend and the runtime child may not
-  // exit: for them any gap is an error, never a skipped check.
-  tree = await descendants(instance.pid);
+  // Per-pid checks run on the union of every pid ever seen, in rounds, each
+  // after the tree has been stable across two snapshots, until a round finds
+  // nothing new. Each pid yields a command, a readable non-empty environment
+  // and a clean lsof inventory, or the explicit "exited" outcome. The parent,
+  // the backend and the runtime child may not exit: for them any gap is an
+  // error, never a skipped check.
   const required = new Map([
     [instance.pid, "parent"],
     [backend.pid, "backend"],
     [runtimeChild.pid, "runtime"],
   ]);
-  for (const pid of required.keys())
-    assert.ok(tree.includes(pid), `OWNER_PREVIEW_ISOLATION_NOT_IN_TREE:${pid}`);
   const processes = [];
   const files = [];
-  for (const pid of tree) {
-    const text = await command(pid);
-    const environment = text === null ? null : await environmentOf(pid);
-    const inventory = environment === null ? null : await openFiles(pid);
-    if (
-      text === null ||
-      environment === null ||
-      inventory.outcome === "exited"
-    ) {
-      assert.equal(
-        required.has(pid),
-        false,
-        `OWNER_PREVIEW_ISOLATION_OWNED_PROCESS_EXITED:${required.get(pid)}:${pid}`,
-      );
-      processes.push({ pid, outcome: "exited" });
-      continue;
-    }
-    files.push(...inventory.files);
-    processes.push({
-      pid,
-      outcome: "observed",
-      role: required.get(pid) ?? "helper",
-      command: text,
-      environment: {
-        keys: Object.keys(environment).sort(),
-        homePresent: "HOME" in environment,
-        home: environment.HOME ?? null,
-        codexHomePresent: "CODEX_HOME" in environment,
-        codexHome: environment.CODEX_HOME ?? null,
-        runtimeIdentity: environment.FAROL_NEXT_RUNTIME_IDENTITY ?? null,
-        namesOwnerLocation: Object.values(environment).some((value) =>
-          touchesOwner(value),
-        ),
-      },
-      openFileCount: inventory.files.length,
+  const handled = new Set();
+  for (let round = 0; ; round += 1) {
+    await stableTree(() => scanTree(instance), {
+      label: `${instance.kind}:${instance.pid}`,
     });
+    const todo = [...instance.seen].filter((pid) => !handled.has(pid));
+    if (todo.length === 0) break;
+    if (round >= 5)
+      throw new Error(
+        `OWNER_PREVIEW_ISOLATION_TREE_UNSTABLE:${instance.kind}:${todo.join(",")}`,
+      );
+    for (const pid of todo) {
+      handled.add(pid);
+      const text = await command(pid);
+      const environment = text === null ? null : await environmentOf(pid);
+      const inventory = environment === null ? null : await openFiles(pid);
+      if (
+        text === null ||
+        environment === null ||
+        inventory.outcome === "exited"
+      ) {
+        assert.equal(
+          required.has(pid),
+          false,
+          `OWNER_PREVIEW_ISOLATION_OWNED_PROCESS_EXITED:${required.get(pid)}:${pid}`,
+        );
+        processes.push({ pid, outcome: "exited" });
+        continue;
+      }
+      files.push(...inventory.files);
+      processes.push({
+        pid,
+        outcome: "observed",
+        role: required.get(pid) ?? "helper",
+        command: text,
+        environment: {
+          keys: Object.keys(environment).sort(),
+          homePresent: "HOME" in environment,
+          home: environment.HOME ?? null,
+          codexHomePresent: "CODEX_HOME" in environment,
+          codexHome: environment.CODEX_HOME ?? null,
+          runtimeIdentity: environment.FAROL_NEXT_RUNTIME_IDENTITY ?? null,
+          namesOwnerLocation: Object.values(environment).some((value) =>
+            touchesOwner(value),
+          ),
+        },
+        openFileCount: inventory.files.length,
+      });
+    }
   }
+  for (const pid of required.keys())
+    assert.ok(
+      instance.seen.has(pid),
+      `OWNER_PREVIEW_ISOLATION_NOT_IN_TREE:${pid}`,
+    );
   return {
     kind: instance.kind,
     pid: instance.pid,
@@ -723,6 +877,7 @@ async function observe(instance, expected) {
     processes,
     files,
     listeners: listenerReport(files).accepted,
+    connections: listenerReport(files).connections,
     listenerViolations: listenerReport(files).violations,
     unixPaths: files
       .filter((file) => file.type === "unix" && file.name?.startsWith("/"))
@@ -846,7 +1001,7 @@ async function assertInstance(observed, instance, identity, other) {
     "A Codex child needs a live provider and cannot be witnessed here",
   );
   // Sockets: TCP LISTEN on 127.0.0.1 only, at least one; any other network
-  // listener on an owned pid fails with its code (see classifyListener).
+  // listener on an owned pid fails with its code (see classifySocket).
   assert.deepEqual(
     observed.listenerViolations,
     [],
@@ -1005,6 +1160,7 @@ async function scannerSelfCheck() {
   const report = (fields) => listenerReport(parseLsof(socket(fields)));
   const good = report(["tIPv4", "PTCP", "n127.0.0.1:8080", "TST=LISTEN"]);
   assert.deepEqual(good.violations, []);
+  assert.deepEqual(good.connections, []);
   assert.deepEqual(good.accepted, [
     { pid: 1, protocol: "TCP", host: "127.0.0.1", port: 8080 },
   ]);
@@ -1015,6 +1171,16 @@ async function scannerSelfCheck() {
     HOSTNAME_LISTENER: ["tIPv4", "PTCP", "nlocalhost:80", "TST=LISTEN"],
     NON_LOOPBACK_ADDRESS: ["tIPv4", "PTCP", "n0.0.0.0:80", "TST=LISTEN"],
     UNPARSABLE_LISTENER: ["tIPv4", "PTCP", "ngarbage", "TST=LISTEN"],
+    // Every TCP record needs a recognised state, whatever its address.
+    MISSING_TCP_STATE: ["tIPv4", "PTCP", "n127.0.0.1:8080"],
+    UNKNOWN_TCP_STATE: ["tIPv4", "PTCP", "n127.0.0.1:8080", "TST=WEIRD"],
+    NON_LOOPBACK_PEER: [
+      "tIPv4",
+      "PTCP",
+      "n127.0.0.1:1->93.184.216.34:443",
+      "TST=ESTABLISHED",
+    ],
+    UNPARSABLE_SOCKET: ["tIPv4", "PTCP", "ngarbage", "TST=ESTABLISHED"],
   };
   for (const [code, fields] of Object.entries(rejected)) {
     const answer = report(fields);
@@ -1024,13 +1190,47 @@ async function scannerSelfCheck() {
       [code],
     );
   }
-  // A connected socket and a unix socket are not listeners.
+  // A wildcard address with no state is a missing state, not an accepted line.
   assert.deepEqual(
-    report(["tIPv4", "PTCP", "n127.0.0.1:1->127.0.0.1:2", "TST=ESTABLISHED"]),
-    { accepted: [], violations: [] },
+    report(["tIPv4", "PTCP", "n*:8080"]).violations.map((entry) => entry.code),
+    ["MISSING_TCP_STATE"],
+  );
+  assert.deepEqual(
+    report(["tIPv4", "PTCP", "n*:8080", "TST=WEIRD"]).violations.map(
+      (entry) => entry.code,
+    ),
+    ["UNKNOWN_TCP_STATE"],
+  );
+  // Recognised non-listening states are connections with a loopback peer, not
+  // listeners and not violations; a state without a peer needs no arrow.
+  for (const state of [
+    "ESTABLISHED",
+    "CLOSE_WAIT",
+    "TIME_WAIT",
+    "SYN_SENT",
+    "FIN_WAIT_1",
+    "FIN_WAIT_2",
+    "CLOSING",
+    "LAST_ACK",
+    "SYN_RCDV",
+  ]) {
+    const answer = report([
+      "tIPv4",
+      "PTCP",
+      "n127.0.0.1:1->127.0.0.1:2",
+      `TST=${state}`,
+    ]);
+    assert.deepEqual(answer.violations, [], state);
+    assert.deepEqual(answer.accepted, [], state);
+    assert.deepEqual(answer.connections, [{ pid: 1, state, remotePort: 2 }]);
+  }
+  assert.deepEqual(
+    report(["tIPv4", "PTCP", "n*:80", "TST=BOUND"]).connections,
+    [{ pid: 1, state: "BOUND", remotePort: null }],
   );
   assert.deepEqual(report(["tunix", "n/tmp/x"]), {
     accepted: [],
+    connections: [],
     violations: [],
   });
   // Every inventory runs through runInventory: success is exit 0 with empty
@@ -1110,7 +1310,71 @@ async function scannerSelfCheck() {
     ),
     { outcome: "no_match" },
   );
+  await treeSelfCheck();
   await quitSelfCheck();
+}
+
+// A process tree is a moving snapshot: stability, the union of pids ever seen
+// and teardown verification are checked on a fake tree.
+async function treeSelfCheck() {
+  const sequence = (...snapshots) => {
+    const seen = new Set();
+    let index = 0;
+    const scan = async () => {
+      const snapshot = snapshots[Math.min(index, snapshots.length - 1)];
+      index += 1;
+      for (const pid of snapshot) seen.add(pid);
+      return snapshot;
+    };
+    return { scan, seen, scans: () => index };
+  };
+  // A helper that appears after the first snapshot: the tree is only accepted
+  // once two consecutive snapshots agree, and the late pid is in `seen`.
+  const late = sequence([1, 2], [1, 2, 3], [1, 2, 3]);
+  assert.deepEqual(await stableTree(late.scan, { interval: 1 }), [1, 2, 3]);
+  assert.equal(late.scans(), 3);
+  // A helper that appears and goes again stays in the union.
+  const flicker = sequence([1, 2], [1, 2, 3], [1, 2], [1, 2]);
+  assert.deepEqual(await stableTree(flicker.scan, { interval: 1 }), [1, 2]);
+  assert.deepEqual([...flicker.seen].sort(), [1, 2, 3]);
+  // A tree that never settles fails with a named code within the bound.
+  let counter = 0;
+  await assert.rejects(
+    stableTree(async () => [1, (counter += 1)], {
+      interval: 1,
+      maxScans: 5,
+      label: "x",
+    }),
+    /OWNER_PREVIEW_ISOLATION_TREE_UNSTABLE:x/u,
+  );
+  assert.equal(counter, 5);
+  // Teardown: every pid ever seen gone, nothing new below the parent, no orphan.
+  const instance = (...pids) => ({
+    kind: "selfcheck",
+    pid: 1,
+    home: "/h",
+    seen: new Set(pids),
+  });
+  const fast = { tries: 2, interval: 1 };
+  const clean = {
+    alive: () => false,
+    rescan: async () => [1],
+    orphans: async () => [],
+    ...fast,
+  };
+  await assertTornDown(instance(1, 2, 3), clean);
+  await assert.rejects(
+    assertTornDown(instance(1, 2, 3), { ...clean, alive: (pid) => pid === 3 }),
+    /PID_REMAINS:selfcheck:3/u,
+  );
+  await assert.rejects(
+    assertTornDown(instance(1, 2), { ...clean, rescan: async () => [1, 9] }),
+    /NEW_DESCENDANT:selfcheck:9/u,
+  );
+  await assert.rejects(
+    assertTornDown(instance(1, 2), { ...clean, orphans: async () => [7] }),
+    /ORPHAN_REMAINS:selfcheck:7/u,
+  );
 }
 
 // The recorded quit outcome follows the actual terminal state and nothing else.
@@ -1125,6 +1389,7 @@ async function quitSelfCheck() {
       owned,
       handle: { evaluate: async () => exit?.(owned) },
       terminal: null,
+      seen: new Set(),
       record: {},
       quit: { requested: false, expired: false, promise: null },
     };
@@ -1330,6 +1595,7 @@ export async function runOwnerPreviewIsolation(
           backendPid: entry.backend.pid,
           runtimePid: entry.runtimeChild.pid,
           listeners: entry.listeners,
+          connections: entry.connections,
           listenerViolations: entry.listenerViolations,
           unixPaths: entry.unixPaths,
           openPathCount: entry.paths.length,
@@ -1369,6 +1635,17 @@ export async function runOwnerPreviewIsolation(
       new Set(observed[kind].listeners.map((entry) => entry.port));
     for (const port of ports("normal"))
       assert.equal(ports("owner-preview").has(port), false, `PORT:${port}`);
+    // A connected socket never has the other instance's listener as its peer.
+    for (const [kind, otherKind] of [
+      ["normal", "owner-preview"],
+      ["owner-preview", "normal"],
+    ])
+      for (const connection of observed[kind].connections)
+        assert.equal(
+          ports(otherKind).has(connection.remotePort),
+          false,
+          `PEER_IS_OTHER_INSTANCE:${kind}:${connection.remotePort}`,
+        );
     for (const socket of sets("normal", "unixPaths"))
       assert.equal(sets("owner-preview", "unixPaths").has(socket), false);
     const pids = (kind) => new Set(observed[kind].processes.map((p) => p.pid));
@@ -1386,12 +1663,7 @@ export async function runOwnerPreviewIsolation(
     assert.deepEqual(await fs.readdir(normal.appData), ["Farol Next Preview"]);
     assert.deepEqual(await fs.readdir(owner.appData), ["Farol Preview"]);
 
-    // Orderly quit of both; every observed pid, including the backend, is gone.
-    const everyPid = new Set(
-      instances.flatMap((entry) =>
-        observed[entry.kind].processes.map((p) => p.pid),
-      ),
-    );
+    // Orderly quit of both, then teardown is verified (see assertTornDown).
     const outcomes = await Promise.all(
       instances.map((instance) => requestQuit(instance)),
     );
@@ -1417,19 +1689,7 @@ export async function runOwnerPreviewIsolation(
       assert.equal(quit.receipt.drained, true);
       assert.deepEqual(quit.receipt.unconfirmed, []);
     }
-    for (const pid of everyPid) {
-      let gone = false;
-      for (let tries = 0; tries < 100 && !gone; tries += 1) {
-        try {
-          process.kill(pid, 0);
-          await new Promise((r) => setTimeout(r, 50));
-        } catch (error) {
-          if (error.code !== "ESRCH") throw error;
-          gone = true;
-        }
-      }
-      assert.equal(gone, true, `OWNER_PREVIEW_ISOLATION_PID_REMAINS:${pid}`);
-    }
+    for (const instance of instances) await assertTornDown(instance);
     for (const instance of instances) writeQuit(instance);
     receipt.terminals = instances.map((entry) => ({
       kind: entry.kind,
