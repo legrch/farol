@@ -622,6 +622,8 @@ function parsePsCommand(output) {
 // lsof -F pftPnT   one `<letter><value>` per line. `p` opens a process, `f` a
 // file of the current process; `t`, `P`, `n` and `T` (a `NAME=value` subfield)
 // belong to the current file. No other letter, and no field before its opener.
+// Every file declares its type (lsof always emits `t`), and an IPv4/IPv6 file
+// its protocol, so no socket can reach the listener checks unclassified.
 function parseLsof(output) {
   const bad = (index) =>
     new Error(`OWNER_PREVIEW_ISOLATION_INVENTORY_ROW_INVALID:lsof:${index}`);
@@ -653,6 +655,19 @@ function parseLsof(output) {
   });
   if (files.length === 0)
     throw new Error("OWNER_PREVIEW_ISOLATION_INVENTORY_EMPTY:lsof");
+  for (const file of files) {
+    if (typeof file.type !== "string" || file.type === "")
+      throw new Error(
+        "OWNER_PREVIEW_ISOLATION_INVENTORY_ROW_INVALID:lsof:MISSING_TYPE",
+      );
+    if (
+      (file.type === "IPv4" || file.type === "IPv6") &&
+      (typeof file.protocol !== "string" || file.protocol === "")
+    )
+      throw new Error(
+        "OWNER_PREVIEW_ISOLATION_INVENTORY_ROW_INVALID:lsof:MISSING_PROTOCOL",
+      );
+  }
   return files;
 }
 // The scanner's JSON answer: one object per requested pid, in order.
@@ -1144,9 +1159,12 @@ try:
     while i < len(parts) and parts[i] == b"": i += 1
     env = {}
     for p in parts[i + argc:]:
-        if b"=" in p:
-            k, v = p.split(b"=", 1)
-            env[k.decode("utf8", "replace")] = v.decode("utf8", "replace")
+        if p == b"": continue
+        if b"=" not in p: fail("env-entry")
+        k, v = p.split(b"=", 1)
+        k = k.decode("utf8", "replace")
+        if k in env: fail("env-duplicate")
+        env[k] = v.decode("utf8", "replace")
     argv = [p.decode("utf8", "replace") for p in parts[i:i + argc]]
     exe = parts[0].decode("utf8", "replace")
 except Exception:
@@ -1155,7 +1173,9 @@ print(json.dumps({"status": "ok", "env": env, "argv": argv, "exe": exe}))
 `;
 // Fail closed: a readable process with a non-empty environment, or null for a
 // pid that has exited. An unreadable or empty environment of a live pid is an
-// error, never a skipped check. Returns { env, argv, exe }.
+// error, never a skipped check. The environment is read without loss: a
+// duplicate key or an entry without `=` (exec accepts both) is unreadable
+// rather than silently dropped before classification. Returns { env, argv, exe }.
 async function readProcess(pid) {
   const probed = await runInventory("probe", [
     "-I",
@@ -1932,6 +1952,9 @@ function parserSelfCheck() {
         "f3\nn/file-before-any-process\n",
         "p5\nf3\nTnot-a-subfield\n",
         "pabc\nf3\n",
+        "p5\nf5\nn*:8080\n", // no type: could hide a listener
+        "p5\nf5\ntIPv4\nn*:8080\n", // a network file without a protocol
+        "p5\nf5\ntREG\nn/x\nf6\nn*:8080\n", // the second file has no type
       ],
     },
     scan: {
@@ -2732,6 +2755,46 @@ async function scannerSelfCheck() {
   );
   const environment = await environmentOf(process.pid);
   assert.ok(environment !== null && Object.keys(environment).length > 0);
+  // A raw exec environment the reader cannot map one-to-one is refused. The
+  // exec target is this Node, not a platform binary, whose environment macOS
+  // would withhold from the reader.
+  const node = JSON.stringify(process.execPath);
+  for (const [entries, reason] of [
+    [["HOME=/tmp/own", "HOME=/tmp/other"], "env-duplicate"],
+    [["HOME=/tmp/own", "LOOSE"], "env-entry"],
+  ]) {
+    const code = [
+      "import ctypes",
+      "libc = ctypes.CDLL(None)",
+      `argv = (ctypes.c_char_p * 4)(b${node}, b"-e", b"setTimeout(() => {}, 2000)", None)`,
+      `entries = [${entries.map((entry) => `b"${entry}"`).join(", ")}, None]`,
+      "envp = (ctypes.c_char_p * len(entries))(*entries)",
+      `libc.execve(b${node}, argv, envp)`,
+    ].join("\n");
+    const child = execFile("/usr/bin/python3", ["-I", "-c", code]);
+    let refused = null;
+    let accepted = false;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try {
+        const read = await readProcess(child.pid);
+        if (read?.exe === process.execPath) accepted = true;
+      } catch (error) {
+        refused = error;
+      }
+      if (refused !== null || accepted) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.equal(accepted, false, `raw environment accepted: ${reason}`);
+    assert.match(
+      refused?.message ?? "",
+      new RegExp(
+        `^OWNER_PREVIEW_ISOLATION_ENV_UNREADABLE:${child.pid}:${reason}$`,
+        "u",
+      ),
+    );
+    if (child.exitCode === null && child.signalCode === null)
+      await once(child, "exit");
+  }
   const inventory = await openFiles(process.pid);
   assert.equal(inventory.outcome, "listed");
   assert.ok(inventory.files.length > 0);
@@ -3614,7 +3677,25 @@ if (
     const result = await runOwnerPreviewIsolation(root, process.argv[3]);
     process.stdout.write(`${result.receiptFile}\n`);
   } catch (error) {
-    process.stderr.write(`${error.message}\n`);
+    // A diagnostic leaves through the receipt guard too: an owner path in a
+    // failure (for example an unsafe TMPDIR refused before any receipt
+    // exists) is redacted, the code in front of it is kept.
+    let message = String(error.message);
+    try {
+      message = guardReceipt(
+        { message },
+        {
+          envValues: new Set(),
+          roots: new Set(),
+          repositoryRoot: path.dirname(
+            path.dirname(path.dirname(fileURLToPath(import.meta.url))),
+          ),
+        },
+      ).receipt.message;
+    } catch {
+      message = message.replace(/\/\S*/gu, "[REDACTED_PATH]");
+    }
+    process.stderr.write(`${message}\n`);
     process.exitCode = 1;
   }
 }

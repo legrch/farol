@@ -220,6 +220,9 @@ is redacted (a whole value, or only the offending path inside a failure message,
 so the failure code survives), reported by JSON pointer and code only, the
 scrubbed receipt is written, and the run fails closed
 (`RECEIPT_UNSAFE`). The observed values are kept in memory only for that scan.
+The failure line the command prints passes the same guard, so an owner path in
+an early failure (an unsafe `TMPDIR` refused before any receipt exists) is
+printed as `[REDACTED_PATH]` behind its code.
 
 Receipt status: `PASS` is reserved for a run with no blocked dimension.
 Because override-free resolution is never observed, a run that passes every
@@ -319,7 +322,11 @@ any other row that does not match is an inventory error naming the command and
 the row index but never the row, and a listing that is empty where it cannot be,
 or that lacks an entry that must be there (this test's own pid in the uid
 listing, a known live instance process in its tree), is an error, not an empty
-answer.
+answer. Every `lsof` file must declare its type, and an IPv4/IPv6 file its
+protocol, so no socket reaches the listener checks unclassified. The
+`KERN_PROCARGS2` reader maps the environment one-to-one: a duplicate key or an
+entry without `=` makes the environment unreadable instead of dropping a value
+before classification.
 
 Sockets: a qualifying listener is **TCP LISTEN on 127.0.0.1 only**. Every
 network socket on an owned pid is classified and none is ignored. A TCP record
