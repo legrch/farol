@@ -642,8 +642,11 @@ const settleConnection = (run) =>
     ),
     "NETWORK_LOSS_OBSERVATION_UNSETTLED",
   );
-const runningReceipt = async () =>
-  (await receiptList()).find((value) => value.phase === "running");
+const runningReceipt = async () => {
+  const value = (await receiptList()).find((v) => v.phase === "running");
+  if (!value) throw new Error("NETWORK_LOSS_HELPER_NOT_RUNNING");
+  return value;
+};
 async function checkNetworkLoss(run) {
   const loss = { ladderDelaysMillis: LADDER_DELAYS_MILLIS };
   run.observations.push({ networkLoss: loss });
@@ -795,10 +798,7 @@ async function checkNetworkLoss(run) {
   assert.equal(final.loss.metrics, 0);
   assert.equal(final.loss.other, 0);
   loss.attemptsPerSecond = Number(
-    (
-      (final.loss.requests + final.loss.connections) /
-      (loss.windowMillis / 1000)
-    ).toFixed(3),
+    (final.loss.requests / (loss.windowMillis / 1000)).toFixed(3),
   );
   // No second owner/tunnel generation: the same helper, backend and runtime.
   const receipts = await receiptList();

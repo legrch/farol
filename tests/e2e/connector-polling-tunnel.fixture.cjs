@@ -193,7 +193,7 @@ if (process.argv[2] === "run") {
     save();
   });
   // Connection-level loss of this helper's loopback transport. A lost transport
-  // closes the socket before any HTTP status exists; it never answers 5xx. The
+  // closes the socket without any HTTP response; it never answers 5xx. The
   // loss ledger appears in the receipt only after the first lost connection, so
   // every other mode leaves the receipt shape unchanged.
   const lost = () => {
@@ -204,7 +204,7 @@ if (process.argv[2] === "run") {
       return false;
     }
   };
-  const refuse = (socket, label) => {
+  const note = (label) => {
     const loss = (record.loss ??= {
       connections: 0,
       requests: 0,
@@ -230,6 +230,11 @@ if (process.argv[2] === "run") {
     if (loss.log.length < 256)
       loss.log.push({ at: Date.now(), kind: label ?? "connection" });
     save();
+  };
+  // The request line classifies the attempt; the socket is then closed with no
+  // HTTP response at all.
+  const refuse = (socket, label) => {
+    note(label);
     socket.destroy();
   };
   const create = http.createServer;
@@ -278,7 +283,7 @@ if (process.argv[2] === "run") {
       );
     });
     server.on("connection", (socket) => {
-      if (lost()) refuse(socket, null);
+      if (lost()) note(null);
     });
     return server;
   };
