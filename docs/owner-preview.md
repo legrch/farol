@@ -25,8 +25,11 @@ cannot replace the running snapshot. The snapshot and its frozen manifest are re
 when the owner launcher observes that launch exit. Running the snapshot makes
 LaunchServices register its bundle and nested helper bundles under the product
 bundle identifier, so the launcher first runs `lsregister -u` on each exact `.app`
-path inside the snapshot, never a prefix or global unregister, and reports any path it
-could not unregister. An ungraceful launcher kill or host
+path inside the snapshot, never a prefix or global unregister. Every `.app` it finds
+is accounted for as unregistered, failed (including when `lsregister` is missing) or
+refused (a path that does not resolve to itself inside the snapshot), and a directory
+it could not read is named in the errors. Anything but a clean unregister is printed
+on stderr; it never fails the launch, and the snapshot is always deleted. An ungraceful launcher kill or host
 shutdown can leave its private temporary directory behind; it is never reused as a
 candidate or promotion source. If the candidate is absent or stale, the command says
 to commit the intended source and run `task package`; it never falls back to old

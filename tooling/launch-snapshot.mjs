@@ -149,6 +149,11 @@ function runLsregisterUnregister(lsregister, bundlePath) {
 // unregister, and strictly best effort: nothing here may throw, because the
 // snapshot must be deleted and the launch outcome must not depend on it.
 //
+// Invariant: every bundle path the walk finds ends in exactly one of
+// `unregistered`, `failed` or `refused`; `errors` carries the diagnostics. A
+// directory the walk could not read is named in `errors`. No branch returns
+// with a found bundle unaccounted for.
+//
 // Private on purpose: it trusts `realRoot`, which only `removeLaunchSnapshot`
 // supplies after validating the descriptor and resolving the real path. A path
 // that does not resolve to itself inside `realRoot` is refused, not unregistered.
@@ -161,7 +166,13 @@ async function unregisterSnapshotBundles(
   if (bundles.length === 0) return;
   try {
     await fs.access(lsregister);
-  } catch {
+  } catch (error) {
+    // Without the tool nothing can be unregistered: say so once, and account
+    // for every bundle the walk found instead of returning with it unreported.
+    result.errors.push(
+      `${lsregister}: ${error?.code ?? error?.message ?? "not accessible"}`,
+    );
+    result.failed.push(...bundles);
     return;
   }
   for (const bundlePath of bundles) {
@@ -189,6 +200,7 @@ async function unregisterSnapshotBundles(
         : result.failed
       ).push(bundlePath);
     } catch (error) {
+      result.failed.push(bundlePath);
       result.errors.push(
         `${bundlePath}: ${error?.message ?? "unregister failed"}`,
       );

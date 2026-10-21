@@ -312,19 +312,149 @@ describe("launch snapshot LaunchServices cleanup", () => {
     });
   });
 
-  it("skips quietly where lsregister does not exist", async () => {
-    const { snapshot } = await fixtureSnapshot();
-    const outcome = await removeLaunchSnapshot(snapshot, {
-      lsregister: path.join(os.tmpdir(), "no-such-lsregister"),
-      unregister: async () => {
-        throw new Error("must not run");
+  describe("every found bundle is accounted for in exactly one bucket", () => {
+    const fakeTool = async (root, body) => {
+      const tool = path.join(root, "fake-lsregister");
+      await fs.writeFile(tool, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+      return tool;
+    };
+    const cases = [
+      {
+        name: "success",
+        options: () => ({
+          lsregister: process.execPath,
+          unregister: async () => true,
+        }),
+        expected: { unregistered: 3 },
       },
-    });
-    expect(outcome).toEqual({
-      unregistered: [],
-      failed: [],
-      refused: [],
-      errors: [],
+      {
+        name: "-10814 (no record) from the real runner",
+        options: async (root) => ({
+          lsregister: await fakeTool(root, 'echo "-10814" >&2; exit 1'),
+        }),
+        expected: { unregistered: 3 },
+      },
+      {
+        name: "non-zero exit from the real runner",
+        options: async (root) => ({
+          lsregister: await fakeTool(root, "echo boom >&2; exit 2"),
+        }),
+        expected: { failed: 3 },
+      },
+      {
+        name: "thrown runner",
+        options: () => ({
+          lsregister: process.execPath,
+          unregister: async () => {
+            throw new Error("spawn failed");
+          },
+        }),
+        expected: { failed: 3, errors: 3 },
+      },
+      {
+        name: "refused path",
+        options: () => ({
+          lsregister: process.execPath,
+          unregister: async () => true,
+        }),
+        refuseRuntime: true,
+        expected: { unregistered: 2, refused: 1 },
+      },
+      {
+        name: "missing lsregister",
+        options: (root) => ({
+          lsregister: path.join(root, "no-such-lsregister"),
+          unregister: async () => {
+            throw new Error("must not run");
+          },
+        }),
+        expected: {
+          failed: 3,
+          errors: 1,
+          errorMatches: "no-such-lsregister: ENOENT",
+        },
+      },
+      {
+        name: "readdir failure mid-walk",
+        options: () => ({
+          lsregister: process.execPath,
+          unregister: async () => true,
+        }),
+        failRuntimeRead: true,
+        // The helper below the unreadable directory is never found.
+        found: ["runtime", "outer"],
+        expected: { unregistered: 2, errors: 1 },
+      },
+    ];
+    it.each(cases)("$name", async (scenario) => {
+      const { root, snapshot } = await fixtureSnapshot();
+      const outer = snapshot.appPath;
+      const runtime = path.join(
+        outer,
+        "Contents/Frameworks/Electron Runtime.app",
+      );
+      const helper = path.join(
+        runtime,
+        "Contents/Frameworks/Electron Helper.app",
+      );
+      const byName = { outer, runtime, helper };
+      const found = (scenario.found ?? ["helper", "runtime", "outer"]).map(
+        (name) => byName[name],
+      );
+      const spies = [];
+      if (scenario.refuseRuntime) {
+        const original = fs.realpath.bind(fs);
+        spies.push(
+          vi
+            .spyOn(fs, "realpath")
+            .mockImplementation((target, ...rest) =>
+              target === runtime
+                ? Promise.resolve(`${runtime}-moved`)
+                : original(target, ...rest),
+            ),
+        );
+      }
+      if (scenario.failRuntimeRead) {
+        const original = fs.readdir.bind(fs);
+        spies.push(
+          vi
+            .spyOn(fs, "readdir")
+            .mockImplementation((target, ...rest) =>
+              target === runtime
+                ? Promise.reject(
+                    Object.assign(new Error("denied"), { code: "EACCES" }),
+                  )
+                : original(target, ...rest),
+            ),
+        );
+      }
+      let outcome;
+      try {
+        outcome = await removeLaunchSnapshot(
+          snapshot,
+          await scenario.options(root),
+        );
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+      }
+      const buckets = [
+        ...outcome.unregistered,
+        ...outcome.failed,
+        ...outcome.refused,
+      ];
+      // The found set equals the union of the buckets, with no path in two.
+      expect(new Set(buckets).size).toBe(buckets.length);
+      expect([...buckets].sort()).toEqual([...found].sort());
+      const want = scenario.expected;
+      expect(outcome.unregistered.length).toBe(want.unregistered ?? 0);
+      expect(outcome.failed.length).toBe(want.failed ?? 0);
+      expect(outcome.refused.length).toBe(want.refused ?? 0);
+      expect(outcome.errors.length).toBe(want.errors ?? 0);
+      if (want.errorMatches)
+        expect(outcome.errors[0]).toContain(want.errorMatches);
+      await expect(fs.stat(snapshot.root)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     });
   });
 
