@@ -208,6 +208,19 @@ paths: **`other_instance`** (inside the other instance's roots or bundle),
 The receipt records the number of strings per instance, kind and class
 (`observations[kind].classification.counts`), never the strings themselves.
 
+**Receipt guard.** No receipt or log line carries a raw environment value, and
+this is enforced mechanically: every write of the receipt goes through a guard
+that scans each string in it. A string is a finding if it equals an environment
+value observed in this run (when that value is path-like or at least 12
+characters; short enumerations such as `normal` are not secrets) unless it is a
+path inside this run's disposable roots or the checkout, which are recorded by
+design; or if it holds a path that is an owner location, or that lies under the
+owner's home without being inside the disposable roots or the checkout. A finding
+is redacted (a whole value, or only the offending path inside a failure message,
+so the failure code survives), reported by JSON pointer and code only, the
+scrubbed receipt is written, and the run fails closed
+(`RECEIPT_UNSAFE`). The observed values are kept in memory only for that scan.
+
 Receipt status: `PASS` is reserved for a run with no blocked dimension.
 Because override-free resolution is never observed, a run that passes every
 exercised check with a verified teardown ends as **`PASS_WITH_BLOCKED`**, with
@@ -264,7 +277,12 @@ instance's own disposable root (`OWNED_PROCESS_HOME_MISSING`,
 `HOME_OUTSIDE_INSTANCE_ROOT`). `CODEX_HOME` is not required to be absent: if it
 is present it must lie inside that instance's own profile, never `~/.codex`, an
 owner location or the other instance's root (`CODEX_HOME_OUTSIDE_INSTANCE_ROOT`).
-The receipt records per process whether each was present. The one observed
+The receipt records per process only verdicts about them, never their values:
+whether each is present (`homePresent`, `codexHomePresent`), the class the one
+classifier gave it (`homeClass`, `codexHomeClass`), and whether it lies where it
+must (`homeInsideOwnRoot`, `homeInsideOtherRoot`, `codexHomeInsideProfile`,
+`runtimeIdentityMatches`). The raw values exist only while a process is checked.
+The one observed
 exception is the Node runtime child, spawned with an explicit minimal
 environment that has no `HOME`. The receipt reports it under `findings` as
 `RUNTIME_CHILD_HOME_UNSET` with `severity: info` rather than failing the run,

@@ -1243,6 +1243,152 @@ function requestQuit(instance, milliseconds = 20000) {
   return instance.quit.promise;
 }
 
+// A process record keeps verdicts about HOME, CODEX_HOME and the runtime
+// identity, never their values: whether each is present, the class the one
+// classifier gave it, and whether it lies where it must. Raw values exist only
+// inside the call.
+function environmentRecord(
+  environment,
+  { instance, other, identity, context },
+) {
+  const has = (name) => name in environment;
+  const within = (name, root) =>
+    has(name) && inside(environment[name], root, true);
+  return {
+    keys: Object.keys(environment).sort(),
+    homePresent: has("HOME"),
+    homeClass: has("HOME") ? classifyPath(environment.HOME, context) : null,
+    homeIsInstanceRoot: environment.HOME === instance.home,
+    homeInsideOwnRoot: within("HOME", instance.home),
+    homeInsideOtherRoot: within("HOME", other.home),
+    codexHomePresent: has("CODEX_HOME"),
+    codexHomeClass: has("CODEX_HOME")
+      ? classifyPath(environment.CODEX_HOME, context)
+      : null,
+    codexHomeInsideProfile: within("CODEX_HOME", identity.userData),
+    runtimeIdentityPresent: has("FAROL_NEXT_RUNTIME_IDENTITY"),
+    runtimeIdentityMatches:
+      environment.FAROL_NEXT_RUNTIME_IDENTITY === identity.runtimeIdentity,
+  };
+}
+// The extra HOME / CODEX_HOME requirements, on top of the classifier. HOME must
+// be set and inside THIS instance's disposable root; the one exception is the
+// Node runtime child, which the shell spawns with an explicit minimal
+// environment that never includes HOME (startRuntime in main.ts) and is
+// recorded as a finding. CODEX_HOME, if present, must lie inside this
+// instance's own profile.
+function assertProcessEnvironment(entry) {
+  assert.ok(entry.environment.keys.length > 0, `ENV_EMPTY:${entry.pid}`);
+  if (entry.environment.homePresent) {
+    assert.ok(
+      entry.environment.homeInsideOwnRoot,
+      `HOME_OUTSIDE_INSTANCE_ROOT:${entry.role}:${entry.pid}`,
+    );
+    assert.equal(entry.environment.homeInsideOtherRoot, false);
+  } else {
+    assert.equal(
+      entry.role,
+      "runtime",
+      `OWNED_PROCESS_HOME_MISSING:${entry.role}:${entry.pid}`,
+    );
+    assert.ok(
+      entry.environment.keys.includes("ELECTRON_RUN_AS_NODE"),
+      `RUNTIME_CHILD_NOT_NODE_MODE:${entry.pid}`,
+    );
+  }
+  if (entry.environment.codexHomePresent)
+    assert.ok(
+      entry.environment.codexHomeInsideProfile &&
+        entry.environment.codexHomeClass === "own",
+      `CODEX_HOME_OUTSIDE_INSTANCE_ROOT:${entry.role}:${entry.pid}`,
+    );
+}
+// The receipt guard. No receipt ever carries a raw environment value: before a
+// receipt is written, every string in it is checked against (1) the environment
+// values observed in this run, when they are path-like or at least 12 characters
+// (short enumerations such as `normal` are not secrets), and (2) the owner: any
+// path in it that is an owner location, or that lies under the owner's home
+// without being inside this run's disposable roots or the checkout. Paths inside
+// the disposable roots and the checkout are allowed because they are recorded by
+// design. A finding is redacted (a whole value, or just the offending path inside
+// a failure message) and reported by JSON pointer and code only; the caller
+// writes the scrubbed receipt and then fails closed.
+function guardReceipt(receipt, { envValues, roots, repositoryRoot }) {
+  const homeForms = formsOf(os.userInfo().homedir);
+  const guarded = new Set(
+    [...envValues].filter(
+      (value) => value.length >= 12 || path.isAbsolute(value),
+    ),
+  );
+  const recorded = (candidate) => {
+    try {
+      return (
+        [...roots].some((root) => inside(candidate, root, true)) ||
+        inside(candidate, repositoryRoot, true)
+      );
+    } catch {
+      return false;
+    }
+  };
+  const violations = [];
+  const verdict = (text) => {
+    if (guarded.has(text) && !(path.isAbsolute(text) && recorded(text)))
+      return { code: "ENV_VALUE", whole: true };
+    let code = null;
+    const offenders = [];
+    for (const candidate of extractPaths(text)) {
+      if (recorded(candidate)) continue;
+      let owner;
+      try {
+        owner = touchesOwner(candidate, { reported: true });
+      } catch {
+        owner = true;
+      }
+      let real = candidate;
+      try {
+        real = canonical(candidate, true);
+      } catch {
+        // judged literally
+      }
+      const underHome = homeForms.some(
+        (home) => contains(candidate, home) || contains(real, home),
+      );
+      if (owner || underHome) {
+        code ??= owner ? "OWNER_LOCATION" : "OWNER_HOME_PATH";
+        offenders.push(candidate);
+      }
+    }
+    return code === null ? null : { code, offenders };
+  };
+  // A failure message may name an owner path (that is the finding): only the
+  // path is redacted, so the code in front of it survives.
+  const scrub = (node, pointer) => {
+    if (typeof node === "string") {
+      const found = verdict(node);
+      if (found === null) return node;
+      violations.push({ code: found.code, pointer });
+      if (found.whole) return "[REDACTED]";
+      return [...found.offenders]
+        .sort((x, y) => y.length - x.length)
+        .reduce(
+          (text, offender) => text.split(offender).join("[REDACTED_PATH]"),
+          node,
+        );
+    }
+    if (Array.isArray(node))
+      return node.map((item, index) => scrub(item, `${pointer}/${index}`));
+    if (node !== null && typeof node === "object")
+      return Object.fromEntries(
+        Object.entries(node).map(([key, value]) => [
+          key,
+          scrub(value, `${pointer}/${key}`),
+        ]),
+      );
+    return node;
+  };
+  return { receipt: scrub(receipt, ""), violations };
+}
+
 // One snapshot of everything the operating system says about an instance.
 async function observe(instance, expected) {
   const outbound = [];
@@ -1339,6 +1485,7 @@ async function observe(instance, expected) {
     [backend.pid, "backend"],
     [runtimeChild.pid, "runtime"],
   ]);
+  const context = classificationContext(instance, expected.other);
   const processes = [];
   const files = [];
   const strings = [];
@@ -1373,6 +1520,8 @@ async function observe(instance, expected) {
         continue;
       }
       files.push(...inventory.files);
+      for (const value of Object.values(environment))
+        expected.envValues.add(value);
       strings.push(
         ...processStrings(
           pid,
@@ -1386,14 +1535,15 @@ async function observe(instance, expected) {
         outcome: "observed",
         role: required.get(pid) ?? "helper",
         command: text,
-        environment: {
-          keys: Object.keys(environment).sort(),
-          homePresent: "HOME" in environment,
-          home: environment.HOME ?? null,
-          codexHomePresent: "CODEX_HOME" in environment,
-          codexHome: environment.CODEX_HOME ?? null,
-          runtimeIdentity: environment.FAROL_NEXT_RUNTIME_IDENTITY ?? null,
-        },
+        // Verdicts only: no environment value is ever stored here. The raw
+        // values live in this loop for the checks and, for the receipt guard,
+        // in the run's in-memory set.
+        environment: environmentRecord(environment, {
+          instance,
+          other: expected.other,
+          identity: expected.identity,
+          context,
+        }),
         openFileCount: inventory.files.length,
       });
     }
@@ -1417,10 +1567,7 @@ async function observe(instance, expected) {
     listeners: listenerReport(files).accepted,
     connections: listenerReport(files).connections,
     listenerViolations: listenerReport(files).violations,
-    classification: classifyStrings(
-      strings,
-      classificationContext(instance, expected.other),
-    ),
+    classification: classifyStrings(strings, context),
     unixPaths: files
       .filter((file) => file.type === "unix" && file.name?.startsWith("/"))
       .map((file) => file.name),
@@ -1477,44 +1624,10 @@ async function assertInstance(observed, instance, identity, other) {
       entry.command.includes(instance.app) || entry.pid === instance.pid,
       `FOREIGN_PROCESS:${entry.command.slice(0, 120)}`,
     );
-    // Every live process has a readable, non-empty environment (see
-    // environmentOf). HOME must be set and inside THIS instance's disposable
-    // root; the one exception is the Node runtime child, which the shell spawns
-    // with an explicit minimal environment that never includes HOME (see
-    // startRuntime in main.ts) and is recorded as a finding in the receipt.
-    // CODEX_HOME, if present, must lie inside this instance's own profile (the
-    // stricter form of "own root"): never ~/.codex, an owner location, or the
-    // other instance's root.
-    assert.ok(entry.environment.keys.length > 0, `ENV_EMPTY:${entry.pid}`);
-    if (entry.environment.homePresent) {
-      assert.ok(
-        inside(entry.environment.home, instance.home),
-        `HOME_OUTSIDE_INSTANCE_ROOT:${entry.role}:${entry.pid}`,
-      );
-      assert.equal(inside(entry.environment.home, other.home), false);
-    } else {
-      assert.equal(
-        entry.role,
-        "runtime",
-        `OWNED_PROCESS_HOME_MISSING:${entry.role}:${entry.pid}`,
-      );
-      assert.ok(
-        entry.environment.keys.includes("ELECTRON_RUN_AS_NODE"),
-        `RUNTIME_CHILD_NOT_NODE_MODE:${entry.pid}`,
-      );
-    }
-    if (entry.environment.codexHomePresent) {
-      const codexHome = entry.environment.codexHome;
-      assert.ok(
-        inside(codexHome, identity.userData) &&
-          !touchesOwner(codexHome) &&
-          !inside(codexHome, other.home),
-        `CODEX_HOME_OUTSIDE_INSTANCE_ROOT:${entry.role}:${entry.pid}`,
-      );
-    }
+    assertProcessEnvironment(entry);
   }
   const parent = live.find((entry) => entry.pid === instance.pid);
-  assert.equal(parent.environment.home, instance.home);
+  assert.equal(parent.environment.homeIsInstanceRoot, true);
   assert.equal(
     await fs.realpath(runtime.executable),
     await fs.realpath(instance.executable),
@@ -1552,10 +1665,7 @@ async function assertInstance(observed, instance, identity, other) {
   const runtimeProcess = live.find(
     (entry) => entry.pid === observed.runtimeChild.pid,
   );
-  assert.equal(
-    runtimeProcess.environment.runtimeIdentity,
-    identity.runtimeIdentity,
-  );
+  assert.equal(runtimeProcess.environment.runtimeIdentityMatches, true);
   assert.ok(
     observed.listeners.some((entry) => entry.pid === observed.runtimeChild.pid),
     "RUNTIME_NOT_LISTENING",
@@ -1866,6 +1976,110 @@ async function scannerSelfCheck() {
         violationMessage(fileViolation),
         `OWNER_PREVIEW_ISOLATION_STRING_OTHER_INSTANCE:file:backend:7:${otherRoot}/f`,
       );
+    }
+    // Receipts hold verdicts, never environment values. A fake process whose
+    // HOME is under an owner location fails the isolation check, and neither the
+    // record nor a receipt that carries it holds that path or the owner home.
+    {
+      const ownRoot = path.join(sandbox, "receipt-own");
+      const otherRoot = path.join(sandbox, "receipt-other");
+      await fs.mkdir(ownRoot);
+      await fs.mkdir(otherRoot);
+      const instance = { home: ownRoot, app: path.join(ownRoot, "App.app") };
+      const other = { home: otherRoot, app: path.join(otherRoot, "App.app") };
+      const identity = {
+        userData: path.join(ownRoot, "profile"),
+        runtimeIdentity: "farol-selfcheck-runtime",
+      };
+      const context = classificationContext(instance, other);
+      const ownerHome = path.join(home, ".codex", "fake-home-4242");
+      const proof = "0b1c2d3e-aaaa-bbbb-cccc-1234567890ab";
+      const environment = {
+        HOME: ownerHome,
+        FAROL_NEXT_E2E_TEST_PROOF: proof,
+        LANG: "en_US.UTF-8",
+        FAROL_NEXT_PREVIEW_SCENARIO: "normal",
+      };
+      const record = environmentRecord(environment, {
+        instance,
+        other,
+        identity,
+        context,
+      });
+      assert.equal(record.homeClass, "owner");
+      assert.equal(record.homeInsideOwnRoot, false);
+      const text = JSON.stringify(record);
+      for (const forbidden of [ownerHome, home, proof, "en_US.UTF-8"])
+        assert.equal(text.includes(forbidden), false, forbidden);
+      assert.throws(
+        () =>
+          assertProcessEnvironment({
+            pid: 4242,
+            role: "helper",
+            environment: record,
+          }),
+        /HOME_OUTSIDE_INSTANCE_ROOT:helper:4242/u,
+      );
+      const classified = classifyStrings(
+        Object.entries(environment).map(([key, value]) => ({
+          pid: 4242,
+          role: "helper",
+          kind: "env",
+          key,
+          text: value,
+        })),
+        context,
+      );
+      assert.equal(classified.violations.length, 1);
+      assert.equal(JSON.stringify(classified).includes(ownerHome), false);
+      const carrying = {
+        status: "UNKNOWN",
+        observations: {
+          normal: {
+            processes: [{ pid: 4242, role: "helper", environment: record }],
+            classification: classified,
+          },
+        },
+        launches: [{ kind: "normal", home: ownRoot }],
+      };
+      const guard = {
+        envValues: new Set(Object.values(environment)),
+        roots: new Set([ownRoot]),
+        repositoryRoot: "/nonexistent-checkout",
+      };
+      // The receipt as the run builds it passes the guard unchanged: no raw
+      // value, the disposable root allowed, a short enumeration like `normal`
+      // not mistaken for a secret.
+      const clean = guardReceipt(carrying, guard);
+      assert.deepEqual(clean.violations, []);
+      assert.deepEqual(clean.receipt, carrying);
+      // A receipt that did carry a value, a proof, an owner path or the home is
+      // scrubbed, reported by pointer and code, and the text holds none of them.
+      const leaky = {
+        leak: ownerHome,
+        proof,
+        nested: { message: `FAIL:${home}/.farol/state/x and ${ownRoot}/ok` },
+        under: `${home}/Documents/x`,
+        fine: `${ownRoot}/data`,
+      };
+      const scrubbed = guardReceipt(leaky, guard);
+      assert.deepEqual(
+        scrubbed.violations.map((entry) => `${entry.code}@${entry.pointer}`),
+        [
+          "ENV_VALUE@/leak",
+          "ENV_VALUE@/proof",
+          "OWNER_LOCATION@/nested/message",
+          "OWNER_HOME_PATH@/under",
+        ],
+      );
+      const written = JSON.stringify(scrubbed.receipt);
+      for (const forbidden of [ownerHome, proof, `${home}/`])
+        assert.equal(written.includes(forbidden), false, forbidden);
+      assert.equal(
+        scrubbed.receipt.nested.message.startsWith("FAIL:[REDACTED_PATH]"),
+        true,
+      );
+      assert.equal(scrubbed.receipt.fine, `${ownRoot}/data`);
     }
     // With the real guard roots back, a normal temporary parent still works and
     // creates exactly one root.
@@ -2648,19 +2862,41 @@ export async function runOwnerPreviewIsolation(
       "no installed-state qualification",
     ],
   };
-  const checkpoint = () =>
-    fs.writeFile(receiptFile, jsonBytes(receipt), { mode: 0o600 });
-  await fs.writeFile(receiptFile, jsonBytes(receipt), {
-    flag: "wx",
-    mode: 0o600,
-  });
+  // Everything this run creates that a survivor could carry: every disposable
+  // root, the uid's pids that already existed when the run began, and, for the
+  // receipt guard only, every environment value observed (in memory, never
+  // written).
+  const run = {
+    roots: new Set(),
+    preexisting: new Set(),
+    envValues: new Set(),
+  };
+  ownerState.exempt = run.roots;
+  // Every write of the receipt goes through the guard. A receipt that holds an
+  // observed environment value or an owner path is scrubbed, written with the
+  // finding, and the run fails closed.
+  const writeReceipt = async (flag) => {
+    const guarded = guardReceipt(receipt, {
+      envValues: run.envValues,
+      roots: run.roots,
+      repositoryRoot,
+    });
+    await fs.writeFile(receiptFile, jsonBytes(guarded.receipt), {
+      mode: 0o600,
+      ...(flag ? { flag } : {}),
+    });
+    if (guarded.violations.length > 0)
+      throw new Error(
+        `OWNER_PREVIEW_ISOLATION_RECEIPT_UNSAFE:${guarded.violations
+          .map((entry) => `${entry.code}@${entry.pointer}`)
+          .join(",")}`,
+      );
+  };
+  const checkpoint = () => writeReceipt();
+  await writeReceipt("wx");
   const instances = [];
   let server;
   let failure = null;
-  // Everything this run creates that a survivor could carry: every disposable
-  // root, and the uid's pids that already existed when the run began.
-  const run = { roots: new Set(), preexisting: new Set() };
-  ownerState.exempt = run.roots;
   try {
     run.preexisting = new Set((await uidPids()).map((entry) => entry.pid));
     // 1. Override-free resolution is not witnessed. A bundled Electron resolves
@@ -2732,6 +2968,8 @@ export async function runOwnerPreviewIsolation(
       observed[instance.kind] = await observe(instance, {
         fixtureOrigin,
         other: instance === normal ? owner : normal,
+        identity: identities[instance.kind],
+        envValues: run.envValues,
       });
     receipt.observations = Object.fromEntries(
       Object.entries(observed).map(([kind, entry]) => [
