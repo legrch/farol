@@ -1,6 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { fileURLToPath } from "node:url";
-import path from "node:path";
 import {
   onboardingHelpUrl,
   openOnboardingHelp,
@@ -48,45 +46,28 @@ describe("fixed onboarding help destinations", () => {
       "ONBOARDING_HELP_DESTINATION_INVALID",
     );
   });
-  it.each([
-    "/controlled/dev/_output/build/app",
-    "/controlled/Farol Dev.app/Contents/Resources/app",
-  ])("resolves the guide inside the host bundle at %s", (directory) => {
-    const url = new URL(onboardingHelpUrl("setup-guide", directory));
-    expect(url.protocol).toBe("file:");
-    expect(fileURLToPath(url)).toBe(path.join(directory, "shell.html"));
-    expect(url.hash).toBe("#farol-connection-guide");
-    expect(url.search).toBe("");
-  });
-  it.each([undefined, "", "relative/app"])(
-    "refuses a guide without an absolute host bundle: %s",
-    (directory) => {
-      expect(() => onboardingHelpUrl("setup-guide", directory)).toThrow(
-        "ONBOARDING_GUIDE_BUNDLE_INVALID",
-      );
-    },
-  );
-  it("opens the guide only through the dedicated local handler", async () => {
+  it("opens the repository setup guide through the same fixed destination policy", async () => {
     const external: string[] = [];
-    let guides = 0;
-    const open = async (url: string) => {
-      external.push(url);
-    };
-    expect(await openOnboardingHelp("setup-guide", open)).toBe(false);
+    expect(onboardingHelpUrl("setup-guide")).toBe(
+      "https://github.com/legrch/farol/blob/main/docs/setup-connection.md",
+    );
     expect(
-      await openOnboardingHelp("setup-guide", open, async () => {
-        guides++;
+      await openOnboardingHelp("setup-guide", async (url) => {
+        external.push(url);
       }),
     ).toBe(true);
-    expect(guides).toBe(1);
-    expect(external).toEqual([]);
+    expect(external).toEqual([onboardingHelpUrl("setup-guide")]);
     expect(
-      await openOnboardingHelp("setup-guide", open, async () => {
-        throw new Error("local load failed");
+      await openOnboardingHelp("setup-guide", async () => {
+        throw new Error("open refused");
       }),
     ).toBe(false);
-    expect(await openOnboardingHelp("tunnels", open)).toBe(true);
-    expect(external).toEqual([onboardingHelpUrl("tunnels")]);
+    expect(
+      await openOnboardingHelp("https://example.invalid", async (url) => {
+        external.push(url);
+      }),
+    ).toBe(false);
+    expect(external).toHaveLength(1);
   });
 });
 

@@ -59,7 +59,7 @@ it("renders the existing guide open without a preload bridge, controller or stor
   const guide =
     document.querySelector<HTMLDetailsElement>(".connection-guide")!;
   expect(guide.open).toBe(true);
-  expect(guide.querySelectorAll("li")).toHaveLength(5);
+  expect(guide.querySelectorAll("li")).toHaveLength(4);
   expect(guide.textContent).toContain("Sign in.");
   expect(guide.textContent).toContain("inspect it before trying again");
   expect(document.querySelectorAll("button, input, a")).toHaveLength(0);
