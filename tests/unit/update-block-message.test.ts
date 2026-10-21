@@ -69,4 +69,23 @@ describe("update block messages", () => {
       ),
     ).toMatch(/cannot confirm update availability/u);
   });
+
+  it("tells the owner a newer Farol needs a manual download", () => {
+    const message = updateBlockMessage("UPDATE_RELEASE_FORMAT_NEWER");
+    expect(message).toBe(
+      "A newer Farol is available that this version can’t install by itself. Download it from the releases page.",
+    );
+    expect(
+      updateResultMessage("failed", false, "UPDATE_RELEASE_FORMAT_NEWER"),
+    ).toBe(message);
+    expect(
+      updateResultMessage("failed", true, "UPDATE_RELEASE_FORMAT_NEWER"),
+    ).toBe(message);
+    expect(
+      updateResultMessage("failed", false, "UPDATE_RELEASE_FORMAT_NEWER"),
+    ).not.toMatch(/did not finish/u);
+    expect(
+      updateResultMessage("unavailable", false, "UPDATE_RELEASE_FORMAT_NEWER"),
+    ).toMatch(/cannot confirm update availability/u);
+  });
 });

@@ -282,6 +282,8 @@ fails with exactly `UPDATE_ACCEPTED_SOURCE_UNCONFIRMED`.
    same lookup and manifest match as above, failing with
    `UPDATE_ADOPTION_NETWORK_FAILURE`, `UPDATE_ADOPTION_RELEASE_NOT_FOUND`,
    `UPDATE_ADOPTION_RELEASE_MISMATCH` or another `UPDATE_ADOPTION_<CODE>`.
+   A published manifest of a newer release format than this build parses is reported
+   as `UPDATE_ADOPTION_RELEASE_MISMATCH`, never as a match.
 4. It measures the installed tree in-process and requires its digest to equal the
    manifest's `artifactSha256`, else `UPDATE_ADOPTION_TREE_MISMATCH`, before any
    capture.

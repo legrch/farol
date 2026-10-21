@@ -805,6 +805,317 @@ describe("published manifest lookup for first-launch adoption", () => {
   });
 });
 
+describe("newer release manifest format", () => {
+  const newer = { ...manifest, schema: "farol.github-release/2" };
+  const versionOf = (index: number) => `0.1.${index}`;
+
+  // A catalogue of releases keyed by version; `documents` maps a version to the
+  // exact manifest document that release serves. The source records every
+  // manifest URL it was asked for.
+  function catalogue(documents: Readonly<Record<string, unknown>>) {
+    const releases = Object.keys(documents).map((releaseVersion) => {
+      const releaseTag = `v${releaseVersion}`;
+      const name = `Farol-${releaseVersion}-darwin-arm64.zip`;
+      return release({
+        tag_name: releaseTag,
+        html_url: `https://github.com/legrch/farol/releases/tag/${releaseTag}`,
+        assets: [
+          {
+            name: "farol-release.json",
+            browser_download_url: assetUrl("farol-release.json", releaseTag),
+            size: 900,
+            state: "uploaded",
+          },
+          {
+            name,
+            browser_download_url: assetUrl(name, releaseTag),
+            size: 10,
+            state: "uploaded",
+          },
+        ],
+      });
+    });
+    const manifestUrls: string[] = [];
+    const source: GithubReleasePorts = {
+      ...ports(),
+      fetchJson: vi.fn(async (url: string) => {
+        if (url === GITHUB_RELEASES_API)
+          return {
+            ok: true as const,
+            value: { value: releases, finalUrl: url, redirects: [] },
+          };
+        manifestUrls.push(url);
+        const releaseVersion = /\/download\/v([^/]+)\//u.exec(url)![1]!;
+        return {
+          ok: true as const,
+          value: {
+            value: documents[releaseVersion],
+            finalUrl: url,
+            redirects: [],
+          },
+        };
+      }),
+    };
+    return { source, manifestUrls };
+  }
+  const valid = (releaseVersion: string) => ({
+    ...manifest,
+    version: releaseVersion,
+    archiveName: `Farol-${releaseVersion}-darwin-arm64.zip`,
+  });
+  const tagsOf = (urls: readonly string[]) =>
+    urls.map((url) => /\/download\/(v[^/]+)\//u.exec(url)![1]);
+
+  it.each([
+    ["a /2 manifest", newer],
+    ["a /2 manifest with extra keys", { ...newer, signature: "x", extra: [1] }],
+    ["a /2 manifest with nothing else", { schema: "farol.github-release/2" }],
+    ["a /1000 manifest", { schema: "farol.github-release/1000" }],
+    ["a /9999 manifest", { schema: "farol.github-release/9999" }],
+  ])("reports %s as a newer release format", (_name, document) => {
+    expect(parseGithubReleaseManifest(document)).toEqual({
+      ok: false,
+      code: "release_format_newer",
+    });
+  });
+
+  it.each([
+    ["a leading zero", "farol.github-release/02"],
+    ["version zero", "farol.github-release/0"],
+    ["a leading space", " farol.github-release/2"],
+    ["a trailing space", "farol.github-release/2 "],
+    ["a trailing newline", "farol.github-release/2\n"],
+    ["a five digit number", "farol.github-release/10000"],
+    ["a non digit", "farol.github-release/2a"],
+    ["no number", "farol.github-release/"],
+    ["another product", "other.github-release/2"],
+    ["another case", "Farol.github-release/2"],
+    ["a negative number", "farol.github-release/-2"],
+  ])("keeps a schema with %s an invalid manifest", (_name, schema) => {
+    expect(parseGithubReleaseManifest({ ...manifest, schema })).toEqual({
+      ok: false,
+      code: "invalid_manifest",
+    });
+  });
+
+  it.each([2, null, undefined, ["farol.github-release/2"], {}])(
+    "keeps a non-string schema %j an invalid manifest",
+    (schema) => {
+      expect(parseGithubReleaseManifest({ ...manifest, schema })).toEqual({
+        ok: false,
+        code: "invalid_manifest",
+      });
+    },
+  );
+
+  it("keeps a /1 field violation and a non-object an invalid manifest", () => {
+    expect(
+      parseGithubReleaseManifest({ ...manifest, signing: "developer-id" }),
+    ).toEqual({ ok: false, code: "invalid_manifest" });
+    expect(parseGithubReleaseManifest([newer])).toEqual({
+      ok: false,
+      code: "invalid_manifest",
+    });
+    expect(parseGithubReleaseManifest("farol.github-release/2")).toEqual({
+      ok: false,
+      code: "invalid_manifest",
+    });
+  });
+
+  it("does not make the retained decoder accept or reclassify a newer format", () => {
+    expect(
+      parseRetainedGithubReleaseManifest({
+        schema: "farol.ready-update/1",
+        handle: "exact-local-archive",
+        manifest: newer,
+        operation: null,
+      }),
+    ).toEqual({ ok: false, code: "invalid_manifest" });
+  });
+
+  it("reaches the lower bridge release when the newest one is a newer format", async () => {
+    const { source, manifestUrls } = catalogue({
+      "0.1.3": newer,
+      "0.1.2": valid("0.1.2"),
+      "0.1.1": valid("0.1.1"),
+    });
+    const result = await discoverGithubUpdate("0.1.0", "stable", source);
+    expect(result).toMatchObject({
+      ok: true,
+      value: { tag: "v0.1.2", manifest: { version: "0.1.2" } },
+    });
+    expect(tagsOf(manifestUrls)).toEqual(["v0.1.3", "v0.1.2"]);
+  });
+
+  it("walks the catalogue in descending version order whatever its order", async () => {
+    const { source, manifestUrls } = catalogue({
+      "0.1.2": newer,
+      "0.1.4": newer,
+      "0.1.1": valid("0.1.1"),
+      "0.1.3": newer,
+    });
+    expect(await discoverGithubUpdate("0.1.0", "stable", source)).toMatchObject(
+      { ok: true, value: { tag: "v0.1.1" } },
+    );
+    expect(tagsOf(manifestUrls)).toEqual([
+      "v0.1.4",
+      "v0.1.3",
+      "v0.1.2",
+      "v0.1.1",
+    ]);
+  });
+
+  it("reports a newer format when every eligible release is one", async () => {
+    const { source, manifestUrls } = catalogue({
+      "0.1.2": newer,
+      "0.1.1": newer,
+    });
+    expect(await discoverGithubUpdate("0.1.0", "stable", source)).toEqual({
+      ok: false,
+      code: "release_format_newer",
+    });
+    expect(manifestUrls).toHaveLength(2);
+    expect(source.download).not.toHaveBeenCalled();
+  });
+
+  it("returns a malformed /1 manifest instead of skipping past it", async () => {
+    const { source, manifestUrls } = catalogue({
+      "0.1.3": newer,
+      "0.1.2": { ...valid("0.1.2"), signing: "developer-id" },
+      "0.1.1": valid("0.1.1"),
+    });
+    expect(await discoverGithubUpdate("0.1.0", "stable", source)).toEqual({
+      ok: false,
+      code: "invalid_manifest",
+    });
+    expect(tagsOf(manifestUrls)).toEqual(["v0.1.3", "v0.1.2"]);
+  });
+
+  it("does not skip past a mismatched or non-increasing bridge", async () => {
+    const mismatch = catalogue({
+      "0.1.2": newer,
+      "0.1.1": valid("0.1.9"),
+    });
+    expect(
+      await discoverGithubUpdate("0.1.0", "stable", mismatch.source),
+    ).toEqual({ ok: false, code: "release_mismatch" });
+    const lowBuild = catalogue({
+      "0.1.2": newer,
+      "0.1.1": { ...valid("0.1.1"), buildVersion: "1" },
+    });
+    expect(
+      await discoverGithubUpdate("0.1.0", "stable", lowBuild.source, "1"),
+    ).toEqual({ ok: false, code: "release_mismatch" });
+  });
+
+  it("stops after four consecutive newer formats without a fifth manifest fetch", async () => {
+    const { source, manifestUrls } = catalogue({
+      [versionOf(6)]: newer,
+      [versionOf(5)]: newer,
+      [versionOf(4)]: newer,
+      [versionOf(3)]: newer,
+      [versionOf(2)]: newer,
+      [versionOf(1)]: valid(versionOf(1)),
+    });
+    expect(await discoverGithubUpdate("0.1.0", "stable", source)).toEqual({
+      ok: false,
+      code: "release_format_newer",
+    });
+    // The catalogue fetch plus exactly four manifest fetches.
+    expect(source.fetchJson).toHaveBeenCalledTimes(5);
+    expect(tagsOf(manifestUrls)).toEqual([
+      "v0.1.6",
+      "v0.1.5",
+      "v0.1.4",
+      "v0.1.3",
+    ]);
+  });
+
+  it("still reaches a bridge behind three newer formats", async () => {
+    const { source, manifestUrls } = catalogue({
+      [versionOf(4)]: newer,
+      [versionOf(3)]: newer,
+      [versionOf(2)]: newer,
+      [versionOf(1)]: valid(versionOf(1)),
+    });
+    expect(await discoverGithubUpdate("0.1.0", "stable", source)).toMatchObject(
+      { ok: true, value: { tag: `v${versionOf(1)}` } },
+    );
+    expect(manifestUrls).toHaveLength(4);
+  });
+
+  it("never selects a version at or below the installed one", async () => {
+    const { source, manifestUrls } = catalogue({
+      "0.1.2": newer,
+      "0.1.1": valid("0.1.1"),
+      "0.1.0": valid("0.1.0"),
+    });
+    // Installed is 0.1.1: only 0.1.2 is eligible and it is unreadable.
+    expect(await discoverGithubUpdate("0.1.1", "stable", source)).toEqual({
+      ok: false,
+      code: "release_format_newer",
+    });
+    expect(tagsOf(manifestUrls)).toEqual(["v0.1.2"]);
+  });
+
+  it("returns no update when nothing is newer, even if lower releases exist", async () => {
+    const { source } = catalogue({ "0.1.1": newer, "0.1.0": newer });
+    expect(await discoverGithubUpdate("0.1.1", "stable", source)).toEqual({
+      ok: true,
+      value: null,
+    });
+    expect(source.fetchJson).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["the newest", 0],
+    ["a lower", 1],
+  ])(
+    "aborts on a duplicate eligible version of %s release",
+    async (_name, at) => {
+      const base = catalogue({ "0.1.2": newer, "0.1.1": valid("0.1.1") });
+      const original = base.source.fetchJson;
+      const withDuplicate: GithubReleasePorts = {
+        ...base.source,
+        fetchJson: vi.fn(async (url: string, max: number) => {
+          const answer = await original(url, max);
+          if (url !== GITHUB_RELEASES_API || !answer.ok) return answer;
+          const list = answer.value.value as unknown[];
+          return {
+            ok: true as const,
+            value: { ...answer.value, value: [...list, list[at]] },
+          };
+        }),
+      };
+      expect(
+        await discoverGithubUpdate("0.1.0", "stable", withDuplicate),
+      ).toEqual({ ok: false, code: "invalid_release_metadata" });
+      // Only the catalogue was fetched: no manifest is trusted from an ambiguous list.
+      expect(withDuplicate.fetchJson).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("aborts on malformed release metadata before any manifest is fetched", async () => {
+    const source = ports([release({ tag_name: "not-a-tag" }), release()]);
+    expect(await discoverGithubUpdate("0.1.0", "stable", source)).toEqual({
+      ok: false,
+      code: "invalid_release_metadata",
+    });
+    expect(source.fetchJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not adopt a release whose manifest is a newer format", async () => {
+    const { source } = catalogue({ [version]: newer });
+    expect(
+      await findGithubReleaseManifest(
+        { version, buildVersion: "2" },
+        "stable",
+        source,
+      ),
+    ).toEqual({ ok: false, code: "release_format_newer" });
+  });
+});
+
 describe("staged archive verification", () => {
   it("matches retained staged packages by build version and owner-beta update channel", () => {
     const betaManifest = {

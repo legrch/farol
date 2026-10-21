@@ -26,17 +26,21 @@ const messages: Readonly<Record<string, string>> = {
     "This copy of Farol doesn’t match its published release. Download it again.",
   UPDATE_ADOPTION_NETWORK_FAILURE:
     "Farol couldn’t check its release. Check your connection and try again.",
+  UPDATE_RELEASE_FORMAT_NEWER:
+    "A newer Farol is available that this version can’t install by itself. Download it from the releases page.",
   UPDATE_STATE_UNREADABLE: "Farol couldn’t read its update status.",
   UPDATE_VERIFICATION_RECOVERY_REQUIRED:
     "An earlier package check did not finish. Its files are saved. Review Diagnostics to recover that check before updating.",
 };
 
-// First-launch adoption failures carry their own guidance, not the generic copy.
+// These failures carry their own guidance, not the generic copy: first-launch
+// adoption failures and a newer release format this version cannot read.
 const adoptionResultCodes: ReadonlySet<string> = new Set([
   "UPDATE_ADOPTION_RELEASE_NOT_FOUND",
   "UPDATE_BASELINE_ADOPTION_REQUIRED",
   "UPDATE_ADOPTION_TREE_MISMATCH",
   "UPDATE_ADOPTION_NETWORK_FAILURE",
+  "UPDATE_RELEASE_FORMAT_NEWER",
 ]);
 
 export function updateBlockMessage(
