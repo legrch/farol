@@ -68,10 +68,41 @@ describe("adoptReviewedTunnelClient", () => {
     expect(await leftovers()).toEqual(["tunnel-client"]);
   });
 
+  it("creates every missing directory private to this user", async () => {
+    const adopted = await adopt();
+    if (!adopted.ok) throw new Error("not adopted");
+    for (
+      let directory = path.dirname(adopted.path);
+      directory !== home;
+      directory = path.dirname(directory)
+    )
+      expect((await fs.lstat(directory)).mode & 0o777).toBe(0o700);
+  });
+
+  it("refuses a destination another account could change", async () => {
+    // A group-writable directory on the way to the copy.
+    await fs.mkdir(path.join(home, ".local"), { mode: 0o700 });
+    await fs.chmod(path.join(home, ".local"), 0o770);
+    expect(await adopt()).toEqual({ ok: false, reason: "destination-unsafe" });
+    await fs.chmod(path.join(home, ".local"), 0o700);
+    // A symlinked directory on the way to the copy.
+    const elsewhere = path.join(root, "elsewhere");
+    await fs.mkdir(elsewhere, { mode: 0o700 });
+    await fs.symlink(elsewhere, path.join(home, ".local", "libexec"));
+    expect(await adopt()).toEqual({ ok: false, reason: "destination-unsafe" });
+    expect(await fs.readdir(elsewhere)).toEqual([]);
+    // A world-writable home.
+    await fs.rm(path.join(home, ".local", "libexec"));
+    await fs.chmod(home, 0o777);
+    expect(await adopt()).toEqual({ ok: false, reason: "destination-unsafe" });
+    await fs.chmod(home, 0o700);
+    expect((await adopt()).ok).toBe(true);
+  });
+
   it("replaces a stale copy at the target atomically", async () => {
     const target = reviewedTunnelClientPath(home, "arm64", digests);
     if (!target) throw new Error("no target");
-    await fs.mkdir(path.dirname(target.path), { recursive: true });
+    await fs.mkdir(path.dirname(target.path), { recursive: true, mode: 0o700 });
     await fs.writeFile(target.path, "stale");
     const adopted = await adopt();
     expect(adopted.ok).toBe(true);

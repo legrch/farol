@@ -20,6 +20,13 @@ import {
  * does to the source during the copy, the result is either exactly the
  * reviewed build, owned by this user and not group/world-writable, or nothing:
  * a mismatching or partial copy is removed and never renamed into place.
+ *
+ * The destination is trusted only when nobody else can change it: the home
+ * directory and every directory below it on the way to the copy must be a real
+ * directory (never a symlink), owned by this user and not group- or
+ * world-writable. A missing directory is created one level at a time, private
+ * (0700), and checked again. Otherwise another account could replace the copy
+ * between its verification and its use.
  */
 
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
@@ -35,6 +42,7 @@ export type TunnelClientAdoption =
         | "source-unreadable"
         | "source-not-a-regular-file"
         | "source-not-reviewed"
+        | "destination-unsafe"
         | "write-failed";
     }>;
 
@@ -43,6 +51,54 @@ export type TunnelClientAdoptionDependencies = Readonly<{
   arch: string;
   reviewedDigests: ReviewedTunnelClientDigests;
 }>;
+
+type DirectoryOutcome = "safe" | "unsafe" | "failed";
+
+function privateDirectory(
+  info: Readonly<{
+    isDirectory(): boolean;
+    isSymbolicLink(): boolean;
+    uid: number;
+    mode: number;
+  }>,
+): boolean {
+  const effectiveUser = process.geteuid?.();
+  return (
+    !info.isSymbolicLink() &&
+    info.isDirectory() &&
+    (effectiveUser === undefined || info.uid === effectiveUser) &&
+    (info.mode & 0o022) === 0
+  );
+}
+
+// Walks from home to `directory`, creating what is missing, and accepts the
+// path only when every component is a private directory of this user.
+async function secureDirectory(
+  home: string,
+  directory: string,
+): Promise<DirectoryOutcome> {
+  const relative = path.relative(home, directory);
+  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative))
+    return "unsafe";
+  let current = home;
+  for (const component of ["", ...relative.split(path.sep)]) {
+    if (component !== "") current = path.join(current, component);
+    let info;
+    try {
+      info = await fsPromises.lstat(current);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return "failed";
+      try {
+        await fsPromises.mkdir(current, { mode: 0o700 });
+        info = await fsPromises.lstat(current);
+      } catch {
+        return "failed";
+      }
+    }
+    if (!privateDirectory(info)) return "unsafe";
+  }
+  return "safe";
+}
 
 export async function adoptReviewedTunnelClient(
   sourcePath: string,
@@ -77,11 +133,10 @@ export async function adoptReviewedTunnelClient(
       return { ok: false, reason: "source-not-a-regular-file" };
     if (info.size !== expected.bytes)
       return { ok: false, reason: "source-not-reviewed" };
-    try {
-      await fsPromises.mkdir(directory, { recursive: true, mode: 0o700 });
-    } catch {
-      return { ok: false, reason: "write-failed" };
-    }
+    const secured = await secureDirectory(dependencies.home, directory);
+    if (secured === "unsafe")
+      return { ok: false, reason: "destination-unsafe" };
+    if (secured === "failed") return { ok: false, reason: "write-failed" };
     let output;
     try {
       output = await fsPromises.open(
