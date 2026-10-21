@@ -59,46 +59,66 @@ async function privateDirectory(directory) {
   }
   await physicalDirectory(directory, { privateMode: true });
 }
-// pgrep exits 1 when a process has no children; that is its answer. Nothing
-// else is allowed to exit non-zero: see `strict`.
-async function query(command, args) {
-  try {
-    return (
-      await execFileAsync(command, args, {
-        encoding: "utf8",
-        timeout: 15000,
-        maxBuffer: 16 * 1024 * 1024,
-      })
-    ).stdout;
-  } catch (error) {
-    if (error.code === 1 && typeof error.stdout === "string")
-      return error.stdout;
-    throw error;
-  }
-}
-// An inventory is only evidence when the tool finished cleanly: any non-zero
-// exit, signal, timeout or stderr output is an error carrying `code`.
-async function strict(command, args, code) {
+// Every external inventory command (pgrep, lsof, ps and the KERN_PROCARGS2
+// probe) runs through `runInventory`; nothing else spawns one. Success is exit 0
+// with empty stderr. The only accepted non-zero outcome is the command's own
+// documented, verified "no match", and it carries no output:
+//   pgrep  exit 1, empty stdout and stderr: the parent has no children.
+//   lsof   exit 1, empty stdout and stderr, only for a pid confirmed gone.
+//   ps     exit 1, empty stdout and stderr, only for a pid confirmed gone.
+//   probe  none: it answers in JSON and always exits 0.
+// Anything else (another exit code, a signal, a timeout, stderr output, or
+// partial stdout beside a failure) is an inventory error naming the command,
+// the exit code and the stderr. A failed command's stdout is never returned.
+const emptyFailure = (result) =>
+  result.code === 1 && result.stdout === "" && result.stderr === "";
+const INVENTORY = {
+  pgrep: { label: "pgrep", command: PGREP, noMatch: emptyFailure },
+  lsof: {
+    label: "lsof",
+    command: LSOF,
+    noMatch: (result, context) =>
+      emptyFailure(result) && context.gone?.() === true,
+  },
+  ps: {
+    label: "ps",
+    command: PS,
+    noMatch: (result, context) =>
+      emptyFailure(result) && context.gone?.() === true,
+  },
+  probe: {
+    label: "probe",
+    command: "/usr/bin/python3",
+    noMatch: () => false,
+  },
+};
+async function runInventory(tool, args, context = {}) {
+  const spec = typeof tool === "string" ? INVENTORY[tool] : tool;
+  const fail = (code, stderr) =>
+    new Error(
+      `OWNER_PREVIEW_ISOLATION_INVENTORY_ERROR:${spec.label}:${code}:${String(stderr).trim().slice(0, 200)}`,
+    );
   let result;
   try {
-    result = await execFileAsync(command, args, {
+    const { stdout, stderr } = await execFileAsync(spec.command, args, {
       encoding: "utf8",
       timeout: 15000,
       maxBuffer: 16 * 1024 * 1024,
     });
+    result = { code: 0, stdout, stderr };
   } catch (error) {
-    throw new Error(
-      `${code}:${error.code ?? error.signal ?? "FAILED"}:${String(
-        error.stderr ?? "",
-      )
-        .trim()
-        .slice(0, 200)}`,
-      { cause: error },
-    );
+    if (typeof error.code !== "number")
+      throw fail(error.code ?? error.signal ?? "FAILED", error.stderr ?? "");
+    result = {
+      code: error.code,
+      stdout: String(error.stdout ?? ""),
+      stderr: String(error.stderr ?? ""),
+    };
   }
-  if (result.stderr.trim() !== "")
-    throw new Error(`${code}:STDERR:${result.stderr.trim().slice(0, 200)}`);
-  return result.stdout;
+  if (result.code === 0 && result.stderr === "")
+    return { outcome: "ok", stdout: result.stdout };
+  if (spec.noMatch(result, context)) return { outcome: "no_match" };
+  throw fail(result.code, result.stderr);
 }
 // Only a pid the kernel no longer knows may have an empty inventory.
 function isGone(pid) {
@@ -204,28 +224,32 @@ function touchesOwner(value, { text = false, reported = false } = {}) {
 async function descendants(parent) {
   const tree = [parent];
   for (let index = 0; index < tree.length; index += 1) {
-    const found = await query(PGREP, ["-P", String(tree[index]), "-f", "."]);
-    for (const line of found.split("\n"))
+    const found = await runInventory("pgrep", [
+      "-P",
+      String(tree[index]),
+      "-f",
+      ".",
+    ]);
+    if (found.outcome === "no_match") continue;
+    for (const line of found.stdout.split("\n"))
       if (/^[0-9]+$/u.test(line)) tree.push(Number(line));
   }
   return tree;
 }
-// null is the explicit "already exited" outcome; any other failure throws.
+// null is the explicit "already exited" outcome: the documented ps no-match for
+// a pid the kernel no longer knows. Every other failure is an inventory error.
 async function command(pid) {
-  try {
-    const text = (
-      await strict(
-        PS,
-        ["-o", "command=", "-p", String(pid)],
-        "OWNER_PREVIEW_ISOLATION_PS_INCOMPLETE",
-      )
-    ).trim();
-    if (text === "") throw new Error("OWNER_PREVIEW_ISOLATION_PS_EMPTY");
-    return text;
-  } catch (error) {
-    if (isGone(pid)) return null;
-    throw error;
-  }
+  const answer = await runInventory(
+    "ps",
+    ["-o", "command=", "-p", String(pid)],
+    {
+      gone: () => isGone(pid),
+    },
+  );
+  if (answer.outcome === "no_match") return null;
+  const text = answer.stdout.trim();
+  if (text === "") throw new Error("OWNER_PREVIEW_ISOLATION_PS_EMPTY");
+  return text;
 }
 // ps cannot show an environment on this macOS; KERN_PROCARGS2 can, for a
 // process of the same user. The values stay in memory: only key names and the
@@ -263,20 +287,14 @@ print(json.dumps({"status": "ok", "env": env}))
 // exited. An unreadable or empty environment of a live pid is an error, never
 // a skipped check.
 async function environmentOf(pid) {
-  let answer;
-  try {
-    answer = JSON.parse(
-      await strict(
-        "/usr/bin/python3",
-        ["-I", "-c", PROCARGS_SCRIPT, String(pid)],
-        "OWNER_PREVIEW_ISOLATION_ENV_UNREADABLE",
-      ),
-    );
-  } catch (error) {
-    if (isGone(pid)) return null;
-    throw error;
-  }
-  if (isGone(pid) && answer.status !== "ok") return null;
+  const probed = await runInventory("probe", [
+    "-I",
+    "-c",
+    PROCARGS_SCRIPT,
+    String(pid),
+  ]);
+  const answer = JSON.parse(probed.stdout);
+  if (answer.status !== "ok" && isGone(pid)) return null;
   if (answer.status !== "ok")
     throw new Error(
       `OWNER_PREVIEW_ISOLATION_ENV_UNREADABLE:${pid}:${answer.reason}`,
@@ -309,41 +327,64 @@ function parseLsof(output) {
   }
   return files;
 }
-const LOOPBACK = new Set(["127.0.0.1", "[::1]", "localhost"]);
-function listeners(files) {
-  return files
-    .filter(
-      (file) =>
-        (file.protocol === "TCP" && file.state === "ST=LISTEN") ||
-        file.protocol === "UDP",
-    )
-    .map((file) => {
-      const match = /^(.*):(\d+|\*)$/u.exec(file.name ?? "");
-      return {
-        pid: file.pid,
-        protocol: file.protocol,
-        host: match?.[1] ?? file.name,
-        port: match?.[2] === "*" ? null : Number(match?.[2]),
-      };
-    });
+// A qualifying listener is a TCP socket in LISTEN state bound to 127.0.0.1 and
+// nothing else. Every other network listener on an owned pid is a violation with
+// a named code: UDP, IPv6 (including ::1), the wildcard, a hostname, another
+// IPv4 address or an unparsable line. Connected sockets are not listeners; unix
+// sockets are not network sockets and are compared separately.
+function classifyListener(file) {
+  const network =
+    file.type === "IPv4" ||
+    file.type === "IPv6" ||
+    file.protocol === "TCP" ||
+    file.protocol === "UDP";
+  if (!network) return null;
+  const violation = (code) => ({
+    pid: file.pid,
+    code,
+    protocol: file.protocol ?? null,
+    name: file.name ?? null,
+  });
+  if (file.protocol === "UDP") return violation("UDP_SOCKET");
+  if (file.protocol !== "TCP") return violation("UNPARSABLE_LISTENER");
+  if (file.state !== "ST=LISTEN") return null;
+  if (file.type === "IPv6") return violation("IPV6_LISTENER");
+  const match = /^(.*):(\d{1,5})$/u.exec(file.name ?? "");
+  if (file.type !== "IPv4" || match === null)
+    return violation("UNPARSABLE_LISTENER");
+  const host = match[1];
+  if (host === "127.0.0.1")
+    return { pid: file.pid, protocol: "TCP", host, port: Number(match[2]) };
+  if (host === "*") return violation("WILDCARD_LISTENER");
+  if (/^\[.*\]$/u.test(host) || host.includes(":"))
+    return violation("IPV6_LISTENER");
+  if (/^\d{1,3}(\.\d{1,3}){3}$/u.test(host))
+    return violation("NON_LOOPBACK_ADDRESS");
+  return violation("HOSTNAME_LISTENER");
+}
+function listenerReport(files) {
+  const accepted = [];
+  const violations = [];
+  for (const file of files) {
+    const entry = classifyListener(file);
+    if (entry === null) continue;
+    (entry.code === undefined ? accepted : violations).push(entry);
+  }
+  return { accepted, violations };
 }
 // One lsof per pid, each required to finish cleanly and to name its own pid.
 // A pid confirmed gone is the only empty inventory; it is reported as such.
 async function openFiles(pid) {
-  let output;
-  try {
-    output = await strict(
-      LSOF,
-      ["-nP", "-a", "-p", String(pid), "-F", "pftPnT"],
-      "OWNER_PREVIEW_ISOLATION_LSOF_INCOMPLETE",
-    );
-  } catch (error) {
-    if (isGone(pid)) return { pid, outcome: "exited", files: [] };
-    throw error;
-  }
-  const files = parseLsof(output);
+  const answer = await runInventory(
+    "lsof",
+    ["-nP", "-a", "-p", String(pid), "-F", "pftPnT"],
+    { gone: () => isGone(pid) },
+  );
+  if (answer.outcome === "no_match")
+    return { pid, outcome: "exited", files: [] };
+  const files = parseLsof(answer.stdout);
   if (
-    output.split("\n")[0] !== `p${pid}` ||
+    answer.stdout.split("\n")[0] !== `p${pid}` ||
     files.length === 0 ||
     files.some((file) => file.pid !== pid)
   )
@@ -616,7 +657,7 @@ async function observe(instance, expected) {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     const inventory = await openFiles(runtimeChild.pid);
     if (inventory.outcome === "exited") break;
-    if (listeners(inventory.files).length > 0) break;
+    if (listenerReport(inventory.files).accepted.length > 0) break;
     await new Promise((r) => setTimeout(r, 200));
   }
   // One pass over the final tree. Each pid yields a command, a readable
@@ -681,7 +722,8 @@ async function observe(instance, expected) {
     runtimeChild,
     processes,
     files,
-    listeners: listeners(files),
+    listeners: listenerReport(files).accepted,
+    listenerViolations: listenerReport(files).violations,
     unixPaths: files
       .filter((file) => file.type === "unix" && file.name?.startsWith("/"))
       .map((file) => file.name),
@@ -803,13 +845,14 @@ async function assertInstance(observed, instance, identity, other) {
     false,
     "A Codex child needs a live provider and cannot be witnessed here",
   );
-  // Sockets: loopback only; the backend serves on at least one.
+  // Sockets: TCP LISTEN on 127.0.0.1 only, at least one; any other network
+  // listener on an owned pid fails with its code (see classifyListener).
+  assert.deepEqual(
+    observed.listenerViolations,
+    [],
+    `NON_LOOPBACK_LISTENER:${JSON.stringify(observed.listenerViolations[0] ?? null)}`,
+  );
   assert.ok(observed.listeners.length > 0);
-  for (const entry of observed.listeners)
-    assert.ok(
-      LOOPBACK.has(entry.host),
-      `NON_LOOPBACK:${entry.protocol}:${entry.host}:${entry.port}`,
-    );
   // The Node runtime child serves its loopback port under this instance's
   // runtime identity; it is not the other channel's and not the owner's.
   const runtimeProcess = live.find(
@@ -956,26 +999,82 @@ async function scannerSelfCheck() {
   } finally {
     await fs.rm(sandbox, { recursive: true });
   }
-  const parsed = listeners(
-    parseLsof(
-      "p1\nf5\nPTCP\nn*:8080\nTST=LISTEN\nf6\nPUDP\nn*:5353\nf7\nPTCP\nn127.0.0.1:1->127.0.0.1:2\nTST=ESTABLISHED\n",
-    ),
-  );
+  // Listener rule: only TCP LISTEN on 127.0.0.1 qualifies.
+  const socket = (fields) =>
+    ["p1", "f5", ...fields.map((field) => field)].join("\n") + "\n";
+  const report = (fields) => listenerReport(parseLsof(socket(fields)));
+  const good = report(["tIPv4", "PTCP", "n127.0.0.1:8080", "TST=LISTEN"]);
+  assert.deepEqual(good.violations, []);
+  assert.deepEqual(good.accepted, [
+    { pid: 1, protocol: "TCP", host: "127.0.0.1", port: 8080 },
+  ]);
+  const rejected = {
+    UDP_SOCKET: ["tIPv4", "PUDP", "n127.0.0.1:5353"],
+    IPV6_LISTENER: ["tIPv6", "PTCP", "n[::1]:80", "TST=LISTEN"],
+    WILDCARD_LISTENER: ["tIPv4", "PTCP", "n*:8080", "TST=LISTEN"],
+    HOSTNAME_LISTENER: ["tIPv4", "PTCP", "nlocalhost:80", "TST=LISTEN"],
+    NON_LOOPBACK_ADDRESS: ["tIPv4", "PTCP", "n0.0.0.0:80", "TST=LISTEN"],
+    UNPARSABLE_LISTENER: ["tIPv4", "PTCP", "ngarbage", "TST=LISTEN"],
+  };
+  for (const [code, fields] of Object.entries(rejected)) {
+    const answer = report(fields);
+    assert.deepEqual(answer.accepted, [], code);
+    assert.deepEqual(
+      answer.violations.map((entry) => entry.code),
+      [code],
+    );
+  }
+  // A connected socket and a unix socket are not listeners.
   assert.deepEqual(
-    parsed.map((entry) => [entry.pid, entry.protocol, entry.host, entry.port]),
-    [
-      [1, "TCP", "*", 8080],
-      [1, "UDP", "*", 5353],
-    ],
+    report(["tIPv4", "PTCP", "n127.0.0.1:1->127.0.0.1:2", "TST=ESTABLISHED"]),
+    { accepted: [], violations: [] },
   );
-  assert.equal(LOOPBACK.has("*"), false);
-  // The inventories fail closed: a bad exit or any stderr is an error, a live
-  // pid yields a real environment and file list, and only a pid the kernel no
-  // longer knows is reported as exited.
-  await assert.rejects(strict("/usr/bin/false", [], "SELF"), /^Error: SELF:1/u);
+  assert.deepEqual(report(["tunix", "n/tmp/x"]), {
+    accepted: [],
+    violations: [],
+  });
+  // Every inventory runs through runInventory: success is exit 0 with empty
+  // stderr; the only accepted failure is the command's documented no-match.
+  const shell = (tool, script) => ({
+    ...INVENTORY[tool],
+    command: "/bin/sh",
+    args: ["-c", script],
+  });
+  const run = (tool, script, context) =>
+    runInventory(shell(tool, script), ["-c", script], context);
+  const refused = (tool, script, context) =>
+    assert.rejects(
+      run(tool, script, context),
+      new RegExp(
+        `^Error: OWNER_PREVIEW_ISOLATION_INVENTORY_ERROR:${tool}:`,
+        "u",
+      ),
+      `${tool}: ${script}`,
+    );
+  const gone = { gone: () => true };
+  const live = { gone: () => false };
+  for (const tool of ["pgrep", "lsof", "ps", "probe"]) {
+    assert.deepEqual(await run(tool, "echo 123", live), {
+      outcome: "ok",
+      stdout: "123\n",
+    });
+    await refused(tool, "echo w >&2", live);
+    await refused(tool, "exit 2", gone);
+    await refused(tool, "echo 123; exit 1", gone);
+    await refused(tool, "echo w >&2; exit 1", gone);
+    await refused(tool, "echo 123; echo w >&2; exit 1", gone);
+    await refused(tool, "echo 123; echo w >&2", gone);
+  }
+  assert.deepEqual(await run("pgrep", "exit 1"), { outcome: "no_match" });
+  for (const tool of ["lsof", "ps"]) {
+    assert.deepEqual(await run(tool, "exit 1", gone), { outcome: "no_match" });
+    await refused(tool, "exit 1", live);
+    await refused(tool, "exit 1", {});
+  }
+  await refused("probe", "exit 1", gone);
   await assert.rejects(
-    strict("/bin/sh", ["-c", "echo warning >&2"], "SELF"),
-    /^Error: SELF:STDERR:warning/u,
+    runInventory({ ...INVENTORY.pgrep, command: "/nonexistent/inventory" }, []),
+    /INVENTORY_ERROR:pgrep:ENOENT/u,
   );
   const environment = await environmentOf(process.pid);
   assert.ok(environment !== null && Object.keys(environment).length > 0);
@@ -992,6 +1091,25 @@ async function scannerSelfCheck() {
     outcome: "exited",
     files: [],
   });
+  // The real tools' documented no-match answers.
+  assert.deepEqual(
+    await runInventory("pgrep", ["-P", String(finished.pid), "-f", "."]),
+    { outcome: "no_match" },
+  );
+  assert.deepEqual(
+    await runInventory("ps", ["-o", "command=", "-p", String(finished.pid)], {
+      gone: () => isGone(finished.pid),
+    }),
+    { outcome: "no_match" },
+  );
+  assert.deepEqual(
+    await runInventory(
+      "lsof",
+      ["-nP", "-a", "-p", String(finished.pid), "-F", "pftPnT"],
+      { gone: () => isGone(finished.pid) },
+    ),
+    { outcome: "no_match" },
+  );
   await quitSelfCheck();
 }
 
@@ -1212,6 +1330,7 @@ export async function runOwnerPreviewIsolation(
           backendPid: entry.backend.pid,
           runtimePid: entry.runtimeChild.pid,
           listeners: entry.listeners,
+          listenerViolations: entry.listenerViolations,
           unixPaths: entry.unixPaths,
           openPathCount: entry.paths.length,
         },

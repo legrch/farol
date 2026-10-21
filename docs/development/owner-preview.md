@@ -209,11 +209,23 @@ home directory. Path containment is decided on canonical paths resolved the way
 the kernel does (each existing prefix is realpathed before the next component,
 including `..`); a `..` after a missing component cannot be resolved and fails
 closed. Each launch is recorded and checkpointed in the receipt as soon as it
-exists, so a later failure still names every launched pid. Every inventory fails closed: each owned process (parent, Go backend, Node
-runtime child) must yield a readable, non-empty environment and a clean per-pid
-`lsof` listing, and a non-zero exit or stderr output from `lsof`, `ps` or the
-environment probe is an error. Only a pid the kernel confirms gone is reported,
-explicitly, as exited. Receipts are under `_output/preview/isolation/<generation>/`.
+exists, so a later failure still names every launched pid. Every inventory fails closed, through one runner that every external command
+uses (`pgrep`, `lsof`, `ps` and the `KERN_PROCARGS2` probe). Success is exit 0
+with empty stderr. The only accepted non-zero outcome is the command's own
+documented no-match, with no output: `pgrep` exit 1 (no children); `lsof` and
+`ps` exit 1, only for a pid the kernel confirms gone. Any other exit, a signal,
+a timeout, stderr output, or partial output beside a failure is an inventory
+error naming the command, exit code and stderr, and a failed command's stdout is
+never parsed. Each owned process (parent, Go backend, Node runtime child) must
+yield a readable, non-empty environment and a clean per-pid `lsof` listing; only
+a pid the kernel confirms gone is reported, explicitly, as exited.
+
+Sockets: a qualifying listener is **TCP LISTEN on 127.0.0.1 only**. Any other
+network listener on an owned pid fails with a named code (`UDP_SOCKET`,
+`IPV6_LISTENER` including `::1`, `WILDCARD_LISTENER`, `HOSTNAME_LISTENER`,
+`NON_LOOPBACK_ADDRESS`, `UNPARSABLE_LISTENER`); connected and unix sockets are not
+listeners and the two instances' port sets and socket paths must be disjoint.
+Receipts are under `_output/preview/isolation/<generation>/`.
 
 ## Verification and remaining gates
 
