@@ -239,6 +239,15 @@ such pid must be gone (`PID_REMAINS`), a rescan from the original parent must
 find no descendant (`NEW_DESCENDANT`), and no process may still carry the
 instance's unique disposable root in its arguments (`ORPHAN_REMAINS`, a `pgrep -f`
 on that root; a reparented orphan is no longer a descendant).
+
+That teardown proof runs once, in a `finally`, on every exit path (success,
+failure, or a launch that failed half way; a launch with no handle still gets the
+orphan check on its disposable root). The receipt records
+`teardown: { verified, survivors[], instances[] }`. A failed run keeps its
+original error and stays UNKNOWN; an unverified teardown also keeps a successful
+run UNKNOWN (`TEARDOWN_UNVERIFIED`). A survivor is reported with its pid and
+reason and is never signalled: the only signals are the existing exact-pid quit
+requests.
 Receipts are under `_output/preview/isolation/<generation>/`.
 
 ## Verification and remaining gates

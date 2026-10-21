@@ -261,11 +261,14 @@ async function stableTree(
   }
   throw new Error(`OWNER_PREVIEW_ISOLATION_TREE_UNSTABLE:${label}`);
 }
-// After the quits: every pid ever seen is gone; a rescan from the original
-// parent finds no descendant; and no process anywhere still carries the
-// instance's unique disposable root in its arguments (an orphan reparented away
-// from the tree). The dependencies are injectable for the self-check.
-async function assertTornDown(
+// Teardown proof for one instance, reported and never thrown (except the
+// result's own `error` for an inventory failure): every pid ever seen has
+// exited, a rescan from the original parent finds no descendant, and no
+// process anywhere still carries the instance's unique disposable root in its
+// arguments (an orphan reparented away from the tree is no longer a
+// descendant). A survivor is reported with its reason and is never signalled.
+// The dependencies are injectable for the self-check.
+async function tearDownReport(
   instance,
   {
     alive = (pid) => !isGone(pid),
@@ -283,34 +286,93 @@ async function assertTornDown(
     interval = 50,
   } = {},
 ) {
-  for (const pid of instance.seen) {
-    for (let attempt = 0; attempt < tries && alive(pid); attempt += 1)
-      await new Promise((r) => setTimeout(r, interval));
-    assert.equal(
-      alive(pid),
-      false,
-      `OWNER_PREVIEW_ISOLATION_PID_REMAINS:${instance.kind}:${pid}`,
-    );
+  const survivors = [];
+  const survivor = (pid, reason) => {
+    if (
+      !survivors.some((entry) => entry.pid === pid && entry.reason === reason)
+    )
+      survivors.push({ kind: instance.kind, pid, reason });
+  };
+  const wait = () => new Promise((r) => setTimeout(r, interval));
+  let error = null;
+  try {
+    for (const pid of instance.seen) {
+      for (let attempt = 0; attempt < tries && alive(pid); attempt += 1)
+        await wait();
+      if (alive(pid)) survivor(pid, "PID_REMAINS");
+    }
+    if (instance.pid !== null)
+      for (const pid of await rescan(instance.pid))
+        if (pid !== instance.pid) survivor(pid, "NEW_DESCENDANT");
+    let orphaned = await orphans(instance.home);
+    for (
+      let attempt = 0;
+      attempt < tries && orphaned.length > 0;
+      attempt += 1
+    ) {
+      await wait();
+      orphaned = await orphans(instance.home);
+    }
+    for (const pid of orphaned) survivor(pid, "ORPHAN_REMAINS");
+  } catch (caught) {
+    error = caught instanceof Error ? caught.message : "TEARDOWN_FAILED";
   }
-  const again = (await rescan(instance.pid)).filter(
-    (pid) => pid !== instance.pid,
-  );
-  assert.deepEqual(
-    again,
-    [],
-    `OWNER_PREVIEW_ISOLATION_NEW_DESCENDANT:${instance.kind}:${again.join(",")}`,
-  );
-  let orphaned = await orphans(instance.home);
-  for (let attempt = 0; attempt < tries && orphaned.length > 0; attempt += 1) {
-    await new Promise((r) => setTimeout(r, interval));
-    orphaned = await orphans(instance.home);
-  }
-  assert.deepEqual(
-    orphaned,
-    [],
-    `OWNER_PREVIEW_ISOLATION_ORPHAN_REMAINS:${instance.kind}:${orphaned.join(",")}`,
-  );
+  return {
+    kind: instance.kind,
+    pid: instance.pid,
+    verified: error === null && survivors.length === 0,
+    survivors,
+    error,
+  };
 }
+// The one teardown, run for every exit path. A launch that failed before it
+// returned a handle has no instance; its disposable root still gets the orphan
+// check.
+async function verifyTeardown(targets, deps) {
+  const reports = [];
+  for (const target of targets)
+    reports.push(await tearDownReport(target, deps));
+  return {
+    verified: reports.every((report) => report.verified),
+    survivors: reports.flatMap((report) => report.survivors),
+    instances: reports,
+  };
+}
+function teardownTargets(instances, launches) {
+  const started = new Set(instances.map((entry) => entry.home));
+  return [
+    ...instances,
+    ...launches
+      .filter((record) => record.home && !started.has(record.home))
+      .map((record) => ({
+        kind: record.kind,
+        pid: null,
+        home: record.home,
+        seen: new Set(),
+      })),
+  ];
+}
+// PASS needs no failure and a verified teardown. Otherwise the status stays
+// UNKNOWN: the original failure stays the reported error, and an unverified
+// teardown with no other failure is reported as such.
+function concludeReceipt(receipt, failure, teardown) {
+  receipt.teardown = teardown;
+  receipt.finishedAt = new Date().toISOString();
+  if (failure === null && teardown.verified) {
+    receipt.status = "PASS";
+    return;
+  }
+  receipt.status = "UNKNOWN";
+  receipt.error =
+    failure !== null
+      ? failure instanceof Error
+        ? failure.message
+        : "OWNER_PREVIEW_ISOLATION_FAILED"
+      : `OWNER_PREVIEW_ISOLATION_TEARDOWN_UNVERIFIED:${teardown.survivors
+          .map((entry) => `${entry.kind}:${entry.pid}:${entry.reason}`)
+          .join(",")}`;
+}
+
 // null is the explicit "already exited" outcome: the documented ps no-match for
 // a pid the kernel no longer knows. Every other failure is an inventory error.
 async function command(pid) {
@@ -1362,18 +1424,87 @@ async function treeSelfCheck() {
     orphans: async () => [],
     ...fast,
   };
-  await assertTornDown(instance(1, 2, 3), clean);
-  await assert.rejects(
-    assertTornDown(instance(1, 2, 3), { ...clean, alive: (pid) => pid === 3 }),
-    /PID_REMAINS:selfcheck:3/u,
+  const reasons = async (target, deps) =>
+    (await tearDownReport(target, deps)).survivors.map(
+      (entry) => `${entry.pid}:${entry.reason}`,
+    );
+  assert.equal((await tearDownReport(instance(1, 2, 3), clean)).verified, true);
+  assert.deepEqual(
+    await reasons(instance(1, 2, 3), { ...clean, alive: (pid) => pid === 3 }),
+    ["3:PID_REMAINS"],
   );
-  await assert.rejects(
-    assertTornDown(instance(1, 2), { ...clean, rescan: async () => [1, 9] }),
-    /NEW_DESCENDANT:selfcheck:9/u,
+  assert.deepEqual(
+    await reasons(instance(1, 2), { ...clean, rescan: async () => [1, 9] }),
+    ["9:NEW_DESCENDANT"],
   );
-  await assert.rejects(
-    assertTornDown(instance(1, 2), { ...clean, orphans: async () => [7] }),
-    /ORPHAN_REMAINS:selfcheck:7/u,
+  assert.deepEqual(
+    await reasons(instance(1, 2), { ...clean, orphans: async () => [7] }),
+    ["7:ORPHAN_REMAINS"],
+  );
+  // An inventory failure is an unverified teardown, not a pass.
+  const broken = await tearDownReport(instance(1), {
+    ...clean,
+    orphans: async () => {
+      throw new Error("OWNER_PREVIEW_ISOLATION_INVENTORY_ERROR:pgrep:2:x");
+    },
+  });
+  assert.equal(broken.verified, false);
+  assert.match(broken.error, /INVENTORY_ERROR:pgrep/u);
+  // A failed launch has no pid: only its disposable root is checked.
+  const orphanOnly = await tearDownReport(
+    { kind: "owner-preview", pid: null, home: "/h2", seen: new Set() },
+    {
+      ...clean,
+      rescan: async () => assert.fail("no rescan without a pid"),
+      orphans: async (home) => (home === "/h2" ? [5] : []),
+    },
+  );
+  assert.deepEqual(
+    orphanOnly.survivors.map((e) => e.pid),
+    [5],
+  );
+  // A failing run that leaves one survivor: the receipt lists it, the status
+  // stays UNKNOWN, and the original failure stays the reported error.
+  const failing = {
+    status: "UNKNOWN",
+    launches: [{ kind: "normal", home: "/h" }],
+  };
+  const failed = await verifyTeardown([instance(1, 2, 3)], {
+    ...clean,
+    alive: (pid) => pid === 3,
+  });
+  concludeReceipt(failing, new Error("BOOM"), failed);
+  assert.equal(failing.status, "UNKNOWN");
+  assert.equal(failing.error, "BOOM");
+  assert.equal(failing.teardown.verified, false);
+  assert.deepEqual(failing.teardown.survivors, [
+    { kind: "selfcheck", pid: 3, reason: "PID_REMAINS" },
+  ]);
+  // A successful run with a survivor is not a pass either.
+  const leaked = { status: "UNKNOWN" };
+  concludeReceipt(leaked, null, failed);
+  assert.equal(leaked.status, "UNKNOWN");
+  assert.match(leaked.error, /TEARDOWN_UNVERIFIED:selfcheck:3:PID_REMAINS/u);
+  // Only a clean run with a verified teardown passes.
+  const passing = { status: "UNKNOWN" };
+  concludeReceipt(passing, null, await verifyTeardown([instance(1, 2)], clean));
+  assert.equal(passing.status, "PASS");
+  assert.equal(passing.teardown.verified, true);
+  // Launch records without an instance still get their root checked.
+  const targets = teardownTargets(
+    [{ home: "/a", kind: "normal", pid: 1, seen: new Set([1]) }],
+    [
+      { kind: "normal", home: "/a" },
+      { kind: "owner-preview", home: "/b" },
+      { kind: "owner-preview", home: null },
+    ],
+  );
+  assert.deepEqual(
+    targets.map((target) => [target.kind, target.home, target.pid]),
+    [
+      ["normal", "/a", 1],
+      ["owner-preview", "/b", null],
+    ],
   );
 }
 
@@ -1490,6 +1621,8 @@ export async function runOwnerPreviewIsolation(
   });
   const instances = [];
   let server;
+  let failure = null;
+  let teardown = null;
   try {
     const temporary = await fs.realpath(os.tmpdir());
     const previewExecutable = path.join(
@@ -1663,7 +1796,7 @@ export async function runOwnerPreviewIsolation(
     assert.deepEqual(await fs.readdir(normal.appData), ["Farol Next Preview"]);
     assert.deepEqual(await fs.readdir(owner.appData), ["Farol Preview"]);
 
-    // Orderly quit of both, then teardown is verified (see assertTornDown).
+    // Orderly quit of both, then the single teardown in `finally` verifies the process trees.
     const outcomes = await Promise.all(
       instances.map((instance) => requestQuit(instance)),
     );
@@ -1689,19 +1822,14 @@ export async function runOwnerPreviewIsolation(
       assert.equal(quit.receipt.drained, true);
       assert.deepEqual(quit.receipt.unconfirmed, []);
     }
-    for (const instance of instances) await assertTornDown(instance);
     for (const instance of instances) writeQuit(instance);
     receipt.terminals = instances.map((entry) => ({
       kind: entry.kind,
       ...entry.terminal,
     }));
     await verifyOwnerPreview(repositoryRoot, generation);
-    receipt.profilesRetained = instances.map((entry) => entry.home);
-    receipt.status = "PASS";
-    receipt.finishedAt = new Date().toISOString();
-    await checkpoint();
-    return { receiptFile, receipt };
   } catch (error) {
+    failure = error;
     // One orderly quit per known owned app; never retry, signal or kill. The
     // record is derived from the actual terminal state, never assumed.
     for (const instance of instances) {
@@ -1715,22 +1843,29 @@ export async function runOwnerPreviewIsolation(
       }
       writeQuit(instance);
     }
-    receipt.status = "UNKNOWN";
-    receipt.error =
-      error instanceof Error ? error.message : "OWNER_PREVIEW_ISOLATION_FAILED";
-    receipt.profilesRetained = instances.map((entry) => entry.home);
-    receipt.finishedAt = new Date().toISOString();
-    await checkpoint();
-    throw new Error(
-      `OWNER_PREVIEW_ISOLATION_UNCONFIRMED: ${receiptFile}: ${receipt.error}`,
-      { cause: error },
-    );
   } finally {
+    // The single teardown, for every exit path: success, failure, or a launch
+    // that failed half way. Survivors are reported, never signalled.
+    teardown = await verifyTeardown(
+      teardownTargets(instances, receipt.launches),
+    );
+    for (const instance of instances) writeQuit(instance);
     if (server) {
       server.closeAllConnections();
       await new Promise((resolve) => server.close(resolve));
     }
   }
+  receipt.profilesRetained = [
+    ...new Set(receipt.launches.map((record) => record.home).filter(Boolean)),
+  ];
+  concludeReceipt(receipt, failure, teardown);
+  await checkpoint();
+  if (receipt.status !== "PASS")
+    throw new Error(
+      `OWNER_PREVIEW_ISOLATION_UNCONFIRMED: ${receiptFile}: ${receipt.error}`,
+      { cause: failure ?? undefined },
+    );
+  return { receiptFile, receipt };
 }
 
 if (
