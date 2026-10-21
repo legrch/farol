@@ -249,6 +249,23 @@ function mapReviewedArch(rawArch: string): "arm64" | "x86_64" | undefined {
   return undefined;
 }
 
+/**
+ * Where this user's own copy of the reviewed tunnel-client build lives, and
+ * the pinned digest it must match, or undefined on an unreviewed architecture.
+ */
+export function reviewedTunnelClientPath(
+  home: string,
+  rawArch: string,
+  reviewedDigests: ReviewedTunnelClientDigests = REVIEWED_TUNNEL_CLIENT_DIGESTS,
+): Readonly<{ path: string; digest: ReviewedTunnelClientDigest }> | undefined {
+  const reviewedArch = mapReviewedArch(rawArch);
+  const digest = reviewedArch ? reviewedDigests[reviewedArch] : undefined;
+  const seed = reviewedArch
+    ? reviewedBuildDirSeed(home, reviewedArch, reviewedDigests)
+    : undefined;
+  return digest && seed ? { path: seed.path, digest } : undefined;
+}
+
 function reviewedBuildDirSeed(
   home: string,
   reviewedArch: "arm64" | "x86_64",

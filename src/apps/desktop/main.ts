@@ -408,8 +408,10 @@ import {
 import { probeCodexHost } from "./codex-host-probe";
 import {
   discoverExecutables,
+  REVIEWED_TUNNEL_CLIENT_DIGESTS,
   type DiscoveryCandidate,
 } from "./executable-discovery";
+import { adoptReviewedTunnelClient } from "./tunnel-client-adoption";
 import {
   UNTRUSTED_CANDIDATE_DIALOG,
   reverifyDiscoveredCandidate as reverifyDiscoveredCandidateImpl,
@@ -6987,6 +6989,24 @@ async function configureAdmittedProduct(
           const verified = await verifyTunnelClientExecutable(candidate.path, {
             canonicalPath: candidate.path,
             sha256: candidate.sha256,
+          });
+          if (verified.ok) return verified;
+        }
+        // A build another macOS user owns (Homebrew installed by the Mac's
+        // first account) is refused as is; copy it into this user's reviewed
+        // build directory, accepted only on the pinned digest, and verify the
+        // copy the same way.
+        for (const candidate of discovered.candidates) {
+          if (candidate.refusalReason !== "wrong-owner") continue;
+          const adopted = await adoptReviewedTunnelClient(candidate.path, {
+            home: os.homedir(),
+            arch: process.arch,
+            reviewedDigests: REVIEWED_TUNNEL_CLIENT_DIGESTS,
+          });
+          if (!adopted.ok) continue;
+          const verified = await verifyTunnelClientExecutable(adopted.path, {
+            canonicalPath: adopted.path,
+            sha256: adopted.sha256,
           });
           if (verified.ok) return verified;
         }

@@ -75,6 +75,12 @@ export const cloudDeferredFiles = Object.freeze(
       mixed: true,
     },
     {
+      file: "tests/unit/tunnel-client-adoption.test.ts",
+      prerequisite:
+        "macOS ACL tools (ls -lde, chmod +a) and a physical root-or-user owner chain",
+      mixed: false,
+    },
+    {
       file: "tests/integration/go-connector-launch.test.ts",
       prerequisite: "Connector's fixed physical /private/tmp socket parent",
       mixed: true,

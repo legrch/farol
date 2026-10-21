@@ -237,6 +237,13 @@ function actionFeedback(
     )
       return "Connection helper validated and selected. This does not start the connection or prove ChatGPT attachment.";
     const discovery = evidenceReceived ? current?.evidence?.value : null;
+    if (
+      discovery?.kind === "connector.client-discovery" &&
+      discovery.candidates.some(
+        (candidate) => candidate.refusalReason === "wrong-owner",
+      )
+    )
+      return "Found the tunnel helper, but another macOS user owns it and Farol could not make its own checked copy for this account. Install tunnel-client from this account, then choose Find connection helper again.";
     if (discovery?.kind === "connector.client-discovery")
       return discovery.candidates.length === 0
         ? "No connection helper found. Install the helper described in the Connection guide, or choose a custom installation in Advanced connection options."
