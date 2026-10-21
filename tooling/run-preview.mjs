@@ -177,8 +177,8 @@ async function main() {
     }
   } finally {
     if (snapshot) {
-      const { failed, refused } = await removeLaunchSnapshot(snapshot);
-      const unregistered = [...failed, ...refused];
+      const { failed, refused, errors } = await removeLaunchSnapshot(snapshot);
+      const unregistered = [...failed, ...refused, ...errors];
       if (unregistered.length > 0) {
         process.stderr.write(
           `could not unregister launch snapshot bundles from LaunchServices: ${unregistered.join(", ")}\n`,

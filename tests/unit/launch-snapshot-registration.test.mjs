@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as launchSnapshot from "../../tooling/launch-snapshot.mjs";
 import {
   createLaunchSnapshot,
@@ -74,6 +74,7 @@ describe("launch snapshot LaunchServices cleanup", () => {
       unregistered: [helper, runtime, outer],
       failed: [],
       refused: [],
+      errors: [],
     });
     await expect(fs.stat(snapshot.root)).rejects.toMatchObject({
       code: "ENOENT",
@@ -232,6 +233,85 @@ describe("launch snapshot LaunchServices cleanup", () => {
     expect(outcome[ok ? "failed" : "unregistered"]).toEqual([]);
   });
 
+  it("removes the snapshot and reports the error when a directory cannot be read mid-walk", async () => {
+    const { snapshot } = await fixtureSnapshot();
+    const runtime = path.join(
+      snapshot.appPath,
+      "Contents/Frameworks/Electron Runtime.app",
+    );
+    const original = fs.readdir.bind(fs);
+    const spy = vi
+      .spyOn(fs, "readdir")
+      .mockImplementation((target, ...rest) =>
+        target === runtime
+          ? Promise.reject(
+              Object.assign(new Error("denied"), { code: "EACCES" }),
+            )
+          : original(target, ...rest),
+      );
+    try {
+      const calls = [];
+      const outcome = await removeLaunchSnapshot(snapshot, {
+        lsregister: process.execPath,
+        unregister: async (_tool, bundlePath) => {
+          calls.push(bundlePath);
+          return true;
+        },
+      });
+      expect(outcome.errors).toEqual([`${runtime}: EACCES`]);
+      // What could be enumerated is still unregistered, and the walk goes on.
+      expect(calls).toEqual([runtime, snapshot.appPath]);
+    } finally {
+      spy.mockRestore();
+    }
+    await expect(fs.stat(snapshot.root)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("removes the snapshot and reports the error when the unregister step throws", async () => {
+    const { snapshot } = await fixtureSnapshot();
+    const outcome = await removeLaunchSnapshot(snapshot, {
+      lsregister: process.execPath,
+      unregister: async () => {
+        throw new Error("spawn failed");
+      },
+    });
+    expect(outcome.errors.length).toBe(3);
+    expect(outcome.errors[0]).toContain("spawn failed");
+    await expect(fs.stat(snapshot.root)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("ignores a directory that vanishes mid-walk without reporting an error", async () => {
+    const { snapshot } = await fixtureSnapshot();
+    const runtime = path.join(
+      snapshot.appPath,
+      "Contents/Frameworks/Electron Runtime.app",
+    );
+    const original = fs.readdir.bind(fs);
+    const spy = vi
+      .spyOn(fs, "readdir")
+      .mockImplementation((target, ...rest) =>
+        target === runtime
+          ? Promise.reject(Object.assign(new Error("gone"), { code: "ENOENT" }))
+          : original(target, ...rest),
+      );
+    try {
+      const outcome = await removeLaunchSnapshot(snapshot, {
+        lsregister: process.execPath,
+        unregister: async () => true,
+      });
+      expect(outcome.errors).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+    await expect(fs.stat(snapshot.root)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("skips quietly where lsregister does not exist", async () => {
     const { snapshot } = await fixtureSnapshot();
     const outcome = await removeLaunchSnapshot(snapshot, {
@@ -240,7 +320,12 @@ describe("launch snapshot LaunchServices cleanup", () => {
         throw new Error("must not run");
       },
     });
-    expect(outcome).toEqual({ unregistered: [], failed: [], refused: [] });
+    expect(outcome).toEqual({
+      unregistered: [],
+      failed: [],
+      refused: [],
+      errors: [],
+    });
   });
 
   it("does not unregister when the descriptor is not an owned snapshot", async () => {

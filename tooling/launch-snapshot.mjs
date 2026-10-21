@@ -103,12 +103,24 @@ export async function createLaunchSnapshot({
 
 // Every `*.app` inside the snapshot (the product bundle, `Electron Runtime.app`
 // and its helpers), deepest first, as exact paths. Symlinks are not followed.
-async function snapshotBundlePaths(directory) {
-  const found = [];
-  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+// Best effort: a directory that vanishes mid-walk is skipped, and any other
+// read error is recorded in `errors` while the walk continues elsewhere.
+async function snapshotBundlePaths(directory, errors, found = []) {
+  let entries;
+  try {
+    entries = await fs.readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      errors.push(
+        `${directory}: ${error?.code ?? error?.message ?? "read failed"}`,
+      );
+    }
+    return found;
+  }
+  for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const entryPath = path.join(directory, entry.name);
-    found.push(...(await snapshotBundlePaths(entryPath)));
+    await snapshotBundlePaths(entryPath, errors, found);
     if (entry.name.endsWith(".app")) found.push(entryPath);
   }
   return found;
@@ -134,7 +146,8 @@ function runLsregisterUnregister(lsregister, bundlePath) {
 // its nested helper bundles, under the production bundle identifier; deleting
 // the directory does not unregister them. Unregister each exact path the
 // snapshot owns before the directory goes away. Never a prefix or global
-// unregister, and never fatal: the launch outcome must not depend on it.
+// unregister, and strictly best effort: nothing here may throw, because the
+// snapshot must be deleted and the launch outcome must not depend on it.
 //
 // Private on purpose: it trusts `realRoot`, which only `removeLaunchSnapshot`
 // supplies after validating the descriptor and resolving the real path. A path
@@ -142,14 +155,14 @@ function runLsregisterUnregister(lsregister, bundlePath) {
 async function unregisterSnapshotBundles(
   realRoot,
   { lsregister = LSREGISTER, unregister = runLsregisterUnregister } = {},
+  result,
 ) {
-  const result = { unregistered: [], failed: [], refused: [] };
-  const bundles = await snapshotBundlePaths(realRoot);
-  if (bundles.length === 0) return result;
+  const bundles = await snapshotBundlePaths(realRoot, result.errors);
+  if (bundles.length === 0) return;
   try {
     await fs.access(lsregister);
   } catch {
-    return result;
+    return;
   }
   for (const bundlePath of bundles) {
     let resolved = null;
@@ -158,6 +171,11 @@ async function unregisterSnapshotBundles(
     } catch {
       // Gone or unreadable: not a path this run can vouch for.
     }
+    // The resolve-then-unregister window is not closed against a concurrent
+    // rewrite, deliberately: exploiting it needs a same-uid process able to
+    // modify this private 0700 snapshot, and such a process can already run
+    // `lsregister -u` on any path itself, so no privilege boundary is crossed.
+    // This check stops an accidental foreign path, not a same-user attacker.
     if (
       resolved !== bundlePath ||
       !bundlePath.startsWith(`${realRoot}${path.sep}`)
@@ -165,12 +183,21 @@ async function unregisterSnapshotBundles(
       result.refused.push(bundlePath);
       continue;
     }
-    ((await unregister(lsregister, bundlePath))
-      ? result.unregistered
-      : result.failed
-    ).push(bundlePath);
+    try {
+      ((await unregister(lsregister, bundlePath))
+        ? result.unregistered
+        : result.failed
+      ).push(bundlePath);
+    } catch (error) {
+      result.errors.push(
+        `${bundlePath}: ${error?.message ?? "unregister failed"}`,
+      );
+    }
   }
-  return result;
+}
+
+function emptyOutcome() {
+  return { unregistered: [], failed: [], refused: [], errors: [] };
 }
 
 export async function removeLaunchSnapshot(snapshot, options) {
@@ -203,11 +230,17 @@ export async function removeLaunchSnapshot(snapshot, options) {
     }
   } catch (error) {
     if (error?.code === "ENOENT") {
-      return { unregistered: [], failed: [], refused: [] };
+      return emptyOutcome();
     }
     throw error;
   }
-  const outcome = await unregisterSnapshotBundles(realRoot, options);
-  await fs.rm(snapshot.root, { recursive: true, force: true });
+  const outcome = emptyOutcome();
+  try {
+    await unregisterSnapshotBundles(realRoot, options, outcome);
+  } catch (error) {
+    outcome.errors.push(error?.message ?? "unregister failed");
+  } finally {
+    await fs.rm(snapshot.root, { recursive: true, force: true });
+  }
   return outcome;
 }
