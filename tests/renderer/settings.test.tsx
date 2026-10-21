@@ -1485,6 +1485,34 @@ describe("owner setup entry feedback", () => {
       expect(h.calls()).toEqual([{ kind: "connector.discover-client" }]);
     },
   );
+  it("names a helper owned by another macOS user in plain words", async () => {
+    const h = await mount("connection");
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: h.configuration,
+      evidence: {
+        kind: "connector.client-discovery",
+        candidates: [
+          {
+            requestedPath: "/opt/homebrew/bin/tunnel-client",
+            path: "/opt/homebrew/Cellar/tunnel-client/0.0.14/libexec/tunnel-client",
+            source: "homebrew",
+            origin: "unknown",
+            verdict: "refused",
+            refusalReason: "wrong-owner",
+          },
+        ],
+        searched: ["/opt/homebrew/bin/tunnel-client"],
+      },
+    });
+    await h.click("Find connection helper");
+    expect(h.host.textContent).toContain(
+      "another macOS user owns it and it is not the reviewed build",
+    );
+    expect(h.host.textContent).not.toContain("candidate(s) found");
+    expect(() => h.button("Connect this Mac")).toThrow();
+    expect(h.calls()).toEqual([{ kind: "connector.discover-client" }]);
+  });
   it.each([
     ["TUNNEL_CLIENT_DISCOVERY_FAILED", "Connection helper discovery failed"],
     [
