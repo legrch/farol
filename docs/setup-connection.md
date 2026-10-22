@@ -60,6 +60,21 @@ Return to Farol and choose **Test in ChatGPT** once. Farol selects the app named
 
 Choose **Start using Farol** when all four steps have current checks. This opens Home.
 
+## Chat conversations
+
+Open **ChatGPT**, then choose **Chat conversations** in its sidebar. To start
+with a typed message, choose **Check account**, review the signed-in account in
+ChatGPT, and choose **Use this account and send** only for the account you intend
+to use. A workspace-backed conversation requires a verified workspace with
+read-only access: choose a text file, review its metadata, inspect and confirm
+the account, then explicitly send. Opening this sheet never reads a file or
+sends a message. If an outcome is unconfirmed, do not submit it again.
+
+The same sheet offers **Load saved answers** for retained answers from an earlier
+app session and **Stored replies** for recovery copies. These readers load only
+on explicit action; saved answers cannot be continued here. Chat conversations
+belong to the ChatGPT area and remain separate from Settings.
+
 ## Settings and support
 
 **Settings → General** has the Setup status card and **Open Setup**, **Install updates automatically**, **Version**, **Check for updates**, **Update recovery…** for a recorded update, and **Save support file…**. Appearance and Keyboard shortcuts remain separate pages. Workspace access, commands and connection setup belong in Setup.

@@ -21,6 +21,10 @@ import { computerSetup } from "./computer-setup";
 import { TaskEditor } from "./task";
 import { Home, HomeNavigation, homeTitle } from "./home";
 import { Setup } from "./setup";
+import { ChatDirect } from "./chat-direct";
+import { ChatReadonly } from "./chat-readonly";
+import { ChatHistory } from "./chat-history";
+import { RetiredReplies } from "./retired-replies";
 import { setupSteps } from "./setup-navigation";
 import { designIconPath, designIconViewBox } from "./design-icons";
 import { UpdateNotice, acknowledgeUpdateNotice } from "./update-notice";
@@ -1435,10 +1439,16 @@ export function Shell() {
               </nav>
             )}
           {destination.area === "chatgpt" && (
-            <p className="description">
-              Your conversations stay in ChatGPT. Use its own New chat action to
-              start a conversation.
-            </p>
+            <nav className="sidebar-section" aria-label="Chat conversations">
+              <button onClick={() => facade.overlay("chat-conversations")}>
+                <Icon name="chatgpt" />
+                <span>Chat conversations</span>
+              </button>
+              <p className="description">
+                Start an account-confirmed conversation, review a read-only
+                workspace file, or read saved answers here.
+              </p>
+            </nav>
           )}
           {destination.area === "activity" && (
             <ActivityNavigation
@@ -1506,6 +1516,19 @@ export function Shell() {
         </PanelBoundary>
       </main>
       <UpdateNotice snapshot={state} facade={facade} />
+      {state.overlay === "chat-conversations" && (
+        <Overlay
+          title="Chat conversations"
+          onClose={() => facade.overlay("none")}
+        >
+          <PanelBoundary>
+            <ChatDirect snapshot={state} facade={facade} />
+            <ChatReadonly snapshot={state} facade={facade} />
+            <ChatHistory snapshot={state} facade={facade} />
+            <RetiredReplies snapshot={state} facade={facade} />
+          </PanelBoundary>
+        </Overlay>
+      )}
       {state.overlay === "activity" && (
         <Overlay title="Recorded event" onClose={() => facade.overlay("none")}>
           <Activity

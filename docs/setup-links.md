@@ -29,7 +29,7 @@ uses `setupStep`, independently of the Settings `page` field.
 | Settings   | `general`, `appearance`, `folders`, `computer`, `connection`, `model`, `shortcuts`, `diagnostics` | `general`, `appearance`, `shortcuts`                        |
 | Setup      | `overview`, `signin`, `folders`, `connection`, `attachment`, `finish`                             | `overview`, `signin`, `folders`, `connection`, `attachment` |
 | Home views | `overview`, `work`, `attention`, `activity`, `access`                                             | Unchanged                                                   |
-| Sheets     | `search`, `task`, `update`, `update-recovery`, `activity`                                         | Same set plus `unresolved-actions`                          |
+| Sheets     | `search`, `task`, `update`, `update-recovery`, `activity`                                         | Same set plus `unresolved-actions`, `chat-conversations`    |
 
 Connect this Mac and Workspaces are Setup step labels, not Settings destinations. Start page
 was already absent from the Settings navigation and destination type at this
@@ -66,3 +66,31 @@ pending and restores focus to its connected trigger.
 and clicks the formerly linked controls against their actual rendered surfaces.
 These are scripted DOM and controller contracts, not native UI, filesystem,
 provider, packaging or installed-app evidence.
+
+## Chat capabilities and deleted-component inventory
+
+Open **ChatGPT → Chat conversations** in the sidebar for account-confirmed
+conversation start, workspace-backed read-only conversations, saved answers and
+stored reply copies. This sheet uses the existing overlay presentation to keep
+its controls above the native ChatGPT browser. Settings remains General,
+Appearance and Keyboard shortcuts. Opening or closing the sheet does not inspect
+an account, prepare a file, read saved content or send a message. An active
+conversation retains its controller-owned state across sheet remounts; unknown
+outcomes remain fenced against resubmission.
+
+The inventory below covers every deleted component file reported by
+`git diff --diff-filter=D --name-only 6ca65fec 642d4543 -- src/ui/renderer apps/desktop/renderer`.
+All four components and their original component tests are restored from
+`6ca65fec`; the same inventory against the corrected HEAD is empty.
+
+| Deleted component at `642d4543`                          | Disposition                                                                       | Current surface                                                    |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `src/ui/renderer/chat-direct.tsx` (`ChatDirect`)         | Restored, including account confirmation and unknown-send fences                  | ChatGPT → Chat conversations: new conversation                     |
+| `src/ui/renderer/chat-readonly.tsx` (`ChatReadonly`)     | Restored, including verified read-only workspace scope and exact-operation fences | ChatGPT → Chat conversations: file preview and active conversation |
+| `src/ui/renderer/chat-history.tsx` (`ChatHistory`)       | Restored, including explicit local reads and context/epoch checks                 | ChatGPT → Chat conversations: Saved Chat answers                   |
+| `src/ui/renderer/retired-replies.tsx` (`RetiredReplies`) | Restored with its tests to preserve the related recovery reader                   | ChatGPT → Chat conversations: Stored replies                       |
+
+The intentionally removed inline Settings surfaces are outside that deleted-file
+list: Setup duplicates now live in Setup, diagnostic action readback lives in
+Unresolved actions, and the former startup preference lives in Setup → Workspaces.
+None of those removals authorizes dropping Chat capabilities.

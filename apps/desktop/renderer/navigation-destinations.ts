@@ -22,6 +22,7 @@ export const navigationAreas = [
   "settings",
 ] as const;
 export const sheets = [
+  "chat-conversations",
   "search",
   "task",
   "update",

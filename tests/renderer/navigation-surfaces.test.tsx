@@ -78,8 +78,13 @@ describe("closed renderer destinations", () => {
     })),
     ...sheets.map((sheet) => ({
       name: `sheet/${sheet}`,
-      destination: { area: "home" } as Partial<Destination>,
-      selector: "dialog",
+      destination: {
+        area: sheet === "chat-conversations" ? "chatgpt" : "home",
+      } as Partial<Destination>,
+      selector:
+        sheet === "chat-conversations"
+          ? 'dialog[aria-label="Chat conversations"]'
+          : "dialog",
       sheet,
     })),
   ];
@@ -100,6 +105,50 @@ describe("closed renderer destinations", () => {
         h.host.querySelector(selectors[h.c.getSnapshot().destination.page]),
       ).toBeTruthy();
     }
+  });
+  it("opens Chat flows from the ChatGPT sidebar without sending or reading on mount", async () => {
+    const h = await mount({ page: "general", shell: true });
+    expect(h.button("Chat conversations")).toBeUndefined();
+    await act(async () => h.c.navigate({ area: "chatgpt" }));
+    vi.mocked(h.f.api.configure).mockClear();
+    const historyRead = vi.spyOn(h.c, "readChatHistory");
+    const retiredRead = vi.spyOn(h.c, "readRetiredReplies");
+    const trigger = h.button("Chat conversations")!;
+    trigger.focus();
+    await h.click("Chat conversations");
+    expect(h.c.getSnapshot().destination.area).toBe("chatgpt");
+    expect(h.c.getSnapshot().overlay).toBe("chat-conversations");
+    const dialog = h.host.querySelector(
+      'dialog[aria-label="Chat conversations"]',
+    )!;
+    expect(
+      dialog.querySelector('[aria-label="New Chat conversation"]'),
+    ).toBeTruthy();
+    expect(
+      dialog.querySelector('[aria-label="Read-only file preview"]'),
+    ).toBeTruthy();
+    expect(
+      dialog.querySelector('[aria-label="Saved Chat answers"]'),
+    ).toBeTruthy();
+    expect(dialog.textContent).toContain("Stored replies");
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+    expect(historyRead).not.toHaveBeenCalled();
+    expect(retiredRead).not.toHaveBeenCalled();
+    expect(h.f.api.task).not.toHaveBeenCalled();
+    expect(vi.mocked(h.f.api.layout).mock.calls.at(-1)?.[5]).toBe("task-menu");
+    await act(async () =>
+      dialog.dispatchEvent(new Event("cancel", { cancelable: true })),
+    );
+    expect(h.c.getSnapshot().overlay).toBe("none");
+    expect(document.activeElement).toBe(trigger);
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+    expect(historyRead).not.toHaveBeenCalled();
+    expect(retiredRead).not.toHaveBeenCalled();
+    await act(async () => h.c.navigate({ area: "settings", page: "general" }));
+    expect(
+      h.host.querySelector('[aria-label="New Chat conversation"]'),
+    ).toBeNull();
+    expect(h.button("Chat conversations")).toBeUndefined();
   });
   it("uses the exact rendered Setup section set", () =>
     expect(setupPages).toEqual(setupSections.map(([key]) => key)));
