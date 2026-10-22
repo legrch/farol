@@ -3,6 +3,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { treeDigest } from "./artifact-digest.mjs";
 import {
   assertEmbeddedRuntime,
   observeEmbeddedRuntime,
@@ -35,33 +37,87 @@ export function devInfoPlist(plist) {
   return plist;
 }
 
+function codesign(args, action) {
+  const result = spawnSync("/usr/bin/codesign", args, {
+    encoding: "utf8",
+    timeout: 60_000,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error || result.status !== 0)
+    throw Error(`Farol Dev ${action} failed. No launch was attempted.`);
+  return result.stderr;
+}
+
+function verifyDevSignature(app) {
+  codesign(["--verify", "--deep", "--strict", app], "signature verification");
+  const details = codesign(
+    ["--display", "--verbose=4", app],
+    "signature inspection",
+  );
+  if (!/^Identifier=local\.farol\.dev$/mu.test(details))
+    throw Error(
+      "Farol Dev signature identifier is invalid. No launch was attempted.",
+    );
+}
+
 export async function prepareDevRuntime(root) {
   const source = path.join(root, "node_modules/electron/dist/Electron.app");
-  // Verify the copy before applying the four presentation-only plist fields.
+  const observed = await observeEmbeddedRuntime(source);
+  assertEmbeddedRuntime(observed);
+  const icon = await fs.readFile(
+    path.join(root, "resources/brand/sunrise-dock/farol-sunrise-dev.icns"),
+  );
+  if (
+    createHash("sha256").update(icon).digest("hex") !==
+    "557009b055071416d90a0c79df9c813978920094b15db5fa3ed09851cfa66eef"
+  )
+    throw Error("DEV_RUNTIME_ICON_INVALID");
+  const presentation = devInfoPlist(
+    await fs.readFile(path.join(source, "Contents/Info.plist"), "utf8"),
+  );
+  const inputs = createHash("sha256")
+    .update("farol-dev-signed-runtime/1\0")
+    .update(observed.extractedTreeDigest)
+    .update(presentation)
+    .update(icon)
+    .digest("hex");
   const parent = path.join(root, "_output/dev-runtime");
+  const destination = path.join(parent, "Farol Dev.app");
+  const receiptPath = path.join(parent, "signed-runtime.json");
+  let receipt;
+  try {
+    receipt = JSON.parse(await fs.readFile(receiptPath, "utf8"));
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  if (receipt?.inputs === inputs) {
+    if ((await treeDigest(destination)) !== receipt.output)
+      throw Error("Farol Dev bundle changed. No launch was attempted.");
+    verifyDevSignature(destination);
+    return root + DEV_EXECUTABLE_SUFFIX;
+  }
+  // Verify the copy before applying the four presentation-only plist fields.
   await fs.mkdir(parent, { recursive: true });
   const staging = await fs.mkdtemp(path.join(parent, ".prepare-"));
   const app = path.join(staging, "Farol Dev.app");
   try {
     await fs.cp(source, app, { recursive: true, verbatimSymlinks: true });
     assertEmbeddedRuntime(await observeEmbeddedRuntime(app));
-    const icon = await fs.readFile(
-      path.join(root, "resources/brand/sunrise-dock/farol-sunrise-dev.icns"),
-    );
-    if (
-      createHash("sha256").update(icon).digest("hex") !==
-      "557009b055071416d90a0c79df9c813978920094b15db5fa3ed09851cfa66eef"
-    )
-      throw Error("DEV_RUNTIME_ICON_INVALID");
     const plist = path.join(app, "Contents/Info.plist");
     await fs.writeFile(plist, devInfoPlist(await fs.readFile(plist, "utf8")));
     await fs.writeFile(
       path.join(app, "Contents/Resources/farol-dev.icns"),
       icon,
     );
-    const destination = path.join(parent, "Farol Dev.app");
+    codesign(
+      ["--force", "--deep", "--sign", "-", "--timestamp=none", app],
+      "signing",
+    );
+    verifyDevSignature(app);
+    const output = await treeDigest(app);
     await fs.rm(destination, { recursive: true, force: true });
     await fs.rename(app, destination);
+    await fs.writeFile(receiptPath, JSON.stringify({ inputs, output }));
     return root + DEV_EXECUTABLE_SUFFIX;
   } finally {
     await fs.rm(staging, { recursive: true, force: true });

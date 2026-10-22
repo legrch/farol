@@ -75,8 +75,14 @@ name, `local.farol.dev` bundle identifier and existing sunrise Dev icon for Dock
 Cmd-Tab and the app menu. The desktop retains its explicit Dev paths, partitions,
 `app.setName`, About panel and `Farol Dev · Development` window title.
 The locked npm Electron bytes, packaged Farol and Owner Preview are unchanged.
-The copy is recreated after a successful build, only after the launcher confirms
-that processes sharing the checkout's outputs are absent.
+After its Dev edits, the copy is ad-hoc signed with `/usr/bin/codesign --force
+--deep --sign - --timestamp=none`, then checked with `--verify --deep --strict`
+and inspected for the signed identifier `local.farol.dev`. Signing, verification
+or identifier failures refuse to launch. The copy is reused only while its input
+and output tree digests match; its signature and identifier are checked again
+before each launch. Changed vendor bytes or Dev resources require a new copy
+after a successful build, only after the launcher confirms that processes sharing
+the checkout's outputs are absent. This signing is confined to the Dev copy.
 
 | Existing command        | Purpose                                                                                                                        |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
