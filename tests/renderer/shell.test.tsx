@@ -3204,7 +3204,7 @@ it.each([false, true])(
     });
     expect(c.getSnapshot().destination.area).toBe("chatgpt");
     expect(host.querySelector('main [role="alert"]')?.textContent).toContain(
-      "failed page is retained",
+      "page failed to load",
     );
     await act(async () => button(host, "Back to setup").click());
     expect(c.getSnapshot().destination).toMatchObject({

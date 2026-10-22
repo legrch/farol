@@ -962,7 +962,7 @@ function ChatBrowser({
               ? "Sign-in is already open in ChatGPT. Finish there, then check sign-in in Connection."
               : failed
                 ? snapshot.route === "failed"
-                  ? "ChatGPT could not be opened. The failed page is retained. Return to Setup to check sign-in; navigation does not retry the page."
+                  ? "ChatGPT could not be opened. The page failed to load. Return to Setup to check sign-in; navigation does not retry the page."
                   : "ChatGPT could not be opened. Check Connection in Setup for details."
                 : "ChatGPT page status has not been confirmed. Check Connection for details."}
       </p>
