@@ -719,6 +719,25 @@ describe("dev opener bounded orchestration", () => {
     return { calls, logs, overrides };
   }
 
+  it("combines fresh first-run state with ordinary secondary-display sizing", async () => {
+    const { calls, overrides } = fixture();
+    await main(
+      ["--fresh-review-profile", "--display=secondary", argument],
+      overrides,
+    );
+    expect(calls.at(-1)).toEqual([
+      "launch",
+      false,
+      false,
+      marker,
+      {
+        builtInDisplayOnly: false,
+        allowPrimaryDisplay: false,
+        devSecondaryDisplay: true,
+      },
+    ]);
+  });
+
   it("forwards the one canonical Go input verbatim and provisions only after build", async () => {
     const { calls, logs, overrides } = fixture();
     await main(["--fresh-review-profile", argument], overrides);
@@ -729,7 +748,7 @@ describe("dev opener bounded orchestration", () => {
       [
         "launch",
         false,
-        true,
+        false,
         marker,
         {
           builtInDisplayOnly: false,

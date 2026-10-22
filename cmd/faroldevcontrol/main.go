@@ -25,12 +25,13 @@ import (
 )
 
 const (
-	maxRequestBytes  = 4096
-	maxResponseBytes = 512
-	maxPID           = 1<<31 - 1
-	maxProcArgsBytes = 1 << 20
-	electronSuffix   = "/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
-	relativeAppPath  = "_output/build/app/main.cjs"
+	maxRequestBytes   = 4096
+	maxResponseBytes  = 512
+	maxPID            = 1<<31 - 1
+	maxProcArgsBytes  = 1 << 20
+	devElectronSuffix = "/_output/dev-runtime/Farol Dev.app/Contents/MacOS/Electron"
+	electronSuffix    = "/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
+	relativeAppPath   = "_output/build/app/main.cjs"
 )
 
 type identity struct {
@@ -170,11 +171,16 @@ func (q request) expected() identity { return identity{PID: q.PID, UID: q.UID, T
 // checks permit only its Electron binary and matching built Dev entrypoint;
 // they do not independently prove realpath, ownership, profile or run marker.
 func validDevPaths(executable, appPath string) bool {
-	if !canonicalPath(executable) || !canonicalPath(appPath) || !strings.HasSuffix(executable, electronSuffix) {
+	if !canonicalPath(executable) || !canonicalPath(appPath) {
 		return false
 	}
-	root := strings.TrimSuffix(executable, electronSuffix)
-	return canonicalPath(root) && appPath == root+"/"+relativeAppPath
+	for _, suffix := range []string{devElectronSuffix, electronSuffix} {
+		if strings.HasSuffix(executable, suffix) {
+			root := strings.TrimSuffix(executable, suffix)
+			return canonicalPath(root) && appPath == root+"/"+relativeAppPath
+		}
+	}
+	return false
 }
 
 func canonicalPath(value string) bool {

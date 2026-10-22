@@ -17,6 +17,7 @@ import { createOwnerLaunchResultCollector } from "./owner-launch-result.mjs";
 import { ownerLaunchEnvironment } from "./launch-snapshot.mjs";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { parseDevDisplay } from "../src/apps/desktop/window-placement.ts";
+import { prepareDevRuntime } from "./dev-runtime.mjs";
 import { prepareDevBuild } from "./dev-process-control.mjs";
 import {
   dependencyDrift,
@@ -566,7 +567,7 @@ export async function runDevBuild(
     report(
       "Farol Dev requires a valid approved Go input declaration. Place it at " +
         `${DEFAULT_GO_INPUTS_FILE} or select --go-inputs=/absolute/path.json. ` +
-        "See README: Develop from source. No desktop was launched.",
+        "See docs/development/setup.md. No desktop was launched.",
     );
     return 1;
   }
@@ -702,8 +703,9 @@ export async function launchPreview(
   secondaryDisplay = false,
   reviewMarker,
   displayOptions = {},
+  prepareRuntime = prepareDevRuntime,
 ) {
-  const electronBin = path.join(root, "node_modules/.bin/electron");
+  const electronBin = await prepareRuntime(root);
   const { stopLabel, outcome, protocolError, resultCollector } =
     await runOwnerManagedChild({
       spawnChild: () =>
@@ -717,8 +719,7 @@ export async function launchPreview(
             ...(displayOptions.devSecondaryDisplay !== true &&
             (acceptanceProfile ||
               secondaryDisplay ||
-              displayOptions.builtInDisplayOnly === true ||
-              reviewMarker !== undefined)
+              displayOptions.builtInDisplayOnly === true)
               ? ["--preview-window-mode=secondary-visible"]
               : []),
             ...(displayOptions.builtInDisplayOnly === true
@@ -931,8 +932,8 @@ export async function main(argv, overrides = {}) {
     log(
       "Development bytes, not a packaged candidate. Profile retained; this opener cannot reopen it. No automatic retry or recovery.",
     );
-    log("Running Farol Dev on the secondary display. Press Ctrl+C to stop.");
-    await launch(false, true, review.marker, displayOptions);
+    log("Running Farol Dev in this terminal. Press Ctrl+C to stop.");
+    await launch(false, secondaryDisplay, review.marker, displayOptions);
     return;
   }
   log("Running Farol Dev in this terminal. Press Ctrl+C to stop.");

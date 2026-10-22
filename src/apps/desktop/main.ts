@@ -814,15 +814,15 @@ const controlSchema = z.strictObject({
 
 type RuntimeReady = z.infer<typeof readySchema>;
 app.setName(activeDesktopIdentity.applicationName);
-// macOS also exposes the process title as the application name. Storage,
-// bundle, executable and receipt identities remain explicit compatibility values.
+// The process title supports Dev lifetime correlation; macOS presentation
+// comes from the Dev-only bundle. Storage and release identity stay explicit.
 process.title = activeDesktopIdentity.applicationName;
 if (process.platform === "win32")
   app.setAppUserModelId(activeDesktopIdentity.applicationId);
 if (process.platform === "darwin") {
   // macOS's default About panel otherwise reads the raw release identity
   // (app.getName()); this is display-only and does not touch that
-  // identity, the bundle ID, or app.setName's own OS-level registration.
+  // identity or the bundle ID.
   app.setAboutPanelOptions({
     applicationName: displayProductName,
     applicationVersion: displayEdition

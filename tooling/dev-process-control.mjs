@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { devExecutables } from "./dev-runtime.mjs";
 import { performance } from "node:perf_hooks";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { buildDevControl } from "./go-backend-build.mjs";
@@ -82,7 +83,9 @@ function ps(args, budget = 3000) {
 // private run marker and this exact checkout's Electron command.
 export function correlateDevCommand(line, marker, scope, native, bootTime) {
   const match = /^(\d+)\s+(.{24})\s+(.+)$/u.exec(line.trim());
-  const executable = `${scope.writerRoot}/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron`;
+  const executable = native.executable ?? devExecutables(scope.writerRoot)[1];
+  if (!devExecutables(scope.writerRoot).includes(executable))
+    throw Error("DEV_PROCESS_IDENTITY_REFUSED: executable");
   const refuse = (field) => {
     throw Error(`DEV_PROCESS_IDENTITY_REFUSED: ${field}`);
   };
@@ -179,6 +182,24 @@ async function buildControl(root, buildArguments) {
   return buildDevControl(root, inputs);
 }
 
+function inspectDevExecutable(binary, pid, root, appPath, remaining = 3000) {
+  const deadline = performance.now() + remaining;
+  for (const executable of devExecutables(root)) {
+    const seen = nativeCall(
+      binary,
+      { action: "inspect", pid, executable, appPath },
+      deadline - performance.now(),
+    );
+    if (
+      seen.status === "refused" &&
+      seen.reason === "WRITER_EXECUTABLE_MISMATCH"
+    )
+      continue;
+    return seen.status === "present" ? { ...seen, executable } : seen;
+  }
+  return { status: "refused", reason: "WRITER_EXECUTABLE_MISMATCH" };
+}
+
 function nativeCall(binary, request, remaining = 3000) {
   const timeout = devControlTimeout(remaining);
   const result = spawnSync(binary, [], {
@@ -249,15 +270,12 @@ export async function prepareDevBuild({
     if (command.status === 0 && command.text) {
       if (!replace) throw Error("DEV_BUILD_LIVE_OUTPUTS_REFUSED");
       const binary = await getControl();
-      const native = nativeCall(binary, {
-        action: "inspect",
-        pid: marker.marker.pid,
-        executable: path.join(
-          writerRoot,
-          "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
-        ),
+      const native = inspectDevExecutable(
+        binary,
+        marker.marker.pid,
+        writerRoot,
         appPath,
-      });
+      );
       if (native.status === "present") {
         let retained;
         try {
@@ -286,8 +304,8 @@ export async function prepareDevBuild({
           const observation = inspectDevStopIdentity({
             marker: marker.marker,
             scope,
-            native: () =>
-              nativeCall(
+            native: () => ({
+              ...nativeCall(
                 binary,
                 {
                   action: "inspect",
@@ -297,6 +315,8 @@ export async function prepareDevBuild({
                 },
                 deadline - performance.now(),
               ),
+              executable: retained.executable,
+            }),
             markerMatches: () =>
               readRetainedDevMarker(markerFile, marker.marker),
             command: () =>
@@ -366,6 +386,7 @@ export async function prepareDevBuild({
   const ownedRoots = [
     path.join(writerRoot, "node_modules/electron/dist/Electron.app/"),
     path.join(writerRoot, "_output/build/app/"),
+    path.join(writerRoot, "_output/dev-runtime/"),
     path.join(profilePath, "farol-state/"),
   ];
   for (const line of inventory.text.split("\n")) {
@@ -375,15 +396,12 @@ export async function prepareDevBuild({
     if (!titled) continue;
     // Erased argv cannot prove a writer. Qualify the exact selected executable
     // without reading another profile or signaling an inventory candidate.
-    const seen = nativeCall(await getControl(), {
-      action: "inspect",
-      pid: Number(titled[1]),
-      executable: path.join(
-        writerRoot,
-        "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
-      ),
+    const seen = inspectDevExecutable(
+      await getControl(),
+      Number(titled[1]),
+      writerRoot,
       appPath,
-    });
+    );
     if (!devInventoryCandidateAbsent(seen))
       throw Error(
         `DEV_BUILD_OWNED_PROCESSES_REMAIN: named Dev identity ${seen.status}/${seen.reason ?? "no reason"}. Quit the Dev using this checkout's app outputs before rebuilding.`,

@@ -34,6 +34,27 @@ const native = {
 const command = `501 ${marker.processStart} ${executable} _output/build/app/main.cjs`;
 
 describe("exact Dev command correlation", () => {
+  it("correlates the isolated Dev executable with its native lifetime", () => {
+    const executable = `${root}/_output/dev-runtime/Farol Dev.app/Contents/MacOS/Electron`;
+    expect(
+      correlateDevCommand(
+        `501 ${marker.processStart} Farol Dev`,
+        marker,
+        scope,
+        { ...native, executable },
+        10000,
+      ).executable,
+    ).toBe(executable);
+    expect(() =>
+      correlateDevCommand(
+        command,
+        marker,
+        scope,
+        { ...native, executable: "/other/Electron" },
+        10000,
+      ),
+    ).toThrow("executable");
+  });
   it("continues exact-lifetime observation across normal marker removal but refuses replacement or unreadable bytes", async () => {
     const parent = await fs.mkdtemp(
       path.join(os.tmpdir(), "farol-dev-quit-marker-"),

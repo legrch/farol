@@ -418,3 +418,21 @@ func TestNamedWriterExclusion(t *testing.T) {
 		}
 	}
 }
+
+func TestDevBundlePaths(t *testing.T) {
+	root := "/fixture/Owner's Farol"
+	for _, suffix := range []string{electronSuffix, devElectronSuffix} {
+		if !validDevPaths(root+suffix, root+"/"+relativeAppPath) {
+			t.Fatal("Dev executable refused", suffix)
+		}
+		if validDevPaths(root+suffix, "/other/"+relativeAppPath) {
+			t.Fatal("foreign entry admitted")
+		}
+		q := fixtureRequest()
+		q.Executable = root + suffix
+		q.AppPath = root + "/" + relativeAppPath
+		if r := inspectProcCommand(procArgs(q.Executable, "Farol Dev", ""), q); r.Status != "present" {
+			t.Fatalf("bundle command: %+v", r)
+		}
+	}
+}

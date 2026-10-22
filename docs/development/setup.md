@@ -53,7 +53,20 @@ Neither process disappearance nor forced stop means application work was drained
 retained UNKNOWN and interrupted-profile recovery guards still apply.
 Dev is not a package candidate.
 `task dev -- --check` validates and builds without launching or changing profiles;
-`--fresh-review-profile` is a separate disposable review journey.
+`--fresh-review-profile` opens a new, retained disposable first-run Dev profile
+with ordinary window sizing. Combine it with `--display=secondary` for Sidecar;
+it fits the work area rather than requiring the fixed visible-test viewport.
+It never reuses the daily profile or enables E2E substitutions. Each invocation
+mints a new profile; the launcher does not retry or reopen a previous review.
+
+Dev launches an authenticated Electron copy at
+`_output/dev-runtime/Farol Dev.app`. Only this copy gets the `Farol Dev` bundle
+name, `local.farol.dev` bundle identifier and existing sunrise Dev icon for Dock,
+Cmd-Tab and the app menu. The desktop retains its explicit Dev paths, partitions,
+`app.setName`, About panel and `Farol Dev · Development` window title.
+The locked npm Electron bytes, packaged Farol and Owner Preview are unchanged.
+The copy is recreated after a successful build, only after the launcher confirms
+that processes sharing the checkout's outputs are absent.
 
 | Existing command        | Purpose                                                                                                                        |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
