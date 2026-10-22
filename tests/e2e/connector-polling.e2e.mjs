@@ -40,6 +40,9 @@ assert.ok(
 const goDelay = args.includes("--go-callback-delay");
 const healthStatus = args.includes("--health-status");
 const networkLoss = args.includes("--network-loss");
+throw new Error(
+  "E2E_JOURNEY_RETIRED:connector-polling-diagnostics: Connector polling assertions require removed Settings Diagnostics and Connection projections; the current Setup and Settings UI has no equivalent observation surface",
+);
 assert.equal(process.platform, "darwin");
 const root = process.cwd(),
   source = sourceIdentity(root),

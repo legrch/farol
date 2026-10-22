@@ -63,7 +63,7 @@ const contract = {
     "Explicit only: normal main.cjs/attested Go + saved Chat/File work -> prove original Electron/anchor/synthetic tunnel ancestry -> one exact anchor SIGKILL with original tunnel still running -> ordinary app Quit -> require drained=false/unconfirmed=[connector], real original Go absence and unchanged run marker -> settle the nonce-bound owned tunnel -> one same-profile ordinary restart -> record actual normal/read-only/UI outcome and preservation; no forced recovery or success",
   limits: [
     "Synthetic loopback provider/account/tasks and disposable workspace; existing admitted normal preload/UI flows, no product seam or injected journal/result",
-    "Legacy Chat/history witness labels mention Home remount; this harness records actual Home -> Settings -> Diagnostics -> ChatGPT acceptance tools navigation. No renderer mounting or Home-hosted-control claim",
+    "E2E_JOURNEY_RETIRED:writable-recovery-diagnostics-navigation: Its Home navigation adapter depended on the removed Settings Diagnostics ChatGPT acceptance-tools disclosure",
     "Go owns Settings edit admission/pending/result; existing typed host storage performs conditional filesystem writes, not an autonomous model tool call",
     "Hidden windows throughout; no focus, real picker, real provider/control plane, installed profile, sleep/reboot or interrupted-effect qualification; connector-failed-quit uses a synthetic loopback tunnel only",
     "Connector-only failure is a hypothesis until native qualification. Any other failed-drain shape is NONMATCHING_FIXTURE, never R04 PASS. A read-only restart records that limit and performs no write or recovery action",
@@ -610,10 +610,9 @@ async function scenario({
     launch.windows = state;
     await save();
   };
-  // The shared journey's pure witnesses remain useful, but its navigation
-  // predates the accepted UI move. Translate only the Home click into actual
-  // visible DOM navigation through the current Diagnostics disclosure. Never
-  // inject a controller response, source seam, fake DOM or hidden action.
+  // This adapter's former Home route depended on a removed Diagnostics
+  // disclosure. Its narrow click entry reports that journey retirement before
+  // any visible navigation or other UI effect.
   const journeyPage = {
     evaluate: (...args) => page.evaluate(...args),
     locator: (...args) => page.locator(...args),
@@ -626,43 +625,10 @@ async function scenario({
       )
         return target;
       return {
-        click: async (options) => {
-          active();
-          await hidden();
-          await target.click(options);
-          await page
-            .getByRole("button", { name: "Settings", exact: true })
-            .click(options);
-          await page
-            .locator(".contextual-sidebar")
-            .getByRole("button", { name: "Diagnostics", exact: true })
-            .click(options);
-          const disclosure = page.locator("details").filter({
-            has: page
-              .locator("summary")
-              .getByText("ChatGPT acceptance tools", { exact: true }),
-          });
-          assert.equal(
-            await disclosure.count(),
-            1,
-            "CHAT_ACCEPTANCE_DISCLOSURE_NOT_UNIQUE",
+        click: async () => {
+          throw new Error(
+            "E2E_JOURNEY_RETIRED:writable-recovery-diagnostics-navigation: Home-to-history navigation relied on the removed Settings Diagnostics ChatGPT acceptance-tools disclosure",
           );
-          if (!(await disclosure.evaluate((element) => element.open)))
-            await disclosure.locator(":scope > summary").click(options);
-          await page
-            .locator('section[aria-label="Saved Chat answers"]')
-            .waitFor({ state: "visible", timeout: 5000 });
-          (row.navigation ??= []).push({
-            path: [
-              "Home",
-              "Settings",
-              "Diagnostics",
-              "ChatGPT acceptance tools",
-            ],
-            hidden: true,
-          });
-          await hidden();
-          await save();
         },
       };
     },

@@ -399,66 +399,33 @@ try {
     await window.locator("#setup-dialog, #guided-onboarding").count(),
     0,
   );
-  // Current React Setup, not the retained legacy wizard selectors.
+  // Current welcome/progress navigation only, never legacy checklist readiness.
   const beforeReview = bootstrap.configuration;
   await openSetup(window);
-  for (const [step, label] of [
-    ["overview", "Overview"],
-    ["signin", "Sign in"],
-    ["connection", "Connection"],
-    ["folders", "Workspaces"],
-    ["attachment", "Check"],
-  ]) {
-    await setupStep(window, step, label);
+  await window
+    .getByRole("heading", { name: "Welcome to Farol", exact: true })
+    .waitFor();
+  for (const step of ["signin", "folders", "connection", "attachment"]) {
+    await setupStep(window, step);
     assert.equal(
-      await window
-        .locator('.rail [aria-label="Setup"]')
-        .getAttribute("aria-current"),
-      "page",
+      await window.locator(".setup-page").getAttribute("data-setup-step"),
+      step,
     );
   }
-  await assertSetupOverview(window, uncheckedOverview);
-  assert.equal(
-    await window.locator('.rail [aria-label="New chat"]').count(),
-    0,
-  );
   assert.deepEqual(
     (await window.evaluate(() => window.farol.bootstrap())).configuration,
     beforeReview,
   );
-  report.checks.push(
-    "fresh-current-React-Setup-navigation-no-effects-no-false-ready",
-  );
+  report.checks.push("fresh-current-React-Setup-navigation-no-saved-effects");
   await save();
-  await window
-    .getByRole("navigation", { name: "Sections", exact: true })
-    .getByRole("button", { name: "Home", exact: true })
-    .click();
-  for (const name of [
-    "General",
-    "Appearance",
-    "Workspaces",
-    "This Mac",
-    "Connection",
-    "Shortcuts",
-    "Diagnostics",
-  ]) {
+  for (const name of ["General", "Appearance", "Shortcuts"])
     await settingsPage(window, name);
-  }
   assert.deepEqual(
     await window
       .locator('nav[aria-label="Settings navigation"] button')
       .allTextContents(),
-    [
-      "General",
-      "Appearance",
-      "Workspaces",
-      "This Mac",
-      "Connection",
-      "Keyboard shortcuts",
-      "Diagnostics",
-    ],
-    "SETTINGS_NAVIGATION_MUST_NOT_RESTORE_UPDATES_PAGE",
+    ["General", "Appearance", "Keyboard shortcuts"],
+    "SETTINGS_NAVIGATION_CURRENT_CATEGORIES",
   );
   assert.equal(
     await application.evaluate(({ Menu }) => {
@@ -1089,9 +1056,9 @@ try {
     if (launch === 0) {
       await openSetup(legacyWindow);
       await setupStep(legacyWindow, "folders", "Workspaces");
-      await setupAction(legacyWindow, "Add workspace…");
+      await setupAction(legacyWindow, "+ Add workspace");
       const detail = legacyWindow.locator(
-        ".setup-page .workspace-detail:visible",
+        ".setup-page .setup-workspace-row:visible",
       );
       await detail.waitFor();
       assert.equal(await detail.count(), 1);
@@ -1135,6 +1102,10 @@ try {
       );
     } else {
       // A saved verified folder is still partial without connection/attachment.
+      // Explicit retirement: the current welcome has no partial checklist card.
+      throw new Error(
+        "E2E_JOURNEY_RETIRED:startup-partial-profile-overview-continuation: Continue setup and Set up Connection checklist cards were removed; Setup now uses the welcome/progress flow",
+      );
       await legacyWindow
         .locator(".toolbar-title strong")
         .getByText("Overview", { exact: true })

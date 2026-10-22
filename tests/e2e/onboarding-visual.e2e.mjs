@@ -8,6 +8,16 @@ import os from "node:os";
 import path from "node:path";
 import { _electron as electron } from "playwright-core";
 
+// This entire capture is a pre-React guided-onboarding visual journey. Its
+// #guided-onboarding/#onboarding-* surfaces and Settings Model/Diagnostics
+// categories were removed; current Setup is React and Settings exposes only
+// General, Appearance, and Shortcuts. Retire before creating files, starting
+// fixtures, or launching Electron so this obsolete capture cannot look like a
+// passing or silently skipped journey.
+throw new Error(
+  "E2E_JOURNEY_RETIRED:onboarding-visual-guided-owner-editable: pre-React #guided-onboarding/#onboarding-* and Settings Model/Diagnostics UI were removed; current Setup uses React and Settings has only General, Appearance, and Shortcuts",
+);
+
 const root = process.cwd();
 const label = "guided-owner-editable";
 const output = path.resolve(root, "_output/evidence/onboarding-visual", label);

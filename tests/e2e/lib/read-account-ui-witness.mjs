@@ -13,7 +13,7 @@ export const readAccountLimits = Object.freeze([
   "Synthetic GET /api/auth/session through actual ChatGptRoute.observeAccount and the normal explicit Go approval composition; not live authentication, entitlement, model qualification or atomic provider binding",
   "No independent Go account-approval RPC counter is exposed. Zero extra GETs plus the source-bound ReadAccountConfirmation cached original command contract support no reapproval; unchanged ChatTurn journal alone does not prove that private in-memory grant was untouched. Lead must bind this inference to the exact integrated production source",
   "React receipts expose safe metadata and account state, not a principal or confirmation ID. A duplicate inspect is permitted only after independently observed exact UI success, to read the original confirmation receipt; an approved duplicate follows only independently observed exact UI confirmation",
-  "Same-revision Refresh status is clicked in Diagnostics; the public UI has no refresh-completion receipt. Retained exact metadata, current Diagnostics and independent settings/journals are observed on returning Home; no claim about transient refresh timing",
+  "E2E_JOURNEY_RETIRED:account-refresh-diagnostics-observer: The previous same-revision Refresh status observer depended on the removed Settings Diagnostics projection; the current UI has no equivalent completion receipt",
 ]);
 
 export function accountLedgerWitness(ledger, expectedGets, session) {
@@ -274,6 +274,9 @@ export async function accountUiAction(window, name, after) {
 }
 
 export async function refreshAccountUi(window, revision) {
+  throw new Error(
+    "E2E_JOURNEY_RETIRED:account-refresh-diagnostics-observer: Same-revision refresh observation requires the removed Settings Diagnostics projection; the current UI has no equivalent completion receipt",
+  );
   assert.ok(Number.isSafeInteger(revision) && revision >= 0);
   await window
     .getByRole("button", { name: "Settings", exact: true })
