@@ -274,6 +274,56 @@ describe("native backend launch binding", () => {
     await client.close();
     expect(child.kill).not.toHaveBeenCalled();
   });
+  it("records only the actual terminal fact for a quiescent requested close", async () => {
+    const { native } = fixture();
+    const diagnostic = vi.fn();
+    const client = await spawnCore("/owned/backend", "profile", "test", 1000, {
+      ...native,
+      onLifecycleObservation: diagnostic,
+    });
+    expect(await client.closeAndObserve()).toEqual({
+      exitCode: 0,
+      signal: null,
+      forced: false,
+    });
+    expect(
+      diagnostic.mock.calls.map(([value]) => [
+        value.phase,
+        value.event,
+        value.state,
+      ]),
+    ).toEqual([["closing", "child-close", "observed"]]);
+  });
+  it("retains UNKNOWN for a request still pending at requested close", async () => {
+    const { child } = fixture();
+    vi.mocked(Client.prototype.handshake).mockRestore();
+    const diagnostic = vi.fn();
+    const client = new Client(
+      child as unknown as ChildProcessWithoutNullStreams,
+      true,
+      undefined,
+      diagnostic,
+    );
+    const pending = expect(
+      client.handshake(
+        {
+          protocolMajor: 1,
+          protocolMinor: 0,
+          buildId: "test",
+          profileId: "profile",
+        },
+        1000,
+      ),
+    ).rejects.toMatchObject({ state: "unknown", code: "client_closed" });
+    await client.close();
+    await pending;
+    expect(diagnostic.mock.calls[0]?.[0]).toMatchObject({
+      phase: "closing",
+      event: "failure",
+      code: "client_closed",
+      state: "outcome_unknown",
+    });
+  });
   it("preserves requested-close and cleanup UNKNOWN evidence through late close and throwing sink", async () => {
     vi.useFakeTimers();
     const { child, native } = fixture(false);
@@ -299,12 +349,9 @@ describe("native backend launch binding", () => {
         value.event,
         value.code,
       ]),
-    ).toEqual([
-      ["closing", "failure", "client_closed"],
-      ["closing", "cleanup-unknown", "backend_cleanup_unconfirmed"],
-    ]);
+    ).toEqual([["closing", "cleanup-unknown", "backend_cleanup_unconfirmed"]]);
     child.emit("close", 0, null);
-    expect(diagnostic.mock.calls[2]?.[0]).toMatchObject({
+    expect(diagnostic.mock.calls[1]?.[0]).toMatchObject({
       phase: "closing",
       event: "child-close",
       exitCode: 0,
@@ -314,7 +361,7 @@ describe("native backend launch binding", () => {
     await expect(client.closeAndObserve()).rejects.toMatchObject({
       code: "backend_cleanup_unconfirmed",
     });
-    expect(diagnostic).toHaveBeenCalledTimes(3);
+    expect(diagnostic).toHaveBeenCalledTimes(2);
     expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
   });
   it("retains startup failure and sanitizes malformed terminal diagnostic facts", async () => {

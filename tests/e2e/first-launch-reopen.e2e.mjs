@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { _electron as electron } from "playwright-core";
 import { desktopIdentity } from "../../tooling/harness-identity.ts";
 import { parseQuitReceipt } from "../../src/apps/desktop/quit-receipt.ts";
+import { OperationsSnapshotSchema } from "../../apps/desktop/renderer/operations-contract.ts";
 import {
   candidatePaths,
   assertCanonicalArtifactPath,
@@ -314,6 +315,33 @@ try {
       profileRoot,
       current.pid,
     );
+    const operations = OperationsSnapshotSchema.parse(
+      await bounded(
+        page.evaluate(() => window.farol.operations()),
+        "FIRST_LAUNCH_OPERATIONS_TIMEOUT",
+      ),
+    );
+    current.operationDiagnostics = {
+      writeFailures: operations.writeFailures,
+      corruptLines: operations.corruptLines,
+      unrecordedUncertainEntries: operations.unrecordedUncertainEntries,
+    };
+    assert.equal(operations.writeFailures, 0);
+    assert.equal(operations.corruptLines, 0);
+    assert.equal(operations.unrecordedUncertainEntries, 0);
+    current.unresolvedOperations = operations.entries
+      .filter(
+        (entry) => entry.outcome === "unknown" || entry.outcome === "pending",
+      )
+      .map(({ id, kind, outcome, code }) => ({ id, kind, outcome, code }));
+    assert.deepEqual(
+      current.unresolvedOperations,
+      [],
+      "FIRST_LAUNCH_UNRESOLVED_OPERATIONS",
+    );
+    await page
+      .getByRole("button", { name: "Unresolved actions", exact: true })
+      .waitFor({ state: "hidden" });
     current.startup = {
       destination: "setup",
       welcome: "Welcome to Farol",

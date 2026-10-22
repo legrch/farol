@@ -894,13 +894,22 @@ export class Client {
   ): void {
     if (this.stopped) return;
     this.stopped = true;
-    this.observeLifecycle(
-      "failure",
-      lifecycleCodes.has(code)
-        ? (code as BackendLifecycleCode)
-        : "backend_unclassified_failure",
-      state === "unavailable" ? "unavailable" : "outcome_unknown",
-    );
+    // Closing a quiet transport is not an operation with an unknown result.
+    // Outstanding requests, unexpected failures and unconfirmed child cleanup
+    // retain their original UNKNOWN evidence; terminal observation is separate.
+    if (!(
+      this.closeRequested &&
+      code === "client_closed" &&
+      this.pending.size === 0
+    )) {
+      this.observeLifecycle(
+        "failure",
+        lifecycleCodes.has(code)
+          ? (code as BackendLifecycleCode)
+          : "backend_unclassified_failure",
+        state === "unavailable" ? "unavailable" : "outcome_unknown",
+      );
+    }
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       clearImmediate(pending.timeoutCheck);
