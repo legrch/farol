@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-const { setupAction } = await import("../e2e/current-react-setup.mjs");
+const helper = "../e2e/current-react-setup.mjs";
+const { setupAction } = await import(helper);
 
 // Source-only retirement proof: the removed journeys fail before page access.
 // The current native replacement remains not run by this test.
