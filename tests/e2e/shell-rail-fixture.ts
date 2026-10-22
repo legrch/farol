@@ -1,7 +1,8 @@
 import { desktopIdentity } from "../../tooling/harness-identity.ts";
 
-const identity = desktopIdentity("preview", "/");
 import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
+
+const identity = desktopIdentity("preview", "/");
 
 /** Synthetic renderer evidence only. No account, provider, connection or disk access. */
 export function shellRailFixture(ready: boolean) {
