@@ -863,6 +863,9 @@ export class WindowController implements RendererFacade {
               entry.target.workspace,
               entry.target.relativePath,
               entry.target.command,
+              entry.target.handle
+                ? `Handle ${entry.target.handle}${entry.target.start === "unknown" ? " (start unknown)" : ""}`
+                : undefined,
             ]
               .filter(Boolean)
               .join(" · ") || null,

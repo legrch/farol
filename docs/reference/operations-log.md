@@ -32,6 +32,14 @@ label index is atomically replaced in the same private directory; it grants no
 access. Commands exclude arguments; search patterns, file contents, prompts,
 replies, credentials and raw exception text are never projected.
 
+Shell read/cancel observations inherit the dispatched start's workspace, relative
+directory and executable name by original operation ID, checking the returned
+handle when available. This server-local metadata cache keeps at most 1,024
+starts, excludes proven refusals and never relabels a retained ID. For an unknown, evicted or
+previous-connection start, the target contains only the supplied handle and
+`start: "unknown"`; Activity displays that limitation. This lookup grants no
+execution authority and never reads command arguments, stdin or output.
+
 An admitted operation enqueues a start observation before execution. A flushed
 unmatched start remains pending across restart. Its separately appended observation supplies
 the actual result; the raw start line is never edited. Activity folds only such
@@ -120,8 +128,10 @@ starts, SSE terminals and every updater port. Injected filesystem fixtures also
 exercise stalled write/sync calls, nonblocking begin/completion, bounded shutdown
 and snapshot deadlines, overflow/loss counters, protected-queue exhaustion,
 orphan completions, error isolation, cross-writer diagnostics and FIFO rotation. The MCP table in
-`tests/unit/go-computer-mcp.test.ts` invokes each registered tool's actual adapter
-callback with a refused contract fixture and asserts one content-free observation.
+`tests/unit/go-computer-mcp.test.ts` invokes every registered tool through the SDK
+with fabricated start/refused contract fixtures and asserts the exact content-free
+target. It covers inherited shell targets, unmatched handles/IDs, a start without
+a returned handle, refused/evicted starts, and retained IDs without relabeling.
 These are policy/adapter fixtures, not live providers or native effects.
 
 `tests/e2e/operations-log.e2e.mjs` runs the exact built app hidden with a disposable

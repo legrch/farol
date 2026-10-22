@@ -440,7 +440,7 @@ export function createGoComputerMcpServer(
           {
             source: "ChatGPT",
             kind: "computer_connection_status",
-            target: operationTarget({}),
+            target: operationTarget({}), // Connection-wide status has no workspace, path or command.
           },
           ctx.mcpReq.signal,
           async (call) => ({
@@ -470,7 +470,7 @@ export function createGoComputerMcpServer(
           {
             source: "ChatGPT",
             kind: "farol_connector_verify_catalogue",
-            target: operationTarget({}),
+            target: operationTarget({}), // Empty-catalogue verification has no workspace, path or command.
           },
           ctx.mcpReq.signal,
           async (call) => ({
@@ -609,6 +609,21 @@ export function createGoComputerMcpServer(
 
   if (options.processes) {
     const processes = options.processes;
+    // Server-local observation metadata only; never retains command arguments or I/O.
+    const starts = new Map<
+      string,
+      { target: OperationMetadata["target"]; handle?: string }
+    >();
+    const processTarget = (input: {
+      operationId: string;
+      handle: string;
+    }): OperationMetadata["target"] => {
+      const start = starts.get(input.operationId);
+      return start &&
+        (start.handle === undefined || start.handle === input.handle)
+        ? { ...start.target }
+        : { handle: input.handle, start: "unknown" };
+    };
     const effectAnnotations = {
       ...annotations,
       readOnlyHint: false,
@@ -632,12 +647,36 @@ export function createGoComputerMcpServer(
             target: operationTarget(input),
           },
           ctx.mcpReq.signal,
-          (call) =>
-            processes.start(
-              { ...input, ...(stdin === undefined ? {} : { stdin }) },
-              operationId,
-              call,
-            ),
+          async (call) => {
+            let start = starts.get(operationId);
+            const first = start === undefined;
+            if (!start) {
+              // Bound retention; evicted or previous-connection starts stay explicitly unknown.
+              if (starts.size >= 1024)
+                starts.delete(starts.keys().next().value!);
+              start = { target: operationTarget(input) };
+              starts.set(operationId, start);
+            }
+            const forgetRefused = () => {
+              if (first && starts.get(operationId) === start)
+                starts.delete(operationId);
+            };
+            try {
+              const result = await processes.start(
+                { ...input, ...(stdin === undefined ? {} : { stdin }) },
+                operationId,
+                call,
+              );
+              if (result.status === "refused") forgetRefused();
+              // Never let a repeated operation ID relabel the original start.
+              else if (first && result.data) start.handle = result.data.handle;
+              return result;
+            } catch (error) {
+              if (error instanceof BridgeError && error.state === "refused")
+                forgetRefused();
+              throw error;
+            }
+          },
           operationId,
           undefined,
           true,
@@ -661,7 +700,7 @@ export function createGoComputerMcpServer(
           {
             source: "ChatGPT",
             kind: "computer_shell_read",
-            target: operationTarget({}),
+            target: processTarget(input),
           },
           ctx.mcpReq.signal,
           (call) =>
@@ -695,7 +734,7 @@ export function createGoComputerMcpServer(
           {
             source: "ChatGPT",
             kind: "computer_shell_cancel",
-            target: operationTarget({}),
+            target: processTarget(input),
           },
           ctx.mcpReq.signal,
           (call) => processes.cancel(input, cancelOperationId, call),
@@ -722,7 +761,7 @@ export function createGoComputerMcpServer(
           {
             source: "Codex",
             kind: "codex_selected_thread_read",
-            target: operationTarget({}),
+            target: operationTarget({}), // Selected provider history exposes no workspace, path or command target.
           },
           ctx.mcpReq.signal,
           async () => ({
@@ -750,7 +789,7 @@ export function createGoComputerMcpServer(
         {
           source: "ChatGPT",
           kind: "computer_workspace_catalogue",
-          target: operationTarget({}),
+          target: operationTarget({}), // Discovery spans the catalogue rather than one workspace target.
         },
         ctx.mcpReq.signal,
         (call) => bridge.catalogue(identity(call), call),

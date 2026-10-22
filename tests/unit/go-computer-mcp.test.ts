@@ -6,6 +6,10 @@ import {
   type ServerContext,
 } from "@modelcontextprotocol/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  OperationEntrySchema,
+  type OperationMetadata,
+} from "../../apps/desktop/renderer/operations-contract";
 import { BridgeError } from "../../apps/desktop/bridge/client.ts";
 import { ComputerBridge } from "../../apps/desktop/bridge/computer.ts";
 import {
@@ -1723,97 +1727,236 @@ it("routes explicit empty catalogue verification through the same admission fenc
   expect(request).not.toHaveBeenCalled();
 });
 
-it.each([
-  ["computer_connection_status", {}],
-  ["farol_connector_verify_catalogue", { challenge: "private-challenge" }],
-  [
-    "farol_connector_verify",
-    { challenge: "private-challenge", workspaceId: "workspace" },
-  ],
-  ["computer_workspace_catalogue", {}],
-  [
-    "computer_workspace_bootstrap",
-    { workspaceId: "workspace", relativeDirectory: "src" },
-  ],
-  ["computer_workspace_list", { workspaceId: "workspace", relativePath: "." }],
-  [
-    "computer_workspace_read",
-    { workspaceId: "workspace", relativePath: "README.md" },
-  ],
-  [
-    "computer_workspace_search",
-    { workspaceId: "workspace", relativePath: ".", pattern: "PRIVATE-CANARY" },
-  ],
-  [
-    "computer_workspace_write",
-    {
+const shellLogStart = {
+  operationId: "op",
+  workspaceId: "workspace",
+  relativeCwd: "src",
+  command: "echo PRIVATE-CANARY",
+  stdin: "PRIVATE-STDIN",
+  write: false,
+};
+const shellLogTarget = {
+  workspace: "workspace",
+  relativePath: "src",
+  command: "echo",
+};
+const unknownLogTarget = { handle: "handle", start: "unknown" } as const;
+const recordedToolCases: {
+  name: string;
+  input: Record<string, unknown>;
+  target: OperationMetadata["target"];
+  start?: "known" | "unknown" | "repeated" | "refused" | "evicted";
+}[] = [
+  { name: "computer_connection_status", input: {}, target: {} },
+  {
+    name: "farol_connector_verify_catalogue",
+    input: { challenge: "private-challenge" },
+    target: {},
+  },
+  {
+    name: "farol_connector_verify",
+    input: { challenge: "private-challenge", workspaceId: "workspace" },
+    target: { workspace: "workspace" },
+  },
+  { name: "computer_workspace_catalogue", input: {}, target: {} },
+  {
+    name: "computer_workspace_bootstrap",
+    input: { workspaceId: "workspace", relativeDirectory: "src" },
+    target: { workspace: "workspace", relativePath: "src" },
+  },
+  {
+    name: "computer_workspace_list",
+    input: { workspaceId: "workspace", relativePath: "." },
+    target: { workspace: "workspace", relativePath: "." },
+  },
+  {
+    name: "computer_workspace_read",
+    input: { workspaceId: "workspace", relativePath: "README.md" },
+    target: { workspace: "workspace", relativePath: "README.md" },
+  },
+  {
+    name: "computer_workspace_search",
+    input: {
+      workspaceId: "workspace",
+      relativePath: ".",
+      pattern: "PRIVATE-CANARY",
+    },
+    target: { workspace: "workspace", relativePath: "." },
+  },
+  {
+    name: "computer_workspace_write",
+    input: {
       operationId: "op",
       workspaceId: "workspace",
       relativePath: "x",
       expectedSha256: null,
-      text: "PRIVATE-CANARY",
+      content: "PRIVATE-CANARY",
     },
-  ],
-  [
-    "computer_workspace_edit",
-    {
+    target: { workspace: "workspace", relativePath: "x" },
+  },
+  {
+    name: "computer_workspace_edit",
+    input: {
       operationId: "op",
       workspaceId: "workspace",
       relativePath: "x",
       expectedSha256: "a".repeat(64),
       edits: [{ oldText: "PRIVATE-CANARY", newText: "secret" }],
     },
-  ],
-  [
-    "computer_mutation_read",
-    { operationId: "op", workspaceId: "workspace", relativePath: "x" },
-  ],
-  [
-    "computer_shell_start",
-    {
-      operationId: "op",
-      workspaceId: "workspace",
-      relativeCwd: ".",
-      command: "echo PRIVATE-CANARY",
-      write: false,
+    target: { workspace: "workspace", relativePath: "x" },
+  },
+  {
+    name: "computer_mutation_read",
+    input: { operationId: "op", workspaceId: "workspace", relativePath: "x" },
+    target: { workspace: "workspace", relativePath: "x" },
+  },
+  {
+    name: "computer_shell_start",
+    input: shellLogStart,
+    target: shellLogTarget,
+  },
+  ...(["computer_shell_read", "computer_shell_cancel"] as const).flatMap(
+    (name) => {
+      const input = {
+        operationId: "op",
+        handle: "handle",
+        ...(name === "computer_shell_cancel"
+          ? { cancelOperationId: "cancel" }
+          : {}),
+      };
+      return [
+        { name, input, target: unknownLogTarget },
+        { name, input, target: shellLogTarget, start: "known" as const },
+        { name, input, target: shellLogTarget, start: "unknown" as const },
+        { name, input, target: shellLogTarget, start: "repeated" as const },
+        { name, input, target: unknownLogTarget, start: "refused" as const },
+        { name, input, target: unknownLogTarget, start: "evicted" as const },
+        {
+          name,
+          input: { ...input, handle: "different-handle" },
+          target: { handle: "different-handle", start: "unknown" as const },
+          start: "known" as const,
+        },
+        {
+          name,
+          input: { ...input, operationId: "different-op" },
+          target: unknownLogTarget,
+          start: "known" as const,
+        },
+      ];
     },
-  ],
-  ["computer_shell_read", { operationId: "op", handle: "handle" }],
-  [
-    "computer_shell_cancel",
-    { operationId: "op", handle: "handle", cancelOperationId: "cancel" },
-  ],
-  ["codex_selected_thread_read", {}],
-] as const)(
-  "records exactly one metadata-only entry at %s's final adapter outcome",
-  async (name, input) => {
+  ),
+  {
+    name: "codex_selected_thread_read",
+    input: { includeResult: true },
+    target: {},
+  },
+];
+it.each(recordedToolCases)(
+  "records the exact content-free target for $name (start: $start)",
+  async ({ name, input, target, start }) => {
     const record = vi.fn();
     const refused = async (): Promise<never> => {
       throw new BridgeError("refused", "FIXTURE_REFUSAL");
     };
-    const { tools } = await setup({
+    // Fabricated start/result only; no command or provider is executed.
+    const processes: NonNullable<GoComputerMcpOptions["processes"]> = {
+      start: async (_input, operationId, call) => {
+        if (start === "refused") return refused();
+        if (start === "unknown")
+          return {
+            status: "unknown",
+            operationId,
+            requestId: call.requestId,
+            context: call.context,
+            code: "FIXTURE_UNKNOWN",
+            retry: "never",
+          };
+        return {
+          status: "ok",
+          operationId,
+          requestId: call.requestId,
+          context: call.context,
+          data: {
+            execution: binding,
+            callId: call.requestId,
+            operationId,
+            handle: "handle",
+          },
+        };
+      },
+      read: async (input, call) => ({
+        status: "refused",
+        operationId: input.operationId,
+        requestId: call.requestId,
+        context: call.context,
+        code: "FIXTURE_REFUSAL",
+        stdout: "PRIVATE-OUTPUT",
+        stderr: "PRIVATE-OUTPUT",
+      }),
+      cancel: refused,
+    };
+    const { client, tools } = await setup({
       operations: { record },
       respond: refused,
       verification: { verify: refused, verifyCatalogue: refused },
       connectionStatus: { observe: refused },
       mutations: { write: refused, edit: refused, read: refused },
-      processes: { start: refused, read: refused, cancel: refused },
+      processes,
       codexRead: { read: refused },
     });
-    const tool = tools.get(name)!;
-    await tool.executor(input, handlerContext(new AbortController().signal));
+    // Any newly registered kind must receive an explicit target expectation.
+    expect([...tools.keys()].sort()).toEqual(
+      [...new Set(recordedToolCases.map(({ name }) => name))].sort(),
+    );
+    if (start) {
+      await client.callTool({
+        name: "computer_shell_start",
+        arguments: shellLogStart,
+      });
+      if (start === "repeated")
+        await client.callTool({
+          name: "computer_shell_start",
+          arguments: {
+            ...shellLogStart,
+            workspaceId: "other",
+            command: "other secret",
+          },
+        });
+      if (start === "evicted")
+        for (let i = 0; i < 1024; i++)
+          await tools
+            .get("computer_shell_start")!
+            .executor(
+              { ...shellLogStart, operationId: `other-${i}` },
+              handlerContext(new AbortController().signal),
+            );
+      record.mockClear();
+    }
+    await client.callTool({ name, arguments: input });
     expect(record).toHaveBeenCalledOnce();
-    expect(record.mock.calls[0]).toMatchObject([
-      {
-        kind: name,
-        source: name === "codex_selected_thread_read" ? "Codex" : "ChatGPT",
-      },
-      "refused",
-      "FIXTURE_REFUSAL",
-      expect.any(Number),
-    ]);
+    const [metadata, outcome, code, durationMs] = record.mock.calls[0]!;
+    expect(metadata).toEqual({
+      kind: name,
+      source: name === "codex_selected_thread_read" ? "Codex" : "ChatGPT",
+      target,
+    });
+    expect(outcome).toBe(name === "computer_shell_start" ? "done" : "refused");
+    expect(code).toBe(
+      name === "computer_shell_start" ? null : "FIXTURE_REFUSAL",
+    );
+    expect(durationMs).toEqual(expect.any(Number));
+    const entry = OperationEntrySchema.parse({
+      ...metadata,
+      outcome,
+      code,
+      durationMs: Math.round(durationMs),
+      id: "00000000-0000-4000-8000-000000000000",
+      at: 0,
+    });
+    expect(entry.target).toEqual(target);
     expect(JSON.stringify(record.mock.calls)).not.toMatch(
-      /PRIVATE-CANARY|private-challenge|secret/,
+      /PRIVATE-CANARY|PRIVATE-STDIN|PRIVATE-OUTPUT|private-challenge|secret|"(?:content|text|stdin|stdout|stderr|arguments|edits|pattern)":/,
     );
   },
 );

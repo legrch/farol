@@ -246,6 +246,33 @@ it("uses names-only workspace labels and excludes paths, arguments and payloads"
     "target",
   ]);
 });
+it("retains an unknown start's handle across restart without accepting content", async () => {
+  const { store, directory } = setup();
+  const target = { handle: "original-handle", start: "unknown" } as const;
+  store.record(
+    { source: "ChatGPT", kind: "computer_shell_read", target },
+    "refused",
+    "FIXTURE_REFUSED",
+    1,
+  );
+  store.record(
+    {
+      source: "ChatGPT",
+      kind: "computer_shell_read",
+      target: { ...target, content: "PRIVATE-CANARY" },
+    } as Parameters<OperationsStore["record"]>[0],
+    "done",
+    null,
+    1,
+  );
+  await store.flush(5000);
+  const restarted = new OperationsStore(directory, () => 1792670400000);
+  stores.push(restarted);
+  const snapshot = await restarted.snapshot(5000);
+  expect(snapshot.entries).toHaveLength(1);
+  expect(snapshot.entries[0]?.target).toEqual(target);
+  expect(JSON.stringify(snapshot)).not.toContain("PRIVATE-CANARY");
+});
 it.each([
   "response.completed",
   "response.failed",

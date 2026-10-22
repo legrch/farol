@@ -46,6 +46,11 @@ export const OperationEntrySchema = z.strictObject({
       .max(80)
       .regex(/^[A-Za-z0-9._-]+$/u)
       .optional(),
+    handle: z
+      .string()
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u)
+      .optional(),
+    start: z.literal("unknown").optional(),
   }),
   outcome: z.enum(operationOutcomes),
   code: z
