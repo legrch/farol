@@ -23,6 +23,27 @@ it("keeps identity and witness configuration attested, never test exemptions", (
   }
 });
 
+it("pins the controller exceptions to the four approved test files", () => {
+  expect(EXACT_PACKAGE_WITNESSES).toHaveLength(1);
+  expect([...EXACT_PACKAGE_WITNESSES[0].testInputs].sort()).toEqual([
+    "tests/e2e/go-computer-mcp.diagnostics.ts",
+    "tests/e2e/go-computer-mcp.e2e.entry.ts",
+    "tests/e2e/go-git-shell-journey.ts",
+    "tests/fixtures/ordinary-git-environment.mjs",
+  ]);
+});
+
+it.each([
+  "tooling/harness-identity.ts",
+  "src/new-policy.ts",
+  "node_modules/new-package/index.js",
+  "tests/../src/escape.ts",
+])("refuses a controller exception outside the test tree: %s", (file) => {
+  expect(() => assertWitnessInputCoverage([file], [], [file])).toThrow(
+    `WITNESS_TEST_INPUT_OUTSIDE_TESTS:${file}`,
+  );
+});
+
 it.each([
   "tooling/new-helper.ts",
   "src/new-policy.ts",

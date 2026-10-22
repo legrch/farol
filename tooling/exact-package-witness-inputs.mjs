@@ -20,6 +20,11 @@ export const EXACT_PACKAGE_WITNESSES = Object.freeze([
 export function assertWitnessInputCoverage(inputs, ledgerPaths, testInputs) {
   const declared = new Set(ledgerPaths);
   const testOwned = new Set(testInputs);
+  // Controller exceptions are test-tree files only; product, tooling and
+  // dependency code must always come from the sealed ledger.
+  for (const input of testOwned)
+    if (!input.startsWith("tests/") || input.includes(".."))
+      throw new Error(`WITNESS_TEST_INPUT_OUTSIDE_TESTS:${input}`);
   for (const input of inputs)
     if (!declared.has(input) && !testOwned.has(input))
       throw new Error(`WITNESS_INPUT_UNDECLARED:${input}`);
