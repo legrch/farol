@@ -1,4 +1,5 @@
-import { desktopIdentity as harnessDesktopIdentity } from "../../../src/apps/desktop/desktop-environment.ts";
+import { productName } from "../../../tooling/harness-identity.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "../../../tooling/harness-identity.ts";
 import { createHash, webcrypto } from "node:crypto";
 import vm from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
@@ -163,7 +164,7 @@ async function controlledPage() {
   const selection = {
     model: "Test model",
     effort: "Light",
-    connector: { id: "plugin_asdk_app_TEST", label: "Farol DEV" },
+    connector: { id: "plugin_asdk_app_TEST", label: `${productName} DEV` },
   };
   const fixture: Fixture = await startChatGptFixture({
     controlledScenario: {

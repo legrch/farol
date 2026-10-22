@@ -1,3 +1,4 @@
+import { productName } from "../../tooling/harness-identity.ts";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -5,7 +6,7 @@ import path from "node:path";
 
 /**
  * Disposable reference environment for the ordinary-Git Computer acceptance.
- * This is test setup, NOT a Farol execution adapter or an authority grant.
+ * This is test setup, NOT a product execution adapter or an authority grant.
  * It never reads the actual owner's HOME, Git config, auth or repositories.
  */
 export async function createOrdinaryGitEnvironment({
@@ -29,7 +30,7 @@ export async function createOrdinaryGitEnvironment({
   const templates = path.join(root, "empty-templates");
   const git = "/usr/bin/git";
   const expected = Object.freeze({
-    user: "Farol Fixture Author",
+    user: `${productName} Fixture Author`,
     email: "farol-fixture@example.invalid",
     xdg: "xdg-config-read",
     include: "relative-include-read",

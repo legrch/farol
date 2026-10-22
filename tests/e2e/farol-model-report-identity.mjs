@@ -81,7 +81,7 @@ export function bundleDigest(bundlePath) {
 // S35-TA-5: what a real-host report must say about the bytes it exercised.
 //
 // The report used to carry the host binary and its version and nothing about
-// Farol, so a passing run could not be attributed to a candidate: two reports
+// the product, so a passing run could not be attributed to a candidate: two reports
 // from different commits were indistinguishable. This is the same identity the
 // ordinary lanes derive, through the same `sourceIdentity` they use, plus the
 // two things only this journey knows — which `codex` answered, and which Node

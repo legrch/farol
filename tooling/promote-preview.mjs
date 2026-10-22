@@ -1,3 +1,4 @@
+import { productName, productBundleName } from "./harness-identity.ts";
 import { spawnSync } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
@@ -232,7 +233,7 @@ async function promote(arguments_, dependencies, stdout) {
   const { destination, receipt } = assertPromotionDestination({
     home,
     source,
-    destination: destinationOption ?? "/Applications/Farol.app",
+    destination: destinationOption ?? `/Applications/${productBundleName}`,
   });
 
   // F3-4: a promotion and the app's own work admission share one lease, so
@@ -356,7 +357,7 @@ export async function runPromotionCli(arguments_, dependencies = {}) {
     return 0;
   } catch (error) {
     stderr.write(
-      `Farol promotion refused: ${error instanceof Error ? error.message : "unknown failure"}\n`,
+      `${productName} promotion refused: ${error instanceof Error ? error.message : "unknown failure"}\n`,
     );
     return 1;
   }

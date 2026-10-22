@@ -1,4 +1,4 @@
-import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 // Only called by the explicit native Go qualification on a fresh producer-owned
 // synthetic tree. No ordinary/production profile, Electron or provider action.
 import fs from "node:fs/promises";

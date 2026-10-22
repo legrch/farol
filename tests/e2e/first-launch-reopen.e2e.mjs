@@ -7,7 +7,7 @@ import path from "node:path";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { _electron as electron } from "playwright-core";
-import { desktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
+import { desktopIdentity } from "../../tooling/harness-identity.ts";
 import { parseQuitReceipt } from "../../src/apps/desktop/quit-receipt.ts";
 import {
   candidatePaths,

@@ -1,3 +1,4 @@
+import { productBundleName } from "./harness-identity.ts";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
@@ -63,7 +64,7 @@ function appendBounded(chunks, chunk, state) {
 
 export async function runPromotionApply({
   home,
-  destination = path.join(home, "Applications/Farol.app"),
+  destination = path.join(home, `Applications/${productBundleName}`),
   source,
   artifactSha256,
   receiptText,
@@ -92,7 +93,7 @@ export async function runPromotionApply({
   }
   assertPromotionDestination({ home, source, destination });
   const installLocation =
-    destination === "/Applications/Farol.app" ? "shared" : "legacy";
+    destination === `/Applications/${productBundleName}` ? "shared" : "legacy";
   // This is the original owner's held kernel lock, selected once. Passing a
   // descriptor from a receipt or acquiring another lock cannot authorize it.
   const transfer = await createPromotionLeaseTransfer(lease);

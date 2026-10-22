@@ -1,4 +1,4 @@
-import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 /**
  * Explicit hidden macOS Dev lane. Build clean committed bytes first:
  * task dev -- --check

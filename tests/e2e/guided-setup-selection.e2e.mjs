@@ -1,4 +1,4 @@
-import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 // Owned hidden Electron windows and disposable state only. This proves Setup
 // selection and IPC/UI integration, never external ChatGPT or live attachment.
 import assert from "node:assert/strict";

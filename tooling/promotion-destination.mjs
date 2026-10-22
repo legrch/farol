@@ -1,3 +1,4 @@
+import { productBundleName } from "./harness-identity.ts";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PRODUCT_APP_NAME } from "./package-layout.mjs";
@@ -25,13 +26,13 @@ export function trustedOwnerHome(userInfo, effectiveUid) {
 export function assertPromotionDestination({
   home,
   source,
-  destination = "/Applications/Farol.app",
+  destination = `/Applications/${productBundleName}`,
 }) {
   const resolvedHome = path.resolve(home);
   const resolvedSource = path.resolve(source);
   const resolvedDestination = destination;
   const parent =
-    destination === "/Applications/Farol.app"
+    destination === `/Applications/${productBundleName}`
       ? "/Applications"
       : path.join(resolvedHome, "Applications");
   if (

@@ -23,7 +23,7 @@ import {
   previewPlist,
   requireOwnerPreviewRuntimeIntegration,
 } from "./owner-preview-contract.mjs";
-import { OWNER_PREVIEW_IDENTITY } from "../src/apps/desktop/desktop-environment.ts";
+import { OWNER_PREVIEW_IDENTITY } from "./harness-identity.ts";
 import {
   assertPreviewAssets,
   renderPreviewAssets,

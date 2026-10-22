@@ -3,7 +3,7 @@
 const { createServer } = require("node:http");
 const { app } = require("electron");
 
-app.setName("Farol Legacy Lifecycle Fixture");
+app.setName("Legacy Lifecycle Fixture");
 
 let server = null;
 let stopping = false;

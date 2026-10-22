@@ -1,4 +1,4 @@
-import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 // Exact built Electron startup against a held, real macOS promotion lease.
 // Disposable native HOME/profile only. No swap, updater open, account, connector
 // or model action; this does not qualify the separate relaunch handoff.

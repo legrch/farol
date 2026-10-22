@@ -1,7 +1,7 @@
 // A test-owned copy of a packaged app that is executed in place.
 //
 // macOS LaunchServices registers a bundle the first time a process runs out of
-// it. A clone named `Farol.app` therefore becomes a second, runnable
+// it. A clone named the product bundle therefore becomes a second, runnable
 // application under the production bundle identifier, and deleting the
 // directory afterwards does not unregister it. Later `open` and relaunch
 // acceptance can then resolve that identifier to a path that no longer exists.

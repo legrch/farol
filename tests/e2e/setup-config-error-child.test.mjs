@@ -1,7 +1,7 @@
 // Vitest runs a pure Node fixture in this same file with the exact VM flag.
 // All child/Playwright host effects inside the fixture remain in-memory.
 import assert from "node:assert/strict";
-import { desktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
+import { desktopIdentity } from "../../tooling/harness-identity.ts";
 import { EventEmitter } from "node:events";
 import { readFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
@@ -210,7 +210,7 @@ if (!process.argv.includes("--pure-node-fixture")) {
       };
     if (childUnavailable) fake.application.process = () => undefined;
     const mocks = {
-      "../../src/apps/desktop/desktop-environment.ts": { desktopIdentity },
+      "../../tooling/harness-identity.ts": { desktopIdentity },
       "node:http": { createServer: () => fixture },
       "node:fs/promises": {
         default: {

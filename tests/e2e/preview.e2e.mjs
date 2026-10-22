@@ -1,4 +1,7 @@
-import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
+import {
+  testUserDataLeaf,
+  desktopIdentity as harnessDesktopIdentity,
+} from "../../tooling/harness-identity.ts";
 import assert from "node:assert/strict";
 import {
   runtimeProcessId,
@@ -1120,7 +1123,7 @@ async function launch(
   );
   const profile = await isolatedProfileEnvironment(isolatedHome);
   const isolatedAppData = profile.isolatedAppData;
-  const userData = path.join(isolatedHome, "Farol user-data");
+  const userData = path.join(isolatedHome, testUserDataLeaf);
   let seededChatGptOperationId = null;
   if (options.seedChatGptDispatchIntent === true) {
     seededChatGptOperationId = randomUUID();
@@ -1731,7 +1734,7 @@ async function proveSecondLaunchDuringStartup() {
     await fs.mkdtemp(path.join(temporaryRoot, "farol-e2e-home-")),
   );
   const profile = await isolatedProfileEnvironment(isolatedHome);
-  const userData = path.join(isolatedHome, "Farol user-data");
+  const userData = path.join(isolatedHome, testUserDataLeaf);
   const windowMode = "hidden";
   const launchArgs = [
     ...launchPrefix,
@@ -1947,7 +1950,7 @@ async function proveSecondLaunchRejectsFailedStartup() {
     await fs.mkdtemp(path.join(temporaryRoot, "farol-e2e-home-")),
   );
   const profile = await isolatedProfileEnvironment(isolatedHome);
-  const userData = path.join(isolatedHome, "Farol user-data");
+  const userData = path.join(isolatedHome, testUserDataLeaf);
   const launchArgs = [
     ...launchPrefix,
     "--demo",
@@ -2916,7 +2919,7 @@ async function proveStartupRuntimeDeath(stage) {
     await fs.mkdtemp(path.join(temporaryRoot, "farol-e2e-home-")),
   );
   const profile = await isolatedProfileEnvironment(isolatedHome);
-  const userData = path.join(isolatedHome, "Farol user-data");
+  const userData = path.join(isolatedHome, testUserDataLeaf);
   const application = await electron.launch({
     executablePath: executable,
     args: [
@@ -7936,7 +7939,7 @@ demoMainSegment: try {
       `${isolatedRoot}${path.sep}`,
     ),
   );
-  assert.equal(path.basename(resourceIdentity.userData), "Farol user-data");
+  assert.equal(path.basename(resourceIdentity.userData), testUserDataLeaf);
   await waitForTask(
     normal.application,
     "task-atlantic",

@@ -173,7 +173,7 @@ def main():
     env = environment(node)
     node_version = subprocess.check_output([str(node), "--version"], env=env, text=True).strip()
     if node_version not in ("v24.20.0", "v26.7.0"):
-        parser.error("Farol's declared Node version is required")
+        parser.error("Product's declared Node version is required")
     before = measurement_identity(ROOT)
     if before["dirty"]:
         parser.error("clean committed source required")

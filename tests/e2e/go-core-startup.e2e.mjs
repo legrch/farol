@@ -1,4 +1,5 @@
-import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
+import { productBundleName } from "../../tooling/harness-identity.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 /**
  * SOURCE-ONLY preparation: this file never builds or packages an application.
  * Native execution is opt-in and belongs to the caller's exclusive native lane.
@@ -16,7 +17,7 @@ import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/deskto
  * and actual React reads of both original answers, without another Send.
  * Ordinary Quit is recorded separately; unconfirmed profiles are quarantined.
  * Or replace --candidate-root with:
- *   --packaged /absolute/Farol.app --artifact-metadata /absolute/artifact.json
+ *   --packaged /absolute/Product.app --artifact-metadata /absolute/artifact.json
  *   --artifact-sha <independently selected artifactSha256>
  *
  * Fresh-only by default. Packaged --reopen opts into one same-build successor
@@ -3267,7 +3268,7 @@ function selfTest() {
     ["--run-native", "--check"],
     ["--source-sha", "a".repeat(40)],
     ["--artifact-sha", "c".repeat(64)],
-    ["--packaged", "/tmp/Farol.app"],
+    ["--packaged", `/tmp/${productBundleName}`],
   ])
     reject(() => selection([...args, ...extra]));
   reject(() => selection([]));
@@ -3279,7 +3280,7 @@ function selfTest() {
   const selected = selection(args);
   const packageArgs = [
     "--packaged",
-    "/tmp/Farol.app",
+    `/tmp/${productBundleName}`,
     "--artifact-metadata",
     "/tmp/artifact.json",
     "--artifact-sha",

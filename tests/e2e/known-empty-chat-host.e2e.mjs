@@ -1,4 +1,4 @@
-import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 // Fresh native fixture only. Reproduce the actual frozen4d host failure and
 // original child closure, then exercise the current read-only observer/host and
 // the original recorder. No saved profile, Electron, provider or external MCP.

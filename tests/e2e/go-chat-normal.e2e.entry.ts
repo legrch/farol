@@ -1,4 +1,5 @@
-import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
+import { productName } from "../../tooling/harness-identity.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 /** Controlled offline DOM join of production constructors. No normal main/UI
  * entry, installed product, selector qualification or live-provider claim. */
 import assert from "node:assert/strict";
@@ -91,7 +92,7 @@ function fail(code: string) {
   receipt.error ??= code;
   save();
 }
-app.setName("Farol Controlled Go Chat DOM Join");
+app.setName(`${productName} Controlled Go Chat DOM Join`);
 for (const [name, directory] of Object.entries(config.paths))
   app.setPath(name, directory);
 app.setAppLogsPath(config.paths.logs!);

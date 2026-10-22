@@ -1,4 +1,4 @@
-"""Bounded Farol pilot scheduling; exact executors still own test acceptance.
+"""Bounded Product pilot scheduling; exact executors still own test acceptance.
 
 There is no arbitrary-command or selected-test CLI here. Unknown child outcomes
 retain a persistent writer-local lease. Cancellation drains issued work without

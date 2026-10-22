@@ -1,4 +1,4 @@
-import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 import { pollingTunnelStore } from "./lib/polling-tunnel-store.mjs";
 import { readNativePreviewEcho } from "./lib/native-preview-echo.mjs";
 // Exact attested Dev Electron/Go, synthetic loopback child and disposable roots.

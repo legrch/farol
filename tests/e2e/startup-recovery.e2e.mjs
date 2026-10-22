@@ -1,4 +1,4 @@
-import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 // Explicit native lane: exact Go build and synthetic data, with either a
 // synthetic predecessor or an actual idle normal-host crash. Hidden recovery
 // UI -> Quit or exact-host SIGKILL -> same-profile reopen. No live provider,

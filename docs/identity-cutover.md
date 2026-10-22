@@ -77,18 +77,29 @@ activation or release. The integration Lead owns the remaining aggregate gates.
 
 ## Acceptance harness identities
 
-E2E and acceptance tooling derive bundle IDs, data-directory leaves, partitions
-and process names from `desktopIdentity` in the desktop environment contract.
-Serialized Electron callbacks receive that calculated identity as an argument.
-They must not capture a Node-side variable or substitute a display name for a
-profile directory. The unit identity guard scans `tests/e2e`, shared fixtures and tooling; only
-its explicit product/build contract list owns fixed identity assertions. It checks
-identity substrings in string literals, template quasis and constant concatenations,
-and scans every non-binary harness file, including JSON, shell, Python, plist
-and YAML. Protective rejection cases have exact-value exceptions; historical
-readers have explicit file exceptions.
-Historical package readers and protective rejection fixtures retain historical
-paths, without granting access to those profiles.
+E2E and acceptance tooling import identity values through the single
+`tooling/harness-identity.ts` helper, which delegates to the product's
+`desktopIdentity` contract for production, owner preview and Dev. Serialized
+Electron callbacks receive calculated values as arguments; they must not capture
+Node-side identity variables or substitute display names for profile directories.
+
+`tests/unit/harness-identities.test.mjs` denies pinned identity tokens by default
+in every non-binary file under `tests/e2e`, `tests/fixtures` and `tooling`, regardless
+of extension. Every text line is checked, including comments and regexes. The
+product display name is a whole-word token in all contexts, including bundle
+suffixes and edition names. Bundle IDs, data-directory leaves, partitions (with
+and without the persistence prefix), executable/application names and runtime
+names come from all three product identities; retired rename tokens are also
+denied. Decoded JavaScript/TypeScript literals and constant concatenations are
+checked in addition to raw text.
+
+Only the helper and the guard's exact file allowlist are exempt. Each entry has a
+one-line reason for a fixed product/build contract, historical reader, protective
+rejection fixture or displayed-copy assertion. A test rejects missing, binary,
+out-of-scope or token-free (stale) exceptions. Newly discovered text files receive
+no implicit exemption. Historical and rejection values grant no access to owner
+profiles. Operational harness identity values still belong in the helper rather
+than the displayed-copy exceptions.
 
 Native admission can precede the startup phase that creates the caller relay.
 A harness that reopens a profile refreshes its isolation witness from the

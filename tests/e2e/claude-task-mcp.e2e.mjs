@@ -1,4 +1,5 @@
-import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
+import { productName } from "../../tooling/harness-identity.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 import {
   ownedFixtureTransport,
   requireOwnedFixtureExit,
@@ -371,7 +372,7 @@ while [ "$#" -gt 0 ]; do
   console.log(
     JSON.stringify({
       status: "PASS",
-      route: "new-Farol-packaged-or-built-MCP",
+      route: `new-${productName}-packaged-or-built-MCP`,
       packaged,
       qualification: "owned-process-fixture-only",
       terminal: "completed-and-needs-input",

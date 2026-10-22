@@ -1,4 +1,4 @@
-import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 // Three fresh hidden PACKAGED lifetimes. No installed profile, provider Send,
 // hardware sleep, updater, clock injection, process scan or unknown retry.
 // Usage (only after the Lead supplies clean, attested owner-beta package bytes):

@@ -1,4 +1,4 @@
-import { desktopIdentity as harnessDesktopIdentity } from "../src/apps/desktop/desktop-environment.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "./harness-identity.ts";
 // Development launcher mechanics only. Never selects the installed application,
 // changes a profile or claims a signal settled application work.
 import fs from "node:fs";
@@ -277,8 +277,10 @@ export async function prepareDevBuild({
       .split("\n")
       .some(
         (line) =>
-          /^\s*\d+\s+Farol Dev$/u.test(line) ||
-          ownedRoots.some((prefix) => line.includes(prefix)),
+          new RegExp(
+            `^\\s*\\d+\\s+${RegExp.escape(harnessDesktopIdentity("dev", "/").applicationName)}$`,
+            "u",
+          ).test(line) || ownedRoots.some((prefix) => line.includes(prefix)),
       )
   )
     throw Error("DEV_BUILD_OWNED_PROCESSES_REMAIN");

@@ -1,4 +1,4 @@
-import { desktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
+import { desktopIdentity } from "../../tooling/harness-identity.ts";
 import { execFileSync } from "node:child_process";
 
 function parseProcessTable(table, mainPid) {

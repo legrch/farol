@@ -77,7 +77,7 @@ export async function startChatGptFixture(options = {}) {
         <script>
           // UX34 self-deception guard fixture (test-only): ?cover=1 adds a
           // full-viewport overlay at the same maximal z-index the injected
-          // "Return to Farol" banner uses, counting its own clicks. Equal
+          // return banner uses, counting its own clicks. Equal
           // z-index falls back to DOM order, and the banner is injected
           // later (on did-finish-load), so the overlay re-appends itself
           // whenever a sibling is added, keeping it the topmost element.

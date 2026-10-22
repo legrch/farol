@@ -1,4 +1,5 @@
-import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
+import { productName } from "../../tooling/harness-identity.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import assert from "node:assert/strict";
@@ -120,7 +121,7 @@ await fixtureGit([
   "-C",
   workspaceRoot,
   "-c",
-  "user.name=Farol E2E",
+  `user.name=${productName} E2E`,
   "-c",
   "user.email=farol-e2e@invalid.example",
   "commit",

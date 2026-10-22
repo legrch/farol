@@ -1,4 +1,4 @@
-import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 // Hidden owned windows and disposable profiles only. No account, connector,
 // model or owner-state acceptance is claimed by these configuration faults.
 import assert from "node:assert/strict";

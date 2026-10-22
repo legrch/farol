@@ -1,4 +1,4 @@
-import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 // Explicit hidden native lane. Synthetic profile, failed in-memory helper,
 // ordinary Quit, then one clean same-profile successor. No installed or provider proof.
 import assert from "node:assert/strict";

@@ -58,7 +58,7 @@ function childMain({
     receipt.error = String(error?.stack ?? error);
     save();
   };
-  app.setName("Farol Synthetic Public DOM Qualification");
+  app.setName("Synthetic Public DOM Qualification");
   for (const [name, directory] of Object.entries(config.paths))
     app.setPath(name, directory);
   app.setAppLogsPath(config.paths.logs);

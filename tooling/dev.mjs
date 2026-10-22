@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-import { desktopIdentity as harnessDesktopIdentity } from "../src/apps/desktop/desktop-environment.ts";
-// The single development entrypoint for Farol: find the declared
+import { productName } from "./harness-identity.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "./harness-identity.ts";
+// The single development entrypoint for the product: find the declared
 // toolchain, make sure dependencies are the locked ones, build the current
-// development bytes, and run Farol's own local processes in this terminal.
+// development bytes, and run the product's own local processes in this terminal.
 //
 // This is deliberately not `task package` / `task run`, which build
 // and verify an exact, committed candidate and refuse a stale or dirty one.
@@ -271,7 +272,7 @@ function electronBinaryPresent(root) {
 }
 
 /**
- * What needs to happen before Farol can be built, given what is already on
+ * What needs to happen before the product can be built, given what is already on
  * disk. Pure — `dependencyState` and `electronPresent` are plain values, so
  * tests can drive every combination without a real node_modules.
  */
@@ -372,9 +373,9 @@ async function ensureDependencies(root, npmBin, log) {
 
 const ESCALATION_SEQUENCE = Object.freeze(["SIGINT", "SIGTERM", "SIGKILL"]);
 export const ESCALATION_MESSAGES = Object.freeze({
-  SIGINT: "Stopping Farol (Ctrl+C)...",
-  SIGTERM: "Farol did not stop; sending SIGTERM.",
-  SIGKILL: "Farol still did not stop; forcing it with SIGKILL.",
+  SIGINT: `Stopping ${productName} (Ctrl+C)...`,
+  SIGTERM: `${productName} did not stop; sending SIGTERM.`,
+  SIGKILL: `${productName} still did not stop; forcing it with SIGKILL.`,
 });
 
 /** Each call returns the next signal to send, saturating at SIGKILL. */
@@ -402,8 +403,7 @@ export function describeLaunchResult(outcome) {
   if (outcome === "primary-recovery") {
     return {
       exitCode: null,
-      message:
-        "Farol opened in recovery mode. Previous work records are retained; Computer access is paused.",
+      message: `${productName} opened in recovery mode. Previous work records are retained; Computer access is paused.`,
     };
   }
   if (outcome === "primary-started") {
@@ -412,8 +412,7 @@ export function describeLaunchResult(outcome) {
   if (outcome === "reopened") {
     return {
       exitCode: 0,
-      message:
-        "Farol is already running as this exact build; its existing window was reopened instead of starting a second copy.",
+      message: `${productName} is already running as this exact build; its existing window was reopened instead of starting a second copy.`,
     };
   }
   if (outcome === "startup-failed") {
@@ -425,7 +424,7 @@ export function describeLaunchResult(outcome) {
   return {
     exitCode: 1,
     message:
-      `Farol is already running as a different build (${outcome}); ` +
+      `${productName} is already running as a different build (${outcome}); ` +
       "quit that instance yourself, then run 'task dev' again. It was left running untouched.",
   };
 }
@@ -649,7 +648,7 @@ export function createOwnerFreshReviewProfile(
  * Built from a fixed key allowlist, exactly as `ownerLaunchEnvironment`
  * builds the packaged launcher's, rather than passed through from whoever
  * ran `task dev`. This entrypoint used to hand Electron `process.env`
- * whole, and it is the one Farol launcher that did: a shell that
+ * whole, and it is the one product launcher that did: a shell that
  * happened to export `FAROL_E2E=1` and a seam value gave an ordinary
  * development launch the E2E fault seams — substituted file and directory
  * pickers, a fabricated model reply, live-task commit faults, and a
@@ -739,21 +738,21 @@ export async function launchPreview(
   const ownerExitCode = exitCodeForOwnerStop(stopLabel);
   if (ownerExitCode !== null) {
     process.stdout.write(
-      `Farol stopped (${stopLabel}). Nothing else was touched.\n`,
+      `${productName} stopped (${stopLabel}). Nothing else was touched.\n`,
     );
     process.exit(ownerExitCode);
   }
 
   if (outcome.error) {
     process.stderr.write(
-      `Farol could not be launched: ${outcome.error.message}\n`,
+      `${productName} could not be launched: ${outcome.error.message}\n`,
     );
     process.exit(1);
   }
 
   if (protocolError) {
     process.stderr.write(
-      `Farol's launch could not be read: ${protocolError.message}\n`,
+      `${productName}'s launch could not be read: ${protocolError.message}\n`,
     );
     process.exit(1);
   }
@@ -763,7 +762,7 @@ export async function launchPreview(
     launchResult = resultCollector.finish();
   } catch (error) {
     process.stderr.write(
-      `Farol exited before it announced its launch result: ${error.message}\n`,
+      `${productName} exited before it announced its launch result: ${error.message}\n`,
     );
     process.exit(outcome.status ?? 1);
   }
@@ -775,7 +774,9 @@ export async function launchPreview(
   }
 
   if (outcome.signal) {
-    process.stderr.write(`Farol stopped unexpectedly (${outcome.signal}).\n`);
+    process.stderr.write(
+      `${productName} stopped unexpectedly (${outcome.signal}).\n`,
+    );
     process.exit(1);
   }
   process.exit(outcome.status ?? 0);

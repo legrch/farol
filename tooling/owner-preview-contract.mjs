@@ -1,4 +1,4 @@
-import { desktopIdentity as harnessDesktopIdentity } from "../src/apps/desktop/desktop-environment.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "./harness-identity.ts";
 import assert from "node:assert/strict";
 import path from "node:path";
 import {
@@ -8,7 +8,7 @@ import {
   ownerPreviewIdentity,
   desktopCodexConfigPath,
   desktopCodexChildHomes,
-} from "../src/apps/desktop/desktop-environment.ts";
+} from "./harness-identity.ts";
 import { PREVIEW_ASSET_RECIPE } from "./owner-preview-assets.mjs";
 import { candidatePaths } from "./candidate-contract.mjs";
 

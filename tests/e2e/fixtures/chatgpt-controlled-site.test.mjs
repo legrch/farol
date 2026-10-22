@@ -1,3 +1,4 @@
+import { productName } from "../../../tooling/harness-identity.ts";
 import assert from "node:assert/strict";
 import { request as httpRequest } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
@@ -16,7 +17,7 @@ const scenario = () => ({
   selection: {
     model: "Test model",
     effort: "Light",
-    connector: { id: "plugin_asdk_app_TEST", label: "Farol DEV" },
+    connector: { id: "plugin_asdk_app_TEST", label: `${productName} DEV` },
   },
   turns: [
     {

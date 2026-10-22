@@ -9,7 +9,7 @@ const userData = process.argv
 if (process.env.FAROL_E2E !== "1" || !userData || !path.isAbsolute(userData)) {
   throw new Error("FOCUS_FIXTURE_ISOLATION_REQUIRED");
 }
-app.setName("Farol Inactive Reopen Focus Fixture");
+app.setName("Inactive Reopen Focus Fixture");
 app.setPath("userData", userData);
 
 app
@@ -24,7 +24,7 @@ app
       throw new Error("FOCUS_FIXTURE_BUILT_IN_DISPLAY_UNAVAILABLE");
     }
     const window = new BrowserWindow({
-      title: "Farol Inactive Reopen Focus Fixture",
+      title: "Inactive Reopen Focus Fixture",
       x: builtIn.workArea.x + 12,
       y: builtIn.workArea.y + 12,
       width: 280,

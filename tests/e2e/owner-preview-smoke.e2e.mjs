@@ -1,4 +1,4 @@
-import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import {
   desktopAppDataPath,
   desktopIdentity,
-} from "../../src/apps/desktop/desktop-environment.ts";
+} from "../../tooling/harness-identity.ts";
 import { parseQuitReceipt } from "../../src/apps/desktop/quit-receipt.ts";
 import { requireOwnerPreviewRuntimeIntegration } from "../../tooling/owner-preview-contract.mjs";
 import {

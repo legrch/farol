@@ -1,3 +1,4 @@
+import { productName } from "../../tooling/harness-identity.ts";
 /**
  * Synthetic Copy buttons in hidden native Electron, using the built production
  * ChatGptRoute permission handlers. NOT live ChatGPT, packaged or installed proof.
@@ -53,7 +54,7 @@ function childMain({
     fs.writeFileSync(config.receipt, JSON.stringify(receipt, null, 2), {
       mode: 0o600,
     });
-  app.setName("Farol Clipboard Qualification");
+  app.setName("Clipboard Qualification");
   for (const [name, directory] of Object.entries(config.paths))
     app.setPath(name, directory);
   app.setAppLogsPath(config.paths.logs);
@@ -715,7 +716,7 @@ try {
   const config = {
     paths,
     token,
-    text: `Farol synthetic clipboard qualification ${token}`,
+    text: `${productName} synthetic clipboard qualification ${token}`,
     receipt: nativeReceipt,
   };
   const bundle = path.join(temporary, "clipboard.cjs");

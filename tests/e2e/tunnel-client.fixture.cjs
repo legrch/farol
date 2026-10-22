@@ -1,13 +1,13 @@
 "use strict";
 
 // Synthetic stand-in for the owner's real `tunnel-client` executable — the
-// OpenAI secure-MCP tunnel client that Farol probes, configures,
+// OpenAI secure-MCP tunnel client that the product probes, configures,
 // doctors, and supervises through `SecureMcpConnectorRuntime` once
 // `FAROL_E2E_TUNNEL_CLIENT` names it (see
 // vnext/src/apps/desktop/secure-mcp-connector-runtime.ts and
 // vnext/src/apps/desktop/tunnel-client-probe.ts). It speaks only to
 // 127.0.0.1 and never spawns a child, dials the `--mcp-command` it is
-// handed, or reaches any control plane. It exists to prove that Farol's
+// handed, or reaches any control plane. It exists to prove that the product's
 // own probe/configure/doctor/start/stop state machine reacts correctly to
 // a well-behaved local child, and — on request — to one that fails; it
 // proves nothing about a real tunnel, provider, or MCP session, none of
@@ -223,7 +223,7 @@ function runRun(argv) {
   // listener to know its own PID.
   writeFileAtomic(pidFile, `${process.pid}\n`);
 
-  // This is the one loopback surface this fixture serves. Farol's
+  // This is the one loopback surface this fixture serves. The product's
   // `readHealthBaseUrl()` requires exactly this shape — http, host
   // "127.0.0.1", no userinfo/query/hash, a bare "/" path — so the URL
   // written below is built from a hardcoded scheme and host, never from

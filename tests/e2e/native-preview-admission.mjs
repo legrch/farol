@@ -16,7 +16,7 @@ import {
   desktopAppDataPath,
   desktopIdentity,
   desktopUserDataPath,
-} from "../../src/apps/desktop/desktop-environment.ts";
+} from "../../tooling/harness-identity.ts";
 import {
   FAROL_MODEL_ENABLED,
   FAROL_BACKED_PRODUCT_AGENT_ENABLED,
