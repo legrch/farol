@@ -7,7 +7,10 @@ import {
   operationResult,
   observeOperation,
 } from "../../apps/desktop/operations/observe";
-import { configurationOperation } from "../../apps/desktop/operations/configuration";
+import {
+  configurationOperation,
+  configurationResultTarget,
+} from "../../apps/desktop/operations/configuration";
 import { recordedModelTurn } from "../../apps/desktop/operations/model-turn";
 import type { ProductConfigurationCommand } from "../../src/pkg/product-settings/contract";
 import type { FarolModelSseEvent } from "../../src/apps/desktop/farol-model-endpoint";
@@ -390,3 +393,32 @@ it.each([
     expect(JSON.stringify(store.snapshot())).not.toMatch(/PRIVATE/);
   },
 );
+
+it("extracts target-only metadata from a sealed workspace receipt", () => {
+  const result = {
+    ok: true,
+    snapshot: {
+      status: "ready",
+      settings: {
+        computer: { workspaces: [{ workspaceId: "w", label: "Docs" }] },
+      },
+    },
+    evidence: {
+      kind: "computer.workspace-mutation",
+      workspaceId: "w",
+      relativePath: "README.md",
+      text: "PRIVATE-CANARY",
+      stdout: "PRIVATE-CANARY",
+    },
+  } as unknown as import("../../src/pkg/product-settings/contract").ProductConfigurationResult;
+  expect(configurationResultTarget(result)).toEqual({
+    workspace: "Docs",
+    relativePath: "README.md",
+  });
+  expect(
+    configurationOperation(
+      { kind: "computer.run-git-head", workspaceId: "w" },
+      undefined,
+    ).target,
+  ).toEqual({ command: "git", relativePath: "." });
+});

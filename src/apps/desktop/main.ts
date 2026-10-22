@@ -4,7 +4,10 @@ import {
 } from "../../../apps/desktop/operations/model-turn";
 import { OperationsStore } from "../../../apps/desktop/operations/store";
 import { observeOperation } from "../../../apps/desktop/operations/observe";
-import { configurationOperation } from "../../../apps/desktop/operations/configuration";
+import {
+  configurationOperation,
+  configurationResultTarget,
+} from "../../../apps/desktop/operations/configuration";
 import {
   ownerStopPresentationCurrent,
   type OwnerStopPresentation,
@@ -6423,16 +6426,7 @@ async function configureProduct(
     if (result.snapshot.status === "ready") {
       const workspaces = result.snapshot.settings.computer.workspaces;
       operationsStore().setWorkspaceLabels(workspaces);
-      if (
-        parsed.data.kind === "computer.add-workspace" &&
-        result.ok &&
-        result.evidence?.kind === "computer.workspace-selection"
-      ) {
-        const id = result.evidence.workspaceId;
-        const workspace = workspaces.find((w) => w.workspaceId === id);
-        if (workspace)
-          Object.assign(metadata.target, { workspace: workspace.label });
-      }
+      Object.assign(metadata.target, configurationResultTarget(result));
     }
     return result;
   });
