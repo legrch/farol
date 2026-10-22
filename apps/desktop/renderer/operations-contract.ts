@@ -82,7 +82,9 @@ export const OperationsSnapshotSchema = z.strictObject({
   corruptLines: z.number().int().nonnegative(),
 });
 export type OperationsSnapshot = z.infer<typeof OperationsSnapshotSchema>;
-/** Injected at the adapter which owns the operation. Never accepts payloads. */
+/** Injected at the adapter which owns the operation. Never accepts payloads.
+ * Implementations must be total observers: use createTotalOperationsRecorder
+ * at the recorder boundary so no method or finish handle throws or rejects. */
 export interface OperationsRecorder {
   begin?(
     metadata: OperationMetadata,

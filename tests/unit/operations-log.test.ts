@@ -957,3 +957,65 @@ it("observes completion without adding a settlement turn or waiting for recordin
   );
   disk.resolve();
 });
+
+it.each(["begin", "finish", "record", "labels"] as const)(
+  "counts invalid %s input at the store boundary without throwing",
+  async (method) => {
+    const { store, directory } = setup(retentionLimits);
+    const invalid = { ...metadata, kind: "invalid kind" };
+    if (method === "begin") {
+      const finish = store.begin(invalid);
+      finish("done", null, 1); // Failed starts are inert, with no second failure.
+      finish("unknown", null, 2);
+    } else if (method === "finish") store.begin(metadata)("done", null, NaN);
+    else if (method === "record") store.record(invalid, "unknown", null, 1);
+    else store.setWorkspaceLabels(undefined as never);
+    expect((await store.snapshot(5000)).writeFailures).toBe(1);
+    expect(await store.flush(5000)).toBe(true);
+    const snapshot = await store.snapshot(5000);
+    expect(snapshot).toMatchObject({
+      writeFailures: 1,
+      droppedEntries: method === "labels" ? 0 : 1,
+      unrecordedUncertainEntries:
+        method === "begin" || method === "record" ? 1 : 0,
+    });
+    const restarted = new OperationsStore(directory, () => 1792670400000);
+    stores.push(restarted);
+    expect((await restarted.snapshot(5000)).writeFailures).toBe(1);
+  },
+);
+it.each(["begin", "finish", "record", "labels"] as const)(
+  "absorbs queue scheduling failures in %s and keeps diagnostics available",
+  async (method) => {
+    const { store } = setup(retentionLimits);
+    const finish = method === "finish" ? store.begin(metadata) : undefined;
+    // Complete the valid start first so each failing method must schedule.
+    await store.flush(5000);
+    const schedule = vi
+      .spyOn(globalThis, "setImmediate")
+      .mockImplementation(() => {
+        throw Error("QUEUE_UNAVAILABLE");
+      });
+    try {
+      if (method === "begin") store.begin(metadata)("done", null, 1);
+      else if (method === "finish") finish!("unknown", null, 1);
+      else if (method === "record") store.record(metadata, "done", null, 1);
+      else store.setWorkspaceLabels([{ workspaceId: "w", label: "Docs" }]);
+    } finally {
+      schedule.mockRestore();
+    }
+    expect((await store.snapshot(5000)).writeFailures).toBe(1);
+    expect(await store.flush(5000)).toBe(true);
+    expect((await store.snapshot(5000)).writeFailures).toBe(1);
+  },
+);
+it("counts asynchronous label serialization failure without delaying an operation", async () => {
+  const { store } = setup(retentionLimits);
+  store.setWorkspaceLabels([{ workspaceId: "w", label: 1n as never }]);
+  const result = { status: "ok" };
+  expect(await observeOperation(store, metadata, async () => result)).toBe(
+    result,
+  );
+  expect(await store.flush(5000)).toBe(false);
+  expect((await store.snapshot(5000)).writeFailures).toBe(1);
+});

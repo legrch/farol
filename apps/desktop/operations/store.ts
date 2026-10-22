@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { createTotalOperationsRecorder } from "./recorder";
 import {
   OperationEntrySchema,
   OperationsDiagnosticsSchema,
@@ -51,6 +52,21 @@ export class OperationsStore implements OperationsRecorder {
     unrecordedUncertainEntries: 0,
   };
   private reading: Promise<OperationsSnapshot> | undefined;
+  private readonly recorder = createTotalOperationsRecorder(
+    {
+      begin: (metadata) => this.beginEntry(metadata),
+      record: (metadata, outcome, code, durationMs) =>
+        this.append(metadata, outcome, code, durationMs),
+      setWorkspaceLabels: (workspaces) => this.updateLabels(workspaces),
+    },
+    () => {
+      this.diagnosticsDirty = true;
+      this.schedule();
+    },
+  );
+  readonly begin = this.recorder.begin;
+  readonly record = this.recorder.record;
+  readonly setWorkspaceLabels = this.recorder.setWorkspaceLabels;
   constructor(
     readonly directory: string,
     private readonly now = Date.now,
@@ -100,13 +116,14 @@ export class OperationsStore implements OperationsRecorder {
       throw error;
     }
   }
-  setWorkspaceLabels(workspaces: Labels): void {
+  private updateLabels(workspaces: Labels): void {
     if (this.closed) return;
     // Coalesced and bounded, through the same writer as observations.
-    this.labels = workspaces
+    const labels = workspaces
       .slice(0, 128)
       .map(({ workspaceId, label }) => ({ workspaceId, label }));
     this.schedule();
+    this.labels = labels;
   }
   private async replace(file: string, value: unknown): Promise<void> {
     const temporary = path.join(this.directory, `${randomUUID()}.tmp`);
@@ -145,7 +162,7 @@ export class OperationsStore implements OperationsRecorder {
       return {};
     }
   }
-  begin(metadata: OperationMetadata) {
+  private beginEntry(metadata: OperationMetadata) {
     const id = randomUUID();
     this.append(metadata, "pending", null, 0, { id, phase: "started" });
     let observed = false;
@@ -162,14 +179,6 @@ export class OperationsStore implements OperationsRecorder {
       });
     };
   }
-  record(
-    metadata: OperationMetadata,
-    outcome: OperationEntry["outcome"],
-    code: string | null,
-    durationMs: number,
-  ): void {
-    this.append(metadata, outcome, code, durationMs);
-  }
   private lost(items: readonly QueuedEntry[]): void {
     this.droppedEntries += items.length;
     this.unrecordedUncertainEntries += items.filter(
@@ -184,48 +193,41 @@ export class OperationsStore implements OperationsRecorder {
     durationMs: number,
     lifecycle?: NonNullable<OperationEntry["lifecycle"]>,
   ): void {
-    try {
-      const entry = OperationEntrySchema.parse({
-        ...metadata,
-        ...(lifecycle ? { lifecycle } : {}),
-        id: randomUUID(),
-        at: this.now(),
-        outcome,
-        code,
-        durationMs: Math.max(0, Math.round(durationMs)),
-      });
-      const item = {
-        entry,
-        droppable: outcome !== "pending" && outcome !== "unknown",
-      };
-      if (item.droppable && lifecycle?.phase === "observed") {
-        const start = this.queue.find(
-          (q) =>
-            q.entry.lifecycle?.id === lifecycle.id &&
-            q.entry.lifecycle.phase === "started",
-        );
-        if (start) start.droppable = true;
-      }
-      if (this.closed) {
+    const entry = OperationEntrySchema.parse({
+      ...metadata,
+      ...(lifecycle ? { lifecycle } : {}),
+      id: randomUUID(),
+      at: this.now(),
+      outcome,
+      code,
+      durationMs: Math.max(0, Math.round(durationMs)),
+    });
+    const item = {
+      entry,
+      droppable: outcome !== "pending" && outcome !== "unknown",
+    };
+    if (item.droppable && lifecycle?.phase === "observed") {
+      const start = this.queue.find(
+        (q) =>
+          q.entry.lifecycle?.id === lifecycle.id &&
+          q.entry.lifecycle.phase === "started",
+      );
+      if (start) start.droppable = true;
+    }
+    if (this.closed) {
+      this.lost([item]);
+      return;
+    }
+    this.schedule();
+    if (this.queue.length >= this.queueLimit) {
+      const index = this.queue.findIndex((q) => q.droppable);
+      if (index < 0) {
         this.lost([item]);
         return;
       }
-      if (this.queue.length >= this.queueLimit) {
-        const index = this.queue.findIndex((q) => q.droppable);
-        if (index < 0) {
-          this.lost([item]);
-          this.schedule();
-          return;
-        }
-        this.lost(this.queue.splice(index, 1));
-      }
-      this.queue.push(item);
-      this.schedule();
-    } catch {
-      this.writeFailures++;
-      this.diagnosticsDirty = true;
-      this.schedule();
+      this.lost(this.queue.splice(index, 1));
     }
+    this.queue.push(item);
   }
   private schedule(): void {
     if (this.running || this.scheduled || this.closed) return;
@@ -295,10 +297,12 @@ export class OperationsStore implements OperationsRecorder {
     );
   }
   private diagnostics() {
+    const recorder = this.recorder.diagnostics();
     return {
-      writeFailures: this.writeFailures,
-      droppedEntries: this.droppedEntries,
-      unrecordedUncertainEntries: this.unrecordedUncertainEntries,
+      writeFailures: this.writeFailures + recorder.writeFailures,
+      droppedEntries: this.droppedEntries + recorder.droppedEntries,
+      unrecordedUncertainEntries:
+        this.unrecordedUncertainEntries + recorder.unrecordedUncertainEntries,
     };
   }
   private async writeBatch(batch: readonly QueuedEntry[]): Promise<void> {
@@ -478,11 +482,13 @@ export class OperationsStore implements OperationsRecorder {
       clearImmediate(this.scheduled);
       this.scheduled = undefined;
     }
-    const previousFailures = this.writeFailures;
+    const previousFailures = this.diagnostics().writeFailures;
     let timer: NodeJS.Timeout | undefined;
     try {
       return await Promise.race([
-        this.start().then(() => this.writeFailures === previousFailures),
+        this.start().then(
+          () => this.diagnostics().writeFailures === previousFailures,
+        ),
         new Promise<boolean>((resolve) => {
           timer = setTimeout(() => resolve(false), Math.max(0, deadlineMs));
         }),
@@ -527,11 +533,13 @@ export class OperationsStore implements OperationsRecorder {
   }
   private mergeDiagnostics(snapshot: OperationsSnapshot) {
     // readSnapshot includes other writers only; our counters are always current.
+    const current = this.diagnostics();
     return {
-      writeFailures: snapshot.writeFailures + this.writeFailures,
-      droppedEntries: snapshot.droppedEntries + this.droppedEntries,
+      writeFailures: snapshot.writeFailures + current.writeFailures,
+      droppedEntries: snapshot.droppedEntries + current.droppedEntries,
       unrecordedUncertainEntries:
-        snapshot.unrecordedUncertainEntries + this.unrecordedUncertainEntries,
+        snapshot.unrecordedUncertainEntries +
+        current.unrecordedUncertainEntries,
     };
   }
   private async readSnapshot(): Promise<OperationsSnapshot> {
