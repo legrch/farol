@@ -18,14 +18,10 @@ const source = sourceIdentity(root),
   buildRoot = path.join(root, "_output/build/app");
 const build = await qualifyGoBuild(buildRoot, source);
 const profile = await fs.realpath(
-  await fs.mkdtemp(
-    path.join(
-      os.tmpdir(),
-      `${desktopIdentity("dev", "/").runtimeIdentity}-operations-`,
-    ),
-  ),
+  await fs.mkdtemp(path.join(os.tmpdir(), "farol-e2e-home-")),
 );
-const home = path.join(profile, "home"),
+await fs.chmod(profile, 0o700);
+const home = profile,
   appData = path.join(profile, "app-data"),
   workspace = path.join(profile, "B2 documents");
 for (const dir of [home, appData, workspace])
@@ -121,7 +117,10 @@ async function screenshot(name) {
 }
 try {
   const first = await launch();
-  await page.locator(".sidebar-toggle").count();
+  assert.equal(first.userData, desktopIdentity("dev", appData).userData);
+  // A fresh profile starts in Setup; Home restores the normal expanded shell.
+  await page.locator('.rail [aria-label="Home"]').click();
+  await page.locator('.desktop[data-sidebar="full"]').waitFor();
   assert.equal(
     await page.locator(".desktop").getAttribute("data-sidebar"),
     "full",
@@ -158,6 +157,20 @@ try {
     window.farol.configure({ kind: "connector.check-health" }),
   );
   assert.equal(checked.ok, false, "unconfigured connection stays refused");
+  // Recording is asynchronous: observe the original results, never resend actions.
+  await page.waitForFunction(async () => {
+    const log = await window.farol.operations();
+    return [
+      ["hub.start", "done"],
+      ["computer.add-workspace", "done"],
+      ["computer.verify-workspace", "done"],
+      ["connector.check-health", "refused"],
+    ].every(([kind, outcome]) =>
+      log.entries.some(
+        (entry) => entry.kind === kind && entry.outcome === outcome,
+      ),
+    );
+  });
   const log = await page.evaluate(() => window.farol.operations());
   assert.ok(
     log.entries.some(
@@ -216,6 +229,10 @@ try {
   report.checks.push("log and sidebar choice survive clean app restart");
   await page.locator('.rail [aria-label="Home"]').click();
   await page.locator(".home-recent .home-row").first().waitFor();
+  assert.equal(
+    await page.locator(".desktop").getAttribute("data-sidebar"),
+    "rail",
+  );
   await screenshot("b2-home-recent-real");
   await close(second);
   report.storage = path.join(first.userData, "farol-state/operations");
