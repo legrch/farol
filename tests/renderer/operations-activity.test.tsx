@@ -1,3 +1,4 @@
+import { Home } from "../../src/ui/renderer/home";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
@@ -141,5 +142,44 @@ it("loads durable operations independently of the empty runtime tasks and refres
     expect(c.getSnapshot().activity).toMatchObject([operation]);
   } finally {
     c.dispose();
+  }
+});
+
+it("Home shows the same recorded operations while Setup is unfinished", async () => {
+  const f = fixture(),
+    c = new WindowController(f.api);
+  await c.start();
+  const state = c.getSnapshot();
+  const configuration = state.configuration;
+  if (configuration?.status !== "ready") throw Error("fixture settings");
+  const snapshot = {
+    ...state,
+    configuration: {
+      ...configuration,
+      settings: {
+        ...configuration.settings,
+        setup: {
+          ...configuration.settings.setup,
+          chatgpt: { ...configuration.settings.setup.chatgpt, verified: null },
+        },
+      },
+    },
+    activity: entries,
+  };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<Home snapshot={snapshot} facade={c} />));
+    expect(host.textContent).toContain("Finish setup");
+    expect(host.textContent).toContain("Recent activity");
+    expect(host.querySelectorAll(".home-recent .home-row")).toHaveLength(3);
+    expect(host.querySelector(".home-recent .home-row")?.textContent).toContain(
+      "model turn",
+    );
+  } finally {
+    await act(async () => root.unmount());
+    c.dispose();
+    host.remove();
   }
 });

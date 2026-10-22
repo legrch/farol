@@ -29,9 +29,11 @@ function taskStatus(task: WindowSnapshot["tasks"]["tasks"][number]) {
   return eventState(task.agent?.phase ?? task.lifecycle);
 }
 function eventState(phase: string | null) {
-  if (phase === "completed") return "Done";
+  if (phase === "completed" || phase === "done") return "Done";
   if (phase === "outcome_unknown") return "Result unconfirmed";
   if (phase === "running") return "Working";
+  if (phase === "pending") return "Pending";
+  if (phase === "refused") return "Refused";
   if (phase === "failed") return "Failed";
   if (phase === "cancelled") return "Interrupted";
   return "Recorded";
@@ -251,42 +253,44 @@ export function Home({ snapshot, facade }: Props) {
               ))}
             </section>
           )}
-          <section className="home-recent" aria-labelledby="home-recent-title">
-            <div className="home-section-title">
-              <h2 id="home-recent-title">Recent activity</h2>
-              <button onClick={() => facade.navigate({ area: "activity" })}>
-                Show all
-              </button>
-            </div>
-            {recent.map((event) => (
-              <button
-                className="home-row"
-                key={event.id}
-                onClick={() =>
-                  facade.navigate({ area: "activity", activityId: event.id })
-                }
-              >
-                <time>
-                  {Number.isFinite(event.at) && Math.abs(event.at) <= 8.64e15
-                    ? new Date(event.at).toLocaleTimeString(undefined, {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })
-                    : "Time unavailable"}
-                </time>
-                <span className="home-row-label">{event.label}</span>
-                <span className="home-event-state">
-                  {eventState(event.phase)}
-                </span>
-              </button>
-            ))}
-            {!recent.length && (
-              <p className="description">
-                Activity will appear here as you use Farol.
-              </p>
-            )}
-          </section>
         </>
+      )}
+      {(working || recent.length > 0) && (
+        <section className="home-recent" aria-labelledby="home-recent-title">
+          <div className="home-section-title">
+            <h2 id="home-recent-title">Recent activity</h2>
+            <button onClick={() => facade.navigate({ area: "activity" })}>
+              Show all
+            </button>
+          </div>
+          {recent.map((event) => (
+            <button
+              className="home-row"
+              key={event.id}
+              onClick={() =>
+                facade.navigate({ area: "activity", activityId: event.id })
+              }
+            >
+              <time>
+                {Number.isFinite(event.at) && Math.abs(event.at) <= 8.64e15
+                  ? new Date(event.at).toLocaleTimeString(undefined, {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })
+                  : "Time unavailable"}
+              </time>
+              <span className="home-row-label">{event.label}</span>
+              <span className="home-event-state">
+                {eventState(event.phase)}
+              </span>
+            </button>
+          ))}
+          {!recent.length && (
+            <p className="description">
+              Activity will appear here as you use Farol.
+            </p>
+          )}
+        </section>
       )}
       {checkResult && (
         <p role="status" className="home-check-result">

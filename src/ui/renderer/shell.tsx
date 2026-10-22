@@ -87,6 +87,7 @@ function activitySelection(snapshot: WindowSnapshot, filter: ActivityFilter) {
   return { items, selected, missing, filtered };
 }
 function activityTitle(snapshot: WindowSnapshot, filter: ActivityFilter) {
+  if (snapshot.activityDiagnostics !== undefined) return "Activity";
   const { selected, filtered } = activitySelection(snapshot, filter);
   return selected && !filtered ? selected.label : "Activity";
 }
