@@ -53,7 +53,7 @@ async function bundle(directory, n) {
   );
   await write(
     path.join(directory, "Contents/Info.plist"),
-    `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>local.farol.preview</string><key>CFBundleShortVersionString</key><string>0.1.${n}</string><key>CFBundleVersion</key><string>${n}</string></dict></plist>`,
+    `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${identity.bundleId}</string><key>CFBundleShortVersionString</key><string>0.1.${n}</string><key>CFBundleVersion</key><string>${n}</string></dict></plist>`,
     0o644,
   );
   await fs.chmod(directory, 0o755);
