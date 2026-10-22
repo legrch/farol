@@ -56,12 +56,23 @@ export async function readSetupSettings(page) {
   return bootstrap.configuration.settings;
 }
 
+function connectionOutcomeUnknown(settings) {
+  return Boolean(
+    settings.setup.connect.outcomeUnknown ||
+    settings.setup.computer.outcomeUnknown ||
+    settings.setup.hosts?.outcomeUnknown ||
+    settings.setup.verify?.outcomeUnknown ||
+    settings.computer.pendingEdit ||
+    settings.connectors.secureMcp.runtime?.state === "outcome_unknown",
+  );
+}
+
 // A new connection must have fresh saved runtime evidence; an already green
 // status cannot prove another click. Use this helper only from a stopped runtime.
 export async function connectMac(page) {
   const connection = page.locator('.setup-page[data-setup-step="connection"]');
   const before = await readSetupSettings(page);
-  assert.equal(before.setup.connect.outcomeUnknown, false);
+  assert.equal(connectionOutcomeUnknown(before), false);
   assert.equal(
     before.connectors.secureMcp.runtime,
     null,
@@ -73,10 +84,7 @@ export async function connectMac(page) {
   const deadline = Date.now() + 15_000;
   for (;;) {
     const current = await readSetupSettings(page);
-    if (
-      current.setup.connect.outcomeUnknown ||
-      current.connectors.secureMcp.runtime?.state === "outcome_unknown"
-    )
+    if (connectionOutcomeUnknown(current))
       throw new Error("SETUP_CONNECT_OUTCOME_UNKNOWN");
     if (current.connectors.secureMcp.runtime?.state === "ready") {
       await connection
@@ -96,14 +104,14 @@ export async function disconnectMac(page) {
   const connection = page.locator('.setup-page[data-setup-step="connection"]');
   const before = await readSetupSettings(page);
   assert.notEqual(before.connectors.secureMcp.runtime, null);
-  assert.equal(before.setup.connect.outcomeUnknown, false);
+  assert.equal(connectionOutcomeUnknown(before), false);
   await connection
     .getByRole("button", { name: "Disconnect", exact: true })
     .click();
   const deadline = Date.now() + 15_000;
   for (;;) {
     const current = await readSetupSettings(page);
-    if (current.setup.connect.outcomeUnknown)
+    if (connectionOutcomeUnknown(current))
       throw new Error("SETUP_DISCONNECT_OUTCOME_UNKNOWN");
     if (current.connectors.secureMcp.runtime === null) return current;
     if (Date.now() >= deadline)
@@ -142,7 +150,7 @@ function retired(journey, reason) {
 export async function setupAction(page, name) {
   if (name === "+ Add workspace" || name === "Check access") {
     const before = await readSetupSettings(page);
-    assert.equal(before.setup.computer.outcomeUnknown, false);
+    assert.equal(connectionOutcomeUnknown(before), false);
     await page
       .locator(".setup-page")
       .getByRole("button", { name, exact: true })
@@ -150,11 +158,7 @@ export async function setupAction(page, name) {
     const deadline = Date.now() + 15_000;
     for (;;) {
       const current = await readSetupSettings(page);
-      if (
-        current.setup.computer.outcomeUnknown ||
-        current.setup.connect.outcomeUnknown ||
-        current.connectors.secureMcp.runtime?.state === "outcome_unknown"
-      )
+      if (connectionOutcomeUnknown(current))
         throw new Error(`SETUP_ACTION_OUTCOME_UNKNOWN:${name}`);
       const checked = current.computer.workspaces.find((workspace) => {
         const prior = before.computer.workspaces.find(

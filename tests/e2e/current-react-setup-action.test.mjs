@@ -110,13 +110,32 @@ describe("current Setup one-shot helpers", () => {
     );
     expect(prior.click).not.toHaveBeenCalled();
   });
-  it("does not repeat an unknown Disconnect", async () => {
-    const unknown = state([], { state: "outcome_unknown" });
-    unknown.setup.connect.outcomeUnknown = true;
-    const h = pageFixture([state([], { state: "ready" }), unknown]);
-    await expect(disconnectMac(h.page)).rejects.toThrow(
-      "SETUP_DISCONNECT_OUTCOME_UNKNOWN",
-    );
-    expect(h.click).toHaveBeenCalledTimes(1);
+  it.each([
+    "connect",
+    "computer",
+    "hosts",
+    "verify",
+    "runtime",
+    "pending-edit",
+  ])(
+    "rejects an independent %s unknown fence before any later stopped sample",
+    async (source) => {
+      const unknown = state([], { state: "ready" });
+      if (source === "runtime")
+        unknown.connectors.secureMcp.runtime.state = "outcome_unknown";
+      else if (source === "pending-edit") unknown.computer.pendingEdit = {};
+      else unknown.setup[source] = { outcomeUnknown: true };
+      const h = pageFixture([state([], { state: "ready" }), unknown, state()]);
+      await expect(disconnectMac(h.page)).rejects.toThrow(
+        "SETUP_DISCONNECT_OUTCOME_UNKNOWN",
+      );
+      expect(h.click).toHaveBeenCalledTimes(1);
+      expect(h.page.evaluate).toHaveBeenCalledTimes(2);
+    },
+  );
+  it("does not click Disconnect when the saved runtime is already unknown", async () => {
+    const h = pageFixture([state([], { state: "outcome_unknown" })]);
+    await expect(disconnectMac(h.page)).rejects.toThrow();
+    expect(h.click).not.toHaveBeenCalled();
   });
 });

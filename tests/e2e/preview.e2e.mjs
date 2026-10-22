@@ -140,13 +140,9 @@ if (
   process.exit(0);
 }
 if (selection?.segments.length === 0) {
-  process.stdout.write(
-    JSON.stringify({
-      schema: 1,
-      status: "NOT_RUN",
-      qualifying: false,
-      retiredJourneys: retirement.retired,
-    }) + "\n",
+  reportRetiredJourney(
+    "preview-selected-journeys",
+    "All selected journeys were retired; see the preceding named NOT_RUN records.",
   );
   process.exit(0);
 }

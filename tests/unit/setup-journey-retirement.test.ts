@@ -1,3 +1,6 @@
+import { spawnSync } from "node:child_process";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 const retirementModule = "../../tooling/setup-journey-retirement.mjs";
 const { reportRetiredJourney, retiredJourneyReport } = await import(
@@ -42,4 +45,27 @@ describe("setup journey retirement reports", () => {
       retiredJourneyReport("connector-polling", "UI removed"),
     );
   });
+});
+
+it("delivers the full UTF-8 retirement record to a captured pipe before exit", () => {
+  // A tiny Node fixture, never a native E2E entrypoint or product process.
+  const reason = "synthetic-☀".repeat(20_000);
+  const helperUrl = pathToFileURL(
+    resolve("tooling/setup-journey-retirement.mjs"),
+  ).href;
+  const child = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `import { reportRetiredJourney } from ${JSON.stringify(helperUrl)}; reportRetiredJourney("pipe-fixture", "synthetic-☀".repeat(20000)); process.exit(0);`,
+    ],
+    { encoding: "utf8", maxBuffer: 2 * 1024 * 1024 },
+  );
+  expect(child.error).toBeUndefined();
+  expect(child.status).toBe(0);
+  expect(child.stderr).toBe("");
+  expect(child.stdout).toBe(
+    `${JSON.stringify(retiredJourneyReport("pipe-fixture", reason))}\n`,
+  );
 });
