@@ -73,6 +73,24 @@ describe("Settings", () => {
     });
     expect(h.host.textContent).toContain("Update check completed");
   });
+  it("opens existing update recovery from General without an update command", async () => {
+    // DOM-only modal methods; native update recovery is outside this fixture.
+    HTMLDialogElement.prototype.showModal = function () {
+      this.open = true;
+    };
+    HTMLDialogElement.prototype.close = function () {
+      this.open = false;
+    };
+    const h = await mount({ page: "general", shell: true });
+    vi.mocked(h.f.api.installedUpdate).mockClear();
+    await h.click("Update recovery…");
+    expect(h.c.getSnapshot().overlay).toBe("update-recovery");
+    expect(
+      h.host.querySelector('dialog[aria-label="Update recovery"]'),
+    ).toBeTruthy();
+    expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+  });
   it("blocks support changes across remount after an unknown result", async () => {
     const h = await mount({ page: "general" });
     h.reply(async () => {
@@ -86,6 +104,73 @@ describe("Settings", () => {
 });
 
 describe("Workspace rows", () => {
+  it("removes a workspace from its row after the connection is stopped", async () => {
+    const value = readySettings();
+    value.connectors.secureMcp.runtime = null;
+    const h = await mount({ step: "folders", value });
+    const removed = structuredClone(value);
+    removed.revision++;
+    removed.computer.generation++;
+    removed.computer.workspaces = [];
+    h.reply(() => ({
+      ok: true,
+      snapshot: { status: "ready", settings: removed },
+    }));
+    await h.click("Remove project");
+    expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
+      kind: "computer.remove-workspace",
+      workspaceId,
+    });
+    expect(h.button("Remove project")).toBeUndefined();
+    expect(h.button("Continue")?.disabled).toBe(true);
+  });
+  it("stops a connection, changes row access, checks the grant and reconnects", async () => {
+    let value = readySettings();
+    const h = await mount({ step: "folders", value });
+    h.reply((command) => {
+      value = structuredClone(value);
+      value.revision++;
+      if (command.kind === "connector.stop") {
+        value.connectors.secureMcp.runtime = null;
+      } else if (command.kind === "computer.update-access") {
+        value.computer.generation++;
+        value.computer.workspaces[0]!.access = command.access;
+        value.computer.workspaces[0]!.accessCheck = null;
+      } else if (command.kind === "computer.verify-workspace") {
+        value.computer.workspaces[0]!.accessCheck = {
+          ...readySettings().computer.workspaces[0]!.accessCheck!,
+          computerGeneration: value.computer.generation,
+          checkId: command.checkId,
+        };
+      } else if (command.kind === "connector.start") {
+        value.connectors.secureMcp.runtime = {
+          ...readySettings().connectors.secureMcp.runtime!,
+          computerGeneration: value.computer.generation,
+          runtimeGeneration: "e".repeat(64),
+        };
+      }
+      return { ok: true, snapshot: { status: "ready", settings: value } };
+    });
+    await change(
+      h.host.querySelector<HTMLSelectElement>(
+        '[aria-label="Access for project"]',
+      )!,
+      "write",
+    );
+    expect(
+      vi.mocked(h.f.api.configure).mock.calls.map(([command]) => command.kind),
+    ).toEqual([
+      "connector.stop",
+      "computer.update-access",
+      "computer.verify-workspace",
+      "connector.start",
+    ]);
+    expect(
+      h.host.querySelector<HTMLSelectElement>(
+        '[aria-label="Access for project"]',
+      )!.value,
+    ).toBe("write");
+  });
   it("shows saved access and a real Works check without hidden detail pages", async () => {
     const value = readySettings();
     const h = await mount({ step: "folders", value });
@@ -206,6 +291,92 @@ describe("Workspace rows", () => {
 });
 
 describe("Connection", () => {
+  it("stops the current connection before replacing credentials and never continues after a refused stop", async () => {
+    const h = await mount({ step: "connection", value: readySettings() });
+    h.reply(() => ({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_UNREACHABLE",
+      snapshot: h.configuration(),
+    }));
+    await change(
+      h.host.querySelector<HTMLInputElement>(
+        '.connection-credentials input[type="password"]',
+      )!,
+      "synthetic-replacement-key",
+    );
+    await h.click("Connect");
+    expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
+      kind: "connector.stop",
+    });
+    expect(h.button("Disconnect")?.disabled).toBe(false);
+  });
+  it("disconnects once and withdraws connection success after the saved stop", async () => {
+    const value = readySettings();
+    const h = await mount({ step: "connection", value });
+    const pending = deferred<unknown>();
+    h.reply(() => pending.promise);
+    expect(h.button("Disconnect")?.disabled).toBe(false);
+    await h.click("Disconnect");
+    await h.click("Disconnect");
+    expect(h.button("Disconnect")?.disabled).toBe(true);
+    expect(h.button("Connect")?.disabled).toBe(true);
+    expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
+      kind: "connector.stop",
+    });
+    const stopped = structuredClone(value);
+    stopped.revision++;
+    stopped.connectors.secureMcp.runtime = null;
+    await act(async () =>
+      pending.resolve({
+        ok: true,
+        snapshot: { status: "ready", settings: stopped },
+      }),
+    );
+    expect(h.button("Disconnect")).toBeUndefined();
+    expect(h.host.textContent).not.toContain("✓ Connected");
+    expect(h.button("Continue")?.disabled).toBe(true);
+    expect(h.button("Connect")?.disabled).toBe(false);
+  });
+  it.each(["transport", "save"])(
+    "retains the disconnect %s unknown fence across navigation, refresh and remount",
+    async (failure) => {
+      const value = readySettings();
+      const h = await mount({ step: "connection", value });
+      h.reply(() => {
+        if (failure === "transport") throw new Error("scripted stop loss");
+        return {
+          ok: false,
+          error: "SETTINGS_WRITE_FAILED",
+          snapshot: h.configuration(),
+        };
+      });
+      await h.click("Disconnect");
+      expect(h.button("Disconnect")?.disabled).toBe(true);
+      expect(h.button("Connect")?.disabled).toBe(true);
+      expect(h.button("Continue")?.disabled).toBe(true);
+      await h.navigate("folders");
+      await h.navigate("connection");
+      await act(async () => h.c.refresh());
+      await h.remount();
+      await h.click("Disconnect");
+      await h.click("Connect");
+      expect(h.button("Disconnect")?.disabled).toBe(true);
+      expect(h.button("Connect")?.disabled).toBe(true);
+      expect(h.f.api.configure).toHaveBeenCalledTimes(1);
+      expect(h.host.textContent).toContain("could not confirm");
+    },
+  );
+  it("offers disconnect for an unhealthy retained runtime, but fences unknown runtime state", async () => {
+    const value = readySettings();
+    value.connectors.secureMcp.runtime!.state = "unreachable";
+    const h = await mount({ step: "connection", value });
+    expect(h.button("Disconnect")?.disabled).toBe(false);
+    value.revision++;
+    value.connectors.secureMcp.runtime!.state = "outcome_unknown";
+    await h.publish(value);
+    expect(h.button("Disconnect")?.disabled).toBe(true);
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+  });
   it("keeps Connect disabled for incomplete or invalid fields", async () => {
     const h = await mount({ step: "connection" });
     expect(h.button("Connect")?.disabled).toBe(true);

@@ -619,6 +619,12 @@ function General({ snapshot, facade, actions }: PageProps) {
             >
               {checking ? "Checking…" : "Check for updates"}
             </button>
+            <button
+              className="subtle"
+              onClick={() => facade.overlay("update-recovery")}
+            >
+              Update recovery…
+            </button>
           </div>
           {updateMessage && (
             <p className="description" role="status">
@@ -1219,6 +1225,19 @@ function ConnectMac({ settings, snapshot, facade, actions }: PageProps) {
         <p className="setup-success" role="status">
           ✓ Connected
         </p>
+      )}
+      {connector.runtime !== null && (
+        <Command
+          actions={actions}
+          command={{ kind: "connector.stop" }}
+          disabled={busy}
+          admit={(current) =>
+            current.configuration?.status === "ready" &&
+            current.configuration.settings.connectors.secureMcp.runtime !== null
+          }
+        >
+          Disconnect
+        </Command>
       )}
       {(failed || helperMissing) && (
         <SetupFailure
