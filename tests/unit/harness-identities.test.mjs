@@ -237,7 +237,13 @@ async function harnessViolations(root) {
       const file = `${directory}/${relative}`;
       if (file === helper || allowlist.has(file)) continue;
       const absolute = path.join(root, file);
-      if (!(await fs.lstat(absolute)).isFile()) continue;
+      const stat = await fs.lstat(absolute);
+      // A link could point a scanned path at unscanned text, so none are allowed.
+      if (stat.isSymbolicLink()) {
+        failures.push(`${file}:symbolic link in a harness scope`);
+        continue;
+      }
+      if (!stat.isFile()) continue;
       const bytes = await fs.readFile(absolute);
       if (bytes.includes(0)) continue;
       failures.push(
@@ -253,6 +259,27 @@ it("denies pinned identity tokens in every non-binary harness file by default", 
   expect(
     await harnessViolations(path.resolve(import.meta.dirname, "../..")),
   ).toEqual([]);
+});
+it("rejects symbolic links to files or directories in a harness scope", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "harness-links-"));
+  try {
+    for (const directory of scopes)
+      await fs.mkdir(path.join(root, directory), { recursive: true });
+    const outside = path.join(root, "outside");
+    await fs.mkdir(outside);
+    await fs.writeFile(path.join(outside, "text.mjs"), "export const x = 1;\n");
+    await fs.symlink(
+      path.join(outside, "text.mjs"),
+      path.join(root, "tests/e2e/linked.mjs"),
+    );
+    await fs.symlink(outside, path.join(root, "tooling/linked-dir"));
+    expect(await harnessViolations(root)).toEqual([
+      "tests/e2e/linked.mjs:symbolic link in a harness scope",
+      "tooling/linked-dir:symbolic link in a harness scope",
+    ]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 it("keeps every exception explicit, reasoned, in scope and non-stale", async () => {
   const root = path.resolve(import.meta.dirname, "../..");
