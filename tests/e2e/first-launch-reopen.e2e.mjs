@@ -152,6 +152,15 @@ async function quit() {
   await bounded(current.closed, "FIRST_LAUNCH_STREAM_CLOSE_UNKNOWN", 5000);
   assert.equal(child.exitCode, 0);
   assert.equal(child.signalCode, null);
+  assert.ok(
+    current.lifecycle.some(
+      (entry) =>
+        entry.event === "will-quit" &&
+        entry.pid === child.pid &&
+        entry.visibilityViolations === 0,
+    ),
+    "FIRST_LAUNCH_HIDDEN_LIFETIME_UNCONFIRMED",
+  );
   const state = path.join(identity.userData, "farol-state");
   const parsed = parseQuitReceipt(
     await fs.readFile(path.join(state, "last-quit.json"), "utf8"),
@@ -212,9 +221,9 @@ try {
         const lines = buffer.split("\n");
         buffer = lines.pop().slice(-16384);
         for (const line of lines) {
-          if (line.startsWith("FAROL_DAILY_QUIT:"))
+          if (line.startsWith("FAROL_FIRST_LAUNCH_QUIT:"))
             current.lifecycle.push(
-              JSON.parse(line.slice("FAROL_DAILY_QUIT:".length)),
+              JSON.parse(line.slice("FAROL_FIRST_LAUNCH_QUIT:".length)),
             );
         }
       });
@@ -233,6 +242,29 @@ try {
     );
     assert.equal(actual.userData, identity.userData);
     assert.equal(actual.isPackaged, true);
+    await application.evaluate(({ app, BrowserWindow }) => {
+      globalThis.__farolFirstLaunchVisibilityViolations = [];
+      const watch = (window) => {
+        for (const event of ["show", "focus"])
+          window.on(event, () =>
+            globalThis.__farolFirstLaunchVisibilityViolations.push(event),
+          );
+      };
+      BrowserWindow.getAllWindows().forEach(watch);
+      app.on("browser-window-created", (_event, window) => watch(window));
+      app.once("will-quit", () =>
+        process.stderr.write(
+          "FAROL_FIRST_LAUNCH_QUIT:" +
+            JSON.stringify({
+              event: "will-quit",
+              pid: process.pid,
+              visibilityViolations:
+                globalThis.__farolFirstLaunchVisibilityViolations.length,
+            }) +
+            "\n",
+        ),
+      );
+    });
     await bounded(waitForReactShell(page), "FIRST_LAUNCH_RENDERER_TIMEOUT");
     await page
       .getByRole("heading", { name: "Welcome to Farol", exact: true })
@@ -298,6 +330,7 @@ try {
     // failure. It cannot turn that failed witness into reopen authorization.
     current.quitAttempted = true;
     try {
+      const child = application.process();
       await bounded(
         application.close(),
         "FIRST_LAUNCH_FAILURE_CLOSE_UNKNOWN",
@@ -314,8 +347,8 @@ try {
         5000,
       );
       report.failureCleanup = {
-        exit: application.process().exitCode,
-        signal: application.process().signalCode,
+        exit: child.exitCode,
+        signal: child.signalCode,
       };
       application = undefined;
     } catch (cleanup) {

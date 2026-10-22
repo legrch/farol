@@ -3,21 +3,20 @@
 import assert from "node:assert/strict";
 
 export async function waitForReactShell(page) {
-  await page
-    .getByRole("navigation", { name: "Sections", exact: true })
-    .waitFor();
   await page.locator(".toolbar-title strong").waitFor();
   await page.waitForFunction(() => {
     const main = document.querySelector("main.stage");
-    return main && !main.textContent.includes("Connecting to Farol…");
+    return Boolean(
+      main &&
+      !main.textContent.includes("Connecting to Farol…") &&
+      (document.querySelector('nav[aria-label="Sections"]') ||
+        main.querySelector(".setup-page")),
+    );
   });
 }
 
 export async function openSetup(page) {
-  await page
-    .getByRole("navigation", { name: "Sections", exact: true })
-    .getByRole("button", { name: "Setup", exact: true })
-    .click();
+  await setupStep(page, "overview");
   await page.locator(".setup-page").waitFor({ state: "visible" });
 }
 
@@ -30,23 +29,16 @@ export async function setupStep(page, step) {
     attachment: "Add to ChatGPT",
   }[step];
   assert.ok(label, `SETUP_STEP_UNSUPPORTED:${step}`);
-  if (step === "overview") {
-    await page
-      .getByRole("navigation", { name: "Sections", exact: true })
-      .getByRole("button", { name: "Setup", exact: true })
-      .click();
-  } else {
-    await page
-      .getByRole("button", { name: "Find a page", exact: true })
-      .click();
-    await page
-      .getByRole("textbox", { name: "Find a page", exact: true })
-      .fill(label);
-    await page
-      .locator(".search-results")
-      .getByRole("button", { name: label, exact: true })
-      .click();
-  }
+  // Setup intentionally hides the ordinary rail. Page search is available
+  // in both shells and uses the same production navigation destinations.
+  await page.getByRole("button", { name: "Find a page", exact: true }).click();
+  await page
+    .getByRole("textbox", { name: "Find a page", exact: true })
+    .fill(label);
+  await page
+    .locator(".search-results")
+    .getByRole("button", { name: label, exact: true })
+    .click();
   await page.locator(`.setup-page[data-setup-step="${step}"]`).waitFor();
 }
 
