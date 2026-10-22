@@ -11,12 +11,28 @@ runs:
       with:
         node-version: 24.20.0
         cache: npm
-    - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
-      with:
-        go-version: 1.26.2
-        # setup-go's own cache also stores the Go build cache; only module
-        # downloads are cached, below.
-        cache: false
+    # The official go.dev archive, verified and extracted unchanged. Its tree
+    # is the SDK the release and native archive pins approve; a repackaged
+    # toolcache SDK is not. Only module downloads are cached, below.
+    - name: Install the official Go SDK
+      shell: bash
+      run: |
+        case "$(uname -s)-$(uname -m)" in
+          Darwin-arm64)
+            archive=go1.26.2.darwin-arm64.tar.gz
+            sha256=32af1522bf3e3ff3975864780a429cc0b41d190ec7bf90faa661d6d64566e7af ;;
+          Linux-x86_64)
+            archive=go1.26.2.linux-amd64.tar.gz
+            sha256=990e6b4bbba816dc3ee129eaeaf4b42f17c2800b88a2166c265ac1a200262282 ;;
+          *) echo "GO_SDK_PLATFORM_UNSUPPORTED" >&2; exit 1 ;;
+        esac
+        curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive" "https://go.dev/dl/$archive"
+        echo "$sha256  $RUNNER_TEMP/$archive" | shasum -a 256 -c -
+        mkdir -p "$RUNNER_TEMP/go-sdk"
+        tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/go-sdk"
+        rm "$RUNNER_TEMP/$archive"
+        echo "$RUNNER_TEMP/go-sdk/go/bin" >> "$GITHUB_PATH"
+        "$RUNNER_TEMP/go-sdk/go/bin/go" version
     - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
       with:
         path: ~/go/pkg/mod

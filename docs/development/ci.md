@@ -83,6 +83,14 @@ release preflight refuses with `CI_GO_SDK_APPROVAL_REQUIRED` when
 does not name `farol-ci-go-sdk/1`, `go1.26.2`, `darwin`, `arm64` and a 64-hex
 `treeSha256`.
 
+CI does not use `actions/setup-go`: its toolcache SDK is repackaged and
+measures differently. The shared setup action downloads the official go.dev
+archive for the runner, checks the sha256 that go.dev publishes, and extracts
+it unchanged. The native archive builder trusts exactly two compilers, each an
+exact go binary and SDK tree pair: the owner's Homebrew Go and that pristine
+official extraction. Both compile the byte-identical archive pinned in
+`NATIVE_ARCHIVE_SHA256`.
+
 The committed approval pins the tree digest of the official
 `go1.26.2.darwin-arm64.tar.gz`. Its archive digest matches the one go.dev
 publishes, and the tree digest was measured over the verified extraction of that

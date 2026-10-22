@@ -89,11 +89,19 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
     "base classifier",
   );
   assert.doesNotMatch(classify, /node tooling\/ci-paths\.mjs/u);
-  // Caches hold downloads only, never the Go build cache.
-  const setupGo = setup.runs.steps.find((step) =>
-    step.uses?.startsWith("actions/setup-go@"),
+  // Go comes from the verified official archive, never a toolcache SDK, and
+  // caches hold downloads only, never the Go build cache.
+  assert.ok(
+    !setup.runs.steps.some((step) =>
+      step.uses?.startsWith("actions/setup-go@"),
+    ),
+    "no setup-go",
   );
-  assert.equal(setupGo?.with?.cache, false);
+  const installGo = setup.runs.steps.find(
+    (step) => step.name === "Install the official Go SDK",
+  );
+  assert.match(installGo?.run ?? "", /https:\/\/go\.dev\/dl\/\$archive/u);
+  assert.match(installGo?.run ?? "", /shasum -a 256 -c -/u);
   for (const step of setup.runs.steps)
     if (step.uses?.startsWith("actions/cache@"))
       assert.doesNotMatch(String(step.with.path), /go-build|GOCACHE|_output/u);

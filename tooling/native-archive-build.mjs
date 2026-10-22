@@ -27,7 +27,7 @@ const TRUSTED_COMPILERS = Object.freeze([
     binarySha256:
       "005640c7ff93028cb704283b0f737f2db3faf8b51b2561170c769b83905da646",
     sdkSha256:
-      "489fc7aab97296629ee7da3c0273b1c24eb46fd6accdc5fa3e5fce8cda979b8d",
+      "fc13e8f5ab542d3cdc4642b91af8a1428d4d6b198cbc1cb62c14b46a7e346f35",
   }),
 ]);
 
