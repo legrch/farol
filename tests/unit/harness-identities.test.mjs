@@ -235,14 +235,15 @@ async function harnessViolations(root) {
       recursive: true,
     })) {
       const file = `${directory}/${relative}`;
-      if (file === helper || allowlist.has(file)) continue;
       const absolute = path.join(root, file);
       const stat = await fs.lstat(absolute);
-      // A link could point a scanned path at unscanned text, so none are allowed.
+      // A link could point a scanned or exempt path at unscanned text, so none
+      // are allowed anywhere in a scope, the helper and allowlist included.
       if (stat.isSymbolicLink()) {
         failures.push(`${file}:symbolic link in a harness scope`);
         continue;
       }
+      if (file === helper || allowlist.has(file)) continue;
       if (!stat.isFile()) continue;
       const bytes = await fs.readFile(absolute);
       if (bytes.includes(0)) continue;
@@ -273,8 +274,11 @@ it("rejects symbolic links to files or directories in a harness scope", async ()
       path.join(root, "tests/e2e/linked.mjs"),
     );
     await fs.symlink(outside, path.join(root, "tooling/linked-dir"));
-    expect(await harnessViolations(root)).toEqual([
+    // Exempt paths are no exception: a link at the helper is still refused.
+    await fs.symlink(path.join(outside, "text.mjs"), path.join(root, helper));
+    expect((await harnessViolations(root)).sort()).toEqual([
       "tests/e2e/linked.mjs:symbolic link in a harness scope",
+      `${helper}:symbolic link in a harness scope`,
       "tooling/linked-dir:symbolic link in a harness scope",
     ]);
   } finally {
