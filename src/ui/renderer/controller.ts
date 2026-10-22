@@ -715,6 +715,7 @@ export class WindowController implements RendererFacade {
           if (
             !this.pendingSectionNavigation &&
             (settings.setup.journey.dismissed ||
+              settings.connectors.secureMcp.lastVerifiedAttachment !== null ||
               computerSetup(this.state).ready)
           ) {
             const launch = settings.general.openAtLaunch;
@@ -729,6 +730,17 @@ export class WindowController implements RendererFacade {
                       ? { area: "settings", page: "general" }
                       : { area: "activity" },
             );
+          } else if (!this.pendingSectionNavigation) {
+            // Incomplete setup always starts at Welcome. Replace the startup
+            // placeholder so Back cannot reveal Home as a previous destination.
+            const destination: Destination = {
+              ...this.state.destination,
+              area: "setup",
+              page: "general",
+              setupStep: "overview",
+            };
+            this.history[this.cursor] = destination;
+            this.patch({ destination });
           }
         }
       } catch {
