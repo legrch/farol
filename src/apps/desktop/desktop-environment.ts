@@ -202,6 +202,11 @@ function isolatedE2EAppData(
   testProof: string | undefined,
 ): string {
   const invalid = () => new Error("DESKTOP_E2E_APP_DATA_INVALID");
+  // The live Go helper resolves this fixed native layout from its disposable
+  // home. This is an E2E-only shape, never a caller-selected ordinary profile.
+  const nativeAppData =
+    testHome !== undefined &&
+    override === path.join(testHome, "Library", "Application Support");
   if (
     override === undefined ||
     testRoot === undefined ||
@@ -212,8 +217,11 @@ function isolatedE2EAppData(
     ) ||
     !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(testProof) ||
     !E2E_ROOT_NAME.test(path.basename(testRoot)) ||
-    path.dirname(override) !== testRoot ||
-    !E2E_APP_DATA_NAMES.has(path.basename(override)) ||
+    (!nativeAppData &&
+      (path.dirname(override) !== testRoot ||
+        !E2E_APP_DATA_NAMES.has(path.basename(override)))) ||
+    (nativeAppData &&
+      !/^farol-e2e-home-[A-Za-z0-9]{6,}$/u.test(path.basename(testRoot))) ||
     !(
       testHome === testRoot ||
       (path.dirname(testHome) === testRoot &&
@@ -232,6 +240,10 @@ function isolatedE2EAppData(
       !/^\/private\/var\/folders\/[^/]+\/[^/]+\/T$/u.test(parent)
     )
       throw invalid();
+    if (nativeAppData) {
+      assertNativeE2EAppData(override, testRoot, testHome, testProof);
+      return override;
+    }
     const rootInfo = fs.lstatSync(testRoot);
     const homeInfo = fs.lstatSync(testHome);
     const appDataInfo = fs.lstatSync(override);
@@ -276,6 +288,83 @@ function isolatedE2EAppData(
     throw invalid();
   }
   return override;
+}
+
+/** Read-only admission of the fixed native E2E layout. Every component and
+ * the UUID proof are pinned across the bounded read, before Electron opens it.
+ * Never repair permissions, follow aliases, or create profile state here.
+ */
+function assertNativeE2EAppData(
+  appData: string,
+  root: string,
+  home: string,
+  proof: string,
+): void {
+  const invalid = () => new Error("DESKTOP_E2E_APP_DATA_INVALID");
+  const uid = process.getuid?.();
+  const directories = [
+    ...new Set([root, home, path.join(home, "Library"), appData]),
+  ];
+  const before = directories.map((directory) => {
+    const info = fs.lstatSync(directory);
+    if (
+      uid === undefined ||
+      !info.isDirectory() ||
+      info.isSymbolicLink() ||
+      info.uid !== uid ||
+      (info.mode & 0o7777) !== 0o700 ||
+      fs.realpathSync.native(directory) !== directory
+    )
+      throw invalid();
+    return info;
+  });
+  const same = (a: fs.Stats, b: fs.Stats): boolean =>
+    a.dev === b.dev &&
+    a.ino === b.ino &&
+    a.mode === b.mode &&
+    a.uid === b.uid &&
+    a.nlink === b.nlink &&
+    a.size === b.size &&
+    a.mtimeMs === b.mtimeMs &&
+    a.ctimeMs === b.ctimeMs;
+  const marker = path.join(root, E2E_ROOT_MARKER);
+  const named = fs.lstatSync(marker);
+  if (
+    !named.isFile() ||
+    named.isSymbolicLink() ||
+    named.uid !== uid ||
+    named.nlink !== 1 ||
+    (named.mode & 0o7777) !== 0o600 ||
+    named.size !== proof.length
+  )
+    throw invalid();
+  const fd = fs.openSync(
+    marker,
+    fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+  );
+  try {
+    if (!same(named, fs.fstatSync(fd))) throw invalid();
+    const bytes = Buffer.alloc(proof.length + 1);
+    const count = fs.readSync(fd, bytes, 0, bytes.length, 0);
+    if (
+      count !== proof.length ||
+      bytes.subarray(0, count).toString("utf8") !== proof ||
+      !same(named, fs.fstatSync(fd)) ||
+      !same(named, fs.lstatSync(marker))
+    )
+      throw invalid();
+    directories.forEach((directory, index) => {
+      const prior = before[index];
+      if (
+        prior === undefined ||
+        !same(prior, fs.lstatSync(directory)) ||
+        fs.realpathSync.native(directory) !== directory
+      )
+        throw invalid();
+    });
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 const REVIEW_NAMESPACE = "Farol Dev Review";
