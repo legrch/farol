@@ -636,7 +636,11 @@ export class OperationsStore implements OperationsRecorder {
                 const raw = JSON.parse(line) as OperationEntry;
                 const parsed = OperationEntrySchema.safeParse({
                   ...raw,
-                  target: resolveOperationTarget(raw.target, labels, "label"),
+                  target: resolveOperationTarget(
+                    raw.target,
+                    labels,
+                    "persisted",
+                  ),
                 });
                 if (parsed.success) {
                   if (parsed.data.at >= cutoff) entries.push(parsed.data);

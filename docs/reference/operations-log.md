@@ -3,7 +3,11 @@
 The desktop records content-free operation observations in the current profile's
 `farol-state/operations/` directory. It never uses a global state directory.
 Production, Dev, Owner Preview and disposable test profiles keep their existing
-identity isolation.
+identity isolation. `apps/desktop/operations/paths.ts` owns the adapter path for
+both Desktop and Go MCP. The admitted lifecycle root
+`<userData>/farol-private/secure-mcp-connector/computer-authority` resolves to
+that same existing store and workspace-label index; the launch envelope carries
+no separate operations path.
 
 ## Storage and outcomes
 
@@ -40,7 +44,7 @@ a successful write, survive restart, and have a separate 64 KiB/30-day bound. If
 the disk cannot store even diagnostics, counts remain in that process's memory;
 no logger can promise durable evidence on an unavailable disk.
 
-The closed schema stores time, source, operation kind, workspace label, relative
+The closed schema stores time, source, operation kind, workspace label, opaque workspace identity, relative
 path, closed command category, outcome, closed code and duration. The optional lifecycle
 field contains only a UUID and started/observed phase. The names-only workspace
 label index is atomically replaced in the same private directory; it grants no
@@ -115,6 +119,7 @@ unchanged outside the diagnostic projection.
 | `source`                                | Farol adapter selection; exact `ChatGPT`, `Setup`, `You`, `Updater`, `Codex` enum.                                                                                                                                                 |
 | `kind`                                  | Static Farol operation names and validated command discriminants; exact `operationKinds` enum. Arbitrary strings are rejected, including regex-shaped names.                                                                       |
 | `target.workspace`                      | Exact caller ID resolved to the owner-configured label at observation time; otherwise `[unknown workspace]`. Labels retain existing bounded owner-text normalization.                                                              |
+| `target.workspaceIdentity`              | Lowercase 64-character SHA-256 of the exact configured workspace ID, computed only after exact caller-ID resolution. Caller-supplied identity fields are ignored. It grants no authority.                                          |
 | `target.relativePath`                   | Selected relative-path/directory metadata only after workspace resolution; existing bounded normalization removes control/format characters and rejects absolute paths, empty segments, traversal and backslashes. `.` is allowed. |
 | `target.command`                        | MCP's selected executable word or Farol's fixed Git action, reduced at the recorder boundary to `git` or `other`; no arbitrary tool-argument word survives.                                                                        |
 | `target.handle`, `target.start`         | Unmatched process arguments have no trusted start metadata; fixed `unrecognized` and `unknown` only. Matched starts retain their validated target; raw handles are never persisted.                                                |
@@ -150,14 +155,19 @@ process loads the private owner label index before serving tools; an unavailable
 index leaves its workspace targets unresolved. Loading the index never rewrites
 it or creates execution authority.
 
-Persisted records contain labels, not IDs. Store reads resolve those labels
-against the owner index, before display normalization, and reapply the resolver
-to returned snapshots, including cached deadline fallbacks. Older raw unmatched
-IDs and their paths are suppressed without rewriting historical segments. A label
-removed from the current configuration is also suppressed. A historical label
-that equals a currently configured owner label is indistinguishable from that
-owner label and is retained as configured metadata; arbitrary unmatched text is
-never accepted as a label.
+Persisted targets contain owner labels and a bounded opaque SHA-256 identity of
+exact configured IDs, never raw caller IDs. Reads match that identity against the
+current owner index before substituting the current label. A rename of the same
+ID retains its relative path. Different IDs with duplicate or reused labels never
+inherit one another's paths; a removed identity becomes `[unknown workspace]`
+without a relative path or retained identity. Ambiguous duplicate configured IDs
+also fail closed. Caller-supplied identity fields cannot override exact adapter-ID
+resolution, including at settlement.
+
+Store reads and returned snapshots, including cached deadline fallbacks, reapply
+identity resolution. Legacy label-only records cannot establish identity: their
+workspace becomes `[unknown workspace]` and their relative path is omitted while
+the operation and outcome remain visible. Historical segments are never rewritten.
 
 `createSupportExport` independently uses its full owner configuration; the final
 `writeSupportExport` uses an explicit names-only workspace argument. Both invoke
@@ -268,6 +278,12 @@ validated metadata and diagnostics; its ordinary non-log fields retain a 64 KiB
 bound, with a separate 12 MiB bound for a report containing a validated log.
 
 ## Evidence limits
+
+`tests/unit/operations-paths.test.ts` pins the actual Desktop store wiring and
+dispatches an MCP tool through real composition with fixture socket/lifecycle
+ports and disposable filesystem stores. It verifies that Desktop sees the MCP
+record and that MCP loaded Desktop's owner label index. This is adapter/store
+evidence, not native connector or installed-profile qualification.
 
 `tests/unit/operations-log.test.ts` exercises use-case metadata/source mapping,
 classified outcomes, restart, cap, 40-day quiet-profile retention, UTC day

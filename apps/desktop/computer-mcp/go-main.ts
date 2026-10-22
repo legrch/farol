@@ -1,4 +1,4 @@
-import path from "node:path";
+import { operationsDirectoryFromLifecycleRoot } from "../operations/paths";
 import { OperationsStore } from "../operations/store";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import {
@@ -68,7 +68,7 @@ export async function runGoComputerMcp(file: string): Promise<void> {
     launch.challengeSha256,
   );
   const operations = new OperationsStore(
-    path.join(path.dirname(path.dirname(launch.lifecycleRoot)), "operations"),
+    operationsDirectoryFromLifecycleRoot(launch.lifecycleRoot),
   );
   await operations.loadWorkspaceLabels();
   let effectOutcomeUnknown = false;

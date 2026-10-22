@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/client";
 import {
   InMemoryTransport,
@@ -1882,7 +1883,13 @@ it.each([
     expect(record.mock.calls[0]![0]).toEqual({
       source: "ChatGPT",
       kind: "computer_workspace_read",
-      target: { workspace: "Owner Docs", relativePath },
+      target: {
+        workspace: "Owner Docs",
+        workspaceIdentity: createHash("sha256")
+          .update("workspace")
+          .digest("hex"),
+        relativePath,
+      },
     });
     expect(record.mock.calls[0]![1]).toBe("refused");
   },
@@ -2022,6 +2029,13 @@ it.each(
                 ? "Owner Docs"
                 : "[unknown workspace]",
           }),
+      ...(workspace !== undefined && workspaceId === "workspace"
+        ? {
+            workspaceIdentity: createHash("sha256")
+              .update("workspace")
+              .digest("hex"),
+          }
+        : {}),
       ...(workspace !== undefined &&
       workspaceId === "workspace" &&
       relativePath !== undefined

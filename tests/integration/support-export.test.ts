@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
+import { createHash } from "node:crypto";
+import { OperationsStore } from "../../apps/desktop/operations/store";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -277,6 +279,90 @@ describe("content-free support export", () => {
         ...overrides,
       };
     }
+
+    it("revalidates identity at both export boundaries after a rename or reused label", async () => {
+      const root = await temporaryRoot();
+      const configuration = new ProductConfigurationService(
+        new ProductSettingsStore({ root: path.join(root, "state") }),
+      );
+      await configuration.initialize();
+      const added = await configuration.addReadonlyWorkspace({
+        root: path.join(root, "workspace"),
+        label: "Shared",
+      });
+      if (added.snapshot.status !== "ready")
+        throw Error("fixture settings missing");
+      const configured = added.snapshot.settings.computer.workspaces[0]!;
+      const store = new OperationsStore(path.join(root, "operations"));
+      try {
+        store.setWorkspaceLabels([configured]);
+        store.record(
+          {
+            source: "ChatGPT",
+            kind: "computer_workspace_read",
+            target: {
+              workspace: configured.workspaceId,
+              relativePath: "original.txt",
+            },
+          },
+          "unknown",
+          "ACTION_OUTCOME_UNKNOWN",
+          1,
+        );
+        expect(await store.flush(5000)).toBe(true);
+        const operations = await store.snapshot(5000);
+        const binding = createHash("sha256")
+          .update(configured.workspaceId)
+          .digest("hex");
+        expect(operations.entries[0]!.target.workspaceIdentity).toBe(binding);
+        const reportFor = (workspaceId: string, label: string) => {
+          const current = { ...configured, workspaceId, label };
+          const snapshot = added.snapshot;
+          if (snapshot.status !== "ready")
+            throw Error("fixture settings missing");
+          const owner = {
+            ...snapshot,
+            settings: {
+              ...snapshot.settings,
+              computer: {
+                ...snapshot.settings.computer,
+                workspaces: [current],
+              },
+            },
+          };
+          return createSupportExport({
+            ...input(),
+            configuration: owner,
+            operations,
+          });
+        };
+        const renamed = reportFor(configured.workspaceId, "Renamed");
+        expect(renamed.operations!.entries[0]!.target).toEqual({
+          workspace: "Renamed",
+          workspaceIdentity: binding,
+          relativePath: "original.txt",
+        });
+        const replaced = reportFor("replacement", "Shared");
+        expect(replaced.operations!.entries[0]!.target).toEqual({
+          workspace: "[unknown workspace]",
+        });
+        expect(replaced.operations!.entries[0]!.outcome).toBe("unknown");
+        // Exercise final-write validation independently using the earlier report.
+        const file = path.join(root, "identity-support.json");
+        await writeSupportExport(file, renamed, [
+          { workspaceId: "replacement", label: "Renamed" },
+        ]);
+        const written = JSON.parse(await fs.readFile(file, "utf8"));
+        expect(written.operations.entries[0].target).toEqual({
+          workspace: "[unknown workspace]",
+        });
+        expect(written.operations.entries[0].outcome).toBe("unknown");
+        expect(JSON.stringify(written)).not.toContain("original.txt");
+        expect(JSON.stringify(written)).not.toContain(configured.workspaceId);
+      } finally {
+        await store.shutdown(5000);
+      }
+    });
 
     it("OBS-F3/F4 refuses input it does not know, including provider diagnostics", () => {
       expect(() =>

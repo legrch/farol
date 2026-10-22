@@ -2,6 +2,7 @@ import {
   recordedModelTurn,
   recordedCompaction,
 } from "../../../apps/desktop/operations/model-turn";
+import { operationsDirectory } from "../../../apps/desktop/operations/paths";
 import { OperationsStore } from "../../../apps/desktop/operations/store";
 import { observeOperation } from "../../../apps/desktop/operations/observe";
 import {
@@ -6434,7 +6435,7 @@ async function configureSaveAndConnect(
 let operationsLog: OperationsStore | undefined;
 function operationsStore(): OperationsStore {
   return (operationsLog ??= new OperationsStore(
-    path.join(app.getPath("userData"), "farol-state", "operations"),
+    operationsDirectory(app.getPath("userData")),
   ));
 }
 function configureProduct(value: unknown): Promise<ProductConfigurationResult> {

@@ -53,6 +53,12 @@ export const OperationLabelSchema = z.preprocess(
 );
 export const OperationTargetSchema = z.strictObject({
   workspace: OperationLabelSchema.optional(),
+  // Opaque binding to owner configuration; never supplied by operation callers.
+  workspaceIdentity: z
+    .string()
+    .length(64)
+    .regex(/^[a-f0-9]{64}$/u)
+    .optional(),
   relativePath: z
     .preprocess((value) => ownerText(value, 4096, true), z.string())
     .optional(),
@@ -93,7 +99,10 @@ export type OperationEntry = z.infer<typeof OperationEntrySchema>;
  * recorder resolves them against owner configuration before any sink sees them. */
 export type OperationMetadata = Pick<OperationEntry, "source"> & {
   kind: string;
-  target: Omit<OperationEntry["target"], "command" | "handle"> & {
+  target: Omit<
+    OperationEntry["target"],
+    "command" | "handle" | "workspaceIdentity"
+  > & {
     command?: string | undefined;
     handle?: string | undefined;
   };

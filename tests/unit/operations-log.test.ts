@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import {
   ProductSettingsSchema,
   ProductConfigurationCommandSchema,
@@ -44,6 +45,8 @@ import type { ProductConfigurationCommand } from "../../src/pkg/product-settings
 import { routeBModelTurnHandler } from "../../src/apps/desktop/farol-model-endpoint";
 import { recordedUpdaterPorts } from "../../apps/desktop/operations/updater";
 import type { FarolModelSseEvent } from "../../src/apps/desktop/farol-model-endpoint";
+const identity = (id: string) =>
+  createHash("sha256").update(id, "utf8").digest("hex");
 const roots: string[] = [];
 const stores: OperationsStore[] = [];
 afterEach(async () => {
@@ -318,6 +321,7 @@ it("uses names-only workspace labels and excludes paths, arguments and payloads"
   await store.flush(5000);
   expect((await store.snapshot(5000)).entries[0]?.target).toEqual({
     workspace: "Docs",
+    workspaceIdentity: identity("w"),
     relativePath: "README.md",
   });
   expect(Object.keys((await store.snapshot(5000)).entries[0]!).sort()).toEqual([
@@ -1566,7 +1570,11 @@ it.each(ownerTargets)(
     ];
     store.setWorkspaceLabels(labels);
     const input = { ...target, workspace: "owner" };
-    const resolved = { ...expected, workspace: expected.workspace ?? "Docs" };
+    const resolved = {
+      ...expected,
+      workspace: expected.workspace ?? "Docs",
+      workspaceIdentity: identity("owner"),
+    };
     const validTarget = { ...input, command: "git" };
     const normalized = { ...resolved, command: "git" };
     // Test both one-shot records and settlement after a target changes.
@@ -1605,10 +1613,14 @@ it.each(ownerTargets)(
       corruptLines: 0,
     });
     expect(snapshot.entries).toHaveLength(2);
-    // Raw legacy fields go through the same normalization on disk and export.
+    // Identity-bound persisted fields go through the same normalization on disk and export.
     const raw = {
       ...snapshot.entries[0]!,
-      target: { ...target, workspace: resolved.workspace },
+      target: {
+        ...target,
+        workspace: resolved.workspace,
+        workspaceIdentity: identity("owner"),
+      },
     };
     fs.appendFileSync(
       path.join(directory, segmentFiles(directory)[0]!),
@@ -1684,7 +1696,10 @@ it("preserves bounded international owner names and relative paths, and rejects 
   );
   await store.flush(5000);
   const snapshot = await store.snapshot(5000);
-  expect(snapshot.entries[0]!.target).toEqual(target);
+  expect(snapshot.entries[0]!.target).toEqual({
+    ...target,
+    workspaceIdentity: identity("workspace-1"),
+  });
   for (const text of hostileText) {
     for (const field of [
       "corruptLines",
@@ -1882,6 +1897,7 @@ it("validates only names from full owner workspace metadata and enriches a begun
   const snapshot = await store.snapshot(5000);
   expect(snapshot.entries[0]!.target).toEqual({
     workspace: "Docs",
+    workspaceIdentity: identity("w"),
     relativePath: "README.md",
   });
   expect(JSON.stringify(supportWith(snapshot))).not.toContain("OWNER_ROOT");
@@ -2007,8 +2023,16 @@ it("resolves at each observation before enqueue, including settlement and later 
   );
   expect(raw.map((entry) => entry.target)).toEqual([
     { workspace: unknownWorkspace },
-    { workspace: "Owner Docs", relativePath: "README.md" },
-    { workspace: "Owner Docs", relativePath: "README.md" },
+    {
+      workspace: "Owner Docs",
+      relativePath: "README.md",
+      workspaceIdentity: identity("w"),
+    },
+    {
+      workspace: "Owner Docs",
+      relativePath: "README.md",
+      workspaceIdentity: identity("w"),
+    },
   ]);
   expect(
     (await store.snapshot(5000)).entries.map((entry) => entry.target),
@@ -2063,7 +2087,11 @@ it("sanitizes old raw targets on read and both export boundaries", async () => {
     entries: [
       {
         ...snapshot.entries[0]!,
-        target: { workspace: "Owner Docs", relativePath: "README.md" },
+        target: {
+          workspace: "Owner Docs",
+          relativePath: "README.md",
+          workspaceIdentity: identity("w"),
+        },
       },
     ],
   };
@@ -2098,6 +2126,7 @@ it("initializes a separate MCP recorder from the private owner index and fails c
   await mcp.flush(5000);
   expect((await mcp.snapshot(5000)).entries[0]!.target).toEqual({
     workspace: "Owner Docs",
+    workspaceIdentity: identity("w"),
     relativePath: "README.md",
   });
   const missing = setup(retentionLimits).store;
@@ -2137,6 +2166,7 @@ it("resolves before arbitrary begin/record sinks and re-resolves enriched finish
   });
   expect(begin.mock.calls[0]![0].target).toEqual({
     workspace: "Owner Docs",
+    workspaceIdentity: identity("w"),
     relativePath: "README.md",
   });
   expect(
@@ -2196,45 +2226,57 @@ it.each(
   },
 );
 
-it("revalidates cached targets without extending the snapshot deadline on stalled IO", async () => {
-  let stalled = false;
-  const release = deferred();
-  const io = {
-    ...fs.promises,
-    lstat: async (...args: Parameters<typeof fs.promises.lstat>) => {
-      if (stalled) await release.promise;
-      return fs.promises.lstat(...args);
+it.each([
+  ["replacement", "Owner Docs", { workspace: unknownWorkspace }],
+  [
+    "w",
+    "Renamed",
+    {
+      workspace: "Renamed",
+      workspaceIdentity: identity("w"),
+      relativePath: "README.md",
     },
-  } as typeof fs.promises;
-  const { store } = injectedStore(io);
-  store.setWorkspaceLabels(ownerLabels);
-  store.record(
-    { ...metadata, target: { workspace: "w", relativePath: "README.md" } },
-    "done",
-    null,
-    1,
-  );
-  await store.flush(5000);
-  expect((await store.snapshot(5000)).entries[0]!.target.workspace).toBe(
-    "Owner Docs",
-  );
-  store.setWorkspaceLabels([]);
-  await store.flush(5000);
-  stalled = true;
-  try {
-    const started = performance.now();
-    const fallback = await store.snapshot(10);
-    expect(performance.now() - started).toBeLessThan(500);
-    expect(fallback.corruptLines).toBe(1);
-    expect(fallback.entries[0]!.target).toEqual({
-      workspace: unknownWorkspace,
-    });
-  } finally {
-    stalled = false;
-    release.resolve();
-  }
-  await store.snapshot(5000);
-});
+  ],
+] as const)(
+  "revalidates cached targets on stalled IO for ID %s and label %s",
+  async (workspaceId, label, expected) => {
+    let stalled = false;
+    const release = deferred();
+    const io = {
+      ...fs.promises,
+      lstat: async (...args: Parameters<typeof fs.promises.lstat>) => {
+        if (stalled) await release.promise;
+        return fs.promises.lstat(...args);
+      },
+    } as typeof fs.promises;
+    const { store } = injectedStore(io);
+    store.setWorkspaceLabels(ownerLabels);
+    store.record(
+      { ...metadata, target: { workspace: "w", relativePath: "README.md" } },
+      "done",
+      null,
+      1,
+    );
+    await store.flush(5000);
+    expect((await store.snapshot(5000)).entries[0]!.target.workspace).toBe(
+      "Owner Docs",
+    );
+    store.setWorkspaceLabels([{ workspaceId, label }]);
+    await store.flush(5000);
+    stalled = true;
+    try {
+      const started = performance.now();
+      const fallback = await store.snapshot(10);
+      expect(performance.now() - started).toBeLessThan(500);
+      expect(fallback.corruptLines).toBe(1);
+      expect(fallback.entries[0]!.target).toEqual(expected);
+    } finally {
+      stalled = false;
+      release.resolve();
+    }
+    await store.snapshot(5000);
+  },
+);
 
 it("bounds MCP label loading and records unknown targets when the owner index stalls", async () => {
   const release = deferred();
@@ -2268,4 +2310,233 @@ it("bounds MCP label loading and records unknown targets when the owner index st
   expect((await store.snapshot(5000)).entries[0]!.target).toEqual({
     workspace: unknownWorkspace,
   });
+});
+
+it("never reattaches a removed workspace's path to a different ID with the same label", async () => {
+  const { store, directory } = setup(retentionLimits);
+  store.setWorkspaceLabels([{ workspaceId: "original", label: "Shared" }]);
+  store.record(
+    {
+      ...metadata,
+      target: { workspace: "original", relativePath: "original.txt" },
+    },
+    "unknown",
+    "ACTION_OUTCOME_UNKNOWN",
+    1,
+  );
+  await store.flush(5000);
+  const original = await store.snapshot(5000);
+  store.setWorkspaceLabels([{ workspaceId: "replacement", label: "Shared" }]);
+  await store.flush(5000);
+  const restarted = new OperationsStore(
+    directory,
+    () => 1792670400000,
+    retentionLimits,
+  );
+  stores.push(restarted);
+  const exported = path.join(directory, "identity-support.json");
+  await writeSupportExport(exported, { operations: original }, [
+    { workspaceId: "replacement", label: "Shared" },
+  ]);
+  const targets = [
+    (await store.snapshot(5000)).entries[0]!.target,
+    (await restarted.snapshot(5000)).entries[0]!.target,
+    supportWith(
+      original,
+      ownerConfiguration([{ workspaceId: "replacement", label: "Shared" }]),
+    ).operations!.entries[0]!.target,
+    JSON.parse(fs.readFileSync(exported, "utf8")).operations.entries[0].target,
+  ];
+  expect(targets).toEqual(targets.map(() => ({ workspace: unknownWorkspace })));
+  expect((await restarted.snapshot(5000)).entries[0]).toMatchObject({
+    outcome: "unknown",
+    code: "ACTION_OUTCOME_UNKNOWN",
+  });
+});
+
+it("keeps an exact workspace identity through renames and duplicate labels", async () => {
+  const { store, directory } = setup(retentionLimits);
+  store.setWorkspaceLabels([
+    { workspaceId: "original", label: "Shared" },
+    { workspaceId: "sibling", label: "Shared" },
+  ]);
+  for (const workspace of ["original", "sibling"])
+    store.record(
+      { ...metadata, target: { workspace, relativePath: `${workspace}.txt` } },
+      "done",
+      null,
+      1,
+    );
+  await store.flush(5000);
+  const before = await store.snapshot(5000);
+  expect(before.entries.map((e) => e.target.workspaceIdentity)).toEqual([
+    identity("original"),
+    identity("sibling"),
+  ]);
+  store.setWorkspaceLabels([
+    { workspaceId: "original", label: "Renamed" },
+    { workspaceId: "replacement", label: "Shared" },
+  ]);
+  await store.flush(5000);
+  const restarted = new OperationsStore(
+    directory,
+    () => 1792670400000,
+    retentionLimits,
+  );
+  stores.push(restarted);
+  const expected = [
+    {
+      workspace: "Renamed",
+      workspaceIdentity: identity("original"),
+      relativePath: "original.txt",
+    },
+    { workspace: unknownWorkspace },
+  ];
+  expect((await restarted.snapshot(5000)).entries.map((e) => e.target)).toEqual(
+    expected,
+  );
+  expect(
+    supportWith(
+      before,
+      ownerConfiguration([
+        { workspaceId: "original", label: "Renamed" },
+        { workspaceId: "replacement", label: "Shared" },
+      ]),
+    ).operations!.entries.map((e) => e.target),
+  ).toEqual(expected);
+});
+
+it.each([
+  undefined,
+  "",
+  "PRIVATE_IDENTITY",
+  "a".repeat(63),
+  "A".repeat(64),
+  { private: "PRIVATE_IDENTITY" },
+])(
+  "preserves legacy or invalid-identity outcomes but drops their matching-label path: case %#",
+  async (workspaceIdentity) => {
+    const { store, directory } = setup(retentionLimits);
+    store.setWorkspaceLabels(ownerLabels);
+    store.record(metadata, "unknown", "ACTION_OUTCOME_UNKNOWN", 1);
+    await store.flush(5000);
+    const snapshot = await store.snapshot(5000);
+    const entry = {
+      ...snapshot.entries[0]!,
+      target: {
+        workspace: "Owner Docs",
+        relativePath: privatePath,
+        ...(workspaceIdentity === undefined ? {} : { workspaceIdentity }),
+      },
+    };
+    fs.appendFileSync(
+      path.join(directory, segmentFiles(directory)[0]!),
+      JSON.stringify(entry) + "\n",
+    );
+    const readback = await store.snapshot(5000);
+    expect(readback.corruptLines).toBe(0);
+    expect(readback.entries[1]).toMatchObject({
+      outcome: "unknown",
+      code: "ACTION_OUTCOME_UNKNOWN",
+      target: { workspace: unknownWorkspace },
+    });
+    expect(readback.entries[1]!.target).not.toHaveProperty("relativePath");
+    const raw = { ...snapshot, entries: [entry] } as never;
+    const exported = path.join(directory, "legacy-support.json");
+    await writeSupportExport(exported, { operations: raw }, ownerLabels);
+    for (const value of [
+      supportWith(raw, ownerConfiguration(ownerLabels)),
+      JSON.parse(fs.readFileSync(exported, "utf8")),
+    ]) {
+      expect(value.operations!.entries[0]!.target).toEqual({
+        workspace: unknownWorkspace,
+      });
+      expect(value.operations!.entries[0]!.outcome).toBe("unknown");
+    }
+  },
+);
+
+it.each(["w", privateWorkspace, "Owner Docs", "w\n", "w\u202e"])(
+  "drops caller-supplied identity and binds only the exact configured ID: case %#",
+  async (workspace) => {
+    const { store, directory } = setup(retentionLimits);
+    store.setWorkspaceLabels(ownerLabels);
+    const record = vi.fn();
+    const begin = vi.fn(() => vi.fn());
+    const recorder = createTotalOperationsRecorder({ record, begin });
+    recorder.setWorkspaceLabels(ownerLabels);
+    for (const workspaceIdentity of [
+      identity("w"),
+      identity("other"),
+      "PRIVATE_IDENTITY",
+      { private: "PRIVATE_IDENTITY" },
+    ]) {
+      const input = {
+        ...metadata,
+        target: { workspace, relativePath: privatePath, workspaceIdentity },
+      } as never;
+      recorder.record(input, "done", null, 1);
+      recorder.begin(input)("done", null, 1);
+      store.record(input, "done", null, 1);
+      store.begin(input)("done", null, 1);
+    }
+    await store.flush(5000);
+    const expected =
+      workspace === "w"
+        ? {
+            workspace: "Owner Docs",
+            workspaceIdentity: identity("w"),
+            relativePath: privatePath,
+          }
+        : { workspace: unknownWorkspace };
+    for (const [input] of [...record.mock.calls, ...begin.mock.calls])
+      expect((input as OperationMetadata).target).toEqual(expected);
+    const snapshot = await store.snapshot(5000);
+    expect(snapshot.entries).toHaveLength(8);
+    expect(snapshot.writeFailures).toBe(0);
+    for (const entry of snapshot.entries)
+      expect(entry.target).toEqual(expected);
+    const raw = segmentFiles(directory)
+      .map((name) => fs.readFileSync(path.join(directory, name), "utf8"))
+      .join("");
+    expect(raw).not.toContain("PRIVATE_IDENTITY");
+    if (workspace !== "w") {
+      expect(raw).not.toContain(privatePath);
+      expect(raw).not.toContain(identity("w"));
+    }
+  },
+);
+
+it("fails closed when owner configuration has an ambiguous duplicate ID", async () => {
+  const { store } = setup(retentionLimits);
+  const duplicates = [
+    { workspaceId: "w", label: "First" },
+    { workspaceId: "w", label: "Second" },
+  ];
+  store.setWorkspaceLabels(ownerLabels);
+  store.record(
+    { ...metadata, target: { workspace: "w", relativePath: "README.md" } },
+    "done",
+    null,
+    1,
+  );
+  await store.flush(5000);
+  const earlier = await store.snapshot(5000);
+  store.setWorkspaceLabels(duplicates);
+  store.record(
+    { ...metadata, target: { workspace: "w", relativePath: "README.md" } },
+    "refused",
+    "OPERATION_REFUSED",
+    2,
+  );
+  await store.flush(5000);
+  const current = await store.snapshot(5000);
+  expect(current.entries.map((entry) => entry.target)).toEqual([
+    { workspace: unknownWorkspace },
+    { workspace: unknownWorkspace },
+  ]);
+  expect(
+    supportWith(earlier, ownerConfiguration(duplicates)).operations!.entries[0]!
+      .target,
+  ).toEqual({ workspace: unknownWorkspace });
 });

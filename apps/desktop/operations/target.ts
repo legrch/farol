@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   OperationTargetSchema,
   OperationWorkspaceLabelsSchema,
@@ -12,27 +13,42 @@ export type OperationWorkspaceLabels = readonly {
 }[];
 export const unknownWorkspace = "[unknown workspace]";
 
-/** Adapter targets contain IDs; persisted targets contain owner labels. Never
- * normalize an identifier before lookup or accept a label as an adapter ID. */
+/** Only hash an exact, validated configured ID, never arbitrary caller text. */
+function workspaceIdentity(workspaceId: string): string {
+  return createHash("sha256").update(workspaceId, "utf8").digest("hex");
+}
+
+/** Adapter targets carry IDs; persisted targets carry opaque identity and owner
+ * labels. Persisted reads must prove identity, never a name. */
 export function resolveOperationTarget(
-  target: OperationMetadata["target"],
+  target: OperationMetadata["target"] & { workspaceIdentity?: unknown },
   workspaces: OperationWorkspaceLabels,
-  representation: "identifier" | "label",
+  representation: "identifier" | "persisted",
 ) {
   const labels = OperationWorkspaceLabelsSchema.parse(
     workspaces.map(({ workspaceId, label }) => ({ workspaceId, label })),
   );
-  const workspace = labels.find((entry) =>
+  const {
+    workspace: supplied,
+    relativePath,
+    workspaceIdentity: suppliedIdentity,
+    ...rest
+  } = target;
+  const matches = labels.filter((entry) =>
     representation === "identifier"
-      ? entry.workspaceId === target.workspace
-      : entry.label === target.workspace,
+      ? entry.workspaceId === supplied
+      : suppliedIdentity === workspaceIdentity(entry.workspaceId),
   );
-  const { workspace: supplied, relativePath, ...rest } = target;
+  // An ambiguous owner index cannot establish a workspace binding either.
+  const workspace = matches.length === 1 ? matches[0] : undefined;
   return OperationTargetSchema.parse({
     ...rest,
     ...(supplied === undefined
       ? {}
       : { workspace: workspace?.label ?? unknownWorkspace }),
+    ...(workspace
+      ? { workspaceIdentity: workspaceIdentity(workspace.workspaceId) }
+      : {}),
     ...(workspace && relativePath !== undefined ? { relativePath } : {}),
   });
 }
@@ -46,7 +62,7 @@ export function resolveOperationsSnapshot(
     ...snapshot,
     entries: snapshot.entries.map((entry) => ({
       ...entry,
-      target: resolveOperationTarget(entry.target, workspaces, "label"),
+      target: resolveOperationTarget(entry.target, workspaces, "persisted"),
     })),
   });
 }
