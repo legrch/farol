@@ -365,3 +365,28 @@ it("separates a damaged trailing line before appending the next valid observatio
   ).toEqual(["first", "next"]);
   expect(store.snapshot().corruptLines).toBe(1);
 });
+
+it.each([
+  "TURN_OUTCOME_UNKNOWN",
+  "FAROL_MODEL_ROUTE_UNREACHABLE",
+  "PROVIDER_FAILED",
+])(
+  "retains the terminal metadata code %s without mistaking unknown for failed",
+  async (code) => {
+    const { store } = setup();
+    const handler = recordedModelTurn(store, async () => ({
+      ok: true,
+      events: [
+        {
+          event: "response.failed",
+          data: { response: { error: { code, message: "PRIVATE-CANARY" } } },
+        },
+      ],
+    }));
+    await handler({ body: "PRIVATE-PROMPT", headers: {} });
+    expect(store.snapshot().entries).toMatchObject([
+      { code, outcome: code === "PROVIDER_FAILED" ? "failed" : "unknown" },
+    ]);
+    expect(JSON.stringify(store.snapshot())).not.toMatch(/PRIVATE/);
+  },
+);
