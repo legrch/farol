@@ -1295,29 +1295,7 @@ const SIGN_IN_SURFACE_ID = "farol-sign-in";
 let signInSurfaceOpen = false;
 let browserHomeSurfaceOpen = false;
 let checkFeedbackVisible = false;
-let signInReturnLayout: {
-  section: SurfaceSection;
-  setupOpen: boolean;
-  taskId: string;
-} | null = null;
-
-function restoreEmbeddedSignInLayout(): void {
-  signInSurfaceOpen = false;
-  const previous = signInReturnLayout;
-  signInReturnLayout = null;
-  if (
-    previous &&
-    section === "browser" &&
-    !setupOpen &&
-    selectedTaskId === previous.taskId &&
-    shellOverlay === "none"
-  ) {
-    section = previous.section;
-    setupOpen = previous.setupOpen;
-  }
-  applyLayout();
-  publishLayout();
-}
+let browserHomeLoadState: "loading" | "loaded" | "failed" = "loading";
 const liveTaskConversationUrls = new Map<string, string | null>();
 let liveTaskStore: PrivateLiveTaskStore | null = null;
 let productAgentStore: PrivateProductAgentStore | null = null;
@@ -2429,6 +2407,7 @@ async function openLiveTaskSurface(taskId: string): Promise<boolean> {
   const route = liveTaskRoutes.get(taskId);
   const task = liveTaskRegistry.get(taskId);
   if (!route || !task) return false;
+  signInSurfaceOpen = false;
   const currentTask = () => {
     const current = liveTaskRegistry.get(taskId);
     return liveTaskRoutes.get(taskId) === route &&
@@ -8338,24 +8317,16 @@ async function configureAdmittedProduct(
       chatGptSignInGeneration += 1;
       chatGptSignInOpenGeneration = chatGptSignInGeneration;
       if (embeddedBrowserEnabled()) {
-        if (!signInSurfaceOpen || section !== "browser" || setupOpen) {
-          signInReturnLayout = { section, setupOpen, taskId: selectedTaskId };
-        }
+        // Renderer presentation has already selected ChatGPT. Select only
+        // the retained document here, never a competing shell destination.
         signInSurfaceOpen = true;
-        section = "browser";
-        setupOpen = false;
         applyLayout();
-        publishLayout();
       }
       let opened: Awaited<ReturnType<ChatGptRoute["open"]>>;
       try {
         opened = await chatGptRoute.openForSignIn(SIGN_IN_WINDOW_TITLE);
       } catch {
         opened = { status: "unreachable" };
-      }
-      if (opened.status !== "opened" && embeddedBrowserEnabled()) {
-        chatGptRoute.returnFromSignIn();
-        restoreEmbeddedSignInLayout();
       }
       const recorded =
         opened.status === "opened"
@@ -8421,10 +8392,7 @@ async function configureAdmittedProduct(
           ok: true,
           snapshot: configuration.snapshot(),
         });
-      section = "browser";
-      setupOpen = false;
       applyLayout();
-      publishLayout();
       let opened: Awaited<ReturnType<ChatGptRoute["open"]>>;
       try {
         // open() joins an in-flight open or retains the existing document. It
@@ -8450,11 +8418,9 @@ async function configureAdmittedProduct(
       if (chatGptTaskAdmission || connectorTaskAdmission) {
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
       }
+      signInSurfaceOpen = true;
       browserHomeSurfaceOpen = true;
-      section = "browser";
-      setupOpen = false;
       applyLayout();
-      publishLayout();
       let opened: Awaited<ReturnType<ChatGptRoute["open"]>>;
       try {
         opened = await chatGptRoute.retryFailedOpen();
@@ -8462,7 +8428,6 @@ async function configureAdmittedProduct(
         opened = { status: "unreachable" };
       }
       if (opened.status !== "opened") {
-        browserHomeSurfaceOpen = false;
         applyLayout();
         return configurationFailure("CHATGPT_PAGE_UNREACHABLE");
       }
@@ -8527,22 +8492,9 @@ async function configureAdmittedProduct(
     case "chatgpt.sign-in-return":
     case "chatgpt.verification-return": {
       if (embeddedBrowserEnabled()) {
-        // A readonly app check leaves sign-in mode before it dispatches. The
-        // embedded page still occupies the browser surface, so Return must
-        // restore Setup even when there is no sign-in observation to finish.
-        const observingSignIn = chatGptRoute?.returnFromSignIn() ?? false;
-        if (!observingSignIn && signInSurfaceOpen) {
-          const closing = chatGptSignInOpenGeneration;
-          chatGptSignInOpenGeneration = null;
-          restoreEmbeddedSignInLayout();
-          publishShellAction(
-            "sign-in-returned",
-            command.kind === "chatgpt.verification-return"
-              ? "verification-completed"
-              : "sign-in-return-command",
-            closing,
-          );
-        }
+        // This ends observation only. Renderer navigation conceals the retained
+        // view; a later read or popup outcome cannot change that destination.
+        chatGptRoute?.returnFromSignIn();
       }
       return ProductConfigurationResultSchema.parse({
         ok: true,
@@ -10441,7 +10393,12 @@ function focusForLayout(): void {
     window.webContents.focus();
     return;
   }
-  const selected = taskViews.get(selectedTaskId);
+  const layout = currentSurfaceLayout();
+  const selected = layout?.pageVisible
+    ? taskViews.get(
+        layout.showBrowserHome ? SIGN_IN_SURFACE_ID : selectedTaskId,
+      )
+    : undefined;
   if (!selected || !nativeViewVisibility.focus(window, selected)) {
     if (!window.webContents.isDestroyed()) window.webContents.focus();
   }
@@ -10749,6 +10706,7 @@ function signInChatGptSurfaceFactory(): ChatGptRouteSurfaceFactory {
   const create = liveChatGptSurfaceFactory(SIGN_IN_SURFACE_ID);
   return (options) => {
     const surface = create(options);
+    browserHomeSurfaceOpen = true;
     return {
       ...surface,
       focus: () => {
@@ -11046,7 +11004,10 @@ function applyRendererLayout(value: unknown): void {
     setupOpen !== parsed.data.setupOpen ||
     shellOverlay !== parsed.data.overlay;
   section = parsed.data.section;
-  if (knownTask) selectedTaskId = parsed.data.taskId;
+  if (knownTask) {
+    if (selectedTaskId !== parsed.data.taskId) signInSurfaceOpen = false;
+    selectedTaskId = parsed.data.taskId;
+  }
   setupOpen = parsed.data.setupOpen;
   checkFeedbackVisible = parsed.data.checkFeedbackVisible;
   sidebarMode = parsed.data.sidebar;
@@ -11073,7 +11034,9 @@ function currentSurfaceLayout() {
     overlay: shellOverlay,
     section,
     setupOpen,
-    runtimeReady: selectedViewKind === "chatgpt" || runtimeState === "ready",
+    runtimeReady: showBrowserHome
+      ? browserHomeLoadState !== "failed"
+      : selectedViewKind === "chatgpt" || runtimeState === "ready",
     selectedTaskPresent: showBrowserHome || taskViews.has(selectedTaskId),
     browserChromeVisible:
       showBrowserHome || productTasksState().tasks.length > 0,
@@ -12383,9 +12346,6 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
       : {}),
     onSignInOutcome: (status, diagnostic) => {
-      if (embeddedBrowserEnabled()) {
-        restoreEmbeddedSignInLayout();
-      }
       chatGptSignInOutcome = diagnostic;
       const closing = chatGptSignInOpenGeneration;
       chatGptSignInOpenGeneration = null;
@@ -12398,14 +12358,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       if (!embeddedBrowserEnabled()) return;
       // Retained document readiness survives concealment and sign-in. Current
       // layout alone decides whether its native surface is visible or focused.
-      browserHomeSurfaceOpen = state === "loaded";
-      if (
-        !signInSurfaceOpen &&
-        section === "browser" &&
-        productTasksState().tasks.length === 0
-      ) {
-        applyLayout();
-      }
+      browserHomeLoadState = state;
+      applyLayout();
       window?.webContents.send(channels.browserRouteState, { state });
     },
   });

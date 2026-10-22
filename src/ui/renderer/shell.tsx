@@ -961,20 +961,24 @@ function ChatBrowser({
                 )
               ? "Sign-in is already open in ChatGPT. Finish there, then check sign-in in Connection."
               : failed
-                ? "ChatGPT could not be opened. Check Connection in Setup for details."
+                ? snapshot.route === "failed"
+                  ? "ChatGPT could not be opened. The failed page is retained. Return to Setup to check sign-in; navigation does not retry the page."
+                  : "ChatGPT could not be opened. Check Connection in Setup for details."
                 : "ChatGPT page status has not been confirmed. Check Connection for details."}
       </p>
-      <div className="control-row">
-        <button
-          onClick={() =>
-            unknown || pending
-              ? facade.overlay("unresolved-actions")
-              : facade.navigate({ area: "setup", setupStep: "connection" })
-          }
-        >
-          {unknown || pending ? "Unresolved actions" : "Connection"}
-        </button>
-      </div>
+      {(unknown || pending || !snapshot.setupSignInReturn) && (
+        <div className="control-row">
+          <button
+            onClick={() =>
+              unknown || pending
+                ? facade.overlay("unresolved-actions")
+                : facade.navigate({ area: "setup", setupStep: "connection" })
+            }
+          >
+            {unknown || pending ? "Unresolved actions" : "Connection"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1135,6 +1139,19 @@ export function Shell() {
           {state.environment === "owner-preview" && <small>Preview</small>}
         </div>
         {destination.area === "chatgpt" &&
+          !destination.connectionCheckReturn &&
+          state.setupSignInReturn && (
+            <div className="sign-in-context" aria-label="Setup sign-in">
+              <span>Setup · Sign in</span>
+              <button
+                className="connection-check-return"
+                onClick={() => facade.returnToSetup()}
+              >
+                <Icon name="back" /> Back to setup
+              </button>
+            </div>
+          )}
+        {destination.area === "chatgpt" &&
           destination.connectionCheckReturn && (
             <button
               className="connection-check-return"
@@ -1154,7 +1171,7 @@ export function Shell() {
           <span>Find a page</span>
           <kbd>⌘ K</kbd>
         </button>
-        {destination.area === "chatgpt" && (
+        {destination.area === "chatgpt" && !state.setupSignInReturn && (
           <button
             className="chat-conversations-trigger"
             onClick={() => facade.overlay("chat-conversations")}

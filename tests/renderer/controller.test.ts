@@ -4143,3 +4143,127 @@ it("an ordinary unobserved sign-in has a neutral checklist marker, unlike an unk
     c.dispose();
   }
 });
+
+// Shell/transport doubles only; native geometry and provider login are root gates.
+describe("Setup sign-in browser continuity", () => {
+  it("presents ChatGPT before transport and only explicitly returns to the saved Sign in step", async () => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    c.navigate({ area: "setup", setupStep: "signin" });
+    const saved = c.getSnapshot().destination;
+    const waiting = deferred<unknown>();
+    const entered = deferred<void>();
+    vi.mocked(f.api.configure).mockImplementation((command) => {
+      if (command.kind === "chatgpt.open-sign-in") {
+        entered.resolve();
+        return waiting.promise;
+      }
+      return Promise.resolve({ ok: true, snapshot: bootstrap().configuration });
+    });
+    const opening = c.configure(
+      { kind: "chatgpt.open-sign-in" },
+      "settings:chatgpt.open-sign-in:",
+    );
+    await entered.promise;
+    expect(c.getSnapshot().destination.area).toBe("chatgpt");
+    expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.[0]).toBe("browser");
+    expect(c.getSnapshot().setupSignInReturn).toEqual(saved);
+    const destination = c.getSnapshot().destination;
+    for (const state of ["loading", "loaded", "failed"] as const) {
+      f.emit("route", { state });
+      f.emit("action", {
+        action: "sign-in-returned",
+        source: "auth-window-closed",
+        authWindowGeneration: 1,
+        eventId: crypto.randomUUID(),
+      });
+      await c.refresh();
+      expect(c.getSnapshot().destination).toBe(destination);
+      expect(c.getSnapshot().setupSignInCheck).toBeFalsy();
+    }
+    c.navigate({ area: "activity" });
+    waiting.resolve({ ok: true, snapshot: bootstrap().configuration });
+    await opening;
+    expect(c.getSnapshot().destination.area).toBe("activity");
+    c.navigate({ area: "chatgpt" });
+    c.returnToSetup();
+    await vi.waitFor(() =>
+      expect(f.api.configure).toHaveBeenCalledWith({
+        kind: "chatgpt.sign-in-return",
+      }),
+    );
+    expect(c.getSnapshot().destination).toEqual(saved);
+    expect(c.getSnapshot().setupSignInReturn).toBeNull();
+    f.emit("action", {
+      action: "sign-in-returned",
+      source: "sign-in-return-command",
+      authWindowGeneration: 1,
+      eventId: crypto.randomUUID(),
+    });
+    expect(c.getSnapshot().destination).toEqual(saved);
+    expect(
+      vi
+        .mocked(f.api.configure)
+        .mock.calls.filter(
+          ([command]) => command.kind === "chatgpt.open-sign-in",
+        ),
+    ).toHaveLength(1);
+    expect(
+      vi
+        .mocked(f.api.configure)
+        .mock.calls.filter(
+          ([command]) => command.kind === "chatgpt.sign-in-return",
+        ),
+    ).toHaveLength(1);
+    expect(f.api.task).not.toHaveBeenCalled();
+    c.dispose();
+  });
+});
+
+it.each(["chatgpt.open-sign-in", "chatgpt.open-browser"] as const)(
+  "%s from Sign in retains its own context without late navigation or effect replay",
+  async (kind) => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    c.navigate({ area: "setup", setupStep: "signin" });
+    const saved = c.getSnapshot().destination;
+    const waiting = deferred<unknown>();
+    vi.mocked(f.api.configure).mockImplementation((command) =>
+      command.kind === kind
+        ? waiting.promise
+        : Promise.resolve({ ok: true, snapshot: bootstrap().configuration }),
+    );
+    const opening = c.configure({ kind }, `settings:${kind}:`);
+    // Explicit navigation while the command digest is pending must win.
+    c.navigate({ area: "activity" });
+    await vi.waitFor(() =>
+      expect(f.api.configure).toHaveBeenCalledWith({ kind }),
+    );
+    expect(c.getSnapshot().destination.area).toBe("activity");
+    waiting.reject(new Error("fixture lost reply"));
+    expect((await opening).state).toBe("unknown");
+    const latch = c.getSnapshot().intents[`settings:${kind}:`];
+    expect(c.getSnapshot().setupSignInReturn).toEqual(saved);
+    c.navigate({ area: "chatgpt" });
+    f.emit("runtime", {
+      state: "offline",
+      error: null,
+      identity: null,
+      embeddedNode: null,
+      embeddedElectron: null,
+    });
+    c.returnToSetup();
+    expect(c.getSnapshot().destination).toEqual(saved);
+    expect(c.getSnapshot().intents[`settings:${kind}:`]).toBe(latch);
+    expect(c.getSnapshot().setupSignInCheck).toBeFalsy();
+    await c.refresh();
+    expect(
+      vi
+        .mocked(f.api.configure)
+        .mock.calls.filter(([command]) => command.kind === kind),
+    ).toHaveLength(1);
+    c.dispose();
+  },
+);

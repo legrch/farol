@@ -1723,3 +1723,25 @@ kbd {
 .operation-outcome[data-outcome="pending"] {
   color: var(--accent);
 }
+
+/* Sign-in context lives in shell chrome, above the native browser viewport. */
+.sign-in-context {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.sign-in-context > span {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.sign-in-context button {
+  flex: none;
+  white-space: nowrap;
+}
+@media (max-width: 850px) {
+  .sign-in-context > span {
+    display: none;
+  }
+}

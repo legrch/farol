@@ -2298,10 +2298,10 @@ export class ChatGptRoute {
       void pending.then((read) => {
         if (!this.signInMode || this.routeWindow !== candidate) return;
         this.pendingSignInObservation = null;
-        const keepPage = this.load === "loaded";
+        // The shell owns visibility. A bounded return read can settle after
+        // explicit navigation has already revealed this retained document again.
+        // Retain failed documents too; only an explicit retry may replace one.
         this.exitSignInMode();
-        if (keepPage) candidate.hide();
-        else candidate.destroy();
         this.reportSignInOutcome(
           read.observation?.state === "authenticated"
             ? "authenticated"
