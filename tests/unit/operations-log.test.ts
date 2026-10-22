@@ -477,6 +477,154 @@ const metadata = {
   kind: "fixture.operation",
   target: {},
 } as const;
+const dayMs = 86400000;
+const retentionLimits = {
+  days: 30,
+  bytes: 1024 * 1024,
+  segmentBytes: 65536,
+  entries: 1000,
+};
+function segmentFiles(directory: string) {
+  return fs
+    .readdirSync(directory)
+    .filter((name) => name.endsWith(".jsonl"))
+    .sort();
+}
+it("keeps the last 30 days on a quiet profile writing once a day for 40 days", async () => {
+  const f = setup(retentionLimits);
+  for (let day = 0; day < 40; day++) {
+    f.store.record({ ...metadata, kind: `day.${day}` }, "done", null, 1);
+    expect(await f.store.flush(5000)).toBe(true);
+    if (day < 39) f.now(dayMs);
+  }
+  f.now(1);
+  expect(await f.store.flush(5000)).toBe(true);
+  expect(
+    (await f.store.snapshot(5000)).entries.map((entry) => entry.kind),
+  ).toEqual(Array.from({ length: 30 }, (_, i) => `day.${i + 10}`));
+  expect(segmentFiles(f.directory)).toHaveLength(30);
+  expect(
+    fs.readdirSync(f.directory).filter((n) => n.endsWith(".index.json")),
+  ).toHaveLength(30);
+});
+it("rotates at UTC midnight within a batch and reuses the segment during that day", async () => {
+  const f = setup(retentionLimits);
+  f.now(Date.parse("2026-10-22T23:59:59.999Z") - 1792670400000);
+  f.store.record({ ...metadata, kind: "before.midnight" }, "done", null, 1);
+  f.now(1);
+  f.store.record({ ...metadata, kind: "after.midnight" }, "done", null, 1);
+  expect(await f.store.flush(5000)).toBe(true);
+  f.now(1000);
+  f.store.record({ ...metadata, kind: "same.day" }, "done", null, 1);
+  expect(await f.store.flush(5000)).toBe(true);
+  const files = segmentFiles(f.directory);
+  expect(files).toHaveLength(2);
+  expect(
+    files.map((name) =>
+      fs
+        .readFileSync(path.join(f.directory, name), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line).kind),
+    ),
+  ).toEqual([["before.midnight"], ["after.midnight", "same.day"]]);
+});
+it.each(["missing", "corrupt", "stale"])(
+  "rebuilds a %s index and retains recent records in a legacy long-open segment",
+  async (damage) => {
+    const f = setup(retentionLimits);
+    f.store.record(metadata, "done", null, 1);
+    expect(await f.store.flush(5000)).toBe(true);
+    const original = (await f.store.snapshot(5000)).entries[0]!;
+    const file = path.join(f.directory, segmentFiles(f.directory)[0]!);
+    // Simulate a pre-day-rotation segment, including an exact-cutoff record.
+    const last = f.now(40 * dayMs);
+    fs.appendFileSync(
+      file,
+      [last - 30 * dayMs - 1, last - 30 * dayMs, last - 1, last]
+        .map(
+          (at, i) =>
+            JSON.stringify({ ...original, at, kind: `legacy.${i}` }) + "\n",
+        )
+        .join(""),
+    );
+    const indexFile = `${file}.index.json`;
+    if (damage === "missing") fs.unlinkSync(indexFile);
+    else
+      fs.writeFileSync(
+        indexFile,
+        damage === "corrupt"
+          ? "{broken"
+          : JSON.stringify({ first: original.at, last: original.at, count: 1 }),
+      );
+    const reader = new OperationsStore(
+      f.directory,
+      () => last,
+      retentionLimits,
+    );
+    stores.push(reader);
+    // Readers neither trust creation time nor need a valid index or writer flush.
+    expect(
+      (await reader.snapshot(5000)).entries.map((entry) => entry.kind),
+    ).toEqual(["legacy.1", "legacy.2", "legacy.3"]);
+    expect(await f.store.flush(5000)).toBe(true);
+    expect(fs.existsSync(file)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(indexFile, "utf8"))).toEqual({
+      first: original.at,
+      last,
+      count: 5,
+    });
+    expect(fs.statSync(indexFile).mode & 0o777).toBe(0o600);
+    expect(
+      (await f.store.snapshot(5000)).entries.map((entry) => entry.kind),
+    ).toEqual(["legacy.1", "legacy.2", "legacy.3"]);
+    f.now(30 * dayMs + 1);
+    expect(await f.store.flush(5000)).toBe(true);
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.existsSync(indexFile)).toBe(false);
+  },
+);
+it("keeps future observations when the clock moves backwards across days", async () => {
+  const f = setup(retentionLimits);
+  const present = f.now(0);
+  f.now(60 * dayMs);
+  f.store.record({ ...metadata, kind: "future" }, "done", null, 1);
+  expect(await f.store.flush(5000)).toBe(true);
+  f.now(-60 * dayMs);
+  f.store.record({ ...metadata, kind: "present" }, "done", null, 1);
+  expect(await f.store.flush(5000)).toBe(true);
+  expect(segmentFiles(f.directory)).toHaveLength(2);
+  expect(
+    (await f.store.snapshot(5000)).entries.map((entry) => entry.kind),
+  ).toEqual(["present", "future"]);
+  f.now(31 * dayMs);
+  expect(await f.store.flush(5000)).toBe(true);
+  expect((await f.store.snapshot(5000)).entries).toMatchObject([
+    { kind: "future", at: present + 60 * dayMs },
+  ]);
+  expect(segmentFiles(f.directory)).toHaveLength(1);
+});
+it("indexes minimum and maximum record times when the clock moves backwards within a day", async () => {
+  const f = setup(retentionLimits);
+  const last = f.now(1000);
+  f.store.record({ ...metadata, kind: "later" }, "done", null, 1);
+  const first = f.now(-1000);
+  f.store.record({ ...metadata, kind: "earlier" }, "done", null, 1);
+  expect(await f.store.flush(5000)).toBe(true);
+  const files = segmentFiles(f.directory);
+  expect(files).toHaveLength(1);
+  expect(
+    JSON.parse(
+      fs.readFileSync(path.join(f.directory, `${files[0]}.index.json`), "utf8"),
+    ),
+  ).toEqual({ first, last, count: 2 });
+  f.now(30 * dayMs + 1);
+  expect(await f.store.flush(5000)).toBe(true);
+  expect((await f.store.snapshot(5000)).entries).toMatchObject([
+    { kind: "later", at: last },
+  ]);
+  expect(segmentFiles(f.directory)).toEqual(files);
+});
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => {

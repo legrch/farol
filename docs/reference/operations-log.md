@@ -8,15 +8,30 @@ identity isolation.
 ## Storage and outcomes
 
 Each writer appends JSON lines to its own timestamp/UUID segment, rotating at
-64 KiB. The directory is mode 0700; regular single-link files are mode 0600 and
-opened without following symlinks. Recording is observability: `begin`, its
+64 KiB or when the next observation belongs to a different UTC calendar day,
+including when the clock moves backwards. The directory is mode 0700; regular
+single-link files are mode 0600 and opened without following symlinks.
+Recording is observability: `begin`, its
 completion callback and `record` validate bounded metadata, enqueue, and return
 without filesystem work. One asynchronous writer per store processes FIFO batches
 of at most 64 observations, synchronizing once per batch/rotated segment. Directory
 preparation, label replacement, tail repair, retention and diagnostics all use
 asynchronous filesystem APIs on that writer.
-Retention deletes complete oldest segments after 30 days, 8 MiB or 20,000 raw
-records. Whole-segment deletion can retain fewer than the maximum. Readers skip
+Age retention deletes a complete segment only when its newest valid record is
+strictly older than 30 days. Segment creation names never decide record age or
+visibility. Each segment has a private `.jsonl.index.json` sidecar containing
+minimum/maximum valid record times and raw nonempty record count. The writer
+verifies this index against bounded segment contents on each retention pass and
+atomically rebuilds missing, corrupt or stale indexes. An unreadable/oversized
+segment or one without valid record times cannot establish age expiry. Readers
+filter individual valid records against the 30-day cutoff, including in legacy
+segments spanning that cutoff; a record exactly at the cutoff stays visible.
+Future records do not advance the cutoff, and backwards clocks do not lower a
+segment's maximum record time.
+
+The independent 8 MiB (including indexes) and 20,000 raw-record caps still delete
+whole segments, ordered by newest record time rather than creation name.
+Whole-segment deletion can retain fewer than the maximum. Readers skip
 and count invalid lines, unsafe files and oversized segments. Logging failures
 are counted and shown once as aggregate diagnostics in Activity and support export,
 without changing the original operation's result. No raw filesystem error text is
@@ -123,8 +138,10 @@ bound, with a separate 12 MiB bound for a report containing a validated log.
 ## Evidence limits
 
 `tests/unit/operations-log.test.ts` exercises use-case metadata/source mapping,
-classified outcomes, restart, cap, corruption, unsafe files, privacy, unmatched
-starts, SSE terminals and every updater port. Injected filesystem fixtures also
+classified outcomes, restart, cap, 40-day quiet-profile retention, UTC day
+rotation, legacy segments spanning the cutoff, missing/corrupt/stale index
+rebuilds, future records and backwards clocks, corruption, unsafe files, privacy,
+unmatched starts, SSE terminals and every updater port. Injected filesystem fixtures also
 exercise stalled write/sync calls, nonblocking begin/completion, bounded shutdown
 and snapshot deadlines, overflow/loss counters, protected-queue exhaustion,
 orphan completions, error isolation, cross-writer diagnostics and FIFO rotation. The MCP table in

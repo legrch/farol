@@ -18,6 +18,12 @@ export const operationsLimits = {
 } as const;
 const segmentName = /^[0-9]{13}-[a-f0-9-]{36}\.jsonl$/u;
 const diagnosticsName = /^[0-9]{13}-[a-f0-9-]{36}\.diagnostics\.json$/u;
+const dayMs = 86400000;
+type SegmentIndex = {
+  first: number | null;
+  last: number | null;
+  count: number;
+};
 type QueuedEntry = { entry: OperationEntry; droppable: boolean };
 type Labels = readonly { workspaceId: string; label: string }[];
 
@@ -26,6 +32,7 @@ type Labels = readonly { workspaceId: string; label: string }[];
 export class OperationsStore implements OperationsRecorder {
   private segment = "";
   private segmentTime = 0;
+  private segmentDay: number | undefined;
   private readonly writer: string;
   private writeFailures = 0;
   private droppedEntries = 0;
@@ -311,10 +318,16 @@ export class OperationsStore implements OperationsRecorder {
     };
     try {
       for (const { entry } of batch) {
+        const day = Math.floor(entry.at / dayMs);
+        if (this.segment && day !== this.segmentDay) {
+          await close();
+          this.segment = "";
+        }
         if (!handle) {
           if (!this.segment) {
             this.segmentTime = Math.max(this.now(), this.segmentTime + 1);
             this.segment = `${String(this.segmentTime).padStart(13, "0")}-${randomUUID()}.jsonl`;
+            this.segmentDay = day;
           }
           const opened = await this.open(
             path.join(this.directory, this.segment),
@@ -354,13 +367,46 @@ export class OperationsStore implements OperationsRecorder {
       await close();
     }
   }
+  private async segmentIndex(
+    name: string,
+    text: string,
+  ): Promise<SegmentIndex> {
+    const index: SegmentIndex = { first: null, last: null, count: 0 };
+    for (const line of text.split("\n")) {
+      if (!line) continue;
+      index.count++;
+      try {
+        const parsed = OperationEntrySchema.safeParse(JSON.parse(line));
+        if (!parsed.success) continue;
+        const at = parsed.data.at;
+        index.first = Math.min(index.first ?? at, at);
+        index.last = Math.max(index.last ?? at, at);
+      } catch {
+        // Invalid lines remain visible as corruption diagnostics, never content.
+      }
+    }
+    const file = path.join(this.directory, `${name}.index.json`);
+    const serialized = JSON.stringify(index);
+    let previous: string | undefined;
+    try {
+      const { handle, stat } = await this.open(file, fs.constants.O_RDONLY);
+      try {
+        if (stat.size <= 1024) previous = await handle.readFile("utf8");
+      } finally {
+        await handle.close();
+      }
+    } catch {
+      // The content scan is authoritative, including after an interrupted append.
+    }
+    if (previous !== serialized) await this.replace(file, index);
+    return index;
+  }
   private async prune(): Promise<void> {
     const files = (await this.io.readdir(this.directory))
       .filter((name) => segmentName.test(name))
       .sort()
       .reverse();
-    let bytes = 0,
-      entries = 0;
+    const segments = [];
     for (const name of files) {
       const file = path.join(this.directory, name);
       const inspected = await this.io.lstat(file).catch(() => undefined);
@@ -371,23 +417,38 @@ export class OperationsStore implements OperationsRecorder {
       )
         continue;
       const { handle, stat } = await this.open(file, fs.constants.O_RDONLY);
-      let count: number;
+      let index: SegmentIndex;
       try {
-        count =
+        index =
           stat.size > this.limits.segmentBytes + 16384
-            ? this.limits.entries
-            : (await handle.readFile("utf8")).split("\n").length - 1;
+            ? { first: null, last: null, count: this.limits.entries }
+            : await this.segmentIndex(name, await handle.readFile("utf8"));
       } finally {
         await handle.close();
       }
-      bytes += stat.size;
-      entries += count;
+      segments.push({ name, file, size: stat.size, index });
+    }
+    // Filename time orders writes with equal timestamps, never retention age.
+    segments.sort(
+      (a, b) =>
+        (b.index.last ?? Infinity) - (a.index.last ?? Infinity) ||
+        b.name.localeCompare(a.name),
+    );
+    const cutoff = this.now() - this.limits.days * dayMs;
+    let bytes = 0,
+      entries = 0;
+    for (const { name, file, size, index } of segments) {
+      bytes += size + Buffer.byteLength(JSON.stringify(index));
+      entries += index.count;
       if (
-        Number(name.slice(0, 13)) < this.now() - this.limits.days * 86400000 ||
+        (index.last !== null && index.last < cutoff) ||
         bytes > this.limits.bytes ||
         entries > this.limits.entries
       ) {
         await this.io.unlink(file);
+        await this.io.unlink(`${file}.index.json`).catch((error: unknown) => {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        });
         if (name === this.segment) this.segment = "";
       }
     }
@@ -407,10 +468,7 @@ export class OperationsStore implements OperationsRecorder {
       )
         continue;
       diagnosticBytes += stat.size;
-      if (
-        diagnosticBytes > 65536 ||
-        Number(name.slice(0, 13)) < this.now() - this.limits.days * 86400000
-      )
+      if (diagnosticBytes > 65536 || Number(name.slice(0, 13)) < cutoff)
         await this.io.unlink(file);
     }
   }
@@ -477,6 +535,7 @@ export class OperationsStore implements OperationsRecorder {
     };
   }
   private async readSnapshot(): Promise<OperationsSnapshot> {
+    const cutoff = this.now() - this.limits.days * dayMs;
     let corruptLines = 0;
     const entries: OperationEntry[] = [];
     const diagnostics = {
@@ -489,10 +548,7 @@ export class OperationsStore implements OperationsRecorder {
       const names = (await this.io.readdir(this.directory)).sort();
       for (const name of names) {
         if (!segmentName.test(name) && !diagnosticsName.test(name)) continue;
-        if (
-          Number(name.slice(0, 13)) <
-          this.now() - this.limits.days * 86400000
-        )
+        if (diagnosticsName.test(name) && Number(name.slice(0, 13)) < cutoff)
           continue;
         if (name === `${this.writer}.diagnostics.json`) continue;
         try {
@@ -521,8 +577,9 @@ export class OperationsStore implements OperationsRecorder {
               if (!line) continue;
               try {
                 const parsed = OperationEntrySchema.safeParse(JSON.parse(line));
-                if (parsed.success) entries.push(parsed.data);
-                else corruptLines++;
+                if (parsed.success) {
+                  if (parsed.data.at >= cutoff) entries.push(parsed.data);
+                } else corruptLines++;
               } catch {
                 corruptLines++;
               }
