@@ -23,10 +23,19 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - id: paths
-        name: Classify the complete merge candidate
+        name: Classify the complete merge candidate with the base classifier
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: node tooling/ci-paths.mjs
+        # The classifier decides whether heavy jobs may be skipped, so it runs
+        # as committed on the base branch; a pull request cannot rewrite it to
+        # skip its own checks. Without a base classifier nothing is skipped.
+        run: |
+          if git cat-file -e "$PR_BASE_SHA:tooling/ci-paths.mjs" 2>/dev/null; then
+            git show "$PR_BASE_SHA:tooling/ci-paths.mjs" > "$RUNNER_TEMP/ci-paths.mjs"
+            node "$RUNNER_TEMP/ci-paths.mjs"
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
 
   checks:
     runs-on: ubuntu-24.04
@@ -39,7 +48,11 @@ jobs:
       - uses: ./.github/actions/setup-ci
       - name: Check every candidate including docs-only changes
         run: |
+          npm run typecheck
+          npm run lint
           npm run format:check
+          npm run architecture
+          npm run runtime:check
           npm run docs:check
           node node_modules/vitest/vitest.mjs run tests/tooling/delivery-policy.test.mjs tests/tooling/ci-policy.test.mjs
           task scan:secrets

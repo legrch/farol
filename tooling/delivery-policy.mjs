@@ -72,6 +72,31 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
     if (step.uses) assert.match(step.uses, /^actions\/[a-z-]+@[a-f0-9]{40}$/u);
   const commands = (job) => job.steps.map((step) => step.run ?? "").join("\n");
   assert.match(commands(pr.jobs.checks), /task scan:secrets/u);
+  // Docs-only candidates skip only the heavy jobs, never the cheap checks.
+  for (const check of [
+    "typecheck",
+    "lint",
+    "format:check",
+    "architecture",
+    "runtime:check",
+    "docs:check",
+  ])
+    assert.ok(commands(pr.jobs.checks).includes(`npm run ${check}\n`), check);
+  // The skip decision comes from the base branch's classifier.
+  const classify = commands(pr.jobs.changes);
+  assert.ok(
+    classify.includes('git show "$PR_BASE_SHA:tooling/ci-paths.mjs"'),
+    "base classifier",
+  );
+  assert.doesNotMatch(classify, /node tooling\/ci-paths\.mjs/u);
+  // Caches hold downloads only, never the Go build cache.
+  const setupGo = setup.runs.steps.find((step) =>
+    step.uses?.startsWith("actions/setup-go@"),
+  );
+  assert.equal(setupGo?.with?.cache, false);
+  for (const step of setup.runs.steps)
+    if (step.uses?.startsWith("actions/cache@"))
+      assert.doesNotMatch(String(step.with.path), /go-build|GOCACHE|_output/u);
   assert.match(commands(pr.jobs.checks), /delivery-policy\.test\.mjs/u);
   assert.match(commands(pr.jobs.portable), /task ci:cloud/u);
   assert.match(

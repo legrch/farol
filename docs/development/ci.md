@@ -64,6 +64,14 @@ direct pushes, so write access already allows changing `main` and its
 workflows; a tag adds no access beyond that. The ancestry, annotated-tag and
 remote-identity checks keep an honest release consistent with reviewed `main`.
 
+Pull request checks are evidence for the reviewer, not a merge authority. The
+docs-only skip is decided by `tooling/ci-paths.mjs` as committed on the base
+branch, so a pull request cannot rewrite the classifier to skip its own heavy
+jobs; any change outside documentation Markdown, including `.github/` and CI
+tooling, runs everything. A pull request can still change its own workflow
+file, so a change under `.github/` or to CI tooling is reviewed as a change to
+the gate itself before merge.
+
 Granting write access to anyone else changes this boundary. Before that, add a
 tag ruleset that restricts creating, updating and deleting `v*` tags to the
 owner, or move publication behind a protected environment that requires
