@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
 import assert from "node:assert/strict";
 import {
   runtimeProcessId,
@@ -179,7 +180,10 @@ const evidenceLaneRoot = path.join(
           : "_output/evidence/e2e",
 );
 const metadataPath = path.join(root, "_output/package/artifact.json");
-const canonicalPackagePath = path.join(root, "_output/package/Farol.app");
+const canonicalPackagePath = path.join(
+  root,
+  `_output/package/${harnessDesktopIdentity("preview", "/").applicationName}.app`,
+);
 const vendorElectron = path.join(
   root,
   "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
@@ -244,7 +248,10 @@ if (development) {
   );
   assert.equal(artifact.buildId, buildIdentity.buildId);
   assert.equal(artifact.builtAt, buildIdentity.builtAt);
-  executable = path.join(appPath, "Contents/MacOS/Farol");
+  executable = path.join(
+    appPath,
+    `Contents/MacOS/${harnessDesktopIdentity("preview", "/").applicationName}`,
+  );
 }
 
 // The predecessor is identified by its own manifest and qualified by the
@@ -840,7 +847,10 @@ if (development) {
       `${launcherClone.stdout}${launcherClone.stderr}`,
     );
     await fs.appendFile(
-      path.join(wrongLauncherApp, "Contents/MacOS/Farol"),
+      path.join(
+        wrongLauncherApp,
+        `Contents/MacOS/${harnessDesktopIdentity("preview", "/").applicationName}`,
+      ),
       "\n# deterministic tamper probe\n",
     );
     const wrongLauncherMetadata = path.join(
@@ -1896,7 +1906,10 @@ async function proveSecondLaunchDuringStartup() {
       () => instance.window.evaluate(() => window.farol.bootstrap()),
     );
     assert.equal(bootstrap.runtimeState, "ready");
-    assert.equal(bootstrap.runtimeIdentity, "farol-runtime");
+    assert.equal(
+      bootstrap.runtimeIdentity,
+      harnessDesktopIdentity("preview", "/").runtimeIdentity,
+    );
     assert.equal(
       (
         await phases.step(
@@ -2070,7 +2083,10 @@ async function rejectMismatchedBuildLaunch(instance) {
         encoding: "utf8",
       });
       assert.equal(copied.status, 0, `${copied.stdout}${copied.stderr}`);
-      mismatchedExecutable = path.join(copiedApp, "Contents/MacOS/Farol");
+      mismatchedExecutable = path.join(
+        copiedApp,
+        `Contents/MacOS/${harnessDesktopIdentity("preview", "/").applicationName}`,
+      );
       mismatchedArguments = instance.launchArgs;
       manifestPath = path.join(
         copiedApp,
@@ -2953,9 +2969,7 @@ async function proveStartupRuntimeDeath(stage) {
               .filter(
                 (metric) =>
                   metric.type === "Utility" &&
-                  ["Farol Runtime", "Farol Dev Runtime"].includes(
-                    metric.name,
-                  ) &&
+                  input.runtimeNames.includes(metric.name) &&
                   metric.serviceName === "node.mojom.NodeService",
               )
               .map((metric) => metric.pid);
@@ -2976,6 +2990,10 @@ async function proveStartupRuntimeDeath(stage) {
       },
       {
         stage,
+        runtimeNames: ["preview", "dev", "owner-preview"].map(
+          (environment) =>
+            harnessDesktopIdentity(environment, "/").runtimeServiceName,
+        ),
         observerModule: pathToFileURL(
           path.join(root, "tests/e2e/runtime-process.mjs"),
         ).href,
@@ -4026,7 +4044,10 @@ async function completeSetup(
       await chatGptPage.waitForURL(instance.chatGptFixture.url);
       await waitForWindowCount(instance.application, 2);
       const security = await instance.application.evaluate(
-        ({ session, webContents }, expectedUrl) => {
+        (
+          { session, webContents },
+          { value: expectedUrl, identity: __desktopIdentity },
+        ) => {
           const contents = webContents
             .getAllWebContents()
             .find((candidate) => candidate.getURL() === expectedUrl);
@@ -4038,10 +4059,13 @@ async function completeSetup(
             nodeIntegration: preferences.nodeIntegration,
             isolatedSession:
               contents.session ===
-              session.fromPartition("persist:farol-app-chatgpt"),
+              session.fromPartition(__desktopIdentity.chatGptPartition),
           };
         },
-        instance.chatGptFixture.url,
+        {
+          value: instance.chatGptFixture.url,
+          identity: harnessDesktopIdentity("preview", "/"),
+        },
       );
       assert.deepEqual(security, {
         sandbox: true,
@@ -4058,7 +4082,10 @@ async function completeSetup(
       await waitForWindowCount(instance.application, 3);
       await popupPage.locator('[data-testid="popup-ready"]').waitFor();
       const popupSecurity = await instance.application.evaluate(
-        ({ session, webContents }, popupUrl) => {
+        (
+          { session, webContents },
+          { value: popupUrl, identity: __desktopIdentity },
+        ) => {
           const contents = webContents
             .getAllWebContents()
             .find((candidate) => candidate.getURL() === popupUrl);
@@ -4070,10 +4097,13 @@ async function completeSetup(
             nodeIntegration: preferences.nodeIntegration,
             isolatedSession:
               contents.session ===
-              session.fromPartition("persist:farol-app-chatgpt"),
+              session.fromPartition(__desktopIdentity.chatGptPartition),
           };
         },
-        `${new URL(instance.chatGptFixture.url).origin}/chatgpt-popup`,
+        {
+          value: `${new URL(instance.chatGptFixture.url).origin}/chatgpt-popup`,
+          identity: harnessDesktopIdentity("preview", "/"),
+        },
       );
       assert.deepEqual(popupSecurity, security);
       await popupPage.close();
@@ -4568,7 +4598,10 @@ function fileDescriptorCount(pid) {
 async function lifecycleMetrics(instance) {
   const providerOrigin = new URL(instance.chatGptFixture.url).origin;
   const measured = await instance.application.evaluate(
-    ({ app, BrowserWindow, session, webContents }, expectedOrigin) => {
+    (
+      { app, BrowserWindow, session, webContents },
+      { value: expectedOrigin, identity: __desktopIdentity },
+    ) => {
       const windows = BrowserWindow.getAllWindows();
       const primary = windows[0] ?? null;
       const contents = webContents
@@ -4610,7 +4643,7 @@ async function lifecycleMetrics(instance) {
           }
         }).length,
         downloadListenerCount: session
-          .fromPartition("persist:farol-app-chatgpt")
+          .fromPartition(__desktopIdentity.chatGptPartition)
           .listenerCount("will-download"),
         processMetrics,
         processCount: processMetrics.length,
@@ -4626,7 +4659,7 @@ async function lifecycleMetrics(instance) {
         activeResourceTypes,
       };
     },
-    providerOrigin,
+    { value: providerOrigin, identity: harnessDesktopIdentity("preview", "/") },
   );
   const nativeRuntimes = await runtimeProcessSnapshots(instance.application);
   measured.runtimePids = nativeRuntimes.map((row) => row.pid);
@@ -4769,10 +4802,12 @@ async function lifecycleBatch(instance, count, timings, overlayKind = null) {
     count,
   );
   assert.equal(
-    await instance.application.evaluate(({ session }) =>
-      session
-        .fromPartition("persist:farol-app-chatgpt")
-        .listenerCount("will-download"),
+    await instance.application.evaluate(
+      ({ session }, __desktopIdentity) =>
+        session
+          .fromPartition(__desktopIdentity.chatGptPartition)
+          .listenerCount("will-download"),
+      harnessDesktopIdentity("preview", "/"),
     ),
     1,
     "E2E_SOAK_LIVE_DOWNLOAD_GUARD",
@@ -6294,7 +6329,10 @@ liveTasksSegment: try {
     "reduced-motion-measured",
   );
   const providerSecurity = await ordinaryLiveTasks.application.evaluate(
-    ({ session, webContents }, origin) =>
+    (
+      { session, webContents },
+      { value: origin, identity: __desktopIdentity },
+    ) =>
       webContents
         .getAllWebContents()
         .filter((contents) => contents.getURL().startsWith(origin))
@@ -6306,10 +6344,13 @@ liveTasksSegment: try {
             nodeIntegration: preferences.nodeIntegration,
             isolatedSession:
               contents.session ===
-              session.fromPartition("persist:farol-app-chatgpt"),
+              session.fromPartition(__desktopIdentity.chatGptPartition),
           };
         }),
-    new URL(ordinaryLiveTasks.chatGptFixture.url).origin,
+    {
+      value: new URL(ordinaryLiveTasks.chatGptFixture.url).origin,
+      identity: harnessDesktopIdentity("preview", "/"),
+    },
   );
   assert.equal(providerSecurity.length, 5);
   assert.ok(
@@ -6322,10 +6363,12 @@ liveTasksSegment: try {
     ),
   );
   assert.equal(
-    await ordinaryLiveTasks.application.evaluate(({ session }) =>
-      session
-        .fromPartition("persist:farol-app-chatgpt")
-        .listenerCount("will-download"),
+    await ordinaryLiveTasks.application.evaluate(
+      ({ session }, __desktopIdentity) =>
+        session
+          .fromPartition(__desktopIdentity.chatGptPartition)
+          .listenerCount("will-download"),
+      harnessDesktopIdentity("preview", "/"),
     ),
     1,
   );
@@ -6519,10 +6562,12 @@ liveTasksSegment: try {
     false,
   );
   assert.equal(
-    await ordinaryLiveTasks.application.evaluate(({ session }) =>
-      session
-        .fromPartition("persist:farol-app-chatgpt")
-        .listenerCount("will-download"),
+    await ordinaryLiveTasks.application.evaluate(
+      ({ session }, __desktopIdentity) =>
+        session
+          .fromPartition(__desktopIdentity.chatGptPartition)
+          .listenerCount("will-download"),
+      harnessDesktopIdentity("preview", "/"),
     ),
     1,
   );
@@ -7363,8 +7408,10 @@ devNewTaskAffordanceSegment: {
       }),
     );
     assert.deepEqual(resolvedProfile, {
-      userData: path.join(devNewTask.isolatedAppData, "Farol Dev"),
-      sessionData: path.join(devNewTask.isolatedAppData, "Farol Dev"),
+      userData: harnessDesktopIdentity("dev", devNewTask.isolatedAppData)
+        .userData,
+      sessionData: harnessDesktopIdentity("dev", devNewTask.isolatedAppData)
+        .userData,
     });
     assert.equal(devNewTask.presentation.taskViewCount, 0);
 
@@ -7871,10 +7918,12 @@ demoMainSegment: try {
     () => document.documentElement.dataset.sidebar === "full",
   );
   const resourceIdentity = await normal.application.evaluate(
-    ({ app, session }) => ({
+    ({ app, session }, __desktopIdentity) => ({
       userData: app.getPath("userData"),
-      taskStorage: session.fromPartition("persist:farol-runtime").storagePath,
+      taskStorage: session.fromPartition(__desktopIdentity.runtimePartition)
+        .storagePath,
     }),
+    harnessDesktopIdentity("preview", "/"),
   );
   const isolatedRoot = await fs.realpath(normal.isolatedHome);
   assert.equal(
@@ -9130,7 +9179,10 @@ demoMainSegment: try {
     window.farol.bootstrap(),
   );
   assert.equal(reopenedBootstrap.runtimeState, "ready");
-  assert.equal(reopenedBootstrap.runtimeIdentity, "farol-runtime");
+  assert.equal(
+    reopenedBootstrap.runtimeIdentity,
+    harnessDesktopIdentity("preview", "/").runtimeIdentity,
+  );
   assert.equal((await taskSurfaces(normal.application)).length, 2);
   assert.equal(
     await runtimeProcessId(normal.application),

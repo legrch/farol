@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
 // Three fresh hidden PACKAGED lifetimes. No installed profile, provider Send,
 // hardware sleep, updater, clock injection, process scan or unknown retry.
 // Usage (only after the Lead supplies clean, attested owner-beta package bytes):
@@ -299,7 +300,10 @@ function captureMain(run, application) {
 }
 async function launch(run) {
   const options = {
-    executablePath: path.join(appPath, "Contents/MacOS/Farol"),
+    executablePath: path.join(
+      appPath,
+      `Contents/MacOS/${harnessDesktopIdentity("preview", "/").applicationName}`,
+    ),
     args: ["--preview-window-mode=hidden"],
     env: {
       HOME: run.home.path,
@@ -357,7 +361,10 @@ async function launch(run) {
   );
   assert.equal(actual.isPackaged, true);
   assert.equal(actual.userDataOverride, false);
-  assert.equal(actual.userData, path.join(run.appData, "Farol"));
+  assert.equal(
+    actual.userData,
+    harnessDesktopIdentity("preview", run.appData).userData,
+  );
   run.nativePaths = actual;
   run.isolated = true;
   run.userData = actual.userData;
@@ -1182,7 +1189,7 @@ async function fresh(name) {
     run.appData = path.join(run.home.path, "app-data");
     run.workspace = path.join(run.auxiliary.path, "approved-folder");
     await fs.mkdir(run.appData, { mode: 0o700 });
-    await fs.mkdir(path.join(run.appData, "Farol"), {
+    await fs.mkdir(harnessDesktopIdentity("preview", run.appData).userData, {
       mode: 0o700,
     });
     await fs.mkdir(run.workspace, { mode: 0o700 });

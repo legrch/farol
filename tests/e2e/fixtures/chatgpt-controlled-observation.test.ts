@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../../../src/apps/desktop/desktop-environment.ts";
 import { createHash, webcrypto } from "node:crypto";
 import vm from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
@@ -291,7 +292,7 @@ async function controlledPage() {
       viewId: "42",
       viewGeneration: 1,
       documentGeneration: 1,
-      partition: "persist:farol-app-chatgpt",
+      partition: harnessDesktopIdentity("preview", "/").chatGptPartition,
     },
     selection,
     previous: { userId: "previous-user", assistantId: "previous-reply" },

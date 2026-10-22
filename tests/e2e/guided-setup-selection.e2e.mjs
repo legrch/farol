@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
 // Owned hidden Electron windows and disposable state only. This proves Setup
 // selection and IPC/UI integration, never external ChatGPT or live attachment.
 import assert from "node:assert/strict";
@@ -17,6 +18,7 @@ import { assertBuildIdentity } from "../../tooling/build-identity-contract.mjs";
 import {
   assertNativePreviewAdmission,
   recheckNativePreviewIsolation,
+  refreshNativePreviewIsolation,
   readOwnedStartupMarker,
 } from "./native-preview-admission.mjs";
 
@@ -81,7 +83,10 @@ reportRetiredJourney(
 );
 process.exit(0);
 const root = process.cwd();
-const appRoot = path.join(root, "_output/package/Farol.app");
+const appRoot = path.join(
+  root,
+  `_output/package/${harnessDesktopIdentity("preview", "/").applicationName}.app`,
+);
 const executable = packaged
   ? path.join(
       appRoot,
@@ -530,6 +535,23 @@ async function closeOwned() {
   if (!application) return;
   const owned = application;
   const child = owned.process();
+  if (
+    profileIsolationConfirmed &&
+    child.exitCode === null &&
+    child.signalCode === null
+  ) {
+    const profileRoot = activeFixtureProfile.home;
+    const witness = await bounded(
+      refreshNativePreviewIsolation(profileAdmissions.get(profileRoot), owned),
+      "GUIDED_SETUP_PRE_QUIT_ISOLATION_TIMEOUT",
+    );
+    profileAdmissions.set(profileRoot, witness);
+    observations.push({
+      kind: "pre-quit-isolation",
+      pid: child.pid,
+      relayObserved: witness.relayObserved,
+    });
+  }
   const terminal =
     child.exitCode !== null || child.signalCode !== null
       ? Promise.resolve()
@@ -673,9 +695,9 @@ async function launch(environment, mode = "normal", profile = mode) {
   const normalPackagedProfile = packaged && mode === "normal-profile";
   const userData =
     environment === "dev"
-      ? path.join(appData, "Farol Dev")
+      ? harnessDesktopIdentity("dev", appData).userData
       : normalPackagedProfile
-        ? path.join(appData, "io.github.legrch.farol")
+        ? harnessDesktopIdentity("preview", appData).userData
         : path.join(profileRoot, "user-data");
   await fs.mkdir(home, { recursive: true, mode: 0o700 });
   await fs.mkdir(appData, { recursive: true, mode: 0o700 });
@@ -687,7 +709,10 @@ async function launch(environment, mode = "normal", profile = mode) {
   });
   const launchOptions = {
     executablePath: normalPackagedProfile
-      ? path.join(appRoot, "Contents/MacOS/Farol")
+      ? path.join(
+          appRoot,
+          `Contents/MacOS/${harnessDesktopIdentity("preview", "/").applicationName}`,
+        )
       : executable,
     args: [
       ...(normalPackagedProfile ? [] : [entry, `--user-data-dir=${userData}`]),
@@ -921,12 +946,18 @@ try {
       sessionData: app.getPath("sessionData"),
       userDataOverride: app.commandLine.hasSwitch("user-data-dir"),
     }));
-    assert.equal(identity.name, "Farol");
+    assert.equal(
+      identity.name,
+      harnessDesktopIdentity("preview", "/").applicationName,
+    );
     assert.equal(identity.isPackaged, true);
     assert.equal(identity.userDataOverride, false);
     assert.equal(identity.userData, activeFixtureProfile.userData);
     assert.equal(identity.sessionData, identity.userData);
-    assert.equal(path.basename(identity.userData), "Farol");
+    assert.equal(
+      path.basename(identity.userData),
+      path.basename(harnessDesktopIdentity("preview", "/").userData),
+    );
     observations.push({
       kind: "packaged-normal-profile-without-user-data-override",
       ...identity,

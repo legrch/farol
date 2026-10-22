@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
 /**
  * SOURCE-ONLY preparation: this file never builds or packages an application.
  * Native execution is opt-in and belongs to the caller's exclusive native lane.
@@ -1017,7 +1018,10 @@ async function native(selected, inputs, report, save) {
   const require = createRequire(import.meta.url);
   const { _electron: electron } = require(playwrightDirectory);
   const executable = selected.packaged
-    ? path.join(selected.packaged, "Contents/MacOS/Farol")
+    ? path.join(
+        selected.packaged,
+        `Contents/MacOS/${harnessDesktopIdentity("preview", "/").applicationName}`,
+      )
     : path.join(
         selected.dependencyRoot,
         "electron/dist/Electron.app/Contents/MacOS/Electron",
@@ -1108,7 +1112,10 @@ async function native(selected, inputs, report, save) {
   if (selected.chatTwoTurn) {
     // Fresh private Dev only, before app startup. Every field besides tasks is
     // the existing normal default; authority still comes from normal commands.
-    const seedRoot = path.join(appData, "Farol Dev", "farol-state");
+    const seedRoot = path.join(
+      harnessDesktopIdentity("dev", appData).userData,
+      "farol-state",
+    );
     await fs.mkdir(seedRoot, { recursive: true, mode: 0o700 });
     await fs.chmod(path.dirname(seedRoot), 0o700);
     const seeded = conversationSeed(randomUUID());
@@ -1758,7 +1765,7 @@ async function native(selected, inputs, report, save) {
       if (selected.chatTwoTurn) {
         assert.equal(
           bootstrap.chatgptPartition,
-          "persist:farol-dev-chatgpt",
+          harnessDesktopIdentity("dev", "/").chatGptPartition,
           "CHAT_TWO_TURN_DEV_PARTITION_REQUIRED",
         );
         assert.deepEqual(
@@ -1766,16 +1773,25 @@ async function native(selected, inputs, report, save) {
           syntheticTaskPolicy,
           "CHAT_TWO_TURN_SEED_NOT_LOADED",
         );
-        assert.equal(paths.userData, path.join(appData, "Farol Dev"));
+        assert.equal(
+          paths.userData,
+          harnessDesktopIdentity("dev", appData).userData,
+        );
       }
-      assert.equal(paths.name, selected.packaged ? "Farol" : "Farol Dev");
+      assert.equal(
+        paths.name,
+        harnessDesktopIdentity(selected.packaged ? "preview" : "dev", "/")
+          .applicationName,
+      );
       assert.equal(
         bootstrap.environment,
         selected.packaged ? "preview" : "dev",
       );
       assert.equal(
         bootstrap.applicationId,
-        selected.packaged ? "io.github.legrch.farol" : "local.farol.dev",
+        selected.packaged
+          ? harnessDesktopIdentity("preview", "/").applicationId
+          : harnessDesktopIdentity("dev", "/").applicationId,
       );
       stateRoot = path.join(paths.userData, "farol-state");
       launch.profile = paths;

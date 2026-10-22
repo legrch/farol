@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { desktopIdentity as harnessDesktopIdentity } from "../src/apps/desktop/desktop-environment.ts";
 // The single development entrypoint for Farol: find the declared
 // toolchain, make sure dependencies are the locked ones, build the current
 // development bytes, and run Farol's own local processes in this terminal.
@@ -623,7 +624,7 @@ export function createFreshReviewProfile(nativeAppData, token = randomUUID()) {
   return Object.freeze({
     marker: `review:${token}`,
     appData,
-    userData: path.join(appData, "Farol Dev"),
+    userData: harnessDesktopIdentity("dev", appData).userData,
   });
 }
 

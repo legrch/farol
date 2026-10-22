@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
 // Hidden owned windows and disposable profiles only. No account, connector,
 // model or owner-state acceptance is claimed by these configuration faults.
 import assert from "node:assert/strict";
@@ -30,7 +31,10 @@ assert.deepEqual(
   packaged ? ["--packaged"] : devOnly ? ["--dev-only"] : [],
 );
 const root = process.cwd();
-const appRoot = path.join(root, "_output/package/Farol.app");
+const appRoot = path.join(
+  root,
+  `_output/package/${harnessDesktopIdentity("preview", "/").applicationName}.app`,
+);
 const executable = packaged
   ? path.join(
       appRoot,
@@ -100,7 +104,7 @@ try {
       const appData = path.join(profile, "app-data");
       const userData =
         environment === "dev"
-          ? path.join(appData, "Farol Dev")
+          ? harnessDesktopIdentity("dev", appData).userData
           : path.join(profile, "user-data");
       const stateRoot = path.join(userData, "farol-state");
       await fs.mkdir(appData, { mode: 0o700 });

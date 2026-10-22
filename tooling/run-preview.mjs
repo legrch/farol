@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../src/apps/desktop/desktop-environment.ts";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -101,7 +102,10 @@ async function main() {
       artifact,
       "CANDIDATE_SOURCE_CHANGED_DURING_VERIFICATION",
     );
-    const executable = path.join(snapshot.appPath, "Contents/MacOS/Farol");
+    const executable = path.join(
+      snapshot.appPath,
+      `Contents/MacOS/${harnessDesktopIdentity("preview", "/").applicationName}`,
+    );
     await fs.access(executable);
     process.stdout.write(
       `launching isolated verified candidate ${snapshot.appPath} from ${appPath}\n`,

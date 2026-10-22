@@ -632,6 +632,7 @@ export async function recheckNativePreviewIsolation(receipt, actual, child) {
   const observed = Object.freeze({
     ...receipt,
     kind: "isolated-native-preview-readback",
+    relayObserved: relay !== undefined,
   });
   admissions.set(observed, {
     ...admitted,
@@ -641,6 +642,27 @@ export async function recheckNativePreviewIsolation(receipt, actual, child) {
     checked: true,
   });
   return observed;
+}
+
+// Startup can create the caller relay after the first hidden-window echo.
+// Refresh the original live child's witness before Quit; reopening still needs
+// the exact witnessed relay inode and a known graceful child terminal.
+export async function refreshNativePreviewIsolation(receipt, application) {
+  const child = application.process();
+  if (child.exitCode !== null || child.signalCode !== null)
+    throw invalid("LIVE_CHILD_REQUIRED");
+  const actual = await application.evaluate(({ app, BrowserWindow }) => ({
+    pid: process.pid,
+    home: app.getPath("home"),
+    userData: app.getPath("userData"),
+    sessionData: app.getPath("sessionData"),
+    temp: app.getPath("temp"),
+    windows: BrowserWindow.getAllWindows().map((window) => ({
+      visible: window.isVisible(),
+      focused: window.isFocused(),
+    })),
+  }));
+  return recheckNativePreviewIsolation(receipt, actual, child);
 }
 
 // Only the already verified disposable root is eligible for startup evidence.

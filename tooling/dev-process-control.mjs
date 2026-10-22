@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../src/apps/desktop/desktop-environment.ts";
 // Development launcher mechanics only. Never selects the installed application,
 // changes a profile or claims a signal settled application work.
 import fs from "node:fs";
@@ -90,7 +91,7 @@ export function correlateDevCommand(line, marker, scope, native, bootTime) {
     ].some(
       (prefix) => match[3] === prefix || match[3].startsWith(prefix + " "),
     ) &&
-      match[3] !== "Farol Dev") ||
+      match[3] !== harnessDesktopIdentity("dev", "/").applicationName) ||
     /--(?:acceptance|user-data|profile|type)(?:[=\s-]|$)/u.test(match[3])
   )
     throw Error("DEV_PROCESS_IDENTITY_REFUSED");
@@ -100,7 +101,7 @@ export function correlateDevCommand(line, marker, scope, native, bootTime) {
     startIdentity: native.token,
     executable,
     environment: "dev",
-    applicationId: "local.farol.dev",
+    applicationId: harnessDesktopIdentity("dev", "/").applicationId,
     installed: false,
   });
 }

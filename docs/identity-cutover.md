@@ -74,3 +74,21 @@ under their original identity and cannot qualify renamed bytes. Source checks,
 independent review, packaging, installation and live acceptance are separate
 facts. This source cutover does not run an installed migration, packaging, E2E,
 activation or release. The integration Lead owns the remaining aggregate gates.
+
+## Acceptance harness identities
+
+E2E and acceptance tooling derive bundle IDs, data-directory leaves, partitions
+and process names from `desktopIdentity` in the desktop environment contract.
+Serialized Electron callbacks receive that calculated identity as an argument.
+They must not capture a Node-side variable or substitute a display name for a
+profile directory. The unit identity guard scans `tests/e2e`, shared fixtures and tooling; only
+its explicit product/build contract list owns fixed identity assertions.
+Historical package readers and protective rejection fixtures retain historical
+paths, without granting access to those profiles.
+
+Native admission can precede the startup phase that creates the caller relay.
+A harness that reopens a profile refreshes its isolation witness from the
+original live child before Quit. Clean Quit removes the socket and preserves
+the private relay directory. Reopen still requires the previously witnessed
+directory identity, an absent run marker and a graceful original child exit;
+an unwitnessed or replaced relay directory remains an isolation refusal.

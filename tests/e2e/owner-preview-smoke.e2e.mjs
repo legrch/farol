@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -193,8 +194,14 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
         "bootstrap",
       );
       assert.equal(bootstrap.environment, "owner-preview");
-      assert.equal(bootstrap.displayName, "Farol Preview");
-      assert.equal(bootstrap.applicationId, "local.farol.owner.preview");
+      assert.equal(
+        bootstrap.displayName,
+        harnessDesktopIdentity("owner-preview", "/").applicationName,
+      );
+      assert.equal(
+        bootstrap.applicationId,
+        harnessDesktopIdentity("owner-preview", "/").applicationId,
+      );
       assert.equal(bootstrap.partition, identity.runtimePartition);
       assert.equal(bootstrap.chatgptPartition, identity.chatGptPartition);
       assert.equal(
@@ -220,30 +227,36 @@ export async function runOwnerPreviewSmoke(repositoryRoot, generation) {
         assert.equal(connector[key], null);
       assert.deepEqual(bootstrap.tasks, []);
       const actual = await deadline(
-        current.evaluate(({ app, BrowserWindow, session }) => ({
-          name: app.getName(),
-          packaged: app.isPackaged,
-          appPath: app.getAppPath(),
-          userData: app.getPath("userData"),
-          sessionData: app.getPath("sessionData"),
-          home: app.getPath("home"),
-          executable: process.execPath,
-          windows: BrowserWindow.getAllWindows().map((window) => ({
-            visible: window.isVisible(),
-            focused: window.isFocused(),
-            url: window.webContents.getURL(),
-          })),
-          runtimeStorage: session.fromPartition(
-            "persist:farol-owner-preview-runtime",
-          ).storagePath,
-          chatStorage: session.fromPartition(
-            "persist:farol-owner-preview-chatgpt",
-          ).storagePath,
-          pids: app.getAppMetrics().map((metric) => metric.pid),
-        })),
+        current.evaluate(
+          ({ app, BrowserWindow, session }, __desktopIdentity) => ({
+            name: app.getName(),
+            packaged: app.isPackaged,
+            appPath: app.getAppPath(),
+            userData: app.getPath("userData"),
+            sessionData: app.getPath("sessionData"),
+            home: app.getPath("home"),
+            executable: process.execPath,
+            windows: BrowserWindow.getAllWindows().map((window) => ({
+              visible: window.isVisible(),
+              focused: window.isFocused(),
+              url: window.webContents.getURL(),
+            })),
+            runtimeStorage: session.fromPartition(
+              __desktopIdentity.runtimePartition,
+            ).storagePath,
+            chatStorage: session.fromPartition(
+              __desktopIdentity.chatGptPartition,
+            ).storagePath,
+            pids: app.getAppMetrics().map((metric) => metric.pid),
+          }),
+          harnessDesktopIdentity("owner-preview", "/"),
+        ),
         "runtime-identity",
       );
-      assert.equal(actual.name, "Farol Preview");
+      assert.equal(
+        actual.name,
+        harnessDesktopIdentity("owner-preview", "/").applicationName,
+      );
       assert.equal(actual.packaged, true);
       assert.equal(
         await fs.realpath(actual.executable),

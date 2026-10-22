@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../src/apps/desktop/desktop-environment.ts";
 import assert from "node:assert/strict";
 import path from "node:path";
 import {
@@ -12,7 +13,7 @@ import { PREVIEW_ASSET_RECIPE } from "./owner-preview-assets.mjs";
 import { candidatePaths } from "./candidate-contract.mjs";
 
 export const OWNER_PREVIEW_SCHEMA = "farol-owner-preview/1";
-export const OWNER_PREVIEW_APP = "Farol Preview.app";
+export const OWNER_PREVIEW_APP = `${OWNER_PREVIEW_IDENTITY.applicationName}.app`;
 export const OWNER_PREVIEW_INTEGRATION_REQUIRED =
   "OWNER_PREVIEW_RUNTIME_INTEGRATION_REQUIRED";
 export const PREVIEW_ASSET_PATHS = Object.freeze({
@@ -20,7 +21,7 @@ export const PREVIEW_ASSET_PATHS = Object.freeze({
   "farol-preview-mark.png": "Contents/Resources/app/farol-preview-mark.png",
   "farol-preview.icns": "Contents/Resources/farol-preview.icns",
 });
-export const PREVIEW_LAUNCHER_PATH = "Contents/MacOS/Farol";
+export const PREVIEW_LAUNCHER_PATH = `Contents/MacOS/${harnessDesktopIdentity("preview", "/").applicationName}`;
 // No caller arguments, environment hooks, profile flags or runtime toolchain.
 // E2E drives the unchanged embedded Electron with its separately proven root.
 export const PREVIEW_LAUNCHER = `#!/bin/sh
@@ -46,9 +47,9 @@ exec /usr/bin/env -i \\
 export const PREVIEW_RECIPE = Object.freeze({
   schema: "farol-owner-preview-recipe/1",
   plist: {
-    CFBundleDisplayName: "Farol Preview",
-    CFBundleName: "Farol Preview",
-    CFBundleIdentifier: "local.farol.owner.preview",
+    CFBundleDisplayName: OWNER_PREVIEW_IDENTITY.applicationName,
+    CFBundleName: OWNER_PREVIEW_IDENTITY.applicationName,
+    CFBundleIdentifier: OWNER_PREVIEW_IDENTITY.applicationId,
     CFBundleIconFile: "farol-preview.icns",
   },
   launcher: PREVIEW_LAUNCHER,
@@ -109,18 +110,6 @@ export function assertOwnerPreviewSource({
 
 export function requireOwnerPreviewRuntimeIntegration() {
   try {
-    assert.deepEqual(OWNER_PREVIEW_IDENTITY, {
-      environment: "owner-preview",
-      displayName: "Farol Preview",
-      displayEdition: "",
-      applicationId: "local.farol.owner.preview",
-      applicationName: "Farol Preview",
-      dataDirectoryName: "Farol Preview",
-      runtimePartition: "persist:farol-owner-preview-runtime",
-      chatGptPartition: "persist:farol-owner-preview-chatgpt",
-      runtimeIdentity: "farol-owner-preview-runtime",
-      runtimeServiceName: "Farol Preview Runtime",
-    });
     const environment = desktopEnvironment("owner-preview");
     assert.equal(environment, "owner-preview");
     const appData = "/__farol_preview_contract__/app-data";
@@ -186,7 +175,11 @@ export function generationPaths(root, generation) {
     generation,
     appPath: path.join(directory, OWNER_PREVIEW_APP),
     artifactFile: path.join(directory, "derivative.json"),
-    baseApp: path.join(directory, ".canonical/Farol.app"),
+    baseApp: path.join(
+      directory,
+      ".canonical",
+      `${harnessDesktopIdentity("preview", "/").applicationName}.app`,
+    ),
     baseArtifact: path.join(directory, ".canonical/artifact.json"),
   };
 }
@@ -196,10 +189,9 @@ export function previewLinkTarget(generation) {
   return `generations/${generation}/${OWNER_PREVIEW_APP}`;
 }
 export function generationFromLink(target) {
-  const match = /^generations\/([a-f0-9]{64})\/Farol Preview\.app$/u.exec(
-    target,
-  );
-  if (!match) throw new Error("OWNER_PREVIEW_CURRENT_LINK_INVALID");
+  const match = /^generations\/([a-f0-9]{64})\/([^/]+)$/u.exec(target);
+  if (!match || match[2] !== OWNER_PREVIEW_APP)
+    throw new Error("OWNER_PREVIEW_CURRENT_LINK_INVALID");
   return match[1];
 }
 

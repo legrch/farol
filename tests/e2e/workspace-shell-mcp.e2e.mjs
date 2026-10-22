@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import assert from "node:assert/strict";
@@ -12,7 +13,9 @@ const packaged = process.argv[2] === "--packaged";
 if (process.argv.length > (packaged ? 3 : 2)) {
   throw new Error("WORKSPACE_SHELL_MCP_E2E_ARGUMENTS_INVALID");
 }
-const packageRoot = path.resolve("_output/package/Farol.app");
+const packageRoot = path.resolve(
+  `_output/package/${harnessDesktopIdentity("preview", "/").applicationName}.app`,
+);
 const entry = packaged
   ? path.join(packageRoot, "Contents/Resources/app/computer-mcp.cjs")
   : path.resolve("_output/build/app/computer-mcp.cjs");

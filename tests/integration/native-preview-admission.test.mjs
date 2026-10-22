@@ -1,3 +1,4 @@
+import { desktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
 import fs from "node:fs/promises";
 import { ChildProcess, execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -10,6 +11,7 @@ import {
   assertOwnerPreviewIdle,
   assertNativePreviewAdmission,
   recheckNativePreviewIsolation,
+  refreshNativePreviewIsolation,
   readOwnedStartupMarker,
 } from "../e2e/native-preview-admission.mjs";
 
@@ -155,9 +157,9 @@ describe("hidden disposable Setup admission", () => {
     const appData = path.join(profileRoot, "app-data");
     const userData =
       environment === "dev"
-        ? path.join(appData, "Farol Dev")
+        ? desktopIdentity("dev", appData).userData
         : normalProfile
-          ? path.join(appData, "io.github.legrch.farol")
+          ? desktopIdentity("preview", appData).userData
           : path.join(profileRoot, "user-data");
     await fs.mkdir(appData, { mode: 0o700 });
     await fs.mkdir(userData, { mode: 0o700 });
@@ -391,6 +393,28 @@ describe("hidden disposable Setup admission", () => {
       ).rejects.toThrow();
     },
   );
+  it("refreshes the original live child's late relay before Quit and refuses a terminal refresh", async () => {
+    const s = await singletonFixture();
+    const early = await recheckNativePreviewIsolation(
+      s.receipt,
+      s.selected.actual,
+      s.child,
+    );
+    expect(early.relayObserved).toBe(false);
+    await fs.mkdir(early.relayRoot, { mode: 0o700 });
+    roots.push(early.relayRoot);
+    const application = {
+      process: () => s.child,
+      evaluate: vi.fn(async () => s.selected.actual),
+    };
+    const ready = await refreshNativePreviewIsolation(early, application);
+    expect(ready.relayObserved).toBe(true);
+    s.child.exitCode = 0;
+    await expect(
+      refreshNativePreviewIsolation(ready, application),
+    ).rejects.toThrow("NATIVE_ISOLATION_LIVE_CHILD_REQUIRED");
+    expect(application.evaluate).toHaveBeenCalledOnce();
+  });
   it("requires known graceful terminal and absent singleton before reopen", async () => {
     const s = await singletonFixture();
     const observed = await recheckNativePreviewIsolation(
@@ -829,6 +853,25 @@ describe("hidden disposable Setup admission", () => {
       }
     },
   );
+  it("binds a relay created after the initial echo only through a fresh readback", async () => {
+    const selected = await selection();
+    const receipt = await admit(selected);
+    const early = await recheckNativePreviewIsolation(receipt, selected.actual);
+    expect(early.relayObserved).toBe(false);
+    await fs.mkdir(receipt.relayRoot, { mode: 0o700 });
+    roots.push(receipt.relayRoot);
+    // The stale witness must still refuse, rather than adopt an unwitnessed root.
+    await expect(admit({ ...selected, previous: early })).rejects.toMatchObject(
+      {
+        cause: { message: "NATIVE_ISOLATION_RELAY_OVERLAP" },
+      },
+    );
+    const ready = await recheckNativePreviewIsolation(early, selected.actual);
+    expect(ready.relayObserved).toBe(true);
+    await expect(
+      admit({ ...selected, previous: ready }),
+    ).resolves.toBeDefined();
+  });
   it("refuses a preexisting relay namespace and binds the owned new directory", async () => {
     const selected = await selection();
     const receipt = await admit(selected);

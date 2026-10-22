@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
 /** Controlled offline DOM join of production constructors. No normal main/UI
  * entry, installed product, selector qualification or live-provider claim. */
 import assert from "node:assert/strict";
@@ -54,7 +55,7 @@ assert.equal(origin.hostname, "127.0.0.1");
 assert.equal(origin.origin, config.origin);
 assert.equal(config.homeUrl, `${config.origin}/chatgpt`);
 const settingsFile = path.join(config.stateRoot, "settings.json");
-const partition = "persist:farol-dev-chatgpt" as const;
+const partition = harnessDesktopIdentity("dev", "/").chatGptPartition;
 const routes: ChatGptRoute[] = [];
 let host: DesktopGoCore | undefined;
 let startAttempted = false;

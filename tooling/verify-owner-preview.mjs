@@ -1,3 +1,4 @@
+import { PRODUCT_APP_NAME } from "./package-layout.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -290,7 +291,7 @@ export async function verifyOwnerPreview(repositoryRoot, generation) {
   );
   assert.deepEqual(
     (await fs.readdir(path.join(paths.directory, ".canonical"))).sort(),
-    ["Farol.app", "artifact.json"],
+    [PRODUCT_APP_NAME, "artifact.json"],
   );
   for (const file of [paths.baseArtifact, paths.artifactFile]) {
     const info = await fs.lstat(file);
