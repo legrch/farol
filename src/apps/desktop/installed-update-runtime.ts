@@ -407,10 +407,18 @@ async function readStartupOperationJournal(
   location: InstalledAppLocation,
   read: typeof readRecord = readRecord,
   purpose: "update" | "ordinary-shared-execution" = "update",
+  absent: typeof recordAbsent = recordAbsent,
 ): Promise<z.infer<typeof Journal> | null> {
   await readOperationBinding(root, op, location, read, purpose);
-  const raw = await read(path.join(root, op.operationId, "journal.json"));
-  if (raw === null) return null;
+  const file = path.join(root, op.operationId, "journal.json");
+  const raw = await read(file);
+  if (raw === null) {
+    // JSON null is malformed journal evidence, not the pre-journal crash window.
+    // Preserve it; only a separate ENOENT observation permits the none row.
+    if (!(await absent(file)))
+      throw new Error("UPDATE_OPERATION_JOURNAL_INVALID");
+    return null;
+  }
   const journal = Journal.parse(raw);
   if (!sameOperation(journal, op))
     throw new Error("UPDATE_OPERATION_IDENTITY_MISMATCH");
@@ -666,6 +674,7 @@ async function observeSharedSlotStartup(
       "shared",
       read,
       "ordinary-shared-execution",
+      options.observation?.recordAbsent ?? recordAbsent,
     );
     const installed = options.observation
       ? AcceptedBuild.parse(
@@ -954,6 +963,8 @@ async function observeCompletedPrivateLaunch(
       operation,
       "shared",
       read,
+      "update",
+      options.observation?.recordAbsent ?? recordAbsent,
     );
     const measured = options.observation
       ? AcceptedBuild.parse(
@@ -1295,6 +1306,8 @@ export async function waitForInstalledUpdateRelaunch(
           pinned!,
           slot === "/Applications/Farol.app" ? "shared" : "legacy",
           reads.readRecord,
+          "update",
+          reads.recordAbsent ?? recordAbsent,
         ),
       );
       if (helper === "unknown")

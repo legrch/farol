@@ -21,14 +21,16 @@ Each phase is logged to the operation's `helper.log.jsonl` with only phase,
 classified code, UTC timestamp and helper PID. The log is best effort; diagnostic
 failure cannot block rollback. It contains no profile contents or absolute paths.
 
-Startup automatically settles interrupted `prepared`, `predecessor_saved`,
-`new_installed` and `rollback_started` journals after confirming the original
-helper ended: installed target content means `completed`, source content means
-`rolled_back`, and neither means refusal. It rechecks the installed content and
-journal before publishing settlement, reclaims the retained archive, and keeps
-companion bundles and diagnostics. A pre-mutation helper exit clears its pending
-operation and unfinished copy so another attempt can be offered. No user recovery
-action is needed for either known installed build. This Go contract supersedes
+Startup follows the [desktop startup invariant](#desktop-startup-invariant) for
+every journal phase after confirming the relevant helper ended: installed target
+content means `completed`, source content means `rolled_back`, and neither means
+refusal. It rechecks installed content and journal before publishing settlement,
+reclaims the retained archive, and keeps companion bundles and diagnostics.
+A pre-mutation helper exit with no journal also settles by installed content;
+the operation remains in the saved receipt and its staged copy stays evidence.
+Only actual file absence permits this case; a present JSON `null` journal is
+malformed evidence and remains untouched. No user recovery action is needed for
+either known installed build. This Go contract supersedes
 the strict Quit/explicit recovery and source-stays-closed historical behavior
 below. D16 replaces this temporary updater with the standard signed updater once
 Developer ID is available.

@@ -158,6 +158,7 @@ function fixture(phase: Phase = "completed", action: Action = "apply") {
     close: vi.fn(async () => undefined),
   };
   const observation = {
+    recordAbsent: vi.fn(async (file: string) => !records.has(file)),
     canonicalOwnedDirectory: vi.fn(
       async (_file: string, _privateMode: boolean) => undefined,
     ),
@@ -568,6 +569,22 @@ describe("installed updater startup correlation (pure ports only)", () => {
     },
   );
 
+  it.each(["correlated", "ordinary-shared"])(
+    "preserves a present JSON-null journal at %s startup instead of selecting none",
+    async (route) => {
+      const f = route === "correlated" ? fixture() : sharedRollbackFixture();
+      const journal = path.join(opRoot, "journal.json");
+      f.records.set(journal, null);
+      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+        "UPDATE_OPERATION_JOURNAL_INVALID",
+      );
+      expect(f.records.has(journal)).toBe(true);
+      expect(f.records.get(journal)).toBeNull();
+      expect(f.observation.recordAbsent).toHaveBeenCalledWith(journal);
+      expect(f.options.pause).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     "different-operation",
     "different-operation",
@@ -709,70 +726,84 @@ describe("installed updater startup correlation (pure ports only)", () => {
       "UPDATE_SLOT_BINDING_UNCONFIRMED",
     );
   });
-  it("reopens a settled private target without repeating the original helper hint", async () => {
-    const f = fixture();
-    const privateApp = path.join(opRoot, "launch-Farol.app");
-    f.records.set(
-      path.join(opRoot, "slot-binding.json"),
-      JSON.parse(installedSlotBindingBytes(operation, "shared").toString()),
-    );
-    f.records.set(path.join(root, "last-update.json"), {
-      ...f.receipt,
-      operation,
-      observedAt: "2026-10-06T13:00:00.000Z",
-      phase: "completed",
-      runningBuildId: targetBuild.buildId,
-      manifest: {
-        schema: "farol.github-release/1",
-        repository: "legrch/farol",
-        channel: "owner-beta",
-        product: "Farol",
-        bundleId: "io.github.legrch.farol",
-        version: targetBuild.version,
-        buildVersion: targetBuild.buildVersion,
-        sourceCommit: targetBuild.sourceCommit,
-        sourceTreeDigest: targetBuild.sourceTreeDigest,
-        buildId: targetBuild.buildId,
-        artifactSha256: target.digest,
-        archiveSha256: "a".repeat(64),
-        archiveName: "Farol-" + targetBuild.version + "-darwin-arm64.zip",
-        archiveSize: 100,
-        platform: "darwin",
-        arch: "arm64",
-        signing: "unsigned",
-        notarized: false,
-        sourceDirty: false,
-      },
-    });
-    f.records.delete(f.receiptFile);
-    f.builds.set("/Applications/Farol.app", target);
-    const recheck = vi.fn().mockResolvedValue(undefined);
-    captureMock.mockResolvedValue({
-      app: "/fixture-private/image",
-      directory: "/fixture-private/resources",
-      executable: "/fixture-private/executable",
-      digest: target.digest,
-      recheck,
-    });
-    const guard = await waitForInstalledUpdateRelaunch({
-      ...f.options,
-      args: [],
-      directory: path.join(privateApp, "Contents/Resources/app"),
-      physicalFiles: fs,
-      copyApp: vi.fn().mockResolvedValue(undefined),
-    });
-    expect(guard!.resourcesOrigin!.app).toBe(privateApp);
-    await guard!.recheck();
-    await guard!.resourcesOrigin!.recheckUpdateSource();
-    f.builds.set("/Applications/Farol.app", source);
-    await guard!.resourcesOrigin!.recheck();
-    await expect(guard!.resourcesOrigin!.recheckUpdateSource()).rejects.toThrow(
-      "UPDATE_ACCEPTED_SOURCE_CHANGED",
-    );
-    expect(f.observation.readProcess).toHaveBeenCalled();
-    expect(f.options.pause).not.toHaveBeenCalled();
-    expect(captureMock).toHaveBeenCalledTimes(1);
-  });
+  it.each([false, true])(
+    "reopens a private target only with a valid journal (JSON null=%s)",
+    async (nullJournal) => {
+      const f = fixture();
+      const privateApp = path.join(opRoot, "launch-Farol.app");
+      f.records.set(
+        path.join(opRoot, "slot-binding.json"),
+        JSON.parse(installedSlotBindingBytes(operation, "shared").toString()),
+      );
+      f.records.set(path.join(root, "last-update.json"), {
+        ...f.receipt,
+        operation,
+        observedAt: "2026-10-06T13:00:00.000Z",
+        phase: "completed",
+        runningBuildId: targetBuild.buildId,
+        manifest: {
+          schema: "farol.github-release/1",
+          repository: "legrch/farol",
+          channel: "owner-beta",
+          product: "Farol",
+          bundleId: "io.github.legrch.farol",
+          version: targetBuild.version,
+          buildVersion: targetBuild.buildVersion,
+          sourceCommit: targetBuild.sourceCommit,
+          sourceTreeDigest: targetBuild.sourceTreeDigest,
+          buildId: targetBuild.buildId,
+          artifactSha256: target.digest,
+          archiveSha256: "a".repeat(64),
+          archiveName: "Farol-" + targetBuild.version + "-darwin-arm64.zip",
+          archiveSize: 100,
+          platform: "darwin",
+          arch: "arm64",
+          signing: "unsigned",
+          notarized: false,
+          sourceDirty: false,
+        },
+      });
+      f.records.delete(f.receiptFile);
+      f.builds.set("/Applications/Farol.app", target);
+      const recheck = vi.fn().mockResolvedValue(undefined);
+      captureMock.mockResolvedValue({
+        app: "/fixture-private/image",
+        directory: "/fixture-private/resources",
+        executable: "/fixture-private/executable",
+        digest: target.digest,
+        recheck,
+      });
+      const reopenOptions = {
+        ...f.options,
+        args: [],
+        directory: path.join(privateApp, "Contents/Resources/app"),
+        physicalFiles: fs,
+        copyApp: vi.fn().mockResolvedValue(undefined),
+      };
+      if (nullJournal) {
+        const journal = path.join(opRoot, "journal.json");
+        f.records.set(journal, null);
+        await expect(
+          waitForInstalledUpdateRelaunch(reopenOptions),
+        ).rejects.toThrow("UPDATE_OPERATION_JOURNAL_INVALID");
+        expect(f.records.has(journal)).toBe(true);
+        expect(f.records.get(journal)).toBeNull();
+        return;
+      }
+      const guard = await waitForInstalledUpdateRelaunch(reopenOptions);
+      expect(guard!.resourcesOrigin!.app).toBe(privateApp);
+      await guard!.recheck();
+      await guard!.resourcesOrigin!.recheckUpdateSource();
+      f.builds.set("/Applications/Farol.app", source);
+      await guard!.resourcesOrigin!.recheck();
+      await expect(
+        guard!.resourcesOrigin!.recheckUpdateSource(),
+      ).rejects.toThrow("UPDATE_ACCEPTED_SOURCE_CHANGED");
+      expect(f.observation.readProcess).toHaveBeenCalled();
+      expect(f.options.pause).not.toHaveBeenCalled();
+      expect(captureMock).toHaveBeenCalledTimes(1);
+    },
+  );
   it("refuses normal private reopen without a settled current receipt", async () => {
     const f = fixture();
     f.records.set(

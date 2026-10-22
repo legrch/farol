@@ -4488,6 +4488,42 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     }
   }
 
+  it.each(["source", "target"] as const)(
+    "preserves present JSON-null journal and archive for installed %s",
+    async (installed) => {
+      const first = await prepared();
+      await first.restart();
+      await first.close();
+      const record = JSON.parse(await fs.readFile(ready, "utf8"));
+      const journal = path.join(
+        userData,
+        "installed-updates",
+        record.operation.operationId,
+        "journal.json",
+      );
+      await fs.writeFile(journal, "null\n", { mode: 0o600 });
+      const current = installed === "target" ? target : source;
+      mocks.exec.mockImplementation(async (file: string) => {
+        if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+        return { stdout: JSON.stringify(current) };
+      });
+      const next = await createInstalledUpdateRuntime({
+        ...options(),
+        build: { ...build, version: current.version, buildId: current.buildId },
+      });
+      await next!.initialize();
+      expect(next!.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: true,
+      });
+      expect(await fs.readFile(journal, "utf8")).toBe("null\n");
+      expect(JSON.parse(await fs.readFile(ready, "utf8"))).toEqual(record);
+      expect(mocks.reclaimArchive).not.toHaveBeenCalled();
+      expect(mocks.helper).toHaveBeenCalledTimes(1);
+      await next!.close();
+    },
+  );
+
   it.each([
     "rollback_started",
     "rollback_launch_requested",
