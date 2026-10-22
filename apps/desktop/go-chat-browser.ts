@@ -870,9 +870,11 @@ export class GoChatBrowserDriver implements BrowserDriver {
               ? "pending"
               : "unknown";
       const duration = Math.max(0, this.time() - (s.sentAt ?? this.time()));
-      if (s.turnObservation)
-        s.turnObservation(outcome, fields.code || null, duration);
-      else
+      if (s.turnObservation) {
+        const finish = s.turnObservation;
+        s.turnObservation = undefined;
+        finish(outcome, fields.code || null, duration);
+      } else
         this.operations?.record(
           metadata,
           outcome,

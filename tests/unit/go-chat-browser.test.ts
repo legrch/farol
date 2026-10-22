@@ -1658,3 +1658,42 @@ it("records embedded consult submission and terminal metadata without prompt/rep
     /Transient prompt|\*\*Result\*\*|Working/,
   );
 });
+
+it("appends completion after an awaiting-owner observation while retaining pending", async () => {
+  const record = vi.fn();
+  const operations: OperationsRecorder = {
+    record,
+    begin: (metadata) => {
+      let observed = false;
+      return (outcome, code, duration) => {
+        if (!observed) {
+          observed = true;
+          record(metadata, outcome, code, duration);
+        }
+      };
+    },
+  };
+  const f = fixture({ operations });
+  await f.start();
+  let cursor = "0";
+  for (let i = 0; i < 5; i++) {
+    const page = await f.observe(cursor, 128);
+    if (!page.events.length) break;
+    cursor = page.events.at(-1)!.sequence;
+  }
+  const original = vi.mocked(f.api.observe).getMockImplementation()!;
+  vi.mocked(f.api.observe).mockResolvedValue({
+    state: "awaiting-owner",
+    code: "owner_control_required",
+  });
+  const paused = await f.observe(cursor, 128);
+  cursor = paused.events.at(-1)!.sequence;
+  vi.mocked(f.api.observe).mockImplementation(original);
+  f.setFrame(frame(true));
+  await f.observe(cursor, 128);
+  expect(
+    record.mock.calls
+      .filter((call) => call[0].kind === "chatgpt.consult.turn")
+      .map((call) => call[1]),
+  ).toEqual(["pending", "done"]);
+});
