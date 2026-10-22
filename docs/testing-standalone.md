@@ -318,10 +318,19 @@ Atomic reports go only into the runner repository's ignored
 terminal code/signal, native paths, installed digests, quit receipts and failure
 quarantine classifications, without raw logs or authentication/transcripts.
 Disposable profiles remain outside Git. Any refusal, malformed output, timeout,
-nonzero exit or uncertain terminal stops progression; there is no automatic
-retry, replacement launch, kill escalation or recovery. The root retains custody
-of original handles, unconfirmed launches and all partially modified state for
-reconciliation. A report-write failure is itself a failed run, never acceptance.
+nonzero exit or uncertain terminal stops controller progression, with no retry,
+replacement launch, follow-up signal or recovery. The pinned Playwright 1.63.0
+Electron launcher owns a detached process group and may force-kill that group
+when initialization rejects or times out, before returning a public app handle.
+This witness does not claim a signal-free launch-failure path. Such rejection
+remains an unconfirmed original launch, never proof of no spawn or clean exit;
+the fresh home and partial state are quarantined without another attempt.
+App launch occurs only before a helper is started or after the previous helper's
+terminal, drain and installed-tree verification have settled. Vendor abort
+cleanup cannot authorize the next helper, Quit, recovery or replacement launch.
+The root retains known original handles, unconfirmed launches and all partially
+modified state for reconciliation. A report-write failure is itself a failed
+run, never acceptance.
 
 `tests/unit/owner-beta-update-pair.test.mjs` uses inert Mach-O-header files,
 in-memory child streams and injected effect counters. It covers preflight

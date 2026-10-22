@@ -29,7 +29,11 @@ import {
   treeDigest,
 } from "../../../tooling/artifact-digest.mjs";
 import { sourceIdentity } from "../../../tooling/source-identity.mjs";
-import { desktopAppDataPath } from "../../../tooling/harness-identity.ts";
+import {
+  desktopAppDataPath,
+  desktopIdentity,
+  productBundleName,
+} from "../../../tooling/harness-identity.ts";
 import { parseQuitReceipt } from "../../../src/apps/desktop/quit-receipt.ts";
 import {
   readRunMarker,
@@ -793,7 +797,7 @@ export async function allocateHome(report = {}) {
   const home = path.join(root, "home");
   const library = path.join(home, "Library");
   const appData = path.join(library, "Application Support");
-  const userData = path.join(appData, "io.github.legrch.farol");
+  const userData = desktopIdentity("preview", appData).userData;
   const applications = path.join(home, "Applications");
   for (const directory of [home, library, appData, userData, applications])
     await fs.mkdir(directory, { mode: 0o700 });
@@ -822,7 +826,7 @@ export async function recheckHome(home) {
   check(
     home.home === path.join(home.root, "home") &&
       home.appData === path.join(home.home, "Library/Application Support") &&
-      home.userData === path.join(home.appData, "io.github.legrch.farol") &&
+      home.userData === desktopIdentity("preview", home.appData).userData &&
       home.applications === path.join(home.home, "Applications"),
     "HOME_SELECTION",
   );
@@ -914,7 +918,7 @@ async function atomicReport(repositoryRoot, report) {
 
 async function startApp(candidate, home, fixture, report, owners, launch) {
   await recheckHome(home);
-  const installed = path.join(home.applications, "Farol.app");
+  const installed = path.join(home.applications, productBundleName);
   check(
     (await treeDigest(installed)) === candidate.artifactSha256,
     "INSTALLED_TREE_MISMATCH",
@@ -934,7 +938,11 @@ async function startApp(candidate, home, fixture, report, owners, launch) {
   report.lifetimes.push(lifetime);
   let app;
   const pending = launch({
-    executablePath: path.join(installed, "Contents/MacOS/Farol"),
+    executablePath: path.join(
+      installed,
+      "Contents/MacOS",
+      desktopIdentity("preview", home.appData).applicationName,
+    ),
     args: ["--preview-window-mode=hidden"],
     timeout: 15000,
     env: {
@@ -948,38 +956,48 @@ async function startApp(candidate, home, fixture, report, owners, launch) {
       FAROL_E2E_TEST_PROOF: home.proof,
       FAROL_E2E_CHATGPT_URL: fixture.url,
     },
-  }).then((value) => {
-    app = value;
-    const owner = retainChild(value.process(), lifetime);
-    owners.push(owner);
-    // A timed-out launch remains the same original attempt, even if its
-    // handle arrives after the failure report. Never replace or signal it.
-    if (report.status === "failed") releaseObservers(owner);
-    lifetime.hiddenQuit = null;
-    let diagnostics = "";
-    owner.child.stderr?.on("data", (chunk) => {
-      diagnostics += chunk.toString("utf8");
-      const lines = diagnostics.split("\n");
-      diagnostics = lines.pop().slice(-16384);
-      for (const line of lines) {
-        if (!line.startsWith("FAROL_UPDATE_PAIR_QUIT:")) continue;
-        try {
-          const parsed = JSON.parse(
-            line.slice("FAROL_UPDATE_PAIR_QUIT:".length),
-          );
-          if (
-            keys(parsed, ["pid", "violations"]) &&
-            parsed.pid === owner.child.pid &&
-            parsed.violations === 0
-          )
-            lifetime.hiddenQuit = parsed;
-        } catch {
-          /* Malformed diagnostics never prove a hidden lifetime. */
+  }).then(
+    (value) => {
+      app = value;
+      const owner = retainChild(value.process(), lifetime);
+      owners.push(owner);
+      // A timed-out launch remains the same original attempt, even if its
+      // handle arrives after the failure report. Never replace or signal it.
+      if (report.status === "failed") releaseObservers(owner);
+      lifetime.hiddenQuit = null;
+      let diagnostics = "";
+      owner.child.stderr?.on("data", (chunk) => {
+        diagnostics += chunk.toString("utf8");
+        const lines = diagnostics.split("\n");
+        diagnostics = lines.pop().slice(-16384);
+        for (const line of lines) {
+          if (!line.startsWith("FAROL_UPDATE_PAIR_QUIT:")) continue;
+          try {
+            const parsed = JSON.parse(
+              line.slice("FAROL_UPDATE_PAIR_QUIT:".length),
+            );
+            if (
+              keys(parsed, ["pid", "violations"]) &&
+              parsed.pid === owner.child.pid &&
+              parsed.violations === 0
+            )
+              lifetime.hiddenQuit = parsed;
+          } catch {
+            /* Malformed diagnostics never prove a hidden lifetime. */
+          }
         }
-      }
-    });
-    return owner;
-  });
+      });
+      return owner;
+    },
+    () => {
+      // The pinned Playwright launcher may abort its own detached process group
+      // before exposing a public app handle. Rejection proves neither no spawn
+      // nor a clean terminal; preserve this original launch as UNKNOWN.
+      lifetime.status = "outcome_unknown";
+      lifetime.launchRejected = true;
+      throw code("APP_LAUNCH_UNKNOWN");
+    },
+  );
   // Retain the original late launch; timeout never authorizes another launch.
   pending.catch(() => {});
   const owner = await bounded(pending, 20000, "APP_LAUNCH_UNKNOWN");
@@ -1156,7 +1174,7 @@ export async function runNativePair(pair) {
     home = await allocateHome(report);
     report.profileRoot = home.root;
     report.home = home.home;
-    const installed = path.join(home.applications, "Farol.app");
+    const installed = path.join(home.applications, productBundleName);
     await copyApp(pair.source.appPath, installed, pair.source.artifactSha256);
     const update = path.join(home.userData, "installed-updates");
     await fs.mkdir(update, { mode: 0o700 });
@@ -1283,10 +1301,11 @@ export async function runNativePair(pair) {
       ? error.message
       : "OWNER_BETA_UNEXPECTED_REFUSAL_OR_UNKNOWN";
     report.quarantine =
-      "Retain disposable home, staged/installed bytes and original child handles; no retry, signal, recovery or replacement launch authorized";
+      "Retain disposable home, staged/installed bytes and original known handles; no controller retry, additional signal, recovery or replacement launch. Playwright launch abort may already have signalled its own detached group; unconfirmed launch/terminal remains UNKNOWN";
   } finally {
-    // A failed attempt is never cleaned by signalling or a replacement process.
-    // Persist observed terminals, leave uncertain children/state under root custody.
+    // The controller issues no follow-up signal or replacement after failure.
+    // Playwright may have already aborted its own launch group. Persist only
+    // observed terminals; an exception is never child-exit or no-spawn proof.
     for (const owner of owners) releaseObservers(owner);
     if (fixture) {
       fixture.server.close();

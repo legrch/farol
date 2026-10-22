@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { _electron as electron } from "playwright-core";
 import { desktopIdentity } from "../../tooling/harness-identity.ts";
 import { parseQuitReceipt } from "../../src/apps/desktop/quit-receipt.ts";
-import { OperationsSnapshotSchema } from "../../apps/desktop/renderer/operations-contract.ts";
+import { parseFirstLaunchOperations } from "./lib/first-launch-operations.mjs";
 import {
   candidatePaths,
   assertCanonicalArtifactPath,
@@ -315,7 +315,7 @@ try {
       profileRoot,
       current.pid,
     );
-    const operations = OperationsSnapshotSchema.parse(
+    const operations = parseFirstLaunchOperations(
       await bounded(
         page.evaluate(() => window.farol.operations()),
         "FIRST_LAUNCH_OPERATIONS_TIMEOUT",
