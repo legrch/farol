@@ -119,6 +119,7 @@ it("observes refused setup completion without replacing its result or promise", 
   ).toBe(original);
   expect(await original).toBe(result);
   expect(action).toHaveBeenCalledOnce();
+  await store.flush(5000);
   expect((await store.snapshot(5000)).entries).toMatchObject([
     {
       source: "Setup",

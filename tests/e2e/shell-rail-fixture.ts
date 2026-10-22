@@ -1,3 +1,6 @@
+import { desktopIdentity } from "../../tooling/harness-identity.ts";
+
+const identity = desktopIdentity("preview", "/");
 import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
 
 /** Synthetic renderer evidence only. No account, provider, connection or disk access. */
@@ -85,7 +88,7 @@ export function shellRailFixture(ready: boolean) {
         verifiedAt,
       },
       chatgptApp: {
-        name: "Farol",
+        name: identity.displayName,
         tunnelId: "fixture-tunnel",
         connectorGeneration: 1,
       },
@@ -115,9 +118,9 @@ export function shellRailFixture(ready: boolean) {
     environment: "preview",
     build: {
       schema: 1,
-      product: "Farol",
+      product: identity.displayName,
       version: "0.2.7",
-      bundleId: "io.github.legrch.farol",
+      bundleId: identity.applicationId,
       updateChannel: "github-stable",
       buildVersion: "36",
       builtAt: verifiedAt,

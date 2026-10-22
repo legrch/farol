@@ -1,3 +1,4 @@
+import { productName } from "../../tooling/harness-identity.ts";
 // Built shipping renderer in hidden Electron with a disposable, synthetic preload.
 // Native geometry probes use a disposable local WebContentsView and the unchanged
 // shipping host layout function. No backend, account, connection or owner profile.
@@ -224,7 +225,7 @@ contextBridge.exposeInMainWorld('farolRecovery',{
 });
 contextBridge.exposeInMainWorld('farol',{
  bootstrap:async()=>snapshot,snapshot:async()=>snapshot,
- configure:async(command)=>{calls.push(command.kind);if(command.kind==='chatgpt.observe-sign-in')return {ok:true,snapshot:snapshot.configuration,evidence:{kind:'chatgpt.sign-in-status',observationId:command.observationId,buildId:command.buildId,state:'authenticated',binding:{documentGeneration:0,sequence:1}}};if(command.kind==='chatgpt.verify')return {ok:true,snapshot:snapshot.configuration,evidence:{kind:'chatgpt.readiness',state:'authenticated',code:null}};return {ok:true,snapshot:snapshot.configuration};},
+ configure:async(command)=>{calls.push(command.kind);if(command.kind==='setup.progress'){snapshot=structuredClone(snapshot);snapshot.configuration.settings.revision++;Object.assign(snapshot.configuration.settings.setup.journey,{currentStep:command.currentStep,dismissed:command.dismissed});return {ok:true,snapshot:snapshot.configuration};}if(command.kind==='chatgpt.observe-sign-in')return {ok:true,snapshot:snapshot.configuration,evidence:{kind:'chatgpt.sign-in-status',observationId:command.observationId,buildId:command.buildId,state:'authenticated',binding:{documentGeneration:0,sequence:1}}};if(command.kind==='chatgpt.verify')return {ok:true,snapshot:snapshot.configuration,evidence:{kind:'chatgpt.readiness',state:'authenticated',code:null}};return {ok:true,snapshot:snapshot.configuration};},
  installedUpdate:async()=>({ok:true,view:{phase:'idle',checkedAt:null}}),
  task:async()=>{throw Error('NO_TASK_EFFECT_ALLOWED')},setNavigationShortcuts:async()=>({ok:true}),
  layout:(...args)=>{lastLayout=args},onConfigurationChanged:listen('configuration'),onTasksState:listen('tasks'),onRuntimeEvent:listen('event'),onRuntimeState:listen('runtime'),onInstalledUpdateState:listen('update'),onBrowserRouteState:listen('route'),onTaskSurfaceState:listen('surface'),onLayout:listen('layout'),onShellAction:listen('action'),onWindowState:listen('window'),onConnectionStatus:listen('connection'),
@@ -294,7 +295,10 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
   await captureWalkthrough("b3-connect-this-mac");
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page
-    .getByRole("heading", { name: "Add Farol to ChatGPT", exact: true })
+    .getByRole("heading", {
+      name: `Add ${productName} to ChatGPT`,
+      exact: true,
+    })
     .waitFor();
   await captureWalkthrough("b3-add-to-chatgpt");
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -331,10 +335,13 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
   );
   assert.equal(await page.locator(".setup-progress").count(), 1);
   await page
+    .getByRole("button", { name: "Start using Farol", exact: true })
+    .click();
+  await page
     .locator(".rail")
     .getByRole("button", { name: "Home", exact: true })
     .click();
-  await page.getByText("Farol is working", { exact: true }).waitFor();
+  await page.getByText(`${productName} is working`, { exact: true }).waitFor();
   await page.evaluate(() => {
     window.shellRailTest.emit("tasks", {
       revision: 1,

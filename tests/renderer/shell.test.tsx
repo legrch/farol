@@ -429,7 +429,9 @@ it.each([
 
 it("a new profile opens Setup Welcome without a legacy modal or effects", async () => {
   const { host, c, f } = await mount(bootstrap());
-  expect(host.querySelector(".toolbar-title")?.textContent).toBe("Setup");
+  expect(host.querySelector(".toolbar-title")?.textContent).toBe(
+    "Setup /Overview",
+  );
   expect(host.querySelector("dialog")).toBeNull();
   expect(host.querySelector(".setup-welcome")?.textContent).toContain(
     "Start setup",
