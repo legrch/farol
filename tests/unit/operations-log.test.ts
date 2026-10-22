@@ -1,4 +1,15 @@
 import fs from "node:fs";
+import {
+  ProductSettingsSchema,
+  ProductConfigurationCommandSchema,
+  ProductConfigurationEvidenceSchema,
+  type ProductConfigurationSnapshot,
+} from "../../src/pkg/product-settings/contract";
+import {
+  resolveOperationTarget,
+  unknownWorkspace,
+  type OperationWorkspaceLabels,
+} from "../../apps/desktop/operations/target";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -113,10 +124,9 @@ it.each(table)(
   async (kind, source) => {
     const { store } = setup();
     // Use-case boundary fixture, not native execution or provider evidence.
-    const metadata = configurationOperation(
-      { kind } as ProductConfigurationCommand,
-      undefined,
-    );
+    const metadata = configurationOperation({
+      kind,
+    } as ProductConfigurationCommand);
     const action = vi.fn(async () => ({
       ok: false,
       error: { code: "OPERATION_REFUSED" },
@@ -137,10 +147,11 @@ it("observes refused setup completion without replacing its result or promise", 
   expect(
     observeOperation(
       store,
-      configurationOperation(
-        { kind: "setup.progress", currentStep: "connect", dismissed: true },
-        undefined,
-      ),
+      configurationOperation({
+        kind: "setup.progress",
+        currentStep: "connect",
+        dismissed: true,
+      }),
       action,
     ),
   ).toBe(original);
@@ -544,15 +555,13 @@ it("extracts target-only metadata from a sealed workspace receipt", () => {
     },
   } as unknown as import("../../src/pkg/product-settings/contract").ProductConfigurationResult;
   expect(configurationResultTarget(result)).toEqual({
-    workspace: "Docs",
+    workspace: "w",
     relativePath: "README.md",
   });
   expect(
-    configurationOperation(
-      { kind: "computer.run-git-head", workspaceId: "w" },
-      undefined,
-    ).target,
-  ).toEqual({ command: "git", relativePath: "." });
+    configurationOperation({ kind: "computer.run-git-head", workspaceId: "w" })
+      .target,
+  ).toEqual({ workspace: "w", command: "git", relativePath: "." });
 });
 
 const metadata = {
@@ -1002,7 +1011,7 @@ it("records a completion with full known metadata when its settled begin was evi
   expect(await store.snapshot(5000)).toMatchObject({
     entries: [
       {
-        target: { relativePath: "x" },
+        target: {},
         outcome: "done",
         code: "PHYSICAL_TERMINAL_CONFIRMED",
         durationMs: 17,
@@ -1272,8 +1281,57 @@ const hostileText = [
   "PRIVATE_秘密_\u202e",
   'PRIVATE_INJECTION\n"};$(echo secret)<script>',
 ];
+function ownerConfiguration(
+  workspaces: OperationWorkspaceLabels,
+): ProductConfigurationSnapshot {
+  const readiness = {
+    visited: false,
+    skipped: false,
+    configured: false,
+    reachable: "unknown",
+    verified: null,
+    needsAction: null,
+    unavailable: null,
+    outcomeUnknown: false,
+  };
+  const settings = ProductSettingsSchema.parse({
+    schema: 1,
+    revision: 1,
+    general: {
+      openAtLaunch: "home",
+      sidebarDefault: "full",
+      activityDetail: "summary",
+    },
+    computer: {
+      computerId: "11111111-1111-4111-8111-111111111111",
+      generation: 1,
+      name: "This Mac",
+      workspaces: [],
+    },
+    setup: {
+      chatgpt: readiness,
+      computer: readiness,
+      connect: readiness,
+      hosts: readiness,
+      verify: readiness,
+    },
+  });
+  // Include historical labels wider than today's settings input permits.
+  settings.computer.workspaces = workspaces.map(({ workspaceId, label }) => ({
+    workspaceId,
+    label,
+    root: "/fixture",
+    access: "read" as const,
+    excludedPaths: [],
+  }));
+  return { status: "ready", settings };
+}
 function supportWith(
   operations: Awaited<ReturnType<OperationsStore["snapshot"]>>,
+  configuration: ProductConfigurationSnapshot = {
+    status: "error",
+    error: "SETTINGS_READ_FAILED",
+  },
 ) {
   return createSupportExport({
     operations,
@@ -1290,7 +1348,7 @@ function supportWith(
       sourceDirty: false,
       buildId: "c".repeat(64),
     },
-    configuration: { status: "error", error: "SETTINGS_READ_FAILED" },
+    configuration,
     runtime: { state: "offline", errorCode: null, identity: null },
     capabilities: {
       nativeFilesystem: false,
@@ -1408,7 +1466,7 @@ it.each(recordableOperationCodes)(
 
 it("enforces the vocabulary for arbitrary sinks and workspace label calls", () => {
   const record = vi.fn();
-  const begin = vi.fn(() => vi.fn());
+  const begin = vi.fn((_metadata: OperationMetadata) => vi.fn());
   const labels = vi.fn();
   const recorder = createTotalOperationsRecorder({
     record,
@@ -1503,11 +1561,17 @@ it.each(ownerTargets)(
   "normalizes owner target fields without losing a record %#",
   async (target, expected) => {
     const { store, directory } = setup(retentionLimits);
-    const validTarget = { ...target, command: "git" };
-    const normalized = { ...expected, command: "git" };
+    const labels = [
+      { workspaceId: "owner", label: (target.workspace ?? "Docs") as string },
+    ];
+    store.setWorkspaceLabels(labels);
+    const input = { ...target, workspace: "owner" };
+    const resolved = { ...expected, workspace: expected.workspace ?? "Docs" };
+    const validTarget = { ...input, command: "git" };
+    const normalized = { ...resolved, command: "git" };
     // Test both one-shot records and settlement after a target changes.
     store.record(
-      { ...metadata, target } as never,
+      { ...metadata, target: input } as never,
       "unknown",
       "ACTION_OUTCOME_UNKNOWN",
       1,
@@ -1522,7 +1586,7 @@ it.each(ownerTargets)(
       entries: [
         {
           ...metadata,
-          target: expected,
+          target: resolved,
           outcome: "unknown",
           code: "ACTION_OUTCOME_UNKNOWN",
           durationMs: 1,
@@ -1542,7 +1606,10 @@ it.each(ownerTargets)(
     });
     expect(snapshot.entries).toHaveLength(2);
     // Raw legacy fields go through the same normalization on disk and export.
-    const raw = { ...snapshot.entries[0]!, target };
+    const raw = {
+      ...snapshot.entries[0]!,
+      target: { ...target, workspace: resolved.workspace },
+    };
     fs.appendFileSync(
       path.join(directory, segmentFiles(directory)[0]!),
       JSON.stringify(raw) + "\n",
@@ -1560,17 +1627,20 @@ it.each(ownerTargets)(
       readback.entries
         .filter((entry) => entry.id === raw.id)
         .map((entry) => entry.target),
-    ).toEqual([expected, expected]);
+    ).toEqual([resolved, resolved]);
     const rawSnapshot = { ...snapshot, entries: [raw] } as never;
-    const report = supportWith(rawSnapshot);
+    const report = supportWith(
+      rawSnapshot,
+      ownerConfiguration([{ workspaceId: "owner", label: resolved.workspace }]),
+    );
     expect(report.operations!.entries).toHaveLength(1);
-    expect(report.operations!.entries[0]!.target).toEqual(expected);
+    expect(report.operations!.entries[0]!.target).toEqual(resolved);
     const exported = path.join(directory, "support.json");
-    await writeSupportExport(exported, { operations: rawSnapshot });
+    await writeSupportExport(exported, { operations: rawSnapshot }, labels);
     expect(
       JSON.parse(fs.readFileSync(exported, "utf8")).operations.entries[0]
         .target,
-    ).toEqual(expected);
+    ).toEqual(resolved);
   },
 );
 
@@ -1606,7 +1676,12 @@ it("preserves bounded international owner names and relative paths, and rejects 
   store.setWorkspaceLabels([
     { workspaceId: "workspace-1", label: target.workspace },
   ]);
-  store.record({ ...metadata, target }, "done", null, 1);
+  store.record(
+    { ...metadata, target: { ...target, workspace: "workspace-1" } },
+    "done",
+    null,
+    1,
+  );
   await store.flush(5000);
   const snapshot = await store.snapshot(5000);
   expect(snapshot.entries[0]!.target).toEqual(target);
@@ -1866,4 +1941,331 @@ it("preserves compaction's promise and synchronous exception through its actual 
       code: "OPERATION_SYNC_THROW",
     },
   ]);
+});
+
+const privateWorkspace = "My private sentence about a personal appointment";
+const privatePath = "private appointment notes.txt";
+const ownerLabels = [{ workspaceId: "w", label: "Owner Docs" }];
+
+it.each([
+  privateWorkspace,
+  "Owner Docs",
+  "w\n",
+  "w\u202e",
+  "w" + "x".repeat(160),
+])(
+  "resolves IDs exactly before normalization and never queues caller text: case %#",
+  async (workspace) => {
+    const { store, directory } = setup(retentionLimits);
+    store.setWorkspaceLabels(ownerLabels);
+    const target = {
+      workspace,
+      relativePath: privatePath,
+      command: privateWorkspace,
+    };
+    store.record({ ...metadata, target }, "refused", "OPERATION_REFUSED", 1);
+    store.begin({ ...metadata, target })(
+      "unknown",
+      "ACTION_OUTCOME_UNKNOWN",
+      2,
+    );
+    await store.flush(5000);
+    const snapshot = await store.snapshot(5000);
+    expect(snapshot.entries).toHaveLength(2);
+    expect(snapshot.entries.map((entry) => entry.target)).toEqual([
+      { workspace: unknownWorkspace, command: "other" },
+      { workspace: unknownWorkspace, command: "other" },
+    ]);
+    const raw = segmentFiles(directory)
+      .map((name) => fs.readFileSync(path.join(directory, name), "utf8"))
+      .join("");
+    for (const value of [privateWorkspace, privatePath]) {
+      expect(raw).not.toContain(value);
+      expect(JSON.stringify(snapshot)).not.toContain(value);
+      expect(
+        JSON.stringify(supportWith(snapshot, ownerConfiguration(ownerLabels))),
+      ).not.toContain(value);
+    }
+  },
+);
+
+it("resolves at each observation before enqueue, including settlement and later configuration changes", async () => {
+  const { store, directory } = setup(retentionLimits);
+  const target = { workspace: "w", relativePath: "README.md" };
+  const finish = store.begin({ ...metadata, target });
+  store.setWorkspaceLabels(ownerLabels);
+  finish("done", null, 2);
+  store.record({ ...metadata, target }, "done", null, 3);
+  store.setWorkspaceLabels([]);
+  await store.flush(5000);
+  const raw = segmentFiles(directory).flatMap((name) =>
+    fs
+      .readFileSync(path.join(directory, name), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line)),
+  );
+  expect(raw.map((entry) => entry.target)).toEqual([
+    { workspace: unknownWorkspace },
+    { workspace: "Owner Docs", relativePath: "README.md" },
+    { workspace: "Owner Docs", relativePath: "README.md" },
+  ]);
+  expect(
+    (await store.snapshot(5000)).entries.map((entry) => entry.target),
+  ).toEqual([{ workspace: unknownWorkspace }, { workspace: unknownWorkspace }]);
+});
+
+it("sanitizes old raw targets on read and both export boundaries", async () => {
+  const { store, directory } = setup(retentionLimits);
+  store.setWorkspaceLabels(ownerLabels);
+  store.record(metadata, "done", null, 1);
+  await store.flush(5000);
+  const snapshot = await store.snapshot(5000);
+  const rawEntries = [privateWorkspace, "Owner Docs\n", "w"].map(
+    (workspace) => ({
+      ...snapshot.entries[0]!,
+      target: { workspace, relativePath: privatePath, command: "git" as const },
+    }),
+  );
+  const file = path.join(directory, segmentFiles(directory)[0]!);
+  fs.appendFileSync(
+    file,
+    rawEntries.map((entry) => JSON.stringify(entry) + "\n").join(""),
+  );
+  const restarted = new OperationsStore(
+    directory,
+    () => 1792670400000,
+    retentionLimits,
+  );
+  stores.push(restarted);
+  const readback = await restarted.snapshot(5000);
+  expect(readback.corruptLines).toBe(0);
+  expect(readback.entries.slice(1).map((entry) => entry.target)).toEqual(
+    rawEntries.map(() => ({ workspace: unknownWorkspace, command: "git" })),
+  );
+  const rawSnapshot = { ...snapshot, entries: rawEntries };
+  const report = supportWith(rawSnapshot, ownerConfiguration(ownerLabels));
+  const exported = path.join(directory, "support.json");
+  await writeSupportExport(exported, { operations: rawSnapshot }, ownerLabels);
+  for (const value of [
+    JSON.stringify(readback),
+    JSON.stringify(report),
+    fs.readFileSync(exported, "utf8"),
+  ]) {
+    expect(value).not.toContain(privateWorkspace);
+    expect(value).not.toContain(privatePath);
+    expect(value).toContain(unknownWorkspace);
+  }
+  // Reading/exporting never rewrites historical evidence.
+  expect(fs.readFileSync(file, "utf8")).toContain(privateWorkspace);
+  const known = {
+    ...snapshot,
+    entries: [
+      {
+        ...snapshot.entries[0]!,
+        target: { workspace: "Owner Docs", relativePath: "README.md" },
+      },
+    ],
+  };
+  expect(
+    supportWith(known, ownerConfiguration(ownerLabels)).operations!.entries[0]!
+      .target,
+  ).toEqual(known.entries[0]!.target);
+  // No configuration means no trusted workspace or path, even in a prebuilt report.
+  await writeSupportExport(exported, { operations: known });
+  expect(
+    JSON.parse(fs.readFileSync(exported, "utf8")).operations.entries[0].target,
+  ).toEqual({ workspace: unknownWorkspace });
+});
+
+it("initializes a separate MCP recorder from the private owner index and fails closed without it", async () => {
+  const { store, directory } = setup(retentionLimits);
+  store.setWorkspaceLabels(ownerLabels);
+  await store.flush(5000);
+  const mcp = new OperationsStore(
+    directory,
+    () => 1792670400000,
+    retentionLimits,
+  );
+  stores.push(mcp);
+  await mcp.loadWorkspaceLabels();
+  mcp.record(
+    { ...metadata, target: { workspace: "w", relativePath: "README.md" } },
+    "done",
+    null,
+    1,
+  );
+  await mcp.flush(5000);
+  expect((await mcp.snapshot(5000)).entries[0]!.target).toEqual({
+    workspace: "Owner Docs",
+    relativePath: "README.md",
+  });
+  const missing = setup(retentionLimits).store;
+  await missing.loadWorkspaceLabels();
+  missing.record(
+    {
+      ...metadata,
+      target: { workspace: privateWorkspace, relativePath: privatePath },
+    },
+    "done",
+    null,
+    1,
+  );
+  await missing.flush(5000);
+  expect((await missing.snapshot(5000)).entries[0]!.target).toEqual({
+    workspace: unknownWorkspace,
+  });
+});
+
+it("resolves before arbitrary begin/record sinks and re-resolves enriched finish metadata", () => {
+  const record = vi.fn();
+  const begin = vi.fn((_metadata: OperationMetadata) => vi.fn());
+  const recorder = createTotalOperationsRecorder({ record, begin });
+  recorder.setWorkspaceLabels(ownerLabels);
+  const mutable = {
+    ...metadata,
+    target: { workspace: privateWorkspace, relativePath: privatePath },
+  };
+  const finish = recorder.begin(mutable);
+  const started = structuredClone(begin.mock.calls[0]![0]);
+  recorder.record(mutable, "done", null, 1);
+  mutable.target = { workspace: "w", relativePath: "README.md" };
+  finish("done", null, 2);
+  expect(started.target).toEqual({ workspace: unknownWorkspace });
+  expect(record.mock.calls[0]![0].target).toEqual({
+    workspace: unknownWorkspace,
+  });
+  expect(begin.mock.calls[0]![0].target).toEqual({
+    workspace: "Owner Docs",
+    relativePath: "README.md",
+  });
+  expect(
+    JSON.stringify([started, record.mock.calls, begin.mock.calls]),
+  ).not.toContain(privateWorkspace);
+});
+
+const configurationTargetCases = [
+  ...ProductConfigurationCommandSchema.options.map((schema) => ({
+    route: "command",
+    kind: schema.shape.kind.value,
+    fields: Object.keys(schema.shape),
+  })),
+  ...ProductConfigurationEvidenceSchema.options.map((schema) => ({
+    route: "receipt",
+    kind: schema.shape.kind.value,
+    fields: Object.keys(schema.shape),
+  })),
+];
+it.each(
+  configurationTargetCases.flatMap((test) =>
+    ["w", privateWorkspace].map((workspaceId) => ({ ...test, workspaceId })),
+  ),
+)(
+  "resolves every configuration $route projection: $kind, $workspaceId",
+  async ({ route, kind, fields, workspaceId }) => {
+    const { store } = setup(retentionLimits);
+    store.setWorkspaceLabels(ownerLabels);
+    // Projection fixtures only: no configuration command or provider is executed.
+    const input = {
+      kind,
+      ...(fields.includes("workspaceId") ? { workspaceId } : {}),
+      ...(fields.includes("relativePath") ? { relativePath: privatePath } : {}),
+    };
+    const target =
+      route === "command"
+        ? configurationOperation(input as ProductConfigurationCommand).target
+        : configurationResultTarget({
+            ok: true,
+            snapshot: ownerConfiguration(ownerLabels),
+            evidence: input,
+          } as never);
+    store.record({ ...metadata, target }, "done", null, 1);
+    await store.flush(5000);
+    const recorded = (await store.snapshot(5000)).entries[0]!.target;
+    if (fields.includes("workspaceId"))
+      expect(recorded.workspace).toBe(
+        workspaceId === "w" ? "Owner Docs" : unknownWorkspace,
+      );
+    else expect(recorded.workspace).toBeUndefined();
+    if (workspaceId !== "w" || !fields.includes("workspaceId"))
+      expect(recorded.relativePath).toBeUndefined();
+    expect(JSON.stringify(recorded)).not.toContain(privateWorkspace);
+    expect(resolveOperationTarget(target, ownerLabels, "identifier")).toEqual(
+      recorded,
+    );
+  },
+);
+
+it("revalidates cached targets without extending the snapshot deadline on stalled IO", async () => {
+  let stalled = false;
+  const release = deferred();
+  const io = {
+    ...fs.promises,
+    lstat: async (...args: Parameters<typeof fs.promises.lstat>) => {
+      if (stalled) await release.promise;
+      return fs.promises.lstat(...args);
+    },
+  } as typeof fs.promises;
+  const { store } = injectedStore(io);
+  store.setWorkspaceLabels(ownerLabels);
+  store.record(
+    { ...metadata, target: { workspace: "w", relativePath: "README.md" } },
+    "done",
+    null,
+    1,
+  );
+  await store.flush(5000);
+  expect((await store.snapshot(5000)).entries[0]!.target.workspace).toBe(
+    "Owner Docs",
+  );
+  store.setWorkspaceLabels([]);
+  await store.flush(5000);
+  stalled = true;
+  try {
+    const started = performance.now();
+    const fallback = await store.snapshot(10);
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(fallback.corruptLines).toBe(1);
+    expect(fallback.entries[0]!.target).toEqual({
+      workspace: unknownWorkspace,
+    });
+  } finally {
+    stalled = false;
+    release.resolve();
+  }
+  await store.snapshot(5000);
+});
+
+it("bounds MCP label loading and records unknown targets when the owner index stalls", async () => {
+  const release = deferred();
+  let stalled = true;
+  const io = {
+    ...fs.promises,
+    lstat: async (...args: Parameters<typeof fs.promises.lstat>) => {
+      if (stalled) await release.promise;
+      return fs.promises.lstat(...args);
+    },
+  } as typeof fs.promises;
+  const { store } = injectedStore(io);
+  try {
+    const started = performance.now();
+    await store.loadWorkspaceLabels(10);
+    expect(performance.now() - started).toBeLessThan(500);
+    store.record(
+      {
+        ...metadata,
+        target: { workspace: privateWorkspace, relativePath: privatePath },
+      },
+      "done",
+      null,
+      1,
+    );
+  } finally {
+    stalled = false;
+    release.resolve();
+  }
+  expect(await store.flush(5000)).toBe(true);
+  expect((await store.snapshot(5000)).entries[0]!.target).toEqual({
+    workspace: unknownWorkspace,
+  });
 });

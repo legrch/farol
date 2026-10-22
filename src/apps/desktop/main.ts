@@ -6440,10 +6440,7 @@ function operationsStore(): OperationsStore {
 function configureProduct(value: unknown): Promise<ProductConfigurationResult> {
   const parsed = ProductConfigurationCommandSchema.safeParse(value);
   if (!parsed.success) return configureProductObserved(value);
-  const metadata = configurationOperation(
-    parsed.data,
-    configuration?.snapshot(),
-  );
+  const metadata = configurationOperation(parsed.data);
   return observeOperation(operationsStore(), metadata, () => {
     const original = configureProductObserved(value);
     void original.then(
@@ -8196,13 +8193,14 @@ async function configureAdmittedProduct(
           return configurationFailure("SUPPORT_EXPORT_CANCELLED");
         }
         const tasks = productTasksState().tasks;
+        const supportConfiguration = configuration.snapshot();
         const receipt = await writeSupportExport(
           target,
           createSupportExport({
             operations: await operationsStore().snapshot(),
             generatedAt: new Date().toISOString(),
             build: buildIdentity,
-            configuration: configuration.snapshot(),
+            configuration: supportConfiguration,
             runtime: {
               state: runtimeState,
               errorCode: supportRuntimeErrorCode(runtimeError),
@@ -8233,6 +8231,9 @@ async function configureAdmittedProduct(
                     countsFrom: "current" as const,
                   },
           }),
+          supportConfiguration.status === "ready"
+            ? supportConfiguration.settings.computer.workspaces
+            : [],
         );
         return ProductConfigurationResultSchema.parse({
           ok: true,

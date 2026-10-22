@@ -199,3 +199,86 @@ it("Home shows the same recorded operations while Setup is unfinished", async ()
     host.remove();
   }
 });
+
+it("shows only resolved owner targets from current and legacy store records", async () => {
+  // Disposable store + scripted IPC only; no Electron or live provider evidence.
+  const fs = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { OperationsStore } =
+    await import("../../apps/desktop/operations/store");
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "farol-b14-activity-"),
+  );
+  const store = new OperationsStore(directory);
+  const privateSentence = "My private sentence about an appointment";
+  const privatePath = "private appointment notes.txt";
+  const f = fixture();
+  const c = new WindowController({
+    ...f.api,
+    operations: () => store.snapshot(5000),
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    store.setWorkspaceLabels([{ workspaceId: "w", label: "Owner Docs" }]);
+    for (const workspace of [privateSentence, "w"])
+      store.record(
+        {
+          source: "ChatGPT",
+          kind: "computer_workspace_read",
+          target: {
+            workspace,
+            relativePath: workspace === "w" ? "README.md" : privatePath,
+          },
+        },
+        "refused",
+        "OPERATION_REFUSED",
+        1,
+      );
+    expect(await store.flush(5000)).toBe(true);
+    const snapshot = await store.snapshot(5000);
+    const segment = (await fs.readdir(directory)).find((name) =>
+      name.endsWith(".jsonl"),
+    )!;
+    await fs.appendFile(
+      path.join(directory, segment),
+      JSON.stringify({
+        ...snapshot.entries[0],
+        id: crypto.randomUUID(),
+        target: { workspace: privateSentence, relativePath: privatePath },
+      }) + "\n",
+    );
+    await c.start();
+    await c.refresh();
+    await expect.poll(() => c.getSnapshot().activity.length).toBe(3);
+    const activity = c.getSnapshot().activity;
+    expect(activity).toHaveLength(3);
+    expect(JSON.stringify(activity)).not.toContain(privateSentence);
+    expect(JSON.stringify(activity)).not.toContain(privatePath);
+    expect(activity.map((entry) => entry.operation)).toEqual([
+      "[unknown workspace]",
+      "Owner Docs · README.md",
+      "[unknown workspace]",
+    ]);
+    await act(async () =>
+      root.render(
+        <OperationsActivity
+          snapshot={c.getSnapshot()}
+          facade={{} as RendererFacade}
+        />,
+      ),
+    );
+    expect(host.textContent).toContain("Owner Docs · README.md");
+    expect(host.textContent).toContain("[unknown workspace]");
+    expect(host.textContent).not.toContain(privateSentence);
+    expect(host.textContent).not.toContain(privatePath);
+  } finally {
+    await act(async () => root.unmount());
+    c.dispose();
+    host.remove();
+    await store.shutdown(5000);
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});

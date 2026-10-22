@@ -1,20 +1,12 @@
 import type {
   ProductConfigurationCommand,
-  ProductConfigurationSnapshot,
   ProductConfigurationResult,
 } from "../../../src/pkg/product-settings/contract";
 import type { OperationMetadata } from "../renderer/operations-contract";
 export function configurationOperation(
   value: ProductConfigurationCommand,
-  settings: ProductConfigurationSnapshot | undefined,
 ): OperationMetadata {
   const kind = value.kind;
-  const workspace =
-    "workspaceId" in value && settings?.status === "ready"
-      ? settings.settings.computer.workspaces.find(
-          (w) => w.workspaceId === value.workspaceId,
-        )
-      : undefined;
   const source =
     kind.startsWith("host.") || kind.startsWith("model.")
       ? "Codex"
@@ -27,7 +19,7 @@ export function configurationOperation(
     source,
     kind,
     target: {
-      ...(workspace ? { workspace: workspace.label } : {}),
+      ...("workspaceId" in value ? { workspace: value.workspaceId } : {}),
       ...(kind.startsWith("computer.run-git-")
         ? { command: "git", relativePath: "." }
         : {}),
@@ -46,14 +38,10 @@ export function configurationResultTarget(
   if (!result.ok || !result.evidence || result.snapshot.status !== "ready")
     return {};
   const evidence = result.evidence;
-  const workspace =
-    "workspaceId" in evidence
-      ? result.snapshot.settings.computer.workspaces.find(
-          (w) => w.workspaceId === evidence.workspaceId,
-        )
-      : undefined;
   return {
-    ...(workspace ? { workspace: workspace.label } : {}),
+    ...("workspaceId" in evidence && typeof evidence.workspaceId === "string"
+      ? { workspace: evidence.workspaceId }
+      : {}),
     ...("relativePath" in evidence && typeof evidence.relativePath === "string"
       ? { relativePath: evidence.relativePath }
       : {}),

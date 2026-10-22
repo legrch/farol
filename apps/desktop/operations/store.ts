@@ -2,10 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { createTotalOperationsRecorder } from "./recorder";
+import { resolveOperationTarget, resolveOperationsSnapshot } from "./target";
 import {
   OperationEntrySchema,
   OperationsDiagnosticsSchema,
-  OperationLabelSchema,
   type OperationMetadata,
   type OperationEntry,
   type OperationsRecorder,
@@ -41,6 +41,8 @@ export class OperationsStore implements OperationsRecorder {
   private unrecordedUncertainEntries = 0;
   private readonly queue: QueuedEntry[] = [];
   private labels: Labels | undefined;
+  private currentLabels: Labels | undefined;
+  private readLabelsCache: Labels = [];
   private running: Promise<void> | undefined;
   private scheduled: NodeJS.Immediate | undefined;
   private readonly retentionTimer: NodeJS.Timeout;
@@ -67,6 +69,7 @@ export class OperationsStore implements OperationsRecorder {
       this.diagnosticsDirty = true;
       this.schedule();
     },
+    () => this.currentLabels ?? [],
   );
   readonly begin = this.recorder.begin;
   readonly record = this.recorder.record;
@@ -137,6 +140,7 @@ export class OperationsStore implements OperationsRecorder {
       .map(({ workspaceId, label }) => ({ workspaceId, label }));
     this.schedule();
     this.labels = labels;
+    this.currentLabels = labels;
   }
   private async replace(file: string, value: unknown): Promise<void> {
     const temporary = path.join(this.directory, `${randomUUID()}.tmp`);
@@ -156,23 +160,54 @@ export class OperationsStore implements OperationsRecorder {
       await this.io.unlink(temporary).catch(() => undefined);
     }
   }
-  private async readLabels(): Promise<Record<string, unknown>> {
+  private async readLabels(): Promise<Labels> {
     try {
+      await this.validateDirectory();
       const { handle, stat } = await this.open(
         path.join(this.directory, "workspace-labels.json"),
         fs.constants.O_RDONLY,
       );
       try {
-        if (stat.size > 65536) return {};
-        const labels: unknown = JSON.parse(await handle.readFile("utf8"));
-        return labels && typeof labels === "object"
-          ? (labels as Record<string, unknown>)
-          : {};
+        if (stat.size > 65536) return [];
+        const value: unknown = JSON.parse(await handle.readFile("utf8"));
+        if (!value || typeof value !== "object" || Array.isArray(value))
+          return [];
+        // Validate each owner label independently; one corrupt sibling grants nothing.
+        return Object.entries(value)
+          .flatMap(([workspaceId, label]) => {
+            try {
+              const target = resolveOperationTarget(
+                { workspace: workspaceId },
+                [{ workspaceId, label: label as string }],
+                "identifier",
+              );
+              return [{ workspaceId, label: target.workspace! }];
+            } catch {
+              return [];
+            }
+          })
+          .slice(0, 128);
       } finally {
         await handle.close();
       }
     } catch {
-      return {};
+      return [];
+    }
+  }
+  /** Load the private owner index before a separate MCP writer serves requests.
+   * Missing/unreadable configuration leaves all workspace targets unresolved. */
+  async loadWorkspaceLabels(deadlineMs = 100): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const labels = await Promise.race([
+        this.readLabels(),
+        new Promise<Labels>((resolve) => {
+          timer = setTimeout(() => resolve([]), Math.max(0, deadlineMs));
+        }),
+      ]);
+      this.currentLabels ??= labels;
+    } finally {
+      clearTimeout(timer);
     }
   }
   private beginEntry(metadata: OperationMetadata) {
@@ -323,7 +358,6 @@ export class OperationsStore implements OperationsRecorder {
     };
   }
   private async writeBatch(batch: readonly QueuedEntry[]): Promise<void> {
-    const labels = await this.readLabels();
     let handle:
       Awaited<ReturnType<OperationsStore["open"]>>["handle"] | undefined;
     let size = 0;
@@ -365,22 +399,7 @@ export class OperationsStore implements OperationsRecorder {
             }
           }
         }
-        const workspace = entry.target.workspace;
-        const label =
-          workspace && Object.hasOwn(labels, workspace)
-            ? labels[workspace]
-            : undefined;
-        const parsedLabel =
-          label === undefined
-            ? undefined
-            : OperationLabelSchema.safeParse(label);
-        const resolved = parsedLabel?.success
-          ? {
-              ...entry,
-              target: { ...entry.target, workspace: parsedLabel.data },
-            }
-          : entry;
-        const line = JSON.stringify(resolved) + "\n";
+        const line = JSON.stringify(entry) + "\n";
         await handle.writeFile(line);
         size += Buffer.byteLength(line);
         if (size >= this.limits.segmentBytes) {
@@ -548,7 +567,10 @@ export class OperationsStore implements OperationsRecorder {
           );
         }),
       ]);
-      return { ...snapshot, ...this.mergeDiagnostics(snapshot) };
+      return resolveOperationsSnapshot(
+        { ...snapshot, ...this.mergeDiagnostics(snapshot) },
+        this.currentLabels ?? this.readLabelsCache,
+      );
     } finally {
       clearTimeout(timer);
     }
@@ -569,6 +591,8 @@ export class OperationsStore implements OperationsRecorder {
     const cutoff = this.now() - this.limits.days * dayMs;
     let corruptLines = 0;
     const entries: OperationEntry[] = [];
+    const labels = this.currentLabels ?? (await this.readLabels());
+    this.readLabelsCache = labels;
     const diagnostics = {
       writeFailures: 0,
       droppedEntries: 0,
@@ -609,7 +633,11 @@ export class OperationsStore implements OperationsRecorder {
             for (const line of text.split("\n")) {
               if (!line) continue;
               try {
-                const parsed = OperationEntrySchema.safeParse(JSON.parse(line));
+                const raw = JSON.parse(line) as OperationEntry;
+                const parsed = OperationEntrySchema.safeParse({
+                  ...raw,
+                  target: resolveOperationTarget(raw.target, labels, "label"),
+                });
                 if (parsed.success) {
                   if (parsed.data.at >= cutoff) entries.push(parsed.data);
                 } else corruptLines++;

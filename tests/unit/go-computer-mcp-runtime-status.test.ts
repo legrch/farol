@@ -37,6 +37,7 @@ const ports = vi.hoisted(() => ({
   request: vi.fn(),
   duringSetup: undefined as (() => void) | undefined,
   operationsShutdown: vi.fn(async () => true),
+  operationsLabels: vi.fn(async () => {}),
 }));
 vi.mock("../../apps/desktop/operations/store", () => ({
   OperationsStore: class {
@@ -45,6 +46,7 @@ vi.mock("../../apps/desktop/operations/store", () => ({
     }
     record() {}
     shutdown = ports.operationsShutdown;
+    loadWorkspaceLabels = ports.operationsLabels;
   },
 }));
 vi.mock("../../apps/desktop/bridge/connector-launch", () => ({
@@ -146,6 +148,7 @@ vi.mock("../../src/modules/computer/infra/mcp/private-mcp-lifecycle", () => ({
 }));
 vi.mock("@modelcontextprotocol/server/stdio", () => ({
   serveStdio: (factory: () => McpServer) => {
+    expect(ports.operationsLabels).toHaveBeenCalledOnce();
     const registration = vi.spyOn(McpServer.prototype, "registerTool");
     ports.servers.push(factory());
     ports.toolNames = registration.mock.calls.map(([name]) => name);

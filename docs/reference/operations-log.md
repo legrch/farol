@@ -110,19 +110,19 @@ rewritten or replayed. The HTTP model adapter uses the same code classifier befo
 returning upstream refusal codes. Model SSE frames and action results remain
 unchanged outside the diagnostic projection.
 
-| Stored field                            | Origin and recording rule                                                                                                                                                                                      |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `source`                                | Farol adapter selection; exact `ChatGPT`, `Setup`, `You`, `Updater`, `Codex` enum.                                                                                                                             |
-| `kind`                                  | Static Farol operation names and validated command discriminants; exact `operationKinds` enum. Arbitrary strings are rejected, including regex-shaped names.                                                   |
-| `target.workspace`                      | Owner-configured workspace name/ID; 1–160 UTF-16 units, Unicode letters/marks/numbers and space, `.`, `_`, `(`, `)`, `@`, `-` only.                                                                            |
-| `target.relativePath`                   | Selected relative-path metadata; 1–4096 units, the same characters plus `/`; no absolute path, empty segment, traversal, backslash, control or bidi format character. `.` is allowed.                          |
-| `target.command`                        | MCP's selected executable word or Farol's fixed Git action, reduced at the recorder boundary to `git` or `other`; no arbitrary tool-argument word survives.                                                    |
-| `target.handle`, `target.start`         | Unmatched process arguments have no trusted start metadata; fixed `unrecognized` and `unknown` only. Matched starts retain their validated target; raw handles are never persisted.                            |
-| `outcome`, `code`                       | Farol's closed outcome classifier and the single closed code set above. Provider, ChatGPT, process, tool and network text cannot add a value.                                                                  |
-| `id`, `lifecycle.id`, `lifecycle.phase` | UUIDs minted by the store and exact `started`/`observed` phase. Adapter metadata cannot supply or override them.                                                                                               |
-| `at`, `durationMs`                      | Farol wall/monotonic clocks; finite, nonnegative safe integers. Duration is rounded locally; invalid numeric values are rejected.                                                                              |
-| Workspace label index                   | Only `workspaceId`/`label` selected from owner configuration; same name bounds, at most 128 pairs. Other configuration fields never reach the sink. Disk label values are validated again before substitution. |
-| Diagnostic/index counters               | Local increments or counts of validated/read records; nonnegative safe integers at the snapshot/export boundary. No external text or error message is retained.                                                |
+| Stored field                            | Origin and recording rule                                                                                                                                                                                                          |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `source`                                | Farol adapter selection; exact `ChatGPT`, `Setup`, `You`, `Updater`, `Codex` enum.                                                                                                                                                 |
+| `kind`                                  | Static Farol operation names and validated command discriminants; exact `operationKinds` enum. Arbitrary strings are rejected, including regex-shaped names.                                                                       |
+| `target.workspace`                      | Exact caller ID resolved to the owner-configured label at observation time; otherwise `[unknown workspace]`. Labels retain existing bounded owner-text normalization.                                                              |
+| `target.relativePath`                   | Selected relative-path/directory metadata only after workspace resolution; existing bounded normalization removes control/format characters and rejects absolute paths, empty segments, traversal and backslashes. `.` is allowed. |
+| `target.command`                        | MCP's selected executable word or Farol's fixed Git action, reduced at the recorder boundary to `git` or `other`; no arbitrary tool-argument word survives.                                                                        |
+| `target.handle`, `target.start`         | Unmatched process arguments have no trusted start metadata; fixed `unrecognized` and `unknown` only. Matched starts retain their validated target; raw handles are never persisted.                                                |
+| `outcome`, `code`                       | Farol's closed outcome classifier and the single closed code set above. Provider, ChatGPT, process, tool and network text cannot add a value.                                                                                      |
+| `id`, `lifecycle.id`, `lifecycle.phase` | UUIDs minted by the store and exact `started`/`observed` phase. Adapter metadata cannot supply or override them.                                                                                                                   |
+| `at`, `durationMs`                      | Farol wall/monotonic clocks; finite, nonnegative safe integers. Duration is rounded locally; invalid numeric values are rejected.                                                                                                  |
+| Workspace label index                   | Only `workspaceId`/`label` selected from owner configuration; same name bounds, at most 128 pairs. Other configuration fields never reach the sink. Disk label values are validated again before substitution.                     |
+| Diagnostic/index counters               | Local increments or counts of validated/read records; nonnegative safe integers at the snapshot/export boundary. No external text or error message is retained.                                                                    |
 
 Workspace names and relative paths are the explicit owner-metadata exception, not
 code or kind vocabularies. International names and normal relative filenames remain
@@ -130,6 +130,67 @@ visible. Raw file/process/network contents, command arguments, search text, prom
 answers and exception messages have no log field. Unknown target/metadata keys are
 rejected. Failing observation never suppresses work, changes promise identity,
 adds an await turn or retries an operation.
+
+## Workspace resolution and target inventory (B14)
+
+`apps/desktop/operations/target.ts` owns the shared target resolver. Adapter
+metadata carries workspace IDs. `createTotalOperationsRecorder` resolves the exact
+ID before any normalization, before calling a sink's `begin` or `record`, and
+again when a finish handle observes enriched metadata. A caller cannot impersonate
+an ID by supplying its owner label, a control-character variant or a truncated
+prefix. Missing configuration resolves nothing. Unmatched workspace values become
+`[unknown workspace]`; relative paths and directories are absent unless a workspace
+resolved. Resolved labels and paths keep their existing per-field normalization.
+Command names become only `git`/`other`; unknown process handles become only
+`unrecognized`/`unknown`. Unknown target keys still fail the closed schema.
+
+The store queues only resolved targets. Configuration changes before the writer
+runs cannot retrospectively resolve an earlier caller value. The separate MCP
+process loads the private owner label index before serving tools; an unavailable
+index leaves its workspace targets unresolved. Loading the index never rewrites
+it or creates execution authority.
+
+Persisted records contain labels, not IDs. Store reads resolve those labels
+against the owner index, before display normalization, and reapply the resolver
+to returned snapshots, including cached deadline fallbacks. Older raw unmatched
+IDs and their paths are suppressed without rewriting historical segments. A label
+removed from the current configuration is also suppressed. A historical label
+that equals a currently configured owner label is indistinguishable from that
+owner label and is retained as configured metadata; arbitrary unmatched text is
+never accepted as a label.
+
+`createSupportExport` independently uses its full owner configuration; the final
+`writeSupportExport` uses an explicit names-only workspace argument. Both invoke
+the same resolver before their closed snapshot schema. A direct export without
+configuration drops workspace/path detail. The production export passes the same
+configuration snapshot to both boundaries. The renderer receives the sanitized
+store snapshot through the operations IPC; no renderer label map grants trust.
+
+| Target producer / caller input                                                                                                                     | Projection and handling                                                                                                                                                                                                                                                                                             |
+| -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bridge/computer-mcp.ts`: `farol_connector_verify`                                                                                                 | Caller `workspaceId` only; exact-ID resolution or fixed marker. Challenge is excluded.                                                                                                                                                                                                                              |
+| Same: `computer_workspace_bootstrap`                                                                                                               | Caller `workspaceId`, `relativeDirectory` projected as relative path; directory survives only with resolved workspace.                                                                                                                                                                                              |
+| Same: `computer_workspace_list`, `computer_workspace_read`, `computer_workspace_search`                                                            | Caller `workspaceId`, `relativePath`; same resolution. Search pattern and returned file/match data are excluded.                                                                                                                                                                                                    |
+| Same: `computer_workspace_write`, `computer_workspace_edit`, `computer_mutation_read`                                                              | Caller `workspaceId`, `relativePath`; same resolution. Operation IDs, hashes, content and edits are excluded.                                                                                                                                                                                                       |
+| Same: `computer_shell_start`                                                                                                                       | Caller `workspaceId`, `relativeCwd`, executable word; workspace/directory resolution and closed command category. Arguments/stdin are excluded.                                                                                                                                                                     |
+| Same: `computer_shell_read`, `computer_shell_cancel`                                                                                               | Original operation ID/handle select server-local start metadata; inherited raw ID is resolved anew at observation. No match yields fixed markers only. Provider-returned handles are used only for matching; never stored.                                                                                          |
+| Same: `computer_connection_status`, `farol_connector_verify_catalogue`, `computer_workspace_catalogue`, `codex_selected_thread_read`               | Empty targets. Catalogue entries, selected thread/turn IDs and provider text are excluded.                                                                                                                                                                                                                          |
+| `operations/configuration.ts`: every `configurationOperation` command                                                                              | Only command `workspaceId`, optional `relativePath`, and Farol's fixed Git category/root directory are selected. The recorder resolves the ID; absent/unresolved workspace drops the path. Add labels, filesystem roots, exclusions, executable settings, thread IDs and other configuration payloads are excluded. |
+| Same: every `configurationResultTarget` receipt                                                                                                    | Only receipt `workspaceId`, optional `relativePath`, and Farol's fixed Git category/root directory; the same recorder resolves against the updated owner configuration, including Add. No independent label substitution.                                                                                           |
+| `bridge/computer.ts`, `connector-mutation.ts`, `connector-process.ts`, `connector-verification.ts`, `selected-codex-read.ts`                       | Go contract adapters return typed results, not operation targets. The enclosing MCP observer selects the fields above; Go response identifiers cannot add target fields.                                                                                                                                            |
+| `operations/model-turn.ts`: Responses turn and compaction; `go-chat-browser.ts`: Consult send and turn                                             | Empty targets. Request/provider conversation, thread, turn, response and model-route identifiers are excluded.                                                                                                                                                                                                      |
+| `src/apps/desktop/main.ts`: task configuration, Codex chat turns, backend/connector lifecycle, connection health/start/repair/stop, Hub start/stop | Empty targets. IDs and lifecycle/provider payloads are excluded; source/kind remain the closed vocabulary.                                                                                                                                                                                                          |
+| `operations/updater.ts`: recovery/check/download/apply/apply-on-quit/restore/rollback                                                              | Empty targets. Update versions, build IDs and provider metadata cannot enter targets.                                                                                                                                                                                                                               |
+
+The MCP table drives every registered tool, including retained, unknown, repeated,
+refused, evicted and mismatched shell starts, with a configured ID, an unmatched
+private sentence, and a label used as an ID. Configuration projection tables are
+derived from every command and receipt discriminant. Store/recorder fixtures cover
+record-time resolution, finish enrichment, private-index loading, missing
+configuration and legacy read/export suppression. A disposable store-to-controller
+renderer test verifies Activity data and rendered text. Existing model/browser and
+updater fixtures exercise their empty-target projections. These are bounded source
+and renderer fixtures, not live Go/provider, installed or native acceptance.
 
 ## Recording boundaries
 

@@ -1863,8 +1863,12 @@ it.each([
   "records tool-valid unusual paths through MCP: case %#",
   async (relativePath) => {
     const record = vi.fn();
+    const recorder = createTotalOperationsRecorder({ record });
+    recorder.setWorkspaceLabels([
+      { workspaceId: "workspace", label: "Owner Docs" },
+    ]);
     const { client, request } = await setup({
-      operations: createTotalOperationsRecorder({ record }),
+      operations: recorder,
       respond: async () => {
         throw new BridgeError("refused", "OPERATION_REFUSED");
       },
@@ -1878,7 +1882,7 @@ it.each([
     expect(record.mock.calls[0]![0]).toEqual({
       source: "ChatGPT",
       kind: "computer_workspace_read",
-      target: { workspace: "workspace", relativePath },
+      target: { workspace: "Owner Docs", relativePath },
     });
     expect(record.mock.calls[0]![1]).toBe("refused");
   },
@@ -1909,9 +1913,19 @@ it("records an unlisted MCP refusal code as counted unknown without changing the
   expect(recorder.diagnostics().unmappedCodes).toBe(1);
 });
 
-it.each(recordedToolCases)(
-  "records the exact content-free target for $name (start: $start)",
-  async ({ name, input, target, start }) => {
+it.each(
+  recordedToolCases.flatMap((test) =>
+    ["workspace", "My private sentence about the owner", "Owner Docs"].map(
+      (workspaceId) => ({ ...test, workspaceId }),
+    ),
+  ),
+)(
+  "resolves the target for $name (start: $start, workspace: $workspaceId)",
+  async ({ name, input: originalInput, target, start, workspaceId }) => {
+    const input = {
+      ...originalInput,
+      ...("workspaceId" in originalInput ? { workspaceId } : {}),
+    };
     const record = vi.fn();
     const refused = async (): Promise<never> => {
       throw new BridgeError("refused", "OPERATION_REFUSED");
@@ -1953,8 +1967,12 @@ it.each(recordedToolCases)(
       }),
       cancel: refused,
     };
+    const recorder = createTotalOperationsRecorder({ record });
+    recorder.setWorkspaceLabels([
+      { workspaceId: "workspace", label: "Owner Docs" },
+    ]);
     const { client, tools } = await setup({
-      operations: createTotalOperationsRecorder({ record }),
+      operations: recorder,
       respond: refused,
       verification: { verify: refused, verifyCatalogue: refused },
       connectionStatus: { observe: refused },
@@ -1969,7 +1987,7 @@ it.each(recordedToolCases)(
     if (start) {
       await client.callTool({
         name: "computer_shell_start",
-        arguments: shellLogStart,
+        arguments: { ...shellLogStart, workspaceId },
       });
       if (start === "repeated")
         await client.callTool({
@@ -1990,11 +2008,25 @@ it.each(recordedToolCases)(
             );
       record.mockClear();
     }
-    await client.callTool({ name, arguments: input });
+    const reply = await client.callTool({ name, arguments: input });
     expect(record).toHaveBeenCalledOnce();
     const [metadata, outcome, code, durationMs] = record.mock.calls[0]!;
+    const { workspace, relativePath, ...rest } = target;
     const safeTarget = {
-      ...target,
+      ...rest,
+      ...(workspace === undefined
+        ? {}
+        : {
+            workspace:
+              workspaceId === "workspace"
+                ? "Owner Docs"
+                : "[unknown workspace]",
+          }),
+      ...(workspace !== undefined &&
+      workspaceId === "workspace" &&
+      relativePath !== undefined
+        ? { relativePath }
+        : {}),
       ...(target.command === undefined
         ? {}
         : { command: target.command === "git" ? "git" : "other" }),
@@ -2007,7 +2039,8 @@ it.each(recordedToolCases)(
     });
     expect(outcome).toBe(name === "computer_shell_start" ? "done" : "refused");
     expect(code).toBe(
-      name === "computer_shell_start" ? null : "OPERATION_REFUSED",
+      (reply.structuredContent as Record<string, unknown> | undefined)?.code ??
+        null,
     );
     expect(durationMs).toEqual(expect.any(Number));
     const entry = OperationEntrySchema.parse({
@@ -2020,7 +2053,7 @@ it.each(recordedToolCases)(
     });
     expect(entry.target).toEqual(safeTarget);
     expect(JSON.stringify(record.mock.calls)).not.toMatch(
-      /PRIVATE-CANARY|PRIVATE-STDIN|PRIVATE-OUTPUT|private-challenge|secret|"(?:content|text|stdin|stdout|stderr|arguments|edits|pattern)":/,
+      /My private sentence|PRIVATE-CANARY|PRIVATE-STDIN|PRIVATE-OUTPUT|private-challenge|secret|"(?:content|text|stdin|stdout|stderr|arguments|edits|pattern)":/,
     );
   },
 );

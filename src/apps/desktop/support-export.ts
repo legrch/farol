@@ -1,7 +1,8 @@
 import {
-  OperationsSnapshotSchema,
-  type OperationsSnapshot,
-} from "../../../apps/desktop/renderer/operations-contract";
+  resolveOperationsSnapshot,
+  type OperationWorkspaceLabels,
+} from "../../../apps/desktop/operations/target";
+import { type OperationsSnapshot } from "../../../apps/desktop/renderer/operations-contract";
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
@@ -208,7 +209,14 @@ export function createSupportExport(input: SupportExportInput) {
   return {
     ...(input.operations === undefined
       ? {}
-      : { operations: OperationsSnapshotSchema.parse(input.operations) }),
+      : {
+          operations: resolveOperationsSnapshot(
+            input.operations,
+            input.configuration.status === "ready"
+              ? input.configuration.settings.computer.workspaces
+              : [],
+          ),
+        }),
     schema: 2 as const,
     kind: "farol_support" as const,
     generatedAt: input.generatedAt,
@@ -249,7 +257,11 @@ async function syncDirectory(directory: string): Promise<void> {
   }
 }
 
-export async function writeSupportExport(target: string, report: unknown) {
+export async function writeSupportExport(
+  target: string,
+  report: unknown,
+  workspaces: OperationWorkspaceLabels = [],
+) {
   if (!path.isAbsolute(target) || target.includes("\0")) {
     throw new Error("SUPPORT_EXPORT_UNSAFE");
   }
@@ -278,11 +290,17 @@ export async function writeSupportExport(target: string, report: unknown) {
     report !== null && typeof report === "object" && "operations" in report;
   if (hasOperations) {
     const reportRecord = report as Record<string, unknown>;
-    const operations = OperationsSnapshotSchema.safeParse(
-      reportRecord.operations,
-    );
-    if (!operations.success) throw new Error("SUPPORT_EXPORT_INVALID");
-    report = { ...reportRecord, operations: operations.data };
+    try {
+      report = {
+        ...reportRecord,
+        operations: resolveOperationsSnapshot(
+          reportRecord.operations as OperationsSnapshot,
+          workspaces,
+        ),
+      };
+    } catch {
+      throw new Error("SUPPORT_EXPORT_INVALID");
+    }
   }
   let serialized: string;
   try {

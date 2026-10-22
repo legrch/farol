@@ -70,6 +70,7 @@ export async function runGoComputerMcp(file: string): Promise<void> {
   const operations = new OperationsStore(
     path.join(path.dirname(path.dirname(launch.lifecycleRoot)), "operations"),
   );
+  await operations.loadWorkspaceLabels();
   let effectOutcomeUnknown = false;
   const handle = serveStdio(
     () =>

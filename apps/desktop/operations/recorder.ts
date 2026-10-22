@@ -9,20 +9,31 @@ import {
   OperationDurationSchema,
   OperationWorkspaceLabelsSchema,
 } from "../renderer/operations-contract";
+import {
+  resolveOperationTarget,
+  type OperationWorkspaceLabels,
+} from "./target";
 import { mappedOperationOutcome } from "../renderer/operation-outcomes";
 import { recordableOperationCode } from "../renderer/operations-vocabulary";
 
-function recordableMetadata(metadata: OperationMetadata) {
+function recordableMetadata(
+  metadata: OperationMetadata,
+  workspaces: OperationWorkspaceLabels,
+) {
   const target = metadata.target;
   return OperationMetadataSchema.parse({
     ...metadata,
-    target: {
-      ...target,
-      ...(target.command === undefined
-        ? {}
-        : { command: target.command === "git" ? "git" : "other" }),
-      ...(target.handle === undefined ? {} : { handle: "unrecognized" }),
-    },
+    target: resolveOperationTarget(
+      {
+        ...target,
+        ...(target.command === undefined
+          ? {}
+          : { command: target.command === "git" ? "git" : "other" }),
+        ...(target.handle === undefined ? {} : { handle: "unrecognized" }),
+      },
+      workspaces,
+      "identifier",
+    ),
   });
 }
 
@@ -60,7 +71,10 @@ const inert: Finish = () => {};
 export function createTotalOperationsRecorder(
   sink: RecorderSink,
   diagnosticsChanged: () => void = () => {},
+  workspaceLabels?: () => OperationWorkspaceLabels,
 ): TotalOperationsRecorder {
+  let labels: OperationWorkspaceLabels = [];
+  const workspaces = () => workspaceLabels?.() ?? labels;
   let unmappedCodes = 0;
   let writeFailures = 0;
   let droppedEntries = 0;
@@ -114,7 +128,7 @@ export function createTotalOperationsRecorder(
   const recorder: TotalOperationsRecorder = {
     begin(metadata) {
       try {
-        const safe = recordableMetadata(metadata);
+        const safe = recordableMetadata(metadata, workspaces());
         if (!sink.begin)
           return (outcome, code, durationMs) =>
             recorder.record(metadata, outcome, code, durationMs);
@@ -132,10 +146,13 @@ export function createTotalOperationsRecorder(
             () => {
               // Configuration receipts may enrich the target before settlement.
               // Revalidate that target without letting source/kind change mid-flight.
-              safe.target = recordableMetadata({
-                ...safe,
-                target: metadata.target,
-              }).target;
+              safe.target = recordableMetadata(
+                {
+                  ...safe,
+                  target: metadata.target,
+                },
+                workspaces(),
+              ).target;
               const classified = classification(outcome, code);
               recordedOutcome = classified.outcome;
               return finish(
@@ -158,7 +175,7 @@ export function createTotalOperationsRecorder(
       let recordedOutcome = outcome;
       observe(
         () => {
-          const safe = recordableMetadata(metadata);
+          const safe = recordableMetadata(metadata, workspaces());
           const classified = classification(outcome, code);
           recordedOutcome = classified.outcome;
           return sink.record(
@@ -172,16 +189,12 @@ export function createTotalOperationsRecorder(
       );
     },
     setWorkspaceLabels(workspaces) {
-      observe(() =>
-        sink.setWorkspaceLabels?.(
-          OperationWorkspaceLabelsSchema.parse(
-            workspaces.map(({ workspaceId, label }) => ({
-              workspaceId,
-              label,
-            })),
-          ),
-        ),
-      );
+      observe(() => {
+        labels = OperationWorkspaceLabelsSchema.parse(
+          workspaces.map(({ workspaceId, label }) => ({ workspaceId, label })),
+        );
+        return sink.setWorkspaceLabels?.(labels);
+      });
     },
     diagnostics: () => ({
       writeFailures,

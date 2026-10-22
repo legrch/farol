@@ -89,6 +89,8 @@ export const OperationEntrySchema = z.strictObject({
     .optional(),
 });
 export type OperationEntry = z.infer<typeof OperationEntrySchema>;
+/** Adapter workspace values are unresolved IDs, never display labels. The
+ * recorder resolves them against owner configuration before any sink sees them. */
 export type OperationMetadata = Pick<OperationEntry, "source"> & {
   kind: string;
   target: Omit<OperationEntry["target"], "command" | "handle"> & {
