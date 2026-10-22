@@ -488,8 +488,11 @@ func (a *liveHelperNativeAdmission) Check(ctx context.Context) error {
 		if err := a.promotion.Verify(ctx); err != nil {
 			return err
 		}
-		// The original process exit and held promotion lease admit the swap.
-		// A drain receipt is diagnostic and cannot revoke that observed exit.
+		// A successor can publish its marker before we acquire promotion. Only
+		// the captured predecessor's leftover marker is diagnostic.
+		if err := a.live.CheckUpdateStopped(ctx); err != nil {
+			return err
+		}
 	}
 	return closedHelperBounds(ctx, a.until)
 }
