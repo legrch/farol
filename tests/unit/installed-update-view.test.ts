@@ -409,16 +409,54 @@ describe("installed update view", () => {
   });
 });
 
-it("reassures after a settled failure using the actual installed version", () => {
+it("reassures only after content-verified rollback using the installed version", () => {
   const f = fixture();
   f.view.setInstalledIdentity("0.2.8-owner.beta.5");
   f.view.render({
     phase: "failed",
-    code: "UPDATE_HELPER_EXITED",
+    code: "UPDATE_ROLLED_BACK",
     recoveryRequired: false,
   });
   expect(f.node("summary").textContent).toContain(
     "The update didn't finish. Farol 0.2.8-owner.beta.5 is still installed and works.",
   );
   expect(f.node("summary").textContent).not.toContain("Recovery required");
+});
+
+it.each([
+  ["UPDATE_SOURCE_IDENTITY_UNCONFIRMED", false],
+  ["UPDATE_HELPER_EXITED", false],
+  ["UPDATE_DOWNLOAD_FAILED", false],
+  ["UPDATE_ADOPTION_TREE_MISMATCH", false],
+  ["UPDATE_HANDOFF_UNKNOWN", true],
+  ["UPDATE_ROLLED_BACK", true],
+] as const)(
+  "does not promise installation health for %s with recoveryRequired=%s",
+  (code, recoveryRequired) => {
+    const f = fixture();
+    f.view.setInstalledIdentity("0.2.8-owner.beta.5");
+    f.view.render({ phase: "failed", code, recoveryRequired });
+    for (const name of ["summary", "notice-copy"]) {
+      expect(f.node(name).textContent).not.toContain(
+        "still installed and works",
+      );
+      expect(f.node(name).textContent).toContain(
+        code === "UPDATE_ADOPTION_TREE_MISMATCH"
+          ? "doesn’t match its published release"
+          : "Farol couldn’t complete the update",
+      );
+    }
+  },
+);
+
+it("does not promise installation health after rollback without a version", () => {
+  const f = fixture();
+  f.view.render({
+    phase: "failed",
+    code: "UPDATE_ROLLED_BACK",
+    recoveryRequired: false,
+  });
+  expect(f.node("summary").textContent).not.toContain(
+    "still installed and works",
+  );
 });

@@ -148,7 +148,10 @@ export function createInstalledUpdateView(
     render(view: InstalledUpdateView): void {
       lastView = view;
       const failure =
-        view.phase === "failed" && !view.recoveryRequired && installedVersion
+        view.phase === "failed" &&
+        view.code === "UPDATE_ROLLED_BACK" &&
+        !view.recoveryRequired &&
+        installedVersion
           ? `The update didn't finish. Farol ${installedVersion} is still installed and works.`
           : description(view);
       const message =
