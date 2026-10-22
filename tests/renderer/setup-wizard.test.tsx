@@ -110,7 +110,7 @@ describe("linear Setup", () => {
         return outcome === "refused"
           ? {
               ok: false,
-              error: "SETTINGS_INPUT_INVALID",
+              error: "SETUP_INCOMPLETE",
               snapshot: h.configuration(),
             }
           : { ok: true, snapshot: h.configuration() };
@@ -121,6 +121,14 @@ describe("linear Setup", () => {
         setupStep: "attachment",
       });
       expect(h.configuration().settings.setup.journey.dismissed).toBe(false);
+      if (outcome === "refused") {
+        expect(h.host.textContent).toContain(
+          "Finish the remaining steps before using Farol.",
+        );
+        expect(
+          h.c.getSnapshot().intents["settings:setup.progress:"],
+        ).toMatchObject({ state: "refused", code: "SETUP_INCOMPLETE" });
+      }
       if (outcome === "unknown") {
         await h.remount();
         expect(h.button("Start using Farol")?.disabled).toBe(true);

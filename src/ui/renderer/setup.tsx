@@ -134,6 +134,10 @@ export function Setup({ snapshot, facade }: Props) {
           }}
         />
       </div>
+      {snapshot.intents["settings:setup.progress:"]?.code ===
+        "SETUP_INCOMPLETE" && (
+        <p role="status">Finish the remaining steps before using Farol.</p>
+      )}
       {step !== "overview" && (
         <footer className="setup-wizard-footer">
           <button
