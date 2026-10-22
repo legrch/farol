@@ -814,9 +814,10 @@ const controlSchema = z.strictObject({
 
 type RuntimeReady = z.infer<typeof readySchema>;
 app.setName(activeDesktopIdentity.applicationName);
-// The process title supports Dev lifetime correlation; macOS presentation
-// comes from the Dev-only bundle. Storage and release identity stay explicit.
-process.title = activeDesktopIdentity.applicationName;
+// Darwin process.title erases argv. Dev stop authorization needs its original
+// entrypoint and user-data-dir; the Dev-only bundle owns display naming.
+if (buildEnvironment !== "dev")
+  process.title = activeDesktopIdentity.applicationName;
 if (process.platform === "win32")
   app.setAppUserModelId(activeDesktopIdentity.applicationId);
 if (process.platform === "darwin") {

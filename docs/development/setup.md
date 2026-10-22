@@ -45,7 +45,15 @@ The existing Go builder requires clean committed source. It verifies the SDK,
 modules and source instead of downloading or trusting an arbitrary local `go`.
 An ordinary `task dev` stops the previous Dev from this exact checkout/profile
 before replacing dependencies or rebuilding shared outputs. It checks the private
-run marker, executable, account, boot and precise native lifetime, allows 30 seconds
+run marker, account, boot and precise native lifetime. The native helper reads the
+exact executable through the kernel operation behind `proc_pidpath` and parses
+`KERN_PROCARGS2` for this checkout's absolute entrypoint and an explicit
+`--user-data-dir` equal to the selected marker directory's profile. These checks
+run again at each signal boundary. Dev preserves its original argv; its bundle
+and `app.setName` supply display naming. A renamed title, missing argv, another
+checkout or another profile (including ordinary versus fresh review) cannot
+supply stop authority. Older Dev processes with erased argv require their own
+Quit command. After proof, the launcher allows 30 seconds
 to stop, then forces that process once if necessary. Other profiles and installed
 Farol are not stopped. A refused or uncertain lookup/signal blocks the build and reports the failed identity read. Quit the previous Dev from that checkout/profile using its own Quit command, then run `task dev` again; the launcher never signals an unproven process.
 **Ctrl+C** stops what the launcher started and escalates automatically if it hangs.

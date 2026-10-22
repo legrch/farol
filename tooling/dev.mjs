@@ -19,6 +19,7 @@ import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { parseDevDisplay } from "../src/apps/desktop/window-placement.ts";
 import { prepareDevRuntime } from "./dev-runtime.mjs";
 import { prepareDevBuild } from "./dev-process-control.mjs";
+import { resolvePhysicalDevDataDirectoryName } from "../src/apps/desktop/dev-profile-directory.ts";
 import {
   dependencyDrift,
   readDependencyDigests,
@@ -696,6 +697,30 @@ export function devLaunchEnvironment(
   };
 }
 
+// Keep the selected profile in the kernel-visible argv. The desktop validates
+// this assertion against its independently selected userData before using it.
+export function devLaunchProfile(
+  acceptanceProfile = false,
+  reviewMarker,
+  home = os.userInfo().homedir,
+) {
+  if (
+    reviewMarker !== undefined &&
+    (acceptanceProfile ||
+      !reviewMarker.startsWith("review:") ||
+      !REVIEW_TOKEN.test(reviewMarker.slice(7)))
+  )
+    throw new Error("DEV_REVIEW_PROFILE_INVALID");
+  const nativeAppData = path.join(home, "Library/Application Support");
+  const appData =
+    reviewMarker !== undefined
+      ? path.join(nativeAppData, REVIEW_NAMESPACE, reviewMarker.slice(7))
+      : acceptanceProfile
+        ? path.join(nativeAppData, "Farol Dev Acceptance")
+        : nativeAppData;
+  return path.join(appData, resolvePhysicalDevDataDirectoryName(appData));
+}
+
 export async function launchPreview(
   root,
   spawnProcess = spawn,
@@ -712,7 +737,8 @@ export async function launchPreview(
         spawnProcess(
           electronBin,
           [
-            "_output/build/app/main.cjs",
+            path.join(root, "_output/build/app/main.cjs"),
+            `--user-data-dir=${devLaunchProfile(acceptanceProfile, reviewMarker)}`,
             ...(displayOptions.devSecondaryDisplay === true
               ? ["--display=secondary"]
               : []),

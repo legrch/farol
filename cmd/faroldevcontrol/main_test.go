@@ -19,13 +19,13 @@ func fixtureRequest() request {
 	token, _ := lifetimeToken(testBoot, 1_700_000_000, 123456)
 	return request{Action: "signal", PID: 123, UID: 501, Token: token, Signal: "SIGTERM",
 		Executable: "/fixture/Owner's Farol" + electronSuffix,
-		AppPath:    "/fixture/Owner's Farol/" + relativeAppPath}
+		AppPath:    "/fixture/Owner's Farol/" + relativeAppPath, ProfilePath: "/fixture/Library/Application Support/Farol Dev"}
 }
 
 func requestJSON(q request) []byte {
 	data, _ := json.Marshal(map[string]any{"action": q.Action, "pid": q.PID,
 		"uid": q.UID, "token": q.Token, "signal": q.Signal,
-		"executable": q.Executable, "appPath": q.AppPath})
+		"executable": q.Executable, "appPath": q.AppPath, "profilePath": q.ProfilePath})
 	return data
 }
 
@@ -62,7 +62,7 @@ func TestParser(t *testing.T) {
 			t.Errorf("accepted invalid JSON: %.100s", input)
 		}
 	}
-	for _, field := range []string{"action", "pid", "uid", "token", "signal", "executable", "appPath"} {
+	for _, field := range []string{"action", "pid", "uid", "token", "signal", "executable", "appPath", "profilePath"} {
 		var values map[string]any
 		_ = json.Unmarshal(requestJSON(fixtureRequest()), &values)
 		values[field] = nil
@@ -79,7 +79,8 @@ func TestParser(t *testing.T) {
 	for field, values := range map[string][]any{
 		"uid": {-1, 4294967296, "501", 501.5}, "token": {"", "ps lstart", fixtureRequest().Token + "\x00"},
 		"signal": {"SIGINT", "SIGSTOP", "9"}, "executable": {"/bin/sleep", "/Applications/Farol.app/Contents/MacOS/Farol"},
-		"appPath": {"/other/" + relativeAppPath, relativeAppPath},
+		"appPath":     {"/other/" + relativeAppPath, relativeAppPath},
+		"profilePath": {"", "/fixture/Farol", "/fixture/../Farol Dev"},
 	} {
 		for _, value := range values {
 			var data map[string]any
@@ -120,11 +121,11 @@ func TestLifetimeToken(t *testing.T) {
 
 func TestOrdinarySecondaryDisplayCommand(t *testing.T) {
 	q := fixtureRequest()
-	if !matchesProcArgs(procArgs(q.Executable, q.Executable, q.AppPath, "--display=secondary"), q) {
+	if !matchesProcArgs(procArgs(q.Executable, q.Executable, q.AppPath, "--user-data-dir="+q.ProfilePath, "--display=secondary"), q) {
 		t.Fatal("ordinary secondary Dev command refused")
 	}
 	for _, flag := range []string{"--display=primary", "--display", "--display=secondary --user-data-dir=/other"} {
-		if matchesProcArgs(procArgs(q.Executable, q.Executable, q.AppPath, flag), q) {
+		if matchesProcArgs(procArgs(q.Executable, q.Executable, q.AppPath, "--user-data-dir="+q.ProfilePath, flag), q) {
 			t.Fatalf("accepted unexpected display command %q", flag)
 		}
 	}
@@ -133,7 +134,7 @@ func TestOrdinarySecondaryDisplayCommand(t *testing.T) {
 func TestQualifiedCommandInspection(t *testing.T) {
 	q := fixtureRequest()
 	q.Action, q.UID, q.Token, q.Signal = "inspect", 0, "", ""
-	raw, _ := json.Marshal(map[string]any{"action": "inspect", "pid": q.PID, "executable": q.Executable, "appPath": q.AppPath})
+	raw, _ := json.Marshal(map[string]any{"action": "inspect", "pid": q.PID, "executable": q.Executable, "appPath": q.AppPath, "profilePath": q.ProfilePath})
 	if got, err := parseRequest(raw); err != nil || got != q {
 		t.Fatalf("qualified inspect: %+v %v", got, err)
 	}
@@ -203,19 +204,17 @@ func procArgs(executable string, argv ...string) []byte {
 
 func TestProcArgs(t *testing.T) {
 	q := fixtureRequest()
-	for _, app := range []string{q.AppPath, relativeAppPath} {
-		for _, flags := range [][]string{nil, {"--preview-window-mode=secondary-visible"}, {"--preview-window-mode=secondary-visible", "--built-in-display-only", "--allow-primary-display"}} {
-			argv := append([]string{q.Executable, app}, flags...)
-			if !matchesProcArgs(procArgs(q.Executable, argv...), q) {
-				t.Fatalf("rejected valid argv: %v", argv)
-			}
+	for _, flags := range [][]string{nil, {"--preview-window-mode=secondary-visible"}, {"--preview-window-mode=secondary-visible", "--built-in-display-only", "--allow-primary-display"}} {
+		argv := append([]string{q.Executable, q.AppPath, "--user-data-dir=" + q.ProfilePath}, flags...)
+		if !matchesProcArgs(procArgs(q.Executable, argv...), q) {
+			t.Fatalf("rejected valid argv: %v", argv)
 		}
 	}
 	for _, argc := range []int{2, 3, 5} {
 		argv := make([]string, argc)
 		argv[0] = "Farol Dev"
-		if !matchesProcArgs(procArgs(q.Executable, argv...), q) {
-			t.Fatal("refused exact observed renamed Dev command")
+		if matchesProcArgs(procArgs(q.Executable, argv...), q) {
+			t.Fatal("accepted erased renamed Dev argv")
 		}
 	}
 	invalid := [][]byte{
@@ -406,7 +405,7 @@ func TestNamedWriterExclusion(t *testing.T) {
 		raw            []byte
 		status, reason string
 	}{
-		{procArgs(q.Executable, "Farol Dev", ""), "present", ""},
+		{procArgs(q.Executable, "Farol Dev", ""), "refused", "COMMAND_MISMATCH"},
 		{procArgs("/other/writer"+electronSuffix, "Farol Dev", ""), "refused", "WRITER_EXECUTABLE_MISMATCH"},
 		{procArgs(q.Executable, "Farol Dev", "unexpected"), "refused", "COMMAND_MISMATCH"},
 		{procArgs(q.Executable, "Farol Dev", "", "", "", "", ""), "refused", "COMMAND_MISMATCH"},
@@ -431,8 +430,88 @@ func TestDevBundlePaths(t *testing.T) {
 		q := fixtureRequest()
 		q.Executable = root + suffix
 		q.AppPath = root + "/" + relativeAppPath
-		if r := inspectProcCommand(procArgs(q.Executable, "Farol Dev", ""), q); r.Status != "present" {
+		if r := inspectProcCommand(procArgs(q.Executable, q.Executable, q.AppPath, "--user-data-dir="+q.ProfilePath), q); r.Status != "present" {
 			t.Fatalf("bundle command: %+v", r)
+		}
+	}
+}
+
+// Synthetic kernel snapshots exercise the complete native authorization path;
+// the kill port counts calls and never sends an OS signal.
+func TestStopProofTable(t *testing.T) {
+	q := fixtureRequest()
+	argv := func(app, profile string) []byte {
+		return procArgs(q.Executable, q.Executable, app, "--user-data-dir="+profile)
+	}
+	review := "/fixture/Library/Application Support/Farol Dev Review/disposable/Farol Dev"
+	type proof struct {
+		observed   response
+		executable string
+		raw        []byte
+		unreadable bool
+	}
+	cases := []struct {
+		name   string
+		change func(*proof)
+		want   string
+		kills  int
+	}{
+		{"all proved", func(*proof) {}, "sent", 1},
+		{"kernel executable mismatch", func(p *proof) { p.executable = "/other" + electronSuffix }, "refused", 0},
+		{"kernel executable unreadable", func(p *proof) { p.executable = "" }, "refused", 0},
+		{"argv unreadable", func(p *proof) { p.raw = nil }, "refused", 0},
+		{"argv permission denied", func(p *proof) { p.unreadable = true }, "refused", 0},
+		{"argv executable mismatch", func(p *proof) {
+			p.raw = procArgs("/other"+electronSuffix, q.Executable, q.AppPath, "--user-data-dir="+q.ProfilePath)
+		}, "refused", 0},
+		{"entrypoint mismatch", func(p *proof) { p.raw = argv("/other/"+relativeAppPath, q.ProfilePath) }, "refused", 0},
+		{"entrypoint unreadable", func(p *proof) { p.raw = argv("", q.ProfilePath) }, "refused", 0},
+		{"relative entrypoint", func(p *proof) { p.raw = argv(relativeAppPath, q.ProfilePath) }, "refused", 0},
+		{"profile mismatch forged marker", func(p *proof) { p.raw = argv(q.AppPath, review) }, "refused", 0},
+		{"profile unreadable", func(p *proof) { p.raw = argv(q.AppPath, "") }, "refused", 0},
+		{"profile missing", func(p *proof) { p.raw = procArgs(q.Executable, q.Executable, q.AppPath) }, "refused", 0},
+		{"duplicate profile", func(p *proof) {
+			p.raw = procArgs(q.Executable, q.Executable, q.AppPath, "--user-data-dir="+q.ProfilePath, "--user-data-dir="+review)
+		}, "refused", 0},
+		{"renamed title erased argv", func(p *proof) { p.raw = procArgs(q.Executable, "Farol Dev", "", "") }, "refused", 0},
+		{"pid mismatch", func(p *proof) { p.observed.PID++ }, "refused", 0},
+		{"pid unreadable", func(p *proof) { p.observed.PID = 0 }, "refused", 0},
+		{"uid mismatch", func(p *proof) { p.observed.UID++ }, "refused", 0},
+		{"uid unreadable", func(p *proof) { p.observed.UID = 0 }, "refused", 0},
+		{"identity unreadable", func(p *proof) { p.observed = response{Status: "unreadable"} }, "refused", 0},
+		{"start mismatch", func(p *proof) { p.observed.Token, _ = lifetimeToken(testBoot, 1700000000, 123457) }, "refused", 0},
+		{"boot mismatch", func(p *proof) {
+			p.observed.Token, _ = lifetimeToken("22345678-1234-1234-1234-123456789abc", 1700000000, 123456)
+		}, "refused", 0},
+		{"boot/start unreadable", func(p *proof) { p.observed.Token = "" }, "refused", 0},
+	}
+	for _, selected := range []string{q.ProfilePath, review} {
+		for _, tc := range cases {
+			t.Run(selected+"/"+tc.name, func(t *testing.T) {
+				current := q
+				current.ProfilePath = selected
+				p := proof{observed: present(current), executable: q.Executable, raw: argv(q.AppPath, selected)}
+				tc.change(&p)
+				// Exercise the ordinary/review pair in BOTH directions.
+				if tc.name == "profile mismatch forged marker" && selected == review {
+					p.raw = argv(q.AppPath, q.ProfilePath)
+				}
+				kills := 0
+				inspect := func(int) response { return p.observed }
+				command := func(r request) response {
+					if p.unreadable {
+						return response{Status: "unreadable", Reason: "INSPECTION_PERMISSION_DENIED"}
+					}
+					return inspectProcessCommand(p.executable, p.raw, r)
+				}
+				ports := ports{supported: true, inspect: inspect, signal: func(r request) response {
+					return checkedSignal(r, inspect, func() (uint32, bool) { return q.UID, true }, command, func(int, string) response { kills++; return response{Status: "sent"} })
+				}}
+				got := execute(current, ports)
+				if got.Status != tc.want || kills != tc.kills {
+					t.Fatalf("status=%s kills=%d; want %s/%d", got.Status, kills, tc.want, tc.kills)
+				}
+			})
 		}
 	}
 }

@@ -428,6 +428,11 @@ export function desktopUserDataPath(
   identity: DesktopIdentity,
   options: Readonly<{ enabled: boolean; override: string | undefined }>,
 ): string {
+  if (identity.environment === "dev" && options.override) {
+    if (options.override !== identity.userData)
+      throw new Error("DESKTOP_DEV_USER_DATA_MISMATCH");
+    return identity.userData;
+  }
   if (
     !options.enabled ||
     identity.environment !== "preview" ||

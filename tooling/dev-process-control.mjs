@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { devExecutables } from "./dev-runtime.mjs";
+import { resolvePhysicalDevDataDirectoryName } from "../src/apps/desktop/dev-profile-directory.ts";
 import { performance } from "node:perf_hooks";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { buildDevControl } from "./go-backend-build.mjs";
@@ -83,34 +84,36 @@ function ps(args, budget = 3000) {
 // private run marker and this exact checkout's Electron command.
 export function correlateDevCommand(line, marker, scope, native, bootTime) {
   const match = /^(\d+)\s+(.{24})\s+(.+)$/u.exec(line.trim());
-  const executable = native.executable ?? devExecutables(scope.writerRoot)[1];
-  if (!devExecutables(scope.writerRoot).includes(executable))
-    throw Error("DEV_PROCESS_IDENTITY_REFUSED: executable");
   const refuse = (field) => {
     throw Error(`DEV_PROCESS_IDENTITY_REFUSED: ${field}`);
   };
+  const { executable, appPath, profilePath } = native;
+  if (!devExecutables(scope.writerRoot).includes(executable))
+    refuse("executable");
   if (!match) refuse("ps UID/start/command format");
+  if (match[3] === "Farol Dev") refuse("erased process title");
   if (native.status !== "present" || native.commandVerified !== true)
     refuse("native command verification");
+  if (
+    !/^darwin-v1:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}:[1-9][0-9]{6,18}$/u.test(
+      native.token ?? "",
+    )
+  )
+    refuse("native boot/start identity");
   if (Number(match[1]) !== scope.uid || native.uid !== scope.uid)
     refuse("account UID");
   if (native.pid !== marker.pid) refuse("run-marker PID");
   if (match[2].trim() !== marker.processStart)
     refuse("ps start time differs from run marker");
   if (!sameBoot(marker.bootTime, bootTime)) refuse("run-marker boot time");
-  if (
-    (![
-      executable + " _output/build/app/main.cjs",
-      executable + " " + scope.appPath,
-    ].some(
-      (prefix) => match[3] === prefix || match[3].startsWith(prefix + " "),
-    ) &&
-      match[3] !== "Farol Dev") ||
-    /--(?:acceptance|user-data|profile|type)(?:[=\s-]|$)/u.test(match[3])
-  )
+  if (appPath !== scope.appPath || profilePath !== scope.profilePath)
     refuse("checkout entrypoint/profile command");
+  // ps is only a coarse marker witness. The native helper independently proves
+  // the executable and exact argv; a display title supplies no authority.
   return Object.freeze({
     ...scope,
+    appPath,
+    profilePath,
     pid: marker.pid,
     startIdentity: native.token,
     executable,
@@ -182,12 +185,19 @@ async function buildControl(root, buildArguments) {
   return buildDevControl(root, inputs);
 }
 
-function inspectDevExecutable(binary, pid, root, appPath, remaining = 3000) {
+function inspectDevExecutable(
+  binary,
+  pid,
+  root,
+  appPath,
+  profilePath,
+  remaining = 3000,
+) {
   const deadline = performance.now() + remaining;
   for (const executable of devExecutables(root)) {
     const seen = nativeCall(
       binary,
-      { action: "inspect", pid, executable, appPath },
+      { action: "inspect", pid, executable, appPath, profilePath },
       deadline - performance.now(),
     );
     if (
@@ -195,7 +205,7 @@ function inspectDevExecutable(binary, pid, root, appPath, remaining = 3000) {
       seen.reason === "WRITER_EXECUTABLE_MISMATCH"
     )
       continue;
-    return seen.status === "present" ? { ...seen, executable } : seen;
+    return seen;
   }
   return { status: "refused", reason: "WRITER_EXECUTABLE_MISMATCH" };
 }
@@ -206,7 +216,7 @@ function nativeCall(binary, request, remaining = 3000) {
     input: JSON.stringify(request),
     encoding: "utf8",
     timeout,
-    maxBuffer: 4096,
+    maxBuffer: 32768,
     env: { PATH: "/usr/bin:/bin" },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -241,7 +251,13 @@ export async function prepareDevBuild({
   if (process.env.HOME !== home) throw Error("DEV_PROCESS_HOME_REFUSED");
   const profileName =
     selectedProfilePath ??
-    path.join(home, "Library/Application Support/Farol Dev");
+    path.join(
+      home,
+      "Library/Application Support",
+      resolvePhysicalDevDataDirectoryName(
+        path.join(home, "Library/Application Support"),
+      ),
+    );
   const profilePath = fs.existsSync(profileName)
     ? fs.realpathSync(profileName)
     : profileName;
@@ -275,6 +291,7 @@ export async function prepareDevBuild({
         marker.marker.pid,
         writerRoot,
         appPath,
+        profilePath,
       );
       if (native.status === "present") {
         let retained;
@@ -304,19 +321,18 @@ export async function prepareDevBuild({
           const observation = inspectDevStopIdentity({
             marker: marker.marker,
             scope,
-            native: () => ({
-              ...nativeCall(
+            native: () =>
+              nativeCall(
                 binary,
                 {
                   action: "inspect",
                   pid,
                   executable: retained.executable,
                   appPath,
+                  profilePath,
                 },
                 deadline - performance.now(),
               ),
-              executable: retained.executable,
-            }),
             markerMatches: () =>
               readRetainedDevMarker(markerFile, marker.marker),
             command: () =>
@@ -358,6 +374,7 @@ export async function prepareDevBuild({
                 uid: expected.uid,
                 executable: expected.executable,
                 appPath: expected.appPath,
+                profilePath: expected.profilePath,
               },
               remaining,
             );
@@ -401,6 +418,7 @@ export async function prepareDevBuild({
       Number(titled[1]),
       writerRoot,
       appPath,
+      profilePath,
     );
     if (!devInventoryCandidateAbsent(seen))
       throw Error(

@@ -2,13 +2,15 @@
 // and emits one bounded JSON response. The caller owns its wall-clock timeout.
 //
 // Inspect: {"action":"inspect","pid":123}, optionally with the same exact
-// executable/appPath pair to qualify the kernel command without exposing it.
+// executable/appPath/profilePath tuple to qualify the kernel command without exposing it.
 // Signal: {"action":"signal","pid":123,"uid":501,"token":"<retained token>",
 // "signal":"SIGTERM","executable":"<writer>/node_modules/electron/dist/
-// Electron.app/Contents/MacOS/Electron","appPath":"<writer>/_output/build/app/main.cjs"}
+// Electron.app/Contents/MacOS/Electron","appPath":"<writer>/_output/build/app/main.cjs",
+// "profilePath":"<owned-app-data>/Farol Dev"}
 //
-// Only present responses carry top-level pid, uid and token. The Lead
-// must independently correlate executable, command, profile and run marker.
+// Only present responses carry top-level pid, uid and token. Qualified inspect
+// also proves the exact executable, absolute entrypoint and profile against the
+// kernel. The launcher must independently correlate the private run marker.
 // A token is process-lifetime evidence, not authorization to stop arbitrary work.
 package main
 
@@ -25,8 +27,8 @@ import (
 )
 
 const (
-	maxRequestBytes   = 4096
-	maxResponseBytes  = 512
+	maxRequestBytes   = 32768
+	maxResponseBytes  = 32768
 	maxPID            = 1<<31 - 1
 	maxProcArgsBytes  = 1 << 20
 	devElectronSuffix = "/_output/dev-runtime/Farol Dev.app/Contents/MacOS/Electron"
@@ -41,19 +43,23 @@ type identity struct {
 }
 
 type request struct {
-	Action     string
-	PID        int
-	UID        uint32
-	Token      string
-	Signal     string
-	Executable string
-	AppPath    string
+	Action      string
+	PID         int
+	UID         uint32
+	Token       string
+	Signal      string
+	Executable  string
+	AppPath     string
+	ProfilePath string
 }
 
 type response struct {
 	Status          string `json:"status"`
 	Reason          string `json:"reason,omitempty"`
 	CommandVerified bool   `json:"commandVerified,omitempty"`
+	Executable      string `json:"executable,omitempty"`
+	AppPath         string `json:"appPath,omitempty"`
+	ProfilePath     string `json:"profilePath,omitempty"`
 	*identity
 }
 
@@ -144,22 +150,22 @@ func parseRequest(data []byte) (request, error) {
 	if len(data) > maxRequestBytes || !utf8.Valid(data) {
 		return q, errInvalidRequest
 	}
-	f, err := object(data, "action", "pid", "uid", "token", "signal", "executable", "appPath")
+	f, err := object(data, "action", "pid", "uid", "token", "signal", "executable", "appPath", "profilePath")
 	if err != nil || json.Unmarshal(f["action"], &q.Action) != nil || json.Unmarshal(f["pid"], &q.PID) != nil || !validPID(q.PID) {
 		return q, errInvalidRequest
 	}
 	if q.Action == "inspect" && len(f) == 2 {
 		return q, nil
 	}
-	if q.Action == "inspect" && len(f) == 4 && json.Unmarshal(f["executable"], &q.Executable) == nil && json.Unmarshal(f["appPath"], &q.AppPath) == nil && validDevPaths(q.Executable, q.AppPath) {
+	if q.Action == "inspect" && len(f) == 5 && json.Unmarshal(f["executable"], &q.Executable) == nil && json.Unmarshal(f["appPath"], &q.AppPath) == nil && json.Unmarshal(f["profilePath"], &q.ProfilePath) == nil && validCommandScope(q) {
 		return q, nil
 	}
-	if q.Action != "signal" || len(f) != 7 || json.Unmarshal(f["signal"], &q.Signal) != nil || !validSignal(q.Signal) {
+	if q.Action != "signal" || len(f) != 8 || json.Unmarshal(f["signal"], &q.Signal) != nil || !validSignal(q.Signal) {
 		return q, errInvalidRequest
 	}
 	if json.Unmarshal(f["uid"], &q.UID) != nil || json.Unmarshal(f["token"], &q.Token) != nil ||
-		json.Unmarshal(f["executable"], &q.Executable) != nil || json.Unmarshal(f["appPath"], &q.AppPath) != nil ||
-		!validToken(q.Token) || !validDevPaths(q.Executable, q.AppPath) {
+		json.Unmarshal(f["executable"], &q.Executable) != nil || json.Unmarshal(f["appPath"], &q.AppPath) != nil || json.Unmarshal(f["profilePath"], &q.ProfilePath) != nil ||
+		!validToken(q.Token) || !validCommandScope(q) {
 		return q, errInvalidRequest
 	}
 	return q, nil
@@ -167,9 +173,9 @@ func parseRequest(data []byte) (request, error) {
 
 func (q request) expected() identity { return identity{PID: q.PID, UID: q.UID, Token: q.Token} }
 
-// The Lead selects the physically canonical owned writer root. These lexical
+// The launcher selects the physically canonical owned writer root. These lexical
 // checks permit only its Electron binary and matching built Dev entrypoint;
-// they do not independently prove realpath, ownership, profile or run marker.
+// they do not independently prove realpath, ownership or run marker.
 func validDevPaths(executable, appPath string) bool {
 	if !canonicalPath(executable) || !canonicalPath(appPath) {
 		return false
@@ -181,6 +187,11 @@ func validDevPaths(executable, appPath string) bool {
 		}
 	}
 	return false
+}
+
+func validCommandScope(q request) bool {
+	return validDevPaths(q.Executable, q.AppPath) && canonicalPath(q.ProfilePath) &&
+		(strings.HasSuffix(q.ProfilePath, "/Farol Dev") || strings.HasSuffix(q.ProfilePath, "/Farol DEV"))
 }
 
 func canonicalPath(value string) bool {
@@ -200,8 +211,18 @@ func canonicalPath(value string) bool {
 // or emit the remaining environment. No shell quoting or command-line splitting.
 // Only an independently parsed different executable excludes a named process
 // from this writer. Unsupported argv of the same binary remains a blocker.
+func inspectProcessCommand(executable string, raw []byte, q request) response {
+	if !canonicalPath(executable) {
+		return response{Status: "unreadable", Reason: "PROC_EXECUTABLE_UNREADABLE"}
+	}
+	if executable != q.Executable {
+		return response{Status: "refused", Reason: "WRITER_EXECUTABLE_MISMATCH"}
+	}
+	return inspectProcCommand(raw, q)
+}
+
 func inspectProcCommand(raw []byte, q request) response {
-	if !validDevPaths(q.Executable, q.AppPath) || len(raw) < 5 || len(raw) > maxProcArgsBytes {
+	if !validCommandScope(q) || len(raw) < 5 || len(raw) > maxProcArgsBytes {
 		return response{Status: "unreadable", Reason: "PROC_EXECUTABLE_UNREADABLE"}
 	}
 	end := bytes.IndexByte(raw[4:], 0)
@@ -211,19 +232,25 @@ func inspectProcCommand(raw []byte, q request) response {
 	if string(raw[4:4+end]) != q.Executable {
 		return response{Status: "refused", Reason: "WRITER_EXECUTABLE_MISMATCH"}
 	}
-	if !matchesProcArgs(raw, q) {
+	observed, ok := parseProcCommand(raw, q)
+	if !ok {
 		return response{Status: "refused", Reason: "COMMAND_MISMATCH"}
 	}
-	return response{Status: "present"}
+	return observed
 }
 
 func matchesProcArgs(raw []byte, q request) bool {
-	if !validDevPaths(q.Executable, q.AppPath) || len(raw) < 4 || len(raw) > maxProcArgsBytes {
-		return false
+	_, ok := parseProcCommand(raw, q)
+	return ok
+}
+
+func parseProcCommand(raw []byte, q request) (response, bool) {
+	if !validCommandScope(q) || len(raw) < 4 || len(raw) > maxProcArgsBytes {
+		return response{}, false
 	}
 	argc := int(binary.NativeEndian.Uint32(raw[:4]))
-	if argc < 2 || argc > 5 {
-		return false
+	if argc < 3 || argc > 7 {
+		return response{}, false
 	}
 	rest := raw[4:]
 	readString := func() (string, bool) {
@@ -237,46 +264,37 @@ func matchesProcArgs(raw []byte, q request) bool {
 	}
 	executable, ok := readString()
 	if !ok || executable != q.Executable {
-		return false
+		return response{}, false
 	}
 	for len(rest) > 0 && rest[0] == 0 {
 		rest = rest[1:]
 	}
 	argv0, ok := readString()
 	if !ok {
-		return false
-	}
-	// Node's process.title replaces argv with the exact product name and empty
-	// remaining strings on Darwin. The kernel executable above is retained.
-	// Profile/entrypoint correlation still belongs to the private run-marker
-	// owner; this renamed form cannot independently reconstruct erased argv.
-	if argv0 == "Farol Dev" {
-		for i := 1; i < argc; i++ {
-			value, ok := readString()
-			if !ok || value != "" {
-				return false
-			}
-		}
-		return true
+		return response{}, false
 	}
 	if argv0 != q.Executable {
-		return false
+		return response{}, false
 	}
 	app, ok := readString()
-	if !ok || (app != q.AppPath && app != relativeAppPath) {
-		return false
+	if !ok || app != q.AppPath {
+		return response{}, false
+	}
+	profile, ok := readString()
+	if !ok || profile != "--user-data-dir="+q.ProfilePath {
+		return response{}, false
 	}
 	seen := make(map[string]bool)
-	for i := 2; i < argc; i++ {
+	for i := 3; i < argc; i++ {
 		flag, ok := readString()
 		if !ok || seen[flag] || !contains([]string{
-			"--preview-window-mode=secondary-visible", "--built-in-display-only", "--allow-primary-display", "--display=secondary",
+			"--preview-window-mode=secondary-visible", "--preview-window-mode=hidden", "--built-in-display-only", "--allow-primary-display", "--display=secondary",
 		}, flag) {
-			return false
+			return response{}, false
 		}
 		seen[flag] = true
 	}
-	return true
+	return response{Status: "present", Executable: executable, AppPath: app, ProfilePath: strings.TrimPrefix(profile, "--user-data-dir=")}, true
 }
 
 func validPID(pid int) bool { return pid > 0 && pid <= maxPID }
@@ -320,7 +338,7 @@ func validToken(token string) bool {
 
 func execute(q request, p ports) response {
 	if !validPID(q.PID) || (q.Action != "inspect" && q.Action != "signal") ||
-		(q.Action == "signal" && (!validSignal(q.Signal) || !validToken(q.Token) || !validDevPaths(q.Executable, q.AppPath))) {
+		(q.Action == "signal" && (!validSignal(q.Signal) || !validToken(q.Token) || !validCommandScope(q))) {
 		return response{Status: "error", Reason: "INVALID_REQUEST"}
 	}
 	if !p.supported {
@@ -329,12 +347,14 @@ func execute(q request, p ports) response {
 	observed := p.inspect(q.PID)
 	if q.Action == "inspect" {
 		if q.Executable != "" && observed.Status == "present" {
-			if observed.identity == nil || p.command == nil || !validDevPaths(q.Executable, q.AppPath) {
+			if observed.identity == nil || p.command == nil || !validCommandScope(q) {
 				return response{Status: "unreadable", Reason: "IDENTITY_UNREADABLE"}
 			}
-			if command := p.command(q); command.Status != "present" {
+			command := p.command(q)
+			if command.Status != "present" {
 				return command
 			}
+			observed.Executable, observed.AppPath, observed.ProfilePath = command.Executable, command.AppPath, command.ProfilePath
 			if denied, ok := match(*observed.identity, p.inspect(q.PID)); !ok {
 				return denied
 			}
@@ -369,7 +389,7 @@ func match(expected identity, observed response) (response, bool) {
 // callers must not claim an identity-atomic syscall or a successful clean Quit.
 // execute supplies the first lifetime observation; both phases correlate argv.
 func checkedSignal(q request, inspect func(int) response, callerUID func() (uint32, bool), command func(request) response, kill func(int, string) response) response {
-	if !validPID(q.PID) || !validSignal(q.Signal) || !validToken(q.Token) || !validDevPaths(q.Executable, q.AppPath) {
+	if !validPID(q.PID) || !validSignal(q.Signal) || !validToken(q.Token) || !validCommandScope(q) {
 		return response{Status: "error", Reason: "INVALID_REQUEST"}
 	}
 	uid, ok := callerUID()

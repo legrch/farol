@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   devLaunchEnvironment,
+  devLaunchProfile,
   launchPreview as realLaunchPreview,
 } from "../../tooling/dev.mjs";
 
@@ -179,7 +180,10 @@ describe("development launcher environment", () => {
         "_output/dev-runtime/Farol Dev.app/Contents/MacOS/Electron",
       ),
     );
-    expect(received.args).toEqual(["_output/build/app/main.cjs"]);
+    expect(received.args).toEqual([
+      path.join(root, "_output/build/app/main.cjs"),
+      `--user-data-dir=${devLaunchProfile()}`,
+    ]);
     expect(received.options.cwd).toBe(root);
     // Named before the key set, so removing the option again fails with
     // this sentence rather than a TypeError from reading `undefined`.
@@ -217,7 +221,8 @@ describe("development launcher environment", () => {
       ),
     ).rejects.toBe(stop);
     expect(received.args).toEqual([
-      "_output/build/app/main.cjs",
+      "/tmp/farol-dev-root/_output/build/app/main.cjs",
+      `--user-data-dir=${devLaunchProfile(true)}`,
       "--preview-window-mode=secondary-visible",
     ]);
     expect(received.options.env.FAROL_ACCEPTANCE_PROFILE).toBe("1");
@@ -240,7 +245,8 @@ describe("development launcher environment", () => {
       ),
     ).rejects.toBe(stop);
     expect(received.args).toEqual([
-      "_output/build/app/main.cjs",
+      "/tmp/farol-dev-root/_output/build/app/main.cjs",
+      `--user-data-dir=${devLaunchProfile()}`,
       "--preview-window-mode=secondary-visible",
     ]);
     expect(received.options.env.FAROL_ENVIRONMENT).toBe("dev");
@@ -265,7 +271,8 @@ describe("development launcher environment", () => {
       ),
     ).rejects.toBe(stop);
     expect(received.args).toEqual([
-      "_output/build/app/main.cjs",
+      "/fixture/repository/_output/build/app/main.cjs",
+      `--user-data-dir=${devLaunchProfile()}`,
       "--preview-window-mode=secondary-visible",
       "--built-in-display-only",
       "--allow-primary-display",
@@ -328,7 +335,10 @@ describe("fresh review environment (CPU-only)", () => {
         marker,
       ),
     ).rejects.toBe(stop);
-    expect(received.args).toEqual(["_output/build/app/main.cjs"]);
+    expect(received.args).toEqual([
+      "/fixture/repository/_output/build/app/main.cjs",
+      `--user-data-dir=${devLaunchProfile(false, marker)}`,
+    ]);
     expect(received.options.env.FAROL_ACCEPTANCE_PROFILE).toBe(marker);
     expect(received.options.env.FAROL_E2E).toBeUndefined();
   });
