@@ -159,9 +159,12 @@ try {
     window.farol.configure({ kind: "connector.check-health" }),
   );
   assert.equal(checked.ok, false, "unconfigured connection stays refused");
-  // Recording is asynchronous: observe the original results, never resend actions.
-  const observed = await page.waitForFunction(async () => {
-    const log = await window.farol.operations();
+  // Poll the async bridge sequentially; waitForFunction treats a Promise as
+  // truthy before it settles. Observe results without resending any action.
+  const observationDeadline = Date.now() + 20000;
+  let log;
+  for (;;) {
+    log = await page.evaluate(() => window.farol.operations());
     const complete = [
       ["hub.start", "done"],
       ["computer.add-workspace", "done"],
@@ -172,11 +175,13 @@ try {
         (entry) => entry.kind === kind && entry.outcome === outcome,
       ),
     );
-    return complete ? log : false;
-  });
-  // Assert the exact snapshot that satisfied the asynchronous observation.
-  const log = await observed.jsonValue();
-  await observed.dispose();
+    if (complete) break;
+    assert.ok(
+      Date.now() < observationDeadline,
+      "OPERATIONS_OBSERVATION_TIMEOUT",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
   assert.ok(
     log.entries.some(
       (e) =>
