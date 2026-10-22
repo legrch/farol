@@ -62,6 +62,15 @@ exceptions. `task test:tooling` includes this cheap check, so both `task ci` and
 witness, allocate a profile, or replace an existing candidate. Candidate builds
 repeat the same coverage check before sealing their input ledger.
 
+The separate `connector-daily-lifecycle.e2e.mjs` packaged witness keeps a bounded
+fixture journal of TERM delivery, exit-handler entry and completion of the
+synchronous atomic exit-receipt write. It copies those observations into the
+suite report before checking the terminal predicate, including on failure.
+The journal is diagnostic only: every owned tunnel still needs its original
+`phase: "exited"`, `exitCode: 0` receipt and confirmed process/group absence.
+A running receipt or a tunnel killed before its own exit receipt is never
+converted into a clean exit.
+
 Connector mutations have separate lower-layer evidence:
 
 - `TestConnectorV3*` in Computer domain and repository tests checks exact retained
