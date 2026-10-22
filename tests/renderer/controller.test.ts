@@ -4267,3 +4267,35 @@ it.each(["chatgpt.open-sign-in", "chatgpt.open-browser"] as const)(
     c.dispose();
   },
 );
+
+// A retained task is not the home/sign-in document even when both share a rail.
+it.each(["chatgpt.open-sign-in", "chatgpt.open-browser"] as const)(
+  "%s explicitly selects the home document while retaining task return context",
+  async (kind) => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    f.emit("tasks", { revision: 1, tasks: [task("retained")] });
+    c.navigate({ area: "chatgpt", taskId: "retained" });
+    c.navigate({ area: "setup", setupStep: "signin" });
+    const previous = c.getSnapshot().destination;
+    await c.configure({ kind }, `settings:${kind}:`);
+    expect(c.getSnapshot().destination).toMatchObject({
+      area: "chatgpt",
+      taskId: "",
+    });
+    expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.slice(0, 2)).toEqual([
+      "browser",
+      "",
+    ]);
+    expect(c.getSnapshot().setupSignInReturn).toEqual(previous);
+    c.returnToSetup();
+    expect(c.getSnapshot().destination).toEqual(previous);
+    c.navigate({ area: "chatgpt", taskId: "retained" });
+    expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.slice(0, 2)).toEqual([
+      "browser",
+      "retained",
+    ]);
+    c.dispose();
+  },
+);

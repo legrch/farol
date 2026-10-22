@@ -295,6 +295,7 @@ const callbackNames = [
   "liveChatGptSurfaceFactory",
   "signInChatGptSurfaceFactory",
   "createTaskViews",
+  "openLiveTaskSurface",
 ] as const;
 const source = readFileSync(
   new URL("../../src/apps/desktop/main.ts", import.meta.url),
@@ -390,7 +391,14 @@ function desktopFixture() {
     publishTaskSurfaceStatus: () => undefined,
     browserHomeSurfaceOpen: false,
     browserHomeLoadState: "loaded" as "loading" | "loaded" | "failed",
-    signInSurfaceOpen: false,
+    liveTaskRoutes: new Map<
+      string,
+      { open(): Promise<{ status: "opened" }> }
+    >(),
+    liveTaskRegistry: new Map<
+      string,
+      { taskId: string; sessionId: string; turnId: string; lifecycle: string }
+    >(),
     checkFeedbackVisible: false,
     runtimeEnvironment: "dev",
     demoMode: false,
@@ -426,6 +434,7 @@ function desktopFixture() {
     focusForLayout(): void;
     disposeTaskView(taskId: string, view: BrowserView): void;
     createTaskViews(): Promise<void>;
+    openLiveTaskSurface(taskId: string): Promise<boolean>;
     signInChatGptSurfaceFactory(): ReturnType<
       typeof api.liveChatGptSurfaceFactory
     >;
@@ -544,7 +553,7 @@ describe("desktop layout attachment integration (source callbacks + fake host)",
         expect(f.host.children).toEqual([]);
         expect(f.view.visible).toBe(false);
         expect(f.view.webContents.destroyed).toBe(false);
-        expect(f.context.selectedTaskId).toBe("page");
+        expect(f.context.selectedTaskId).toBe(taskId === "" ? "" : "page");
       }
     },
   );
@@ -553,7 +562,7 @@ describe("desktop layout attachment integration (source callbacks + fake host)",
     f.context.section = "activity";
     f.api.applyLayout();
     f.events.length = 0;
-    for (const taskId of ["", "removed-task"])
+    for (const taskId of ["removed-task"])
       f.api.applyRendererLayout({
         section: "browser",
         taskId,
@@ -752,18 +761,61 @@ describe("desktop layout attachment integration (source callbacks + fake host)",
     f.api.applyLayout();
     expect(f.host.children).toEqual([]);
   });
-  it("attaches the sign-in view only when the shared layout admits it", () => {
+  it("renderer home and task selections survive background surface opening", async () => {
     const f = desktopFixture();
-    const signIn = new BrowserView("sign-in", f.events);
-    f.taskViews.set("sign-in", signIn);
-    f.taskViewKinds.set("sign-in", "chatgpt");
-    f.api.applyLayout();
-    f.context.signInSurfaceOpen = true;
-    f.api.applyLayout();
-    expect(f.host.children).toEqual([signIn]);
-    f.context.setupOpen = true;
-    f.api.applyLayout();
+    const home = f.api.signInChatGptSurfaceFactory()({ webPreferences: {} });
+    const selected = (taskId: string, setupOpen = false) =>
+      f.api.applyRendererLayout({
+        section: setupOpen ? "settings" : "browser",
+        taskId,
+        setupOpen,
+        sidebar: "full",
+        overlay: "none",
+      });
+    selected("");
+    const retainedHome = f.taskViews.get("sign-in")!;
+    expect(f.host.children).toEqual([retainedHome]);
+    expect(f.context.selectedTaskId).toBe("");
+    const background = f.api.liveChatGptSurfaceFactory("background")({
+      webPreferences: {},
+    });
+    f.context.liveTaskRoutes.set("background", {
+      open: async () => ({ status: "opened" }),
+    });
+    f.context.liveTaskRegistry.set("background", {
+      taskId: "background",
+      sessionId: "session",
+      turnId: "turn",
+      lifecycle: "idle",
+    });
+    expect(await f.api.openLiveTaskSurface("background")).toBe(true);
+    expect(f.context.selectedTaskId).toBe("");
+    expect(f.host.children).toEqual([retainedHome]);
+    selected("page", true);
     expect(f.host.children).toEqual([]);
+    selected("page");
+    expect(f.host.children).toEqual([f.view]);
+    selected("page");
+    expect(f.host.children).toEqual([f.view]);
+    expect(home.webContents.destroyed).toBe(false);
+    expect(background.webContents.destroyed).toBe(false);
+    selected("");
+    expect(f.host.children).toEqual([retainedHome]);
+  });
+  it("a blank renderer selection never substitutes a previously selected task", () => {
+    const f = desktopFixture();
+    f.api.applyLayout();
+    expect(f.host.children).toEqual([f.view]);
+    f.api.applyRendererLayout({
+      section: "browser",
+      taskId: "",
+      setupOpen: false,
+      sidebar: "full",
+      overlay: "none",
+    });
+    expect(f.context.selectedTaskId).toBe("");
+    expect(f.host.children).toEqual([]);
+    expect(f.view.webContents.destroyed).toBe(false);
   });
   it("live surface hide detaches and hidden focus is refused; reveal retains identity", () => {
     const f = desktopFixture();

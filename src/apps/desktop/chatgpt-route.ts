@@ -1574,6 +1574,7 @@ export class ChatGptRoute {
   private observedTaskRunning: boolean | null = null;
   private updateAdmission = false;
   private signInMode = false;
+  private signInAttempt = 0;
   private signInReported = false;
   private pendingSignInObservation: Promise<SignInObservation> | null = null;
   private readinessReadSequence = 0;
@@ -2220,12 +2221,14 @@ export class ChatGptRoute {
   // ends the sign-in surface.
   async openForSignIn(title: string): Promise<ChatGptOpenResult> {
     if (this.updateAdmission) return { status: "unreachable" };
+    const attempt = ++this.signInAttempt;
+    this.pendingSignInObservation = null;
     this.setTitle(title);
     this.signInMode = true;
     this.signInReported = false;
     activeSignInRoute = this;
     const result = await this.open();
-    if (result.status !== "opened") {
+    if (attempt === this.signInAttempt && result.status !== "opened") {
       // No window opened, so no page was ever read: the owner's own action
       // is what produced this outcome, and there is nothing to time.
       this.reportSignInOutcome("unknown", unreadSignInOutcome("return"));
@@ -2275,8 +2278,9 @@ export class ChatGptRoute {
     // A sign-in attempt that never got a window reports its own outcome in
     // `openForSignIn`, with the `no-window` reason.
     if (!candidate || candidate.isDestroyed()) return;
+    const attempt = this.signInAttempt;
     const close = () => {
-      if (candidate.isDestroyed()) return;
+      if (attempt !== this.signInAttempt || candidate.isDestroyed()) return;
       if (candidate.close) candidate.close();
       else candidate.destroy();
     };
@@ -2296,7 +2300,12 @@ export class ChatGptRoute {
     if (candidate.kind === "embedded") {
       const pending = this.pendingSignInObservation;
       void pending.then((read) => {
-        if (!this.signInMode || this.routeWindow !== candidate) return;
+        if (
+          attempt !== this.signInAttempt ||
+          !this.signInMode ||
+          this.routeWindow !== candidate
+        )
+          return;
         this.pendingSignInObservation = null;
         // The shell owns visibility. A bounded return read can settle after
         // explicit navigation has already revealed this retained document again.
@@ -2370,8 +2379,10 @@ export class ChatGptRoute {
     });
     candidate.onClosed(() => {
       this.stopTaskActivityWatch();
-      if (this.routeWindow === candidate) this.routeWindow = null;
-      if (this.signInMode) {
+      const ownsRoute = this.routeWindow === candidate;
+      if (ownsRoute) this.routeWindow = null;
+      if (ownsRoute && this.signInMode) {
+        const attempt = this.signInAttempt;
         const pending = this.pendingSignInObservation;
         this.pendingSignInObservation = null;
         this.signInMode = false;
@@ -2397,7 +2408,8 @@ export class ChatGptRoute {
             // Stays "unknown" — a page that could not be read is not the
             // same claim as a page that was read and found signed out.
           }
-          this.reportSignInOutcome(status, diagnostic);
+          if (attempt === this.signInAttempt)
+            this.reportSignInOutcome(status, diagnostic);
         })();
       }
       if (!this.disposing) {

@@ -1292,7 +1292,6 @@ const liveTaskRegistry = new LiveTaskRegistry(5, {
 const liveTaskRoutes = new Map<string, ChatGptRoute>();
 const managedChatGptRoutes = new Set<ChatGptRoute>();
 const SIGN_IN_SURFACE_ID = "farol-sign-in";
-let signInSurfaceOpen = false;
 let browserHomeSurfaceOpen = false;
 let checkFeedbackVisible = false;
 let browserHomeLoadState: "loading" | "loaded" | "failed" = "loading";
@@ -2407,7 +2406,6 @@ async function openLiveTaskSurface(taskId: string): Promise<boolean> {
   const route = liveTaskRoutes.get(taskId);
   const task = liveTaskRegistry.get(taskId);
   if (!route || !task) return false;
-  signInSurfaceOpen = false;
   const currentTask = () => {
     const current = liveTaskRegistry.get(taskId);
     return liveTaskRoutes.get(taskId) === route &&
@@ -8317,9 +8315,8 @@ async function configureAdmittedProduct(
       chatGptSignInGeneration += 1;
       chatGptSignInOpenGeneration = chatGptSignInGeneration;
       if (embeddedBrowserEnabled()) {
-        // Renderer presentation has already selected ChatGPT. Select only
-        // the retained document here, never a competing shell destination.
-        signInSurfaceOpen = true;
+        // Renderer presentation has already selected the home document.
+        // Starting sign-in never changes that explicit selection.
         applyLayout();
       }
       let opened: Awaited<ReturnType<ChatGptRoute["open"]>>;
@@ -8418,7 +8415,6 @@ async function configureAdmittedProduct(
       if (chatGptTaskAdmission || connectorTaskAdmission) {
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
       }
-      signInSurfaceOpen = true;
       browserHomeSurfaceOpen = true;
       applyLayout();
       let opened: Awaited<ReturnType<ChatGptRoute["open"]>>;
@@ -8438,8 +8434,7 @@ async function configureAdmittedProduct(
     }
     case "chatgpt.toggle-sidebar": {
       const visibleRoute =
-        signInSurfaceOpen ||
-        (browserHomeSurfaceOpen && productTasksState().tasks.length === 0)
+        browserHomeSurfaceOpen && selectedTaskId === ""
           ? chatGptRoute
           : liveTaskRoutes.get(selectedTaskId);
       if (!embeddedBrowserEnabled() || !visibleRoute) {
@@ -10990,12 +10985,12 @@ function applyRendererLayout(value: unknown): void {
   if (!parsed.success) return;
   const tasks = productTasksState().tasks;
   const knownTask =
-    tasks.length === 0
-      ? parsed.data.taskId === ""
-      : tasks.some((task) => task.taskId === parsed.data.taskId);
+    parsed.data.taskId === "" ||
+    tasks.some((task) => task.taskId === parsed.data.taskId);
   // Shell navigation can conceal a browser even if its retained task selection
   // is missing or stale. It cannot select a replacement or reveal an unknown
-  // conversation. Browser admission still requires the exact known task.
+  // conversation. An explicit blank ID selects only the retained home page,
+  // never an incidental previously selected task.
   const concealsBrowser =
     parsed.data.section !== "browser" ||
     parsed.data.setupOpen ||
@@ -11008,7 +11003,6 @@ function applyRendererLayout(value: unknown): void {
     shellOverlay !== parsed.data.overlay;
   section = parsed.data.section;
   if (knownTask) {
-    if (selectedTaskId !== parsed.data.taskId) signInSurfaceOpen = false;
     selectedTaskId = parsed.data.taskId;
   }
   setupOpen = parsed.data.setupOpen;
@@ -11023,9 +11017,7 @@ function applyRendererLayout(value: unknown): void {
 function currentSurfaceLayout() {
   if (!window || window.isDestroyed()) return null;
   const [width = 1, height = 1] = window.getContentSize();
-  const showBrowserHome =
-    signInSurfaceOpen ||
-    (browserHomeSurfaceOpen && productTasksState().tasks.length === 0);
+  const showBrowserHome = browserHomeSurfaceOpen && selectedTaskId === "";
   const selectedViewKind = showBrowserHome
     ? "chatgpt"
     : taskViewKinds.get(selectedTaskId);

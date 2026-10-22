@@ -254,7 +254,6 @@ function continuityHarness(width = 1180, height = 760) {
     section: "settings",
     setupOpen: false,
     selectedTaskId: "",
-    signInSurfaceOpen: false,
     browserHomeSurfaceOpen: true,
     browserHomeLoadState: "loaded",
     sidebarMode: "full",
@@ -332,13 +331,16 @@ describe("retained sign-in host continuity", () => {
     expect(c.publishShellAction).not.toHaveBeenCalled();
   });
 
-  it("Open ChatGPT explicitly selects the retained home document while task routes exist", async () => {
+  it("Open ChatGPT retains the home document while renderer selection alone presents it", async () => {
     const { context: c, api } = continuityHarness();
     c.productTasksState = () => ({ tasks: [{ taskId: "retained-task" }] });
     c.section = "browser";
+    c.selectedTaskId = "retained-task";
     expect(api.layout().showBrowserHome).toBe(false);
     await api.command("chatgpt.open-browser");
     expect(c.chatGptRoute.retryFailedOpen).toHaveBeenCalledTimes(1);
+    expect(api.layout().showBrowserHome).toBe(false);
+    c.selectedTaskId = "";
     expect(api.layout().showBrowserHome).toBe(true);
     expect(api.layout().pageVisible).toBe(true);
   });

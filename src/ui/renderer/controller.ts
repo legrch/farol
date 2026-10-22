@@ -1439,7 +1439,7 @@ export class WindowController implements RendererFacade {
           // Commit renderer navigation before transport can reveal a native
           // surface. Host observations and late replies never own navigation.
           if (this.state.destination === requestedDestination)
-            this.navigate({ area: "chatgpt" });
+            this.navigate({ area: "chatgpt", taskId: "" });
         }
         const order = this.configOrder.begin();
         let transport: Parameters<typeof classifyConfigurationResponse>[0];
