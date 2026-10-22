@@ -322,7 +322,9 @@ describe("retained sign-in host continuity", () => {
     expect(c.setupOpen).toBe(false);
     c.section = "browser";
     const before = api.layout();
+    c.chatGptSignInOpenGeneration = 4;
     await api.command("chatgpt.verification-return");
+    expect(c.chatGptSignInOpenGeneration).toBeNull();
     api.outcome("unknown", { reason: "synthetic" });
     expect(c.section).toBe("browser");
     expect(api.layout()).toEqual(before);

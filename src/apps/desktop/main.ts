@@ -8494,7 +8494,10 @@ async function configureAdmittedProduct(
       if (embeddedBrowserEnabled()) {
         // This ends observation only. Renderer navigation conceals the retained
         // view; a later read or popup outcome cannot change that destination.
-        chatGptRoute?.returnFromSignIn();
+        const observingSignIn = chatGptRoute?.returnFromSignIn() ?? false;
+        // Readonly checks may already have ended sign-in mode. Explicit Return
+        // still retires that observation generation without restoring layout.
+        if (!observingSignIn) chatGptSignInOpenGeneration = null;
       }
       return ProductConfigurationResultSchema.parse({
         ok: true,
