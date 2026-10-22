@@ -466,6 +466,8 @@ async function executeScope(args, stopSignal) {
     );
   save();
   try {
+    if (scope === "native" && process.platform !== "darwin")
+      throw Error("TEST_NATIVE_PREREQUISITE:darwin");
     if (!supportedNode.has(process.versions.node))
       throw Error("TEST_NODE_PREREQUISITE:" + process.versions.node);
     report.go = execFileSync(environment.FAROL_TEST_GO, ["version"], {

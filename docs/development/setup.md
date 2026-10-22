@@ -96,9 +96,9 @@ work; it is not product acceptance. See [standalone build guidance](../../docs/s
 Hunt now uses the same Go-required `tooling/dev.mjs --check` producer and verifies
 the source, input ledger, complete entry set and core artifact before recording
 evidence. Consequently, `task ci:fast` also needs the separately approved inputs
-at `_output/go-build-inputs.json`. The manual hosted standalone workflow does not
-yet provision that declaration and its SDK/module inputs; a fresh hosted run is
-not qualified. Missing inputs refuse the build rather than emit core-less output.
+at `_output/go-build-inputs.json`. The [tagged CI workflow](ci.md) provisions that declaration only after its
+independent SDK approval is committed; a hosted run remains unqualified until
+all native and package gates pass. Missing inputs refuse the build rather than emit core-less output.
 Local checks, native acceptance and package acceptance remain separate evidence.
 
 ### Declared Go backend inputs
