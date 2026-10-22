@@ -23,6 +23,22 @@ if (process.argv[2] === "run") {
     termRequested: false,
     exitCode: null,
   };
+  // A separate bounded journal distinguishes signal delivery/exit from a
+  // receipt rename interrupted by group escalation. Synthetic fixture only.
+  const journal = [];
+  function trace(event) {
+    if (journal.length >= 32) process.exit(66);
+    journal.push({
+      event,
+      at: new Date().toISOString(),
+      monotonicNs: String(process.hrtime.bigint()),
+    });
+    const traceFile = `${file}.trace.json`;
+    fs.writeFileSync(`${traceFile}.tmp`, JSON.stringify(journal) + "\n", {
+      mode: 0o600,
+    });
+    fs.renameSync(`${traceFile}.tmp`, traceFile);
+  }
   function record() {
     const temporary = `${file}.tmp`;
     fs.writeFileSync(temporary, JSON.stringify(receipt) + "\n", {
@@ -30,14 +46,19 @@ if (process.argv[2] === "run") {
     });
     fs.renameSync(temporary, file);
   }
+  trace("started");
   record();
   process.once("SIGTERM", () => {
+    trace("term-received");
     receipt.termRequested = true;
   });
   process.once("exit", (code) => {
+    trace("exit-started");
     receipt.phase = "exited";
     receipt.exitCode = code;
+    trace("exit-receipt-write-started");
     record();
+    trace("exit-receipt-written");
   });
   const createServer = http.createServer;
   http.createServer = (listener) =>
