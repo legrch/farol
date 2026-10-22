@@ -72,13 +72,16 @@ async function launch() {
   const child = application.process();
   const terminal = once(child, "exit");
   page = await application.firstWindow();
-  await page.waitForFunction(
-    async () => {
+  const deadline = Date.now() + 20000;
+  while (true) {
+    const ready = await page.evaluate(async () => {
       const b = await window.farol?.bootstrap();
       return b?.runtimeState === "ready" && b?.configuration.status === "ready";
-    },
-    { timeout: 20000 },
-  );
+    });
+    if (ready) break;
+    assert.ok(Date.now() < deadline, "OPERATIONS_BOOTSTRAP_TIMEOUT");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
   const windows = await application.evaluate(({ BrowserWindow, app }) => ({
     userData: app.getPath("userData"),
     windows: BrowserWindow.getAllWindows().map((w) => ({

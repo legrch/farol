@@ -893,3 +893,67 @@ it.each(["write", "sync"])(
     expect(attempts).toBe(1);
   },
 );
+
+function controlledPromise<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+it.each(["begin", "finish"] as const)(
+  "preserves original promise identity, order and rejection when %s recording throws",
+  async (failure) => {
+    const events: string[] = [];
+    const original = controlledPromise<never>();
+    const recorder = {
+      begin() {
+        events.push("begin");
+        if (failure === "begin") throw Error("RECORDER_UNAVAILABLE");
+        return () => {
+          throw Error("RECORDER_UNAVAILABLE");
+        };
+      },
+      record() {
+        throw Error("UNEXPECTED_FALLBACK");
+      },
+    };
+    const result = observeOperation(
+      recorder,
+      { source: "You", kind: "fixture", target: {} },
+      () => {
+        events.push("action");
+        return original.promise;
+      },
+    );
+    expect(result).toBe(original.promise);
+    expect(events).toEqual(["action", "begin"]);
+    const error = Error("ORIGINAL_UNKNOWN");
+    original.reject(error);
+    await expect(result).rejects.toBe(error);
+  },
+);
+it("observes completion without adding a settlement turn or waiting for recording IO", async () => {
+  const original = controlledPromise<{ status: string }>();
+  const disk = controlledPromise<void>();
+  const record = vi.fn(() => {
+    void disk.promise;
+  });
+  const result = observeOperation(
+    { record },
+    { source: "You", kind: "fixture", target: {} },
+    () => original.promise,
+  );
+  expect(result).toBe(original.promise);
+  original.resolve({ status: "unknown" });
+  await expect(result).resolves.toEqual({ status: "unknown" });
+  expect(record).toHaveBeenCalledWith(
+    expect.anything(),
+    "unknown",
+    null,
+    expect.any(Number),
+  );
+  disk.resolve();
+});

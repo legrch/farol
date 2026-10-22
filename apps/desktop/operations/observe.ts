@@ -104,46 +104,55 @@ export function operationResult(value: unknown): {
     return { outcome: "failed", code: resultCode ?? "OPERATION_FAILED" };
   return { outcome: "done", code: resultCode };
 }
-export async function observeOperation<T>(
+/** Observe settlement without replacing the action's promise or admitting work. */
+export function observeOperation<T>(
   recorder: OperationsRecorder,
   metadata: OperationMetadata,
   action: () => Promise<T>,
 ): Promise<T> {
   const start = performance.now();
-  const finish =
-    recorder.begin?.(metadata) ??
-    ((
-      outcome: OperationEntry["outcome"],
-      code: string | null,
-      durationMs: number,
-    ) => recorder.record(metadata, outcome, code, durationMs));
+  const original = action();
+  let finish: ReturnType<NonNullable<OperationsRecorder["begin"]>>;
   try {
-    const value = await action();
-    const result =
-      metadata.kind === "chatgpt.consult.send" &&
-      object(value).status === "submitted"
-        ? { outcome: "done" as const, code: null }
-        : operationResult(value);
-    finish(result.outcome, result.code, performance.now() - start);
-    return value;
-  } catch (error) {
-    // The action may already have taken effect. Logging never invents a failure.
-    const classified = object(error);
-    const state = classified.state;
-    const known =
-      typeof state === "string" &&
-      [
-        "refused",
-        "failed",
-        "unknown",
-        "pending",
-        "unsupported",
-        "unavailable",
-      ].includes(state);
-    const result = known
-      ? operationResult({ status: state, code: code(classified.code) })
-      : { outcome: "unknown" as const, code: "OPERATION_OUTCOME_UNKNOWN" };
-    finish(result.outcome, result.code, performance.now() - start);
-    throw error;
+    finish =
+      recorder.begin?.(metadata) ??
+      ((outcome, code, durationMs) =>
+        recorder.record(metadata, outcome, code, durationMs));
+  } catch {
+    return original;
   }
+  const record = (value: unknown, rejected: boolean) => {
+    try {
+      const classified = object(value);
+      const state = classified.state;
+      const known =
+        typeof state === "string" &&
+        [
+          "refused",
+          "failed",
+          "unknown",
+          "pending",
+          "unsupported",
+          "unavailable",
+        ].includes(state);
+      const result = rejected
+        ? known
+          ? operationResult({ status: state, code: code(classified.code) })
+          : { outcome: "unknown" as const, code: "OPERATION_OUTCOME_UNKNOWN" }
+        : metadata.kind === "chatgpt.consult.send" &&
+            classified.status === "submitted"
+          ? { outcome: "done" as const, code: null }
+          : metadata.kind === "connection.health" && value === false
+            ? { outcome: "failed" as const, code: "CONNECTION_HEALTH_FAILED" }
+            : operationResult(value);
+      finish(result.outcome, result.code, performance.now() - start);
+    } catch {
+      // The observer cannot replace settlement, including the original error.
+    }
+  };
+  void original.then(
+    (value) => record(value, false),
+    (error) => record(error, true),
+  );
+  return original;
 }

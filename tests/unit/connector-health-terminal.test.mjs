@@ -1,3 +1,4 @@
+import { observeOperation } from "../../apps/desktop/operations/observe";
 import fs from "node:fs";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
@@ -24,6 +25,16 @@ function visit(node) {
 }
 visit(tree);
 if (!branch) throw new Error("CONNECTOR_HEALTH_CASE_MISSING");
+const healthObserver = parse(source, {
+  sourceType: "module",
+  plugins: ["typescript"],
+}).program.body.find(
+  (node) =>
+    node.type === "FunctionDeclaration" &&
+    node.id?.name === "observedConnectorHealth",
+);
+if (!healthObserver) throw Error("CONNECTOR_HEALTH_OBSERVER_MISSING");
+const healthSource = source.slice(healthObserver.start, healthObserver.end);
 const generation = "a".repeat(64);
 function harness(observation, healthy = false) {
   const snapshot = {
@@ -45,6 +56,8 @@ function harness(observation, healthy = false) {
     },
   };
   const context = {
+    observeOperation,
+    operationsStore: () => ({ record() {} }),
     command: { kind: "connector.check-health" },
     secureMcpConnectorRuntime: {
       checkHealth: vi.fn(async () => healthy),
@@ -92,7 +105,8 @@ function harness(observation, healthy = false) {
   };
   const handle = vm.runInNewContext(
     stripTypeScriptTypes(
-      `async function handle() { switch(command.kind) { ${branch} } } handle`,
+      `${healthSource}
+async function handle() { switch(command.kind) { ${branch} } } handle`,
     ),
     context,
   );

@@ -55,8 +55,12 @@ previous-connection start, the target contains only the supplied handle and
 `start: "unknown"`; Activity displays that limitation. This lookup grants no
 execution authority and never reads command arguments, stdin or output.
 
-An admitted operation enqueues a start observation before execution. A flushed
-unmatched start remains pending across restart. Its separately appended observation supplies
+The recorder observes admission without granting it. Promise-based desktop
+observers invoke the original action first, enqueue its start observation, attach
+isolated settlement callbacks and return the exact original promise. They add no
+await or result transformation to health checks, Stop or Quit. The MCP tool
+adapter enqueues its start at the existing handler boundary. A flushed unmatched
+start remains pending across restart. Its separately appended observation supplies
 the actual result; the raw start line is never edited. Activity folds only such
 matched start markers. Explicit unknown and pending results remain immutable,
 including after a later independent read-back. A helper ACK is pending, not proof
@@ -106,10 +110,12 @@ retry loop. Later enqueues or a flush may publish updated counters, but never
 replay lost observations. Retention failures count as log failures without
 misclassifying an already flushed batch as lost.
 
-Desktop normal Quit flushes after child drains, within the existing overall Quit
-budget; the Go MCP adapter flushes after its handler drain on either exit path.
-Each store's shutdown flush has a 250 ms deadline and reports false if stalled or
-if a write fails. Reaching that deadline does not cancel or replay a filesystem
+Desktop Quit and MCP exit never await log durability: child drain, lease
+retention/release, Quit receipts and run-marker handling keep their original
+ordering and deadlines. The background writer may lose the newest tail even on
+normal exit. An operations entry is not a clean-Quit receipt. Explicit store
+shutdown (used by disposable writer fixtures) has a 250 ms default deadline and
+reports false if stalled or if a write fails. Reaching that deadline does not cancel or replay a filesystem
 operation. A crash or forced exit can lose the newest unflushed tail (the queued
 observations and in-flight batch); only successfully synchronized batches are
 durable. Asynchronous logging cannot guarantee a start survives a crash before

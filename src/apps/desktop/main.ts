@@ -3145,7 +3145,7 @@ async function executeProductAgent(
   return taskSuccess(task.taskId);
 }
 
-async function runProductTaskCommand(
+function runProductTaskCommand(
   value: unknown,
 ): Promise<ProductTaskCommandResult> {
   const parsed = ProductTaskCommandSchema.safeParse(value);
@@ -3734,15 +3734,6 @@ function computerMcpLifecycle(): PrivateMcpLifecycle {
 }
 
 async function stopAndConfirmComputerMcp(
-  ...args: Parameters<typeof stopAndConfirmComputerMcpObserved>
-): Promise<void> {
-  return observeOperation(
-    operationsStore(),
-    { source: "You", kind: "connection.stop", target: {} },
-    () => stopAndConfirmComputerMcpObserved(...args),
-  );
-}
-async function stopAndConfirmComputerMcpObserved(
   connector = secureMcpConnectorRuntime,
   inFlightStart: Promise<void> | null = null,
   core = desktopGoCore,
@@ -3751,27 +3742,32 @@ async function stopAndConfirmComputerMcpObserved(
 ): Promise<void> {
   if (!connector) throw new Error("CONNECTOR_STOP_UNCONFIRMED");
   const lifecycle = computerMcpLifecycle();
-  await drainComputerConnector({
-    beginStop: () => lifecycle.beginStop(),
-    startInFlight: inFlightStart,
-    waitForMcpStop: () => lifecycle.waitForStop(),
-    stopConnector: () => connector.stop(),
-    closeSavedChat: async () => {
-      // Wait for admitted account work before closing its Browser endpoint.
-      try {
-        if (savedChat) {
-          await savedChat.close();
-          if (savedChatBridgeRuntime === savedChat)
-            savedChatBridgeRuntime = null;
-        }
-      } finally {
-        // Withdraw the original Go owner even when the old adapter drain fails.
-        // A failure remains unconfirmed; it cannot authorize a new launch.
-        await core?.closeComputerConnector(reason);
-      }
-    },
-    confirmStop: () => lifecycle.confirmStop(),
-  });
+  await observeOperation(
+    operationsStore(),
+    { source: "You", kind: "connection.stop", target: {} },
+    () =>
+      drainComputerConnector({
+        beginStop: () => lifecycle.beginStop(),
+        startInFlight: inFlightStart,
+        waitForMcpStop: () => lifecycle.waitForStop(),
+        stopConnector: () => connector.stop(),
+        closeSavedChat: async () => {
+          // Wait for admitted account work before closing its Browser endpoint.
+          try {
+            if (savedChat) {
+              await savedChat.close();
+              if (savedChatBridgeRuntime === savedChat)
+                savedChatBridgeRuntime = null;
+            }
+          } finally {
+            // Withdraw the original Go owner even when the old adapter drain fails.
+            // A failure remains unconfirmed; it cannot authorize a new launch.
+            await core?.closeComputerConnector(reason);
+          }
+        },
+        confirmStop: () => lifecycle.confirmStop(),
+      }),
+  );
 }
 
 function devMcpProofRoot(): string {
@@ -4805,22 +4801,14 @@ function currentConnectionStatus(): ConnectionStatusView {
   return retainedConnectionView;
 }
 
-async function observedConnectorHealth(
+function observedConnectorHealth(
   connector: SecureMcpConnectorRuntime,
 ): Promise<boolean> {
-  const result = await observeOperation(
+  return observeOperation(
     operationsStore(),
     { source: "Setup", kind: "connection.health", target: {} },
-    async () => {
-      const healthy = await connector.checkHealth();
-      return {
-        healthy,
-        status: healthy ? "ok" : "failed",
-        code: healthy ? null : "CONNECTION_HEALTH_FAILED",
-      };
-    },
+    () => connector.checkHealth(),
   );
-  return result.healthy;
 }
 function startConnectorTransportWatch(): void {
   if (connectorTransportWatch || quitInProgress) return;
@@ -4957,7 +4945,7 @@ function startConnectorTransportWatch(): void {
   });
 }
 
-async function startObservedDesktopGoCore(
+function startObservedDesktopGoCore(
   ...args: Parameters<typeof startDesktopGoCore>
 ): ReturnType<typeof startDesktopGoCore> {
   return observeOperation(
@@ -4970,26 +4958,30 @@ function reportOwnedBackendLifecycle(
   observation:
     BackendLifecycleObservation | ConnectorRuntimeLifecycleObservation,
 ): void {
-  operationsStore().record(
-    {
-      source: "Setup",
-      kind:
-        observation.source === "go-backend"
-          ? "hub.lifecycle"
-          : "connection.lifecycle",
-      target: {},
-    },
-    observation.state === "outcome_unknown" ||
-      observation.event === "cleanup-unknown"
-      ? "unknown"
-      : observation.event === "failure"
-        ? "failed"
-        : observation.exitCode === 0
-          ? "done"
-          : "unknown",
-    observation.code,
-    0,
-  );
+  try {
+    operationsStore().record(
+      {
+        source: "Setup",
+        kind:
+          observation.source === "go-backend"
+            ? "hub.lifecycle"
+            : "connection.lifecycle",
+        target: {},
+      },
+      observation.state === "outcome_unknown" ||
+        observation.event === "cleanup-unknown"
+        ? "unknown"
+        : observation.event === "failure"
+          ? "failed"
+          : observation.exitCode === 0
+            ? "done"
+            : "unknown",
+      observation.code,
+      0,
+    );
+  } catch {
+    // Optional operations projection cannot suppress the original diagnostic.
+  }
   // Project only the original producer's closed terminal facts. This sink never
   // looks up mutable host state or changes admission, recovery or drain results.
   try {
@@ -5056,7 +5048,7 @@ async function recordConnectorRuntime(
   return recorded.ok ? null : ProductConfigurationResultSchema.parse(recorded);
 }
 
-async function startSecureMcpConnector(
+function startSecureMcpConnector(
   repair: boolean,
   resumeAfterQuit = false,
 ): Promise<ProductConfigurationResult> {
@@ -6412,24 +6404,29 @@ function operationsStore(): OperationsStore {
     path.join(app.getPath("userData"), "farol-state", "operations"),
   ));
 }
-async function configureProduct(
-  value: unknown,
-): Promise<ProductConfigurationResult> {
+function configureProduct(value: unknown): Promise<ProductConfigurationResult> {
   const parsed = ProductConfigurationCommandSchema.safeParse(value);
   if (!parsed.success) return configureProductObserved(value);
   const metadata = configurationOperation(
     parsed.data,
     configuration?.snapshot(),
   );
-  return observeOperation(operationsStore(), metadata, async () => {
-    const result = await configureProductObserved(value);
-    if (result.snapshot.status === "ready") {
-      const workspaces = result.snapshot.settings.computer.workspaces;
-      operationsStore().setWorkspaceLabels(workspaces);
-      Object.assign(metadata.target, configurationResultTarget(result));
-    }
-    return result;
-  });
+  const original = configureProductObserved(value);
+  void original.then(
+    (result) => {
+      try {
+        if (result.snapshot.status === "ready") {
+          const workspaces = result.snapshot.settings.computer.workspaces;
+          operationsStore().setWorkspaceLabels(workspaces);
+          Object.assign(metadata.target, configurationResultTarget(result));
+        }
+      } catch {
+        // Optional labels cannot replace the configuration result or notification.
+      }
+    },
+    () => undefined,
+  );
+  return observeOperation(operationsStore(), metadata, () => original);
 }
 async function configureProductObserved(
   value: unknown,
@@ -12423,7 +12420,6 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     // not be written, leaves the marker in place, and the next promotion
     // reads that as a stop that never confirmed, never as a clean quit.
     record: async (receipt) => {
-      await operationsLog?.shutdown(250);
       await recordQuitReceipt(receipt);
       if (receipt.drained) {
         await removeRunMarker(

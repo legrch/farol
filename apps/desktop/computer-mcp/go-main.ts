@@ -137,12 +137,8 @@ export async function runGoComputerMcp(file: string): Promise<void> {
     void closing.then(
       // A settled adapter drain cannot turn unexpected connector EOF into
       // clean lifecycle shutdown or prove native Go work was cancelled.
-      async () => {
-        await operations.shutdown();
-        process.exit(transportFailed ? 1 : 0);
-      },
-      async () => {
-        await operations.shutdown();
+      () => process.exit(transportFailed ? 1 : 0),
+      () => {
         process.stderr.write("Farol Go Computer MCP shutdown unverified.\n");
         process.exit(1);
       },

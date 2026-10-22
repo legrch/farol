@@ -1,3 +1,4 @@
+import { observeOperation } from "../../apps/desktop/operations/observe";
 import fs from "node:fs";
 import vm from "node:vm";
 import { EventEmitter } from "node:events";
@@ -22,8 +23,19 @@ const declarations = parse(source, {
 if (declarations.length !== 1)
   throw Error("CONNECTOR_TRANSPORT_EVENT_SOURCE_MISSING");
 const node = declarations[0];
+const healthObserver = parse(source, {
+  sourceType: "module",
+  plugins: ["typescript"],
+}).program.body.find(
+  (node) =>
+    node.type === "FunctionDeclaration" &&
+    node.id?.name === "observedConnectorHealth",
+);
+if (!healthObserver) throw Error("CONNECTOR_HEALTH_OBSERVER_MISSING");
+const healthSource = source.slice(healthObserver.start, healthObserver.end);
 const compiled = stripTypeScriptTypes(
-  `${source.slice(node.start, node.end)}; ({ start: startConnectorTransportWatch, watch: () => connectorTransportWatch });`,
+  `${healthSource}
+${source.slice(node.start, node.end)}; ({ start: startConnectorTransportWatch, watch: () => connectorTransportWatch });`,
 );
 
 async function until(predicate) {
@@ -55,6 +67,8 @@ function fixture({ e2e = false, statusKind = "running" } = {}) {
   const statusCapture = Object.freeze({ kind: statusKind, original });
   let eligible = true;
   const context = {
+    observeOperation,
+    operationsStore: () => ({ record() {} }),
     process: new EventEmitter(),
     isolatedE2EHome: e2e ? "/private/tmp/owned-native-test-home" : undefined,
     captureConnectionStatus: vi.fn(() => (eligible ? statusCapture : null)),
