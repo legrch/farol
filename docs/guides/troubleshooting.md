@@ -48,7 +48,7 @@ Shell/Git or Tasks being unavailable is not a reason to approve broader file acc
 
 ## A check is pending or unknown
 
-If Setup is open, use **Find a page → Home** to reach the sidebar. Choose **Review unresolved actions** in the sidebar to open **Unresolved actions**. The control appears only while something is unresolved. Inspect the listed original operation, then use **Refresh status** to inspect available evidence. Refresh does not replay an action or establish that it succeeded. See [Recovery](recovery.md#observe-an-uncertain-action) for workspace-edit observation and result delivery.
+Choose **Review unresolved actions** in the sidebar to open **Unresolved actions**. The control appears only while something is unresolved. Inspect the listed original operation, then use **Refresh status** to inspect available evidence. Refresh does not replay an action or establish that it succeeded. See [Recovery](recovery.md#observe-an-uncertain-action) for workspace-edit observation and result delivery.
 
 An unknown result may already have taken effect. Keep the same operation and do not send a second challenge, retarget the check, replace credentials or delete the journal. Follow [Recovery](recovery.md).
 

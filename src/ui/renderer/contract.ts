@@ -204,9 +204,6 @@ export type WindowSnapshot = Readonly<{
   back: boolean;
   forward: boolean;
   sidebar: "full" | "rail" | "overlay";
-  /** Window-local geometry; not a saved configuration setting. */
-  sidebarWidth: number;
-  sidebarResizing: boolean;
   overlay: "none" | Sheet;
   window: WindowState;
   appearance: Appearance;
@@ -267,7 +264,6 @@ export interface RendererFacade {
   navigate(destination: Partial<Destination>): void;
   travel(direction: -1 | 1): void;
   toggleSidebar(compact: boolean): void;
-  resizeSidebar(width: number, active: boolean): void;
   overlay(kind: WindowSnapshot["overlay"]): void;
   dismissOverlay(): void;
   appearance(value: Appearance): void;

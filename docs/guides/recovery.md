@@ -15,7 +15,7 @@ Reopen **Setup** and review saved state before starting again. Returning to a se
 
 ## Observe an uncertain action
 
-If Setup is open, use **Find a page → Home** to reach the sidebar. Choose **Review unresolved actions** in the sidebar to open **Unresolved actions**. The sidebar control is shown only while something is unresolved. Inspect the listed original action, its operation identity, state and classified code. **Refresh status** reads current state; it does not replay a Send, edit, connection start or install. For an existing workspace edit, use **Observe existing edit** when offered; review its result before **Record result delivery**. Only existing workspace edits support operation readback here; refreshing is not a general operation query.
+Choose **Review unresolved actions** in the sidebar to open **Unresolved actions**. The sidebar control is shown only while something is unresolved. Inspect the listed original action, its operation identity, state and classified code. **Refresh status** reads current state; it does not replay a Send, edit, connection start or install. For an existing workspace edit, use **Observe existing edit** when offered; review its result before **Record result delivery**. Only existing workspace edits support operation readback here; refreshing is not a general operation query.
 
 Preserve the original operation identity, status and error. For an unknown edit, the file may already contain the change. For an unknown verification Send, the message may already have been sent. Cancelling a draft or reopening the window does not resolve either uncertainty. Do not create a new operation ID or substitute an executor to repeat the work.
 

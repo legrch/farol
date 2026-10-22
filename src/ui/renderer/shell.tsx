@@ -1,31 +1,24 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode, RefObject } from "react";
-import {
-  isCompactShell,
-  shellGeometry,
-  shellRailWidth,
-} from "../../pkg/shell-layout/geometry";
+import { isCompactShell, shellGeometry } from "../../pkg/shell-layout/geometry";
 import { useRenderer } from "./services";
-import { pageListMode } from "./sidebar-presentation";
+import {
+  sidebarWidth,
+  sidebarPreferenceKey,
+} from "../../../apps/desktop/renderer/sidebar-presentation";
 import { PanelBoundary } from "./boundary";
 import { Settings, useSetupIntents, retainedSetupIntents } from "./settings";
 import type { RendererFacade, SettingsPage, WindowSnapshot } from "./contract";
 import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
 import { computerSetup } from "./computer-setup";
 import { TaskEditor } from "./task";
-import { Home, HomeNavigation, homeTitle } from "./home";
+import { Home } from "./home";
 import { Setup } from "./setup";
 import { ChatDirect } from "./chat-direct";
 import { ChatReadonly } from "./chat-readonly";
 import { ChatHistory } from "./chat-history";
 import { RetiredReplies } from "./retired-replies";
-import { setupSteps } from "./setup-navigation";
+import { setupSteps, setupChecklist } from "./setup-navigation";
 import { designIconPath, designIconViewBox } from "./design-icons";
 import { UpdateNotice, acknowledgeUpdateNotice } from "./update-notice";
 import {
@@ -71,7 +64,7 @@ function title(snapshot: WindowSnapshot, filter: ActivityFilter) {
           ? (setupSteps.find(
               ([step]) => step === snapshot.destination.setupStep,
             )?.[1] ?? "Setup")
-          : homeTitle(snapshot);
+          : "Home";
 }
 type ActivityFilter = "all" | "attention";
 function activityItems(snapshot: WindowSnapshot, filter: ActivityFilter) {
@@ -173,11 +166,6 @@ function ActivityNavigation({
         Recorded metadata only. Up to 256 events are held in memory in this
         window.
       </p>
-      {snapshot.sidebar === "overlay" && (
-        <button type="button" onClick={() => facade.toggleSidebar(true)}>
-          Close Activity sidebar
-        </button>
-      )}
     </div>
   );
 }
@@ -984,96 +972,6 @@ function ChatBrowser({
     </div>
   );
 }
-function PageListResizer({
-  facade,
-  width,
-}: {
-  facade: RendererFacade;
-  width: number;
-}) {
-  const drag = useRef<{ pointerId: number; x: number; width: number } | null>(
-    null,
-  );
-  const finish = useCallback(() => {
-    if (!drag.current) return;
-    drag.current = null;
-    facade.resizeSidebar(facade.getSnapshot().sidebarWidth, false);
-  }, [facade]);
-  useEffect(() => {
-    window.addEventListener("blur", finish);
-    return () => {
-      window.removeEventListener("blur", finish);
-      finish();
-    };
-  }, [finish]);
-  return (
-    <div
-      className="page-list-resizer"
-      role="separator"
-      aria-label="Resize page list"
-      aria-orientation="vertical"
-      aria-valuemin={shellGeometry.pageListMin}
-      aria-valuemax={shellGeometry.pageListMax}
-      aria-valuenow={width}
-      tabIndex={0}
-      title="Drag or use arrow keys to resize the page list"
-      onPointerDown={(event) => {
-        if (event.button !== 0 || drag.current) return;
-        const state = facade.getSnapshot();
-        facade.resizeSidebar(state.sidebarWidth, true);
-        if (!facade.getSnapshot().sidebarResizing) return;
-        event.preventDefault();
-        event.currentTarget.focus();
-        drag.current = {
-          pointerId: event.pointerId,
-          x: event.clientX,
-          width: state.sidebarWidth,
-        };
-        event.currentTarget.setPointerCapture(event.pointerId);
-      }}
-      onPointerMove={(event) => {
-        if (!facade.getSnapshot().sidebarResizing) {
-          drag.current = null;
-          return;
-        }
-        const start = drag.current;
-        if (start?.pointerId !== event.pointerId) return;
-        facade.resizeSidebar(start.width + event.clientX - start.x, true);
-      }}
-      onPointerUp={(event) => {
-        if (drag.current?.pointerId !== event.pointerId) return;
-        finish();
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }}
-      onPointerCancel={finish}
-      onLostPointerCapture={finish}
-      onKeyDown={(event) => {
-        if (!facade.getSnapshot().sidebarResizing) drag.current = null;
-        if (event.key === "Escape" && drag.current) {
-          drag.current = null;
-          facade.dismissOverlay();
-        } else if (event.key === "ArrowLeft")
-          facade.resizeSidebar(width - 8, drag.current !== null);
-        else if (event.key === "ArrowRight")
-          facade.resizeSidebar(width + 8, drag.current !== null);
-        else if (event.key === "Home")
-          facade.resizeSidebar(
-            shellGeometry.pageListMin,
-            drag.current !== null,
-          );
-        else if (event.key === "End")
-          facade.resizeSidebar(
-            shellGeometry.pageListMax,
-            drag.current !== null,
-          );
-        else return;
-        event.preventDefault();
-        event.stopPropagation();
-      }}
-    />
-  );
-}
-
 export function Shell() {
   const { snapshot, facade } = useRenderer();
   const state = snapshot;
@@ -1081,9 +979,7 @@ export function Shell() {
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>("all");
   const stage = useRef<HTMLElement>(null);
   const activityHeading = useRef<HTMLHeadingElement>(null);
-  const sidebarTrigger = useRef<HTMLButtonElement>(null);
-  const sidebarPanel = useRef<HTMLElement>(null);
-  const previousSidebar = useRef({ open: false, destination });
+  const preferenceLoaded = useRef(false);
   const scrollPositions = useRef(
     new WeakMap<WindowSnapshot["destination"], { top: number; left: number }>(),
   );
@@ -1098,37 +994,47 @@ export function Shell() {
     isCompactShell(window.innerWidth),
   );
   useEffect(() => {
-    const resize = () => setCompactWindow(isCompactShell(window.innerWidth));
+    const resize = () => {
+      setCompactWindow(isCompactShell(window.innerWidth));
+      facade.presentation();
+    };
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
-  }, []);
-  const pageList = pageListMode(destination, state.sidebar);
-  const sideVisible =
-    destination.area !== "setup" &&
-    (pageList === "overlay" || (pageList === "full" && !compactWindow));
-  const sidebarOverlay = sideVisible && pageList === "overlay";
-  useLayoutEffect(() => {
-    const previous = previousSidebar.current;
-    previousSidebar.current = { open: sidebarOverlay, destination };
-    // Modal dialogs and destination views own their own focus transitions.
-    if (state.overlay !== "none") return;
-    if (sidebarOverlay && !previous.open) {
-      sidebarPanel.current
-        ?.querySelector<HTMLElement>(
-          "button:not(:disabled), select:not(:disabled), input:not(:disabled)",
-        )
-        ?.focus();
-    } else if (
-      !sidebarOverlay &&
-      previous.open &&
-      destination === previous.destination
-    ) {
-      sidebarTrigger.current?.focus();
+  }, [facade]);
+  const expanded = state.sidebar === "full" && !compactWindow;
+  // Ignore the retired page-list width. This preference controls only labels.
+  useEffect(() => {
+    if (state.status !== "current") return;
+    if (!preferenceLoaded.current) {
+      preferenceLoaded.current = true;
+      try {
+        const saved = localStorage.getItem(sidebarPreferenceKey);
+        if ((saved === "full" || saved === "rail") && saved !== state.sidebar) {
+          facade.toggleSidebar(false);
+          return;
+        }
+      } catch {
+        /* Retain the active preference when storage is unavailable. */
+      }
     }
-  }, [sidebarOverlay, destination, state.overlay]);
+    try {
+      localStorage.setItem(sidebarPreferenceKey, state.sidebar);
+    } catch {
+      /* Storage does not grant authority. */
+    }
+  }, [facade, state.sidebar, state.status]);
   const settings = destination.area === "settings";
   const retained = useSetupIntents(facade, state);
   const unresolved = unresolvedActions(state, retained).length > 0;
+  const checklist = setupChecklist(state, false, retained);
+  const completedSteps = checklist.entries.filter(
+    (entry) => entry.state === "verified",
+  ).length;
+  const connected = computerSetup(state).ready;
+  const connectionLabel = connected
+    ? "Connected — ChatGPT can reach this Mac"
+    : "Not connected yet";
+  const sidebarLabel = expanded ? "Collapse sidebar" : "Expand sidebar";
   const updateRailLabel =
     state.update.phase === "available"
       ? state.update.deferred
@@ -1165,15 +1071,12 @@ export function Shell() {
       data-theme={state.appearance.theme}
       data-accent={state.appearance.accent}
       data-font={state.appearance.font}
-      data-sidebar={sidebarOverlay ? "overlay" : sideVisible ? "full" : "rail"}
+      data-sidebar={expanded ? "full" : "rail"}
       data-window-active={state.window.focused}
-      data-sidebar-resizing={state.sidebarResizing}
       style={
         {
-          "--rail-width": `${destination.area === "setup" ? 0 : shellRailWidth(window.innerWidth)}px`,
+          "--rail-width": `${sidebarWidth(expanded)}px`,
           "--toolbar-height": `${shellGeometry.windowBar}px`,
-          "--page-list-width": `${state.sidebarWidth}px`,
-          "--side-width": `${sideVisible && !sidebarOverlay ? state.sidebarWidth : 0}px`,
         } as CSSProperties
       }
     >
@@ -1194,22 +1097,18 @@ export function Shell() {
           >
             <Icon name="forward" />
           </button>
-          {destination.area !== "setup" && (
-            <button
-              ref={sidebarTrigger}
-              title="Show or hide page list"
-              aria-label="Toggle sidebar"
-              aria-expanded={sideVisible}
-              onClick={() => facade.toggleSidebar(compactWindow)}
-            >
-              <Icon name="sidebar" />
-            </button>
-          )}
+          <button
+            title={`${sidebarLabel}${state.shortcuts.sidebar === "off" ? "" : ` (⌃⌘${state.shortcuts.sidebar.toUpperCase()})`}${compactWindow ? " — widen the window to show labels" : ""}`}
+            aria-label={sidebarLabel}
+            aria-expanded={expanded}
+            aria-controls="main-sidebar"
+            onClick={() => facade.toggleSidebar(false)}
+          >
+            <Icon name="sidebar" />
+          </button>
         </div>
         <div className="toolbar-title">
-          {(settings ||
-            destination.area === "setup" ||
-            destination.area === "home") && (
+          {(settings || destination.area === "setup") && (
             <span>
               {settings
                 ? "Settings"
@@ -1249,6 +1148,15 @@ export function Shell() {
           <span>Find a page</span>
           <kbd>⌘ K</kbd>
         </button>
+        {destination.area === "chatgpt" && (
+          <button
+            className="chat-conversations-trigger"
+            onClick={() => facade.overlay("chat-conversations")}
+          >
+            <Icon name="chatgpt" />
+            <span>Chat conversations</span>
+          </button>
+        )}
         {destination.area === "chatgpt" && destination.taskId && (
           <button
             aria-label="Chat options"
@@ -1260,217 +1168,110 @@ export function Shell() {
           </button>
         )}
       </header>
-      {destination.area !== "setup" && (
-        <nav className="rail" aria-label="Sections">
-          {(["home", "chatgpt", "activity"] as const).map((area) => (
+      <nav id="main-sidebar" className="rail" aria-label="Sections">
+        {(["home", "chatgpt", "activity", "setup"] as const).map((area) => {
+          const label = {
+            home: "Home",
+            chatgpt: "ChatGPT",
+            activity: "Activity",
+            setup: "Setup",
+          }[area];
+          const detail =
+            area === "setup"
+              ? `${completedSteps} of 4 steps done`
+              : destination.area === area
+                ? "Current page"
+                : "Open page";
+          return (
             <button
               key={area}
-              aria-label={
-                area === "chatgpt"
-                  ? "ChatGPT"
-                  : area === "home"
-                    ? "Home"
-                    : "Activity"
-              }
-              title={
-                area === "chatgpt"
-                  ? "ChatGPT"
-                  : area === "home"
-                    ? "Home"
-                    : "Activity"
-              }
+              aria-label={label}
+              title={`${label} · ${detail}`}
               aria-current={destination.area === area ? "page" : undefined}
               onClick={() => facade.navigate({ area })}
             >
               <Icon name={area} />
+              <span className="rail-label">{label}</span>
+              {area === "setup" && (
+                <span className="rail-label setup-count">
+                  {completedSteps === 4 ? "✓" : `${completedSteps} of 4`}
+                </span>
+              )}
             </button>
-          ))}
+          );
+        })}
+        {unresolved && (
           <button
-            aria-label="Setup"
-            title="Setup"
-            onClick={() => facade.navigate({ area: "setup" })}
+            aria-label="Review unresolved actions"
+            title="Review unresolved actions · Needs attention"
+            className="attention-action"
+            onClick={() => facade.overlay("unresolved-actions")}
           >
-            <Icon name="setup" />
+            <Icon name="attention" />
+            <span className="rail-label">Unresolved actions</span>
           </button>
-          {unresolved && (
+        )}
+        <div className="rail-footer">
+          {updateRailLabel && (
             <button
-              aria-label="Review unresolved actions"
-              title="Actions need observation or result delivery"
-              className="attention-action"
-              onClick={() => facade.overlay("unresolved-actions")}
+              className="update-action"
+              aria-label={updateRailLabel}
+              title={updateRailLabel}
+              onClick={() => facade.overlay("update")}
             >
-              <Icon name="attention" />
+              <Icon
+                name={
+                  state.update.phase === "failed" ||
+                  state.update.phase === "recovery"
+                    ? "attention"
+                    : "download"
+                }
+              />
+              <span className="rail-label">{updateRailLabel}</span>
+              {"notice" in state.update &&
+                state.update.notice &&
+                !state.update.notice.seen && (
+                  <span className="update-dot" aria-hidden="true" />
+                )}
             </button>
           )}
-          <div className="rail-footer">
-            {updateRailLabel && (
-              <button
-                className="update-action"
-                aria-label={updateRailLabel}
-                title={updateRailLabel}
-                onClick={() => facade.overlay("update")}
-              >
-                <Icon
-                  name={
-                    state.update.phase === "failed" ||
-                    state.update.phase === "recovery"
-                      ? "attention"
-                      : "download"
-                  }
-                />
-                {"notice" in state.update &&
-                  state.update.notice &&
-                  !state.update.notice.seen && (
-                    <span className="update-dot" aria-hidden="true" />
-                  )}
-              </button>
-            )}
-            <button
-              className="rail-bottom"
-              aria-label="Settings"
-              title="Settings"
-              aria-current={settings ? "page" : undefined}
-              onClick={() =>
-                facade.navigate({ area: "settings", page: "general" })
-              }
-            >
-              <Icon name="settings" />
-            </button>
+          <div
+            className="rail-connection"
+            data-connected={connected}
+            role="status"
+            aria-label={connectionLabel}
+            title={connectionLabel}
+            tabIndex={0}
+          >
+            <span className="connection-dot" aria-hidden="true" />
+            <span className="rail-label">
+              {connected ? (
+                <>
+                  Connected<small>ChatGPT can reach this Mac</small>
+                </>
+              ) : (
+                "Not connected yet"
+              )}
+            </span>
           </div>
-        </nav>
-      )}
-      {sideVisible && (
-        <aside
-          ref={sidebarPanel}
-          className={`sidebar contextual-sidebar ${sidebarOverlay ? "sidebar-overlay" : ""}`}
-          aria-label={settings ? "Settings pages" : "Page list"}
-        >
-          <PageListResizer facade={facade} width={state.sidebarWidth} />
-          <h2>
-            {settings
-              ? "Settings"
-              : destination.area === "home"
-                ? "Home"
-                : destination.area === "chatgpt"
-                  ? "ChatGPT"
-                  : "Activity"}
-          </h2>
-          {destination.area === "home" && (
-            <HomeNavigation snapshot={state} facade={facade} />
-          )}
-          {settings && (
-            <nav aria-label="Settings navigation">
-              {pages.map(([page, label]) => (
-                <button
-                  key={page}
-                  aria-current={destination.page === page ? "page" : undefined}
-                  onClick={() => facade.navigate({ area: "settings", page })}
-                >
-                  <Icon name={page} />
-                  <span>{label}</span>
-                </button>
-              ))}
-            </nav>
-          )}
-          {destination.area === "chatgpt" &&
-            state.tasks.tasks.some((task) => task.agent) && (
-              <nav className="sidebar-section" aria-label="Farol work">
-                <h2>Farol work</h2>
-                {state.tasks.tasks
-                  .filter((task) => task.agent)
-                  .map((task) => (
-                    <button
-                      key={task.taskId}
-                      aria-current={
-                        destination.area === "chatgpt" &&
-                        destination.taskId === task.taskId
-                          ? "page"
-                          : undefined
-                      }
-                      onClick={() => {
-                        const latest = facade.getSnapshot();
-                        const currentTask = latest.tasks.tasks.find(
-                          (item) =>
-                            item.taskId === task.taskId &&
-                            item.sessionId === task.sessionId &&
-                            item.turnId === task.turnId,
-                        );
-                        if (
-                          latest.status !== "current" ||
-                          latest.runtime !== "ready" ||
-                          !currentTask?.agent ||
-                          currentTask.agent.observation === "unavailable"
-                        )
-                          return;
-                        facade.navigate({
-                          area: "chatgpt",
-                          taskId: currentTask.taskId,
-                        });
-                        const afterNavigation = facade.getSnapshot();
-                        const activationTask = afterNavigation.tasks.tasks.find(
-                          (item) =>
-                            item.taskId === currentTask.taskId &&
-                            item.sessionId === currentTask.sessionId &&
-                            item.turnId === currentTask.turnId,
-                        );
-                        if (
-                          afterNavigation.status !== "current" ||
-                          afterNavigation.runtime !== "ready" ||
-                          !activationTask?.agent ||
-                          activationTask.agent.observation === "unavailable"
-                        )
-                          return;
-                        void facade.task(
-                          {
-                            kind: "task.activate",
-                            taskId: activationTask.taskId,
-                          },
-                          `activate:${activationTask.taskId}`,
-                        );
-                      }}
-                    >
-                      <Icon name="chatgpt" />
-                      <span>
-                        {task.label}
-                        <small>{task.agent?.phase.replaceAll("_", " ")}</small>
-                      </span>
-                    </button>
-                  ))}
-              </nav>
-            )}
-          {destination.area === "chatgpt" && (
-            <nav className="sidebar-section" aria-label="Chat conversations">
-              <button onClick={() => facade.overlay("chat-conversations")}>
-                <Icon name="chatgpt" />
-                <span>Chat conversations</span>
-              </button>
-              <p className="description">
-                Start an account-confirmed conversation, review a read-only
-                workspace file, or read saved answers here.
-              </p>
-            </nav>
-          )}
-          {destination.area === "activity" && (
-            <ActivityNavigation
-              snapshot={state}
-              facade={facade}
-              filter={activityFilter}
-              onFilter={setActivityFilter}
-            />
-          )}
-        </aside>
-      )}
-      {sidebarOverlay && (
-        <button
-          className="sidebar-scrim"
-          aria-label="Close sidebar"
-          onClick={() => facade.toggleSidebar(true)}
-        />
-      )}
+          <button
+            className="rail-bottom"
+            aria-label="Settings"
+            title={`Settings · ${settings ? "Current page" : "Open page"}`}
+            aria-current={settings ? "page" : undefined}
+            onClick={() =>
+              facade.navigate({ area: "settings", page: "general" })
+            }
+          >
+            <Icon name="settings" />
+            <span className="rail-label">Settings</span>
+          </button>
+        </div>
+      </nav>
       <main
         ref={stage}
         className="stage"
-        inert={state.overlay !== "none" || sidebarOverlay}
+        inert={state.overlay !== "none"}
         onScrollCapture={(event) => {
           if (event.target !== event.currentTarget) return;
           // Save the displayed entry before navigation changes or clamps its DOM.
@@ -1498,7 +1299,26 @@ export function Shell() {
           ) : destination.area === "setup" ? (
             <Setup snapshot={state} facade={facade} />
           ) : destination.area === "settings" ? (
-            <Settings snapshot={state} facade={facade} />
+            <div className="settings-layout">
+              <nav
+                className="settings-sections"
+                aria-label="Settings navigation"
+              >
+                {pages.map(([page, label]) => (
+                  <button
+                    key={page}
+                    aria-current={
+                      destination.page === page ? "page" : undefined
+                    }
+                    onClick={() => facade.navigate({ area: "settings", page })}
+                  >
+                    <Icon name={page} />
+                    <span>{label}</span>
+                  </button>
+                ))}
+              </nav>
+              <Settings snapshot={state} facade={facade} />
+            </div>
           ) : destination.area === "activity" ? (
             <div className="activity-page">
               <Activity
@@ -1506,7 +1326,7 @@ export function Shell() {
                 facade={facade}
                 filter={activityFilter}
                 onFilter={setActivityFilter}
-                showList={!sideVisible}
+                showList={true}
                 heading={activityHeading}
               />
             </div>
@@ -1522,6 +1342,75 @@ export function Shell() {
           onClose={() => facade.overlay("none")}
         >
           <PanelBoundary>
+            {destination.area === "chatgpt" &&
+              state.tasks.tasks.some((task) => task.agent) && (
+                <nav className="chat-work-list" aria-label="Farol work">
+                  <h2>Farol work</h2>
+                  {state.tasks.tasks
+                    .filter((task) => task.agent)
+                    .map((task) => (
+                      <button
+                        key={task.taskId}
+                        aria-current={
+                          destination.area === "chatgpt" &&
+                          destination.taskId === task.taskId
+                            ? "page"
+                            : undefined
+                        }
+                        onClick={() => {
+                          const latest = facade.getSnapshot();
+                          const currentTask = latest.tasks.tasks.find(
+                            (item) =>
+                              item.taskId === task.taskId &&
+                              item.sessionId === task.sessionId &&
+                              item.turnId === task.turnId,
+                          );
+                          if (
+                            latest.status !== "current" ||
+                            latest.runtime !== "ready" ||
+                            !currentTask?.agent ||
+                            currentTask.agent.observation === "unavailable"
+                          )
+                            return;
+                          facade.navigate({
+                            area: "chatgpt",
+                            taskId: currentTask.taskId,
+                          });
+                          const afterNavigation = facade.getSnapshot();
+                          const activationTask =
+                            afterNavigation.tasks.tasks.find(
+                              (item) =>
+                                item.taskId === currentTask.taskId &&
+                                item.sessionId === currentTask.sessionId &&
+                                item.turnId === currentTask.turnId,
+                            );
+                          if (
+                            afterNavigation.status !== "current" ||
+                            afterNavigation.runtime !== "ready" ||
+                            !activationTask?.agent ||
+                            activationTask.agent.observation === "unavailable"
+                          )
+                            return;
+                          void facade.task(
+                            {
+                              kind: "task.activate",
+                              taskId: activationTask.taskId,
+                            },
+                            `activate:${activationTask.taskId}`,
+                          );
+                        }}
+                      >
+                        <Icon name="chatgpt" />
+                        <span>
+                          {task.label}
+                          <small>
+                            {task.agent?.phase.replaceAll("_", " ")}
+                          </small>
+                        </span>
+                      </button>
+                    ))}
+                </nav>
+              )}
             <ChatDirect snapshot={state} facade={facade} />
             <ChatReadonly snapshot={state} facade={facade} />
             <ChatHistory snapshot={state} facade={facade} />

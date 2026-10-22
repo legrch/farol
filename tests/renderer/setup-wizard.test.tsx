@@ -5,12 +5,12 @@ import { deferred } from "./fixture";
 
 // Actual renderer/controller with scripted responses, never live verification.
 describe("linear Setup", () => {
-  it("welcomes with four steps, one Start setup and no side menu", async () => {
+  it("welcomes with four steps, one Start setup and the permanent sidebar", async () => {
     const h = await mount({ shell: true });
     expect(h.host.textContent).toContain("Welcome to Farol");
     expect(h.host.querySelectorAll(".setup-welcome li")).toHaveLength(4);
     expect(h.host.querySelector(".contextual-sidebar")).toBeNull();
-    expect(h.host.querySelector(".rail")).toBeNull();
+    expect(h.host.querySelector(".rail")).toBeTruthy();
     expect(h.host.querySelector(".setup-progress")).toBeNull();
     expect(h.button("Start setup")).toBeTruthy();
     expect(h.button("Read the setup guide")).toBeTruthy();
@@ -42,7 +42,7 @@ describe("linear Setup", () => {
     );
     expect(line.querySelectorAll("button")).toHaveLength(0);
     expect(h.host.querySelector(".contextual-sidebar")).toBeNull();
-    expect(h.host.querySelector(".rail")).toBeNull();
+    expect(h.host.querySelector(".rail")).toBeTruthy();
     expect(h.host.querySelectorAll("details")).toHaveLength(0);
   });
   it.each(["signin", "folders", "connection", "attachment"] as const)(

@@ -462,10 +462,10 @@ it("notice contracts reject unbound or malformed commands and metadata", () => {
   ).toBe(false);
 });
 
-it("keeps the quiet notice out of the sidebar overlay without acknowledging it", async () => {
+it("keeps the quiet notice visible through sidebar collapse without acknowledging it", async () => {
   const { host, c, f } = await mount();
   await act(async () => c.toggleSidebar(true));
-  expect(host.querySelector('[aria-label="Update notice"]')).toBeNull();
+  expect(host.querySelector('[aria-label="Update notice"]')).not.toBeNull();
   await act(async () => c.toggleSidebar(false));
   expect(host.querySelector('[aria-label="Update notice"]')).not.toBeNull();
   expect(f.api.installedUpdate).not.toHaveBeenCalled();

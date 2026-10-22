@@ -7,13 +7,7 @@ export const setupPages = [
   "connection",
   "attachment",
 ] as const;
-export const homeViews = [
-  "overview",
-  "work",
-  "attention",
-  "activity",
-  "access",
-] as const;
+export const homeViews = ["overview"] as const;
 export const navigationAreas = [
   "home",
   "chatgpt",

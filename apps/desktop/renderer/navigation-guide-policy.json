@@ -86,6 +86,19 @@
     },
     {
       "label": "Check in ChatGPT once"
+    },
+    {
+      "label": "Connection settings"
+    },
+    {
+      "label": "Manage access"
+    },
+    {
+      "label": "Check sign-in from Home",
+      "pattern": "\\bHome\\s*(?:→|>|›|/)\\s*Check sign-in\\b"
+    },
+    {
+      "label": "page list"
     }
   ]
 }

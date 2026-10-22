@@ -58,11 +58,13 @@ Return to Farol and choose **Test in ChatGPT** once. Farol selects the app named
 
 **✓ Everything works** means ChatGPT used Farol, reached this Mac and verified access to the approved workspace. The existing bounded check lists the approved root and verifies a receipt; it does **not** read a file's contents or prove that a README was read. A model's reply alone, a saved app name or a local connection is insufficient.
 
-Choose **Start using Farol** when all four steps have current checks. This opens Home.
+Choose **Start using Farol** when all four steps have current checks. This opens Home. Home shows **Finish setup** until the four checks are current. Once ready, it shows connection status, **Check now**, any items needing attention and the latest activity with **Show all**.
+
+The sidebar stays visible on every page, including Setup. Use **Collapse sidebar** or **Expand sidebar** (⌃⌘S, also in the View menu) to switch between icons and labels. Farol remembers this choice. Narrow windows show the icon rail automatically and restore labels when widened. Hover an icon for its name and state. Settings has its own **General**, **Appearance** and **Keyboard shortcuts** section list inside the page. Activity filters stay inside Activity.
 
 ## Chat conversations
 
-Open **ChatGPT**, then choose **Chat conversations** in its sidebar. To start
+Open **ChatGPT**, then choose **Chat conversations** in its toolbar. To start
 with a typed message, choose **Check account**, review the signed-in account in
 ChatGPT, and choose **Use this account and send** only for the account you intend
 to use. A workspace-backed conversation requires a verified workspace with
@@ -79,6 +81,6 @@ belong to the ChatGPT area and remain separate from Settings.
 
 **Settings → General** has the Setup status card and **Open Setup**, **Install updates automatically**, **Version**, **Check for updates**, **Update recovery…** for a recorded update, and **Save support file…**. Appearance and Keyboard shortcuts remain separate pages. Workspace access, commands and connection setup belong in Setup.
 
-If an action's result is unconfirmed, use **Find a page → Home** if Setup is open, then choose **Review unresolved actions** in the sidebar to open **Unresolved actions**. This control appears only while something is unresolved. Inspect the original action and use **Refresh status** to observe available evidence. Existing workspace edits also offer **Observe existing edit** and, after review, **Record result delivery**; other actions do not gain operation readback from refreshing. Refresh, navigation and reopening a page do not repeat it or turn uncertainty into success. Do not re-enter the key, rerun the ChatGPT test or change the connection to obtain a green status while an earlier action remains unconfirmed.
+If an action's result is unconfirmed, choose **Review unresolved actions** in the sidebar to open **Unresolved actions**. This control appears only while something is unresolved. Inspect the original action and use **Refresh status** to observe available evidence. Existing workspace edits also offer **Observe existing edit** and, after review, **Record result delivery**; other actions do not gain operation readback from refreshing. Refresh, navigation and reopening a page do not repeat it or turn uncertainty into success. Do not re-enter the key, rerun the ChatGPT test or change the connection to obtain a green status while an earlier action remains unconfirmed.
 
 For support, save a support file from General and attach it to a GitHub issue. The export excludes messages, keys and file contents.

@@ -23,6 +23,7 @@ const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
   document.body.replaceChildren();
+  localStorage.clear();
 });
 async function mount(data = bootstrap(), compactViewport = () => false) {
   const f = fixture();
@@ -132,7 +133,7 @@ it("history stage scroll restores both offsets using the exact immutable entry",
   const second = c.getSnapshot().destination;
   const stage = scrollStage(host, 290, 29);
   await act(async () => {
-    c.navigate({ area: "home", homeView: "work" });
+    c.navigate({ area: "home", homeView: "overview" });
     // Simulate content clamping before the navigation commit. Cleanup must not
     // overwrite the earlier observed offset with this changed DOM value.
     stage.scrollTop = 0;
@@ -415,448 +416,13 @@ it.each([
     expect(f.api.configure).not.toHaveBeenCalled();
   },
 );
-it("Home keeps the rail and full-width overview while an explicitly opened page list reports the actual host layout", async () => {
-  const { host, c, f } = await mount();
-  expect(host.querySelectorAll(".sidebar")).toHaveLength(0);
-  expect(host.querySelectorAll(".rail")).toHaveLength(1);
-  expect(
-    host.querySelector(".rail button:first-child")?.getAttribute("aria-label"),
-  ).toBe("Home");
-  expect(
-    host.querySelector(".rail button:last-child")?.getAttribute("aria-label"),
-  ).toBe("Settings");
-  expect(host.querySelector(".contextual-sidebar")).toBeNull();
-  expect(c.getSnapshot().sidebar).toBe("full");
-  expect(f.api.layout).toHaveBeenLastCalledWith(
-    "activity",
-    "",
-    false,
-    false,
-    "rail",
-    "none",
-    232,
-  );
-  expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
-  await act(async () => c.toggleSidebar(false));
-  expect(host.querySelector(".sidebar-scrim")).not.toBeNull();
-  expect(host.querySelector("main")?.hasAttribute("inert")).toBe(true);
-  expect(f.api.layout).toHaveBeenLastCalledWith(
-    "activity",
-    "",
-    false,
-    false,
-    "overlay",
-    "sidebar",
-    232,
-  );
-  await act(async () => button(host, "Close sidebar").click());
-  expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
-  await act(async () => c.navigate({ area: "chatgpt" }));
-  await act(async () => c.toggleSidebar(true));
-  expect(f.api.layout).toHaveBeenLastCalledWith(
-    "browser",
-    "",
-    false,
-    false,
-    "overlay",
-    "sidebar",
-    232,
-  );
-  await act(async () =>
-    host.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-    ),
-  );
-  expect(host.querySelector(".sidebar-scrim")).toBeNull();
-  expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
-});
-it.each([
-  [849, "58px", false],
-  [850, "58px", false],
-  [851, "62px", true],
-] as const)(
-  "approved geometry projects rail and context at %ipx",
-  async (width, rail, context) => {
-    const previous = window.innerWidth;
-    cleanups.push(async () => {
-      await act(async () => {
-        window.innerWidth = previous;
-        window.dispatchEvent(new Event("resize"));
-      });
-    });
-    window.innerWidth = width;
-    const { host, c, f } = await mount(bootstrap(), () =>
-      isCompactShell(window.innerWidth),
-    );
-    await act(async () => c.navigate({ area: "home", homeView: "work" }));
-    const desktop = host.querySelector<HTMLElement>(".desktop")!;
-    expect(desktop.style.getPropertyValue("--rail-width")).toBe(rail);
-    expect(desktop.style.getPropertyValue("--page-list-width")).toBe("232px");
-    expect(Boolean(host.querySelector("aside"))).toBe(context);
-    await act(async () => button(host, "Toggle sidebar").click());
-    expect(c.getSnapshot().sidebar).toBe(context ? "rail" : "overlay");
-    expect(Boolean(host.querySelector(".sidebar-overlay"))).toBe(!context);
-    expect(host.querySelector("main")?.hasAttribute("inert")).toBe(!context);
-    expect(desktop.style.getPropertyValue("--rail-width")).toBe(rail);
-    await act(async () =>
-      f.emit("action", {
-        action: "toggle-sidebar",
-        source: "sidebar-command",
-        eventId: "11111111-1111-4111-8111-111111111178",
-        authWindowGeneration: null,
-      }),
-    );
-    expect(c.getSnapshot().sidebar).toBe(context ? "full" : "rail");
-    expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
-    await act(async () =>
-      f.emit("action", {
-        action: "toggle-sidebar",
-        source: "sidebar-command",
-        eventId: "11111111-1111-4111-8111-111111111179",
-        authWindowGeneration: null,
-      }),
-    );
-    expect(c.getSnapshot().sidebar).toBe(context ? "rail" : "overlay");
-    expect(f.api.configure).not.toHaveBeenCalled();
-    expect(f.api.task).not.toHaveBeenCalled();
-  },
-);
-async function compactSettingsShell() {
-  const originalWidth = window.innerWidth;
-  cleanups.push(async () => {
-    await act(async () => {
-      window.innerWidth = originalWidth;
-      window.dispatchEvent(new Event("resize"));
-    });
-  });
-  window.innerWidth = 758;
-  const mounted = await mount();
-  await act(async () =>
-    mounted.c.navigate({ area: "settings", page: "general" }),
-  );
-  return mounted;
-}
-it.each(["toolbar", "controller"] as const)(
-  "compact sidebar focus enters a page control when opened by %s",
-  async (source) => {
-    const { host, c, f } = await compactSettingsShell();
-    const trigger = button(host, "Toggle sidebar");
-    trigger.focus();
-    await act(async () => {
-      if (source === "toolbar") trigger.click();
-      else c.toggleSidebar(true);
-    });
-    expect(
-      document.activeElement ===
-        button(host.querySelector("aside")!, "General"),
-    ).toBe(true);
-    expect(document.activeElement?.getAttribute("role")).not.toBe("separator");
-    expect(host.querySelector("main")?.hasAttribute("inert")).toBe(true);
-    expect(f.api.configure).not.toHaveBeenCalled();
-    expect(f.api.task).not.toHaveBeenCalled();
-  },
-);
-it.each(["Escape", "scrim", "toggle", "host-dismiss", "current-page"] as const)(
-  "compact sidebar focus returns to its toggle after %s dismissal",
-  async (dismissal) => {
-    const { host, f } = await compactSettingsShell();
-    const trigger = button(host, "Toggle sidebar");
-    await act(async () => trigger.click());
-    const current = button(host.querySelector("aside")!, "General");
-    current.focus();
-    await act(async () => {
-      if (dismissal === "Escape")
-        current.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-        );
-      else if (dismissal === "scrim") button(host, "Close sidebar").click();
-      else if (dismissal === "toggle") trigger.click();
-      else if (dismissal === "current-page") current.click();
-      else
-        f.emit("action", {
-          action: "close-overlay",
-          source: "overlay-dismissed",
-          eventId: "11111111-1111-4111-8111-111111111177",
-          authWindowGeneration: null,
-        });
-    });
-    expect(host.querySelector(".sidebar-overlay")).toBeNull();
-    expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
-    expect(document.activeElement === trigger).toBe(true);
-    expect(f.api.configure).not.toHaveBeenCalled();
-    expect(f.api.task).not.toHaveBeenCalled();
-  },
-);
-it.each(["search", "update", "update-recovery"] as const)(
-  "compact sidebar focus does not displace the %s dialog",
-  async (overlay) => {
-    const { host, c, f } = await compactSettingsShell();
-    await act(async () => c.overlay(overlay));
-    const dialogTarget = document.activeElement;
-    expect(host.querySelector("dialog")?.contains(dialogTarget)).toBe(true);
-    await act(async () => c.toggleSidebar(true));
-    expect(document.activeElement).toBe(dialogTarget);
-    await act(async () => c.toggleSidebar(true));
-    expect(document.activeElement).toBe(dialogTarget);
-    expect(f.api.configure).not.toHaveBeenCalled();
-    expect(f.api.task).not.toHaveBeenCalled();
-  },
-);
-it("compact sidebar focus does not restore its toggle after destination navigation", async () => {
-  const { host, c } = await compactSettingsShell();
-  const trigger = button(host, "Toggle sidebar");
-  await act(async () => trigger.click());
-  const target = button(host.querySelector("aside")!, "Appearance");
-  target.focus();
-  await act(async () => target.click());
-  expect(c.getSnapshot().destination.page).toBe("appearance");
-  expect(host.querySelector(".sidebar-overlay")).toBeNull();
-  expect(document.activeElement).not.toBe(trigger);
-});
-it("compact sidebar focus leaves desktop toggle focus unchanged", async () => {
-  const { host, c } = await mount();
-  await act(async () => c.navigate({ area: "home", homeView: "work" }));
-  const trigger = button(host, "Toggle sidebar");
-  trigger.focus();
-  await act(async () => c.toggleSidebar(false));
-  expect(document.activeElement).toBe(trigger);
-  await act(async () => c.toggleSidebar(false));
-  expect(document.activeElement).toBe(trigger);
-});
-it("resizes the page list with keyboard bounds and remembers its width only in this window", async () => {
-  const { host, c, f } = await mount();
-  await act(async () => c.navigate({ area: "home", homeView: "work" }));
-  const divider = host.querySelector<HTMLElement>('[role="separator"]')!;
-  const key = async (value: string) =>
-    act(async () => {
-      divider.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: value,
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-    });
-  expect(divider.getAttribute("aria-valuenow")).toBe("232");
-  await key("ArrowRight");
-  expect(c.getSnapshot().sidebarWidth).toBe(240);
-  expect(
-    host
-      .querySelector<HTMLElement>(".desktop")!
-      .style.getPropertyValue("--side-width"),
-  ).toBe("240px");
-  expect(f.api.layout).toHaveBeenLastCalledWith(
-    "activity",
-    "",
-    false,
-    false,
-    "full",
-    "none",
-    240,
-  );
-  await key("End");
-  await key("ArrowRight");
-  expect(c.getSnapshot().sidebarWidth).toBe(288);
-  await key("Home");
-  await key("ArrowLeft");
-  expect(c.getSnapshot().sidebarWidth).toBe(152);
-  await act(async () => c.toggleSidebar(false));
-  expect(host.querySelector('[role="separator"]')).toBeNull();
-  await act(async () => c.toggleSidebar(false));
-  expect(
-    host.querySelector('[role="separator"]')?.getAttribute("aria-valuenow"),
-  ).toBe("152");
-  expect(f.api.configure).not.toHaveBeenCalled();
-  expect(f.api.task).not.toHaveBeenCalled();
-});
-
-it.each([
-  "pointerup",
-  "pointercancel",
-  "lostpointercapture",
-  "blur",
-  "collapse",
-  "escape",
-  "native-escape",
-])(
-  "hides native browser input during resizing and releases it after %s",
-  async (ending) => {
-    const { host, c, f } = await mount();
-    await act(async () => f.emit("route", { state: "loaded" }));
-    await act(async () => c.navigate({ area: "chatgpt" }));
-    const divider = host.querySelector<HTMLElement>('[role="separator"]')!;
-    divider.setPointerCapture = vi.fn();
-    divider.releasePointerCapture = vi.fn();
-    const pointer = async (type: string, x: number) =>
-      act(async () => {
-        const event = new MouseEvent(type, {
-          bubbles: true,
-          cancelable: true,
-          button: 0,
-          clientX: x,
-        });
-        Object.defineProperty(event, "pointerId", { value: 1 });
-        divider.dispatchEvent(event);
-      });
-    await pointer("pointerdown", 235);
-    expect(c.getSnapshot().sidebarResizing).toBe(true);
-    expect(f.api.layout).toHaveBeenLastCalledWith(
-      "browser",
-      "",
-      false,
-      false,
-      "full",
-      "sidebar",
-      232,
-    );
-    await pointer("pointermove", 275);
-    expect(c.getSnapshot().sidebarWidth).toBe(272);
-    if (ending === "blur")
-      await act(async () => window.dispatchEvent(new Event("blur")));
-    else if (ending === "native-escape")
-      await act(async () =>
-        f.emit("action", {
-          action: "close-overlay",
-          source: "overlay-dismissed",
-          eventId: "11111111-1111-4111-8111-111111111177",
-          authWindowGeneration: null,
-        }),
-      );
-    else if (ending === "escape")
-      await act(async () =>
-        divider.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-        ),
-      );
-    else if (ending === "collapse")
-      await act(async () => c.toggleSidebar(false));
-    else await pointer(ending, 275);
-    expect(c.getSnapshot().sidebarResizing).toBe(false);
-    const cancelled = ending === "escape" || ending === "native-escape";
-    expect(c.getSnapshot().sidebarWidth).toBe(cancelled ? 232 : 272);
-    expect(f.api.layout).toHaveBeenLastCalledWith(
-      "browser",
-      "",
-      false,
-      false,
-      ending === "collapse" ? "rail" : "full",
-      "none",
-      cancelled ? 232 : 272,
-    );
-    // A still-held pointer cannot restart a drag cancelled by the native action.
-    if (cancelled) {
-      await act(async () =>
-        divider.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
-        ),
-      );
-      expect(c.getSnapshot().sidebarResizing).toBe(false);
-      await pointer("pointermove", 290);
-      expect(c.getSnapshot().sidebarResizing).toBe(false);
-      expect(c.getSnapshot().sidebarWidth).toBe(240);
-    }
-    expect(f.api.task).not.toHaveBeenCalled();
-    expect(f.api.configure).not.toHaveBeenCalled();
-  },
-);
-
-it.each(["Setup", "Home", "Back"] as const)(
-  "narrow page-list navigation to %s closes the scrim and restores page input",
-  async (label) => {
-    const { host, c, f } = await mount();
-    const originalWidth = window.innerWidth;
-    try {
-      await act(async () => {
-        window.innerWidth = 758;
-        window.dispatchEvent(new Event("resize"));
-        if (label === "Back")
-          c.navigate({ area: "settings", page: "appearance" });
-      });
-      await act(async () => button(host, "Toggle sidebar").click());
-      expect(host.querySelector(".sidebar-overlay")).not.toBeNull();
-      expect(host.querySelector("main")?.hasAttribute("inert")).toBe(true);
-      const before = c.getSnapshot();
-      await act(async () => button(host, label).click());
-      expect(host.querySelector(".sidebar-overlay")).toBeNull();
-      expect(host.querySelector(".sidebar-scrim")).toBeNull();
-      expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
-      expect(c.getSnapshot().sidebar).toBe("rail");
-      expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.slice(4, 6)).toEqual([
-        "rail",
-        "none",
-      ]);
-      if (label === "Home") {
-        expect(c.getSnapshot().back).toBe(before.back);
-        expect(c.getSnapshot().destination).toEqual(before.destination);
-      }
-      expect(f.api.configure).not.toHaveBeenCalled();
-      expect(f.api.task).not.toHaveBeenCalled();
-    } finally {
-      await act(async () => {
-        window.innerWidth = originalWidth;
-        window.dispatchEvent(new Event("resize"));
-      });
-    }
-  },
-);
-
-it("automatically uses the rail at narrow widths and opens a bounded page-list overlay", async () => {
-  const { host, c, f } = await mount();
-  await act(async () => c.navigate({ area: "home", homeView: "work" }));
-  const originalWidth = window.innerWidth;
-  try {
-    await act(async () => {
-      window.innerWidth = 979;
-      window.dispatchEvent(new Event("resize"));
-    });
-    expect(host.querySelector(".contextual-sidebar")).not.toBeNull();
-    await act(async () => {
-      window.innerWidth = 850;
-      window.dispatchEvent(new Event("resize"));
-    });
-    expect(host.querySelector(".contextual-sidebar")).toBeNull();
-    expect(button(host, "Toggle sidebar").getAttribute("aria-expanded")).toBe(
-      "false",
-    );
-    await act(async () => button(host, "Toggle sidebar").click());
-    expect(host.querySelector(".sidebar-overlay")).not.toBeNull();
-    expect(f.api.layout).toHaveBeenLastCalledWith(
-      "activity",
-      "",
-      false,
-      false,
-      "overlay",
-      "sidebar",
-      232,
-    );
-    await act(async () => button(host, "Close sidebar").click());
-    await act(async () => {
-      window.innerWidth = 1180;
-      window.dispatchEvent(new Event("resize"));
-    });
-    // Explicit dismissal preserves the user's collapsed preference when wider.
-    expect(host.querySelector(".contextual-sidebar")).toBeNull();
-    await act(async () => button(host, "Toggle sidebar").click());
-    expect(c.getSnapshot().sidebar).toBe("full");
-    expect(host.querySelector(".contextual-sidebar")).not.toBeNull();
-  } finally {
-    await act(async () => {
-      window.innerWidth = originalWidth;
-      window.dispatchEvent(new Event("resize"));
-    });
-  }
-});
 
 it("R36 R39 new profile opens Home without a legacy modal and has one leaf toolbar", async () => {
   const { host, f } = await mount();
-  expect(host.querySelector(".toolbar-title strong")?.textContent).toBe(
-    "Overview",
-  );
-  expect(host.querySelector(".toolbar-title")?.textContent).toBe(
-    "Home /Overview",
-  );
+  expect(host.querySelector(".toolbar-title strong")?.textContent).toBe("Home");
+  expect(host.querySelector(".toolbar-title")?.textContent).toBe("Home");
   expect(host.querySelector("dialog")).toBeNull();
-  expect(host.textContent).toContain("Setup needed");
+  expect(host.textContent).toContain("Finish setup");
   expect(f.api.configure).not.toHaveBeenCalled();
   expect(f.api.task).not.toHaveBeenCalled();
   await act(async () => button(host, "Settings").click());
@@ -928,8 +494,9 @@ it("R05 renders hostile labels as text and stable task identity survives reorder
     });
     c.navigate({ area: "chatgpt" });
   });
+  await act(async () => button(host, "Chat conversations").click());
   expect(host.querySelector("script")).toBeNull();
-  const row = host.querySelector(".contextual-sidebar button");
+  const row = host.querySelector(".chat-work-list button");
   await act(async () =>
     f.emit("tasks", {
       revision: 2,
@@ -939,9 +506,7 @@ it("R05 renders hostile labels as text and stable task identity survives reorder
       ],
     }),
   );
-  expect([...host.querySelectorAll(".contextual-sidebar button")]).toContain(
-    row,
-  );
+  expect([...host.querySelectorAll(".chat-work-list button")]).toContain(row);
 });
 it("R24 refused/unavailable update remains honest and review is dismissible", async () => {
   const { host, c, f } = await mount();
@@ -963,31 +528,6 @@ it("R24 refused/unavailable update remains honest and review is dismissible", as
   expect(c.getSnapshot().overlay).toBe("none");
 });
 
-it("R31 R36 Home keeps local views selected and explicit destinations use existing routes", async () => {
-  const { host, c, f } = await mount();
-  for (const [label, page] of [
-    ["Manage connection", "connection"],
-    ["Manage workspaces", "folders"],
-  ] as const) {
-    await act(async () =>
-      c.navigate({ area: "home", homeView: "access", homeSelection: null }),
-    );
-    await act(async () => button(host, label).click());
-    expect(c.getSnapshot().destination).toMatchObject({
-      area: "setup",
-      page: "general",
-      setupStep: page,
-    });
-  }
-  await act(async () =>
-    c.navigate({ area: "home", homeView: "activity", homeSelection: null }),
-  );
-  await act(async () => button(host, "Open full Activity").click());
-  expect(c.getSnapshot().destination.area).toBe("activity");
-  expect(host.querySelector('.rail [aria-label="New chat"]')).toBeNull();
-  expect(f.api.task).not.toHaveBeenCalled();
-  expect(f.api.configure).not.toHaveBeenCalled();
-});
 it("R05 R32 R34 activity inspection displays only metadata and returns to exact chat", async () => {
   const { host, c, f } = await mount();
   await act(async () => {
@@ -1099,7 +639,9 @@ it("keeps the update indicator in the rail only while an update needs attention"
   await act(async () => rail.click());
   expect(c.getSnapshot().overlay).toBe("update");
   expect(rail.parentElement).toBe(host.querySelector(".rail-footer"));
-  expect(rail.nextElementSibling?.getAttribute("aria-label")).toBe("Settings");
+  expect(rail.parentElement?.lastElementChild?.getAttribute("aria-label")).toBe(
+    "Settings",
+  );
   await act(async () => {
     c.overlay("none");
     f.emit("update", { phase: "idle", checkedAt: 42 });
@@ -2071,138 +1613,6 @@ it("R24 checking and rollback controls follow recovery and drain eligibility", a
   expect(f.api.installedUpdate).not.toHaveBeenCalledWith({ kind: "rollback" });
 });
 
-const buildId = "3".repeat(64);
-const runtimeGeneration = "a".repeat(64);
-const workspaceId = "22222222-2222-4222-8222-222222222222";
-const timestamp = "2026-10-02T20:00:00.000Z";
-function homeComputerSettings() {
-  const value = settings();
-  value.computer.workspaces = [
-    {
-      workspaceId,
-      root: "/approved/project",
-      label: "Project",
-      access: "read",
-      excludedPaths: [],
-      rootIdentity: { device: "1", inode: "2" },
-      accessCheck: {
-        buildId,
-        computerGeneration: 1,
-        verifiedAt: timestamp,
-        rootIdentity: { device: "1", inode: "2" },
-      },
-    },
-  ];
-  const witness = {
-    profile: "farol",
-    configRevision: 1,
-    workspaceId,
-    runtimeGeneration,
-    buildId,
-    protocol: "secure-mcp",
-    verifiedAt: timestamp,
-  };
-  value.setup.computer.verified = witness;
-  value.setup.connect.verified = witness;
-  value.connectors.secureMcp = {
-    ...value.connectors.secureMcp,
-    tunnelId: "owner-tunnel",
-    credential: "stored",
-    tunnelClient: {
-      executablePath: "/approved/tunnel",
-      executableSha256: "b".repeat(64),
-      version: "1.0.0",
-      protocol: "openai-tunnel-client/v1",
-      verifiedAt: timestamp,
-    },
-    runtime: {
-      state: "ready",
-      connectorGeneration: 1,
-      computerGeneration: 1,
-      runtimeGeneration,
-      buildId,
-      observedAt: timestamp,
-    },
-    challenge: {
-      value: "33333333-3333-4333-8333-333333333333",
-      challengeSha256: "c".repeat(64),
-      computerGeneration: 1,
-      runtimeGeneration,
-      buildId,
-      preparedAt: timestamp,
-    },
-    attachment: {
-      tunnelId: "owner-tunnel",
-      workspaceId,
-      connectorGeneration: 1,
-      computerGeneration: 1,
-      runtimeGeneration,
-      buildId,
-      challengeSha256: "c".repeat(64),
-      receiptSha256: "d".repeat(64),
-      verifiedAt: timestamp,
-    },
-  };
-  return ProductSettingsSchema.parse(value);
-}
-
-it("Home projects Computer readiness separately from optional embedded login", async () => {
-  const data = bootstrap();
-  data.configuration.settings = homeComputerSettings();
-  const { host, c, f } = await mount(data);
-  await act(async () => c.navigate({ area: "home", homeView: "access" }));
-  expect(host.querySelector("main")?.textContent).toContain("Computer ready");
-  expect(host.querySelector("main")?.textContent).toContain(
-    "Sign-in not checked",
-  );
-  for (const setupStep of ["folders", "connection"] as const) {
-    await act(async () => c.navigate({ area: "setup", setupStep }));
-    await act(async () => c.navigate({ area: "home" }));
-  }
-  expect(f.api.configure).not.toHaveBeenCalled();
-  expect(f.api.task).not.toHaveBeenCalled();
-});
-it("Home never upgrades embedded login or stale attachment to Computer ready", async () => {
-  const data = bootstrap();
-  data.configuration.settings.setup.chatgpt.verified =
-    homeComputerSettings().setup.computer.verified;
-  const { host, c, f } = await mount(data);
-  await act(async () => c.navigate({ area: "home", homeView: "access" }));
-  expect(host.querySelector("main")?.textContent).toContain("Setup needed");
-  expect(host.querySelector("main")?.textContent).not.toContain(
-    "Computer ready",
-  );
-  const changed = bootstrap();
-  changed.configuration.settings = homeComputerSettings();
-  changed.configuration.settings.setup.connect.verified!.runtimeGeneration =
-    "e".repeat(64);
-  vi.mocked(f.api.bootstrap).mockResolvedValue(changed);
-  await act(async () => c.refresh());
-  expect(host.querySelector("main")?.textContent).not.toContain(
-    "Computer ready",
-  );
-  expect(f.api.configure).not.toHaveBeenCalled();
-});
-
-it("Home projects current window metadata without creating a chat or exposing qualification forms", async () => {
-  const { host, c, f } = await mount();
-  await act(async () =>
-    f.emit("tasks", { revision: 1, tasks: [task(), task("task-2")] }),
-  );
-  await act(async () => c.navigate({ area: "home", homeView: "work" }));
-  expect(host.querySelector("main")?.textContent).toContain("Task 1");
-  expect(host.querySelector("main")?.textContent).not.toMatch(
-    /Check account|Read-only file preview|Saved Chat answers/,
-  );
-  expect(host.querySelector('.rail [aria-label="New chat"]')).toBeNull();
-  expect(f.api.task).not.toHaveBeenCalled();
-  await act(async () => c.navigate({ area: "chatgpt", taskId: "task-1" }));
-  expect(host.querySelector(".toolbar-title strong")?.textContent).toBe(
-    "ChatGPT",
-  );
-  expect(host.querySelector('[aria-label="Farol work"]')).toBeNull();
-  expect(host.querySelector('[aria-label="New chat"]')).toBeNull();
-});
 it.each([
   "MODEL_ENDPOINT_UNAVAILABLE",
   "CHATGPT_SIGN_IN_IN_PROGRESS",
@@ -2880,12 +2290,12 @@ it("Activity toolbar leaf names an empty view without a duplicated content headi
     "No events need attention",
   );
 });
-it("Activity contextual list filters actual unknown metadata and keeps selection stable", async () => {
+it("Activity in-page list filters actual unknown metadata and keeps selection stable", async () => {
   const { host, c, f } = await activityFixture();
   expect(host.querySelector(".activity-event strong")?.textContent).toBe(
     "Outcome not confirmed",
   );
-  expect(host.querySelectorAll("aside .activity-row")).toHaveLength(2);
+  expect(host.querySelectorAll(".activity-page .activity-row")).toHaveLength(2);
   expect(host.querySelector(".activity-page")?.textContent).toContain(
     "There is no confirmed successful or failed result.",
   );
@@ -3158,12 +2568,14 @@ it("Activity retains legacy Home event inspector routing", async () => {
   expect(c.getSnapshot().overlay).toBe("none");
   expect(document.activeElement).toBe(host.querySelector(".toolbar-title h1"));
 });
-it("Activity compact selection dismisses sidebar and focuses usable inline details", async () => {
+it("Activity rail collapse keeps inline filters and keyboard details usable", async () => {
   const { host, c } = await activityFixture();
   await act(async () => c.toggleSidebar(true));
-  expect(host.querySelector("main")?.hasAttribute("inert")).toBe(true);
+  expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
   await act(async () =>
-    host.querySelector<HTMLButtonElement>("aside .activity-row")!.click(),
+    host
+      .querySelector<HTMLButtonElement>(".activity-page .activity-row")!
+      .click(),
   );
   expect(c.getSnapshot().sidebar).toBe("rail");
   expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
@@ -3603,37 +3015,111 @@ it.each([
   },
 );
 
-it("Home overview hides the default page list without changing detail or Settings preferences", async () => {
+it("one sidebar expands to labels and collapses to a permanent rail on every area", async () => {
   const { host, c, f } = await mount();
-  expect(c.getSnapshot().sidebar).toBe("full");
-  expect(host.querySelector("aside")).toBeNull();
+  expect(host.querySelectorAll('nav[aria-label="Sections"]')).toHaveLength(1);
+  expect(
+    host.querySelector('.contextual-sidebar,.sidebar-scrim,[role="separator"]'),
+  ).toBeNull();
   expect(
     host
-      .querySelector<HTMLElement>(".desktop")!
-      .style.getPropertyValue("--side-width"),
-  ).toBe("0px");
-  await act(async () => c.navigate({ area: "home", homeView: "work" }));
-  expect(host.querySelector("aside")).not.toBeNull();
-  expect(f.api.layout).toHaveBeenLastCalledWith(
-    "activity",
-    "",
-    false,
-    false,
-    "full",
-    "none",
-    232,
-  );
-  await act(async () =>
-    c.navigate({ area: "home", homeView: "overview", homeSelection: null }),
-  );
-  expect(host.querySelector("aside")).toBeNull();
-  await act(async () => c.navigate({ area: "settings", page: "appearance" }));
-  expect(host.querySelector("aside")).not.toBeNull();
-  expect(c.getSnapshot().sidebar).toBe("full");
+      .querySelector<HTMLElement>(".desktop")
+      ?.style.getPropertyValue("--rail-width"),
+  ).toBe("208px");
+  const toggle = button(host, "Collapse sidebar");
+  toggle.focus();
+  await act(async () => toggle.click());
+  expect(
+    host
+      .querySelector<HTMLElement>(".desktop")
+      ?.style.getPropertyValue("--rail-width"),
+  ).toBe("56px");
+  expect(document.activeElement).toBe(toggle);
+  expect(localStorage.getItem("farol.sidebar.v2")).toBe("rail");
+  for (const area of ["home", "activity", "setup", "settings"] as const) {
+    await act(async () => c.navigate({ area }));
+    expect(host.querySelector(".rail")).toBeTruthy();
+    expect(
+      host
+        .querySelector('.rail [aria-current="page"]')
+        ?.getAttribute("aria-label"),
+    ).toBe(
+      {
+        home: "Home",
+        activity: "Activity",
+        setup: "Setup",
+        settings: "Settings",
+      }[area],
+    );
+  }
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
 });
-it("Home page-list keyboard opening and dismissal retain usable focus at desktop width", async () => {
+it("restores the label preference while ignoring retired width and malformed preferences", async () => {
+  localStorage.setItem("farol.sidebar.v2", "rail");
+  localStorage.setItem("farol.sidebar.width", "999999");
+  const { host } = await mount();
+  expect(button(host, "Expand sidebar").getAttribute("aria-expanded")).toBe(
+    "false",
+  );
+  expect(
+    host
+      .querySelector<HTMLElement>(".desktop")
+      ?.style.getPropertyValue("--rail-width"),
+  ).toBe("56px");
+});
+it("compact collapse keeps the expanded preference and never opens a page-list overlay", async () => {
+  const old = window.innerWidth;
+  const { host, c } = await mount(bootstrap(), () =>
+    isCompactShell(window.innerWidth),
+  );
+  try {
+    await act(async () => {
+      window.innerWidth = 620;
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(
+      host
+        .querySelector<HTMLElement>(".desktop")
+        ?.style.getPropertyValue("--rail-width"),
+    ).toBe("56px");
+    expect(c.getSnapshot().sidebar).toBe("full");
+    expect(localStorage.getItem("farol.sidebar.v2")).toBe("full");
+    expect(host.querySelector(".sidebar-overlay,.sidebar-scrim")).toBeNull();
+    expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
+    await act(async () => {
+      window.innerWidth = 1100;
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(button(host, "Collapse sidebar").getAttribute("aria-expanded")).toBe(
+      "true",
+    );
+  } finally {
+    await act(async () => {
+      window.innerWidth = old;
+      window.dispatchEvent(new Event("resize"));
+    });
+  }
+});
+it("Setup keeps the same rail, active item, progress and gated Continue", async () => {
+  const { host, c } = await mount();
+  await act(async () => c.toggleSidebar(false));
+  await act(async () => c.navigate({ area: "setup", setupStep: "connection" }));
+  expect(
+    host
+      .querySelector('.rail [aria-current="page"]')
+      ?.getAttribute("aria-label"),
+  ).toBe("Setup");
+  expect(host.querySelector(".setup-progress")).toBeTruthy();
+  expect(button(host, "Continue").disabled).toBe(true);
+  expect(button(host, "Back")).toBeTruthy();
+  expect(
+    host.querySelector('.rail [aria-label="Setup"]')?.getAttribute("title"),
+  ).toContain("of 4 steps done");
+});
+it("View-menu sidebar command shares the toggle owner and keeps focused controls usable", async () => {
   const { host, c, f } = await mount();
-  const trigger = button(host, "Toggle sidebar");
+  const trigger = button(host, "Collapse sidebar");
   trigger.focus();
   await act(async () =>
     f.emit("action", {
@@ -3643,9 +3129,22 @@ it("Home page-list keyboard opening and dismissal retain usable focus at desktop
       authWindowGeneration: null,
     }),
   );
-  expect(host.querySelector(".sidebar-overlay")).not.toBeNull();
-  expect(document.activeElement?.closest("aside")).not.toBeNull();
-  await act(async () => c.dismissOverlay());
-  expect(host.querySelector("aside")).toBeNull();
+  expect(c.getSnapshot().sidebar).toBe("rail");
+  expect(button(host, "Expand sidebar")).toBe(trigger);
   expect(document.activeElement).toBe(trigger);
+  expect(trigger.title).toContain("⌃⌘S");
+  expect(host.querySelector(".sidebar-overlay")).toBeNull();
+});
+it("Settings owns its inner section list and Chat conversations stays in the ChatGPT toolbar", async () => {
+  const { host, c } = await mount();
+  await act(async () => c.navigate({ area: "settings", page: "appearance" }));
+  expect(
+    host.querySelector('main .settings-sections [aria-current="page"]')
+      ?.textContent,
+  ).toBe("Appearance");
+  expect(host.querySelector(".rail .settings-sections")).toBeNull();
+  await act(async () => c.navigate({ area: "chatgpt" }));
+  expect(
+    host.querySelector(".toolbar .chat-conversations-trigger")?.textContent,
+  ).toContain("Chat conversations");
 });

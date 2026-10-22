@@ -106,7 +106,7 @@ describe("closed renderer destinations", () => {
       ).toBeTruthy();
     }
   });
-  it("opens Chat flows from the ChatGPT sidebar without sending or reading on mount", async () => {
+  it("opens Chat flows from the ChatGPT toolbar without sending or reading on mount", async () => {
     const h = await mount({ page: "general", shell: true });
     expect(h.button("Chat conversations")).toBeUndefined();
     await act(async () => h.c.navigate({ area: "chatgpt" }));
@@ -315,68 +315,10 @@ describe("former callers open their real home", () => {
       text: "Unresolved actions",
     },
     {
-      name: "Home attention action row",
-      from: "attention",
-      to: "unresolved-actions",
-      control: ".home-candidate-issue",
-      text: "An action needs review",
-    },
-    {
-      name: "Home attention inspector action-details link",
-      from: "inspector",
-      to: "unresolved-actions",
-      text: "Inspect action details",
-    },
-    {
       name: "Chat options action-details link",
       from: "task",
       to: "unresolved-actions",
       text: "Inspect action details",
-    },
-    {
-      name: "Home connection footer",
-      from: "work",
-      to: "connection",
-      control: ".home-candidate-connection-link",
-    },
-    {
-      name: "Home connection readiness",
-      from: "overview",
-      to: "connection",
-      control: ".home-candidate-status-row",
-      text: "Connection settings",
-    },
-    {
-      name: "Home workspace readiness",
-      from: "overview",
-      to: "folders",
-      control: ".home-candidate-status-row",
-      text: "Manage access",
-    },
-    {
-      name: "Home access manage connection",
-      from: "access",
-      to: "connection",
-      text: "Manage connection",
-    },
-    {
-      name: "Home access manage workspaces",
-      from: "access",
-      to: "folders",
-      text: "Manage workspaces",
-    },
-    {
-      name: "Home workspace issue row",
-      from: "folder-row",
-      to: "folders",
-      control: ".home-candidate-issue",
-      text: "needs an access check",
-    },
-    {
-      name: "Home workspace inspector",
-      from: "folder-inspector",
-      to: "folders",
-      text: "Manage workspaces",
     },
   ];
   it.each(callers)("$name → $to", async (caller) => {
@@ -399,37 +341,6 @@ describe("former callers open their real home", () => {
           recoveryRequired: false,
         });
         h.c.overlay("update");
-      } else if (
-        [
-          "overview",
-          "work",
-          "access",
-          "attention",
-          "inspector",
-          "folder-row",
-          "folder-inspector",
-        ].includes(caller.from)
-      ) {
-        h.c.navigate({
-          area: "home",
-          homeView:
-            caller.from === "work"
-              ? "work"
-              : caller.from === "access"
-                ? "access"
-                : ["attention", "folder-row"].includes(caller.from)
-                  ? "attention"
-                  : "overview",
-          homeSelection:
-            caller.from === "inspector"
-              ? {
-                  kind: "attention",
-                  id: "intent:settings:chatgpt.open-browser:",
-                }
-              : caller.from === "folder-inspector"
-                ? { kind: "attention", id: `folder:${workspaceId}` }
-                : null,
-        });
       } else if (caller.from === "task") {
         h.f.emit("tasks", {
           revision: 1,
@@ -569,3 +480,19 @@ describe("unresolved operation boundaries", () => {
     });
   });
 });
+
+it.each(["work", "attention", "activity", "access"])(
+  "rejects retired Home destination %s",
+  async (homeView) => {
+    const h = await mount({ page: "general", shell: true });
+    const before = h.c.getSnapshot().destination;
+    await act(async () =>
+      h.c.navigate({
+        area: "home",
+        homeView,
+      } as unknown as Partial<Destination>),
+    );
+    expect(h.c.getSnapshot().destination).toBe(before);
+    expect(homeViews).toEqual(["overview"]);
+  },
+);
