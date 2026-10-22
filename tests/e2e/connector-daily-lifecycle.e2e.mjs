@@ -913,12 +913,23 @@ async function normalQuit(run) {
   }
   const receipts = await tunnelReceipts(run);
   assert.equal(receipts.length, run.tunnels.length);
+  run.evidence.tunnels = receipts;
+  run.evidence.tunnelTraces = await Promise.all(
+    receipts.map((receipt) =>
+      privateJson(
+        path.join(
+          run.connectorRoot,
+          "state",
+          `daily-tunnel-${receipt.id}.json.trace.json`,
+        ),
+      ),
+    ),
+  );
   assert.ok(
     receipts.every(
       (receipt) => receipt.phase === "exited" && receipt.exitCode === 0,
     ),
   );
-  run.evidence.tunnels = receipts;
   run.evidence.quit.lastQuit = value;
   assert.ok(
     run.evidence.observations.some(
