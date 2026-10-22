@@ -282,9 +282,20 @@ try {
         .count(),
       0,
     );
-    await page.waitForFunction(
-      async () => (await window.farol.bootstrap()).runtimeState === "ready",
-    );
+    const readyDeadline = Date.now() + 30000;
+    for (;;) {
+      const state = await bounded(
+        page.evaluate(
+          async () => (await window.farol.bootstrap()).runtimeState,
+        ),
+        "FIRST_LAUNCH_RUNTIME_READY_TIMEOUT",
+        Math.max(1, readyDeadline - Date.now()),
+      );
+      if (state === "ready") break;
+      if (Date.now() >= readyDeadline)
+        throw Error("FIRST_LAUNCH_RUNTIME_READY_TIMEOUT");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
     const deadline = Date.now() + 30000;
     for (;;) {
       const stage = await fs
