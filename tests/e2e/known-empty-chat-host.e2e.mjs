@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 // Fresh native fixture only. Reproduce the actual frozen4d host failure and
 // original child closure, then exercise the current read-only observer/host and
 // the original recorder. No saved profile, Electron, provider or external MCP.
@@ -28,7 +29,8 @@ if (process.argv.length !== 3 || !path.isAbsolute(process.argv[2] ?? ""))
 const fixture = JSON.parse(await fs.readFile(process.argv[2], "utf8"));
 const userData = path.dirname(path.dirname(fixture.Profile.Root));
 if (
-  path.basename(userData) !== "Farol Dev" ||
+  path.basename(userData) !==
+    path.basename(harnessDesktopIdentity("dev", "/").userData) ||
   path.dirname(path.dirname(userData)) !== path.join(root, "_output/tmp") ||
   !path.basename(path.dirname(userData)).startsWith("retirement-boot-")
 )

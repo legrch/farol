@@ -25,7 +25,17 @@ afterEach(async () => {
   document.body.replaceChildren();
   localStorage.clear();
 });
-async function mount(data = bootstrap(), compactViewport = () => false) {
+// Most shell cases exercise a returning user's Home and rail.
+function completedBootstrap() {
+  const data = bootstrap();
+  data.configuration.settings.setup.journey.dismissed = true;
+  data.configuration.settings.general.openAtLaunch = "home";
+  return data;
+}
+async function mount(
+  data = completedBootstrap(),
+  compactViewport = () => false,
+) {
   const f = fixture();
   vi.mocked(f.api.bootstrap).mockResolvedValue(data);
   const c = new WindowController(f.api, undefined, undefined, compactViewport);
@@ -417,19 +427,26 @@ it.each([
   },
 );
 
-it("R36 R39 new profile opens Home without a legacy modal and has one leaf toolbar", async () => {
-  const { host, f } = await mount();
-  expect(host.querySelector(".toolbar-title strong")?.textContent).toBe("Home");
-  expect(host.querySelector(".toolbar-title")?.textContent).toBe("Home");
+it("a new profile opens Setup Welcome without a legacy modal or effects", async () => {
+  const { host, c, f } = await mount(bootstrap());
+  expect(host.querySelector(".toolbar-title")?.textContent).toBe("Setup");
   expect(host.querySelector("dialog")).toBeNull();
+  expect(host.querySelector(".setup-welcome")?.textContent).toContain(
+    "Start setup",
+  );
+  expect(host.querySelector("main h1")?.textContent).toBe("Welcome to Farol");
+  await act(async () => c.navigate({ area: "home" }));
+  expect(host.querySelector(".toolbar-title")?.textContent).toBe("Home");
   expect(host.textContent).toContain("Finish setup");
+  await act(async () => c.navigate({ area: "setup", setupStep: "overview" }));
   expect(f.api.configure).not.toHaveBeenCalled();
   expect(f.api.task).not.toHaveBeenCalled();
-  await act(async () => button(host, "Settings").click());
-  expect(host.querySelector(".toolbar-title")?.textContent).toContain(
-    "General",
-  );
+  await act(async () => button(host, "Start setup").click());
+  expect(
+    host.querySelector(".setup-page")?.getAttribute("data-setup-step"),
+  ).toBe("signin");
 });
+
 it("R34 search dismisses, restores focus and uses real navigation", async () => {
   const { host, c } = await mount();
   const trigger = button(host, "Find a page");

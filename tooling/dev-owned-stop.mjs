@@ -1,3 +1,9 @@
+import {
+  LEGACY_DEV_DATA_DIRECTORY_NAME,
+  desktopIdentity as harnessDesktopIdentity,
+} from "./harness-identity.ts";
+import { devExecutables } from "./dev-runtime.mjs";
+
 // Mechanical launcher sequencing only. No native lookup, process discovery,
 // profile access, recovery, startup, or implicit host ports live here.
 export const DEV_OWNED_STOP_LIMITS = Object.freeze({
@@ -10,7 +16,7 @@ export const DEV_OWNED_STOP_LIMITS = Object.freeze({
 /**
  * @typedef {Readonly<{pid: number, uid: number, startIdentity: string,
  * executable: string, writerRoot: string, appPath: string, profilePath: string,
- * environment: 'dev', applicationId: 'local.farol.dev', installed: false}>} DevIdentity
+ * environment: 'dev', applicationId: string, installed: false}>} DevIdentity
  * @typedef {Readonly<{uid: number, writerRoot: string, appPath: string,
  * profilePath: string}>} DevScope
  * @typedef {{status: 'absent'} | {status: 'unreadable'} |
@@ -57,7 +63,10 @@ function validScope(scope) {
       canonicalPath(scope[field]),
     ) &&
     scope.appPath === `${scope.writerRoot}/_output/build/app/main.cjs` &&
-    /\/(?:Farol Dev|Farol DEV)$/u.test(scope.profilePath)
+    [
+      harnessDesktopIdentity("dev", "/").userData,
+      `/${LEGACY_DEV_DATA_DIRECTORY_NAME}`,
+    ].some((leaf) => scope.profilePath.endsWith(leaf))
   );
 }
 
@@ -72,10 +81,10 @@ function validIdentity(identity) {
     identity.startIdentity.length <= 256 &&
     !identity.startIdentity.includes("\0") &&
     identity.environment === "dev" &&
-    identity.applicationId === "local.farol.dev" &&
+    identity.applicationId ===
+      harnessDesktopIdentity("dev", "/").applicationId &&
     identity.installed === false &&
-    identity.executable ===
-      `${identity.writerRoot}/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron`
+    devExecutables(identity.writerRoot).includes(identity.executable)
   );
 }
 

@@ -1,3 +1,4 @@
+import { computerSetup } from "../../src/ui/renderer/computer-setup";
 import { workspaceReadbackBinding } from "../../src/ui/guided-workspace-access";
 import { describe, it, expect, vi } from "vitest";
 import {
@@ -1007,7 +1008,7 @@ it("Setup is a separate history destination with the same Settings host surface 
   c.dispose();
 });
 it.each(["home", "browser", "computer", "settings", "activity"] as const)(
-  "a returning partial profile retains its task through Home, Setup and ChatGPT with %s launch preference",
+  "a returning partial profile starts at Welcome and retains its task with %s launch preference",
   async (launch) => {
     const f = fixture();
     const data = bootstrap();
@@ -1034,7 +1035,8 @@ it.each(["home", "browser", "computer", "settings", "activity"] as const)(
       await c.start();
       expect(c.getSnapshot().status).toBe("current");
       expect(c.getSnapshot().destination).toMatchObject({
-        area: "home",
+        area: "setup",
+        setupStep: "overview",
         taskId: "retained",
       });
       expect(c.getSnapshot().back).toBe(false);
@@ -1059,6 +1061,58 @@ it.each(["home", "browser", "computer", "settings", "activity"] as const)(
     expect(f.api.task).not.toHaveBeenCalled();
   },
 );
+it("a fresh profile starts at Setup Welcome without applying its launch preference", async () => {
+  const f = fixture();
+  const c = new WindowController(f.api);
+  await c.start();
+  expect(c.getSnapshot().destination).toMatchObject({
+    area: "setup",
+    setupStep: "overview",
+  });
+  expect(c.getSnapshot().back).toBe(false);
+  expect(c.getSnapshot().forward).toBe(false);
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+  c.dispose();
+});
+it("completed setup defaults to Home even when its current runtime needs reconnection", async () => {
+  const f = fixture();
+  const data = bootstrap();
+  data.configuration.settings.setup.journey.dismissed = true;
+  data.configuration.settings.general.openAtLaunch = "home";
+  vi.mocked(f.api.bootstrap).mockResolvedValue(data);
+  const c = new WindowController(f.api);
+  await c.start();
+  expect(c.getSnapshot().destination.area).toBe("home");
+  expect(f.api.configure).not.toHaveBeenCalled();
+  c.dispose();
+});
+it("a verified attachment without finished Setup still opens Welcome", async () => {
+  const f = fixture();
+  const data = bootstrap();
+  data.configuration.settings.general.openAtLaunch = "home";
+  data.configuration.settings.connectors.secureMcp.lastVerifiedAttachment = {
+    tunnelId: "fixture-tunnel",
+    workspaceId: null,
+    connectorGeneration: 1,
+    runtimeGeneration: "a".repeat(64),
+    computerGeneration: 1,
+    buildId: "3".repeat(64),
+    challengeSha256: "b".repeat(64),
+    receiptSha256: "c".repeat(64),
+    verifiedAt: "2026-10-02T20:00:00.000Z",
+  };
+  vi.mocked(f.api.bootstrap).mockResolvedValue(data);
+  const c = new WindowController(f.api);
+  await c.start();
+  expect(c.getSnapshot().destination).toMatchObject({
+    area: "setup",
+    setupStep: "overview",
+  });
+  expect(computerSetup(c.getSnapshot()).ready).toBe(false);
+  expect(f.api.configure).not.toHaveBeenCalled();
+  c.dispose();
+});
 describe("F0 window owner", () => {
   it.each([
     { launch: "home", area: "home", page: "general" },
@@ -1420,7 +1474,7 @@ describe("F0 window owner", () => {
     expect(c.getSnapshot().destination.page).toBe("appearance");
     c.travel(-1);
     c.travel(-1);
-    expect(c.getSnapshot().destination.area).toBe("home");
+    expect(c.getSnapshot().destination.area).toBe("setup");
     expect(f.api.task).not.toHaveBeenCalled();
     expect(f.api.configure).not.toHaveBeenCalled();
     c.dispose();
@@ -1906,7 +1960,7 @@ describe("F0 window owner", () => {
     f.emit("action", action);
     expect(c.getSnapshot()).toBe(state);
     c.travel(-1);
-    expect(c.getSnapshot().destination.area).toBe("home");
+    expect(c.getSnapshot().destination.area).toBe("setup");
     c.dispose();
   });
   it("R35 same-destination native intent fences an older task completion", async () => {
@@ -2343,7 +2397,7 @@ it("R30 repeated native actions and background completion do not navigate", asyn
     authWindowGeneration: 1,
   };
   f.emit("action", action);
-  expect(c.getSnapshot().destination.area).toBe("home");
+  expect(c.getSnapshot().destination.area).toBe("setup");
   f.emit("action", action);
   await Promise.resolve();
   expect(f.api.bootstrap).toHaveBeenCalledTimes(2);

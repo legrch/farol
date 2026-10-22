@@ -1,3 +1,4 @@
+import { productName } from "./harness-identity.ts";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
@@ -318,7 +319,7 @@ async function main(arguments_) {
     attemptId: option(arguments_, "--attempt"),
     subject,
     processPattern: new RegExp(
-      option(arguments_, "--process") ?? "Farol(?:\\.app/|$)",
+      option(arguments_, "--process") ?? `${productName}(?:\\.app/|$)`,
       "u",
     ),
     intervalMs: Number(option(arguments_, "--interval-ms") ?? 500),

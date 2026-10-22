@@ -2,7 +2,11 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { devLaunchEnvironment, launchPreview } from "../../tooling/dev.mjs";
+import {
+  devLaunchEnvironment,
+  devLaunchProfile,
+  launchPreview as realLaunchPreview,
+} from "../../tooling/dev.mjs";
 
 // `task run` builds its child's environment from a fixed allowlist and
 // inherits nothing. `task dev` used to spawn Electron with no `env` option
@@ -22,6 +26,26 @@ import { devLaunchEnvironment, launchPreview } from "../../tooling/dev.mjs";
 // The sealed E2E lanes do not go through this entrypoint: every lane
 // launches Electron with Playwright's `electron.launch({ env })` and its
 // own explicit environment, so they still set exactly what they mean to.
+
+// Keep environment/argv tests free of filesystem bundle preparation.
+const launchPreview = (
+  root,
+  spawn,
+  acceptance = false,
+  secondary = false,
+  marker,
+  options = {},
+) =>
+  realLaunchPreview(
+    root,
+    spawn,
+    acceptance,
+    secondary,
+    marker,
+    options,
+    async () =>
+      root + "/_output/dev-runtime/Farol Dev.app/Contents/MacOS/Electron",
+  );
 
 const SENTINEL = "FAROL_E2E_SENTINEL";
 
@@ -151,9 +175,15 @@ describe("development launcher environment", () => {
     ).rejects.toBe(stop);
 
     expect(received.command).toBe(
-      path.join(root, "node_modules/.bin/electron"),
+      path.join(
+        root,
+        "_output/dev-runtime/Farol Dev.app/Contents/MacOS/Electron",
+      ),
     );
-    expect(received.args).toEqual(["_output/build/app/main.cjs"]);
+    expect(received.args).toEqual([
+      path.join(root, "_output/build/app/main.cjs"),
+      `--farol-dev-user-data-dir=${devLaunchProfile()}`,
+    ]);
     expect(received.options.cwd).toBe(root);
     // Named before the key set, so removing the option again fails with
     // this sentence rather than a TypeError from reading `undefined`.
@@ -191,7 +221,8 @@ describe("development launcher environment", () => {
       ),
     ).rejects.toBe(stop);
     expect(received.args).toEqual([
-      "_output/build/app/main.cjs",
+      "/tmp/farol-dev-root/_output/build/app/main.cjs",
+      `--farol-dev-user-data-dir=${devLaunchProfile(true)}`,
       "--preview-window-mode=secondary-visible",
     ]);
     expect(received.options.env.FAROL_ACCEPTANCE_PROFILE).toBe("1");
@@ -214,7 +245,8 @@ describe("development launcher environment", () => {
       ),
     ).rejects.toBe(stop);
     expect(received.args).toEqual([
-      "_output/build/app/main.cjs",
+      "/tmp/farol-dev-root/_output/build/app/main.cjs",
+      `--farol-dev-user-data-dir=${devLaunchProfile()}`,
       "--preview-window-mode=secondary-visible",
     ]);
     expect(received.options.env.FAROL_ENVIRONMENT).toBe("dev");
@@ -239,7 +271,8 @@ describe("development launcher environment", () => {
       ),
     ).rejects.toBe(stop);
     expect(received.args).toEqual([
-      "_output/build/app/main.cjs",
+      "/fixture/repository/_output/build/app/main.cjs",
+      `--farol-dev-user-data-dir=${devLaunchProfile()}`,
       "--preview-window-mode=secondary-visible",
       "--built-in-display-only",
       "--allow-primary-display",
@@ -287,7 +320,7 @@ describe("fresh review environment (CPU-only)", () => {
       devLaunchEnvironment({}, "/declared/bin", true, marker),
     ).toThrow("DEV_REVIEW_PROFILE_INVALID");
   });
-  it("threads the review marker to Electron and requires the secondary display", async () => {
+  it("threads the review marker without forcing a fixed test viewport", async () => {
     let received;
     const stop = new Error("SPAWN_INTERCEPTED");
     await expect(
@@ -303,10 +336,31 @@ describe("fresh review environment (CPU-only)", () => {
       ),
     ).rejects.toBe(stop);
     expect(received.args).toEqual([
-      "_output/build/app/main.cjs",
-      "--preview-window-mode=secondary-visible",
+      "/fixture/repository/_output/build/app/main.cjs",
+      `--farol-dev-user-data-dir=${devLaunchProfile(false, marker)}`,
     ]);
     expect(received.options.env.FAROL_ACCEPTANCE_PROFILE).toBe(marker);
     expect(received.options.env.FAROL_E2E).toBeUndefined();
   });
+});
+
+it("does not spawn when Dev bundle preparation refuses", async () => {
+  const refusal = Error("DEV_RUNTIME_ICON_INVALID");
+  let spawned = false;
+  await expect(
+    realLaunchPreview(
+      "/fixture/repository",
+      () => {
+        spawned = true;
+      },
+      false,
+      false,
+      undefined,
+      {},
+      async () => {
+        throw refusal;
+      },
+    ),
+  ).rejects.toBe(refusal);
+  expect(spawned).toBe(false);
 });

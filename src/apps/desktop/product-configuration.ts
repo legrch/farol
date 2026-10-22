@@ -67,6 +67,9 @@ type StoreWriteFence = Readonly<{
   assertBeforePublication?: () => void;
 }>;
 
+// A completion fence refuses before Settings publication.
+class SetupIncomplete extends Error {}
+
 // The one throw `beforeWrite` may raise on this path: the promotion lease a
 // guarded edit holds is no longer the lease on disk. Carried as its own
 // class so `commit` can report the edit's readable refusal instead of the
@@ -147,6 +150,7 @@ type MutationResult = Readonly<
       error:
         | "SETTINGS_UNAVAILABLE"
         | "SETTINGS_INPUT_INVALID"
+        | "SETUP_INCOMPLETE"
         | "AUTHORITY_CHANGE_IN_PROGRESS"
         | "SETTINGS_WRITE_FAILED"
         | "CONNECTOR_APP_VERIFICATION_STATE_CHANGED"
@@ -3155,7 +3159,11 @@ export class ProductConfigurationService {
     }));
   }
 
-  async setSetupJourney(input: unknown): Promise<MutationResult> {
+  async setSetupJourney(
+    input: unknown,
+    // Trusted main-process predicate only; never taken from the IPC payload.
+    isComplete?: (settings: ProductSettings) => boolean,
+  ): Promise<MutationResult> {
     const parsed = z
       .strictObject({
         currentStep: SetupStepIdSchema,
@@ -3163,22 +3171,41 @@ export class ProductConfigurationService {
       })
       .safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutate((settings) => ({
-      ...settings,
-      revision: settings.revision + 1,
-      setup: {
-        ...settings.setup,
-        [settings.setup.journey.currentStep]: {
-          ...settings.setup[settings.setup.journey.currentStep],
-          visited: true,
+    return this.exclusive(async () => {
+      const complete = () => {
+        try {
+          return this.current !== null && isComplete?.(this.current) === true;
+        } catch {
+          return false;
+        }
+      };
+      if (parsed.data.dismissed && !complete())
+        return this.failure("SETUP_INCOMPLETE");
+      return this.mutate(
+        (settings) => ({
+          ...settings,
+          revision: settings.revision + 1,
+          setup: {
+            ...settings.setup,
+            [settings.setup.journey.currentStep]: {
+              ...settings.setup[settings.setup.journey.currentStep],
+              visited: true,
+            },
+            journey: parsed.data,
+            [parsed.data.currentStep]: {
+              ...settings.setup[parsed.data.currentStep],
+              visited: true,
+            },
+          },
+        }),
+        {
+          assertBeforePublication: () => {
+            if (parsed.data.dismissed && !complete())
+              throw new SetupIncomplete();
+          },
         },
-        journey: parsed.data,
-        [parsed.data.currentStep]: {
-          ...settings.setup[parsed.data.currentStep],
-          visited: true,
-        },
-      },
-    }));
+      );
+    });
   }
 
   private exclusive<T>(work: () => Promise<T>): Promise<T> {
@@ -3434,6 +3461,8 @@ export class ProductConfigurationService {
       this.current = this.fenceTaskSource(fallback);
       // A fence refusal is not a write failure: nothing was written at all,
       // and the caller gets the reason rather than a generic disk error.
+      if (error instanceof SetupIncomplete)
+        return this.failure("SETUP_INCOMPLETE");
       if (error instanceof WorkspaceEditLeaseLost) {
         return this.failure("WORKSPACE_MUTATION_PROMOTION_PENDING");
       }

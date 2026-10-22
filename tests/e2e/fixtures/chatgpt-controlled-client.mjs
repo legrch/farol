@@ -110,7 +110,7 @@ const render = (next) => {
   send.hidden = busy();
   updateSend();
   for (const turn of next.turns) {
-    // This receipt is a page-render watermark only, never Farol persistence/ACK.
+    // This receipt is a page-render watermark only, never product persistence/ACK.
     void post("/fixtures/chatgpt/rendered", {
       replyId: turn.replyId,
       segmentIds: turn.segments.map((segment) => segment.id),

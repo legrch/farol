@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import assert from "node:assert/strict";
@@ -35,12 +36,12 @@ const callbackAssertion = new assert.AssertionError({
 let injectedFailureObserved = false;
 const entry = packaged
   ? path.resolve(
-      "_output/package/Farol.app/Contents/Resources/app/computer-mcp.cjs",
+      `_output/package/${harnessDesktopIdentity("preview", "/").applicationName}.app/Contents/Resources/app/computer-mcp.cjs`,
     )
   : path.resolve("_output/build/app/computer-mcp.cjs");
 const command = packaged
   ? path.resolve(
-      "_output/package/Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron",
+      `_output/package/${harnessDesktopIdentity("preview", "/").applicationName}.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron`,
     )
   : process.execPath;
 const root = await fs.realpath(

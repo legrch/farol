@@ -9,6 +9,10 @@ import {
   configurationResultTarget,
 } from "../../../apps/desktop/operations/configuration";
 import {
+  setupCompletionAllowed,
+  type SetupCompletionContext,
+} from "../../ui/setup-completion";
+import {
   ownerStopPresentationCurrent,
   type OwnerStopPresentation,
 } from "../../../apps/desktop/owner-stop-presentation";
@@ -260,6 +264,8 @@ import {
   writeInstanceAcknowledgement,
 } from "./single-instance";
 import {
+  parseDevDisplay,
+  selectDevWindowPlacement,
   parseAllowPrimaryDisplay,
   parseBuiltInDisplayOnly,
   parseSidecarDisplayOnly,
@@ -617,6 +623,7 @@ const selectedDesktopUserData = (() => {
     return desktopUserDataPath(declaredDesktopIdentity, {
       enabled: process.env.FAROL_E2E === "1",
       override: app.commandLine.getSwitchValue("user-data-dir"),
+      devProfileArguments: process.argv,
     });
   } catch (error) {
     terminateDesktopStartup(error, runtimeEnvironment, {
@@ -752,7 +759,12 @@ const legacySetupTestMode =
 const contextOwnerId = "owner-desktop";
 const contextProviderProfileId = "profile-isolated-farol";
 const contextModel = ROUTE_B_MODEL;
-const windowMode = parsePreviewWindowMode(process.argv);
+const devSecondaryDisplay = parseDevDisplay(process.argv);
+if (devSecondaryDisplay && buildEnvironment !== "dev")
+  throw new Error("DEV_DISPLAY_ARGUMENT_INVALID");
+const windowMode = devSecondaryDisplay
+  ? "secondary-visible"
+  : parsePreviewWindowMode(process.argv);
 // Explicit-only: the owner-handed overnight run passes this itself. Its
 // absence keeps every display-selection outcome exactly as before.
 const allowPrimaryDisplay = parseAllowPrimaryDisplay(process.argv);
@@ -817,15 +829,16 @@ const controlSchema = z.strictObject({
 
 type RuntimeReady = z.infer<typeof readySchema>;
 app.setName(activeDesktopIdentity.applicationName);
-// macOS also exposes the process title as the application name. Storage,
-// bundle, executable and receipt identities remain explicit compatibility values.
-process.title = activeDesktopIdentity.applicationName;
+// Darwin process.title erases argv. Dev stop authorization needs its original
+// entrypoint and explicit profile assertion; the Dev-only bundle owns display naming.
+if (buildEnvironment !== "dev")
+  process.title = activeDesktopIdentity.applicationName;
 if (process.platform === "win32")
   app.setAppUserModelId(activeDesktopIdentity.applicationId);
 if (process.platform === "darwin") {
   // macOS's default About panel otherwise reads the raw release identity
   // (app.getName()); this is display-only and does not touch that
-  // identity, the bundle ID, or app.setName's own OS-level registration.
+  // identity or the bundle ID.
   app.setAboutPanelOptions({
     applicationName: displayProductName,
     applicationVersion: displayEdition
@@ -1219,6 +1232,8 @@ const chatGptSignInBlocked = new ChatGptSignInBlockLedger();
 // one, and `recordChatGptSignInOutcome` still writes nothing for
 // "unknown".
 let chatGptSignInOutcome: ChatGptSignInOutcomeDiagnostic | null = null;
+// Explicit Setup check for the current build and browser document; never durable.
+let setupSignInCheck: SetupCompletionContext["signInCheck"] = null;
 // S35-TA-16 (U1 seam): each sign-in attempt gets the next number, and the
 // published outcome carries that attempt's number. A delayed return therefore
 // reports the OLDER generation, which is how a recipient tells a late event
@@ -1241,6 +1256,15 @@ let taskCountsBeforeRuntimeExit: Readonly<{
   failed: number;
 }> | null = null;
 let callerRelayRuntime: CodexCallerRelayRuntime | null = null;
+let callerRelayDirectoryWitness: ReturnType<
+  CodexCallerRelayRuntime["directoryWitness"]
+> | null = null;
+if (process.env.FAROL_E2E === "1") {
+  // Main-process metadata readback only: no token, socket client or control API.
+  Object.defineProperty(app, "__farolE2ERelayDirectory", {
+    get: () => callerRelayDirectoryWitness,
+  });
+}
 let savedChatBridgeRuntime: Awaited<
   ReturnType<typeof startSavedChatBridge>
 > | null = null;
@@ -2115,7 +2139,16 @@ async function initializeCallerRelay(): Promise<void> {
     // No previous socket.
   }
   try {
-    callerRelayRuntime = await startCodexCallerRelay({ root });
+    callerRelayRuntime = await startCodexCallerRelay({
+      root,
+      ...(isolatedE2EHome !== undefined
+        ? {
+            onDirectoryPrepared: (witness) => {
+              callerRelayDirectoryWitness = witness;
+            },
+          }
+        : {}),
+    });
   } catch {
     // Without the relay, Route B turns that offer host tools are refused.
     callerRelayRuntime = null;
@@ -8454,10 +8487,12 @@ async function configureAdmittedProduct(
       });
     }
     case "chatgpt.verify": {
+      setupSignInCheck = null;
       if (!chatGptRoute) {
         return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
       }
-      const observed = await chatGptRoute.observe();
+      const route = chatGptRoute;
+      const observed = await route.observe();
       const recorded = await configuration.recordChatGptObservation(
         observed.state === "authenticated"
           ? {
@@ -8469,6 +8504,19 @@ async function configureAdmittedProduct(
             }
           : { state: observed.state },
       );
+      if (recorded.ok && observed.state === "authenticated") {
+        const observation = await route.observeSignInStatus();
+        if (
+          chatGptRoute === route &&
+          route.isCurrentSignInStatus(observation) &&
+          observation.state === "authenticated" &&
+          observation.binding !== null
+        )
+          setupSignInCheck = {
+            buildId: buildIdentity.buildId,
+            binding: observation.binding,
+          };
+      }
       return ProductConfigurationResultSchema.parse({
         ...recorded,
         evidence: { kind: "chatgpt.readiness", ...observed },
@@ -10079,13 +10127,42 @@ async function configureAdmittedProduct(
         ok: true,
         snapshot: configuration.snapshot(),
       });
-    case "setup.progress":
+    case "setup.progress": {
+      const route = chatGptRoute;
+      const check = setupSignInCheck;
+      // Read only the existing document. No sign-in or provider effect is retried.
+      const observation = command.dismissed
+        ? await route?.observeSignInStatus().catch(() => null)
+        : null;
       return ProductConfigurationResultSchema.parse(
-        await configuration.setSetupJourney({
-          currentStep: command.currentStep,
-          dismissed: command.dismissed,
-        }),
+        await configuration.setSetupJourney(
+          { currentStep: command.currentStep, dismissed: command.dismissed },
+          (settings) =>
+            setupCompletionAllowed(settings, {
+              buildId: buildIdentity.buildId,
+              current:
+                runtimeState === "ready" &&
+                !quitInProgress &&
+                !installedUpdateAdmission &&
+                !connectorTaskAdmission &&
+                !workspaceMutationAdmission &&
+                activeAuthorityChangeKind === null &&
+                chatGptRoute === route &&
+                setupSignInCheck === check &&
+                observation != null &&
+                route?.isCurrentSignInStatus(observation) === true,
+              signInObservation: observation
+                ? {
+                    ...observation,
+                    buildId: buildIdentity.buildId,
+                    pending: false,
+                  }
+                : null,
+              signInCheck: check,
+            }),
+        ),
       );
+    }
     case "model.status": {
       if (!modelLifecycle) {
         return configurationFailure("MODEL_ENDPOINT_UNAVAILABLE");
@@ -11471,14 +11548,7 @@ async function createWindow(): Promise<void> {
   if (quitInProgress || installedUpdateAdmission) return;
   const testPlacement =
     windowMode === "secondary-visible"
-      ? selectPreviewWindowPlacement(
-          screen.getAllDisplays(),
-          screen.getPrimaryDisplay().id,
-          initialWindowSize,
-          allowPrimaryDisplay,
-          builtInDisplayOnly,
-          sidecarDisplayOnly,
-        )
+      ? selectedVisibleTestPlacement(initialWindowSize)
       : null;
   window = new BrowserWindow({
     title: displayWindowTitle,
@@ -11503,6 +11573,9 @@ async function createWindow(): Promise<void> {
   observeRendererLifecycle(window.webContents, buildIdentity.buildId, (line) =>
     process.stderr.write(line),
   );
+  // The renderer's neutral HTML title must not replace the Dev window identity.
+  if (buildEnvironment === "dev")
+    window.on("page-title-updated", (event) => event.preventDefault());
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   window.webContents.on("before-input-event", (event, input) => {
@@ -11593,6 +11666,12 @@ async function createWindow(): Promise<void> {
 function selectedVisibleTestPlacement(
   requested: Readonly<{ width: number; height: number }>,
 ) {
+  if (devSecondaryDisplay)
+    return selectDevWindowPlacement(
+      screen.getAllDisplays(),
+      screen.getPrimaryDisplay().id,
+      requested,
+    );
   return selectPreviewWindowPlacement(
     screen.getAllDisplays(),
     screen.getPrimaryDisplay().id,
@@ -12347,8 +12426,6 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     demoMode,
     legacySetupTestMode,
     dismissed: initialSettings?.setup.journey.dismissed ?? false,
-    completedPreviously:
-      initialSettings?.connectors.secureMcp.lastVerifiedAttachment != null,
     currentStep: initialSettings?.setup.journey.currentStep ?? "chatgpt",
     openAtLaunch: initialSettings?.general.openAtLaunch ?? "home",
   });

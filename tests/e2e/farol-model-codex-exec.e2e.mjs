@@ -1,5 +1,6 @@
+import { productName } from "../../tooling/harness-identity.ts";
 // Packet N04 (Decisions.md, run farol-local-completion-0919): end-to-end
-// proof that an ordinary, supported Codex can reach a Farol Model endpoint
+// proof that an ordinary, supported Codex can reach the product Model endpoint
 // through the managed-config-block lifecycle, using a disposable CODEX_HOME
 // and the real `codex` binary when one is installed on this machine.
 //
@@ -48,7 +49,7 @@
 //   app-conflict-and-rollback a foreign entry of the same name is never
 //                             overwritten; rollback removes exactly the
 //                             managed regions and the host can no longer
-//                             reach Farol.
+//                             reach the product.
 //
 // Exit codes: 0 PASS · 1 FAIL · 3 REAL_HOST_UNAVAILABLE (no `codex` on
 // PATH: the config+endpoint plumbing is not the real-host claim, so this is
@@ -554,7 +555,7 @@ async function main() {
     const { stdout: versionOut } = await execFileAsync(codexBin, ["--version"]);
     report.hostVersion = versionOut.trim();
     hostVersions.set(codexBin, report.hostVersion);
-    // S35-TA-5: which bytes of Farol this run exercised, derived through the
+    // S35-TA-5: which bytes of the product this run exercised, derived through the
     // same `sourceIdentity` the ordinary lanes use, plus which host answered
     // and which Node launched it. Deliberately not an evidence attempt: this
     // journey has no lane contract yet and stays a witness note on the Route
@@ -586,7 +587,7 @@ async function main() {
     const envKeyConfig = path.join(envKeyHome, "config.toml");
     const envKeySpec = {
       providerName: "farol",
-      displayName: "Farol Model",
+      displayName: `${productName} Model`,
       baseUrl,
       model: ROUTE_B_MODEL,
       wireApi: "responses",
@@ -856,7 +857,7 @@ async function main() {
       if (!currentToken) return null;
       return {
         providerName: "farol",
-        displayName: "Farol Model",
+        displayName: `${productName} Model`,
         baseUrl: `http://127.0.0.1:${status.port}`,
         model: ROUTE_B_MODEL,
         wireApi: "responses",
@@ -1030,7 +1031,7 @@ async function main() {
     });
 
     await phase("app-tool-roundtrip", async () => {
-      // One correlated tool roundtrip on the real host: Farol answers the
+      // One correlated tool roundtrip on the real host: the product answers the
       // first turn with a function call, the host runs it and opens a
       // SECOND turn carrying the result. What is asserted is the
       // correlation — the same call_id comes back with its output —
@@ -1095,7 +1096,7 @@ async function main() {
       assert.equal(
         outputs[0].call_id,
         upstream.toolCall.callId,
-        "the result must carry the call_id Farol issued",
+        `the result must carry the call_id ${productName} issued`,
       );
       const rendered = JSON.stringify(outputs[0].output ?? "");
       assert.ok(
@@ -1243,7 +1244,7 @@ async function main() {
     });
 
     await phase("app-conflict-and-rollback", async () => {
-      // A provider entry of the same name that Farol did not write.
+      // A provider entry of the same name that the product did not write.
       const foreignHome = path.join(root, "codex-home-foreign");
       await fs.mkdir(foreignHome, { recursive: true });
       const foreignConfig = path.join(foreignHome, "config.toml");
@@ -1253,7 +1254,7 @@ async function main() {
       await fs.writeFile(foreignConfig, foreignBytes, { mode: 0o600 });
       const conflictSpec = {
         providerName: "farol",
-        displayName: "Farol Model",
+        displayName: `${productName} Model`,
         baseUrl: "http://127.0.0.1:1/v1",
         model: ROUTE_B_MODEL,
         wireApi: "responses",
@@ -1289,7 +1290,7 @@ async function main() {
         "the owner's own lines survive the rollback",
       );
 
-      // And the host can no longer reach Farol through that config.
+      // And the host can no longer reach the product through that config.
       const run = await runCodexExec(
         discoveredHostBin,
         hostEnvironment(appHome),
@@ -1299,7 +1300,7 @@ async function main() {
       assert.notEqual(
         run.code,
         0,
-        "a rolled-back config must not still reach Farol",
+        `a rolled-back config must not still reach ${productName}`,
       );
       assert.ok(!run.stdout.includes(REPLY_TEXT));
       return {

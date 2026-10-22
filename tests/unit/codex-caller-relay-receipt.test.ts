@@ -1,11 +1,17 @@
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const boundaries = vi.hoisted(() => ({
   createServer: vi.fn(),
   createConnection: vi.fn(),
   mkdir: vi.fn(),
+  mkdtemp: vi.fn(),
+  open: vi.fn(),
+  realpath: vi.fn(),
+  rename: vi.fn(),
+  rmdir: vi.fn(),
   lstat: vi.fn(),
   chmod: vi.fn(),
   rm: vi.fn(),
@@ -17,6 +23,11 @@ vi.mock("node:net", () => ({
 vi.mock("node:fs/promises", () => ({
   default: {
     mkdir: boundaries.mkdir,
+    mkdtemp: boundaries.mkdtemp,
+    open: boundaries.open,
+    realpath: boundaries.realpath,
+    rename: boundaries.rename,
+    rmdir: boundaries.rmdir,
     lstat: boundaries.lstat,
     chmod: boundaries.chmod,
     rm: boundaries.rm,
@@ -52,6 +63,9 @@ let afterDelivery:
 let accept: (socket: FakeSocket) => void;
 const connections: { client: FakeSocket; server: FakeSocket }[] = [];
 let runtime: CodexCallerRelayRuntime | null;
+const realFs =
+  await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+const realRoots: string[] = [];
 class FakeSocket extends EventEmitter {
   destroyed = false;
   peer!: FakeSocket;
@@ -222,6 +236,15 @@ beforeEach(() => {
   transfer = (_direction, _index, data) => [data];
   for (const mock of Object.values(boundaries)) mock.mockReset();
   boundaries.mkdir.mockResolvedValue(undefined);
+  boundaries.realpath.mockImplementation(async (value: string) => value);
+  boundaries.open.mockImplementation(async () => ({
+    stat: async () => ({
+      isDirectory: () => true,
+      uid: process.geteuid?.(),
+      mode: 0o700,
+    }),
+    close: async () => undefined,
+  }));
   boundaries.chmod.mockResolvedValue(undefined);
   boundaries.rm.mockResolvedValue(undefined);
   boundaries.lstat.mockImplementation(async (value: string) => {
@@ -246,6 +269,124 @@ afterEach(async () => {
   await runtime?.close();
   vi.clearAllTimers();
   vi.useRealTimers();
+  for (const root of realRoots.splice(0))
+    await realFs.rm(root, { recursive: true, force: true });
+});
+
+describe("relay directory creation identity (real disposable filesystem)", () => {
+  async function prepare() {
+    vi.useRealTimers();
+    for (const name of [
+      "mkdir",
+      "mkdtemp",
+      "open",
+      "realpath",
+      "rename",
+      "rmdir",
+      "lstat",
+    ] as const)
+      boundaries[name].mockImplementation(realFs[name]);
+    const parent = await realFs.mkdtemp("/tmp/fr-identity-");
+    realRoots.push(parent);
+    // Stop after the witness, before the fixture's fake network boundary.
+    const root = path.join(parent, "r".repeat(100));
+    return { parent, root, prepared: vi.fn() };
+  }
+
+  it("reports the descriptor identity of the created directory and removes only its empty staging parent", async () => {
+    const f = await prepare();
+    await expect(
+      startCodexCallerRelay({
+        root: f.root,
+        onDirectoryPrepared: f.prepared,
+      }),
+    ).rejects.toThrow("CALLER_RELAY_SOCKET_PATH_TOO_LONG");
+    const actual = await realFs.lstat(f.root);
+    expect(f.prepared).toHaveBeenCalledOnce();
+    expect(f.prepared.mock.calls[0]![0]).toMatchObject({
+      path: await realFs.realpath(f.root),
+      created: true,
+      dev: actual.dev,
+      ino: actual.ino,
+      uid: actual.uid,
+      mode: actual.mode,
+    });
+    expect(await realFs.readdir(f.parent)).toEqual([path.basename(f.root)]);
+  });
+
+  it.each(["directory", "symlink"] as const)(
+    "refuses a %s replacement between publication and the first path stat",
+    async (replacement) => {
+      const f = await prepare();
+      const moved = path.join(f.parent, "child-created");
+      let original: Awaited<ReturnType<typeof realFs.lstat>> | undefined;
+      boundaries.rename.mockImplementationOnce(async (from, to) => {
+        await realFs.rename(from, to);
+        original = await realFs.lstat(to);
+        await realFs.rename(to, moved);
+        if (replacement === "directory")
+          await realFs.mkdir(to, { mode: 0o700 });
+        else await realFs.symlink(moved, to);
+      });
+      await expect(
+        startCodexCallerRelay({
+          root: f.root,
+          onDirectoryPrepared: f.prepared,
+        }),
+      ).rejects.toThrow("CALLER_RELAY_ROOT_CHANGED");
+      expect(f.prepared).not.toHaveBeenCalled();
+      expect(boundaries.createServer).not.toHaveBeenCalled();
+      const owned = await realFs.lstat(moved);
+      expect([owned.dev, owned.ino]).toEqual([original!.dev, original!.ino]);
+      expect(await realFs.readdir(moved)).toEqual([]);
+      const foreign = await realFs.lstat(f.root);
+      expect(foreign.ino).not.toBe(owned.ino);
+      expect(foreign.isSymbolicLink()).toBe(replacement === "symlink");
+    },
+  );
+
+  it("refuses a staged directory replaced after open but before the first descriptor stat", async () => {
+    const f = await prepare();
+    const moved = path.join(f.parent, "child-created");
+    let substituted: string | undefined;
+    boundaries.open.mockImplementation(async (file, flags) => {
+      const handle = await realFs.open(file, flags);
+      // The initial shared path is absent. This hook runs on the fresh staged
+      // directory, before prepareRoot can take its first identity observation.
+      await realFs.rename(file, moved);
+      await realFs.mkdir(file, { mode: 0o700 });
+      substituted = file;
+      return handle;
+    });
+    await expect(
+      startCodexCallerRelay({ root: f.root, onDirectoryPrepared: f.prepared }),
+    ).rejects.toThrow("CALLER_RELAY_ROOT_CHANGED");
+    expect(f.prepared).not.toHaveBeenCalled();
+    expect(boundaries.createServer).not.toHaveBeenCalled();
+    expect(boundaries.rename).not.toHaveBeenCalled();
+    await expect(realFs.lstat(f.root)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    const owned = await realFs.lstat(moved);
+    const foreign = await realFs.lstat(substituted!);
+    expect([foreign.dev, foreign.ino]).not.toEqual([owned.dev, owned.ino]);
+    expect(await realFs.readdir(moved)).toEqual([]);
+    expect(await realFs.readdir(substituted!)).toEqual([]);
+  });
+
+  it("never reports an existing directory as child-created", async () => {
+    const f = await prepare();
+    await realFs.mkdir(f.root, { mode: 0o700 });
+    await expect(
+      startCodexCallerRelay({
+        root: f.root,
+        onDirectoryPrepared: f.prepared,
+      }),
+    ).rejects.toThrow("CALLER_RELAY_SOCKET_PATH_TOO_LONG");
+    expect(f.prepared.mock.calls[0]![0]).toMatchObject({ created: false });
+    expect(boundaries.mkdtemp).not.toHaveBeenCalled();
+    expect(boundaries.rename).not.toHaveBeenCalled();
+  });
 });
 
 describe("private parsed-result receipt (actual handlers, CPU boundaries)", () => {

@@ -28,8 +28,8 @@ type stored struct {
 }
 
 func main() {
-	if len(os.Args) != 5 {
-		panic("explicit owned profile, proof, profile ID and original generation required")
+	if len(os.Args) != 6 {
+		panic("explicit owned profile, proof, profile ID, original generation and derived user data required")
 	}
 	profile, proof, profileID, generation := os.Args[1], os.Args[2], os.Args[3], os.Args[4]
 	base, err := filepath.EvalSymlinks(os.TempDir())
@@ -50,7 +50,19 @@ func main() {
 	if string(bytes) != proof || len(proof) != 36 {
 		panic("owned marker mismatch")
 	}
-	chat := filepath.Join(profile, "app-data", "Farol Dev", "farol-state", "go-core", "chat")
+	// The JS harness supplies desktopIdentity's selected leaf. Validate the
+	// physical disposable boundary here without duplicating that identity.
+	userData := os.Args[5]
+	selected, err := filepath.EvalSymlinks(userData)
+	must(err)
+	if selected != userData || filepath.Dir(userData) != filepath.Join(profile, "app-data") {
+		panic("user data escaped the owned disposable app-data")
+	}
+	must(unix.Lstat(userData, &physical))
+	if physical.Mode&unix.S_IFMT != unix.S_IFDIR || physical.Mode&07777 != 0700 || physical.Uid != uint32(os.Geteuid()) {
+		panic("invalid owned user data")
+	}
+	chat := filepath.Join(userData, "farol-state", "go-core", "chat")
 	must(unix.Lstat(chat, &physical))
 	root := results.Root{Path: chat, ProfileID: profileID, Identity: port.JournalRoot{Device: uint64(physical.Dev), Inode: uint64(physical.Ino), OwnerUID: physical.Uid}}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

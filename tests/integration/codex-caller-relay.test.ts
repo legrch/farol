@@ -50,6 +50,30 @@ describe("Farol Codex caller relay", () => {
     return runtime;
   }
 
+  it("reports its actual directory creation even when later socket startup refuses", async () => {
+    root = await fs.mkdtemp(path.join("/tmp", "fr-"));
+    const relayRoot = path.join(root, "x".repeat(100));
+    const prepared = vi.fn();
+    await expect(
+      startCodexCallerRelay({ root: relayRoot, onDirectoryPrepared: prepared }),
+    ).rejects.toThrow("CALLER_RELAY_SOCKET_PATH_TOO_LONG");
+    expect(prepared).toHaveBeenCalledOnce();
+    const witness = prepared.mock.calls[0]![0];
+    const actual = await fs.lstat(relayRoot);
+    expect(witness).toMatchObject({
+      path: await fs.realpath(relayRoot),
+      created: true,
+      pid: process.pid,
+      dev: actual.dev,
+      ino: actual.ino,
+    });
+    expect(Object.isFrozen(witness)).toBe(true);
+    expect(witness.birthtimeMs).toBeGreaterThanOrEqual(
+      witness.processStartedAtMs,
+    );
+    expect(await fs.readdir(relayRoot)).toEqual([]);
+  });
+
   it("describes the exact frozen catalogue and invokes one operation at most once", async () => {
     const relay = await start();
     let release!: () => void;

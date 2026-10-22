@@ -58,6 +58,7 @@ const table = [
   ["chatgpt.open-sign-in", "Setup"],
   ["chatgpt.observe-sign-in", "Setup"],
   ["chatgpt.verify", "Setup"],
+  ["setup.progress", "Setup"],
   ["computer.verify-workspace", "Setup"],
   ["computer.check-folder", "Setup"],
   ["connector.save-and-connect", "Setup"],
@@ -101,6 +102,32 @@ it.each(table)(
     ]);
   },
 );
+it("observes refused setup completion without replacing its result or promise", async () => {
+  const { store } = setup();
+  const result = { ok: false, error: "SETUP_INCOMPLETE" };
+  const original = Promise.resolve(result);
+  const action = vi.fn(() => original);
+  expect(
+    observeOperation(
+      store,
+      configurationOperation(
+        { kind: "setup.progress", currentStep: "connect", dismissed: true },
+        undefined,
+      ),
+      action,
+    ),
+  ).toBe(original);
+  expect(await original).toBe(result);
+  expect(action).toHaveBeenCalledOnce();
+  expect((await store.snapshot(5000)).entries).toMatchObject([
+    {
+      source: "Setup",
+      kind: "setup.progress",
+      outcome: "refused",
+      code: "SETUP_INCOMPLETE",
+    },
+  ]);
+});
 it.each([
   [{ status: "ok" }, "done"],
   [{ ok: false, error: { code: "WORKSPACE_READ_FAILED" } }, "failed"],

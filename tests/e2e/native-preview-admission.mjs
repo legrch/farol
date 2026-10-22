@@ -16,7 +16,7 @@ import {
   desktopAppDataPath,
   desktopIdentity,
   desktopUserDataPath,
-} from "../../src/apps/desktop/desktop-environment.ts";
+} from "../../tooling/harness-identity.ts";
 import {
   FAROL_MODEL_ENABLED,
   FAROL_BACKED_PRODUCT_AGENT_ENABLED,
@@ -36,6 +36,8 @@ export async function assertOwnerPreviewIdle(stateRoot, metadata = fs.lstat) {
 }
 
 const admissions = new WeakMap();
+// Only refresh can attach a live app readback, never a caller-supplied actual.
+const relayReadbacks = new WeakMap();
 const allowedEnvironment = new Set([
   "HOME",
   "TMPDIR",
@@ -581,6 +583,8 @@ export async function recheckNativePreviewIsolation(receipt, actual, child) {
   // Consume the exact witness before checking. Failure cannot be retried or
   // turned into a fresh observation by replaying the older preflight receipt.
   admissions.delete(receipt);
+  const readback = relayReadbacks.get(actual);
+  relayReadbacks.delete(actual);
   endpoint(admitted.launch, admitted.fixture);
   await recheckBindings(admitted);
   for (const key of ["home", "userData", "sessionData"]) {
@@ -626,12 +630,45 @@ export async function recheckNativePreviewIsolation(receipt, actual, child) {
   }
   if (admitted.relay && (!relay || !same(relay, admitted.relay)))
     throw invalid("RELAY_CHANGED");
-  if (relay) await tree(admitted.relayRoot, true);
+  if (relay) {
+    await tree(admitted.relayRoot, true);
+    if (readback) {
+      const reported = actual.relay;
+      const info = await fs.lstat(admitted.relayRoot);
+      if (
+        !resource ||
+        !reported ||
+        reported.pid !== child.pid ||
+        reported.path !== admitted.relayRoot ||
+        !same(reported, relay) ||
+        reported.birthtimeMs !== info.birthtimeMs ||
+        !Number.isFinite(reported.processStartedAtMs) ||
+        !Number.isFinite(reported.observedAtMs) ||
+        (reported.birthtimeMs < reported.processStartedAtMs &&
+          !admitted.relay) ||
+        reported.observedAtMs < reported.birthtimeMs ||
+        reported.observedAtMs > readback.refreshedAtMs ||
+        info.birthtimeMs > readback.refreshedAtMs ||
+        (!admitted.relay && reported.created !== true)
+      )
+        throw invalid("RELAY_CHILD_UNCONFIRMED");
+    } else if (!admitted.relay) {
+      // An early window echo can precede the relay's creation. Never adopt it
+      // from harness metadata alone; a fresh live-child readback is mandatory.
+      if (!resource) throw invalid("RELAY_CHILD_UNCONFIRMED");
+      relay = undefined;
+    }
+    if (relay && !same(await directory(admitted.relayRoot), relay))
+      throw invalid("RELAY_CHANGED");
+  } else if (readback && actual.relay !== null) {
+    throw invalid("RELAY_CHILD_UNCONFIRMED");
+  }
   await recheckSingleton(resource, child);
   // Internal witness only; callers cannot rewrite a receipt to waive a recheck.
   const observed = Object.freeze({
     ...receipt,
     kind: "isolated-native-preview-readback",
+    relayObserved: relay !== undefined,
   });
   admissions.set(observed, {
     ...admitted,
@@ -641,6 +678,37 @@ export async function recheckNativePreviewIsolation(receipt, actual, child) {
     checked: true,
   });
   return observed;
+}
+
+// Startup can create the caller relay after the first hidden-window echo.
+// Refresh the original live child's witness before Quit; reopening still needs
+// the exact witnessed relay inode and a known graceful child terminal.
+export async function refreshNativePreviewIsolation(receipt, application) {
+  const admitted = admissions.get(receipt);
+  if (!admitted?.checked || !admitted.child) throw invalid("RECEIPT_INVALID");
+  const child = application.process();
+  if (child !== admitted.child) throw invalid("SINGLETON_CHILD_UNOWNED");
+  if (child.exitCode !== null || child.signalCode !== null)
+    throw invalid("LIVE_CHILD_REQUIRED");
+  // Creation must precede dispatch, not merely the completion of the readback.
+  // An unknown/failed evaluate consumes this witness and cannot be replayed.
+  const refreshedAtMs = performance.timeOrigin + performance.now();
+  admissions.delete(receipt);
+  const actual = await application.evaluate(({ app, BrowserWindow }) => ({
+    relay: app.__farolE2ERelayDirectory ?? null,
+    pid: process.pid,
+    home: app.getPath("home"),
+    userData: app.getPath("userData"),
+    sessionData: app.getPath("sessionData"),
+    temp: app.getPath("temp"),
+    windows: BrowserWindow.getAllWindows().map((window) => ({
+      visible: window.isVisible(),
+      focused: window.isFocused(),
+    })),
+  }));
+  relayReadbacks.set(actual, { refreshedAtMs });
+  admissions.set(receipt, admitted);
+  return recheckNativePreviewIsolation(receipt, actual, child);
 }
 
 // Only the already verified disposable root is eligible for startup evidence.

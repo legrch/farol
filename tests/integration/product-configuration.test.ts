@@ -1,3 +1,10 @@
+import {
+  setupCompletionAllowed,
+  type SetupCompletionContext,
+} from "../../src/ui/setup-completion";
+import { setupChecklist } from "../../src/ui/renderer/setup-navigation";
+import { setupStepCheck } from "../../src/ui/renderer/setup-gate";
+import type { WindowSnapshot } from "../../src/ui/renderer/contract";
 import { fixtureTaskSettingsCompare } from "../fixtures/task-settings-projection.ts";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -11,8 +18,10 @@ import {
 import { PrivateConnectorKeyStore } from "../../src/apps/desktop/connector-key-store";
 import {
   ProductConfigurationCommandSchema,
+  ProductConfigurationResultSchema,
   ProductConfigurationEvidenceSchema,
   type ProductConfigurationSnapshot,
+  type ProductSettings,
 } from "../../src/pkg/product-settings/contract";
 import { ownerSettingsComputerApproval } from "../../src/modules/computer/infra/repo/owner-settings-computer-approval";
 import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
@@ -328,6 +337,114 @@ function dependencies() {
     now: () => "2026-09-16T10:00:00.000Z",
     id: () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`,
   };
+}
+
+// Synthetic main-side receipts and disposable settings, never live provider proof.
+async function setupCompletionFixture() {
+  const root = await stateRoot();
+  const store = new ProductSettingsStore({ root });
+  const first = new ProductConfigurationService(store, dependencies());
+  await first.initialize();
+  const snapshot = first.snapshot();
+  if (snapshot.status !== "ready") throw new Error("settings missing");
+  const settings = snapshot.settings;
+  const buildId = "3".repeat(64);
+  const workspaceId = "22222222-2222-4222-8222-222222222222";
+  const runtimeGeneration = "a".repeat(64);
+  const verifiedAt = "2026-10-22T10:00:00.000Z";
+  const rootIdentity = { device: "1", inode: "2" };
+  settings.computer.workspaces = [
+    {
+      workspaceId,
+      root: "/synthetic/project",
+      label: "Project",
+      access: "read",
+      excludedPaths: [],
+      rootIdentity,
+      accessCheck: { buildId, computerGeneration: 1, verifiedAt, rootIdentity },
+    },
+  ];
+  const witness = {
+    profile: "farol",
+    configRevision: 1,
+    workspaceId,
+    runtimeGeneration,
+    buildId,
+    protocol: "secure-mcp",
+    verifiedAt,
+  };
+  for (const step of ["chatgpt", "computer", "connect"] as const) {
+    settings.setup[step].verified = { ...witness };
+    settings.setup[step].reachable = "reachable";
+  }
+  Object.assign(settings.connectors.secureMcp, {
+    tunnelId: "synthetic-tunnel",
+    credential: "stored",
+    tunnelClient: {
+      executablePath: "/synthetic/tunnel",
+      executableSha256: "b".repeat(64),
+      version: "1.0.0",
+      protocol: "openai-tunnel-client/v1",
+      verifiedAt,
+    },
+    chatgptApp: {
+      name: "Farol",
+      tunnelId: "synthetic-tunnel",
+      connectorGeneration: 1,
+    },
+    runtime: {
+      state: "ready",
+      connectorGeneration: 1,
+      computerGeneration: 1,
+      runtimeGeneration,
+      buildId,
+      observedAt: verifiedAt,
+    },
+    attachment: {
+      tunnelId: "synthetic-tunnel",
+      workspaceId,
+      connectorGeneration: 1,
+      computerGeneration: 1,
+      runtimeGeneration,
+      buildId,
+      challengeSha256: "c".repeat(64),
+      receiptSha256: "d".repeat(64),
+      verifiedAt,
+    },
+  });
+  settings.connectors.secureMcp.lastVerifiedAttachment =
+    settings.connectors.secureMcp.attachment;
+  const context: SetupCompletionContext = {
+    buildId,
+    current: true,
+    signInObservation: {
+      buildId,
+      state: "authenticated",
+      pending: false,
+      binding: { documentGeneration: 1, sequence: 2 },
+    },
+    signInCheck: { buildId, binding: { documentGeneration: 1, sequence: 1 } },
+  };
+  await store.save(settings);
+  const service = new ProductConfigurationService(store, dependencies());
+  await service.initialize();
+  return { root, store, service, settings, context };
+}
+
+function setupRendererSnapshot(
+  settings: ProductSettings,
+  context: SetupCompletionContext,
+) {
+  return {
+    status: "current",
+    runtime: context.current ? "ready" : "failed",
+    buildId: context.buildId,
+    configuration: { status: "ready", settings },
+    intents: {},
+    update: { phase: "idle" },
+    signInObservation: context.signInObservation,
+    setupSignInCheck: context.signInCheck,
+  } as unknown as WindowSnapshot;
 }
 
 function approval(snapshot: ProductConfigurationSnapshot, now = 0) {
@@ -1494,6 +1611,164 @@ describe("Farol product configuration", () => {
       });
     },
   );
+
+  it("persists explicit Setup completion through setup.progress across restart", async () => {
+    const { root, service: first, context } = await setupCompletionFixture();
+    const before = first.snapshot();
+    if (before.status !== "ready") throw new Error("settings missing");
+    expect(setupCompletionAllowed(before.settings, context)).toBe(true);
+    expect(
+      setupChecklist(setupRendererSnapshot(before.settings, context)).ready,
+    ).toBe(true);
+    expect(first.snapshot()).toMatchObject({
+      status: "ready",
+      settings: { setup: { journey: { dismissed: false } } },
+    });
+    const command = ProductConfigurationCommandSchema.parse({
+      kind: "setup.progress",
+      currentStep: "connect",
+      dismissed: true,
+    });
+    if (command.kind !== "setup.progress") throw new Error("wrong command");
+    const { kind: _kind, ...journey } = command;
+    expect(
+      await first.setSetupJourney(journey, (settings) =>
+        setupCompletionAllowed(settings, context),
+      ),
+    ).toMatchObject({ ok: true });
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    expect(restarted.snapshot()).toMatchObject({
+      status: "ready",
+      settings: {
+        general: { openAtLaunch: "home" },
+        setup: { journey: { currentStep: "connect", dismissed: true } },
+      },
+    });
+  });
+
+  it.each(
+    (["signin", "folders", "connection", "attachment"] as const).flatMap(
+      (step) =>
+        (["missing", "stale", "unknown"] as const).map(
+          (state) => [step, state] as const,
+        ),
+    ),
+  )(
+    "refuses Setup completion without writing when %s is %s (host and renderer)",
+    async (step, state) => {
+      const {
+        root,
+        store,
+        settings,
+        context: original,
+      } = await setupCompletionFixture();
+      let context = original;
+      const connector = settings.connectors.secureMcp;
+      if (step === "signin") {
+        if (state === "missing") context = { ...context, signInCheck: null };
+        if (state === "stale")
+          context = {
+            ...context,
+            signInCheck: {
+              buildId: context.buildId,
+              binding: { documentGeneration: 0, sequence: 1 },
+            },
+          };
+        if (state === "unknown")
+          context = {
+            ...context,
+            signInObservation: {
+              ...context.signInObservation!,
+              state: "unknown",
+              binding: null,
+            },
+          };
+      } else if (step === "folders") {
+        if (state === "missing")
+          settings.computer.workspaces[0]!.accessCheck = null;
+        if (state === "stale")
+          settings.computer.workspaces[0]!.accessCheck!.buildId = "4".repeat(
+            64,
+          );
+        if (state === "unknown") settings.setup.computer.outcomeUnknown = true;
+      } else if (step === "connection") {
+        if (state === "missing") connector.runtime = null;
+        if (state === "stale") connector.runtime!.buildId = "4".repeat(64);
+        if (state === "unknown") connector.runtime!.state = "outcome_unknown";
+      } else {
+        if (state === "missing") connector.attachment = null;
+        if (state === "stale") connector.attachment!.buildId = "4".repeat(64);
+        if (state === "unknown") settings.setup.connect.outcomeUnknown = true;
+      }
+      await store.save(settings);
+      const service = new ProductConfigurationService(store, dependencies());
+      await service.initialize();
+      const before = service.snapshot();
+      const bytes = await fs.readFile(path.join(root, "config.json"));
+      const save = vi.spyOn(store, "save");
+      expect(setupCompletionAllowed(settings, context)).toBe(false);
+      const renderer = setupRendererSnapshot(settings, context);
+      expect(setupStepCheck(renderer, step).allowed).toBe(false);
+      expect(setupChecklist(renderer).ready).toBe(false);
+      const result = await service.setSetupJourney(
+        { currentStep: "connect", dismissed: true },
+        (current) => setupCompletionAllowed(current, context),
+      );
+      expect(ProductConfigurationResultSchema.parse(result)).toEqual({
+        ok: false,
+        error: "SETUP_INCOMPLETE",
+        snapshot: before,
+      });
+      expect(save).not.toHaveBeenCalled();
+      expect(service.snapshot()).toEqual(before);
+      expect(await fs.readFile(path.join(root, "config.json"))).toEqual(bytes);
+      const restarted = new ProductConfigurationService(store, dependencies());
+      await restarted.initialize();
+      expect(restarted.snapshot()).toEqual(before);
+    },
+  );
+
+  it("fails closed without a host predicate and allows ordinary Setup progress", async () => {
+    const { service } = await setupCompletionFixture();
+    expect(
+      await service.setSetupJourney({ currentStep: "verify", dismissed: true }),
+    ).toMatchObject({ ok: false, error: "SETUP_INCOMPLETE" });
+    expect(
+      await service.setSetupJourney({
+        currentStep: "computer",
+        dismissed: false,
+      }),
+    ).toMatchObject({ ok: true });
+  });
+
+  it("refuses Setup completion if host currency is lost before publication", async () => {
+    const { root, context } = await setupCompletionFixture();
+    let current = true;
+    const store = new ProductSettingsStore(
+      { root },
+      {
+        beforeCommit: async () => {
+          current = false;
+        },
+      },
+    );
+    const service = new ProductConfigurationService(store, dependencies());
+    await service.initialize();
+    const before = service.snapshot();
+    const bytes = await fs.readFile(path.join(root, "config.json"));
+    expect(
+      await service.setSetupJourney(
+        { currentStep: "connect", dismissed: true },
+        (settings) => setupCompletionAllowed(settings, { ...context, current }),
+      ),
+    ).toEqual({ ok: false, error: "SETUP_INCOMPLETE", snapshot: before });
+    expect(service.snapshot()).toEqual(before);
+    expect(await fs.readFile(path.join(root, "config.json"))).toEqual(bytes);
+  });
 
   it("persists working preferences and workspace approval across restart", async () => {
     const root = await stateRoot();

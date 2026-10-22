@@ -1,3 +1,4 @@
+import { productName } from "./harness-identity.ts";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -40,6 +41,6 @@ if (violations.length > 0) {
   process.exitCode = 1;
 } else {
   process.stdout.write(
-    `Farol lint: ${productionFiles.length} production files checked.\n`,
+    `${productName} lint: ${productionFiles.length} production files checked.\n`,
   );
 }

@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
+import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import path from "node:path";
@@ -79,7 +80,21 @@ export type CodexCallerRelayTurn = Readonly<{
   close(): void;
 }>;
 
+export type CallerRelayDirectoryWitness = Readonly<{
+  path: string;
+  dev: number;
+  ino: number;
+  uid: number;
+  mode: number;
+  birthtimeMs: number;
+  pid: number;
+  processStartedAtMs: number;
+  observedAtMs: number;
+  created: boolean;
+}>;
+
 export type CodexCallerRelayRuntime = Readonly<{
+  directoryWitness(): CallerRelayDirectoryWitness;
   endpoint: CodexCallerRelayEndpoint;
   openTurn(
     input: Readonly<{
@@ -103,6 +118,7 @@ export type CodexCallerRelayRuntime = Readonly<{
 
 type StartOptions = Readonly<{
   root: string;
+  onDirectoryPrepared?(witness: CallerRelayDirectoryWitness): void;
   token?: string;
   now?: () => number;
 }>;
@@ -127,19 +143,88 @@ function safeRoot(root: string): boolean {
   return path.isAbsolute(root) && !root.includes("\0") && root !== "/";
 }
 
-async function prepareRoot(root: string): Promise<void> {
+async function prepareRoot(root: string): Promise<CallerRelayDirectoryWitness> {
   if (!safeRoot(root)) throw new Error("CALLER_RELAY_ROOT_INVALID");
-  await fs.mkdir(root, { recursive: true, mode: 0o700 });
-  const info = await fs.lstat(root);
-  const effectiveUser = process.geteuid?.();
-  if (
-    !info.isDirectory() ||
-    info.isSymbolicLink() ||
-    (effectiveUser !== undefined && info.uid !== effectiveUser)
-  ) {
-    throw new Error("CALLER_RELAY_ROOT_UNSAFE");
+  const flags =
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
+  let handle: fs.FileHandle | undefined;
+  let privateParent: string | undefined;
+  try {
+    try {
+      handle = await fs.open(root, flags);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+        throw new Error("CALLER_RELAY_ROOT_UNSAFE");
+    }
+    const created = handle === undefined;
+    if (created) {
+      await fs.mkdir(path.dirname(root), { recursive: true, mode: 0o700 });
+      // Pin the newly created object before publishing it at the shared path.
+      // Both names are unpredictable inside a fresh private parent. Immediately
+      // open the exact mkdtemp path with O_DIRECTORY | O_NOFOLLOW.
+      privateParent = await fs.mkdtemp(path.join(path.dirname(root), ".fr-"));
+      const staged = await fs.mkdtemp(path.join(privateParent, "root-"));
+      handle = await fs.open(staged, flags);
+      const owned = await handle.stat();
+      const atStaged = await fs.lstat(staged);
+      if (
+        atStaged.isSymbolicLink() ||
+        atStaged.dev !== owned.dev ||
+        atStaged.ino !== owned.ino
+      )
+        throw new Error("CALLER_RELAY_ROOT_CHANGED");
+      // Never knowingly replace a directory that appeared during preparation.
+      try {
+        await fs.lstat(root);
+        throw new Error("CALLER_RELAY_ROOT_CHANGED");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      await fs.rename(staged, root);
+      const published = await fs.lstat(root);
+      if (published.dev !== owned.dev || published.ino !== owned.ino)
+        throw new Error("CALLER_RELAY_ROOT_CHANGED");
+    }
+    if (!handle) throw new Error("CALLER_RELAY_ROOT_UNSAFE");
+    const info = await handle.stat();
+    const effectiveUser = process.geteuid?.();
+    if (
+      !info.isDirectory() ||
+      (effectiveUser !== undefined && info.uid !== effectiveUser)
+    ) {
+      throw new Error("CALLER_RELAY_ROOT_UNSAFE");
+    }
+    // Change only the pinned object, never an unverified replacement path.
+    if ((info.mode & 0o077) !== 0) await handle.chmod(0o700);
+    const final = await handle.stat();
+    const physical = await fs.realpath(root);
+    const atPath = await fs.lstat(root);
+    const atPhysical = await fs.lstat(physical);
+    if (
+      atPath.isSymbolicLink() ||
+      atPath.dev !== final.dev ||
+      atPath.ino !== final.ino ||
+      atPhysical.dev !== final.dev ||
+      atPhysical.ino !== final.ino
+    )
+      throw new Error("CALLER_RELAY_ROOT_CHANGED");
+    return Object.freeze({
+      path: physical,
+      dev: final.dev,
+      ino: final.ino,
+      uid: final.uid,
+      mode: final.mode,
+      birthtimeMs: final.birthtimeMs,
+      pid: process.pid,
+      processStartedAtMs: performance.timeOrigin,
+      observedAtMs: performance.timeOrigin + performance.now(),
+      created,
+    });
+  } finally {
+    await handle?.close();
+    // No recursive cleanup: preserve a substituted or unpublished object.
+    if (privateParent) await fs.rmdir(privateParent).catch(() => undefined);
   }
-  if ((info.mode & 0o077) !== 0) await fs.chmod(root, 0o700);
 }
 
 async function assertSocketAvailable(socketPath: string): Promise<void> {
@@ -160,7 +245,10 @@ export async function startCodexCallerRelay(
   if (token.length < 32 || token.length > 512 || /[\0\r\n]/u.test(token)) {
     throw new Error("CALLER_RELAY_TOKEN_INVALID");
   }
-  await prepareRoot(options.root);
+  const directory = await prepareRoot(options.root);
+  // Creation provenance remains known even if a later socket startup refuses.
+  // The observer receives metadata only, before any token-bearing endpoint.
+  options.onDirectoryPrepared?.(directory);
   const socketPath = path.join(options.root, SOCKET_BASENAME);
   if (Buffer.byteLength(socketPath) > 100) {
     throw new Error("CALLER_RELAY_SOCKET_PATH_TOO_LONG");
@@ -473,6 +561,7 @@ export async function startCodexCallerRelay(
     token,
   };
   return {
+    directoryWitness: () => directory,
     endpoint,
     openTurn: (input) => {
       if (closed) throw new Error("CALLER_RELAY_CLOSED");

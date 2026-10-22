@@ -1,3 +1,5 @@
+import { productName } from "../../tooling/harness-identity.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 /** Controlled offline DOM join of production constructors. No normal main/UI
  * entry, installed product, selector qualification or live-provider claim. */
 import assert from "node:assert/strict";
@@ -54,7 +56,7 @@ assert.equal(origin.hostname, "127.0.0.1");
 assert.equal(origin.origin, config.origin);
 assert.equal(config.homeUrl, `${config.origin}/chatgpt`);
 const settingsFile = path.join(config.stateRoot, "settings.json");
-const partition = "persist:farol-dev-chatgpt" as const;
+const partition = harnessDesktopIdentity("dev", "/").chatGptPartition;
 const routes: ChatGptRoute[] = [];
 let host: DesktopGoCore | undefined;
 let startAttempted = false;
@@ -90,7 +92,7 @@ function fail(code: string) {
   receipt.error ??= code;
   save();
 }
-app.setName("Farol Controlled Go Chat DOM Join");
+app.setName(`${productName} Controlled Go Chat DOM Join`);
 for (const [name, directory] of Object.entries(config.paths))
   app.setPath(name, directory);
 app.setAppLogsPath(config.paths.logs!);

@@ -10,7 +10,7 @@
 // can satisfy a requirement whose minimum boundary is a live provider,
 // connector or installed host.
 
-// These assertions require an admitted Farol-backed Product Agent. The
+// These assertions require an admitted the product-backed Product Agent. The
 // current production route is intentionally disabled, so they remain a
 // visible qualification gap, separate from the default-off product lanes.
 const PRODUCT_AGENT_POSITIVE_CASES = Object.freeze([

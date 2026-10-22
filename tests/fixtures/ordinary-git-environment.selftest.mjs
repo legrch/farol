@@ -4,7 +4,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { createOrdinaryGitEnvironment } from "./ordinary-git-environment.mjs";
 
-/** Node reference self-test only; not a Farol sandbox/MCP acceptance claim. */
+/** Node reference self-test only; not a the product sandbox/MCP acceptance claim. */
 async function withFixture(run) {
   const fixture = await createOrdinaryGitEnvironment();
   try {

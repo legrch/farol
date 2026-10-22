@@ -1,3 +1,4 @@
+import { desktopIdentity } from "../../tooling/harness-identity.ts";
 // Real built application + disposable disk/native workspace. Only the OS picker
 // is replaced by the existing explicit E2E workspace selection seam. No signed-in
 // ChatGPT, external tunnel, production app or owner Dev profile is accessed.
@@ -17,7 +18,12 @@ const source = sourceIdentity(root),
   buildRoot = path.join(root, "_output/build/app");
 const build = await qualifyGoBuild(buildRoot, source);
 const profile = await fs.realpath(
-  await fs.mkdtemp(path.join(os.tmpdir(), "farol-dev-onboarding-startup-")),
+  await fs.mkdtemp(
+    path.join(
+      os.tmpdir(),
+      `${desktopIdentity("dev", "/").runtimeIdentity}-operations-`,
+    ),
+  ),
 );
 const home = path.join(profile, "home"),
   appData = path.join(profile, "app-data"),

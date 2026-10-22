@@ -89,8 +89,10 @@ identities. See [identity cutover](docs/identity-cutover.md).
   required by the test plan recreate Dev-only runtime/profile state without per-run
   owner approval. Preserve explicitly quarantined unknown-effect evidence and never
   mutate the installed production Farol profile under this rule. When two displays
-  are active, place visible Farol Dev work on the MacBook built-in display and avoid
-  disturbing the owner's other screen; when only one display is active, visible
+  are active, place visible Farol Dev work on the display the owner is not working
+  on: the MacBook built-in display when an external monitor is primary, or the iPad
+  (Sidecar) when the built-in display is primary (`task dev -- --display=secondary`);
+  never on the primary display the owner works on. When only one display is active, visible
   launch, focus, and interaction on that display are allowed as needed. Do not stop
   to ask merely for Farol Dev lifecycle or focus permission. This exception does not
   authorize production installation/replacement/publication or replay of an

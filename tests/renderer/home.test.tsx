@@ -21,8 +21,10 @@ afterEach(async () => {
 });
 function working(): Partial<WindowSnapshot> {
   const buildId = bootstrap().build.buildId;
+  const settings = readySettings(true);
+  settings.setup.journey.dismissed = true;
   return {
-    configuration: { status: "ready", settings: readySettings(true) },
+    configuration: { status: "ready", settings },
     signInObservation: {
       observationId: "fixture",
       buildId,
@@ -125,6 +127,25 @@ it("marks done/current/pending steps and continues at the first unfinished step"
   expect(h.host.querySelectorAll('[data-state="pending"]')).toHaveLength(1);
   await h.click("Continue setup");
   expect(h.c.getSnapshot().destination.setupStep).toBe("connection");
+});
+it("keeps Finish setup when all four checks pass without persisted completion", async () => {
+  const value = working();
+  const settings = readySettings(true);
+  const h = await mount({
+    ...value,
+    configuration: { status: "ready", settings },
+  });
+  expect(h.c.getSnapshot().destination).toMatchObject({
+    area: "setup",
+    setupStep: "overview",
+  });
+  expect(h.host.querySelectorAll('[data-state="done"]')).toHaveLength(4);
+  expect(h.host.textContent).toContain("Finish setup");
+  expect(h.host.textContent).not.toContain("Farol is working");
+  expect(h.f.api.configure).not.toHaveBeenCalled();
+  await h.click("Continue setup");
+  expect(h.c.getSnapshot().destination.setupStep).toBe("attachment");
+  expect(h.f.api.configure).not.toHaveBeenCalled();
 });
 it("working Home has one status card, newest three events, and no empty attention section", async () => {
   const h = await mount({

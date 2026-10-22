@@ -35,7 +35,7 @@ import {
   DEV_DATA_DIRECTORY_NAME,
   LEGACY_DEV_DATA_DIRECTORY_NAME,
   resolveDevDataDirectoryName,
-} from "../src/apps/desktop/dev-profile-directory.ts";
+} from "./harness-identity.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 

@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 // Only called by the explicit native Go qualification on a fresh producer-owned
 // synthetic tree. No ordinary/production profile, Electron or provider action.
 import fs from "node:fs/promises";
@@ -38,10 +39,15 @@ for (const mutation of fixture.Input.Mutations) {
 const userData = path.dirname(path.dirname(fixture.Profile.Root));
 if (
   path.basename(userData) !==
-    (fixture.Input.InstalledEmpty === true ||
-    fixture.Input.InstalledPreserved === true
-      ? "Farol"
-      : "Farol Dev") ||
+    path.basename(
+      harnessDesktopIdentity(
+        fixture.Input.InstalledEmpty === true ||
+          fixture.Input.InstalledPreserved === true
+          ? "preview"
+          : "dev",
+        "/",
+      ).userData,
+    ) ||
   path.dirname(path.dirname(userData)) !== path.join(root, "_output/tmp") ||
   !path.basename(path.dirname(userData)).startsWith("retirement-boot-")
 )

@@ -85,7 +85,8 @@ tasks:
       # wrapper runs isolated (-I), so no user-site .pth or usercustomize runs.
       # This is the only entrypoint that produces a candidate.
       - |
-        clean_path=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+        # Prefer the declared nvm LTS, without inheriting caller PATH or hooks.
+        clean_path="${HOME:?task package requires HOME}/.nvm/versions/node/v24.20.0/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         if ! node_path="$(PATH="$clean_path" command -v node)" || [ -z "$node_path" ]; then
           echo "task package requires the declared Node toolchain on $clean_path" >&2
           exit 1

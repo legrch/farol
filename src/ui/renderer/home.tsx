@@ -43,7 +43,10 @@ export function Home({ snapshot, facade }: Props) {
   const local = useSetupIntents(facade, snapshot);
   const checklist = setupChecklist(snapshot, false, local);
   const first = checklist.entries.find((entry) => entry.state !== "verified");
-  const working = checklist.ready;
+  const working =
+    snapshot.configuration?.status === "ready" &&
+    snapshot.configuration.settings.setup.journey.dismissed &&
+    checklist.ready;
   const [checking, setChecking] = useState(false);
   const [checkResult, setCheckResult] = useState<string | null>(null);
   const unresolved = unresolvedActions(snapshot, local);
@@ -139,7 +142,7 @@ export function Home({ snapshot, facade }: Props) {
             onClick={() =>
               facade.navigate({
                 area: "setup",
-                setupStep: first?.step ?? "connection",
+                setupStep: first?.step ?? "attachment",
               })
             }
           >

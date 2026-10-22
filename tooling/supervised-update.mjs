@@ -23,7 +23,7 @@ function deliverFinal(output, value) {
 }
 
 // This entry is bundled from reviewed source and run in an external Node
-// process. It must remain independent of the Farol instance being replaced.
+// process. It must remain independent of the the product instance being replaced.
 export async function runSupervisedUpdateCLI(
   args,
   output = (value) => {

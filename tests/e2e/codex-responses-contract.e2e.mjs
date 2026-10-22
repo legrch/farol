@@ -1,5 +1,6 @@
+import { productName } from "../../tooling/harness-identity.ts";
 // Explicit native compatibility observation, outside the ordinary suite.
-// This is a test-side Responses peer: no Farol, Go or business delivery ACK.
+// This is a test-side Responses peer: no product, Go or business delivery ACK.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -43,7 +44,7 @@ const report = {
   witnessSHA256: digest(await fs.readFile(fileURLToPath(import.meta.url))),
   root,
   startedAt: new Date().toISOString(),
-  limits: "Synthetic HTTP peer only; no Farol, Go, provider or business ACK",
+  limits: `Synthetic HTTP peer only; no ${productName}, Go, provider or business ACK`,
   requests: [],
   runs: [],
 };
@@ -274,7 +275,7 @@ try {
   const config = [
     'model_provider="farol"',
     'model="chatgpt"',
-    'model_providers.farol.name="Farol synthetic contract"',
+    `model_providers.farol.name="${productName} synthetic contract"`,
     'model_providers.farol.base_url="http://127.0.0.1:' + port + '"',
     'model_providers.farol.wire_api="responses"',
     "model_providers.farol.requires_openai_auth=false",

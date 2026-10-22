@@ -28,12 +28,36 @@ const native = {
   status: "present",
   pid: 111,
   uid: 501,
-  token: "boot:123:456",
+  token: "darwin-v1:12345678-1234-1234-1234-123456789abc:1700000000123456",
+  executable,
+  appPath: scope.appPath,
+  profilePath: scope.profilePath,
   commandVerified: true,
 };
-const command = `501 ${marker.processStart} ${executable} _output/build/app/main.cjs`;
+const command = `501 ${marker.processStart} ${executable} ${scope.appPath} --farol-dev-user-data-dir=${scope.profilePath}`;
 
 describe("exact Dev command correlation", () => {
+  it("correlates the isolated Dev executable with its native lifetime", () => {
+    const executable = `${root}/_output/dev-runtime/Farol Dev.app/Contents/MacOS/Electron`;
+    expect(
+      correlateDevCommand(
+        `501 ${marker.processStart} ${executable} ${scope.appPath} --farol-dev-user-data-dir=${scope.profilePath}`,
+        marker,
+        scope,
+        { ...native, executable },
+        10000,
+      ).executable,
+    ).toBe(executable);
+    expect(() =>
+      correlateDevCommand(
+        command,
+        marker,
+        scope,
+        { ...native, executable: "/other/Electron" },
+        10000,
+      ),
+    ).toThrow("executable");
+  });
   it("continues exact-lifetime observation across normal marker removal but refuses replacement or unreadable bytes", async () => {
     const parent = await fs.mkdtemp(
       path.join(os.tmpdir(), "farol-dev-quit-marker-"),
@@ -53,6 +77,10 @@ describe("exact Dev command correlation", () => {
       expect(retainedDevMarkerMatches(file, marker)).toBe(false);
       await fs.writeFile(file, "{");
       expect(retainedDevMarkerMatches(file, marker)).toBe(false);
+      expect(control.readRetainedDevMarker(file, marker)).toEqual({
+        matches: false,
+        reason: "RUN_MARKER_JSON_INVALID",
+      });
       await fs.unlink(file);
       await fs.mkdir(file);
       expect(retainedDevMarkerMatches(file, marker)).toBe(false);
@@ -113,48 +141,70 @@ describe("exact Dev command correlation", () => {
       installed: false,
     });
   });
-  it("accepts the observed macOS product title only with independent kernel command verification", () => {
-    const line = `501 ${marker.processStart} Farol Dev`;
-    expect(
-      correlateDevCommand(line, marker, scope, native, 10000),
-    ).toMatchObject({ pid: marker.pid, executable });
-    for (const seen of [
-      { ...native, commandVerified: false },
-      { ...native, commandVerified: undefined },
-    ]) {
-      expect(() =>
-        correlateDevCommand(line, marker, scope, seen, 10000),
-      ).toThrow("DEV_PROCESS_IDENTITY_REFUSED");
-    }
-    for (const title of [
-      "Farol",
-      "Electron",
-      "Farol Dev --user-data-dir=/foreign",
-    ]) {
-      expect(() =>
-        correlateDevCommand(
-          `501 ${marker.processStart} ${title}`,
-          marker,
-          scope,
-          native,
-          10000,
-        ),
-      ).toThrow("DEV_PROCESS_IDENTITY_REFUSED");
-    }
-  });
   it.each([
-    command.replace(executable, "/Applications/Farol.app/Contents/MacOS/Farol"),
-    command.replace("_output/build/app/main.cjs", "other.cjs"),
-    `${command} --user-data-dir=/foreign`,
-    `${command} --acceptance-profile`,
-    `${command} --type=renderer`,
-    command.replace("501", "502"),
-    command.replace("10:44:37", "10:44:38"),
-  ])("refuses foreign command or coarse marker disagreement", (line) => {
+    ["executable", "/other/Electron"],
+    ["appPath", "/other/_output/build/app/main.cjs"],
+    ["profilePath", "/synthetic/Farol Dev Review/other/Farol Dev"],
+    ["pid", 112],
+    ["uid", 502],
+    ["token", "invalid"],
+    ["commandVerified", false],
+    ["status", "unreadable"],
+    ...[
+      "executable",
+      "appPath",
+      "profilePath",
+      "pid",
+      "uid",
+      "token",
+      "commandVerified",
+    ].map((field): [string, undefined] => [field, undefined]),
+  ])("refuses mismatched or unreadable native %s (%s)", (field, value) => {
     expect(() =>
-      correlateDevCommand(line, marker, scope, native, 10000),
+      correlateDevCommand(
+        command,
+        marker,
+        scope,
+        { ...native, [field]: value },
+        10000,
+      ),
     ).toThrow("DEV_PROCESS_IDENTITY_REFUSED");
   });
+  it("refuses a renamed process whose entrypoint and profile were erased", () => {
+    expect(() =>
+      correlateDevCommand(
+        `501 ${marker.processStart} Farol Dev`,
+        marker,
+        scope,
+        {
+          ...native,
+          status: "refused",
+          commandVerified: false,
+          appPath: undefined,
+          profilePath: undefined,
+        },
+        10000,
+      ),
+    ).toThrow("DEV_PROCESS_IDENTITY_REFUSED");
+  });
+  it.each(["ordinary", "fresh-review"])(
+    "a forged/stale %s marker cannot borrow another profile's live lifetime",
+    (selected) => {
+      const review =
+        "/synthetic/Library/Application Support/Farol Dev Review/123/Farol Dev";
+      const current = {
+        ...scope,
+        profilePath: selected === "ordinary" ? scope.profilePath : review,
+      };
+      const seen = {
+        ...native,
+        profilePath: selected === "ordinary" ? review : scope.profilePath,
+      };
+      expect(() =>
+        correlateDevCommand(command, marker, current, seen, 10000),
+      ).toThrow("profile command");
+    },
+  );
   it("refuses another boot and native UID/PID mismatch", () => {
     for (const [seen, boot] of [
       [native, 20000],
@@ -166,4 +216,118 @@ describe("exact Dev command correlation", () => {
       ).toThrow("DEV_PROCESS_IDENTITY_REFUSED");
     }
   });
+});
+
+describe("stop identity observations", () => {
+  const inspect = (overrides = {}) =>
+    control.inspectDevStopIdentity({
+      marker,
+      scope,
+      native: () => native,
+      command: () => ({ status: 0, text: command }),
+      markerMatches: () => true,
+      bootTime: () => 10000,
+      ...overrides,
+    });
+  it("refuses a renamed supervisor instead of borrowing entrypoint/profile proof", () => {
+    expect(
+      inspect({
+        command: () => ({
+          status: 0,
+          text: `501 ${marker.processStart} Farol Dev`,
+        }),
+      }),
+    ).toMatchObject({
+      status: "unreadable",
+      reason: expect.stringContaining("erased process title"),
+    });
+  });
+  it("confirms process exit between native inspection and ps instead of refusing clean shutdown", () => {
+    let reads = 0;
+    expect(
+      inspect({
+        native: () => (++reads === 1 ? native : { status: "absent" }),
+        command: () => ({ status: 1, text: "" }),
+      }),
+    ).toEqual({ status: "absent" });
+    expect(reads).toBe(2);
+  });
+  it.each([
+    native,
+    { ...native, token: "reused" },
+    { status: "unreadable", reason: "INSPECTION_PERMISSION_DENIED" },
+  ])("never treats ps absence alone as authority (%#)", (confirmation) => {
+    let reads = 0;
+    expect(
+      inspect({
+        native: () => (++reads === 1 ? native : confirmation),
+        command: () => ({ status: 1, text: "" }),
+      }),
+    ).toMatchObject({
+      status: "unreadable",
+      reason: expect.stringContaining(
+        "ps reported absence; native confirmation:",
+      ),
+    });
+  });
+  it("reports the exact failed read and preserves refused observations", () => {
+    expect(
+      inspect({
+        native: () => ({ status: "refused", reason: "COMMAND_MISMATCH" }),
+      }),
+    ).toEqual({
+      status: "unreadable",
+      reason: "native inspection: refused/COMMAND_MISMATCH",
+    });
+    expect(inspect({ markerMatches: () => false })).toEqual({
+      status: "unreadable",
+      reason: "retained run marker: changed or could not be read",
+    });
+    expect(
+      inspect({
+        command: () => {
+          throw Error("DEV_PROCESS_LOOKUP_UNREADABLE");
+        },
+      }),
+    ).toEqual({
+      status: "unreadable",
+      reason: "identity read: DEV_PROCESS_LOOKUP_UNREADABLE",
+    });
+  });
+  it("does not classify another checkout by the shared Farol Dev process title", () => {
+    const owned = [
+      `${root}/node_modules/electron/dist/Electron.app/`,
+      `${root}/_output/build/app/`,
+    ];
+    expect(control.devInventoryOwnsLine("111 Farol Dev", owned)).toBe(false);
+    expect(
+      control.devInventoryOwnsLine(
+        `112 ${executable} ${root}/_output/build/app/runtime.cjs`,
+        owned,
+      ),
+    ).toBe(true);
+    expect(
+      control.devInventoryOwnsLine(
+        "113 /other/farol/_output/build/app/runtime.cjs",
+        owned,
+      ),
+    ).toBe(false);
+  });
+});
+
+it("requires exact native exclusion before ignoring a named inventory process", () => {
+  expect(control.devInventoryCandidateAbsent({ status: "absent" })).toBe(true);
+  expect(
+    control.devInventoryCandidateAbsent({
+      status: "refused",
+      reason: "WRITER_EXECUTABLE_MISMATCH",
+    }),
+  ).toBe(true);
+  for (const seen of [
+    { status: "present", commandVerified: true },
+    { status: "unreadable" },
+    { status: "refused", reason: "COMMAND_MISMATCH" },
+    { status: "refused", reason: "INSPECTION_PERMISSION_DENIED" },
+  ])
+    expect(control.devInventoryCandidateAbsent(seen)).toBe(false);
 });

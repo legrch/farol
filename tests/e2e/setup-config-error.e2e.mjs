@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 // Hidden owned windows and disposable profiles only. No account, connector,
 // model or owner-state acceptance is claimed by these configuration faults.
 import assert from "node:assert/strict";
@@ -14,6 +15,7 @@ import {
 import {
   assertNativePreviewAdmission,
   recheckNativePreviewIsolation,
+  refreshNativePreviewIsolation,
   readOwnedStartupMarker,
 } from "./native-preview-admission.mjs";
 import {
@@ -30,7 +32,10 @@ assert.deepEqual(
   packaged ? ["--packaged"] : devOnly ? ["--dev-only"] : [],
 );
 const root = process.cwd();
-const appRoot = path.join(root, "_output/package/Farol.app");
+const appRoot = path.join(
+  root,
+  `_output/package/${harnessDesktopIdentity("preview", "/").applicationName}.app`,
+);
 const executable = packaged
   ? path.join(
       appRoot,
@@ -44,8 +49,11 @@ const entry = packaged
   ? path.join(appRoot, "Contents/Resources/app/main.cjs")
   : path.join(root, "_output/build/app/main.cjs");
 const ownerState = path.join(
-  os.homedir(),
-  "Library/Application Support/io.github.legrch.farol/farol-state",
+  harnessDesktopIdentity(
+    "preview",
+    path.join(os.homedir(), "Library/Application Support"),
+  ).userData,
+  "farol-state",
 );
 const observations = [];
 let primaryFailure;
@@ -100,7 +108,7 @@ try {
       const appData = path.join(profile, "app-data");
       const userData =
         environment === "dev"
-          ? path.join(appData, "Farol Dev")
+          ? harnessDesktopIdentity("dev", appData).userData
           : path.join(profile, "user-data");
       const stateRoot = path.join(userData, "farol-state");
       await fs.mkdir(appData, { mode: 0o700 });
@@ -328,6 +336,16 @@ try {
         run.failureStage = stage;
       } finally {
         if (owned) {
+          if (!primaryFailure && isolationWitness) {
+            try {
+              isolationWitness = await fixtureWait(
+                refreshNativePreviewIsolation(isolationWitness, application),
+                "SETUP_CONFIG_PRE_QUIT_ISOLATION_TIMEOUT",
+              );
+            } catch (error) {
+              cleanupFailures.push(error);
+            }
+          }
           const result = await closeOriginalChild(
             application,
             owned,
