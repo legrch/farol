@@ -117,6 +117,7 @@ export type CodexCallerRelayRuntime = Readonly<{
 
 type StartOptions = Readonly<{
   root: string;
+  onDirectoryPrepared?(witness: CallerRelayDirectoryWitness): void;
   token?: string;
   now?: () => number;
 }>;
@@ -192,6 +193,9 @@ export async function startCodexCallerRelay(
     throw new Error("CALLER_RELAY_TOKEN_INVALID");
   }
   const directory = await prepareRoot(options.root);
+  // Creation provenance remains known even if a later socket startup refuses.
+  // The observer receives metadata only, before any token-bearing endpoint.
+  options.onDirectoryPrepared?.(directory);
   const socketPath = path.join(options.root, SOCKET_BASENAME);
   if (Buffer.byteLength(socketPath) > 100) {
     throw new Error("CALLER_RELAY_SOCKET_PATH_TOO_LONG");

@@ -1230,10 +1230,13 @@ let taskCountsBeforeRuntimeExit: Readonly<{
   failed: number;
 }> | null = null;
 let callerRelayRuntime: CodexCallerRelayRuntime | null = null;
+let callerRelayDirectoryWitness: ReturnType<
+  CodexCallerRelayRuntime["directoryWitness"]
+> | null = null;
 if (process.env.FAROL_E2E === "1") {
   // Main-process metadata readback only: no token, socket client or control API.
   Object.defineProperty(app, "__farolE2ERelayDirectory", {
-    get: () => callerRelayRuntime?.directoryWitness() ?? null,
+    get: () => callerRelayDirectoryWitness,
   });
 }
 let savedChatBridgeRuntime: Awaited<
@@ -2110,7 +2113,16 @@ async function initializeCallerRelay(): Promise<void> {
     // No previous socket.
   }
   try {
-    callerRelayRuntime = await startCodexCallerRelay({ root });
+    callerRelayRuntime = await startCodexCallerRelay({
+      root,
+      ...(isolatedE2EHome !== undefined
+        ? {
+            onDirectoryPrepared: (witness) => {
+              callerRelayDirectoryWitness = witness;
+            },
+          }
+        : {}),
+    });
   } catch {
     // Without the relay, Route B turns that offer host tools are refused.
     callerRelayRuntime = null;
