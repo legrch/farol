@@ -733,10 +733,12 @@ function Update({
       )}
       {recoveryMode && recovery ? (
         <p className="description">
-          Farol will quit to finish recovery. If recovery restores the previous
-          version, it stays closed until recovery completion is confirmed. Start
-          the restored version separately after confirmation, then verify that
-          start before resuming work.
+          Farol will quit to finish recovery
+          {update.phase === "recovery" ? ` of version ${update.version}` : ""}.
+          If recovery restores the previous version, it stays closed until
+          recovery completion is confirmed. Start the restored version
+          separately after confirmation, then verify that start before resuming
+          work.
         </p>
       ) : rollbackVersion ? (
         <p className="description">
