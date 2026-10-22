@@ -50,24 +50,23 @@ release. Private evidence under `private/` is never uploaded. The release
 remains unsigned and not notarized (D16).
 
 The existing producer requires a separately approved Go SDK declaration. The
-release preflight intentionally refuses with `CI_GO_SDK_APPROVAL_REQUIRED` until
-`config/ci-go-sdk.json` is reviewed and committed. It must contain:
+release preflight refuses with `CI_GO_SDK_APPROVAL_REQUIRED` when
+`config/ci-go-sdk.json` is missing and with `CI_GO_SDK_APPROVAL_INVALID` when it
+does not name `farol-ci-go-sdk/1`, `go1.26.2`, `darwin`, `arm64` and a 64-hex
+`treeSha256`.
 
-```json
-{
-  "schema": "farol-ci-go-sdk/1",
-  "version": "go1.26.2",
-  "goos": "darwin",
-  "goarch": "arm64",
-  "treeSha256": "<independently approved full SDK tree digest>"
-}
-```
+The committed approval pins the tree digest of the official
+`go1.26.2.darwin-arm64.tar.gz`. Its archive digest matches the one go.dev
+publishes, and the tree digest was measured over the verified extraction of that
+archive, the same SDK pin the local release chain uses. The `approval` block
+records that provenance. Change the version only together with a new approval
+taken the same way.
 
 `tooling/ci-go-inputs.mjs` compares the installed SDK with that approved digest
 and resolves the two pinned module inputs; the unchanged producer authenticates
 module bytes against `go.sum`. A freshly measured SDK digest does not constitute
-approval. This prerequisite blocks tag releases until closed. The declared Go
-inputs are ignored build outputs, never public release assets.
+approval, and a hosted SDK that differs fails with `CI_GO_SDK_DIGEST_MISMATCH`.
+The declared Go inputs are ignored build outputs, never public release assets.
 
 All GitHub Actions are pinned to commit SHAs. npm, Go, and Electron downloads
 use caches. Repository contents permission is read-only by default; only the
