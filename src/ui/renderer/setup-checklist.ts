@@ -19,7 +19,7 @@ export type SetupChecklistEntry = Readonly<{
   status: string;
   action: "Review" | "Set up";
 }>;
-/** Legacy Finish history entries display the summary, never a phantom sixth step. */
+/** Invalid external step values never create a phantom page. */
 export function visibleSetupSection(step: unknown): SetupSection {
   return setupSections.some(([key]) => key === step)
     ? (step as SetupSection)

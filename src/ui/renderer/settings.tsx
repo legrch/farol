@@ -1,3 +1,4 @@
+import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
 import { setupStepCheck } from "./setup-gate";
 import { setupChecklist } from "./setup-navigation";
 import {
@@ -44,6 +45,7 @@ export type SettingsProps = Readonly<{
   snapshot: WindowSnapshot;
   facade: RendererFacade;
   setupStep?: "signin" | "connection" | "folders" | "attachment" | undefined;
+  unresolvedSheet?: boolean;
   setupInputsChanged?: boolean | undefined;
   onSetupInputsChange?: ((changed: boolean) => void) | undefined;
 }>;
@@ -244,6 +246,7 @@ export function Settings({
   setupStep,
   setupInputsChanged,
   onSetupInputsChange,
+  unresolvedSheet,
 }: SettingsProps) {
   const configuration = snapshot.configuration;
   const [lastReady, setLastReady] = useState<ProductSettings | null>(() =>
@@ -271,9 +274,24 @@ export function Settings({
     Object.values(feedback.intents).map(
       (intent) => settledEdit(intent, current) ?? intent,
     );
+  const exportAllowed = (current: WindowSnapshot) =>
+    Boolean(
+      unresolvedSheet &&
+      current.status === "current" &&
+      current.runtime === "ready" &&
+      current.buildId &&
+      current.configuration?.status === "ready" &&
+      ![...Object.values(current.intents), ...retained(current)].some(
+        (intent) =>
+          intent.id === intention("support.export") &&
+          (intent.state === "pending" || intent.state === "unknown"),
+      ),
+    );
   const allowed: Actions["allowed"] = (kind, workspaceId) =>
-    !feedback.unretained &&
-    commandAllowed(snapshot, kind, workspaceId, retained(snapshot));
+    kind === "support.export" && unresolvedSheet
+      ? exportAllowed(snapshot)
+      : !feedback.unretained &&
+        commandAllowed(snapshot, kind, workspaceId, retained(snapshot));
   const computerFences = dependencyFences(
     snapshot,
     "computer",
@@ -372,14 +390,16 @@ export function Settings({
             : undefined,
       );
       if (
-        feedback.unretained ||
         composing.current ||
-        !commandAllowed(
-          current,
-          command.kind,
-          "workspaceId" in command ? command.workspaceId : undefined,
-          retained(current),
-        )
+        !(command.kind === "support.export" && unresolvedSheet
+          ? exportAllowed(current)
+          : !feedback.unretained &&
+            commandAllowed(
+              current,
+              command.kind,
+              "workspaceId" in command ? command.workspaceId : undefined,
+              retained(current),
+            ))
       ) {
         feedback.pages[page] = {
           request,
@@ -445,6 +465,14 @@ export function Settings({
       }
     },
   };
+  if (unresolvedSheet)
+    return (
+      <UnresolvedActionsContent
+        snapshot={snapshot}
+        facade={facade}
+        actions={actions}
+      />
+    );
   if (!displayedSettings)
     return (
       <div className="settings-page">
@@ -538,9 +566,9 @@ export function Settings({
             <AppearancePage {...props} />
           ) : snapshot.destination.page === "shortcuts" ? (
             <Shortcuts {...props} />
-          ) : (
+          ) : snapshot.destination.page === "general" ? (
             <General {...props} />
-          )}
+          ) : null}
           {pageFeedback && (
             <p className="description" role="status">
               {pageFeedback.text}
@@ -1604,6 +1632,252 @@ function Shortcuts({ snapshot, facade }: PageProps) {
           </p>
         )}
       </Group>
+    </>
+  );
+}
+
+function WorkspaceEditResults({
+  snapshot,
+  settings,
+  facade,
+}: Omit<PageProps, "actions">) {
+  const applyPrefix = intention("computer.apply-workspace-edit");
+  const operations = new Set<string>();
+  if (settings.computer.pendingEdit)
+    operations.add(settings.computer.pendingEdit.operationId);
+  if (snapshot.workspaceEditDelivery)
+    operations.add(snapshot.workspaceEditDelivery);
+  const unsettled = (intent: Intent | undefined) =>
+    intent?.state === "pending" || intent?.state === "unknown";
+  const stateLabel = (intent: Intent | undefined) =>
+    !intent
+      ? "Not observed in this window"
+      : intent.state === "unknown"
+        ? "Outcome unknown"
+        : intent.state === "pending"
+          ? "Checking…"
+          : intent.state === "refused"
+            ? "Refused"
+            : "Confirmed";
+  return [...operations].map((operationId) => {
+    const applied = snapshot.intents[`${applyPrefix}${operationId}`];
+    const observation = snapshot.intents[`observe:${operationId}`];
+    const acknowledgement = snapshot.intents[`ack:${operationId}`];
+    const awaitingDelivery = snapshot.workspaceEditDelivery === operationId;
+    return (
+      <Group title="Workspace edit result" key={operationId}>
+        <p className="description">
+          Operation: <code>{operationId}</code>
+        </p>
+        <p role="status">
+          Edit submission: {stateLabel(applied)}.
+          {applied?.code && (
+            <>
+              {" "}
+              <code>{applied.code}</code>
+            </>
+          )}
+        </p>
+        {observation && (
+          <p role="status">
+            Observation: {stateLabel(observation)}.{" "}
+            {observation.code && <code>{observation.code}</code>}
+          </p>
+        )}
+        {acknowledgement && (
+          <p role="status">
+            Result acknowledgement: {stateLabel(acknowledgement)}.
+            {acknowledgement.code && (
+              <>
+                {" "}
+                <code>{acknowledgement.code}</code>
+              </>
+            )}
+            {acknowledgement.state === "unknown" &&
+              " Do not repeat acknowledgement; delivery is unconfirmed."}
+            {acknowledgement.state === "applied" &&
+              " Delivery recorded. This does not change the edit outcome."}
+          </p>
+        )}
+        {settings.computer.pendingEdit?.operationId === operationId && (
+          <>
+            <p className="description">
+              Observe this existing edit to retrieve its result without
+              repeating the edit.
+            </p>
+            <button
+              type="button"
+              className="subtle"
+              disabled={
+                snapshot.status !== "current" ||
+                unsettled(observation) ||
+                acknowledgement?.state === "pending"
+              }
+              onClick={() => {
+                const current = facade.getSnapshot();
+                if (
+                  current.status === "current" &&
+                  current.configuration?.status === "ready" &&
+                  current.configuration.settings.computer.pendingEdit
+                    ?.operationId === operationId &&
+                  !unsettled(current.intents[`observe:${operationId}`]) &&
+                  current.intents[`ack:${operationId}`]?.state !== "pending"
+                )
+                  void facade.observeWorkspaceEdit(operationId);
+              }}
+            >
+              Observe existing edit
+            </button>
+          </>
+        )}
+        {awaitingDelivery && (
+          <>
+            <p className="description">
+              Review the result above, then record its delivery before preparing
+              another edit.
+            </p>
+            <button
+              type="button"
+              className="subtle"
+              disabled={
+                snapshot.status !== "current" ||
+                observation?.state === "pending" ||
+                unsettled(acknowledgement)
+              }
+              onClick={() => {
+                const current = facade.getSnapshot();
+                if (
+                  current.status === "current" &&
+                  current.workspaceEditDelivery === operationId &&
+                  current.intents[`observe:${operationId}`]?.state !==
+                    "pending" &&
+                  !unsettled(current.intents[`ack:${operationId}`])
+                )
+                  void facade.acknowledgeWorkspaceEdit(operationId);
+              }}
+            >
+              Record result delivery
+            </button>
+          </>
+        )}
+      </Group>
+    );
+  });
+}
+
+function UnresolvedActionsContent({
+  snapshot,
+  facade,
+  actions,
+}: SettingsProps & { actions: Actions }) {
+  const retained = useSetupIntents(facade, snapshot);
+  const feedback = useSettingsFeedback(facade);
+  const rows = unresolvedActions(snapshot, retained);
+  const settings =
+    snapshot.configuration?.status === "ready"
+      ? snapshot.configuration.settings
+      : null;
+  const evidence =
+    settings && snapshot.evidence?.revision === settings.revision
+      ? snapshot.evidence.value
+      : null;
+  return (
+    <>
+      {rows.length === 0 ? (
+        <p role="status">No unresolved actions.</p>
+      ) : (
+        <ul aria-label="Unresolved operations">
+          {rows.map((row) => (
+            <li key={row.id}>
+              <h3>{row.label}</h3>
+              {row.id === "update-recovery" &&
+                snapshot.environment === "preview" && (
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => facade.overlay("update-recovery")}
+                  >
+                    Review recovery options
+                  </button>
+                )}
+              <p>
+                {row.state === "pending" ? "Pending" : "Outcome unknown"}.{" "}
+                {row.cause}
+              </p>
+              <p className="description">
+                <code>{row.id}</code>
+                {row.code ? (
+                  <>
+                    {" "}
+                    · <code>{row.code}</code>
+                  </>
+                ) : null}
+              </p>
+              {Object.values(feedback.pages)
+                .filter((entry) => entry?.result?.id === row.id)
+                .map(
+                  (entry) =>
+                    entry && (
+                      <button
+                        key={row.id}
+                        type="button"
+                        className="text-button"
+                        onClick={() => {
+                          facade.overlay("none");
+                          facade.navigate(
+                            entry.origin.area === "setup"
+                              ? {
+                                  area: "setup",
+                                  setupStep:
+                                    entry.origin.setupStep ?? "overview",
+                                }
+                              : { area: "settings", page: entry.origin.page },
+                          );
+                        }}
+                      >
+                        Return to{" "}
+                        {entry.origin.area === "setup" ? "Setup" : "Settings"}
+                      </button>
+                    ),
+                )}
+              {snapshot.intents[row.id]?.connectorAttempt && (
+                <p className="description">
+                  Original connection operation:{" "}
+                  <code>
+                    {snapshot.intents[row.id]!.connectorAttempt!.operationId}
+                  </code>
+                </p>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {settings && (
+        <WorkspaceEditResults
+          snapshot={snapshot}
+          facade={facade}
+          settings={settings}
+        />
+      )}
+      <button
+        type="button"
+        className="subtle"
+        onClick={() => void actions.refresh()}
+      >
+        Refresh status
+      </button>
+      <p className="description">
+        Refreshing cannot prove that an unknown action did not run. Only
+        existing workspace edits support operation readback.
+      </p>
+      <Command actions={actions} command={{ kind: "support.export" }}>
+        Save support file…
+      </Command>
+      {evidence?.kind === "support.exported" && (
+        <p role="status">
+          Saved {evidence.fileName} · {evidence.bytes} bytes.
+        </p>
+      )}
     </>
   );
 }

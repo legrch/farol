@@ -40,7 +40,10 @@ import {
 } from "../../pkg/ipc/chat-history";
 import { adoptReadConversation } from "./read-conversation-state";
 import { computerSetup } from "./computer-setup";
-import { setupPage } from "./setup-navigation";
+import {
+  validNavigation,
+  sheets,
+} from "../../../apps/desktop/renderer/navigation-destinations";
 import { isHomeOverview, pageListMode } from "./sidebar-presentation";
 import {
   ProductConfigurationSnapshotSchema,
@@ -721,7 +724,7 @@ export class WindowController implements RendererFacade {
                 : launch === "browser"
                   ? { area: "chatgpt" }
                   : launch === "computer"
-                    ? { area: "settings", page: "computer" }
+                    ? { area: "setup", setupStep: "folders" }
                     : launch === "settings"
                       ? { area: "settings", page: "general" }
                       : { area: "activity" },
@@ -2090,26 +2093,9 @@ export class WindowController implements RendererFacade {
   }
   navigate(destination: Partial<Destination>): void {
     if (this.disposed || this.state.update.phase === "applying") return;
-    // Keep old shortcuts and links useful after the Settings pages retire.
-    if (
-      destination.area === "settings" ||
-      (destination.area === undefined && destination.page !== undefined)
-    ) {
+    if (!validNavigation(destination)) return;
+    if (destination.area === undefined && destination.page !== undefined)
       destination = { ...destination, area: "settings" };
-      if (destination.page === "folders" || destination.page === "computer")
-        destination = { ...destination, area: "setup", setupStep: "folders" };
-      else if (destination.page === "connection")
-        destination = {
-          ...destination,
-          area: "setup",
-          setupStep: "connection",
-        };
-      else if (
-        destination.page === "diagnostics" ||
-        destination.page === "model"
-      )
-        destination = { ...destination, page: "general" };
-    }
     if (destination.taskId !== undefined) this.taskSelectionRevision++;
     this.presentationRevision++;
     const wasSignIn = this.isSignInEntry();
@@ -2130,12 +2116,6 @@ export class WindowController implements RendererFacade {
       : destination.area === undefined && destination.page === undefined
         ? this.state.destination.workspaceId
         : undefined;
-    if (
-      (next.area === "settings" || next.area === "setup") &&
-      next.page === "folders" &&
-      workspaceId !== undefined
-    )
-      Object.assign(next, { workspaceId });
     if (homeView) Object.assign(next, { homeView });
     const homeSelection = Object.hasOwn(destination, "homeSelection")
       ? destination.homeSelection
@@ -2151,8 +2131,14 @@ export class WindowController implements RendererFacade {
           ? this.state.destination.setupStep
           : undefined) ??
         "overview";
-      Object.assign(next, { setupStep, page: setupPage(setupStep) });
+      Object.assign(next, { setupStep, page: "general" });
     }
+    if (
+      next.area === "setup" &&
+      next.setupStep === "folders" &&
+      workspaceId !== undefined
+    )
+      Object.assign(next, { workspaceId });
     if (JSON.stringify(next) === JSON.stringify(this.state.destination)) {
       if (this.state.overlay === "search" || this.state.sidebar === "overlay") {
         this.patch({
@@ -2351,6 +2337,7 @@ export class WindowController implements RendererFacade {
     this.presentation();
   }
   overlay(kind: WindowSnapshot["overlay"]): void {
+    if (kind !== "none" && !sheets.includes(kind)) return;
     // Applying admission owns presentation until a newer update result settles.
     // Host layout rejects these changes too; keep both owners on the same view.
     if (this.disposed || this.state.update.phase === "applying") return;
@@ -2468,8 +2455,13 @@ export class WindowController implements RendererFacade {
           ? "chatgpt"
           : action.section === "activity"
             ? "activity"
-            : "settings",
-      page: action.section === "computer" ? "computer" : "general",
+            : action.section === "computer"
+              ? "setup"
+              : "settings",
+      ...(action.section === "computer"
+        ? { setupStep: "folders" as const }
+        : {}),
+      page: "general",
       taskId: action.taskId,
     });
     // The same destination still needs one host acknowledgement after closing
@@ -2532,7 +2524,7 @@ export class WindowController implements RendererFacade {
         action.source === "settings-command" ||
         action.source === "sign-in-return-command"
       )
-        this.navigate({ area: "settings", page: "connection" });
+        this.navigate({ area: "setup", setupStep: "connection" });
       void this.refresh();
     }
   }

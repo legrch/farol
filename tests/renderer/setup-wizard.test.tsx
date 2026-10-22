@@ -132,8 +132,8 @@ describe("linear Setup", () => {
       ).toBe(true);
     },
   );
-  it("maps legacy Finish to the welcome screen without effects", async () => {
-    const h = await mount({ step: "finish" });
+  it("shows the welcome screen at Overview without effects", async () => {
+    const h = await mount({ step: "overview" });
     expect(h.host.textContent).toContain("Welcome to Farol");
     expect(h.f.api.configure).not.toHaveBeenCalled();
   });

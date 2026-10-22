@@ -1,14 +1,9 @@
 import { computerSetup } from "./computer-setup";
 import { setupStepCheck } from "./setup-gate";
 import { signInPresentation } from "./sign-in-presentation";
-import { setupSections, visibleSetupSection } from "./setup-checklist";
+import { setupSections } from "./setup-checklist";
 import type { SetupCheckpoint, SetupChecklistEntry } from "./setup-checklist";
-import type {
-  Intent,
-  SettingsPage,
-  SetupStep,
-  WindowSnapshot,
-} from "./contract";
+import type { Intent, SetupStep, WindowSnapshot } from "./contract";
 
 export const setupSteps = setupSections;
 
@@ -60,7 +55,7 @@ export function setupChecklist(
 /** Preserve the existing required-Computer routing. Sign-in stays optional. */
 export function nextSetupStep(snapshot: WindowSnapshot): SetupStep {
   const setup = computerSetup(snapshot);
-  if (setup.ready) return "finish";
+  if (setup.ready) return "overview";
   if (
     !setup.facts.client ||
     !setup.facts.credentialStored ||
@@ -69,13 +64,4 @@ export function nextSetupStep(snapshot: WindowSnapshot): SetupStep {
     return "connection";
   if (setup.facts.hasFolder && setup.facts.folder !== "ready") return "folders";
   return setup.facts.runtimeCurrent ? "attachment" : "connection";
-}
-
-export function setupPage(step: SetupStep): SettingsPage {
-  const visible = visibleSetupSection(step);
-  return visible === "overview"
-    ? "general"
-    : visible === "folders"
-      ? "folders"
-      : "connection";
 }

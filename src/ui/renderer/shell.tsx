@@ -14,8 +14,9 @@ import {
 import { useRenderer } from "./services";
 import { pageListMode } from "./sidebar-presentation";
 import { PanelBoundary } from "./boundary";
-import { Settings, useSettingsAttention } from "./settings";
+import { Settings, useSetupIntents, retainedSetupIntents } from "./settings";
 import type { RendererFacade, SettingsPage, WindowSnapshot } from "./contract";
+import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
 import { computerSetup } from "./computer-setup";
 import { TaskEditor } from "./task";
 import { Home, HomeNavigation, homeTitle } from "./home";
@@ -395,11 +396,6 @@ function Activity({
         />
       )}
       {details}
-      {snapshot.overlay === "activity" && (
-        <Overlay title="Recorded event" onClose={() => facade.overlay("none")}>
-          {details}
-        </Overlay>
-      )}
     </>
   );
 }
@@ -882,16 +878,14 @@ function Update({
             </button>
           )}
         {!recoveryMode &&
+          unresolvedActions(snapshot, retainedSetupIntents(facade, snapshot))
+            .length > 0 &&
           (recovery ||
             (!!blockedBy && !isConfirmedBrowserBlock(blockedBy)) ||
             update.phase === "failed" ||
             update.phase === "unavailable") && (
-            <button
-              onClick={() =>
-                facade.navigate({ area: "settings", page: "diagnostics" })
-              }
-            >
-              Review Diagnostics
+            <button onClick={() => facade.overlay("unresolved-actions")}>
+              Unresolved actions
             </button>
           )}
         {recoveryMode &&
@@ -955,7 +949,7 @@ function ChatBrowser({
         role={unknown || (failed && !pending) ? "alert" : "status"}
       >
         {unknown
-          ? "Opening ChatGPT is unconfirmed. See Diagnostics before repeating this action."
+          ? "Opening ChatGPT is unconfirmed. Review Unresolved actions before repeating this action."
           : pending
             ? "Opening ChatGPT…"
             : relevant.some(
@@ -963,19 +957,18 @@ function ChatBrowser({
                 )
               ? "Sign-in is already open in ChatGPT. Finish there, then check sign-in in Connection."
               : failed
-                ? "ChatGPT could not be opened. Check Connection or see Diagnostics for details."
+                ? "ChatGPT could not be opened. Check Connection in Setup for details."
                 : "ChatGPT page status has not been confirmed. Check Connection for details."}
       </p>
       <div className="control-row">
         <button
           onClick={() =>
-            facade.navigate({
-              area: "settings",
-              page: unknown ? "diagnostics" : "connection",
-            })
+            unknown || pending
+              ? facade.overlay("unresolved-actions")
+              : facade.navigate({ area: "setup", setupStep: "connection" })
           }
         >
-          {unknown ? "Diagnostics" : "Connection"}
+          {unknown || pending ? "Unresolved actions" : "Connection"}
         </button>
       </div>
     </div>
@@ -1124,23 +1117,8 @@ export function Shell() {
     }
   }, [sidebarOverlay, destination, state.overlay]);
   const settings = destination.area === "settings";
-  const settingsAttention = useSettingsAttention(facade, state);
-  const configuration =
-    state.configuration?.status === "ready"
-      ? state.configuration.settings
-      : null;
-  const unresolved =
-    settingsAttention ||
-    Boolean(
-      state.workspaceEditDelivery || configuration?.computer.pendingEdit,
-    ) ||
-    Object.values(state.intents).some(
-      (intent) => intent.state === "pending" || intent.state === "unknown",
-    ) ||
-    Object.values(configuration?.setup ?? {}).some(
-      (step) => "outcomeUnknown" in step && step.outcomeUnknown,
-    ) ||
-    configuration?.connectors.secureMcp.runtime?.state === "outcome_unknown";
+  const retained = useSetupIntents(facade, state);
+  const unresolved = unresolvedActions(state, retained).length > 0;
   const updateRailLabel =
     state.update.phase === "available"
       ? state.update.deferred
@@ -1309,9 +1287,7 @@ export function Shell() {
               aria-label="Review unresolved actions"
               title="Actions need observation or result delivery"
               className="attention-action"
-              onClick={() =>
-                facade.navigate({ area: "settings", page: "diagnostics" })
-              }
+              onClick={() => facade.overlay("unresolved-actions")}
             >
               <Icon name="attention" />
             </button>
@@ -1524,6 +1500,18 @@ export function Shell() {
         </PanelBoundary>
       </main>
       <UpdateNotice snapshot={state} facade={facade} />
+      {state.overlay === "activity" && (
+        <Overlay title="Recorded event" onClose={() => facade.overlay("none")}>
+          <Activity
+            snapshot={state}
+            facade={facade}
+            filter={activityFilter}
+            onFilter={setActivityFilter}
+            showList={false}
+            heading={activityHeading}
+          />
+        </Overlay>
+      )}
       {state.overlay === "search" && (
         <Search snapshot={state} facade={facade} />
       )}{" "}
@@ -1533,6 +1521,14 @@ export function Shell() {
       {state.overlay === "update-recovery" && (
         <Update snapshot={state} facade={facade} recoveryMode />
       )}{" "}
+      {state.overlay === "unresolved-actions" && (
+        <Overlay
+          title="Unresolved actions"
+          onClose={() => facade.overlay("none")}
+        >
+          <Settings snapshot={state} facade={facade} unresolvedSheet />
+        </Overlay>
+      )}
       {state.overlay === "task" && (
         <Overlay title="Chat options" onClose={() => facade.overlay("none")}>
           <TaskEditor

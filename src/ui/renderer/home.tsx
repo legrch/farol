@@ -29,7 +29,7 @@ type Issue = {
   details?: [string, ReactNode][];
 } & (
   | { target: "folders"; workspaceId: string }
-  | { target: "access" | "work" | "diagnostics" }
+  | { target: "access" | "work" | "unresolved-actions" }
 );
 
 function Glyph({ name }: { name: string }) {
@@ -119,7 +119,7 @@ function projection(snapshot: WindowSnapshot) {
         title: "A ChatGPT action needs review",
         state: setup.embeddedChatGPT,
         copy: "Embedded sign-in is optional and independent of Computer access. Review its available evidence before using an embedded conversation.",
-        target: "diagnostics",
+        target: "unresolved-actions",
       });
     if (!setup.localConnectionCurrent)
       issues.push({
@@ -149,8 +149,8 @@ function projection(snapshot: WindowSnapshot) {
         id: `folder-edit:${operationId}`,
         title: "A workspace edit needs review",
         state: "Pending review",
-        copy: "Inspect the existing operation and its delivery state in Diagnostics before preparing another edit.",
-        target: "diagnostics",
+        copy: "Inspect the existing operation and its delivery state in Unresolved actions before preparing another edit.",
+        target: "unresolved-actions",
         details: [["Operation", operationId]],
       });
   }
@@ -172,17 +172,30 @@ function projection(snapshot: WindowSnapshot) {
       task,
     });
   for (const intent of Object.values(snapshot.intents).filter(
-    (intent) => intent.state === "unknown" || intent.state === "refused",
+    (intent) =>
+      intent.state === "unknown" ||
+      intent.state === "pending" ||
+      intent.state === "refused",
   ))
     issues.push({
       id: `intent:${intent.id}`,
       title: "An action needs review",
-      state: intent.state === "unknown" ? "Outcome unknown" : "Refused",
+      state:
+        intent.state === "unknown"
+          ? "Outcome unknown"
+          : intent.state === "pending"
+            ? "Pending"
+            : "Refused",
       copy:
         intent.state === "unknown"
           ? "The action has no confirmed result. Opening this item does not repeat it."
-          : "The action was refused. Opening this item does not retry it.",
-      target: "diagnostics",
+          : intent.state === "pending"
+            ? "The action is still waiting for its result. Opening this item does not repeat it."
+            : "The action was refused. Opening this item does not retry it.",
+      target:
+        intent.state === "unknown" || intent.state === "pending"
+          ? "unresolved-actions"
+          : "access",
       details: [
         ["Action", intent.id],
         ["Recorded code", intent.code ?? "Not recorded"],
@@ -301,7 +314,7 @@ export function HomeNavigation({ snapshot, facade }: Props) {
         type="button"
         className="home-candidate-connection-link"
         onClick={() =>
-          facade.navigate({ area: "settings", page: "connection" })
+          facade.navigate({ area: "setup", setupStep: "connection" })
         }
       >
         <span
@@ -420,16 +433,12 @@ function EventRow({
 function openIssue(facade: RendererFacade, issue: Issue) {
   if (issue.target === "folders")
     facade.navigate({
-      area: "settings",
-      page: "folders",
+      area: "setup",
+      setupStep: "folders",
       workspaceId: issue.workspaceId,
     });
-  else if (
-    issue.target === "diagnostics" ||
-    issue.id === "snapshot" ||
-    issue.id === "configuration"
-  )
-    facade.navigate({ area: "settings", page: "diagnostics" });
+  else if (issue.target === "unresolved-actions")
+    facade.overlay("unresolved-actions");
   else if (issue.target === "work" && issue.task)
     go(facade, "work", {
       kind: "task",
@@ -625,8 +634,8 @@ function Inspector({ snapshot, facade }: Props) {
               type="button"
               onClick={() =>
                 facade.navigate({
-                  area: "settings",
-                  page: "folders",
+                  area: "setup",
+                  setupStep: "folders",
                   workspaceId: issue.workspaceId,
                 })
               }
@@ -646,12 +655,10 @@ function Inspector({ snapshot, facade }: Props) {
             >
               Inspect current work
             </button>
-          ) : issue.target === "diagnostics" ? (
+          ) : issue.target === "unresolved-actions" ? (
             <button
               type="button"
-              onClick={() =>
-                facade.navigate({ area: "settings", page: "diagnostics" })
-              }
+              onClick={() => facade.overlay("unresolved-actions")}
             >
               Inspect action details <Glyph name="forward" />
             </button>
@@ -742,14 +749,16 @@ function Access({ snapshot, facade }: Props) {
         <button
           type="button"
           onClick={() =>
-            facade.navigate({ area: "settings", page: "connection" })
+            facade.navigate({ area: "setup", setupStep: "connection" })
           }
         >
           Manage connection <Glyph name="forward" />
         </button>
         <button
           type="button"
-          onClick={() => facade.navigate({ area: "settings", page: "folders" })}
+          onClick={() =>
+            facade.navigate({ area: "setup", setupStep: "folders" })
+          }
         >
           Manage workspaces <Glyph name="forward" />
         </button>
@@ -783,7 +792,7 @@ function Readiness({ snapshot, facade }: Props) {
           facade.navigate(
             localReady && !data.setup.externalAccessVerified
               ? { area: "setup", setupStep: "attachment" }
-              : { area: "settings", page: "connection" },
+              : { area: "setup", setupStep: "connection" },
           )
         }
       >
@@ -808,7 +817,7 @@ function Readiness({ snapshot, facade }: Props) {
       <button
         type="button"
         className="home-candidate-status-row"
-        onClick={() => facade.navigate({ area: "settings", page: "folders" })}
+        onClick={() => facade.navigate({ area: "setup", setupStep: "folders" })}
       >
         <span
           className={`home-candidate-status-icon${data.folders.length > 0 && data.folders.every((item) => item.state === "Verified") ? " is-ready" : ""}`}

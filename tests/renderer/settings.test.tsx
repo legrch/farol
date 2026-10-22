@@ -35,26 +35,20 @@ describe("Settings", () => {
       setupStep: "overview",
     });
   });
-  it.each([
-    "folders",
-    "computer",
-    "connection",
-    "diagnostics",
-    "model",
-  ] as const)(
-    "routes retired %s links to their remaining home",
-    async (page) => {
-      const h = await mount({ page });
-      expect(h.c.getSnapshot().destination).toMatchObject(
-        page === "folders" || page === "computer"
-          ? { area: "setup", setupStep: "folders" }
-          : page === "connection"
-            ? { area: "setup", setupStep: "connection" }
-            : { area: "settings", page: "general" },
-      );
-      expect(h.host.querySelectorAll("details")).toHaveLength(0);
-    },
-  );
+  it("rejects retired Settings destinations without rewriting them", async () => {
+    const h = await mount({ page: "general" });
+    const before = h.c.getSnapshot().destination;
+    for (const page of [
+      "folders",
+      "computer",
+      "connection",
+      "diagnostics",
+      "model",
+    ])
+      h.c.navigate({ area: "settings", page } as never);
+    expect(h.c.getSnapshot().destination).toBe(before);
+    expect(h.host.querySelectorAll("details")).toHaveLength(0);
+  });
   it("keeps appearance and shortcut controls usable", async () => {
     const h = await mount({ page: "appearance" });
     expect(h.host.querySelector('select[aria-label="Typeface"]')).toBeTruthy();

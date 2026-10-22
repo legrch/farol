@@ -127,7 +127,7 @@ it("history stage scroll restores both offsets using the exact immutable entry",
   const first = c.getSnapshot().destination;
   expect(Object.isFrozen(first)).toBe(true);
   await act(async () => scrollStage(host, 180, 17));
-  await act(async () => c.navigate({ area: "settings", page: "connection" }));
+  await act(async () => c.navigate({ area: "setup", setupStep: "connection" }));
   expect(stageOffset(host)).toEqual([0, 0]);
   const second = c.getSnapshot().destination;
   const stage = scrollStage(host, 290, 29);
@@ -156,7 +156,7 @@ it("history stage scroll separates identical-route visits and a truncated forwar
   await act(async () => c.navigate({ area: "settings", page: "appearance" }));
   const original = c.getSnapshot().destination;
   scrollStage(host, 180, 17);
-  await act(async () => c.navigate({ area: "settings", page: "connection" }));
+  await act(async () => c.navigate({ area: "setup", setupStep: "connection" }));
   scrollStage(host, 290, 29);
   await act(async () => c.navigate({ area: "settings", page: "appearance" }));
   const discarded = c.getSnapshot().destination;
@@ -218,16 +218,16 @@ it("history stage scroll distinguishes workspace entries with the same former pa
   });
   await act(async () =>
     c.navigate({
-      area: "settings",
-      page: "folders",
+      area: "setup",
+      setupStep: "folders",
       workspaceId: value.computer.workspaces[0]!.workspaceId,
     }),
   );
   scrollStage(host, 160, 16);
   await act(async () =>
     c.navigate({
-      area: "settings",
-      page: "folders",
+      area: "setup",
+      setupStep: "folders",
       workspaceId: value.computer.workspaces[1]!.workspaceId,
     }),
   );
@@ -288,7 +288,7 @@ it("history stage scroll ignores nested scroll notifications", async () => {
   stage
     .querySelector("button")!
     .dispatchEvent(new Event("scroll", { bubbles: true }));
-  await act(async () => c.navigate({ area: "settings", page: "connection" }));
+  await act(async () => c.navigate({ area: "setup", setupStep: "connection" }));
   await act(async () => button(host, "Back").click());
   expect(stageOffset(host)).toEqual([120, 12]);
 });
@@ -355,10 +355,14 @@ it("returns an unresolved Setup workspace action to its actual Setup step", asyn
   expect(c.getSnapshot().intents).toHaveProperty(
     "settings:computer.verify-workspace:22222222-2222-4222-8222-222222222222",
   );
-  await act(async () => c.navigate({ area: "settings", page: "diagnostics" }));
-  await act(async () => button(host, "Open Setup").click());
-  expect(c.getSnapshot().destination.area).toBe("setup");
-  expect(c.getSnapshot().destination.setupStep).toBe("overview");
+  await act(async () => c.overlay("unresolved-actions"));
+  expect(c.getSnapshot().overlay).toBe("unresolved-actions");
+  await act(async () => button(host, "Return to Setup").click());
+  expect(c.getSnapshot().destination).toMatchObject({
+    area: "setup",
+    setupStep: "folders",
+  });
+  expect(c.getSnapshot().overlay).toBe("none");
   expect(f.api.configure).toHaveBeenCalledTimes(1);
 });
 it.each([
@@ -371,7 +375,9 @@ it.each([
   async (label, input) => {
     const { host, c, f } = await mount();
     if (label === "Workspaces")
-      await act(async () => c.navigate({ area: "settings", page: "folders" }));
+      await act(async () =>
+        c.navigate({ area: "setup", setupStep: "folders" }),
+      );
     const before = c.getSnapshot();
     const trigger = button(host, "Find a page");
     trigger.focus();
@@ -950,7 +956,9 @@ it("R24 refused/unavailable update remains honest and review is dismissible", as
   });
   expect(button(host, "Install and Relaunch").disabled).toBe(true);
   expect(host.textContent).not.toContain("WORK_PENDING");
-  expect(button(host, "Review Diagnostics").disabled).toBe(false);
+  expect(host.querySelector(".update-actions")?.textContent).not.toContain(
+    "Unresolved actions",
+  );
   await act(async () => button(host, "Close").click());
   expect(c.getSnapshot().overlay).toBe("none");
 });
@@ -967,7 +975,8 @@ it("R31 R36 Home keeps local views selected and explicit destinations use existi
     await act(async () => button(host, label).click());
     expect(c.getSnapshot().destination).toMatchObject({
       area: "setup",
-      page,
+      page: "general",
+      setupStep: page,
     });
   }
   await act(async () =>
@@ -1155,13 +1164,13 @@ it.each([
     { phase: "unavailable", code: "UPDATE_STATUS_UNAVAILABLE" },
     "Updates unavailable",
     "cannot confirm update availability",
-    ["Dismiss", "Review Diagnostics"],
+    ["Dismiss"],
   ],
   [
     { phase: "failed", code: "UPDATE_FAILED", recoveryRequired: false },
     "The update did not finish",
     "The update did not finish",
-    ["Dismiss", "Review Diagnostics"],
+    ["Dismiss"],
   ],
   [
     {
@@ -1171,7 +1180,7 @@ it.each([
     },
     "The update did not finish",
     "An earlier package check did not finish. Its files are saved.",
-    ["Dismiss", "Review Diagnostics"],
+    ["Dismiss", "Unresolved actions"],
   ],
   [
     {
@@ -1181,7 +1190,7 @@ it.each([
     },
     "The update did not finish",
     "This copy of Farol isn’t a published release",
-    ["Dismiss", "Review Diagnostics"],
+    ["Dismiss"],
   ],
   [
     {
@@ -1191,7 +1200,7 @@ it.each([
     },
     "The update did not finish",
     "This copy of Farol doesn’t match its published release. Download it again.",
-    ["Dismiss", "Review Diagnostics"],
+    ["Dismiss"],
   ],
   [
     {
@@ -1201,7 +1210,7 @@ it.each([
     },
     "The update did not finish",
     "Check your connection and try again.",
-    ["Dismiss", "Review Diagnostics"],
+    ["Dismiss"],
   ],
 ] satisfies [WindowSnapshot["update"], string, string, string[]][])(
   "Updates %j shows its own heading, state and release actions",
@@ -1287,8 +1296,11 @@ it("describes an uncertain update as requiring recovery without claiming the ins
     "UPDATE_HANDOFF_UNKNOWN",
   );
   expect(dialog.querySelector(".update-technical-code")).toBeNull();
-  await act(async () => button(dialog, "Review Diagnostics").click());
-  expect(c.getSnapshot().destination.page).toBe("general");
+  await act(async () => button(dialog, "Unresolved actions").click());
+  expect(c.getSnapshot().overlay).toBe("unresolved-actions");
+  expect(
+    host.querySelector('dialog[aria-label="Unresolved actions"]')?.textContent,
+  ).toContain("Update recovery");
   await act(async () => c.overlay("update-recovery"));
   expect(
     host.querySelector("dialog .update-technical-code code")?.textContent,
@@ -1373,7 +1385,7 @@ it.each([
 );
 
 it.each(["UPDATE_BROWSER_RELEASE_UNCONFIRMED", "UPDATE_STATE_UNREADABLE"])(
-  "keeps %s as a concise issue with Diagnostics and a disabled install",
+  "keeps %s concise without unresolved actions and disables install",
   async (blockedBy) => {
     const { host, c, f } = await mount();
     vi.mocked(f.api.installedUpdate).mockClear();
@@ -1541,7 +1553,7 @@ it("R13 R14 R23 disconnected and incompatible displays retain inspection and cla
   expect(c.getSnapshot().status).toBe("current");
   await act(async () => {
     f.emit("tasks", { revision: 1, tasks: [task()] });
-    c.navigate({ area: "settings", page: "connection", taskId: "task-1" });
+    c.navigate({ area: "setup", setupStep: "connection", taskId: "task-1" });
   });
   await act(async () =>
     c.configure(
@@ -1681,14 +1693,18 @@ it("R29 R34 Enter navigation prevents browser activation of the restored search 
   });
   await act(async () => input.dispatchEvent(enter));
   expect(enter.defaultPrevented).toBe(true);
-  expect(c.getSnapshot().destination.page).toBe("folders");
+  expect(c.getSnapshot().destination).toMatchObject({
+    area: "setup",
+    page: "general",
+    setupStep: "folders",
+  });
   expect(c.getSnapshot().overlay).toBe("none");
 });
 
 it("R15 ChatGPT navigation observes the original Connection intention without replay", async () => {
   const { host, c, f } = await mount();
   vi.mocked(f.api.configure).mockRejectedValue(new Error("reply lost"));
-  await act(async () => c.navigate({ area: "settings", page: "connection" }));
+  await act(async () => c.navigate({ area: "setup", setupStep: "connection" }));
   await act(async () =>
     c.configure(
       { kind: "chatgpt.open-browser" },
@@ -1708,7 +1724,7 @@ it("R15 ChatGPT navigation observes the original Connection intention without re
   expect(host.querySelector("main")?.textContent).not.toContain("Open ChatGPT");
   await act(async () => c.navigate({ area: "settings", page: "general" }));
   expect(c.getSnapshot().destination.page).toBe("general");
-  await act(async () => c.navigate({ area: "settings", page: "connection" }));
+  await act(async () => c.navigate({ area: "setup", setupStep: "connection" }));
   await act(async () =>
     c.configure(
       { kind: "chatgpt.open-browser" },
@@ -1799,7 +1815,8 @@ it.each(["loading", "failed"] as const)(
       await act(async () => button(host, "Connection").click());
       expect(c.getSnapshot().destination).toMatchObject({
         area: "setup",
-        page: "connection",
+        page: "general",
+        setupStep: "connection",
       });
     }
     expect(f.api.configure).toHaveBeenCalledExactlyOnceWith({
@@ -1935,7 +1952,9 @@ it.each(["applied", "refused", "unknown"] as const)(
     const { host, c, f } = await mount();
     const waiting = deferred<unknown>();
     vi.mocked(f.api.configure).mockReturnValueOnce(waiting.promise);
-    await act(async () => c.navigate({ area: "settings", page: "connection" }));
+    await act(async () =>
+      c.navigate({ area: "setup", setupStep: "connection" }),
+    );
     await act(async () => {
       void c.configure(
         { kind: "chatgpt.open-browser" },
@@ -2111,8 +2130,8 @@ it("Home projects Computer readiness separately from optional embedded login", a
   expect(host.querySelector("main")?.textContent).toContain(
     "Sign-in not checked",
   );
-  for (const page of ["folders", "computer", "connection"] as const) {
-    await act(async () => c.navigate({ area: "settings", page }));
+  for (const setupStep of ["folders", "connection"] as const) {
+    await act(async () => c.navigate({ area: "setup", setupStep }));
     await act(async () => c.navigate({ area: "home" }));
   }
   expect(f.api.configure).not.toHaveBeenCalled();
@@ -2193,7 +2212,7 @@ it.each([
     expect(host.querySelector("main")?.textContent).not.toContain(code);
     expect(host.querySelector('main > [role="alert"]')).toBeNull();
   }
-  await act(async () => c.navigate({ area: "settings", page: "diagnostics" }));
+  await act(async () => c.overlay("unresolved-actions"));
   expect(
     Object.values(c.getSnapshot().intents).some(
       (intent) => intent.code === code,
@@ -2449,6 +2468,7 @@ it.each(["available", "ready"] as const)(
 );
 it("Recovery overlay stays isolated from Updates and closes without dispatch", async () => {
   const { host, c, f } = await mount();
+  await act(async () => c.navigate({ area: "settings", page: "general" }));
   vi.mocked(f.api.installedUpdate).mockClear();
   await act(async () => {
     f.emit("update", {
@@ -2456,8 +2476,9 @@ it("Recovery overlay stays isolated from Updates and closes without dispatch", a
       checkedAt: null,
       rollbackVersion: "0.9",
     });
-    c.navigate({ area: "settings", page: "diagnostics" });
+    c.overlay("unresolved-actions");
   });
+  expect(c.getSnapshot().overlay).toBe("unresolved-actions");
   const trigger = button(host, "Save support file…");
   trigger.focus();
   await act(async () => c.overlay("update-recovery"));
@@ -2618,7 +2639,7 @@ it("B04 distinguishes installed and downloaded versions and refuses an unknown-s
 it("native menu preserves the current destination and downloaded update without another check", async () => {
   const { c, f, host } = await mount();
   await act(async () => {
-    c.navigate({ area: "settings", page: "connection" });
+    c.navigate({ area: "setup", setupStep: "connection" });
     f.emit("update", {
       phase: "ready",
       version: "0.2.2",
@@ -3428,7 +3449,7 @@ it("dialog retains an unknown automatic preference without permitting another sa
   });
 });
 
-it("normal update issues direct recovery to Diagnostics without a recovery command", async () => {
+it("normal update recovery stays separate from Unresolved actions", async () => {
   const { host, c, f } = await mount();
   await act(async () => {
     f.emit("update", { phase: "recovery", version: "0.2.2", blockedBy: null });
@@ -3441,12 +3462,10 @@ it("normal update issues direct recovery to Diagnostics without a recovery comma
     "stays closed until recovery completion",
   );
   vi.mocked(f.api.installedUpdate).mockClear();
-  await act(async () => button(host, "Review Diagnostics").click());
-  expect(c.getSnapshot().destination).toMatchObject({
-    area: "settings",
-    page: "general",
-  });
-  expect(c.getSnapshot().overlay).toBe("none");
+  const destination = c.getSnapshot().destination;
+  await act(async () => button(host, "Unresolved actions").click());
+  expect(c.getSnapshot().overlay).toBe("unresolved-actions");
+  expect(c.getSnapshot().destination).toBe(destination);
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
   await act(async () => c.overlay("update-recovery"));
   expect(c.getSnapshot().overlay).toBe("update-recovery");

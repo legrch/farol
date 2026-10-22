@@ -351,7 +351,7 @@ it("unknown release state remains inspectable and cannot be acknowledged", async
   expect(host.querySelector("dialog")?.textContent).not.toContain(
     "UPDATE_HANDOFF_UNKNOWN",
   );
-  expect(button(host, "Review Diagnostics").disabled).toBe(false);
+  expect(button(host, "Unresolved actions").disabled).toBe(false);
   expect(c.getSnapshot().update).toMatchObject({
     code: "UPDATE_HANDOFF_UNKNOWN",
   });
@@ -435,7 +435,9 @@ it("offers one manual admission check for a ready update despite a separate save
   expect(host.querySelector("dialog")?.textContent).not.toContain(
     "Saved update notices could not be confirmed",
   );
-  expect(button(host, "Review Diagnostics").disabled).toBe(false);
+  expect(host.querySelector(".update-actions")?.textContent).not.toContain(
+    "Unresolved actions",
+  );
   expect(host.querySelector("dialog")?.textContent).toContain(
     "Restart postponed",
   );
@@ -452,7 +454,7 @@ it("offers one manual admission check for a ready update despite a separate save
   expect(c.getSnapshot().update.phase).toBe("applying");
 });
 
-it("retains separate admission and notice reasons when retired Diagnostics opens General", async () => {
+it("retains separate admission and notice reasons without rewriting the destination", async () => {
   const ready: InstalledUpdateView = {
     phase: "ready",
     version: available.version,
@@ -464,11 +466,10 @@ it("retains separate admission and notice reasons when retired Diagnostics opens
     },
   };
   const { host, c, f } = await mount(ready);
-  await act(async () => c.navigate({ area: "settings", page: "diagnostics" }));
-  expect(c.getSnapshot().destination).toMatchObject({
-    area: "settings",
-    page: "general",
-  });
+  const destination = c.getSnapshot().destination;
+  await act(async () => c.overlay("unresolved-actions"));
+  expect(c.getSnapshot().overlay).toBe("unresolved-actions");
+  expect(c.getSnapshot().destination).toBe(destination);
   expect(host.textContent).toContain("Save support file");
   expect(host.querySelectorAll("details")).toHaveLength(0);
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
@@ -499,6 +500,8 @@ it("keeps confirmation available with truthful feedback when its fresh admission
   expect(dialog.textContent).toContain("Restart postponed");
   expect(dialog.textContent).toContain("The last restart did not begin");
   expect(button(dialog, "Install and Relaunch").disabled).toBe(false);
-  expect(button(dialog, "Review Diagnostics").disabled).toBe(false);
+  expect(dialog.querySelector(".update-actions")?.textContent).not.toContain(
+    "Unresolved actions",
+  );
   expect(c.getSnapshot().update.phase).toBe("ready");
 });
