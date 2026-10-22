@@ -410,15 +410,15 @@ func (r *runtime) WritePhase(ctx context.Context, phase string) error {
 }
 
 func (r *runtime) persistJournal(ctx context.Context, revision, phase string) error {
-	value := release.Journal{Operation: operation(r.config.Request), Phase: phase, Note: r.config.QuitNote}
-	if value.Note == "" && r.view != nil && r.view.Value != nil {
-		value.Note = r.view.Value.Note
-	}
+	// A restored predecessor reads the same strict /1 journal at any phase.
+	// Keep diagnostics out of its durable protocol, including compensation,
+	// cancellation and manual rollback; log the bounded drain note instead.
+	value := release.Journal{Operation: operation(r.config.Request), Phase: phase}
 	if _, err := records.EncodeJournal(records.Journal{Schema: "farol.installed-update-journal/1", Operation: records.Operation{
 		ID:     value.Operation.ID,
 		Source: records.Build{Digest: value.Operation.Source.Digest, Version: value.Operation.Source.Version, BuildID: value.Operation.Source.BuildID},
 		Target: records.Build{Digest: value.Operation.Target.Digest, Version: value.Operation.Target.Version, BuildID: value.Operation.Target.BuildID},
-	}, Phase: phase, Note: value.Note}); err != nil {
+	}, Phase: phase}); err != nil {
 		return fail("journal_invalid", false, false, err)
 	}
 	view, err := r.config.Journal.CompareAndSwap(ctx, revision, value)
@@ -432,7 +432,7 @@ func (r *runtime) persistJournal(ctx context.Context, revision, phase string) er
 	v, owned := *view, *view.Value
 	v.Value, r.view = &owned, &v
 	if r.config.PhaseLog != nil {
-		r.config.PhaseLog(phase, "")
+		r.config.PhaseLog(phase, r.config.QuitNote)
 	}
 	return r.persistedFence(ctx)
 }

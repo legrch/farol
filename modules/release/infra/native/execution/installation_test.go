@@ -1,7 +1,9 @@
 package execution
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -264,23 +266,49 @@ func TestInstallationComposesActualJournalAndRejectionWithSameOwner(t *testing.T
 	}
 }
 
-func TestQuitDiagnosticNotePersistsAcrossJournalPhases(t *testing.T) {
+// The predecessor at dee61f94 reads a strict /1 journal without a note field.
+// Exercise actual journal persistence, including all source launch/rollback and
+// interrupted phases that an old app can encounter. This is schema compatibility,
+// not an installed predecessor startup or receipt reconciliation witness.
+func TestQuitDiagnosticKeepsEveryJournalPhasePredecessorCompatible(t *testing.T) {
 	f, _ := installationFixture(t)
 	f.config.QuitNote = "predecessor_drain_unconfirmed"
 	phases := []string{}
-	f.config.PhaseLog = func(phase, code string) { phases = append(phases, phase) }
+	f.config.PhaseLog = func(phase, code string) { phases = append(phases, phase+":"+code) }
 	err := installScope(f, context.Background(), func(native port.HelperInstallationRuntime) error {
 		if err := native.Prepare(context.Background()); err != nil {
 			return err
 		}
-		return native.WritePhase(context.Background(), "new_installed")
+		requirePredecessorCompatibleJournal(t, f.path, "prepared")
+		for _, phase := range []string{"predecessor_saved", "new_installed", "verified", "launch_requested", "completed", "rollback_started", "rolled_back", "rollback_launch_requested", "rollback_completed", "cancelled", "cancel_launch_requested", "cancel_completed"} {
+			if err := native.WritePhase(context.Background(), phase); err != nil {
+				return err
+			}
+			requirePredecessorCompatibleJournal(t, f.path, phase)
+		}
+		return nil
 	})
 	must(t, err)
-	data, err := os.ReadFile(filepath.Join(f.path, "journal.json"))
+	if len(phases) != 13 || phases[0] != "prepared:predecessor_drain_unconfirmed" {
+		t.Fatal("drain note was not preserved in diagnostics", phases)
+	}
+}
+
+func requirePredecessorCompatibleJournal(t *testing.T, root, phase string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, "journal.json"))
 	must(t, err)
-	value, err := records.DecodeJournal(data, records.Operation{ID: f.config.Request.OperationID, Source: records.Build{Digest: f.config.Request.Source.Digest, Version: f.config.Request.Source.Version, BuildID: f.config.Request.Source.BuildID}, Target: records.Build{Digest: f.config.Request.Target.Digest, Version: f.config.Request.Target.Version, BuildID: f.config.Request.Target.BuildID}})
-	must(t, err)
-	if value.Note != "predecessor_drain_unconfirmed" || len(phases) != 2 || phases[1] != "new_installed" {
-		t.Fatal(value, phases)
+	var predecessor struct {
+		Schema string `json:"schema"`
+		records.Operation
+		Phase string `json:"phase"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&predecessor); err != nil {
+		t.Fatalf("%s cannot be read by the strict predecessor: %v", phase, err)
+	}
+	if predecessor.Phase != phase || predecessor.Schema != "farol.installed-update-journal/1" {
+		t.Fatal(predecessor)
 	}
 }

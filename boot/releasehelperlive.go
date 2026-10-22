@@ -544,6 +544,9 @@ func (a *liveHelperNativeAdmission) Quit(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if a.quitNote != "" {
+		writeReleaseHelperLog(a.files.Operation, "predecessor_exited", a.quitNote)
+	}
 	a.phase.Store(liveHelperPhaseQuit)
 	return nil
 }

@@ -332,15 +332,23 @@ func TestMilestoneRelaunchRollbackLaunchesRestoredSource(t *testing.T) {
 	if f.measures != 0 || f.fake.opens != 0 {
 		t.Fatal("a non-relaunch apply launched", f.measures, f.fake.opens)
 	}
+	// An unclean manual rollback restores the old app. Its first journal read
+	// occurs at launch, before the helper publishes rollback_completed.
+	f.config.QuitNote = "predecessor_drain_unconfirmed"
+	f.config.open = func(ctx context.Context, until time.Time, args []string, fence func(context.Context) error) error {
+		requirePredecessorCompatibleJournal(t, f.path, "rollback_launch_requested")
+		return f.fake.open(ctx, until, args, fence)
+	}
 	m, ready = f.prepare(t, "rollback", true)
 	result, err = f.run(t, m, ready)
 	if err != nil {
 		t.Fatal(describe(err))
 	}
 	if result == nil || *result != (executionapp.Result{Phase: "rollback_completed"}) {
-		t.Fatal("rollback with relaunch did not settle rolled_back", result)
+		t.Fatal("rollback with relaunch did not complete", result)
 	}
 	f.physical(t, f.repo, "rollback_completed")
+	requirePredecessorCompatibleJournal(t, f.path, "rollback_completed")
 	if f.measures != 1 || f.builds != 0 || f.fake.opens != 1 || f.fake.arguments[0][2] != f.app {
 		t.Fatal("restored source did not launch once", f.measures, f.builds, f.fake.opens)
 	}
