@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "integration": "pr",
+  "defaultBranch": "main",
+  "mergeMethod": "merge",
+  "ci": "pull_request",
+  "release": "version-tag",
+  "deploy": "verified-tag",
+  "requiredChecks": ["changes", "checks", "portable", "native", "required"],
+  "releaseJobs": ["build", "publish"],
+  "tagPattern": "v*",
+  "versionSource": "package.json",
+  "prerelease": true
+}
