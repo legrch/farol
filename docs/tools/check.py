@@ -125,12 +125,48 @@ def selected_files(root):
     return files
 
 
+GUIDE_POLICY = "apps/desktop/renderer/navigation-guide-policy.json"
+
+
+def user_guide_ui_errors(root, names):
+    """Check current user instructions against the renderer's retired-label policy.
+
+    ADRs, historical/frozen records and past release notes are explicitly excluded,
+    even when nested inside a reader tree. Technical references are not UI guides.
+    """
+    policy = json.loads((root / GUIDE_POLICY).read_text())
+    rules = [
+        (rule["label"], re.compile(
+            rule.get("pattern", r"(?<!\w)" + re.escape(rule["label"]) + r"(?!\w)"),
+            0 if rule.get("caseSensitive") else re.I,
+        ))
+        for rule in policy["retiredLabels"]
+    ]
+    errors = []
+    for name in names:
+        path = Path(name)
+        if (any(part in policy["excludedPathParts"] for part in path.parts)
+                or any(path.name.startswith(prefix) for prefix in policy["excludedNamePrefixes"])):
+            continue
+        if name not in policy["readerFiles"] and not name.startswith(tuple(policy["readerTrees"])):
+            continue
+        # Strip Markdown emphasis/code delimiters and join wrapped prose so routes
+        # cannot escape the invariant by formatting or wrapping a retired label.
+        text = re.sub(r"[*_`]+", "", (root / name).read_text())
+        text = re.sub(r"\s+", " ", text)
+        for label, pattern in rules:
+            if pattern.search(text):
+                errors.append(f"{name}: retired UI label: {label}; use the current Setup, Unresolved actions or General surface")
+    return errors
+
+
 def check(root):
     root = root.resolve()
     files = selected_files(root)
     names = inventory(root)
     exceptions = json.loads((root / "docs/tools/placement-exceptions.json").read_text())
     errors = placement_errors(root, names, exceptions)
+    errors.extend(user_guide_ui_errors(root, names))
     totals = {"pages": len(files), "documents": len(names), "links": 0, "commands": 0, "inbound": 0}
     package = json.loads((root / "package.json").read_text())
     tasks = set(re.findall(r"^  ([\w:-]+):\s*$", (root / "Taskfile.yml").read_text(), re.M))
@@ -207,9 +243,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2],
                         help="Repository root; checks placement/all non-frozen links and declared reader commands")
+    parser.add_argument("--ui-only", action="store_true",
+                        help="Check only current user guides for retired renderer UI labels")
     args = parser.parse_args()
     try:
-        errors, totals = check(args.root)
+        if args.ui_only:
+            root = args.root.resolve()
+            errors = user_guide_ui_errors(root, inventory(root))
+            totals = None
+        else:
+            errors, totals = check(args.root)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         print(f"Documentation check refused: {error}", file=sys.stderr)
         return 1
@@ -217,6 +260,9 @@ def main():
         print("\n".join(errors), file=sys.stderr)
         print(f"FAIL: {len(errors)} documentation issue(s)", file=sys.stderr)
         return 1
+    if totals is None:
+        print("PASS: current user guides contain no retired UI labels")
+        return 0
     print(f"PASS: {totals['documents']} Markdown documents, {totals['pages']} reader pages, {totals['links']} local links/anchors, "
           f"{totals['commands']} command references, {totals['inbound']} inbound README links")
     return 0

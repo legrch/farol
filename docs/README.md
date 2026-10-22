@@ -11,7 +11,7 @@ Farol gives a connected ChatGPT app access to selected folders on a Mac. Start w
 ## Use Farol
 
 - [ChatGPT app connection](guides/chatgpt-connection.md)
-- [Folder access](guides/folder-access.md)
+- [Workspace access](guides/folder-access.md)
 - [File and Shell operations](guides/file-and-shell.md)
 - [Updating Farol](guides/updates.md)
 - [Connection troubleshooting](guides/troubleshooting.md)

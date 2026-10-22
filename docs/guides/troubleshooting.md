@@ -8,7 +8,7 @@ Begin with the visible state in Farol. Record the version/build and exact error 
 | **Connection helper needed**                | [Helper discovery](#connection-helper-needed)                |
 | Tunnel or key is refused                    | [Tunnel and credentials](#tunnel-or-credentials-are-refused) |
 | Local connection works but ChatGPT does not | [Attachment](#chatgpt-cannot-reach-this-mac)                 |
-| Workspace access is refused                 | [Folder access](#workspace-access-is-refused)                |
+| Workspace access is refused                 | [Workspace access](#workspace-access-is-refused)             |
 | A check stays pending or unknown            | [Observe the original check](#a-check-is-pending-or-unknown) |
 | Updates have no accepted baseline           | [Update availability](#updates-are-unavailable)              |
 
@@ -22,15 +22,15 @@ Closing a window leaves Farol running. If changing between already accepted buil
 
 ## Connection helper needed
 
-Use **Find connection helper** when offered. Farol must discover and validate a compatible helper before it is usable. A candidate path or saved setting alone is insufficient. Review **Connection help → Connection diagnostics** for the classified result.
+In **Setup → Connect this Mac**, **Connect** discovers and validates the helper before using it. Review the displayed cause and recovery action if it fails. A candidate path or saved setting alone is insufficient. If the result is pending or unknown, observe it through [Recovery](recovery.md) before another connection attempt.
 
-A clean-machine helper installation/distribution path is still an open readiness gate. If discovery cannot find a supported helper, retain the diagnostic and ask the maintainer for the accepted prerequisite. This guide does not invent a download or executable-selection workaround.
+A clean-machine helper installation/distribution path is still an open readiness gate. If the displayed cause says the helper is unavailable, use **Open OpenAI Tunnels** for OpenAI's supported `tunnel-client` installation instructions for the same macOS account. Return to **Connect** only after the earlier attempt has a known result. If no supported helper can be found, retain the diagnostic and ask the maintainer for the accepted prerequisite. This guide does not invent a download or executable-selection workaround.
 
 ## Tunnel or credentials are refused
 
-Confirm the intended ChatGPT workspace and the tunnel shown by **Open Tunnels**. The tunnel must be associated with that ChatGPT workspace; an organization-only tunnel may not be selectable there. Use only the restricted runtime key described in [First connection](../start/first-connection.md).
+Confirm the intended ChatGPT workspace and the tunnel shown by **Open OpenAI Tunnels** in **Setup → Connect this Mac**. The tunnel must be associated with that ChatGPT workspace; an organization-only tunnel may not be selectable there. Use only the restricted runtime key described in [First connection](../start/first-connection.md).
 
-If **Tunnel credentials saved** is shown, the blank key field is intentional. Keep the saved key. If saving or starting was unconfirmed, inspect the original result before replacing a key or choosing **Save & connect** again. If Developer mode or Tunnel is absent in ChatGPT, check account/workspace availability instead of changing Farol's local permissions.
+If **Key saved** is shown, the blank key field is intentional. Keep the saved key. If saving or starting was unconfirmed, inspect the original result before replacing a key or choosing **Connect** again. If Developer mode or Tunnel is absent in ChatGPT, check account/workspace availability instead of changing Farol's local permissions.
 
 ## ChatGPT cannot reach this Mac
 
@@ -40,15 +40,15 @@ Follow [ChatGPT app connection](chatgpt-connection.md) for the current verificat
 
 ## Workspace access is refused
 
-Review the physical path, **Saved access**, exclusions and current **Access checked** state. Use **Verify workspace** when offered for a changed or stale scope. Check that the intended workspace is prepared for Connection. A connection with no workspace grants no file access.
+In **Setup → Workspaces**, review the physical path, the row's **Access** choice, exclusions and current **✓ Works** state. Use **Check access** when offered for a changed or stale scope. Every listed workspace needs a current check before continuing. A connection with no workspace grants no file access.
 
-For `WORKSPACE_ROOT_CHANGED`, such as after reconnecting a volume, preserve any pending operation first. The documented owner path is to remove and re-add the folder deliberately; verification alone does not renew its changed physical identity. Review saved access again after adding it. See [Folder access](folder-access.md).
+For `WORKSPACE_ROOT_CHANGED`, such as after reconnecting a volume, preserve any pending operation first. The documented owner path is to remove and re-add the folder deliberately; verification alone does not renew its changed physical identity. Review saved access again after adding it. See [Workspace access](folder-access.md).
 
 Shell/Git or Tasks being unavailable is not a reason to approve broader file access. Check [capability status](../reference/status.md).
 
 ## A check is pending or unknown
 
-Open **Connection help → Connection diagnostics** or **Workspace diagnostics**. Review **Actions needing observation** and **Action details**, then use **Refresh status** to inspect current state. Refresh does not replay an action or establish that it succeeded.
+If Setup is open, use **Find a page → Home** to reach the sidebar. Choose **Review unresolved actions** in the sidebar to open **Unresolved actions**. The control appears only while something is unresolved. Inspect the listed original operation, then use **Refresh status** to inspect available evidence. Refresh does not replay an action or establish that it succeeded. See [Recovery](recovery.md#observe-an-uncertain-action) for workspace-edit observation and result delivery.
 
 An unknown result may already have taken effect. Keep the same operation and do not send a second challenge, retarget the check, replace credentials or delete the journal. Follow [Recovery](recovery.md).
 
@@ -58,6 +58,6 @@ A missing or mismatched accepted baseline blocks update preparation. Manual app 
 
 ## Share useful diagnostics
 
-Use the content-free Activity/support export when available and inspect what you share. Include version/build, the visible symptom, classified code and whether the original action is pending, refused, confirmed or unknown. Keep runtime keys, credentials, browser state, prompts, answers, file contents and personal paths out of public reports. [Technical references](../reference/README.md) are for the maintainer's deeper investigation.
+Open **Settings → General** to read **Version** and choose **Save support file…** when available. **Setup status** and **Open Setup** lead back to the setup checks. Review **Activity** for available diagnostic events and inspect what you share. Include version/build, the visible symptom, classified code and whether the original action is pending, refused, confirmed or unknown. Keep runtime keys, credentials, browser state, prompts, answers, file contents and personal paths out of public reports. [Technical references](../reference/README.md) are for the maintainer's deeper investigation.
 
 [User guides](README.md) · [Documentation](../README.md)

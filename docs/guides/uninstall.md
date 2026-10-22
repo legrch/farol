@@ -4,8 +4,8 @@ Removing the app, revoking ChatGPT access and deleting local state are separate 
 
 ## Disconnect and remove the app
 
-1. Review Diagnostics and settle active or unknown setup, edit, command and update operations. If an operation cannot be reconciled, preserve the app and its state for maintenance before removal.
-2. If you want to revoke folder grants before quitting, use **Setup → Workspaces → Remove → Confirm removal** for each folder and wait for confirmed results. This keeps your files on disk.
+1. If Setup is open, use **Find a page → Home** to reach the sidebar. Choose **Review unresolved actions** in the sidebar to open **Unresolved actions**, shown only while something is unresolved. Inspect and settle active or unknown setup, edit, command and update operations before another change; see [Recovery](recovery.md). If an operation cannot be reconciled, preserve the app and its state for maintenance before removal.
+2. If you want to revoke folder grants before quitting, use **Setup → Workspaces → Remove [workspace name]** for each workspace and wait for confirmed results. This keeps your files on disk.
 3. In your ChatGPT workspace, remove or disable the matching Farol app connection. In the organization that owns the tunnel/key, revoke the dedicated runtime key and retire the tunnel if nothing else uses it. Confirm the matching connection before revocation; do not remove shared or Farol Dev resources by name alone.
 4. Quit Farol normally with **Command+Q**. Confirm that work and any helper-driven recovery are settled.
 5. In Finder, identify the exact Farol app you used and move only that app to the Trash. Keep the Trash recoverable until you have confirmed the correct app was removed.

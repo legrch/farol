@@ -54,7 +54,7 @@ Watch the second illustrated walkthrough. Choose **Open ChatGPT Apps**, then ope
 
 Use the app attached to this exact tunnel. Keep development and production profiles and tunnels separate; the app's display name does not select the Farol environment. ChatGPT may require an eligible account, workspace permission or developer mode before it offers Create; see [OpenAI's custom-app setup guidance](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt).
 
-Return to Farol and choose **Test in ChatGPT** once. This uses the existing **Check in ChatGPT once** capability: Farol selects the app named **Farol** for this tunnel, sends one short request in a Temporary Chat using Instant, and checks the matching receipt from this Mac. **Back to setup** returns from the embedded check without sending it again.
+Return to Farol and choose **Test in ChatGPT** once. Farol selects the app named **Farol** for this tunnel, sends one short request in a Temporary Chat using Instant, and checks the matching receipt from this Mac. **Back to setup** returns from the embedded check without sending it again.
 
 **✓ Everything works** means ChatGPT used Farol, reached this Mac and verified access to the approved workspace. The existing bounded check lists the approved root and verifies a receipt; it does **not** read a file's contents or prove that a README was read. A model's reply alone, a saved app name or a local connection is insufficient.
 
@@ -62,8 +62,8 @@ Choose **Start using Farol** when all four steps have current checks. This opens
 
 ## Settings and support
 
-**Settings → General** has the Setup status card and **Open Setup**, **Install updates automatically**, the installed version and **Check for updates**, and **Save support file…**. Appearance and Keyboard shortcuts remain separate pages. Workspace access, commands and connection setup belong in Setup.
+**Settings → General** has the Setup status card and **Open Setup**, **Install updates automatically**, **Version**, **Check for updates**, **Update recovery…** for a recorded update, and **Save support file…**. Appearance and Keyboard shortcuts remain separate pages. Workspace access, commands and connection setup belong in Setup.
 
-If an action's result is unconfirmed, use **Refresh status** to observe the original result. Refresh, navigation and reopening a page do not repeat it or turn uncertainty into success. Do not re-enter the key, rerun the ChatGPT test or change the connection to obtain a green status while an earlier action remains unconfirmed.
+If an action's result is unconfirmed, use **Find a page → Home** if Setup is open, then choose **Review unresolved actions** in the sidebar to open **Unresolved actions**. This control appears only while something is unresolved. Inspect the original action and use **Refresh status** to observe available evidence. Existing workspace edits also offer **Observe existing edit** and, after review, **Record result delivery**; other actions do not gain operation readback from refreshing. Refresh, navigation and reopening a page do not repeat it or turn uncertainty into success. Do not re-enter the key, rerun the ChatGPT test or change the connection to obtain a green status while an earlier action remains unconfirmed.
 
 For support, save a support file from General and attach it to a GitHub issue. The export excludes messages, keys and file contents.

@@ -1,0 +1,91 @@
+{
+  "readerFiles": ["README.md", "docs/README.md", "docs/setup-connection.md"],
+  "readerTrees": ["docs/guides/", "docs/start/"],
+  "excludedPathParts": [
+    "history",
+    "archive",
+    "adr",
+    "adrs",
+    "release-notes",
+    "releases"
+  ],
+  "excludedNamePrefixes": ["ADR-", "adr-", "release-notes-"],
+  "retiredLabels": [
+    {
+      "label": "Connection help"
+    },
+    {
+      "label": "Connection diagnostics"
+    },
+    {
+      "label": "Workspace diagnostics"
+    },
+    {
+      "label": "Find connection helper"
+    },
+    {
+      "label": "Settings → Diagnostics",
+      "pattern": "\\bSettings\\s*(?:→|>|›|/)\\s*Diagnostics\\b"
+    },
+    {
+      "label": "Diagnostics page"
+    },
+    {
+      "label": "Diagnostics as a destination",
+      "pattern": "\\b(?:Open|Review|in|under)\\s+(?:the\\s+)?Diagnostics\\b"
+    },
+    {
+      "label": "This Mac as a Settings page",
+      "pattern": "\\b(?:Settings\\s*(?:→|>|›|/)\\s*This Mac|(?:Open|under|choose|select)\\s+(?:the\\s+)?This Mac|This Mac\\s+(?:settings\\s+)?page|(?:page|settings)\\s+(?:named|called)\\s+This Mac)\\b"
+    },
+    {
+      "label": "Start page"
+    },
+    {
+      "label": "Folders",
+      "caseSensitive": true
+    },
+    {
+      "label": "Skip for now"
+    },
+    {
+      "label": "Save & connect"
+    },
+    {
+      "label": "Verify workspace"
+    },
+    {
+      "label": "Copy verification request"
+    },
+    {
+      "label": "Check attachment"
+    },
+    {
+      "label": "Select ChatGPT app"
+    },
+    {
+      "label": "ChatGPT app and technical options"
+    },
+    {
+      "label": "Back to overview"
+    },
+    {
+      "label": "Actions needing observation"
+    },
+    {
+      "label": "Open Tunnels"
+    },
+    {
+      "label": "Add workspace…"
+    },
+    {
+      "label": "Confirm removal"
+    },
+    {
+      "label": "Keep workspace"
+    },
+    {
+      "label": "Check in ChatGPT once"
+    }
+  ]
+}

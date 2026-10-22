@@ -10,7 +10,7 @@ File contents returned through Farol go to ChatGPT. Do not request secrets or ap
 
 ## Make guarded file changes
 
-Choose **Read & write** for the intended workspace only when you want changes. File changes still require approval. Farol's guarded write/edit path binds the request to an operation identity and, where required, the exact source digest. Review the target and requested change before approval, then inspect the returned result and file.
+In **Setup → Workspaces**, choose **Read & write** in the intended row's **Access** control only when you want changes. File changes still require approval. Farol's guarded write/edit path binds the request to an operation identity and, where required, the exact source digest. Review the target and requested change before approval, then inspect the returned result and file.
 
 A refused change, a conflict and an unknown outcome are different results. If Farol cannot confirm whether a change happened, inspect that original operation and the file before any further action. Do not repeat the same change under another operation ID. Recovery may need a retained `.farol-stage-*` directory; do not delete it simply to clear an error.
 

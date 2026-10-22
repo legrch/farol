@@ -1,8 +1,8 @@
 # Setup links
 
 Follow the [Farol connection guide](setup-connection.md) for the current
-Overview / Sign in / Workspaces / Connection / Add to ChatGPT flow. Embedded
-sign-in is optional for external Computer. Navigation alone does not change
+Sign in / Workspaces / Connect this Mac / Add to ChatGPT flow. The guided
+flow requires its sign-in check; external Computer verification is independent. Navigation alone does not change
 access or repeat an operation.
 
 The setup instructions retain these owner-facing external links. A source split
@@ -31,7 +31,7 @@ uses `setupStep`, independently of the Settings `page` field.
 | Home views | `overview`, `work`, `attention`, `activity`, `access`                                             | Unchanged                                                   |
 | Sheets     | `search`, `task`, `update`, `update-recovery`, `activity`                                         | Same set plus `unresolved-actions`                          |
 
-This Mac and Workspaces are Setup labels, not Settings destinations. Start page
+Connect this Mac and Workspaces are Setup step labels, not Settings destinations. Start page
 was already absent from the Settings navigation and destination type at this
 fix's baseline. The removed Model page has no remaining navigation caller.
 
