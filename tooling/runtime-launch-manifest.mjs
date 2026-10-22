@@ -59,14 +59,6 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
   roots: ["src", "apps/desktop", "modules", "boot", "cmd"],
   launches: [
     launch(
-      "desktop.tunnel-adoption-acl",
-      desktop + "tunnel-client-adoption.ts",
-      "aclOutcome",
-      "execFile",
-      '"/bin/ls"',
-      "legacy-system-tool",
-    ),
-    launch(
       "release.update-go",
       release + "installed-update-helper.ts",
       "startInstalledUpdateHelper",

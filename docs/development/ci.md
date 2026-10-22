@@ -49,6 +49,26 @@ prerelease. It does not update a `latest` pointer or overwrite an existing
 release. Private evidence under `private/` is never uploaded. The release
 remains unsigned and not notarized (D16).
 
+### Trust model
+
+GitHub runs the release workflow as defined at the tagged commit. Its checks can
+therefore catch a mistaken tag, but they cannot authenticate the workflow that
+runs them: a tag on an unmerged commit could change those checks. A tag event
+also exists only after someone with repository write access pushes the tag.
+Forks and pull requests cannot create tags here, and pull request workflows get
+no write permission or secrets.
+
+The trust root for a release is therefore repository write access. Today only
+the owner has it. The `main` ruleset blocks deletion and force-push but not
+direct pushes, so write access already allows changing `main` and its
+workflows; a tag adds no access beyond that. The ancestry, annotated-tag and
+remote-identity checks keep an honest release consistent with reviewed `main`.
+
+Granting write access to anyone else changes this boundary. Before that, add a
+tag ruleset that restricts creating, updating and deleting `v*` tags to the
+owner, or move publication behind a protected environment that requires
+approval.
+
 The existing producer requires a separately approved Go SDK declaration. The
 release preflight refuses with `CI_GO_SDK_APPROVAL_REQUIRED` when
 `config/ci-go-sdk.json` is missing and with `CI_GO_SDK_APPROVAL_INVALID` when it
