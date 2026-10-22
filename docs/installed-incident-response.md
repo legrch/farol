@@ -250,3 +250,21 @@ Metrics HTTP 503/504 or stale polling do not enter the local health watcher's re
 The following paragraph preserves the historical witness design; it does not describe runnable current coverage.
 
 The retained historical Dev witness `node tests/e2e/connector-polling.e2e.mjs --run-native` required clean current Go-selected bytes produced by `task package` and verifies the attested development entry, isolated HOME/AppData proof, original hidden Electron/Go child and synthetic helper. It drives normal configuration and actual React Check local connection, stale/no-success/missing/503/504 metrics, a 16-second main-loop stall during held HTTP, ordinary clean Quit and one same-profile successor. A separate fresh invocation with `--go-callback-delay` pauses only the exact original Go PID, starts the explicit check, blocks the main loop and resumes that same Go child to expose queued-RPC deadline behavior. A third fresh invocation with `--network-loss` makes the synthetic helper close its loopback connections (no HTTP status) for a bounded window, then restores them: it asserts the live Connection status leaves the recent state, the product's `/readyz` observation ladder (delays 0, 1, 5, 15 s in `connector-transport-watch.ts`) stays within its length and spacing, the status returns to recent without any click, and the same helper, Go backend and runtime remain. A sustained outage that exhausts the ladder triggers the product's one-shot transport recovery and is not covered. None of these cases exercises a live control plane or actual OS sleep; failed/unknown profiles and original reports are retained without replay, a second Quit or an owner-beta acceptance claim. The existing owner-beta lifecycle gate remains unchanged.
+
+## Unsigned beta updater diagnostics
+
+For an interrupted update, preserve `<operationId>/journal.json` and
+`helper.log.jsonl` under the approved profile's `installed-updates` directory.
+The helper log records phase, classified code, UTC timestamp and PID, without
+paths or profile data. A non-clean app drain is only a journal note once the
+original PID has exited; a still-running or unconfirmed process blocks mutation.
+
+The helper verifies bundle content and identity, ignoring timestamp-only changes.
+Controlled errors after a confirmed swap restore the source, journal rollback,
+and relaunch it when requested. Startup settles an interrupted journal from the
+actual installed content: target means completed, source means rolled back,
+neither means refusal. A confirmed pre-mutation helper exit allows another
+attempt. These known outcomes do not need a manual recovery action. Preserve
+unknown native effects and lost-custody evidence; never replay an uncertain swap
+or claim that a relaunch request proves a working GUI. Source tests are separate
+from packaged and installed acceptance, which the integration Lead owns.

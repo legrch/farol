@@ -47,9 +47,9 @@ type entryState struct {
 }
 
 func sameMetadata(a, b unix.Stat_t) bool {
-	// Observing a tree may update atime. Mutation-sensitive fields still cover
-	// identity, type, ownership, links, size and change/modify timestamps.
-	return a.Dev == b.Dev && a.Ino == b.Ino && a.Mode == b.Mode && a.Uid == b.Uid && a.Gid == b.Gid && a.Nlink == b.Nlink && a.Size == b.Size && a.Mtim == b.Mtim && a.Ctim == b.Ctim
+	// Bundle timestamps can change independently of content on a live Mac.
+	// Retain physical custody checks; the tree digest verifies content.
+	return a.Dev == b.Dev && a.Ino == b.Ino && a.Mode == b.Mode && a.Uid == b.Uid && a.Gid == b.Gid && a.Nlink == b.Nlink && a.Size == b.Size
 }
 
 // No numeric borrowed descriptor escapes Control. Only ENOENT proves absence;
