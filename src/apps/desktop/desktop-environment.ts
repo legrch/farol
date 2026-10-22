@@ -426,10 +426,25 @@ export function desktopAppDataPath(
 /** The app-data root has already passed desktopAppDataPath's E2E proof. */
 export function desktopUserDataPath(
   identity: DesktopIdentity,
-  options: Readonly<{ enabled: boolean; override: string | undefined }>,
+  options: Readonly<{
+    enabled: boolean;
+    override: string | undefined;
+    devProfileArguments?: readonly string[];
+  }>,
 ): string {
-  if (identity.environment === "dev" && options.override) {
-    if (options.override !== identity.userData)
+  if (identity.environment === "dev") {
+    // This is a profile assertion, not Chromium's storage-selection switch.
+    // Chromium creates --user-data-dir before our fresh-review admission runs.
+    const assertions =
+      options.devProfileArguments?.filter((argument) =>
+        argument.startsWith("--farol-dev-user-data-dir"),
+      ) ?? [];
+    if (
+      (options.override && options.override !== identity.userData) ||
+      assertions.length > 1 ||
+      (assertions.length === 1 &&
+        assertions[0] !== `--farol-dev-user-data-dir=${identity.userData}`)
+    )
       throw new Error("DESKTOP_DEV_USER_DATA_MISMATCH");
     return identity.userData;
   }

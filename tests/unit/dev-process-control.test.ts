@@ -34,14 +34,14 @@ const native = {
   profilePath: scope.profilePath,
   commandVerified: true,
 };
-const command = `501 ${marker.processStart} ${executable} ${scope.appPath} --user-data-dir=${scope.profilePath}`;
+const command = `501 ${marker.processStart} ${executable} ${scope.appPath} --farol-dev-user-data-dir=${scope.profilePath}`;
 
 describe("exact Dev command correlation", () => {
   it("correlates the isolated Dev executable with its native lifetime", () => {
     const executable = `${root}/_output/dev-runtime/Farol Dev.app/Contents/MacOS/Electron`;
     expect(
       correlateDevCommand(
-        `501 ${marker.processStart} ${executable} ${scope.appPath} --user-data-dir=${scope.profilePath}`,
+        `501 ${marker.processStart} ${executable} ${scope.appPath} --farol-dev-user-data-dir=${scope.profilePath}`,
         marker,
         scope,
         { ...native, executable },

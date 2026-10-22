@@ -699,6 +699,7 @@ export function devLaunchEnvironment(
 
 // Keep the selected profile in the kernel-visible argv. The desktop validates
 // this assertion against its independently selected userData before using it.
+// A Farol-only flag avoids Chromium creating state before fresh-review admission.
 export function devLaunchProfile(
   acceptanceProfile = false,
   reviewMarker,
@@ -738,7 +739,7 @@ export async function launchPreview(
           electronBin,
           [
             path.join(root, "_output/build/app/main.cjs"),
-            `--user-data-dir=${devLaunchProfile(acceptanceProfile, reviewMarker)}`,
+            `--farol-dev-user-data-dir=${devLaunchProfile(acceptanceProfile, reviewMarker)}`,
             ...(displayOptions.devSecondaryDisplay === true
               ? ["--display=secondary"]
               : []),

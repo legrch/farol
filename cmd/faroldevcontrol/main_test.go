@@ -121,11 +121,11 @@ func TestLifetimeToken(t *testing.T) {
 
 func TestOrdinarySecondaryDisplayCommand(t *testing.T) {
 	q := fixtureRequest()
-	if !matchesProcArgs(procArgs(q.Executable, q.Executable, q.AppPath, "--user-data-dir="+q.ProfilePath, "--display=secondary"), q) {
+	if !matchesProcArgs(procArgs(q.Executable, q.Executable, q.AppPath, "--farol-dev-user-data-dir="+q.ProfilePath, "--display=secondary"), q) {
 		t.Fatal("ordinary secondary Dev command refused")
 	}
-	for _, flag := range []string{"--display=primary", "--display", "--display=secondary --user-data-dir=/other"} {
-		if matchesProcArgs(procArgs(q.Executable, q.Executable, q.AppPath, "--user-data-dir="+q.ProfilePath, flag), q) {
+	for _, flag := range []string{"--display=primary", "--display", "--display=secondary --farol-dev-user-data-dir=/other"} {
+		if matchesProcArgs(procArgs(q.Executable, q.Executable, q.AppPath, "--farol-dev-user-data-dir="+q.ProfilePath, flag), q) {
 			t.Fatalf("accepted unexpected display command %q", flag)
 		}
 	}
@@ -205,7 +205,7 @@ func procArgs(executable string, argv ...string) []byte {
 func TestProcArgs(t *testing.T) {
 	q := fixtureRequest()
 	for _, flags := range [][]string{nil, {"--preview-window-mode=secondary-visible"}, {"--preview-window-mode=secondary-visible", "--built-in-display-only", "--allow-primary-display"}} {
-		argv := append([]string{q.Executable, q.AppPath, "--user-data-dir=" + q.ProfilePath}, flags...)
+		argv := append([]string{q.Executable, q.AppPath, "--farol-dev-user-data-dir=" + q.ProfilePath}, flags...)
 		if !matchesProcArgs(procArgs(q.Executable, argv...), q) {
 			t.Fatalf("rejected valid argv: %v", argv)
 		}
@@ -222,13 +222,13 @@ func TestProcArgs(t *testing.T) {
 		procArgs(q.Executable, "/bin/sleep", q.AppPath), procArgs(q.Executable, q.Executable),
 		procArgs(q.Executable, q.Executable, "/foreign/main.cjs"),
 		procArgs(q.Executable, q.Executable, "./"+relativeAppPath),
-		procArgs(q.Executable, q.Executable, q.AppPath, "--user-data-dir=/other"),
+		procArgs(q.Executable, q.Executable, q.AppPath, "--farol-dev-user-data-dir=/other"),
 		procArgs(q.Executable, q.Executable, q.AppPath, "--type=renderer"),
 		procArgs(q.Executable, q.Executable, q.AppPath, "--built-in-display-only", "--built-in-display-only"),
 		procArgs(q.Executable, q.Executable, q.AppPath, ""),
 		procArgs("/Applications/Farol.app/Contents/MacOS/Farol", "Farol Dev", ""),
 		procArgs(q.Executable, "Farol", ""),
-		procArgs(q.Executable, "Farol Dev --user-data-dir=/foreign", ""),
+		procArgs(q.Executable, "Farol Dev --farol-dev-user-data-dir=/foreign", ""),
 		procArgs(q.Executable, "Farol Dev", "--type=renderer"),
 		procArgs(q.Executable, "Farol Dev", "--acceptance-profile"),
 		procArgs(q.Executable, "Farol Dev", "unexpected"),
@@ -430,7 +430,7 @@ func TestDevBundlePaths(t *testing.T) {
 		q := fixtureRequest()
 		q.Executable = root + suffix
 		q.AppPath = root + "/" + relativeAppPath
-		if r := inspectProcCommand(procArgs(q.Executable, q.Executable, q.AppPath, "--user-data-dir="+q.ProfilePath), q); r.Status != "present" {
+		if r := inspectProcCommand(procArgs(q.Executable, q.Executable, q.AppPath, "--farol-dev-user-data-dir="+q.ProfilePath), q); r.Status != "present" {
 			t.Fatalf("bundle command: %+v", r)
 		}
 	}
@@ -441,7 +441,7 @@ func TestDevBundlePaths(t *testing.T) {
 func TestStopProofTable(t *testing.T) {
 	q := fixtureRequest()
 	argv := func(app, profile string) []byte {
-		return procArgs(q.Executable, q.Executable, app, "--user-data-dir="+profile)
+		return procArgs(q.Executable, q.Executable, app, "--farol-dev-user-data-dir="+profile)
 	}
 	review := "/fixture/Library/Application Support/Farol Dev Review/disposable/Farol Dev"
 	type proof struct {
@@ -462,7 +462,7 @@ func TestStopProofTable(t *testing.T) {
 		{"argv unreadable", func(p *proof) { p.raw = nil }, "refused", 0},
 		{"argv permission denied", func(p *proof) { p.unreadable = true }, "refused", 0},
 		{"argv executable mismatch", func(p *proof) {
-			p.raw = procArgs("/other"+electronSuffix, q.Executable, q.AppPath, "--user-data-dir="+q.ProfilePath)
+			p.raw = procArgs("/other"+electronSuffix, q.Executable, q.AppPath, "--farol-dev-user-data-dir="+q.ProfilePath)
 		}, "refused", 0},
 		{"entrypoint mismatch", func(p *proof) { p.raw = argv("/other/"+relativeAppPath, q.ProfilePath) }, "refused", 0},
 		{"entrypoint unreadable", func(p *proof) { p.raw = argv("", q.ProfilePath) }, "refused", 0},
@@ -471,7 +471,7 @@ func TestStopProofTable(t *testing.T) {
 		{"profile unreadable", func(p *proof) { p.raw = argv(q.AppPath, "") }, "refused", 0},
 		{"profile missing", func(p *proof) { p.raw = procArgs(q.Executable, q.Executable, q.AppPath) }, "refused", 0},
 		{"duplicate profile", func(p *proof) {
-			p.raw = procArgs(q.Executable, q.Executable, q.AppPath, "--user-data-dir="+q.ProfilePath, "--user-data-dir="+review)
+			p.raw = procArgs(q.Executable, q.Executable, q.AppPath, "--farol-dev-user-data-dir="+q.ProfilePath, "--farol-dev-user-data-dir="+review)
 		}, "refused", 0},
 		{"renamed title erased argv", func(p *proof) { p.raw = procArgs(q.Executable, "Farol Dev", "", "") }, "refused", 0},
 		{"pid mismatch", func(p *proof) { p.observed.PID++ }, "refused", 0},

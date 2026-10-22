@@ -48,11 +48,13 @@ before replacing dependencies or rebuilding shared outputs. It checks the privat
 run marker, account, boot and precise native lifetime. The native helper reads the
 exact executable through the kernel operation behind `proc_pidpath` and parses
 `KERN_PROCARGS2` for this checkout's absolute entrypoint and an explicit
-`--user-data-dir` equal to the selected marker directory's profile. These checks
+`--farol-dev-user-data-dir` equal to the selected marker directory's profile. These checks
 run again at each signal boundary. Dev preserves its original argv; its bundle
 and `app.setName` supply display naming. A renamed title, missing argv, another
 checkout or another profile (including ordinary versus fresh review) cannot
-supply stop authority. Older Dev processes with erased argv require their own
+supply stop authority. The Farol profile argument asserts the desktop's independently
+selected `userData`; it does not let Chromium create a fresh-review directory
+before admission. Older Dev processes with erased argv require their own
 Quit command. After proof, the launcher allows 30 seconds
 to stop, then forces that process once if necessary. Other profiles and installed
 Farol are not stopped. A refused or uncertain lookup/signal blocks the build and reports the failed identity read. Quit the previous Dev from that checkout/profile using its own Quit command, then run `task dev` again; the launcher never signals an unproven process.

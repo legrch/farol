@@ -590,6 +590,30 @@ describe("desktop environment identity", () => {
             override: other.userData,
           }),
         ).toThrow("DESKTOP_DEV_USER_DATA_MISMATCH");
+        expect(
+          desktopUserDataPath(selected, {
+            enabled,
+            override: undefined,
+            devProfileArguments: [
+              `--farol-dev-user-data-dir=${selected.userData}`,
+            ],
+          }),
+        ).toBe(selected.userData);
+        for (const args of [
+          [`--farol-dev-user-data-dir=${other.userData}`],
+          ["--farol-dev-user-data-dir"],
+          [
+            `--farol-dev-user-data-dir=${selected.userData}`,
+            `--farol-dev-user-data-dir=${selected.userData}`,
+          ],
+        ])
+          expect(() =>
+            desktopUserDataPath(selected, {
+              enabled,
+              override: undefined,
+              devProfileArguments: args,
+            }),
+          ).toThrow("DESKTOP_DEV_USER_DATA_MISMATCH");
       }
     },
   );

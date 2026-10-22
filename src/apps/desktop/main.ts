@@ -609,6 +609,7 @@ const selectedDesktopUserData = (() => {
     return desktopUserDataPath(declaredDesktopIdentity, {
       enabled: process.env.FAROL_E2E === "1",
       override: app.commandLine.getSwitchValue("user-data-dir"),
+      devProfileArguments: process.argv,
     });
   } catch (error) {
     terminateDesktopStartup(error, runtimeEnvironment, {
@@ -815,7 +816,7 @@ const controlSchema = z.strictObject({
 type RuntimeReady = z.infer<typeof readySchema>;
 app.setName(activeDesktopIdentity.applicationName);
 // Darwin process.title erases argv. Dev stop authorization needs its original
-// entrypoint and user-data-dir; the Dev-only bundle owns display naming.
+// entrypoint and explicit profile assertion; the Dev-only bundle owns display naming.
 if (buildEnvironment !== "dev")
   process.title = activeDesktopIdentity.applicationName;
 if (process.platform === "win32")

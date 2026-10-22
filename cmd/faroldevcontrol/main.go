@@ -281,7 +281,7 @@ func parseProcCommand(raw []byte, q request) (response, bool) {
 		return response{}, false
 	}
 	profile, ok := readString()
-	if !ok || profile != "--user-data-dir="+q.ProfilePath {
+	if !ok || profile != "--farol-dev-user-data-dir="+q.ProfilePath {
 		return response{}, false
 	}
 	seen := make(map[string]bool)
@@ -294,7 +294,7 @@ func parseProcCommand(raw []byte, q request) (response, bool) {
 		}
 		seen[flag] = true
 	}
-	return response{Status: "present", Executable: executable, AppPath: app, ProfilePath: strings.TrimPrefix(profile, "--user-data-dir=")}, true
+	return response{Status: "present", Executable: executable, AppPath: app, ProfilePath: strings.TrimPrefix(profile, "--farol-dev-user-data-dir=")}, true
 }
 
 func validPID(pid int) bool { return pid > 0 && pid <= maxPID }
