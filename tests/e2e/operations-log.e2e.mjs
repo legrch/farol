@@ -153,6 +153,12 @@ try {
   assert.ok(
     log.entries.some(
       (e) =>
+        e.kind === "hub.start" && e.source === "Setup" && e.outcome === "done",
+    ),
+  );
+  assert.ok(
+    log.entries.some(
+      (e) =>
         e.kind === "computer.add-workspace" &&
         e.target.workspace === "B2 documents" &&
         e.outcome === "done",
@@ -193,6 +199,9 @@ try {
     "rail",
   );
   const reopened = await page.evaluate(() => window.farol.operations());
+  assert.ok(
+    reopened.entries.some((e) => e.kind === "hub.stop" && e.outcome === "done"),
+  );
   for (const entry of log.entries)
     assert.ok(reopened.entries.some((e) => e.id === entry.id));
   report.checks.push("log and sidebar choice survive clean app restart");

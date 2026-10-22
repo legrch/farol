@@ -4954,10 +4954,39 @@ function startConnectorTransportWatch(): void {
   });
 }
 
+async function startObservedDesktopGoCore(
+  ...args: Parameters<typeof startDesktopGoCore>
+): ReturnType<typeof startDesktopGoCore> {
+  return observeOperation(
+    operationsStore(),
+    { source: "Setup", kind: "hub.start", target: {} },
+    () => startDesktopGoCore(...args),
+  );
+}
 function reportOwnedBackendLifecycle(
   observation:
     BackendLifecycleObservation | ConnectorRuntimeLifecycleObservation,
 ): void {
+  operationsStore().record(
+    {
+      source: "Setup",
+      kind:
+        observation.source === "go-backend"
+          ? "hub.lifecycle"
+          : "connection.lifecycle",
+      target: {},
+    },
+    observation.state === "outcome_unknown" ||
+      observation.event === "cleanup-unknown"
+      ? "unknown"
+      : observation.event === "failure"
+        ? "failed"
+        : observation.exitCode === 0
+          ? "done"
+          : "unknown",
+    observation.code,
+    0,
+  );
   // Project only the original producer's closed terminal facts. This sink never
   // looks up mutable host state or changes admission, recovery or drain results.
   try {
@@ -12062,7 +12091,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       return snapshot.settings;
     };
     desktopGoCore = await runDesktopStartupBoundary("go-core", () =>
-      startDesktopGoCore({
+      startObservedDesktopGoCore({
         compiledArtifact: compiledGoCore,
         compiledResources: compiledGoResources,
         compiledShell: desktopShellSelection(
@@ -12494,7 +12523,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       closers.push(
         ...goCoreQuitClosers(
           beforeCore,
-          core ? () => core.close() : null,
+          core
+            ? () =>
+                observeOperation(
+                  operationsStore(),
+                  { source: "You", kind: "hub.stop", target: {} },
+                  () => core.close(),
+                )
+            : null,
           () => Date.now() < context.deadlineAt,
         ),
       );
