@@ -254,6 +254,8 @@ import {
   writeInstanceAcknowledgement,
 } from "./single-instance";
 import {
+  parseDevDisplay,
+  selectDevWindowPlacement,
   parseAllowPrimaryDisplay,
   parseBuiltInDisplayOnly,
   parseSidecarDisplayOnly,
@@ -611,6 +613,7 @@ const selectedDesktopUserData = (() => {
     return desktopUserDataPath(declaredDesktopIdentity, {
       enabled: process.env.FAROL_E2E === "1",
       override: app.commandLine.getSwitchValue("user-data-dir"),
+      devProfileArguments: process.argv,
     });
   } catch (error) {
     terminateDesktopStartup(error, runtimeEnvironment, {
@@ -746,7 +749,12 @@ const legacySetupTestMode =
 const contextOwnerId = "owner-desktop";
 const contextProviderProfileId = "profile-isolated-farol";
 const contextModel = ROUTE_B_MODEL;
-const windowMode = parsePreviewWindowMode(process.argv);
+const devSecondaryDisplay = parseDevDisplay(process.argv);
+if (devSecondaryDisplay && buildEnvironment !== "dev")
+  throw new Error("DEV_DISPLAY_ARGUMENT_INVALID");
+const windowMode = devSecondaryDisplay
+  ? "secondary-visible"
+  : parsePreviewWindowMode(process.argv);
 // Explicit-only: the owner-handed overnight run passes this itself. Its
 // absence keeps every display-selection outcome exactly as before.
 const allowPrimaryDisplay = parseAllowPrimaryDisplay(process.argv);
@@ -811,15 +819,16 @@ const controlSchema = z.strictObject({
 
 type RuntimeReady = z.infer<typeof readySchema>;
 app.setName(activeDesktopIdentity.applicationName);
-// macOS also exposes the process title as the application name. Storage,
-// bundle, executable and receipt identities remain explicit compatibility values.
-process.title = activeDesktopIdentity.applicationName;
+// Darwin process.title erases argv. Dev stop authorization needs its original
+// entrypoint and explicit profile assertion; the Dev-only bundle owns display naming.
+if (buildEnvironment !== "dev")
+  process.title = activeDesktopIdentity.applicationName;
 if (process.platform === "win32")
   app.setAppUserModelId(activeDesktopIdentity.applicationId);
 if (process.platform === "darwin") {
   // macOS's default About panel otherwise reads the raw release identity
   // (app.getName()); this is display-only and does not touch that
-  // identity, the bundle ID, or app.setName's own OS-level registration.
+  // identity or the bundle ID.
   app.setAboutPanelOptions({
     applicationName: displayProductName,
     applicationVersion: displayEdition
@@ -11402,14 +11411,7 @@ async function createWindow(): Promise<void> {
   if (quitInProgress || installedUpdateAdmission) return;
   const testPlacement =
     windowMode === "secondary-visible"
-      ? selectPreviewWindowPlacement(
-          screen.getAllDisplays(),
-          screen.getPrimaryDisplay().id,
-          initialWindowSize,
-          allowPrimaryDisplay,
-          builtInDisplayOnly,
-          sidecarDisplayOnly,
-        )
+      ? selectedVisibleTestPlacement(initialWindowSize)
       : null;
   window = new BrowserWindow({
     title: displayWindowTitle,
@@ -11434,6 +11436,9 @@ async function createWindow(): Promise<void> {
   observeRendererLifecycle(window.webContents, buildIdentity.buildId, (line) =>
     process.stderr.write(line),
   );
+  // The renderer's neutral HTML title must not replace the Dev window identity.
+  if (buildEnvironment === "dev")
+    window.on("page-title-updated", (event) => event.preventDefault());
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   window.webContents.on("before-input-event", (event, input) => {
@@ -11524,6 +11529,12 @@ async function createWindow(): Promise<void> {
 function selectedVisibleTestPlacement(
   requested: Readonly<{ width: number; height: number }>,
 ) {
+  if (devSecondaryDisplay)
+    return selectDevWindowPlacement(
+      screen.getAllDisplays(),
+      screen.getPrimaryDisplay().id,
+      requested,
+    );
   return selectPreviewWindowPlacement(
     screen.getAllDisplays(),
     screen.getPrimaryDisplay().id,

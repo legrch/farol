@@ -566,6 +566,58 @@ describe("desktop environment identity", () => {
     ).toBe(isolated.appData);
   });
 
+  it.each([false, true])(
+    "checks a Dev argv profile against independently selected storage (E2E=%s)",
+    (enabled) => {
+      const ordinary = desktopIdentity("dev", "/fixture/app-data");
+      const review = desktopIdentity(
+        "dev",
+        "/fixture/app-data/Farol Dev Review/disposable",
+      );
+      for (const [selected, other] of [
+        [ordinary, review],
+        [review, ordinary],
+      ] as const) {
+        expect(
+          desktopUserDataPath(selected, {
+            enabled,
+            override: selected.userData,
+          }),
+        ).toBe(selected.userData);
+        expect(() =>
+          desktopUserDataPath(selected, {
+            enabled,
+            override: other.userData,
+          }),
+        ).toThrow("DESKTOP_DEV_USER_DATA_MISMATCH");
+        expect(
+          desktopUserDataPath(selected, {
+            enabled,
+            override: undefined,
+            devProfileArguments: [
+              `--farol-dev-user-data-dir=${selected.userData}`,
+            ],
+          }),
+        ).toBe(selected.userData);
+        for (const args of [
+          [`--farol-dev-user-data-dir=${other.userData}`],
+          ["--farol-dev-user-data-dir"],
+          [
+            `--farol-dev-user-data-dir=${selected.userData}`,
+            `--farol-dev-user-data-dir=${selected.userData}`,
+          ],
+        ])
+          expect(() =>
+            desktopUserDataPath(selected, {
+              enabled,
+              override: undefined,
+              devProfileArguments: args,
+            }),
+          ).toThrow("DESKTOP_DEV_USER_DATA_MISMATCH");
+      }
+    },
+  );
+
   it("retains the proven preview fixture override without allowing owner paths", () => {
     const isolated = isolatedAppData();
     const identity = desktopIdentity("preview", isolated.appData);
@@ -580,8 +632,8 @@ describe("desktop environment identity", () => {
       identity.userData,
     );
     const dev = desktopIdentity("dev", isolated.appData);
-    expect(desktopUserDataPath(dev, { enabled: true, override })).toBe(
-      dev.userData,
+    expect(() => desktopUserDataPath(dev, { enabled: true, override })).toThrow(
+      "DESKTOP_DEV_USER_DATA_MISMATCH",
     );
     for (const selected of [
       path.join(appData, "io.github.legrch.farol"),

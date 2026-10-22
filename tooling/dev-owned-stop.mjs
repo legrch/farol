@@ -2,6 +2,8 @@ import {
   LEGACY_DEV_DATA_DIRECTORY_NAME,
   desktopIdentity as harnessDesktopIdentity,
 } from "./harness-identity.ts";
+import { devExecutables } from "./dev-runtime.mjs";
+
 // Mechanical launcher sequencing only. No native lookup, process discovery,
 // profile access, recovery, startup, or implicit host ports live here.
 export const DEV_OWNED_STOP_LIMITS = Object.freeze({
@@ -82,8 +84,7 @@ function validIdentity(identity) {
     identity.applicationId ===
       harnessDesktopIdentity("dev", "/").applicationId &&
     identity.installed === false &&
-    identity.executable ===
-      `${identity.writerRoot}/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron`
+    devExecutables(identity.writerRoot).includes(identity.executable)
   );
 }
 

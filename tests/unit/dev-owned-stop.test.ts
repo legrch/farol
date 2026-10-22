@@ -410,3 +410,15 @@ describe("exact retained Dev stop (pure injected ports)", () => {
     expect(h.signals).toEqual(["SIGTERM"]);
   });
 });
+
+// Native lookup and signaling remain outside this pure scope validation test.
+it("admits the isolated Dev bundle while retaining exact executable comparison", async () => {
+  const expected = {
+    ...identity,
+    executable: `${scope.writerRoot}/_output/dev-runtime/Farol Dev.app/Contents/MacOS/Electron`,
+  };
+  const h = harness();
+  h.hooks.inspect = () => ({ status: "absent" });
+  const result = await stopRetainedDevProcess(expected, scope, h.ports);
+  expect(result.status).toBe("absent");
+});

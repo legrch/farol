@@ -3,7 +3,10 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -62,8 +65,17 @@ func nativeInspect(pid int) response {
 }
 
 func nativeCommand(q request) response {
-	if !validPID(q.PID) || !validDevPaths(q.Executable, q.AppPath) {
+	if !validPID(q.PID) || !validCommandScope(q) {
 		return response{Status: "refused", Reason: "COMMAND_MISMATCH"}
+	}
+	// proc_pidpath's kernel operation, without enabling CGO in the authenticated
+	// helper build. This is independent of argv[0] and KERN_PROCARGS2's exec string.
+	executable, err := nativeExecutable(q.PID)
+	if err != nil {
+		return readFailure(err)
+	}
+	if executable != q.Executable {
+		return response{Status: "refused", Reason: "WRITER_EXECUTABLE_MISMATCH"}
 	}
 	raw, err := unix.SysctlRaw("kern.procargs2", q.PID)
 	if errors.Is(err, unix.ESRCH) {
@@ -72,10 +84,7 @@ func nativeCommand(q request) response {
 	if err != nil {
 		return readFailure(err)
 	}
-	if !matchesProcArgs(raw, q) {
-		return response{Status: "refused", Reason: "COMMAND_MISMATCH"}
-	}
-	return response{Status: "present"}
+	return inspectProcessCommand(executable, raw, q)
 }
 
 func readFailure(err error) response {
@@ -107,4 +116,20 @@ func nativeKill(pid int, name string) response {
 		// Never retry an unclassified signal outcome.
 		return response{Status: "unknown", Reason: "SIGNAL_OUTCOME_UNKNOWN"}
 	}
+}
+
+// Apple libproc's proc_pidpath uses __proc_info(2, pid, 11, 0, buffer, size).
+// https://github.com/apple-oss-distributions/xnu/blob/main/libsyscall/wrappers/libproc/libproc.c
+func nativeExecutable(pid int) (string, error) {
+	var buffer [4096]byte
+	_, _, errno := syscall.Syscall6(unix.SYS_PROC_INFO, 2, uintptr(pid), 11, 0, uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)))
+	if errno != 0 {
+		return "", errno
+	}
+	// The kernel returns zero on success; libproc derives the length from NUL.
+	end := bytes.IndexByte(buffer[:], 0)
+	if end <= 0 || !canonicalPath(string(buffer[:end])) {
+		return "", unix.EIO
+	}
+	return string(buffer[:end]), nil
 }

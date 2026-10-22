@@ -26,8 +26,9 @@ func TestConnectorProcessPublicationReconnectAndColdLifetimeKeepOriginal(t *test
 		input.RuntimeId, input.ConnectorGeneration = "publication-successor", "9007199254740994"
 		selectConnectorProcessSlot(t, s, access, input, "publication-successor")
 	}
+	collectionDone := processCollectionDone(s, start.OperationID)
 	close(child.completed)
-	awaitProcessCollection(t, s, start.OperationID)
+	awaitProcessCollectionDone(t, collectionDone)
 	if publisher.publishes != 1 || publisher.result == nil || publisher.result.Scope != scope || publisher.result.Intent != intent ||
 		!s.mutations.operations[start.OperationID].settled || s.current == originalSlot {
 		t.Fatal("connector replacement lost original publication or provenance")
@@ -90,8 +91,9 @@ func TestConnectorProcessPublicationAuthorityChangesDoNotLosePrivateResult(t *te
 					child.seal.RootIdentity.Inode = "9"
 				}
 			}
+			collectionDone := processCollectionDone(s, start.OperationID)
 			close(child.completed)
-			awaitProcessCollection(t, s, start.OperationID)
+			awaitProcessCollectionDone(t, collectionDone)
 			if publisher.result == nil || publisher.result.Scope != scope || publisher.result.Intent != intent ||
 				string(publisher.result.Observation.Stdout) != "saved" || !s.mutations.operations[start.OperationID].settled {
 				t.Fatal("late READ fence discarded private original output")

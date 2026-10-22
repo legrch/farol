@@ -246,6 +246,26 @@ describe("source test scopes", () => {
     ])
       expect(environment).not.toHaveProperty(key);
   });
+
+  it("isolates the native fd closure witness from sibling descriptor reuse", () => {
+    const witness = "tests/integration/go-connector-launch.test.ts";
+    for (const scope of ["native", "integration"]) {
+      const suites = planTests(scope, files).suites.filter(
+        (suite) => suite.runner === "vitest",
+      );
+      expect(
+        suites.filter((suite) => suite.files.includes(witness)),
+      ).toHaveLength(1);
+      for (const suite of suites) {
+        const command = suiteCommand(suite, "/reports");
+        expect(command.args).toContain(
+          suite.files.includes(witness) ? "--pool=forks" : "--pool=threads",
+        );
+        expect(command.args).toContain(`--maxWorkers=${suite.workers ?? 1}`);
+        for (const file of suite.files) expect(command.args).toContain(file);
+      }
+    }
+  });
 });
 
 describe("observed test reports", () => {

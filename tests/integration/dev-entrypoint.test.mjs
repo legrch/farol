@@ -469,11 +469,72 @@ describe("dev.mjs main() orchestration with an already-declared toolchain", () =
     }
   });
 
+  it("forwards ordinary secondary placement without enabling a fixed test viewport", async () => {
+    let choice;
+    const { overrides } = baseOverrides({
+      launch: async (...args) => {
+        choice = args;
+      },
+    });
+    await main(["--display=secondary"], overrides);
+    expect(choice).toEqual([
+      false,
+      false,
+      undefined,
+      {
+        builtInDisplayOnly: false,
+        allowPrimaryDisplay: false,
+        devSecondaryDisplay: true,
+      },
+    ]);
+  });
+
+  it("rejects ambiguous display choices before process lookup or build", async () => {
+    const { overrides, calls } = baseOverrides({
+      prepareBuild: async () => {
+        calls.push("prepare");
+      },
+    });
+    await main(["--display=secondary", "--secondary-display"], overrides);
+    expect(calls).toEqual(["exit:1"]);
+  });
+
   it("builds and launches when --check is not passed", async () => {
     const { overrides, calls } = baseOverrides();
     await main([], overrides);
     expect(calls).toEqual(["ensureDependencies", "runBuild", "launch"]);
   });
+
+  it.each([
+    ["ordinary", []],
+    ["fresh review", ["--fresh-review-profile"]],
+  ])(
+    "reports signature failure as a plain message for %s launch",
+    async (_label, argv) => {
+      const errors = [];
+      const message =
+        "Farol Dev signature verification failed. No launch was attempted.";
+      let attempts = 0;
+      const { overrides, calls } = baseOverrides({
+        createReviewProfile: () => ({
+          marker: "fixture",
+          appData: "/fixture",
+          userData: "/fixture/dev",
+        }),
+        launch: async () => {
+          attempts += 1;
+          const { DevRuntimeSignatureError } =
+            await import("../../tooling/dev-runtime.mjs");
+          throw new DevRuntimeSignatureError(message);
+        },
+        logError: (line) => errors.push(line),
+      });
+      await main(argv, overrides);
+      expect(errors).toEqual([message]);
+      expect(attempts).toBe(1);
+      expect(calls).toEqual(["ensureDependencies", "runBuild", "exit:1"]);
+    },
+  );
 
   it("selects the isolated real profile only for the explicit acceptance launch", async () => {
     const selected = [];
@@ -689,6 +750,25 @@ describe("dev opener bounded orchestration", () => {
     return { calls, logs, overrides };
   }
 
+  it("combines fresh first-run state with ordinary secondary-display sizing", async () => {
+    const { calls, overrides } = fixture();
+    await main(
+      ["--fresh-review-profile", "--display=secondary", argument],
+      overrides,
+    );
+    expect(calls.at(-1)).toEqual([
+      "launch",
+      false,
+      false,
+      marker,
+      {
+        builtInDisplayOnly: false,
+        allowPrimaryDisplay: false,
+        devSecondaryDisplay: true,
+      },
+    ]);
+  });
+
   it("forwards the one canonical Go input verbatim and provisions only after build", async () => {
     const { calls, logs, overrides } = fixture();
     await main(["--fresh-review-profile", argument], overrides);
@@ -699,7 +779,7 @@ describe("dev opener bounded orchestration", () => {
       [
         "launch",
         false,
-        true,
+        false,
         marker,
         {
           builtInDisplayOnly: false,
