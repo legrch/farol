@@ -9,6 +9,7 @@ import { once } from "node:events";
 import { _electron } from "playwright-core";
 import { desktopIdentity } from "../../tooling/harness-identity.ts";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
+import { ProductConfigurationCommandSchema } from "../../src/pkg/product-settings/contract.ts";
 import { qualifyGoBuild } from "./qualified-go-build.mjs";
 import {
   assertRuntimeObservation,
@@ -38,6 +39,11 @@ const executablePath = path.join(
   "dist/Electron.app/Contents/MacOS/Electron",
 );
 const attemptId = randomUUID();
+const observationCommand = ProductConfigurationCommandSchema.parse({
+  kind: "chatgpt.observe-sign-in",
+  observationId: attemptId,
+  buildId: build.identity.buildId,
+});
 const output = path.join(
   root,
   "_output/evidence/sign-in-continuity",
@@ -367,17 +373,13 @@ try {
   // Join the normal bounded observation after popup closure. It cannot prove
   // authentication or own a destination change.
   const observed = await page.evaluate(
-    (buildId) =>
-      window.farol.configure({
-        kind: "chatgpt.observe-sign-in",
-        observationId: "continuity-read",
-        buildId,
-      }),
-    build.identity.buildId,
+    (command) => window.farol.configure(command),
+    observationCommand,
   );
   assert.equal(observed.ok, true, "SIGN_IN_FIXTURE_OBSERVATION_REFUSED");
   assert.equal(observed.evidence.kind, "chatgpt.sign-in-status");
   assert.equal(observed.evidence.state, "signed_out");
+  assert.notEqual(observed.evidence.binding, null);
   report.signInObservation = {
     state: observed.evidence.state,
     bound: observed.evidence.binding !== null,
