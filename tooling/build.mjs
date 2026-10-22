@@ -1,3 +1,7 @@
+import {
+  WITNESS_HARNESS_ENTRIES,
+  checkExactPackageWitnessInputs,
+} from "./exact-package-witness-inputs.mjs";
 import { assertPreviewRuntimeHostScope } from "./preview-runtime-scope.mjs";
 import { buildGoBackend } from "./go-backend-build.mjs";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
@@ -47,7 +51,10 @@ import {
   toolchainPackageRoots,
 } from "./dependency-digests.mjs";
 
-const goInputs = await readGoBuildInputs(process.argv.slice(2));
+const arguments_ = process.argv.slice(2);
+const checkWitnessInputs =
+  arguments_.length === 1 && arguments_[0] === "--check-witness-inputs";
+const goInputs = await readGoBuildInputs(checkWitnessInputs ? [] : arguments_);
 const root = process.cwd();
 const repositoryRoot = root;
 const output = path.join(root, "_output/build/app");
@@ -161,12 +168,14 @@ const attestInputs = {
   },
 };
 
-await fs.rm(output, { recursive: true, force: true });
-await fs.mkdir(output, { recursive: true });
-await Promise.all([
-  fs.mkdir(path.join(root, "_output/logs"), { recursive: true }),
-  fs.mkdir(path.join(root, "_output/tmp"), { recursive: true }),
-]);
+if (!checkWitnessInputs) {
+  await fs.rm(output, { recursive: true, force: true });
+  await fs.mkdir(output, { recursive: true });
+  await Promise.all([
+    fs.mkdir(path.join(root, "_output/logs"), { recursive: true }),
+    fs.mkdir(path.join(root, "_output/tmp"), { recursive: true }),
+  ]);
+}
 await verifyGeistSources(root);
 const packageDocument = JSON.parse(
   (await readBuildInput("package.json")).toString("utf8"),
@@ -185,8 +194,18 @@ const common = {
   target: "node24",
   metafile: true,
   plugins: [attestInputs],
+  write: !checkWitnessInputs,
 };
 await Promise.all([
+  ...WITNESS_HARNESS_ENTRIES.map((entry) =>
+    build({
+      ...common,
+      entryPoints: [entry],
+      platform: "node",
+      format: "cjs",
+      write: false,
+    }),
+  ),
   build({
     ...common,
     entryPoints: ["src/apps/desktop/desktop-entry.ts"],
@@ -237,9 +256,8 @@ await Promise.all([
     target: ["chrome145"],
     metafile: true,
     plugins: [attestInputs],
+    write: !checkWitnessInputs,
   }),
-]);
-await Promise.all([
   ...[
     ["tooling/verify-package-standalone.mjs", "update-package.mjs"],
     ["tooling/update-slot.mjs", "update-slot.mjs"],
@@ -253,6 +271,19 @@ await Promise.all([
       format: "esm",
     }),
   ),
+]);
+await checkExactPackageWitnessInputs({
+  root,
+  build,
+  ledgerPaths: [...inputRecords.values()].map((record) => record.path),
+});
+if (checkWitnessInputs) {
+  process.stdout.write(
+    "Exact-package witness import coverage passed (compile only).\n",
+  );
+  process.exit(0);
+}
+await Promise.all([
   ...[["resources/native/update_helper.py", "update-helper.py"]].map(
     async ([source, name]) => {
       const bytes = await readBuildInput(source);

@@ -28,7 +28,9 @@ const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../..",
 );
-const entry = "tests/e2e/go-computer-mcp.e2e.entry.ts";
+const { EXACT_PACKAGE_WITNESSES } =
+  await import("../../tooling/exact-package-witness-inputs.mjs");
+const { entry, testInputs } = EXACT_PACKAGE_WITNESSES[0];
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const args = process.argv.slice(2),
   mode = args.shift();
@@ -147,14 +149,7 @@ try {
                 packages.add(packageRootOf(relative));
               // Only these test-owned harness inputs sit outside the sealed
               // production ledger; all joined production/dependency bytes still match.
-              if (
-                ![
-                  entry,
-                  "tests/e2e/go-computer-mcp.diagnostics.ts",
-                  "tests/e2e/go-git-shell-journey.ts",
-                  "tests/fixtures/ordinary-git-environment.mjs",
-                ].includes(relative)
-              )
+              if (!testInputs.includes(relative))
                 assert.equal(
                   sha256,
                   ledger.get(relative),
