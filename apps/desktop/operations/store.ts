@@ -43,6 +43,8 @@ export class OperationsStore implements OperationsRecorder {
   private labels: Labels | undefined;
   private running: Promise<void> | undefined;
   private scheduled: NodeJS.Immediate | undefined;
+  private readonly retentionTimer: NodeJS.Timeout;
+  private retentionPending = false;
   private closed = false;
   private diagnosticsDirty = false;
   private cached: OperationsSnapshot = {
@@ -81,6 +83,15 @@ export class OperationsStore implements OperationsRecorder {
     private readonly queueLimit = 1024,
   ) {
     this.writer = `${String(this.now()).padStart(13, "0")}-${randomUUID()}`;
+    this.requestRetention();
+    this.retentionTimer = setInterval(() => this.requestRetention(), dayMs);
+    this.retentionTimer.unref();
+  }
+  private requestRetention(): void {
+    if (this.closed) return;
+    // One coalesced request; maintenance never starts a second writer.
+    this.retentionPending = true;
+    this.schedule();
   }
   private async prepare(): Promise<void> {
     await this.io.mkdir(this.directory, { recursive: true, mode: 0o700 });
@@ -246,7 +257,8 @@ export class OperationsStore implements OperationsRecorder {
       })
       .finally(() => {
         this.running = undefined;
-        if (this.queue.length || this.labels) this.schedule();
+        if (this.queue.length || this.labels || this.retentionPending)
+          this.schedule();
       });
     return this.running;
   }
@@ -254,6 +266,7 @@ export class OperationsStore implements OperationsRecorder {
     let diagnosticsFailed = false;
     do {
       diagnosticsFailed = false;
+      this.retentionPending = false;
       const batch = this.queue.splice(0, 64);
       const labels = this.labels;
       this.labels = undefined;
@@ -294,6 +307,7 @@ export class OperationsStore implements OperationsRecorder {
     } while (
       this.queue.length ||
       this.labels ||
+      this.retentionPending ||
       (this.diagnosticsDirty && !diagnosticsFailed)
     );
   }
@@ -504,6 +518,7 @@ export class OperationsStore implements OperationsRecorder {
   }
   async shutdown(deadlineMs = 250): Promise<boolean> {
     this.closed = true;
+    clearInterval(this.retentionTimer);
     return this.flush(deadlineMs);
   }
   /** Reads never prune or wait for the writer. Slow reads return the last snapshot. */

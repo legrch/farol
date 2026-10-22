@@ -112,6 +112,7 @@ export async function runGoComputerMcp(file: string): Promise<void> {
         handle.close(),
         lifecycle.waitForHandlers(),
       ]);
+      await operations.shutdown();
       await client.close();
       if (client.terminal && client.terminal.reason !== "closed")
         transportFailed = true;

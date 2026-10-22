@@ -167,6 +167,7 @@ it("survives restart and skips/counts corrupt and content-bearing lines", async 
       "\n",
   );
   const restarted = new OperationsStore(directory, () => 1792670400000);
+  stores.push(restarted);
   expect(await restarted.snapshot(5000)).toMatchObject({
     entries: [{ outcome: "unknown", durationMs: 12 }],
     corruptLines: 2,
@@ -365,10 +366,9 @@ it("retains an unmatched start across process replacement and appends its observ
     target: { relativePath: "x" },
   });
   await store.flush(5000);
-  const before = await new OperationsStore(
-    directory,
-    () => 1792670400000,
-  ).snapshot();
+  const reader = new OperationsStore(directory, () => 1792670400000);
+  stores.push(reader);
+  const before = await reader.snapshot();
   expect(before.entries).toMatchObject([
     { outcome: "pending", lifecycle: { phase: "started" } },
   ]);
@@ -546,6 +546,142 @@ function segmentFiles(directory: string) {
     .filter((name) => name.endsWith(".jsonl"))
     .sort();
 }
+it("prunes expired segments on open without recording or flushing", async () => {
+  const f = setup(retentionLimits);
+  f.store.record(metadata, "done", null, 1);
+  f.now(dayMs);
+  f.store.record(metadata, "done", null, 1);
+  expect(await f.store.shutdown(5000)).toBe(true);
+  expect(segmentFiles(f.directory)).toHaveLength(2);
+  f.now(31 * dayMs);
+  const reopened = new OperationsStore(
+    f.directory,
+    () => f.now(0),
+    retentionLimits,
+  );
+  stores.push(reopened);
+  await expect.poll(() => fs.readdirSync(f.directory)).toEqual([]);
+  expect(await reopened.snapshot(5000)).toMatchObject({
+    entries: [],
+    writeFailures: 0,
+  });
+});
+it("prunes an idle profile daily with an unref'd timer cleared on shutdown", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const interval = vi.spyOn(globalThis, "setInterval");
+  const clear = vi.spyOn(globalThis, "clearInterval");
+  const f = setup(retentionLimits);
+  try {
+    expect(interval).toHaveBeenCalledTimes(1);
+    expect(interval.mock.calls[0]?.[1]).toBe(dayMs);
+    const timer = interval.mock.results[0]!.value as NodeJS.Timeout;
+    expect(timer.hasRef()).toBe(false);
+    f.store.record(metadata, "done", null, 1);
+    expect(await f.store.flush(5000)).toBe(true);
+    expect(segmentFiles(f.directory)).toHaveLength(1);
+    f.now(30 * dayMs + 1);
+    vi.advanceTimersByTime(dayMs - 1);
+    expect(segmentFiles(f.directory)).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    await expect.poll(() => segmentFiles(f.directory)).toEqual([]);
+    expect(await f.store.shutdown(5000)).toBe(true);
+    expect(clear).toHaveBeenCalledWith(timer);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    await f.store.shutdown(5000);
+    interval.mockRestore();
+    clear.mockRestore();
+    vi.useRealTimers();
+  }
+});
+it("counts an open-time prune failure without throwing or busy retries", async () => {
+  const f = setup(retentionLimits);
+  f.store.record(metadata, "done", null, 1);
+  expect(await f.store.shutdown(5000)).toBe(true);
+  f.now(31 * dayMs);
+  const unlink = vi.fn(async (file: fs.PathLike) => {
+    if (String(file).endsWith(".jsonl")) throw Error("PRIVATE-PRUNE-FAILURE");
+    return fs.promises.unlink(file);
+  });
+  const reopened = new OperationsStore(
+    f.directory,
+    () => f.now(0),
+    retentionLimits,
+    { ...fs.promises, unlink },
+  );
+  stores.push(reopened);
+  await expect
+    .poll(async () => (await reopened.snapshot(5000)).writeFailures)
+    .toBe(1);
+  await expect
+    .poll(() => {
+      const file = fs
+        .readdirSync(f.directory)
+        .find((name) => name.endsWith(".diagnostics.json"));
+      return file
+        ? JSON.parse(fs.readFileSync(path.join(f.directory, file), "utf8"))
+        : undefined;
+    })
+    .toEqual({
+      writeFailures: 1,
+      droppedEntries: 0,
+      unrecordedUncertainEntries: 0,
+    });
+  expect(
+    unlink.mock.calls.filter(([file]) => String(file).endsWith(".jsonl")),
+  ).toHaveLength(1);
+  expect(segmentFiles(f.directory)).toHaveLength(1);
+  expect(JSON.stringify(await reopened.snapshot(5000))).not.toContain(
+    "PRIVATE-PRUNE-FAILURE",
+  );
+});
+it("coalesces idle ticks behind stalled startup retention without blocking operations", async () => {
+  const f = setup(retentionLimits);
+  f.store.record(metadata, "done", null, 1);
+  expect(await f.store.shutdown(5000)).toBe(true);
+  f.now(31 * dayMs);
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const entered = deferred(),
+    release = deferred();
+  const unlink = vi.fn(async (file: fs.PathLike) => {
+    if (String(file).endsWith(".jsonl")) {
+      entered.resolve();
+      await release.promise;
+    }
+    return fs.promises.unlink(file);
+  });
+  const open = vi.fn(fs.promises.open);
+  const mkdir = vi.fn(fs.promises.mkdir);
+  const reopened = new OperationsStore(
+    f.directory,
+    () => f.now(0),
+    retentionLimits,
+    { ...fs.promises, unlink, open, mkdir: mkdir as typeof fs.promises.mkdir },
+  );
+  stores.push(reopened);
+  try {
+    expect(mkdir).not.toHaveBeenCalled(); // Opening schedules IO; it never waits for it.
+    await entered.promise;
+    open.mockClear();
+    vi.advanceTimersByTime(10 * dayMs);
+    const value = { status: "ok" };
+    expect(await observeOperation(reopened, metadata, async () => value)).toBe(
+      value,
+    );
+    expect(open).not.toHaveBeenCalled(); // Queued behind the single writer.
+    expect(await reopened.shutdown(10)).toBe(false);
+    release.resolve();
+    expect(await reopened.flush(5000)).toBe(true);
+    expect(mkdir).toHaveBeenCalledTimes(2); // Startup plus one coalesced drain.
+    expect((await reopened.snapshot(5000)).entries).toMatchObject([
+      { outcome: "done" },
+    ]);
+  } finally {
+    release.resolve();
+    await reopened.shutdown(5000);
+    vi.useRealTimers();
+  }
+});
 it("keeps the last 30 days on a quiet profile writing once a day for 40 days", async () => {
   const f = setup(retentionLimits);
   for (let day = 0; day < 40; day++) {
@@ -800,6 +936,7 @@ it("evicts the oldest settled rows, preserves unknown/pending and reports overfl
     operationKinds[4],
   ]);
   const restarted = new OperationsStore(directory, () => 1792670400000);
+  stores.push(restarted);
   expect(await restarted.snapshot(5000)).toMatchObject({
     droppedEntries: 1,
     unrecordedUncertainEntries: 0,
@@ -874,6 +1011,7 @@ it("isolates write failure from operation values/exceptions and publishes cross-
   expect(await store.flush(5000)).toBe(false);
   expect(attempts).toBe(1);
   const reader = new OperationsStore(directory, () => 1792670400000);
+  stores.push(reader);
   expect(await reader.snapshot(5000)).toMatchObject({
     entries: [],
     writeFailures: 1,

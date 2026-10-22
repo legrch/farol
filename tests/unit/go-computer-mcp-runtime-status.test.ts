@@ -36,6 +36,16 @@ const ports = vi.hoisted(() => ({
   admissionClosed: false,
   request: vi.fn(),
   duringSetup: undefined as (() => void) | undefined,
+  operationsShutdown: vi.fn(async () => true),
+}));
+vi.mock("../../apps/desktop/operations/store", () => ({
+  OperationsStore: class {
+    begin() {
+      return () => {};
+    }
+    record() {}
+    shutdown = ports.operationsShutdown;
+  },
 }));
 vi.mock("../../apps/desktop/bridge/connector-launch", () => ({
   loadConnectorLaunch: () => ({
@@ -314,6 +324,7 @@ it("closes admission and drains once on idle terminal without polling, reopening
   await flush();
   expect(ports.handleClose).toHaveBeenCalledTimes(1);
   expect(ports.waitForHandlers).toHaveBeenCalledTimes(1);
+  expect(ports.operationsShutdown).toHaveBeenCalledTimes(1);
   expect(ports.close).toHaveBeenCalledTimes(1);
   expect(ports.release).toHaveBeenCalledTimes(1);
   expect(ports.unsubscribe).toHaveBeenCalledTimes(1);
@@ -450,8 +461,10 @@ it("retains a submitted effect as unknown through terminal drain and refuses new
       code: "COMPUTER_MCP_STOPPING",
     });
     expect(ports.release).not.toHaveBeenCalled();
+    expect(ports.operationsShutdown).not.toHaveBeenCalled();
     finishDrain();
     await flush();
+    expect(ports.operationsShutdown).toHaveBeenCalledTimes(1);
     expect(backend).toEqual({ pendingUnknown: 1, retainedEffects: ["effect"] });
     expect(ports.request).toHaveBeenCalledTimes(1);
     expect(ports.close).toHaveBeenCalledTimes(1);
