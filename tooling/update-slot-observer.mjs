@@ -17,7 +17,7 @@ export async function observeUpdateSlot(slot) {
       ),
     ),
   );
-  if (identity.sourceDirty || identity.bundleId !== "local.farol.next.preview")
+  if (identity.sourceDirty || identity.bundleId !== "io.github.legrch.farol")
     throw new Error("UPDATE_SLOT_IDENTITY_INVALID");
   const plist = path.join(slot, "Contents/Info.plist");
   for (const [key, expected] of [

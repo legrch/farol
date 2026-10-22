@@ -221,7 +221,7 @@ it("serves legacy initialize, strict tool schemas and catalogue through the real
       id: 1,
       result: {
         protocolVersion: "2025-06-18",
-        serverInfo: { name: "farol-next-computer", version: "0.1.0-preview.0" },
+        serverInfo: { name: "farol-computer", version: "0.1.0-preview.0" },
         capabilities: { tools: { listChanged: true } },
       },
     });
@@ -239,8 +239,8 @@ it("serves legacy initialize, strict tool schemas and catalogue through the real
       "computer_workspace_read",
       "computer_workspace_search",
       "computer_workspace_write",
-      "farol_next_connector_verify",
-      "farol_next_connector_verify_catalogue",
+      "farol_connector_verify",
+      "farol_connector_verify_catalogue",
     ]);
     for (const tool of tools) {
       expect(tool.inputSchema, tool.name).toMatchObject({

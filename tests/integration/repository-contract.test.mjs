@@ -19,7 +19,7 @@ function git(...arguments_) {
   }).trim();
 }
 
-describe("portable Farol Next repository contract", () => {
+describe("portable Farol repository contract", () => {
   it("tracks self-contained instructions instead of relying on sibling repositories", async () => {
     expect(git("ls-files", "--error-unmatch", "AGENTS.md")).toBe("AGENTS.md");
     const ignored = spawnSync(
@@ -60,7 +60,7 @@ describe("portable Farol Next repository contract", () => {
     expect(taskfile).toMatch(/^  preview:$/mu);
     expect(taskfile).not.toContain("launch an already verified .app directly");
     expect(taskfile).toContain("/usr/bin/env -i");
-    expect(taskfile).toContain("FAROL_NEXT_OWNER_LAUNCH=1");
+    expect(taskfile).toContain("FAROL_OWNER_LAUNCH=1");
     expect(taskfile).toContain('PATH="$clean_path"');
     expect(packageDocument.scripts.run).toBeUndefined();
     expect(readme).toContain("task run");

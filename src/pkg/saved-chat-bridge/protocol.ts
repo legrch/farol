@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const SAVED_CHAT_BRIDGE_PROTOCOL = "farol-next-saved-chat/v1" as const;
+export const SAVED_CHAT_BRIDGE_PROTOCOL = "farol-saved-chat/v1" as const;
 // A valid 8,192-byte message can expand to six JSON bytes per input byte.
 export const SAVED_CHAT_BRIDGE_MAX_FRAME_BYTES = 64 * 1024;
 

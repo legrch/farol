@@ -20,7 +20,7 @@ selector. The endpoint and authenticated connection already select Farol.
 
 `farol/chatgpt` is a derived display name (`provider/model`), never the wire model.
 A slash is not interpreted as an instruction to switch providers. Supplying
-`model: "farol/chatgpt"`, the former `farol-next/chatgpt`, or an unregistered model
+`model: "farol/chatgpt"`, the former `legacy-route/chatgpt`, or an unregistered model
 to the current production route is a refusal before a model operation, not an alias
 rewrite. Whitespace, case and punctuation are not silently normalized.
 
@@ -176,7 +176,7 @@ not granted solely because the catalogue contains them.
 
 ## Compatibility and isolation
 
-The former public pair was `farol_next` / `farol-next/chatgpt`. New tasks use only
+The former public pair was `legacy_provider` / `legacy-route/chatgpt`. New tasks use only
 `farol` / `chatgpt`. Stored checkpoints and historical receipts keep their original
 binding and provenance. Reading old data must not rewrite it or make it count as
 proof for the new route. Tests cover both explicit checkpoint replay and markerless
@@ -200,7 +200,7 @@ and rollback. Existing shared marker/version formats are not reinterpreted.
 
 Development coexistence is a different concern. The standalone source, Preview/Dev application
 IDs, browser partitions, state directories, temporary process names and private
-`FAROL_NEXT_*` environment variables remain isolated from Legacy. Existing MCP
+`FAROL_*` environment variables remain isolated from Legacy. Existing MCP
 tool names and opaque call/receipt prefixes are not model IDs; their compatibility
 is unchanged by this provider migration. A tested product cutover owns their later
 migration. The final product brand and all new protocol names are Farol.

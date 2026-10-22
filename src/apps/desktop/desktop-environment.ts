@@ -34,7 +34,7 @@ export function ownerPreviewIdentity(appData: string) {
     ...identity,
     userData,
     sessionData: userData,
-    codexHome: path.join(userData, "farol-next-private", "codex-home"),
+    codexHome: path.join(userData, "farol-private", "codex-home"),
   };
 }
 
@@ -52,7 +52,7 @@ export function assertOwnerPreviewProfileSeparation(appData: string): void {
   )
     throw invalid();
   const profile = ownerPreviewIdentity(appData).userData;
-  const privateRoot = path.join(profile, "farol-next-private");
+  const privateRoot = path.join(profile, "farol-private");
   // Fixed storage ancestors used by private-home, credential, state and
   // Chromium partition consumers. Inspect metadata only, without following
   // an alias or reading existing profile contents.
@@ -65,7 +65,7 @@ export function assertOwnerPreviewProfileSeparation(appData: string): void {
       "secure-mcp-connector",
       "model-endpoint",
     ].map((name) => path.join(privateRoot, name)),
-    path.join(profile, "farol-next-state"),
+    path.join(profile, "farol-state"),
     path.join(profile, "Partitions"),
     ...[
       OWNER_PREVIEW_IDENTITY.runtimePartition,
@@ -147,15 +147,13 @@ export type DesktopIdentity = Readonly<{
   sessionData: string;
   runtimePartition: string;
   chatGptPartition:
-    | "persist:farol-next-chatgpt"
+    | "persist:farol-app-chatgpt"
     | "persist:farol-dev-chatgpt"
     | "persist:farol-owner-preview-chatgpt";
   runtimeIdentity:
-    | "farol-next-preview-runtime"
-    | "farol-dev-runtime"
-    | "farol-owner-preview-runtime";
+    "farol-runtime" | "farol-dev-runtime" | "farol-owner-preview-runtime";
   runtimeServiceName:
-    "Farol Next Runtime" | "Farol Dev Runtime" | "Farol Preview Runtime";
+    "Farol Runtime" | "Farol Dev Runtime" | "Farol Preview Runtime";
   codexHome: string;
 }>;
 
@@ -186,9 +184,9 @@ export function desktopProfileEnvironment(
   return buildEnvironment;
 }
 
-const E2E_ROOT_MARKER = ".farol-next-e2e-root";
+const E2E_ROOT_MARKER = ".farol-e2e-root";
 const E2E_ROOT_NAME =
-  /^(?:farol-next-e2e-home|farol-dev-onboarding-startup|onboarding-visual)-[A-Za-z0-9]{6,}$/u;
+  /^(?:farol-e2e-home|farol-dev-onboarding-startup|onboarding-visual)-[A-Za-z0-9]{6,}$/u;
 const E2E_APP_DATA_NAMES = new Set([
   "farol-e2e-app-data",
   "app-data",
@@ -442,7 +440,7 @@ export function desktopUserDataPath(
   const root = path.dirname(path.dirname(identity.userData));
   if (
     override !== identity.userData &&
-    !["user-data", "Farol Next Preview user-data"].some(
+    !["user-data", "Farol user-data"].some(
       (name) => override === path.join(root, name),
     )
   ) {
@@ -483,25 +481,25 @@ export function desktopIdentity(
   }
   const userData = path.join(
     appData,
-    dev ? devDataDirectoryName : "Farol Next Preview",
+    dev ? devDataDirectoryName : "io.github.legrch.farol",
   );
   return {
     environment,
     displayName: dev ? DEV_DISPLAY_NAME : "Farol",
     displayEdition: dev ? "Development" : "",
-    applicationId: dev ? "local.farol.dev" : "local.farol.next.preview",
+    applicationId: dev ? "local.farol.dev" : "io.github.legrch.farol",
     applicationName: dev ? DEV_DISPLAY_NAME : "Farol",
     userData,
     sessionData: userData,
     runtimePartition: dev
       ? "persist:farol-dev-runtime"
-      : "persist:farol-next-preview",
+      : "persist:farol-runtime",
     chatGptPartition: dev
       ? "persist:farol-dev-chatgpt"
-      : "persist:farol-next-chatgpt",
-    runtimeIdentity: dev ? "farol-dev-runtime" : "farol-next-preview-runtime",
-    runtimeServiceName: dev ? "Farol Dev Runtime" : "Farol Next Runtime",
-    codexHome: path.join(userData, "farol-next-private", "codex-home"),
+      : "persist:farol-app-chatgpt",
+    runtimeIdentity: dev ? "farol-dev-runtime" : "farol-runtime",
+    runtimeServiceName: dev ? "Farol Dev Runtime" : "Farol Runtime",
+    codexHome: path.join(userData, "farol-private", "codex-home"),
   };
 }
 
@@ -549,7 +547,7 @@ export function desktopCodexChildHomes(
     ),
     processHomePath:
       buildEnvironment !== "preview"
-        ? path.join(identity.userData, "farol-next-private", "process-home")
+        ? path.join(identity.userData, "farol-private", "process-home")
         : nativeHome,
   };
 }

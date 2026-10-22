@@ -27,7 +27,7 @@ import { FarolModelRuntimeState } from "../../src/apps/desktop/farol-model-runti
 // awaited. These tests hold the endpoint inside each await and ask what the
 // product handler actually saw.
 
-const MODEL = "farol-next/mind";
+const MODEL = "legacy-route/mind";
 
 const roots: string[] = [];
 const endpoints: FarolModelEndpoint[] = [];

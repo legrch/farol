@@ -26,7 +26,7 @@ afterEach(async () => {
 });
 
 async function userData(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-lease-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-lease-"));
   roots.push(root);
   return root;
 }
@@ -170,12 +170,12 @@ describe("promotion lease", () => {
   it("fails closed on a symlinked lease file", async () => {
     const root = await userData();
     const outside = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-lease-outside-"),
+      path.join(os.tmpdir(), "farol-lease-outside-"),
     );
     roots.push(outside);
     const decoy = path.join(outside, "decoy.json");
     await fs.writeFile(decoy, "{}", { mode: 0o600 });
-    await fs.mkdir(path.join(root, "farol-next-state"), {
+    await fs.mkdir(path.join(root, "farol-state"), {
       recursive: true,
       mode: 0o700,
     });
@@ -189,16 +189,16 @@ describe("promotion lease", () => {
   it("fails closed when the state directory is a symlink or is not private", async () => {
     const root = await userData();
     const elsewhere = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-lease-elsewhere-"),
+      path.join(os.tmpdir(), "farol-lease-elsewhere-"),
     );
     roots.push(elsewhere);
-    await fs.symlink(elsewhere, path.join(root, "farol-next-state"));
+    await fs.symlink(elsewhere, path.join(root, "farol-state"));
     await expect(
       acquirePromotionLease(root, "gen-a", "promotion"),
     ).rejects.toThrow(/PROMOTION_LEASE_UNSAFE/u);
 
     const shared = await userData();
-    await fs.mkdir(path.join(shared, "farol-next-state"), { mode: 0o755 });
+    await fs.mkdir(path.join(shared, "farol-state"), { mode: 0o755 });
     await expect(
       acquirePromotionLease(shared, "gen-a", "promotion"),
     ).rejects.toThrow(/PROMOTION_LEASE_UNSAFE/u);
@@ -344,7 +344,7 @@ describe("promotion lease", () => {
 
   it("a record left behind by the previous protocol is not a holder: the lock, not the bytes, decides", async () => {
     const root = await userData();
-    await fs.mkdir(path.join(root, "farol-next-state"), {
+    await fs.mkdir(path.join(root, "farol-state"), {
       recursive: true,
       mode: 0o700,
     });

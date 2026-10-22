@@ -414,7 +414,7 @@ describe("startup-selected Go Responses transport with controlled peers", () => 
       const response = await a.post({ ...body(), reasoning });
       expect(response.status).toBeGreaterThanOrEqual(400);
       expect(await response.text()).toMatch(
-        /FAROL_NEXT_REASONING_(INVALID|UNSUPPORTED)/u,
+        /FAROL_REASONING_(INVALID|UNSUPPORTED)/u,
       );
     }
     expect(a.compaction.prepareTurn).not.toHaveBeenCalled();
@@ -500,16 +500,14 @@ describe("startup-selected Go Responses transport with controlled peers", () => 
       }),
     });
     const replay = await b.post(data);
-    expect(await replay.text()).toContain("FAROL_NEXT_TURN_ALREADY_SUBMITTED");
+    expect(await replay.text()).toContain("FAROL_TURN_ALREADY_SUBMITTED");
     for (const reasoning of [undefined, { effort: "low" }]) {
       const conflict = await b.post({
         ...body(),
         ...(reasoning ? { reasoning } : {}),
       });
       expect(conflict.status).toBe(409);
-      expect(await conflict.text()).toContain(
-        "FAROL_NEXT_TURN_INTENT_CONFLICT",
-      );
+      expect(await conflict.text()).toContain("FAROL_TURN_INTENT_CONFLICT");
     }
     expect(second.chat.create).not.toHaveBeenCalled();
     expect(second.chat.send).not.toHaveBeenCalled();
@@ -564,7 +562,7 @@ describe("startup-selected Go Responses transport with controlled peers", () => 
     );
     expect(blockedSummary.status).toBe(422);
     expect(await blockedSummary.text()).toContain(
-      "FAROL_NEXT_COMPACTION_TURN_ACTIVE",
+      "FAROL_COMPACTION_TURN_ACTIVE",
     );
     expect(a.compaction.compact).not.toHaveBeenCalled();
 
@@ -806,7 +804,7 @@ describe("startup-selected Go Responses transport with controlled peers", () => 
       summary.resolve({
         ok: false,
         error: {
-          code: "FAROL_NEXT_COMPACTION_SUMMARY_BLOCKED",
+          code: "FAROL_COMPACTION_SUMMARY_BLOCKED",
           retry: "never",
         },
       });
@@ -818,7 +816,7 @@ describe("startup-selected Go Responses transport with controlled peers", () => 
     expect(a.runtime.owns("summary-thread")).toBe(true);
     const refused = await a.post(body("summary-thread"));
     expect(refused.status).toBe(409);
-    expect(await refused.text()).toContain("FAROL_NEXT_COMPACTION_TURN_ACTIVE");
+    expect(await refused.text()).toContain("FAROL_COMPACTION_TURN_ACTIVE");
     expect(a.admit).not.toHaveBeenCalled();
     expect(p.chat.create).not.toHaveBeenCalled();
     // A rejected preparation/second summary must not release the first guard.
@@ -829,7 +827,7 @@ describe("startup-selected Go Responses transport with controlled peers", () => 
     await neighbor.text();
     summary.resolve({
       ok: false,
-      error: { code: "FAROL_NEXT_COMPACTION_SUMMARY_BLOCKED", retry: "never" },
+      error: { code: "FAROL_COMPACTION_SUMMARY_BLOCKED", retry: "never" },
     });
     expect((await first).status).toBe(422);
     expect(a.runtime.owns("summary-thread")).toBe(false);
@@ -874,7 +872,7 @@ describe("startup-selected Go Responses transport with controlled peers", () => 
     expect(a.runtime.owns("summary-thread")).toBe(true);
     summary.resolve({
       ok: false,
-      error: { code: "FAROL_NEXT_COMPACTION_SUMMARY_BLOCKED", retry: "never" },
+      error: { code: "FAROL_COMPACTION_SUMMARY_BLOCKED", retry: "never" },
     });
     await exited.promise;
     await vi.waitFor(() =>
@@ -1041,7 +1039,7 @@ describe("ordinary Responses HTTP joined to the actual Go CPU peer", () => {
               event.type === "response.output_item.done" &&
               (event.item as { type: string }).type === "function_call",
           )!.item as Record<string, unknown>;
-          expect(call.call_id).toMatch(/^farol_next_call_/u);
+          expect(call.call_id).toMatch(/^farol_call_/u);
           const continuation = await post(
             body(
               "thread",
@@ -1367,7 +1365,7 @@ describe("original Responses finish/close/error fencing", () => {
         // is still outstanding. No new incoming response can accept output.
         const late = new FinishResponse();
         await expect(f.continuation(late)).rejects.toThrow(
-          "FAROL_NEXT_CONTINUATION_REQUIRED",
+          "FAROL_CONTINUATION_REQUIRED",
         );
         expect(late.observers()).toEqual({
           close: 0,
@@ -1375,10 +1373,8 @@ describe("original Responses finish/close/error fencing", () => {
           finish: 0,
           drain: 0,
         });
-        await expect(initial).rejects.toThrow("FAROL_NEXT_HOST_DELIVERY_LOST");
-        await expect(invocation).rejects.toThrow(
-          "FAROL_NEXT_HOST_DELIVERY_LOST",
-        );
+        await expect(initial).rejects.toThrow("FAROL_HOST_DELIVERY_LOST");
+        await expect(invocation).rejects.toThrow("FAROL_HOST_DELIVERY_LOST");
         response.finish();
         response.lose("close");
         response.lose("error");
@@ -1415,7 +1411,7 @@ describe("original Responses finish/close/error fencing", () => {
     expect(f.p.caller.output).not.toHaveBeenCalled();
     expect(isSettled()).toBe(false);
     await expect(f.continuation(new FinishResponse())).rejects.toThrow(
-      "FAROL_NEXT_CONTINUATION_REQUIRED",
+      "FAROL_CONTINUATION_REQUIRED",
     );
     response.finish();
     response.lose("close");
@@ -1473,11 +1469,9 @@ describe("original Responses finish/close/error fencing", () => {
       void continuation.catch(() => undefined);
       await vi.waitFor(() => expect(next.observers().finish).toBe(1));
       next.lose(event);
-      await expect(continuation).rejects.toThrow(
-        "FAROL_NEXT_HOST_DELIVERY_LOST",
-      );
-      await expect(initial).rejects.toThrow("FAROL_NEXT_HOST_DELIVERY_LOST");
-      await expect(invocation).rejects.toThrow("FAROL_NEXT_HOST_DELIVERY_LOST");
+      await expect(continuation).rejects.toThrow("FAROL_HOST_DELIVERY_LOST");
+      await expect(initial).rejects.toThrow("FAROL_HOST_DELIVERY_LOST");
+      await expect(invocation).rejects.toThrow("FAROL_HOST_DELIVERY_LOST");
       response.finish();
       next.finish();
       response.lose("close");

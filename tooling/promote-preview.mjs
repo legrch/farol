@@ -276,7 +276,7 @@ async function promote(arguments_, dependencies, stdout) {
     assertActivationDrained(obligations);
 
     const plan = {
-      schema: "farol.next.promotion-plan/1",
+      schema: "farol.promotion-plan/1",
       operation: apply ? "apply" : "plan-only",
       product: artifact.product,
       version: artifact.version,
@@ -356,7 +356,7 @@ export async function runPromotionCli(arguments_, dependencies = {}) {
     return 0;
   } catch (error) {
     stderr.write(
-      `Farol Next Preview promotion refused: ${error instanceof Error ? error.message : "unknown failure"}\n`,
+      `Farol promotion refused: ${error instanceof Error ? error.message : "unknown failure"}\n`,
     );
     return 1;
   }

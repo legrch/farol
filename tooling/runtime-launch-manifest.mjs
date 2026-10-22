@@ -127,6 +127,14 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
       "legacy-system-tool",
     ),
     launch(
+      "desktop.acl-listing",
+      desktop + "tunnel-client-adoption.ts",
+      "aclOutcome",
+      "execFile",
+      '"/bin/ls"',
+      "legacy-system-tool",
+    ),
+    launch(
       "desktop.model-process-observation",
       desktop + "farol-model-host-presence.ts",
       "psProcessLister",

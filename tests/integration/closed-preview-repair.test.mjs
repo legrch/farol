@@ -34,7 +34,7 @@ async function write(file, value, mode = 0o600) {
   );
 }
 async function bundle(directory, number) {
-  const identity = createBuildIdentity({
+  const currentIdentity = createBuildIdentity({
     version: `0.1.${number}-owner.beta.1`,
     buildVersion: String(number),
     updateChannel: "github-owner-beta",
@@ -43,6 +43,14 @@ async function bundle(directory, number) {
     sourceTreeDigest: String(number).repeat(64),
     sourceDirty: false,
   });
+  // Explicit legacy metadata for this old-install reader, never a writer default.
+  const { buildId: _currentBuildId, ...body } = currentIdentity;
+  const legacyBody = {
+    ...body,
+    product: "Farol Next Preview",
+    bundleId: "local.farol.next.preview",
+  };
+  const identity = { ...legacyBody, buildId: sha(JSON.stringify(legacyBody)) };
   await write(
     path.join(directory, "Contents/Resources/app/build-identity.json"),
     identity,
@@ -193,7 +201,7 @@ async function fixture({ updates = true } = {}) {
     artifact,
   );
   const normal = {
-    schema: "farol.next.promotion-plan/1",
+    schema: "farol.promotion-plan/1",
     operation: "applied",
     product: "Farol Next Preview",
     version: old.identity.version,
@@ -349,7 +357,7 @@ suite("bounded closed preview repair", () => {
         .sort(),
     );
     expect(r).toMatchObject({
-      schema: "farol.next.closed-repair/1",
+      schema: "farol.closed-repair/1",
       phase: "installed",
       destination: f.destination,
       userData: f.userData,

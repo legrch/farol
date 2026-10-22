@@ -191,7 +191,7 @@ describe("explicit read account confirmation", () => {
         Reflect.set(
           f.observation.binding,
           "partition",
-          "persist:farol-next-chatgpt",
+          "persist:farol-app-chatgpt",
         );
       if (variant === "missing") f.read.mockResolvedValueOnce(null);
       if (variant === "withdraw-before") f.withdraw();

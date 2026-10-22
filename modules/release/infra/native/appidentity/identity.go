@@ -28,7 +28,7 @@ func (e *Error) Error() string { return string(e.Code) }
 func refusal(c Code) error     { return &Error{Code: c} }
 
 const (
-	bundle      = "local.farol.next.preview"
+	bundle      = "io.github.legrch.farol"
 	maxDocument = 65536
 	maxDepth    = 128
 	maxUnits    = 65536

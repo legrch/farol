@@ -26,7 +26,7 @@ def bounded(fd, limit):
 
 
 library = bounded(8, 65536)
-if hashlib.sha256(library).hexdigest() != "739ff487dbffbd3e232c3b90e22c234cebd4f735b226101187ea60a1f62691ce":
+if hashlib.sha256(library).hexdigest() != "be78ebefca9280329b766c0aee9dbfdd9adfdab2020f373df236441fdb476ec6":
     raise RuntimeError("REPLACEMENT_LIBRARY_INVALID")
 b = {"__name__": "attested_promotion_library"}
 exec(compile(library, "<attested-promotion-library>", "exec"), b)
@@ -149,7 +149,7 @@ def run(r):
         opened.append(apps)
         profile = directory(r["userData"])
         private(profile)
-        state = b["open_directory"](profile, "farol-next-state")
+        state = b["open_directory"](profile, "farol-state")
         opened.append(state)
         private(state)
         s = r["snapshot"]

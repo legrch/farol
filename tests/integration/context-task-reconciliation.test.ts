@@ -17,8 +17,8 @@ function binding(taskId: string): ContextBinding {
     taskId,
     hostThreadId: taskId,
     sessionId: taskId,
-    providerProfileId: "profile-isolated-next",
-    modelId: "farol-next/mind",
+    providerProfileId: "profile-isolated-farol",
+    modelId: "legacy-route/mind",
     mode: "mind",
   };
 }
@@ -31,7 +31,7 @@ afterEach(async () => {
 
 describe("CCR-12 restart reconciles task context before admitting work", () => {
   it("replaces each restored copy with the private store's truth", async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-reconcile-"));
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-reconcile-"));
     const store = new PrivateContextStore({ root });
     const moving = beginCompaction(
       createContextSession(binding("task-moving")),

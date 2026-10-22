@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The single development entrypoint for Farol Next: find the declared
+// The single development entrypoint for Farol: find the declared
 // toolchain, make sure dependencies are the locked ones, build the current
 // development bytes, and run Farol's own local processes in this terminal.
 //
@@ -26,7 +26,7 @@ import {
 export const DECLARED_NODE_VERSIONS = Object.freeze(["24.20.0", "26.7.0"]);
 export const DECLARED_NPM_VERSION = "11.19.0";
 export const TOOLCHAIN_PINNED_ENV = "FAROL_DEV_TOOLCHAIN_PINNED";
-export const DESKTOP_ENVIRONMENT_ENV = "FAROL_NEXT_ENVIRONMENT";
+export const DESKTOP_ENVIRONMENT_ENV = "FAROL_ENVIRONMENT";
 export const OWNER_STOP_EXIT_CODE = 130;
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -412,7 +412,7 @@ export function describeLaunchResult(outcome) {
     return {
       exitCode: 0,
       message:
-        "Farol Next is already running as this exact build; its existing window was reopened instead of starting a second copy.",
+        "Farol is already running as this exact build; its existing window was reopened instead of starting a second copy.",
     };
   }
   if (outcome === "startup-failed") {
@@ -425,7 +425,7 @@ export function describeLaunchResult(outcome) {
   return {
     exitCode: 1,
     message:
-      `Farol Next is already running as a different build (${outcome}); ` +
+      `Farol is already running as a different build (${outcome}); ` +
       "quit that instance yourself, then run 'task dev' again. It was left running untouched.",
   };
 }
@@ -649,8 +649,8 @@ export function createOwnerFreshReviewProfile(
  * Built from a fixed key allowlist, exactly as `ownerLaunchEnvironment`
  * builds the packaged launcher's, rather than passed through from whoever
  * ran `task dev`. This entrypoint used to hand Electron `process.env`
- * whole, and it is the one Farol Next launcher that did: a shell that
- * happened to export `FAROL_NEXT_E2E=1` and a seam value gave an ordinary
+ * whole, and it is the one Farol launcher that did: a shell that
+ * happened to export `FAROL_E2E=1` and a seam value gave an ordinary
  * development launch the E2E fault seams — substituted file and directory
  * pickers, a fabricated model reply, live-task commit faults, and a
  * ChatGPT egress allowlist widened to a loopback origin. Nothing is
@@ -680,16 +680,16 @@ export function devLaunchEnvironment(
     throw new Error("DEV_REVIEW_PROFILE_INVALID");
   }
   const owned = ownerLaunchEnvironment(environment);
-  if (reviewMarker !== undefined) delete owned.FAROL_NEXT_SAVED_CHAT_PREVIEW;
+  if (reviewMarker !== undefined) delete owned.FAROL_SAVED_CHAT_PREVIEW;
   return {
     ...owned,
     PATH: `${nodeBinDirectory}:${owned.PATH}`,
     // Ordinary Dev owns its separate profile. Acceptance uses another isolated
     // profile, while both remain development builds rather than candidates.
     [DESKTOP_ENVIRONMENT_ENV]: "dev",
-    ...(acceptanceProfile ? { FAROL_NEXT_ACCEPTANCE_PROFILE: "1" } : {}),
+    ...(acceptanceProfile ? { FAROL_ACCEPTANCE_PROFILE: "1" } : {}),
     ...(reviewMarker !== undefined
-      ? { FAROL_NEXT_ACCEPTANCE_PROFILE: reviewMarker }
+      ? { FAROL_ACCEPTANCE_PROFILE: reviewMarker }
       : {}),
   };
 }

@@ -55,7 +55,7 @@
     },
     "runtime": {
       "version": "44.4.2",
-      "treeDigestVersion": "farol.next.tree-digest/v2",
+      "treeDigestVersion": "farol.tree-digest/v2",
       "treeSHA256": "5555555555555555555555555555555555555555555555555555555555555555",
       "distributionSHA256": "6666666666666666666666666666666666666666666666666666666666666666"
     }

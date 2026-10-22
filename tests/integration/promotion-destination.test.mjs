@@ -19,10 +19,10 @@ afterEach(async () => {
   );
 });
 
-describe("Farol Next promotion destination", () => {
+describe("Farol promotion destination", () => {
   it("ignores an ordinary Legacy directory supplied as HOME", async () => {
     const container = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-owner-home-"),
+      path.join(os.tmpdir(), "farol-owner-home-"),
     );
     roots.push(container);
     const accountHome = path.join(container, "owner-home");
@@ -139,7 +139,7 @@ describe("Farol Next promotion destination", () => {
 
   it("rejects a symlinked Applications parent before copying", async () => {
     const home = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-promotion-home-"),
+      path.join(os.tmpdir(), "farol-promotion-home-"),
     );
     roots.push(home);
     const legacy = path.join(home, ".farol");
@@ -152,7 +152,7 @@ describe("Farol Next promotion destination", () => {
 
   it("rejects a symlinked home before creating Applications", async () => {
     const container = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-promotion-container-"),
+      path.join(os.tmpdir(), "farol-promotion-container-"),
     );
     roots.push(container);
     const actualHome = path.join(container, "actual-home");
@@ -169,7 +169,7 @@ describe("Farol Next promotion destination", () => {
 
   it("rejects a writable home before creating Applications", async () => {
     const home = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-promotion-writable-home-"),
+      path.join(os.tmpdir(), "farol-promotion-writable-home-"),
     );
     roots.push(home);
     await fs.chmod(home, 0o777);

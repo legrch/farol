@@ -78,7 +78,7 @@ describe("summary-only phase fences the Computer connector as the product compos
 
   it("CC-15/CC-03 refuses a Computer call made by the summary and by a racing neighbour while the fence is up, then admits the neighbour and continues the task", async () => {
     const root = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-summary-fence-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-summary-fence-")),
     );
     roots.push(root);
     // The launch root the desktop and the connector's MCP process share.
@@ -132,7 +132,7 @@ describe("summary-only phase fences the Computer connector as the product compos
       undefined,
       new PrivateExecutionFence({ root: launchRoot }),
     );
-    const client = new Client({ name: "farol-next-test", version: "1.0.0" });
+    const client = new Client({ name: "farol-test", version: "1.0.0" });
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair();
     await Promise.all([
@@ -199,7 +199,7 @@ describe("summary-only phase fences the Computer connector as the product compos
     };
     const controller = createCodexContextController({
       ownerId: "owner-desktop",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       stateRoot: path.join(root, "context-continuity"),
       summaryRoutes: {
         retained: (binding) => (binding.taskId === threadId ? taskA : null),

@@ -99,7 +99,7 @@ export function connectionStatusView(
       poll,
       reason,
       retry && Number(value.nextRetryMillis) > now
-        ? "Next helper retry: " + retry + "."
+        ? "Farol helper retry: " + retry + "."
         : "",
     ]
       .filter(Boolean)

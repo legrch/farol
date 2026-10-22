@@ -321,7 +321,7 @@ describe("Go Responses scalar request selection", () => {
     it(`refuses public route ${model} before preparation`, async () => {
       const f = fixture();
       expect(await f.serve({ ...f.request(), model }).done).toEqual(
-        new Error("FAROL_NEXT_MODEL_UNAVAILABLE"),
+        new Error("FAROL_MODEL_UNAVAILABLE"),
       );
       expect(f.prepareInitial).not.toHaveBeenCalled();
       await f.transport.close();
@@ -339,7 +339,7 @@ describe("Go Responses scalar request selection", () => {
         return value;
       });
       expect(await f.serve(f.request(reasoning)).done).toEqual(
-        new Error("FAROL_NEXT_GO_SELECTION_CONFLICT"),
+        new Error("FAROL_GO_SELECTION_CONFLICT"),
       );
       expect(f.admit).not.toHaveBeenCalled();
       expect(f.chat.create).not.toHaveBeenCalled();
@@ -356,7 +356,7 @@ describe("Go Responses scalar request selection", () => {
         return value;
       });
       expect(await f.serve(f.request()).done).toEqual(
-        new Error("FAROL_NEXT_GO_SELECTION_CONFLICT"),
+        new Error("FAROL_GO_SELECTION_CONFLICT"),
       );
       expect(f.admit).not.toHaveBeenCalled();
       expect(f.chat.create).not.toHaveBeenCalled();
@@ -428,7 +428,7 @@ describe("same-key tool continuation selection", () => {
         ].map((fn) => fn.mock.calls.length);
         const response = new Response();
         expect(await f.serve(f.continuation(next), response).done).toEqual(
-          new Error("FAROL_NEXT_CONTINUATION_SELECTION_CONFLICT"),
+          new Error("FAROL_CONTINUATION_SELECTION_CONFLICT"),
         );
         expect(
           [

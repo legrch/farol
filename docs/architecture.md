@@ -1,4 +1,4 @@
-# Farol Next architecture
+# Farol architecture
 
 Status: transitional source architecture. The React + TypeScript UI and Go backend
 target is accepted; complete product cutover and distribution acceptance are pending.
@@ -54,10 +54,10 @@ the failed runtime state is not recast as successful service operation. Missing
 terminal observations remain unconfirmed. Real Go, connector and Shell owners
 retain their independent drain and unknown-effect fences.
 
-The local package is an unsigned outer Farol Next bundle with a fixed, argument-safe
+The local package is an unsigned outer Farol bundle with a fixed, argument-safe
 launcher. It embeds the pinned vendor `Electron.app` byte-for-byte under its own
 Frameworks directory and passes the embedded application directory explicitly. The
-outer bundle owns the Farol Next product and launch identity; the nested Electron
+outer bundle owns the Farol product and launch identity; the nested Electron
 bundle remains a verified runtime dependency rather than rewritten, stripped, or
 newly signed executable code.
 
@@ -155,9 +155,9 @@ under `pkg/sse`, because it is a transport mechanism rather than kernel policy.
 
 ## Isolation and evidence boundary
 
-The preview identity is `local.farol.next.preview`, its product name is
-`Farol Next Preview`, and its state lives only under its distinct Electron
-`userData` root. Browser views use `persist:farol-next-preview` in an ordinary launch
+The preview identity is `io.github.legrch.farol`, its product name is
+`Farol`, and its state lives only under its distinct Electron
+`userData` root. Browser views use `persist:farol-runtime` in an ordinary launch
 and E2E runs the same bytes under a throwaway `HOME` plus an explicit
 `--user-data-dir`, so that partition resolves only inside the test root. Runtime ports
 are allocated by the OS on loopback and protected with per-run bearer values. No
@@ -165,7 +165,7 @@ tunnel, provider slot, global MCP registration, launch agent, legacy state path,
 installed browser profile is used.
 
 The explicit demo provider and Computer remain controlled fixtures. Ordinary product
-composition is separate: `ChatGptRoute` owns the isolated Next partition and bounded
+composition is separate: `ChatGptRoute` owns the isolated Farol partition and bounded
 submission lifecycle, while `NativeReadonlyWorkspace` supplies descriptor-relative
 list/read/search, guarded edit operations, and explicitly enabled fixed `git status`
 and exact `git head` verifiers under persisted Computer approval. Generic file tools deny

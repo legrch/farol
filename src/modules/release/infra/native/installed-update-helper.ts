@@ -1033,7 +1033,7 @@ export async function publishInstalledOperationBinding(
     throw new Error("UPDATE_SLOT_BINDING_INVALID");
   const root = path.join(
     home.homedir,
-    "Library/Application Support/Farol Next Preview/installed-updates",
+    "Library/Application Support/io.github.legrch.farol/installed-updates",
   );
   const directory = path.join(root, operation.operationId);
   const safeDirectory = async (file: string) => {

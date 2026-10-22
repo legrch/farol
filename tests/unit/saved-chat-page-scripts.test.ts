@@ -462,7 +462,7 @@ function followUpPage(editable = false) {
       viewId: "42",
       viewGeneration: 1,
       documentGeneration: 7,
-      partition: "persist:farol-next-chatgpt",
+      partition: "persist:farol-app-chatgpt",
     },
     selection: {
       model: "Test model",

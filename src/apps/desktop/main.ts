@@ -273,7 +273,7 @@ import {
 import { deriveSurfaceLayout, shellGeometry } from "./surface-layout";
 import {
   NativeReadonlyWorkspace,
-  NEXT_SAFE_OPEN_HELPER,
+  SAFE_OPEN_HELPER,
 } from "../../modules/computer/infra/native/native-readonly-workspace";
 import { discoverWorkspaceGitMetadata } from "../../modules/computer/infra/native/native-verification-command";
 import {
@@ -295,7 +295,7 @@ import {
   type ChatGptSignInOutcomeDiagnostic,
   type ChatGptSignInStatus,
 } from "./chatgpt-route";
-import { NextSavedChatBrowser } from "./saved-chat-browser";
+import { SavedChatBrowser } from "./saved-chat-browser";
 import { startSavedChatBridge } from "./saved-chat-bridge";
 import { savedChatPreviewQualified } from "./saved-chat-preview-admission";
 import {
@@ -541,13 +541,13 @@ let desktopGoCore: DesktopGoCore | null = null;
 const buildIdentity = readRuntimeBuildIdentity(directory);
 const productName = buildIdentity.product;
 const bundleId = buildIdentity.bundleId;
-const buildEnvironment = desktopEnvironment(process.env.FAROL_NEXT_ENVIRONMENT);
+const buildEnvironment = desktopEnvironment(process.env.FAROL_ENVIRONMENT);
 const runtimeEnvironment = (() => {
   try {
     return desktopProfileEnvironment(
       buildEnvironment,
-      process.env.FAROL_NEXT_PROFILE_MODE,
-      process.env.FAROL_NEXT_ACCEPTANCE_PROFILE,
+      process.env.FAROL_PROFILE_MODE,
+      process.env.FAROL_ACCEPTANCE_PROFILE,
     );
   } catch (error) {
     terminateDesktopStartup(error, buildEnvironment, {
@@ -558,16 +558,16 @@ const runtimeEnvironment = (() => {
   }
 })();
 const isolatedE2EHome =
-  process.env.FAROL_NEXT_E2E === "1" ? process.env.HOME : undefined;
+  process.env.FAROL_E2E === "1" ? process.env.HOME : undefined;
 const desktopAppData = (() => {
   try {
     return desktopAppDataPath(buildEnvironment, app.getPath("appData"), {
-      enabled: process.env.FAROL_NEXT_E2E === "1",
-      override: process.env.FAROL_NEXT_E2E_APP_DATA,
-      acceptanceProfile: process.env.FAROL_NEXT_ACCEPTANCE_PROFILE,
-      testRoot: process.env.FAROL_NEXT_E2E_TEST_ROOT,
+      enabled: process.env.FAROL_E2E === "1",
+      override: process.env.FAROL_E2E_APP_DATA,
+      acceptanceProfile: process.env.FAROL_ACCEPTANCE_PROFILE,
+      testRoot: process.env.FAROL_E2E_TEST_ROOT,
       testHome: isolatedE2EHome,
-      testProof: process.env.FAROL_NEXT_E2E_TEST_PROOF,
+      testProof: process.env.FAROL_E2E_TEST_PROOF,
     });
   } catch (error) {
     // An invalid E2E profile must fail before Electron selects any owner path
@@ -605,7 +605,7 @@ const declaredDesktopIdentity = (() => {
 const selectedDesktopUserData = (() => {
   try {
     return desktopUserDataPath(declaredDesktopIdentity, {
-      enabled: process.env.FAROL_NEXT_E2E === "1",
+      enabled: process.env.FAROL_E2E === "1",
       override: app.commandLine.getSwitchValue("user-data-dir"),
     });
   } catch (error) {
@@ -629,13 +629,9 @@ const activeDesktopIdentity = {
       : declaredDesktopIdentity.displayEdition,
   userData: app.getPath("userData"),
   sessionData: app.getPath("sessionData"),
-  codexHome: path.join(
-    app.getPath("userData"),
-    "farol-next-private",
-    "codex-home",
-  ),
+  codexHome: path.join(app.getPath("userData"), "farol-private", "codex-home"),
 } as const;
-// `buildIdentity.product` ("Farol Next Preview") is the release identity —
+// `buildIdentity.product` ("Farol") is the release identity —
 // it is validated against the packaged app name, the bundle ID, and the
 // build digest, and stays exactly that everywhere those checks read it.
 // Everywhere the app is only naming itself to the owner (the window title,
@@ -661,7 +657,7 @@ const nativeWorkspace = new NativeReadonlyWorkspace({
       "computer-safe-open.py",
     );
   },
-  helper: NEXT_SAFE_OPEN_HELPER,
+  helper: SAFE_OPEN_HELPER,
 });
 const ownerBackgroundOnly = process.argv.includes("--owner-background-only");
 if (ownerBackgroundOnly && parsePreviewWindowMode(process.argv) !== "hidden") {
@@ -671,21 +667,17 @@ const instanceRequest = createInstanceRequest(
   launchIdentity,
   ownerBackgroundOnly,
 );
-const secondInstanceResultPrefix = "FAROL_NEXT_SECOND_INSTANCE_RESULT:";
-const secondInstanceAcknowledgementPrefix =
-  "FAROL_NEXT_SECOND_INSTANCE_ACK_FAILED:";
+const secondInstanceResultPrefix = "FAROL_SECOND_INSTANCE_RESULT:";
+const secondInstanceAcknowledgementPrefix = "FAROL_SECOND_INSTANCE_ACK_FAILED:";
 const startupStage = (stage: StartupStage) => {
-  const enabled = process.env.FAROL_NEXT_E2E === "1";
+  const enabled = process.env.FAROL_E2E === "1";
   emitStartupStage(stage, enabled, (line) => process.stderr.write(line));
   // Playwright can attach after early stderr tokens have passed. Persist only
   // fixed stage tokens in this run's private disposable E2E home.
   if (!enabled) return;
   try {
     const home = process.env.HOME;
-    if (
-      !home ||
-      !/^farol-next-e2e-home-[A-Za-z0-9]{6,}$/u.test(path.basename(home))
-    )
+    if (!home || !/^farol-e2e-home-[A-Za-z0-9]{6,}$/u.test(path.basename(home)))
       return;
     if (realpathSync(path.dirname(home)) !== realpathSync(os.tmpdir())) return;
     const info = lstatSync(home);
@@ -698,13 +690,13 @@ const startupStage = (stage: StartupStage) => {
       return;
     const marker =
       stage === "lock-secondary"
-        ? ".farol-next-secondary-lock-stage"
+        ? ".farol-secondary-lock-stage"
         : stage === "delay-complete"
-          ? ".farol-next-delay-complete-stage"
+          ? ".farol-delay-complete-stage"
           : stage.startsWith("connector-resume") ||
               stage === "connector-resumed"
-            ? ".farol-next-connector-resume-stage"
-            : ".farol-next-startup-stage";
+            ? ".farol-connector-resume-stage"
+            : ".farol-startup-stage";
     const target = path.join(home, marker);
     const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
     const file = openSync(
@@ -740,16 +732,15 @@ const startupStage = (stage: StartupStage) => {
 const primaryStartup = new PrimaryStartup();
 const startupDelayMs = previewStartupDelay(
   process.argv,
-  process.env.FAROL_NEXT_E2E === "1",
+  process.env.FAROL_E2E === "1",
 );
 const demoMode = process.argv.includes("--demo");
 // Only the fixture lane can exercise the retained legacy journey explicitly.
 // A normal packaged preview always selects the integrated Setup.
 const legacySetupTestMode =
-  process.env.FAROL_NEXT_E2E === "1" &&
-  process.env.FAROL_NEXT_E2E_LEGACY_SETUP === "1";
+  process.env.FAROL_E2E === "1" && process.env.FAROL_E2E_LEGACY_SETUP === "1";
 const contextOwnerId = "owner-desktop";
-const contextProviderProfileId = "profile-isolated-next";
+const contextProviderProfileId = "profile-isolated-farol";
 const contextModel = ROUTE_B_MODEL;
 const windowMode = parsePreviewWindowMode(process.argv);
 // Explicit-only: the owner-handed overnight run passes this itself. Its
@@ -783,7 +774,7 @@ const expectedTasks = demoMode ? demoTasks : [];
 const readySchema = z.strictObject({
   kind: z.literal("runtime.ready"),
   identity: z.enum([
-    "farol-next-preview-runtime",
+    "farol-runtime",
     "farol-dev-runtime",
     "farol-owner-preview-runtime",
   ]),
@@ -1855,7 +1846,7 @@ function createLiveChatGptRoute(
     },
     onConversationChanged: recordConversationUrl,
     onTaskActivityChanged: recordTaskActivity,
-    ...(process.env.FAROL_NEXT_E2E === "1"
+    ...(process.env.FAROL_E2E === "1"
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
       : {}),
   });
@@ -1890,7 +1881,7 @@ function createContextSummaryFallbackRoute(
     parent: () => window,
     ...chatGptWindowPresentationOption(),
     title: `Context recovery · ${displayProductName}`,
-    ...(process.env.FAROL_NEXT_E2E === "1"
+    ...(process.env.FAROL_E2E === "1"
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
       : {}),
   });
@@ -1919,7 +1910,7 @@ async function recordChatGptSignInOutcome(
         status === "authenticated"
           ? {
               state: "authenticated",
-              profile: "chatgpt.next-partition/1",
+              profile: "chatgpt.app-partition/1",
               runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
               buildId: buildIdentity.buildId,
               protocol: "chatgpt-page-readiness/1",
@@ -2058,7 +2049,7 @@ async function recordSummaryFenceRecovery(
 ): Promise<void> {
   const file = path.join(
     app.getPath("userData"),
-    "farol-next-state",
+    "farol-state",
     "summary-fence-recovery.json",
   );
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -2083,7 +2074,7 @@ async function recordSummaryFenceRecovery(
 // field the way they once did about `at`.
 async function recordQuitReceipt(receipt: QuitDrainReceipt): Promise<void> {
   await writeQuitReceipt(
-    path.join(app.getPath("userData"), "farol-next-state"),
+    path.join(app.getPath("userData"), "farol-state"),
     receipt,
     new Date().toISOString(),
   );
@@ -2098,7 +2089,7 @@ function callerRelayRoot(): string {
     .update(app.getPath("userData"))
     .digest("hex")
     .slice(0, 16);
-  return path.join(os.tmpdir(), `farol-next-relay-${profile}`);
+  return path.join(os.tmpdir(), `farol-relay-${profile}`);
 }
 
 async function initializeCallerRelay(): Promise<void> {
@@ -2131,7 +2122,7 @@ async function initializeSavedChatBridge(): Promise<void> {
     if (snapshot?.status !== "ready") return false;
     return savedChatPreviewQualified({
       environment: runtimeEnvironment,
-      ownerOptIn: process.env.FAROL_NEXT_SAVED_CHAT_PREVIEW,
+      ownerOptIn: process.env.FAROL_SAVED_CHAT_PREVIEW,
       outcomeUnknown: snapshot.settings.setup.chatgpt.outcomeUnknown,
       verification: snapshot.settings.setup.chatgpt.verified,
       partition: activeDesktopIdentity.chatGptPartition,
@@ -2141,7 +2132,7 @@ async function initializeSavedChatBridge(): Promise<void> {
   if (!qualified()) return;
   const root = path.join(
     app.getPath("userData"),
-    "farol-next-state",
+    "farol-state",
     "saved-chat-handoff",
   );
   try {
@@ -2157,7 +2148,7 @@ async function initializeSavedChatBridge(): Promise<void> {
       return;
     const canonical = (url: string) =>
       canonicalChatGptConversationUrl(url, chatGptE2eOrigin);
-    const browser = new NextSavedChatBrowser(
+    const browser = new SavedChatBrowser(
       chatGptHomeUrl,
       chatGptE2eOrigin,
       createManagedChatGptRoute,
@@ -2186,8 +2177,8 @@ async function initializeSavedChatBridge(): Promise<void> {
             buttons: ["Do not send", "Account checked — send once"],
             defaultId: 0,
             cancelId: 0,
-            message: "Send this first message through Farol Next Browser?",
-            detail: `Check the signed-in account in Farol Next Browser before approving. Farol cannot identify that account from this receipt.\n\nTitle: ${request.title}\nKey: ${request.key}\nDigest: ${requestDigest}\n\n${request.firstMessage}`,
+            message: "Send this first message through Farol Browser?",
+            detail: `Check the signed-in account in Farol Browser before approving. Farol cannot identify that account from this receipt.\n\nTitle: ${request.title}\nKey: ${request.key}\nDigest: ${requestDigest}\n\n${request.firstMessage}`,
           });
           return response === 1 && qualified();
         },
@@ -2205,7 +2196,7 @@ async function initializeRouteBRuntime(): Promise<void> {
   if (!controller || routeBRuntime) return;
   try {
     routeBRuntime = await startRouteBRuntime({
-      stateRoot: path.join(app.getPath("userData"), "farol-next-state"),
+      stateRoot: path.join(app.getPath("userData"), "farol-state"),
       surfaces: routeBTaskSurfaces,
       compaction: controller.continuity,
       ...(callerRelayRuntime ? { relay: callerRelayRuntime } : {}),
@@ -2311,8 +2302,8 @@ async function reconcileContextAfterRestart(): Promise<void> {
 async function initializeLiveTaskState(): Promise<void> {
   let e2eSaveAttempts = 0;
   const e2eSuccessfulSaves =
-    process.env.FAROL_NEXT_E2E === "1"
-      ? process.env.FAROL_NEXT_E2E_LIVE_TASK_SAVE_SUCCESSES
+    process.env.FAROL_E2E === "1"
+      ? process.env.FAROL_E2E_LIVE_TASK_SAVE_SUCCESSES
       : undefined;
   const store = new PrivateLiveTaskStore(
     { root: liveTaskStoreRoot() },
@@ -3490,8 +3481,8 @@ function supportRuntimeErrorCode(
 }
 
 async function selectedSupportExportTarget(): Promise<string | null> {
-  if (process.env.FAROL_NEXT_E2E === "1") {
-    const target = process.env.FAROL_NEXT_E2E_SUPPORT_EXPORT;
+  if (process.env.FAROL_E2E === "1") {
+    const target = process.env.FAROL_E2E_SUPPORT_EXPORT;
     if (!target || !path.isAbsolute(target) || target.includes("\0")) {
       throw new Error("SUPPORT_EXPORT_E2E_TARGET_INVALID");
     }
@@ -3501,7 +3492,7 @@ async function selectedSupportExportTarget(): Promise<string | null> {
     title: "Export content-free Farol support report",
     defaultPath: path.join(
       app.getPath("documents"),
-      `Farol-Next-Support-${buildIdentity.version}.json`,
+      `Farol-Support-${buildIdentity.version}.json`,
     ),
     buttonLabel: "Export Support Report",
     filters: [{ name: "JSON", extensions: ["json"] }],
@@ -3516,7 +3507,7 @@ async function selectedSupportExportTarget(): Promise<string | null> {
 function chatGptAttachmentStagingRoot(): string {
   return path.join(
     app.getPath("userData"),
-    "farol-next-state",
+    "farol-state",
     "attachment-staging",
   );
 }
@@ -3524,7 +3515,7 @@ function chatGptAttachmentStagingRoot(): string {
 function chatGptTaskJournalRoot(): string {
   return path.join(
     app.getPath("userData"),
-    "farol-next-state",
+    "farol-state",
     "chatgpt-task-journal",
   );
 }
@@ -3532,19 +3523,19 @@ function chatGptTaskJournalRoot(): string {
 function chatGptConversationStoreRoot(): string {
   return path.join(
     app.getPath("userData"),
-    "farol-next-state",
+    "farol-state",
     "chatgpt-conversation",
   );
 }
 
 function liveTaskStoreRoot(): string {
-  return path.join(app.getPath("userData"), "farol-next-state", "live-tasks");
+  return path.join(app.getPath("userData"), "farol-state", "live-tasks");
 }
 
 function contextContinuityRoot(): string {
   return path.join(
     app.getPath("userData"),
-    "farol-next-state",
+    "farol-state",
     "context-continuity",
   );
 }
@@ -3552,17 +3543,13 @@ function contextContinuityRoot(): string {
 function secureMcpConnectorRoot(): string {
   return path.join(
     app.getPath("userData"),
-    "farol-next-state",
+    "farol-state",
     "secure-mcp-connector",
   );
 }
 
 function modelEndpointStateRoot(): string {
-  return path.join(
-    app.getPath("userData"),
-    "farol-next-private",
-    "model-endpoint",
-  );
+  return path.join(app.getPath("userData"), "farol-private", "model-endpoint");
 }
 
 // DEV manages only the config inside its app-owned Codex home. It never
@@ -3570,7 +3557,7 @@ function modelEndpointStateRoot(): string {
 // its existing explicitly owner-operated configuration behavior.
 function farolModelCodexConfigPath(): string {
   const override =
-    process.env.FAROL_NEXT_E2E === "1"
+    process.env.FAROL_E2E === "1"
       ? process.env.FAROL_MODEL_E2E_CODEX_CONFIG_PATH
       : undefined;
   if (override && path.isAbsolute(override) && !override.includes("\0")) {
@@ -3616,7 +3603,7 @@ function modelStatusEvidencePayload(
 }
 
 // E2E-only: a minimal, valid OpenAI Responses-shaped completed turn, used
-// solely behind the FAROL_NEXT_E2E + FAROL_MODEL_E2E_SYNTHETIC_REPLY double
+// solely behind the FAROL_E2E + FAROL_MODEL_E2E_SYNTHETIC_REPLY double
 // gate above. It never runs in a normal launch.
 function syntheticModelTurnHandler(
   text: string,
@@ -3706,7 +3693,7 @@ async function farolModelCodexHostPresence(): Promise<
 function secureMcpCredentialRoot(): string {
   return path.join(
     app.getPath("userData"),
-    "farol-next-private",
+    "farol-private",
     "secure-mcp-connector",
   );
 }
@@ -3759,23 +3746,19 @@ async function stopAndConfirmComputerMcp(
 function devMcpProofRoot(): string {
   return path.join(
     activeDesktopIdentity.userData,
-    "farol-next-private",
+    "farol-private",
     "dev-mcp-proof",
   );
 }
 
 function codexHostProbeRoot(): string {
-  return path.join(
-    app.getPath("userData"),
-    "farol-next-state",
-    "codex-host-probe",
-  );
+  return path.join(app.getPath("userData"), "farol-state", "codex-host-probe");
 }
 
 function codexAgentAssignmentRoot(): string {
   return path.join(
     app.getPath("userData"),
-    "farol-next-state",
+    "farol-state",
     "native-agent-assignments",
   );
 }
@@ -3783,7 +3766,7 @@ function codexAgentAssignmentRoot(): string {
 function productAgentInputRoot(): string {
   return path.join(
     app.getPath("userData"),
-    "farol-next-state",
+    "farol-state",
     "product-agent-inputs",
   );
 }
@@ -3791,7 +3774,7 @@ function productAgentInputRoot(): string {
 async function codexHostRuntimeRoot(): Promise<string> {
   const root = path.join(
     app.getPath("userData"),
-    "farol-next-state",
+    "farol-state",
     "codex-host-runtime",
   );
   await mkdir(root, { recursive: true, mode: 0o700 });
@@ -3898,7 +3881,7 @@ function chatGptAppPreSubmitObservation(code: string | null) {
   if (code === null || !chatGptAppPreSubmitCodes.has(code)) return null;
   return {
     state: "authenticated" as const,
-    profile: "chatgpt.next-partition/1",
+    profile: "chatgpt.app-partition/1",
     runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
     buildId: buildIdentity.buildId,
     protocol: "chatgpt-page-app-binding-block/1",
@@ -3941,7 +3924,7 @@ function chatGptJournalObservation(result: ChatGptTaskJournalResult) {
   if (result.state === "completed") {
     return {
       state: "authenticated" as const,
-      profile: "chatgpt.next-partition/1",
+      profile: "chatgpt.app-partition/1",
       runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
       buildId: buildIdentity.buildId,
       protocol: "chatgpt-page-task-recovery/1",
@@ -4011,16 +3994,14 @@ function discardPreparedReadonlyTask(
 async function selectedChatGptAttachmentPaths(): Promise<
   readonly string[] | "cancelled" | "invalid"
 > {
-  if (process.env.FAROL_NEXT_E2E === "1") {
+  if (process.env.FAROL_E2E === "1") {
     try {
       const parsed = z
         .array(z.string().refine((value) => path.isAbsolute(value)))
         .min(1)
         .max(4)
         .safeParse(
-          JSON.parse(
-            process.env.FAROL_NEXT_E2E_ATTACHMENTS ?? "null",
-          ) as unknown,
+          JSON.parse(process.env.FAROL_E2E_ATTACHMENTS ?? "null") as unknown,
         );
       return parsed.success ? parsed.data : "invalid";
     } catch {
@@ -4101,14 +4082,14 @@ async function selectedWorkspace(): Promise<
   | "invalid"
 > {
   if (
-    process.env.FAROL_NEXT_E2E === "1" &&
-    process.env.FAROL_NEXT_E2E_CANCEL_WORKSPACE_PICKER === "1"
+    process.env.FAROL_E2E === "1" &&
+    process.env.FAROL_E2E_CANCEL_WORKSPACE_PICKER === "1"
   )
     return "cancelled";
   let selected: string | undefined;
   const testRoot =
-    process.env.FAROL_NEXT_E2E === "1"
-      ? process.env.FAROL_NEXT_E2E_WORKSPACE_ROOT
+    process.env.FAROL_E2E === "1"
+      ? process.env.FAROL_E2E_WORKSPACE_ROOT
       : undefined;
   if (testRoot) {
     selected = testRoot;
@@ -4192,8 +4173,8 @@ async function reverifyDiscoveredCandidate(
 
 function e2eCodexExecutable(): string | "invalid" | undefined {
   const testExecutable =
-    process.env.FAROL_NEXT_E2E === "1"
-      ? process.env.FAROL_NEXT_E2E_CODEX_EXECUTABLE
+    process.env.FAROL_E2E === "1"
+      ? process.env.FAROL_E2E_CODEX_EXECUTABLE
       : undefined;
   if (testExecutable === undefined) return undefined;
   return path.isAbsolute(testExecutable) && !testExecutable.includes("\0")
@@ -4275,8 +4256,8 @@ async function verifyCodexExecutable(
 
 function e2eTunnelClientExecutable(): string | "invalid" | undefined {
   const testExecutable =
-    process.env.FAROL_NEXT_E2E === "1"
-      ? process.env.FAROL_NEXT_E2E_TUNNEL_CLIENT
+    process.env.FAROL_E2E === "1"
+      ? process.env.FAROL_E2E_TUNNEL_CLIENT
       : undefined;
   if (testExecutable === undefined) return undefined;
   return path.isAbsolute(testExecutable) && !testExecutable.includes("\0")
@@ -5575,8 +5556,8 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
     }
     const prompt =
       workspaceId === null
-        ? `Use the selected ${appName} app to call farol_next_connector_verify_catalogue once with challenge "${challenge.value}". No workspace is configured. Do not read files or run commands. Reply briefly with the result.`
-        : `Use the selected ${appName} app to call farol_next_connector_verify once with challenge "${challenge.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`;
+        ? `Use the selected ${appName} app to call farol_connector_verify_catalogue once with challenge "${challenge.value}". No workspace is configured. Do not read files or run commands. Reply briefly with the result.`
+        : `Use the selected ${appName} app to call farol_connector_verify once with challenge "${challenge.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`;
     let claimed = false;
     const result = await chatGptRoute.runReadonlyTask(
       prompt,
@@ -6020,8 +6001,8 @@ async function selectedWorkspaceFile(
 ): Promise<string | "cancelled" | "invalid"> {
   let selected: string | undefined;
   const testFile =
-    process.env.FAROL_NEXT_E2E === "1"
-      ? process.env.FAROL_NEXT_E2E_WORKSPACE_FILE
+    process.env.FAROL_E2E === "1"
+      ? process.env.FAROL_E2E_WORKSPACE_FILE
       : undefined;
   if (testFile) {
     selected = testFile;
@@ -6135,7 +6116,7 @@ async function listOwnerWorkspace(
 function workspaceMutationStateRoot(): string {
   return path.join(
     app.getPath("userData"),
-    "farol-next-state",
+    "farol-state",
     "workspace-mutations",
   );
 }
@@ -6645,7 +6626,7 @@ function deliverConfigurationReply(
       ? result.evidence.operationId
       : "unknown";
   process.stderr.write(
-    `farol-next-e2e:reply-dropped ${commandKind} ${operationId}\n`,
+    `farol-e2e:reply-dropped ${commandKind} ${operationId}\n`,
   );
   // Never settles: the renderer's `ipcRenderer.invoke` receives nothing at
   // all, which is the state the durable pending-edit record exists for.
@@ -6681,7 +6662,7 @@ async function configureAdmittedProduct(
       try {
         selected = captureChatStartupProfile({
           environment: runtimeEnvironment,
-          e2e: process.env.FAROL_NEXT_E2E === "1",
+          e2e: process.env.FAROL_E2E === "1",
           origin: chatGptE2eOrigin,
           tasks: snapshot.settings.tasks,
         });
@@ -8448,7 +8429,7 @@ async function configureAdmittedProduct(
         observed.state === "authenticated"
           ? {
               state: "authenticated",
-              profile: "chatgpt.next-partition/1",
+              profile: "chatgpt.app-partition/1",
               runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
               buildId: buildIdentity.buildId,
               protocol: "chatgpt-page-readiness/1",
@@ -8762,7 +8743,7 @@ async function configureAdmittedProduct(
         task.state === "completed"
           ? {
               state: "authenticated" as const,
-              profile: "chatgpt.next-partition/1",
+              profile: "chatgpt.app-partition/1",
               runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
               buildId: buildIdentity.buildId,
               protocol: "chatgpt-page-attachment-task/1",
@@ -9129,7 +9110,7 @@ async function configureAdmittedProduct(
         try {
           current = captureChatStartupProfile({
             environment: runtimeEnvironment,
-            e2e: process.env.FAROL_NEXT_E2E === "1",
+            e2e: process.env.FAROL_E2E === "1",
             origin: chatGptE2eOrigin,
             tasks: snapshot.settings.tasks,
           });
@@ -9270,7 +9251,7 @@ async function configureAdmittedProduct(
         task.state === "completed"
           ? {
               state: "authenticated" as const,
-              profile: "chatgpt.next-partition/1",
+              profile: "chatgpt.app-partition/1",
               runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
               buildId: buildIdentity.buildId,
               protocol: "chatgpt-page-readonly-task/1",
@@ -10743,18 +10724,18 @@ async function startRuntime(): Promise<void> {
       env: {
         ELECTRON_RUN_AS_NODE: "1",
         LANG: process.env.LANG ?? "en_US.UTF-8",
-        FAROL_NEXT_RUNTIME_IDENTITY: activeDesktopIdentity.runtimeIdentity,
-        FAROL_NEXT_PREVIEW_SCENARIO: process.argv.includes(
+        FAROL_RUNTIME_IDENTITY: activeDesktopIdentity.runtimeIdentity,
+        FAROL_PREVIEW_SCENARIO: process.argv.includes(
           "--preview-stream-failure",
         )
           ? "stream-failure"
-          : process.env.FAROL_NEXT_E2E === "1" &&
+          : process.env.FAROL_E2E === "1" &&
               process.argv.includes("--preview-runtime-start-failure")
             ? "startup-failure"
             : process.argv.includes("--preview-failure")
               ? "failure"
               : "normal",
-        FAROL_NEXT_PREVIEW_MODE: demoMode ? "demo" : "empty",
+        FAROL_PREVIEW_MODE: demoMode ? "demo" : "empty",
       },
       stdio: ["ignore", "ignore", "ignore", "ipc"],
       serialization: "advanced",
@@ -11241,7 +11222,7 @@ async function runContextFixtureControl(
   taskId: string,
   action: "compact-context-fixture" | "confirm-context-fixture",
 ): Promise<unknown> {
-  if (process.env.FAROL_NEXT_E2E !== "1" || demoMode) {
+  if (process.env.FAROL_E2E !== "1" || demoMode) {
     return { error: "IPC_CONTROL_INVALID" };
   }
   const task = liveTaskRegistry.get(taskId);
@@ -11643,7 +11624,7 @@ function recoverWindowOpenFailure(): void {
 }
 
 function nativeMenuBarEnabled(): boolean {
-  return process.env.FAROL_NEXT_E2E !== "1" && process.platform === "darwin";
+  return process.env.FAROL_E2E !== "1" && process.platform === "darwin";
 }
 
 function reopenWindow(): void {
@@ -11763,7 +11744,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       }),
   });
   installedResourcesOrigin = updateRelaunch?.resourcesOrigin;
-  const stateRoot = path.join(app.getPath("userData"), "farol-next-state");
+  const stateRoot = path.join(app.getPath("userData"), "farol-state");
   const previousHostAdmissionReady = await withStartupPromotionLease(
     app.getPath("userData"),
     buildIdentity.buildId,
@@ -11953,7 +11934,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   }
   configuration = new ProductConfigurationService(
     new ProductSettingsStore({
-      root: path.join(app.getPath("userData"), "farol-next-state"),
+      root: path.join(app.getPath("userData"), "farol-state"),
     }),
     {
       taskModelPolicy: async (revision, tasks, selection) => {
@@ -12009,8 +11990,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     configuration!.initialize(),
   );
   const e2eChatGptUrl =
-    process.env.FAROL_NEXT_E2E === "1"
-      ? process.env.FAROL_NEXT_E2E_CHATGPT_URL
+    process.env.FAROL_E2E === "1"
+      ? process.env.FAROL_E2E_CHATGPT_URL
       : undefined;
   let chatGptUrl = CHATGPT_HOME;
   let e2eChatGptOrigin: string | null = null;
@@ -12030,7 +12011,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       snapshot.status === "ready"
         ? captureChatStartupProfile({
             environment: runtimeEnvironment,
-            e2e: process.env.FAROL_NEXT_E2E === "1",
+            e2e: process.env.FAROL_E2E === "1",
             origin: chatGptE2eOrigin,
             tasks: snapshot.settings.tasks,
           })
@@ -12170,13 +12151,13 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // via `initializeRouteBRuntime()` below, and can also close before it), so
   // a request before start or after close still answers
   // FAROL_MODEL_ROUTE_UNAVAILABLE, never silently dropped or fabricated.
-  // The one exception is this exact E2E seam: with FAROL_NEXT_E2E=1 *and*
+  // The one exception is this exact E2E seam: with FAROL_E2E=1 *and*
   // FAROL_MODEL_E2E_SYNTHETIC_REPLY set, requests get a synthetic
   // completed reply instead — proof that the "connected" indicator only
   // lights up once a request is actually served, with no real Codex or
   // ChatGPT account involved. It never activates outside that double gate.
   const modelSyntheticReply =
-    process.env.FAROL_NEXT_E2E === "1"
+    process.env.FAROL_E2E === "1"
       ? process.env.FAROL_MODEL_E2E_SYNTHETIC_REPLY
       : undefined;
   if (FAROL_MODEL_ENABLED) {
@@ -12258,7 +12239,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     ...(embeddedBrowserEnabled()
       ? { surfaceFactory: signInChatGptSurfaceFactory() }
       : {}),
-    ...(process.env.FAROL_NEXT_E2E === "1"
+    ...(process.env.FAROL_E2E === "1"
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
       : {}),
     onSignInOutcome: (status, diagnostic) => {
@@ -12385,7 +12366,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       await recordQuitReceipt(receipt);
       if (receipt.drained) {
         await removeRunMarker(
-          path.join(app.getPath("userData"), "farol-next-state"),
+          path.join(app.getPath("userData"), "farol-state"),
           process.pid,
         );
       }

@@ -72,7 +72,7 @@ function readySettings() {
     },
   ];
   const witness = {
-    profile: "farol-next",
+    profile: "farol",
     configRevision: 1,
     workspaceId: folder.workspaceId,
     runtimeGeneration,

@@ -168,7 +168,7 @@ func (o *operation) completeLaunch(launch port.HelperRelaunchEffects) error {
 		if err := o.call(true, func() error { var err error; path, err = launch.CapturePrivateTarget(o.ctx); return err }); err != nil {
 			return err
 		}
-		expected := o.request.Home + "/Library/Application Support/Farol Next Preview/installed-updates/" + o.request.OperationID + "/launch-Farol.app"
+		expected := o.request.Home + "/Library/Application Support/io.github.legrch.farol/installed-updates/" + o.request.OperationID + "/launch-Farol.app"
 		if path != expected {
 			return o.refuse("launch_image_unconfirmed")
 		}

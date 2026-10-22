@@ -32,7 +32,7 @@ function point(batch, pid, total, extra = {}) {
       {
         pid: pid + 1,
         type: "Utility",
-        name: "Farol Next Runtime",
+        name: "Farol Runtime",
         workingSetSizeKiB: 60_000,
       },
     ],
@@ -97,7 +97,7 @@ describe("the soak's additional retention reading", () => {
   it("attributes the carry-over to the processes that hold it", () => {
     const perProcess = diagnostics.samePhaseAcrossRestart.perProcessDeltaKiB;
     expect(perProcess["Browser"].mean).toBe(100);
-    expect(perProcess["Utility:Farol Next Runtime"].mean).toBe(0);
+    expect(perProcess["Utility:Farol Runtime"].mean).toBe(0);
   });
 
   it("survives a run with no restart at all", () => {

@@ -69,7 +69,7 @@ describe("Codex caller relay MCP tool", () => {
     try {
       const listed = await client.listTools();
       expect(
-        listed.tools.find((tool) => tool.name === "farol_next_caller_tools"),
+        listed.tools.find((tool) => tool.name === "farol_host_tools"),
       ).toMatchObject({
         annotations: {
           readOnlyHint: false,
@@ -80,7 +80,7 @@ describe("Codex caller relay MCP tool", () => {
       });
 
       const described = await client.callTool({
-        name: "farol_next_caller_tools",
+        name: "farol_host_tools",
         arguments: { operation: "describe", ticket, binding: turnBinding },
       });
       expect(described.isError).not.toBe(true);
@@ -93,7 +93,7 @@ describe("Codex caller relay MCP tool", () => {
       });
 
       const invoked = await client.callTool({
-        name: "farol_next_caller_tools",
+        name: "farol_host_tools",
         arguments: {
           operation: "invoke",
           ticket,
@@ -150,7 +150,7 @@ describe("Codex caller relay MCP tool", () => {
     ]);
     try {
       const refused = await client.callTool({
-        name: "farol_next_caller_tools",
+        name: "farol_host_tools",
         arguments: { operation: "describe", ticket, binding: turnBinding },
       });
       expect(refused.isError).toBe(true);
@@ -160,7 +160,7 @@ describe("Codex caller relay MCP tool", () => {
       });
 
       const malformed = await client.callTool({
-        name: "farol_next_caller_tools",
+        name: "farol_host_tools",
         arguments: {
           operation: "invoke",
           ticket,

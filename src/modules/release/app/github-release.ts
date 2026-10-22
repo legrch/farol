@@ -162,7 +162,7 @@ function parseManifest(value: unknown): Outcome<RetainedReleaseManifest> {
     (data.repository !== GITHUB_RELEASE_REPOSITORY &&
       data.repository !== RETAINED_GITHUB_RELEASE_REPOSITORY) ||
     !["stable", "owner-beta"].includes(data.channel as string) ||
-    data.product !== "Farol Next Preview" ||
+    data.product !== "Farol" ||
     data.bundleId !== FAROL_BUNDLE_ID ||
     typeof data.version !== "string" ||
     !parseReleaseVersion(data.version) ||

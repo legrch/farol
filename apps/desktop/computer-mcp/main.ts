@@ -16,7 +16,7 @@ import { createReadonlyComputerMcpServer } from "../../../src/modules/computer/i
 import { MutableComputerContractHandler } from "../../../src/modules/computer/infra/mutable-contract-handler";
 import {
   NativeReadonlyWorkspace,
-  NEXT_SAFE_OPEN_HELPER,
+  SAFE_OPEN_HELPER,
 } from "../../../src/modules/computer/infra/native/native-readonly-workspace";
 import { Sha256WorkspaceMutationDigester } from "../../../src/modules/computer/infra/native/sha256-workspace-mutation-digester";
 import { ReadonlyComputerContractHandler } from "../../../src/modules/computer/infra/readonly-contract-handler";
@@ -74,7 +74,7 @@ async function main(): Promise<void> {
   }
   const workspace = new NativeReadonlyWorkspace({
     helperPath: path.join(path.dirname(entryFile), "computer-safe-open.py"),
-    helper: NEXT_SAFE_OPEN_HELPER,
+    helper: SAFE_OPEN_HELPER,
   });
   const loaded = await loadReadonlyComputerLaunchContract(
     launchFile,
@@ -277,7 +277,7 @@ async function main(): Promise<void> {
     {
       legacy: "serve",
       onerror: () => {
-        process.stderr.write("Farol Next Computer MCP transport failed.\n");
+        process.stderr.write("Farol Computer MCP transport failed.\n");
       },
     },
   );
@@ -305,7 +305,7 @@ async function main(): Promise<void> {
         results[3]?.status !== "fulfilled" ||
         results[3].value !== true
       ) {
-        process.stderr.write("Farol Next Computer MCP shutdown unverified.\n");
+        process.stderr.write("Farol Computer MCP shutdown unverified.\n");
         process.exit(1);
       }
       await lifecycleLease.release();
@@ -327,6 +327,6 @@ async function main(): Promise<void> {
 }
 
 void main().catch(() => {
-  process.stderr.write("Farol Next Computer MCP failed to start.\n");
+  process.stderr.write("Farol Computer MCP failed to start.\n");
   process.exit(1);
 });

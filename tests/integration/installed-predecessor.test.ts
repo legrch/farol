@@ -37,9 +37,9 @@ beforeEach(async () => {
   );
   const profile = path.join(
     home,
-    "Library/Application Support/Farol Next Preview",
+    "Library/Application Support/io.github.legrch.farol",
   );
-  state = path.join(profile, "farol-next-state");
+  state = path.join(profile, "farol-state");
   await fs.mkdir(state, { recursive: true, mode: 0o700 });
   await fs.chmod(profile, 0o700);
   vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: home });

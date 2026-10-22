@@ -55,9 +55,9 @@ export function bootstrap() {
     environment: "preview",
     build: {
       schema: 1,
-      product: "Farol Next Preview",
+      product: "Farol",
       version: "0.1.8-owner.beta.1",
-      bundleId: "local.farol.next.preview",
+      bundleId: "io.github.legrch.farol",
       updateChannel: "github-owner-beta",
       buildVersion: "10",
       builtAt: "2026-10-02T20:00:00.000Z",

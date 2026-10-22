@@ -144,12 +144,12 @@ describe("Route B runtime composed as the product composes it", () => {
     journal?: ProviderTurnJournal,
   ) {
     const root = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-route-b-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-route-b-")),
     );
     roots.push(root);
     const controller = createCodexContextController({
       ownerId: "owner-desktop",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       stateRoot: path.join(root, "context-continuity"),
       summaryRoutes: {
         retained: (binding) => (binding.taskId === threadId ? task : null),
@@ -254,7 +254,7 @@ describe("Route B runtime composed as the product composes it", () => {
         taskId: threadId,
         hostThreadId: threadId,
         sessionId: threadId,
-        providerProfileId: "profile-isolated-next",
+        providerProfileId: "profile-isolated-farol",
         modelId: "chatgpt",
         mode: "chatgpt",
       }),
@@ -415,7 +415,7 @@ describe("Route B runtime composed as the product composes it", () => {
       const first = await post(route, "/responses", initial);
       const firstStream = await first.text();
       const call =
-        /"type":"function_call"[^}]*"call_id":"(farol_next_call_[a-f0-9]{32})"/u.exec(
+        /"type":"function_call"[^}]*"call_id":"(farol_call_[a-f0-9]{32})"/u.exec(
           firstStream,
         );
       expect(call).not.toBeNull();
@@ -602,7 +602,7 @@ describe("Route B runtime composed as the product composes it", () => {
       const early = await compactA();
       expect(early.status).toBe(422);
       await expect(early.json()).resolves.toEqual({
-        error: { code: "FAROL_NEXT_COMPACTION_TURN_ACTIVE" },
+        error: { code: "FAROL_COMPACTION_TURN_ACTIVE" },
       });
       expect(summaryStarted).toBe(false);
 
@@ -635,7 +635,7 @@ describe("Route B runtime composed as the product composes it", () => {
       const refusedDuring = (await during.json()) as {
         error: { code: string };
       };
-      expect(refusedDuring.error.code).toMatch(/^FAROL_NEXT_COMPACTION_/u);
+      expect(refusedDuring.error.code).toMatch(/^FAROL_COMPACTION_/u);
       releaseSummary();
       expect((await compacting).status).toBe(200);
       // The summary reached no host tool.
@@ -830,7 +830,7 @@ describe("Route B runtime composed as the product composes it", () => {
     );
     expect(conflict.status).toBe(409);
     await expect(conflict.json()).resolves.toEqual({
-      error: { code: "FAROL_NEXT_TURN_INTENT_CONFLICT" },
+      error: { code: "FAROL_TURN_INTENT_CONFLICT" },
     });
     expect(route.owns(threadId)).toBe(false);
     expect(task.prompts).toHaveLength(1);
@@ -857,7 +857,7 @@ describe("Route B runtime composed as the product composes it", () => {
     // The same process restarts on the same private state.
     const controller = createCodexContextController({
       ownerId: "owner-desktop",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       stateRoot: path.join(root, "context-continuity"),
       summaryRoutes: { retained: () => task, createFallback: vi.fn() },
     });
@@ -875,7 +875,7 @@ describe("Route B runtime composed as the product composes it", () => {
     );
     expect(repeated.status).toBe(409);
     await expect(repeated.json()).resolves.toEqual({
-      error: { code: "FAROL_NEXT_TURN_ALREADY_SUBMITTED" },
+      error: { code: "FAROL_TURN_ALREADY_SUBMITTED" },
     });
     // The same identity with another intent is a conflict, not a new run.
     const conflict = await post(
@@ -885,7 +885,7 @@ describe("Route B runtime composed as the product composes it", () => {
     );
     expect(conflict.status).toBe(409);
     await expect(conflict.json()).resolves.toEqual({
-      error: { code: "FAROL_NEXT_TURN_INTENT_CONFLICT" },
+      error: { code: "FAROL_TURN_INTENT_CONFLICT" },
     });
     expect(task.prompts).toHaveLength(1);
     // A deliberately new identity is a new request.

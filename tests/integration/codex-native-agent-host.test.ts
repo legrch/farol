@@ -544,9 +544,9 @@ describe("selected native Agent route (in-process contract only)", () => {
 
   it.each([
     { model: "other-model" },
-    { model: "farol-next/mind" },
-    { model: "farol-next/drive" },
-    { model: "farol-next/chatgpt" },
+    { model: "legacy-route/mind" },
+    { model: "legacy-route/drive" },
+    { model: "legacy-route/chatgpt" },
     { model: "farol/chatgpt" },
     { model: null },
     { effort: undefined },

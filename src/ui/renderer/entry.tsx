@@ -49,7 +49,7 @@ function startGuide(): void {
 }
 
 function startApplication(): void {
-  const api = (window as unknown as { farolNext: PreloadApi }).farolNext;
+  const api = (window as unknown as { farol: PreloadApi }).farol;
   const controller = new WindowController(
     api,
     (value) => {
@@ -62,7 +62,7 @@ function startApplication(): void {
     (value) => {
       try {
         localStorage.setItem(
-          "farol.next.navigation-shortcuts.v1",
+          "farol.navigation-shortcuts.v1",
           JSON.stringify(value),
         );
       } catch {
@@ -107,7 +107,7 @@ function startApplication(): void {
     try {
       const stored = parseNavigationShortcuts(
         JSON.parse(
-          localStorage.getItem("farol.next.navigation-shortcuts.v1") ?? "null",
+          localStorage.getItem("farol.navigation-shortcuts.v1") ?? "null",
         ),
       );
       if (stored) await controller.shortcuts(stored);

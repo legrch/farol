@@ -12,7 +12,7 @@ import { prepareMcpLifecycle } from "./prepare-mcp-lifecycle.mjs";
 const executeFile = promisify(execFile);
 
 const root = await fs.realpath(
-  await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-computer-mcp-")),
+  await fs.mkdtemp(path.join(os.tmpdir(), "farol-computer-mcp-")),
 );
 const launchRoot = path.join(root, "launch");
 const workspaceRoot = path.join(root, "workspace");
@@ -229,7 +229,7 @@ let stderr = "";
 transport.stderr?.on("data", (chunk) => {
   stderr += String(chunk);
 });
-const client = new Client({ name: "farol-next-e2e", version: "1.0.0" });
+const client = new Client({ name: "farol-e2e", version: "1.0.0" });
 
 try {
   await client.connect(transport);
@@ -246,12 +246,12 @@ try {
       "computer_workspace_search",
       "computer_workspace_git_status",
       "computer_workspace_git_head",
-      "farol_next_connector_verify",
+      "farol_connector_verify",
     ],
   );
   assert.equal(
     tools.tools
-      .filter((tool) => tool.name !== "farol_next_connector_verify")
+      .filter((tool) => tool.name !== "farol_connector_verify")
       .every(
         (tool) =>
           tool.annotations?.readOnlyHint === true &&
@@ -260,7 +260,7 @@ try {
     true,
   );
   assert.deepEqual(
-    tools.tools.find((tool) => tool.name === "farol_next_connector_verify")
+    tools.tools.find((tool) => tool.name === "farol_connector_verify")
       ?.annotations,
     {
       readOnlyHint: false,
@@ -446,7 +446,7 @@ try {
   });
   assert.equal(injected.isError, true);
   const verified = await client.callTool({
-    name: "farol_next_connector_verify",
+    name: "farol_connector_verify",
     arguments: {
       challenge: verificationChallenge,
       workspaceId: "fixture",

@@ -77,7 +77,7 @@ function plist(version) {
 }
 
 async function syntheticElectronPackage({ version, checksums }) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-runtime-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-runtime-"));
   roots.push(root);
   const app = path.join(root, "dist/Electron.app/Contents");
   await fs.mkdir(path.join(app, "MacOS"), { recursive: true });
@@ -176,7 +176,7 @@ describe("reviewed Electron runtime contract", () => {
     ],
     [
       "a legacy tree digest encoding",
-      { treeDigestVersion: "farol.next.tree-digest/v1" },
+      { treeDigestVersion: "farol.tree-digest/v1" },
       "RUNTIME_TREE_DIGEST_MISMATCH",
     ],
   ])("refuses %s", (_name, drift, code) => {
@@ -210,10 +210,7 @@ describe("reviewed Electron runtime contract", () => {
     ],
     ["a malformed extracted digest", { extractedTreeDigest: "abc" }],
     ["an unsupported platform", { platform: "linux" }],
-    [
-      "a legacy digest version",
-      { treeDigestVersion: "farol.next.tree-digest/v1" },
-    ],
+    ["a legacy digest version", { treeDigestVersion: "farol.tree-digest/v1" }],
   ])("refuses an expectation with %s", (_name, drift) => {
     expect(() => assertRuntimeExpectation({ ...expected, ...drift })).toThrow(
       "RUNTIME_EXPECTATION_INVALID",

@@ -56,8 +56,8 @@ function host({
     sourceCommit: foreign ? "e".repeat(40) : launchIdentity.sourceCommit,
     nonce: "d".repeat(32),
     ...(backgroundOnly
-      ? { schema: "farol.next.single-instance/3", backgroundOnly: true }
-      : { schema: "farol.next.single-instance/2" }),
+      ? { schema: "farol.single-instance/3", backgroundOnly: true }
+      : { schema: "farol.single-instance/2" }),
   };
   let finishReady!: () => void;
   const ready = new Promise<void>((resolve) => {

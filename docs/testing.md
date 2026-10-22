@@ -1,4 +1,4 @@
-# Farol Next GUI test policy
+# Farol GUI test policy
 
 ## Portable Linux checkpoint
 
@@ -135,7 +135,7 @@ protocol fallback or replacement launch.
 The two accepted presentation arguments used by the E2E harness are
 `--preview-window-mode=hidden` and
 `--preview-window-mode=secondary-visible`; unknown or repeated values fail closed.
-The E2E harness also sets `FAROL_NEXT_E2E=1` for one bounded startup-delay argument;
+The E2E harness also sets `FAROL_E2E=1` for one bounded startup-delay argument;
 without that explicit harness marker the delay is ignored. This makes a second launch
 during startup deterministic without changing the owner command.
 
@@ -154,14 +154,14 @@ display and measures both applications' real active state before and after
 the second launch. It is closed immediately after that proof.
 
 The sealed and development E2E lanes also close the macOS window, prove the exact
-`Farol Next Runtime` PID remains, invoke a second launch with the same isolated
+`Farol Runtime` PID remains, invoke a second launch with the same isolated
 identity, and prove one window reopens without a second local runtime. Native
 process-table observations identify Node
 IPC children by their exact parent and runtime entry; Electron process metrics
 alone cannot identify them. Quit then waits for the exact owned main and runtime
 PIDs to disappear; no generic Electron
 process-name cleanup is used. A separate task-owned Electron Legacy fixture is started
-before and after Next in isolated homes, and a Next runtime failure must leave
+before and after Farol in isolated homes, and a Farol runtime failure must leave
 its synthetic read endpoint available. The startup-race case additionally proves that
 the reopened window already has both task views and live runtime bootstrap state.
 Forced runtime termination expects an unconfirmed local-runtime Quit obligation

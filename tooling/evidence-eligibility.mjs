@@ -461,7 +461,7 @@ async function main(arguments_) {
     });
   }
   const output = {
-    schema: "farol.next.evidence-eligibility/v2",
+    schema: "farol.evidence-eligibility/v2",
     candidate: {
       sourceCommit: candidate.sourceCommit,
       sourceTreeDigest: candidate.sourceTreeDigest,

@@ -116,7 +116,7 @@ function fixture() {
     connectors: {
       secureMcp: {
         generation: 2,
-        profile: "farol-next",
+        profile: "farol",
         tunnelId: "fixture-tunnel",
         tunnelClient: {
           executablePath: "/fixture/bin/tunnel-client",
@@ -160,6 +160,9 @@ describe("originalPredecessorSettingsReadable", () => {
     // ON TOUCH: compare the complete closure against the exact beta3 commit;
     // update the predicate and negative/default tests before renewing this hash.
     // A hash refresh alone is not a compatibility audit.
+    // 2026-10-22 re-audit: only the host ping literal and connector profile
+    // literal/default changed. Earlier beta identity compatibility is no longer
+    // promised; the retained shape below uses the current identity names.
     const contract = readFileSync(
       new URL("../../src/pkg/product-settings/contract.ts", import.meta.url),
       "utf8",
@@ -169,7 +172,7 @@ describe("originalPredecessorSettingsReadable", () => {
     );
     expect(sections).toHaveLength(2);
     expect(createHash("sha256").update(sections[0]!).digest("hex")).toBe(
-      "f6162b68ceb2b358f8b414dc54049a5e6d8af8d5787cc6c733c980b01ad792d9",
+      "8101df17f98af6fb8ad08c7811dce0c093b45020c32bcd08915a3ee687bb18fc",
     );
     const packageJson = JSON.parse(
       readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
@@ -187,7 +190,7 @@ describe("originalPredecessorSettingsReadable", () => {
   });
 
   it.each(["browser", "computer", "activity", "settings"])(
-    "accepts the old real-shaped stored fixture with %s without mutation",
+    "accepts the retained settings shape with current names and %s without mutation",
     (choice) => {
       const value = fixture();
       value.general.openAtLaunch = choice;
@@ -385,7 +388,7 @@ describe("originalPredecessorSettingsReadable", () => {
     });
     expect(parsed.connectors.secureMcp).toStrictEqual({
       generation: 1,
-      profile: "farol-next",
+      profile: "farol",
       tunnelId: null,
       tunnelClient: null,
       credential: "missing",

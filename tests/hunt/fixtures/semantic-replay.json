@@ -1,9 +1,9 @@
 {
-  "replayId": "farol-next-hunt-replay/v1",
-  "modelVersion": "farol-next-hunt-model/v1",
-  "commandTableVersion": "farol-next-hunt-commands/v1",
+  "replayId": "farol-hunt-replay/v1",
+  "modelVersion": "farol-hunt-model/v1",
+  "commandTableVersion": "farol-hunt-commands/v1",
   "schedule": {
-    "identity": "farol-next-hunt/schedule/serial-v1",
+    "identity": "farol-hunt/schedule/serial-v1",
     "mode": "serial",
     "clock": "fixed-1000"
   },

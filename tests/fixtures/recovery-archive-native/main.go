@@ -39,7 +39,7 @@ func main() {
 	if canonical != profile || filepath.Dir(profile) != base || !strings.HasPrefix(filepath.Base(profile), "farol-dev-onboarding-startup-") {
 		panic("not the owned disposable E2E profile")
 	}
-	marker := filepath.Join(profile, ".farol-next-e2e-root")
+	marker := filepath.Join(profile, ".farol-e2e-root")
 	var physical unix.Stat_t
 	must(unix.Lstat(marker, &physical))
 	if physical.Mode&unix.S_IFMT != unix.S_IFREG || physical.Mode&07777 != 0600 || physical.Uid != uint32(os.Geteuid()) || physical.Nlink != 1 {
@@ -50,7 +50,7 @@ func main() {
 	if string(bytes) != proof || len(proof) != 36 {
 		panic("owned marker mismatch")
 	}
-	chat := filepath.Join(profile, "app-data", "Farol Dev", "farol-next-state", "go-core", "chat")
+	chat := filepath.Join(profile, "app-data", "Farol Dev", "farol-state", "go-core", "chat")
 	must(unix.Lstat(chat, &physical))
 	root := results.Root{Path: chat, ProfileID: profileID, Identity: port.JournalRoot{Device: uint64(physical.Dev), Inode: uint64(physical.Ino), OwnerUID: physical.Uid}}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

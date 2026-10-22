@@ -20,7 +20,7 @@ export const PREVIEW_ASSET_PATHS = Object.freeze({
   "farol-preview-mark.png": "Contents/Resources/app/farol-preview-mark.png",
   "farol-preview.icns": "Contents/Resources/farol-preview.icns",
 });
-export const PREVIEW_LAUNCHER_PATH = "Contents/MacOS/Farol Next Preview";
+export const PREVIEW_LAUNCHER_PATH = "Contents/MacOS/Farol";
 // No caller arguments, environment hooks, profile flags or runtime toolchain.
 // E2E drives the unchanged embedded Electron with its separately proven root.
 export const PREVIEW_LAUNCHER = `#!/bin/sh
@@ -39,7 +39,7 @@ exec /usr/bin/env -i \\
   PATH=/usr/bin:/bin:/usr/sbin:/sbin \\
   TMPDIR="\${TMPDIR:-/tmp}" \\
   ELECTRON_FORCE_IS_PACKAGED=true \\
-  FAROL_NEXT_ENVIRONMENT=owner-preview \\
+  FAROL_ENVIRONMENT=owner-preview \\
   "$contents_dir/Frameworks/Electron Runtime.app/Contents/MacOS/Electron" \\
   "$contents_dir/Resources/app"
 `;
@@ -133,13 +133,10 @@ export function requireOwnerPreviewRuntimeIntegration() {
       "/__foreign_codex__",
     );
     assert.deepEqual(homes, {
-      codexHomePath: path.join(
-        identity.userData,
-        "farol-next-private/codex-home",
-      ),
+      codexHomePath: path.join(identity.userData, "farol-private/codex-home"),
       processHomePath: path.join(
         identity.userData,
-        "farol-next-private/process-home",
+        "farol-private/process-home",
       ),
     });
     assert.equal(

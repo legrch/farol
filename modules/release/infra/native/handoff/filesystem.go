@@ -153,7 +153,7 @@ func openRoute(ctx context.Context, homePath string) (homeFD, stateFD int, err e
 		return
 	}
 	homeFD, current = current, -1
-	for _, part := range []string{"Library", "Application Support", "Farol Next Preview", "farol-next-state"} {
+	for _, part := range []string{"Library", "Application Support", "io.github.legrch.farol", "farol-state"} {
 		parent := homeFD
 		if current >= 0 {
 			parent = current

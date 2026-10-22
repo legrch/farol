@@ -120,18 +120,18 @@ On 2026-10-10, one hidden launch of the owner's installed Farol exited with
 status 1 before displaying the application:
 
 ```text
-FAROL_NEXT_STARTUP_FAILURE:DESKTOP_PREVIOUS_QUIT_UNCONFIRMED
-FAROL_NEXT_SECOND_INSTANCE_RESULT:startup-failed
+FAROL_STARTUP_FAILURE:DESKTOP_PREVIOUS_QUIT_UNCONFIRMED
+FAROL_SECOND_INSTANCE_RESULT:startup-failed
 ```
 
 The installed package identifies itself as `0.2.0-owner.beta.3`, build `17`,
 source `24cc7c32f12f2633156efef40c91ea0817109a4c`, build ID
 `d381182bc7e529db2a21f1c1ded25288cdb4e34a6e33701ed8a7233c7efc3a5c`.
 The selected slot is `~/Applications/Farol.app`, bundle ID
-`local.farol.next.preview`. Its ordinary profile is `Farol Next Preview`.
+`io.github.legrch.farol`. Its ordinary profile is `Farol`.
 Legacy Farol and `codex-chatgpt-web` are separate identities.
 
-The ordinary profile retains a `farol-next-state/running.json` from
+The ordinary profile retains a `farol-state/running.json` from
 2026-10-09T01:16:19.330Z. Its latest `last-quit.json`, dated
 2026-10-10T01:24:23.799Z, reports:
 
@@ -196,7 +196,7 @@ The owner explicitly accepted losing local history in the working interface,
 while retaining folder access, connection selections, credentials and browser
 sign-in data. No retained operation was resumed or retried.
 
-A task-local one-shot helper retained the complete old `farol-next-state`,
+A task-local one-shot helper retained the complete old `farol-state`,
 including the unconfirmed run, Quit receipt, Chat/Computer journals and fences.
 It created a separate fresh state with the same five workspace policies,
 physical-root identities, host selections and tunnel selection. It copied the
@@ -209,7 +209,7 @@ The helper checked exact state hashes, private file/directory identities,
 exclusive promotion leases and installed-process absence. It wrote a durable
 content-free intent before the macOS atomic directory swap, bound both swapped
 directory/lease identities, and retained a completion receipt. Browser
-`Partitions`, `farol-next-private` and the credential object retained their
+`Partitions`, `farol-private` and the credential object retained their
 original filesystem identities. Credentials and browser authentication contents
 were never read, copied into evidence or reset. A fresh-context read-only
 reliability inspection prompted process-attribution, stale-projection and
@@ -219,8 +219,8 @@ those corrections, not general installed-recovery acceptance.
 The original retained state is:
 
 ```text
-~/Library/Application Support/Farol Next Preview/
-  farol-next-state-retained-908e3a09-0785-42d2-a6bb-73ea9b9662ab
+~/Library/Application Support/io.github.legrch.farol/
+  farol-state-retained-908e3a09-0785-42d2-a6bb-73ea9b9662ab
 ```
 
 Later failed diagnostic lifetimes were retained separately under operation IDs

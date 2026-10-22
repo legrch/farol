@@ -109,7 +109,7 @@ function binding(taskId: string): ContextBinding {
     taskId,
     hostThreadId: taskId,
     sessionId: taskId,
-    providerProfileId: "profile-isolated-next",
+    providerProfileId: "profile-isolated-farol",
     modelId: "chatgpt",
     mode: "chatgpt",
   };
@@ -212,12 +212,12 @@ describe("Route B task lifecycle composed as the product composes it", () => {
     }> = {},
   ) {
     const root = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-task-lifecycle-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-task-lifecycle-")),
     );
     roots.push(root);
     const controller = createCodexContextController({
       ownerId: "owner-desktop",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       stateRoot: path.join(root, "context-continuity"),
       summaryRoutes: { retained: () => null, createFallback: vi.fn() },
     });
@@ -458,7 +458,7 @@ describe("Route B task lifecycle composed as the product composes it", () => {
 
   it("S35-H1-1 a later turn whose lease is stolen between the entry check and its durable running mark is refused before submission, and the task stays idle", async () => {
     const leaseRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-lifecycle-lease-"),
+      path.join(os.tmpdir(), "farol-lifecycle-lease-"),
     );
     roots.push(leaseRoot);
     let steal: (() => Promise<void>) | null = null;

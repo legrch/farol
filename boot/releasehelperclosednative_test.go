@@ -148,7 +148,7 @@ func TestClosedHelperNativeChild(t *testing.T) {
 			if err := scope.reverify(ctx, request); err != nil {
 				return err
 			}
-			updateLock := filepath.Join(request.Home, "Library", "Application Support", "Farol Next Preview", "installed-updates", "lock")
+			updateLock := filepath.Join(request.Home, "Library", "Application Support", "io.github.legrch.farol", "installed-updates", "lock")
 			if err := closedHelperNativeContention(updateLock); err != nil {
 				return err
 			}
@@ -299,8 +299,8 @@ func TestClosedHelperNativeInheritedCustody(t *testing.T) {
 				t.Fatal(e)
 			}
 			home := filepath.Join(dir, "home")
-			statePath := filepath.Join(home, "Library", "Application Support", "Farol Next Preview", "farol-next-state")
-			update := filepath.Join(home, "Library", "Application Support", "Farol Next Preview", "installed-updates")
+			statePath := filepath.Join(home, "Library", "Application Support", "io.github.legrch.farol", "farol-state")
+			update := filepath.Join(home, "Library", "Application Support", "io.github.legrch.farol", "installed-updates")
 			operation := filepath.Join(update, strings.Repeat("1", 32))
 			for _, path := range []string{filepath.Join(home, "Applications"), statePath, operation} {
 				if e := os.MkdirAll(path, 0700); e != nil {

@@ -176,8 +176,8 @@ def read_artifact():
     require(re.fullmatch(version_pattern, artifact["version"]) is not None, "VERSION_INVALID")
     require(re.fullmatch(r"[1-9][0-9]{0,8}", artifact["buildVersion"]) is not None, "BUILD_VERSION_INVALID")
     require(
-        artifact["product"] == "Farol Next Preview"
-        and artifact["bundleId"] == "local.farol.next.preview"
+        artifact["product"] == "Farol"
+        and artifact["bundleId"] == "io.github.legrch.farol"
         and artifact["updateChannel"] in ("github-owner-beta", "github-stable")
         and artifact["signing"] == {
             "kind": "unsigned",
@@ -190,7 +190,7 @@ def read_artifact():
     for field, length in (("sourceCommit", 40), ("sourceTreeDigest", 64),
                           ("buildId", 64), ("artifactSha256", 64)):
         require(re.fullmatch(r"[a-f0-9]{" + str(length) + r"}", artifact[field]) is not None, "ARTIFACT_DIGEST_INVALID")
-    require(artifact["treeDigestVersion"] == "farol.next.tree-digest/v2", "TREE_DIGEST_VERSION_INVALID")
+    require(artifact["treeDigestVersion"] == "farol.tree-digest/v2", "TREE_DIGEST_VERSION_INVALID")
     require(isinstance(artifact["builtAt"], str) and re.fullmatch(
         r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{3})?Z",
         artifact["builtAt"]), "BUILD_TIME_INVALID")

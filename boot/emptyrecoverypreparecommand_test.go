@@ -13,7 +13,7 @@ func (emptyRecoveryTestInput) SetReadDeadline(time.Time) error   { return nil }
 func (emptyRecoveryTestOutput) SetWriteDeadline(time.Time) error { return nil }
 
 func TestEmptyRecoveryPreparationCommandRejectsInvalidInputBeforeEffects(t *testing.T) {
-	args := []string{"--profile", "synthetic", "--profile-root", "/private/tmp/Farol Dev/farol-next-state/go-core", "--profile-device", "1", "--profile-inode", "2", "--expected-build", BuildID}
+	args := []string{"--profile", "synthetic", "--profile-root", "/private/tmp/Farol Dev/farol-state/go-core", "--profile-device", "1", "--profile-inode", "2", "--expected-build", BuildID}
 	for _, raw := range []string{"", `{` + "\n", `{"unknown":true}` + "\n", `{"OwnerID":"one","ownerid":"two"}` + "\n", `{"Profile":{"ProfileID":"other"}}` + "\n", string(bytes.Repeat([]byte("x"), 65538)) + "\n"} {
 		var out, diagnostics bytes.Buffer
 		if code := runEmptyRecoveryPreparation(args, emptyRecoveryTestInput{bytes.NewBufferString(raw)}, emptyRecoveryTestOutput{&out}, &diagnostics); code != 2 || out.Len() != 0 {
@@ -24,16 +24,16 @@ func TestEmptyRecoveryPreparationCommandRejectsInvalidInputBeforeEffects(t *test
 
 func TestEmptyRecoveryPreparationDevScopeBeforeIO(t *testing.T) {
 	for _, name := range []string{"Farol Dev", "Farol DEV"} {
-		if !emptyRecoveryDevRoot("/private/tmp/" + name + "/farol-next-state/go-core") {
+		if !emptyRecoveryDevRoot("/private/tmp/" + name + "/farol-state/go-core") {
 			t.Fatal("qualified Dev namespace refused", name)
 		}
 	}
 	for _, root := range []string{
-		"/Users/owner/Library/Application Support/Farol Next Preview/farol-next-state/go-core",
-		"/Users/owner/Library/Application Support/Farol/farol-next-state/go-core",
+		"/Users/owner/Library/Application Support/io.github.legrch.farol/farol-state/go-core",
+		"/Users/owner/Library/Application Support/Farol/farol-state/go-core",
 		"/private/tmp/Farol Dev/go-core",
-		"/private/tmp/Farol Dev/farol-next-state/../farol-next-state/go-core",
-		"/private/tmp/Farol Dev copy/farol-next-state/go-core",
+		"/private/tmp/Farol Dev/farol-state/../farol-state/go-core",
+		"/private/tmp/Farol Dev copy/farol-state/go-core",
 	} {
 		args := []string{"--profile", "synthetic", "--profile-root", root, "--profile-device", "1", "--profile-inode", "2", "--expected-build", BuildID}
 		var diagnostics bytes.Buffer
@@ -58,12 +58,12 @@ func (panicEmptyRecoveryIO) SetWriteDeadline(time.Time) error {
 
 func TestInstalledEmptyRecoveryPreparationScopeBeforeIO(t *testing.T) {
 	for _, root := range []string{
-		"/private/tmp/Farol Dev/farol-next-state/go-core",
-		"/private/tmp/Farol DEV/farol-next-state/go-core",
-		"/private/tmp/Farol/farol-next-state/go-core",
-		"/private/tmp/Farol Next Preview copy/farol-next-state/go-core",
-		"/private/tmp/Farol Next Preview/go-core",
-		"/private/tmp/Farol Next Preview/farol-next-state/../farol-next-state/go-core",
+		"/private/tmp/Farol Dev/farol-state/go-core",
+		"/private/tmp/Farol DEV/farol-state/go-core",
+		"/private/tmp/Farol/farol-state/go-core",
+		"/private/tmp/Farol copy/farol-state/go-core",
+		"/private/tmp/Farol/go-core",
+		"/private/tmp/Farol/farol-state/../farol-state/go-core",
 	} {
 		args := []string{"--profile", "synthetic", "--profile-root", root, "--profile-device", "1", "--profile-inode", "2", "--expected-build", BuildID}
 		var diagnostics bytes.Buffer
@@ -71,7 +71,7 @@ func TestInstalledEmptyRecoveryPreparationScopeBeforeIO(t *testing.T) {
 			t.Fatal("non-installed namespace reached IO", root)
 		}
 	}
-	if !emptyRecoveryInstalledRoot("/private/tmp/Farol Next Preview/farol-next-state/go-core") {
+	if !emptyRecoveryInstalledRoot("/private/tmp/io.github.legrch.farol/farol-state/go-core") {
 		t.Fatal("fixed installed namespace refused")
 	}
 }

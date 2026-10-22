@@ -9,7 +9,7 @@ const ready = {
   partition: "persist:farol-dev-chatgpt",
   buildId: "a".repeat(64),
   verification: {
-    profile: "chatgpt.next-partition/1",
+    profile: "chatgpt.app-partition/1",
     runtimeGeneration: `persist:farol-dev-chatgpt:${"a".repeat(64)}`,
     buildId: "a".repeat(64),
     protocol: "chatgpt-page-readiness/1",

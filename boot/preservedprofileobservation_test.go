@@ -16,7 +16,7 @@ func TestPreservedProfileObservationCommandRejectsBeforeIO(t *testing.T) {
 		}
 	}
 	args := preservedCommandArgs()
-	args[3] = "/private/tmp/Farol Next Preview/farol-next-state/go-core"
+	args[3] = "/private/tmp/Farol/farol-state/go-core"
 	var diagnostic bytes.Buffer
 	if code := runPreservedProfileObservation(args, preservedCommandUntouched{}, preservedCommandUntouched{}, &diagnostic); code != 2 {
 		t.Fatal("installed namespace reached observation", code)

@@ -12,7 +12,7 @@ const binding: ContextBinding = {
   taskId: "task-atlantic",
   hostThreadId: "thread-atlantic",
   sessionId: "session-atlantic",
-  providerProfileId: "profile-isolated-next",
+  providerProfileId: "profile-isolated-farol",
   modelId: "chatgpt-web/high",
   mode: "high",
 };

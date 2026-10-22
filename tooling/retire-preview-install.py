@@ -13,6 +13,10 @@ import subprocess
 import sys
 import types
 
+# Explicit old-beta selectors for this legacy install reader.
+LEGACY_PRODUCT_NAME = "Farol Next Preview"
+LEGACY_STATE_DIRECTORY = "farol-next-state"
+
 
 def bounded_input(fd):
     raw = bytearray()
@@ -55,8 +59,8 @@ def run(request):
         b.refuse("RETIREMENT_INPUT_INVALID")
     home = request["home"]
     b.components(home)
-    user_data = home + "/Library/Application Support/Farol Next Preview"
-    locations = (home + "/Applications", user_data, user_data + "/farol-next-state")
+    user_data = home + "/Library/Application Support/" + LEGACY_PRODUCT_NAME
+    locations = (home + "/Applications", user_data, user_data + "/" + LEGACY_STATE_DIRECTORY)
     descriptors = [b.open_absolute_directory(p) for p in locations]
     applications, profile, state = descriptors
     locks = []
@@ -200,7 +204,7 @@ def run(request):
             journal_fd, journal_name, _ = select(entries[4])
             journal = b.read_json(journal_fd, journal_name)
             b.shape(journal, "schema phase receipt sourceInode targetInode updatesInode")
-            if journal["schema"] != "farol.next.closed-repair-journal/1" or journal["phase"] != "installed" or receipt["phase"] != "installed" or journal["receipt"] != receipt or journal["targetInode"] != target_inode or receipt["target"] != actual or receipt["sourceCommit"] != metadata["sourceCommit"] or receipt["sourceTreeDigest"] != metadata["sourceTreeDigest"]:
+            if journal["schema"] != "farol.closed-repair-journal/1" or journal["phase"] != "installed" or receipt["phase"] != "installed" or journal["receipt"] != receipt or journal["targetInode"] != target_inode or receipt["target"] != actual or receipt["sourceCommit"] != metadata["sourceCommit"] or receipt["sourceTreeDigest"] != metadata["sourceTreeDigest"]:
                 b.refuse("RETIREMENT_REPAIR_UNCONFIRMED")
             prior = private_directory(applications, ".farol-repair-" + receipt["operationId"])
             try:

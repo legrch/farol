@@ -343,7 +343,7 @@ func TestNativeTreePositiveNegativeAndErrors(t *testing.T) {
 	f := newFixture(t)
 	treeFixture(t, f)
 	build := f.config.Request.Source
-	build.Digest = "aa5be957bca1b602513cc520d48ebabb39a79adfffe07ee47434fbc33f4a62bd"
+	build.Digest = "6fffca33b1a4831aecd152a758c4b819e7cc60a844afda73b906b874a8d3f6f3"
 	must(t, f.with(context.Background(), func(r port.HelperRecoveryRuntime) error {
 		match, err := r.MatchesTree(context.Background(), port.App, build)
 		must(t, err)

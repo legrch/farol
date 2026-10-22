@@ -44,7 +44,8 @@ describe("promotion while review findings are open", () => {
 });
 
 describe("N03/D4 --user-data resolution", () => {
-  const owner = "/Users/example/Library/Application Support/Farol Next Preview";
+  const owner =
+    "/Users/example/Library/Application Support/io.github.legrch.farol";
 
   it("defaults to the owner's profile when the option is absent", () => {
     expect(resolvePromotionUserData(null, owner, false)).toBe(owner);
@@ -64,10 +65,10 @@ describe("N03/D4 --user-data resolution", () => {
     for (const spelled of [
       owner,
       `${owner}/`,
-      `${owner}/farol-next-state`,
-      `${owner}/farol-next-state/../farol-next-state`,
+      `${owner}/farol-state`,
+      `${owner}/farol-state/../farol-state`,
       `${owner}/..foo`,
-      "/Users/example/Library/../Library/Application Support/Farol Next Preview",
+      "/Users/example/Library/../Library/Application Support/io.github.legrch.farol",
     ]) {
       expect(
         () => resolvePromotionUserData(spelled, owner, false),
@@ -102,7 +103,7 @@ describe("N03/D4 --user-data resolution", () => {
 describe("N03/D5 artifact manifest read", () => {
   async function scratch() {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-artifact-read-"),
+      path.join(os.tmpdir(), "farol-artifact-read-"),
     );
     roots.push(root);
     return root;
@@ -111,7 +112,7 @@ describe("N03/D5 artifact manifest read", () => {
   it("reads a private regular manifest and refuses everything else with a closed code", async () => {
     const root = await scratch();
     const file = path.join(root, "artifact.json");
-    const manifest = { schema: 5, product: "Farol Next Preview" };
+    const manifest = { schema: 5, product: "Farol" };
     await fs.writeFile(file, JSON.stringify(manifest), { mode: 0o600 });
     await expect(readArtifactManifest(file)).resolves.toEqual(manifest);
     // The packager writes 0600; a manifest nobody else can write to is

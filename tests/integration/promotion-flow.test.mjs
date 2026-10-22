@@ -52,7 +52,7 @@ async function realTemporaryRoot() {
 
 async function generationFixture(name, contents) {
   const app = await fs.mkdtemp(
-    path.join(await realTemporaryRoot(), `farol-next-flow-${name}-`),
+    path.join(await realTemporaryRoot(), `farol-flow-${name}-`),
   );
   roots.push(app);
   const bundle = path.join(app, "Farol.app");
@@ -65,7 +65,7 @@ async function generationFixture(name, contents) {
 
 async function home() {
   const root = await fs.mkdtemp(
-    path.join(await realTemporaryRoot(), "farol-next-flow-home-"),
+    path.join(await realTemporaryRoot(), "farol-flow-home-"),
   );
   roots.push(root);
   await fs.mkdir(path.join(root, "Applications"), {
@@ -77,7 +77,7 @@ async function home() {
 }
 
 function userDataOf(homeRoot) {
-  return path.join(homeRoot, "farol-next-userdata");
+  return path.join(homeRoot, "farol-userdata");
 }
 
 async function promote(homeRoot, source, generation) {
@@ -95,7 +95,7 @@ async function promote(homeRoot, source, generation) {
     });
     const artifactSha256 = await treeDigest(source);
     const receiptText = `${JSON.stringify({
-      schema: "farol.next.promotion-plan/1",
+      schema: "farol.promotion-plan/1",
       operation: "applied",
       generation,
       artifactSha256,
@@ -123,7 +123,7 @@ async function promote(homeRoot, source, generation) {
 }
 
 async function ensureUserData(homeRoot) {
-  await fs.mkdir(path.join(userDataOf(homeRoot), "farol-next-state"), {
+  await fs.mkdir(path.join(userDataOf(homeRoot), "farol-state"), {
     recursive: true,
     mode: 0o700,
   });
@@ -311,7 +311,7 @@ describe("promotion flow: lease held from the drain check through placement", ()
     await ensureUserData(homeRoot);
     const userData = userDataOf(homeRoot);
     const handshake = await fs.mkdtemp(
-      path.join(await realTemporaryRoot(), "farol-next-flow-handshake-"),
+      path.join(await realTemporaryRoot(), "farol-flow-handshake-"),
     );
     roots.push(handshake);
     const admissionReady = path.join(handshake, "admission-ready");
@@ -375,7 +375,7 @@ describe("promotion flow: lease held from the drain check through placement", ()
         .toBe(true);
       const heldByPromotion = JSON.parse(
         await fs.readFile(
-          path.join(userData, "farol-next-state", "promotion.lease"),
+          path.join(userData, "farol-state", "promotion.lease"),
           "utf8",
         ),
       );
@@ -392,7 +392,7 @@ describe("promotion flow: lease held from the drain check through placement", ()
       // on its own schedule, holding the exact same record throughout.
       const stillPromotion = JSON.parse(
         await fs.readFile(
-          path.join(userData, "farol-next-state", "promotion.lease"),
+          path.join(userData, "farol-state", "promotion.lease"),
           "utf8",
         ),
       );

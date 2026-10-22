@@ -30,9 +30,9 @@ describe("the single new-task ChatGPT identity", () => {
       true,
     );
     for (const model of [
-      "farol-next/chatgpt",
-      "farol-next/mind",
-      "farol-next/drive",
+      "legacy-route/chatgpt",
+      "legacy-route/mind",
+      "legacy-route/drive",
       "farol/chatgpt",
       "gpt-6-astra",
       "chatgpt-release-a",
@@ -42,7 +42,7 @@ describe("the single new-task ChatGPT identity", () => {
           .success,
       ).toBe(false);
     }
-    for (const provider of ["farol_next", "openai"]) {
+    for (const provider of ["legacy_provider", "openai"]) {
       expect(
         ProductConfigurationEvidenceSchema.safeParse({ ...evidence, provider })
           .success,
@@ -51,7 +51,11 @@ describe("the single new-task ChatGPT identity", () => {
   });
 
   it("never relabels a historical or unknown ID as the current default", () => {
-    for (const model of ["farol-next/mind", "farol-next/drive", "unknown"]) {
+    for (const model of [
+      "legacy-route/mind",
+      "legacy-route/drive",
+      "unknown",
+    ]) {
       expect(modelCatalogue(model)).toMatchObject({
         id: model,
         display_name: model,

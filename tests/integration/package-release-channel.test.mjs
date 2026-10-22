@@ -44,7 +44,7 @@ import assert from "node:assert/strict";
 export async function verifyPackageContent(options) {
   options.assertArtifactPath();
   assert.equal(options.expectedChannel, ${JSON.stringify(expectedChannel)});
-  return {product:"Farol Next Preview", version:options.expectedVersion, artifactSha256:"fixture"};
+  return {product:"Farol", version:options.expectedVersion, artifactSha256:"fixture"};
 }
 `,
     );

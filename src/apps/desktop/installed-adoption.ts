@@ -22,7 +22,7 @@ export const SHARED_SLOT = "/Applications/Farol.app";
 export const ADOPTED_BASELINE_FILE = "adopted-baseline.json";
 
 export const AdoptedBaseline = z.strictObject({
-  schema: z.literal("farol.next.adopted-baseline/1"),
+  schema: z.literal("farol.adopted-baseline/1"),
   slot: z.string().max(4096),
   userData: z.string().max(4096),
   manifest: z.unknown(),
@@ -189,7 +189,7 @@ export function adoptedRecordFor(input: {
   manifest: ReleaseManifest;
 }): z.infer<typeof AdoptedBaseline> {
   return {
-    schema: "farol.next.adopted-baseline/1",
+    schema: "farol.adopted-baseline/1",
     slot: input.slot,
     userData: input.userData,
     manifest: input.manifest,

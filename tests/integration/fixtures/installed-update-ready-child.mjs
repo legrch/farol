@@ -17,7 +17,7 @@ const user = os.userInfo();
 os.userInfo = () => ({ ...user, homedir: home });
 const state = path.join(
   home,
-  "Library/Application Support/Farol Next Preview/farol-next-state",
+  "Library/Application Support/io.github.legrch.farol/farol-state",
 );
 const processStart = await captureInstalledProcessStart(process.pid);
 await fs.writeFile(

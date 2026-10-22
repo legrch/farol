@@ -50,7 +50,7 @@ function ordinaryBootProfile(
     }).code,
     {
       process: {
-        env: environment ? { FAROL_NEXT_ENVIRONMENT: environment } : {},
+        env: environment ? { FAROL_ENVIRONMENT: environment } : {},
         stderr: {
           write: (message: string) => calls.push(`startup:${message}`),
         },
@@ -84,11 +84,11 @@ function ordinaryBootProfile(
   return { result, calls };
 }
 function isolatedAppData() {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "farol-next-e2e-home-"));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "farol-e2e-home-"));
   const appData = path.join(home, "farol-e2e-app-data");
   fs.mkdirSync(appData, { mode: 0o700 });
   const proof = randomUUID();
-  fs.writeFileSync(path.join(home, ".farol-next-e2e-root"), proof, {
+  fs.writeFileSync(path.join(home, ".farol-e2e-root"), proof, {
     mode: 0o600,
   });
   isolatedHomes.push(home);
@@ -172,7 +172,7 @@ describe("physical Owner Preview profile admission", () => {
 
   it("refuses a stopped installed-profile alias before selecting storage or writing locks", () => {
     const { appData } = fixture();
-    const installed = path.join(appData, "Farol Next Preview");
+    const installed = path.join(appData, "io.github.legrch.farol");
     fs.mkdirSync(installed, { mode: 0o700 });
     const sentinel = path.join(installed, "sentinel");
     fs.writeFileSync(sentinel, "original owner state", { mode: 0o600 });
@@ -211,12 +211,12 @@ describe("physical Owner Preview profile admission", () => {
   });
 
   it.each([
-    "farol-next-private",
-    "farol-next-private/codex-home",
-    "farol-next-private/process-home",
-    "farol-next-private/secure-mcp-connector",
-    "farol-next-private/model-endpoint",
-    "farol-next-state",
+    "farol-private",
+    "farol-private/codex-home",
+    "farol-private/process-home",
+    "farol-private/secure-mcp-connector",
+    "farol-private/model-endpoint",
+    "farol-state",
     "Partitions",
     "Partitions/farol-owner-preview-runtime",
     "Partitions/farol-owner-preview-chatgpt",
@@ -224,7 +224,7 @@ describe("physical Owner Preview profile admission", () => {
     const { appData } = fixture();
     const profile = ownerPreviewIdentity(appData).userData;
     fs.mkdirSync(profile, { mode: 0o700 });
-    const installed = path.join(appData, "Farol Next Preview");
+    const installed = path.join(appData, "io.github.legrch.farol");
     fs.mkdirSync(installed, { mode: 0o700 });
     const sentinel = path.join(installed, "original-private-state");
     fs.writeFileSync(sentinel, "preserve fixture state", { mode: 0o600 });
@@ -312,10 +312,10 @@ describe("desktop environment identity", () => {
 
   it("pins normal production boot to preserved NEW storage before its first read", () => {
     const { result, calls } = ordinaryBootProfile();
-    expect(result.userData).toBe(path.join(appData, "Farol Next Preview"));
+    expect(result.userData).toBe(path.join(appData, "io.github.legrch.farol"));
     expect(result.sessionData).toBe(result.userData);
     expect(result.codexHome).toBe(
-      path.join(result.userData, "farol-next-private", "codex-home"),
+      path.join(result.userData, "farol-private", "codex-home"),
     );
     for (const name of ["userData", "sessionData"]) {
       expect(calls.indexOf(`set:${name}`)).toBeGreaterThan(-1);
@@ -339,7 +339,7 @@ describe("desktop environment identity", () => {
         process,
         buildEnvironment,
         activeDesktopIdentity: desktopIdentity(buildEnvironment, appData),
-        productName: "Farol Next Preview",
+        productName: "Farol",
       });
       expect(process.title).toBe(
         buildEnvironment === "dev" ? "Farol Dev" : "Farol",
@@ -363,12 +363,7 @@ describe("desktop environment identity", () => {
       chatGptPartition: "persist:farol-dev-chatgpt",
       runtimeIdentity: "farol-dev-runtime",
       runtimeServiceName: "Farol Dev Runtime",
-      codexHome: path.join(
-        appData,
-        "Farol Dev",
-        "farol-next-private",
-        "codex-home",
-      ),
+      codexHome: path.join(appData, "Farol Dev", "farol-private", "codex-home"),
     });
     expect(dev.userData).not.toBe(preview.userData);
     expect(dev.sessionData).not.toBe(preview.sessionData);
@@ -376,8 +371,8 @@ describe("desktop environment identity", () => {
     expect(dev.chatGptPartition).not.toBe(preview.chatGptPartition);
     expect(dev.applicationId).not.toBe(preview.applicationId);
     expect(preview.applicationName).toBe("Farol");
-    expect(preview.userData).toBe(path.join(appData, "Farol Next Preview"));
-    expect(preview.applicationId).toBe("local.farol.next.preview");
+    expect(preview.userData).toBe(path.join(appData, "io.github.legrch.farol"));
+    expect(preview.applicationId).toBe("io.github.legrch.farol");
     expect(dev.userData).not.toContain(".farol");
     expect(dev.chatGptPartition).not.toBe("persist:farol-chatgpt");
     expect(dev.chatGptPartition).not.toBe("persist:codex-chatgpt-web");
@@ -415,7 +410,7 @@ describe("desktop environment identity", () => {
     );
     expect(selected.codexHomePath).toBe(identity.codexHome);
     expect(selected.processHomePath).toBe(
-      path.join(identity.userData, "farol-next-private", "process-home"),
+      path.join(identity.userData, "farol-private", "process-home"),
     );
     expect(selected.processHomePath).not.toBe("/Users/owner");
     expect(selected.codexHomePath).not.toBe("/Users/owner/.codex");
@@ -494,14 +489,14 @@ describe("desktop environment identity", () => {
 
   it("keeps production state identity while using the Farol application name", () => {
     expect(desktopIdentity("preview", appData)).toMatchObject({
-      applicationId: "local.farol.next.preview",
+      applicationId: "io.github.legrch.farol",
       applicationName: "Farol",
-      userData: path.join(appData, "Farol Next Preview"),
-      sessionData: path.join(appData, "Farol Next Preview"),
-      runtimePartition: "persist:farol-next-preview",
-      chatGptPartition: "persist:farol-next-chatgpt",
-      runtimeIdentity: "farol-next-preview-runtime",
-      runtimeServiceName: "Farol Next Runtime",
+      userData: path.join(appData, "io.github.legrch.farol"),
+      sessionData: path.join(appData, "io.github.legrch.farol"),
+      runtimePartition: "persist:farol-runtime",
+      chatGptPartition: "persist:farol-app-chatgpt",
+      runtimeIdentity: "farol-runtime",
+      runtimeServiceName: "Farol Runtime",
     });
   });
 
@@ -589,7 +584,7 @@ describe("desktop environment identity", () => {
       dev.userData,
     );
     for (const selected of [
-      path.join(appData, "Farol"),
+      path.join(appData, "io.github.legrch.farol"),
       path.join(isolated.home, "other"),
       `${override}/..`,
     ]) {

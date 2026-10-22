@@ -387,7 +387,7 @@ async function run() {
   };
   const home = trustedOwnerHome(os.userInfo(), process.geteuid());
   const userData = closedRecoveryUserData(home, true);
-  const profileRoot = path.join(userData, "farol-next-state/go-core");
+  const profileRoot = path.join(userData, "farol-state/go-core");
   const info = await fs.lstat(profileRoot);
   if (
     !info.isDirectory() ||
@@ -498,7 +498,7 @@ async function run() {
       attest,
       processesAbsent: () =>
         assertEmptyRecoveryProcesses(
-          path.join(userData, "farol-next-state/secure-mcp-connector"),
+          path.join(userData, "farol-state/secure-mcp-connector"),
           assertClosedConnectorProcesses,
         ),
       observePrepared: () =>

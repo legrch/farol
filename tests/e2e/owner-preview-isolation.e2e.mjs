@@ -1376,12 +1376,12 @@ async function openFiles(pid) {
 }
 
 async function disposableRoot(temporary) {
-  const home = await mkdtempIn(temporary, "farol-next-e2e-home-");
+  const home = await mkdtempIn(temporary, "farol-e2e-home-");
   await fs.chmod(home, 0o700);
   const appData = path.join(home, "farol-e2e-app-data");
   await fs.mkdir(appData, { mode: 0o700 });
   const proof = randomUUID();
-  await fs.writeFile(path.join(home, ".farol-next-e2e-root"), proof, {
+  await fs.writeFile(path.join(home, ".farol-e2e-root"), proof, {
     flag: "wx",
     mode: 0o600,
   });
@@ -1405,9 +1405,9 @@ const PUBLIC_LAUNCH_KEYS = Object.freeze([
   "LANG",
   "PATH",
   "ELECTRON_FORCE_IS_PACKAGED",
-  "FAROL_NEXT_E2E",
-  "FAROL_NEXT_E2E_CHATGPT_URL",
-  "FAROL_NEXT_ENVIRONMENT",
+  "FAROL_E2E",
+  "FAROL_E2E_CHATGPT_URL",
+  "FAROL_ENVIRONMENT",
 ]);
 async function launch(
   electron,
@@ -1440,12 +1440,12 @@ async function launch(
     LANG: "en_US.UTF-8",
     PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
     ELECTRON_FORCE_IS_PACKAGED: "true",
-    FAROL_NEXT_E2E: "1",
-    FAROL_NEXT_E2E_APP_DATA: root.appData,
-    FAROL_NEXT_E2E_TEST_ROOT: root.home,
-    FAROL_NEXT_E2E_TEST_PROOF: root.proof,
-    FAROL_NEXT_E2E_CHATGPT_URL: fixtureOrigin,
-    ...(preview ? { FAROL_NEXT_ENVIRONMENT: "owner-preview" } : {}),
+    FAROL_E2E: "1",
+    FAROL_E2E_APP_DATA: root.appData,
+    FAROL_E2E_TEST_ROOT: root.home,
+    FAROL_E2E_TEST_PROOF: root.proof,
+    FAROL_E2E_CHATGPT_URL: fixtureOrigin,
+    ...(preview ? { FAROL_ENVIRONMENT: "owner-preview" } : {}),
   };
   for (const key of PUBLIC_LAUNCH_KEYS)
     if (environment[key] !== undefined)
@@ -1583,9 +1583,9 @@ function environmentRecord(
       ? classifyPath(environment.CODEX_HOME, context)
       : null,
     codexHomeInsideProfile: within("CODEX_HOME", identity.userData),
-    runtimeIdentityPresent: has("FAROL_NEXT_RUNTIME_IDENTITY"),
+    runtimeIdentityPresent: has("FAROL_RUNTIME_IDENTITY"),
     runtimeIdentityMatches:
-      environment.FAROL_NEXT_RUNTIME_IDENTITY === identity.runtimeIdentity,
+      environment.FAROL_RUNTIME_IDENTITY === identity.runtimeIdentity,
   };
 }
 // The extra HOME / CODEX_HOME requirements, on top of the classifier. HOME must
@@ -1723,7 +1723,7 @@ async function observe(instance, expected) {
   const page = await instance.handle.firstWindow({ timeout: 20000 });
   await page.locator(".desktop").waitFor({ state: "attached", timeout: 20000 });
   const bootstrap = await deadline(
-    page.evaluate(() => window.farolNext.bootstrap()),
+    page.evaluate(() => window.farol.bootstrap()),
     `${instance.kind}-bootstrap`,
   );
   const runtime = await deadline(
@@ -1959,7 +1959,7 @@ async function assertInstance(observed, instance, identity, other) {
   assert.equal(flag("home"), instance.home);
   assert.equal(
     flag("profile-root"),
-    path.join(identity.userData, "farol-next-state/go-core"),
+    path.join(identity.userData, "farol-state/go-core"),
   );
   assert.ok(
     observed.backend.command.startsWith(
@@ -2201,7 +2201,7 @@ async function scannerSelfCheck() {
     true,
   );
   assert.equal(
-    touchesOwner("/private/var/folders/x/T/farol-next-e2e-home-a/f"),
+    touchesOwner("/private/var/folders/x/T/farol-e2e-home-a/f"),
     false,
   );
   // Every root the owner guard prints is an owner location, the nested
@@ -2216,7 +2216,7 @@ async function scannerSelfCheck() {
     assert.equal(touchesOwner(path.join(root, "x/y")), true, root);
   }
   for (const profile of [
-    "Farol Dev Acceptance/Farol Dev/farol-next-state/running.json",
+    "Farol Dev Acceptance/Farol Dev/farol-state/running.json",
     "Farol Dev Acceptance/Farol DEV",
     "Farol Preview/Cookies",
     "Farol Future Channel/anything",
@@ -2234,7 +2234,7 @@ async function scannerSelfCheck() {
   // Containment is canonical: `..` escapes, sibling prefixes, trailing slashes
   // and a symlinked root.
   const sandbox = await fs.realpath(
-    await mkdtempIn(os.tmpdir(), "farol-next-e2e-selfcheck-"),
+    await mkdtempIn(os.tmpdir(), "farol-e2e-selfcheck-"),
   );
   try {
     const a = path.join(sandbox, "instance-a");
@@ -2501,9 +2501,9 @@ async function scannerSelfCheck() {
       const proof = "0b1c2d3e-aaaa-bbbb-cccc-1234567890ab";
       const environment = {
         HOME: ownerHome,
-        FAROL_NEXT_E2E_TEST_PROOF: proof,
+        FAROL_E2E_TEST_PROOF: proof,
         LANG: "en_US.UTF-8",
-        FAROL_NEXT_PREVIEW_SCENARIO: "normal",
+        FAROL_PREVIEW_SCENARIO: "normal",
       };
       const record = environmentRecord(environment, {
         instance,
@@ -2563,10 +2563,7 @@ async function scannerSelfCheck() {
       // is a finding without; a proof is never declared and always a finding.
       assert.equal(PUBLIC_LAUNCH_KEYS.includes("TMPDIR"), false);
       assert.equal(PUBLIC_LAUNCH_KEYS.includes("HOME"), false);
-      assert.equal(
-        PUBLIC_LAUNCH_KEYS.includes("FAROL_NEXT_E2E_TEST_PROOF"),
-        false,
-      );
+      assert.equal(PUBLIC_LAUNCH_KEYS.includes("FAROL_E2E_TEST_PROOF"), false);
       const kinded = { launches: [{ kind: "owner-preview" }], proof };
       const observed = new Set([...guard.envValues, "owner-preview"]);
       assert.deepEqual(
@@ -3771,7 +3768,7 @@ export async function runOwnerPreviewIsolation(
       identities.normal.userData,
       identities["owner-preview"].userData,
     );
-    assert.deepEqual(await fs.readdir(normal.appData), ["Farol Next Preview"]);
+    assert.deepEqual(await fs.readdir(normal.appData), ["Farol"]);
     assert.deepEqual(await fs.readdir(owner.appData), ["Farol Preview"]);
 
     // Orderly quit of both, then the single teardown in `finally` verifies the process trees.
@@ -3789,7 +3786,7 @@ export async function runOwnerPreviewIsolation(
       assert.equal(instance.terminal.signal, null);
       const state = path.join(
         identities[instance.kind].userData,
-        "farol-next-state",
+        "farol-state",
       );
       const quit = parseQuitReceipt(
         (

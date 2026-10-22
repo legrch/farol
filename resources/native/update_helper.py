@@ -20,9 +20,9 @@ import sys
 import time
 
 APP = "Farol.app"
-BUNDLE = "local.farol.next.preview"
-ROOT_PARTS = ("Library", "Application Support", "Farol Next Preview", "installed-updates")
-DIGEST_VERSION = "farol.next.tree-digest/v2"
+BUNDLE = "io.github.legrch.farol"
+ROOT_PARTS = ("Library", "Application Support", "io.github.legrch.farol", "installed-updates")
+DIGEST_VERSION = "farol.tree-digest/v2"
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | getattr(os, "O_NONBLOCK", 0)
 MAX_ENTRIES = 100000
@@ -415,7 +415,7 @@ def open_owner_state(home):
     current = home
     opened = []
     try:
-        for part in ("Library", "Application Support", "Farol Next Preview", "farol-next-state"):
+        for part in ("Library", "Application Support", "io.github.legrch.farol", "farol-state"):
             child = open_dir(current, part)
             opened.append(child)
             current = child

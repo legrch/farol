@@ -11,7 +11,7 @@ const DEFAULT_HELPER = fileURLToPath(
   new URL("./promotion-apply.py", import.meta.url),
 );
 const HELPER_SHA256 =
-  "739ff487dbffbd3e232c3b90e22c234cebd4f735b226101187ea60a1f62691ce";
+  "be78ebefca9280329b766c0aee9dbfdd9adfdab2020f373df236441fdb476ec6";
 const MAX_HELPER_BYTES = 64 * 1024;
 const MAX_OUTPUT_BYTES = 4 * 1024;
 const SUCCESS = "FAROL_PROMOTION_OK\n";
@@ -180,7 +180,7 @@ export async function runPromotionApply({
     });
   }
   const request = {
-    schema: "farol.next.promotion-apply/1",
+    schema: "farol.promotion-apply/1",
     home,
     installLocation,
     source,

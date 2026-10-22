@@ -1,15 +1,15 @@
-# Farol Next design-lab product brief
+# Farol design-lab product brief
 
 This historical September 2026 lab record retains its original status and scope. Relative prototype paths refer to [design-lab/](../../design-lab/); use the [current renderer contract](../desktop/renderer.md) for present source behavior and acceptance limits.
 
 Status: `OWNER_DIRECTION_CHOSEN` · Watch Rail, Iris, Geist; production integration not started
 
-This brief scopes the reversible visual prototype. It does not redefine Farol Next, change
+This brief scopes the reversible visual prototype. It does not redefine Farol, change
 Legacy, or establish live provider or native-host readiness.
 
 ## Product truth
 
-Farol Next is a separate macOS desktop preview for task-bound work. Its shell makes five things
+Farol is a separate macOS desktop preview for task-bound work. Its shell makes five things
 understandable without pretending that configuration is capability:
 
 1. **Browser is the primary work surface.** Each task owns a selected Browser surface and keeps
@@ -80,7 +80,7 @@ performed.
 Keeper's Slate and Watch Rail reuse the same fixture, scenes, viewports, and evidence format; the
 earlier directions are preserved unchanged as the comparison baseline.
 
-The visual baseline was read from the existing sealed Next evidence set at source commit
+The visual baseline was read from the existing sealed Farol evidence set at source commit
 `a5e253426fe487ce8732dfec94fdf993c87a3228`. Its saved `vnext/artifacts/e2e/report.json` records
 `sourceDirty: false`, source tree digest
 `650df9c58546094e0fa75c982b06c3d72ce763d3c9c9ddaf60ad75b574802a67`, and screenshots for

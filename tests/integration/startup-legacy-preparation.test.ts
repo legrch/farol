@@ -77,7 +77,7 @@ async function fixture(
   await fs.chmod(root, 0o700);
   const retained = path.join(root, "retained-originals");
   const userData = path.join(root, "Farol Dev");
-  const state = path.join(userData, "farol-next-state");
+  const state = path.join(userData, "farol-state");
   const legacy = path.join(state, "chatgpt-task-journal");
   const file = path.join(legacy, "chatgpt-task-journal.json");
   const core = path.join(state, "go-core");

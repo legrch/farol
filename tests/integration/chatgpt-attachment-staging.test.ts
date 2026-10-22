@@ -24,7 +24,7 @@ afterEach(async () => {
 
 async function temporaryRoot(): Promise<string> {
   const root = await fs.mkdtemp(
-    path.join(os.tmpdir(), "farol-next-attachment-stage-"),
+    path.join(os.tmpdir(), "farol-attachment-stage-"),
   );
   roots.push(root);
   return root;

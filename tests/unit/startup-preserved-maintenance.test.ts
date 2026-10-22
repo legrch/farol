@@ -56,7 +56,7 @@ function fixture() {
   const candidate: StartupPreservedSelection = {
     profile: {
       profileId: "profile",
-      root: root + "/farol-next-state/go-core",
+      root: root + "/farol-state/go-core",
       home: "/private/synthetic/home",
       device: "1",
       inode: "2",
@@ -102,9 +102,9 @@ function fixture() {
     compiledResources: { fixture: "resources" },
     build: {
       schema: 1,
-      product: "Farol Next Preview",
+      product: "Farol",
       version: "0.2.7",
-      bundleId: "local.farol.next.preview",
+      bundleId: "io.github.legrch.farol",
       updateChannel: "local-preview-only",
       builtAt: "2026-10-17T00:00:00.000Z",
       sourceCommit: "d".repeat(40),
@@ -114,7 +114,7 @@ function fixture() {
     },
     startup: {
       lease: {
-        file: root + "/farol-next-state/promotion.lease",
+        file: root + "/farol-state/promotion.lease",
         record: {
           schema: 1,
           generation: "b".repeat(64),
@@ -232,7 +232,7 @@ describe("one startup preserving-maintenance attempt", () => {
     for (const spelling of ["Farol Dev", "Farol DEV"])
       for (const suffix of ["secure-mcp-connector", "go-core"])
         expect(ports.processes).toHaveBeenCalledWith(
-          `/private/synthetic/${spelling}/farol-next-state/${suffix}`,
+          `/private/synthetic/${spelling}/farol-state/${suffix}`,
         );
   });
 

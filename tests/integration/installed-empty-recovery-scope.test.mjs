@@ -104,7 +104,7 @@ describe("installed consumed-empty maintenance scope", () => {
   });
   it("probes both fixed installed child scopes and stops on the original failure", () => {
     const root =
-      "/Users/test/Library/Application Support/Farol Next Preview/farol-next-state/secure-mcp-connector";
+      "/Users/test/Library/Application Support/io.github.legrch.farol/farol-state/secure-mcp-connector";
     const seen = [];
     assertInstalledEmptyRecoveryProcesses(root, (r) => seen.push(r));
     expect(seen).toEqual([

@@ -27,7 +27,7 @@ const binding: ContextBinding = {
   taskId: "task-atlantic",
   hostThreadId: "thread-atlantic",
   sessionId: "session-atlantic",
-  providerProfileId: "profile-isolated-next",
+  providerProfileId: "profile-isolated-farol",
   modelId: "chatgpt-web/high",
   mode: "high",
 };
@@ -39,7 +39,7 @@ const command = {
 };
 
 const content = {
-  goal: "Continue the exact Farol Next task.",
+  goal: "Continue the exact Farol task.",
   activeConstraints: ["Never repeat an outcome-unknown write."],
   latestCorrections: ["Use Watch Rail, not Graphite."],
   keyDecisions: ["Context continuity belongs to the Chat module."],

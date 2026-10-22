@@ -376,7 +376,7 @@ describe("read-only Computer launch contract", () => {
 
   it("requires a private owner file before invoking the native reader", async () => {
     temporaryRoot = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-launch-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-launch-")),
     );
     await fs.chmod(temporaryRoot, 0o700);
     const file = path.join(temporaryRoot, READONLY_COMPUTER_LAUNCH_BASENAME);

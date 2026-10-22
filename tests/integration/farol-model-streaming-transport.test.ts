@@ -21,7 +21,7 @@ import { FarolModelRuntimeState } from "../../src/apps/desktop/farol-model-runti
 // that scripts one behaviour; the real inner provider is exercised by the
 // parity rows beside this file.
 
-const MODEL = "farol-next/mind";
+const MODEL = "legacy-route/mind";
 const INNER_TOKEN = "inner-route-b-token";
 const roots: string[] = [];
 const closers: Array<() => Promise<void>> = [];
@@ -295,7 +295,7 @@ describe("S35 transport parity: the outer Farol Model relays Route B truthfully"
       response.writeHead(422, { "content-type": "application/json" });
       response.end(
         JSON.stringify({
-          error: { code: "FAROL_NEXT_COMPACTION_IDENTITY_MISMATCH" },
+          error: { code: "FAROL_COMPACTION_IDENTITY_MISMATCH" },
         }),
       );
     });
@@ -311,7 +311,7 @@ describe("S35 transport parity: the outer Farol Model relays Route B truthfully"
     );
     expect(answer.status).toBe(422);
     expect(JSON.parse(answer.body).error.code).toBe(
-      "FAROL_NEXT_COMPACTION_IDENTITY_MISMATCH",
+      "FAROL_COMPACTION_IDENTITY_MISMATCH",
     );
   });
 

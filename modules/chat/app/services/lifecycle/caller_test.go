@@ -23,7 +23,7 @@ func callerRequest(t *testing.T, s *Service, scope port.ComputerContext) port.Be
 	if err != nil {
 		t.Fatal(err)
 	}
-	return port.BeginCallerToolRequest{Context: scope, Scope: external, ProducerOperationID: "fixture-call", Call: port.CallerFunctionCall{ItemID: "fc-fixture", CallID: "farol_next_call_" + hash[:16] + "0123456789abcdef", Name: "exec_command", Arguments: `{"cmd":"fixture private command"}`}}
+	return port.BeginCallerToolRequest{Context: scope, Scope: external, ProducerOperationID: "fixture-call", Call: port.CallerFunctionCall{ItemID: "fc-fixture", CallID: "farol_call_" + hash[:16] + "0123456789abcdef", Name: "exec_command", Arguments: `{"cmd":"fixture private command"}`}}
 }
 func callerInput(r port.BeginCallerToolRequest, raw string) port.AcceptCallerOutputRequest {
 	return port.AcceptCallerOutputRequest{Context: r.Context, Scope: r.Scope, Calls: []port.CallerFunctionCall{cloneCallerFunction(r.Call)}, Outputs: []port.CallerFunctionOutput{{CallID: r.Call.CallID, Raw: []byte(raw)}}}
@@ -264,7 +264,7 @@ func TestCallerBeginValidationAndInternalSeparation(t *testing.T) {
 			case "model":
 				r.Scope.Model = "other-valid-model"
 			case "tag":
-				r.Call.CallID = "farol_next_call_" + strings.Repeat("a", 32)
+				r.Call.CallID = "farol_call_" + strings.Repeat("a", 32)
 			case "args":
 				r.Call.Arguments = `[]`
 			case "size":
@@ -541,7 +541,7 @@ func TestCallerJSONIdentityMatchesExistingJavaScriptProducer(t *testing.T) {
 	r.Scope = port.CallerScope{SessionID: "<>&\u2028\u2029\\u2028😀", ThreadID: "thread", TurnID: "turn", RootTurnID: "root", Model: "chatgpt"}
 	// Golden SHA computed independently with Node crypto + JSON.stringify of the
 	// sorted identity keys, matching existing canonicalJson. No native tool call.
-	r.Call.CallID = "farol_next_call_f3f17ae0cd27b0c50123456789abcdef"
+	r.Call.CallID = "farol_call_f3f17ae0cd27b0c50123456789abcdef"
 	if _, err := c.BeginCallerTool(context.Background(), r); err != nil {
 		t.Fatal(err)
 	}

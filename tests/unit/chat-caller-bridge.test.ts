@@ -28,7 +28,7 @@ const begin: ChatCallerBegin = {
   },
   call: {
     itemId: "fc_one",
-    callId: "farol_next_call_" + "c".repeat(32),
+    callId: "farol_call_" + "c".repeat(32),
     name: "read_file",
     arguments: '{"path":"note.md"}',
   },

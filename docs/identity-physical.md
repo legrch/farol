@@ -8,9 +8,9 @@ Core owns the root module and composition.
 ## Physical operation
 
 The only intended forward effect is a single whole-root rename from the accepted
-current-alpha directory to `Farol` under one verified Application Support
-parent. Production has bundle `io.github.legrch.farol` and browser partition
-`persist:farol`; Dev has separate `Farol Dev`, `io.github.legrch.farol.dev` and
+current-alpha directory to `io.github.legrch.farol` under one verified
+Application Support parent. Production has bundle `io.github.legrch.farol` and
+browser partition `persist:farol-runtime`; Dev has separate `Farol Dev`, `io.github.legrch.farol.dev` and
 `persist:farol-dev`. Development never relocates production. No browser store is
 copied, merged or rewritten. No V0 application is started.
 

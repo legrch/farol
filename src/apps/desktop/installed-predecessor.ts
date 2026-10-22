@@ -99,9 +99,9 @@ export async function captureInstalledPredecessor(): Promise<InstalledPredecesso
   const home = os.userInfo().homedir;
   const profile = path.join(
     home,
-    "Library/Application Support/Farol Next Preview",
+    "Library/Application Support/io.github.legrch.farol",
   );
-  const stateRoot = path.join(profile, "farol-next-state");
+  const stateRoot = path.join(profile, "farol-state");
   const roots = [
     home,
     path.join(home, "Library"),

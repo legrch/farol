@@ -25,12 +25,12 @@ afterEach(async () => {
 });
 
 async function userData() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-userdata-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-userdata-"));
   roots.push(root);
-  await fs.mkdir(path.join(root, "farol-next-state", "live-tasks"), {
+  await fs.mkdir(path.join(root, "farol-state", "live-tasks"), {
     recursive: true,
   });
-  await fs.mkdir(path.join(root, "farol-next-state", "chatgpt-task-journal"), {
+  await fs.mkdir(path.join(root, "farol-state", "chatgpt-task-journal"), {
     recursive: true,
   });
   return root;
@@ -104,7 +104,7 @@ function journal(overrides = {}) {
 const RECEIPT_AT = "2026-09-20T10:00:00.000Z";
 async function writeQuitReceipt(root, drained, unconfirmed = []) {
   await writeFile(
-    path.join(root, "farol-next-state", "last-quit.json"),
+    path.join(root, "farol-state", "last-quit.json"),
     serializeQuitReceipt({ drained, unconfirmed }, RECEIPT_AT),
   );
 }
@@ -120,7 +120,7 @@ const started = () => START;
 
 async function writeTasks(root, tasks, overrides = {}) {
   await writeFile(
-    path.join(root, "farol-next-state", "live-tasks", "live-tasks.json"),
+    path.join(root, "farol-state", "live-tasks", "live-tasks.json"),
     JSON.stringify({
       schema: 1,
       revision: 1,
@@ -180,7 +180,7 @@ describe("Q-08 activation obligations", () => {
     await writeFile(
       path.join(
         root,
-        "farol-next-state",
+        "farol-state",
         "chatgpt-task-journal",
         "chatgpt-task-journal.json",
       ),
@@ -208,7 +208,7 @@ describe("Q-08 activation obligations", () => {
   it("fails closed on state it cannot read, and admits the same root once its obligations are gone", async () => {
     const root = await userData();
     await writeFile(
-      path.join(root, "farol-next-state", "live-tasks", "live-tasks.json"),
+      path.join(root, "farol-state", "live-tasks", "live-tasks.json"),
       "{not json",
     );
     const unreadable = await activationObligations(root);
@@ -235,13 +235,13 @@ describe("Q-08 activation obligations", () => {
     const root = await userData();
     const tasksFile = path.join(
       root,
-      "farol-next-state",
+      "farol-state",
       "live-tasks",
       "live-tasks.json",
     );
     const journalFile = path.join(
       root,
-      "farol-next-state",
+      "farol-state",
       "chatgpt-task-journal",
       "chatgpt-task-journal.json",
     );
@@ -328,7 +328,7 @@ describe("Q-08 activation obligations", () => {
       });
     }
     await fs.rm(journalFile);
-    const quitFile = path.join(root, "farol-next-state", "last-quit.json");
+    const quitFile = path.join(root, "farol-state", "last-quit.json");
     for (const value of [
       { schema: 1, at: RECEIPT_AT, drained: "yes", unconfirmed: [] },
       { schema: 1, at: RECEIPT_AT, drained: true },
@@ -385,7 +385,7 @@ describe("Q-08 activation obligations", () => {
     const root = await userData();
     const tasksFile = path.join(
       root,
-      "farol-next-state",
+      "farol-state",
       "live-tasks",
       "live-tasks.json",
     );
@@ -427,7 +427,7 @@ describe("Q-08 activation obligations", () => {
 
   it("HR-012/F2 refuses while a guarded edit recorded before it ran is still undelivered, whatever the tasks say", async () => {
     const root = await userData();
-    const settingsFile = path.join(root, "farol-next-state", "config.json");
+    const settingsFile = path.join(root, "farol-state", "config.json");
     // A complete `ProductSettingsSchema` record. `nativeHosts`, `connectors`
     // and `setup.journey` are omitted deliberately: the real schema defaults
     // them when the key is absent, exactly like a settings file saved before
@@ -528,7 +528,7 @@ describe("Q-08 activation obligations", () => {
 
   it("reads the product's own user-data directory for an owner home", () => {
     expect(promotionUserData("/Users/example")).toBe(
-      "/Users/example/Library/Application Support/Farol Next Preview",
+      "/Users/example/Library/Application Support/io.github.legrch.farol",
     );
     expect(() => promotionUserData("relative")).toThrow(
       "PROMOTION_HOME_NOT_ABSOLUTE",
@@ -544,7 +544,7 @@ describe("Q-08 activation obligations", () => {
   it("F3-3 refuses a symlink standing in for the state file, never follows it", async () => {
     const root = await userData();
     const outside = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-outside-state-"),
+      path.join(os.tmpdir(), "farol-outside-state-"),
     );
     roots.push(outside);
     // What an attacker or a race would want promotion to read instead: a
@@ -555,7 +555,7 @@ describe("Q-08 activation obligations", () => {
     );
     const tasksFile = path.join(
       root,
-      "farol-next-state",
+      "farol-state",
       "live-tasks",
       "live-tasks.json",
     );
@@ -575,7 +575,7 @@ describe("Q-08 activation obligations", () => {
     const root = await userData();
     const tasksFile = path.join(
       root,
-      "farol-next-state",
+      "farol-state",
       "live-tasks",
       "live-tasks.json",
     );
@@ -621,7 +621,7 @@ describe("Q-08 activation obligations", () => {
   // with the shared serializer that replaces it, and both must be identical.
   it("N03/D1 reads the receipt bytes the desktop actually writes: drained as drained, undrained as QUIT_UNCONFIRMED", async () => {
     const root = await userData();
-    const quitFile = path.join(root, "farol-next-state", "last-quit.json");
+    const quitFile = path.join(root, "farol-state", "last-quit.json");
     const at = new Date().toISOString();
     const desktopBytes = (receipt) =>
       `${JSON.stringify({ schema: 1, at, ...receipt })}\n`;
@@ -665,7 +665,7 @@ describe("Q-08 activation obligations", () => {
     const root = await userData();
     const tasksFile = path.join(
       root,
-      "farol-next-state",
+      "farol-state",
       "live-tasks",
       "live-tasks.json",
     );
@@ -705,7 +705,7 @@ describe("Q-08 activation obligations", () => {
   // so the verdict never depends on this machine's uptime or on pid reuse.
   it("N03/D2 classifies the run marker: a live pid on this boot is APP_RUNNING, a dead pid or another boot is QUIT_UNCONFIRMED:crash, absent is nothing", async () => {
     const root = await userData();
-    const state = path.join(root, "farol-next-state");
+    const state = path.join(root, "farol-state");
     await writeTasks(root, [task({ lifecycle: "completed" })]);
     await writeQuitReceipt(root, true);
     await expect(activationObligations(root)).resolves.toMatchObject({
@@ -804,7 +804,7 @@ describe("Q-08 activation obligations", () => {
   // else, and the obligation reader must not call that the running app.
   it("S35-H1-3 a live pid on this boot whose process start time differs is QUIT_UNCONFIRMED:crash, and an unreadable start time is never guessed", async () => {
     const root = await userData();
-    const state = path.join(root, "farol-next-state");
+    const state = path.join(root, "farol-state");
     await writeTasks(root, [task({ lifecycle: "completed" })]);
     await writeQuitReceipt(root, true);
     await writeRunMarker(state, {
@@ -856,7 +856,7 @@ describe("Q-08 activation obligations", () => {
 
   it("N03/D2 treats a run marker it cannot read as unreadable, and notices one that appears between its two reads", async () => {
     const root = await userData();
-    const state = path.join(root, "farol-next-state");
+    const state = path.join(root, "farol-state");
     const markerFile = path.join(state, "running.json");
     const valid = {
       schema: 1,
@@ -901,7 +901,7 @@ describe("Q-08 activation obligations", () => {
     }
     await fs.rm(markerFile, { force: true });
     const outside = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-outside-marker-"),
+      path.join(os.tmpdir(), "farol-outside-marker-"),
     );
     roots.push(outside);
     await writeFile(path.join(outside, "running.json"), JSON.stringify(valid));

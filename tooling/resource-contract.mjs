@@ -2,18 +2,18 @@ import { isDeepStrictEqual } from "node:util";
 import { ELECTRON_RUNTIME } from "./runtime-contract.mjs";
 
 export const EXPECTED_RESOURCE_MANIFEST = Object.freeze({
-  schema: "farol.next.resource-manifest/1",
+  schema: "farol.resource-manifest/1",
   product: {
-    name: "Farol Next Preview",
+    name: "Farol",
     version: "0.1.0-preview.0",
-    bundleId: "local.farol.next.preview",
+    bundleId: "io.github.legrch.farol",
     updateChannel: "local-preview-only",
   },
   application: {
     singleInstanceScope: "userData",
-    userData: "${appData}/Farol Next Preview",
-    sessionData: "${appData}/Farol Next Preview",
-    browserPartition: "persist:farol-next-preview",
+    userData: "${appData}/io.github.legrch.farol",
+    sessionData: "${appData}/io.github.legrch.farol",
+    browserPartition: "persist:farol-runtime",
     state: "contained-in-userData",
     cache: "contained-in-sessionData",
     logs: "absent",
@@ -21,8 +21,8 @@ export const EXPECTED_RESOURCE_MANIFEST = Object.freeze({
     promotionReceipt: "sibling-of-promoted-app",
   },
   runtime: {
-    process: "Farol Next Runtime",
-    owner: "Farol Next Preview main process",
+    process: "Farol Runtime",
+    owner: "Farol main process",
     transport: "http-sse-loopback",
     port: "os-allocated-loopback",
     bearer: "per-launch-memory-only",
@@ -31,21 +31,21 @@ export const EXPECTED_RESOURCE_MANIFEST = Object.freeze({
   },
   processes: [
     {
-      name: "Farol Next Preview",
+      name: "Farol",
       kind: "electron-main",
-      ownedBy: "local.farol.next.preview",
+      ownedBy: "io.github.legrch.farol",
     },
     {
-      name: "Farol Next Runtime",
+      name: "Farol Runtime",
       // Schema-1 wire tag retained for previously installed package verifiers.
       // The active implementation uses the owned Node IPC runtime.
       kind: "electron-utility-process",
-      ownedBy: "Farol Next Preview",
+      ownedBy: "Farol",
     },
     {
       name: "OpenAI tunnel-client",
       kind: "owner-selected-native-connector",
-      ownedBy: "Farol Next Preview when explicitly started",
+      ownedBy: "Farol when explicitly started",
     },
     {
       name: "Electron renderer/helper",
@@ -55,7 +55,7 @@ export const EXPECTED_RESOURCE_MANIFEST = Object.freeze({
   ],
   integrations: {
     tunnel: "owner-selected-openai-tunnel-client",
-    mcpRegistration: "next-owned-profile-to-packaged-computer-mcp",
+    mcpRegistration: "farol-owned-profile-to-packaged-computer-mcp",
     providerRegistration: "owner-completed-chatgpt-connector-attachment",
     nativeComputer: "packaged-computer-mcp-via-app-owned-tunnel",
     nativeAgent: "absent",

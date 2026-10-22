@@ -20,7 +20,7 @@ const command = {
   strict: true,
 } as const;
 
-describe("Farol Next Codex caller relay", () => {
+describe("Farol Codex caller relay", () => {
   let root: string | null = null;
   let runtime: CodexCallerRelayRuntime | null = null;
 

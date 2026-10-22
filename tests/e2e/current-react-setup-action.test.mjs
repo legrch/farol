@@ -44,7 +44,7 @@ function fakePage({
   dom.window.HTMLElement.prototype.checkVisibility = () => true;
   const context = dom.getInternalVMContext();
   let currentWorkspaces = before.map((item) => ({ ...item, access }));
-  dom.window.farolNext = {
+  dom.window.farol = {
     bootstrap: () => ({
       configuration: {
         status: "ready",

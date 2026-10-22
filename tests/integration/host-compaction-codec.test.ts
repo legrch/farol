@@ -39,7 +39,7 @@ const baseInput = [
 ];
 
 const content: CheckpointContent = {
-  goal: "Continue the exact Farol Next task.",
+  goal: "Continue the exact Farol task.",
   activeConstraints: ["Do not repeat an outcome-unknown write."],
   latestCorrections: ["Do not retry the write."],
   keyDecisions: ["Use ordinary context compaction only."],
@@ -75,7 +75,7 @@ function checkpointFor(request: ParsedHostCompaction) {
     taskId: "task-atlantic",
     hostThreadId: request.identity.threadId,
     sessionId: "session-atlantic",
-    providerProfileId: "profile-isolated-next",
+    providerProfileId: "profile-isolated-farol",
     modelId: request.identity.modelId,
     mode: "high",
   };
@@ -487,9 +487,7 @@ describe("native host compaction codec", () => {
       },
     });
     if (handoff.variant !== "streamed_compaction_item") return;
-    expect(handoff.item.encrypted_content).toMatch(
-      /^farol-next-checkpoint-v1:/u,
-    );
+    expect(handoff.item.encrypted_content).toMatch(/^farol-checkpoint-v1:/u);
     expect(replayHostCheckpoint([handoff.item], 16_384)).toMatchObject({
       ok: true,
       value: {
@@ -600,9 +598,9 @@ describe("native host compaction codec", () => {
         parseHostCompactionRequest(
           endpoint,
           endpoint === "responses_compact"
-            ? { model: "farol-next/mind", input: baseInput }
+            ? { model: "legacy-route/mind", input: baseInput }
             : {
-                model: "farol-next/mind",
+                model: "legacy-route/mind",
                 stream: true,
                 input: [...baseInput, { type: "compaction_trigger" }],
               },

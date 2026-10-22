@@ -4,7 +4,7 @@ import {
 } from "../pkg/product-settings/contract";
 
 /**
- * What actually happened to the `await window.farolNext.configure(command)`
+ * What actually happened to the `await window.farol.configure(command)`
  * call, captured by the caller's own try/catch. This module never touches
  * the IPC bridge itself, so a rejected promise is handed in as plain data
  * instead of being caught here.

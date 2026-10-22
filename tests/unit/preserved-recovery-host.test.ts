@@ -173,7 +173,7 @@ function fixture(
   currentUnconfirmed: readonly string[] = ["go-core", "connector"],
 ) {
   const userData = path.join("/synthetic", basename);
-  const state = path.join(userData, "farol-next-state");
+  const state = path.join(userData, "farol-state");
   const profile = {
     profileId: "dev-profile",
     root: path.join(state, "go-core"),
@@ -1534,7 +1534,7 @@ describe("closed preserved recovery refuses progression", () => {
     async (userData) => {
       const f = fixture();
       f.input.userData = userData;
-      f.input.profile.root = path.join(userData, "farol-next-state", "go-core");
+      f.input.profile.root = path.join(userData, "farol-state", "go-core");
       await expect(f.execute()).rejects.toThrow(
         "PRESERVED_RECOVERY_SELECTION_INVALID",
       );

@@ -33,16 +33,16 @@ Browser route and a short-lived authenticated local socket; the Computer MCP
 process receives its endpoint only in the sealed launch contract. A missing
 endpoint means neither `chatgpt_chat_create` nor `chatgpt_chat_status` is
 advertised. Normal launches are default-off. For a disposable packaged preview,
-the owner can set `FAROL_NEXT_SAVED_CHAT_PREVIEW=1` on the `task run`
+the owner can set `FAROL_SAVED_CHAT_PREVIEW=1` on the `task run`
 process after the new build's ChatGPT Setup connection has been verified, then
 restart and refresh the new connector. Publication requires that opt-in and a
-current, unambiguous Next-partition readiness receipt for the exact build.
+current, unambiguous Farol-partition readiness receipt for the exact build.
 Before durable Send intent, Farol shows the exact key, requested title,
 request digest and first message in a native owner confirmation dialog. Denial
 is recorded without a Send; missing owner window refuses. Immediately before
 the submit call it rechecks the same build/profile admission. The readiness
 receipt proves a signed-in partition, **not the account ID**; the owner must
-inspect the intended account in the same Farol Next Browser partition before
+inspect the intended account in the same Farol Browser partition before
 the one-send confirmation. An account-writing
 operation retains its desktop execution-fence lease until its Browser work
 finishes, even after the MCP caller disconnects. Connector stop drains the
@@ -372,7 +372,7 @@ turn. A failure on this fixture blocks any later live task canary.
 ## Saved ChatGPT route qualification backlog
 
 The saved-chat route now composes a private write-once journal, an app service,
-the dedicated Next Browser adapter and a gated desktop/Computer MCP endpoint.
+the dedicated Farol Browser adapter and a gated desktop/Computer MCP endpoint.
 It reserves a
 lowercase UUID before opening a browser, writes a durable send intent before
 the one Send boundary, and cannot retry that key after an unknown outcome.

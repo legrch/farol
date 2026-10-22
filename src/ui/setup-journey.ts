@@ -16,10 +16,10 @@ export const setupSteps: readonly SetupStep[] = [
   {
     id: "chatgpt",
     eyeline: "ChatGPT",
-    title: "Sign in on the isolated Next route",
-    copy: "Open the dedicated ChatGPT window, sign in there, then deliberately check that the real composer is available. Farol Next never borrows another application's cookies or profile.",
+    title: "Sign in on the isolated Farol route",
+    copy: "Open the dedicated ChatGPT window, sign in there, then deliberately check that the real composer is available. Farol never borrows another application's cookies or profile.",
     details: [
-      "The persistent partition belongs only to Farol Next.",
+      "The persistent partition belongs only to Farol.",
       "Readiness stores only a content-free result; credentials, page text, conversations, prompts, and answers are never copied into settings.",
     ],
   },
@@ -36,8 +36,8 @@ export const setupSteps: readonly SetupStep[] = [
   {
     id: "connect",
     eyeline: "Connect",
-    title: "Configure the Next-owned route",
-    copy: "Select the exact OpenAI tunnel-client, save one tunnel ID and runtime key in Farol Next private state, then start and check the app-owned connector. Local shell transport alone is not connection proof.",
+    title: "Configure the Farol-owned route",
+    copy: "Select the exact OpenAI tunnel-client, save one tunnel ID and runtime key in Farol private state, then start and check the app-owned connector. Local shell transport alone is not connection proof.",
     details: [
       "The connector launches only the packaged Computer MCP with the current owner-approved TaskGrant; it does not register a global shell command or login item.",
       "Profile, Computer generation, runtime readiness, and ChatGPT attachment remain separate proofs. Runtime credentials never enter product settings, support exports, or source.",
@@ -47,7 +47,7 @@ export const setupSteps: readonly SetupStep[] = [
     id: "hosts",
     eyeline: "Codex and Agent apps",
     title: "Choose and verify the native Codex host",
-    copy: "Select the exact Codex executable Farol Next may start. The app first records the bounded version and App Server contract, then verifies readiness with one explicit gpt-6-astra turn and correlated Farol Next tool call.",
+    copy: "Select the exact Codex executable Farol may start. The app first records the bounded version and App Server contract, then verifies readiness with one explicit gpt-6-astra turn and correlated Farol tool call.",
     details: [
       "The live host check disables provider fallback and persists only content-free verification evidence.",
       "Native Agent lineage is verified separately after one workspace is ready.",

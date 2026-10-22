@@ -434,7 +434,7 @@ async function scenario({
   const home = path.join(profile, "home"),
     appData = path.join(profile, "app-data"),
     workspace = path.join(profile, "workspace");
-  const stateRoot = path.join(appData, "Farol Dev", "farol-next-state");
+  const stateRoot = path.join(appData, "Farol Dev", "farol-state");
   for (const dir of [home, stateRoot, workspace])
     await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   await fs.writeFile(
@@ -448,7 +448,7 @@ async function scenario({
     { mode: 0o600, flag: "wx" },
   );
   const proof = randomUUID();
-  await fs.writeFile(path.join(profile, ".farol-next-e2e-root"), proof, {
+  await fs.writeFile(path.join(profile, ".farol-e2e-root"), proof, {
     mode: 0o600,
     flag: "wx",
   });
@@ -674,7 +674,7 @@ async function scenario({
     row.commands.push(observation);
     await save();
     const reply = await bounded(
-      page.evaluate((value) => window.farolNext.configure(value), command),
+      page.evaluate((value) => window.farol.configure(value), command),
       "CONFIGURATION_OUTCOME_UNKNOWN_NO_RETRY",
     );
     observation.reply = reply;
@@ -715,20 +715,17 @@ async function scenario({
         PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
         LANG: "en_US.UTF-8",
         LC_ALL: "en_US.UTF-8",
-        FAROL_NEXT_ENVIRONMENT: "dev",
-        FAROL_NEXT_E2E: "1",
-        FAROL_NEXT_E2E_APP_DATA: appData,
-        FAROL_NEXT_E2E_TEST_ROOT: profile,
-        FAROL_NEXT_E2E_TEST_PROOF: proof,
-        FAROL_NEXT_E2E_CHATGPT_URL: site.url,
+        FAROL_ENVIRONMENT: "dev",
+        FAROL_E2E: "1",
+        FAROL_E2E_APP_DATA: appData,
+        FAROL_E2E_TEST_ROOT: profile,
+        FAROL_E2E_TEST_PROOF: proof,
+        FAROL_E2E_CHATGPT_URL: site.url,
         ...(tunnelExecutable
-          ? { FAROL_NEXT_E2E_TUNNEL_CLIENT: tunnelExecutable }
+          ? { FAROL_E2E_TUNNEL_CLIENT: tunnelExecutable }
           : {}),
-        FAROL_NEXT_E2E_WORKSPACE_ROOT: workspace,
-        FAROL_NEXT_E2E_WORKSPACE_FILE: path.join(
-          workspace,
-          readCanary.relativePath,
-        ),
+        FAROL_E2E_WORKSPACE_ROOT: workspace,
+        FAROL_E2E_WORKSPACE_FILE: path.join(workspace, readCanary.relativePath),
       },
     });
     child = app.process();
@@ -821,7 +818,7 @@ async function scenario({
         () =>
           page
             .evaluate(() => ({
-              normalAPI: typeof window.farolNext,
+              normalAPI: typeof window.farol,
               recoveryAPI: typeof window.farolRecovery,
               normalShell: !!document.querySelector(".desktop"),
               recoveryHeading: [...document.querySelectorAll("h1,h2")].some(
@@ -888,7 +885,7 @@ async function scenario({
         const remaining = readyBy - performance.now();
         assert.ok(remaining > 0, "NORMAL_BOOTSTRAP_DEADLINE");
         bootstrap = await bounded(
-          page.evaluate(() => window.farolNext.bootstrap()),
+          page.evaluate(() => window.farol.bootstrap()),
           "BOOTSTRAP_READ_UNKNOWN_NO_RETRY",
           Math.min(3000, remaining),
         );
@@ -1569,7 +1566,7 @@ async function scenario({
       await save();
       await start();
       row.normalAPI = await page.evaluate(() => ({
-        normal: typeof window.farolNext,
+        normal: typeof window.farol,
         recovery: typeof window.farolRecovery,
       }));
       assert.deepEqual(row.normalAPI, {

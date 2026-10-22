@@ -415,7 +415,7 @@ if (
 if (
   build.schema !== 4 ||
   build.sourceMode !== "head-exact" ||
-  build.product !== "Farol Next Preview" ||
+  build.product !== "Farol" ||
   !/^[a-f0-9]{64}$/u.test(build.buildId) ||
   typeof build.builtAt !== "string" ||
   !/^[a-f0-9]{40}$/u.test(build.sourceCommit) ||
@@ -451,7 +451,7 @@ try {
 }
 
 const buildIdentity = [
-  "farol-next",
+  "farol",
   build.buildId,
   build.sourceCommit,
   build.sourceTreeDigest,

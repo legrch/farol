@@ -28,7 +28,7 @@ afterEach(async () => {
 
 async function root(): Promise<string> {
   const value = await fs.mkdtemp(
-    path.join(os.tmpdir(), "farol-next-secure-mcp-launch-"),
+    path.join(os.tmpdir(), "farol-secure-mcp-launch-"),
   );
   roots.push(value);
   return value;
@@ -433,13 +433,13 @@ describe("secure MCP Computer launch contract", () => {
       runtimeId: "runtime-generation-01",
       challengeSha256: "a".repeat(64),
       callerRelay: {
-        protocol: "farol-next-caller-relay/v1",
-        socketPath: "/private/tmp/farol-next-caller/relay.sock",
+        protocol: "farol-caller-relay/v1",
+        socketPath: "/private/tmp/farol-caller/relay.sock",
         token: "a-private-relay-token-that-is-long-enough",
       },
       savedChat: {
-        protocol: "farol-next-saved-chat/v1",
-        socketPath: "/private/tmp/farol-next-chat/chat.sock",
+        protocol: "farol-saved-chat/v1",
+        socketPath: "/private/tmp/farol-chat/chat.sock",
         token: "a".repeat(64),
       },
     });
@@ -507,12 +507,12 @@ describe("secure MCP Computer launch contract", () => {
       },
       connectorVerification: { challengeSha256: "a".repeat(64) },
       callerRelay: {
-        protocol: "farol-next-caller-relay/v1",
-        socketPath: "/private/tmp/farol-next-caller/relay.sock",
+        protocol: "farol-caller-relay/v1",
+        socketPath: "/private/tmp/farol-caller/relay.sock",
       },
       savedChat: {
-        protocol: "farol-next-saved-chat/v1",
-        socketPath: "/private/tmp/farol-next-chat/chat.sock",
+        protocol: "farol-saved-chat/v1",
+        socketPath: "/private/tmp/farol-chat/chat.sock",
       },
     });
 
@@ -525,13 +525,13 @@ describe("secure MCP Computer launch contract", () => {
       challengeSha256: "a".repeat(64),
     });
     expect(materialized.callerRelay).toEqual({
-      protocol: "farol-next-caller-relay/v1",
-      socketPath: "/private/tmp/farol-next-caller/relay.sock",
+      protocol: "farol-caller-relay/v1",
+      socketPath: "/private/tmp/farol-caller/relay.sock",
       token: "a-private-relay-token-that-is-long-enough",
     });
     expect(materialized.savedChat).toEqual({
-      protocol: "farol-next-saved-chat/v1",
-      socketPath: "/private/tmp/farol-next-chat/chat.sock",
+      protocol: "farol-saved-chat/v1",
+      socketPath: "/private/tmp/farol-chat/chat.sock",
       token: "a".repeat(64),
     });
     expect(materialized.participants[0]?.grant.workspaces).toMatchObject(

@@ -115,7 +115,7 @@ export function assertClosedRecoveryProcesses(
       (name !== DEV_DATA_DIRECTORY_NAME &&
         name !== LEGACY_DEV_DATA_DIRECTORY_NAME) ||
       connectorRoot !==
-        path.join(profile, "farol-next-state", "secure-mcp-connector")
+        path.join(profile, "farol-state", "secure-mcp-connector")
     )
       throw new Error("DEV_PROFILE_DIRECTORY_UNSAFE");
     const alternate =
@@ -126,7 +126,7 @@ export function assertClosedRecoveryProcesses(
       path.join(
         path.dirname(profile),
         alternate,
-        "farol-next-state",
+        "farol-state",
         "secure-mcp-connector",
       ),
     );

@@ -57,7 +57,7 @@ describe("DEV profile spelling compatibility", () => {
     expect(identity.userData).toBe(path.join(appData, "Farol DEV"));
     expect(identity.sessionData).toBe(identity.userData);
     expect(identity.codexHome).toBe(
-      path.join(identity.userData, "farol-next-private", "codex-home"),
+      path.join(identity.userData, "farol-private", "codex-home"),
     );
   });
 
@@ -116,7 +116,7 @@ describe("DEV profile spelling compatibility", () => {
       desktopIdentity("dev", appData, "../other" as "Farol Dev"),
     ).toThrow("DEV_PROFILE_DIRECTORY_INVALID");
     expect(desktopIdentity("preview", appData, "Farol DEV").userData).toBe(
-      path.join(appData, "Farol Next Preview"),
+      path.join(appData, "io.github.legrch.farol"),
     );
   });
 
@@ -207,7 +207,7 @@ describe("DEV profile spelling compatibility", () => {
   );
 
   it.each([
-    path.join(appData, "Farol Next Preview"),
+    path.join(appData, "io.github.legrch.farol"),
     path.join(appData, "Farol Dev Acceptance", DEV_DATA_DIRECTORY_NAME),
     path.join(appData, DEV_DATA_DIRECTORY_NAME, "child"),
     path.join(path.dirname(appData), DEV_DATA_DIRECTORY_NAME),

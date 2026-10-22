@@ -14,7 +14,7 @@ No workspace files need to be deleted. Removing the app by itself does not revok
 
 ## Local data and complete erasure
 
-The current product retains compatibility names such as **Farol Next Preview** for its profile. Farol Dev, legacy Farol and installed `codex-chatgpt-web` have separate ownership. A product name is not enough to identify safe deletion targets.
+The current product retains compatibility names such as **Farol** for its profile. Farol Dev, legacy Farol and installed `codex-chatgpt-web` have separate ownership. A product name is not enough to identify safe deletion targets.
 
 A supported consumer flow for complete local data erasure, credential cleanup and update-baseline retirement is not qualified. Ask the maintainer to identify the exact owned paths and unresolved records before deleting local state. Keep any maintenance backup private: it can contain credentials and browser state. Developer retirement tools are not a public uninstall command.
 

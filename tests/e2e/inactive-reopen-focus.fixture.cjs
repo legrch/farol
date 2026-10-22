@@ -6,11 +6,7 @@ const { app, BrowserWindow, screen } = require("electron");
 const userData = process.argv
   .find((argument) => argument.startsWith("--fixture-user-data="))
   ?.slice("--fixture-user-data=".length);
-if (
-  process.env.FAROL_NEXT_E2E !== "1" ||
-  !userData ||
-  !path.isAbsolute(userData)
-) {
+if (process.env.FAROL_E2E !== "1" || !userData || !path.isAbsolute(userData)) {
   throw new Error("FOCUS_FIXTURE_ISOLATION_REQUIRED");
 }
 app.setName("Farol Inactive Reopen Focus Fixture");

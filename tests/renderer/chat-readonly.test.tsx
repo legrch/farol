@@ -43,7 +43,7 @@ function configured(revision = 1) {
     },
   ];
   const proof = {
-    profile: "farol-next",
+    profile: "farol",
     configRevision: value.computer.generation,
     workspaceId,
     runtimeGeneration: "a".repeat(64),

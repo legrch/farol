@@ -65,7 +65,7 @@ class SmokePeer implements CodexAppServerPeer {
               threadId: this.options.toolThreadId ?? "thread-parent",
               turnId: "turn-parent",
               callId: "call-ping",
-              tool: "farol_next_ping",
+              tool: "farol_ping",
               arguments: { nonce },
             });
           } catch (error) {
@@ -92,7 +92,7 @@ class SmokePeer implements CodexAppServerPeer {
 
 const input = {
   model: "gpt-6-astra",
-  cwd: "/private/tmp/farol-next-host",
+  cwd: "/private/tmp/farol-host",
   nonce: "nonce-a1",
   timeoutMs: 1_000,
 } as const;
@@ -124,13 +124,13 @@ describe("Codex host live smoke", () => {
       dynamicTools: [
         {
           type: "function",
-          name: "farol_next_ping",
+          name: "farol_ping",
         },
       ],
     });
     expect(peer.toolResponse).toEqual({
       success: true,
-      contentItems: [{ type: "inputText", text: "FAROL_NEXT_PING_OK" }],
+      contentItems: [{ type: "inputText", text: "FAROL_PING_OK" }],
     });
   });
 

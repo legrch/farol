@@ -57,7 +57,7 @@ activate anything. See the [approved Go input declaration](../README.md) for the
 Go 1.26.2 SDK, independently approved SDK digest and authenticated offline module
 inputs. The separately authenticated native archive helper is also required;
 backend inputs do not replace its toolchain checks. Historical schema 6 packages
-had no required Go backend, and schema 5 used `Farol Next Preview.app`.
+had no required Go backend, and schema 5 used `Farol.app`.
 The hidden NEW bundle/profile identities remain compatibility boundaries;
 moving an existing preview install to the current basename requires the explicit
 [closed product cutover](product-cutover.md). `task run` is a separate owner action.

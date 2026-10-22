@@ -15,9 +15,9 @@ const assetUrl = (name: string) =>
 
 const build: BuildIdentity = {
   schema: 1,
-  product: "Farol Next Preview",
+  product: "Farol",
   version,
-  bundleId: "local.farol.next.preview",
+  bundleId: "io.github.legrch.farol",
   updateChannel: "github-stable",
   buildVersion: "36",
   builtAt: "2026-10-14T12:00:00.000Z",
@@ -31,8 +31,8 @@ const manifest: ReleaseManifest = {
   schema: "farol.github-release/1",
   repository: "legrch/farol",
   channel: "stable",
-  product: "Farol Next Preview",
-  bundleId: "local.farol.next.preview",
+  product: "Farol",
+  bundleId: "io.github.legrch.farol",
   version,
   buildVersion: "36",
   sourceCommit: build.sourceCommit,

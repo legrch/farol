@@ -10,24 +10,24 @@ describe("one-shot empty Chat recovery preflight", () => {
   it("checks connector and Go roots under both fixed Dev spellings", () => {
     const seen = [];
     assertEmptyRecoveryProcesses(
-      "/Users/test/Library/Application Support/Farol DEV/farol-next-state/secure-mcp-connector",
+      "/Users/test/Library/Application Support/Farol DEV/farol-state/secure-mcp-connector",
       (root) => seen.push(root),
     );
     expect(seen).toEqual([
-      "/Users/test/Library/Application Support/Farol DEV/farol-next-state/secure-mcp-connector",
-      "/Users/test/Library/Application Support/Farol DEV/farol-next-state/go-core",
-      "/Users/test/Library/Application Support/Farol Dev/farol-next-state/secure-mcp-connector",
-      "/Users/test/Library/Application Support/Farol Dev/farol-next-state/go-core",
+      "/Users/test/Library/Application Support/Farol DEV/farol-state/secure-mcp-connector",
+      "/Users/test/Library/Application Support/Farol DEV/farol-state/go-core",
+      "/Users/test/Library/Application Support/Farol Dev/farol-state/secure-mcp-connector",
+      "/Users/test/Library/Application Support/Farol Dev/farol-state/go-core",
     ]);
   });
   it("refuses a Go child using the alternate spelling without continuing", () => {
     const seen = [];
     expect(() =>
       assertEmptyRecoveryProcesses(
-        "/Users/test/Library/Application Support/Farol Dev/farol-next-state/secure-mcp-connector",
+        "/Users/test/Library/Application Support/Farol Dev/farol-state/secure-mcp-connector",
         (root) => {
           seen.push(root);
-          if (root.endsWith("Farol DEV/farol-next-state/go-core"))
+          if (root.endsWith("Farol DEV/farol-state/go-core"))
             throw Error("CLOSED_COMPUTER_RECOVERY_PROCESS_UNVERIFIED");
         },
       ),

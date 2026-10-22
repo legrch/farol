@@ -6,7 +6,7 @@ import type {
 } from "../../app/port/readonly-workspace";
 
 export const FIXTURE_WORKSPACE_ID = "preview-fixture";
-export const FIXTURE_WORKSPACE_ROOT = "/farol-next-preview/fixture";
+export const FIXTURE_WORKSPACE_ROOT = "/farol/fixture";
 // The fixture folder is in memory; this identity only satisfies the approval
 // shape and proves nothing about a real folder.
 export const FIXTURE_WORKSPACE_IDENTITY = Object.freeze({

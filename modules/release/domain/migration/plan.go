@@ -224,7 +224,7 @@ func Plan(s Snapshot) (Decision, error) {
 	if s.Source.State != Missing && s.Source.State != CurrentAlpha {
 		return Decision{}, SourceUnproven
 	}
-	decision := Decision{From: AlphaDirectory, To: "Farol"}
+	decision := Decision{From: AlphaDirectory, To: "io.github.legrch.farol"}
 	if s.Record.Phase == NoRecord {
 		if s.Source.State == Missing {
 			switch s.Destination.State {

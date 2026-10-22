@@ -20,8 +20,8 @@ const binding: ContextBinding = {
   taskId: "task-close",
   hostThreadId: "task-close",
   sessionId: "task-close",
-  providerProfileId: "profile-isolated-next",
-  modelId: "farol-next/mind",
+  providerProfileId: "profile-isolated-farol",
+  modelId: "legacy-route/mind",
   mode: "mind",
 };
 
@@ -33,7 +33,7 @@ afterEach(async () => {
 
 describe("CCR-11 closing a task deletes its private context state", () => {
   it("removes the task's sessions and checkpoints and leaves other tasks", async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-task-close-"));
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-task-close-"));
     const store = new PrivateContextStore({ root });
     const other = { ...binding, taskId: "task-other", sessionId: "task-other" };
     await store.save(createContextSession(binding));
@@ -53,7 +53,7 @@ describe("CCR-11 closing a task deletes its private context state", () => {
   });
 
   it("retains a pending original transition and reports a failed deletion", async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-task-close-"));
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-task-close-"));
     const store = new PrivateContextStore({ root });
     // checkpoint_requested/not_observed is persisted before the original
     // summarizer.request awaits a response. A crash here is not proof that
@@ -121,7 +121,7 @@ describe("CC-21 orphan context sweep after restart", () => {
   });
 
   it("deletes only the context of a closed task whose deletion was cut off, keeps live and unreadable directories, and is idempotent", async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-orphan-"));
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-orphan-"));
     const store = new PrivateContextStore({ root });
     await store.save(createContextSession(bindingFor("task-live")));
     // The crash cut: the task's removal was saved, its context was not.
@@ -172,7 +172,7 @@ describe("CC-21 orphan context sweep after restart", () => {
   });
 
   it("sweeps nothing when the task registry could not be read, and reports a deletion that fails", async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-orphan-"));
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-orphan-"));
     const store = new PrivateContextStore({ root });
     await store.save(createContextSession(bindingFor("task-closed")));
     await expect(
@@ -190,7 +190,7 @@ describe("CC-21 orphan context sweep after restart", () => {
         { status: "loaded", taskIds: [] },
         (id) => ({
           ...bindingFor(id),
-          modelId: "farol-next/other",
+          modelId: "legacy-route/other",
         }),
       ),
     ).resolves.toEqual({ swept: [], unreadable: 0, failed: [] });

@@ -22,9 +22,7 @@ import { InMemoryTurns } from "../repo/in-memory-turns";
 export type PreviewScenario = FixtureScenario | "stream-failure";
 export type PreviewMode = "empty" | "demo";
 export type PreviewRuntimeIdentity =
-  | "farol-next-preview-runtime"
-  | "farol-dev-runtime"
-  | "farol-owner-preview-runtime";
+  "farol-runtime" | "farol-dev-runtime" | "farol-owner-preview-runtime";
 
 export type PreviewTask = Readonly<{
   ownerId: string;
@@ -165,7 +163,7 @@ export async function startPreviewRuntime(
   scenario: PreviewScenario,
   dependencies: PreviewRuntimeDependencies,
   mode: PreviewMode = "empty",
-  identity: PreviewRuntimeIdentity = "farol-next-preview-runtime",
+  identity: PreviewRuntimeIdentity = "farol-runtime",
 ): Promise<PreviewRuntime> {
   const token = randomBytes(32).toString("base64url");
   const runtimeTasks = (mode === "demo" ? tasks : []).map((task) => ({

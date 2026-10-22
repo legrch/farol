@@ -100,7 +100,7 @@ describe("actual loopback SSE runtime", () => {
     expect(runtime.tasks).toEqual([]);
     const manifest = await fetch(`${base}/manifest`, { headers });
     await expect(manifest.json()).resolves.toMatchObject({
-      identity: "farol-next-preview-runtime",
+      identity: "farol-runtime",
       mode: "empty",
       tasks: [],
     });
@@ -117,7 +117,7 @@ describe("actual loopback SSE runtime", () => {
     expect(unauthorized.status).toBe(401);
     const manifest = await fetch(`${base}/manifest`, { headers });
     await expect(manifest.json()).resolves.toMatchObject({
-      identity: "farol-next-preview-runtime",
+      identity: "farol-runtime",
       tasks: [{ taskId: "task-atlantic" }, { taskId: "task-harbor" }],
     });
 
@@ -322,7 +322,7 @@ describe("actual loopback SSE runtime", () => {
 
     const snapshot = await fetch(`${base}/snapshot`, { headers });
     await expect(snapshot.json()).resolves.toMatchObject({
-      identity: "farol-next-preview-runtime",
+      identity: "farol-runtime",
       tasks: [
         { taskId: "task-atlantic", turn: { phase: "tool_wait" } },
         { taskId: "task-harbor", turn: { phase: "completed" } },

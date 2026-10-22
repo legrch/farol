@@ -1,4 +1,4 @@
-"""Descriptor-bound Farol Next preview promotion helper.
+"""Descriptor-bound Farol preview promotion helper.
 
 The reviewed Node launcher sends these exact bytes to ``/usr/bin/python3 -``
 and one bounded JSON request on descriptor 3. Descriptor 6 inherits the original
@@ -34,7 +34,7 @@ MAX_DEPTH = 128
 # tooling/artifact-digest.mjs: a version tag, then per entry a length-prefixed
 # UTF-8 path, one kind byte, the mode as a big-endian u32 and the SHA-256 of a
 # file's bytes or a length-prefixed symlink target.
-TREE_DIGEST_VERSION = "farol.next.tree-digest/v2"
+TREE_DIGEST_VERSION = "farol.tree-digest/v2"
 KIND_CODES = {"file": b"f", "directory": b"d", "symlink": b"l"}
 
 EXIT_INVALID = 70
@@ -102,7 +102,7 @@ def read_request():
         "lease",
     }:
         refuse(EXIT_INVALID)
-    if request.get("schema") != "farol.next.promotion-apply/1":
+    if request.get("schema") != "farol.promotion-apply/1":
         refuse(EXIT_INVALID)
     if not isinstance(request.get("testHook"), bool):
         refuse(EXIT_INVALID)
@@ -112,7 +112,7 @@ def read_request():
     components(lease.get("file"))
     if (
         os.path.basename(lease["file"]) != "promotion.lease"
-        or os.path.basename(os.path.dirname(lease["file"])) != "farol-next-state"
+        or os.path.basename(os.path.dirname(lease["file"])) != "farol-state"
     ):
         refuse(EXIT_INVALID)
     for key in ("device", "inode"):

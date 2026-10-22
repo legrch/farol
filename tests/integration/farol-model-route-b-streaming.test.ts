@@ -28,7 +28,7 @@ import { FarolModelRuntimeState } from "../../src/apps/desktop/farol-model-runti
 // is a deliberate edit here, with the first-frame assertion inverted, and
 // never an accident.
 
-const MODEL = "farol-next/mind";
+const MODEL = "legacy-route/mind";
 
 const roots: string[] = [];
 const closers: Array<() => Promise<void>> = [];

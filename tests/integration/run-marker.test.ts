@@ -41,9 +41,9 @@ afterEach(async () => {
 // The state root as the desktop names it, not yet created: the writer owns
 // its creation like every other store does.
 async function stateRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-marker-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-marker-"));
   roots.push(root);
-  return path.join(root, "farol-next-state");
+  return path.join(root, "farol-state");
 }
 
 async function exitedChildPid(): Promise<number> {

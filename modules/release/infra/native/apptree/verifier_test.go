@@ -17,7 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const appGolden = "bbf5c981fd972e7e74a7402cfa8c49632b9625dfb0803780cd9766ba86752998"
+const appGolden = "862563727ec308e9eda1c908ca2b301aaaa6825d97d2034894b64aa9e98d21b6"
 
 func must(t *testing.T, e error) {
 	t.Helper()
@@ -73,7 +73,7 @@ func scan(t *testing.T, p string) (*inventory, error) {
 	t.Helper()
 	f := open(t, p)
 	s := &inventory{entries: make(map[string]entry), digest: sha256.New(), buffer: make([]byte, 1<<20)}
-	s.digest.Write([]byte("farol.next.tree-digest/v2\x00"))
+	s.digest.Write([]byte("farol.tree-digest/v2\x00"))
 	var e error
 	raw(t, f, func(fd int) { e = s.walk(context.Background(), fd, "", 0, false) })
 	return s, e
@@ -98,8 +98,8 @@ func TestGoldenDigestVectors(t *testing.T) {
 		name, want string
 		setup      func(string)
 	}{
-		{"empty", "a23bfdbe340ba52c5b5b69b482aec669ba591314776fbb3953153a40eadd4e7a", func(string) {}},
-		{"simple", "748ef9437f840e992d0b4e1e331f9def31ebc6c622a93c3ee9c227f59b0e0aee", func(p string) {
+		{"empty", "f243c18a765ab113276bdd73d5bb5c7646608045e484acddfa0f11497dd85dc0", func(string) {}},
+		{"simple", "c2d7abd0665d309c76cfcbbf206547a607a834d06e0b9e4008f5f20f60427d12", func(p string) {
 			mkdir(t, p+"/bin")
 			write(t, p+"/bin/run", []byte("hello\x00world"), 0751)
 			write(t, p+"/empty", nil, 0600)
@@ -112,14 +112,14 @@ func TestGoldenDigestVectors(t *testing.T) {
 				must(t, unix.Fchmodat(unix.AT_FDCWD, p+"/shortcut", 0777, unix.AT_SYMLINK_NOFOLLOW))
 			}
 		}},
-		{"unicode", "15dd0c842840bbda8d91973e3aa3d3c445df57b009b7d0936bdb07e39fb58287", func(p string) {
+		{"unicode", "eaef8c260f9dd172478f6aa9800cfd80d881ea21eb74e066672a721c31ce15d6", func(p string) {
 			for _, n := range []string{"a", "A", "é", "e\u0301", "\ue000", "\U00010000"} {
 				write(t, p+"/"+n, []byte(n), 0644)
 			}
 		}},
-		{"ambiguity-a", "5dba3f4b500dc2915ec5850d79fc4cecb0391144a15f25c491a95bfd24c95557", func(p string) { write(t, p+"/a", []byte("bc"), 0644) }},
-		{"ambiguity-b", "9f78628ca6758abc2d38e78f05b143a386d632a4b25a7eaa9720c455f35ddfa0", func(p string) { write(t, p+"/ab", []byte("c"), 0644) }},
-		{"special", "fabbbd9fa4dfa0eeb8bac5bd4cc3667c902c051819fcf73f6a58439a5513a538", func(p string) { write(t, p+"/run", []byte("x"), 0751|os.ModeSetuid|os.ModeSetgid) }},
+		{"ambiguity-a", "5b8a1384ad1c22e82d6ff9077d200b3a4a4763e3a4cf90993917854671933dc2", func(p string) { write(t, p+"/a", []byte("bc"), 0644) }},
+		{"ambiguity-b", "eff359e15b19f0599bcc2582c8e2a98fb153dc70ed2a5036202996b05b991f5c", func(p string) { write(t, p+"/ab", []byte("c"), 0644) }},
+		{"special", "0882136640a2a4ca6e608f8c1e3e00f06e16ae094c06ac497c0d963998a569f6", func(p string) { write(t, p+"/run", []byte("x"), 0751|os.ModeSetuid|os.ModeSetgid) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := t.TempDir()

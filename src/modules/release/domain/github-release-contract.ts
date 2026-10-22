@@ -8,7 +8,7 @@ export const RELEASE_MANIFEST_ASSET = "farol-release.json";
 export const MAX_RELEASES_JSON_BYTES = 1_048_576;
 export const MAX_MANIFEST_BYTES = 16_384;
 export const MAX_ARCHIVE_BYTES = 2_147_483_648;
-export const FAROL_BUNDLE_ID = "local.farol.next.preview";
+export const FAROL_BUNDLE_ID = "io.github.legrch.farol";
 // Discovery skips at most this many consecutive releases whose manifest is of a
 // newer format than this client understands before it stops looking lower.
 export const MAX_NEWER_FORMAT_SKIPS = 4;
@@ -37,7 +37,7 @@ export type ReleaseManifest = Readonly<{
   schema: "farol.github-release/1";
   repository: typeof GITHUB_RELEASE_REPOSITORY;
   channel: ReleaseChannel;
-  product: "Farol Next Preview";
+  product: "Farol";
   bundleId: typeof FAROL_BUNDLE_ID;
   version: string;
   buildVersion: string;

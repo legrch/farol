@@ -75,7 +75,7 @@ function fixtureAttempt(lane, attemptId, options = {}) {
 function observerFixture(lane, attemptId, overrides = {}) {
   const requiredPath = lane === "hunt" ? "path.json" : "report.json";
   return {
-    schema: "farol.next.effect-observer/v1",
+    schema: "farol.effect-observer/v1",
     healthy: true,
     lane,
     attemptId,
@@ -876,9 +876,7 @@ describe("evidence-bindings: loader-verified integrity and the CLI", () => {
   });
 
   async function createSealedAttempt(candidateInput, { cases } = {}) {
-    const rootDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-bindings-"),
-    );
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "farol-bindings-"));
     const laneRoot = path.join(rootDir, "_output", "evidence", "e2e");
     const opened = await openEvidenceAttempt(laneRoot, {
       lane: "sealed-package",
@@ -894,7 +892,7 @@ describe("evidence-bindings: loader-verified integrity and the CLI", () => {
     await fs.writeFile(
       path.join(opened.directory, "exit.json"),
       JSON.stringify({
-        schema: "farol.next.evidence-attempt/v1",
+        schema: "farol.evidence-attempt/v1",
         attemptId: opened.attemptId,
         exitCode: 0,
         exitedAt: new Date().toISOString(),
@@ -915,7 +913,7 @@ describe("evidence-bindings: loader-verified integrity and the CLI", () => {
 
     const [before] = await listEvidenceAttempts(laneRoot);
     const observerReceipt = {
-      schema: "farol.next.effect-observer/v1",
+      schema: "farol.effect-observer/v1",
       healthy: true,
       lane: "sealed-package",
       attemptId,
@@ -992,7 +990,7 @@ describe("evidence-bindings: loader-verified integrity and the CLI", () => {
       ],
     };
     const observerReceipt = {
-      schema: "farol.next.effect-observer/v1",
+      schema: "farol.effect-observer/v1",
       healthy: true,
       lane: "sealed-package",
       attemptId,

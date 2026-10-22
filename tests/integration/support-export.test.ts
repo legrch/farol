@@ -25,7 +25,7 @@ afterEach(async () => {
 
 async function temporaryRoot(): Promise<string> {
   const root = await fs.mkdtemp(
-    path.join(os.tmpdir(), "farol-next-support-export-"),
+    path.join(os.tmpdir(), "farol-support-export-"),
   );
   roots.push(root);
   return root;
@@ -113,9 +113,9 @@ describe("content-free support export", () => {
       generatedAt: "2026-09-16T11:00:00.000Z",
       build: {
         schema: 1,
-        product: "Farol Next Preview",
+        product: "Farol",
         version: "0.1.0-preview.0",
-        bundleId: "local.farol.next.preview",
+        bundleId: "io.github.legrch.farol",
         updateChannel: "local-preview-only",
         builtAt: "2026-09-16T09:00:00.000Z",
         sourceCommit: "a".repeat(40),
@@ -127,7 +127,7 @@ describe("content-free support export", () => {
       runtime: {
         state: "ready",
         errorCode: null,
-        identity: "farol-next-preview-runtime",
+        identity: "farol-runtime",
       },
       capabilities: {
         nativeFilesystem: true,
@@ -146,7 +146,7 @@ describe("content-free support export", () => {
 
     expect(report).toMatchObject({
       schema: 2,
-      kind: "farol_next_support",
+      kind: "farol_support",
       build: {
         buildId: "c".repeat(64),
         sourceCommit: "a".repeat(40),
@@ -183,10 +183,10 @@ describe("content-free support export", () => {
       /OWNER-TOKEN-CANARY|WORKSPACE-CANARY|LABEL-CANARY|CODEX-CANARY|HOST-ROLE-CANARY|00000000-0000-4000/u,
     );
 
-    const target = path.join(root, "Farol-Next-Support.json");
+    const target = path.join(root, "Farol-Support.json");
     const receipt = await writeSupportExport(target, report);
     expect(receipt).toMatchObject({
-      fileName: "Farol-Next-Support.json",
+      fileName: "Farol-Support.json",
       bytes: expect.any(Number),
       sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
@@ -204,7 +204,7 @@ describe("content-free support export", () => {
     await expect(
       writeSupportExport(target, {
         schema: 1,
-        kind: "farol_next_support",
+        kind: "farol_support",
       }),
     ).rejects.toThrow("SUPPORT_EXPORT_UNSAFE");
     await expect(fs.readFile(real, "utf8")).resolves.toBe("preserve\n");
@@ -216,9 +216,9 @@ describe("content-free support export", () => {
         generatedAt: "2026-09-16T11:00:00.000Z",
         build: {
           schema: 1 as const,
-          product: "Farol Next Preview" as const,
+          product: "Farol" as const,
           version: "0.1.0-preview.0",
-          bundleId: "local.farol.next.preview" as const,
+          bundleId: "io.github.legrch.farol" as const,
           updateChannel: "local-preview-only" as const,
           builtAt: "2026-09-16T09:00:00.000Z",
           sourceCommit: "a".repeat(40),

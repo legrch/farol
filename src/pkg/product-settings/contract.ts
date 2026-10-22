@@ -51,7 +51,7 @@ const CodexHostLiveVerificationSchema = z.strictObject({
   executableSha256: Sha256Schema,
   schemaSha256: Sha256Schema,
   buildId: Sha256Schema,
-  dynamicTool: z.literal("farol_next_ping"),
+  dynamicTool: z.literal("farol_ping"),
   verifiedAt: CanonicalTimestampSchema,
 });
 
@@ -240,7 +240,7 @@ export const SecureMcpAppSelectionSchema = z.strictObject({
 
 export const SecureMcpConnectorSchema = z.strictObject({
   generation: z.number().int().positive(),
-  profile: z.literal("farol-next"),
+  profile: z.literal("farol"),
   tunnelId: z
     .string()
     .min(1)
@@ -262,7 +262,7 @@ export const SecureMcpConnectorSchema = z.strictObject({
 
 const DefaultSecureMcpConnector = {
   generation: 1,
-  profile: "farol-next" as const,
+  profile: "farol" as const,
   tunnelId: null,
   tunnelClient: null,
   credential: "missing" as const,

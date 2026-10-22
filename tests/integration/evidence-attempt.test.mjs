@@ -22,7 +22,7 @@ afterEach(async () => {
 });
 
 async function laneRoot() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-evidence-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-evidence-"));
   roots.push(root);
   return path.join(root, "_output", "evidence", "e2e-dev");
 }
@@ -333,7 +333,7 @@ process.exitCode = 0;
       // OBSERVER_BYPRODUCT_MISMATCH/OBSERVER_TERMINAL_MISMATCH reason of
       // its own here.
       observer: observer ?? {
-        schema: "farol.next.effect-observer/v1",
+        schema: "farol.effect-observer/v1",
         healthy: true,
         lane: "sealed-package",
         attemptId: attempt.attemptId,

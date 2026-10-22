@@ -7,7 +7,7 @@ import { terminateDesktopStartup } from "./desktop-startup-failure";
 void import("./main").catch((error: unknown) => {
   terminateDesktopStartup(
     error,
-    process.env.FAROL_NEXT_ENVIRONMENT === "dev" ? "dev" : "preview",
+    process.env.FAROL_ENVIRONMENT === "dev" ? "dev" : "preview",
     {
       write: (message) => process.stderr.write(message),
       exit: (code) => app.exit(code),

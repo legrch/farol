@@ -103,7 +103,7 @@ function settingsOf(
           verification === undefined || verification === null
             ? null
             : {
-                profile: "farol-next",
+                profile: "farol",
                 configRevision: verification.configRevision,
                 workspaceId: verification.workspaceId,
                 runtimeGeneration: "next-1",

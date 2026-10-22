@@ -197,7 +197,7 @@ describe("launch snapshot LaunchServices cleanup", () => {
     it("makes no lsregister call for an unissued descriptor and reports it refused, not removed", async () => {
       const { root, temporaryRoot } = await fixtureSnapshot();
       const sha = "8".repeat(64);
-      const prefix = `farol-next-launch-${sha.slice(0, 12)}-`;
+      const prefix = `farol-launch-${sha.slice(0, 12)}-`;
       const gone = path.join(temporaryRoot, `${prefix}gone`);
       const forged = {
         appPath: path.join(gone, "Farol.app"),
@@ -229,7 +229,7 @@ describe("launch snapshot LaunchServices cleanup", () => {
     const forgedFor = async (root, temporaryRoot) => {
       // Every field a shape check looks at, for a directory the caller chose.
       const sha = "7".repeat(64);
-      const prefix = `farol-next-launch-${sha.slice(0, 12)}-`;
+      const prefix = `farol-launch-${sha.slice(0, 12)}-`;
       const victimRoot = path.join(temporaryRoot, `${prefix}forged`);
       const bundle = path.join(victimRoot, "Farol.app");
       await fs.mkdir(path.join(bundle, "Contents/Frameworks/Other.app"), {
@@ -310,7 +310,7 @@ describe("launch snapshot LaunchServices cleanup", () => {
     await fs.mkdir(path.join(victim, "Real.app"), { recursive: true });
     const link = path.join(
       temporaryRoot,
-      `farol-next-launch-${"e".repeat(12)}-link`,
+      `farol-launch-${"e".repeat(12)}-link`,
     );
     await fs.symlink(victim, link);
     let called = false;
@@ -789,7 +789,7 @@ describe("launch snapshot LaunchServices cleanup", () => {
 
   it("does not unregister when the descriptor is not an owned snapshot", async () => {
     const { root } = await fixtureSnapshot();
-    const unrelated = path.join(root, `farol-next-launch-${"f".repeat(12)}-x`);
+    const unrelated = path.join(root, `farol-launch-${"f".repeat(12)}-x`);
     await fs.mkdir(path.join(unrelated, "Farol.app"), { recursive: true });
     let called = false;
     await expect(
@@ -798,7 +798,7 @@ describe("launch snapshot LaunchServices cleanup", () => {
           appPath: path.join(unrelated, "Farol.app"),
           artifactFile: path.join(unrelated, "artifact.json"),
           artifactSha256: "a".repeat(64),
-          prefix: `farol-next-launch-${"f".repeat(12)}-`,
+          prefix: `farol-launch-${"f".repeat(12)}-`,
           root: unrelated,
           temporaryRoot: root,
         },

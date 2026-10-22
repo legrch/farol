@@ -8,7 +8,7 @@ of account identity, entitlement, quota, or successful inference.
 ## One configuration file
 
 The filename is **config.json**, in the existing isolated preview state root:
-`<Farol Next Preview userData>/farol-next-state/config.json`. Bundle IDs, state
+`<Farol userData>/farol-state/config.json`. Bundle IDs, state
 roots, browser partitions and V0 paths do not change. Internal
 `ProductSettingsStore` and schema names stay stable to avoid an unrelated API
 rename. The existing schema/revision and other settings remain in the document.

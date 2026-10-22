@@ -186,14 +186,14 @@ and read back separately.
 - The sign-in window was left open, or a closed task still reports
   `TASK_CONTEXT_RESIDUE`: quitting and reopening this preview sweeps both.
 - Every case above touches only this product's NEW state under the app-data root named
-  `Farol Next Preview`. The separate V0 installation and its `~/.farol` state, and
+  `Farol`. The separate V0 installation and its `~/.farol` state, and
   any installed `codex-chatgpt-web` profile, are never read or written by it.
 
 ## Product boundary
 
-The bundle ID is `local.farol.next.preview`; its browser partition is
-`persist:farol-next-preview`; its user and session data resolve under the Electron
-app-data root named `Farol Next Preview`. Runtime HTTP/SSE uses an OS-assigned loopback
+The bundle ID is `io.github.legrch.farol`; its browser partition is
+`persist:farol-runtime`; its user and session data resolve under the Electron
+app-data root named `Farol`. Runtime HTTP/SSE uses an OS-assigned loopback
 port and per-launch in-memory bearers. The complete implemented/absent ownership table
 is [`../resources.json`](../resources.json).
 
@@ -224,7 +224,7 @@ below that real, non-symlinked, owner-controlled home. It refuses an unsafe home
 creating anything. A digest-attested Python helper opens that directory component by
 component and performs every mutation relative to the retained directory descriptor,
 so replacing its pathname cannot redirect the copy or cleanup into a Legacy root. It
-refuses any existing destination, copies into a newly claimed Next-only path, verifies
+refuses any existing destination, copies into a newly claimed Farol-only path, verifies
 the destination bytes against the source artifact digest, and writes
 `$HOME/Applications/Farol.app.receipt.json`. It never overwrites an
 application and never writes inside Legacy roots. This unsigned local Preview is not
@@ -235,7 +235,7 @@ be partial and remains fail-closed. Preserve its bytes and the original attempt;
 an absent receipt alone does not authorize deletion or another install attempt.
 Reconcile the known outcome before selecting a bounded recovery. The tool never
 removes an existing destination on a later invocation. Historical schema 5
-packages and installs used `Farol Next Preview.app`; do not rename them to bypass
+packages and installs used `Farol.app`; do not rename them to bypass
 the supported cutover or reinterpret manual migration as an automatic update.
 
 ## Setup access transitions and receipt timing

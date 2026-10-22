@@ -54,8 +54,8 @@ function launch() {
     env: {
       PATH: "/usr/bin:/bin",
       LANG: "en_US.UTF-8",
-      FAROL_NEXT_PREVIEW_MODE: "empty",
-      FAROL_NEXT_RUNTIME_IDENTITY: "farol-dev-runtime",
+      FAROL_PREVIEW_MODE: "empty",
+      FAROL_RUNTIME_IDENTITY: "farol-dev-runtime",
     },
   });
   const closed = once(child, "close");

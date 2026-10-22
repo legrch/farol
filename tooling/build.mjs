@@ -148,7 +148,7 @@ async function readBuildInput(file) {
 }
 
 const attestInputs = {
-  name: "farol-next-attest-inputs",
+  name: "farol-attest-inputs",
   setup(buildContext) {
     buildContext.onLoad(
       { filter: /\.(?:[cm]?[jt]sx?|json)$/, namespace: "file" },
@@ -469,8 +469,8 @@ const entries = core
 const manifest = {
   schema: core ? 4 : 3,
   ...(core ? { core } : {}),
-  product: "Farol Next Preview",
-  bundleId: "local.farol.next.preview",
+  product: "Farol",
+  bundleId: "io.github.legrch.farol",
   version: buildIdentity.version,
   buildId: buildIdentity.buildId,
   builtAt: buildIdentity.builtAt,

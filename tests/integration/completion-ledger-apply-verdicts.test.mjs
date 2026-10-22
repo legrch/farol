@@ -32,7 +32,7 @@ function baseLedger(overrides = {}) {
 
 function bindingsResultFor(entries) {
   return {
-    schema: "farol.next.evidence-bindings/v1",
+    schema: "farol.evidence-bindings/v1",
     candidate: { sourceCommit: CANDIDATE },
     header: { reasons: [] },
     lanes: [],
@@ -270,7 +270,7 @@ describe("applyVerdicts: currentProofSummary is rebuilt from this same run", () 
 describe("completion-ledger-apply-verdicts: schema export", () => {
   it("exports a stable schema identifier", () => {
     expect(APPLY_VERDICTS_SCHEMA).toBe(
-      "farol.next.completion-ledger-apply-verdicts/v1",
+      "farol.completion-ledger-apply-verdicts/v1",
     );
   });
 });

@@ -27,7 +27,7 @@ import { toProductTaskContext } from "../../src/apps/desktop/context-task-state"
 import { contextTaskPresentation } from "../../src/ui/context-task-presentation";
 
 const checkpointContent: CheckpointContent = {
-  goal: "Finish the exact Farol Next task.",
+  goal: "Finish the exact Farol task.",
   activeConstraints: ["Do not repeat an unknown write."],
   latestCorrections: ["Keep Watch Rail."],
   keyDecisions: ["Store the checkpoint before handoff."],
@@ -73,7 +73,7 @@ function metadata() {
 
 function unaryBody() {
   return {
-    model: "farol-next/mind",
+    model: "legacy-route/mind",
     input: history(),
   };
 }
@@ -84,8 +84,8 @@ function contextBinding() {
     taskId: "thread-context-1",
     hostThreadId: "thread-context-1",
     sessionId: "thread-context-1",
-    providerProfileId: "profile-isolated-next",
-    modelId: "farol-next/mind",
+    providerProfileId: "profile-isolated-farol",
+    modelId: "legacy-route/mind",
     mode: "mind",
   };
 }
@@ -129,23 +129,23 @@ describe("Codex host context continuity composition", () => {
 
   async function stateRoot(): Promise<string> {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-codex-context-"),
+      path.join(os.tmpdir(), "farol-codex-context-"),
     );
     roots.push(root);
     return root;
   }
 
   it.each([
-    ["farol-next/mind", "mind"],
-    ["farol-next/drive", "drive"],
-    ["farol-next/chatgpt", "chatgpt"],
+    ["legacy-route/mind", "mind"],
+    ["legacy-route/drive", "drive"],
+    ["legacy-route/chatgpt", "chatgpt"],
   ])("never rebinds a saved %s checkpoint to chatgpt", async (model, mode) => {
     const root = await stateRoot();
     const store = new PrivateContextStore({ root });
     const summary = driver();
     const continuity = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store,
       summary,
     });
@@ -164,7 +164,7 @@ describe("Codex host context continuity composition", () => {
       // of an old ID; test both markerless and explicit checkpoint replay.
       const restarted = new CodexContextContinuity({
         ownerId: "owner-preview",
-        providerProfileId: "profile-isolated-next",
+        providerProfileId: "profile-isolated-farol",
         store: new PrivateContextStore({ root }),
         summary,
       });
@@ -200,7 +200,7 @@ describe("Codex host context continuity composition", () => {
     const phases: string[] = [];
     const first = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store: firstStore,
       summary,
       onStateChanged: (session) => {
@@ -252,7 +252,7 @@ describe("Codex host context continuity composition", () => {
     const restartedStore = new PrivateContextStore({ root });
     const restarted = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store: restartedStore,
       summary,
       onStateChanged: (session) => {
@@ -261,7 +261,7 @@ describe("Codex host context continuity composition", () => {
     });
     const prepared = await restarted.prepareTurn({
       body: {
-        model: "farol-next/mind",
+        model: "legacy-route/mind",
         stream: true,
         input: [
           ...handoff.value.response.output,
@@ -336,7 +336,7 @@ describe("Codex host context continuity composition", () => {
     const store = new PrivateContextStore({ root });
     const continuity = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store,
       summary,
     });
@@ -368,7 +368,7 @@ describe("Codex host context continuity composition", () => {
     await expect(
       continuity.prepareTurn({
         body: {
-          model: "farol-next/mind",
+          model: "legacy-route/mind",
           stream: true,
           input: [
             {
@@ -419,7 +419,7 @@ describe("Codex host context continuity composition", () => {
     const store = new PrivateContextStore({ root });
     const continuity = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store,
       summary,
     });
@@ -440,7 +440,7 @@ describe("Codex host context continuity composition", () => {
     await expect(
       continuity.prepareTurn({
         body: {
-          model: "farol-next/mind",
+          model: "legacy-route/mind",
           stream: true,
           input: [
             {
@@ -459,7 +459,7 @@ describe("Codex host context continuity composition", () => {
       }),
     ).resolves.toMatchObject({
       ok: false,
-      error: { code: "FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED" },
+      error: { code: "FAROL_COMPACTION_RECONCILIATION_FAILED" },
     });
     await expect(
       store.load(replayed.value.checkpoint.binding),
@@ -474,12 +474,12 @@ describe("Codex host context continuity composition", () => {
     const summary = driver("canonical_history");
     const continuity = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store: new PrivateContextStore({ root }),
       summary,
     });
     const body = {
-      model: "farol-next/mind",
+      model: "legacy-route/mind",
       stream: true,
       input: [...history(), { type: "compaction_trigger" }],
     };
@@ -526,7 +526,7 @@ describe("Codex host context continuity composition", () => {
     const store = new PrivateContextStore({ root });
     const continuity = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store,
       summary,
     });
@@ -547,7 +547,7 @@ describe("Codex host context continuity composition", () => {
     });
     const restarted = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store: new PrivateContextStore({ root }),
       summary,
     });
@@ -571,14 +571,14 @@ describe("Codex host context continuity composition", () => {
     const firstStore = new PrivateContextStore({ root });
     const first = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store: firstStore,
       summary,
     });
     const handoff = await first.compact({
       endpoint: "responses",
       body: {
-        model: "farol-next/mind",
+        model: "legacy-route/mind",
         stream: true,
         input: [...history(), { type: "compaction_trigger" }],
       },
@@ -591,13 +591,13 @@ describe("Codex host context continuity composition", () => {
     const restartedStore = new PrivateContextStore({ root });
     const restarted = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store: restartedStore,
       summary,
     });
     await expect(
       restarted.confirmHostCompaction({
-        modelId: "farol-next/mind",
+        modelId: "legacy-route/mind",
         threadId: "thread-context-1",
         turnId: "turn-foreign",
         itemId: "host-context-compaction-1",
@@ -605,11 +605,11 @@ describe("Codex host context continuity composition", () => {
       }),
     ).resolves.toMatchObject({
       ok: false,
-      error: { code: "FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED" },
+      error: { code: "FAROL_COMPACTION_RECONCILIATION_FAILED" },
     });
     await expect(
       restarted.confirmHostCompaction({
-        modelId: "farol-next/mind",
+        modelId: "legacy-route/mind",
         threadId: "thread-context-1",
         turnId: "turn-context-compact-1",
         itemId: "host-context-compaction-1",
@@ -621,7 +621,7 @@ describe("Codex host context continuity composition", () => {
     });
     await expect(
       restarted.confirmHostCompaction({
-        modelId: "farol-next/mind",
+        modelId: "legacy-route/mind",
         threadId: "thread-context-1",
         turnId: "turn-context-compact-1",
         itemId: "host-context-compaction-1",
@@ -638,7 +638,7 @@ describe("Codex host context continuity composition", () => {
       restarted.compact({
         endpoint: "responses",
         body: {
-          model: "farol-next/mind",
+          model: "legacy-route/mind",
           stream: true,
           input: [...history(), { type: "compaction_trigger" }],
         },
@@ -653,7 +653,7 @@ describe("Codex host context continuity composition", () => {
   function markerlessTurn(turnId: string, threadId = "thread-context-1") {
     return {
       body: {
-        model: "farol-next/mind",
+        model: "legacy-route/mind",
         stream: true,
         input: [
           {
@@ -677,14 +677,14 @@ describe("Codex host context continuity composition", () => {
     const summary = driver();
     const first = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store: new PrivateContextStore({ root }),
       summary,
     });
     const handoff = await first.compact({
       endpoint: "responses",
       body: {
-        model: "farol-next/mind",
+        model: "legacy-route/mind",
         stream: true,
         input: [...history(), { type: "compaction_trigger" }],
       },
@@ -693,7 +693,7 @@ describe("Codex host context continuity composition", () => {
     if (!handoff.ok) throw new Error(handoff.error.code);
     await expect(
       first.confirmHostCompaction({
-        modelId: "farol-next/mind",
+        modelId: "legacy-route/mind",
         threadId: "thread-context-1",
         turnId: "turn-context-compact-1",
         itemId: "host-context-compaction-1",
@@ -726,7 +726,7 @@ describe("Codex host context continuity composition", () => {
     });
     const restarted = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store: new PrivateContextStore({ root }),
       summary,
     });
@@ -750,7 +750,7 @@ describe("Codex host context continuity composition", () => {
     const store = new PrivateContextStore({ root });
     const continuity = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store,
       summary,
     });
@@ -795,14 +795,14 @@ describe("Codex host context continuity composition", () => {
     const store = new PrivateContextStore({ root });
     const continuity = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store,
       summary,
     });
     const handoff = await continuity.compact({
       endpoint: "responses",
       body: {
-        model: "farol-next/mind",
+        model: "legacy-route/mind",
         stream: true,
         input: [...history(), { type: "compaction_trigger" }],
       },
@@ -811,7 +811,7 @@ describe("Codex host context continuity composition", () => {
     if (!handoff.ok) throw new Error(handoff.error.code);
     await expect(
       continuity.confirmHostCompaction({
-        modelId: "farol-next/mind",
+        modelId: "legacy-route/mind",
         threadId: "thread-context-1",
         turnId: "turn-context-compact-1",
         itemId: "host-context-compaction-1",
@@ -874,14 +874,14 @@ describe("Codex host context continuity composition", () => {
     const store = new PrivateContextStore({ root });
     const continuity = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store,
       summary,
     });
     const handoff = await continuity.compact({
       endpoint: "responses",
       body: {
-        model: "farol-next/mind",
+        model: "legacy-route/mind",
         stream: true,
         input: [...history(), { type: "compaction_trigger" }],
       },
@@ -891,7 +891,7 @@ describe("Codex host context continuity composition", () => {
       throw new Error("EXPECTED_STREAMED_HANDOFF");
     }
     const receipt = {
-      modelId: "farol-next/mind",
+      modelId: "legacy-route/mind",
       threadId: "thread-context-1",
       turnId: "turn-context-compact-1",
       itemId: "host-context-compaction-cleanup",
@@ -902,7 +902,7 @@ describe("Codex host context continuity composition", () => {
       continuity.confirmHostCompaction(receipt),
     ).resolves.toMatchObject({
       ok: false,
-      error: { code: "FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED" },
+      error: { code: "FAROL_COMPACTION_RECONCILIATION_FAILED" },
     });
     const replayed = replayHostCheckpoint([handoff.value.item], 262_144);
     if (!replayed.ok) throw new Error(replayed.error.code);
@@ -950,14 +950,14 @@ describe("Codex host context continuity composition", () => {
     const store = new PrivateContextStore({ root });
     const continuity = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store,
       summary,
     });
     const handoff = await continuity.compact({
       endpoint: "responses",
       body: {
-        model: "farol-next/mind",
+        model: "legacy-route/mind",
         stream: true,
         input: [...history(), { type: "compaction_trigger" }],
       },
@@ -967,7 +967,7 @@ describe("Codex host context continuity composition", () => {
       throw new Error("EXPECTED_STREAMED_HANDOFF");
     }
     const receipt = {
-      modelId: "farol-next/mind",
+      modelId: "legacy-route/mind",
       threadId: "thread-context-1",
       turnId: "turn-context-compact-1",
       itemId: "host-context-compaction-superseded",
@@ -1023,7 +1023,7 @@ describe("Codex host context continuity composition", () => {
     });
     const first = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store: new PrivateContextStore({ root }),
       summary,
     });
@@ -1035,17 +1035,17 @@ describe("Codex host context continuity composition", () => {
 
     await expect(first.compact(command)).resolves.toMatchObject({
       ok: false,
-      error: { code: "FAROL_NEXT_COMPACTION_SUMMARY_OUTCOME_UNKNOWN" },
+      error: { code: "FAROL_COMPACTION_SUMMARY_OUTCOME_UNKNOWN" },
     });
     const restarted = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store: new PrivateContextStore({ root }),
       summary,
     });
     await expect(restarted.compact(command)).resolves.toMatchObject({
       ok: false,
-      error: { code: "FAROL_NEXT_COMPACTION_SUMMARY_OUTCOME_UNKNOWN" },
+      error: { code: "FAROL_COMPACTION_SUMMARY_OUTCOME_UNKNOWN" },
     });
     expect(summary.request).toHaveBeenCalledTimes(1);
     expect(summary.observe).not.toHaveBeenCalled();
@@ -1056,7 +1056,7 @@ describe("Codex host context continuity composition", () => {
     const summary = driver();
     const continuity = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store: new PrivateContextStore({ root }),
       summary,
     });
@@ -1064,7 +1064,7 @@ describe("Codex host context continuity composition", () => {
     await expect(
       continuity.prepareTurn({
         body: {
-          model: "farol-next/mind",
+          model: "legacy-route/mind",
           input: [
             { type: "compaction", encrypted_content: "opaque-provider-blob" },
           ],
@@ -1088,7 +1088,7 @@ describe("Codex host context continuity composition", () => {
     const summary = driver();
     const continuity = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store: new PrivateContextStore({ root }),
       summary,
     });
@@ -1121,7 +1121,7 @@ describe("Codex host context continuity composition", () => {
     const live = new Set(["thread-context-1"]);
     const continuity = new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store: new PrivateContextStore({ root }),
       summary: driver(),
       liveTask: (taskId) => live.has(taskId),
@@ -1129,7 +1129,7 @@ describe("Codex host context continuity composition", () => {
     const handoff = await continuity.compact({
       endpoint: "responses",
       body: {
-        model: "farol-next/mind",
+        model: "legacy-route/mind",
         stream: true,
         input: [...history(), { type: "compaction_trigger" }],
       },
@@ -1138,7 +1138,7 @@ describe("Codex host context continuity composition", () => {
     if (!handoff.ok) throw new Error(handoff.error.code);
     await expect(
       continuity.confirmHostCompaction({
-        modelId: "farol-next/mind",
+        modelId: "legacy-route/mind",
         threadId: "thread-context-1",
         turnId: "turn-context-compact-1",
         itemId: "host-context-compaction-1",
@@ -1169,7 +1169,7 @@ describe("Codex host context continuity composition", () => {
 // must end in exactly one epoch transition after a restart, with the same
 // checkpoint and no second summary.
 const summaryContent: CheckpointContent = {
-  goal: "Finish the exact Farol Next task.",
+  goal: "Finish the exact Farol task.",
   activeConstraints: ["Never publish this task."],
   latestCorrections: ["Use the corrected workspace."],
   keyDecisions: ["Store the checkpoint before handoff."],
@@ -1313,7 +1313,7 @@ describe("HR-014/F1 retirement recovery through the controller", () => {
   ): CodexContextContinuity {
     return new CodexContextContinuity({
       ownerId: "owner-preview",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       store,
       summary: new ChatGptContextSummaryDriver({
         store,
@@ -1328,7 +1328,7 @@ describe("HR-014/F1 retirement recovery through the controller", () => {
   }
 
   const receipt = {
-    modelId: "farol-next/mind",
+    modelId: "legacy-route/mind",
     threadId: "thread-context-1",
     turnId: "turn-context-compact-1",
     itemId: "host-context-compaction-hr014",
@@ -1339,7 +1339,7 @@ describe("HR-014/F1 retirement recovery through the controller", () => {
     // Real continuity/store/summary driver; synthetic page output. This is
     // continuation correctness evidence, not live model or native host proof.
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-three-cycles-"),
+      path.join(os.tmpdir(), "farol-three-cycles-"),
     );
     roots.push(root);
     const { route, page } = summaryPage();
@@ -1449,7 +1449,7 @@ describe("HR-014/F1 retirement recovery through the controller", () => {
   ] as const) {
     it(`HR-014 ${fault === "saveRetired" ? "R4" : fault === "putRetirement" ? "store" : "R2"} completes one epoch transition after a restart when ${fault} failed once`, async () => {
       const root = await fs.mkdtemp(
-        path.join(os.tmpdir(), "farol-next-context-retire-"),
+        path.join(os.tmpdir(), "farol-context-retire-"),
       );
       roots.push(root);
       const store = new FaultyContinuityStore({ root });
@@ -1458,7 +1458,7 @@ describe("HR-014/F1 retirement recovery through the controller", () => {
       const handoff = await first.compact({
         endpoint: "responses",
         body: {
-          model: "farol-next/mind",
+          model: "legacy-route/mind",
           stream: true,
           input: [...history(), { type: "compaction_trigger" }],
         },
@@ -1526,7 +1526,7 @@ describe("HR-014/F1 retirement recovery through the controller", () => {
   // submission -- and the operation must still end in one epoch transition.
   it("HR-014/F2-2 recovers a completed summary whose publication failed, across a restart at the retirement boundary, with one submission and one epoch transition", async () => {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-context-retire-"),
+      path.join(os.tmpdir(), "farol-context-retire-"),
     );
     roots.push(root);
     const correlation = {
@@ -1541,7 +1541,7 @@ describe("HR-014/F1 retirement recovery through the controller", () => {
     const handoff = await first.compact({
       endpoint: "responses",
       body: {
-        model: "farol-next/mind",
+        model: "legacy-route/mind",
         stream: true,
         input: [...history(), { type: "compaction_trigger" }],
       },

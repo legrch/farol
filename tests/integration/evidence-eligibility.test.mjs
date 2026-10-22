@@ -72,7 +72,7 @@ function passingAttempt(lane, terminalOverrides = {}, extra = {}) {
 // attempt's byproducts and the last sha256 it sampled of terminal.json,
 // both consistent with `passingAttempt`'s defaults above.
 const observer = Object.freeze({
-  schema: "farol.next.effect-observer/v1",
+  schema: "farol.effect-observer/v1",
   healthy: true,
   lane: "sealed-package",
   attemptId,
@@ -594,9 +594,7 @@ describe("P2 observer inventory binds byproducts and the terminal receipt", () =
   });
 
   async function sealedAttempt() {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-eligibility-"),
-    );
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-eligibility-"));
     roots.push(root);
     const laneRoot = path.join(root, "_output", "evidence", "e2e");
     const opened = await openEvidenceAttempt(laneRoot, {
@@ -618,7 +616,7 @@ describe("P2 observer inventory binds byproducts and the terminal receipt", () =
     await fs.writeFile(
       path.join(opened.directory, "exit.json"),
       JSON.stringify({
-        schema: "farol.next.evidence-attempt/v1",
+        schema: "farol.evidence-attempt/v1",
         attemptId: opened.attemptId,
         exitCode: 0,
         exitedAt: new Date().toISOString(),
@@ -637,7 +635,7 @@ describe("P2 observer inventory binds byproducts and the terminal receipt", () =
   async function healthyObserverFor(laneRoot, attemptIdentifier) {
     const [loaded] = await listEvidenceAttempts(laneRoot);
     return {
-      schema: "farol.next.effect-observer/v1",
+      schema: "farol.effect-observer/v1",
       healthy: true,
       lane: "sealed-package",
       attemptId: attemptIdentifier,

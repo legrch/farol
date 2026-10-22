@@ -21,14 +21,14 @@ import {
 import { PrivateContextStore } from "../../src/modules/chat/infra/repo/private-context-store";
 
 const token = "context-runtime-test-token";
-const model = "farol-next/mind" as const;
+const model = "legacy-route/mind" as const;
 const threadId = "thread-context-runtime";
 const binding: ContextBinding = {
   ownerId: "owner-preview",
   taskId: threadId,
   hostThreadId: threadId,
   sessionId: threadId,
-  providerProfileId: "profile-isolated-next",
+  providerProfileId: "profile-isolated-farol",
   modelId: model,
   mode: "mind",
 };
@@ -265,7 +265,7 @@ describe("assembled Codex context runtime", () => {
 
   async function stateRoot(): Promise<string> {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-context-runtime-"),
+      path.join(os.tmpdir(), "farol-context-runtime-"),
     );
     roots.push(root);
     return root;
@@ -346,12 +346,12 @@ describe("assembled Codex context runtime", () => {
     const first = await request();
     expect(first.status).toBe(422);
     await expect(first.json()).resolves.toEqual({
-      error: { code: "FAROL_NEXT_COMPACTION_SUMMARY_OUTCOME_UNKNOWN" },
+      error: { code: "FAROL_COMPACTION_SUMMARY_OUTCOME_UNKNOWN" },
     });
     const repeated = await request();
     expect(repeated.status).toBe(422);
     await expect(repeated.json()).resolves.toEqual({
-      error: { code: "FAROL_NEXT_COMPACTION_SUMMARY_OUTCOME_UNKNOWN" },
+      error: { code: "FAROL_COMPACTION_SUMMARY_OUTCOME_UNKNOWN" },
     });
 
     const session = await new PrivateContextStore({ root }).load(binding);

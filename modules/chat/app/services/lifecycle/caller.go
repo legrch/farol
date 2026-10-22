@@ -96,7 +96,7 @@ func (c *Conversation) BeginCallerTool(ctx context.Context, input port.BeginCall
 		return nil, Unavailable
 	}
 	tag, err := s.deps.IntentDigests.Digest(identity)
-	if err != nil || !callerHex(tag, 64) || !callerHex(strings.TrimPrefix(input.Call.CallID, "farol_next_call_"), 32) || !strings.HasPrefix(input.Call.CallID, "farol_next_call_"+tag[:16]) {
+	if err != nil || !callerHex(tag, 64) || !callerHex(strings.TrimPrefix(input.Call.CallID, "farol_call_"), 32) || !strings.HasPrefix(input.Call.CallID, "farol_call_"+tag[:16]) {
 		return nil, Invalid
 	}
 	call := &CallerToolCall{original: &ComputerCall{conversation: c, correlation: input.Context, callID: input.ProducerOperationID}, request: input, phase: callerPending}

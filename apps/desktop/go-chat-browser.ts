@@ -309,7 +309,7 @@ export class GoChatBrowserDriver implements BrowserDriver {
       !a ||
       !isDeepStrictEqual(a.lease, lease) ||
       ![
-        "persist:farol-next-chatgpt",
+        "persist:farol-app-chatgpt",
         "persist:farol-dev-chatgpt",
         "persist:farol-owner-preview-chatgpt",
       ].includes(a.partition) ||

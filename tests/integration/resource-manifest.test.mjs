@@ -8,7 +8,7 @@ import {
 
 const vnextRoot = path.resolve(import.meta.dirname, "../..");
 
-describe("Farol Next resource ownership", () => {
+describe("Farol resource ownership", () => {
   it("declares every implemented identity and keeps absent integrations absent", async () => {
     const manifest = JSON.parse(
       await fs.readFile(path.join(vnextRoot, "resources.json"), "utf8"),
@@ -34,8 +34,8 @@ describe("Farol Next resource ownership", () => {
 
   it.each([
     ["application", ["application", "userData"], "${appData}/Farol"],
-    ["runtime", ["runtime", "process"], "Farol Runtime"],
-    ["processes", ["processes", 0, "name"], "Farol"],
+    ["runtime", ["runtime", "process"], "Farol Next Runtime"],
+    ["processes", ["processes", 0, "name"], "Farol Next Preview"],
     ["native Computer", ["integrations", "nativeComputer"], "present"],
     ["native Agent", ["integrations", "nativeAgent"], "present"],
     ["login item", ["integrations", "loginItem"], "registered"],

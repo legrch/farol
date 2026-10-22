@@ -226,7 +226,7 @@ describe("source test scopes", () => {
         HTTPS_PROXY: "synthetic",
         GOTOOLCHAIN: "auto",
         GOPROXY: "synthetic",
-        FAROL_NEXT_E2E: "1",
+        FAROL_E2E: "1",
       },
       "/tools/node",
     );
@@ -242,7 +242,7 @@ describe("source test scopes", () => {
       "OPENAI_API_KEY",
       "NODE_OPTIONS",
       "HTTPS_PROXY",
-      "FAROL_NEXT_E2E",
+      "FAROL_E2E",
     ])
       expect(environment).not.toHaveProperty(key);
   });

@@ -21,7 +21,7 @@ export function devControlTimeout(budget) {
 }
 
 export function readDevRunMarker(profilePath) {
-  return readRunMarker(path.join(profilePath, "farol-next-state"));
+  return readRunMarker(path.join(profilePath, "farol-state"));
 }
 
 export function retainedDevMarkerMatches(markerFile, original) {
@@ -148,7 +148,7 @@ export async function prepareDevBuild({
     ? fs.realpathSync(profileName)
     : profileName;
   const scope = { uid: process.getuid(), writerRoot, appPath, profilePath };
-  const markerFile = path.join(profilePath, "farol-next-state/running.json");
+  const markerFile = path.join(profilePath, "farol-state/running.json");
   const marker = await readDevRunMarker(profilePath);
   if (marker.status === "unreadable") throw Error("DEV_RUN_MARKER_UNREADABLE");
   if (marker.status === "read") {
@@ -266,7 +266,7 @@ export async function prepareDevBuild({
   const ownedRoots = [
     path.join(writerRoot, "node_modules/electron/dist/Electron.app/"),
     path.join(writerRoot, "_output/build/app/"),
-    path.join(profilePath, "farol-next-state/"),
+    path.join(profilePath, "farol-state/"),
   ];
   if (
     inventory.text

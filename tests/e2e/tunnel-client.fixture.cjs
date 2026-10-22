@@ -1,9 +1,9 @@
 "use strict";
 
 // Synthetic stand-in for the owner's real `tunnel-client` executable — the
-// OpenAI secure-MCP tunnel client that Farol Next probes, configures,
+// OpenAI secure-MCP tunnel client that Farol probes, configures,
 // doctors, and supervises through `SecureMcpConnectorRuntime` once
-// `FAROL_NEXT_E2E_TUNNEL_CLIENT` names it (see
+// `FAROL_E2E_TUNNEL_CLIENT` names it (see
 // vnext/src/apps/desktop/secure-mcp-connector-runtime.ts and
 // vnext/src/apps/desktop/tunnel-client-probe.ts). It speaks only to
 // 127.0.0.1 and never spawns a child, dials the `--mcp-command` it is

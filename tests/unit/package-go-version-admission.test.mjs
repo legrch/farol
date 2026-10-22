@@ -51,9 +51,9 @@ function fixture(
     artifact: {
       schema,
       treeDigestVersion: TREE_DIGEST_VERSION,
-      product: "Farol Next Preview",
+      product: "Farol",
       version,
-      bundleId: "local.farol.next.preview",
+      bundleId: "io.github.legrch.farol",
       sourceCommit: "a".repeat(40),
       sourceTreeDigest: "b".repeat(64),
       buildId: "c".repeat(64),
@@ -161,7 +161,7 @@ describe("shared package Go version admission", () => {
     "retains unknown tree-digest diagnostics before schema %s Go admission",
     async (schema) => {
       const input = fixture(schema);
-      input.artifact.treeDigestVersion = "farol.next.tree-digest/v9";
+      input.artifact.treeDigestVersion = "farol.tree-digest/v9";
       await refusesBeforeObservation(
         input,
         "PACKAGE_TREE_DIGEST_VERSION_INVALID",
@@ -180,7 +180,7 @@ describe("shared package Go version admission", () => {
 
   it("retains the tree-digest version guard for schema 7", async () => {
     const input = fixture();
-    input.artifact.treeDigestVersion = "farol.next.tree-digest/v1";
+    input.artifact.treeDigestVersion = "farol.tree-digest/v1";
     await refusesBeforeObservation(
       input,
       "PACKAGE_TREE_DIGEST_VERSION_INVALID",
@@ -279,7 +279,7 @@ describe("shared package Go version admission", () => {
       observations.readdir.mockImplementation(async (file) => {
         if (file === contents)
           return ["Frameworks", "Info.plist", "MacOS", "Resources"];
-        if (file === `${contents}/MacOS`) return ["Farol Next Preview"];
+        if (file === `${contents}/MacOS`) return ["Farol"];
         if (file === `${contents}/Frameworks`) return ["Electron Runtime.app"];
         if (file === `${contents}/Resources`) return ["app", "farol.icns"];
         if (file === resources)

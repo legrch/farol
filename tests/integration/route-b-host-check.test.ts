@@ -17,7 +17,7 @@ afterEach(async () => {
 
 async function runtimeRoot(): Promise<string> {
   root = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-route-b-check-")),
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-route-b-check-")),
   );
   return root;
 }

@@ -17,10 +17,10 @@ const testVersion = "1.2.3-preview.4"
 var testID = strings.Repeat("a", 64)
 
 func xmlDoc(extra string) []byte {
-	return []byte(`<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>local.farol.next.preview</string><key>CFBundleShortVersionString</key><string>1.2.3</string>` + extra + `</dict></plist>`)
+	return []byte(`<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>io.github.legrch.farol</string><key>CFBundleShortVersionString</key><string>1.2.3</string>` + extra + `</dict></plist>`)
 }
 func jsonDoc(extra string) []byte {
-	return []byte(`{"bundleId":"local.farol.next.preview","version":"1.2.3-preview.4","buildId":"` + testID + `"` + extra + `}`)
+	return []byte(`{"bundleId":"io.github.legrch.farol","version":"1.2.3-preview.4","buildId":"` + testID + `"` + extra + `}`)
 }
 func wantCode(t *testing.T, err error, code Code) {
 	t.Helper()
@@ -95,8 +95,8 @@ func TestStrictJSON(t *testing.T) {
 }
 func TestStrictXML(t *testing.T) {
 	for _, extra := range []string{
-		`<key>CFBundleIdentifier</key><string>local.farol.next.preview</string>`,
-		`<key>CFBundleIdentifi&#101;r</key><string>local.farol.next.preview</string>`,
+		`<key>CFBundleIdentifier</key><string>io.github.legrch.farol</string>`,
+		`<key>CFBundleIdentifi&#101;r</key><string>io.github.legrch.farol</string>`,
 		`<key>x</key><integer>abc</integer>`, `<key>x</key><integer>0x-1</integer>`, `<key>x</key><real>0x1p2</real>`, `<key>x</key><date>0000-01-01T00:00:00Z</date>`, `<key>x</key><real>NaN</real>`, `<key>x</key><real>1e999</real>`, `<key>x</key><true>yes</true>`,
 		`<key>x</key><data>!@</data>`, `<key>x</key><date>2026-99-99T00:00:00Z</date>`, `<key>x</key><string>&evil;</string>`,
 		`<key>x</key><dict><key>k</key><true/><key>k</key><false/></dict>`, `<key>x</key><string><true/></string>`, `<key>x</key><null/>`, `<key>x</key>`,

@@ -23,9 +23,9 @@ afterEach(async () => {
 function identity(): BuildIdentity {
   const unsigned = {
     schema: 1,
-    product: "Farol Next Preview",
+    product: "Farol",
     version: "0.1.0-preview.0",
-    bundleId: "local.farol.next.preview",
+    bundleId: "io.github.legrch.farol",
     updateChannel: "local-preview-only",
     builtAt: "2026-09-16T10:00:00.000Z",
     sourceCommit: "a".repeat(40),
@@ -42,9 +42,7 @@ function identity(): BuildIdentity {
 }
 
 async function writeIdentity(value: unknown): Promise<string> {
-  const root = await fs.mkdtemp(
-    path.join(os.tmpdir(), "farol-next-runtime-build-"),
-  );
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-runtime-build-"));
   roots.push(root);
   await fs.writeFile(
     path.join(root, "build-identity.json"),
@@ -71,7 +69,7 @@ describe("runtime build identity", () => {
 
   it("refuses a symlinked build record", async () => {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-runtime-build-link-"),
+      path.join(os.tmpdir(), "farol-runtime-build-link-"),
     );
     roots.push(root);
     const target = path.join(root, "actual.json");
