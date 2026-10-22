@@ -115,7 +115,12 @@ export function suiteCommand(
       ...(suite.testNamePattern
         ? ["--testNamePattern", suite.testNamePattern]
         : []),
-      "--pool=threads",
+      // Threads share the process fd table even with Vitest module isolation.
+      // A sibling can reuse a just-closed fd before the loader's EBADF witness.
+      // Keep that witness in a separate process without changing its assertions.
+      suite.files.includes("tests/integration/go-connector-launch.test.ts")
+        ? "--pool=forks"
+        : "--pool=threads",
       `--maxWorkers=${suite.workers ?? 1}`,
       ...(suite.workers === 2 ? [] : ["--no-file-parallelism"]),
       "--reporter=default",
