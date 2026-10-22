@@ -1,3 +1,4 @@
+import { computerSetup } from "../../src/ui/renderer/computer-setup";
 import { workspaceReadbackBinding } from "../../src/ui/guided-workspace-access";
 import { describe, it, expect, vi } from "vitest";
 import {
@@ -1092,6 +1093,29 @@ it("completed setup defaults to Home even when its current runtime needs reconne
   const c = new WindowController(f.api);
   await c.start();
   expect(c.getSnapshot().destination.area).toBe("home");
+  expect(f.api.configure).not.toHaveBeenCalled();
+  c.dispose();
+});
+it("a saved completion witness restores Home without treating a stopped connector as ready", async () => {
+  const f = fixture();
+  const data = bootstrap();
+  data.configuration.settings.general.openAtLaunch = "home";
+  data.configuration.settings.connectors.secureMcp.lastVerifiedAttachment = {
+    tunnelId: "fixture-tunnel",
+    workspaceId: null,
+    connectorGeneration: 1,
+    runtimeGeneration: "a".repeat(64),
+    computerGeneration: 1,
+    buildId: "3".repeat(64),
+    challengeSha256: "b".repeat(64),
+    receiptSha256: "c".repeat(64),
+    verifiedAt: "2026-10-02T20:00:00.000Z",
+  };
+  vi.mocked(f.api.bootstrap).mockResolvedValue(data);
+  const c = new WindowController(f.api);
+  await c.start();
+  expect(c.getSnapshot().destination.area).toBe("home");
+  expect(computerSetup(c.getSnapshot()).ready).toBe(false);
   expect(f.api.configure).not.toHaveBeenCalled();
   c.dispose();
 });
