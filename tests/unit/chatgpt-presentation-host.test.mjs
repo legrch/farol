@@ -125,13 +125,13 @@ describe("explicit ChatGPT presentation host mechanics", () => {
     expect(await h.handle()).toEqual({ ok: true, snapshot: h.snapshot });
     expect(h.context.chatGptRoute.open).toHaveBeenCalledTimes(1);
     expect(h.context.chatGptRoute.retryFailedOpen).not.toHaveBeenCalled();
-    expect(h.context.section).toBe("browser");
-    expect(h.context.setupOpen).toBe(false);
-    // The actual load callback owns document readiness; requesting Open does
-    // not make an absent/failed document ready before it has loaded.
+    expect(h.context.section).toBe("home");
+    expect(h.context.setupOpen).toBe(true);
+    // Renderer navigation owns the destination. This command alone neither
+    // changes it nor claims that a native document has been constructed.
     expect(h.context.browserHomeSurfaceOpen).toBe(false);
     expect(h.context.applyLayout).toHaveBeenCalledTimes(1);
-    expect(h.context.publishLayout).toHaveBeenCalledTimes(1);
+    expect(h.context.publishLayout).not.toHaveBeenCalled();
   });
 
   it.each(["unreachable", "throw"])(
@@ -161,13 +161,13 @@ describe("explicit ChatGPT presentation host mechanics", () => {
     });
     h.context.chatGptRoute.open.mockReturnValue(pending);
     const original = h.handle();
-    expect(h.context.section).toBe("browser");
+    expect(h.context.section).toBe("home");
     h.context.section = "home";
     h.context.setupOpen = false;
     settle({ status: "opened" });
     expect((await original).ok).toBe(true);
     expect(h.context.section).toBe("home");
     expect(h.context.applyLayout).toHaveBeenCalledTimes(1);
-    expect(h.context.publishLayout).toHaveBeenCalledTimes(1);
+    expect(h.context.publishLayout).not.toHaveBeenCalled();
   });
 });

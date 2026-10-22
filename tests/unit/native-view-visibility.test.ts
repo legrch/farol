@@ -293,6 +293,7 @@ const callbackNames = [
   "applyRendererLayout",
   "focusForLayout",
   "liveChatGptSurfaceFactory",
+  "signInChatGptSurfaceFactory",
   "createTaskViews",
 ] as const;
 const source = readFileSync(
@@ -388,6 +389,7 @@ function desktopFixture() {
     taskSurfaceFailures: new Set<string>(),
     publishTaskSurfaceStatus: () => undefined,
     browserHomeSurfaceOpen: false,
+    browserHomeLoadState: "loaded" as "loading" | "loaded" | "failed",
     signInSurfaceOpen: false,
     checkFeedbackVisible: false,
     runtimeEnvironment: "dev",
@@ -424,6 +426,9 @@ function desktopFixture() {
     focusForLayout(): void;
     disposeTaskView(taskId: string, view: BrowserView): void;
     createTaskViews(): Promise<void>;
+    signInChatGptSurfaceFactory(): ReturnType<
+      typeof api.liveChatGptSurfaceFactory
+    >;
     liveChatGptSurfaceFactory(taskId: string): (options: {
       webPreferences: object;
     }) => {
@@ -469,7 +474,7 @@ describe("desktop layout attachment integration (source callbacks + fake host)",
       f.taskViewKinds.clear();
       f.context.selectedTaskId = "";
       f.context.productTasksState = () => ({ tasks: [] });
-      const surface = f.api.liveChatGptSurfaceFactory("sign-in")({
+      const surface = f.api.signInChatGptSurfaceFactory()({
         webPreferences: {},
       });
       const view = f.taskViews.get("sign-in")!;
@@ -501,14 +506,15 @@ describe("desktop layout attachment integration (source callbacks + fake host)",
     },
   );
   it.each(["loading", "failed"] as const)(
-    "concealed %s clears readiness without destroying or exposing the retained view",
+    "concealed %s retains presence without destroying or exposing the document",
     (state) => {
       const f = desktopFixture();
       f.context.browserHomeSurfaceOpen = true;
       f.context.section = "settings";
       f.context.productTasksState = () => ({ tasks: [] });
       f.api.onLoadStateChanged(state);
-      expect(f.context.browserHomeSurfaceOpen).toBe(false);
+      expect(f.context.browserHomeSurfaceOpen).toBe(true);
+      expect(f.context.browserHomeLoadState).toBe(state);
       expect(f.view.webContents.destroyed).toBe(false);
       expect(f.host.children).toEqual([]);
     },
