@@ -108,7 +108,7 @@ describe("shell action provenance", () => {
     const calls = [...source.matchAll(/publishShellAction\(\s*([^;]*?)\)/gsu)]
       .map((match) => match[1] ?? "")
       .filter((body) => !body.includes("action:"));
-    expect(calls).toHaveLength(9);
+    expect(calls).toHaveLength(8);
     expect(
       calls.filter((body) => body.includes('"update-command"')),
     ).toHaveLength(1);
@@ -124,12 +124,14 @@ describe("shell action provenance", () => {
     expect(
       calls.filter((body) => body.includes('"auth-window-closed"')),
     ).toHaveLength(1);
+    // Explicit returns navigate in the renderer; only actual auth outcomes
+    // notify it asynchronously. Retired return sources stay parseable.
     expect(
       calls.filter((body) => body.includes('"sign-in-return-command"')),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
     expect(
       calls.filter((body) => body.includes('"verification-completed"')),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
     expect(calls).toContain('"toggle-sidebar", "sidebar-command"');
     // Every publish is stamped: no call site may omit provenance.
     for (const body of calls) {

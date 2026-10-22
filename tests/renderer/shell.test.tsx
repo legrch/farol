@@ -3167,3 +3167,60 @@ it("Settings owns its inner section list and Chat conversations stays in the Cha
     host.querySelector(".toolbar .chat-conversations-trigger")?.textContent,
   ).toContain("Chat conversations");
 });
+
+// DOM/transport fixtures only. Root owns real native bounds and stacking checks.
+it.each([false, true])(
+  "sign-in keeps one shell and its own explicit return (compact: %s)",
+  async (compact) => {
+    const { host, c, f } = await mount(completedBootstrap(), () => compact);
+    await act(async () => c.navigate({ area: "setup", setupStep: "signin" }));
+    await act(async () =>
+      c.configure(
+        { kind: "chatgpt.open-sign-in" },
+        "settings:chatgpt.open-sign-in:",
+      ),
+    );
+    expect(c.getSnapshot().destination.area).toBe("chatgpt");
+    expect(host.querySelectorAll('nav[aria-label="Sections"]')).toHaveLength(1);
+    expect(
+      host
+        .querySelector('.rail [aria-label="ChatGPT"]')
+        ?.getAttribute("aria-current"),
+    ).toBe("page");
+    expect(host.querySelector(".setup-page")).toBeNull();
+    expect(host.querySelector(".sign-in-context")?.textContent).toContain(
+      "Setup · Sign in",
+    );
+    expect(host.querySelectorAll(".connection-check-return")).toHaveLength(1);
+    await act(async () => {
+      f.emit("route", { state: "failed" });
+      f.emit("action", {
+        action: "sign-in-returned",
+        source: "auth-window-closed",
+        authWindowGeneration: 1,
+        eventId: crypto.randomUUID(),
+      });
+      await c.refresh();
+    });
+    expect(c.getSnapshot().destination.area).toBe("chatgpt");
+    expect(host.querySelector('main [role="alert"]')?.textContent).toContain(
+      "page failed to load",
+    );
+    await act(async () => button(host, "Back to setup").click());
+    expect(c.getSnapshot().destination).toMatchObject({
+      area: "setup",
+      setupStep: "signin",
+    });
+    expect(host.querySelector(".sign-in-context")).toBeNull();
+    // A separately requested attachment check keeps its own return destination.
+    await act(async () =>
+      c.navigate({ area: "chatgpt", connectionCheckReturn: true }),
+    );
+    await act(async () => button(host, "Back to setup").click());
+    expect(c.getSnapshot().destination).toMatchObject({
+      area: "setup",
+      setupStep: "attachment",
+    });
+    expect(f.api.task).not.toHaveBeenCalled();
+  },
+);

@@ -2067,7 +2067,7 @@ describe("F0 window owner", () => {
     expect(f.api.configure).not.toHaveBeenCalled();
     c.dispose();
   });
-  it("R35 removed or missing task targets are never adopted or retried", async () => {
+  it("R35 removed or unrecognized nonempty task targets are never adopted or retried", async () => {
     const f = fixture();
     const c = new WindowController(f.api);
     await c.start();
@@ -2075,7 +2075,7 @@ describe("F0 window owner", () => {
     c.navigate({ area: "chatgpt", taskId: "task-1" });
     const state = c.getSnapshot();
     f.emit("action", sectionIntent("browser", 1, "removed"));
-    f.emit("action", sectionIntent("settings", 2));
+    f.emit("action", sectionIntent("settings", 2, "unrecognized"));
     expect(c.getSnapshot()).toBe(state);
     f.emit("tasks", { revision: 2, tasks: [] });
     c.navigate({ area: "settings", page: "appearance", taskId: "" });
@@ -4143,3 +4143,189 @@ it("an ordinary unobserved sign-in has a neutral checklist marker, unlike an unk
     c.dispose();
   }
 });
+
+// Shell/transport doubles only; native geometry and provider login are root gates.
+describe("Setup sign-in browser continuity", () => {
+  it("presents ChatGPT before transport and only explicitly returns to the saved Sign in step", async () => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    c.navigate({ area: "setup", setupStep: "signin" });
+    const saved = c.getSnapshot().destination;
+    const waiting = deferred<unknown>();
+    const entered = deferred<void>();
+    vi.mocked(f.api.configure).mockImplementation((command) => {
+      if (command.kind === "chatgpt.open-sign-in") {
+        entered.resolve();
+        return waiting.promise;
+      }
+      return Promise.resolve({ ok: true, snapshot: bootstrap().configuration });
+    });
+    const opening = c.configure(
+      { kind: "chatgpt.open-sign-in" },
+      "settings:chatgpt.open-sign-in:",
+    );
+    await entered.promise;
+    expect(c.getSnapshot().destination.area).toBe("chatgpt");
+    expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.[0]).toBe("browser");
+    expect(c.getSnapshot().setupSignInReturn).toEqual(saved);
+    const destination = c.getSnapshot().destination;
+    for (const state of ["loading", "loaded", "failed"] as const) {
+      f.emit("route", { state });
+      f.emit("action", {
+        action: "sign-in-returned",
+        source: "auth-window-closed",
+        authWindowGeneration: 1,
+        eventId: crypto.randomUUID(),
+      });
+      await c.refresh();
+      expect(c.getSnapshot().destination).toBe(destination);
+      expect(c.getSnapshot().setupSignInCheck).toBeFalsy();
+    }
+    c.navigate({ area: "activity" });
+    waiting.resolve({ ok: true, snapshot: bootstrap().configuration });
+    await opening;
+    expect(c.getSnapshot().destination.area).toBe("activity");
+    c.navigate({ area: "chatgpt" });
+    c.returnToSetup();
+    await vi.waitFor(() =>
+      expect(f.api.configure).toHaveBeenCalledWith({
+        kind: "chatgpt.sign-in-return",
+      }),
+    );
+    expect(c.getSnapshot().destination).toEqual(saved);
+    expect(c.getSnapshot().setupSignInReturn).toBeNull();
+    f.emit("action", {
+      action: "sign-in-returned",
+      source: "sign-in-return-command",
+      authWindowGeneration: 1,
+      eventId: crypto.randomUUID(),
+    });
+    expect(c.getSnapshot().destination).toEqual(saved);
+    expect(
+      vi
+        .mocked(f.api.configure)
+        .mock.calls.filter(
+          ([command]) => command.kind === "chatgpt.open-sign-in",
+        ),
+    ).toHaveLength(1);
+    expect(
+      vi
+        .mocked(f.api.configure)
+        .mock.calls.filter(
+          ([command]) => command.kind === "chatgpt.sign-in-return",
+        ),
+    ).toHaveLength(1);
+    expect(f.api.task).not.toHaveBeenCalled();
+    c.dispose();
+  });
+});
+
+it.each(["chatgpt.open-sign-in", "chatgpt.open-browser"] as const)(
+  "%s from Sign in retains its own context without late navigation or effect replay",
+  async (kind) => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    c.navigate({ area: "setup", setupStep: "signin" });
+    const saved = c.getSnapshot().destination;
+    const waiting = deferred<unknown>();
+    vi.mocked(f.api.configure).mockImplementation((command) =>
+      command.kind === kind
+        ? waiting.promise
+        : Promise.resolve({ ok: true, snapshot: bootstrap().configuration }),
+    );
+    const opening = c.configure({ kind }, `settings:${kind}:`);
+    // Explicit navigation while the command digest is pending must win.
+    c.navigate({ area: "activity" });
+    await vi.waitFor(() =>
+      expect(f.api.configure).toHaveBeenCalledWith({ kind }),
+    );
+    expect(c.getSnapshot().destination.area).toBe("activity");
+    waiting.reject(new Error("fixture lost reply"));
+    expect((await opening).state).toBe("unknown");
+    const latch = c.getSnapshot().intents[`settings:${kind}:`];
+    expect(c.getSnapshot().setupSignInReturn).toEqual(saved);
+    c.navigate({ area: "chatgpt" });
+    f.emit("runtime", {
+      state: "offline",
+      error: null,
+      identity: null,
+      embeddedNode: null,
+      embeddedElectron: null,
+    });
+    c.returnToSetup();
+    expect(c.getSnapshot().destination).toEqual(saved);
+    expect(c.getSnapshot().intents[`settings:${kind}:`]).toBe(latch);
+    expect(c.getSnapshot().setupSignInCheck).toBeFalsy();
+    await c.refresh();
+    expect(
+      vi
+        .mocked(f.api.configure)
+        .mock.calls.filter(([command]) => command.kind === kind),
+    ).toHaveLength(1);
+    c.dispose();
+  },
+);
+
+// A retained task is not the home/sign-in document even when both share a rail.
+it.each(["chatgpt.open-sign-in", "chatgpt.open-browser"] as const)(
+  "%s explicitly selects the home document while retaining task return context",
+  async (kind) => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    f.emit("tasks", { revision: 1, tasks: [task("retained")] });
+    c.navigate({ area: "chatgpt", taskId: "retained" });
+    c.navigate({ area: "setup", setupStep: "signin" });
+    const previous = c.getSnapshot().destination;
+    await c.configure({ kind }, `settings:${kind}:`);
+    expect(c.getSnapshot().destination).toMatchObject({
+      area: "chatgpt",
+      taskId: "",
+    });
+    expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.slice(0, 2)).toEqual([
+      "browser",
+      "",
+    ]);
+    expect(c.getSnapshot().setupSignInReturn).toEqual(previous);
+    c.returnToSetup();
+    expect(c.getSnapshot().destination).toEqual(previous);
+    c.navigate({ area: "chatgpt", taskId: "retained" });
+    expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.slice(0, 2)).toEqual([
+      "browser",
+      "retained",
+    ]);
+    c.dispose();
+  },
+);
+
+it.each(["chatgpt.open-sign-in", "chatgpt.open-browser"] as const)(
+  "%s keeps native section shortcuts usable with a home document and retained tasks",
+  async (kind) => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    f.emit("tasks", { revision: 1, tasks: [task("retained")] });
+    c.navigate({ area: "setup", setupStep: "signin" });
+    await c.configure({ kind }, `settings:${kind}:`);
+    expect(c.getSnapshot().destination.taskId).toBe("");
+    const targets = [
+      ["activity", "activity"],
+      ["settings", "settings"],
+      ["computer", "setup"],
+      ["browser", "chatgpt"],
+    ];
+    for (const [index, [section, area]] of targets.entries()) {
+      const count = vi.mocked(f.api.layout).mock.calls.length;
+      f.emit("action", sectionIntent(section, index + 1, ""));
+      expect(c.getSnapshot().destination).toMatchObject({ area, taskId: "" });
+      expect(f.api.layout).toHaveBeenCalledTimes(count + 1);
+    }
+    const selected = c.getSnapshot().destination;
+    f.emit("action", sectionIntent("activity", 5, "unrecognized"));
+    expect(c.getSnapshot().destination).toBe(selected);
+    expect(f.api.task).not.toHaveBeenCalled();
+    c.dispose();
+  },
+);

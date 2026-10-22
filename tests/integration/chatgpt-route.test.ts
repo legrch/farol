@@ -5503,7 +5503,7 @@ describe("ChatGPT sign-in return", () => {
     candidate.returnFromSignIn();
     candidate.returnFromSignIn();
     await vi.waitFor(() => expect(outcomes).toEqual(["authenticated"]));
-    expect(surface.hide).toHaveBeenCalled();
+    expect(surface.hide).not.toHaveBeenCalled();
     expect(surface.destroy).not.toHaveBeenCalled();
     await expect(candidate.observe()).resolves.toMatchObject({
       state: "authenticated",
@@ -5511,14 +5511,51 @@ describe("ChatGPT sign-in return", () => {
     candidate.dispose();
   });
 
-  it("recreates a failed embedded sign-in page on the next explicit open", async () => {
+  it("does not attribute a previous return read to a new sign-in on the retained document", async () => {
+    const surface = embeddedSurface();
+    const reads: Array<(value: unknown) => void> = [];
+    Object.assign(surface.webContents, {
+      executeJavaScript: vi.fn(
+        () => new Promise((resolve) => reads.push(resolve)),
+      ),
+    });
+    const outcomes: string[] = [];
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+      onSignInOutcome: (status) => outcomes.push(status),
+    });
+    await candidate.openForSignIn("First sign-in");
+    expect(candidate.returnFromSignIn()).toBe(true);
+    expect(reads).toHaveLength(1);
+    await candidate.openForSignIn("Second sign-in");
+    reads[0]!({ composerVisible: true, signInVisible: false });
+    // Flush the completed old read and all of its Promise reactions, rather
+    // than asserting the absence of a callback before it had time to run.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(outcomes).toEqual([]);
+    expect(candidate.returnFromSignIn()).toBe(true);
+    expect(reads).toHaveLength(2);
+    reads[1]!({ composerVisible: false, signInVisible: true });
+    await vi.waitFor(() => expect(outcomes).toEqual(["not_authenticated"]));
+    expect(surface.loadURL).toHaveBeenCalledTimes(1);
+    expect(surface.hide).not.toHaveBeenCalled();
+    expect(surface.destroy).not.toHaveBeenCalled();
+    candidate.dispose();
+  });
+
+  it("ignores a closed previous sign-in read after a new surface starts sign-in", async () => {
     const first = embeddedSurface();
     const second = embeddedSurface();
-    for (const surface of [first, second]) {
-      Object.assign(surface.webContents, {
-        executeJavaScript: vi.fn(async () => ({})),
-      });
-    }
+    Object.assign(second.webContents, {
+      executeJavaScript: vi.fn(async () => ({
+        composerVisible: false,
+        signInVisible: true,
+      })),
+    });
     const surfaces = [first, second];
     const outcomes: string[] = [];
     const candidate = new ChatGptRoute({
@@ -5530,11 +5567,77 @@ describe("ChatGPT sign-in return", () => {
         surfaces.shift()) as unknown as ChatGptRouteSurfaceFactory,
       onSignInOutcome: (status) => outcomes.push(status),
     });
+    await candidate.openForSignIn("First sign-in");
+    let settle!: (value: unknown) => void;
+    Object.assign(first.webContents, {
+      executeJavaScript: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            settle = resolve;
+          }),
+      ),
+    });
+    first.destroy();
+    await candidate.openForSignIn("Second sign-in");
+    settle({ composerVisible: true, signInVisible: false });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(outcomes).toEqual([]);
+    expect(candidate.returnFromSignIn()).toBe(true);
+    await vi.waitFor(() => expect(outcomes).toEqual(["not_authenticated"]));
+    expect(second.destroy).not.toHaveBeenCalled();
+    expect(second.loadURL).toHaveBeenCalledTimes(1);
+    candidate.dispose();
+  });
 
-    await expect(
-      candidate.openForSignIn("Sign in to ChatGPT — Farol Dev"),
-    ).resolves.toEqual({ status: "opened" });
-    first.webContents.emit(
+  it("a late embedded return observation cannot conceal a page the owner selected again", async () => {
+    const surface = embeddedSurface();
+    const outcomes: string[] = [];
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+      onSignInOutcome: (status) => outcomes.push(status),
+    });
+    await candidate.openForSignIn("Sign in to ChatGPT — Farol Dev");
+    let settle!: (value: unknown) => void;
+    Object.assign(surface.webContents, {
+      executeJavaScript: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            settle = resolve;
+          }),
+      ),
+    });
+    candidate.returnFromSignIn();
+    await candidate.open();
+    settle({ composerVisible: true, signInVisible: false });
+    await vi.waitFor(() => expect(outcomes).toEqual(["authenticated"]));
+    expect(surface.hide).not.toHaveBeenCalled();
+    expect(surface.destroy).not.toHaveBeenCalled();
+    expect(surface.loadURL).toHaveBeenCalledTimes(1);
+    candidate.dispose();
+  });
+
+  it("retains the failed embedded sign-in document across explicit return and ordinary open", async () => {
+    // Fake native host only: no provider request or real stacking proof.
+    const surface = embeddedSurface();
+    Object.assign(surface.webContents, {
+      executeJavaScript: vi.fn(async () => ({})),
+    });
+    const factory = vi.fn(() => surface);
+    const outcomes: string[] = [];
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: factory as unknown as ChatGptRouteSurfaceFactory,
+      onSignInOutcome: (status) => outcomes.push(status),
+    });
+    await candidate.openForSignIn("Sign in to ChatGPT — Farol Dev");
+    surface.webContents.emit(
       "did-fail-load",
       {},
       -105,
@@ -5544,12 +5647,11 @@ describe("ChatGPT sign-in return", () => {
     );
     candidate.returnFromSignIn();
     await vi.waitFor(() => expect(outcomes).toEqual(["unknown"]));
-
-    expect(first.destroy).toHaveBeenCalledTimes(1);
-    await expect(
-      candidate.openForSignIn("Sign in to ChatGPT — Farol Dev"),
-    ).resolves.toEqual({ status: "opened" });
-    expect(second.reveal).toHaveBeenCalledTimes(1);
+    expect(surface.destroy).not.toHaveBeenCalled();
+    expect(surface.hide).not.toHaveBeenCalled();
+    await expect(candidate.open()).resolves.toEqual({ status: "unreachable" });
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(surface.loadURL).toHaveBeenCalledTimes(1);
     candidate.dispose();
   });
 

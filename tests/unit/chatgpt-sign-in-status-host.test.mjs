@@ -9,13 +9,40 @@ import {
   ProductConfigurationResultSchema,
 } from "../../src/pkg/product-settings/contract.ts";
 
+import { deriveSurfaceLayout } from "../../src/apps/desktop/surface-layout.ts";
+
 // Actual host code with injected route mechanics. No browser, network, state
 // writer, credential, provider or shared build output participates.
 const source = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
 const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
 let branch;
 let returnCallback;
+const continuityFunctions = new Map();
+const continuityBranches = new Map();
+const continuityCallbacks = new Map();
 function visit(node) {
+  if (
+    node.type === "FunctionDeclaration" &&
+    ["currentSurfaceLayout", "applyLayout"].includes(node.id?.name)
+  )
+    continuityFunctions.set(node.id.name, source.slice(node.start, node.end));
+  if (
+    node.type === "SwitchCase" &&
+    [
+      "chatgpt.open-sign-in",
+      "chatgpt.open-browser",
+      "chatgpt.verification-return",
+    ].includes(node.test?.value)
+  )
+    continuityBranches.set(node.test.value, source.slice(node.start, node.end));
+  if (
+    node.type === "ObjectProperty" &&
+    ["onLoadStateChanged", "onSignInOutcome"].includes(node.key?.name)
+  )
+    continuityCallbacks.set(
+      node.key.name,
+      source.slice(node.value.start, node.value.end),
+    );
   if (
     node.type === "SwitchCase" &&
     node.test?.value === "chatgpt.observe-sign-in"
@@ -205,6 +232,161 @@ describe("bounded Sign in status host disclosure", () => {
         "sign-in-returned",
         "auth-window-closed",
         3,
+      );
+    },
+  );
+});
+
+// Executed host functions with fake native mechanics. These fixtures prove
+// layout decisions, not Electron stacking, hit testing, focus or provider login.
+function continuityHarness(width = 1180, height = 760) {
+  const snapshot = { status: "error", error: "SETTINGS_READ_FAILED" };
+  const view = {
+    webContents: { isDestroyed: () => false },
+    setBounds: vi.fn(),
+  };
+  const context = {
+    window: {
+      isDestroyed: () => false,
+      getContentSize: () => [width, height],
+      webContents: { send: vi.fn() },
+    },
+    section: "settings",
+    setupOpen: false,
+    selectedTaskId: "",
+    browserHomeSurfaceOpen: true,
+    browserHomeLoadState: "loaded",
+    sidebarMode: "full",
+    sidebarWidth: 152,
+    shellOverlay: "none",
+    runtimeState: "ready",
+    runtimeEnvironment: "dev",
+    demoMode: false,
+    legacySetupTestMode: false,
+    checkFeedbackVisible: false,
+    installedUpdateAdmission: false,
+    productTasksState: () => ({ tasks: [] }),
+    SIGN_IN_SURFACE_ID: "fixture-sign-in",
+    taskViews: new Map([["fixture-sign-in", view]]),
+    taskViewKinds: new Map(),
+    deriveSurfaceLayout,
+    compactBrowserSelected: () => false,
+    nativeViewVisibility: { hide: vi.fn() },
+    attachTaskView: vi.fn(),
+    channels: { browserRouteState: "fixture-route" },
+    embeddedBrowserEnabled: () => true,
+    chatGptRoute: {
+      openForSignIn: vi.fn(async () => ({ status: "opened" })),
+      retryFailedOpen: vi.fn(async () => ({ status: "opened" })),
+      returnFromSignIn: vi.fn(() => false),
+    },
+    SIGN_IN_WINDOW_TITLE: "Fixture sign-in",
+    chatGptTaskAdmission: false,
+    connectorTaskAdmission: false,
+    chatGptSignInBlocked: { beginAttempt: vi.fn() },
+    chatGptSignInOutcome: null,
+    chatGptSignInGeneration: 0,
+    chatGptSignInOpenGeneration: null,
+    configuration: {
+      snapshot: () => snapshot,
+      markSetupVisited: vi.fn(async () => ({ ok: true, snapshot })),
+      recordChatGptObservation: vi.fn(async () => ({ ok: true, snapshot })),
+    },
+    configurationFailure: (error) => ({ ok: false, error, snapshot }),
+    ProductConfigurationResultSchema,
+    publishLayout: vi.fn(),
+    publishShellAction: vi.fn(),
+    recordChatGptSignInOutcome: vi.fn(async () => undefined),
+  };
+  const code = `
+    ${[...continuityFunctions.values()].join("\n")}
+    async function command(kind) { switch(kind) {
+      ${continuityBranches.get("chatgpt.open-sign-in")}
+      ${continuityBranches.get("chatgpt.open-browser")}
+      ${continuityBranches.get("chatgpt.verification-return")}
+    } }
+    ({ layout: currentSurfaceLayout, apply: applyLayout, command,
+      load: ${continuityCallbacks.get("onLoadStateChanged")},
+      outcome: ${continuityCallbacks.get("onSignInOutcome")} })`;
+  const api = vm.runInNewContext(stripTypeScriptTypes(code), context);
+  return { context, view, api };
+}
+
+describe("retained sign-in host continuity", () => {
+  it("does not compete with renderer destination on open, return or outcome", async () => {
+    const { context: c, api } = continuityHarness();
+    await api.command("chatgpt.open-sign-in");
+    expect(c.chatGptRoute.openForSignIn).toHaveBeenCalledTimes(1);
+    expect(c.section).toBe("settings");
+    expect(c.setupOpen).toBe(false);
+    c.section = "browser";
+    const before = api.layout();
+    c.chatGptSignInOpenGeneration = 4;
+    await api.command("chatgpt.verification-return");
+    expect(c.chatGptSignInOpenGeneration).toBeNull();
+    api.outcome("unknown", { reason: "synthetic" });
+    expect(c.section).toBe("browser");
+    expect(api.layout()).toEqual(before);
+    expect(c.publishLayout).not.toHaveBeenCalled();
+    expect(c.publishShellAction).not.toHaveBeenCalled();
+  });
+
+  it("Open ChatGPT retains the home document while renderer selection alone presents it", async () => {
+    const { context: c, api } = continuityHarness();
+    c.productTasksState = () => ({ tasks: [{ taskId: "retained-task" }] });
+    c.section = "browser";
+    c.selectedTaskId = "retained-task";
+    expect(api.layout().showBrowserHome).toBe(false);
+    await api.command("chatgpt.open-browser");
+    expect(c.chatGptRoute.retryFailedOpen).toHaveBeenCalledTimes(1);
+    expect(api.layout().showBrowserHome).toBe(false);
+    c.selectedTaskId = "";
+    expect(api.layout().showBrowserHome).toBe(true);
+    expect(api.layout().pageVisible).toBe(true);
+  });
+
+  it.each([
+    [1180, 760, 214],
+    [640, 600, 58],
+  ])(
+    "retains one browser across passive loads and navigation at %sx%s",
+    (width, height, rail) => {
+      const { context: c, view, api } = continuityHarness(width, height);
+      c.section = "browser";
+      for (const state of ["loaded", "loading", "loaded", "failed"]) {
+        api.load(state);
+        expect(c.browserHomeSurfaceOpen).toBe(true);
+        expect(c.section).toBe("browser");
+        expect(c.taskViews.get("fixture-sign-in")).toBe(view);
+        expect(api.layout()).toMatchObject({
+          pageVisible: state !== "failed",
+          pageBounds: {
+            x: rail,
+            y: 58,
+            width: width - rail,
+            height: height - 58,
+          },
+        });
+      }
+      api.load("loaded");
+      c.section = "settings";
+      api.apply();
+      expect(api.layout().pageVisible).toBe(false);
+      api.load("loading");
+      expect(api.layout().pageVisible).toBe(false);
+      c.section = "browser";
+      api.apply();
+      expect(api.layout().pageVisible).toBe(true);
+      c.shellOverlay = "quick-switcher";
+      api.apply();
+      expect(api.layout().pageVisible).toBe(false);
+      expect(c.nativeViewVisibility.hide).toHaveBeenCalledWith(view);
+      c.shellOverlay = "none";
+      api.apply();
+      expect(c.attachTaskView).toHaveBeenLastCalledWith(
+        "fixture-sign-in",
+        view,
+        api.layout().pageBounds,
       );
     },
   );

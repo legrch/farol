@@ -173,6 +173,8 @@ export type WindowSnapshot = Readonly<{
   connectionStatus?: ConnectionStatusView;
   route: "loading" | "loaded" | "failed";
   signInObservation: SignInObservation | null;
+  /** Presentation context only; never evidence that sign-in succeeded. */
+  setupSignInReturn?: Destination | null;
   /** Window-owned explicit check, bound to the authenticated document sample. */
   setupSignInCheck?: Readonly<{
     buildId: string;
@@ -280,5 +282,6 @@ export interface RendererFacade {
   overlay(kind: WindowSnapshot["overlay"]): void;
   dismissOverlay(): void;
   appearance(value: Appearance): void;
+  returnToSetup(): void;
   presentation(): void;
 }

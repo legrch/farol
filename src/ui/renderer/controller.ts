@@ -155,6 +155,7 @@ const initial: WindowSnapshot = {
   runtime: "starting",
   route: "loading",
   signInObservation: null,
+  setupSignInReturn: null,
   update: { phase: "unavailable", code: "UPDATE_STATUS_PENDING" },
   intents: {},
   evidence: null,
@@ -1336,6 +1337,7 @@ export class WindowController implements RendererFacade {
     // including known refusals. A new label must not release that latch.
     if (command.kind === "chatgpt.present-browser")
       intention = "settings:chatgpt.present-browser:";
+    const requestedDestination = this.state.destination;
     const signInCheck =
       command.kind === "chatgpt.verify" ? this.state.signInObservation : null;
     if (command.kind === "chatgpt.verify") {
@@ -1417,6 +1419,28 @@ export class WindowController implements RendererFacade {
               command,
             ),
           );
+        if (
+          command.kind === "chatgpt.open-sign-in" ||
+          command.kind === "chatgpt.open-browser"
+        ) {
+          if (
+            command.kind === "chatgpt.open-sign-in" ||
+            (requestedDestination.area === "setup" &&
+              requestedDestination.setupStep === "signin")
+          )
+            this.patch({
+              setupSignInReturn: this.state.setupSignInReturn ?? {
+                ...requestedDestination,
+                area: "setup",
+                page: "general",
+                setupStep: "signin",
+              },
+            });
+          // Commit renderer navigation before transport can reveal a native
+          // surface. Host observations and late replies never own navigation.
+          if (this.state.destination === requestedDestination)
+            this.navigate({ area: "chatgpt", taskId: "" });
+        }
         const order = this.configOrder.begin();
         let transport: Parameters<typeof classifyConfigurationResponse>[0];
         try {
@@ -2411,6 +2435,19 @@ export class WindowController implements RendererFacade {
     this.patch({ appearance: value });
     this.persistAppearance(value);
   }
+  returnToSetup(): void {
+    const destination = this.state.setupSignInReturn;
+    if (!destination || this.disposed || this.state.update.phase === "applying")
+      return;
+    // Navigation remains available even when command evidence is stale or an
+    // earlier effect is unknown. Observation settlement owns no destination.
+    this.patch({ setupSignInReturn: null });
+    this.navigate(destination);
+    void this.configure(
+      { kind: "chatgpt.sign-in-return" },
+      "settings:chatgpt.sign-in-return:",
+    );
+  }
   presentation(): void {
     if (this.disposed) return;
     const state = this.state;
@@ -2454,9 +2491,8 @@ export class WindowController implements RendererFacade {
       return false;
     const tasks = this.state.tasks.tasks;
     if (
-      tasks.length === 0
-        ? action.taskId !== ""
-        : !tasks.some((task) => task.taskId === action.taskId)
+      action.taskId !== "" &&
+      !tasks.some((task) => task.taskId === action.taskId)
     )
       return false;
     const previous = this.state.destination;
@@ -2535,10 +2571,7 @@ export class WindowController implements RendererFacade {
         this.invalidateSignInObservation();
         this.observeSignIn();
       }
-      if (
-        action.source === "settings-command" ||
-        action.source === "sign-in-return-command"
-      )
+      if (action.source === "settings-command")
         this.navigate({ area: "setup", setupStep: "connection" });
       void this.refresh();
     }

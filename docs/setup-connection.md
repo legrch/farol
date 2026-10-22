@@ -6,7 +6,7 @@ Setup uses your own ChatGPT account and the workspaces you approve on this Mac. 
 
 ## 1. Sign in
 
-Choose **Sign in**, or **Open ChatGPT** if Farol cannot recognize the existing page. Finish signing in and return to Setup. When your signed-in page is recognized, choose **Check sign-in**. This saves the existing account-readiness check needed by the embedded ChatGPT test. Opening a page alone is not a passed check.
+Choose **Sign in**, or **Open ChatGPT** if Farol cannot recognize the existing page. Farol opens the retained ChatGPT page inside the same shell, with the sidebar still available. The toolbar shows **Setup · Sign in** and **Back to setup**. Finish signing in, then choose **Back to setup** to return to the Sign in step. Closing a sign-in popup, a failed or cancelled sign-in, and passive page observations never return you automatically. You can visit another area and select ChatGPT again without replacing its retained document or starting sign-in again. If a retained page later fails to load, Farol keeps it and shows the failure with a next action. Navigation does not retry it. When your signed-in page is recognized, choose **Check sign-in**. This saves the existing account-readiness check needed by the embedded ChatGPT test. Opening a page alone is not a passed check.
 
 When **✓ Sign-in checked** appears, choose **Continue**. There is no skip in this guided flow. A connection used outside Farol can still have independent external verification; that does not replace this flow's sign-in check.
 

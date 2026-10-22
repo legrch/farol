@@ -134,6 +134,17 @@ prove a live authenticated provider or whole-process containment.
 
 After the Setup redesign, explicit retirement is coverage evidence of `NOT_RUN`, not a passing native journey. Source behavior remains covered by `npm run test:renderer` and the focused help-routing, Setup-helper and retirement unit tests. Those checks do not replace built-app, native-host, installed or live-provider evidence.
 
+`sign-in-continuity.e2e.mjs` adds a separate current journey to the historical
+inventory below. It requires a clean exact schema-4 build, explicit absolute
+`FAROL_RENDERER_TEST_ELECTRON_ROOT` validated by the runtime contract, and no
+selector.
+Hidden Electron/Go uses disposable state and a synthetic loopback browser/popup
+to verify one shell, explicit Sign in return, retained document identity through
+popup cancellation/navigation/search, wide and compact native bounds, zero Send
+and clean drain. Separate shell/browser captures are not a composited native
+screenshot. It does not qualify Google, live sign-in, a tunnel, an installed
+workflow or foreground OS focus.
+
 | Entry                                 | Scope and selectors                                                                                               | Required inputs and limits                                                                                                                                                                                                                                                                                                   |
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `readonly-computer-mcp.e2e.mjs`       | Adapter: default; `--packaged`                                                                                    | Built or packaged `computer-mcp.cjs`, Electron, MCP client, system Git/xcrun, disposable files. No assembled UI or live connector proof.                                                                                                                                                                                     |
