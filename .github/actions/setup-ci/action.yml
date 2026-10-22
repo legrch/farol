@@ -11,6 +11,11 @@ runs:
       with:
         node-version: 24.20.0
         cache: npm
+    # Checkout leaves a detached HEAD with only origin/main; repository tools
+    # read the local main branch, as in a developer checkout.
+    - name: Provide the local main branch
+      shell: bash
+      run: git update-ref refs/heads/main refs/remotes/origin/main
     # The official go.dev archive, verified and extracted unchanged. Its tree
     # is the SDK the release and native archive pins approve; a repackaged
     # toolcache SDK is not. Only module downloads are cached, below.
