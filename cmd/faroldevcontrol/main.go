@@ -192,6 +192,25 @@ func canonicalPath(value string) bool {
 // kern.procargs2 contains argc (native int32), executable NUL, padding NULs,
 // argc argv strings, then environment. Parse exactly argc strings; never parse
 // or emit the remaining environment. No shell quoting or command-line splitting.
+// Only an independently parsed different executable excludes a named process
+// from this writer. Unsupported argv of the same binary remains a blocker.
+func inspectProcCommand(raw []byte, q request) response {
+	if !validDevPaths(q.Executable, q.AppPath) || len(raw) < 5 || len(raw) > maxProcArgsBytes {
+		return response{Status: "unreadable", Reason: "PROC_EXECUTABLE_UNREADABLE"}
+	}
+	end := bytes.IndexByte(raw[4:], 0)
+	if end < 1 || end > 2048 || !utf8.Valid(raw[4:4+end]) || !canonicalPath(string(raw[4:4+end])) {
+		return response{Status: "unreadable", Reason: "PROC_EXECUTABLE_UNREADABLE"}
+	}
+	if string(raw[4:4+end]) != q.Executable {
+		return response{Status: "refused", Reason: "WRITER_EXECUTABLE_MISMATCH"}
+	}
+	if !matchesProcArgs(raw, q) {
+		return response{Status: "refused", Reason: "COMMAND_MISMATCH"}
+	}
+	return response{Status: "present"}
+}
+
 func matchesProcArgs(raw []byte, q request) bool {
 	if !validDevPaths(q.Executable, q.AppPath) || len(raw) < 4 || len(raw) > maxProcArgsBytes {
 		return false

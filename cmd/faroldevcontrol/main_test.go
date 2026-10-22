@@ -399,3 +399,22 @@ func TestCLI(t *testing.T) {
 		}
 	}
 }
+
+func TestNamedWriterExclusion(t *testing.T) {
+	q := fixtureRequest()
+	for _, fixture := range []struct {
+		raw            []byte
+		status, reason string
+	}{
+		{procArgs(q.Executable, "Farol Dev", ""), "present", ""},
+		{procArgs("/other/writer"+electronSuffix, "Farol Dev", ""), "refused", "WRITER_EXECUTABLE_MISMATCH"},
+		{procArgs(q.Executable, "Farol Dev", "unexpected"), "refused", "COMMAND_MISMATCH"},
+		{procArgs(q.Executable, "Farol Dev", "", "", "", "", ""), "refused", "COMMAND_MISMATCH"},
+		{[]byte{1, 2, 3}, "unreadable", "PROC_EXECUTABLE_UNREADABLE"},
+	} {
+		got := inspectProcCommand(fixture.raw, q)
+		if got.Status != fixture.status || got.Reason != fixture.reason {
+			t.Fatalf("wrong exclusion: %+v", got)
+		}
+	}
+}

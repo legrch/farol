@@ -168,7 +168,7 @@ export function devInventoryOwnsLine(line, ownedRoots) {
 export function devInventoryCandidateAbsent(seen) {
   return (
     seen.status === "absent" ||
-    (seen.status === "refused" && seen.reason === "COMMAND_MISMATCH")
+    (seen.status === "refused" && seen.reason === "WRITER_EXECUTABLE_MISMATCH")
   );
 }
 

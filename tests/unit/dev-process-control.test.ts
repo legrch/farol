@@ -271,12 +271,13 @@ it("requires exact native exclusion before ignoring a named inventory process", 
   expect(
     control.devInventoryCandidateAbsent({
       status: "refused",
-      reason: "COMMAND_MISMATCH",
+      reason: "WRITER_EXECUTABLE_MISMATCH",
     }),
   ).toBe(true);
   for (const seen of [
     { status: "present", commandVerified: true },
     { status: "unreadable" },
+    { status: "refused", reason: "COMMAND_MISMATCH" },
     { status: "refused", reason: "INSPECTION_PERMISSION_DENIED" },
   ])
     expect(control.devInventoryCandidateAbsent(seen)).toBe(false);

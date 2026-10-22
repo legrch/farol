@@ -72,10 +72,7 @@ func nativeCommand(q request) response {
 	if err != nil {
 		return readFailure(err)
 	}
-	if !matchesProcArgs(raw, q) {
-		return response{Status: "refused", Reason: "COMMAND_MISMATCH"}
-	}
-	return response{Status: "present"}
+	return inspectProcCommand(raw, q)
 }
 
 func readFailure(err error) response {
