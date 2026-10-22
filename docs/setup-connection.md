@@ -25,7 +25,7 @@ Workspace changes use the existing admitted stop/access/check operations. Finish
 
 ## 3. Connect this Mac
 
-Watch **Create a tunnel and a key**, or use its numbered static frames when reduced motion is enabled. The walkthrough is an illustration; it never signs in, creates a tunnel or handles a real key.
+The three small illustrated cards show **Create a tunnel → Create a key → Copy both here**. They highlight once in order; choose **Replay** to watch again. Reduced motion keeps all three cards static. The drawings never sign in, create a tunnel or display a real tunnel ID or key.
 
 1. Choose **Open OpenAI Tunnels** to open [OpenAI organization tunnels](https://platform.openai.com/settings/organization/tunnels).
 2. Create a tunnel named **Farol** and select the ChatGPT workspace you intend to use. Copy its tunnel ID.
@@ -44,7 +44,7 @@ If a key cannot be saved, check this account's key storage before reconnecting. 
 
 ## 4. Add to ChatGPT
 
-Watch the second illustrated walkthrough. Choose **Open ChatGPT Apps**, then open **Settings → Apps → Create** in ChatGPT and enter:
+The second three-card strip shows **Settings → Connectors**, **Add Farol: name, Tunnel, ID**, and **Test in ChatGPT**. It plays once, with the same Replay and reduced-motion behavior. Choose **Open ChatGPT Apps**, then open **Settings → Apps → Create** in ChatGPT and enter:
 
 | Field      | Value                                         |
 | ---------- | --------------------------------------------- |
@@ -60,7 +60,7 @@ Return to Farol and choose **Test in ChatGPT** once. Farol selects the app named
 
 Choose **Start using Farol** when all four steps have current checks. This opens Home. Home shows **Finish setup** until the four checks are current. Once ready, it shows connection status, **Check now**, any items needing attention and the latest activity with **Show all**.
 
-The sidebar stays visible on every page, including Setup. Use **Collapse sidebar** or **Expand sidebar** (⌃⌘S, also in the View menu) to switch between icons and labels. Farol remembers this choice. Narrow windows show the icon rail automatically and restore labels when widened. Hover an icon for its name and state. Settings has its own **General**, **Appearance** and **Keyboard shortcuts** section list inside the page. Activity filters stay inside Activity.
+The sidebar stays visible on every page, including Setup. Use **Collapse sidebar** or **Expand sidebar** (⌃⌘S, also in the View menu) to switch between icons and labels. Farol remembers this choice. Narrow windows show the icon rail automatically and restore labels when widened. The renderer matches the native browser placement: 62 px collapsed, 58 px at compact widths (850 px and below), and 214 px expanded. Hover an icon for its name and state. Settings has its own **General**, **Appearance** and **Keyboard shortcuts** section list inside the page. Activity filters stay inside Activity.
 
 ## Chat conversations
 

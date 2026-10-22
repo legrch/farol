@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { deriveSurfaceLayout } from "../../src/apps/desktop/surface-layout";
+import { sidebarWidth } from "../../apps/desktop/renderer/sidebar-presentation";
+import {
+  isCompactShell,
+  shellGeometry,
+} from "../../src/pkg/shell-layout/geometry";
 import { ShellLayoutSchema } from "../../src/pkg/ipc/shell-state";
 
 const base = {
@@ -161,4 +166,23 @@ describe("native Browser surface layout", () => {
   ])("hides the native page for shell-owned state %#", (change) => {
     expect(deriveSurfaceLayout({ ...base, ...change }).pageVisible).toBe(false);
   });
+});
+
+describe("renderer alignment with the unchanged native host", () => {
+  it.each([620, 849, 850, 851, 940, 1100, 1600])(
+    "leaves no browser inset at %ipx in either preference",
+    (width) => {
+      for (const expanded of [false, true]) {
+        const native = deriveSurfaceLayout({
+          ...base,
+          width,
+          sidebar: expanded ? "full" : "rail",
+          sidebarWidth: shellGeometry.pageListMin,
+        });
+        const rendered = sidebarWidth(expanded, isCompactShell(width));
+        expect(rendered).toBe(native.pageBounds.x);
+        expect(rendered + native.pageBounds.width).toBe(width);
+      }
+    },
+  );
 });

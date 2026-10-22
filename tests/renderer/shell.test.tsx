@@ -3025,7 +3025,7 @@ it("one sidebar expands to labels and collapses to a permanent rail on every are
     host
       .querySelector<HTMLElement>(".desktop")
       ?.style.getPropertyValue("--rail-width"),
-  ).toBe("208px");
+  ).toBe("214px");
   const toggle = button(host, "Collapse sidebar");
   toggle.focus();
   await act(async () => toggle.click());
@@ -3033,7 +3033,7 @@ it("one sidebar expands to labels and collapses to a permanent rail on every are
     host
       .querySelector<HTMLElement>(".desktop")
       ?.style.getPropertyValue("--rail-width"),
-  ).toBe("56px");
+  ).toBe("62px");
   expect(document.activeElement).toBe(toggle);
   expect(localStorage.getItem("farol.sidebar.v2")).toBe("rail");
   for (const area of ["home", "activity", "setup", "settings"] as const) {
@@ -3066,7 +3066,7 @@ it("restores the label preference while ignoring retired width and malformed pre
     host
       .querySelector<HTMLElement>(".desktop")
       ?.style.getPropertyValue("--rail-width"),
-  ).toBe("56px");
+  ).toBe("62px");
 });
 it("compact collapse keeps the expanded preference and never opens a page-list overlay", async () => {
   const old = window.innerWidth;
@@ -3082,7 +3082,7 @@ it("compact collapse keeps the expanded preference and never opens a page-list o
       host
         .querySelector<HTMLElement>(".desktop")
         ?.style.getPropertyValue("--rail-width"),
-    ).toBe("56px");
+    ).toBe("58px");
     expect(c.getSnapshot().sidebar).toBe("full");
     expect(localStorage.getItem("farol.sidebar.v2")).toBe("full");
     expect(host.querySelector(".sidebar-overlay,.sidebar-scrim")).toBeNull();

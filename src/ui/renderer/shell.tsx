@@ -1081,7 +1081,7 @@ export function Shell() {
       data-window-active={state.window.focused}
       style={
         {
-          "--rail-width": `${sidebarWidth(expanded)}px`,
+          "--rail-width": `${sidebarWidth(expanded, compactWindow)}px`,
           "--toolbar-height": `${shellGeometry.windowBar}px`,
         } as CSSProperties
       }

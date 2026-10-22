@@ -244,40 +244,134 @@ describe("Add to ChatGPT", () => {
 const originalMatchMedia = window.matchMedia;
 afterEach(() => {
   window.matchMedia = originalMatchMedia;
+  vi.useRealTimers();
 });
-describe("walkthrough motion", () => {
-  it.each(["connection", "attachment"] as const)(
-    "renders static numbered frames for %s when motion is reduced",
-    async (step) => {
+const walkthroughs = [
+  {
+    step: "connection",
+    label: "Create a tunnel and a key",
+    titles: ["1 · Create a tunnel", "2 · Create a key", "3 · Copy both here"],
+    open: "Open OpenAI Tunnels",
+    destination: "tunnels",
+  },
+  {
+    step: "attachment",
+    label: "Add to ChatGPT",
+    titles: [
+      "1 · Settings → Connectors",
+      "2 · Add Farol: name, Tunnel, ID",
+      "3 · Test in ChatGPT",
+    ],
+    open: "Open ChatGPT Apps",
+    destination: "chatgpt",
+  },
+] as const;
+describe("compact walkthroughs", () => {
+  it.each(walkthroughs)(
+    "shows all $step cards in order with accessible names and no real IDs",
+    async ({ step, label, titles, open, destination }) => {
+      const h = await mount({ step, value: readySettings() });
+      const list = h.host.querySelector(
+        `ol[aria-label="${label} walkthrough"]`,
+      )!;
+      expect(
+        [...list.querySelectorAll("li > strong")].map((x) => x.textContent),
+      ).toEqual(titles);
+      expect(list.querySelectorAll('svg[aria-hidden="true"]')).toHaveLength(3);
+      expect(list.textContent).not.toContain("synthetic-tunnel");
+      expect(h.button(`Replay ${label} walkthrough`)?.textContent).toBe(
+        "↻ Replay",
+      );
+      const actions = h.host.querySelector(".walkthrough-actions")!;
+      expect(actions.querySelectorAll("button")).toHaveLength(2);
+      expect(actions.querySelector("button")?.textContent?.trim()).toBe(open);
+      expect(h.f.api.configure).not.toHaveBeenCalled();
+      await h.click(open);
+      expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
+        kind: "onboarding.open-help",
+        destination,
+      });
+    },
+  );
+  it.each(walkthroughs)(
+    "plays $step once in order and replays from the first card without IPC",
+    async ({ step, label }) => {
+      vi.useFakeTimers();
+      const h = await mount({ step, value: readySettings() });
+      const active = () =>
+        [...h.host.querySelectorAll(".walkthrough-cards > li")].findIndex(
+          (x) => x.getAttribute("data-active") === "true",
+        );
+      expect(active()).toBe(0);
+      await act(async () => vi.advanceTimersByTime(1600));
+      expect(active()).toBe(1);
+      // Replay also restarts the first card's full duration while playing.
+      await h.click(`Replay ${label} walkthrough`);
+      expect(active()).toBe(0);
+      await act(async () => vi.advanceTimersByTime(1599));
+      expect(active()).toBe(0);
+      await act(async () => vi.advanceTimersByTime(1));
+      expect(active()).toBe(1);
+      await act(async () => vi.advanceTimersByTime(1600));
+      expect(active()).toBe(2);
+      await act(async () => vi.advanceTimersByTime(1600));
+      expect(active()).toBe(-1);
+      expect(h.host.querySelector(".walkthrough-cursor")).toBeNull();
+      await act(async () => vi.advanceTimersByTime(20000));
+      expect(active()).toBe(-1);
+      await h.click(`Replay ${label} walkthrough`);
+      expect(active()).toBe(0);
+      expect(h.f.api.configure).not.toHaveBeenCalled();
+    },
+  );
+  it.each(walkthroughs)(
+    "keeps all three $step cards static under reduced motion, including Replay",
+    async ({ step, label }) => {
       window.matchMedia = vi.fn().mockReturnValue({
         matches: true,
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
       });
+      vi.useFakeTimers();
       const h = await mount({ step, value: readySettings() });
-      const frames = h.host.querySelectorAll(".walkthrough-static > li");
-      expect(frames.length).toBe(step === "connection" ? 9 : 6);
-      expect(frames[0]?.textContent).toMatch(/^1\./u);
+      const cards = h.host.querySelector(".walkthrough-cards")!;
+      const before = cards.innerHTML;
+      expect(cards.querySelectorAll("li")).toHaveLength(3);
+      expect(cards.querySelector('[data-active="true"]')).toBeNull();
       expect(h.host.querySelector(".walkthrough-cursor")).toBeNull();
-      expect(h.button("Pause walkthrough")).toBeUndefined();
-      expect(h.host.textContent).toContain(
-        step === "connection" ? "Read and Use" : "Sign-inNone",
-      );
+      expect(h.button(`Replay ${label} walkthrough`)?.disabled).toBe(true);
+      await h.click(`Replay ${label} walkthrough`);
+      await act(async () => vi.advanceTimersByTime(20000));
+      expect(cards.innerHTML).toBe(before);
+      expect(h.f.api.configure).not.toHaveBeenCalled();
     },
   );
-  it("animates offline scenes and supports pausing without any IPC", async () => {
-    const h = await mount({ step: "connection" });
-    const before = h.host.querySelector("figcaption")?.textContent;
+  it("stops motion immediately when the preference changes and cleans up on navigation", async () => {
+    let change = () => {};
+    const query = {
+      matches: false,
+      addEventListener: vi.fn((_event, listener) => {
+        change = listener;
+      }),
+      removeEventListener: vi.fn(),
+    };
+    window.matchMedia = vi.fn().mockReturnValue(query);
     vi.useFakeTimers();
-    // Remount starts this component's interval under the fake clock.
-    await h.remount();
-    await act(async () => vi.advanceTimersByTime(2400));
-    expect(h.host.querySelector("figcaption")?.textContent).not.toBe(before);
-    await h.click("Pause walkthrough");
-    const paused = h.host.querySelector("figcaption")?.textContent;
-    await act(async () => vi.advanceTimersByTime(5000));
-    expect(h.host.querySelector("figcaption")?.textContent).toBe(paused);
-    vi.useRealTimers();
+    const h = await mount({ step: "connection" });
+    expect(h.host.querySelector(".walkthrough-cursor")).toBeTruthy();
+    await act(async () => {
+      query.matches = true;
+      change();
+    });
+    expect(h.host.querySelector(".walkthrough-cursor")).toBeNull();
+    expect(h.host.querySelector('[data-active="true"]')).toBeNull();
+    await act(async () => vi.advanceTimersByTime(10000));
+    expect(h.host.querySelector('[data-active="true"]')).toBeNull();
+    await h.navigate("folders");
+    expect(query.removeEventListener).toHaveBeenCalledWith(
+      "change",
+      expect.any(Function),
+    );
     expect(h.f.api.configure).not.toHaveBeenCalled();
   });
 });

@@ -127,7 +127,6 @@ code {
   height: 100%;
   display: grid;
   grid-template-columns: var(--rail-width) minmax(0, 1fr);
-  transition: grid-template-columns 150ms ease;
   grid-template-rows: var(--toolbar-height) minmax(0, 1fr);
   overflow: hidden;
   color-scheme: light;

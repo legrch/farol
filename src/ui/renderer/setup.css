@@ -126,107 +126,76 @@
 .setup-walkthrough {
   margin: 16px 0;
 }
-.walkthrough-scene {
-  position: relative;
-  overflow: hidden;
-  min-height: 240px;
+.walkthrough-cards {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+}
+.walkthrough-cards > li {
+  min-width: 0;
+  min-height: 120px;
+  padding: 10px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--bg);
+  background: var(--rail);
+}
+.walkthrough-cards > li[data-active="true"] {
+  border-color: var(--accent);
+  background: var(--tint);
+}
+.walkthrough-cards strong,
+.walkthrough-cards span {
+  display: block;
   font-size: 12px;
 }
-.walkthrough-address {
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--line);
+.walkthrough-cards strong {
+  margin-top: 8px;
+  font-weight: 600;
+}
+.walkthrough-cards span {
+  margin-top: 2px;
   color: var(--muted);
-}
-.walkthrough-body {
-  display: grid;
-  grid-template-columns: 100px minmax(0, 1fr);
-  min-height: 210px;
-}
-.walkthrough-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  padding: 20px 12px;
-  color: var(--muted);
-  border-right: 1px solid var(--line);
-}
-.walkthrough-content {
-  padding: 22px;
-}
-.walkthrough-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-}
-.walkthrough-button {
-  background: var(--accent);
-  color: var(--bg);
-  border-radius: 5px;
-  padding: 7px 10px;
-}
-.walkthrough-content dl > div {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--line);
-}
-.walkthrough-content dd {
-  margin: 0;
-  font-weight: 500;
-}
-.walkthrough-cursor {
-  position: absolute;
-  width: 20px;
-  height: 24px;
-  fill: var(--fg);
-  stroke: var(--bg);
-  transition:
-    left 0.7s ease,
-    top 0.7s ease;
-  pointer-events: none;
-}
-.setup-walkthrough figcaption {
-  margin: 12px 0 6px;
-  font-size: 13px;
-  min-height: 2.8em;
-}
-.setup-walkthrough figcaption > span {
-  color: var(--muted);
-  margin-right: 8px;
-}
-.setup-walkthrough > .description {
-  margin-left: 12px;
   font-size: 11px;
 }
-.walkthrough-static {
-  list-style: none;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-}
-.walkthrough-static > li > strong {
+.walkthrough-drawing {
   display: block;
-  margin-bottom: 8px;
-  font-size: 12px;
+  width: 100%;
+  height: 54px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--sheet);
+  stroke: var(--line);
+  stroke-width: 1;
 }
-.walkthrough-static .walkthrough-body {
-  display: block;
-  min-height: 0;
+.walkthrough-drawing text {
+  fill: var(--muted);
+  stroke: none;
+  font: 7px system-ui;
 }
-.walkthrough-static .walkthrough-nav {
-  display: none;
+.walkthrough-cursor {
+  fill: var(--accent);
+  stroke: var(--sheet);
+  animation: walkthrough-point 1600ms ease-out both;
 }
-.walkthrough-static .walkthrough-scene {
-  min-height: 160px;
+@keyframes walkthrough-point {
+  from {
+    transform: translate(-14px, 14px);
+  }
+  to {
+    transform: translate(0, 0);
+  }
 }
-.walkthrough-static .walkthrough-content {
-  padding: 12px;
+.walkthrough-actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-top: 10px;
+}
+.walkthrough-actions > :last-child {
+  color: var(--muted);
 }
 .connection-credentials {
   margin: 24px 0;
@@ -234,23 +203,9 @@
 .setup-failure p {
   margin: 0 0 10px;
 }
-@container (max-width: 460px) {
-  .walkthrough-static {
-    grid-template-columns: 1fr;
-  }
-  .walkthrough-body {
-    grid-template-columns: 70px minmax(0, 1fr);
-  }
-  .walkthrough-content {
-    padding: 14px;
-  }
-  .walkthrough-button {
-    max-width: 110px;
-  }
-}
 @media (prefers-reduced-motion: reduce) {
   .walkthrough-cursor {
-    transition: none;
+    animation: none;
   }
 }
 .setup-app-values {
