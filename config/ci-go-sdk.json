@@ -1,0 +1,14 @@
+{
+  "schema": "farol-ci-go-sdk/1",
+  "version": "go1.26.2",
+  "goos": "darwin",
+  "goarch": "arm64",
+  "treeSha256": "ce2cc6654305db9cc8c376102a7fb96dcee16c33ed09effa91ebdedf6b5f1484",
+  "approval": {
+    "archive": "go1.26.2.darwin-arm64.tar.gz",
+    "archiveSha256": "32af1522bf3e3ff3975864780a429cc0b41d190ec7bf90faa661d6d64566e7af",
+    "archiveSource": "https://go.dev/dl/?mode=json&include=all",
+    "treeSource": "measureGoToolchain over the verified extraction of that archive, the same SDK pin the local release chain uses",
+    "approvedBy": "Lead, 2026-10-22"
+  }
+}

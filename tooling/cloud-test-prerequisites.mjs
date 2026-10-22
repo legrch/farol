@@ -75,6 +75,12 @@ export const cloudDeferredFiles = Object.freeze(
       mixed: true,
     },
     {
+      file: "tests/unit/unregistered-app-copy.test.mjs",
+      prerequisite:
+        "macOS /bin/cp -c (APFS clonefile) to copy an app bundle under a non-package name",
+      mixed: false,
+    },
+    {
       file: "tests/unit/tunnel-client-adoption.test.ts",
       prerequisite:
         "macOS ACL tools (ls -lde, chmod +a) and a physical root-or-user owner chain",
