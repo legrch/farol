@@ -505,6 +505,37 @@ describe("dev.mjs main() orchestration with an already-declared toolchain", () =
     expect(calls).toEqual(["ensureDependencies", "runBuild", "launch"]);
   });
 
+  it.each([
+    ["ordinary", []],
+    ["fresh review", ["--fresh-review-profile"]],
+  ])(
+    "reports signature failure as a plain message for %s launch",
+    async (_label, argv) => {
+      const errors = [];
+      const message =
+        "Farol Dev signature verification failed. No launch was attempted.";
+      let attempts = 0;
+      const { overrides, calls } = baseOverrides({
+        createReviewProfile: () => ({
+          marker: "fixture",
+          appData: "/fixture",
+          userData: "/fixture/dev",
+        }),
+        launch: async () => {
+          attempts += 1;
+          const { DevRuntimeSignatureError } =
+            await import("../../tooling/dev-runtime.mjs");
+          throw new DevRuntimeSignatureError(message);
+        },
+        logError: (line) => errors.push(line),
+      });
+      await main(argv, overrides);
+      expect(errors).toEqual([message]);
+      expect(attempts).toBe(1);
+      expect(calls).toEqual(["ensureDependencies", "runBuild", "exit:1"]);
+    },
+  );
+
   it("selects the isolated real profile only for the explicit acceptance launch", async () => {
     const selected = [];
     const { overrides } = baseOverrides({

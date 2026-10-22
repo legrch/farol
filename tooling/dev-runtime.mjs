@@ -37,6 +37,8 @@ export function devInfoPlist(plist) {
   return plist;
 }
 
+export class DevRuntimeSignatureError extends Error {}
+
 function codesign(args, action) {
   const result = spawnSync("/usr/bin/codesign", args, {
     encoding: "utf8",
@@ -44,7 +46,9 @@ function codesign(args, action) {
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (result.error || result.status !== 0)
-    throw Error(`Farol Dev ${action} failed. No launch was attempted.`);
+    throw new DevRuntimeSignatureError(
+      `Farol Dev ${action} failed. No launch was attempted.`,
+    );
   return result.stderr;
 }
 
@@ -55,7 +59,7 @@ function verifyDevSignature(app) {
     "signature inspection",
   );
   if (!/^Identifier=local\.farol\.dev$/mu.test(details))
-    throw Error(
+    throw new DevRuntimeSignatureError(
       "Farol Dev signature identifier is invalid. No launch was attempted.",
     );
 }
@@ -92,7 +96,9 @@ export async function prepareDevRuntime(root) {
   }
   if (receipt?.inputs === inputs) {
     if ((await treeDigest(destination)) !== receipt.output)
-      throw Error("Farol Dev bundle changed. No launch was attempted.");
+      throw new DevRuntimeSignatureError(
+        "Farol Dev bundle changed. No launch was attempted.",
+      );
     verifyDevSignature(destination);
     return root + DEV_EXECUTABLE_SUFFIX;
   }

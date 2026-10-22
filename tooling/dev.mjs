@@ -17,7 +17,7 @@ import { createOwnerLaunchResultCollector } from "./owner-launch-result.mjs";
 import { ownerLaunchEnvironment } from "./launch-snapshot.mjs";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { parseDevDisplay } from "../src/apps/desktop/window-placement.ts";
-import { prepareDevRuntime } from "./dev-runtime.mjs";
+import { DevRuntimeSignatureError, prepareDevRuntime } from "./dev-runtime.mjs";
 import { prepareDevBuild } from "./dev-process-control.mjs";
 import { resolvePhysicalDevDataDirectoryName } from "../src/apps/desktop/dev-profile-directory.ts";
 import {
@@ -858,6 +858,16 @@ export async function main(argv, overrides = {}) {
     exit = (code) => process.exit(code),
   } = overrides;
 
+  const launchDev = async (...args) => {
+    try {
+      await launch(...args);
+    } catch (error) {
+      if (!(error instanceof DevRuntimeSignatureError)) throw error;
+      logError(error.message);
+      exit(1);
+    }
+  };
+
   const checkOnly = argv.includes("--check");
   const acceptanceProfile = argv.includes("--acceptance-profile");
   const secondaryDisplay = argv.includes("--secondary-display");
@@ -960,11 +970,16 @@ export async function main(argv, overrides = {}) {
       "Development bytes, not a packaged candidate. Profile retained; this opener cannot reopen it. No automatic retry or recovery.",
     );
     log("Running Farol Dev in this terminal. Press Ctrl+C to stop.");
-    await launch(false, secondaryDisplay, review.marker, displayOptions);
+    await launchDev(false, secondaryDisplay, review.marker, displayOptions);
     return;
   }
   log("Running Farol Dev in this terminal. Press Ctrl+C to stop.");
-  await launch(acceptanceProfile, secondaryDisplay, undefined, displayOptions);
+  await launchDev(
+    acceptanceProfile,
+    secondaryDisplay,
+    undefined,
+    displayOptions,
+  );
 }
 
 const isMainModule =
