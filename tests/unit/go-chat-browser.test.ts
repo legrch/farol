@@ -1,3 +1,4 @@
+import type { OperationsRecorder } from "../../apps/desktop/renderer/operations-contract";
 import { describe, expect, it, vi } from "vitest";
 import {
   GoChatBrowserDriver,
@@ -123,6 +124,7 @@ function frame(terminal = false): PhysicalFrame {
 }
 function fixture(
   options: {
+    operations?: OperationsRecorder;
     followup?: boolean;
     required?: BrowserRequiredControls;
     translation?: QualifiedControlTranslation;
@@ -229,6 +231,7 @@ function fixture(
     return assignment;
   });
   const driver = new GoChatBrowserDriver({
+    ...(options.operations ? { operations: options.operations } : {}),
     lookup,
     translations: [options.translation ?? translation],
     nowMillis: () => now,
@@ -1630,5 +1633,28 @@ describe("independent account snapshot transport", () => {
       ).rejects.toThrow("chat_browser_send_witness_mismatch");
       expect(f.api.send).not.toHaveBeenCalled();
     },
+  );
+});
+
+it("records embedded consult submission and terminal metadata without prompt/reply content", async () => {
+  const record = vi.fn();
+  const f = fixture({ operations: { record } });
+  await f.start();
+  f.setFrame(frame(true));
+  await f.observe();
+  await f.observe("1", 10);
+  expect(
+    record.mock.calls.filter((call) => call[0].kind === "chatgpt.consult.send"),
+  ).toHaveLength(1);
+  expect(
+    record.mock.calls.filter((call) => call[0].kind === "chatgpt.consult.turn"),
+  ).toHaveLength(1);
+  expect(
+    record.mock.calls.every(
+      (call) => call[0].source === "ChatGPT" && call[1] === "done",
+    ),
+  ).toBe(true);
+  expect(JSON.stringify(record.mock.calls)).not.toMatch(
+    /Transient prompt|\*\*Result\*\*|Working/,
   );
 });
