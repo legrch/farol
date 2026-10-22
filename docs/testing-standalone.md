@@ -58,8 +58,9 @@ new helpers and dependencies must occur in the sealed ledger.
 `node tooling/build.mjs --check-witness-inputs` compiles the actual candidate
 script graph with writes disabled, then checks every transitive input of the
 registered exact-package witnesses against that graph and the exact controller
-exceptions. `task test:tooling` includes this cheap check, so both `task ci` and
-`task ci:cloud` enforce it. It does not build Go/native resources, execute a
+exceptions. `task test:witness-inputs` runs this cheap check on Darwin, where the
+reviewed packaging compiler is available; `task ci` and the hosted `native` job
+include it, and the Linux `task ci:cloud` gate does not. It does not build Go/native resources, execute a
 witness, allocate a profile, or replace an existing candidate. Candidate builds
 repeat the same coverage check before sealing their input ledger.
 

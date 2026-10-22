@@ -22,6 +22,7 @@ tasks:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run ci
       - task: test:core
       - task: test:tooling
+      - task: test:witness-inputs
       - task: output:check
       - task: scan:secrets
 
@@ -47,9 +48,14 @@ tasks:
     desc: Check the declared toolchain and bounded planner, inventory and scheduler fixture regressions
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run check:toolchain
-      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/build.mjs --check-witness-inputs
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- /usr/bin/python3 -B -m unittest discover -s tooling/testops -p 'test_*.py'
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node --test --test-concurrency=1 --test-reporter=tap tooling/testops/catalog.test.mjs tooling/testops/languagegraph.test.mjs tooling/testops/iteration-witness.test.mjs
+
+  test:witness-inputs:
+    desc: Check exact-package witness imports against the sealed candidate input graph (Darwin; uses the reviewed packaging compiler)
+    platforms: [darwin]
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/build.mjs --check-witness-inputs
 
   test:unit:
     desc: Unit/component selection across TypeScript, React and Go; --list shows the plan
