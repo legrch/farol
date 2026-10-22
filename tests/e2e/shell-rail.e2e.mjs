@@ -353,6 +353,10 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
   await page.getByText("Finish setup", { exact: true }).waitFor();
   await capture(page, "home-not-connected");
   assert.equal(
+    await page.locator(".home-setup-steps [data-state=done]").count(),
+    0,
+  );
+  assert.equal(
     await page.locator(".rail-connection").getAttribute("data-connected"),
     "false",
   );
