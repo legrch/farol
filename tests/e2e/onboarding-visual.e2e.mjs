@@ -7,6 +7,7 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { _electron as electron } from "playwright-core";
+import { reportRetiredJourney } from "../../tooling/setup-journey-retirement.mjs";
 
 // This entire capture is a pre-React guided-onboarding visual journey. Its
 // #guided-onboarding/#onboarding-* surfaces and Settings Model/Diagnostics
@@ -14,9 +15,11 @@ import { _electron as electron } from "playwright-core";
 // General, Appearance, and Shortcuts. Retire before creating files, starting
 // fixtures, or launching Electron so this obsolete capture cannot look like a
 // passing or silently skipped journey.
-throw new Error(
-  "E2E_JOURNEY_RETIRED:onboarding-visual-guided-owner-editable: pre-React #guided-onboarding/#onboarding-* and Settings Model/Diagnostics UI were removed; current Setup uses React and Settings has only General, Appearance, and Shortcuts",
+reportRetiredJourney(
+  "onboarding-visual-guided-owner-editable",
+  "Pre-React #guided-onboarding/#onboarding-* and Settings Model/Diagnostics UI were removed; current Setup uses React and Settings has only General, Appearance, and Shortcuts.",
 );
+process.exit(0);
 
 const root = process.cwd();
 const label = "guided-owner-editable";

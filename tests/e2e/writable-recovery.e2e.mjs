@@ -41,6 +41,7 @@ import {
   historyOriginals,
   runHistoryReadJourney,
 } from "./lib/chat-history-witness.mjs";
+import { reportRetiredJourney } from "../../tooling/setup-journey-retirement.mjs";
 
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -105,6 +106,11 @@ if (args.length === 0 || (args.length === 1 && args[0] === "--contract")) {
         pins["--scenario"] === "connector-failed-quit"),
     "INVALID_RESTART_EXPECTATION",
   );
+  reportRetiredJourney(
+    "writable-recovery-native-history",
+    "The native history scenarios require the removed Diagnostics navigation adapter.",
+  );
+  process.exit(0);
   await main(pins);
 }
 

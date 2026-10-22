@@ -28,6 +28,7 @@ import {
 } from "./native-preview-admission.mjs";
 import { startControlledChatGptSite } from "./fixtures/chatgpt-controlled-site.mjs";
 import { waitForReactShell } from "./current-react-setup.mjs";
+import { reportRetiredJourney } from "../../tooling/setup-journey-retirement.mjs";
 
 const args = process.argv.slice(2);
 assert.ok(
@@ -40,9 +41,11 @@ assert.ok(
 const goDelay = args.includes("--go-callback-delay");
 const healthStatus = args.includes("--health-status");
 const networkLoss = args.includes("--network-loss");
-throw new Error(
-  "E2E_JOURNEY_RETIRED:connector-polling-diagnostics: Connector polling assertions require removed Settings Diagnostics and Connection projections; the current Setup and Settings UI has no equivalent observation surface",
+reportRetiredJourney(
+  "connector-polling-diagnostics",
+  "Connector polling assertions require removed Settings Diagnostics and Connection projections; the current Setup and Settings UI has no equivalent observation surface.",
 );
+process.exit(0);
 assert.equal(process.platform, "darwin");
 const root = process.cwd(),
   source = sourceIdentity(root),

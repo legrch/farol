@@ -140,6 +140,7 @@ import {
   runHistoryReadJourney,
 } from "./lib/chat-history-witness.mjs";
 import { browserFailureCollector } from "./lib/browser-failure-witness.mjs";
+import { reportRetiredJourney } from "../../tooling/setup-journey-retirement.mjs";
 
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -3792,6 +3793,18 @@ function selfTest() {
 
 async function main(args) {
   const selected = selection(args);
+  if (
+    selected.mode === "--run-native" &&
+    (selected.readAccount || selected.settingsEditMutation)
+  ) {
+    reportRetiredJourney(
+      selected.readAccount
+        ? "go-core-read-account-settings-edit-observer"
+        : "go-core-settings-edit-mutation-observer",
+      "The selected native mode requires the removed Settings Diagnostics observer.",
+    );
+    return;
+  }
   const report = {
     contract,
     scenario: selected.settingsIdleDelay

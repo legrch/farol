@@ -11,6 +11,7 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { _electron as electron } from "playwright-core";
+import { reportRetiredJourney } from "../../tooling/setup-journey-retirement.mjs";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { assertBuildIdentity } from "../../tooling/build-identity-contract.mjs";
 import {
@@ -74,6 +75,11 @@ assert.ok(
   "SHELL_REQUIRES_PACKAGED_BEHAVIOR_WITHOUT_RESUME_REFUSAL",
 );
 assert.ok(!(behavior && devOnly));
+reportRetiredJourney(
+  "guided-legacy-setup-composite",
+  "The retained composite requires removed Setup overview, advanced permission policy, and external challenge-card prerequisites.",
+);
+process.exit(0);
 const root = process.cwd();
 const appRoot = path.join(root, "_output/package/Farol.app");
 const executable = packaged

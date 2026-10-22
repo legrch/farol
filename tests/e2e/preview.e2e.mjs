@@ -29,6 +29,8 @@ import {
   isSegmentSelected,
   shouldRunDevelopmentSegment,
 } from "../../tooling/e2e-selection.mjs";
+import { previewRetirementPlan } from "../../tooling/preview-setup-retirement.mjs";
+import { reportRetiredJourney } from "../../tooling/setup-journey-retirement.mjs";
 import { retentionDiagnostics } from "../../tooling/soak-retention.mjs";
 import {
   assertBuildIdentity,
@@ -85,7 +87,11 @@ const soakIdleMs = integerOption("soak-idle-ms", 0, 120_000);
 // rejects a selector that matches nothing.  A selected run is reported as
 // SELECTED and never PASS, so it can neither be bound as evidence nor stand
 // in for a lane's required cases.
-const selection = createSelection(process.argv);
+const requestedSelection = createSelection(process.argv);
+// Special workloads are composite journeys with the same removed prerequisite.
+// Invalid special/partial combinations retain their existing failure below.
+const retirement = previewRetirementPlan(requestedSelection);
+const selection = retirement.selection;
 const selectionActive = selection !== null;
 const segmentSelected = (name) => isSegmentSelected(selection, name);
 async function assertSameFixtureExecutable(actual, expected) {
@@ -94,7 +100,8 @@ async function assertSameFixtureExecutable(actual, expected) {
 // Each special lane drives one declared workload end to end, so combining it
 // with a partial selection would name an attempt after more than it ran.
 assert.equal(
-  selectionActive && (lifecycleSoak || persistenceFault || twoGenerationState),
+  requestedSelection !== null &&
+    (lifecycleSoak || persistenceFault || twoGenerationState),
   false,
   "E2E_SELECTION_EXCLUSIVE_WITH_SPECIAL_LANE",
 );
@@ -120,6 +127,30 @@ assert.equal(
     path.isAbsolute(predecessorArtifactOption),
   "E2E_PREDECESSOR_ARTIFACT_OPTION",
 );
+for (const entry of retirement.retired)
+  reportRetiredJourney(entry.journey, entry.reason);
+if (
+  requestedSelection === null &&
+  (lifecycleSoak || persistenceFault || twoGenerationState)
+) {
+  reportRetiredJourney(
+    "preview-special-setup-prerequisite",
+    "This composite workload requires the removed native Setup dialog; no native workload was started.",
+  );
+  process.exit(0);
+}
+if (selection?.segments.length === 0) {
+  process.stdout.write(
+    JSON.stringify({
+      schema: 1,
+      status: "NOT_RUN",
+      qualifying: false,
+      retiredJourneys: retirement.retired,
+    }) + "\n",
+  );
+  process.exit(0);
+}
+
 // The soak lane is named by the bytes it drives: the development build or
 // the sealed package, never one presented as the other.
 const evidenceLane = lifecycleSoak
@@ -13677,6 +13708,7 @@ const report = {
         ? "BLOCKED"
         : "PASS",
   selection,
+  retiredJourneys: retirement.retired,
   productAgentQualification,
   harnessObservations,
   lane: development ? "development-build" : "sealed-package",

@@ -10,6 +10,7 @@ import { runBoundedProcess } from "./bounded-process.mjs";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { verifyInputManifest } from "../../tooling/build-contract.mjs";
 import { verifyGoCoreArtifact } from "../../tooling/go-core-artifact.mjs";
+import { retiredJourneyReport } from "../../tooling/setup-journey-retirement.mjs";
 import {
   shellGeometry,
   shellRailWidth,
@@ -19,24 +20,7 @@ import {
   stopChatGptFixture,
 } from "./fixtures/chatgpt-site.mjs";
 
-import {
-  openSetup,
-  setupStep,
-  setupAction,
-  assertSetupOverview,
-} from "./current-react-setup.mjs";
-
-const uncheckedOverview = {
-  ready: false,
-  hasWorkspaces: false,
-  signIn: "unknown",
-  states: {
-    signin: "needed",
-    folders: "needed",
-    connection: "needed",
-    attachment: "needed",
-  },
-};
+import { openSetup, setupStep, setupAction } from "./current-react-setup.mjs";
 
 const root = process.cwd();
 const useInstalledTunnelClient = process.argv.includes(
@@ -83,6 +67,7 @@ const report = {
   buildId: identity.buildId,
   launches: [],
   checks: [],
+  retirements: [],
   status: "running",
 };
 const save = () =>
@@ -1101,46 +1086,12 @@ try {
         "DEV_STARTUP_SMOKE_WORKSPACE_VERIFICATION_MISSING",
       );
     } else {
-      // A saved verified folder is still partial without connection/attachment.
-      // Explicit retirement: the current welcome has no partial checklist card.
-      throw new Error(
-        "E2E_JOURNEY_RETIRED:startup-partial-profile-overview-continuation: Continue setup and Set up Connection checklist cards were removed; Setup now uses the welcome/progress flow",
+      const retirement = retiredJourneyReport(
+        "startup-partial-profile-overview-continuation",
+        "Continue setup and Set up Connection checklist cards were removed; Setup now uses the welcome/progress flow.",
       );
-      await legacyWindow
-        .locator(".toolbar-title strong")
-        .getByText("Overview", { exact: true })
-        .waitFor();
-      await legacyWindow
-        .getByRole("button", { name: "Continue setup", exact: true })
-        .click();
-      await legacyWindow
-        .locator('.setup-page[data-setup-step="overview"]')
-        .waitFor();
-      await assertSetupOverview(legacyWindow, {
-        ready: false,
-        hasWorkspaces: true,
-        signIn: uncheckedOverview.signIn,
-        states: { ...uncheckedOverview.states, folders: "verified" },
-      });
-      await legacyWindow
-        .getByRole("region", { name: "Setup overview", exact: true })
-        .getByRole("button", { name: "Set up Connection", exact: true })
-        .click();
-      assert.equal(
-        await legacyWindow
-          .locator(".setup-page")
-          .getAttribute("data-setup-step"),
-        "connection",
-      );
-      await assertSetupOverview(legacyWindow, {
-        ready: false,
-        hasWorkspaces: true,
-        signIn: uncheckedOverview.signIn,
-        states: { ...uncheckedOverview.states, folders: "verified" },
-      });
-      report.checks.push(
-        "partial-folder-Quit-reopen-retained-obvious-continuation-no-false-ready",
-      );
+      report.retirements.push(retirement);
+      report.status = "NOT_RUN";
       await save();
       const value = await legacyWindow.evaluate(() => window.farol.bootstrap());
       assert.deepEqual(
@@ -1207,7 +1158,11 @@ try {
     });
   }
   report.status =
-    passed && cleanupConfirmed && !launchUnresolved ? "passed" : "failed";
+    passed && cleanupConfirmed && !launchUnresolved
+      ? report.retirements.length > 0
+        ? "NOT_RUN"
+        : "passed"
+      : "failed";
   report.cleanup = {
     cleanupConfirmed,
     launchUnresolved,
@@ -1222,5 +1177,5 @@ try {
     throw new Error("DEV_REACT_CLEANUP_UNCONFIRMED");
 }
 process.stdout.write(
-  `Farol Dev React Setup: PASS; exact source ${source.commit}; evidence ${evidenceRoot}\n`,
+  `Farol Dev React Setup: ${report.status}; exact source ${source.commit}; evidence ${evidenceRoot}\n`,
 );
