@@ -259,3 +259,56 @@ func recordFields(data []byte) (map[string]json.RawMessage, error) {
 	}
 	return fields, nil
 }
+
+// CheckUpdateStopped permits only absence or the exact captured predecessor
+// marker after its observed exit. Boot holds promotion through all effect fences,
+// excluding startup publication once this check has admitted the generation.
+func (l *Live) CheckUpdateStopped(ctx context.Context) error {
+	return l.run(ctx, func(ctx context.Context, _ int, state int) error {
+		_, err := l.updateMarker(ctx, state)
+		return err
+	})
+}
+
+func (l *Live) updateMarker(ctx context.Context, state int) (bool, error) {
+	if !l.state.stopped || !l.state.markerCaptured {
+		return false, ErrProcessUnknown
+	}
+	_, present, err := named(ctx, state, "running.json", ErrProcessUnknown)
+	if err != nil || !present {
+		return false, err
+	}
+	data, err := readRecord(ctx, state, "running.json", 4096)
+	if err != nil {
+		return false, err
+	}
+	if sha256.Sum256(data) != l.state.markerDigest {
+		return false, ErrRunningMarker
+	}
+	return true, nil
+}
+
+// ObserveUpdateQuit is diagnostic after the original process has actually exited.
+// Only its captured marker may be leftover; another generation remains a refusal.
+// Offline recovery retains its separate strict VerifyQuit contract.
+func (l *Live) ObserveUpdateQuit(ctx context.Context) (note string, err error) {
+	err = l.run(ctx, func(ctx context.Context, _ int, state int) error {
+		leftover, e := l.updateMarker(ctx, state)
+		if e != nil {
+			return e
+		}
+		if leftover {
+			note = "predecessor_drain_unconfirmed"
+		}
+		data, e := readQuit(ctx, state)
+		if e != nil {
+			note = "predecessor_drain_unconfirmed"
+			return nil
+		}
+		if _, e := quitTimestamp(data); e != nil {
+			note = "predecessor_drain_unconfirmed"
+		}
+		return nil
+	})
+	return
+}

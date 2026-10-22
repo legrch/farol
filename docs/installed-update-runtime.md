@@ -1,5 +1,18 @@
 # Installed updater lifecycle
 
+The 2026-10-22 unsigned beta update contract automatically settles an interrupted
+journal from the installed tree digest and build identity once the original
+helper is confirmed ended. Target content completes the update; source content
+records rollback and permits a later update attempt. The existing rollback
+receipt keeps that target deferred for scheduled automatic installation across
+restarts; an explicit Download/Restart can retry it. A newer target is unaffected.
+Only content matching neither accepted build requires an error. Companion bundles are retained as
+recovery evidence; a matching `previous.app` enables manual rollback. A helper
+exit before journal creation clears the pending operation and unfinished copy,
+including when `helper.log.jsonl` exists. No recovery view is shown for these
+known outcomes. Unknown helper/process or native-effect outcomes remain fenced.
+See [helper contract](installed-update-helper.md#unsigned-beta-reliability-contract-2026-10-22).
+
 The supported installed slots are exactly `/Applications/Farol.app` and the
 trusted OS-account home followed by `/Applications/Farol.app`. First installation
 with `tooling/promote-preview.mjs` defaults to `/Applications/Farol.app`; an explicit
@@ -437,17 +450,15 @@ exact verified current target and its exact `previous.app`, settling forward to
 Quit under the owner lease. Other incompatible pairs refuse before the helper
 authorizes Quit. No journal history or state downgrade is inferred from a missing
 launch record. This guard does not qualify rollback compatibility for later
-versions. A known interrupted pair offers **Quit & Finish Recovery** only after the original helper PID/start
-time has been observed as ended; a permission error or malformed process readback
-keeps recovery blocked. Both actions acquire the existing work
-admission fences, record their exact dispatch intent, and use the helper's normal
-Quit protocol. The helper, not the renderer, owns atomic exchange and reconciliation.
-Only a reconciled verified target is automatically relaunched. Cancellation and
-rollback leave the restored source closed, with `cancelled` or `rolled_back`
-retained. A predecessor can predate the startup lease protocol, so it must not
-start while the helper still owns that lease. Independent completion, physical
-identity and state-compatibility verification must precede a normal cold launch.
-Historical source-launch phases remain readable; observation never repeats them.
+versions. Known interrupted source/target content now settles automatically after
+confirmed helper exit, as described above. No helper or Quit is dispatched for
+that readback; profile data and companion bundles remain preserved. Explicit
+manual rollback still acquires work admission, records dispatch intent and uses
+the normal Quit protocol. Requested relaunch follows either verified target or
+restored source content; source launch uses `rollback_launch_requested` and
+`rollback_completed`. The startup guard observes the original helper's completion
+before acquiring the startup lease, including an apply that rolled back. Unknown
+launch outcomes remain fenced and are never replayed.
 
 Once dispatch intent requires admission to remain held, the runtime retains the
 admission handle itself, including its kernel lease, until the process exits.

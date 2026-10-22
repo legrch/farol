@@ -126,6 +126,9 @@ func closedHelperExecute(ctx context.Context, in closedHelperExecution) (result 
 		executed, e := in.milestone.Execute(ctx, native, in.readiness, native)
 		if e == nil {
 			result = executed
+			if executed != nil {
+				writeReleaseHelperLog(in.files.Operation, executed.Phase, executed.Code)
+			}
 		}
 		return e
 	})
@@ -142,6 +145,12 @@ func closedHelperNativeConfig(in closedHelperExecution, repository releaseport.H
 	config := executionnative.Config{
 		Request: in.request, Files: in.files, Journal: repository, Rejection: rejected, Until: in.until,
 		Reverify: in.helper.reverify, Unknown: in.helper.unknown, RetainUnknown: in.helper.retainUnknown,
+	}
+	config.PhaseLog = func(phase, code string) { writeReleaseHelperLog(in.files.Operation, phase, code) }
+	if in.helper.state != nil {
+		if live, ok := in.helper.state.admission.(*liveHelperNativeAdmission); ok {
+			config.QuitNote = live.quitNote
+		}
 	}
 	if in.relaunch != nil {
 		config.RelaunchArguments, config.MeasureSelf = in.relaunch.arguments, in.relaunch.measure

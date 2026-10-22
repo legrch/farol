@@ -22,7 +22,7 @@ func WithInstallation(ctx context.Context, config Config, fn func(port.HelperIns
 // composition can hand the very value to Milestone.Execute as its launch port.
 // The effects remain inert unless the Config supplies RelaunchArguments and
 // MeasureSelf, and Execute reaches them only for a verified apply that asked for
-// relaunch.
+// relaunch, or a restored source that requested relaunch.
 type AdmittedInstallation interface {
 	port.HelperInstallationRuntime
 	port.HelperInstallationObservation

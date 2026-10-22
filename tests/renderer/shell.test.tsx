@@ -1155,7 +1155,25 @@ it.each([
   [
     { phase: "failed", code: "UPDATE_FAILED", recoveryRequired: false },
     "The update did not finish",
+    "The update did not finish. Check Diagnostics and the installed version before trying again.",
+    ["Dismiss", "Review Diagnostics"],
+  ],
+  [
+    { phase: "failed", code: "UPDATE_ROLLED_BACK", recoveryRequired: false },
     "The update did not finish",
+    `The update didn't finish. Farol ${bootstrap().build.version} is still installed and works.`,
+    ["Dismiss", "Review Diagnostics"],
+  ],
+  [
+    { phase: "failed", code: "UPDATE_ROLLED_BACK", recoveryRequired: true },
+    "The update did not finish",
+    "The update result needs recovery. Check Diagnostics and the installed version before another update action.",
+    ["Dismiss", "Review Diagnostics"],
+  ],
+  [
+    { phase: "recovery", version: "1.0", blockedBy: null },
+    "Update needs attention",
+    "The update didn’t finish. Check Diagnostics to confirm the installed application.",
     ["Dismiss", "Review Diagnostics"],
   ],
   [
@@ -1219,6 +1237,13 @@ it.each([
       status,
     );
     if (update.phase === "failed" || update.phase === "unavailable") {
+      if (
+        update.phase === "failed" &&
+        (update.code !== "UPDATE_ROLLED_BACK" || update.recoveryRequired)
+      )
+        expect(
+          dialog.querySelector(".update-state")?.textContent,
+        ).not.toContain("still installed and works");
       expect(dialog.querySelector(".update-state")?.textContent).not.toContain(
         update.code,
       );
@@ -2782,6 +2807,13 @@ it.each([
       "after confirmation, then verify that start before resuming work",
     );
     if (version) expect(copy).toContain(version);
+    if (update.phase === "recovery") {
+      expect(copy).toContain(`recovery of version ${update.version}.`);
+      expect(host.querySelector("dialog .update-state")?.textContent).toBe(
+        "The update didn’t finish. Check Diagnostics to confirm the installed application.",
+      );
+      expect(copy).not.toContain("still installed and works");
+    }
     expect(button(host, action).disabled).toBe(false);
     expect(copy).not.toContain("restart into the new version");
     expect(f.api.installedUpdate).not.toHaveBeenCalledWith({ kind: "recover" });

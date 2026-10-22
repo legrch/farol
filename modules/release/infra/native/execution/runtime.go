@@ -23,9 +23,11 @@ import (
 // It must not reenter this runtime or the journal gate. The caller retains every
 // borrowed owner through With's actual return. No field alone grants authority.
 type Config struct {
-	Request port.HelperRequest
-	Files   helperroutes.Files
-	Journal port.HelperJournalRepository
+	QuitNote string
+	PhaseLog func(phase, code string)
+	Request  port.HelperRequest
+	Files    helperroutes.Files
+	Journal  port.HelperJournalRepository
 	// Rejection is required only by WithInstallation. It borrows the same
 	// operation descriptor and original JournalAdmission/gate as Journal.
 	Rejection port.HelperTargetRejectionRepository
@@ -275,6 +277,13 @@ func (r *runtime) invoke(ctx context.Context, effect string, fn func(context.Con
 		}
 	}
 	if err != nil {
+		if r.config.PhaseLog != nil {
+			code := "internal"
+			if f, ok := err.(*port.HelperRecoveryFailure); ok {
+				code = f.Code
+			}
+			r.config.PhaseLog("failed", code)
+		}
 		r.view = nil
 	}
 	return err
@@ -401,6 +410,9 @@ func (r *runtime) WritePhase(ctx context.Context, phase string) error {
 }
 
 func (r *runtime) persistJournal(ctx context.Context, revision, phase string) error {
+	// A restored predecessor reads the same strict /1 journal at any phase.
+	// Keep diagnostics out of its durable protocol, including compensation,
+	// cancellation and manual rollback; log the bounded drain note instead.
 	value := release.Journal{Operation: operation(r.config.Request), Phase: phase}
 	if _, err := records.EncodeJournal(records.Journal{Schema: "farol.installed-update-journal/1", Operation: records.Operation{
 		ID:     value.Operation.ID,
@@ -419,6 +431,9 @@ func (r *runtime) persistJournal(ctx context.Context, revision, phase string) er
 	}
 	v, owned := *view, *view.Value
 	v.Value, r.view = &owned, &v
+	if r.config.PhaseLog != nil {
+		r.config.PhaseLog(phase, r.config.QuitNote)
+	}
 	return r.persistedFence(ctx)
 }
 

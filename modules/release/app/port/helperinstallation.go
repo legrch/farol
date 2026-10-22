@@ -81,3 +81,9 @@ type HelperRelaunchEffects interface {
 	SelfIdentity(context.Context) (HelperSelfIdentity, error)
 	LaunchTarget(context.Context, HelperSelfIdentity, *string) error
 }
+
+// HelperRollbackRelaunchEffects launches the verified source restored into the
+// absolute installation slot. It belongs to the same admitted native owner.
+type HelperRollbackRelaunchEffects interface {
+	LaunchPrevious(context.Context) error
+}

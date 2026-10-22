@@ -16,6 +16,7 @@ type Operation struct {
 type Journal struct {
 	Operation Operation
 	Phase     string
+	Note      string
 }
 
 type Helper struct {
