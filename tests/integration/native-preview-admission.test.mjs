@@ -497,11 +497,11 @@ describe("hidden disposable Setup admission", () => {
       s.child,
     );
     await expect(
-      admit({ ...s.selected, previous: closed }),
-    ).resolves.toBeDefined();
-    await expect(
       refreshNativePreviewIsolation(closed, s.application),
     ).rejects.toThrow("LIVE_CHILD_REQUIRED");
+    await expect(
+      admit({ ...s.selected, previous: closed }),
+    ).resolves.toBeDefined();
   });
   it.each(["harness-created", "replaced", "foreign-owner"])(
     "refuses a live child's unqualified relay: %s",
@@ -538,26 +538,58 @@ describe("hidden disposable Setup admission", () => {
       ).rejects.toThrow();
     },
   );
-  it.each(["missing", "wrong-pid", "pre-start", "future-observation"])(
-    "requires a complete, timed child readback: %s",
-    async (kind) => {
-      const s = await relayFixture();
+  it.each([
+    "missing",
+    "wrong-pid",
+    "pre-start",
+    "future-observation",
+    "during-refresh",
+  ])("requires a complete, timed child readback: %s", async (kind) => {
+    const s = await relayFixture();
+    if (kind !== "during-refresh")
       await s.request({ kind: "start", root: s.early.relayRoot });
-      const evaluate = s.application.evaluate;
-      s.application.evaluate = async (callback) => {
-        const actual = await evaluate(callback);
-        if (kind === "missing") actual.relay = null;
-        if (kind === "wrong-pid") actual.relay.pid++;
-        if (kind === "pre-start")
-          actual.relay.processStartedAtMs = actual.relay.birthtimeMs + 1;
-        if (kind === "future-observation") actual.relay.observedAtMs += 60000;
-        return actual;
-      };
-      await expect(
-        refreshNativePreviewIsolation(s.early, s.application),
-      ).rejects.toThrow("RELAY_CHILD_UNCONFIRMED");
-    },
-  );
+    const evaluate = s.application.evaluate;
+    s.application.evaluate = async (callback) => {
+      if (kind === "during-refresh")
+        await s.request({ kind: "start", root: s.early.relayRoot });
+      const actual = await evaluate(callback);
+      if (kind === "missing") actual.relay = null;
+      if (kind === "wrong-pid") actual.relay.pid++;
+      if (kind === "pre-start")
+        actual.relay.processStartedAtMs = actual.relay.birthtimeMs + 1;
+      if (kind === "future-observation") actual.relay.observedAtMs += 60000;
+      return actual;
+    };
+    await expect(
+      refreshNativePreviewIsolation(s.early, s.application),
+    ).rejects.toThrow("RELAY_CHILD_UNCONFIRMED");
+  });
+  it("refuses another application before dispatch and consumes a failed readback", async () => {
+    const s = await singletonFixture();
+    const early = await recheckNativePreviewIsolation(
+      s.receipt,
+      s.selected.actual,
+      s.child,
+    );
+    const evaluate = vi.fn(async () => {
+      throw Error("synthetic readback unknown");
+    });
+    await expect(
+      refreshNativePreviewIsolation(early, {
+        process: () => new ChildProcess(),
+        evaluate,
+      }),
+    ).rejects.toThrow("SINGLETON_CHILD_UNOWNED");
+    expect(evaluate).not.toHaveBeenCalled();
+    const application = { process: () => s.child, evaluate };
+    await expect(
+      refreshNativePreviewIsolation(early, application),
+    ).rejects.toThrow("synthetic readback unknown");
+    await expect(
+      refreshNativePreviewIsolation(early, application),
+    ).rejects.toThrow("RECEIPT_INVALID");
+    expect(evaluate).toHaveBeenCalledOnce();
+  });
   it("refuses directory replacement between refresh and Quit", async () => {
     const s = await relayFixture();
     await s.request({ kind: "start", root: s.early.relayRoot });

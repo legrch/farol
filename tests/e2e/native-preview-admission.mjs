@@ -684,9 +684,16 @@ export async function recheckNativePreviewIsolation(receipt, actual, child) {
 // Refresh the original live child's witness before Quit; reopening still needs
 // the exact witnessed relay inode and a known graceful child terminal.
 export async function refreshNativePreviewIsolation(receipt, application) {
+  const admitted = admissions.get(receipt);
+  if (!admitted?.checked || !admitted.child) throw invalid("RECEIPT_INVALID");
   const child = application.process();
+  if (child !== admitted.child) throw invalid("SINGLETON_CHILD_UNOWNED");
   if (child.exitCode !== null || child.signalCode !== null)
     throw invalid("LIVE_CHILD_REQUIRED");
+  // Creation must precede dispatch, not merely the completion of the readback.
+  // An unknown/failed evaluate consumes this witness and cannot be replayed.
+  const refreshedAtMs = performance.timeOrigin + performance.now();
+  admissions.delete(receipt);
   const actual = await application.evaluate(({ app, BrowserWindow }) => ({
     relay: app.__farolE2ERelayDirectory ?? null,
     pid: process.pid,
@@ -699,9 +706,8 @@ export async function refreshNativePreviewIsolation(receipt, application) {
       focused: window.isFocused(),
     })),
   }));
-  relayReadbacks.set(actual, {
-    refreshedAtMs: performance.timeOrigin + performance.now(),
-  });
+  relayReadbacks.set(actual, { refreshedAtMs });
+  admissions.set(receipt, admitted);
   return recheckNativePreviewIsolation(receipt, actual, child);
 }
 
