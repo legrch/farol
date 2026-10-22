@@ -60,7 +60,7 @@ const env = {
   LC_ALL: "en_US.UTF-8",
   TMPDIR: os.tmpdir(),
 };
-let application, page;
+let application, page, activeInstance;
 async function launch() {
   application = await _electron.launch({
     executablePath: path.join(
@@ -73,6 +73,7 @@ async function launch() {
   });
   const child = application.process();
   const terminal = once(child, "exit");
+  activeInstance = { child, terminal };
   page = await application.firstWindow();
   const deadline = Date.now() + 20000;
   while (true) {
@@ -97,8 +98,9 @@ async function launch() {
   return { child, terminal, userData: windows.userData };
 }
 async function close(owned) {
-  await application.close();
+  const closing = application;
   application = null;
+  await closing.close();
   const [code, signal] = await owned.terminal;
   assert.equal(code, 0);
   assert.equal(signal, null);
@@ -158,9 +160,9 @@ try {
   );
   assert.equal(checked.ok, false, "unconfigured connection stays refused");
   // Recording is asynchronous: observe the original results, never resend actions.
-  await page.waitForFunction(async () => {
+  const observed = await page.waitForFunction(async () => {
     const log = await window.farol.operations();
-    return [
+    const complete = [
       ["hub.start", "done"],
       ["computer.add-workspace", "done"],
       ["computer.verify-workspace", "done"],
@@ -170,8 +172,11 @@ try {
         (entry) => entry.kind === kind && entry.outcome === outcome,
       ),
     );
+    return complete ? log : false;
   });
-  const log = await page.evaluate(() => window.farol.operations());
+  // Assert the exact snapshot that satisfied the asynchronous observation.
+  const log = await observed.jsonValue();
+  await observed.dispose();
   assert.ok(
     log.entries.some(
       (e) =>
@@ -240,8 +245,7 @@ try {
     "both exact hidden Electron instances exited 0; disposable profile retained as local evidence";
 } finally {
   if (application) {
-    await application.close();
-    application = null;
+    await close(activeInstance);
   }
   await fs.writeFile(
     path.join(output, "b2-real-session.json"),
