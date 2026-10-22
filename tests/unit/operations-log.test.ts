@@ -6,6 +6,7 @@ import {
   operationKinds,
   recordableOperationCodes,
 } from "../../apps/desktop/renderer/operations-vocabulary";
+import { mappedOperationOutcome } from "../../apps/desktop/renderer/operation-outcomes";
 import { createTotalOperationsRecorder } from "../../apps/desktop/operations/recorder";
 import {
   OperationEntrySchema,
@@ -54,6 +55,32 @@ function setup(
     store,
   };
 }
+it("persists unmapped-code counts across restart and exposes only safe unknown records", async () => {
+  const { store, directory } = setup();
+  const metadata = {
+    source: "You",
+    kind: "general.update",
+    target: {},
+  } as const;
+  await observeOperation(store, metadata, async () => ({
+    ok: false,
+    error: "PRIVATE_FUTURE_CODE",
+  }));
+  store.record(metadata, "done", "PRIVATE_FUTURE_CODE", 1);
+  expect(await store.shutdown(5000)).toBe(true);
+  const restarted = new OperationsStore(directory, () => 1792670400000);
+  stores.push(restarted);
+  const snapshot = await restarted.snapshot(5000);
+  expect(snapshot.unmappedCodes).toBe(2);
+  expect(snapshot.entries).toMatchObject([
+    { outcome: "unknown", code: "OPERATION_CODE_UNMAPPED" },
+    { outcome: "unknown", code: "provider_error" },
+  ]);
+  expect(supportWith(snapshot)).toMatchObject({
+    operations: { unmappedCodes: 2 },
+  });
+  expect(JSON.stringify(snapshot)).not.toContain("PRIVATE_");
+});
 const table = [
   ["chatgpt.open-sign-in", "Setup"],
   ["chatgpt.observe-sign-in", "Setup"],
@@ -132,7 +159,7 @@ it("observes refused setup completion without replacing its result or promise", 
 it.each([
   [{ status: "ok" }, "done"],
   [{ ok: false, error: { code: "WORKSPACE_READ_FAILED" } }, "failed"],
-  [{ status: "refused", code: "NO_ACCESS" }, "refused"],
+  [{ status: "refused", code: "NO_ACCESS" }, "unknown"],
   [{ status: "unknown" }, "unknown"],
   [{ status: "ok", data: { phase: "running" } }, "pending"],
   [{ status: "submitted" }, "pending"],
@@ -626,6 +653,7 @@ it("counts an open-time prune failure without throwing or busy retries", async (
       writeFailures: 1,
       droppedEntries: 0,
       unrecordedUncertainEntries: 0,
+      unmappedCodes: 0,
     });
   expect(
     unlink.mock.calls.filter(([file]) => String(file).endsWith(".jsonl")),
@@ -776,6 +804,9 @@ it.each(["missing", "corrupt", "stale"])(
     expect(
       (await f.store.snapshot(5000)).entries.map((entry) => entry.kind),
     ).toEqual([operationKinds[1], operationKinds[2], operationKinds[3]]);
+    // Drain the second fixture's startup maintenance before advancing only the
+    // writer's clock; otherwise it can recreate an index after expiry removal.
+    expect(await reader.shutdown(5000)).toBe(true);
     f.now(30 * dayMs + 1);
     expect(await f.store.flush(5000)).toBe(true);
     expect(fs.existsSync(file)).toBe(false);
@@ -965,7 +996,7 @@ it("reports protected-queue exhaustion explicitly without evicting queued uncert
 it("records a completion with full known metadata when its settled begin was evicted", async () => {
   const { store, directory } = injectedStore(fs.promises, 1);
   const finish = store.begin({ ...metadata, target: { relativePath: "x" } });
-  finish("done", "SAVED", 17);
+  finish("done", "PHYSICAL_TERMINAL_CONFIRMED", 17);
   finish("failed", "LATE", 18);
   expect(await store.flush(5000)).toBe(true);
   expect(await store.snapshot(5000)).toMatchObject({
@@ -973,7 +1004,7 @@ it("records a completion with full known metadata when its settled begin was evi
       {
         target: { relativePath: "x" },
         outcome: "done",
-        code: "provider_error",
+        code: "PHYSICAL_TERMINAL_CONFIRMED",
         durationMs: 17,
         lifecycle: { phase: "observed" },
       },
@@ -1306,8 +1337,8 @@ it.each(hostileText)(
     await store.flush(5000);
     const snapshot = await store.snapshot(5000);
     expect(snapshot.entries).toMatchObject([
-      { code: "provider_error", outcome: "failed" },
-      { code: "provider_error", outcome: "refused" },
+      { code: "provider_error", outcome: "unknown" },
+      { code: "provider_error", outcome: "unknown" },
       {
         target: { command: "other", handle: "unrecognized", start: "unknown" },
       },
@@ -1367,8 +1398,11 @@ it.each(recordableOperationCodes)(
     });
     recorder.record(metadata, "failed", code, 1);
     recorder.begin(metadata)("failed", code, 2);
-    expect(record).toHaveBeenCalledWith(metadata, "failed", code, 1);
-    expect(finish).toHaveBeenCalledWith("failed", code, 2);
+    const mapped = mappedOperationOutcome(code);
+    const outcome =
+      mapped === "unknown" || mapped === "pending" ? mapped : "failed";
+    expect(record).toHaveBeenCalledWith(metadata, outcome, code, 1);
+    expect(finish).toHaveBeenCalledWith(outcome, code, 2);
   },
 );
 
@@ -1401,7 +1435,7 @@ it("enforces the vocabulary for arbitrary sinks and workspace label calls", () =
     target: { command: "other" },
   });
   expect(begin.mock.results[0]!.value).toHaveBeenCalledWith(
-    "failed",
+    "unknown",
     "provider_error",
     1,
   );
@@ -1640,7 +1674,7 @@ it.each(wrappedKinds)(
     await expect(fulfilled).resolves.toBe(value);
     await store.flush(5000);
     expect((await store.snapshot(5000)).entries).toMatchObject([
-      { kind: metadata.kind, outcome: "failed", code: "OPERATION_SYNC_THROW" },
+      { kind: metadata.kind, outcome: "unknown", code: "OPERATION_SYNC_THROW" },
       {
         kind: metadata.kind,
         outcome: "unknown",
@@ -1677,8 +1711,8 @@ it.each(hostileText)(
     await store.flush(5000);
     const snapshot = await store.snapshot(5000);
     expect(snapshot.entries).toMatchObject([
-      { outcome: "failed", code: "provider_error" },
-      { outcome: "refused", code: "provider_error" },
+      { outcome: "unknown", code: "OPERATION_CODE_UNMAPPED" },
+      { outcome: "unknown", code: "OPERATION_CODE_UNMAPPED" },
     ]);
     expect(JSON.stringify(supportWith(snapshot))).not.toContain("PRIVATE_");
   },
@@ -1742,7 +1776,7 @@ it.each(["sync", "reject", "success"])(
         kind: "update.check",
         outcome:
           settlement === "sync"
-            ? "failed"
+            ? "unknown"
             : settlement === "reject"
               ? "unknown"
               : "done",
@@ -1799,7 +1833,7 @@ it("records an opaque synchronous exception even when inspecting it would throw"
   expect(caught === error).toBe(true);
   await store.flush(5000);
   expect((await store.snapshot(5000)).entries).toMatchObject([
-    { outcome: "failed", code: "OPERATION_SYNC_THROW" },
+    { outcome: "unknown", code: "OPERATION_SYNC_THROW" },
   ]);
 });
 
@@ -1828,7 +1862,7 @@ it("preserves compaction's promise and synchronous exception through its actual 
     },
     {
       kind: "model.responses.compact",
-      outcome: "failed",
+      outcome: "unknown",
       code: "OPERATION_SYNC_THROW",
     },
   ]);

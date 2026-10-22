@@ -7,10 +7,9 @@ import type {
   OperationsRecorder,
   OperationEntry,
 } from "../renderer/operations-contract";
-import { observeOperation } from "./observe";
-import { recordableOperationCode } from "../renderer/operations-vocabulary";
+import { observeOperation, operationResult } from "./observe";
 
-/** Watches only the closed SSE event name. No request or response data is logged. */
+/** Observe only closed terminal fields. Never retain request/response content. */
 export function recordedModelTurn(
   recorder: OperationsRecorder,
   handler: FarolModelTurnHandler,
@@ -31,22 +30,39 @@ export function recordedModelTurn(
       ) => recorder.record(metadata, outcome, code, durationMs));
     let outcome: OperationEntry["outcome"] = "unknown";
     let terminalCode: string | null = null;
+    let terminalObserved = false;
     const observe = (frame: FarolModelSseEvent) => {
-      if (frame.event === "response.completed") outcome = "done";
-      else if (frame.event === "response.failed") {
-        const record = (v: unknown): Record<string, unknown> =>
-          v !== null && typeof v === "object" && !Array.isArray(v)
-            ? (v as Record<string, unknown>)
-            : {};
-        const data = record(frame.data);
-        const rawCode =
-          record(record(data.response).error).code ?? record(data.error).code;
+      if (
+        ![
+          "response.completed",
+          "response.failed",
+          "response.incomplete",
+        ].includes(frame.event)
+      )
+        return;
+      const record = (v: unknown): Record<string, unknown> =>
+        v !== null && typeof v === "object" && !Array.isArray(v)
+          ? (v as Record<string, unknown>)
+          : {};
+      const data = record(frame.data);
+      const response = record(data.response);
+      const result = operationResult({
+        outcome: frame.event,
+        error: response.error ?? data.error,
+        status: response.status,
+      });
+      // Multiple terminal frames cannot establish a single confirmed completion.
+      if (terminalObserved) {
+        outcome = "unknown";
+        if (terminalCode !== "OPERATION_CODE_UNMAPPED")
+          terminalCode = "MODEL_TERMINAL_UNCONFIRMED";
+      } else {
+        outcome = result.outcome;
         terminalCode =
-          recordableOperationCode(rawCode) ?? "MODEL_RESPONSE_FAILED";
-        outcome = /unknown|unconfirmed|unreachable/iu.test(terminalCode)
-          ? "unknown"
-          : "failed";
-      } else if (frame.event === "response.incomplete") outcome = "unknown";
+          result.code ??
+          (frame.event === "response.failed" ? "MODEL_RESPONSE_FAILED" : null);
+        terminalObserved = true;
+      }
     };
     const record = () =>
       finish(
@@ -58,12 +74,10 @@ export function recordedModelTurn(
     try {
       const result = await handler(request);
       if (!result.ok) {
-        const code = recordableOperationCode(result.reason) ?? "MODEL_REFUSED";
+        const classified = operationResult(result);
         finish(
-          /unknown|unconfirmed|unreachable/iu.test(code)
-            ? "unknown"
-            : "refused",
-          code,
+          classified.outcome,
+          classified.code,
           performance.now() - started,
         );
         return result;
@@ -78,6 +92,11 @@ export function recordedModelTurn(
                 observe(frame);
                 yield frame;
               }
+            } catch (error) {
+              outcome = "unknown";
+              if (terminalCode !== "OPERATION_CODE_UNMAPPED")
+                terminalCode = "MODEL_TERMINAL_UNCONFIRMED";
+              throw error;
             } finally {
               record();
             }

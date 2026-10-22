@@ -167,6 +167,7 @@ export type WindowSnapshot = Readonly<{
     writeFailures: number;
     droppedEntries?: number;
     unrecordedUncertainEntries?: number;
+    unmappedCodes?: number;
   }>;
   runtime: "starting" | "ready" | "offline" | "failed";
   connectionStatus?: ConnectionStatusView;

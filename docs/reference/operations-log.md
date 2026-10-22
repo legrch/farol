@@ -58,7 +58,7 @@ execution authority and never reads command arguments, stdin or output.
 The recorder observes admission without granting it. Promise-based desktop
 observers enqueue their start observation first, invoke the action inside a guarded
 region, attach isolated settlement callbacks and return the exact original promise.
-A synchronous throw records `failed` / `OPERATION_SYNC_THROW` and rethrows the
+A synchronous throw records `unknown` / `OPERATION_SYNC_THROW` and rethrows the
 exact original exception synchronously. Unclassified asynchronous rejections remain
 `unknown` / `OPERATION_OUTCOME_UNKNOWN`. They add no
 await or result transformation to health checks, Stop or Quit. The MCP tool
@@ -71,15 +71,36 @@ that an update was installed. No logger invokes retries or reconciliation.
 
 ## Closed vocabulary and field provenance (B9)
 
-`apps/desktop/renderer/operations-vocabulary.ts` owns one static set of recordable
-codes: `farolOperationCodes`, the explicit `providerOperationCodes`, and
+`apps/desktop/renderer/operation-outcomes.ts` owns one explicit mapping from
+codes and outcome kinds to `done`, `refused`, `failed`, `unknown` or `pending`.
+`operations-vocabulary.ts` derives the recording vocabulary from that mapping:
+`farolOperationCodes`, the explicit `providerOperationCodes`, and
 `provider_error`. Provider codes are limited to `server_error`,
 `rate_limit_exceeded`, `invalid_api_key`, `insufficient_quota`,
 `invalid_request_error`, `context_length_exceeded`, and
-`content_policy_violation`. An unlisted code of any type becomes `provider_error`;
-absence remains null. New Farol classifications require an explicit source change
+`content_policy_violation`. An unlisted result code or outcome kind becomes
+`unknown` / `OPERATION_CODE_UNMAPPED`; a raw code supplied directly to the recorder
+becomes `unknown` / `provider_error`. Each such observation increments the durable
+`unmappedCodes` diagnostic shown in Activity and support export; no raw value is
+retained. Absence remains null. New Farol classifications require an explicit source change
 before their detail is recordable. A regex, uppercase spelling, HTTP status suffix,
 provider failed-frame code, or handler refusal reason never extends the set.
+
+The result observer reads string errors, structured error kinds/codes, Go outcome
+and phase fields, configuration evidence/connector receipts and MCP data. Unknown
+or unconfirmed evidence dominates every contradictory terminal assertion, including
+`ok: true`, explicit failure/refusal and HTTP errors. Pending evidence stays pending;
+`ok: false` alone supplies no refusal proof. Model terminal frames and handler
+reasons use the same mapping, and the recorder preserves unknown/pending codes at
+both entry points. `CHATGPT_CONVERSATION_UNCONFIRMED` therefore remains unknown.
+
+`tests/unit/operations-outcome-inventory.ts` discovers TS contract/producer code
+literals and closed result discriminants, plus Go code/outcome constants in the
+observed owners. The inventory deliberately includes a conservative superset for
+open string contracts. The exhaustiveness test fails with source paths for every
+unmapped value and rejects duplicate mapping entries; it does not compare the
+mapping against another copied list of contract codes. Shape, precedence, redaction
+and persistence fixtures are source tests, not native or live-provider acceptance.
 
 `createTotalOperationsRecorder` validates before calling any sink, including
 `begin`, `record`, finish handles and workspace labels. The strict store/read/export

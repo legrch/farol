@@ -1,5 +1,5 @@
 import type { OperationsRecorder } from "./renderer/operations-contract";
-import { observeOperation } from "./operations/observe";
+import { observeOperation, operationResult } from "./operations/observe";
 import { isDeepStrictEqual } from "node:util";
 import { ChatGptAccountObservationSchema } from "./chatgpt-account-probe.ts";
 import { BridgeError } from "./bridge/client.ts";
@@ -861,24 +861,20 @@ export class GoChatBrowserDriver implements BrowserDriver {
     if (kind === "accepted")
       s.turnObservation = this.operations?.begin?.(metadata);
     if (["completed", "refused", "unknown", "awaiting-owner"].includes(kind)) {
-      const outcome =
-        kind === "completed"
-          ? "done"
-          : kind === "refused"
-            ? "refused"
-            : kind === "awaiting-owner"
-              ? "pending"
-              : "unknown";
+      const classified = operationResult({
+        outcome: kind,
+        code: fields.code || undefined,
+      });
       const duration = Math.max(0, this.time() - (s.sentAt ?? this.time()));
       if (s.turnObservation) {
         const finish = s.turnObservation;
         s.turnObservation = undefined;
-        finish(outcome, fields.code || null, duration);
+        finish(classified.outcome, classified.code, duration);
       } else
         this.operations?.record(
           metadata,
-          outcome,
-          fields.code || null,
+          classified.outcome,
+          classified.code,
           duration,
         );
     }

@@ -197,7 +197,7 @@ function fixture(
         binding: clone(input.binding),
         operationId: input.operationId,
         evidenceId: input.witness.evidenceId,
-        code: "physical_submitted",
+        code: "PHYSICAL_SEND_ACKNOWLEDGED",
       };
     }),
     observe: vi.fn<ChatGptPhysicalApi["observe"]>(async (input, guard) => {
@@ -1534,7 +1534,7 @@ describe("Go Chat BrowserDriver — strict physical doubles, CPU only", () => {
     await f.start();
     vi.mocked(f.api.observe).mockResolvedValue({
       state: "awaiting-owner",
-      code: "owner_control_required",
+      code: "PHYSICAL_COMPOSER_BUSY",
     });
     const signal = await f.observe();
     expect(signal.events[0]).toMatchObject({
@@ -1695,7 +1695,7 @@ it("appends completion after an awaiting-owner observation while retaining pendi
   const original = vi.mocked(f.api.observe).getMockImplementation()!;
   vi.mocked(f.api.observe).mockResolvedValue({
     state: "awaiting-owner",
-    code: "owner_control_required",
+    code: "PHYSICAL_COMPOSER_BUSY",
   });
   const paused = await f.observe(cursor, 128);
   cursor = paused.events.at(-1)!.sequence;
@@ -1728,7 +1728,7 @@ const recorderCases = (
 it.each(recorderCases)(
   "keeps $adapter settlement with $fault at $phase (refused=$refused)",
   async ({ fault, phase, adapter, refused }) => {
-    const originalError = new BridgeError("refused", "ORIGINAL_REFUSED");
+    const originalError = new BridgeError("refused", "OPERATION_REFUSED");
     const fail = vi.fn(() => {
       if (fault === "rejected") return Promise.reject(Error("RECORDER_FAILED"));
       if (fault === "invalid-metadata")
@@ -1826,7 +1826,7 @@ it.each(recorderCases)(
       const f = fixture({ operations });
       expect(await f.start()).toMatchObject({
         status: "submitted",
-        code: "physical_submitted",
+        code: "PHYSICAL_SEND_ACKNOWLEDGED",
       });
       expect(f.api.send).toHaveBeenCalledOnce();
       if (refused)

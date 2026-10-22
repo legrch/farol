@@ -53,6 +53,7 @@ export class OperationsStore implements OperationsRecorder {
     writeFailures: 0,
     droppedEntries: 0,
     unrecordedUncertainEntries: 0,
+    unmappedCodes: 0,
   };
   private reading: Promise<OperationsSnapshot> | undefined;
   private readonly recorder = createTotalOperationsRecorder(
@@ -314,6 +315,7 @@ export class OperationsStore implements OperationsRecorder {
   private diagnostics() {
     const recorder = this.recorder.diagnostics();
     return {
+      unmappedCodes: recorder.unmappedCodes,
       writeFailures: this.writeFailures + recorder.writeFailures,
       droppedEntries: this.droppedEntries + recorder.droppedEntries,
       unrecordedUncertainEntries:
@@ -555,6 +557,7 @@ export class OperationsStore implements OperationsRecorder {
     // readSnapshot includes other writers only; our counters are always current.
     const current = this.diagnostics();
     return {
+      unmappedCodes: snapshot.unmappedCodes + current.unmappedCodes,
       writeFailures: snapshot.writeFailures + current.writeFailures,
       droppedEntries: snapshot.droppedEntries + current.droppedEntries,
       unrecordedUncertainEntries:
@@ -570,6 +573,7 @@ export class OperationsStore implements OperationsRecorder {
       writeFailures: 0,
       droppedEntries: 0,
       unrecordedUncertainEntries: 0,
+      unmappedCodes: 0,
     };
     try {
       await this.validateDirectory();
@@ -596,6 +600,7 @@ export class OperationsStore implements OperationsRecorder {
           }
           if (diagnosticsName.test(name)) {
             const parsed = OperationsDiagnosticsSchema.parse(JSON.parse(text));
+            diagnostics.unmappedCodes += parsed.unmappedCodes;
             diagnostics.writeFailures += parsed.writeFailures;
             diagnostics.droppedEntries += parsed.droppedEntries;
             diagnostics.unrecordedUncertainEntries +=

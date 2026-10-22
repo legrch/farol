@@ -105,6 +105,7 @@ export const OperationWorkspaceLabelsSchema = z
   )
   .max(128);
 export const OperationsDiagnosticsSchema = z.strictObject({
+  unmappedCodes: z.number().int().nonnegative().safe().default(0),
   writeFailures: z.number().int().nonnegative().safe(),
   droppedEntries: z.number().int().nonnegative().safe().default(0),
   unrecordedUncertainEntries: z.number().int().nonnegative().safe().default(0),

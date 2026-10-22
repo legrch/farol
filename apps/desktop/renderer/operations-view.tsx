@@ -70,13 +70,15 @@ export function OperationsActivity({
       {diagnostics &&
       (diagnostics.corruptLines > 0 ||
         diagnostics.writeFailures > 0 ||
-        (diagnostics.droppedEntries ?? 0) > 0) ? (
+        (diagnostics.droppedEntries ?? 0) > 0 ||
+        (diagnostics.unmappedCodes ?? 0) > 0) ? (
         <p role="status">
           {diagnostics.corruptLines} unreadable log lines skipped.{" "}
           {diagnostics.writeFailures} log writes or reads unavailable.{" "}
           {diagnostics.droppedEntries ?? 0} entries were not recorded.{" "}
           {diagnostics.unrecordedUncertainEntries ?? 0} of these had pending or
-          unknown outcomes. Do not repeat unconfirmed actions.
+          unknown outcomes. {diagnostics.unmappedCodes ?? 0} unmapped result
+          codes were recorded as unknown. Do not repeat unconfirmed actions.
         </p>
       ) : null}
       {rows.length === 0 ? (

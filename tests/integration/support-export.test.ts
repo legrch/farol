@@ -127,6 +127,7 @@ describe("content-free support export", () => {
         writeFailures: 0,
         droppedEntries: 3,
         unrecordedUncertainEntries: 1,
+        unmappedCodes: 2,
       },
       generatedAt: "2026-09-16T11:00:00.000Z",
       build: {
@@ -168,6 +169,7 @@ describe("content-free support export", () => {
         corruptLines: 1,
         droppedEntries: 3,
         unrecordedUncertainEntries: 1,
+        unmappedCodes: 2,
       },
       schema: 2,
       kind: "farol_support",

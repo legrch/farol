@@ -75,6 +75,7 @@ it("filters shared operations, expands metadata and links attention to the unres
       writeFailures: 2,
       droppedEntries: 7,
       unrecordedUncertainEntries: 1,
+      unmappedCodes: 4,
     },
   };
   const overlay = vi.fn();
@@ -90,6 +91,9 @@ it("filters shared operations, expands metadata and links attention to the unres
     expect(host.querySelector("summary")?.textContent).toContain("model turn");
     expect(host.textContent).toContain("1 unreadable log lines skipped");
     expect(host.textContent).toContain("7 entries were not recorded");
+    expect(host.textContent).toContain(
+      "4 unmapped result codes were recorded as unknown",
+    );
     expect(host.textContent).toContain("2 log writes or reads unavailable");
     expect(
       host.textContent?.match(/7 entries were not recorded/g),
@@ -142,12 +146,14 @@ it("loads durable operations independently of the empty runtime tasks and refres
       entries: [operation],
       corruptLines: 0,
       writeFailures: 0,
+      unmappedCodes: 3,
     }),
   });
   try {
     await c.start();
     await Promise.resolve();
     expect(c.getSnapshot().activity).toMatchObject([operation]);
+    expect(c.getSnapshot().activityDiagnostics?.unmappedCodes).toBe(3);
     await c.refresh();
     expect(c.getSnapshot().activity).toMatchObject([operation]);
   } finally {

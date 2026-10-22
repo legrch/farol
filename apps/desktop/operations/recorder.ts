@@ -9,6 +9,7 @@ import {
   OperationDurationSchema,
   OperationWorkspaceLabelsSchema,
 } from "../renderer/operations-contract";
+import { mappedOperationOutcome } from "../renderer/operation-outcomes";
 import { recordableOperationCode } from "../renderer/operations-vocabulary";
 
 function recordableMetadata(metadata: OperationMetadata) {
@@ -46,6 +47,7 @@ export interface TotalOperationsRecorder extends OperationsRecorder {
   begin(metadata: OperationMetadata): Finish;
   setWorkspaceLabels(workspaces: Labels): void;
   diagnostics(): {
+    unmappedCodes: number;
     writeFailures: number;
     droppedEntries: number;
     unrecordedUncertainEntries: number;
@@ -59,6 +61,7 @@ export function createTotalOperationsRecorder(
   sink: RecorderSink,
   diagnosticsChanged: () => void = () => {},
 ): TotalOperationsRecorder {
+  let unmappedCodes = 0;
   let writeFailures = 0;
   let droppedEntries = 0;
   let unrecordedUncertainEntries = 0;
@@ -74,12 +77,39 @@ export function createTotalOperationsRecorder(
       // Counters remain available even when scheduling diagnostics fails.
     }
   };
-  const observe = (action: () => unknown, outcome?: Outcome): void => {
+  const observe = (
+    action: () => unknown,
+    outcome?: Outcome | (() => Outcome),
+  ): void => {
+    const unavailable = () =>
+      failed(typeof outcome === "function" ? outcome() : outcome);
     try {
-      void Promise.resolve(action()).catch(() => failed(outcome));
+      void Promise.resolve(action()).catch(unavailable);
     } catch {
-      failed(outcome);
+      unavailable();
     }
+  };
+  const classification = (outcome: Outcome, code: string | null) => {
+    OperationOutcomeSchema.parse(outcome);
+    const safeCode = recordableOperationCode(code);
+    if (
+      safeCode === "provider_error" ||
+      safeCode === "OPERATION_CODE_UNMAPPED"
+    ) {
+      unmappedCodes++;
+      try {
+        void Promise.resolve(diagnosticsChanged()).catch(() => {});
+      } catch {
+        /* Observational only. */
+      }
+    }
+    const mapped = mappedOperationOutcome(safeCode);
+    return {
+      outcome: OperationOutcomeSchema.parse(
+        mapped === "unknown" || mapped === "pending" ? mapped : outcome,
+      ),
+      code: safeCode,
+    };
   };
   const recorder: TotalOperationsRecorder = {
     begin(metadata) {
@@ -96,37 +126,49 @@ export function createTotalOperationsRecorder(
           failed("pending");
           return inert;
         }
-        return (outcome, code, durationMs) =>
-          observe(() => {
-            // Configuration receipts may enrich the target before settlement.
-            // Revalidate that target without letting source/kind change mid-flight.
-            safe.target = recordableMetadata({
-              ...safe,
-              target: metadata.target,
-            }).target;
-            return finish(
-              OperationOutcomeSchema.parse(outcome),
-              recordableOperationCode(code),
-              OperationDurationSchema.parse(
-                Math.max(0, Math.round(durationMs)),
-              ),
-            );
-          }, outcome);
+        return (outcome, code, durationMs) => {
+          let recordedOutcome = outcome;
+          observe(
+            () => {
+              // Configuration receipts may enrich the target before settlement.
+              // Revalidate that target without letting source/kind change mid-flight.
+              safe.target = recordableMetadata({
+                ...safe,
+                target: metadata.target,
+              }).target;
+              const classified = classification(outcome, code);
+              recordedOutcome = classified.outcome;
+              return finish(
+                classified.outcome,
+                classified.code,
+                OperationDurationSchema.parse(
+                  Math.max(0, Math.round(durationMs)),
+                ),
+              );
+            },
+            () => recordedOutcome,
+          );
+        };
       } catch {
         failed("pending");
         return inert;
       }
     },
     record(metadata, outcome, code, durationMs) {
+      let recordedOutcome = outcome;
       observe(
-        () =>
-          sink.record(
-            recordableMetadata(metadata),
-            OperationOutcomeSchema.parse(outcome),
-            recordableOperationCode(code),
+        () => {
+          const safe = recordableMetadata(metadata);
+          const classified = classification(outcome, code);
+          recordedOutcome = classified.outcome;
+          return sink.record(
+            safe,
+            classified.outcome,
+            classified.code,
             OperationDurationSchema.parse(Math.max(0, Math.round(durationMs))),
-          ),
-        outcome,
+          );
+        },
+        () => recordedOutcome,
       );
     },
     setWorkspaceLabels(workspaces) {
@@ -145,6 +187,7 @@ export function createTotalOperationsRecorder(
       writeFailures,
       droppedEntries,
       unrecordedUncertainEntries,
+      unmappedCodes,
     }),
   };
   return recorder;

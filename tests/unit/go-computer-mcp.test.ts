@@ -1866,7 +1866,7 @@ it.each([
     const { client, request } = await setup({
       operations: createTotalOperationsRecorder({ record }),
       respond: async () => {
-        throw new BridgeError("refused", "FIXTURE_REFUSAL");
+        throw new BridgeError("refused", "OPERATION_REFUSED");
       },
     });
     await client.callTool({
@@ -1884,12 +1884,37 @@ it.each([
   },
 );
 
+it("records an unlisted MCP refusal code as counted unknown without changing the reply", async () => {
+  const record = vi.fn();
+  const recorder = createTotalOperationsRecorder({ record });
+  const { client, request } = await setup({
+    operations: recorder,
+    respond: async () => {
+      throw new BridgeError("refused", "FUTURE_MCP_CODE");
+    },
+  });
+  const reply = await client.callTool({
+    name: "computer_workspace_read",
+    arguments: { workspaceId: "workspace", relativePath: "README.md" },
+  });
+  expect(reply.structuredContent).toMatchObject({
+    status: "refused",
+    code: "FUTURE_MCP_CODE",
+  });
+  expect(request).toHaveBeenCalledOnce();
+  expect(record.mock.calls[0]!.slice(1, 3)).toEqual([
+    "unknown",
+    "OPERATION_CODE_UNMAPPED",
+  ]);
+  expect(recorder.diagnostics().unmappedCodes).toBe(1);
+});
+
 it.each(recordedToolCases)(
   "records the exact content-free target for $name (start: $start)",
   async ({ name, input, target, start }) => {
     const record = vi.fn();
     const refused = async (): Promise<never> => {
-      throw new BridgeError("refused", "FIXTURE_REFUSAL");
+      throw new BridgeError("refused", "OPERATION_REFUSED");
     };
     // Fabricated start/result only; no command or provider is executed.
     const processes: NonNullable<GoComputerMcpOptions["processes"]> = {
@@ -1922,7 +1947,7 @@ it.each(recordedToolCases)(
         operationId: input.operationId,
         requestId: call.requestId,
         context: call.context,
-        code: "FIXTURE_REFUSAL",
+        code: "OPERATION_REFUSED",
         stdout: "PRIVATE-OUTPUT",
         stderr: "PRIVATE-OUTPUT",
       }),
@@ -1982,7 +2007,7 @@ it.each(recordedToolCases)(
     });
     expect(outcome).toBe(name === "computer_shell_start" ? "done" : "refused");
     expect(code).toBe(
-      name === "computer_shell_start" ? null : "provider_error",
+      name === "computer_shell_start" ? null : "OPERATION_REFUSED",
     );
     expect(durationMs).toEqual(expect.any(Number));
     const entry = OperationEntrySchema.parse({

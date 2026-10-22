@@ -1,3 +1,9 @@
+import {
+  mappedOperationCodes,
+  mappedOperationOutcome,
+  type OperationOutcomeCode,
+} from "./operation-outcomes";
+
 /** Static recording vocabulary. Never extend it from runtime/provider values. */
 export const operationKinds = [
   "chat.turn",
@@ -123,113 +129,7 @@ export const operationKinds = [
   "update.rollback",
 ] as const;
 
-/** Farol classifications plus the explicit provider allowlist below.
- * Unlisted classifications lose detail rather than admitting external text. */
-export const farolOperationCodes = [
-  "ACTION_OUTCOME_UNKNOWN",
-  "AGENT_ALREADY_RUNNING",
-  "AGENT_ASSIGNMENT_FAILED",
-  "AGENT_ASSIGNMENT_OUTCOME_UNKNOWN",
-  "AGENT_CANCEL_RACED_COMPLETION",
-  "AGENT_DELIVERY_FAILED",
-  "AGENT_INPUT_STATE_UNAVAILABLE",
-  "AGENT_NOT_READY",
-  "AGENT_REJOIN_UNAVAILABLE",
-  "AGENT_SCOPE_INVALID",
-  "CHATGPT_CONNECTION_NOT_VERIFIED",
-  "CONNECTION_HEALTH_FAILED",
-  "CONNECTION_NOT_READY",
-  "CONNECTOR_STOP_UNCONFIRMED",
-  "FAROL_MODEL_BODY_INVALID",
-  "FAROL_MODEL_BODY_TOO_LARGE",
-  "FAROL_MODEL_ENDPOINT_MODEL_REQUIRED",
-  "FAROL_MODEL_ENDPOINT_NOT_STARTED",
-  "FAROL_MODEL_ENDPOINT_SEALED",
-  "FAROL_MODEL_ENDPOINT_TIMEOUTS_INVALID",
-  "FAROL_MODEL_MODEL_MISMATCH",
-  "FAROL_MODEL_NON_LOOPBACK",
-  "FAROL_MODEL_ORIGIN_PRESENT",
-  "FAROL_MODEL_ROUTE_NOT_FOUND",
-  "FAROL_MODEL_ROUTE_UNAVAILABLE",
-  "FAROL_MODEL_ROUTE_REFUSED",
-  "FAROL_MODEL_ROUTE_UNREACHABLE",
-  "FAROL_MODEL_SEALED",
-  "FAROL_MODEL_TOKEN_INVALID",
-  "FAROL_MODEL_TOKEN_MISSING",
-  "FAROL_MODEL_TOKEN_UNSET",
-  "HTTP_OPERATION_REJECTED",
-  "MODEL_REFUSED",
-  "MODEL_RESPONSE_FAILED",
-  "MODEL_TERMINAL_UNCONFIRMED",
-  "OPERATION_FAILED",
-  "OPERATION_OUTCOME_UNKNOWN",
-  "OPERATION_REFUSED",
-  "OPERATION_SYNC_THROW",
-  "PHYSICAL_SEND_UNKNOWN",
-  "ROUTE_B_CHECK_INPUT_INVALID",
-  "ROUTE_B_CHECK_OUTCOME_UNKNOWN",
-  "ROUTE_B_HOST_START_FAILED",
-  "ROUTE_B_STATE_ROOT_NOT_ABSOLUTE",
-  "ROUTE_B_THREAD_BUSY",
-  "ROUTE_B_TOOL_RELAY_REFUSED",
-  "ROUTE_B_TOOL_RELAY_UNAVAILABLE",
-  "SETUP_INCOMPLETE",
-  "TASK_CANCEL_FAILED",
-  "TASK_CAPACITY_REACHED",
-  "TASK_COMMAND_INVALID",
-  "TASK_NOT_FOUND",
-  "TASK_NOT_RUNNING",
-  "TASK_OPERATION_IN_PROGRESS",
-  "TASK_ROUTE_UNAVAILABLE",
-  "TASK_STATE_UNAVAILABLE",
-  "TASK_SURFACE_UNREACHABLE",
-  "TURN_OUTCOME_UNKNOWN",
-  "UPDATE_AUTOMATIC_PREFERENCE_ACK_MISMATCH",
-  "UPDATE_AUTOMATIC_PREFERENCE_INVALID",
-  "UPDATE_AUTOMATIC_PREFERENCE_NOT_LOADED",
-  "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
-  "UPDATE_AUTOMATIC_PREFERENCE_UNAVAILABLE",
-  "UPDATE_AUTOMATIC_PREFERENCE_UNREADABLE",
-  "UPDATE_AUTOMATIC_PREFERENCE_UNSUPPORTED",
-  "UPDATE_AUTOMATIC_PREFERENCE_WRITING",
-  "UPDATE_BROWSER_BUSY",
-  "UPDATE_BROWSER_DRAFT",
-  "UPDATE_BROWSER_OPEN",
-  "UPDATE_BROWSER_STATE_UNKNOWN",
-  "UPDATE_CANDIDATE_CHANGED",
-  "UPDATE_CHECK_FAILED",
-  "UPDATE_CONNECTOR_ACTIVE",
-  "UPDATE_HANDOFF_UNKNOWN",
-  "UPDATE_LATER_OUTCOME_UNKNOWN",
-  "UPDATE_LOCAL_CANDIDATE_NOT_NEW",
-  "UPDATE_LOCAL_IMPORT_UNAVAILABLE",
-  "UPDATE_LOCAL_IMPORT_UNKNOWN",
-  "UPDATE_NOTICE_OUTCOME_UNKNOWN",
-  "UPDATE_PACKAGE_NOT_READY",
-  "UPDATE_QUIT_APPLY_UNSUPPORTED",
-  "UPDATE_QUIT_CLOCK_UNREADABLE",
-  "UPDATE_QUIT_DEADLINE_EXPIRED",
-  "UPDATE_QUIT_ELIGIBILITY_UNCONFIRMED",
-  "UPDATE_QUIT_INSTALL_REQUIRES_RELAUNCH",
-  "UPDATE_QUIT_NOT_OPTED_IN",
-  "UPDATE_QUIT_OWNER_UNAVAILABLE",
-  "UPDATE_QUIT_PREFERENCE_ACK_MISMATCH",
-  "UPDATE_QUIT_PREFERENCE_INVALID",
-  "UPDATE_QUIT_PREFERENCE_NOT_LOADED",
-  "UPDATE_QUIT_PREFERENCE_OUTCOME_UNKNOWN",
-  "UPDATE_QUIT_PREFERENCE_UNAVAILABLE",
-  "UPDATE_QUIT_PREFERENCE_UNREADABLE",
-  "UPDATE_QUIT_PREFERENCE_UNSUPPORTED",
-  "UPDATE_QUIT_PREFERENCE_WRITING",
-  "UPDATE_QUIT_REQUEST_INVALID",
-  "UPDATE_RECOVERY_REQUIRED",
-  "UPDATE_RECOVERY_UNAVAILABLE",
-  "UPDATE_SKIP_OUTCOME_UNKNOWN",
-  "UPDATE_STAGING_OUTCOME_UNKNOWN",
-  "UPDATE_TASK_ROUTE_NEEDS_DRAIN",
-  "UPDATE_WORK_PENDING",
-  "WORKSPACE_READ_FAILED",
-] as const;
+/** Recording and classification share the same closed vocabulary. */
 export const providerOperationCodes = [
   "server_error",
   "rate_limit_exceeded",
@@ -239,19 +139,21 @@ export const providerOperationCodes = [
   "context_length_exceeded",
   "content_policy_violation",
 ] as const;
-export const recordableOperationCodes = [
-  "provider_error",
-  ...farolOperationCodes,
-  ...providerOperationCodes,
-] as const;
-export type RecordableOperationCode = (typeof recordableOperationCodes)[number];
-const codes = new Set<unknown>(recordableOperationCodes);
+export const farolOperationCodes = mappedOperationCodes.filter(
+  (code) =>
+    code !== "provider_error" &&
+    !providerOperationCodes.includes(
+      code as (typeof providerOperationCodes)[number],
+    ),
+);
+export const recordableOperationCodes = mappedOperationCodes;
+export type RecordableOperationCode = OperationOutcomeCode;
 /** Return a canonical closed value, never a regex-approved external string. */
 export function recordableOperationCode(
   value: unknown,
 ): RecordableOperationCode | null {
   if (value === null || value === undefined) return null;
-  return codes.has(value)
-    ? (value as RecordableOperationCode)
-    : "provider_error";
+  return mappedOperationOutcome(value) === undefined
+    ? "provider_error"
+    : (value as RecordableOperationCode);
 }
