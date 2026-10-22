@@ -6,3 +6,7 @@ dist/
 coverage/
 artifacts/
 .DS_Store
+# Claude Code's per-user files. Build source identity ignores global git
+# config, so a global ignore alone leaves these "untracked" and dirties Dev.
+.claude/settings.local.json
+.claude/.cc-writes/

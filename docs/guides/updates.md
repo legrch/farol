@@ -4,14 +4,14 @@ This guide is for an installation with an **accepted update baseline**. A manual
 
 ## Review and install an update
 
-1. Open **Check for Updates…** from Farol's menu. Review the installed version, offered version and release notes.
+1. In **Settings → General**, review **Version** and choose **Check for updates**. Review the installed version, offered version and release notes.
 2. If offered, choose **Download Update**. Wait through download and verification; a completed download alone does not mean installation has begun.
 3. Finish active work and review open ChatGPT sessions. When the update is ready, choose **Install and Relaunch** once. Farol closes sessions and restarts as part of this action.
 4. After relaunch, confirm the displayed version and connection status. Saved access and credentials are intended to remain; review any request for a new current check rather than assuming old attachment proof is still current.
 
 These labels are verified against the audited source. Older builds can have different wording. An installation can be newer than the latest public release; that does not call for a downgrade.
 
-**Remind Me Later** postpones an available or ready update. **Skip This Version** is offered for an available update. **Automatically install updates** is a separate preference in the update dialog; review it intentionally. **Continue working** or **Done** closes the relevant ordinary dialog when offered.
+**Remind Me Later** postpones an available or ready update. **Skip This Version** is offered for an available update. **Install updates automatically** is a separate preference in **Settings → General**; review it intentionally. The update dialog also offers **Automatically install updates**. **Continue working** or **Done** closes the relevant ordinary dialog when offered.
 
 ## When an update is blocked
 
@@ -21,7 +21,7 @@ If a check finished with a known pre-installation blocker, a later manual check 
 
 ## Recovery and rollback
 
-Open **Settings → Diagnostics → Update recovery** when recovery is needed. Use only the action offered for the recorded operation. Optional rollback is separate from an ordinary update; it is not a general downgrade procedure. Preserve the retained predecessor until recovery is confirmed.
+Open **Settings → General → Update recovery…** when recovery is needed. Use only the action offered for the recorded operation. Optional rollback is separate from an ordinary update; it is not a general downgrade procedure. Preserve the retained predecessor until recovery is confirmed.
 
 A restored previous version can remain closed until recovery completion is confirmed. Start it separately afterward and verify its version and connection before resuming work. See [Recovery](recovery.md) and the developer [installed updater contract](../installed-update-runtime.md).
 

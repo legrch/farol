@@ -1,50 +1,39 @@
-/** Read-only help. Opening it never changes access or sends a message. */
+/** Compatibility document for an explicitly opened, read-only local guide. */
 export function ConnectionGuide() {
   return (
     <details className="connection-guide">
-      <summary>How to connect</summary>
+      <summary>How to set up Farol</summary>
       <div className="connection-guide-content">
         <ol>
           <li>
-            <strong>Sign in.</strong> Use your ChatGPT account in Farol for the
-            built-in check. You can skip this when using ChatGPT in another
-            browser.
+            <strong>Sign in.</strong> Sign in to your own ChatGPT account,
+            return to Farol and choose Check sign-in. Continue after the check
+            passes.
           </li>
           <li>
-            <strong>Connect this Mac.</strong> Open Tunnels in ChatGPT, create
-            or select your tunnel, and paste its Tunnel ID and runtime key into
-            Farol. Choose Save &amp; connect. Keep the saved key unless the
-            tunnel details change.
+            <strong>Workspaces.</strong> Add a workspace. Each row shows Read
+            only or Read &amp; write, Commands and its access check. Command
+            access is shared across all workspaces. All listed workspaces must
+            work before continuing.
           </li>
           <li>
-            <strong>Add Farol to ChatGPT.</strong> In ChatGPT, create or select
-            the app attached to this tunnel. Use that app when checking the
-            connection. The tunnel and the ChatGPT app must belong to the same
-            connection.
+            <strong>Connect this Mac.</strong> Create a tunnel named Farol and a
+            Restricted key with Tunnels: Read and Use in OpenAI. Enter the
+            Tunnel ID and Key, then choose Connect. Farol finds the helper,
+            saves the key, connects and checks health.
           </li>
           <li>
-            <strong>Workspace.</strong> Add a folder for Computer file access.
-            Farol checks it and restores a configured connection automatically.
-            Removing a workspace only removes access; your files stay on disk.
-            ChatGPT itself can be used without a workspace; this version's
-            Computer check requires one.
-          </li>
-          <li>
-            <strong>Check.</strong> Select the exact ChatGPT app name. In a
-            Temporary Chat using Instant, choose Check in ChatGPT once. Farol
-            sends one small verification request; only a matching receipt from
-            this Mac confirms success. Alternatively, copy the request into your
-            own ChatGPT chat and return to Check attachment.
+            <strong>Add to ChatGPT.</strong> In Settings → Apps, create Farol
+            with connection Tunnel and your tunnel ID, and sign-in None. Choose
+            Test in ChatGPT once in Farol. A matching receipt verifies workspace
+            access without reading file contents. Start using Farol opens Home
+            after all checks pass.
           </li>
         </ol>
         <p>
-          Continue only moves to the next page. Overview shows the checks that
-          actually passed. A local connection alone does not confirm that
-          ChatGPT can reach this Mac.
-        </p>
-        <p>
-          If a result is unconfirmed, open Connection diagnostics to inspect it
-          before trying again. Opening Setup never repeats a request.
+          If a result is unconfirmed, refresh its saved result and inspect it
+          before trying again. Do not repeat an unconfirmed action. Save a
+          support file from Settings → General when you need help.
         </p>
       </div>
     </details>

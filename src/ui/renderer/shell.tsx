@@ -14,12 +14,17 @@ import {
 import { useRenderer } from "./services";
 import { pageListMode } from "./sidebar-presentation";
 import { PanelBoundary } from "./boundary";
-import { Settings, useSettingsAttention } from "./settings";
+import { Settings, useSetupIntents, retainedSetupIntents } from "./settings";
 import type { RendererFacade, SettingsPage, WindowSnapshot } from "./contract";
+import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
 import { computerSetup } from "./computer-setup";
 import { TaskEditor } from "./task";
 import { Home, HomeNavigation, homeTitle } from "./home";
-import { Setup, SetupNavigation } from "./setup";
+import { Setup } from "./setup";
+import { ChatDirect } from "./chat-direct";
+import { ChatReadonly } from "./chat-readonly";
+import { ChatHistory } from "./chat-history";
+import { RetiredReplies } from "./retired-replies";
 import { setupSteps } from "./setup-navigation";
 import { designIconPath, designIconViewBox } from "./design-icons";
 import { UpdateNotice, acknowledgeUpdateNotice } from "./update-notice";
@@ -40,11 +45,7 @@ import {
 const pages: readonly [SettingsPage, string][] = [
   ["general", "General"],
   ["appearance", "Appearance"],
-  ["folders", "Workspaces"],
-  ["computer", "This Mac"],
-  ["connection", "Connection"],
   ["shortcuts", "Keyboard shortcuts"],
-  ["diagnostics", "Diagnostics"],
 ];
 export function Icon({ name }: { name: string }) {
   return (
@@ -399,11 +400,6 @@ function Activity({
         />
       )}
       {details}
-      {snapshot.overlay === "activity" && (
-        <Overlay title="Recorded event" onClose={() => facade.overlay("none")}>
-          {details}
-        </Overlay>
-      )}
     </>
   );
 }
@@ -498,6 +494,12 @@ function Search({
     { label: "ChatGPT", area: "chatgpt" as const, page: "general" as const },
     { label: "Activity", area: "activity" as const, page: "general" as const },
     { label: "Setup", area: "setup" as const, page: "general" as const },
+    ...setupSteps.slice(1).map(([setupStep, label]) => ({
+      label,
+      area: "setup" as const,
+      setupStep,
+      page: "general" as const,
+    })),
     ...pages.map(([page, label]) => ({
       label,
       area: "settings" as const,
@@ -886,16 +888,14 @@ function Update({
             </button>
           )}
         {!recoveryMode &&
+          unresolvedActions(snapshot, retainedSetupIntents(facade, snapshot))
+            .length > 0 &&
           (recovery ||
             (!!blockedBy && !isConfirmedBrowserBlock(blockedBy)) ||
             update.phase === "failed" ||
             update.phase === "unavailable") && (
-            <button
-              onClick={() =>
-                facade.navigate({ area: "settings", page: "diagnostics" })
-              }
-            >
-              Review Diagnostics
+            <button onClick={() => facade.overlay("unresolved-actions")}>
+              Unresolved actions
             </button>
           )}
         {recoveryMode &&
@@ -959,7 +959,7 @@ function ChatBrowser({
         role={unknown || (failed && !pending) ? "alert" : "status"}
       >
         {unknown
-          ? "Opening ChatGPT is unconfirmed. See Diagnostics before repeating this action."
+          ? "Opening ChatGPT is unconfirmed. Review Unresolved actions before repeating this action."
           : pending
             ? "Opening ChatGPT…"
             : relevant.some(
@@ -967,19 +967,18 @@ function ChatBrowser({
                 )
               ? "Sign-in is already open in ChatGPT. Finish there, then check sign-in in Connection."
               : failed
-                ? "ChatGPT could not be opened. Check Connection or see Diagnostics for details."
+                ? "ChatGPT could not be opened. Check Connection in Setup for details."
                 : "ChatGPT page status has not been confirmed. Check Connection for details."}
       </p>
       <div className="control-row">
         <button
           onClick={() =>
-            facade.navigate({
-              area: "settings",
-              page: unknown ? "diagnostics" : "connection",
-            })
+            unknown || pending
+              ? facade.overlay("unresolved-actions")
+              : facade.navigate({ area: "setup", setupStep: "connection" })
           }
         >
-          {unknown ? "Diagnostics" : "Connection"}
+          {unknown || pending ? "Unresolved actions" : "Connection"}
         </button>
       </div>
     </div>
@@ -1105,7 +1104,8 @@ export function Shell() {
   }, []);
   const pageList = pageListMode(destination, state.sidebar);
   const sideVisible =
-    pageList === "overlay" || (pageList === "full" && !compactWindow);
+    destination.area !== "setup" &&
+    (pageList === "overlay" || (pageList === "full" && !compactWindow));
   const sidebarOverlay = sideVisible && pageList === "overlay";
   useLayoutEffect(() => {
     const previous = previousSidebar.current;
@@ -1127,23 +1127,8 @@ export function Shell() {
     }
   }, [sidebarOverlay, destination, state.overlay]);
   const settings = destination.area === "settings";
-  const settingsAttention = useSettingsAttention(facade, state);
-  const configuration =
-    state.configuration?.status === "ready"
-      ? state.configuration.settings
-      : null;
-  const unresolved =
-    settingsAttention ||
-    Boolean(
-      state.workspaceEditDelivery || configuration?.computer.pendingEdit,
-    ) ||
-    Object.values(state.intents).some(
-      (intent) => intent.state === "pending" || intent.state === "unknown",
-    ) ||
-    Object.values(configuration?.setup ?? {}).some(
-      (step) => "outcomeUnknown" in step && step.outcomeUnknown,
-    ) ||
-    configuration?.connectors.secureMcp.runtime?.state === "outcome_unknown";
+  const retained = useSetupIntents(facade, state);
+  const unresolved = unresolvedActions(state, retained).length > 0;
   const updateRailLabel =
     state.update.phase === "available"
       ? state.update.deferred
@@ -1185,7 +1170,7 @@ export function Shell() {
       data-sidebar-resizing={state.sidebarResizing}
       style={
         {
-          "--rail-width": `${shellRailWidth(window.innerWidth)}px`,
+          "--rail-width": `${destination.area === "setup" ? 0 : shellRailWidth(window.innerWidth)}px`,
           "--toolbar-height": `${shellGeometry.windowBar}px`,
           "--page-list-width": `${state.sidebarWidth}px`,
           "--side-width": `${sideVisible && !sidebarOverlay ? state.sidebarWidth : 0}px`,
@@ -1209,15 +1194,17 @@ export function Shell() {
           >
             <Icon name="forward" />
           </button>
-          <button
-            ref={sidebarTrigger}
-            title="Show or hide page list"
-            aria-label="Toggle sidebar"
-            aria-expanded={sideVisible}
-            onClick={() => facade.toggleSidebar(compactWindow)}
-          >
-            <Icon name="sidebar" />
-          </button>
+          {destination.area !== "setup" && (
+            <button
+              ref={sidebarTrigger}
+              title="Show or hide page list"
+              aria-label="Toggle sidebar"
+              aria-expanded={sideVisible}
+              onClick={() => facade.toggleSidebar(compactWindow)}
+            >
+              <Icon name="sidebar" />
+            </button>
+          )}
         </div>
         <div className="toolbar-title">
           {(settings ||
@@ -1273,86 +1260,85 @@ export function Shell() {
           </button>
         )}
       </header>
-      <nav className="rail" aria-label="Sections">
-        {(["home", "chatgpt", "activity"] as const).map((area) => (
-          <button
-            key={area}
-            aria-label={
-              area === "chatgpt"
-                ? "ChatGPT"
-                : area === "home"
-                  ? "Home"
-                  : "Activity"
-            }
-            title={
-              area === "chatgpt"
-                ? "ChatGPT"
-                : area === "home"
-                  ? "Home"
-                  : "Activity"
-            }
-            aria-current={destination.area === area ? "page" : undefined}
-            onClick={() => facade.navigate({ area })}
-          >
-            <Icon name={area} />
-          </button>
-        ))}
-        <button
-          aria-label="Setup"
-          title="Setup"
-          aria-current={destination.area === "setup" ? "page" : undefined}
-          onClick={() => facade.navigate({ area: "setup" })}
-        >
-          <Icon name="setup" />
-        </button>
-        {unresolved && (
-          <button
-            aria-label="Review unresolved actions"
-            title="Actions need observation or result delivery"
-            className="attention-action"
-            onClick={() =>
-              facade.navigate({ area: "settings", page: "diagnostics" })
-            }
-          >
-            <Icon name="attention" />
-          </button>
-        )}
-        <div className="rail-footer">
-          {updateRailLabel && (
+      {destination.area !== "setup" && (
+        <nav className="rail" aria-label="Sections">
+          {(["home", "chatgpt", "activity"] as const).map((area) => (
             <button
-              className="update-action"
-              aria-label={updateRailLabel}
-              title={updateRailLabel}
-              onClick={() => facade.overlay("update")}
+              key={area}
+              aria-label={
+                area === "chatgpt"
+                  ? "ChatGPT"
+                  : area === "home"
+                    ? "Home"
+                    : "Activity"
+              }
+              title={
+                area === "chatgpt"
+                  ? "ChatGPT"
+                  : area === "home"
+                    ? "Home"
+                    : "Activity"
+              }
+              aria-current={destination.area === area ? "page" : undefined}
+              onClick={() => facade.navigate({ area })}
             >
-              <Icon
-                name={
-                  state.update.phase === "failed" ||
-                  state.update.phase === "recovery"
-                    ? "attention"
-                    : "download"
-                }
-              />
-              {"notice" in state.update &&
-                state.update.notice &&
-                !state.update.notice.seen && (
-                  <span className="update-dot" aria-hidden="true" />
-                )}
+              <Icon name={area} />
+            </button>
+          ))}
+          <button
+            aria-label="Setup"
+            title="Setup"
+            onClick={() => facade.navigate({ area: "setup" })}
+          >
+            <Icon name="setup" />
+          </button>
+          {unresolved && (
+            <button
+              aria-label="Review unresolved actions"
+              title="Actions need observation or result delivery"
+              className="attention-action"
+              onClick={() => facade.overlay("unresolved-actions")}
+            >
+              <Icon name="attention" />
             </button>
           )}
-          <button
-            className="rail-bottom"
-            aria-label="Settings"
-            title="Settings"
-            aria-current={settings ? "page" : undefined}
-            onClick={() =>
-              facade.navigate({ area: "settings", page: "appearance" })
-            }
-          >
-            <Icon name="settings" />
-          </button>
-        </div>
-      </nav>
+          <div className="rail-footer">
+            {updateRailLabel && (
+              <button
+                className="update-action"
+                aria-label={updateRailLabel}
+                title={updateRailLabel}
+                onClick={() => facade.overlay("update")}
+              >
+                <Icon
+                  name={
+                    state.update.phase === "failed" ||
+                    state.update.phase === "recovery"
+                      ? "attention"
+                      : "download"
+                  }
+                />
+                {"notice" in state.update &&
+                  state.update.notice &&
+                  !state.update.notice.seen && (
+                    <span className="update-dot" aria-hidden="true" />
+                  )}
+              </button>
+            )}
+            <button
+              className="rail-bottom"
+              aria-label="Settings"
+              title="Settings"
+              aria-current={settings ? "page" : undefined}
+              onClick={() =>
+                facade.navigate({ area: "settings", page: "general" })
+              }
+            >
+              <Icon name="settings" />
+            </button>
+          </div>
+        </nav>
+      )}
       {sideVisible && (
         <aside
           ref={sidebarPanel}
@@ -1365,17 +1351,12 @@ export function Shell() {
               ? "Settings"
               : destination.area === "home"
                 ? "Home"
-                : destination.area === "setup"
-                  ? "Setup"
-                  : destination.area === "chatgpt"
-                    ? "ChatGPT"
-                    : "Activity"}
+                : destination.area === "chatgpt"
+                  ? "ChatGPT"
+                  : "Activity"}
           </h2>
           {destination.area === "home" && (
             <HomeNavigation snapshot={state} facade={facade} />
-          )}
-          {destination.area === "setup" && (
-            <SetupNavigation snapshot={state} facade={facade} />
           )}
           {settings && (
             <nav aria-label="Settings navigation">
@@ -1458,10 +1439,16 @@ export function Shell() {
               </nav>
             )}
           {destination.area === "chatgpt" && (
-            <p className="description">
-              Your conversations stay in ChatGPT. Use its own New chat action to
-              start a conversation.
-            </p>
+            <nav className="sidebar-section" aria-label="Chat conversations">
+              <button onClick={() => facade.overlay("chat-conversations")}>
+                <Icon name="chatgpt" />
+                <span>Chat conversations</span>
+              </button>
+              <p className="description">
+                Start an account-confirmed conversation, review a read-only
+                workspace file, or read saved answers here.
+              </p>
+            </nav>
           )}
           {destination.area === "activity" && (
             <ActivityNavigation
@@ -1529,6 +1516,31 @@ export function Shell() {
         </PanelBoundary>
       </main>
       <UpdateNotice snapshot={state} facade={facade} />
+      {state.overlay === "chat-conversations" && (
+        <Overlay
+          title="Chat conversations"
+          onClose={() => facade.overlay("none")}
+        >
+          <PanelBoundary>
+            <ChatDirect snapshot={state} facade={facade} />
+            <ChatReadonly snapshot={state} facade={facade} />
+            <ChatHistory snapshot={state} facade={facade} />
+            <RetiredReplies snapshot={state} facade={facade} />
+          </PanelBoundary>
+        </Overlay>
+      )}
+      {state.overlay === "activity" && (
+        <Overlay title="Recorded event" onClose={() => facade.overlay("none")}>
+          <Activity
+            snapshot={state}
+            facade={facade}
+            filter={activityFilter}
+            onFilter={setActivityFilter}
+            showList={false}
+            heading={activityHeading}
+          />
+        </Overlay>
+      )}
       {state.overlay === "search" && (
         <Search snapshot={state} facade={facade} />
       )}{" "}
@@ -1538,6 +1550,14 @@ export function Shell() {
       {state.overlay === "update-recovery" && (
         <Update snapshot={state} facade={facade} recoveryMode />
       )}{" "}
+      {state.overlay === "unresolved-actions" && (
+        <Overlay
+          title="Unresolved actions"
+          onClose={() => facade.overlay("none")}
+        >
+          <Settings snapshot={state} facade={facade} unresolvedSheet />
+        </Overlay>
+      )}
       {state.overlay === "task" && (
         <Overlay title="Chat options" onClose={() => facade.overlay("none")}>
           <TaskEditor

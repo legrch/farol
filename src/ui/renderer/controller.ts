@@ -40,7 +40,10 @@ import {
 } from "../../pkg/ipc/chat-history";
 import { adoptReadConversation } from "./read-conversation-state";
 import { computerSetup } from "./computer-setup";
-import { setupPage } from "./setup-navigation";
+import {
+  validNavigation,
+  sheets,
+} from "../../../apps/desktop/renderer/navigation-destinations";
 import { isHomeOverview, pageListMode } from "./sidebar-presentation";
 import {
   ProductConfigurationSnapshotSchema,
@@ -721,7 +724,7 @@ export class WindowController implements RendererFacade {
                 : launch === "browser"
                   ? { area: "chatgpt" }
                   : launch === "computer"
-                    ? { area: "settings", page: "computer" }
+                    ? { area: "setup", setupStep: "folders" }
                     : launch === "settings"
                       ? { area: "settings", page: "general" }
                       : { area: "activity" },
@@ -1143,6 +1146,7 @@ export class WindowController implements RendererFacade {
     this.historyRevision++;
     this.patch({ chatHistoryEpoch: this.historyRevision });
   }
+  private setupCheckSequence = 0;
   private dispatch(
     key: string,
     payload: unknown,
@@ -1206,6 +1210,14 @@ export class WindowController implements RendererFacade {
         ...this.state.intents,
         [key]: { id: key, state: "pending", code: null },
       },
+      ...(key.startsWith("settings:")
+        ? {
+            setupCheckOrder: {
+              ...this.state.setupCheckOrder,
+              [key]: ++this.setupCheckSequence,
+            },
+          }
+        : {}),
     });
     void (async () => {
       let result: Intent;
@@ -1265,7 +1277,12 @@ export class WindowController implements RendererFacade {
     // including known refusals. A new label must not release that latch.
     if (command.kind === "chatgpt.present-browser")
       intention = "settings:chatgpt.present-browser:";
-    if (command.kind === "chatgpt.verify") this.invalidateSignInObservation();
+    const signInCheck =
+      command.kind === "chatgpt.verify" ? this.state.signInObservation : null;
+    if (command.kind === "chatgpt.verify") {
+      this.patch({ setupSignInCheck: null });
+      this.invalidateSignInObservation();
+    }
     return this.dispatch(
       intention,
       command,
@@ -1587,6 +1604,23 @@ export class WindowController implements RendererFacade {
             ? { connectorAttempt: outcome.result.connectorAttempt }
             : {}),
         };
+        if (
+          command.kind === "chatgpt.verify" &&
+          result.state === "applied" &&
+          result.chatGptReadiness?.state === "authenticated" &&
+          signInCheck?.state === "authenticated" &&
+          !signInCheck.pending &&
+          signInCheck.binding !== null &&
+          signInCheck.buildId === this.state.buildId
+        ) {
+          this.patch({
+            setupSignInCheck: {
+              buildId: signInCheck.buildId,
+              binding: signInCheck.binding,
+            },
+          });
+        }
+        if (command.kind === "chatgpt.verify") this.observeSignIn();
         const value = outcome.result.ok ? outcome.result.evidence : undefined;
         if (
           command.kind === "computer.prepare-workspace-edit" &&
@@ -2059,6 +2093,9 @@ export class WindowController implements RendererFacade {
   }
   navigate(destination: Partial<Destination>): void {
     if (this.disposed || this.state.update.phase === "applying") return;
+    if (!validNavigation(destination)) return;
+    if (destination.area === undefined && destination.page !== undefined)
+      destination = { ...destination, area: "settings" };
     if (destination.taskId !== undefined) this.taskSelectionRevision++;
     this.presentationRevision++;
     const wasSignIn = this.isSignInEntry();
@@ -2079,12 +2116,6 @@ export class WindowController implements RendererFacade {
       : destination.area === undefined && destination.page === undefined
         ? this.state.destination.workspaceId
         : undefined;
-    if (
-      next.area === "settings" &&
-      next.page === "folders" &&
-      workspaceId !== undefined
-    )
-      Object.assign(next, { workspaceId });
     if (homeView) Object.assign(next, { homeView });
     const homeSelection = Object.hasOwn(destination, "homeSelection")
       ? destination.homeSelection
@@ -2100,8 +2131,14 @@ export class WindowController implements RendererFacade {
           ? this.state.destination.setupStep
           : undefined) ??
         "overview";
-      Object.assign(next, { setupStep, page: setupPage(setupStep) });
+      Object.assign(next, { setupStep, page: "general" });
     }
+    if (
+      next.area === "setup" &&
+      next.setupStep === "folders" &&
+      workspaceId !== undefined
+    )
+      Object.assign(next, { workspaceId });
     if (JSON.stringify(next) === JSON.stringify(this.state.destination)) {
       if (this.state.overlay === "search" || this.state.sidebar === "overlay") {
         this.patch({
@@ -2300,6 +2337,7 @@ export class WindowController implements RendererFacade {
     this.presentation();
   }
   overlay(kind: WindowSnapshot["overlay"]): void {
+    if (kind !== "none" && !sheets.includes(kind)) return;
     // Applying admission owns presentation until a newer update result settles.
     // Host layout rejects these changes too; keep both owners on the same view.
     if (this.disposed || this.state.update.phase === "applying") return;
@@ -2417,8 +2455,13 @@ export class WindowController implements RendererFacade {
           ? "chatgpt"
           : action.section === "activity"
             ? "activity"
-            : "settings",
-      page: action.section === "computer" ? "computer" : "general",
+            : action.section === "computer"
+              ? "setup"
+              : "settings",
+      ...(action.section === "computer"
+        ? { setupStep: "folders" as const }
+        : {}),
+      page: "general",
       taskId: action.taskId,
     });
     // The same destination still needs one host acknowledgement after closing
@@ -2481,7 +2524,7 @@ export class WindowController implements RendererFacade {
         action.source === "settings-command" ||
         action.source === "sign-in-return-command"
       )
-        this.navigate({ area: "settings", page: "connection" });
+        this.navigate({ area: "setup", setupStep: "connection" });
       void this.refresh();
     }
   }

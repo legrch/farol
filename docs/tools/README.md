@@ -16,7 +16,13 @@ Strict prose/command lint remains scoped to README, current Start / Guides / Dev
 python3 docs/tools/check.py --help
 ```
 
-The synthetic unittest fixtures use disposable local Git repositories to prove placement refusal, exception/index/staleness checks, link/anchor failures, archive-index coverage and ignored dependency exclusion. They execute no Farol, network, provider or native capability. `npm run ci` includes `docs:check`; Python is a developer check dependency, with no installed application dependency added.
+Current UI instructions in root README, the documentation index, all nested Start and Guides pages, and [Setup semantics](../setup-connection.md) also reject retired navigation and action labels. The single [retired-label policy](../../apps/desktop/renderer/navigation-guide-policy.json) lives beside the renderer's closed destination set. It declares the reader scope and explicitly excludes history, frozen archives, ADRs and past release notes. Ordinary lowercase “folders” and the current **Connect this Mac** step remain valid. Markdown emphasis and wrapped labels cannot bypass the check. Run this invariant alone with:
+
+```sh
+python3 -B docs/tools/check.py --ui-only
+```
+
+The synthetic unittest fixtures use disposable local Git repositories to prove placement refusal, exception/index/staleness checks, link/anchor failures, archive-index coverage, ignored dependency exclusion, every retired label across reader scopes, formatted/wrapped labels, current UI labels and historical exclusions. They execute no Farol, network, provider or native capability. `npm run ci` includes `docs:check`; Python is a developer check dependency, with no installed application dependency added.
 
 For formatting, use the repository's installed pinned Prettier on the task-owned Markdown files. Preserve prose paragraphs as one physical line; do not reformat historical snapshots merely to change wrapping. Run `git diff --check` and inspect the owned diff before committing. These checks do not establish current UI behavior, package acceptance or an installed/live user journey.
 

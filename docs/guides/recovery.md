@@ -6,16 +6,16 @@ Reopen **Setup** and review saved state before starting again. Returning to a se
 
 | Observed state                                | Next action                                                                                                     |
 | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| A field was edited but never submitted        | **Cancel** the local draft or finish it intentionally.                                                          |
+| A field was edited but never submitted        | Discard the unsubmitted field edit or finish it intentionally.                                                  |
 | Credentials are confirmed saved               | Keep the saved key; review connection status.                                                                   |
-| Workspace and attachment checks are current   | **Continue** or **Back to overview** without rechecking.                                                        |
-| An action is pending or its result is unknown | Observe the original action in Diagnostics before another change.                                               |
+| Workspace and attachment checks are current   | **Continue** without rechecking, or **Start using Farol** when all steps pass.                                  |
+| An action is pending or its result is unknown | Observe the original action in **Unresolved actions** before another change.                                    |
 | An action is explicitly refused               | Read its classified reason and saved state; refusal alone does not prove that every earlier step had no effect. |
 | Configuration cannot be read                  | Preserve it and request scoped maintenance help.                                                                |
 
 ## Observe an uncertain action
 
-Use **Connection help → Connection diagnostics** or **Workspace diagnostics**. Inspect **Actions needing observation** and **Action details**. **Refresh status** reads current state; it does not replay a Send, edit, connection start or install.
+If Setup is open, use **Find a page → Home** to reach the sidebar. Choose **Review unresolved actions** in the sidebar to open **Unresolved actions**. The sidebar control is shown only while something is unresolved. Inspect the listed original action, its operation identity, state and classified code. **Refresh status** reads current state; it does not replay a Send, edit, connection start or install. For an existing workspace edit, use **Observe existing edit** when offered; review its result before **Record result delivery**. Only existing workspace edits support operation readback here; refreshing is not a general operation query.
 
 Preserve the original operation identity, status and error. For an unknown edit, the file may already contain the change. For an unknown verification Send, the message may already have been sent. Cancelling a draft or reopening the window does not resolve either uncertainty. Do not create a new operation ID or substitute an executor to repeat the work.
 
@@ -33,6 +33,6 @@ A fresh developer profile is a [developer test lane](../development/setup.md), n
 
 ## Interrupted updates or partial installation
 
-Use **Settings → Diagnostics → Update recovery** for an existing recorded update. A partial owner promotion without its receipt must be preserved and reconciled; the absent receipt does not authorize deletion or a second installation. [Install readiness](../reference/install-readiness.md) describes the remaining first-recipient recovery gates.
+Use **Settings → General → Update recovery…** for an existing recorded update. A partial owner promotion without its receipt must be preserved and reconciled; the absent receipt does not authorize deletion or a second installation. [Install readiness](../reference/install-readiness.md) describes the remaining first-recipient recovery gates.
 
 [User guides](README.md) · [Troubleshooting](troubleshooting.md)

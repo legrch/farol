@@ -5,7 +5,7 @@ Use [Start](../start/README.md) for the first connection and sample folder. Thes
 | Goal                                             | Guide                                           |
 | ------------------------------------------------ | ----------------------------------------------- |
 | Attach the tunnel in ChatGPT                     | [ChatGPT app connection](chatgpt-connection.md) |
-| Choose, narrow or revoke folder access           | [Folder access](folder-access.md)               |
+| Choose, narrow or revoke folder access           | [Workspace access](folder-access.md)            |
 | Understand file changes and command availability | [File and Shell operations](file-and-shell.md)  |
 | Update an established installation               | [Updating Farol](updates.md)                    |
 | Diagnose a failed connection                     | [Troubleshooting](troubleshooting.md)           |
