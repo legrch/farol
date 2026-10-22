@@ -125,6 +125,8 @@ describe("content-free support export", () => {
         ],
         corruptLines: 1,
         writeFailures: 0,
+        droppedEntries: 3,
+        unrecordedUncertainEntries: 1,
       },
       generatedAt: "2026-09-16T11:00:00.000Z",
       build: {
@@ -164,6 +166,8 @@ describe("content-free support export", () => {
       operations: {
         entries: [{ kind: "connector.check-health", outcome: "refused" }],
         corruptLines: 1,
+        droppedEntries: 3,
+        unrecordedUncertainEntries: 1,
       },
       schema: 2,
       kind: "farol_support",

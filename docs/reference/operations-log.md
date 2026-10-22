@@ -9,11 +9,21 @@ identity isolation.
 
 Each writer appends JSON lines to its own timestamp/UUID segment, rotating at
 64 KiB. The directory is mode 0700; regular single-link files are mode 0600 and
-opened without following symlinks. Appends are synchronized before returning.
+opened without following symlinks. Recording is observability: `begin`, its
+completion callback and `record` validate bounded metadata, enqueue, and return
+without filesystem work. One asynchronous writer per store processes FIFO batches
+of at most 64 observations, synchronizing once per batch/rotated segment. Directory
+preparation, label replacement, tail repair, retention and diagnostics all use
+asynchronous filesystem APIs on that writer.
 Retention deletes complete oldest segments after 30 days, 8 MiB or 20,000 raw
 records. Whole-segment deletion can retain fewer than the maximum. Readers skip
 and count invalid lines, unsafe files and oversized segments. Logging failures
-are counted and shown without changing the original operation's result.
+are counted and shown once as aggregate diagnostics in Activity and support export,
+without changing the original operation's result. No raw filesystem error text is
+recorded. Per-writer private diagnostic sidecars expose MCP-process counts after
+a successful write, survive restart, and have a separate 64 KiB/30-day bound. If
+the disk cannot store even diagnostics, counts remain in that process's memory;
+no logger can promise durable evidence on an unavailable disk.
 
 The closed schema stores time, source, operation kind, workspace label, relative
 path, executable name, outcome, stable code and duration. The optional lifecycle
@@ -22,8 +32,8 @@ label index is atomically replaced in the same private directory; it grants no
 access. Commands exclude arguments; search patterns, file contents, prompts,
 replies, credentials and raw exception text are never projected.
 
-An admitted operation appends a start observation before execution. An unmatched
-start remains pending across restart. Its separately appended observation supplies
+An admitted operation enqueues a start observation before execution. A flushed
+unmatched start remains pending across restart. Its separately appended observation supplies
 the actual result; the raw start line is never edited. Activity folds only such
 matched start markers. Explicit unknown and pending results remain immutable,
 including after a later independent read-back. A helper ACK is pending, not proof
@@ -56,6 +66,46 @@ adds recording at their desktop adapters; it introduces no neighbour-internal
 reads and changes no Go source or protocol bindings. The retired legacy MCP
 fixture route is not an active Go-backed recording boundary.
 
+The queue holds at most 1,024 waiting observations plus one in-flight batch of 64. Overflow evicts the oldest settled observation. Pending/unknown observations
+already queued are protected; a queued start becomes evictable only when its
+known terminal observation arrives. Every eviction increments the visible
+"N entries were not recorded" counter. A completion whose start was evicted still
+contains its lifecycle ID, target, outcome, code and duration. If every slot is
+protected, new observations are rejected from the log, with explicit separate
+counts for unrecorded pending/unknown observations; operations continue. This
+bounds memory even under unlimited uncertain outcomes, without silent loss.
+Counters describe observations, so a begin/completion pair can count twice.
+
+Writes and sync failures never escape into operations. An uncertain/partially
+written batch is not replayed; its observations are conservatively counted as
+unconfirmed recording losses. Diagnostic persistence is attempted without a busy
+retry loop. Later enqueues or a flush may publish updated counters, but never
+replay lost observations. Retention failures count as log failures without
+misclassifying an already flushed batch as lost.
+
+Desktop normal Quit flushes after child drains, within the existing overall Quit
+budget; the Go MCP adapter flushes after its handler drain on either exit path.
+Each store's shutdown flush has a 250 ms deadline and reports false if stalled or
+if a write fails. Reaching that deadline does not cancel or replay a filesystem
+operation. A crash or forced exit can lose the newest unflushed tail (the queued
+observations and in-flight batch); only successfully synchronized batches are
+durable. Asynchronous logging cannot guarantee a start survives a crash before
+its first flush. Previously flushed observations remain immutable.
+
+Snapshots use asynchronous reads, never prune, and never wait for the writer. A
+100 ms read deadline returns the last snapshot with an unreadable-log diagnostic,
+so a stalled profile disk cannot hang Activity or the support operation. Fresh
+process-local loss counters are still included. Snapshot reads are coalesced to
+avoid accumulating stalled reads. The support report is a point-in-time view,
+not a flush acknowledgement.
+
+The branch's operation-write audit covers `OperationsStore`, the desktop main
+process recording/configuration/quit paths, the Go MCP adapter and stdio exit,
+Go Browser consult callbacks, model/SSE and updater wrappers, preload/IPC, and
+support export. All operation-log writes go through this appender; support-file
+export already uses asynchronous FileHandle writes. No Go source or generated
+protocol changes are needed.
+
 Activity reads the same durable snapshot as Home's Recent activity. It offers
 source/outcome filters, search and expandable details. Unknown/pending rows link
 to Unresolved actions, without granting replay. Support export includes the same
@@ -66,7 +116,10 @@ bound, with a separate 12 MiB bound for a report containing a validated log.
 
 `tests/unit/operations-log.test.ts` exercises use-case metadata/source mapping,
 classified outcomes, restart, cap, corruption, unsafe files, privacy, unmatched
-starts, SSE terminals and every updater port. The MCP table in
+starts, SSE terminals and every updater port. Injected filesystem fixtures also
+exercise stalled write/sync calls, nonblocking begin/completion, bounded shutdown
+and snapshot deadlines, overflow/loss counters, protected-queue exhaustion,
+orphan completions, error isolation, cross-writer diagnostics and FIFO rotation. The MCP table in
 `tests/unit/go-computer-mcp.test.ts` invokes each registered tool's actual adapter
 callback with a refused contract fixture and asserts one content-free observation.
 These are policy/adapter fixtures, not live providers or native effects.

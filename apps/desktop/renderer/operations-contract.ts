@@ -66,10 +66,15 @@ export type OperationMetadata = Pick<
   OperationEntry,
   "source" | "kind" | "target"
 >;
+export const OperationsDiagnosticsSchema = z.strictObject({
+  writeFailures: z.number().int().nonnegative(),
+  droppedEntries: z.number().int().nonnegative().default(0),
+  unrecordedUncertainEntries: z.number().int().nonnegative().default(0),
+});
 export const OperationsSnapshotSchema = z.strictObject({
+  ...OperationsDiagnosticsSchema.shape,
   entries: z.array(OperationEntrySchema).max(20000),
   corruptLines: z.number().int().nonnegative(),
-  writeFailures: z.number().int().nonnegative(),
 });
 export type OperationsSnapshot = z.infer<typeof OperationsSnapshotSchema>;
 /** Injected at the adapter which owns the operation. Never accepts payloads. */

@@ -8167,7 +8167,7 @@ async function configureAdmittedProduct(
         const receipt = await writeSupportExport(
           target,
           createSupportExport({
-            operations: operationsStore().snapshot(),
+            operations: await operationsStore().snapshot(),
             generatedAt: new Date().toISOString(),
             build: buildIdentity,
             configuration: configuration.snapshot(),
@@ -12423,6 +12423,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     // not be written, leaves the marker in place, and the next promotion
     // reads that as a stop that never confirmed, never as a clean quit.
     record: async (receipt) => {
+      await operationsLog?.shutdown(250);
       await recordQuitReceipt(receipt);
       if (receipt.drained) {
         await removeRunMarker(

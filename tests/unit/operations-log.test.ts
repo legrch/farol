@@ -15,7 +15,9 @@ import { recordedModelTurn } from "../../apps/desktop/operations/model-turn";
 import type { ProductConfigurationCommand } from "../../src/pkg/product-settings/contract";
 import type { FarolModelSseEvent } from "../../src/apps/desktop/farol-model-endpoint";
 const roots: string[] = [];
-afterEach(() => {
+const stores: OperationsStore[] = [];
+afterEach(async () => {
+  await Promise.all(stores.splice(0).map((store) => store.shutdown(5000)));
   roots
     .splice(0)
     .forEach((root) => fs.rmSync(root, { recursive: true, force: true }));
@@ -26,10 +28,12 @@ function setup(
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "farol-operations-"));
   roots.push(directory);
   let now = 1792670400000;
+  const store = new OperationsStore(directory, () => now, limits);
+  stores.push(store);
   return {
     directory,
     now: (n: number) => (now += n),
-    store: new OperationsStore(directory, () => now, limits),
+    store,
   };
 }
 const table = [
@@ -73,7 +77,8 @@ it.each(table)(
     }));
     await observeOperation(store, metadata, action);
     expect(action).toHaveBeenCalledOnce();
-    expect(store.snapshot().entries).toMatchObject([
+    await store.flush(5000);
+    expect((await store.snapshot(5000)).entries).toMatchObject([
       { kind, source, outcome: "refused", code: "FIXTURE_REFUSED" },
     ]);
   },
@@ -89,7 +94,7 @@ it.each([
 ] as const)("preserves classified outcome %#", (value, outcome) =>
   expect(operationResult(value).outcome).toBe(outcome),
 );
-it("survives restart and skips/counts corrupt and content-bearing lines", () => {
+it("survives restart and skips/counts corrupt and content-bearing lines", async () => {
   const { store, directory } = setup();
   store.record(
     {
@@ -101,6 +106,7 @@ it("survives restart and skips/counts corrupt and content-bearing lines", () => 
     "UNCONFIRMED",
     12,
   );
+  await store.flush(5000);
   const file = path.join(
     directory,
     fs.readdirSync(directory).find((f) => f.endsWith(".jsonl"))!,
@@ -109,21 +115,23 @@ it("survives restart and skips/counts corrupt and content-bearing lines", () => 
     file,
     "corrupt\n" +
       JSON.stringify({
-        ...store.snapshot().entries[0],
+        ...(await store.snapshot(5000)).entries[0],
         prompt: "PRIVATE-CANARY",
       }) +
       "\n",
   );
   const restarted = new OperationsStore(directory, () => 1792670400000);
-  expect(restarted.snapshot()).toMatchObject({
+  expect(await restarted.snapshot(5000)).toMatchObject({
     entries: [{ outcome: "unknown", durationMs: 12 }],
     corruptLines: 2,
   });
-  expect(JSON.stringify(restarted.snapshot())).not.toContain("PRIVATE-CANARY");
+  expect(JSON.stringify(await restarted.snapshot(5000))).not.toContain(
+    "PRIVATE-CANARY",
+  );
   expect(fs.statSync(file).mode & 0o777).toBe(0o600);
   expect(fs.statSync(directory).mode & 0o777).toBe(0o700);
 });
-it("bounds disk bytes, age and entry count across independent writer lifetimes", () => {
+it("bounds disk bytes, age and entry count across independent writer lifetimes", async () => {
   const f = setup({ days: 30, bytes: 1500, segmentBytes: 300, entries: 4 });
   for (let i = 0; i < 20; i++) {
     f.now(1);
@@ -134,8 +142,9 @@ it("bounds disk bytes, age and entry count across independent writer lifetimes",
       1,
     );
   }
-  expect(f.store.snapshot().entries.length).toBeGreaterThan(0);
-  expect(f.store.snapshot().entries.length).toBeLessThanOrEqual(4);
+  await f.store.flush(5000);
+  expect((await f.store.snapshot(5000)).entries.length).toBeGreaterThan(0);
+  expect((await f.store.snapshot(5000)).entries.length).toBeLessThanOrEqual(4);
   expect(
     fs
       .readdirSync(f.directory)
@@ -145,7 +154,8 @@ it("bounds disk bytes, age and entry count across independent writer lifetimes",
       ),
   ).toBeLessThanOrEqual(1500);
   f.now(31 * 86400000);
-  expect(f.store.snapshot().entries).toEqual([]);
+  await f.store.flush(5000);
+  expect((await f.store.snapshot(5000)).entries).toEqual([]);
 });
 it("never overwrites unknown/pending observations and preserves the original exception", async () => {
   const { store } = setup();
@@ -171,15 +181,16 @@ it("never overwrites unknown/pending observations and preserves the original exc
     null,
     8,
   );
+  await store.flush(5000);
   expect(
-    store
-      .snapshot()
-      .entries.map((e) => e.outcome)
-      .sort(),
+    (await store.snapshot(5000)).entries.map((e) => e.outcome).sort(),
   ).toEqual(["done", "pending", "unknown"]);
-  expect(JSON.stringify(store.snapshot())).not.toContain("PRIVATE-CANARY");
+  await store.flush(5000);
+  expect(JSON.stringify(await store.snapshot(5000))).not.toContain(
+    "PRIVATE-CANARY",
+  );
 });
-it("refuses unsafe files and extraneous metadata without following symlinks", () => {
+it("refuses unsafe files and extraneous metadata without following symlinks", async () => {
   const { store, directory } = setup();
   store.record(
     {
@@ -192,8 +203,8 @@ it("refuses unsafe files and extraneous metadata without following symlinks", ()
     null,
     1,
   );
-  expect(store.snapshot().entries).toEqual([]);
-  expect(store.snapshot().writeFailures).toBe(1);
+  expect((await store.snapshot(5000)).entries).toEqual([]);
+  expect((await store.snapshot(5000)).writeFailures).toBe(1);
   const target = path.join(directory, "outside");
   fs.writeFileSync(target, "secret");
   fs.symlinkSync(
@@ -203,10 +214,10 @@ it("refuses unsafe files and extraneous metadata without following symlinks", ()
       "1792670400000-00000000-0000-4000-8000-000000000000.jsonl",
     ),
   );
-  expect(store.snapshot().corruptLines).toBe(1);
+  expect((await store.snapshot(5000)).corruptLines).toBe(1);
   expect(fs.readFileSync(target, "utf8")).toBe("secret");
 });
-it("uses names-only workspace labels and excludes paths, arguments and payloads", () => {
+it("uses names-only workspace labels and excludes paths, arguments and payloads", async () => {
   const { store } = setup();
   store.setWorkspaceLabels([{ workspaceId: "w", label: "Docs" }]);
   store.record(
@@ -219,11 +230,12 @@ it("uses names-only workspace labels and excludes paths, arguments and payloads"
     null,
     1,
   );
-  expect(store.snapshot().entries[0]?.target).toEqual({
+  await store.flush(5000);
+  expect((await store.snapshot(5000)).entries[0]?.target).toEqual({
     workspace: "Docs",
     relativePath: "README.md",
   });
-  expect(Object.keys(store.snapshot().entries[0]!).sort()).toEqual([
+  expect(Object.keys((await store.snapshot(5000)).entries[0]!).sort()).toEqual([
     "at",
     "code",
     "durationMs",
@@ -255,7 +267,8 @@ it.each([
   for await (const _frame of result.stream) {
     /* Consume the original stream once. */
   }
-  expect(store.snapshot().entries).toMatchObject([
+  await store.flush(5000);
+  expect((await store.snapshot(5000)).entries).toMatchObject([
     {
       source: "Codex",
       kind: "model.responses.turn",
@@ -267,7 +280,8 @@ it.each([
             : "unknown",
     },
   ]);
-  expect(JSON.stringify(store.snapshot())).not.toMatch(/PRIVATE/);
+  await store.flush(5000);
+  expect(JSON.stringify(await store.snapshot(5000))).not.toMatch(/PRIVATE/);
 });
 
 it("retains an unmatched start across process replacement and appends its observation without editing it", async () => {
@@ -277,10 +291,15 @@ it("retains an unmatched start across process replacement and appends its observ
     kind: "workspace.write",
     target: { relativePath: "x" },
   });
-  const before = new OperationsStore(directory, () => 1792670400000).snapshot();
+  await store.flush(5000);
+  const before = await new OperationsStore(
+    directory,
+    () => 1792670400000,
+  ).snapshot();
   expect(before.entries).toMatchObject([
     { outcome: "pending", lifecycle: { phase: "started" } },
   ]);
+  await store.flush(5000);
   const file = path.join(
     directory,
     fs.readdirSync(directory).find((f) => f.endsWith(".jsonl"))!,
@@ -288,11 +307,12 @@ it("retains an unmatched start across process replacement and appends its observ
   const original = fs.readFileSync(file, "utf8");
   finish("unknown", "WRITE_UNCONFIRMED", 20);
   expect(fs.readFileSync(file, "utf8").startsWith(original)).toBe(true);
-  expect(store.snapshot().entries).toMatchObject([
+  await store.flush(5000);
+  expect((await store.snapshot(5000)).entries).toMatchObject([
     { outcome: "unknown", lifecycle: { phase: "observed" } },
   ]);
   finish("done", null, 30);
-  expect(store.snapshot().entries[0]?.outcome).toBe("unknown");
+  expect((await store.snapshot(5000)).entries[0]?.outcome).toBe("unknown");
 });
 
 it.each([
@@ -331,7 +351,8 @@ it.each([
   else if (kind === "recovery-check") await ports.recover();
   else await ports.restore(kind as "recover" | "rollback");
   expect(effect).toHaveBeenCalledOnce();
-  expect(store.snapshot().entries).toMatchObject([
+  await store.flush(5000);
+  expect((await store.snapshot(5000)).entries).toMatchObject([
     {
       source: "Updater",
       kind: `update.${kind}`,
@@ -346,7 +367,7 @@ it("keeps an explicit refusal classification even when its code ends in FAILED",
     operationResult({ status: "refused", code: "FIXTURE_FAILED" }),
   ).toEqual({ outcome: "refused", code: "FIXTURE_FAILED" });
 });
-it("separates a damaged trailing line before appending the next valid observation", () => {
+it("separates a damaged trailing line before appending the next valid observation", async () => {
   const { store, directory } = setup({
     days: 30,
     bytes: 8192,
@@ -354,19 +375,18 @@ it("separates a damaged trailing line before appending the next valid observatio
     entries: 100,
   });
   store.record({ source: "You", kind: "first", target: {} }, "done", null, 1);
+  await store.flush(5000);
   const file = path.join(
     directory,
     fs.readdirSync(directory).find((f) => f.endsWith(".jsonl"))!,
   );
   fs.appendFileSync(file, "{broken tail");
   store.record({ source: "You", kind: "next", target: {} }, "done", null, 2);
+  await store.flush(5000);
   expect(
-    store
-      .snapshot()
-      .entries.map((e) => e.kind)
-      .sort(),
+    (await store.snapshot(5000)).entries.map((e) => e.kind).sort(),
   ).toEqual(["first", "next"]);
-  expect(store.snapshot().corruptLines).toBe(1);
+  expect((await store.snapshot(5000)).corruptLines).toBe(1);
 });
 
 it.each([
@@ -387,10 +407,12 @@ it.each([
       ],
     }));
     await handler({ body: "PRIVATE-PROMPT", headers: {} });
-    expect(store.snapshot().entries).toMatchObject([
+    await store.flush(5000);
+    expect((await store.snapshot(5000)).entries).toMatchObject([
       { code, outcome: code === "PROVIDER_FAILED" ? "failed" : "unknown" },
     ]);
-    expect(JSON.stringify(store.snapshot())).not.toMatch(/PRIVATE/);
+    await store.flush(5000);
+    expect(JSON.stringify(await store.snapshot(5000))).not.toMatch(/PRIVATE/);
   },
 );
 
@@ -422,3 +444,277 @@ it("extracts target-only metadata from a sealed workspace receipt", () => {
     ).target,
   ).toEqual({ command: "git", relativePath: "." });
 });
+
+const metadata = {
+  source: "You",
+  kind: "fixture.operation",
+  target: {},
+} as const;
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+function injectedStore(io: typeof fs.promises, queueLimit = 4) {
+  const { directory } = setup();
+  const store = new OperationsStore(
+    directory,
+    () => 1792670400000,
+    { days: 30, bytes: 8192, segmentBytes: 4096, entries: 100 },
+    io,
+    queueLimit,
+  );
+  stores.push(store);
+  return { store, directory };
+}
+it("returns begin/completion immediately while async durability is stalled and bounds shutdown", async () => {
+  const entered = deferred(),
+    release = deferred();
+  let syncs = 0;
+  const io = {
+    ...fs.promises,
+    open: async (...args: Parameters<typeof fs.promises.open>) => {
+      const handle = await fs.promises.open(...args);
+      if (String(args[0]).endsWith(".jsonl")) {
+        const sync = handle.sync.bind(handle);
+        handle.sync = async () => {
+          syncs++;
+          entered.resolve();
+          await release.promise;
+          await sync();
+        };
+      }
+      return handle;
+    },
+  };
+  const { store, directory } = injectedStore(io);
+  const finish = store.begin(metadata);
+  finish("done", null, 1);
+  await entered.promise;
+  try {
+    const start = performance.now();
+    const complete = store.begin({ ...metadata, kind: "fixture.second" });
+    complete("unknown", "UNCONFIRMED", 2);
+    expect(performance.now() - start).toBeLessThan(100);
+    const shutdownAt = performance.now();
+    expect(await store.shutdown(20)).toBe(false);
+    expect(performance.now() - shutdownAt).toBeLessThan(500);
+  } finally {
+    release.resolve();
+  }
+  expect(await store.flush(5000)).toBe(true);
+  expect(syncs).toBe(2); // One sync per batch, not per begin/completion.
+  const rows = fs
+    .readdirSync(directory)
+    .filter((n) => n.endsWith(".jsonl"))
+    .flatMap((n) =>
+      fs
+        .readFileSync(path.join(directory, n), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    );
+  expect(rows.map((e) => e.lifecycle.phase)).toEqual([
+    "started",
+    "observed",
+    "started",
+    "observed",
+  ]);
+  expect(rows[0].lifecycle.id).toBe(rows[1].lifecycle.id);
+  expect(rows[2].lifecycle.id).toBe(rows[3].lifecycle.id);
+});
+it("does no filesystem work on begin/completion, including workspace-label updates", async () => {
+  const release = deferred();
+  const mkdir = vi.fn(async (...args: Parameters<typeof fs.promises.mkdir>) => {
+    await release.promise;
+    return fs.promises.mkdir(...args);
+  }) as typeof fs.promises.mkdir;
+  const { store } = injectedStore({ ...fs.promises, mkdir });
+  try {
+    const start = performance.now();
+    store.setWorkspaceLabels([{ workspaceId: "w", label: "Docs" }]);
+    const complete = store.begin(metadata);
+    complete("done", null, 1);
+    expect(performance.now() - start).toBeLessThan(100);
+    expect(mkdir).not.toHaveBeenCalled();
+    expect(await store.flush(10)).toBe(false);
+  } finally {
+    release.resolve();
+  }
+  expect(await store.flush(5000)).toBe(true);
+});
+it("evicts the oldest settled rows, preserves unknown/pending and reports overflow once across restart", async () => {
+  const { store, directory } = injectedStore(fs.promises);
+  for (const [kind, outcome] of [
+    ["old", "done"],
+    ["unknown", "unknown"],
+    ["pending", "pending"],
+    ["new", "done"],
+    ["newest", "refused"],
+  ] as const)
+    store.record({ ...metadata, kind }, outcome, null, 1);
+  expect(await store.flush(5000)).toBe(true);
+  expect((await store.snapshot(5000)).entries.map((e) => e.kind)).toEqual([
+    "unknown",
+    "pending",
+    "new",
+    "newest",
+  ]);
+  const restarted = new OperationsStore(directory, () => 1792670400000);
+  expect(await restarted.snapshot(5000)).toMatchObject({
+    droppedEntries: 1,
+    unrecordedUncertainEntries: 0,
+  });
+  expect(await restarted.snapshot(5000)).toMatchObject({ droppedEntries: 1 });
+});
+it("reports protected-queue exhaustion explicitly without evicting queued uncertain outcomes", async () => {
+  const { store } = injectedStore(fs.promises, 2);
+  store.record({ ...metadata, kind: "pending" }, "pending", null, 1);
+  store.record({ ...metadata, kind: "unknown" }, "unknown", null, 1);
+  store.begin({ ...metadata, kind: "overflow" })("unknown", "UNCONFIRMED", 1);
+  expect(await store.flush(5000)).toBe(true);
+  expect(await store.snapshot(5000)).toMatchObject({
+    entries: [
+      { kind: "pending", outcome: "pending" },
+      { kind: "unknown", outcome: "unknown" },
+    ],
+    droppedEntries: 2,
+    unrecordedUncertainEntries: 2,
+  });
+});
+it("records a completion with full known metadata when its settled begin was evicted", async () => {
+  const { store, directory } = injectedStore(fs.promises, 1);
+  const finish = store.begin({ ...metadata, target: { relativePath: "x" } });
+  finish("done", "SAVED", 17);
+  finish("failed", "LATE", 18);
+  expect(await store.flush(5000)).toBe(true);
+  expect(await store.snapshot(5000)).toMatchObject({
+    entries: [
+      {
+        target: { relativePath: "x" },
+        outcome: "done",
+        code: "SAVED",
+        durationMs: 17,
+        lifecycle: { phase: "observed" },
+      },
+    ],
+    droppedEntries: 1,
+  });
+  const raw = fs.readdirSync(directory).filter((n) => n.endsWith(".jsonl"));
+  expect(
+    fs.readFileSync(path.join(directory, raw[0]!), "utf8").trim().split("\n"),
+  ).toHaveLength(1);
+});
+it("isolates write failure from operation values/exceptions and publishes cross-writer diagnostics without replay", async () => {
+  let attempts = 0;
+  const io = {
+    ...fs.promises,
+    open: async (...args: Parameters<typeof fs.promises.open>) => {
+      if (String(args[0]).endsWith(".jsonl")) {
+        attempts++;
+        throw Error("PRIVATE-CANARY");
+      }
+      return fs.promises.open(...args);
+    },
+  };
+  const { store, directory } = injectedStore(io);
+  const value = { status: "ok" };
+  expect(await observeOperation(store, metadata, async () => value)).toBe(
+    value,
+  );
+  const error = Error("original");
+  await expect(
+    observeOperation(store, metadata, async () => {
+      throw error;
+    }),
+  ).rejects.toBe(error);
+  expect(await store.flush(5000)).toBe(false);
+  expect(attempts).toBe(1);
+  const reader = new OperationsStore(directory, () => 1792670400000);
+  expect(await reader.snapshot(5000)).toMatchObject({
+    entries: [],
+    writeFailures: 1,
+    droppedEntries: 4,
+    unrecordedUncertainEntries: 2,
+  });
+  expect(JSON.stringify(await reader.snapshot(5000))).not.toContain(
+    "PRIVATE-CANARY",
+  );
+  expect(attempts).toBe(1);
+});
+it("preserves order through segment rotation with identical observation timestamps", async () => {
+  const { directory } = setup();
+  const store = new OperationsStore(directory, () => 1792670400000, {
+    days: 30,
+    bytes: 8192,
+    segmentBytes: 100,
+    entries: 100,
+  });
+  stores.push(store);
+  for (let i = 0; i < 8; i++)
+    store.record({ ...metadata, kind: `order.${i}` }, "done", null, 1);
+  expect(await store.shutdown(5000)).toBe(true);
+  expect((await store.snapshot(5000)).entries.map((e) => e.kind)).toEqual(
+    Array.from({ length: 8 }, (_, i) => `order.${i}`),
+  );
+});
+it("bounds stalled snapshot reads without delaying operation recording", async () => {
+  const release = deferred();
+  const io = {
+    ...fs.promises,
+    readdir: vi.fn(async () => {
+      await release.promise;
+      return [];
+    }) as unknown as typeof fs.promises.readdir,
+  };
+  const { store } = injectedStore(io);
+  try {
+    const started = performance.now();
+    expect((await store.snapshot(10)).corruptLines).toBe(1);
+    const finish = store.begin(metadata);
+    finish("done", null, 1);
+    expect(performance.now() - started).toBeLessThan(500);
+  } finally {
+    release.resolve();
+  }
+  await store.shutdown(5000);
+});
+
+it.each(["write", "sync"])(
+  "isolates asynchronous %s errors without replaying a batch",
+  async (failure) => {
+    let attempts = 0;
+    const io = {
+      ...fs.promises,
+      open: async (...args: Parameters<typeof fs.promises.open>) => {
+        const handle = await fs.promises.open(...args);
+        if (String(args[0]).endsWith(".jsonl")) {
+          if (failure === "write")
+            handle.writeFile = async () => {
+              attempts++;
+              throw Error("PRIVATE-WRITE");
+            };
+          else
+            handle.sync = async () => {
+              attempts++;
+              throw Error("PRIVATE-SYNC");
+            };
+        }
+        return handle;
+      },
+    };
+    const { store } = injectedStore(io);
+    const value = { status: "ok" };
+    expect(await observeOperation(store, metadata, async () => value)).toBe(
+      value,
+    );
+    expect(await store.flush(5000)).toBe(false);
+    expect(attempts).toBe(1);
+    const snapshot = await store.snapshot(5000);
+    expect(snapshot).toMatchObject({ writeFailures: 1, droppedEntries: 2 });
+    expect(JSON.stringify(snapshot)).not.toMatch(/PRIVATE/);
+    expect(attempts).toBe(1);
+  },
+);

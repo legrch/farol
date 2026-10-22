@@ -67,6 +67,9 @@ export async function runGoComputerMcp(file: string): Promise<void> {
     launch.opened,
     launch.challengeSha256,
   );
+  const operations = new OperationsStore(
+    path.join(path.dirname(path.dirname(launch.lifecycleRoot)), "operations"),
+  );
   let effectOutcomeUnknown = false;
   const handle = serveStdio(
     () =>
@@ -75,12 +78,7 @@ export async function runGoComputerMcp(file: string): Promise<void> {
         launch.opened.execution,
         client.verifiedContext,
         {
-          operations: new OperationsStore(
-            path.join(
-              path.dirname(path.dirname(launch.lifecycleRoot)),
-              "operations",
-            ),
-          ),
+          operations,
           lifecycle,
           fence,
           verification,
@@ -139,8 +137,12 @@ export async function runGoComputerMcp(file: string): Promise<void> {
     void closing.then(
       // A settled adapter drain cannot turn unexpected connector EOF into
       // clean lifecycle shutdown or prove native Go work was cancelled.
-      () => process.exit(transportFailed ? 1 : 0),
-      () => {
+      async () => {
+        await operations.shutdown();
+        process.exit(transportFailed ? 1 : 0);
+      },
+      async () => {
+        await operations.shutdown();
         process.stderr.write("Farol Go Computer MCP shutdown unverified.\n");
         process.exit(1);
       },

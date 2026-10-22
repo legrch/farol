@@ -165,6 +165,8 @@ export type WindowSnapshot = Readonly<{
   activityDiagnostics?: Readonly<{
     corruptLines: number;
     writeFailures: number;
+    droppedEntries?: number;
+    unrecordedUncertainEntries?: number;
   }>;
   runtime: "starting" | "ready" | "offline" | "failed";
   connectionStatus?: ConnectionStatusView;

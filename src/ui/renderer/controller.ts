@@ -870,6 +870,8 @@ export class WindowController implements RendererFacade {
         activityDiagnostics: {
           corruptLines: result.corruptLines,
           writeFailures: result.writeFailures,
+          droppedEntries: result.droppedEntries,
+          unrecordedUncertainEntries: result.unrecordedUncertainEntries,
         },
       });
     } catch {

@@ -70,7 +70,12 @@ it("filters shared operations, expands metadata and links attention to the unres
   const snapshot = {
     ...c.getSnapshot(),
     activity: entries,
-    activityDiagnostics: { corruptLines: 1, writeFailures: 0 },
+    activityDiagnostics: {
+      corruptLines: 1,
+      writeFailures: 2,
+      droppedEntries: 7,
+      unrecordedUncertainEntries: 1,
+    },
   };
   const overlay = vi.fn();
   const facade = { overlay } as unknown as RendererFacade;
@@ -84,6 +89,11 @@ it("filters shared operations, expands metadata and links attention to the unres
     expect(host.querySelectorAll("details")).toHaveLength(3);
     expect(host.querySelector("summary")?.textContent).toContain("model turn");
     expect(host.textContent).toContain("1 unreadable log lines skipped");
+    expect(host.textContent).toContain("7 entries were not recorded");
+    expect(host.textContent).toContain("2 log writes or reads unavailable");
+    expect(
+      host.textContent?.match(/7 entries were not recorded/g),
+    ).toHaveLength(1);
     const selects = host.querySelectorAll("select");
     await act(async () => {
       selects[1]!.value = "attention";
