@@ -23,8 +23,9 @@ func TestConnectorSupervisedResultPreservesFactsAndRetiresOriginal(t *testing.T)
 		t.Fatal(err)
 	}
 	child.terminal, child.supervisor = true, processsvc.SupervisorExited
+	collectionDone := processCollectionDone(s, start.OperationID)
 	close(child.completed)
-	awaitProcessCollection(t, s, start.OperationID)
+	awaitProcessCollectionDone(t, collectionDone)
 	if publisher.publishes != 1 || publisher.result == nil || processsvc.ResultState(*publisher.result) != processsvc.Exited ||
 		publisher.result.Observation.GroupCleanup != processsvc.CleanupUnverified || publisher.result.Observation.DescendantCleanup != processsvc.CleanupUnverified ||
 		string(publisher.result.Observation.Stdout) != "saved" || child.spawns != 1 || journal.reserves != 1 || child.probes != 0 {
@@ -53,8 +54,9 @@ func TestConnectorSupervisedResultUnknownCannotRetire(t *testing.T) {
 			case "publication":
 				publisher.err = errors.New("lost original publication ACK")
 			}
+			collectionDone := processCollectionDone(s, start.OperationID)
 			close(child.completed)
-			awaitProcessCollection(t, s, start.OperationID)
+			awaitProcessCollectionDone(t, collectionDone)
 			published := publisher.publishes
 			child.supervisor, child.completionErr, publisher.err = processsvc.SupervisorExited, nil, nil
 			if out, err := s.observeProcess(context.Background(), s.current, start.OperationID, processct.ReadRequest{Handle: start.Handle}); out != nil || err == nil {

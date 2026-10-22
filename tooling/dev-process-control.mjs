@@ -4,6 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { devExecutables } from "./dev-runtime.mjs";
+import { resolvePhysicalDevDataDirectoryName } from "../src/apps/desktop/dev-profile-directory.ts";
 import { performance } from "node:perf_hooks";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { buildDevControl } from "./go-backend-build.mjs";
@@ -24,38 +26,46 @@ export function readDevRunMarker(profilePath) {
   return readRunMarker(path.join(profilePath, "farol-state"));
 }
 
-export function retainedDevMarkerMatches(markerFile, original) {
+export function readRetainedDevMarker(markerFile, original) {
   let fd;
+  const failed = (reason) => ({ matches: false, reason });
   try {
     fd = fs.openSync(
       markerFile,
       fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
     );
     const stat = fs.fstatSync(fd);
-    if (
-      !stat.isFile() ||
-      stat.nlink !== 1 ||
-      stat.uid !== process.getuid() ||
-      (stat.mode & 0o777) !== 0o600 ||
-      stat.size > 4096
-    )
-      return false;
+    if (!stat.isFile() || stat.nlink !== 1)
+      return failed("RUN_MARKER_NOT_REGULAR_PRIVATE_FILE");
+    if (stat.uid !== process.getuid()) return failed("RUN_MARKER_UID_CHANGED");
+    if ((stat.mode & 0o777) !== 0o600) return failed("RUN_MARKER_MODE_UNSAFE");
+    if (stat.size > 4096) return failed("RUN_MARKER_OVERSIZED");
     const bytes = Buffer.alloc(4097);
     const size = fs.readSync(fd, bytes, 0, bytes.length, 0);
-    if (size > 4096) return false;
-    return (
-      JSON.stringify(JSON.parse(bytes.subarray(0, size).toString("utf8"))) ===
-      JSON.stringify(original)
-    );
+    if (size > 4096) return failed("RUN_MARKER_OVERSIZED");
+    let current;
+    try {
+      current = JSON.parse(bytes.subarray(0, size).toString("utf8"));
+    } catch {
+      return failed("RUN_MARKER_JSON_INVALID");
+    }
+    return JSON.stringify(current) === JSON.stringify(original)
+      ? { matches: true }
+      : failed("RUN_MARKER_CHANGED");
   } catch (error) {
-    // Normal Quit removes its marker before Electron necessarily exits. This
-    // is only continuation of the already-correlated lifetime: every poll and
-    // signal still verifies the retained native token, UID and executable.
-    // A replacement marker or any unreadable/malformed file still refuses.
-    return error?.code === "ENOENT";
+    // Normal Quit removes its marker before Electron necessarily exits. Every
+    // poll/signal still verifies the independently retained native lifetime.
+    if (error?.code === "ENOENT") return { matches: true };
+    return failed(
+      `RUN_MARKER_READ_${["ELOOP", "EACCES", "EPERM", "EISDIR"].includes(error?.code) ? error.code : "FAILED"}`,
+    );
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
   }
+}
+
+export function retainedDevMarkerMatches(markerFile, original) {
+  return readRetainedDevMarker(markerFile, original).matches;
 }
 
 function ps(args, budget = 3000) {
@@ -74,28 +84,36 @@ function ps(args, budget = 3000) {
 // private run marker and this exact checkout's Electron command.
 export function correlateDevCommand(line, marker, scope, native, bootTime) {
   const match = /^(\d+)\s+(.{24})\s+(.+)$/u.exec(line.trim());
-  const executable = `${scope.writerRoot}/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron`;
+  const refuse = (field) => {
+    throw Error(`DEV_PROCESS_IDENTITY_REFUSED: ${field}`);
+  };
+  const { executable, appPath, profilePath } = native;
+  if (!devExecutables(scope.writerRoot).includes(executable))
+    refuse("executable");
+  if (!match) refuse("ps UID/start/command format");
+  if (match[3] === "Farol Dev") refuse("erased process title");
+  if (native.status !== "present" || native.commandVerified !== true)
+    refuse("native command verification");
   if (
-    !match ||
-    native.status !== "present" ||
-    native.commandVerified !== true ||
-    Number(match[1]) !== scope.uid ||
-    native.uid !== scope.uid ||
-    native.pid !== marker.pid ||
-    match[2].trim() !== marker.processStart ||
-    !sameBoot(marker.bootTime, bootTime) ||
-    (![
-      executable + " _output/build/app/main.cjs",
-      executable + " " + scope.appPath,
-    ].some(
-      (prefix) => match[3] === prefix || match[3].startsWith(prefix + " "),
-    ) &&
-      match[3] !== "Farol Dev") ||
-    /--(?:acceptance|user-data|profile|type)(?:[=\s-]|$)/u.test(match[3])
+    !/^darwin-v1:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}:[1-9][0-9]{6,18}$/u.test(
+      native.token ?? "",
+    )
   )
-    throw Error("DEV_PROCESS_IDENTITY_REFUSED");
+    refuse("native boot/start identity");
+  if (Number(match[1]) !== scope.uid || native.uid !== scope.uid)
+    refuse("account UID");
+  if (native.pid !== marker.pid) refuse("run-marker PID");
+  if (match[2].trim() !== marker.processStart)
+    refuse("ps start time differs from run marker");
+  if (!sameBoot(marker.bootTime, bootTime)) refuse("run-marker boot time");
+  if (appPath !== scope.appPath || profilePath !== scope.profilePath)
+    refuse("checkout entrypoint/profile command");
+  // ps is only a coarse marker witness. The native helper independently proves
+  // the executable and exact argv; a display title supplies no authority.
   return Object.freeze({
     ...scope,
+    appPath,
+    profilePath,
     pid: marker.pid,
     startIdentity: native.token,
     executable,
@@ -105,11 +123,91 @@ export function correlateDevCommand(line, marker, scope, native, bootTime) {
   });
 }
 
+// Each observation has a closed source label so an unreadable step is actionable.
+// A process can exit after the native read but before ps. Confirm that exact PID's
+// absence independently; an empty ps result alone never grants rebuild authority.
+export function inspectDevStopIdentity({
+  marker,
+  scope,
+  native,
+  command,
+  markerMatches,
+  bootTime,
+}) {
+  const unreadable = (reason) => ({ status: "unreadable", reason });
+  try {
+    const seen = native();
+    if (seen.status === "absent") return seen;
+    if (seen.status !== "present")
+      return unreadable(
+        `native inspection: ${seen.status}/${seen.reason ?? "no reason"}`,
+      );
+    const markerRead = markerMatches();
+    if (markerRead !== true && markerRead?.matches !== true)
+      return unreadable(
+        `retained run marker: ${markerRead?.reason ?? "changed or could not be read"}`,
+      );
+    const line = command();
+    if (line.status === 1 && line.text === "") {
+      const confirmed = native();
+      return confirmed.status === "absent"
+        ? confirmed
+        : unreadable(
+            `ps reported absence; native confirmation: ${confirmed.status}/${confirmed.reason ?? "no reason"}`,
+          );
+    }
+    return {
+      status: "present",
+      identity: correlateDevCommand(line.text, marker, scope, seen, bootTime()),
+    };
+  } catch (error) {
+    return unreadable(`identity read: ${error.message}`);
+  }
+}
+
+export function devInventoryOwnsLine(line, ownedRoots) {
+  // A product title alone does not identify a checkout. Its runtime/native
+  // children retain exact writer paths and still block shared-output rebuilds.
+  return ownedRoots.some((prefix) => line.includes(prefix));
+}
+
+export function devInventoryCandidateAbsent(seen) {
+  return (
+    seen.status === "absent" ||
+    (seen.status === "refused" && seen.reason === "WRITER_EXECUTABLE_MISMATCH")
+  );
+}
+
 async function buildControl(root, buildArguments) {
   const inputs = await readGoBuildInputs(buildArguments);
   if (!inputs || process.platform !== "darwin")
     throw Error("DEV_CONTROL_TOOLCHAIN_REFUSED");
   return buildDevControl(root, inputs);
+}
+
+function inspectDevExecutable(
+  binary,
+  pid,
+  root,
+  appPath,
+  profilePath,
+  remaining = 3000,
+) {
+  const deadline = performance.now() + remaining;
+  for (const executable of devExecutables(root)) {
+    const seen = nativeCall(
+      binary,
+      { action: "inspect", pid, executable, appPath, profilePath },
+      deadline - performance.now(),
+    );
+    if (
+      seen.status === "refused" &&
+      seen.reason === "WRITER_EXECUTABLE_MISMATCH"
+    )
+      continue;
+    return seen;
+  }
+  return { status: "refused", reason: "WRITER_EXECUTABLE_MISMATCH" };
 }
 
 function nativeCall(binary, request, remaining = 3000) {
@@ -118,16 +216,22 @@ function nativeCall(binary, request, remaining = 3000) {
     input: JSON.stringify(request),
     encoding: "utf8",
     timeout,
-    maxBuffer: 4096,
+    maxBuffer: 32768,
     env: { PATH: "/usr/bin:/bin" },
     stdio: ["pipe", "pipe", "pipe"],
   });
   if (result.error || ![0, 1].includes(result.status))
-    return { status: "unreadable" };
+    return {
+      status: "unreadable",
+      reason:
+        result.error?.code === "ETIMEDOUT"
+          ? "NATIVE_HELPER_TIMEOUT"
+          : "NATIVE_HELPER_EXECUTION_FAILED",
+    };
   try {
     return JSON.parse(result.stdout);
   } catch {
-    return { status: "unreadable" };
+    return { status: "unreadable", reason: "NATIVE_HELPER_RESPONSE_INVALID" };
   }
 }
 
@@ -135,6 +239,8 @@ export async function prepareDevBuild({
   root,
   buildArguments,
   replace,
+  profilePath: selectedProfilePath,
+  createControl = buildControl,
   log = () => {},
 }) {
   if (process.platform !== "darwin")
@@ -143,14 +249,28 @@ export async function prepareDevBuild({
   const appPath = path.join(writerRoot, "_output/build/app/main.cjs");
   const home = os.userInfo().homedir;
   if (process.env.HOME !== home) throw Error("DEV_PROCESS_HOME_REFUSED");
-  const profileName = path.join(home, "Library/Application Support/Farol Dev");
+  const profileName =
+    selectedProfilePath ??
+    path.join(
+      home,
+      "Library/Application Support",
+      resolvePhysicalDevDataDirectoryName(
+        path.join(home, "Library/Application Support"),
+      ),
+    );
   const profilePath = fs.existsSync(profileName)
     ? fs.realpathSync(profileName)
     : profileName;
   const scope = { uid: process.getuid(), writerRoot, appPath, profilePath };
+  let controlBinary;
+  const getControl = async () =>
+    (controlBinary ??= await createControl(writerRoot, buildArguments));
   const markerFile = path.join(profilePath, "farol-state/running.json");
   const marker = await readDevRunMarker(profilePath);
-  if (marker.status === "unreadable") throw Error("DEV_RUN_MARKER_UNREADABLE");
+  if (marker.status === "unreadable")
+    throw Error(
+      `DEV_RUN_MARKER_UNREADABLE: ${marker.reason}. Quit the previous Farol Dev from this checkout/profile using its own Quit command, then run task dev again.`,
+    );
   if (marker.status === "read") {
     const command = ps([
       "-ww",
@@ -165,68 +285,76 @@ export async function prepareDevBuild({
     ]);
     if (command.status === 0 && command.text) {
       if (!replace) throw Error("DEV_BUILD_LIVE_OUTPUTS_REFUSED");
-      const binary = await buildControl(writerRoot, buildArguments);
-      const native = nativeCall(binary, {
-        action: "inspect",
-        pid: marker.marker.pid,
-        executable: path.join(
-          writerRoot,
-          "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
-        ),
+      const binary = await getControl();
+      const native = inspectDevExecutable(
+        binary,
+        marker.marker.pid,
+        writerRoot,
         appPath,
-      });
+        profilePath,
+      );
       if (native.status === "present") {
-        const retained = correlateDevCommand(
-          command.text,
-          marker.marker,
-          scope,
-          native,
-          currentBootTimeMs(),
-        );
+        let retained;
+        try {
+          retained = correlateDevCommand(
+            command.text,
+            marker.marker,
+            scope,
+            native,
+            currentBootTimeMs(),
+          );
+        } catch (error) {
+          throw Error(
+            `${error.message}. Quit the previous Farol Dev from this checkout/profile using its own Quit command, then run task dev again.`,
+          );
+        }
+        let inspectionFailure = "none";
+        const unreadable = (reason) => {
+          inspectionFailure = reason;
+          log(
+            `Dev stop identity read failed: ${reason} (pid ${retained.pid}).`,
+          );
+          return { status: "unreadable" };
+        };
         const inspect = (pid, remaining) => {
           const deadline = performance.now() + remaining;
-          const seen = nativeCall(
-            binary,
-            {
-              action: "inspect",
-              pid,
-              executable: retained.executable,
-              appPath,
-            },
-            deadline - performance.now(),
-          );
-          if (seen.status === "absent") return seen;
-          if (seen.status !== "present") return { status: "unreadable" };
-          if (!retainedDevMarkerMatches(markerFile, marker.marker))
-            return { status: "unreadable" };
-          const line = ps(
-            [
-              "-ww",
-              "-p",
-              String(pid),
-              "-o",
-              "uid=",
-              "-o",
-              "lstart=",
-              "-o",
-              "command=",
-            ],
-            deadline - performance.now(),
-          );
-          try {
-            return {
-              status: "present",
-              identity: correlateDevCommand(
-                line.text,
-                marker.marker,
-                scope,
-                seen,
-                currentBootTimeMs(),
+          const observation = inspectDevStopIdentity({
+            marker: marker.marker,
+            scope,
+            native: () =>
+              nativeCall(
+                binary,
+                {
+                  action: "inspect",
+                  pid,
+                  executable: retained.executable,
+                  appPath,
+                  profilePath,
+                },
+                deadline - performance.now(),
               ),
-            };
-          } catch {
-            return { status: "unreadable" };
-          }
+            markerMatches: () =>
+              readRetainedDevMarker(markerFile, marker.marker),
+            command: () =>
+              ps(
+                [
+                  "-ww",
+                  "-p",
+                  String(pid),
+                  "-o",
+                  "uid=",
+                  "-o",
+                  "lstart=",
+                  "-o",
+                  "command=",
+                ],
+                deadline - performance.now(),
+              ),
+            bootTime: currentBootTimeMs,
+          });
+          return observation.status === "unreadable"
+            ? unreadable(observation.reason)
+            : observation;
         };
         log(
           "Stopping the previous Farol Dev before rebuilding its app outputs...",
@@ -235,8 +363,8 @@ export async function prepareDevBuild({
           clock: () => performance.now(),
           sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
           inspect,
-          signal: (pid, signal, expected, remaining) =>
-            nativeCall(
+          signal: (pid, signal, expected, remaining) => {
+            const outcome = nativeCall(
               binary,
               {
                 action: "signal",
@@ -246,17 +374,26 @@ export async function prepareDevBuild({
                 uid: expected.uid,
                 executable: expected.executable,
                 appPath: expected.appPath,
+                profilePath: expected.profilePath,
               },
               remaining,
-            ),
+            );
+            if (outcome.status !== "sent" && outcome.status !== "absent")
+              inspectionFailure = `${signal}: ${outcome.status}/${outcome.reason ?? "no reason"}`;
+            return outcome;
+          },
         });
         if (result.status !== "absent")
-          throw Error(`DEV_STOP_${result.reason}`);
+          throw Error(
+            `DEV_STOP_${result.reason}: ${inspectionFailure}. Quit the previous Farol Dev from this checkout/profile using its own Quit command, then run task dev again.`,
+          );
         log(
           `Previous Dev process is absent (${result.attemptedSignals.join(", ") || "already stopped"}). Profile outcomes remain unchanged.`,
         );
       } else if (native.status !== "absent")
-        throw Error("DEV_PROCESS_IDENTITY_UNREADABLE");
+        throw Error(
+          `DEV_PROCESS_IDENTITY_UNREADABLE: native inspection ${native.status}/${native.reason ?? "no reason"} (pid ${marker.marker.pid}). Quit the previous Farol Dev from this checkout/profile using its own Quit command, then run task dev again.`,
+        );
     } else if (command.status !== 1 || command.text)
       throw Error("DEV_PROCESS_ABSENCE_UNCONFIRMED");
   }
@@ -266,17 +403,27 @@ export async function prepareDevBuild({
   const ownedRoots = [
     path.join(writerRoot, "node_modules/electron/dist/Electron.app/"),
     path.join(writerRoot, "_output/build/app/"),
+    path.join(writerRoot, "_output/dev-runtime/"),
     path.join(profilePath, "farol-state/"),
   ];
-  if (
-    inventory.text
-      .split("\n")
-      .some(
-        (line) =>
-          /^\s*\d+\s+Farol Dev$/u.test(line) ||
-          ownedRoots.some((prefix) => line.includes(prefix)),
-      )
-  )
-    throw Error("DEV_BUILD_OWNED_PROCESSES_REMAIN");
+  for (const line of inventory.text.split("\n")) {
+    if (devInventoryOwnsLine(line, ownedRoots))
+      throw Error("DEV_BUILD_OWNED_PROCESSES_REMAIN");
+    const titled = /^\s*(\d+)\s+Farol Dev$/u.exec(line);
+    if (!titled) continue;
+    // Erased argv cannot prove a writer. Qualify the exact selected executable
+    // without reading another profile or signaling an inventory candidate.
+    const seen = inspectDevExecutable(
+      await getControl(),
+      Number(titled[1]),
+      writerRoot,
+      appPath,
+      profilePath,
+    );
+    if (!devInventoryCandidateAbsent(seen))
+      throw Error(
+        `DEV_BUILD_OWNED_PROCESSES_REMAIN: named Dev identity ${seen.status}/${seen.reason ?? "no reason"}. Quit the Dev using this checkout's app outputs before rebuilding.`,
+      );
+  }
   return { profilePath, marker: marker.status };
 }

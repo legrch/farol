@@ -16,7 +16,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createOwnerLaunchResultCollector } from "./owner-launch-result.mjs";
 import { ownerLaunchEnvironment } from "./launch-snapshot.mjs";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
+import { parseDevDisplay } from "../src/apps/desktop/window-placement.ts";
+import { DevRuntimeSignatureError, prepareDevRuntime } from "./dev-runtime.mjs";
 import { prepareDevBuild } from "./dev-process-control.mjs";
+import { resolvePhysicalDevDataDirectoryName } from "../src/apps/desktop/dev-profile-directory.ts";
 import {
   dependencyDrift,
   readDependencyDigests,
@@ -565,7 +568,7 @@ export async function runDevBuild(
     report(
       "Farol Dev requires a valid approved Go input declaration. Place it at " +
         `${DEFAULT_GO_INPUTS_FILE} or select --go-inputs=/absolute/path.json. ` +
-        "See README: Develop from source. No desktop was launched.",
+        "See docs/development/setup.md. No desktop was launched.",
     );
     return 1;
   }
@@ -694,6 +697,31 @@ export function devLaunchEnvironment(
   };
 }
 
+// Keep the selected profile in the kernel-visible argv. The desktop validates
+// this assertion against its independently selected userData before using it.
+// A Farol-only flag avoids Chromium creating state before fresh-review admission.
+export function devLaunchProfile(
+  acceptanceProfile = false,
+  reviewMarker,
+  home = os.userInfo().homedir,
+) {
+  if (
+    reviewMarker !== undefined &&
+    (acceptanceProfile ||
+      !reviewMarker.startsWith("review:") ||
+      !REVIEW_TOKEN.test(reviewMarker.slice(7)))
+  )
+    throw new Error("DEV_REVIEW_PROFILE_INVALID");
+  const nativeAppData = path.join(home, "Library/Application Support");
+  const appData =
+    reviewMarker !== undefined
+      ? path.join(nativeAppData, REVIEW_NAMESPACE, reviewMarker.slice(7))
+      : acceptanceProfile
+        ? path.join(nativeAppData, "Farol Dev Acceptance")
+        : nativeAppData;
+  return path.join(appData, resolvePhysicalDevDataDirectoryName(appData));
+}
+
 export async function launchPreview(
   root,
   spawnProcess = spawn,
@@ -701,19 +729,24 @@ export async function launchPreview(
   secondaryDisplay = false,
   reviewMarker,
   displayOptions = {},
+  prepareRuntime = prepareDevRuntime,
 ) {
-  const electronBin = path.join(root, "node_modules/.bin/electron");
+  const electronBin = await prepareRuntime(root);
   const { stopLabel, outcome, protocolError, resultCollector } =
     await runOwnerManagedChild({
       spawnChild: () =>
         spawnProcess(
           electronBin,
           [
-            "_output/build/app/main.cjs",
-            ...(acceptanceProfile ||
-            secondaryDisplay ||
-            displayOptions.builtInDisplayOnly === true ||
-            reviewMarker !== undefined
+            path.join(root, "_output/build/app/main.cjs"),
+            `--farol-dev-user-data-dir=${devLaunchProfile(acceptanceProfile, reviewMarker)}`,
+            ...(displayOptions.devSecondaryDisplay === true
+              ? ["--display=secondary"]
+              : []),
+            ...(displayOptions.devSecondaryDisplay !== true &&
+            (acceptanceProfile ||
+              secondaryDisplay ||
+              displayOptions.builtInDisplayOnly === true)
               ? ["--preview-window-mode=secondary-visible"]
               : []),
             ...(displayOptions.builtInDisplayOnly === true
@@ -825,6 +858,16 @@ export async function main(argv, overrides = {}) {
     exit = (code) => process.exit(code),
   } = overrides;
 
+  const launchDev = async (...args) => {
+    try {
+      await launch(...args);
+    } catch (error) {
+      if (!(error instanceof DevRuntimeSignatureError)) throw error;
+      logError(error.message);
+      exit(1);
+    }
+  };
+
   const checkOnly = argv.includes("--check");
   const acceptanceProfile = argv.includes("--acceptance-profile");
   const secondaryDisplay = argv.includes("--secondary-display");
@@ -845,6 +888,7 @@ export async function main(argv, overrides = {}) {
       (freshReview && acceptanceProfile)
     )
       throw new Error("DEV_REVIEW_PROFILE_ARGUMENT_INVALID");
+    if (parseDevDisplay(argv)) displayOptions.devSecondaryDisplay = true;
     buildArguments = devGoBuildArguments(argv);
   } catch (error) {
     logError(error.message);
@@ -925,12 +969,17 @@ export async function main(argv, overrides = {}) {
     log(
       "Development bytes, not a packaged candidate. Profile retained; this opener cannot reopen it. No automatic retry or recovery.",
     );
-    log("Running Farol Dev on the secondary display. Press Ctrl+C to stop.");
-    await launch(false, true, review.marker, displayOptions);
+    log("Running Farol Dev in this terminal. Press Ctrl+C to stop.");
+    await launchDev(false, secondaryDisplay, review.marker, displayOptions);
     return;
   }
   log("Running Farol Dev in this terminal. Press Ctrl+C to stop.");
-  await launch(acceptanceProfile, secondaryDisplay, undefined, displayOptions);
+  await launchDev(
+    acceptanceProfile,
+    secondaryDisplay,
+    undefined,
+    displayOptions,
+  );
 }
 
 const isMainModule =

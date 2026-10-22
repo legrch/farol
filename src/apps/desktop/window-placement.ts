@@ -188,3 +188,74 @@ export function selectPreviewWindowPlacement(
     bounds: centeredBounds(selected.workArea, requested),
   };
 }
+
+// Ordinary Dev uses Electron's DIP work areas and may shrink its window. Test
+// viewports retain their exact-size contract in selectPreviewWindowPlacement.
+export function parseDevDisplay(arguments_: readonly string[]): boolean {
+  const flags = arguments_.filter((value) => value.startsWith("--display"));
+  if (flags.length === 0) return false;
+  if (flags.length !== 1 || flags[0] !== "--display=secondary")
+    throw new Error("DEV_DISPLAY_ARGUMENT_INVALID");
+  if (
+    arguments_.some(
+      (value) =>
+        value.startsWith("--preview-window-mode=") ||
+        [
+          "--secondary-display",
+          "--built-in-display-only",
+          "--sidecar-display-only",
+          "--allow-primary-display",
+        ].includes(value),
+    )
+  )
+    throw new Error("DEV_DISPLAY_ARGUMENT_CONFLICT");
+  return true;
+}
+
+export function selectDevWindowPlacement(
+  displays: readonly PreviewDisplay[],
+  primaryDisplayId: number,
+  requested: Readonly<{ width: number; height: number }>,
+): PreviewWindowPlacement {
+  if (!displays.some((display) => display.id === primaryDisplayId))
+    throw new Error("WINDOW_PRIMARY_DISPLAY_MISSING");
+  const secondary = displays
+    .filter((display) => display.id !== primaryDisplayId)
+    .sort((left, right) => left.id - right.id);
+  const selected =
+    secondary.find(
+      (display) =>
+        !display.internal && /\b(?:sidecar|ipad)\b/iu.test(display.label ?? ""),
+    ) ?? secondary[0];
+  if (!selected) throw new Error("DEV_SECONDARY_DISPLAY_UNAVAILABLE");
+  const area = selected.workArea;
+  if (
+    ![
+      area.x,
+      area.y,
+      area.width,
+      area.height,
+      requested.width,
+      requested.height,
+    ].every(Number.isFinite) ||
+    area.width <= 0 ||
+    area.height <= 0 ||
+    requested.width <= 0 ||
+    requested.height <= 0
+  )
+    throw new Error("WINDOW_DISPLAY_GEOMETRY_INVALID");
+  if (area.width < 640 || area.height < 520)
+    throw new Error("DEV_SECONDARY_DISPLAY_TOO_SMALL");
+  return {
+    displayId: selected.id,
+    internal: selected.internal,
+    primary: false,
+    selection: /\b(?:sidecar|ipad)\b/iu.test(selected.label ?? "")
+      ? "sidecar"
+      : "non-primary",
+    bounds: centeredBounds(area, {
+      width: Math.min(requested.width, area.width),
+      height: Math.min(requested.height, area.height),
+    }),
+  };
+}

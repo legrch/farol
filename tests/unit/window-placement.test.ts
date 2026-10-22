@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  parseDevDisplay,
+  selectDevWindowPlacement,
   parseAllowPrimaryDisplay,
   parseBuiltInDisplayOnly,
   parseSidecarDisplayOnly,
@@ -375,4 +377,102 @@ it("accepts a bounded explicit test viewport without changing normal launches", 
       "hidden",
     ),
   ).toThrow("PREVIEW_WINDOW_SIZE_INVALID");
+});
+
+describe("ordinary Dev secondary placement", () => {
+  const sidecar = {
+    ...builtInSecondary,
+    id: 68,
+    internal: false,
+    label: "Sidecar Display (AirPlay)",
+    scaleFactor: 2,
+    workArea: { x: -1135, y: 30, width: 1135, height: 759 },
+  };
+  it("prefers Sidecar and fits its DIP work area before showing", () => {
+    expect(
+      selectDevWindowPlacement(
+        [externalPrimary, builtInSecondary, sidecar],
+        5,
+        { width: 1180, height: 760 },
+      ),
+    ).toMatchObject({
+      displayId: 68,
+      primary: false,
+      selection: "sidecar",
+      bounds: sidecar.workArea,
+    });
+  });
+  it("uses another non-primary display with negative origins and mixed scaling", () => {
+    const primary = { ...externalPrimary, scaleFactor: 2 };
+    const secondary = { ...builtInSecondary, scaleFactor: 1 };
+    expect(
+      selectDevWindowPlacement([primary, secondary], 5, {
+        width: 1180,
+        height: 760,
+      }).bounds,
+    ).toEqual({ x: -1346, y: 585, width: 1180, height: 760 });
+  });
+  it("never falls back to primary when the secondary disappears", () => {
+    expect(() =>
+      selectDevWindowPlacement([externalPrimary], 5, {
+        width: 1180,
+        height: 760,
+      }),
+    ).toThrow("DEV_SECONDARY_DISPLAY_UNAVAILABLE");
+    expect(
+      selectDevWindowPlacement(
+        [externalPrimary, { ...sidecar, id: 5 }, builtInSecondary],
+        5,
+        { width: 1180, height: 760 },
+      ).displayId,
+    ).toBe(1);
+  });
+  it("refuses invalid topology, geometry and unsupported minimum sizes", () => {
+    expect(() =>
+      selectDevWindowPlacement([], 5, { width: 1180, height: 760 }),
+    ).toThrow("WINDOW_PRIMARY_DISPLAY_MISSING");
+    for (const width of [NaN, Infinity, 0, -1]) {
+      expect(() =>
+        selectDevWindowPlacement(
+          [
+            externalPrimary,
+            { ...sidecar, workArea: { ...sidecar.workArea, width } },
+          ],
+          5,
+          { width: 1180, height: 760 },
+        ),
+      ).toThrow("WINDOW_DISPLAY_GEOMETRY_INVALID");
+    }
+    expect(() =>
+      selectDevWindowPlacement(
+        [
+          externalPrimary,
+          { ...sidecar, workArea: { ...sidecar.workArea, width: 639 } },
+        ],
+        5,
+        { width: 1180, height: 760 },
+      ),
+    ).toThrow("DEV_SECONDARY_DISPLAY_TOO_SMALL");
+  });
+  it("parses only the explicit ordinary Dev choice and rejects test conflicts", () => {
+    expect(parseDevDisplay([])).toBe(false);
+    expect(parseDevDisplay(["--display=secondary"])).toBe(true);
+    for (const flags of [
+      ["--display=primary"],
+      ["--display"],
+      ["--display=secondary", "--display=secondary"],
+    ])
+      expect(() => parseDevDisplay(flags)).toThrow(
+        "DEV_DISPLAY_ARGUMENT_INVALID",
+      );
+    for (const flag of [
+      "--secondary-display",
+      "--allow-primary-display",
+      "--built-in-display-only",
+      "--preview-window-mode=hidden",
+    ])
+      expect(() => parseDevDisplay(["--display=secondary", flag])).toThrow(
+        "DEV_DISPLAY_ARGUMENT_CONFLICT",
+      );
+  });
 });

@@ -4,6 +4,7 @@ import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
 import { parse } from "@babel/parser";
 import { expect, it } from "vitest";
+import type { DesktopEnvironment } from "../../src/apps/desktop/desktop-environment";
 
 // Actual host startup functions and existing route/stream helpers. Native
 // mechanics, route settlements and fetch dispatches are controlled; this does
@@ -52,10 +53,12 @@ function host({
   stage = "shell",
   reentrant,
   extraBackground = false,
+  buildEnvironment = "preview",
 }: {
   stage?: Stage;
   reentrant?: { event: string; action: Withdrawal };
   extraBackground?: boolean;
+  buildEnvironment?: DesktopEnvironment;
 } = {}) {
   const reached = deferred();
   const pending = deferred();
@@ -70,6 +73,7 @@ function host({
     directory: "/controlled-only",
     desktopExecutionResources: () => ({ directory: "/controlled-only" }),
     windowMode: "default",
+    buildEnvironment,
     displayWindowTitle: "Controlled host",
     initialWindowSize: { width: 800, height: 600 },
     process: { platform: "linux", stderr: { write: () => undefined } },
@@ -133,7 +137,7 @@ function host({
   };
   class FakeWindow {
     destroyed = false;
-    listeners = new Map<string, () => void>();
+    listeners = new Map<string, (event?: { preventDefault(): void }) => void>();
     webContents = { setWindowOpenHandler() {}, on() {} };
     constructor() {
       record("window-create");
@@ -279,7 +283,16 @@ function host({
     events,
     count,
     withdraw,
-    reached: reached.promise,
+    // Surface an early startup failure instead of hiding it behind a stage
+    // promise that can no longer settle. The controlled stage still must run.
+    reached(creating: Promise<void>) {
+      return Promise.race([
+        reached.promise,
+        creating.then(() => {
+          throw new Error(`CONTROLLED_STARTUP_SETTLED_BEFORE_${stage}`);
+        }),
+      ]);
+    },
     finish: pending.resolve,
     reject: pending.reject,
     captured: () => captured,
@@ -301,7 +314,7 @@ it.each(
   async ({ stage, action }) => {
     const h = host({ stage });
     const creating = h.create();
-    await h.reached;
+    await h.reached(creating);
     h.withdraw(action);
     const withdrawnHost = h.context.window;
     h.finish();
@@ -335,12 +348,16 @@ it.each(
   },
 );
 
-it.each(stages)(
-  "retains healthy startup through the %s await",
-  async (stage) => {
-    const h = host({ stage });
+it.each(
+  (["preview", "owner-preview", "dev"] as const).flatMap((buildEnvironment) =>
+    stages.map((stage) => ({ buildEnvironment, stage })),
+  ),
+)(
+  "retains healthy $buildEnvironment startup through the $stage await",
+  async ({ buildEnvironment, stage }) => {
+    const h = host({ buildEnvironment, stage });
     const creating = h.create();
-    await h.reached;
+    await h.reached(creating);
     h.finish();
     await creating;
     expect(h.context.window).toBe(h.captured());
@@ -360,7 +377,7 @@ it("retains runtimeStopping-only offline diagnostic startup", async () => {
   h.context.runtime = null;
   h.context.demoMode = true;
   const creating = h.create();
-  await h.reached;
+  await h.reached(creating);
   h.finish();
   await creating;
   expect(h.context.windowPresentationReady).toBe(true);
@@ -388,11 +405,20 @@ it.each(["shell", "view"] as const)(
     const h = host({ stage });
     const error = new Error("CONTROLLED_LOAD_FAILURE");
     const creating = h.create();
-    const rejected = expect(creating).rejects.toBe(error);
-    await h.reached;
+    // Observe rejection immediately, then assert its exact outcome after the
+    // controlled load fails; no pending async assertion can be abandoned.
+    const settlement = creating.then(
+      () => ({ status: "fulfilled" as const }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    await h.reached(creating);
     h.withdraw("close");
     h.reject(error);
-    await rejected;
+    const outcome = await settlement;
+    expect(outcome.status).toBe("rejected");
+    if (outcome.status !== "rejected")
+      throw new Error("CONTROLLED_LOAD_DID_NOT_REJECT");
+    expect(outcome.error).toBe(error);
     expect(h.context.windowPresentationReady).toBe(false);
     expect(h.count("background-open")).toBe(0);
     expect(h.count("show")).toBe(0);
@@ -405,7 +431,7 @@ it("keeps healthy retained runtime views without creating replacements", async (
   h.context.taskViews.set("runtime-1", retained);
   h.context.taskViews.set("runtime-2", retained);
   const creating = h.create();
-  await h.reached;
+  await h.reached(creating);
   h.finish();
   await creating;
   expect(h.context.taskViews.get("runtime-1")).toBe(retained);
@@ -417,7 +443,7 @@ it("keeps healthy retained runtime views without creating replacements", async (
 it("retains fulfilled load outcome when the admitted view's contents disappear", async () => {
   const h = host({ stage: "view" });
   const creating = h.create();
-  await h.reached;
+  await h.reached(creating);
   const admitted = h.context.taskViews.get("runtime-1");
   expect(admitted).toBeDefined();
   // The load was already dispatched. The native contents can disappear
@@ -437,7 +463,7 @@ it("retains fulfilled load outcome when the admitted view's contents disappear",
 it("replaces a cleared retained view on the next host without stale callback deletion", async () => {
   const h = host({ stage: "view" });
   const creating = h.create();
-  await h.reached;
+  await h.reached(creating);
   const stale = h.context.taskViews.get("runtime-1");
   expect(stale).toBeDefined();
   Object.defineProperty(stale, "webContents", { value: undefined });
@@ -457,7 +483,7 @@ it("replaces a cleared retained view on the next host without stale callback del
 it("rechecks after window-state publication before creating views", async () => {
   const h = host({ reentrant: { event: "publish-window", action: "close" } });
   const creating = h.create();
-  await h.reached;
+  await h.reached(creating);
   h.finish();
   await creating;
   expect(h.count("view-create")).toBe(0);
@@ -471,7 +497,7 @@ it("rechecks after a view's ready publication before dispatching the next view",
     reentrant: { event: "publish-task", action: "update" },
   });
   const creating = h.create();
-  await h.reached;
+  await h.reached(creating);
   h.finish();
   await creating;
   expect(h.count("view-load")).toBe(1);
@@ -485,7 +511,7 @@ it("rechecks before each background route dispatch", async () => {
     reentrant: { event: "background-open", action: "update" },
   });
   const creating = h.create();
-  await h.reached;
+  await h.reached(creating);
   h.finish();
   await creating;
   expect(h.count("background-open")).toBe(1);
@@ -497,10 +523,46 @@ it("rechecks before each background route dispatch", async () => {
 it("rechecks before each stream dispatch and presentation", async () => {
   const h = host({ reentrant: { event: "stream-dispatch", action: "update" } });
   const creating = h.create();
-  await h.reached;
+  await h.reached(creating);
   h.finish();
   await creating;
   expect(h.count("stream-dispatch")).toBe(1);
   expect(h.count("show")).toBe(0);
+  expect(h.context.windowPresentationReady).toBe(false);
+});
+
+it.each(["preview", "owner-preview", "dev"] as const)(
+  "preserves the native page title only for Dev in %s startup",
+  async (buildEnvironment) => {
+    const h = host({ buildEnvironment });
+    const creating = h.create();
+    await h.reached(creating);
+    const titleUpdate = h.captured().listeners.get("page-title-updated");
+    let prevented = false;
+    // The Electron event is controlled; this is handler policy, not native UI.
+    titleUpdate?.({
+      preventDefault() {
+        prevented = true;
+      },
+    });
+    h.finish();
+    await creating;
+    expect(Boolean(titleUpdate)).toBe(buildEnvironment === "dev");
+    expect(prevented).toBe(buildEnvironment === "dev");
+    expect(h.count("show")).toBe(1);
+    expect(h.context.windowPresentationReady).toBe(true);
+  },
+);
+
+it("surfaces startup rejection before the controlled shell stage", async () => {
+  const h = host();
+  Reflect.deleteProperty(h.context, "buildEnvironment");
+  const creating = h.create();
+  await expect(h.reached(creating)).rejects.toMatchObject({
+    name: "ReferenceError",
+    message: "buildEnvironment is not defined",
+  });
+  expect(h.count("window-create")).toBe(1);
+  expect(h.count("shell-load")).toBe(0);
   expect(h.context.windowPresentationReady).toBe(false);
 });

@@ -99,8 +99,9 @@ func TestConnectorRecoverySettledProcessRetainsResultAndBlocksControl(t *testing
 	started := processWireStarted(t, s)
 	originalSlot := s.current
 	child.terminal = true
+	collectionDone := processCollectionDone(s, started.OperationId)
 	close(child.completed)
-	awaitProcessCollection(t, s, started.OperationId)
+	awaitProcessCollectionDone(t, collectionDone)
 	record := s.mutations.operations[started.OperationId]
 	original := record.process
 	in, disposition := closeRecoveryFixture(t, s, in)

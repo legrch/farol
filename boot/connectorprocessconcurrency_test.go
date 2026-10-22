@@ -71,8 +71,9 @@ func TestConnectorProcessCancelOwnerChangeCannotRepairLostACK(t *testing.T) {
 				t.Fatal("fresh admitted READ cleared lost cancellation ACK", out, err)
 			}
 			child.terminal = true
+			collectionDone := processCollectionDone(s, start.OperationId)
 			close(child.completed)
-			awaitProcessCollection(t, s, start.OperationId)
+			awaitProcessCollectionDone(t, collectionDone)
 			record := s.mutations.operations[start.OperationId]
 			if !record.process.cancelUnknown || record.settled || record.process.collectionErr == nil || child.reads != 0 ||
 				child.spawns != 1 || journal.reserves != 1 || s.drainProcessesForRetirement(context.Background()) == nil {

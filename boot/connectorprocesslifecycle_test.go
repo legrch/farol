@@ -53,8 +53,9 @@ func TestConnectorProcessLifecycleRetainsAfterOriginalConnectorClosed(t *testing
 		t.Fatal(err)
 	}
 	child.terminal = true
+	collectionDone := processCollectionDone(s, start.OperationID)
 	close(child.completed)
-	awaitProcessCollection(t, s, start.OperationID)
+	awaitProcessCollectionDone(t, collectionDone)
 	if publisher.publishes != 1 || publisher.result == nil || child.reads != 1 || child.probes != 0 || child.spawns != 1 || journal.reserves != 1 {
 		t.Fatal("lifecycle did not retain exact original output without new effects or READ authority")
 	}
@@ -81,8 +82,9 @@ func TestConnectorProcessLifecycleReadDoesNotTriggerPublication(t *testing.T) {
 	if publisher.publishes != 0 || s.mutations.operations[start.OperationID].settled {
 		t.Fatal("READ published or settled original process")
 	}
+	collectionDone := processCollectionDone(s, start.OperationID)
 	close(child.completed)
-	awaitProcessCollection(t, s, start.OperationID)
+	awaitProcessCollectionDone(t, collectionDone)
 	if publisher.publishes != 1 || !s.mutations.operations[start.OperationID].settled {
 		t.Fatal("completion did not publish independently")
 	}
@@ -106,8 +108,9 @@ func TestConnectorProcessLifecycleLostStartDisclosureRetainsOriginal(t *testing.
 		t.Fatal("wire lost the original execution uncertainty", outcome, outcomeErr)
 	}
 	child.terminal = true
+	collectionDone := processCollectionDone(s, "process-operation")
 	close(child.completed)
-	awaitProcessCollection(t, s, "process-operation")
+	awaitProcessCollectionDone(t, collectionDone)
 	if publisher.publishes != 1 || publisher.result == nil || !s.mutations.operations["process-operation"].settled || child.spawns != 1 || journal.reserves != 1 {
 		t.Fatal("lost disclosure forgot child or repeated execution")
 	}
@@ -133,8 +136,9 @@ func TestConnectorProcessLifecycleUnknownNeverRetiresOrReplays(t *testing.T) {
 			case "bad-digest":
 				publisher.digest = "invalid"
 			}
+			collectionDone := processCollectionDone(s, start.OperationID)
 			close(child.completed)
-			awaitProcessCollection(t, s, start.OperationID)
+			awaitProcessCollectionDone(t, collectionDone)
 			if s.mutations.operations[start.OperationID].settled || s.mutations.operations[start.OperationID].process.collectionErr == nil {
 				t.Fatal("unknown collection became settlement")
 			}
@@ -204,8 +208,9 @@ func TestConnectorProcessLifecycleUncompletedQuitRemainsFenced(t *testing.T) {
 		t.Fatal("uncompleted child retired or was replayed")
 	}
 	child.terminal = true
+	collectionDone := processCollectionDone(s, start.OperationID)
 	close(child.completed)
-	awaitProcessCollection(t, s, start.OperationID)
+	awaitProcessCollectionDone(t, collectionDone)
 	if publisher.publishes != 0 || s.drainProcessesForRetirement(context.Background()) == nil || s.mutations.freezeForRetirement() == nil {
 		t.Fatal("late terminal facts erased original failed retirement")
 	}
@@ -220,12 +225,12 @@ func TestConnectorProcessLifecycleCollectionWaitUsesOriginalNotification(t *test
 			"process-operation": {process: &connectorProcessOperation{collectionDone: originalDone}},
 		},
 	}}
-	done := processCollectionDone(s, "process-operation")
-	if done != originalDone {
+	collectionDone := processCollectionDone(s, "process-operation")
+	if collectionDone != originalDone {
 		t.Fatal("waiter did not select the original collection notification")
 	}
 	select {
-	case <-done:
+	case <-collectionDone:
 		t.Fatal("collection notification completed before selection")
 	default:
 	}
@@ -236,7 +241,7 @@ func TestConnectorProcessLifecycleCollectionWaitUsesOriginalNotification(t *test
 	waited := make(chan struct{})
 	go func() {
 		defer close(waited)
-		awaitProcessCollectionDone(t, done)
+		awaitProcessCollectionDone(t, collectionDone)
 	}()
 	close(originalDone)
 	select {
@@ -253,7 +258,7 @@ func TestConnectorProcessLifecycleWaitsForOriginalCancelACK(t *testing.T) {
 			publisher := &connectorProcessPublisherDouble{connectorProcessJournalDouble: journal, s: s, digest: strings.Repeat("a", 64)}
 			s.mutations.dependencies.repository = publisher
 			start := processWireStarted(t, s)
-			done := processCollectionDone(s, start.OperationId)
+			collectionDone := processCollectionDone(s, start.OperationId)
 			entered, release := make(chan struct{}), make(chan struct{})
 			child.cancelIO = func() { close(entered); <-release }
 			if unknown {
@@ -273,7 +278,7 @@ func TestConnectorProcessLifecycleWaitsForOriginalCancelACK(t *testing.T) {
 			close(child.completed)
 			close(release)
 			result := <-cancelled
-			awaitProcessCollectionDone(t, done)
+			awaitProcessCollectionDone(t, collectionDone)
 			if (result.err != nil) != unknown || child.cancels != 1 || child.spawns != 1 || journal.reserves != 1 {
 				t.Fatal("original control outcome changed or repeated", result.err)
 			}

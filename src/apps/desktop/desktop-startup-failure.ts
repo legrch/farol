@@ -162,23 +162,28 @@ export function desktopStartupFailureReport(
         ? "Farol Preview"
         : "Farol";
   const notice = desktopStartupFailureNotice(code);
-  const remedy = notice
-    ? notice.message
-    : QUALIFICATION_DEADLINE_CODES.has(code)
-      ? "Checking the app's files took longer than the startup allows. Open the app again; if the Mac is busy, wait for it to settle first."
-      : PREVIOUS_DRAIN_FAILURE_CODES.has(code)
-        ? "The previous session did not confirm shutdown. Preserve the existing profile and its recovery records; rebuilding the app does not settle this state. Use a qualified recovery procedure before reopening that profile."
-        : DISPLAY_PRECONDITION_CODES.has(code)
-          ? "The visible-test display requirements are not met. Check available displays and the requested viewport before launching again. Use hidden mode only for an equivalent check."
-          : environment === "owner-preview" &&
-              code === "OWNER_PREVIEW_PROFILE_DIRECTORY_UNSAFE"
-            ? "The Preview profile or its parent is aliased or unsafe. Preserve the existing directories and resolve their physical separation before another launch; rebuilding does not repair this state."
-            : environment === "dev" &&
-                code === "DEV_PROFILE_DIRECTORY_AMBIGUOUS"
-              ? "Two distinct Dev profiles exist. Stop here and choose a profile explicitly; neither was moved or merged."
-              : environment === "dev"
-                ? "Fix the reported local build or configuration issue, then run 'task dev' again."
-                : "Rebuild the exact candidate, then launch it again.";
+  const remedy =
+    code === "DEV_SECONDARY_DISPLAY_UNAVAILABLE"
+      ? "No non-primary display is available. Connect a second display, then run task dev -- --display=secondary again."
+      : code === "DEV_SECONDARY_DISPLAY_TOO_SMALL"
+        ? "The non-primary display work area is smaller than 640 by 520. Increase its available work area before launching Dev there."
+        : notice
+          ? notice.message
+          : QUALIFICATION_DEADLINE_CODES.has(code)
+            ? "Checking the app's files took longer than the startup allows. Open the app again; if the Mac is busy, wait for it to settle first."
+            : PREVIOUS_DRAIN_FAILURE_CODES.has(code)
+              ? "The previous session did not confirm shutdown. Preserve the existing profile and its recovery records; rebuilding the app does not settle this state. Use a qualified recovery procedure before reopening that profile."
+              : DISPLAY_PRECONDITION_CODES.has(code)
+                ? "The visible-test display requirements are not met. Check available displays and the requested viewport before launching again. For ordinary Dev that fits a second display, use task dev -- --display=secondary. Use hidden mode only for an equivalent check."
+                : environment === "owner-preview" &&
+                    code === "OWNER_PREVIEW_PROFILE_DIRECTORY_UNSAFE"
+                  ? "The Preview profile or its parent is aliased or unsafe. Preserve the existing directories and resolve their physical separation before another launch; rebuilding does not repair this state."
+                  : environment === "dev" &&
+                      code === "DEV_PROFILE_DIRECTORY_AMBIGUOUS"
+                    ? "Two distinct Dev profiles exist. Stop here and choose a profile explicitly; neither was moved or merged."
+                    : environment === "dev"
+                      ? "Fix the reported local build or configuration issue, then run 'task dev' again."
+                      : "Rebuild the exact candidate, then launch it again.";
   return (
     `${product} main-process startup failed before the app became ready (${code}). ${remedy}\n` +
     (error instanceof StartupBoundaryFailure
