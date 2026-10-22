@@ -3,6 +3,7 @@
 // do not turn it into a test-only exception at the candidate boundary.
 export const WITNESS_HARNESS_ENTRIES = Object.freeze([
   "tooling/harness-identity.ts",
+  "tooling/exact-package-witness-inputs.mjs",
 ]);
 export const EXACT_PACKAGE_WITNESSES = Object.freeze([
   Object.freeze({

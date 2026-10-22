@@ -10,11 +10,16 @@ import {
   WITNESS_HARNESS_ENTRIES,
 } from "../../tooling/exact-package-witness-inputs.mjs";
 
-it("keeps the identity helper attested, never a witness test exemption", () => {
-  expect(WITNESS_HARNESS_ENTRIES).toContain("tooling/harness-identity.ts");
-  for (const witness of EXACT_PACKAGE_WITNESSES) {
-    expect(witness.testInputs).toContain(witness.entry);
-    expect(witness.testInputs).not.toContain("tooling/harness-identity.ts");
+it("keeps identity and witness configuration attested, never test exemptions", () => {
+  for (const input of [
+    "tooling/harness-identity.ts",
+    "tooling/exact-package-witness-inputs.mjs",
+  ]) {
+    expect(WITNESS_HARNESS_ENTRIES).toContain(input);
+    for (const witness of EXACT_PACKAGE_WITNESSES) {
+      expect(witness.testInputs).toContain(witness.entry);
+      expect(witness.testInputs).not.toContain(input);
+    }
   }
 });
 
@@ -42,7 +47,14 @@ it("compiles transitive reexports without executing witnesses and refuses a miss
     );
     await fs.writeFile(
       path.join(root, "tooling/helper.mjs"),
-      'export { value } from "./leaf.mjs";',
+      'export { value } from "./leaf.mjs"; export { EXACT_PACKAGE_WITNESSES } from "./exact-package-witness-inputs.mjs";',
+    );
+    await fs.copyFile(
+      new URL(
+        "../../tooling/exact-package-witness-inputs.mjs",
+        import.meta.url,
+      ),
+      path.join(root, "tooling/exact-package-witness-inputs.mjs"),
     );
     await fs.writeFile(
       path.join(root, "tooling/leaf.mjs"),
@@ -60,6 +72,19 @@ it("compiles transitive reexports without executing witnesses and refuses a miss
         root,
         build,
         ledgerPaths: ["tooling/helper.mjs", "tooling/leaf.mjs"],
+      }),
+    ).rejects.toThrow(
+      "WITNESS_INPUT_UNDECLARED:tooling/exact-package-witness-inputs.mjs",
+    );
+    await expect(
+      checkExactPackageWitnessInputs({
+        root,
+        build,
+        ledgerPaths: [
+          "tooling/helper.mjs",
+          "tooling/leaf.mjs",
+          "tooling/exact-package-witness-inputs.mjs",
+        ],
       }),
     ).resolves.toBeUndefined();
   } finally {
