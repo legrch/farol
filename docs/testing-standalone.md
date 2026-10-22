@@ -47,6 +47,37 @@ This is native adapter composition, not normal Electron startup, a tunnel,
 ChatGPT-client, installed workflow or complete network-containment qualification.
 The standalone entry is not registered in an aggregate by this documentation.
 
+The shared identity import surface in `tooling/harness-identity.ts` and witness
+configuration in `tooling/exact-package-witness-inputs.mjs` are declared
+attested harness entries. The candidate builder compiles them and their transitive
+imports through the same source/dependency input hook as packaged scripts. It
+is not an exception to the witness's byte comparison. Exact test-owned controller
+inputs are declared separately in `tooling/exact-package-witness-inputs.mjs`;
+new helpers and dependencies must occur in the sealed ledger.
+
+`node tooling/build.mjs --check-witness-inputs` compiles the actual candidate
+script graph with writes disabled, then checks every transitive input of the
+registered exact-package witnesses against that graph and the exact controller
+exceptions. `task test:witness-inputs` runs this cheap check on Darwin, where the
+reviewed packaging compiler is available; `task ci` and the hosted `native` job
+include it, and the Linux `task ci:cloud` gate does not. It does not build Go/native resources, execute a
+witness, allocate a profile, or replace an existing candidate. Candidate builds
+repeat the same coverage check before sealing their input ledger.
+
+The separate `connector-daily-lifecycle.e2e.mjs` packaged witness keeps a bounded
+fixture journal of TERM delivery, exit-handler entry and completion of the
+synchronous atomic exit-receipt write. It copies those observations into the
+suite report unconditionally from cleanup's `finally` path, before deleting
+owned roots, including when recovery times out or Quit fails before receipt
+validation. Trace discovery is independent of terminal receipt parsing; each
+available journal is retained even if another trace cannot be read. Read
+failures are reported separately and fail cleanup without replacing the
+original case failure.
+The journal is diagnostic only: every owned tunnel still needs its original
+`phase: "exited"`, `exitCode: 0` receipt and confirmed process/group absence.
+A running receipt or a tunnel killed before its own exit receipt is never
+converted into a clean exit.
+
 Connector mutations have separate lower-layer evidence:
 
 - `TestConnectorV3*` in Computer domain and repository tests checks exact retained

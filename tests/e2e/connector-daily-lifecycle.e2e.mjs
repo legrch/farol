@@ -650,6 +650,41 @@ async function tunnelReceipts(run) {
     }),
   );
 }
+// Diagnostic journals must not depend on a valid terminal receipt or process
+// absence. Read every exact fixture trace independently, retaining partial facts
+// and explicit read failures without turning either into a clean terminal.
+async function collectTunnelTraces(run) {
+  run.evidence.tunnelTraces = [];
+  run.evidence.tunnelTraceFailures = [];
+  if (!run.connectorRoot) return;
+  const directory = path.join(run.connectorRoot, "state");
+  let names;
+  try {
+    names = (await fs.readdir(directory)).filter((name) =>
+      /^daily-tunnel-[0-9a-f-]{36}\.json\.trace\.json$/u.test(name),
+    );
+    assert.ok(names.length <= 2, "DAILY_UNEXPECTED_SUCCESSOR_COUNT");
+  } catch (error) {
+    run.evidence.tunnelTraceFailures.push({ file: "state", ...failure(error) });
+    throw new Error("DAILY_TUNNEL_TRACES_UNCONFIRMED");
+  }
+  for (const name of new Set([
+    ...names.sort(),
+    ...run.tunnels.map(
+      (owned) => `daily-tunnel-${owned.receiptId}.json.trace.json`,
+    ),
+  ])) {
+    try {
+      run.evidence.tunnelTraces.push(
+        await privateJson(path.join(directory, name)),
+      );
+    } catch (error) {
+      run.evidence.tunnelTraceFailures.push({ file: name, ...failure(error) });
+    }
+  }
+  if (run.evidence.tunnelTraceFailures.length)
+    throw new Error("DAILY_TUNNEL_TRACES_UNCONFIRMED");
+}
 async function ownTunnel(run, receipt) {
   const tunnel = await processIdentity(receipt.pid);
   const anchor = await processIdentity(receipt.parentPid);
@@ -913,12 +948,12 @@ async function normalQuit(run) {
   }
   const receipts = await tunnelReceipts(run);
   assert.equal(receipts.length, run.tunnels.length);
+  run.evidence.tunnels = receipts;
   assert.ok(
     receipts.every(
       (receipt) => receipt.phase === "exited" && receipt.exitCode === 0,
     ),
   );
-  run.evidence.tunnels = receipts;
   run.evidence.quit.lastQuit = value;
   assert.ok(
     run.evidence.observations.some(
@@ -1023,49 +1058,55 @@ async function dispose(run) {
       errors.push(failure(error));
     }
   };
-  // Observe the same pending launch once; no new launch/profile after timeout.
-  if (run.pendingLaunch)
-    await attempt(() =>
-      bounded(run.pendingLaunch, "DAILY_LATE_LAUNCH_UNKNOWN", 20000),
-    );
-  for (const peer of run.peers) await attempt(() => closePeer(run, peer));
-  if (run.application && run.isolated && !run.quitAttempted)
-    await attempt(() => normalQuit(run));
-  await attempt(() => originalClose(run));
-  // The original endpoint remains owned and listening while its admission
-  // witness is consumed. Close it only after the exact child terminal recheck.
-  if (
-    run.cleanQuit &&
-    run.closeAttempted &&
-    errors.length === 0 &&
-    !run.evidence.failure
-  )
-    await attempt(async () => {
-      run.admission = await recheckNativePreviewIsolation(
-        run.admission,
-        run.nativePaths,
-        run.child,
+  try {
+    // Observe the same pending launch once; no new launch/profile after timeout.
+    if (run.pendingLaunch)
+      await attempt(() =>
+        bounded(run.pendingLaunch, "DAILY_LATE_LAUNCH_UNKNOWN", 20000),
       );
-      run.evidence.disposal.push({
-        kind: "post-quit-native-admission-recheck",
-        status: "confirmed",
+    for (const peer of run.peers) await attempt(() => closePeer(run, peer));
+    if (run.application && run.isolated && !run.quitAttempted)
+      await attempt(() => normalQuit(run));
+    await attempt(() => originalClose(run));
+    // The original endpoint remains owned and listening while its admission
+    // witness is consumed. Close it only after the exact child terminal recheck.
+    if (
+      run.cleanQuit &&
+      run.closeAttempted &&
+      errors.length === 0 &&
+      !run.evidence.failure
+    )
+      await attempt(async () => {
+        run.admission = await recheckNativePreviewIsolation(
+          run.admission,
+          run.nativePaths,
+          run.child,
+        );
+        run.evidence.disposal.push({
+          kind: "post-quit-native-admission-recheck",
+          status: "confirmed",
+        });
       });
-    });
-  if (run.server)
-    await attempt(async () => {
-      await bounded(
-        new Promise((resolve, reject) => {
-          run.server.close((error) => (error ? reject(error) : resolve()));
-          run.server.closeAllConnections();
-        }),
-        "DAILY_HTTP_CLOSE_TIMEOUT",
-        5000,
-      );
-      run.evidence.disposal.push({
-        kind: "loopback-server-close",
-        status: "returned",
+    if (run.server)
+      await attempt(async () => {
+        await bounded(
+          new Promise((resolve, reject) => {
+            run.server.close((error) => (error ? reject(error) : resolve()));
+            run.server.closeAllConnections();
+          }),
+          "DAILY_HTTP_CLOSE_TIMEOUT",
+          5000,
+        );
+        run.evidence.disposal.push({
+          kind: "loopback-server-close",
+          status: "returned",
+        });
       });
-    });
+  } finally {
+    // Includes exercise/normalQuit/cleanup failures, before successful disposal
+    // can remove the owned state. Never derive trace names from quit receipts.
+    await attempt(() => collectTunnelTraces(run));
+  }
   // The endpoint is now closed; use the completed recheck for root disposal.
   if (
     run.cleanQuit &&
@@ -1174,6 +1215,8 @@ async function fresh(name) {
     name,
     status: "pending",
     observations: [],
+    tunnelTraces: [],
+    tunnelTraceFailures: [],
     disposal: [],
     cleanupUnknown: false,
     disposed: false,
@@ -1328,12 +1371,13 @@ try {
     } catch (error) {
       caseError = error;
       run.evidence.failure = failure(error);
-    }
-    try {
-      await dispose(run);
-    } catch (error) {
-      caseError ??= error;
-      run.evidence.failure ??= failure(error);
+    } finally {
+      try {
+        await dispose(run);
+      } catch (error) {
+        caseError ??= error;
+        run.evidence.failure ??= failure(error);
+      }
     }
     run.evidence.status = caseError ? "failed" : "passed";
     if (caseError) throw caseError; // No unknown retry or successor case.
