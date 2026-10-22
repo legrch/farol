@@ -72,6 +72,48 @@ function button(host: Element, label: string): HTMLButtonElement {
   if (!found) throw new Error(`BUTTON_MISSING:${label}`);
   return found;
 }
+it.each([
+  ["UPDATE_ROLLED_BACK", false, true],
+  ["UPDATE_SOURCE_IDENTITY_UNCONFIRMED", false, false],
+  ["UPDATE_HELPER_EXITED", false, false],
+  ["UPDATE_DOWNLOAD_FAILED", false, false],
+  ["UPDATE_ADOPTION_TREE_MISMATCH", false, false],
+  ["UPDATE_HANDOFF_UNKNOWN", true, false],
+  ["UPDATE_ROLLED_BACK", true, false],
+] as const)(
+  "reserves health reassurance for verified rollback: %s, recoveryRequired=%s",
+  async (code, recoveryRequired, verified) => {
+    const { host, c } = await mount({
+      phase: "failed",
+      code,
+      recoveryRequired,
+    });
+    await act(async () => c.overlay("update"));
+    const dialog = host.querySelector("dialog")!;
+    const status = dialog.querySelector('[role="status"]')!.textContent;
+    if (verified)
+      expect(status).toBe(
+        `The update didn't finish. Farol ${bootstrap().build.version} is still installed and works.`,
+      );
+    else {
+      expect(status).not.toContain("still installed and works");
+      expect(status).toContain(
+        code === "UPDATE_ADOPTION_TREE_MISMATCH"
+          ? "doesn’t match its published release"
+          : recoveryRequired
+            ? "needs recovery"
+            : "The update did not finish",
+      );
+    }
+    expect(button(dialog, "Review Diagnostics").disabled).toBe(false);
+    await act(async () => button(dialog, "Review Diagnostics").click());
+    expect(c.getSnapshot().destination).toMatchObject({
+      area: "settings",
+      page: "diagnostics",
+    });
+    expect(button(host, "Export support diagnostics…").disabled).toBe(false);
+  },
+);
 it.each(["available", "ready"] as const)(
   "uses one atomic automatic update choice in the %s sheet and preserves an unknown save",
   async (phase) => {

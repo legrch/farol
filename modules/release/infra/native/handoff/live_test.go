@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -301,6 +302,81 @@ func TestLiveNativeCopiesShareObservationConsumption(t *testing.T) {
 				}
 			}
 			f.assertCustody()
+		})
+	}
+}
+
+// Disposable profile route and a scripted waiter; no installed app is accessed.
+func TestUpdateQuitProceedsAfterNonCleanDrain(t *testing.T) {
+	for _, leftover := range []bool{false, true} {
+		t.Run(fmt.Sprint(leftover), func(t *testing.T) {
+			f := newFixture(t)
+			f.writeQuit(`{"schema":1,"at":"2026-10-15T12:00:01Z","drained":false,"unconfirmed":["work"]}`)
+			running := filepath.Join(f.statePath, "running.json")
+			marker := `{"schema":1,"pid":42,"startedAt":"2026-10-15T12:00:00.000Z","bootTime":null,"processStart":"Thu Oct 15 12:00:00 2026"}`
+			must(t, os.WriteFile(running, []byte(marker), 0600))
+			l, err := NewLive(f.homePath, f.home, f.state, f.v.expected.StateIdentity, 42, f.v.expected.ProcessStart, &liveBoundWaiter{}, time.Now().Add(time.Minute))
+			if err != nil {
+				t.Fatal(err)
+			}
+			l.route.reopen = fixtureRoute
+			must(t, l.CaptureMarker(context.Background()))
+			if !leftover {
+				must(t, os.Remove(running))
+			}
+			if _, err := l.ObserveUpdateQuit(context.Background()); err == nil {
+				t.Fatal("absence was not observed")
+			}
+			if err := l.WaitExit(context.Background(), time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			note, err := l.ObserveUpdateQuit(context.Background())
+			if err != nil || note != "predecessor_drain_unconfirmed" {
+				t.Fatal(note, err)
+			}
+			must(t, l.CheckUpdateStopped(context.Background()))
+		})
+	}
+}
+
+// Simulate startup publishing a new generation after the observed predecessor
+// exits but before the helper acquires promotion. No process or app is launched.
+func TestUpdateQuitRejectsSuccessorMarkerAfterPredecessorExit(t *testing.T) {
+	for _, kind := range []string{"pid", "birth", "started", "malformed", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newFixture(t)
+			running := filepath.Join(f.statePath, "running.json")
+			marker := `{"schema":1,"pid":42,"startedAt":"2026-10-15T12:00:00.000Z","bootTime":null,"processStart":"Thu Oct 15 12:00:00 2026"}`
+			must(t, os.WriteFile(running, []byte(marker), 0600))
+			l, err := NewLive(f.homePath, f.home, f.state, f.v.expected.StateIdentity, 42, f.v.expected.ProcessStart, &liveBoundWaiter{}, time.Now().Add(time.Minute))
+			must(t, err)
+			l.route.reopen = fixtureRoute
+			must(t, l.CaptureMarker(context.Background()))
+			must(t, l.WaitExit(context.Background(), time.Now().Add(time.Second)))
+			must(t, l.CheckUpdateStopped(context.Background()))
+			replacement := marker
+			switch kind {
+			case "pid":
+				replacement = strings.Replace(marker, `"pid":42`, `"pid":43`, 1)
+			case "birth":
+				replacement = strings.Replace(marker, "12:00:00 2026", "12:00:01 2026", 1)
+			case "started":
+				replacement = strings.Replace(marker, "12:00:00.000Z", "12:00:01.000Z", 1)
+			case "malformed":
+				replacement = `{}`
+			case "symlink":
+				must(t, os.Remove(running))
+				must(t, os.Symlink("missing", running))
+			}
+			if kind != "symlink" {
+				must(t, os.WriteFile(running, []byte(replacement), 0600))
+			}
+			if _, err := l.ObserveUpdateQuit(context.Background()); err == nil {
+				t.Fatal("a successor or unreadable marker was treated as a drain note")
+			}
+			if err := l.CheckUpdateStopped(context.Background()); err == nil {
+				t.Fatal("effect fence accepted a successor or unreadable marker")
+			}
 		})
 	}
 }

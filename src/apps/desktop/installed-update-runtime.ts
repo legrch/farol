@@ -188,13 +188,6 @@ const Operation = z.strictObject({
   source: AcceptedBuild,
   target: AcceptedBuild,
 });
-const RejectedTarget = Operation.extend({
-  schema: z.literal("farol.rejected-update-target/1"),
-  directoryIdentity: z.strictObject({
-    device: z.string().regex(/^[0-9]{1,30}$/u),
-    inode: z.string().regex(/^[0-9]{1,30}$/u),
-  }),
-});
 const Retained = z.strictObject({
   schema: z.literal("farol.ready-update/1"),
   handle: z.string().max(4096),
@@ -402,10 +395,30 @@ async function readOperationJournal(
   location: InstalledAppLocation,
   read: typeof readRecord = readRecord,
 ): Promise<z.infer<typeof Journal>> {
-  await readOperationBinding(root, op, location, read);
-  const journal = Journal.parse(
-    await read(path.join(root, op.operationId, "journal.json")),
+  return Journal.parse(
+    await readStartupOperationJournal(root, op, location, read),
   );
+}
+
+async function readStartupOperationJournal(
+  root: string,
+  op: z.infer<typeof Operation>,
+  location: InstalledAppLocation,
+  read: typeof readRecord = readRecord,
+  purpose: "update" | "ordinary-shared-execution" = "update",
+  absent: typeof recordAbsent = recordAbsent,
+): Promise<z.infer<typeof Journal> | null> {
+  await readOperationBinding(root, op, location, read, purpose);
+  const file = path.join(root, op.operationId, "journal.json");
+  const raw = await read(file);
+  if (raw === null) {
+    // JSON null is malformed journal evidence, not the pre-journal crash window.
+    // Preserve it; only a separate ENOENT observation permits the none row.
+    if (!(await absent(file)))
+      throw new Error("UPDATE_OPERATION_JOURNAL_INVALID");
+    return null;
+  }
+  const journal = Journal.parse(raw);
   if (!sameOperation(journal, op))
     throw new Error("UPDATE_OPERATION_IDENTITY_MISMATCH");
   return journal;
@@ -495,70 +508,6 @@ async function openRejectedDirectory(directory: string): Promise<
 
 const readRejectedEntry = (file: string): Promise<RejectedDirectoryStat> =>
   fs.lstat(file, { bigint: true });
-
-/** Existing rejected-target proof: accepted operation, ended helper, exact inode/layout. */
-async function confirmRejectedTarget(
-  root: string,
-  op: z.infer<typeof Operation>,
-  helperEnded: () => Promise<boolean>,
-  reads: Readonly<{
-    canonicalOwnedDirectory: typeof canonicalOwnedDirectory;
-    readRecord: typeof readRecord;
-    openDirectory: typeof openRejectedDirectory;
-    lstat: typeof readRejectedEntry;
-  }> = {
-    canonicalOwnedDirectory,
-    readRecord,
-    openDirectory: openRejectedDirectory,
-    lstat: readRejectedEntry,
-  },
-): Promise<z.infer<typeof RejectedTarget> | null> {
-  const directory = path.join(root, op.operationId);
-  await reads.canonicalOwnedDirectory(directory, true);
-  const raw = await reads.readRecord(
-    path.join(directory, "rejected-target.json"),
-  );
-  if (raw === null) return null;
-  const witness = RejectedTarget.parse(raw);
-  if (!sameOperation(witness, op) || !(await helperEnded()))
-    throw new Error("UPDATE_REJECTED_TARGET_UNCONFIRMED");
-  // Only metadata is needed for rejected bytes; never execute their verifier
-  // or reinterpret their corrupt contents as an accepted application.
-  const rejected = path.join(directory, "failed.app");
-  await reads.canonicalOwnedDirectory(rejected, false);
-  const fd = await reads.openDirectory(rejected);
-  try {
-    const metadata = await fd.stat();
-    if (
-      !metadata.isDirectory() ||
-      metadata.uid !== BigInt(process.getuid?.() ?? -1) ||
-      (metadata.mode & 0o022n) !== 0n ||
-      String(metadata.dev) !== witness.directoryIdentity.device ||
-      String(metadata.ino) !== witness.directoryIdentity.inode
-    )
-      throw new Error("UPDATE_REJECTED_TARGET_CHANGED");
-    for (const name of ["previous.app", "staged.app"]) {
-      let present = false;
-      try {
-        await reads.lstat(path.join(directory, name));
-        present = true;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-      if (present) throw new Error("UPDATE_REJECTED_TARGET_LAYOUT_UNCONFIRMED");
-    }
-    const current = await reads.lstat(rejected);
-    if (
-      current.dev !== metadata.dev ||
-      current.ino !== metadata.ino ||
-      !current.isDirectory()
-    )
-      throw new Error("UPDATE_REJECTED_TARGET_CHANGED");
-  } finally {
-    await fd.close();
-  }
-  return witness;
-}
 
 export type InstalledUpdateResourcesOrigin = Readonly<{
   slot: "/Applications/Farol.app";
@@ -698,50 +647,54 @@ async function observeSharedSlotStartup(
   const saved = await read(path.join(root, "last-update.json"));
   const repair = await read(app + ".repair.json");
   const repairJournal = await read("/Applications/.farol-closed-repair.json");
-  if (
-    ready !== null &&
-    (Retained.parse(ready).operation || Retained.parse(ready).preparation)
-  ) {
-    expected = await operationImage(Retained.parse(ready));
-  } else if (saved !== null) {
-    const receipt = SavedReceipt.parse(saved);
-    expected = await operationImage(receipt);
-    const accepted = TARGET_PHASES.includes(receipt.phase)
-      ? receipt.operation!.target
-      : [...ROLLED_BACK_PHASES, ...CANCELLED_PHASES].includes(receipt.phase)
-        ? receipt.operation!.source
+  const readyRecord = ready === null ? null : Retained.parse(ready);
+  const active =
+    readyRecord?.operation || readyRecord?.preparation
+      ? readyRecord
+      : saved !== null
+        ? SavedReceipt.parse(saved)
         : null;
-    if (
-      !accepted ||
-      !sameBuild(accepted, expected) ||
-      receipt.runningBuildId !== build.buildId
-    ) {
-      // A finished explicit rollback leaves last-update at the old target
-      // until the restored source can start its ordinary recovery reader.
-      const op = receipt.operation!;
-      const pending = RestoreIntent.parse(
-        await read(path.join(root, "restore-pending.json")),
+  if (active?.operation) {
+    const record = active;
+    expected = await operationImage(record);
+    const op = record.operation!;
+    const pendingRaw = await read(path.join(root, "restore-pending.json"));
+    const pending =
+      pendingRaw === null ? null : RestoreIntent.parse(pendingRaw);
+    if (pending && !sameOperation(pending.operation, op))
+      throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+    const helper = await observeInstalledHelper(
+      pending && !pending.notStartedAt ? pending.helper : record.helper,
+      options.observation?.readProcess ?? readInstalledProcess,
+    );
+    const journal = await readStartupOperationJournal(
+      root,
+      op,
+      "shared",
+      read,
+      "ordinary-shared-execution",
+      options.observation?.recordAbsent ?? recordAbsent,
+    );
+    const installed = options.observation
+      ? AcceptedBuild.parse(
+          await options.observation.readBuild(options.directory, app, 30000),
+        )
+      : { ...expected, digest: await treeDigest(app, options.physicalFiles) };
+    const decision = installedUpdateStartupDecision({
+      phase: journal?.phase ?? null,
+      helper: startupHelperState(helper),
+      installed,
+      running: build,
+      operation: op,
+    });
+    if (!decision.mayStart)
+      throw new Error(
+        helper === "live" || helper === "unknown"
+          ? "UPDATE_HELPER_EXIT_UNCONFIRMED"
+          : "UPDATE_ACCEPTED_SOURCE_UNCONFIRMED",
       );
-      const journal = await readOperationJournal(root, op, "shared", read);
-      const helper = await observeInstalledHelper(
-        pending.helper,
-        options.observation?.readProcess ?? readInstalledProcess,
-      );
-      if (
-        pending.action !== "rollback" ||
-        pending.notStartedAt !== undefined ||
-        !sameOperation(pending.operation, op) ||
-        !pending.installedBefore ||
-        !sameBuild(pending.installedBefore, op.target) ||
-        pending.priorPhase !== receipt.phase ||
-        !TARGET_PHASES.includes(receipt.phase) ||
-        receipt.runningBuildId !== op.target.buildId ||
-        !["rolled_back", "rollback_completed"].includes(journal.phase) ||
-        !sameBuild(expected, op.source) ||
-        !["ended", "changed"].includes(helper)
-      )
-        throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-    }
+  } else if (active?.preparation) {
+    expected = await operationImage(active);
   } else if (repair !== null || repairJournal !== null) {
     const receipt = ClosedRepairReceipt.parse(repair);
     const journal = ClosedRepairJournal.parse(repairJournal);
@@ -992,23 +945,26 @@ async function observeCompletedPrivateLaunch(
     )
       throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
     await readOperationBinding(root, receipt.operation, "shared", read);
-    const expected =
-      receipt.phase === "completed"
-        ? receipt.operation.target
-        : [
-              "cancelled",
-              "rolled_back",
-              "cancel_completed",
-              "rollback_completed",
-            ].includes(receipt.phase)
-          ? receipt.operation.source
-          : null;
-    if (
-      !expected ||
-      !sameBuild(expected, operation.target) ||
-      receipt.runningBuildId !== build.buildId
-    )
+    const expected = operation.target;
+    if (!sameOperation(receipt.operation, operation))
       throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+    const pendingRaw = await read(path.join(root, "restore-pending.json"));
+    const pending =
+      pendingRaw === null ? null : RestoreIntent.parse(pendingRaw);
+    if (pending && !sameOperation(pending.operation, operation))
+      throw new Error("UPDATE_OPERATION_IDENTITY_MISMATCH");
+    const helper = await observeInstalledHelper(
+      pending && !pending.notStartedAt ? pending.helper : receipt.helper,
+      options.observation?.readProcess ?? readInstalledProcess,
+    );
+    const journal = await readStartupOperationJournal(
+      root,
+      operation,
+      "shared",
+      read,
+      "update",
+      options.observation?.recordAbsent ?? recordAbsent,
+    );
     const measured = options.observation
       ? AcceptedBuild.parse(
           await options.observation.readBuild(
@@ -1024,8 +980,16 @@ async function observeCompletedPrivateLaunch(
             options.physicalFiles,
           ),
         };
-    if (!sameBuild(measured, expected))
-      throw new Error("UPDATE_ACCEPTED_SOURCE_CHANGED");
+    if (
+      !installedUpdateStartupDecision({
+        phase: journal?.phase ?? null,
+        helper: startupHelperState(helper),
+        installed: measured,
+        running: build,
+        operation,
+      }).mayStart
+    )
+      throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
     await canonical("/Applications/Farol.app", false);
   };
   await settled();
@@ -1057,6 +1021,62 @@ async function observeCompletedPrivateLaunch(
       await resourcesOrigin.recheck();
     },
   });
+}
+
+function startupHelperState(
+  status: Awaited<ReturnType<typeof observeInstalledHelper>>,
+): "running" | "exited" | "unknown" {
+  return status === "live"
+    ? "running"
+    : status === "unknown"
+      ? "unknown"
+      : "exited";
+}
+
+/**
+ * Startup decision table (after operation/binding/manifest authentication):
+ * phase = none, prepared, predecessor_saved, new_installed, verified,
+ * launch_requested, completed, rollback_started, rolled_back, cancelled,
+ * cancel_launch_requested, cancel_completed, rollback_launch_requested,
+ * rollback_completed. Every phase has exactly the same rows:
+ * helper       installed       running       action          mayStart
+ * running      any             any           wait            false
+ * unknown      any             any           refuse          false
+ * exited       neither         any           refuse          false
+ * exited       target          target        completed       true
+ * exited       target          source/other  completed       false
+ * exited       source          source        rolled_back     true
+ * exited       source          target/other  rolled_back     false
+ * A missing journal means none only inside an authenticated operation; no
+ * operation uses the ordinary install/adoption baseline. Historical phases are
+ * evidence, never a reason to replay an effect or reopen a settled operation.
+ * Companions only determine rollback availability, identically on every restart.
+ * This pure decision grants no write, launch, or retry authority.
+ */
+export function installedUpdateStartupDecision(input: {
+  phase: z.infer<typeof Journal>["phase"] | null;
+  helper: "running" | "exited" | "unknown";
+  installed: z.infer<typeof AcceptedBuild>;
+  running: Pick<z.infer<typeof AcceptedBuild>, "version" | "buildId">;
+  operation: z.infer<typeof Operation>;
+}): {
+  action: "completed" | "rolled_back" | "wait" | "refuse";
+  mayStart: boolean;
+} {
+  if (input.helper === "running") return { action: "wait", mayStart: false };
+  if (input.helper === "unknown") return { action: "refuse", mayStart: false };
+  const accepted = [input.operation.target, input.operation.source].find(
+    (build) => sameBuild(input.installed, build),
+  );
+  if (!accepted) return { action: "refuse", mayStart: false };
+  return {
+    action: sameBuild(accepted, input.operation.target)
+      ? "completed"
+      : "rolled_back",
+    mayStart:
+      input.running.buildId === accepted.buildId &&
+      input.running.version === accepted.version,
+  };
 }
 
 /** Observe one explicit updater relaunch before the first startup lease acquire. */
@@ -1115,7 +1135,8 @@ export async function waitForInstalledUpdateRelaunch(
   )
     throw new Error("UPDATE_RELAUNCH_IDENTITY_MISMATCH");
   if (
-    (hint.action === "apply" && hint.phase !== "completed") ||
+    (hint.action === "apply" &&
+      !["completed", "rollback_completed"].includes(hint.phase)) ||
     (hint.action === "rollback" && hint.phase !== "rollback_completed")
   )
     throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
@@ -1168,18 +1189,11 @@ export async function waitForInstalledUpdateRelaunch(
       },
       readProcess: readInstalledProcess,
     };
-  const pendingPhase = {
-    completed: "launch_requested",
-    cancel_completed: "cancel_launch_requested",
-    rollback_completed: "rollback_launch_requested",
-  }[hint.phase];
   const receiptFile = path.join(
     root,
     hint.action === "apply" ? "ready.json" : "restore-pending.json",
   );
   let pinned: z.infer<typeof Operation> | undefined;
-  let completedObserved = false;
-  let rejectedTargetObserved: z.infer<typeof RejectedTarget> | undefined;
 
   const observe = async (wait: boolean): Promise<void> => {
     const deadline = now() + timeoutMs;
@@ -1256,31 +1270,6 @@ export async function waitForInstalledUpdateRelaunch(
         throw new Error("UPDATE_RELAUNCH_RECEIPT_MISMATCH");
       if ("preparation" in receipt && receipt.preparation)
         throw new Error("UPDATE_RELAUNCH_RECEIPT_MISMATCH");
-      if ("priorPhase" in receipt) {
-        const eligible =
-          hint.action === "rollback"
-            ? ["verified", "launch_requested", "completed"]
-            : hint.phase === "completed"
-              ? ["prepared", "predecessor_saved", "new_installed", "verified"]
-              : hint.phase === "cancel_completed"
-                ? ["prepared", "cancelled"]
-                : [
-                    "prepared",
-                    "predecessor_saved",
-                    "rollback_started",
-                    "rolled_back",
-                  ];
-        const recoveredForward =
-          hint.action === "recover" &&
-          hint.phase === "completed" &&
-          receipt.priorPhase === "rollback_started" &&
-          legacyPredecessorRequiresStateRecovery(
-            op.source.version,
-            op.target.version,
-          );
-        if (!eligible.includes(receipt.priorPhase) && !recoveredForward)
-          throw new Error("UPDATE_RELAUNCH_RECEIPT_MISMATCH");
-      }
       pinned ??= Operation.parse(op);
       await bounded(() =>
         reads.canonicalOwnedDirectory(
@@ -1311,36 +1300,22 @@ export async function waitForInstalledUpdateRelaunch(
         observeInstalledHelper(hint.helper, reads.readProcess),
       );
       const journal = await bounded(() =>
-        readOperationJournal(
+        readStartupOperationJournal(
           root,
           pinned!,
           slot === "/Applications/Farol.app" ? "shared" : "legacy",
           reads.readRecord,
+          "update",
+          reads.recordAbsent ?? recordAbsent,
         ),
       );
-      if (
-        journal.phase !== hint.phase &&
-        (journal.phase !== pendingPhase || completedObserved)
-      )
-        throw new Error("UPDATE_RELAUNCH_PHASE_MISMATCH");
-      if (journal.phase === hint.phase) completedObserved = true;
-      if (helper === "unknown" || helper === "changed")
+      if (helper === "unknown")
         throw new Error("UPDATE_RELAUNCH_HELPER_UNCONFIRMED");
-      if (helper === "ended" && journal.phase !== hint.phase)
-        throw new Error("UPDATE_RELAUNCH_COMPLETION_UNCONFIRMED");
       return { journal, helper };
     };
     const physical = async () => {
       const expected =
         hint.phase === "completed" ? pinned!.target : pinned!.source;
-      const companion =
-        hint.phase === "completed"
-          ? "previous.app"
-          : hint.phase === "cancel_completed"
-            ? "staged.app"
-            : "failed.app";
-      const companionPath = path.join(root, pinned!.operationId, companion);
-      await bounded(() => reads.canonicalOwnedDirectory(companionPath, false));
       const stored = BuildIdentitySchema.parse(
         await bounded(() =>
           reads.readRecord(path.join(directory, "build-identity.json"), false),
@@ -1358,77 +1333,38 @@ export async function waitForInstalledUpdateRelaunch(
         )
       )
         throw new Error("UPDATE_RELAUNCH_PHYSICAL_PAIR_CHANGED");
-      if (hint.phase === "rollback_completed") {
-        const confirmed = await bounded(() =>
-          confirmRejectedTarget(
-            root,
-            pinned!,
-            async () =>
-              (await bounded(() =>
-                observeInstalledHelper(hint.helper, reads.readProcess),
-              )) === "ended",
-            {
-              canonicalOwnedDirectory: reads.canonicalOwnedDirectory,
-              readRecord: reads.readRecord,
-              openDirectory:
-                reads.rejectedDirectory?.openDirectory ?? openRejectedDirectory,
-              lstat: reads.rejectedDirectory?.lstat ?? readRejectedEntry,
-            },
-          ),
-        );
-        if (confirmed) {
-          if (
-            rejectedTargetObserved &&
-            (confirmed.directoryIdentity.device !==
-              rejectedTargetObserved.directoryIdentity.device ||
-              confirmed.directoryIdentity.inode !==
-                rejectedTargetObserved.directoryIdentity.inode)
-          )
-            throw new Error("UPDATE_REJECTED_TARGET_CHANGED");
-          rejectedTargetObserved = confirmed;
-          return;
-        }
-        if (rejectedTargetObserved)
-          throw new Error("UPDATE_REJECTED_TARGET_UNCONFIRMED");
-      }
-      if (
-        !sameBuild(
-          AcceptedBuild.parse(
-            await bounded(() =>
-              reads.readBuild(directory, companionPath, remaining()),
-            ),
-          ),
-          hint.phase === "completed" ? pinned!.source : pinned!.target,
-        )
-      )
-        throw new Error("UPDATE_RELAUNCH_PHYSICAL_PAIR_CHANGED");
     };
-    let pairObserved = false;
     for (;;) {
       const result = await correlate();
+      if (result.helper === "live") {
+        if (!wait) throw new Error("UPDATE_RELAUNCH_COMPLETION_UNCONFIRMED");
+        await bounded(() => pause(Math.min(intervalMs, remaining())));
+        continue;
+      }
+      // Never replay an uncertain open. Once the helper has ended, the same
+      // content decision admits both interrupted and already settled journals.
+      await physical();
+      const expected =
+        hint.phase === "completed" ? pinned!.target : pinned!.source;
+      const installed = AcceptedBuild.parse(
+        await bounded(() => reads.readBuild(directory, slot, remaining())),
+      );
+      const decision = installedUpdateStartupDecision({
+        phase: result.journal?.phase ?? null,
+        helper: startupHelperState(result.helper),
+        installed,
+        running: build,
+        operation: pinned!,
+      });
+      if (!decision.mayStart || !sameBuild(installed, expected))
+        throw new Error("UPDATE_RELAUNCH_PHYSICAL_PAIR_CHANGED");
+      const final = await correlate();
       if (
-        !wait &&
-        (result.journal.phase !== hint.phase || result.helper !== "ended")
+        final.helper === "live" ||
+        final.journal?.phase !== result.journal?.phase
       )
         throw new Error("UPDATE_RELAUNCH_COMPLETION_UNCONFIRMED");
-      if (
-        (!pairObserved &&
-          (hint.phase !== "rollback_completed" || result.helper === "ended")) ||
-        (result.journal.phase === hint.phase && result.helper === "ended")
-      ) {
-        await physical();
-        pairObserved = true;
-      }
-      if (result.journal.phase === hint.phase && result.helper === "ended") {
-        // The helper may finalize while a tree is measured; never use that
-        // earlier observation to admit a changed receipt or operation.
-        const final = await correlate();
-        if (final.journal.phase !== hint.phase || final.helper !== "ended")
-          throw new Error("UPDATE_RELAUNCH_COMPLETION_UNCONFIRMED");
-        return;
-      }
-      if (!wait) throw new Error("UPDATE_RELAUNCH_COMPLETION_UNCONFIRMED");
-      await bounded(() => pause(Math.min(intervalMs, remaining())));
+      return;
     }
   };
   await observe(true);
@@ -2440,6 +2376,7 @@ async function createRuntime(
   let restorable: z.infer<typeof Retained> | null = null;
   let restoreKind: "recover" | "rollback" | null = null;
   let declinedBuildId: string | null = null;
+
   const runTrusted = async (
     entry: string,
     args: string[],
@@ -2762,17 +2699,6 @@ async function createRuntime(
     const status = await observeInstalledHelper(record.helper);
     return status === "ended" || status === "changed";
   };
-  const confirmedRejectedTarget = async (
-    op: z.infer<typeof Operation>,
-    record: z.infer<typeof Retained>,
-  ) => {
-    await verifyBinding(op);
-    return (
-      (await confirmRejectedTarget(root, op, () =>
-        originalHelperEnded(record),
-      )) !== null
-    );
-  };
   const removeDownloadStage = async (
     download: z.infer<typeof DownloadStage>,
   ) => {
@@ -2896,7 +2822,8 @@ async function createRuntime(
     for await (const entry of await fs.opendir(directory)) {
       if (
         entry.name !== "staged.app" &&
-        entry.name !== INSTALLED_SLOT_BINDING_FILE
+        entry.name !== INSTALLED_SLOT_BINDING_FILE &&
+        entry.name !== "helper.log.jsonl"
       )
         throw new Error("UPDATE_PREPARATION_UNRECONCILED");
     }
@@ -3417,161 +3344,90 @@ async function createRuntime(
         retained = { ...retained, preparation: undefined };
         await writeRecord(readyFile, retained);
       }
-      if (
-        retained.operation &&
-        (await readRecord(
-          path.join(root, retained.operation.operationId, "journal.json"),
-        )) === null
-      ) {
-        const op = retained.operation;
-        // No journal alone never proves non-dispatch. First reconcile the exact
-        // dispatched PID, including when its start-time readback was unavailable.
-        if (pending || !(await originalHelperEnded(retained)))
-          return known("UPDATE_HELPER_EXIT_UNCONFIRMED");
-        const current = await readBuild(slot);
-        const staged = await optionalBuild(op, "staged.app");
-        if (
-          current.buildId !== options.build.buildId ||
-          current.version !== options.build.version ||
-          !sameBuild(current, op.source) ||
-          !staged ||
-          !sameBuild(staged, op.target) ||
-          (await optionalBuild(op, "previous.app")) !== null ||
-          (await optionalBuild(op, "failed.app")) !== null ||
-          (await readRecord(
-            path.join(root, op.operationId, "journal.json"),
-          )) !== null
-        )
-          return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
-        await writeRecord(
-          path.join(root, `${op.operationId}-pre-mutation-exit.json`),
-          {
-            schema: "farol.update-refusal/1",
-            action: "apply",
-            operation: op,
-            helper: retained.helper,
-            code: "helper_exited_before_mutation",
-          },
-        );
-        // Reuse the durable preparation cleanup phase. If reclamation itself
-        // is interrupted, the next lifetime still identifies this exact copy.
-        retained = {
-          ...retained,
-          operation: null,
-          helper: null,
-          preparation: op,
-        };
-        await writeRecord(readyFile, retained);
-        await removePreparedCopy(op);
-        retained = { ...retained, preparation: undefined };
-        await writeRecord(readyFile, retained);
-      }
       if (retained.operation) {
         const op = retained.operation;
         if (pending && !sameOperation(pending.operation, op))
           return known("UPDATE_OPERATION_IDENTITY_MISMATCH");
-        const journal = await readJournal(op);
+        const journalFile = path.join(root, op.operationId, "journal.json");
+        const readStartupJournal = () =>
+          readStartupOperationJournal(root, op, installLocation);
+        const journal = await readStartupJournal();
+        // A restore owns a distinct helper. Its exit is required even when the
+        // original apply helper has long since ended. No phase-based shortcut.
+        const helper = await observeInstalledHelper(
+          pending ? pending.helper : retained.helper,
+        );
         const current = await readBuild(slot);
-        if (
-          current.buildId !== options.build.buildId ||
-          current.version !== options.build.version
-        )
+        const decision = installedUpdateStartupDecision({
+          phase: journal?.phase ?? null,
+          helper: startupHelperState(helper),
+          installed: current,
+          running: options.build,
+          operation: op,
+        });
+        if (decision.action === "wait" || helper === "unknown")
+          return known("UPDATE_HELPER_EXIT_UNCONFIRMED");
+        if (decision.action === "refuse" || !decision.mayStart)
           return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
-        let restoreExitedUnchanged = false;
         if (
           pending &&
-          !(pending.action === "rollback"
-            ? ROLLED_BACK_PHASES.includes(journal.phase) &&
-              sameBuild(current, op.source)
-            : journal.phase !== pending.priorPhase &&
-              [
-                ...TARGET_PHASES,
-                ...CANCELLED_PHASES,
-                ...ROLLED_BACK_PHASES,
-              ].includes(journal.phase))
-        ) {
-          // An unchanged journal alone cannot settle dispatch. Reconcile this
-          // restore's recorded helper separately from the original apply helper.
-          if (
-            !pending.helper ||
-            !pending.installedBefore ||
-            journal.phase !== pending.priorPhase ||
-            !sameBuild(current, pending.installedBefore) ||
-            !(await originalHelperEnded(pending))
-          )
-            return known("UPDATE_RESTORE_OUTCOME_UNKNOWN");
-          restoreExitedUnchanged = true;
-        }
-        let settled = false;
+          journal?.phase === pending.priorPhase &&
+          pending.installedBefore &&
+          sameBuild(current, pending.installedBefore)
+        )
+          await writeRecord(
+            path.join(root, op.operationId, "restore-exit.json"),
+            {
+              schema: "farol.update-refusal/1",
+              action: pending.action,
+              operation: op,
+              helper: pending.helper,
+              priorPhase: pending.priorPhase,
+              installedBefore: pending.installedBefore,
+              code: "helper_exited_without_journal_change",
+            },
+          );
+        // The sole settlement writer. Recheck exact content, phase and helper
+        // before publishing. Subsequent lifetimes make the identical decision;
+        // they never re-open an operation because a companion is damaged.
+        if (
+          !sameBuild(await readBuild(slot), current) ||
+          (await readStartupJournal())?.phase !== journal?.phase ||
+          !(await originalHelperEnded(pending ?? retained))
+        )
+          return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+        if (journal?.phase !== decision.action)
+          await writeRecord(journalFile, {
+            ...(journal ?? {
+              schema: "farol.installed-update-journal/1",
+              ...op,
+            }),
+            phase: decision.action,
+          });
+        const settledPhase = decision.action;
         let rollbackVersion: string | undefined;
-        if (sameBuild(current, op.target)) {
-          const predecessorName =
-            (await optionalBuild(op, "previous.app")) !== null
-              ? "previous.app"
-              : "staged.app";
-          const predecessor = await optionalBuild(op, predecessorName);
-          if (!predecessor || !sameBuild(predecessor, op.source))
-            return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
-          settled =
-            predecessorName === "previous.app" &&
-            TARGET_PHASES.includes(journal.phase);
+        if (settledPhase === "completed") {
+          let predecessor: z.infer<typeof AcceptedBuild> | null = null;
+          try {
+            predecessor = await optionalBuild(op, "previous.app");
+          } catch {
+            /* Preserved evidence is not installed content, on any restart. */
+          }
           if (
-            settled &&
+            predecessor &&
+            sameBuild(predecessor, op.source) &&
             !legacyPredecessorRequiresStateRecovery(
               op.source.version,
               op.target.version,
             )
           )
             rollbackVersion = op.source.version;
-        } else if (sameBuild(current, op.source)) {
-          const rolledBack = ROLLED_BACK_PHASES.includes(journal.phase);
-          const rejected =
-            journal.phase === "rolled_back" &&
-            (await confirmedRejectedTarget(op, retained));
-          if (!rejected) {
-            const other = rolledBack
-              ? await optionalBuild(op, "failed.app")
-              : journal.phase === "rollback_started"
-                ? ((await optionalBuild(op, "failed.app")) ??
-                  (await optionalBuild(op, "previous.app")))
-                : await optionalBuild(op, "staged.app");
-            if (!other || !sameBuild(other, op.target))
-              return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
-          }
-          settled = [...ROLLED_BACK_PHASES, ...CANCELLED_PHASES].includes(
-            journal.phase,
-          );
-          if (settled) declinedBuildId = op.target.buildId;
-        } else return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
-        restorable = retained;
-        restoreKind = settled
-          ? rollbackVersion
-            ? "rollback"
-            : null
-          : "recover";
-        if (!settled && !(await originalHelperEnded(retained)))
-          return known("UPDATE_HELPER_EXIT_UNCONFIRMED");
-        if (restoreExitedUnchanged) {
-          // Both accepted physical companions were checked above. Preserve the
-          // original outcome before clearing only its reconciled dispatch intent.
-          await writeRecord(
-            path.join(root, op.operationId, "restore-exit.json"),
-            {
-              schema: "farol.update-refusal/1",
-              action: pending!.action,
-              operation: op,
-              helper: pending!.helper,
-              priorPhase: pending!.priorPhase,
-              installedBefore: pending!.installedBefore,
-              code: "helper_exited_without_journal_change",
-            },
-          );
-          await clearRestoreIntent();
-          pending = null;
+        } else {
+          declinedBuildId = op.target.buildId;
         }
-        if (!settled)
-          return { ok: true, update: null, recoveryVersion: current.version };
-        // The journal and installed/predecessor identities establish that this
+        restorable = retained;
+        restoreKind = rollbackVersion ? "rollback" : null;
+        // The settled journal and installed content establish that this
         // operation no longer needs its archive. Reconcile a prior truncation
         // through the same private handle before acknowledging reclamation.
         if (!retained.archiveReleased) {
@@ -3586,12 +3442,20 @@ async function createRuntime(
         await writeRecord(receiptFile, {
           ...retained,
           observedAt: new Date().toISOString(),
-          phase: journal.phase,
+          phase: settledPhase,
           runningBuildId: options.build.buildId,
         });
         if (fromReady) await fs.unlink(readyFile);
         if (pending) await fs.unlink(restoreFile);
+        const failedApply =
+          fromReady && !pending && sameBuild(current, op.source);
         retained = null;
+        if (failedApply)
+          return {
+            ok: false,
+            code: "UPDATE_ROLLED_BACK",
+            recoveryRequired: false,
+          };
         return {
           ok: true,
           update: null,
@@ -3698,7 +3562,6 @@ async function createRuntime(
         };
       }
       candidate =
-        found.value?.manifest.buildId === declinedBuildId ||
         found.value?.manifest.version === preferences.skipped?.version
           ? null
           : found.value;
@@ -3709,6 +3572,7 @@ async function createRuntime(
             version: candidate.manifest.version,
             buildId: candidate.manifest.buildId,
             deferred:
+              candidate.manifest.buildId === declinedBuildId ||
               candidate.manifest.version === preferences.deferredVersion,
             ...(candidate.notes ? { notes: candidate.notes } : {}),
           }
@@ -3821,8 +3685,6 @@ async function createRuntime(
               )
             )
               return known("UPDATE_LOCAL_VERSION_MISMATCH");
-            if (manifest.buildId === declinedBuildId)
-              return known("UPDATE_LOCAL_TARGET_DECLINED");
             return stageSelectedUpdate(manifest, async (verifyPackage) => {
               const imported = await transport.importLocal(
                 localArchive.path,

@@ -189,6 +189,12 @@ type liveNativeOutcome struct {
 // waiting_for_exit frame arrives, quit (when set) is performed by this test.
 func (f *liveNativeFixture) run(t *testing.T, request map[string]any, quit bool, args ...string) liveNativeOutcome {
 	t.Helper()
+	// Successful relaunch belongs to execution's replaced-open seam. Compiled
+	// recovery refusal fixtures may request it only while the predecessor stays
+	// alive; an unexpected ready frame is killed below before Quit.
+	if request["relaunch"] == true && request["action"] != "recover" {
+		t.Fatal("compiled fixture must not dispatch LaunchServices")
+	}
 	requestBytes := closedHelperJSON(t, request)
 	// Offline recover is refused before any slot binding exists, so the test must
 	// not manufacture one (BuildSlotBinding is a recover-with-relaunch protocol).
@@ -246,6 +252,11 @@ func (f *liveNativeFixture) run(t *testing.T, request map[string]any, quit bool,
 	// The waiting_for_exit frame seals with EOF; only then does the desktop quit.
 	// A refused frame keeps the desktop running (installed-update-helper.ts).
 	waiting := bytes.Contains(ack, []byte(`"phase":"`+protocolapp.WaitingForExit+`"`))
+	if waiting && request["relaunch"] == true {
+		_ = c.cmd.Process.Kill() // This exact test-owned helper, still waiting on our live predecessor.
+		_ = c.wait(t)
+		t.Fatal("relaunch refusal fixture unexpectedly admitted Quit")
+	}
 	if waiting && quit {
 		if f.quitHook != nil {
 			f.quitHook()
@@ -342,7 +353,7 @@ func TestLiveHelperNativeApplyThenRollback(t *testing.T) {
 	}
 }
 
-// There is deliberately no apply or recover relaunch witness on the compiled
+// There is deliberately no successful relaunch witness on the compiled
 // entry. With the production /usr/bin/open the only seam, a relaunch here would
 // run LaunchServices over a disposable inert image that carries the production
 // bundle id: it registers that temporary path with the owner's LaunchServices and
@@ -350,31 +361,6 @@ func TestLiveHelperNativeApplyThenRollback(t *testing.T) {
 // open in modules/release/infra/native/execution (deterministic Milestone tests
 // and FAROL_RELAUNCH_NATIVE=1), and the terminal line and exit code of every
 // result in the boot terminal-mapping tests.
-
-// A rollback that asked for relaunch settles rolled_back and never launches, like
-// Python: the launch condition is a verified apply.
-func TestLiveHelperNativeRollbackWithRelaunchNeverLaunches(t *testing.T) {
-	liveNativeRequire(t)
-	f := newLiveNativeFixture(t, true)
-	id := strings.Repeat("1", 32)
-	apps := filepath.Join(f.home, "Applications", "Farol.app")
-	f.arm(t, "")
-	apply := f.request("apply", false)
-	o := f.run(t, apply, true)
-	f.requireTerminal(t, o.execNativeOutcome, `{"phase": "verified", "operationId": "`+id+`"}`+"\n", 0)
-
-	f.arm(t, "")
-	rollback := f.request("rollback", true)
-	o = f.run(t, rollback, true)
-	f.wantWaitingFrame(t, rollback, o.ack)
-	f.requireTerminal(t, o.execNativeOutcome, `{"phase": "rolled_back", "operationId": "`+id+`"}`+"\n", 0)
-	if got := f.phase(t); got != "rolled_back" {
-		t.Fatal("journal phase", got)
-	}
-	if execNativeRead(t, filepath.Join(apps, "Contents/Info.plist")) != execNativeTestdata(t, "oracle.xml") {
-		t.Fatal("installed app is not the source after rollback")
-	}
-}
 
 // The real self measurement: this very process, through the native probe and the
 // process-wait policy, equal to an independent observation, and joined.
@@ -452,15 +438,15 @@ func TestLiveHelperNativeForeignMarkerIsRefusedBeforeTheFrame(t *testing.T) {
 	f.noEffect(t)
 }
 
-// A Quit that was never confirmed (no receipt) after the exit is no proof.
-func TestLiveHelperNativeMissingQuitReceiptIsRefused(t *testing.T) {
+// An observed exit permits update without a Quit receipt; the log retains the note.
+func TestLiveHelperNativeMissingQuitReceiptUpdatesWithDiagnostic(t *testing.T) {
 	liveNativeRequire(t)
 	f := newLiveNativeFixture(t, true)
 	f.arm(t, "")
 	apply := f.request("apply", false)
 	// The marker vanishes while the process is alive and the process then exits,
-	// but NO last-quit.json is published. Removing the marker first keeps the
-	// refusal about the missing receipt, not about a marker still present.
+	// but NO last-quit.json is published. Neither a clean receipt nor marker
+	// removal grants the observed exit; the helper must wait for the process.
 	f.quitHook = func() {
 		if err := os.Remove(filepath.Join(f.statePath, "running.json")); err != nil {
 			t.Error(err)
@@ -469,8 +455,21 @@ func TestLiveHelperNativeMissingQuitReceiptIsRefused(t *testing.T) {
 	}
 	o := f.run(t, apply, true)
 	f.wantWaitingFrame(t, apply, o.ack)
-	f.requireTerminal(t, o.execNativeOutcome, `{"phase": "unknown", "error": "internal", "operationId": "`+strings.Repeat("1", 32)+`"}`+"\n", 79)
-	f.noEffect(t)
+	f.requireTerminal(t, o.execNativeOutcome, `{"phase": "verified", "operationId": "`+strings.Repeat("1", 32)+`"}`+"\n", 0)
+	if got := f.phase(t); got != "verified" {
+		t.Fatal("journal phase", got)
+	}
+	if execNativeRead(t, filepath.Join(f.home, "Applications/Farol.app/Contents/Info.plist")) != execNativeTestdata(t, "oracle.bplist") {
+		t.Fatal("missing receipt prevented target installation")
+	}
+	log := execNativeRead(t, filepath.Join(f.operation, "helper.log.jsonl"))
+	if !strings.Contains(log, `"code":"predecessor_drain_unconfirmed"`) {
+		t.Fatal("missing drain diagnostic", log)
+	}
+	journal := execNativeRead(t, filepath.Join(f.operation, "journal.json"))
+	if strings.Contains(journal, `"note"`) {
+		t.Fatal("diagnostic broke predecessor journal compatibility", journal)
+	}
 }
 
 // Offline recover (relaunch false) has no production caller: refused before any IO,
@@ -586,4 +585,33 @@ func TestLiveHelperNativeRefusesExtraArgv(t *testing.T) {
 		t.Fatalf("extra argv: ack %q exit %d stdout %q stderr %q", o.ack, o.exit, o.stdout, o.stderr)
 	}
 	f.noEffect(t)
+}
+
+// A successor marker present when the helper observes predecessor exit must
+// stop the real compiled helper before any journal or bundle mutation.
+func TestLiveHelperNativeSuccessorMarkerRefusesBeforeMutation(t *testing.T) {
+	liveNativeRequire(t)
+	f := newLiveNativeFixture(t, true)
+	f.arm(t, "")
+	apply := f.request("apply", false)
+	self, err := liveHelperMeasureSelf(context.Background(), time.Now().Add(5*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Publish before stopping the predecessor so the helper cannot race ahead of
+	// this deterministic successor/startup interleaving.
+	f.quitHook = func() {
+		marker := closedHelperJSON(t, map[string]any{"schema": 1, "pid": self.PID, "processStart": self.ProcessStart, "startedAt": time.Now().UTC().Format("2006-01-02T15:04:05.000Z"), "bootTime": nil})
+		if err := os.WriteFile(filepath.Join(f.statePath, "running.json"), marker, 0600); err != nil {
+			t.Fatal(err)
+		}
+		f.pred.stop(t)
+	}
+	o := f.run(t, apply, true)
+	f.wantWaitingFrame(t, apply, o.ack)
+	f.requireTerminal(t, o.execNativeOutcome, `{"phase": "unknown", "error": "internal", "operationId": "`+strings.Repeat("1", 32)+`"}`+"\n", 79)
+	f.noEffect(t)
+	if execNativeRead(t, filepath.Join(f.home, "Applications/Farol.app/Contents/Info.plist")) != execNativeTestdata(t, "oracle.xml") {
+		t.Fatal("successor bundle was replaced")
+	}
 }

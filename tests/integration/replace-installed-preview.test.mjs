@@ -1366,6 +1366,7 @@ describe("closed replacement after ordinary OTA", () => {
     "manifest",
     "journal-phase",
     "journal-operation",
+    "journal-note",
     "predecessor",
   ])("refuses %s without moving installed bytes", async (kind) => {
     const f = await completedUpdateFixture();
@@ -1375,6 +1376,8 @@ describe("closed replacement after ordinary OTA", () => {
     if (kind === "manifest") f.saved.manifest.sourceCommit = "0".repeat(40);
     if (kind === "journal-phase") f.journal.phase = "launch_requested";
     if (kind === "journal-operation") f.journal.operationId = "d".repeat(32);
+    if (kind === "journal-note")
+      f.journal.note = "predecessor_drain_unconfirmed";
     if (kind === "predecessor")
       await fs.writeFile(path.join(f.previous, "modified"), "changed");
     await fs.writeFile(

@@ -154,7 +154,7 @@ func TestMilestoneRecoverRelaunchCancelledNeverLaunches(t *testing.T) {
 // A rollback that stopped at rollback_started is repaired to rolled_back (the
 // exchange is finished and the target is kept as failed.app). Rolled back is not
 // verified: nothing is launched.
-func TestMilestoneRecoverRelaunchRollbackRepairNeverLaunches(t *testing.T) {
+func TestMilestoneRecoverRelaunchRollbackRepairLaunchesSource(t *testing.T) {
 	f := newFakeRelaunchLifecycle(t)
 	m, ready := f.prepare(t, "apply", false)
 	result, err := f.run(t, m, ready)
@@ -176,11 +176,13 @@ func TestMilestoneRecoverRelaunchRollbackRepairNeverLaunches(t *testing.T) {
 	if err != nil {
 		t.Fatal(describe(err))
 	}
-	if result == nil || *result != (executionapp.Result{Phase: "rolled_back"}) {
+	if result == nil || *result != (executionapp.Result{Phase: "rollback_completed"}) {
 		t.Fatal("the interrupted rollback was not repaired", result)
 	}
-	f.physical(t, f.repo, "rolled_back")
-	f.requireNoLaunch(t)
+	f.physical(t, f.repo, "rollback_completed")
+	if f.fake.opens != 1 || f.fake.arguments[0][2] != f.app {
+		t.Fatal("restored source not relaunched")
+	}
 	lifecycleRequireTree(t, f.app, f.source)
 	lifecycleRequireTree(t, filepath.Join(f.path, "failed.app"), f.target)
 }

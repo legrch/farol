@@ -653,3 +653,20 @@ func TestAggregateByteBudgetBoundary(t *testing.T) {
 		})
 	}
 }
+
+func TestMetadataOnlyChangesDuringContentVerificationAreAccepted(t *testing.T) {
+	app, parent, handle := fixture(t)
+	expectedDigest := digest(t, app)
+	v := verifier(t, parent, handle, expectedDigest, func(context.Context, []byte, []byte, string, string) error {
+		// Simulate a system daemon touching a newly installed tree between passes.
+		return filepath.Walk(app, func(name string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			stamp := time.Now().Add(time.Hour)
+			return os.Chtimes(name, stamp, stamp)
+		})
+	})
+	_, err := v.Verify(context.Background())
+	must(t, err)
+}

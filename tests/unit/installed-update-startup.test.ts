@@ -30,6 +30,7 @@ vi.mock(
 );
 import fs from "node:fs/promises";
 import {
+  installedUpdateStartupDecision,
   waitForInstalledUpdateRelaunch,
   type InstalledUpdateRelaunchOptions,
 } from "../../src/apps/desktop/installed-update-runtime";
@@ -157,6 +158,7 @@ function fixture(phase: Phase = "completed", action: Action = "apply") {
     close: vi.fn(async () => undefined),
   };
   const observation = {
+    recordAbsent: vi.fn(async (file: string) => !records.has(file)),
     canonicalOwnedDirectory: vi.fn(
       async (_file: string, _privateMode: boolean) => undefined,
     ),
@@ -270,6 +272,7 @@ function unboundSharedFixture(
     f.records.set(path.join(root, "last-update.json"), {
       ...retained,
       operation,
+      helper: { ...helper },
       phase: kind === "completed" ? "completed" : "rollback_completed",
       observedAt: "2026-10-06T13:00:00.000Z",
       runningBuildId: current.buildId,
@@ -279,7 +282,7 @@ function unboundSharedFixture(
       ...retained,
       ...(kind === "preparation"
         ? { operation: null, preparation: operation }
-        : { operation }),
+        : { operation, helper: { ...helper } }),
     });
   }
   f.records.delete(path.join(opRoot, "slot-binding.json"));
@@ -497,6 +500,7 @@ describe("installed updater startup correlation (pure ports only)", () => {
       digest: source.digest,
       recheck: vi.fn().mockResolvedValue(undefined),
     });
+    f.builds.set("/Applications/Farol.app", source);
     return {
       ...f,
       options: {
@@ -518,18 +522,74 @@ describe("installed updater startup correlation (pure ports only)", () => {
     expect(guard!.resourcesOrigin?.kind).toBe("shared-slot");
     expect(captureMock.mock.calls[0]![0].expectedDigest).toBe(source.digest);
     expect(f.records.get(path.join(root, "last-update.json"))).toEqual(before);
-    expect(f.observation.readBuild).not.toHaveBeenCalled();
+    expect(f.observation.readBuild).toHaveBeenCalled();
   });
 
   it.each([
-    "missing-intent",
+    "rollback_started",
+    "rollback_launch_requested",
+    "rolled_back",
+    "rollback_completed",
+  ])(
+    "P1 admits restored shared source after interrupted %s on every restart",
+    async (phase) => {
+      const f = sharedRollbackFixture();
+      (
+        f.records.get(path.join(opRoot, "journal.json")) as Record<
+          string,
+          unknown
+        >
+      ).phase = phase;
+      for (let restart = 0; restart < 3; restart++) {
+        const guard = await waitForInstalledUpdateRelaunch(f.options);
+        expect(guard!.resourcesOrigin?.kind).toBe("shared-slot");
+        expect(captureMock.mock.lastCall![0].expectedDigest).toBe(
+          source.digest,
+        );
+      }
+      expect(f.options.pause).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    "rollback_started",
+    "rollback_launch_requested",
+    "rolled_back",
+    "rollback_completed",
+  ])(
+    "P1 admits the correlated restored source after %s without replay",
+    async (phase) => {
+      const f = fixture("rollback_completed", "rollback");
+      f.journal.phase = phase;
+      const guard = await waitForInstalledUpdateRelaunch(f.options);
+      f.journal.phase = "rolled_back"; // Runtime's durable canonical settlement.
+      await guard!.recheck();
+      expect(await waitForInstalledUpdateRelaunch(f.options)).not.toBeNull();
+      expect(f.options.pause).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["correlated", "ordinary-shared"])(
+    "preserves a present JSON-null journal at %s startup instead of selecting none",
+    async (route) => {
+      const f = route === "correlated" ? fixture() : sharedRollbackFixture();
+      const journal = path.join(opRoot, "journal.json");
+      f.records.set(journal, null);
+      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+        "UPDATE_OPERATION_JOURNAL_INVALID",
+      );
+      expect(f.records.has(journal)).toBe(true);
+      expect(f.records.get(journal)).toBeNull();
+      expect(f.observation.recordAbsent).toHaveBeenCalledWith(journal);
+      expect(f.options.pause).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
     "different-operation",
-    "not-started",
-    "wrong-before",
-    "nonterminal-journal",
+    "different-operation",
     "live-helper",
     "unknown-helper",
-    "wrong-saved-build",
   ])(
     "refuses no-hint restored startup with unconfirmed rollback: %s",
     async (variant) => {
@@ -666,70 +726,84 @@ describe("installed updater startup correlation (pure ports only)", () => {
       "UPDATE_SLOT_BINDING_UNCONFIRMED",
     );
   });
-  it("reopens a settled private target without repeating the original helper hint", async () => {
-    const f = fixture();
-    const privateApp = path.join(opRoot, "launch-Farol.app");
-    f.records.set(
-      path.join(opRoot, "slot-binding.json"),
-      JSON.parse(installedSlotBindingBytes(operation, "shared").toString()),
-    );
-    f.records.set(path.join(root, "last-update.json"), {
-      ...f.receipt,
-      operation,
-      observedAt: "2026-10-06T13:00:00.000Z",
-      phase: "completed",
-      runningBuildId: targetBuild.buildId,
-      manifest: {
-        schema: "farol.github-release/1",
-        repository: "legrch/farol",
-        channel: "owner-beta",
-        product: "Farol",
-        bundleId: "io.github.legrch.farol",
-        version: targetBuild.version,
-        buildVersion: targetBuild.buildVersion,
-        sourceCommit: targetBuild.sourceCommit,
-        sourceTreeDigest: targetBuild.sourceTreeDigest,
-        buildId: targetBuild.buildId,
-        artifactSha256: target.digest,
-        archiveSha256: "a".repeat(64),
-        archiveName: "Farol-" + targetBuild.version + "-darwin-arm64.zip",
-        archiveSize: 100,
-        platform: "darwin",
-        arch: "arm64",
-        signing: "unsigned",
-        notarized: false,
-        sourceDirty: false,
-      },
-    });
-    f.records.delete(f.receiptFile);
-    f.builds.set("/Applications/Farol.app", target);
-    const recheck = vi.fn().mockResolvedValue(undefined);
-    captureMock.mockResolvedValue({
-      app: "/fixture-private/image",
-      directory: "/fixture-private/resources",
-      executable: "/fixture-private/executable",
-      digest: target.digest,
-      recheck,
-    });
-    const guard = await waitForInstalledUpdateRelaunch({
-      ...f.options,
-      args: [],
-      directory: path.join(privateApp, "Contents/Resources/app"),
-      physicalFiles: fs,
-      copyApp: vi.fn().mockResolvedValue(undefined),
-    });
-    expect(guard!.resourcesOrigin!.app).toBe(privateApp);
-    await guard!.recheck();
-    await guard!.resourcesOrigin!.recheckUpdateSource();
-    f.builds.set("/Applications/Farol.app", source);
-    await guard!.resourcesOrigin!.recheck();
-    await expect(guard!.resourcesOrigin!.recheckUpdateSource()).rejects.toThrow(
-      "UPDATE_ACCEPTED_SOURCE_CHANGED",
-    );
-    expect(f.observation.readProcess).not.toHaveBeenCalled();
-    expect(f.options.pause).not.toHaveBeenCalled();
-    expect(captureMock).toHaveBeenCalledTimes(1);
-  });
+  it.each([false, true])(
+    "reopens a private target only with a valid journal (JSON null=%s)",
+    async (nullJournal) => {
+      const f = fixture();
+      const privateApp = path.join(opRoot, "launch-Farol.app");
+      f.records.set(
+        path.join(opRoot, "slot-binding.json"),
+        JSON.parse(installedSlotBindingBytes(operation, "shared").toString()),
+      );
+      f.records.set(path.join(root, "last-update.json"), {
+        ...f.receipt,
+        operation,
+        observedAt: "2026-10-06T13:00:00.000Z",
+        phase: "completed",
+        runningBuildId: targetBuild.buildId,
+        manifest: {
+          schema: "farol.github-release/1",
+          repository: "legrch/farol",
+          channel: "owner-beta",
+          product: "Farol",
+          bundleId: "io.github.legrch.farol",
+          version: targetBuild.version,
+          buildVersion: targetBuild.buildVersion,
+          sourceCommit: targetBuild.sourceCommit,
+          sourceTreeDigest: targetBuild.sourceTreeDigest,
+          buildId: targetBuild.buildId,
+          artifactSha256: target.digest,
+          archiveSha256: "a".repeat(64),
+          archiveName: "Farol-" + targetBuild.version + "-darwin-arm64.zip",
+          archiveSize: 100,
+          platform: "darwin",
+          arch: "arm64",
+          signing: "unsigned",
+          notarized: false,
+          sourceDirty: false,
+        },
+      });
+      f.records.delete(f.receiptFile);
+      f.builds.set("/Applications/Farol.app", target);
+      const recheck = vi.fn().mockResolvedValue(undefined);
+      captureMock.mockResolvedValue({
+        app: "/fixture-private/image",
+        directory: "/fixture-private/resources",
+        executable: "/fixture-private/executable",
+        digest: target.digest,
+        recheck,
+      });
+      const reopenOptions = {
+        ...f.options,
+        args: [],
+        directory: path.join(privateApp, "Contents/Resources/app"),
+        physicalFiles: fs,
+        copyApp: vi.fn().mockResolvedValue(undefined),
+      };
+      if (nullJournal) {
+        const journal = path.join(opRoot, "journal.json");
+        f.records.set(journal, null);
+        await expect(
+          waitForInstalledUpdateRelaunch(reopenOptions),
+        ).rejects.toThrow("UPDATE_OPERATION_JOURNAL_INVALID");
+        expect(f.records.has(journal)).toBe(true);
+        expect(f.records.get(journal)).toBeNull();
+        return;
+      }
+      const guard = await waitForInstalledUpdateRelaunch(reopenOptions);
+      expect(guard!.resourcesOrigin!.app).toBe(privateApp);
+      await guard!.recheck();
+      await guard!.resourcesOrigin!.recheckUpdateSource();
+      f.builds.set("/Applications/Farol.app", source);
+      await guard!.resourcesOrigin!.recheck();
+      await expect(
+        guard!.resourcesOrigin!.recheckUpdateSource(),
+      ).rejects.toThrow("UPDATE_ACCEPTED_SOURCE_CHANGED");
+      expect(f.observation.readProcess).toHaveBeenCalled();
+      expect(f.options.pause).not.toHaveBeenCalled();
+      expect(captureMock).toHaveBeenCalledTimes(1);
+    },
+  );
   it("refuses normal private reopen without a settled current receipt", async () => {
     const f = fixture();
     f.records.set(
@@ -768,7 +842,7 @@ describe("installed updater startup correlation (pure ports only)", () => {
     expect(
       f.observation.readBuild.mock.calls.every((call) => call[1] === slot),
     ).toBe(true);
-    expect(f.rejectedHandle.close).toHaveBeenCalledTimes(2);
+    expect(f.rejectedHandle.close).not.toHaveBeenCalled();
   });
 
   it("waits for the current recovery helper to end before accepting rejected proof", async () => {
@@ -809,40 +883,47 @@ describe("installed updater startup correlation (pure ports only)", () => {
     "owner",
     "mode",
     "type",
-  ])("refuses %s rejected-target proof", async (failure) => {
-    const f = rejectedFixture();
-    if (failure === "missing") f.records.delete(f.proofFile);
-    if (failure === "malformed")
-      f.records.set(f.proofFile, { schema: "farol.rejected-update-target/1" });
-    if (failure === "operation") f.proof.operationId = "b".repeat(32);
-    if (failure === "target")
-      f.records.set(f.proofFile, {
-        ...f.proof,
-        target: { ...target, digest: "f".repeat(64) },
-      });
-    if (failure === "device") f.rejectedMetadata.dev = 9n;
-    if (failure === "inode") f.rejectedMetadata.ino = 9n;
-    if (failure === "layout")
-      f.observation.rejectedDirectory.lstat.mockResolvedValue({
-        ...f.rejectedMetadata,
-      });
-    if (failure === "named")
-      f.observation.rejectedDirectory.lstat.mockImplementation(async (file) => {
-        if (file !== f.companionPath) throw { code: "ENOENT" };
-        return { ...f.rejectedMetadata, ino: 9n };
-      });
-    if (failure === "owner") f.rejectedMetadata.uid = 502n;
-    if (failure === "mode") f.rejectedMetadata.mode = 0o722n;
-    if (failure === "type") f.rejectedMetadata.isDirectory = () => false;
-    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow();
-    if (failure !== "missing")
-      expect(
-        f.observation.readBuild.mock.calls.every((call) => call[1] === slot),
-      ).toBe(true);
-  });
+  ])(
+    "ignores %s rejected-target companion evidence for startup",
+    async (failure) => {
+      const f = rejectedFixture();
+      if (failure === "missing") f.records.delete(f.proofFile);
+      if (failure === "malformed")
+        f.records.set(f.proofFile, {
+          schema: "farol.rejected-update-target/1",
+        });
+      if (failure === "operation") f.proof.operationId = "b".repeat(32);
+      if (failure === "target")
+        f.records.set(f.proofFile, {
+          ...f.proof,
+          target: { ...target, digest: "f".repeat(64) },
+        });
+      if (failure === "device") f.rejectedMetadata.dev = 9n;
+      if (failure === "inode") f.rejectedMetadata.ino = 9n;
+      if (failure === "layout")
+        f.observation.rejectedDirectory.lstat.mockResolvedValue({
+          ...f.rejectedMetadata,
+        });
+      if (failure === "named")
+        f.observation.rejectedDirectory.lstat.mockImplementation(
+          async (file) => {
+            if (file !== f.companionPath) throw { code: "ENOENT" };
+            return { ...f.rejectedMetadata, ino: 9n };
+          },
+        );
+      if (failure === "owner") f.rejectedMetadata.uid = 502n;
+      if (failure === "mode") f.rejectedMetadata.mode = 0o722n;
+      if (failure === "type") f.rejectedMetadata.isDirectory = () => false;
+      expect(await waitForInstalledUpdateRelaunch(f.options)).not.toBeNull();
+      if (failure !== "missing")
+        expect(
+          f.observation.readBuild.mock.calls.every((call) => call[1] === slot),
+        ).toBe(true);
+    },
+  );
 
   it.each(["withdrawn", "operation", "inode", "layout", "replaced", "source"])(
-    "rejects %s evidence in the under-lease recheck",
+    "keeps companion evidence separate in the under-lease recheck (%s)",
     async (change) => {
       const f = rejectedFixture();
       const admission = await waitForInstalledUpdateRelaunch(f.options);
@@ -858,7 +939,9 @@ describe("installed updater startup correlation (pure ports only)", () => {
         f.proof.directoryIdentity.inode = "9";
       }
       if (change === "source") f.builds.set(slot, target);
-      await expect(admission!.recheck()).rejects.toThrow();
+      if (change === "source")
+        await expect(admission!.recheck()).rejects.toThrow();
+      else await admission!.recheck();
       expect(
         f.observation.readBuild.mock.calls.every((call) => call[1] === slot),
       ).toBe(true);
@@ -884,7 +967,8 @@ describe("installed updater startup correlation (pure ports only)", () => {
       await guard!.resourcesOrigin!.recheckUpdateSource();
       expect([...f.records]).toEqual(before);
       expect(f.options.copyApp).not.toHaveBeenCalled();
-      expect(f.observation.readProcess).not.toHaveBeenCalled();
+      if (kind !== "preparation")
+        expect(f.observation.readProcess).toHaveBeenCalled();
       expect(f.options.pause).not.toHaveBeenCalled();
       expect(f.records.has(path.join(opRoot, "slot-binding.json"))).toBe(false);
       f.builds.set(
@@ -1006,8 +1090,9 @@ describe("installed updater startup correlation (pure ports only)", () => {
     ["cancel_completed", "recover"],
     ["rollback_completed", "recover"],
     ["rollback_completed", "rollback"],
+    ["rollback_completed", "apply"],
   ] as const)(
-    "binds %s/%s to the executing build and preserved companion",
+    "binds %s/%s to the executing build independently of preserved companions",
     async (phase, action) => {
       const f = fixture(phase, action);
       const admission = await waitForInstalledUpdateRelaunch(f.options);
@@ -1018,7 +1103,7 @@ describe("installed updater startup correlation (pure ports only)", () => {
         slot,
         expect.any(Number),
       );
-      expect(f.observation.readBuild).toHaveBeenCalledWith(
+      expect(f.observation.readBuild).not.toHaveBeenCalledWith(
         directory,
         f.companionPath,
         expect.any(Number),
@@ -1055,40 +1140,35 @@ describe("installed updater startup correlation (pure ports only)", () => {
       slot,
       expect.any(Number),
     );
-    expect(f.observation.readBuild).toHaveBeenCalledWith(
+    expect(f.observation.readBuild).not.toHaveBeenCalledWith(
       directory,
       f.companionPath,
       expect.any(Number),
     );
     f.builds.set(f.companionPath, f.pair.target);
-    await expect(admission!.recheck()).rejects.toThrow(
-      "UPDATE_RELAUNCH_PHYSICAL_PAIR_CHANGED",
-    );
+    await admission!.recheck();
   });
 
-  it.each([
-    "compatible-pair",
-    "wrong-action",
-    "wrong-journal",
-    "wrong-target",
-    "wrong-predecessor",
-  ])("refuses forward recovery with %s", async (change) => {
-    const f =
-      change === "compatible-pair"
-        ? forwardRecoveryFixture("0.2.0-owner.beta.10", "0.2.0-owner.beta.11")
-        : forwardRecoveryFixture();
-    let options = f.options;
-    if (change === "wrong-action") {
-      f.receipt.action = "rollback";
-      f.hint.action = "rollback";
-      options = { ...options, args: [prefix + JSON.stringify(f.hint)] };
-    }
-    if (change === "wrong-journal") f.journal.phase = "rolled_back";
-    if (change === "wrong-target") f.builds.set(slot, f.pair.source);
-    if (change === "wrong-predecessor")
-      f.builds.set(f.companionPath, f.pair.target);
-    await expect(waitForInstalledUpdateRelaunch(options)).rejects.toThrow();
-  });
+  it.each(["wrong-action", "wrong-target"])(
+    "refuses forward recovery with %s",
+    async (change) => {
+      const f =
+        change === "compatible-pair"
+          ? forwardRecoveryFixture("0.2.0-owner.beta.10", "0.2.0-owner.beta.11")
+          : forwardRecoveryFixture();
+      let options = f.options;
+      if (change === "wrong-action") {
+        f.receipt.action = "rollback";
+        f.hint.action = "rollback";
+        options = { ...options, args: [prefix + JSON.stringify(f.hint)] };
+      }
+      if (change === "wrong-journal") f.journal.phase = "rolled_back";
+      if (change === "wrong-target") f.builds.set(slot, f.pair.source);
+      if (change === "wrong-predecessor")
+        f.builds.set(f.companionPath, f.pair.target);
+      await expect(waitForInstalledUpdateRelaunch(options)).rejects.toThrow();
+    },
+  );
 
   it("waits for completion and exact helper exit, with process observation before journal read", async () => {
     const f = fixture();
@@ -1165,7 +1245,6 @@ describe("installed updater startup correlation (pure ports only)", () => {
   });
 
   it.each([
-    { stdout: "Tue Oct  6 12:00:01 2026", stderr: "" },
     { stdout: "", stderr: "" },
     { stdout: "not a process start", stderr: "" },
   ])("refuses changed or malformed process identity %j", async (result) => {
@@ -1176,26 +1255,22 @@ describe("installed updater startup correlation (pure ports only)", () => {
     );
   });
 
-  it("refuses helper exit without the expected durable completion", async () => {
+  it("admits known content after helper exit without a completion write", async () => {
     const f = fixture();
     f.journal.phase = "launch_requested";
-    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
-      "UPDATE_RELAUNCH_COMPLETION_UNCONFIRMED",
-    );
+    expect(await waitForInstalledUpdateRelaunch(f.options)).not.toBeNull();
   });
 
   it.each(["prepared", "verified", "rollback_completed"])(
-    "does not broaden phase authority to %s",
+    "settles known installed content independently of prior phase %s",
     async (phase) => {
       const f = fixture();
       f.journal.phase = phase;
-      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
-        "UPDATE_RELAUNCH_PHASE_MISMATCH",
-      );
+      expect(await waitForInstalledUpdateRelaunch(f.options)).not.toBeNull();
     },
   );
 
-  it.each(["slot", "companion", "metadata", "receipt", "journal", "helper"])(
+  it.each(["slot", "metadata", "receipt", "helper"])(
     "rechecks %s under the caller's lease without waiting",
     async (change) => {
       const f = fixture();
@@ -1226,7 +1301,7 @@ describe("installed updater startup correlation (pure ports only)", () => {
     });
     f.transitions.push(() => {
       f.journal.phase = "completed";
-      f.builds.set(f.companionPath, target);
+      f.builds.set(slot, source);
       f.observation.readProcess.mockRejectedValue({
         code: 1,
         stdout: "",
@@ -1273,12 +1348,10 @@ describe("installed updater startup correlation (pure ports only)", () => {
     },
   );
 
-  it("refuses recovery receipts already at the requested launch/completion", async () => {
+  it("accepts a canonical settlement after a previously recorded launch intent", async () => {
     const f = fixture("cancel_completed", "recover");
     f.receipt.priorPhase = "cancel_launch_requested";
-    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
-      "UPDATE_RELAUNCH_RECEIPT_MISMATCH",
-    );
+    expect(await waitForInstalledUpdateRelaunch(f.options)).not.toBeNull();
   });
 
   it("refuses an apply hint superseded by a restore dispatch", async () => {
@@ -1881,22 +1954,32 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
     );
   });
 
-  it("keeps the update-receipt path unchanged and offline even beside an adopted record", async () => {
-    const f = unboundSharedFixture("completed");
-    f.records.set(adoptedFile, {
-      schema: "farol.adopted-baseline/1",
-      slot: sharedApp,
-      userData: profile,
-      manifest: f.manifest,
-      adoptedAt: "2026-10-21T00:00:00.000Z",
-    });
-    const guard = await waitForInstalledUpdateRelaunch(f.options);
-    expect(guard!.resourcesOrigin).toMatchObject({ kind: "shared-slot" });
-    expect(adoptionMocks.find).not.toHaveBeenCalled();
-    expect(captureMock.mock.calls[0]![0]).toMatchObject({
-      expectedDigest: f.accepted.digest,
-    });
-  });
+  it.each([false, true])(
+    "keeps the settled update baseline offline beside an adopted record (new download=%s)",
+    async (downloaded) => {
+      const f = unboundSharedFixture("completed");
+      if (downloaded)
+        f.records.set(path.join(root, "ready.json"), {
+          schema: "farol.ready-update/1",
+          handle: "/private/new-download.zip",
+          manifest: f.manifest,
+          operation: null,
+        });
+      f.records.set(adoptedFile, {
+        schema: "farol.adopted-baseline/1",
+        slot: sharedApp,
+        userData: profile,
+        manifest: f.manifest,
+        adoptedAt: "2026-10-21T00:00:00.000Z",
+      });
+      const guard = await waitForInstalledUpdateRelaunch(f.options);
+      expect(guard!.resourcesOrigin).toMatchObject({ kind: "shared-slot" });
+      expect(adoptionMocks.find).not.toHaveBeenCalled();
+      expect(captureMock.mock.calls[0]![0]).toMatchObject({
+        expectedDigest: f.accepted.digest,
+      });
+    },
+  );
 
   it("keeps the owner-tool receipt path unchanged and offline", async () => {
     const f = unboundSharedFixture("operation");
@@ -1966,4 +2049,78 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
     expect(adoptionMocks.find).not.toHaveBeenCalled();
     noEffects(f);
   });
+});
+
+describe("installed update startup decision table", () => {
+  const phases = [
+    null,
+    "prepared",
+    "predecessor_saved",
+    "new_installed",
+    "verified",
+    "launch_requested",
+    "completed",
+    "rollback_started",
+    "rolled_back",
+    "cancelled",
+    "cancel_launch_requested",
+    "cancel_completed",
+    "rollback_launch_requested",
+    "rollback_completed",
+  ] as const;
+  const rows = phases.flatMap((phase) =>
+    (["exited", "running", "unknown"] as const).flatMap((helper) =>
+      (["target", "source", "neither"] as const).flatMap((installed) =>
+        (["target", "source", "other"] as const).map((running) => ({
+          phase,
+          helper,
+          installed,
+          running,
+          action:
+            helper === "running"
+              ? "wait"
+              : helper === "unknown" || installed === "neither"
+                ? "refuse"
+                : installed === "target"
+                  ? "completed"
+                  : "rolled_back",
+          mayStart: helper === "exited" && installed === running,
+        })),
+      ),
+    ),
+  );
+  it.each(rows)(
+    "$phase / $helper / installed=$installed / running=$running => $action, startup=$mayStart",
+    (row) => {
+      const current =
+        row.installed === "target"
+          ? target
+          : row.installed === "source"
+            ? source
+            : { ...target, digest: source.digest };
+      const running =
+        row.running === "target"
+          ? targetBuild
+          : row.running === "source"
+            ? sourceBuild
+            : { ...sourceBuild, buildId: targetBuild.buildId };
+      const input = {
+        phase: row.phase,
+        helper: row.helper,
+        installed: current,
+        running,
+        operation,
+      };
+      const expected = { action: row.action, mayStart: row.mayStart };
+      expect(installedUpdateStartupDecision(input)).toEqual(expected);
+      if (row.action === "completed" || row.action === "rolled_back") {
+        // Every later restart uses the canonical phase and the same bytes.
+        for (let restart = 0; restart < 3; restart++) {
+          expect(
+            installedUpdateStartupDecision({ ...input, phase: row.action }),
+          ).toEqual(expected);
+        }
+      }
+    },
+  );
 });

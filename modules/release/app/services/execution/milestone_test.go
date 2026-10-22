@@ -242,6 +242,15 @@ func (l *milestoneLaunch) LaunchTarget(_ context.Context, self port.HelperSelfId
 	})
 }
 
+func (l *milestoneLaunch) LaunchPrevious(context.Context) error {
+	return l.runtime.call("launch-previous", func() error {
+		if l.runtime.phase != "rollback_launch_requested" || l.runtime.trees[port.App].build != l.runtime.request.Source {
+			return errors.New("source not restored before launch")
+		}
+		return l.err
+	})
+}
+
 func TestHelperMilestoneApplyThroughDurableLaunch(t *testing.T) {
 	for _, location := range []string{"legacy", "shared"} {
 		t.Run(location, func(t *testing.T) {
@@ -312,10 +321,10 @@ func TestHelperMilestoneKnownLaunchFailureDoesNotCompleteOrReplay(t *testing.T) 
 	requireExecutionCode(t, err, "execution_attempt_unknown", true)
 }
 
-func TestHelperMilestoneCompensatesOnlyConfirmedNegative(t *testing.T) {
+func TestHelperMilestoneCompensatesAndRelaunchesPrevious(t *testing.T) {
 	for _, opaque := range []bool{false, true} {
 		t.Run(fmt.Sprint(opaque), func(t *testing.T) {
-			request, r := milestoneFixture("apply", true)
+			request, r := milestoneFixture("apply", false)
 			request.Relaunch = true
 			r.request = request
 			m, _ := testMilestone(context.Background(), request)
@@ -323,25 +332,24 @@ func TestHelperMilestoneCompensatesOnlyConfirmedNegative(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			cause := errors.New("private tree query failed")
 			r.before = func(name string) error {
 				if name == "matches" {
 					if opaque {
-						return cause
+						return errors.New("verification read failed")
 					}
 					r.match = false
 				}
 				return nil
 			}
 			result, err := m.Execute(context.Background(), r, ready, newMilestoneLaunch(request, r))
+			code := "target_verification"
 			if opaque {
-				requireExecutionCode(t, err, "internal", true)
-				if result != nil || !errors.Is(err, cause) || r.reject || r.phase != "new_installed" {
-					t.Fatal("opaque verification failure authorized compensation")
-				}
-			} else if err != nil || result == nil || *result != (Result{Phase: "rolled_back", Code: "target_verification"}) || !r.reject {
-				t.Fatal("confirmed negative was not durably compensated", result, err)
+				code = "apply_failed"
 			}
+			if err != nil || result == nil || *result != (Result{Phase: "rollback_completed", Code: code}) || !r.reject {
+				t.Fatal("failed update did not restore and relaunch source", result, err, r.trace)
+			}
+			indexTrace(t, r.trace, "launch-previous")
 			for _, s := range r.trace {
 				if s == "launch" || s == "capture" {
 					t.Fatal("failed target launched")
@@ -375,7 +383,7 @@ func TestHelperMilestoneRecoverRollbackAndHistoricalLaunch(t *testing.T) {
 				t.Fatal(err)
 			}
 			result, err := m.Execute(context.Background(), r, ready, newMilestoneLaunch(request, r))
-			want := map[string]string{"prepared": "cancelled", "verified": "completed", "launch_requested": "launch_requested", "completed": "completed", "rollback": "rolled_back"}[state]
+			want := map[string]string{"prepared": "cancelled", "verified": "completed", "launch_requested": "launch_requested", "completed": "completed", "rollback": "rollback_completed"}[state]
 			if err != nil || result == nil || result.Phase != want {
 				t.Fatal(result, err)
 			}
@@ -439,6 +447,173 @@ func TestHelperMilestoneFailedOrLateLaunchNeverCompletesOrRetries(t *testing.T) 
 			requireExecutionCode(t, err, "execution_attempt_unknown", true)
 			if !reflect.DeepEqual(before, r.trace) {
 				t.Fatal("unknown launch retried")
+			}
+		})
+	}
+}
+
+// These cases stop only the symbolic app policy at its journal seams. They
+// record the phase a helper could leave behind at each write boundary; they do
+// not qualify journal durability or any native recovery behavior.
+func TestHelperMilestoneInterruptedApplyJournalWrites(t *testing.T) {
+	for _, tc := range []struct {
+		phase string
+		when  string // before: write refusal; after: helper stops just after persistence
+		want  string
+	}{
+		{"prepared", "before", ""}, {"prepared", "after", "prepared"},
+		{"new_installed", "before", "prepared"}, {"new_installed", "after", "new_installed"},
+		{"verified", "before", "new_installed"}, {"verified", "after", "verified"},
+		{"launch_requested", "before", "verified"}, {"launch_requested", "after", "launch_requested"},
+		{"completed", "before", "launch_requested"}, {"completed", "after", "completed"},
+	} {
+		t.Run(tc.phase+"/"+tc.when, func(t *testing.T) {
+			request, r := milestoneFixture("apply", true)
+			request.Relaunch = true
+			r.request = captureRequest(request)
+			m, err := testMilestone(context.Background(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ready, err := m.Inspect(context.Background(), r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			writeEvent := "write:" + tc.phase
+			if tc.phase == "prepared" {
+				writeEvent = "prepare"
+			}
+			if tc.when == "before" {
+				r.before = func(name string) error {
+					if name == writeEvent {
+						cancel() // model helper loss at the failed write; suppress compensation
+						return errors.New("injected journal write refusal")
+					}
+					return nil
+				}
+			} else {
+				r.after = func(name string) {
+					if name == writeEvent {
+						cancel()
+					}
+				}
+			}
+			launch := newMilestoneLaunch(request, r)
+			_, _ = m.Execute(ctx, r, ready, launch)
+			if r.phase != tc.want {
+				t.Fatalf("persisted phase %q, want %q; trace=%v", r.phase, tc.want, r.trace)
+			}
+			app, hasApp := r.trees[port.App]
+			prev, hasPrevious := r.trees[port.Previous]
+			if tc.phase == "prepared" {
+				staged, hasStaged := r.trees[port.Staged]
+				if !hasApp || app.build != request.Source || !hasStaged || staged.build != request.Target || hasPrevious {
+					t.Fatalf("interrupted preparation pair changed: trees=%+v", r.trees)
+				}
+			} else if !hasApp || app.build != request.Target || !hasPrevious || prev.build != request.Source {
+				t.Fatalf("interrupted target install pair changed: app=%+v previous=%+v trees=%+v", app, prev, r.trees)
+			}
+			launches := 0
+			for _, event := range r.trace {
+				if event == "launch" {
+					launches++
+				}
+			}
+			wantLaunches := 0
+			if tc.phase == "completed" || tc.want == "completed" {
+				wantLaunches = 1 // completion can fail only after LaunchTarget returned
+			}
+			if launches != wantLaunches {
+				t.Fatalf("unexpected target launch count %d: %v", launches, r.trace)
+			}
+			before := append([]string(nil), r.trace...)
+			_, retryErr := m.Execute(context.Background(), r, ready, launch)
+			requireExecutionCode(t, retryErr, "execution_attempt_unknown", true)
+			if !reflect.DeepEqual(before, r.trace) {
+				t.Fatal("reusing attempt repeated launch or writes", r.trace)
+			}
+		})
+	}
+}
+
+func TestHelperMilestoneInterruptedRollbackJournalWrites(t *testing.T) {
+	for _, tc := range []struct {
+		phase, when, want string
+		launch            bool
+	}{
+		{"rollback_started", "before", "verified", false},
+		{"rollback_started", "after", "rollback_started", false},
+		{"rolled_back", "before", "rollback_started", false},
+		{"rolled_back", "after", "rolled_back", false},
+		{"rollback_launch_requested", "before", "rolled_back", true},
+		{"rollback_launch_requested", "after", "rollback_launch_requested", true},
+		{"rollback_completed", "before", "rollback_launch_requested", true},
+		{"rollback_completed", "after", "rollback_completed", true},
+	} {
+		t.Run(tc.phase+"/"+tc.when, func(t *testing.T) {
+			request, r := milestoneFixture("rollback", false)
+			request.Relaunch = tc.launch
+			r.request = captureRequest(request)
+			m, err := testMilestone(context.Background(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ready, err := m.Inspect(context.Background(), r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.when == "before" {
+				r.before = func(name string) error {
+					if name == "write:"+tc.phase {
+						cancel()
+						return errors.New("injected journal write refusal")
+					}
+					return nil
+				}
+			} else {
+				r.after = func(name string) {
+					if name == "write:"+tc.phase {
+						cancel()
+					}
+				}
+			}
+			launch := newMilestoneLaunch(request, r)
+			_, _ = m.Execute(ctx, r, ready, launch)
+			if r.phase != tc.want {
+				t.Fatalf("persisted phase %q, want %q; trace=%v", r.phase, tc.want, r.trace)
+			}
+			app, hasApp := r.trees[port.App]
+			previous, hasPrevious := r.trees[port.Previous]
+			failed, hasFailed := r.trees[port.Failed]
+			if (tc.want == "verified" || tc.want == "rollback_started") && tc.phase != "rolled_back" {
+				if !hasApp || app.build != request.Target || !hasPrevious || previous.build != request.Source || hasFailed {
+					t.Fatalf("rollback had not yet restored source: trees=%+v", r.trees)
+				}
+			} else if !hasApp || app.build != request.Source || hasPrevious || !hasFailed || failed.build != request.Target {
+				t.Fatalf("rollback did not retain restored source and rejected target: trees=%+v", r.trees)
+			}
+			previousLaunches := 0
+			for _, event := range r.trace {
+				if event == "launch-previous" {
+					previousLaunches++
+				}
+			}
+			wantPreviousLaunches := 0
+			if tc.phase == "rollback_completed" {
+				wantPreviousLaunches = 1 // that write follows the completed launch call
+			}
+			if previousLaunches != wantPreviousLaunches {
+				t.Fatalf("unexpected previous launch count %d: %v", previousLaunches, r.trace)
+			}
+			before := append([]string(nil), r.trace...)
+			_, retryErr := m.Execute(context.Background(), r, ready, launch)
+			requireExecutionCode(t, retryErr, "execution_attempt_unknown", true)
+			if !reflect.DeepEqual(before, r.trace) {
+				t.Fatal("reusing attempt relaunched or repeated writes", r.trace)
 			}
 		})
 	}
