@@ -18,26 +18,51 @@ export const operationOutcomes = [
   "unknown",
   "pending",
 ] as const;
-export const OperationLabelSchema = z
+const WorkspaceIdentifierSchema = z
   .string()
   .min(1)
   .max(160)
   .regex(/^[\p{L}\p{M}\p{N} ._()@-]+$/u);
+
+const unrepresentable = "[unrepresentable]";
+// Bound untrusted input before scanning; display limits include the ellipsis.
+function ownerText(
+  value: unknown,
+  limit: number,
+  relativePath = false,
+): string {
+  if (typeof value !== "string" || value.length > 16384) return unrepresentable;
+  const text = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, "");
+  if (!text || /\p{Cs}/u.test(text)) return unrepresentable;
+  if (
+    relativePath &&
+    text !== "." &&
+    (text.startsWith("/") ||
+      text.includes("\\") ||
+      text.split("/").some((part) => !part || part === "." || part === ".."))
+  )
+    return unrepresentable;
+  return text.length <= limit
+    ? text
+    : text.slice(0, limit - 1).replace(/\p{Cs}$/u, "") + "…";
+}
+
+export const OperationLabelSchema = z.preprocess(
+  (value) => ownerText(value, 160),
+  z.string(),
+);
 export const OperationTargetSchema = z.strictObject({
   workspace: OperationLabelSchema.optional(),
   relativePath: z
-    .string()
-    .min(1)
-    .max(4096)
-    .regex(/^[\p{L}\p{M}\p{N} ._()@/-]+$/u)
-    .refine(
-      (v) =>
-        v === "." ||
-        (!v.startsWith("/") &&
-          v.split("/").every((s) => s && s !== ".." && s !== ".")),
+    .preprocess((value) => ownerText(value, 4096, true), z.string())
+    .optional(),
+  // Command text is never retained, including when reading older records.
+  command: z
+    .preprocess(
+      (value) => (value === "git" ? "git" : "other"),
+      z.enum(["git", "other"]),
     )
     .optional(),
-  command: z.enum(["git", "other"]).optional(),
   // Unmatched tool-supplied handles have no trusted metadata provenance.
   handle: z.literal("unrecognized").optional(),
   start: z.literal("unknown").optional(),
@@ -74,7 +99,7 @@ export type OperationMetadata = Pick<OperationEntry, "source"> & {
 export const OperationWorkspaceLabelsSchema = z
   .array(
     z.strictObject({
-      workspaceId: OperationLabelSchema,
+      workspaceId: WorkspaceIdentifierSchema,
       label: OperationLabelSchema,
     }),
   )

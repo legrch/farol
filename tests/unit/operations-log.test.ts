@@ -11,7 +11,10 @@ import {
   OperationEntrySchema,
   type OperationMetadata,
 } from "../../apps/desktop/renderer/operations-contract";
-import { createSupportExport } from "../../src/apps/desktop/support-export";
+import {
+  createSupportExport,
+  writeSupportExport,
+} from "../../src/apps/desktop/support-export";
 import { OperationsStore } from "../../apps/desktop/operations/store";
 import {
   operationResult,
@@ -1044,7 +1047,7 @@ it.each(["begin", "finish", "record", "labels"] as const)(
     expect((await store.snapshot(5000)).writeFailures).toBe(1);
   },
 );
-it("rejects invalid labels before serialization without delaying an operation", async () => {
+it("marks unrepresentable labels before serialization without delaying an operation", async () => {
   const { store } = setup(retentionLimits);
   store.setWorkspaceLabels([{ workspaceId: "w", label: 1n as never }]);
   const result = { status: "ok" };
@@ -1052,7 +1055,15 @@ it("rejects invalid labels before serialization without delaying an operation", 
     result,
   );
   expect(await store.flush(5000)).toBe(true);
-  expect((await store.snapshot(5000)).writeFailures).toBe(1);
+  expect((await store.snapshot(5000)).writeFailures).toBe(0);
+  expect(
+    JSON.parse(
+      fs.readFileSync(
+        path.join(store.directory, "workspace-labels.json"),
+        "utf8",
+      ),
+    ),
+  ).toEqual({ w: "[unrepresentable]" });
 });
 
 // Synthetic adversarial inputs exercise the recorder and real support projection,
@@ -1142,7 +1153,7 @@ it.each(hostileText)(
       .map((file) => fs.readFileSync(path.join(directory, file), "utf8"))
       .join("\n");
     expect(disk).not.toContain("PRIVATE_");
-    // Re-reading legacy/corrupt disk entries rejects arbitrary text instead of exporting it.
+    // Closed fields reject arbitrary text; legacy command names become "other".
     const valid = snapshot.entries[0]!;
     const file = path.join(directory, segmentFiles(directory)[0]!);
     const variants = [
@@ -1172,7 +1183,9 @@ it.each(hostileText)(
     );
     stores.push(restarted);
     const readback = await restarted.snapshot(5000);
-    expect(readback.corruptLines).toBe(variants.length);
+    expect(readback.corruptLines).toBe(variants.length - 1);
+    expect(readback.entries).toHaveLength(snapshot.entries.length + 1);
+    expect(readback.entries.at(-1)!.target).toEqual({ command: "other" });
     expect(JSON.stringify(supportWith(readback))).not.toContain("PRIVATE_");
   },
 );
@@ -1235,27 +1248,154 @@ it("enforces the vocabulary for arbitrary sinks and workspace label calls", () =
     recorder.setWorkspaceLabels([{ workspaceId: "w", label: value }]);
     recorder.setWorkspaceLabels([{ workspaceId: value, label: "Docs" }]);
   }
-  expect(labels).not.toHaveBeenCalled();
+  expect(labels).toHaveBeenCalledTimes(4);
+  expect(labels.mock.calls.map(([value]) => value[0].label)).toEqual([
+    "PRIVATEPROMPT",
+    "PRIVATEPROMPT",
+    "x".repeat(159) + "…",
+    "<script>",
+  ]);
 });
 
-it.each([
-  { workspace: "x".repeat(161) },
-  { workspace: "Private\u202eName" },
-  { workspace: "Private\nName" },
-  { workspace: "<script>" },
-  { relativePath: "/private/file" },
-  { relativePath: "../private" },
-  { relativePath: "private\\file" },
-  { relativePath: "x".repeat(4097) },
-  { relativePath: "private\u202efile" },
-  { relativePath: "$(private)" },
-])("rejects unsafe owner metadata %# before recording", async (target) => {
+const ownerTargets: [Record<string, unknown>, Record<string, string>][] = [
+  [{ workspace: "x".repeat(161) }, { workspace: "x".repeat(159) + "…" }],
+  [{ workspace: "Private\u202eName" }, { workspace: "PrivateName" }],
+  [{ workspace: "Private\nName" }, { workspace: "PrivateName" }],
+  [{ workspace: "Project + [dev] #1" }, { workspace: "Project + [dev] #1" }],
+  [{ workspace: "<script>" }, { workspace: "<script>" }],
+  [{ workspace: 42 }, { workspace: "[unrepresentable]" }],
+  [{ workspace: "\n\u202e" }, { workspace: "[unrepresentable]" }],
+  [{ command: 42 }, { command: "other" }],
+  [{ command: "build+[dev]" }, { command: "other" }],
+  ...[
+    ["a+b.txt", "a+b.txt"],
+    ["资料/Проект/é.txt", "资料/Проект/é.txt"],
+    ["Release notes/a b.md", "Release notes/a b.md"],
+    ["nested/[x]~#,=+!$&;'().txt", "nested/[x]~#,=+!$&;'().txt"],
+    ["a/".repeat(100) + "z", "a/".repeat(100) + "z"],
+    ["x".repeat(4096), "x".repeat(4096)],
+    ["x".repeat(4097), "x".repeat(4095) + "…"],
+    ["a/" + "x".repeat(16382), "a/" + "x".repeat(4093) + "…"],
+    ["x".repeat(16385), "[unrepresentable]"],
+    ["x".repeat(4094) + "😀😀", "x".repeat(4094) + "…"],
+    ["/private/file", "[unrepresentable]"],
+    ["../private", "[unrepresentable]"],
+    ["private\\file", "[unrepresentable]"],
+    ["private\u202efile", "privatefile"],
+    ["a\n\u0000b\u007f.txt", "ab.txt"],
+    ["\n\u0000\u202e", "[unrepresentable]"],
+    ["\ud800", "[unrepresentable]"],
+    ["$(private)", "$(private)"],
+    [".", "."],
+  ].map(
+    ([input, expected]): [Record<string, unknown>, Record<string, string>] => [
+      { relativePath: input! },
+      { relativePath: expected! },
+    ],
+  ),
+  [{ relativePath: null }, { relativePath: "[unrepresentable]" }],
+  [
+    { relativePath: { nested: "PRIVATE_PROMPT" } },
+    { relativePath: "[unrepresentable]" },
+  ],
+];
+it.each(ownerTargets)(
+  "normalizes owner target fields without losing a record %#",
+  async (target, expected) => {
+    const { store, directory } = setup(retentionLimits);
+    const validTarget = { ...target, command: "git" };
+    const normalized = { ...expected, command: "git" };
+    // Test both one-shot records and settlement after a target changes.
+    store.record(
+      { ...metadata, target } as never,
+      "unknown",
+      "ACTION_OUTCOME_UNKNOWN",
+      1,
+    );
+    const mutable = { ...metadata, target: {} };
+    const finish = store.begin(mutable);
+    mutable.target = validTarget;
+    finish("failed", "WORKSPACE_READ_FAILED", 2);
+    expect(await store.flush(5000)).toBe(true);
+    const snapshot = await store.snapshot(5000);
+    expect(snapshot).toMatchObject({
+      entries: [
+        {
+          ...metadata,
+          target: expected,
+          outcome: "unknown",
+          code: "ACTION_OUTCOME_UNKNOWN",
+          durationMs: 1,
+        },
+        {
+          ...metadata,
+          target: normalized,
+          outcome: "failed",
+          code: "WORKSPACE_READ_FAILED",
+          durationMs: 2,
+        },
+      ],
+      writeFailures: 0,
+      droppedEntries: 0,
+      unrecordedUncertainEntries: 0,
+      corruptLines: 0,
+    });
+    expect(snapshot.entries).toHaveLength(2);
+    // Raw legacy fields go through the same normalization on disk and export.
+    const raw = { ...snapshot.entries[0]!, target };
+    fs.appendFileSync(
+      path.join(directory, segmentFiles(directory)[0]!),
+      JSON.stringify(raw) + "\n",
+    );
+    const restarted = new OperationsStore(
+      directory,
+      () => 1792670400000,
+      retentionLimits,
+    );
+    stores.push(restarted);
+    const readback = await restarted.snapshot(5000);
+    expect(readback.corruptLines).toBe(0);
+    expect(readback.entries).toHaveLength(3);
+    expect(
+      readback.entries
+        .filter((entry) => entry.id === raw.id)
+        .map((entry) => entry.target),
+    ).toEqual([expected, expected]);
+    const rawSnapshot = { ...snapshot, entries: [raw] } as never;
+    const report = supportWith(rawSnapshot);
+    expect(report.operations!.entries).toHaveLength(1);
+    expect(report.operations!.entries[0]!.target).toEqual(expected);
+    const exported = path.join(directory, "support.json");
+    await writeSupportExport(exported, { operations: rawSnapshot });
+    expect(
+      JSON.parse(fs.readFileSync(exported, "utf8")).operations.entries[0]
+        .target,
+    ).toEqual(expected);
+  },
+);
+
+it("resolves unusual workspace names per field without discarding sibling labels", async () => {
   const { store } = setup(retentionLimits);
-  store.record({ ...metadata, target }, "done", null, 1);
-  expect(await store.snapshot(5000)).toMatchObject({
-    entries: [],
-    writeFailures: 1,
-  });
+  store.setWorkspaceLabels([
+    { workspaceId: "a", label: "工程 + [dev] #1" },
+    { workspaceId: "b", label: "\n\u202e" },
+    { workspaceId: "c", label: "x".repeat(161) },
+  ]);
+  for (const workspace of ["a", "b", "c"])
+    store.record(
+      { ...metadata, target: { workspace, relativePath: "a+b.txt" } },
+      "done",
+      null,
+      1,
+    );
+  await store.flush(5000);
+  const snapshot = await store.snapshot(5000);
+  expect(snapshot.entries.map((entry) => entry.target.workspace)).toEqual([
+    "工程 + [dev] #1",
+    "[unrepresentable]",
+    "x".repeat(159) + "…",
+  ]);
+  expect(snapshot.writeFailures).toBe(0);
 });
 it("preserves bounded international owner names and relative paths, and rejects nonnumeric counters", async () => {
   const { store } = setup(retentionLimits);

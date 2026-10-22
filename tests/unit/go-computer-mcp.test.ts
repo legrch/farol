@@ -1853,6 +1853,37 @@ const recordedToolCases: {
     target: {},
   },
 ];
+it.each([
+  "a+b.txt",
+  "资料/Проект/notes [v1] #1,=~.md",
+  "Release notes/a b.md",
+  "nested/".repeat(30) + "[file]+.txt",
+  "x".repeat(4096),
+])(
+  "records tool-valid unusual paths through MCP: case %#",
+  async (relativePath) => {
+    const record = vi.fn();
+    const { client, request } = await setup({
+      operations: createTotalOperationsRecorder({ record }),
+      respond: async () => {
+        throw new BridgeError("refused", "FIXTURE_REFUSAL");
+      },
+    });
+    await client.callTool({
+      name: "computer_workspace_read",
+      arguments: { workspaceId: "workspace", relativePath },
+    });
+    expect(request).toHaveBeenCalledOnce();
+    expect(record).toHaveBeenCalledOnce();
+    expect(record.mock.calls[0]![0]).toEqual({
+      source: "ChatGPT",
+      kind: "computer_workspace_read",
+      target: { workspace: "workspace", relativePath },
+    });
+    expect(record.mock.calls[0]![1]).toBe("refused");
+  },
+);
+
 it.each(recordedToolCases)(
   "records the exact content-free target for $name (start: $start)",
   async ({ name, input, target, start }) => {

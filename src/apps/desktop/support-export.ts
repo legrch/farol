@@ -274,6 +274,16 @@ export async function writeSupportExport(target: string, report: unknown) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 
+  const hasOperations =
+    report !== null && typeof report === "object" && "operations" in report;
+  if (hasOperations) {
+    const reportRecord = report as Record<string, unknown>;
+    const operations = OperationsSnapshotSchema.safeParse(
+      reportRecord.operations,
+    );
+    if (!operations.success) throw new Error("SUPPORT_EXPORT_INVALID");
+    report = { ...reportRecord, operations: operations.data };
+  }
   let serialized: string;
   try {
     serialized = `${JSON.stringify(report, null, 2)}\n`;
@@ -284,13 +294,9 @@ export async function writeSupportExport(target: string, report: unknown) {
     throw new Error("SUPPORT_EXPORT_INVALID");
   }
   const bytes = Buffer.byteLength(serialized);
-  const hasOperations =
-    report !== null && typeof report === "object" && "operations" in report;
   let permittedBytes = MAX_SUPPORT_EXPORT_BYTES;
   if (hasOperations) {
     const reportRecord = report as Record<string, unknown>;
-    if (!OperationsSnapshotSchema.safeParse(reportRecord.operations).success)
-      throw new Error("SUPPORT_EXPORT_INVALID");
     const otherBytes = Buffer.byteLength(
       JSON.stringify({ ...reportRecord, operations: undefined }, null, 2),
     );

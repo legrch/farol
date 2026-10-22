@@ -354,8 +354,11 @@ export class OperationsStore implements OperationsRecorder {
           workspace && Object.hasOwn(labels, workspace)
             ? labels[workspace]
             : undefined;
-        const parsedLabel = OperationLabelSchema.safeParse(label);
-        const resolved = parsedLabel.success
+        const parsedLabel =
+          label === undefined
+            ? undefined
+            : OperationLabelSchema.safeParse(label);
+        const resolved = parsedLabel?.success
           ? {
               ...entry,
               target: { ...entry.target, workspace: parsedLabel.data },
