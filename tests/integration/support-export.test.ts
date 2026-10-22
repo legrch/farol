@@ -110,6 +110,22 @@ describe("content-free support export", () => {
       throw new Error("settings missing");
     }
     const report = createSupportExport({
+      operations: {
+        entries: [
+          {
+            id: "22222222-2222-4222-8222-222222222222",
+            at: 1,
+            source: "Setup",
+            kind: "connector.check-health",
+            target: {},
+            outcome: "refused",
+            code: "CONNECTION_NOT_READY",
+            durationMs: 2,
+          },
+        ],
+        corruptLines: 1,
+        writeFailures: 0,
+      },
       generatedAt: "2026-09-16T11:00:00.000Z",
       build: {
         schema: 1,
@@ -145,6 +161,10 @@ describe("content-free support export", () => {
     });
 
     expect(report).toMatchObject({
+      operations: {
+        entries: [{ kind: "connector.check-health", outcome: "refused" }],
+        corruptLines: 1,
+      },
       schema: 2,
       kind: "farol_support",
       build: {

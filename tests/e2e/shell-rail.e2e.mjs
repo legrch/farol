@@ -107,6 +107,10 @@ const ready=${JSON.stringify(bootstrap)};
 const unfinished=${JSON.stringify(shellRailFixture(false))};
 const listeners=new Map();const calls=[];let sequence=0;let snapshot=localStorage.getItem("shell-rail-fixture") === "unfinished" ? unfinished : ready;
 const listen=name=>fn=>{listeners.set(name,fn);return ()=>listeners.delete(name)};
+contextBridge.exposeInMainWorld('farolRecovery',{
+ state:async()=>({status:"ready",revision:1,folders:[{workspaceId:"22222222-2222-4222-8222-222222222222",label:"Synthetic workspace",root:"/synthetic/workspace"}],computer:"available",archive:"available"}),
+ read:async()=>({status:"refused"}),quit:()=>{}
+});
 contextBridge.exposeInMainWorld('farol',{
  bootstrap:async()=>snapshot,snapshot:async()=>snapshot,
  configure:async(command)=>{calls.push(command.kind);if(command.kind==='chatgpt.observe-sign-in')return {ok:true,snapshot:snapshot.configuration,evidence:{kind:'chatgpt.sign-in-status',observationId:command.observationId,buildId:command.buildId,state:'authenticated',binding:{documentGeneration:0,sequence:1}}};if(command.kind==='chatgpt.verify')return {ok:true,snapshot:snapshot.configuration,evidence:{kind:'chatgpt.readiness',state:'authenticated',code:null}};return {ok:true,snapshot:snapshot.configuration};},
@@ -156,6 +160,11 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
     .getByRole("button", { name: "Home", exact: true })
     .click();
   await page.locator(".home-setup-card").waitFor();
+  assert.equal(
+    await page.locator(".desktop").getAttribute("data-sidebar"),
+    "full",
+  );
+  await capture(page, "b2-default-expanded-fixture");
   await capture(page, "home-unfinished");
   assert.equal(await page.locator(".home-candidate section").count(), 1);
   await page
@@ -360,6 +369,19 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
     await page.locator(".rail-connection").getAttribute("data-connected"),
     "false",
   );
+  await page.goto(page.url().split("#")[0] + "#farol-startup-recovery");
+  await page.reload();
+  await page
+    .getByRole("button", { name: "Check previous operations", exact: true })
+    .waitFor();
+  await capture(page, "b2-recovery-fixture");
+  await page
+    .getByRole("button", { name: "Check previous operations", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Open with commands paused", exact: true })
+    .click();
+  await capture(page, "b2-recovery-paused-fixture");
   report.windows = await app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows().map((w) => ({
       visible: w.isVisible(),

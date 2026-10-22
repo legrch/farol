@@ -2521,6 +2521,8 @@ export class ChatGptRoute {
     );
     const candidate = new BrowserWindow({
       title: this.displayTitle,
+      frame: true,
+      titleBarStyle: "default",
       width: requested.width,
       height: requested.height,
       ...(initial.bounds ?? {}),
@@ -4883,6 +4885,8 @@ export class ChatGptRoute {
         action: "allow",
         overrideBrowserWindowOptions: {
           title: `Sign in · ${this.displayTitle}`,
+          frame: true,
+          titleBarStyle: "default",
           width: requested.width,
           height: requested.height,
           ...(presentation.bounds ?? {}),

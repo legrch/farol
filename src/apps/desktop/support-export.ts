@@ -1,3 +1,7 @@
+import {
+  OperationsSnapshotSchema,
+  type OperationsSnapshot,
+} from "../../../apps/desktop/renderer/operations-contract";
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
@@ -9,7 +13,8 @@ import type { ProductConfigurationSnapshot } from "../../pkg/product-settings/co
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 // A support report is a small content-free summary; anything larger means
 // something that does not belong in it was added.
-const MAX_SUPPORT_EXPORT_BYTES = 64 * 1_024;
+const MAX_SUPPORT_EXPORT_BYTES = 64 * 1024;
+const MAX_SUPPORT_WITH_OPERATIONS_BYTES = 12 * 1024 * 1024;
 const CLOSE_ON_EXEC =
   (fsConstants as typeof fsConstants & { O_CLOEXEC?: number }).O_CLOEXEC ?? 0;
 
@@ -22,6 +27,7 @@ export type SupportRuntimeErrorCode =
   | "other";
 
 type SupportExportInput = Readonly<{
+  operations?: OperationsSnapshot;
   generatedAt: string;
   build: BuildIdentity;
   configuration: ProductConfigurationSnapshot;
@@ -67,6 +73,7 @@ function exactKeys(value: unknown, keys: readonly string[]): boolean {
 function assertKnownInput(input: SupportExportInput): void {
   if (
     !exactKeys(input, [
+      ...(input.operations === undefined ? [] : ["operations"]),
       "generatedAt",
       "build",
       "configuration",
@@ -199,6 +206,9 @@ export function createSupportExport(input: SupportExportInput) {
         };
 
   return {
+    ...(input.operations === undefined
+      ? {}
+      : { operations: OperationsSnapshotSchema.parse(input.operations) }),
     schema: 2 as const,
     kind: "farol_support" as const,
     generatedAt: input.generatedAt,
@@ -274,7 +284,21 @@ export async function writeSupportExport(target: string, report: unknown) {
     throw new Error("SUPPORT_EXPORT_INVALID");
   }
   const bytes = Buffer.byteLength(serialized);
-  if (bytes > MAX_SUPPORT_EXPORT_BYTES) {
+  const hasOperations =
+    report !== null && typeof report === "object" && "operations" in report;
+  let permittedBytes = MAX_SUPPORT_EXPORT_BYTES;
+  if (hasOperations) {
+    const reportRecord = report as Record<string, unknown>;
+    if (!OperationsSnapshotSchema.safeParse(reportRecord.operations).success)
+      throw new Error("SUPPORT_EXPORT_INVALID");
+    const otherBytes = Buffer.byteLength(
+      JSON.stringify({ ...reportRecord, operations: undefined }, null, 2),
+    );
+    if (otherBytes > MAX_SUPPORT_EXPORT_BYTES)
+      throw new Error("SUPPORT_EXPORT_TOO_LARGE");
+    permittedBytes = MAX_SUPPORT_WITH_OPERATIONS_BYTES;
+  }
+  if (bytes > permittedBytes) {
     throw new Error("SUPPORT_EXPORT_TOO_LARGE");
   }
   const sha256 = createHash("sha256").update(serialized).digest("hex");

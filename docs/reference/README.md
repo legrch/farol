@@ -18,6 +18,8 @@ These pages explain source contracts and evidence. They are separate from the [u
 - [Model routing](../model-routing.md), [configuration/model discovery](../config-model-discovery.md), [persistent handoff](../persistent-chat-handoff-parity.md) and [Claude candidate](../claude-handoff-candidate.md).
 - [Agent workflow proposal](../agent-workflows/README.md), [inference](../inference/README.md) and [model capability routing](../model-capabilities/README.md). Presence in this list is not activation.
 
+- [App operations log](operations-log.md) — metadata recording, profile retention and Activity evidence.
+
 ## Installation, update and developer diagnostics
 
 - [Owner preview reference](../owner-preview.md) — source launch, controlled fixtures and bounded local promotion.

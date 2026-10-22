@@ -1674,3 +1674,53 @@ kbd {
   box-shadow: 0 3px 12px #0002;
   z-index: 6;
 }
+
+.operations-activity {
+  display: grid;
+  gap: 16px;
+}
+.operations-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.operations-filters label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+}
+.operations-filters label:last-child {
+  flex: 1;
+  min-width: 180px;
+}
+.operation-row {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px;
+}
+.operation-row summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  cursor: pointer;
+}
+.operation-row summary > span:first-child {
+  display: grid;
+  gap: 5px;
+}
+.operation-row small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.operation-row[open] summary {
+  margin-bottom: 16px;
+}
+.operation-outcome {
+  color: var(--muted);
+  font-size: 12px;
+}
+.operation-outcome[data-outcome="unknown"],
+.operation-outcome[data-outcome="pending"] {
+  color: var(--accent);
+}

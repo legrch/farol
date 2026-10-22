@@ -1,3 +1,5 @@
+import type { OperationsRecorder } from "./renderer/operations-contract";
+import { observeOperation } from "./operations/observe";
 import { isDeepStrictEqual } from "node:util";
 import { ChatGptAccountObservationSchema } from "./chatgpt-account-probe.ts";
 import { BridgeError } from "./bridge/client.ts";
@@ -59,6 +61,7 @@ export type QualifiedControlTranslation = Readonly<{
   connector: readonly ControlTranslation[];
 }>;
 export type GoChatBrowserDependencies = Readonly<{
+  operations?: OperationsRecorder;
   lookup: (lease: BrowserLease) => AssignedChatBrowser | undefined;
   translations: readonly QualifiedControlTranslation[];
   // Explicit trusted harness input; never read from a wire request or environment.
@@ -81,6 +84,9 @@ type Session = {
   verification?: BrowserVerification;
   verifyAttempted: boolean;
   sendAttempted: boolean;
+  sentAt?: number;
+  turnObservation?:
+    ReturnType<NonNullable<OperationsRecorder["begin"]>> | undefined;
   sendOutcome?: "submitted" | "not-sent" | "unknown";
   cancelAttempted: boolean;
   disposeAttempted: boolean;
@@ -239,6 +245,7 @@ function unknownFact(): BrowserControlFact {
  * observation paging and witness correlation, never an executor or result store.
  */
 export class GoChatBrowserDriver implements BrowserDriver {
+  private readonly operations: OperationsRecorder | undefined;
   private readonly lookup: GoChatBrowserDependencies["lookup"];
   private readonly translations: readonly QualifiedControlTranslation[];
   private readonly now: () => number;
@@ -254,6 +261,7 @@ export class GoChatBrowserDriver implements BrowserDriver {
       (deps.nowMillis !== undefined && typeof deps.nowMillis !== "function")
     )
       fail("chat_browser_dependencies_missing");
+    this.operations = deps.operations;
     this.e2eOrigin = fixtureOrigin(deps.e2eOrigin);
     this.lookup = deps.lookup;
     this.translations = copy(deps.translations);
@@ -757,6 +765,14 @@ export class GoChatBrowserDriver implements BrowserDriver {
     });
   }
   async send(input: BrowserSend): Promise<BrowserSent> {
+    if (!this.operations) return this.sendObserved(input);
+    return observeOperation(
+      this.operations,
+      { source: "ChatGPT", kind: "chatgpt.consult.send", target: {} },
+      () => this.sendObserved(input),
+    );
+  }
+  private async sendObserved(input: BrowserSend): Promise<BrowserSent> {
     shape("BrowserSend", input);
     input = copy(input);
     const deadline = this.deadline(input.deadlineMillis),
@@ -774,6 +790,7 @@ export class GoChatBrowserDriver implements BrowserDriver {
       fail("chat_browser_send_witness_mismatch");
     return this.exclusive(s, async () => {
       s.sendAttempted = true;
+      s.sentAt = this.time();
       const guard = this.guard(
           s,
           Math.min(deadline, s.witness!.deadlineMillis),
@@ -836,6 +853,33 @@ export class GoChatBrowserDriver implements BrowserDriver {
       >
     > = {},
   ): void {
+    const metadata = {
+      source: "ChatGPT",
+      kind: "chatgpt.consult.turn",
+      target: {},
+    } as const;
+    if (kind === "accepted")
+      s.turnObservation = this.operations?.begin?.(metadata);
+    if (["completed", "refused", "unknown", "awaiting-owner"].includes(kind)) {
+      const outcome =
+        kind === "completed"
+          ? "done"
+          : kind === "refused"
+            ? "refused"
+            : kind === "awaiting-owner"
+              ? "pending"
+              : "unknown";
+      const duration = Math.max(0, this.time() - (s.sentAt ?? this.time()));
+      if (s.turnObservation)
+        s.turnObservation(outcome, fields.code || null, duration);
+      else
+        this.operations?.record(
+          metadata,
+          outcome,
+          fields.code || null,
+          duration,
+        );
+    }
     if (s.events.length >= 1024) fail("chat_browser_page_overflow", "unknown");
     const event: BrowserObservation = {
       binding: copy(binding),

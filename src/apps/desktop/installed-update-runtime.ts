@@ -1,3 +1,5 @@
+import { recordedUpdaterPorts } from "../../../apps/desktop/operations/updater";
+import type { OperationsRecorder } from "../../../apps/desktop/renderer/operations-contract";
 import { execFile } from "node:child_process";
 import { constants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
@@ -1656,6 +1658,7 @@ async function recheckAdmission(
   }
 }
 export type InstalledUpdateRuntimeOptions = Readonly<{
+  operations?: OperationsRecorder;
   directory: string;
   userData: string;
   build: BuildIdentity;
@@ -2942,7 +2945,7 @@ async function createRuntime(
     };
   };
 
-  const controller = new InstalledUpdater({
+  const updaterPorts: InstalledUpdaterPorts = {
     cancelPending: () => {
       downloadsCancelled = true;
       transport.cancelPending();
@@ -3089,7 +3092,10 @@ async function createRuntime(
         if (prior.status === "unknown")
           return { status: "unknown", code: prior.code };
       } catch {
-        return { status: "refused", code: "UPDATE_QUIT_PREFERENCE_UNREADABLE" };
+        return {
+          status: "refused",
+          code: "UPDATE_QUIT_PREFERENCE_UNREADABLE",
+        };
       }
       const fence = {
         schema: "farol.installed-install-on-quit-unconfirmed/1",
@@ -3175,7 +3181,11 @@ async function createRuntime(
             previous?.code === view.code &&
             previous.version === version
           )
-            return { key: previous.key, seen: previous.seen, blockedBy: null };
+            return {
+              key: previous.key,
+              seen: previous.seen,
+              blockedBy: null,
+            };
           const failureNotice = {
             version,
             code: view.code,
@@ -3935,7 +3945,10 @@ async function createRuntime(
     restart: (update, confirmation) => apply(update, undefined, confirmation),
     canInstallOnNormalQuit: () => origin?.kind !== "private-launch",
     applyOnQuit: (update, context) => apply(update, context),
-  });
+  };
+  const controller = new InstalledUpdater(
+    recordedUpdaterPorts(options.operations, updaterPorts),
+  );
   const apply = async (
     update: ReadyUpdate,
     quitContext?: NormalQuitApplyContext,

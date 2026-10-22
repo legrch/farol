@@ -122,6 +122,9 @@ function wireReply(method: string, params: Json, id: string) {
 
 async function setup(
   options: {
+    operations?: GoComputerMcpOptions["operations"];
+    connectionStatus?: GoComputerMcpOptions["connectionStatus"];
+    codexRead?: GoComputerMcpOptions["codexRead"];
     binding?: ComputerConnectorExecution;
     context?: Context;
     lifecycle?: GoComputerMcpLifecycle;
@@ -149,6 +152,11 @@ async function setup(
     options.binding ?? binding,
     options.context ?? context,
     {
+      ...(options.operations ? { operations: options.operations } : {}),
+      ...(options.connectionStatus
+        ? { connectionStatus: options.connectionStatus }
+        : {}),
+      ...(options.codexRead ? { codexRead: options.codexRead } : {}),
       fence: options.fence ?? fixtureOptions().fence,
       ...(options.lifecycle ? { lifecycle: options.lifecycle } : {}),
       ...(options.verification ? { verification: options.verification } : {}),
@@ -1714,3 +1722,98 @@ it("routes explicit empty catalogue verification through the same admission fenc
   expect(verify).not.toHaveBeenCalled();
   expect(request).not.toHaveBeenCalled();
 });
+
+it.each([
+  ["computer_connection_status", {}],
+  ["farol_connector_verify_catalogue", { challenge: "private-challenge" }],
+  [
+    "farol_connector_verify",
+    { challenge: "private-challenge", workspaceId: "workspace" },
+  ],
+  ["computer_workspace_catalogue", {}],
+  [
+    "computer_workspace_bootstrap",
+    { workspaceId: "workspace", relativeDirectory: "src" },
+  ],
+  ["computer_workspace_list", { workspaceId: "workspace", relativePath: "." }],
+  [
+    "computer_workspace_read",
+    { workspaceId: "workspace", relativePath: "README.md" },
+  ],
+  [
+    "computer_workspace_search",
+    { workspaceId: "workspace", relativePath: ".", pattern: "PRIVATE-CANARY" },
+  ],
+  [
+    "computer_workspace_write",
+    {
+      operationId: "op",
+      workspaceId: "workspace",
+      relativePath: "x",
+      expectedSha256: null,
+      text: "PRIVATE-CANARY",
+    },
+  ],
+  [
+    "computer_workspace_edit",
+    {
+      operationId: "op",
+      workspaceId: "workspace",
+      relativePath: "x",
+      expectedSha256: "a".repeat(64),
+      edits: [{ oldText: "PRIVATE-CANARY", newText: "secret" }],
+    },
+  ],
+  [
+    "computer_mutation_read",
+    { operationId: "op", workspaceId: "workspace", relativePath: "x" },
+  ],
+  [
+    "computer_shell_start",
+    {
+      operationId: "op",
+      workspaceId: "workspace",
+      relativeCwd: ".",
+      command: "echo PRIVATE-CANARY",
+      write: false,
+    },
+  ],
+  ["computer_shell_read", { operationId: "op", handle: "handle" }],
+  [
+    "computer_shell_cancel",
+    { operationId: "op", handle: "handle", cancelOperationId: "cancel" },
+  ],
+  ["codex_selected_thread_read", {}],
+] as const)(
+  "records exactly one metadata-only entry at %s's final adapter outcome",
+  async (name, input) => {
+    const record = vi.fn();
+    const refused = async (): Promise<never> => {
+      throw new BridgeError("refused", "FIXTURE_REFUSAL");
+    };
+    const { tools } = await setup({
+      operations: { record },
+      respond: refused,
+      verification: { verify: refused, verifyCatalogue: refused },
+      connectionStatus: { observe: refused },
+      mutations: { write: refused, edit: refused, read: refused },
+      processes: { start: refused, read: refused, cancel: refused },
+      codexRead: { read: refused },
+    });
+    const tool = tools.get(name)!;
+    await tool.executor(input, handlerContext(new AbortController().signal));
+    expect(record).toHaveBeenCalledOnce();
+    expect(record.mock.calls[0]).toMatchObject([
+      {
+        kind: name,
+        source: name === "codex_selected_thread_read" ? "Codex" : "ChatGPT",
+      },
+      "refused",
+      "FIXTURE_REFUSAL",
+      expect.any(Number),
+    ]);
+    expect(JSON.stringify(record.mock.calls)).not.toMatch(
+      /PRIVATE-CANARY|private-challenge|secret/,
+    );
+  },
+);

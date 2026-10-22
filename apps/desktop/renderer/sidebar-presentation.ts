@@ -2,3 +2,5 @@
 export const sidebarPreferenceKey = "farol.sidebar.v2";
 export const sidebarWidth = (expanded: boolean): number =>
   expanded ? 208 : 56;
+
+export const defaultSidebarPreference = "full" as const;

@@ -1,3 +1,5 @@
+import path from "node:path";
+import { OperationsStore } from "../operations/store";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import {
   ConnectorMutationBridge,
@@ -73,6 +75,12 @@ export async function runGoComputerMcp(file: string): Promise<void> {
         launch.opened.execution,
         client.verifiedContext,
         {
+          operations: new OperationsStore(
+            path.join(
+              path.dirname(path.dirname(launch.lifecycleRoot)),
+              "operations",
+            ),
+          ),
           lifecycle,
           fence,
           verification,

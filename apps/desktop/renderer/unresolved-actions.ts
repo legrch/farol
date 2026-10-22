@@ -35,6 +35,17 @@ export function unresolvedActions(
           : "Farol could not confirm the result. The action may have taken effect; do not repeat it.",
       code: intent.code,
     }));
+  for (const entry of snapshot.activity) {
+    if (entry.outcome !== "unknown" && entry.outcome !== "pending") continue;
+    rows.push({
+      id: `operation:${entry.id}`,
+      label: `${entry.source}: ${entry.label}`,
+      state: entry.outcome,
+      code: entry.code,
+      cause:
+        "This is the recorded outcome of an earlier operation. Inspect its original result; do not submit it again.",
+    });
+  }
   const settings =
     snapshot.configuration?.status === "ready"
       ? snapshot.configuration.settings

@@ -1,3 +1,5 @@
+import { defaultSidebarPreference } from "../../../apps/desktop/renderer/sidebar-presentation";
+import { OperationsSnapshotSchema } from "../../../apps/desktop/renderer/operations-contract";
 import {
   ConnectionStatusViewSchema,
   unavailableConnectionStatus,
@@ -167,7 +169,7 @@ const initial: WindowSnapshot = {
   destination: home,
   back: false,
   forward: false,
-  sidebar: "full",
+  sidebar: defaultSidebarPreference,
   overlay: "none",
   window: { focused: false, fullScreen: false, trafficLightPosition: null },
   appearance: { theme: "system", accent: "iris", font: "geist" },
@@ -620,6 +622,11 @@ export class WindowController implements RendererFacade {
     const runtimeAtStart = this.runtimeRevision;
     const windowAtStart = this.state.window;
     const order = this.configOrder.begin();
+    if (this.api.operations) {
+      void this.readOperations();
+      const timer = setInterval(() => void this.readOperations(), 1500);
+      this.disposers.push(() => clearInterval(timer));
+    }
     this.startPromise = (async () => {
       try {
         const connectionRead = this.beginConnectionStatusRead();
@@ -689,9 +696,11 @@ export class WindowController implements RendererFacade {
           this.state.tasks.tasks.map((task) => `${task.taskId}:${task.turnId}`),
         );
         this.patch({
-          activity: this.bufferedEvents.filter((event) =>
-            ids.has(`${event.taskId}:${event.turnId}`),
-          ),
+          activity: this.api.operations
+            ? this.state.activity
+            : this.bufferedEvents.filter((event) =>
+                ids.has(`${event.taskId}:${event.turnId}`),
+              ),
           status:
             this.overflow ||
             this.state.configuration?.status !== "ready" ||
@@ -831,7 +840,49 @@ export class WindowController implements RendererFacade {
     this.patch({ tasks: value });
     return true;
   }
+  private operationsReading = false;
+  private async readOperations(): Promise<void> {
+    if (!this.api.operations || this.operationsReading || this.disposed) return;
+    this.operationsReading = true;
+    try {
+      const result = OperationsSnapshotSchema.parse(
+        await this.api.operations(),
+      );
+      if (this.disposed) return;
+      this.patch({
+        activity: result.entries.map((entry) => ({
+          ...entry,
+          taskId: "",
+          turnId: "",
+          generation: 0,
+          label: entry.kind.replaceAll("_", " ").replaceAll(".", " "),
+          phase:
+            entry.outcome === "unknown" ? "outcome_unknown" : entry.outcome,
+          operation:
+            [
+              entry.target.workspace,
+              entry.target.relativePath,
+              entry.target.command,
+            ]
+              .filter(Boolean)
+              .join(" · ") || null,
+        })),
+        activityDiagnostics: {
+          corruptLines: result.corruptLines,
+          writeFailures: result.writeFailures,
+        },
+      });
+    } catch {
+      if (!this.disposed)
+        this.patch({
+          activityDiagnostics: { corruptLines: 0, writeFailures: 1 },
+        });
+    } finally {
+      this.operationsReading = false;
+    }
+  }
   private record(value: unknown): void {
+    if (this.api.operations) return;
     const parsed = ClientEventSchema.safeParse(value);
     if (!parsed.success) {
       this.stale();

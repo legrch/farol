@@ -256,3 +256,26 @@
   overflow-wrap: anywhere;
   font: inherit;
 }
+
+.recovery-titlebar {
+  position: fixed;
+  inset: 0 0 auto;
+  height: 46px;
+  padding: 12px 90px;
+  -webkit-app-region: drag;
+  user-select: none;
+  font-size: 12px;
+}
+.recovery-titlebar :is(button, input, select, a, summary) {
+  -webkit-app-region: no-drag;
+}
+.recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.recovery-quit {
+  background: transparent;
+  color: var(--recovery-muted);
+}

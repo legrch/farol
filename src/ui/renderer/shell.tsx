@@ -1,3 +1,4 @@
+import { OperationsActivity } from "../../../apps/desktop/renderer/operations-view";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode, RefObject } from "react";
 import { isCompactShell, shellGeometry } from "../../pkg/shell-layout/geometry";
@@ -163,8 +164,7 @@ function ActivityNavigation({
       </nav>
       {!items.length && <p className="description">No matching events.</p>}
       <p className="description activity-retention">
-        Recorded metadata only. Up to 256 events are held in memory in this
-        window.
+        Recorded metadata only. App operations remain available across restarts.
       </p>
     </div>
   );
@@ -334,6 +334,11 @@ function Activity({
     snapshot.sidebar,
     snapshot.overlay,
   ]);
+  if (
+    snapshot.activityDiagnostics !== undefined ||
+    snapshot.activity.some((row) => row.source)
+  )
+    return <OperationsActivity snapshot={snapshot} facade={facade} />;
   const emptyTitle = missing
     ? "Event no longer available"
     : filter === "all" && !snapshot.activity.length
@@ -1080,7 +1085,7 @@ export function Shell() {
         } as CSSProperties
       }
     >
-      <header className="toolbar">
+      <header className="toolbar" data-window-drag-region="shell">
         <div className="navigation-chrome">
           <div className="traffic-light-space" />
           <button
