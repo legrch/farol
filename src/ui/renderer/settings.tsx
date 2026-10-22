@@ -554,6 +554,24 @@ export function Settings({
               )}
             </div>
           )}
+          {gate?.actionError && (
+            <div className="notice setup-action-error" role="alert">
+              <p>{gate.actionError.cause}</p>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() =>
+                  void actions.run({
+                    kind: "onboarding.open-help",
+                    destination:
+                      gate.actionError?.action.destination ?? "setup-guide",
+                  })
+                }
+              >
+                {gate.actionError.action.label}
+              </button>
+            </div>
+          )}
           {setupStep === "folders" ? (
             <Folders {...props} />
           ) : (
@@ -1139,13 +1157,12 @@ function ConnectMac({
   useEffect(() => {
     onSetupInputsChange?.(draftChanged);
   }, [draftChanged, onSetupInputsChange]);
-  const connected =
-    setupStepCheck(
-      snapshot,
-      "connection",
-      draftChanged,
-      retainedSetupIntents(facade, snapshot),
-    ).allowed && !failed;
+  const connected = setupStepCheck(
+    snapshot,
+    "connection",
+    draftChanged,
+    retainedSetupIntents(facade, snapshot),
+  ).allowed;
   const valid =
     key.length > 0
       ? ProductConfigurationCommandSchema.safeParse({

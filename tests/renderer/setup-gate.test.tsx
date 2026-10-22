@@ -53,7 +53,7 @@ function intentId(step: SetupCheckpoint) {
     case "folders":
       return `settings:computer.verify-workspace:${workspaceId}`;
     case "connection":
-      return "settings:connector.start:synthetic";
+      return "settings:connector.check-health:synthetic";
     case "attachment":
       return "settings:connector.verify-app:synthetic";
   }
@@ -178,6 +178,137 @@ describe("rendered Setup gate", () => {
       }
     },
   );
+
+  const nonConfirmingIds: Record<SetupCheckpoint, string> = {
+    signin: "settings:chatgpt.open-sign-in:",
+    folders: `settings:computer.remove-workspace:${workspaceId}`,
+    connection: "settings:connector.stop:",
+    attachment: "settings:connector.select-chatgpt-app:",
+  };
+  const afterCheckCases = [
+    { name: "refused action", state: "refused", expected: "success" },
+    { name: "refused check", state: "refused", expected: "refused" },
+    { name: "unknown action", state: "unknown", expected: "unknown" },
+    { name: "pending action", state: "pending", expected: "pending" },
+    {
+      name: "unconfirmed write refusal",
+      state: "refused",
+      expected: "unknown",
+      code: "SETTINGS_WRITE_FAILED",
+    },
+  ] as const;
+  it.each(
+    steps.flatMap((step) =>
+      afterCheckCases.map((testCase) => ({ step, ...testCase })),
+    ),
+  )("$step handles a newer $name after a confirmed check", async (testCase) => {
+    const { step, name, state, expected } = testCase;
+    const h = await mount({ step });
+    const confirmation = intentId(step);
+    const id = name === "refused check" ? confirmation : nonConfirmingIds[step];
+    const snapshot: WindowSnapshot = {
+      ...syntheticSnapshot(h.c.getSnapshot(), step, "success-current"),
+      intents: {
+        [confirmation]: { id: confirmation, state: "applied", code: null },
+        [id]: {
+          id,
+          state,
+          code: "code" in testCase ? testCase.code : null,
+        },
+      },
+      setupCheckOrder: { [confirmation]: 1, [id]: 2 },
+    };
+    const facade = new Proxy(h.c, {
+      get(target, property) {
+        if (property === "getSnapshot") return () => snapshot;
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as unknown as RendererFacade;
+    await h.renderSetup(snapshot, facade);
+
+    expect(
+      h.button(step === "attachment" ? "Start using Farol" : "Continue")
+        ?.disabled,
+    ).toBe(expected !== "success");
+    const status = h.host.querySelector<HTMLElement>(".setup-gate-status");
+    expect(status?.dataset.resultState).toBe(expected);
+    const error = h.host.querySelector<HTMLElement>(".setup-action-error");
+    if (expected === "success") {
+      expect(status?.textContent).toContain(
+        "check passed for the current inputs",
+      );
+      expect(status?.querySelectorAll("button")).toHaveLength(0);
+      expect(error?.textContent).toContain(
+        "The action could not be completed.",
+      );
+      expect(error?.querySelectorAll("button")).toHaveLength(1);
+      expect(error?.querySelector("button")?.textContent?.trim()).toBe(
+        "Read the setup guide",
+      );
+      await h.click("Read the setup guide");
+      expect(vi.mocked(h.f.api.configure).mock.calls.at(-1)?.[0]).toEqual({
+        kind: "onboarding.open-help",
+        destination: "setup-guide",
+      });
+    } else {
+      expect(error).toBeNull();
+      expect(status?.querySelectorAll("button")).toHaveLength(1);
+      if (expected === "unknown" || expected === "pending") {
+        const submissions = vi.mocked(h.f.api.configure).mock.calls.length;
+        await h.click("Refresh status");
+        expect(vi.mocked(h.f.api.configure)).toHaveBeenCalledTimes(submissions);
+        await h.remount(snapshot, facade);
+        expect(
+          h.button(step === "attachment" ? "Start using Farol" : "Continue")
+            ?.disabled,
+        ).toBe(true);
+        expect(
+          h.host.querySelector<HTMLElement>(".setup-gate-status")?.dataset
+            .resultState,
+        ).toBe(expected);
+        expect(vi.mocked(h.f.api.configure)).toHaveBeenCalledTimes(submissions);
+      }
+    }
+  });
+
+  it("keeps the confirmed connection and action error after Disconnect is refused", async () => {
+    const h = await mount({ step: "connection" });
+    const snapshot = syntheticSnapshot(
+      h.c.getSnapshot(),
+      "connection",
+      "success-current",
+    );
+    const configure = vi.fn<RendererFacade["configure"]>(
+      async (_command, id) => ({ id, state: "refused", code: null }),
+    );
+    const facade = new Proxy(h.c, {
+      get(target, property) {
+        if (property === "getSnapshot") return () => snapshot;
+        if (property === "configure") return configure;
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as unknown as RendererFacade;
+    await h.renderSetup(snapshot, facade);
+    await h.click("Disconnect");
+    expect(configure).toHaveBeenCalledExactlyOnceWith(
+      { kind: "connector.stop" },
+      "settings:connector.stop:",
+    );
+    expect(h.button("Continue")?.disabled).toBe(false);
+    expect(h.host.textContent).toContain("✓ Connected");
+    expect(
+      h.host.querySelector(".setup-action-error")?.querySelectorAll("button"),
+    ).toHaveLength(1);
+    await h.remount(snapshot, facade);
+    expect(h.button("Continue")?.disabled).toBe(false);
+    expect(h.host.textContent).toContain("✓ Connected");
+    expect(h.host.querySelector(".setup-action-error")?.textContent).toContain(
+      "The action could not be completed.",
+    );
+    expect(configure).toHaveBeenCalledTimes(1);
+  });
 
   it.each(["refused", "unknown"] as const)(
     "a newer confirmed check supersedes an old %s only when its outcome is known",

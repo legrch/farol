@@ -8,15 +8,17 @@ import type { SetupCheckpoint } from "./setup-checklist";
 
 export type SetupResultState =
   "success" | "stale" | "unknown" | "pending" | "refused" | "missing";
+type SetupAction = Readonly<{
+  kind: "refresh" | "guide";
+  label: string;
+  destination?: "setup-guide" | "tunnels";
+}>;
 export type SetupCheckResult = Readonly<{
   state: SetupResultState;
   allowed: boolean;
   cause: string;
-  action: Readonly<{
-    kind: "refresh" | "guide";
-    label: string;
-    destination?: "setup-guide" | "tunnels";
-  }> | null;
+  action: SetupAction | null;
+  actionError: Readonly<{ cause: string; action: SetupAction }> | null;
 }>;
 const labels: Record<SetupCheckpoint, string> = {
   signin: "Sign-in",
@@ -132,14 +134,24 @@ export function setupStepCheck(
       )
       .map((intent) => snapshot.setupCheckOrder?.[intent.id] ?? 0),
   );
-  const refusal = intents.find(
+  const refusals = intents.filter(
     (intent) =>
       intent.state === "refused" &&
       // Missing order cannot establish that a refusal predates this check.
       (!snapshot.setupCheckOrder?.[intent.id] ||
         snapshot.setupCheckOrder[intent.id]! >= latestConfirmation),
   );
-  const refused = Boolean(refusal);
+  // A known refusal cannot change the inputs of a confirmed check. Only a
+  // refused confirming check withdraws that success; uncertain effects stay fenced.
+  const blockingRefusal = refusals.find(
+    (intent) =>
+      !confirmed ||
+      confirmingCommands[step].some((command) =>
+        intent.id.startsWith(`settings:${command}:`),
+      ),
+  );
+  const refusal = blockingRefusal ?? refusals[0];
+  const refused = Boolean(blockingRefusal);
   const state: SetupResultState = unknown
     ? "unknown"
     : pending
@@ -173,9 +185,20 @@ export function setupStepCheck(
         ? "Farol could not save the key on this Mac. Check this account’s key storage before connecting again."
         : refusal?.code === "CONNECTOR_POLLING_EXPIRED"
           ? "The connection started, but its health check did not finish. The connection is not confirmed."
-          : step === "folders"
-            ? "Farol could not check this workspace. Make sure it still exists and this account can open it."
-            : `${label} check was refused. Review the setup instructions before continuing.`;
+          : confirmed && !blockingRefusal
+            ? "The action could not be completed. Check the setup guide before trying again."
+            : step === "folders"
+              ? "Farol could not check this workspace. Make sure it still exists and this account can open it."
+              : `${label} check was refused. Review the setup instructions before continuing.`;
+  const refusalAction: SetupAction = {
+    kind: "guide",
+    label: keyRejected
+      ? "Create a new key in OpenAI Tunnels"
+      : helperMissing
+        ? "How to install tunnel-client"
+        : "Read the setup guide",
+    destination: keyRejected ? "tunnels" : "setup-guide",
+  };
   const cause =
     state === "success"
       ? `${label} check passed for the current inputs.`
@@ -192,21 +215,24 @@ export function setupStepCheck(
     state,
     allowed: state === "success",
     cause,
+    actionError:
+      state === "success" && refusals.length > 0
+        ? {
+            cause: refusalCause,
+            action: refusalAction,
+          }
+        : null,
     action:
       state === "success"
         ? null
         : state === "unknown" || state === "pending"
           ? { kind: "refresh", label: "Refresh status" }
-          : {
-              kind: "guide",
-              label:
-                state === "refused" && keyRejected
-                  ? "Create a new key in OpenAI Tunnels"
-                  : state === "refused" && helperMissing
-                    ? "How to install tunnel-client"
-                    : "Read the setup guide",
-              destination:
-                state === "refused" && keyRejected ? "tunnels" : "setup-guide",
-            },
+          : state === "refused"
+            ? refusalAction
+            : {
+                kind: "guide",
+                label: "Read the setup guide",
+                destination: "setup-guide",
+              },
   };
 }
