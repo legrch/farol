@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 // Explicit native lane: exact Go build and synthetic data, with either a
 // synthetic predecessor or an actual idle normal-host crash. Hidden recovery
 // UI -> Quit or exact-host SIGKILL -> same-profile reopen. No live provider,
@@ -54,7 +55,7 @@ const profile = await fs.realpath(
 await fs.chmod(profile, 0o700);
 const home = path.join(profile, "home"),
   appData = path.join(profile, "app-data");
-const userData = path.join(appData, "Farol Dev"),
+const userData = harnessDesktopIdentity("dev", appData).userData,
   stateRoot = path.join(userData, "farol-state");
 for (const dir of [home, stateRoot])
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
@@ -350,6 +351,7 @@ try {
         proof,
         seeded.profileId,
         seeded.oldGeneration,
+        userData,
       ],
       {
         cwd: root,

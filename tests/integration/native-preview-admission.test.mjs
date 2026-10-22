@@ -1,19 +1,24 @@
+import { desktopIdentity } from "../../src/apps/desktop/desktop-environment.ts";
 import fs from "node:fs/promises";
-import { ChildProcess, execFile } from "node:child_process";
+import { ChildProcess, execFile, fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { build } from "esbuild";
+import { once } from "node:events";
 import {
   assertOwnerPreviewIdle,
   assertNativePreviewAdmission,
   recheckNativePreviewIsolation,
+  refreshNativePreviewIsolation,
   readOwnedStartupMarker,
 } from "../e2e/native-preview-admission.mjs";
 
 const roots = [];
+const relayChildren = [];
 const runNode = promisify(execFile);
 
 it("imports native admission through standalone Node without the test bundler", async () => {
@@ -35,6 +40,13 @@ it("imports native admission through standalone Node without the test bundler", 
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  for (const { child, request, terminal } of relayChildren.splice(0)) {
+    if (child.exitCode === null && child.signalCode === null)
+      await request({ kind: "close" });
+    await terminal;
+    expect(child.exitCode).toBe(0);
+    expect(child.signalCode).toBe(null);
+  }
   for (const root of roots.splice(0))
     await fs.rm(root, { recursive: true, force: true });
 });
@@ -139,8 +151,8 @@ describe("owned native startup witness", () => {
   );
 });
 
-// Server address/listening below are synthetic metadata. No socket is bound,
-// no process is started, and these cases are not native-effect qualification.
+// Endpoint/singleton metadata below is synthetic. Relay provenance cases also
+// run the real relay in an owned Node child; neither proves native Electron.
 describe("hidden disposable Setup admission", () => {
   async function selection(environment = "preview", normalProfile = false) {
     const profileRoot = await fs.realpath(
@@ -155,9 +167,9 @@ describe("hidden disposable Setup admission", () => {
     const appData = path.join(profileRoot, "app-data");
     const userData =
       environment === "dev"
-        ? path.join(appData, "Farol Dev")
+        ? desktopIdentity("dev", appData).userData
         : normalProfile
-          ? path.join(appData, "io.github.legrch.farol")
+          ? desktopIdentity("preview", appData).userData
           : path.join(profileRoot, "user-data");
     await fs.mkdir(appData, { mode: 0o700 });
     await fs.mkdir(userData, { mode: 0o700 });
@@ -211,11 +223,11 @@ describe("hidden disposable Setup admission", () => {
     assertNativePreviewAdmission("/unavailable-owner-profile", value);
   // Synthetic socket metadata only: no socket/child is started or contacted.
   // The exact real resource is qualified separately by the native Setup run.
-  async function singletonFixture() {
+  async function singletonFixture(originalChild) {
     const selected = await selection();
     const receipt = await admit(selected);
-    const child = new ChildProcess();
-    child.pid = 2147483000;
+    const child = originalChild ?? new ChildProcess();
+    if (!originalChild) child.pid = 2147483000;
     selected.actual.pid = child.pid;
     const socketRoot = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "farol-singleton-metadata-")),
@@ -391,6 +403,207 @@ describe("hidden disposable Setup admission", () => {
       ).rejects.toThrow();
     },
   );
+  // Bundle the actual product relay for a separate Node process. The child
+  // executes refresh's serialized readback; app/window objects alone are doubles.
+  async function relayFixture() {
+    const folder = await root();
+    const entry = path.join(folder, "relay-child.cjs");
+    await build({
+      stdin: {
+        contents: `
+          import { startCodexCallerRelay } from ${JSON.stringify(path.resolve("src/apps/desktop/codex-caller-relay.ts"))};
+          let relay;
+          process.on("message", async (message) => {
+            try {
+              let result;
+              if (message.kind === "start") {
+                // Darwin's native temp path uses the shorter /var alias. Keep
+                // the socket below the unchanged 100-byte limit, same inode.
+                const root = process.platform === "darwin"
+                  ? message.root.replace("/private/var/", "/var/") : message.root;
+                relay = await startCodexCallerRelay({ root });
+                result = relay.directoryWitness();
+              } else if (message.kind === "evaluate") {
+                const app = {
+                  getPath: (key) => message.actual[key],
+                  get __farolE2ERelayDirectory() { return relay?.directoryWitness() ?? null; },
+                };
+                result = await (0, eval)("(" + message.callback + ")")({
+                  app, BrowserWindow: { getAllWindows: () => [{ isVisible: () => false, isFocused: () => false }] },
+                });
+              } else if (message.kind === "close") {
+                await relay?.close();
+              }
+              process.send({ result }, () => { if (message.kind === "close") process.disconnect(); });
+            } catch (error) { process.send({ error: error.message }); }
+          });
+        `,
+        resolveDir: process.cwd(),
+      },
+      bundle: true,
+      platform: "node",
+      format: "cjs",
+      outfile: entry,
+    });
+    const child = fork(entry, [], {
+      execArgv: [],
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+    });
+    const terminal = once(child, "exit");
+    const request = async (message) => {
+      const answer = once(child, "message", {
+        signal: AbortSignal.timeout(5000),
+      });
+      child.send(message);
+      const [response] = await answer;
+      if (response.error) throw Error(response.error);
+      return response.result;
+    };
+    relayChildren.push({ child, terminal, request });
+    const s = await singletonFixture(child);
+    const early = await recheckNativePreviewIsolation(
+      s.receipt,
+      s.selected.actual,
+      child,
+    );
+    const application = {
+      process: () => child,
+      evaluate: (callback) =>
+        request({
+          kind: "evaluate",
+          callback: callback.toString(),
+          actual: s.selected.actual,
+        }),
+    };
+    roots.push(early.relayRoot);
+    return { ...s, early, application, request, terminal, folder };
+  }
+  it("accepts only a child-created late relay and preserves its identity through Quit", async () => {
+    const s = await relayFixture();
+    expect(s.early.relayObserved).toBe(false);
+    const own = await s.request({ kind: "start", root: s.early.relayRoot });
+    expect(own.created).toBe(true);
+    expect(own.pid).toBe(s.child.pid);
+    expect(own.birthtimeMs).toBeGreaterThanOrEqual(own.processStartedAtMs);
+    const ready = await refreshNativePreviewIsolation(s.early, s.application);
+    expect(ready.relayObserved).toBe(true);
+    await s.request({ kind: "close" });
+    await s.terminal;
+    for (const file of [s.links.lock, s.links.cookie, s.links.socket])
+      await fs.unlink(file);
+    const closed = await recheckNativePreviewIsolation(
+      ready,
+      s.selected.actual,
+      s.child,
+    );
+    await expect(
+      refreshNativePreviewIsolation(closed, s.application),
+    ).rejects.toThrow("LIVE_CHILD_REQUIRED");
+    await expect(
+      admit({ ...s.selected, previous: closed }),
+    ).resolves.toBeDefined();
+  });
+  it.each(["harness-created", "replaced", "foreign-owner"])(
+    "refuses a live child's unqualified relay: %s",
+    async (kind) => {
+      const s = await relayFixture();
+      if (kind === "harness-created")
+        await fs.mkdir(s.early.relayRoot, { mode: 0o700 });
+      const own = await s.request({ kind: "start", root: s.early.relayRoot });
+      expect(own.created).toBe(kind !== "harness-created");
+      if (kind === "replaced") {
+        await fs.rename(
+          s.early.relayRoot,
+          path.join(s.folder, "original-relay"),
+        );
+        await fs.mkdir(s.early.relayRoot, { mode: 0o700 });
+      }
+      if (kind === "foreign-owner") {
+        const original = s.socketMetadata.getMockImplementation();
+        s.socketMetadata.mockImplementation(async (file, ...args) => {
+          const info = await original(file, ...args);
+          if (file === s.early.relayRoot) info.uid += 1;
+          return info;
+        });
+      }
+      await expect(
+        refreshNativePreviewIsolation(s.early, s.application),
+      ).rejects.toThrow(
+        kind === "foreign-owner"
+          ? "DIRECTORY_UNSAFE"
+          : "RELAY_CHILD_UNCONFIRMED",
+      );
+      await expect(
+        admit({ ...s.selected, previous: s.early }),
+      ).rejects.toThrow();
+    },
+  );
+  it.each([
+    "missing",
+    "wrong-pid",
+    "pre-start",
+    "future-observation",
+    "during-refresh",
+  ])("requires a complete, timed child readback: %s", async (kind) => {
+    const s = await relayFixture();
+    if (kind !== "during-refresh")
+      await s.request({ kind: "start", root: s.early.relayRoot });
+    const evaluate = s.application.evaluate;
+    s.application.evaluate = async (callback) => {
+      if (kind === "during-refresh")
+        await s.request({ kind: "start", root: s.early.relayRoot });
+      const actual = await evaluate(callback);
+      if (kind === "missing") actual.relay = null;
+      if (kind === "wrong-pid") actual.relay.pid++;
+      if (kind === "pre-start")
+        actual.relay.processStartedAtMs = actual.relay.birthtimeMs + 1;
+      if (kind === "future-observation") actual.relay.observedAtMs += 60000;
+      return actual;
+    };
+    await expect(
+      refreshNativePreviewIsolation(s.early, s.application),
+    ).rejects.toThrow("RELAY_CHILD_UNCONFIRMED");
+  });
+  it("refuses another application before dispatch and consumes a failed readback", async () => {
+    const s = await singletonFixture();
+    const early = await recheckNativePreviewIsolation(
+      s.receipt,
+      s.selected.actual,
+      s.child,
+    );
+    const evaluate = vi.fn(async () => {
+      throw Error("synthetic readback unknown");
+    });
+    await expect(
+      refreshNativePreviewIsolation(early, {
+        process: () => new ChildProcess(),
+        evaluate,
+      }),
+    ).rejects.toThrow("SINGLETON_CHILD_UNOWNED");
+    expect(evaluate).not.toHaveBeenCalled();
+    const application = { process: () => s.child, evaluate };
+    await expect(
+      refreshNativePreviewIsolation(early, application),
+    ).rejects.toThrow("synthetic readback unknown");
+    await expect(
+      refreshNativePreviewIsolation(early, application),
+    ).rejects.toThrow("RECEIPT_INVALID");
+    expect(evaluate).toHaveBeenCalledOnce();
+  });
+  it("refuses directory replacement between refresh and Quit", async () => {
+    const s = await relayFixture();
+    await s.request({ kind: "start", root: s.early.relayRoot });
+    const ready = await refreshNativePreviewIsolation(s.early, s.application);
+    await s.request({ kind: "close" });
+    await s.terminal;
+    for (const file of [s.links.lock, s.links.cookie, s.links.socket])
+      await fs.unlink(file);
+    await fs.rename(ready.relayRoot, path.join(s.folder, "original-relay"));
+    await fs.mkdir(ready.relayRoot, { mode: 0o700 });
+    await expect(
+      recheckNativePreviewIsolation(ready, s.selected.actual, s.child),
+    ).rejects.toThrow("RELAY_CHANGED");
+  });
   it("requires known graceful terminal and absent singleton before reopen", async () => {
     const s = await singletonFixture();
     const observed = await recheckNativePreviewIsolation(
@@ -829,33 +1042,16 @@ describe("hidden disposable Setup admission", () => {
       }
     },
   );
-  it("refuses a preexisting relay namespace and binds the owned new directory", async () => {
+  it("refuses a pre-existing relay namespace without reading its contents", async () => {
     const selected = await selection();
     const receipt = await admit(selected);
-    // Mint only the unique namespace derived from this disposable test root.
     await fs.mkdir(receipt.relayRoot, { mode: 0o700 });
     roots.push(receipt.relayRoot);
-    await expect(admit(selected)).rejects.toThrow(
-      "NATIVE_ISOLATION_NOT_ESTABLISHED",
-    );
-    const observed = await recheckNativePreviewIsolation(
-      receipt,
-      selected.actual,
-    );
-    const reopened = await admit({ ...selected, previous: observed });
-    const reopenedWitness = await recheckNativePreviewIsolation(
-      reopened,
-      selected.actual,
-    );
-    await fs.rename(
-      receipt.relayRoot,
-      path.join(selected.profileRoot, "old-relay"),
-    );
-    await fs.mkdir(receipt.relayRoot, { mode: 0o700 });
-    await expect(
-      admit({ ...selected, previous: reopenedWitness }),
-    ).rejects.toMatchObject({
+    await expect(admit(selected)).rejects.toMatchObject({
       cause: { message: "NATIVE_ISOLATION_RELAY_OVERLAP" },
     });
+    await expect(
+      recheckNativePreviewIsolation(receipt, selected.actual),
+    ).rejects.toThrow("RELAY_CHILD_UNCONFIRMED");
   });
 });

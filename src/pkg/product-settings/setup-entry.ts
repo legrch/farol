@@ -27,7 +27,6 @@ export function initialSetupPresentation(
     demoMode?: boolean;
     legacySetupTestMode?: boolean;
     dismissed: boolean;
-    completedPreviously?: boolean;
     currentStep: SetupStepId;
     openAtLaunch: ProductGeneralSettings["openAtLaunch"];
   }>,
@@ -37,10 +36,9 @@ export function initialSetupPresentation(
   section: SurfaceSection;
 }> {
   const setupStep = Math.max(0, setupStepOrder.indexOf(input.currentStep));
-  // A saved app-check witness means this is a returning user even when an
-  // older Setup flow never persisted dismissal. This controls navigation only:
-  // fresh runtime checks and the selected launch preference remain unchanged.
-  const firstSetup = !input.dismissed && input.completedPreviously !== true;
+  // Only the persisted journey completion fact controls first-run entry.
+  // Attachments and individual checks cannot stand in for completed Setup.
+  const firstSetup = !input.dismissed;
   const connectionsFirst = guidedSetupSelected(input) && firstSetup;
   return {
     setupOpen: firstSetup && !connectionsFirst,

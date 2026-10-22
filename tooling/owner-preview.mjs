@@ -1,3 +1,4 @@
+import { PRODUCT_APP_NAME } from "./package-layout.mjs";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
@@ -202,7 +203,7 @@ async function build(observation) {
     await fs.mkdir(attempt, { mode: 0o700 });
     const hidden = path.join(attempt, ".canonical");
     await fs.mkdir(hidden, { mode: 0o700 });
-    const baseApp = path.join(hidden, "Farol.app");
+    const baseApp = path.join(hidden, PRODUCT_APP_NAME);
     const baseArtifact = path.join(hidden, "artifact.json");
     await fs.writeFile(baseArtifact, baseBytes, { flag: "wx", mode: 0o600 });
     await fs.cp(canonical.appPath, baseApp, {

@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "./harness-identity.ts";
 // Development launcher mechanics only. Never selects the installed application,
 // changes a profile or claims a signal settled application work.
 import fs from "node:fs";
@@ -5,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { devExecutables } from "./dev-runtime.mjs";
-import { resolvePhysicalDevDataDirectoryName } from "../src/apps/desktop/dev-profile-directory.ts";
+import { resolvePhysicalDevDataDirectoryName } from "./harness-identity.ts";
 import { performance } from "node:perf_hooks";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { buildDevControl } from "./go-backend-build.mjs";
@@ -91,7 +92,8 @@ export function correlateDevCommand(line, marker, scope, native, bootTime) {
   if (!devExecutables(scope.writerRoot).includes(executable))
     refuse("executable");
   if (!match) refuse("ps UID/start/command format");
-  if (match[3] === "Farol Dev") refuse("erased process title");
+  if (match[3] === harnessDesktopIdentity("dev", "/").applicationName)
+    refuse("erased process title");
   if (native.status !== "present" || native.commandVerified !== true)
     refuse("native command verification");
   if (
@@ -118,7 +120,7 @@ export function correlateDevCommand(line, marker, scope, native, bootTime) {
     startIdentity: native.token,
     executable,
     environment: "dev",
-    applicationId: "local.farol.dev",
+    applicationId: harnessDesktopIdentity("dev", "/").applicationId,
     installed: false,
   });
 }
@@ -269,7 +271,7 @@ export async function prepareDevBuild({
   const marker = await readDevRunMarker(profilePath);
   if (marker.status === "unreadable")
     throw Error(
-      `DEV_RUN_MARKER_UNREADABLE: ${marker.reason}. Quit the previous Farol Dev from this checkout/profile using its own Quit command, then run task dev again.`,
+      `DEV_RUN_MARKER_UNREADABLE: ${marker.reason}. Quit the previous ${harnessDesktopIdentity("dev", "/").applicationName} from this checkout/profile using its own Quit command, then run task dev again.`,
     );
   if (marker.status === "read") {
     const command = ps([
@@ -305,7 +307,7 @@ export async function prepareDevBuild({
           );
         } catch (error) {
           throw Error(
-            `${error.message}. Quit the previous Farol Dev from this checkout/profile using its own Quit command, then run task dev again.`,
+            `${error.message}. Quit the previous ${harnessDesktopIdentity("dev", "/").applicationName} from this checkout/profile using its own Quit command, then run task dev again.`,
           );
         }
         let inspectionFailure = "none";
@@ -357,7 +359,7 @@ export async function prepareDevBuild({
             : observation;
         };
         log(
-          "Stopping the previous Farol Dev before rebuilding its app outputs...",
+          `Stopping the previous ${harnessDesktopIdentity("dev", "/").applicationName} before rebuilding its app outputs...`,
         );
         const result = await stopRetainedDevProcess(retained, scope, {
           clock: () => performance.now(),
@@ -385,14 +387,14 @@ export async function prepareDevBuild({
         });
         if (result.status !== "absent")
           throw Error(
-            `DEV_STOP_${result.reason}: ${inspectionFailure}. Quit the previous Farol Dev from this checkout/profile using its own Quit command, then run task dev again.`,
+            `DEV_STOP_${result.reason}: ${inspectionFailure}. Quit the previous ${harnessDesktopIdentity("dev", "/").applicationName} from this checkout/profile using its own Quit command, then run task dev again.`,
           );
         log(
           `Previous Dev process is absent (${result.attemptedSignals.join(", ") || "already stopped"}). Profile outcomes remain unchanged.`,
         );
       } else if (native.status !== "absent")
         throw Error(
-          `DEV_PROCESS_IDENTITY_UNREADABLE: native inspection ${native.status}/${native.reason ?? "no reason"} (pid ${marker.marker.pid}). Quit the previous Farol Dev from this checkout/profile using its own Quit command, then run task dev again.`,
+          `DEV_PROCESS_IDENTITY_UNREADABLE: native inspection ${native.status}/${native.reason ?? "no reason"} (pid ${marker.marker.pid}). Quit the previous ${harnessDesktopIdentity("dev", "/").applicationName} from this checkout/profile using its own Quit command, then run task dev again.`,
         );
     } else if (command.status !== 1 || command.text)
       throw Error("DEV_PROCESS_ABSENCE_UNCONFIRMED");
@@ -409,7 +411,10 @@ export async function prepareDevBuild({
   for (const line of inventory.text.split("\n")) {
     if (devInventoryOwnsLine(line, ownedRoots))
       throw Error("DEV_BUILD_OWNED_PROCESSES_REMAIN");
-    const titled = /^\s*(\d+)\s+Farol Dev$/u.exec(line);
+    const titled = new RegExp(
+      `^\\s*(\\d+)\\s+${RegExp.escape(harnessDesktopIdentity("dev", "/").applicationName)}$`,
+      "u",
+    ).exec(line);
     if (!titled) continue;
     // Erased argv cannot prove a writer. Qualify the exact selected executable
     // without reading another profile or signaling an inventory candidate.

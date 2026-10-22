@@ -1,3 +1,4 @@
+import { productName } from "../../tooling/harness-identity.ts";
 // Test-side only. Injected child streams and persistence; importing never spawns.
 import assert from "node:assert/strict";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
@@ -430,7 +431,8 @@ export class Peer {
     assert.equal(this.buffer.length, 0);
     assert.equal(
       this.stderr.toString("utf8"),
-      "Farol Computer MCP failed to start.\n",
+      `${productName} Computer MCP failed to start.
+`,
     );
     if (this.failure) throw this.failure;
   }

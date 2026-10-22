@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-// The single development entrypoint for Farol: find the declared
+import { productName } from "./harness-identity.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "./harness-identity.ts";
+// The single development entrypoint for the product: find the declared
 // toolchain, make sure dependencies are the locked ones, build the current
-// development bytes, and run Farol's own local processes in this terminal.
+// development bytes, and run the product's own local processes in this terminal.
 //
 // This is deliberately not `task package` / `task run`, which build
 // and verify an exact, committed candidate and refuse a stale or dirty one.
@@ -19,7 +21,7 @@ import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { parseDevDisplay } from "../src/apps/desktop/window-placement.ts";
 import { DevRuntimeSignatureError, prepareDevRuntime } from "./dev-runtime.mjs";
 import { prepareDevBuild } from "./dev-process-control.mjs";
-import { resolvePhysicalDevDataDirectoryName } from "../src/apps/desktop/dev-profile-directory.ts";
+import { resolvePhysicalDevDataDirectoryName } from "./harness-identity.ts";
 import {
   dependencyDrift,
   readDependencyDigests,
@@ -61,7 +63,7 @@ export function candidateToolchainDirectories(home) {
 
 export function toolchainMissingMessage() {
   return (
-    `Farol Dev needs Node ${DECLARED_NODE_VERSIONS.join(" or ")} with npm ${DECLARED_NPM_VERSION}, and none was found ` +
+    `${harnessDesktopIdentity("dev", "/").applicationName} needs Node ${DECLARED_NODE_VERSIONS.join(" or ")} with npm ${DECLARED_NPM_VERSION}, and none was found ` +
     "at the running interpreter or at the usual nvm/Homebrew locations. Install one, for example " +
     "'nvm install 24.20.0' or 'brew install node@26', then run 'task dev' again."
   );
@@ -273,7 +275,7 @@ function electronBinaryPresent(root) {
 }
 
 /**
- * What needs to happen before Farol can be built, given what is already on
+ * What needs to happen before the product can be built, given what is already on
  * disk. Pure — `dependencyState` and `electronPresent` are plain values, so
  * tests can drive every combination without a real node_modules.
  */
@@ -374,9 +376,9 @@ async function ensureDependencies(root, npmBin, log) {
 
 const ESCALATION_SEQUENCE = Object.freeze(["SIGINT", "SIGTERM", "SIGKILL"]);
 export const ESCALATION_MESSAGES = Object.freeze({
-  SIGINT: "Stopping Farol (Ctrl+C)...",
-  SIGTERM: "Farol did not stop; sending SIGTERM.",
-  SIGKILL: "Farol still did not stop; forcing it with SIGKILL.",
+  SIGINT: `Stopping ${productName} (Ctrl+C)...`,
+  SIGTERM: `${productName} did not stop; sending SIGTERM.`,
+  SIGKILL: `${productName} still did not stop; forcing it with SIGKILL.`,
 });
 
 /** Each call returns the next signal to send, saturating at SIGKILL. */
@@ -404,8 +406,7 @@ export function describeLaunchResult(outcome) {
   if (outcome === "primary-recovery") {
     return {
       exitCode: null,
-      message:
-        "Farol opened in recovery mode. Previous work records are retained; Computer access is paused.",
+      message: `${productName} opened in recovery mode. Previous work records are retained; Computer access is paused.`,
     };
   }
   if (outcome === "primary-started") {
@@ -414,21 +415,19 @@ export function describeLaunchResult(outcome) {
   if (outcome === "reopened") {
     return {
       exitCode: 0,
-      message:
-        "Farol is already running as this exact build; its existing window was reopened instead of starting a second copy.",
+      message: `${productName} is already running as this exact build; its existing window was reopened instead of starting a second copy.`,
     };
   }
   if (outcome === "startup-failed") {
     return {
       exitCode: 1,
-      message:
-        "Farol Dev main-process startup failed. The classified cause is above; fix it, then run 'task dev' again.",
+      message: `${harnessDesktopIdentity("dev", "/").applicationName} main-process startup failed. The classified cause is above; fix it, then run 'task dev' again.`,
     };
   }
   return {
     exitCode: 1,
     message:
-      `Farol is already running as a different build (${outcome}); ` +
+      `${productName} is already running as a different build (${outcome}); ` +
       "quit that instance yourself, then run 'task dev' again. It was left running untouched.",
   };
 }
@@ -521,7 +520,7 @@ export async function runOwnerManagedChild({
 
 // A fresh review has a fixed namespace and a launcher-minted identity. It never
 // accepts an owner path, HOME override, E2E seam, or a reusable acceptance root.
-const REVIEW_NAMESPACE = "Farol Dev Review";
+const REVIEW_NAMESPACE = `${harnessDesktopIdentity("dev", "/").applicationName} Review`;
 const REVIEW_RECEIPT = ".farol-dev-review-profile";
 const REVIEW_TOKEN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -566,7 +565,7 @@ export async function runDevBuild(
       throw new Error("DEV_GO_INPUTS_REQUIRED");
   } catch {
     report(
-      "Farol Dev requires a valid approved Go input declaration. Place it at " +
+      `${harnessDesktopIdentity("dev", "/").applicationName} requires a valid approved Go input declaration. Place it at ` +
         `${DEFAULT_GO_INPUTS_FILE} or select --go-inputs=/absolute/path.json. ` +
         "See docs/development/setup.md. No desktop was launched.",
     );
@@ -626,7 +625,7 @@ export function createFreshReviewProfile(nativeAppData, token = randomUUID()) {
   return Object.freeze({
     marker: `review:${token}`,
     appData,
-    userData: path.join(appData, "Farol Dev"),
+    userData: harnessDesktopIdentity("dev", appData).userData,
   });
 }
 
@@ -652,7 +651,7 @@ export function createOwnerFreshReviewProfile(
  * Built from a fixed key allowlist, exactly as `ownerLaunchEnvironment`
  * builds the packaged launcher's, rather than passed through from whoever
  * ran `task dev`. This entrypoint used to hand Electron `process.env`
- * whole, and it is the one Farol launcher that did: a shell that
+ * whole, and it is the one product launcher that did: a shell that
  * happened to export `FAROL_E2E=1` and a seam value gave an ordinary
  * development launch the E2E fault seams — substituted file and directory
  * pickers, a fabricated model reply, live-task commit faults, and a
@@ -699,7 +698,7 @@ export function devLaunchEnvironment(
 
 // Keep the selected profile in the kernel-visible argv. The desktop validates
 // this assertion against its independently selected userData before using it.
-// A Farol-only flag avoids Chromium creating state before fresh-review admission.
+// A product-specific flag avoids Chromium creating state before fresh-review admission.
 export function devLaunchProfile(
   acceptanceProfile = false,
   reviewMarker,
@@ -717,7 +716,10 @@ export function devLaunchProfile(
     reviewMarker !== undefined
       ? path.join(nativeAppData, REVIEW_NAMESPACE, reviewMarker.slice(7))
       : acceptanceProfile
-        ? path.join(nativeAppData, "Farol Dev Acceptance")
+        ? path.join(
+            nativeAppData,
+            `${harnessDesktopIdentity("dev", "/").applicationName} Acceptance`,
+          )
         : nativeAppData;
   return path.join(appData, resolvePhysicalDevDataDirectoryName(appData));
 }
@@ -772,21 +774,21 @@ export async function launchPreview(
   const ownerExitCode = exitCodeForOwnerStop(stopLabel);
   if (ownerExitCode !== null) {
     process.stdout.write(
-      `Farol stopped (${stopLabel}). Nothing else was touched.\n`,
+      `${productName} stopped (${stopLabel}). Nothing else was touched.\n`,
     );
     process.exit(ownerExitCode);
   }
 
   if (outcome.error) {
     process.stderr.write(
-      `Farol could not be launched: ${outcome.error.message}\n`,
+      `${productName} could not be launched: ${outcome.error.message}\n`,
     );
     process.exit(1);
   }
 
   if (protocolError) {
     process.stderr.write(
-      `Farol's launch could not be read: ${protocolError.message}\n`,
+      `${productName}'s launch could not be read: ${protocolError.message}\n`,
     );
     process.exit(1);
   }
@@ -796,7 +798,7 @@ export async function launchPreview(
     launchResult = resultCollector.finish();
   } catch (error) {
     process.stderr.write(
-      `Farol exited before it announced its launch result: ${error.message}\n`,
+      `${productName} exited before it announced its launch result: ${error.message}\n`,
     );
     process.exit(outcome.status ?? 1);
   }
@@ -808,7 +810,9 @@ export async function launchPreview(
   }
 
   if (outcome.signal) {
-    process.stderr.write(`Farol stopped unexpectedly (${outcome.signal}).\n`);
+    process.stderr.write(
+      `${productName} stopped unexpectedly (${outcome.signal}).\n`,
+    );
     process.exit(1);
   }
   process.exit(outcome.status ?? 0);
@@ -915,7 +919,7 @@ export async function main(argv, overrides = {}) {
   }
 
   log(
-    `Farol Dev toolchain: Node ${currentNode}, npm ${getCurrentNpmVersion()}.`,
+    `${harnessDesktopIdentity("dev", "/").applicationName} toolchain: Node ${currentNode}, npm ${getCurrentNpmVersion()}.`,
   );
 
   // Close the exact prior Dev BEFORE dependency replacement or shared builds.
@@ -947,7 +951,7 @@ export async function main(argv, overrides = {}) {
 
   if (checkOnly) {
     log(
-      "Farol Dev check complete: toolchain, dependencies, and build are current. Not launching.",
+      `${harnessDesktopIdentity("dev", "/").applicationName} check complete: toolchain, dependencies, and build are current. Not launching.`,
     );
     return;
   }
@@ -969,11 +973,15 @@ export async function main(argv, overrides = {}) {
     log(
       "Development bytes, not a packaged candidate. Profile retained; this opener cannot reopen it. No automatic retry or recovery.",
     );
-    log("Running Farol Dev in this terminal. Press Ctrl+C to stop.");
+    log(
+      `Running ${harnessDesktopIdentity("dev", "/").applicationName} in this terminal. Press Ctrl+C to stop.`,
+    );
     await launchDev(false, secondaryDisplay, review.marker, displayOptions);
     return;
   }
-  log("Running Farol Dev in this terminal. Press Ctrl+C to stop.");
+  log(
+    `Running ${harnessDesktopIdentity("dev", "/").applicationName} in this terminal. Press Ctrl+C to stop.`,
+  );
   await launchDev(
     acceptanceProfile,
     secondaryDisplay,

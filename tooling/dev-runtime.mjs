@@ -1,6 +1,8 @@
 // Dev-only macOS presentation. Never modify the authenticated npm runtime or
 // the packaged/Owner Preview bundle. Call only after prepareDevBuild and build.
 import fs from "node:fs/promises";
+import { desktopIdentity } from "./harness-identity.ts";
+
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -10,8 +12,10 @@ import {
   observeEmbeddedRuntime,
 } from "./runtime-contract.mjs";
 
-export const DEV_EXECUTABLE_SUFFIX =
-  "/_output/dev-runtime/Farol Dev.app/Contents/MacOS/Electron";
+const devIdentity = desktopIdentity("dev", "/");
+const devBundleName = `${devIdentity.applicationName}.app`;
+
+export const DEV_EXECUTABLE_SUFFIX = `/_output/dev-runtime/${devBundleName}/Contents/MacOS/Electron`;
 export const VENDOR_EXECUTABLE_SUFFIX =
   "/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron";
 export const devExecutables = (root) => [
@@ -21,9 +25,9 @@ export const devExecutables = (root) => [
 
 export function devInfoPlist(plist) {
   for (const [key, before, after] of [
-    ["CFBundleName", "Electron", "Farol Dev"],
-    ["CFBundleDisplayName", "Electron", "Farol Dev"],
-    ["CFBundleIdentifier", "com.github.Electron", "local.farol.dev"],
+    ["CFBundleName", "Electron", devIdentity.applicationName],
+    ["CFBundleDisplayName", "Electron", devIdentity.applicationName],
+    ["CFBundleIdentifier", "com.github.Electron", devIdentity.applicationId],
     ["CFBundleIconFile", "electron.icns", "farol-dev.icns"],
   ]) {
     const pattern = new RegExp(
@@ -47,7 +51,7 @@ function codesign(args, action) {
   });
   if (result.error || result.status !== 0)
     throw new DevRuntimeSignatureError(
-      `Farol Dev ${action} failed. No launch was attempted.`,
+      `${devIdentity.applicationName} ${action} failed. No launch was attempted.`,
     );
   return result.stderr;
 }
@@ -58,9 +62,14 @@ function verifyDevSignature(app) {
     ["--display", "--verbose=4", app],
     "signature inspection",
   );
-  if (!/^Identifier=local\.farol\.dev$/mu.test(details))
+  if (
+    !new RegExp(
+      `^Identifier=${RegExp.escape(devIdentity.applicationId)}$`,
+      "mu",
+    ).test(details)
+  )
     throw new DevRuntimeSignatureError(
-      "Farol Dev signature identifier is invalid. No launch was attempted.",
+      `${devIdentity.applicationName} signature identifier is invalid. No launch was attempted.`,
     );
 }
 
@@ -86,7 +95,7 @@ export async function prepareDevRuntime(root) {
     .update(icon)
     .digest("hex");
   const parent = path.join(root, "_output/dev-runtime");
-  const destination = path.join(parent, "Farol Dev.app");
+  const destination = path.join(parent, devBundleName);
   const receiptPath = path.join(parent, "signed-runtime.json");
   let receipt;
   try {
@@ -97,7 +106,7 @@ export async function prepareDevRuntime(root) {
   if (receipt?.inputs === inputs) {
     if ((await treeDigest(destination)) !== receipt.output)
       throw new DevRuntimeSignatureError(
-        "Farol Dev bundle changed. No launch was attempted.",
+        `${devIdentity.applicationName} bundle changed. No launch was attempted.`,
       );
     verifyDevSignature(destination);
     return root + DEV_EXECUTABLE_SUFFIX;
@@ -105,7 +114,7 @@ export async function prepareDevRuntime(root) {
   // Verify the copy before applying the four presentation-only plist fields.
   await fs.mkdir(parent, { recursive: true });
   const staging = await fs.mkdtemp(path.join(parent, ".prepare-"));
-  const app = path.join(staging, "Farol Dev.app");
+  const app = path.join(staging, devBundleName);
   try {
     await fs.cp(source, app, { recursive: true, verbatimSymlinks: true });
     assertEmbeddedRuntime(await observeEmbeddedRuntime(app));

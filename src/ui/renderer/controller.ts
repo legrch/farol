@@ -39,7 +39,6 @@ import {
   type ChatHistoryContext,
 } from "../../pkg/ipc/chat-history";
 import { adoptReadConversation } from "./read-conversation-state";
-import { computerSetup } from "./computer-setup";
 import {
   validNavigation,
   sheets,
@@ -714,8 +713,7 @@ export class WindowController implements RendererFacade {
           this.patch({ sidebar: settings.general.sidebarDefault });
           if (
             !this.pendingSectionNavigation &&
-            (settings.setup.journey.dismissed ||
-              computerSetup(this.state).ready)
+            settings.setup.journey.dismissed
           ) {
             const launch = settings.general.openAtLaunch;
             this.navigate(
@@ -729,6 +727,17 @@ export class WindowController implements RendererFacade {
                       ? { area: "settings", page: "general" }
                       : { area: "activity" },
             );
+          } else if (!this.pendingSectionNavigation) {
+            // Incomplete setup always starts at Welcome. Replace the startup
+            // placeholder so Back cannot reveal Home as a previous destination.
+            const destination: Destination = {
+              ...this.state.destination,
+              area: "setup",
+              page: "general",
+              setupStep: "overview",
+            };
+            this.history[this.cursor] = destination;
+            this.patch({ destination });
           }
         }
       } catch {

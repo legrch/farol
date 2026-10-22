@@ -1,3 +1,4 @@
+import { productName } from "./harness-identity.ts";
 // Check only the public handoff. The existing archive producer owns package
 // authentication, extraction and physical identity verification.
 import { createHash } from "node:crypto";
@@ -22,7 +23,7 @@ export async function verifyReleaseAssets(directory, { version, head }) {
   const manifestPath = path.join(directory, "farol-release.json");
   regular(manifestPath, 16384);
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  const archive = `Farol-${version}-darwin-arm64.zip`;
+  const archive = `${productName}-${version}-darwin-arm64.zip`;
   if (
     manifest.schema !== "farol.github-release/1" ||
     manifest.repository !== "legrch/farol" ||

@@ -1,8 +1,5 @@
-import { allFoldersChecked } from "../folder-access-state";
-import { selectedConnectorApp } from "../../pkg/product-settings/connector-app-selection";
+import { setupCompletionChecks } from "../setup-completion";
 import { dependencyFences } from "./command-eligibility";
-import { computerSetup } from "./computer-setup";
-import { signInPresentation } from "./sign-in-presentation";
 import type { Intent, WindowSnapshot } from "./contract";
 import type { SetupCheckpoint } from "./setup-checklist";
 
@@ -63,7 +60,6 @@ export function setupStepCheck(
     snapshot.configuration?.status === "ready"
       ? snapshot.configuration.settings
       : null;
-  const setup = computerSetup(snapshot);
   const fence = dependencyFences(
     snapshot,
     step === "signin" ? "chat" : "computer",
@@ -81,26 +77,15 @@ export function setupStepCheck(
   const check = snapshot.setupSignInCheck;
   const saved = settings?.setup.chatgpt;
   const connector = settings?.connectors.secureMcp;
-  const confirmed =
-    step === "signin"
-      ? signInPresentation(snapshot).signedIn &&
-        check != null &&
-        check.buildId === snapshot.buildId &&
-        check.binding.documentGeneration ===
-          observation?.binding?.documentGeneration &&
-        observation.binding !== null &&
-        observation.binding.sequence >= check.binding.sequence &&
-        saved?.verified?.buildId === snapshot.buildId &&
-        saved.reachable === "reachable"
-      : step === "folders"
-        ? setup.workspacesVerified &&
-          settings !== null &&
-          allFoldersChecked(settings, snapshot.buildId ?? "")
-        : step === "connection"
-          ? setup.localConnectionCurrent
-          : setup.externalAccessVerified &&
-            connector != null &&
-            selectedConnectorApp(connector) === "Farol";
+  const confirmed = setupCompletionChecks(settings, {
+    buildId: snapshot.buildId ?? "",
+    current:
+      snapshot.status === "current" &&
+      snapshot.runtime === "ready" &&
+      snapshot.update.phase !== "applying",
+    signInObservation: observation ?? null,
+    signInCheck: check ?? null,
+  })[step];
   const hasCheck =
     step === "signin"
       ? Boolean(check || saved?.verified)

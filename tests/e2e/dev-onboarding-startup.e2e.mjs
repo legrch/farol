@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -312,8 +313,11 @@ try {
   // A missing override must fail before the first app-ready boundary and
   // leave even a synthetic ordinary-Dev startup marker untouched.
   const ordinaryMarker = path.join(
-    isolatedHome,
-    "Library/Application Support/Farol Dev/farol-state/running.json",
+    harnessDesktopIdentity(
+      "dev",
+      path.join(isolatedHome, "Library/Application Support"),
+    ).userData,
+    "farol-state/running.json",
   );
   await fs.mkdir(path.dirname(ordinaryMarker), {
     recursive: true,
@@ -355,22 +359,36 @@ try {
   const window = await application.firstWindow({ timeout: 15_000 });
   const bootstrap = await ready(window);
   await window
-    .locator(".toolbar-title strong")
-    .getByText("Overview", { exact: true })
+    .getByRole("heading", { name: "Welcome to Farol", exact: true })
     .waitFor();
   assert.equal(bootstrap.environment, "dev");
-  assert.equal(bootstrap.displayName, "Farol Dev");
-  assert.equal(bootstrap.applicationId, "local.farol.dev");
-  assert.equal(bootstrap.partition, "persist:farol-dev-runtime");
-  assert.equal(bootstrap.chatgptPartition, "persist:farol-dev-chatgpt");
+  assert.equal(
+    bootstrap.displayName,
+    harnessDesktopIdentity("dev", "/").applicationName,
+  );
+  assert.equal(
+    bootstrap.applicationId,
+    harnessDesktopIdentity("dev", "/").applicationId,
+  );
+  assert.equal(
+    bootstrap.partition,
+    harnessDesktopIdentity("dev", "/").runtimePartition,
+  );
+  assert.equal(
+    bootstrap.chatgptPartition,
+    harnessDesktopIdentity("dev", "/").chatGptPartition,
+  );
   const paths = await application.evaluate(({ app }) => ({
     name: app.getName(),
     userData: app.getPath("userData"),
     sessionData: app.getPath("sessionData"),
   }));
-  const expectedUserData = path.join(isolatedAppData, "Farol Dev");
+  const expectedUserData = harnessDesktopIdentity(
+    "dev",
+    isolatedAppData,
+  ).userData;
   assert.deepEqual(paths, {
-    name: "Farol Dev",
+    name: harnessDesktopIdentity("dev", "/").applicationName,
     userData: expectedUserData,
     sessionData: expectedUserData,
   });
@@ -582,8 +600,7 @@ try {
   );
   assert.ok(reopened.tasks.some((task) => task.taskId === retainedTaskId));
   await reopenedWindow
-    .locator(".toolbar-title strong")
-    .getByText("Overview", { exact: true })
+    .getByRole("heading", { name: "Welcome to Farol", exact: true })
     .waitFor();
   // An empty child list alone is not restoration evidence: first witness the
   // exact task's loaded, live native contents in this new Electron lifetime.
@@ -1177,5 +1194,5 @@ try {
     throw new Error("DEV_REACT_CLEANUP_UNCONFIRMED");
 }
 process.stdout.write(
-  `Farol Dev React Setup: ${report.status}; exact source ${source.commit}; evidence ${evidenceRoot}\n`,
+  `${harnessDesktopIdentity("dev", "/").applicationName} React Setup: ${report.status}; exact source ${source.commit}; evidence ${evidenceRoot}\n`,
 );

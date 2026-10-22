@@ -1,3 +1,4 @@
+import { productName } from "../../tooling/harness-identity.ts";
 // Test-side package Go/MCP Shell journey. No owner HOME, credentials or provider.
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -120,7 +121,7 @@ if Path('.fixture-reject').exists():
   await input.checkpoint();
   const script = `set -eu
 # HOME, PATH and Git configuration are supplied only by the product host.
-test "$(git config --get user.name)" = 'Farol Fixture Author'
+test "$(git config --get user.name)" = '${productName} Fixture Author'
 test "$(git config --get farolFixture.xdg)" = xdg-config-read
 test "$(git config --get farolFixture.included)" = relative-include-read
 test "$(git config --get farolFixture.conditional)" = linked-worktree-include-read

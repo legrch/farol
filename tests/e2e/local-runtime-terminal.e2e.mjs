@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 // Explicit hidden native lane. Synthetic profile, failed in-memory helper,
 // ordinary Quit, then one clean same-profile successor. No installed or provider proof.
 import assert from "node:assert/strict";
@@ -34,7 +35,7 @@ const profile = await fs.realpath(
 await fs.chmod(profile, 0o700);
 const home = path.join(profile, "home"),
   appData = path.join(profile, "app-data");
-const userData = path.join(appData, "Farol Dev"),
+const userData = harnessDesktopIdentity("dev", appData).userData,
   stateRoot = path.join(userData, "farol-state");
 for (const dir of [home, stateRoot])
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });

@@ -1,3 +1,5 @@
+import { productName } from "./harness-identity.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "./harness-identity.ts";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -22,7 +24,7 @@ const scope = ".";
 const { artifactFile, appPath } = candidatePaths(root);
 
 function fail(message) {
-  process.stderr.write(`Farol is not runnable: ${message}\n`);
+  process.stderr.write(`${productName} is not runnable: ${message}\n`);
   process.exitCode = 1;
 }
 
@@ -71,7 +73,7 @@ async function main() {
     );
   } catch {
     throw new Error(
-      "package is stale or source is not exact; commit the intended Farol source and run 'task package'",
+      `package is stale or source is not exact; commit the intended ${productName} source and run 'task package'`,
     );
   }
 
@@ -101,7 +103,10 @@ async function main() {
       artifact,
       "CANDIDATE_SOURCE_CHANGED_DURING_VERIFICATION",
     );
-    const executable = path.join(snapshot.appPath, "Contents/MacOS/Farol");
+    const executable = path.join(
+      snapshot.appPath,
+      `Contents/MacOS/${harnessDesktopIdentity("preview", "/").applicationName}`,
+    );
     await fs.access(executable);
     process.stdout.write(
       `launching isolated verified candidate ${snapshot.appPath} from ${appPath}\n`,
@@ -152,7 +157,7 @@ async function main() {
     if (outcome.signal) {
       if (ownerStopSignal) {
         process.stdout.write(
-          `Farol stopped (owner ${ownerStopSignal === "SIGINT" ? "Ctrl+C" : ownerStopSignal}). Nothing else was touched.\n`,
+          `${productName} stopped (owner ${ownerStopSignal === "SIGINT" ? "Ctrl+C" : ownerStopSignal}). Nothing else was touched.\n`,
         );
         process.exitCode = 130;
         return;
@@ -169,7 +174,7 @@ async function main() {
       ownerLaunchResult !== "reopened"
     ) {
       throw new Error(
-        `running Farol instance rejected the exact candidate (${ownerLaunchResult}); quit it and launch again`,
+        `running ${productName} instance rejected the exact candidate (${ownerLaunchResult}); quit it and launch again`,
       );
     }
   } finally {

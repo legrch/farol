@@ -47,7 +47,9 @@ npm run verify:package
 ```
 
 Packaging starts with an empty environment and isolated Python guard. Its fixed
-system/Homebrew PATH must resolve a declared Node version. It accepts only exact
+PATH prefers the declared Node 24.20.0 in the owner's standard nvm location,
+then system/Homebrew locations; it never inherits the caller's PATH. The selected
+interpreter must be a declared Node version. It accepts only exact
 committed inputs, authenticated compiler/dependencies, the reviewed Electron
 runtime, and matching resource/receipt contracts. For `0.2`, packaging requires
 declared Go backend inputs and a Go-enabled build manifest (schema 4). The unsigned

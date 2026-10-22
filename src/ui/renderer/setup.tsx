@@ -134,6 +134,10 @@ export function Setup({ snapshot, facade }: Props) {
           }}
         />
       </div>
+      {snapshot.intents["settings:setup.progress:"]?.code ===
+        "SETUP_INCOMPLETE" && (
+        <p role="status">Finish the remaining steps before using Farol.</p>
+      )}
       {step !== "overview" && (
         <footer className="setup-wizard-footer">
           <button
@@ -152,7 +156,7 @@ export function Setup({ snapshot, facade }: Props) {
             type="button"
             className="primary"
             disabled={!passed || (step === "attachment" && !checklist.ready)}
-            onClick={() => {
+            onClick={async () => {
               const latest = facade.getSnapshot();
               if (
                 latest.destination.area !== "setup" ||
@@ -172,12 +176,28 @@ export function Setup({ snapshot, facade }: Props) {
               )
                 return;
               if (next) facade.navigate({ area: "setup", setupStep: next });
-              else if (current.ready)
-                facade.navigate({
-                  area: "home",
-                  homeView: "overview",
-                  homeSelection: null,
-                });
+              else if (current.ready) {
+                const result = await facade.configure(
+                  {
+                    kind: "setup.progress",
+                    currentStep: "connect",
+                    dismissed: true,
+                  },
+                  "settings:setup.progress:",
+                );
+                const saved = facade.getSnapshot();
+                if (
+                  result.state === "applied" &&
+                  saved.configuration?.status === "ready" &&
+                  saved.configuration.settings.setup.journey.dismissed &&
+                  saved.destination === latest.destination
+                )
+                  facade.navigate({
+                    area: "home",
+                    homeView: "overview",
+                    homeSelection: null,
+                  });
+              }
             }}
           >
             {next ? "Continue" : "Start using Farol"}

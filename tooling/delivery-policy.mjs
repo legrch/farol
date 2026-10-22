@@ -1,3 +1,4 @@
+import { productName } from "./harness-identity.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { parseDocument } from "yaml";
@@ -139,7 +140,7 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
   );
   assert.ok(upload);
   assert.deepEqual(upload.with.path.trim().split("\n"), [
-    "_output/release/${{ github.ref_name }}/Farol-*-darwin-arm64.zip",
+    `_output/release/\${{ github.ref_name }}/${productName}-*-darwin-arm64.zip`,
     "_output/release/${{ github.ref_name }}/farol-release.json",
     "_output/release/${{ github.ref_name }}/SHA256SUMS",
   ]);

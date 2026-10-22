@@ -1,3 +1,4 @@
+import { desktopIdentity } from "../../tooling/harness-identity.ts";
 import { execFileSync } from "node:child_process";
 
 function parseProcessTable(table, mainPid) {
@@ -146,18 +147,23 @@ export function readRuntimeProcessSnapshots(mainPid, utilityPids = []) {
 }
 
 export async function runtimeProcessSnapshots(application) {
-  const context = await application.evaluate(({ app }) => ({
-    mainPid: process.pid,
-    utilityPids: app
-      .getAppMetrics()
-      .filter(
-        (metric) =>
-          metric.type === "Utility" &&
-          ["Farol Runtime", "Farol Dev Runtime"].includes(metric.name) &&
-          metric.serviceName === "node.mojom.NodeService",
-      )
-      .map((metric) => metric.pid),
-  }));
+  const context = await application.evaluate(
+    ({ app }, runtimeNames) => ({
+      mainPid: process.pid,
+      utilityPids: app
+        .getAppMetrics()
+        .filter(
+          (metric) =>
+            metric.type === "Utility" &&
+            runtimeNames.includes(metric.name) &&
+            metric.serviceName === "node.mojom.NodeService",
+        )
+        .map((metric) => metric.pid),
+    }),
+    ["preview", "dev", "owner-preview"].map(
+      (environment) => desktopIdentity(environment, "/").runtimeServiceName,
+    ),
+  );
   if (context.mainPid !== application.process().pid)
     throw new Error("E2E_RUNTIME_PRIMARY_CHANGED");
   return readRuntimeProcessSnapshots(context.mainPid, context.utilityPids);

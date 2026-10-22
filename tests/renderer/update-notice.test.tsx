@@ -41,7 +41,10 @@ async function mount(
   environment: "preview" | "dev" = "preview",
 ) {
   const f = fixture();
-  vi.mocked(f.api.bootstrap).mockResolvedValue({ ...bootstrap(), environment });
+  const data = bootstrap();
+  data.configuration.settings.setup.journey.dismissed = true;
+  data.configuration.settings.general.openAtLaunch = "home";
+  vi.mocked(f.api.bootstrap).mockResolvedValue({ ...data, environment });
   vi.mocked(f.api.installedUpdate).mockResolvedValue(update);
   const c = new WindowController(f.api);
   await c.start();

@@ -1,3 +1,5 @@
+import { productName } from "../../tooling/harness-identity.ts";
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 import {
   ownedFixtureTransport,
   requireOwnedFixtureExit,
@@ -27,7 +29,9 @@ const reconnectFailure = new assert.AssertionError({
 });
 const transports = [];
 let connections = 0;
-const app = path.resolve("_output/package/Farol.app");
+const app = path.resolve(
+  `_output/package/${harnessDesktopIdentity("preview", "/").applicationName}.app`,
+);
 const entry = packaged
   ? path.join(app, "Contents/Resources/app/computer-mcp.cjs")
   : path.resolve("_output/build/app/computer-mcp.cjs");
@@ -368,7 +372,7 @@ while [ "$#" -gt 0 ]; do
   console.log(
     JSON.stringify({
       status: "PASS",
-      route: "new-Farol-packaged-or-built-MCP",
+      route: `new-${productName}-packaged-or-built-MCP`,
       packaged,
       qualification: "owned-process-fixture-only",
       terminal: "completed-and-needs-input",

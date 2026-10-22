@@ -24,7 +24,17 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
   document.body.replaceChildren();
 });
-async function mount(data = bootstrap(), compactViewport = () => false) {
+// Most shell cases exercise a returning user's Home and rail.
+function completedBootstrap() {
+  const data = bootstrap();
+  data.configuration.settings.setup.journey.dismissed = true;
+  data.configuration.settings.general.openAtLaunch = "home";
+  return data;
+}
+async function mount(
+  data = completedBootstrap(),
+  compactViewport = () => false,
+) {
   const f = fixture();
   vi.mocked(f.api.bootstrap).mockResolvedValue(data);
   const c = new WindowController(f.api, undefined, undefined, compactViewport);
@@ -847,23 +857,24 @@ it("automatically uses the rail at narrow widths and opens a bounded page-list o
   }
 });
 
-it("R36 R39 new profile opens Home without a legacy modal and has one leaf toolbar", async () => {
-  const { host, f } = await mount();
-  expect(host.querySelector(".toolbar-title strong")?.textContent).toBe(
-    "Overview",
-  );
+it("a new profile opens Setup Welcome without a legacy modal or effects", async () => {
+  const { host, f } = await mount(bootstrap());
   expect(host.querySelector(".toolbar-title")?.textContent).toBe(
-    "Home /Overview",
+    "Setup /Overview",
   );
   expect(host.querySelector("dialog")).toBeNull();
-  expect(host.textContent).toContain("Setup needed");
+  expect(host.querySelector(".setup-welcome")?.textContent).toContain(
+    "Start setup",
+  );
+  expect(host.querySelector("main h1")?.textContent).toBe("Welcome to Farol");
   expect(f.api.configure).not.toHaveBeenCalled();
   expect(f.api.task).not.toHaveBeenCalled();
-  await act(async () => button(host, "Settings").click());
-  expect(host.querySelector(".toolbar-title")?.textContent).toContain(
-    "General",
-  );
+  await act(async () => button(host, "Start setup").click());
+  expect(
+    host.querySelector(".setup-page")?.getAttribute("data-setup-step"),
+  ).toBe("signin");
 });
+
 it("R34 search dismisses, restores focus and uses real navigation", async () => {
   const { host, c } = await mount();
   const trigger = button(host, "Find a page");

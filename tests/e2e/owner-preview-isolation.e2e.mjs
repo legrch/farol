@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -11,7 +12,7 @@ import { promisify } from "node:util";
 import {
   desktopAppDataPath,
   desktopIdentity,
-} from "../../src/apps/desktop/desktop-environment.ts";
+} from "../../tooling/harness-identity.ts";
 import { parseQuitReceipt } from "../../src/apps/desktop/quit-receipt.ts";
 import { requireOwnerPreviewRuntimeIntegration } from "../../tooling/owner-preview-contract.mjs";
 import {
@@ -3768,8 +3769,12 @@ export async function runOwnerPreviewIsolation(
       identities.normal.userData,
       identities["owner-preview"].userData,
     );
-    assert.deepEqual(await fs.readdir(normal.appData), ["Farol"]);
-    assert.deepEqual(await fs.readdir(owner.appData), ["Farol Preview"]);
+    assert.deepEqual(await fs.readdir(normal.appData), [
+      path.basename(harnessDesktopIdentity("preview", "/").userData),
+    ]);
+    assert.deepEqual(await fs.readdir(owner.appData), [
+      path.basename(harnessDesktopIdentity("owner-preview", "/").userData),
+    ]);
 
     // Orderly quit of both, then the single teardown in `finally` verifies the process trees.
     const outcomes = await Promise.all(

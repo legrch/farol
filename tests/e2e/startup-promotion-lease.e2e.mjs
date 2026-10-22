@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 // Exact built Electron startup against a held, real macOS promotion lease.
 // Disposable native HOME/profile only. No swap, updater open, account, connector
 // or model action; this does not qualify the separate relaunch handoff.
@@ -64,7 +65,7 @@ const profile = await fs.realpath(
 report.profile = profile;
 await fs.chmod(profile, 0o700);
 const appData = path.join(profile, "app-data");
-const userData = path.join(appData, "Farol Dev");
+const userData = harnessDesktopIdentity("dev", appData).userData;
 await fs.mkdir(appData, { mode: 0o700 });
 const proof = randomUUID();
 await fs.writeFile(path.join(profile, ".farol-e2e-root"), proof, {

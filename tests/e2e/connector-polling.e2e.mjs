@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 import { pollingTunnelStore } from "./lib/polling-tunnel-store.mjs";
 import { readNativePreviewEcho } from "./lib/native-preview-echo.mjs";
 // Exact attested Dev Electron/Go, synthetic loopback child and disposable roots.
@@ -24,6 +25,7 @@ import {
 import {
   assertNativePreviewAdmission,
   recheckNativePreviewIsolation,
+  refreshNativePreviewIsolation,
   readOwnedStartupMarker,
 } from "./native-preview-admission.mjs";
 import { startControlledChatGptSite } from "./fixtures/chatgpt-controlled-site.mjs";
@@ -71,7 +73,7 @@ for (const directory of [home, auxiliary]) {
   });
 }
 const appData = path.join(home, "app-data"),
-  userData = path.join(appData, "Farol Dev"),
+  userData = harnessDesktopIdentity("dev", appData).userData,
   workspace = path.join(auxiliary, "approved-folder");
 for (const directory of [appData, userData, workspace])
   await fs.mkdir(directory, { mode: 0o700 });
@@ -348,7 +350,7 @@ async function launch(ordinal) {
   run.pathIdentityConfirmed = true;
   admission = await recheckNativePreviewIsolation(preflight, actual, run.child);
   run.isolated = true;
-  assert.equal(actual.name, "Farol Dev");
+  assert.equal(actual.name, harnessDesktopIdentity("dev", "/").applicationName);
   assert.equal(actual.isPackaged, false);
   assert.equal(actual.userData, userData);
   await waitForReactShell(run.page);
@@ -930,6 +932,11 @@ async function blockMain(run) {
 }
 async function quit(run) {
   assert.equal(run.quitAttempted, false);
+  admission = await bounded(
+    refreshNativePreviewIsolation(admission, run.application),
+    "POLLING_PRE_QUIT_ISOLATION_UNKNOWN",
+  );
+  run.preQuitRelayObserved = admission.relayObserved;
   assert.ok(
     run.isolated || run.pathIdentityConfirmed,
     "POLLING_CLEANUP_STORAGE_UNCONFIRMED",

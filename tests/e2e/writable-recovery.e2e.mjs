@@ -1,3 +1,4 @@
+import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 /**
  * Explicit hidden macOS Dev lane. Build clean committed bytes first:
  * task dev -- --check
@@ -440,7 +441,10 @@ async function scenario({
   const home = path.join(profile, "home"),
     appData = path.join(profile, "app-data"),
     workspace = path.join(profile, "workspace");
-  const stateRoot = path.join(appData, "Farol Dev", "farol-state");
+  const stateRoot = path.join(
+    harnessDesktopIdentity("dev", appData).userData,
+    "farol-state",
+  );
   for (const dir of [home, stateRoot, workspace])
     await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   await fs.writeFile(
@@ -870,7 +874,10 @@ async function scenario({
         await pause();
       }
       assert.equal(bootstrap.environment, "dev");
-      assert.equal(bootstrap.applicationId, "local.farol.dev");
+      assert.equal(
+        bootstrap.applicationId,
+        harnessDesktopIdentity("dev", "/").applicationId,
+      );
       launch.marker = await json(path.join(stateRoot, "running.json"));
       assert.equal(launch.marker.pid, child.pid);
       if (observeStartup) row.restartOutcome = "normal-ready";
@@ -881,7 +888,7 @@ async function scenario({
     await hidden();
     assert.equal(
       await app.evaluate(({ app }) => app.getPath("userData")),
-      path.join(appData, "Farol Dev"),
+      harnessDesktopIdentity("dev", appData).userData,
     );
     launch.children = children(child.pid);
     const backends = launch.children.filter((p) =>
