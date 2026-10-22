@@ -226,6 +226,8 @@ try {
   await screenshot("b2-collapsed-real");
   await close(first);
   const second = await launch();
+  // Bootstrap readiness precedes the renderer restoring its local preference.
+  await page.locator('.desktop[data-sidebar="rail"]').waitFor();
   assert.equal(
     await page.locator(".desktop").getAttribute("data-sidebar"),
     "rail",
