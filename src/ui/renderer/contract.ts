@@ -1,3 +1,4 @@
+import type { OperationEntry } from "../../../apps/desktop/renderer/operations-contract";
 import type { ConnectionStatusView } from "../../../apps/desktop/renderer/connection-status";
 import type { NavigationShortcuts } from "../../pkg/ipc/navigation-shortcuts";
 import type { AgentDraftStore } from "../agent-draft";
@@ -25,6 +26,7 @@ import type {
 
 /** F0 is a window-local presentation facade, not the Desktop/Core wire API. */
 export type PreloadApi = Readonly<{
+  operations?(): Promise<unknown>;
   bootstrap(): Promise<unknown>;
   snapshot(): Promise<unknown>;
   configure(command: ProductConfigurationCommand): Promise<unknown>;
@@ -117,6 +119,10 @@ export type Intent = Readonly<{
   }>;
 }>;
 export type ActivityEntry = Readonly<{
+  source?: OperationEntry["source"];
+  outcome?: OperationEntry["outcome"];
+  target?: OperationEntry["target"];
+  durationMs?: number;
   id: string;
   taskId: string;
   turnId: string;
@@ -156,6 +162,13 @@ export type WindowSnapshot = Readonly<{
   configuration: ProductConfigurationSnapshot | null;
   tasks: ProductTasksState;
   activity: readonly ActivityEntry[];
+  activityDiagnostics?: Readonly<{
+    corruptLines: number;
+    writeFailures: number;
+    droppedEntries?: number;
+    unrecordedUncertainEntries?: number;
+    unmappedCodes?: number;
+  }>;
   runtime: "starting" | "ready" | "offline" | "failed";
   connectionStatus?: ConnectionStatusView;
   route: "loading" | "loaded" | "failed";
@@ -204,9 +217,6 @@ export type WindowSnapshot = Readonly<{
   back: boolean;
   forward: boolean;
   sidebar: "full" | "rail" | "overlay";
-  /** Window-local geometry; not a saved configuration setting. */
-  sidebarWidth: number;
-  sidebarResizing: boolean;
   overlay: "none" | Sheet;
   window: WindowState;
   appearance: Appearance;
@@ -267,7 +277,6 @@ export interface RendererFacade {
   navigate(destination: Partial<Destination>): void;
   travel(direction: -1 | 1): void;
   toggleSidebar(compact: boolean): void;
-  resizeSidebar(width: number, active: boolean): void;
   overlay(kind: WindowSnapshot["overlay"]): void;
   dismissOverlay(): void;
   appearance(value: Appearance): void;

@@ -939,27 +939,18 @@ describe("Save & connect original Intent", () => {
   });
 });
 
-it("Home local views and exact record identities survive Back and Forward without a command", async () => {
+it("Home and Activity preserve exact history without a command", async () => {
   const f = fixture();
   const c = new WindowController(f.api);
   await c.start();
-  c.navigate({ area: "home", homeView: "work", homeSelection: null });
-  c.navigate({
-    area: "home",
-    homeView: "work",
-    homeSelection: { kind: "task", id: "owned-task", turnId: "original-turn" },
-  });
-  const inspected = c.getSnapshot().destination;
-  c.navigate({ area: "home", homeView: "activity" });
-  expect(c.getSnapshot().destination.homeSelection).toBeNull();
+  c.navigate({ area: "home", homeView: "overview" });
+  const home = c.getSnapshot().destination;
+  c.navigate({ area: "activity", activityId: "event" });
+  const activity = c.getSnapshot().destination;
   c.travel(-1);
-  expect(c.getSnapshot().destination).toEqual(inspected);
+  expect(c.getSnapshot().destination).toBe(home);
   c.travel(1);
-  expect(c.getSnapshot().destination).toMatchObject({
-    area: "home",
-    homeView: "activity",
-    homeSelection: null,
-  });
+  expect(c.getSnapshot().destination).toBe(activity);
   expect(f.api.configure).not.toHaveBeenCalled();
   expect(f.api.task).not.toHaveBeenCalled();
   c.dispose();
@@ -971,7 +962,7 @@ it("workspace presentation identity belongs to the exact Setup history entry and
   const configuration = c.getSnapshot().configuration;
   c.navigate({
     area: "home",
-    homeView: "attention",
+    homeView: "overview",
     homeSelection: { kind: "attention", id: "folder:second" },
   });
   const home = c.getSnapshot().destination;
@@ -1477,7 +1468,7 @@ describe("F0 window owner", () => {
       false,
       "full",
       "none",
-      232,
+      152,
     );
     c.travel(1);
     expect(c.getSnapshot().destination.page).toBe("appearance");
@@ -2435,9 +2426,9 @@ it("R30 repeated native actions and background completion do not navigate", asyn
   });
   expect(c.getSnapshot().overlay).toBe("none");
   c.toggleSidebar(true);
-  expect(c.getSnapshot().sidebar).toBe("overlay");
-  c.toggleSidebar(true);
   expect(c.getSnapshot().sidebar).toBe("rail");
+  c.toggleSidebar(true);
+  expect(c.getSnapshot().sidebar).toBe("full");
   c.dispose();
 });
 it("R20 observes exact pending edit without sending an acknowledgement or new effect", async () => {
@@ -2613,7 +2604,6 @@ it.each([
   ["history forward", (c: WindowController) => c.travel(1)],
   ["compact sidebar", (c: WindowController) => c.toggleSidebar(true)],
   ["full sidebar", (c: WindowController) => c.toggleSidebar(false)],
-  ["sidebar resize", (c: WindowController) => c.resizeSidebar(224, false)],
   ["search overlay", (c: WindowController) => c.overlay("search")],
   ["task overlay", (c: WindowController) => c.overlay("task")],
   ["dismiss overlay", (c: WindowController) => c.overlay("none")],
@@ -2644,44 +2634,6 @@ it.each([
     }
   },
 );
-it("ends a drag during update admission without resuming native browser input", async () => {
-  const f = fixture();
-  const c = new WindowController(f.api);
-  await c.start();
-  c.navigate({ area: "home", homeView: "work" });
-  c.resizeSidebar(224, true);
-  f.emit("update", { phase: "applying", version: "1.0" });
-  vi.mocked(f.api.layout).mockClear();
-  c.resizeSidebar(224, false);
-  expect(c.getSnapshot().sidebarResizing).toBe(false);
-  expect(f.api.layout).not.toHaveBeenCalled();
-  f.emit("update", { phase: "failed", code: "UPDATE_ABORTED" });
-  expect(f.api.layout).not.toHaveBeenCalled(); // Missing settlement fields are not an ACK.
-  const held = c.getSnapshot().destination;
-  c.overlay("unresolved-actions");
-  c.presentation();
-  expect(c.getSnapshot().destination).toBe(held);
-  expect(f.api.layout).not.toHaveBeenCalled();
-  f.emit("update", {
-    phase: "failed",
-    code: "UPDATE_ABORTED",
-    recoveryRequired: false,
-  });
-  expect(f.api.layout).toHaveBeenLastCalledWith(
-    "activity",
-    "",
-    false,
-    false,
-    "full",
-    "none",
-    224,
-  );
-  vi.mocked(f.api.layout).mockClear();
-  c.dispose();
-  c.resizeSidebar(288, true);
-  expect(c.getSnapshot().sidebarWidth).toBe(224);
-  expect(f.api.layout).not.toHaveBeenCalled();
-});
 
 it.each([
   ["open-quick-switcher", "quick-switcher-command"],
@@ -2869,7 +2821,7 @@ it("R07 superseded malformed bootstrap cannot invalidate a newer valid refresh",
   expect(snapshot.status).toBe("current");
   c.dispose();
 });
-it("R35 native sidebar actions use the single renderer owner and preserve compact overlays", async () => {
+it("R35 native sidebar actions use the single renderer owner and collapse without compact overlays", async () => {
   for (const compact of [false, true]) {
     const f = fixture();
     const c = new WindowController(f.api, undefined, undefined, () => compact);
@@ -2883,7 +2835,7 @@ it("R35 native sidebar actions use the single renderer owner and preserve compac
     };
     f.emit("action", action);
     f.emit("action", action);
-    expect(c.getSnapshot().sidebar).toBe(compact ? "overlay" : "rail");
+    expect(c.getSnapshot().sidebar).toBe("rail");
     f.emit("layout", {
       section: "browser",
       taskId: "",
@@ -2891,7 +2843,7 @@ it("R35 native sidebar actions use the single renderer owner and preserve compac
       sidebar: "full",
       overlay: "none",
     });
-    expect(c.getSnapshot().sidebar).toBe(compact ? "overlay" : "rail");
+    expect(c.getSnapshot().sidebar).toBe("rail");
     c.dispose();
   }
 });
@@ -4110,19 +4062,6 @@ describe("request-owned native workspace readback", () => {
       c.dispose();
     },
   );
-});
-
-it("does not admit a stale divider drag on the full-width Home overview", async () => {
-  const f = fixture();
-  const c = new WindowController(f.api);
-  await c.start();
-  c.navigate({ area: "home" });
-  const before = c.getSnapshot();
-  vi.mocked(f.api.layout).mockClear();
-  c.resizeSidebar(280, true);
-  expect(c.getSnapshot()).toBe(before);
-  expect(f.api.layout).not.toHaveBeenCalled();
-  c.dispose();
 });
 
 it("samples a newly loaded ChatGPT page while Sign in is open without publishing saved readiness", async () => {

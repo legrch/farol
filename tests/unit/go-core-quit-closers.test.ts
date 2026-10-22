@@ -1,3 +1,4 @@
+import { observeOperation } from "../../apps/desktop/operations/observe";
 import fs from "node:fs";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
@@ -316,6 +317,8 @@ describe("actual MCP stop retains its admitted saved-chat lifetime", () => {
     };
     const connector = { stop: vi.fn(async () => undefined) };
     const context = vm.createContext({
+      observeOperation,
+      operationsStore: () => ({ record() {} }),
       Date,
       goCoreQuitClosers,
       drainComputerConnector,
@@ -511,6 +514,8 @@ describe("actual desktop Quit collection", () => {
       await stopped.promise;
     });
     const context = vm.createContext({
+      observeOperation,
+      operationsStore: () => ({ record() {} }),
       Date,
       goCoreQuitClosers,
       desktopGoCore: core,

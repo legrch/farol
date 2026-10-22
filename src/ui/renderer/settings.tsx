@@ -1257,13 +1257,17 @@ function ConnectMac({
     <>
       <section aria-label="Create a tunnel and a key">
         <h3>1. Create a tunnel and a key</h3>
-        <SetupWalkthrough />
-        <Command
-          actions={actions}
-          command={{ kind: "onboarding.open-help", destination: "tunnels" }}
-        >
-          Open OpenAI Tunnels
-        </Command>
+        <SetupWalkthrough
+          openLink={
+            <Command
+              className="text-button"
+              actions={actions}
+              command={{ kind: "onboarding.open-help", destination: "tunnels" }}
+            >
+              Open OpenAI Tunnels
+            </Command>
+          }
+        />
       </section>
       <form
         className="connection-credentials"
@@ -1474,7 +1478,18 @@ function AddToChatGPT({ settings, snapshot, facade, actions }: PageProps) {
   return (
     <>
       <section aria-label="Create the ChatGPT app">
-        <SetupWalkthrough kind="chatgpt" tunnelId={connector.tunnelId ?? ""} />
+        <SetupWalkthrough
+          kind="chatgpt"
+          openLink={
+            <Command
+              className="text-button"
+              actions={actions}
+              command={{ kind: "onboarding.open-help", destination: "chatgpt" }}
+            >
+              Open ChatGPT Apps
+            </Command>
+          }
+        />
         <p className="description">
           In ChatGPT, create an app with these values:
         </p>
@@ -1492,12 +1507,6 @@ function AddToChatGPT({ settings, snapshot, facade, actions }: PageProps) {
             <dd>None</dd>
           </div>
         </dl>
-        <Command
-          actions={actions}
-          command={{ kind: "onboarding.open-help", destination: "chatgpt" }}
-        >
-          Open ChatGPT Apps
-        </Command>
       </section>
       <section className="setup-test" aria-label="Test in ChatGPT">
         <h3>Test in ChatGPT</h3>

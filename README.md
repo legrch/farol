@@ -61,7 +61,7 @@ Open **Farol.app** from its existing accepted installation location; see [instal
 
 For an installation already set up for trusted updates, open **Settings → General**, review **Version**, and choose **Check for updates**, then **Install and Relaunch** when ready. Closing the window leaves Farol running; **Command+Q** quits it.
 
-Follow [Updating Farol](docs/guides/updates.md) or [Recovery](docs/guides/recovery.md). For a recorded update, open **Settings → General → Update recovery…**. If an action has an unknown result, use **Find a page → Home** if Setup is open, then choose **Review unresolved actions** in the sidebar; it appears only while something is unresolved. Inspect the original result before another change. General also offers **Setup status**, **Open Setup**, **Install updates automatically** and **Save support file…**.
+Follow [Updating Farol](docs/guides/updates.md) or [Recovery](docs/guides/recovery.md). For a recorded update, open **Settings → General → Update recovery…**. If an action has an unknown result, choose **Review unresolved actions** in the sidebar; it appears only while something is unresolved. Inspect the original result before another change. General also offers **Setup status**, **Open Setup**, **Install updates automatically** and **Save support file…**.
 
 ## Privacy and security
 

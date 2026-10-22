@@ -1,3 +1,5 @@
+import { defaultSidebarPreference } from "../../../apps/desktop/renderer/sidebar-presentation";
+import { OperationsSnapshotSchema } from "../../../apps/desktop/renderer/operations-contract";
 import {
   ConnectionStatusViewSchema,
   unavailableConnectionStatus,
@@ -18,10 +20,7 @@ import {
   type WorkspaceReadbackBinding,
 } from "../guided-workspace-access";
 import { workspaceEditToAcknowledge } from "../workspace-edit-delivery";
-import {
-  clampPageListWidth,
-  shellGeometry,
-} from "../../pkg/shell-layout/geometry";
+import { shellGeometry } from "../../pkg/shell-layout/geometry";
 import { AgentDraftStore } from "../agent-draft";
 import { ConversationDraftStore } from "./conversation-draft";
 import { z } from "zod";
@@ -43,7 +42,6 @@ import {
   validNavigation,
   sheets,
 } from "../../../apps/desktop/renderer/navigation-destinations";
-import { isHomeOverview, pageListMode } from "./sidebar-presentation";
 import {
   ProductConfigurationSnapshotSchema,
   ProductConfigurationCommandSchema,
@@ -170,9 +168,7 @@ const initial: WindowSnapshot = {
   destination: home,
   back: false,
   forward: false,
-  sidebar: "full",
-  sidebarWidth: shellGeometry.pageListDefault,
-  sidebarResizing: false,
+  sidebar: defaultSidebarPreference,
   overlay: "none",
   window: { focused: false, fullScreen: false, trafficLightPosition: null },
   appearance: { theme: "system", accent: "iris", font: "geist" },
@@ -475,7 +471,6 @@ export class WindowController implements RendererFacade {
   private readonly seenActions = new Set<string>();
   private sectionNavigationSequence = 0;
   private presentationRevision = 0;
-  private resizeStartWidth: number | null = null;
   private presentationDeferred = false;
   private pendingSectionNavigation: {
     action: SectionNavigationAction;
@@ -626,6 +621,11 @@ export class WindowController implements RendererFacade {
     const runtimeAtStart = this.runtimeRevision;
     const windowAtStart = this.state.window;
     const order = this.configOrder.begin();
+    if (this.api.operations) {
+      void this.readOperations();
+      const timer = setInterval(() => void this.readOperations(), 1500);
+      this.disposers.push(() => clearInterval(timer));
+    }
     this.startPromise = (async () => {
       try {
         const connectionRead = this.beginConnectionStatusRead();
@@ -695,9 +695,11 @@ export class WindowController implements RendererFacade {
           this.state.tasks.tasks.map((task) => `${task.taskId}:${task.turnId}`),
         );
         this.patch({
-          activity: this.bufferedEvents.filter((event) =>
-            ids.has(`${event.taskId}:${event.turnId}`),
-          ),
+          activity: this.api.operations
+            ? this.state.activity
+            : this.bufferedEvents.filter((event) =>
+                ids.has(`${event.taskId}:${event.turnId}`),
+              ),
           status:
             this.overflow ||
             this.state.configuration?.status !== "ready" ||
@@ -847,7 +849,55 @@ export class WindowController implements RendererFacade {
     this.patch({ tasks: value });
     return true;
   }
+  private operationsReading = false;
+  private async readOperations(): Promise<void> {
+    if (!this.api.operations || this.operationsReading || this.disposed) return;
+    this.operationsReading = true;
+    try {
+      const result = OperationsSnapshotSchema.parse(
+        await this.api.operations(),
+      );
+      if (this.disposed) return;
+      this.patch({
+        activity: result.entries.map((entry) => ({
+          ...entry,
+          taskId: "",
+          turnId: "",
+          generation: 0,
+          label: entry.kind.replaceAll("_", " ").replaceAll(".", " "),
+          phase:
+            entry.outcome === "unknown" ? "outcome_unknown" : entry.outcome,
+          operation:
+            [
+              entry.target.workspace,
+              entry.target.relativePath,
+              entry.target.command,
+              entry.target.handle
+                ? `Handle ${entry.target.handle}${entry.target.start === "unknown" ? " (start unknown)" : ""}`
+                : undefined,
+            ]
+              .filter(Boolean)
+              .join(" · ") || null,
+        })),
+        activityDiagnostics: {
+          corruptLines: result.corruptLines,
+          writeFailures: result.writeFailures,
+          droppedEntries: result.droppedEntries,
+          unrecordedUncertainEntries: result.unrecordedUncertainEntries,
+          unmappedCodes: result.unmappedCodes,
+        },
+      });
+    } catch {
+      if (!this.disposed)
+        this.patch({
+          activityDiagnostics: { corruptLines: 0, writeFailures: 1 },
+        });
+    } finally {
+      this.operationsReading = false;
+    }
+  }
   private record(value: unknown): void {
+    if (this.api.operations) return;
     const parsed = ClientEventSchema.safeParse(value);
     if (!parsed.success) {
       this.stale();
@@ -2330,18 +2380,11 @@ export class WindowController implements RendererFacade {
       "settings:chatgpt.present-browser:",
     );
   }
-  toggleSidebar(compact: boolean): void {
+  toggleSidebar(_compact: boolean): void {
     if (this.disposed || this.state.update.phase === "applying") return;
     this.presentationRevision++;
     this.patch({
-      sidebar:
-        compact || isHomeOverview(this.state.destination)
-          ? this.state.sidebar === "overlay"
-            ? "rail"
-            : "overlay"
-          : this.state.sidebar === "full"
-            ? "rail"
-            : "full",
+      sidebar: this.state.sidebar === "full" ? "rail" : "full",
     });
     this.presentation();
   }
@@ -2354,48 +2397,12 @@ export class WindowController implements RendererFacade {
     this.patch({ overlay: kind });
     this.presentation();
   }
-  resizeSidebar(width: number, active: boolean): void {
-    if (this.disposed) return;
-    if (this.state.update.phase === "applying") {
-      // A pointer ending during apply must not leave a stale drag afterwards.
-      if (!active && this.state.sidebarResizing) {
-        this.resizeStartWidth = null;
-        this.presentationDeferred = true;
-        this.patch({ sidebarResizing: false });
-      }
-      return;
-    }
-    if (
-      active &&
-      (this.state.overlay !== "none" ||
-        pageListMode(this.state.destination, this.state.sidebar) === "rail")
-    )
-      return;
-    const sidebarWidth = clampPageListWidth(width);
-    if (
-      sidebarWidth === this.state.sidebarWidth &&
-      active === this.state.sidebarResizing
-    )
-      return;
-    if (active && !this.state.sidebarResizing)
-      this.resizeStartWidth = this.state.sidebarWidth;
-    if (!active) this.resizeStartWidth = null;
-    this.presentationRevision++;
-    this.patch({ sidebarWidth, sidebarResizing: active });
-    this.presentation();
-  }
   dismissOverlay(): void {
     if (this.disposed || this.state.update.phase === "applying") return;
-    const sidebarWidth = this.state.sidebarResizing
-      ? (this.resizeStartWidth ?? this.state.sidebarWidth)
-      : this.state.sidebarWidth;
-    this.resizeStartWidth = null;
     this.presentationRevision++;
     this.patch({
       overlay: "none",
       sidebar: this.state.sidebar === "overlay" ? "rail" : this.state.sidebar,
-      sidebarWidth,
-      sidebarResizing: false,
     });
     this.presentation();
   }
@@ -2412,7 +2419,7 @@ export class WindowController implements RendererFacade {
       return;
     }
     this.presentationDeferred = false;
-    const sidebar = pageListMode(state.destination, state.sidebar);
+    const sidebar = this.compactViewport() ? "rail" : state.sidebar;
     this.api.layout(
       state.destination.area === "chatgpt"
         ? "browser"
@@ -2425,13 +2432,12 @@ export class WindowController implements RendererFacade {
       false,
       sidebar,
       state.overlay === "none"
-        ? sidebar === "overlay" || state.sidebarResizing
-          ? "sidebar"
-          : "none"
+        ? "none"
         : state.overlay === "search"
           ? "quick-switcher"
           : "task-menu",
-      state.sidebarWidth,
+      // Retain the existing host wire geometry; there is no resizable page list.
+      shellGeometry.pageListMin,
     );
   }
   private hostLayout(value: unknown): void {

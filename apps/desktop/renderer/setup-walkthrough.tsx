@@ -1,163 +1,76 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
-type Frame = Readonly<{
-  caption: string;
-  page: string;
-  button: string;
-  fields: readonly (readonly [string, string])[];
-  cursor: readonly [number, number];
+type Card = Readonly<{
+  title: string;
+  detail: string;
+  screen: string;
+  action: string;
+  lines: readonly [string, string];
 }>;
-const tunnelFrames: readonly Frame[] = [
+const tunnelCards: readonly Card[] = [
   {
-    caption: "Open OpenAI → Tunnels",
-    page: "Tunnels",
-    button: "Create tunnel",
-    fields: [],
-    cursor: [82, 20],
+    title: "Create a tunnel",
+    detail: "On the Tunnels page",
+    screen: "Tunnels",
+    action: "Create tunnel",
+    lines: ["Name: Farol", "Workspace"],
   },
   {
-    caption: "Press Create tunnel",
-    page: "Create tunnel",
-    button: "Create",
-    fields: [
-      ["Name", ""],
-      ["ChatGPT workspace", ""],
-    ],
-    cursor: [82, 20],
+    title: "Create a key",
+    detail: "Permission: Restricted",
+    screen: "API keys",
+    action: "Create key",
+    lines: ["Restricted", "Tunnels: Read and Use"],
   },
   {
-    caption: "Name it “Farol”",
-    page: "Create tunnel",
-    button: "Create",
-    fields: [
-      ["Name", "Farol"],
-      ["Description", "Farol on my Mac"],
-    ],
-    cursor: [48, 48],
-  },
-  {
-    caption: "Choose your ChatGPT workspace, then Create",
-    page: "Create tunnel",
-    button: "Create",
-    fields: [
-      ["Name", "Farol"],
-      ["ChatGPT workspace", "My workspace"],
-    ],
-    cursor: [78, 78],
-  },
-  {
-    caption: "Copy the tunnel ID",
-    page: "Tunnels",
-    button: "Copy",
-    fields: [["Farol", "Your tunnel ID"]],
-    cursor: [82, 45],
-  },
-  {
-    caption: "Open API keys",
-    page: "API keys",
-    button: "Create new secret key",
-    fields: [],
-    cursor: [16, 46],
-  },
-  {
-    caption: "Create a Restricted key named “Farol”",
-    page: "Create new secret key",
-    button: "Create secret key",
-    fields: [
-      ["Name", "Farol"],
-      ["Permissions", "Restricted"],
-    ],
-    cursor: [48, 48],
-  },
-  {
-    caption: "Allow Tunnels: Read and Use, then Create",
-    page: "Create new secret key",
-    button: "Create secret key",
-    fields: [
-      ["Name", "Farol"],
-      ["Permissions", "Restricted"],
-      ["Tunnels", "Read and Use"],
-    ],
-    cursor: [78, 78],
-  },
-  {
-    caption: "Copy the key — it is shown only once",
-    page: "API keys",
-    button: "Copy",
-    fields: [["Farol", "••••••••••••"]],
-    cursor: [82, 45],
+    title: "Copy both here",
+    detail: "Tunnel ID and key",
+    screen: "Connect this Mac",
+    action: "Copy",
+    lines: ["Tunnel ID", "Key: ••••••••"],
   },
 ];
-const chatgptFrames = (tunnelId: string): readonly Frame[] => [
+const chatgptCards: readonly Card[] = [
   {
-    caption: "Open ChatGPT Settings → Apps",
-    page: "Apps",
-    button: "Create app",
-    fields: [],
-    cursor: [16, 46],
+    title: "Settings → Connectors",
+    detail: "Open ChatGPT settings",
+    screen: "Settings",
+    action: "Connectors",
+    lines: ["General", "Connectors"],
   },
   {
-    caption: "Choose Create app",
-    page: "Create app",
-    button: "Create",
-    fields: [["Name", ""]],
-    cursor: [82, 20],
+    title: "Add Farol: name, Tunnel, ID",
+    detail: "Sign-in: None",
+    screen: "Add Farol",
+    action: "Create",
+    lines: ["Name: Farol", "Tunnel · Tunnel ID"],
   },
   {
-    caption: "Name the app “Farol”",
-    page: "Create app",
-    button: "Create",
-    fields: [["Name", "Farol"]],
-    cursor: [48, 48],
-  },
-  {
-    caption: "Choose Tunnel and enter your tunnel ID",
-    page: "Create app",
-    button: "Create",
-    fields: [
-      ["Name", "Farol"],
-      ["Connection", "Tunnel"],
-      ["Tunnel ID", tunnelId || "Your tunnel ID"],
-    ],
-    cursor: [48, 60],
-  },
-  {
-    caption: "Set sign-in to None, then Create",
-    page: "Create app",
-    button: "Create",
-    fields: [
-      ["Name", "Farol"],
-      ["Connection", "Tunnel"],
-      ["Sign-in", "None"],
-    ],
-    cursor: [78, 78],
-  },
-  {
-    caption: "Return to Farol and test in ChatGPT",
-    page: "Apps",
-    button: "Farol",
-    fields: [["App", "Farol"]],
-    cursor: [82, 45],
+    title: "Test in ChatGPT",
+    detail: "Return to Farol to test",
+    screen: "Farol",
+    action: "Test",
+    lines: ["ChatGPT → This Mac", "Workspace access"],
   },
 ];
-/** Illustrations only. No provider pages, requests, credentials or screenshots. */
+
+/** Offline drawings only. Never receives credentials, IDs or provider page contents. */
 export function SetupWalkthrough({
   kind = "tunnel",
-  tunnelId = "",
+  openLink,
 }: {
   kind?: "tunnel" | "chatgpt";
-  tunnelId?: string;
+  openLink: ReactNode;
 }) {
-  const frames = kind === "tunnel" ? tunnelFrames : chatgptFrames(tunnelId);
+  const cards = kind === "tunnel" ? tunnelCards : chatgptCards;
   const label =
     kind === "tunnel" ? "Create a tunnel and a key" : "Add to ChatGPT";
   const [reduced, setReduced] = useState(
     () =>
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
   );
   const [scene, setScene] = useState(0);
-  const [paused, setPaused] = useState(false);
+  const [replay, setReplay] = useState(0);
   useEffect(() => {
     const query = window.matchMedia?.("(prefers-reduced-motion: reduce)");
     if (!query) return;
@@ -167,104 +80,75 @@ export function SetupWalkthrough({
     return () => query.removeEventListener("change", change);
   }, []);
   useEffect(() => {
-    if (reduced || paused) return;
-    const timer = window.setInterval(
-      () => setScene((value) => (value + 1) % frames.length),
-      2400,
-    );
-    return () => window.clearInterval(timer);
-  }, [reduced, paused, frames.length]);
-  if (reduced)
-    return (
-      <ol
-        className="walkthrough-static"
-        aria-label={`${label}: numbered frames`}
-      >
-        {frames.map((frame, index) => (
-          <li key={index}>
-            <strong>
-              {index + 1}. {frame.caption}
-            </strong>
-            <FrameView frame={frame} animated={false} kind={kind} />
-          </li>
-        ))}
-      </ol>
-    );
-  const frame = frames[scene % frames.length]!;
+    if (reduced || scene >= cards.length) return;
+    const timer = window.setTimeout(() => setScene((value) => value + 1), 1600);
+    return () => window.clearTimeout(timer);
+  }, [reduced, scene, replay, cards.length]);
+  const playing = !reduced && scene < cards.length;
   return (
-    <figure className="setup-walkthrough" aria-label={`${label} walkthrough`}>
-      <FrameView frame={frame} animated kind={kind} />
-      <figcaption>
-        <span>
-          {scene + 1} / {frames.length}
-        </span>{" "}
-        {frame.caption}
-      </figcaption>
-      <button
-        type="button"
-        className="text-button"
-        onClick={() => setPaused((value) => !value)}
-      >
-        {paused ? "Play walkthrough" : "Pause walkthrough"}
-      </button>
-      <span className="description">Illustrated guide</span>
-    </figure>
+    <div className="setup-walkthrough" data-playing={playing}>
+      <ol className="walkthrough-cards" aria-label={`${label} walkthrough`}>
+        {cards.map((card, index) => {
+          const active = playing && scene === index;
+          return (
+            <li key={card.title} data-active={active}>
+              <ScreenDrawing card={card} active={active} key={replay} />
+              <strong>
+                {index + 1} · {card.title}
+              </strong>
+              <span>{card.detail}</span>
+            </li>
+          );
+        })}
+      </ol>
+      <div className="walkthrough-actions">
+        {openLink}
+        <button
+          type="button"
+          className="text-button"
+          aria-label={`Replay ${label} walkthrough`}
+          disabled={reduced}
+          onClick={() => {
+            setScene(0);
+            setReplay((value) => value + 1);
+          }}
+        >
+          <span aria-hidden="true">↻ </span>Replay
+        </button>
+      </div>
+    </div>
   );
 }
-function FrameView({
-  frame,
-  animated,
-  kind,
-}: {
-  frame: Frame;
-  animated: boolean;
-  kind: "tunnel" | "chatgpt";
-}) {
+
+function ScreenDrawing({ card, active }: { card: Card; active: boolean }) {
   return (
-    <div
-      className="walkthrough-scene"
-      aria-hidden={animated ? "true" : undefined}
+    <svg
+      className="walkthrough-drawing"
+      viewBox="0 0 190 58"
+      aria-hidden="true"
     >
-      <div className="walkthrough-address">
-        {kind === "chatgpt"
-          ? "chatgpt.com › Settings › Apps"
-          : `platform.openai.com › ${frame.page.includes("key") ? "API keys" : "Tunnels"}`}
-      </div>
-      <div className="walkthrough-body">
-        <div className="walkthrough-nav">
-          <span>{kind === "chatgpt" ? "General" : "Tunnels"}</span>
-          <span>{kind === "chatgpt" ? "Apps" : "API keys"}</span>
-          <span>Usage</span>
-          <span>Settings</span>
-        </div>
-        <div className="walkthrough-content">
-          <div className="walkthrough-heading">
-            <strong>{frame.page}</strong>
-            <span className="walkthrough-button">{frame.button}</span>
-          </div>
-          {frame.fields.length === 0 ? (
-            <p className="description">Your organization</p>
-          ) : (
-            <dl>
-              {frame.fields.map(([name, value]) => (
-                <div key={name}>
-                  <dt>{name}</dt>
-                  <dd>{value || "…"}</dd>
-                </div>
-              ))}
-            </dl>
-          )}
-        </div>
-      </div>
-      {animated && (
-        <svg
+      <path d="M0 16H190M42 16V58" />
+      <path d="M8 25H32M8 33H27M8 41H30" />
+      <text x="8" y="11">
+        {card.screen}
+      </text>
+      <rect x="116" y="3" width="68" height="11" rx="3" />
+      <text x="150" y="11" textAnchor="middle">
+        {card.action}
+      </text>
+      <rect x="48" y="23" width="134" height="12" rx="3" />
+      <rect x="48" y="40" width="134" height="12" rx="3" />
+      {card.lines.map((line, index) => (
+        <text key={line} x="53" y={31 + index * 17}>
+          {line}
+        </text>
+      ))}
+      {active && (
+        <path
           className="walkthrough-cursor"
-          style={{ left: `${frame.cursor[0]}%`, top: `${frame.cursor[1]}%` }}
-          viewBox="0 0 20 24"
-        >
-          <path d="M2 2v18l5-5 4 7 4-2-4-7h7Z" />
-        </svg>
+          d="m150 10 1 14 4-4 4 6 3-2-4-6 6-1Z"
+        />
       )}
-    </div>
+    </svg>
   );
 }

@@ -34,7 +34,7 @@ function selected(
   return source.slice(node.start as number, node.end as number);
 }
 
-function sink(fail = false) {
+function sink(fail = false, recordingFails = false) {
   const lines: string[] = [];
   const declaration = selected(
     main,
@@ -47,6 +47,11 @@ function sink(fail = false) {
   const report = vm.runInNewContext(
     `${stripTypeScriptTypes(declaration)}; reportOwnedBackendLifecycle`,
     {
+      operationsStore: () => ({
+        record: () => {
+          if (recordingFails) throw Error("CONTROLLED_RECORDER_CLOSED");
+        },
+      }),
       console: {
         warn: (line: string) => {
           if (fail) throw Error("CONTROLLED_SINK_CLOSED");
@@ -118,7 +123,8 @@ for (const route of ["go", "connector"] as const) {
       if (route === "go")
         return (
           node.type === "CallExpression" &&
-          (node.callee as { name?: string }).name === "startDesktopGoCore"
+          (node.callee as { name?: string }).name ===
+            "startObservedDesktopGoCore"
         );
       return (
         node.type === "NewExpression" &&
@@ -203,7 +209,7 @@ it("selects Shell for the actual desktop caller only in its supported layout", (
     mainTree,
     (node) =>
       node.type === "CallExpression" &&
-      (node.callee as { name?: string }).name === "startDesktopGoCore",
+      (node.callee as { name?: string }).name === "startObservedDesktopGoCore",
   );
   const tree = parse(call, { sourceType: "module", plugins: ["typescript"] });
   const property = selected(
@@ -252,7 +258,7 @@ it("uses the authenticated private image for the actual Go and Shell caller", ()
     mainTree,
     (node) =>
       node.type === "CallExpression" &&
-      (node.callee as { name?: string }).name === "startDesktopGoCore",
+      (node.callee as { name?: string }).name === "startObservedDesktopGoCore",
   );
   const tree = parse(call, { sourceType: "module", plugins: ["typescript"] });
   const root = selected(
@@ -294,4 +300,13 @@ it("uses the authenticated private image for the actual Go and Shell caller", ()
   );
   expect(value.artifactRoot).toBe(privateRoot);
   expect(value.compiledShell).toBe(compiledGoShell);
+});
+
+it("keeps the original lifecycle diagnostic when operations recording throws", () => {
+  const { report, lines } = sink(false, true);
+  expect(() => report(backend)).not.toThrow();
+  expect(lines).toHaveLength(1);
+  expect(JSON.parse(lines[0]!.slice(lines[0]!.indexOf(":") + 1))).toMatchObject(
+    backend,
+  );
 });

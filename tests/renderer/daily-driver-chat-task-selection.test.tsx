@@ -9,6 +9,13 @@ import { bootstrap, fixture, task } from "./fixture";
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
+// DOM-only dialog fixture; native modality belongs to the hidden renderer check.
+HTMLDialogElement.prototype.showModal = function () {
+  this.open = true;
+};
+HTMLDialogElement.prototype.close = function () {
+  this.open = false;
+};
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
@@ -53,6 +60,7 @@ async function mount() {
     await act(async () => root.unmount());
     c.dispose();
   });
+  await act(async () => c.overlay("chat-conversations"));
   const captured = host.querySelector<HTMLButtonElement>(
     '[aria-label="Farol work"] button',
   )!;

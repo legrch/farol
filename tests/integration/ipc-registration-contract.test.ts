@@ -61,6 +61,7 @@ describe("privileged IPC registration contract", () => {
     // If this list changes, the change is the point: a new privileged
     // channel must be added here deliberately, with its check.
     expect(found.map((entry) => entry.channel)).toEqual([
+      "operations",
       "installedUpdate",
       "bootstrap",
       "snapshot",

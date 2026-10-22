@@ -1,3 +1,15 @@
+import type { OperationsRecorder } from "../../apps/desktop/renderer/operations-contract";
+import { OperationEntrySchema } from "../../apps/desktop/renderer/operations-contract";
+import { createTotalOperationsRecorder } from "../../apps/desktop/operations/recorder";
+import { recordedModelTurn } from "../../apps/desktop/operations/model-turn";
+import { createGoComputerMcpServer } from "../../apps/desktop/bridge/computer-mcp";
+import { ComputerBridge } from "../../apps/desktop/bridge/computer";
+import { BridgeError } from "../../apps/desktop/bridge/client";
+import {
+  McpServer,
+  type RegisteredTool,
+  type ServerContext,
+} from "@modelcontextprotocol/server";
 import { describe, expect, it, vi } from "vitest";
 import {
   GoChatBrowserDriver,
@@ -123,6 +135,7 @@ function frame(terminal = false): PhysicalFrame {
 }
 function fixture(
   options: {
+    operations?: OperationsRecorder;
     followup?: boolean;
     required?: BrowserRequiredControls;
     translation?: QualifiedControlTranslation;
@@ -184,7 +197,7 @@ function fixture(
         binding: clone(input.binding),
         operationId: input.operationId,
         evidenceId: input.witness.evidenceId,
-        code: "physical_submitted",
+        code: "PHYSICAL_SEND_ACKNOWLEDGED",
       };
     }),
     observe: vi.fn<ChatGptPhysicalApi["observe"]>(async (input, guard) => {
@@ -229,6 +242,7 @@ function fixture(
     return assignment;
   });
   const driver = new GoChatBrowserDriver({
+    ...(options.operations ? { operations: options.operations } : {}),
     lookup,
     translations: [options.translation ?? translation],
     nowMillis: () => now,
@@ -1520,7 +1534,7 @@ describe("Go Chat BrowserDriver — strict physical doubles, CPU only", () => {
     await f.start();
     vi.mocked(f.api.observe).mockResolvedValue({
       state: "awaiting-owner",
-      code: "owner_control_required",
+      code: "PHYSICAL_COMPOSER_BUSY",
     });
     const signal = await f.observe();
     expect(signal.events[0]).toMatchObject({
@@ -1632,3 +1646,263 @@ describe("independent account snapshot transport", () => {
     },
   );
 });
+
+it("records embedded consult submission and terminal metadata without prompt/reply content", async () => {
+  const record = vi.fn();
+  const f = fixture({ operations: { record } });
+  await f.start();
+  f.setFrame(frame(true));
+  await f.observe();
+  await f.observe("1", 10);
+  expect(
+    record.mock.calls.filter((call) => call[0].kind === "chatgpt.consult.send"),
+  ).toHaveLength(1);
+  expect(
+    record.mock.calls.filter((call) => call[0].kind === "chatgpt.consult.turn"),
+  ).toHaveLength(1);
+  expect(
+    record.mock.calls.every(
+      (call) => call[0].source === "ChatGPT" && call[1] === "done",
+    ),
+  ).toBe(true);
+  expect(JSON.stringify(record.mock.calls)).not.toMatch(
+    /Transient prompt|\*\*Result\*\*|Working/,
+  );
+});
+
+it("appends completion after an awaiting-owner observation while retaining pending", async () => {
+  const record = vi.fn();
+  const operations: OperationsRecorder = {
+    record,
+    begin: (metadata) => {
+      let observed = false;
+      return (outcome, code, duration) => {
+        if (!observed) {
+          observed = true;
+          record(metadata, outcome, code, duration);
+        }
+      };
+    },
+  };
+  const f = fixture({ operations });
+  await f.start();
+  let cursor = "0";
+  for (let i = 0; i < 5; i++) {
+    const page = await f.observe(cursor, 128);
+    if (!page.events.length) break;
+    cursor = page.events.at(-1)!.sequence;
+  }
+  const original = vi.mocked(f.api.observe).getMockImplementation()!;
+  vi.mocked(f.api.observe).mockResolvedValue({
+    state: "awaiting-owner",
+    code: "PHYSICAL_COMPOSER_BUSY",
+  });
+  const paused = await f.observe(cursor, 128);
+  cursor = paused.events.at(-1)!.sequence;
+  vi.mocked(f.api.observe).mockImplementation(original);
+  f.setFrame(frame(true));
+  await f.observe(cursor, 128);
+  expect(
+    record.mock.calls
+      .filter((call) => call[0].kind === "chatgpt.consult.turn")
+      .map((call) => call[1]),
+  ).toEqual(["pending", "done"]);
+});
+
+// Recorder isolation fixtures only: no native host, filesystem effect or live provider.
+const recorderCases = (
+  ["sync", "rejected", "invalid-metadata"] as const
+).flatMap((fault) =>
+  (["begin", "finish", "record"] as const).flatMap((phase) =>
+    (["mcp", "model-events", "model-stream", "browser"] as const).flatMap(
+      (adapter) =>
+        ([false, true] as const).map((refused) => ({
+          fault,
+          phase,
+          adapter,
+          refused,
+        })),
+    ),
+  ),
+);
+it.each(recorderCases)(
+  "keeps $adapter settlement with $fault at $phase (refused=$refused)",
+  async ({ fault, phase, adapter, refused }) => {
+    const originalError = new BridgeError("refused", "OPERATION_REFUSED");
+    const fail = vi.fn(() => {
+      if (fault === "rejected") return Promise.reject(Error("RECORDER_FAILED"));
+      if (fault === "invalid-metadata")
+        return OperationEntrySchema.parse({
+          source: "invalid",
+          kind: "invalid kind",
+          target: {},
+        });
+      throw Error("RECORDER_FAILED");
+    });
+    const operations = createTotalOperationsRecorder({
+      ...(phase === "record"
+        ? {}
+        : {
+            begin: () => (phase === "begin" ? fail() : fail),
+          }),
+      record: fail,
+      setWorkspaceLabels: fail,
+    });
+    // Labels use the same total boundary and must not interfere with dispatch.
+    operations.setWorkspaceLabels([
+      { workspaceId: "workspace", label: "Docs" },
+    ]);
+    let dispatched = 0;
+    if (adapter === "mcp") {
+      const bridge = new ComputerBridge({
+        request: async () => {
+          throw Error("UNEXPECTED_TRANSPORT");
+        },
+      });
+      const read = vi
+        .spyOn(bridge, "read")
+        .mockImplementation(async (input, call) => {
+          dispatched++;
+          if (refused) throw originalError;
+          return {
+            ...call,
+            status: "ok",
+            data: {
+              ...input,
+              workspaceId: "workspace",
+              relativePath: "file",
+              text: "Original result",
+              bytes: "15",
+              sha256: "a".repeat(64),
+            },
+          };
+        });
+      const registration = vi.spyOn(McpServer.prototype, "registerTool");
+      const server = createGoComputerMcpServer(
+        bridge,
+        {
+          ownerId: "owner",
+          sessionId: "session",
+          taskId: "task",
+          taskEpoch: "1",
+          participantId: "participant",
+          turnId: "turn",
+          generation: "1",
+        },
+        { profileId: "profile", backendGeneration: "backend" },
+        {
+          operations,
+          fence: {
+            acquireAdmission: async () => ({
+              admitted: true,
+              release: async () => {},
+            }),
+          },
+        },
+      );
+      const index = registration.mock.calls.findIndex(
+        ([name]) => name === "computer_workspace_read",
+      );
+      const tool = registration.mock.results[index]!.value as RegisteredTool;
+      registration.mockRestore();
+      try {
+        const result = await tool.executor(
+          { workspaceId: "workspace", relativePath: "file" },
+          {
+            mcpReq: { id: "request", signal: new AbortController().signal },
+          } as ServerContext,
+        );
+        expect(result.structuredContent).toMatchObject(
+          refused
+            ? { status: "refused", code: originalError.code }
+            : { status: "ok", data: { text: "Original result" } },
+        );
+        expect(result.isError ?? false).toBe(refused);
+      } finally {
+        read.mockRestore();
+        await server.close();
+      }
+    } else if (adapter === "browser") {
+      const f = fixture({ operations });
+      expect(await f.start()).toMatchObject({
+        status: "submitted",
+        code: "PHYSICAL_SEND_ACKNOWLEDGED",
+      });
+      expect(f.api.send).toHaveBeenCalledOnce();
+      if (refused)
+        vi.mocked(f.api.observe).mockResolvedValue({
+          state: "refused",
+          code: originalError.code,
+        });
+      else f.setFrame(frame(true));
+      const page = await f.observe("0", 128);
+      if (refused)
+        expect(page.events).toMatchObject([
+          { kind: "refused", code: originalError.code },
+        ]);
+      else {
+        expect(page.events).toMatchObject([{ kind: "accepted" }]);
+        const terminal = await f.observe(page.events.at(-1)!.sequence, 128);
+        expect(terminal.events).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ kind: "completed" }),
+            expect.objectContaining({
+              kind: "answer-delta",
+              text: "**Result**",
+            }),
+          ]),
+        );
+      }
+      expect(f.api.observe).toHaveBeenCalledOnce();
+      dispatched++;
+    } else {
+      const frames = [
+        { event: "response.completed", data: { original: true } },
+      ];
+      const original = { ok: true as const, events: frames };
+      const handler = recordedModelTurn(operations, async () => {
+        dispatched++;
+        if (adapter === "model-events") {
+          if (refused) throw originalError;
+          return original;
+        }
+        return {
+          ok: true,
+          stream: (async function* () {
+            yield* frames;
+            if (refused) throw originalError;
+          })(),
+        };
+      });
+      const result = handler({ body: "", headers: {} });
+      if (adapter === "model-events") {
+        if (refused) await expect(result).rejects.toBe(originalError);
+        else expect(await result).toBe(original);
+      } else {
+        const response = await result;
+        if (!response.ok || !("stream" in response))
+          throw Error("EXPECTED_STREAM");
+        const consume = async () => {
+          const received = [];
+          for await (const event of response.stream) received.push(event);
+          return received;
+        };
+        if (refused) await expect(consume()).rejects.toBe(originalError);
+        else expect(await consume()).toEqual(frames);
+      }
+    }
+    // Drain observer rejection handlers; Vitest also fails unhandled rejections.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(dispatched).toBe(1);
+    const calls = adapter === "browser" ? 3 : 2; // Label + send + terminal, or label + operation.
+    expect(fail).toHaveBeenCalledTimes(calls);
+    expect(operations.diagnostics()).toMatchObject({
+      writeFailures: calls,
+      droppedEntries: calls - 1,
+    });
+    if (phase === "begin")
+      expect(operations.diagnostics().unrecordedUncertainEntries).toBe(
+        adapter === "browser" && !refused ? 2 : 1,
+      );
+  },
+);

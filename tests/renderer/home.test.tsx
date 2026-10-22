@@ -1,44 +1,49 @@
 import { StrictMode, act, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { Home, HomeNavigation, homeTitle } from "../../src/ui/renderer/home";
-import {
-  designIconPath,
-  designIconViewBox,
-} from "../../src/ui/renderer/design-icons";
+import { Home } from "../../src/ui/renderer/home";
 import { WindowController } from "../../src/ui/renderer/controller";
 import type {
   ActivityEntry,
   WindowSnapshot,
 } from "../../src/ui/renderer/contract";
-import type { ProductTask } from "../../src/modules/chat/contract/product-task";
-import { bootstrap, fixture, settings, task } from "./fixture";
+import { bootstrap, fixture, settings, task, deferred } from "./fixture";
+import { readySettings } from "./setup-fixture";
 
-// React/controller fixtures only: no pixels, native filesystem or provider proof.
+// DOM + scripted evidence only; no live connection, account or filesystem.
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
-const cleanup: (() => Promise<void>)[] = [];
+const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
-  for (const dispose of cleanup.splice(0)) await dispose();
+  for (const cleanup of cleanups.splice(0)) await cleanup();
   document.body.replaceChildren();
 });
-const running: ProductTask = {
-  ...task(),
-  provider: "chatgpt",
-  lifecycle: "running",
-  label: "Review Atlas",
-};
-const completed: ProductTask = { ...running, lifecycle: "completed" };
-const event = (
-  id: string,
-  at: number,
-  turnId = running.turnId,
-): ActivityEntry => ({
+function working(): Partial<WindowSnapshot> {
+  const buildId = bootstrap().build.buildId;
+  const settings = readySettings(true);
+  settings.setup.journey.dismissed = true;
+  return {
+    configuration: { status: "ready", settings },
+    signInObservation: {
+      observationId: "fixture",
+      buildId,
+      counter: 1,
+      pending: false,
+      state: "authenticated",
+      binding: { documentGeneration: 0, sequence: 1 },
+    },
+    setupSignInCheck: {
+      buildId,
+      binding: { documentGeneration: 0, sequence: 1 },
+    },
+  };
+}
+const event = (id: string, at: number): ActivityEntry => ({
   id,
   at,
-  taskId: running.taskId,
-  turnId,
+  taskId: "task-1",
+  turnId: "task-1",
   generation: 1,
   label: `Event ${id}`,
   kind: "task.phase",
@@ -46,102 +51,17 @@ const event = (
   operation: null,
   code: null,
 });
-const folder = {
-  workspaceId: "22222222-2222-4222-8222-222222222222",
-  root: "/work/Atlas",
-  label: "Atlas",
-  access: "read" as const,
-  excludedPaths: [],
-  rootIdentity: { device: "1", inode: "2" },
-  accessCheck: null,
-};
-function readySettings() {
-  const value = settings();
-  const buildId = bootstrap().build.buildId;
-  const runtimeGeneration = "a".repeat(64);
-  const verifiedAt = "2026-10-06T10:00:00.000Z";
-  value.computer.workspaces = [
-    {
-      ...folder,
-      accessCheck: {
-        buildId,
-        computerGeneration: 1,
-        verifiedAt,
-        rootIdentity: folder.rootIdentity,
-      },
-    },
-  ];
-  const witness = {
-    profile: "farol",
-    configRevision: 1,
-    workspaceId: folder.workspaceId,
-    runtimeGeneration,
-    buildId,
-    protocol: "secure-mcp",
-    verifiedAt,
-  };
-  value.setup.computer.verified = witness;
-  value.setup.connect.verified = witness;
-  value.connectors.secureMcp = {
-    ...value.connectors.secureMcp,
-    tunnelId: "fixture-tunnel",
-    credential: "stored",
-    tunnelClient: {
-      executablePath: "/fixture/tunnel",
-      executableSha256: "b".repeat(64),
-      version: "1.0.0",
-      protocol: "openai-tunnel-client/v1",
-      verifiedAt,
-    },
-    runtime: {
-      state: "ready",
-      connectorGeneration: 1,
-      computerGeneration: 1,
-      runtimeGeneration,
-      buildId,
-      observedAt: verifiedAt,
-    },
-    attachment: {
-      tunnelId: "fixture-tunnel",
-      workspaceId: folder.workspaceId,
-      connectorGeneration: 1,
-      computerGeneration: 1,
-      runtimeGeneration,
-      buildId,
-      challengeSha256: "c".repeat(64),
-      receiptSha256: "d".repeat(64),
-      verifiedAt,
-    },
-  };
-  return value;
-}
-async function mount(
-  tasks: ProductTask[] = [],
-  initial: Partial<WindowSnapshot> = {},
-) {
+async function mount(initial: Partial<WindowSnapshot> = {}) {
   const f = fixture();
-  vi.mocked(f.api.bootstrap).mockResolvedValue({
-    ...bootstrap(),
-    taskRevision: 1,
-    tasks,
-  });
   const c = new WindowController(f.api);
   await c.start();
-  // Controller startup reads update status; Home must add no calls after it.
-  vi.mocked(f.api.installedUpdate).mockClear();
   let patch = initial;
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   function View() {
     const value = useSyncExternalStore(c.subscribe, c.getSnapshot);
-    const snapshot = { ...value, ...patch };
-    return (
-      <>
-        <HomeNavigation snapshot={snapshot} facade={c} />
-        <Home snapshot={snapshot} facade={c} />
-      </>
-    );
+    return <Home snapshot={{ ...value, ...patch }} facade={c} />;
   }
   const render = () =>
     act(async () =>
@@ -152,729 +72,208 @@ async function mount(
       ),
     );
   await render();
-  cleanup.push(async () => {
+  cleanups.push(async () => {
     await act(async () => root.unmount());
     c.dispose();
   });
-  const button = (label: string, scope: Element = host) => {
-    const result = [...scope.querySelectorAll("button")].find(
-      (button) => button.textContent?.trim() === label,
-    );
-    if (!result) throw new Error(`Missing button: ${label}`);
-    return result;
-  };
   return {
     f,
     c,
     host,
-    button,
-    content: () => host.querySelector(".home-candidate")!,
-    click: (label: string, scope?: Element) =>
-      act(async () => button(label, scope).click()),
     set: async (value: Partial<WindowSnapshot>) => {
       patch = value;
       await render();
     },
-  };
-}
-function noEffects(f: ReturnType<typeof fixture>) {
-  expect(f.api.task).not.toHaveBeenCalled();
-  expect(f.api.configure).not.toHaveBeenCalled();
-  expect(f.api.installedUpdate).not.toHaveBeenCalled();
-  expect(f.api.snapshot).not.toHaveBeenCalled();
-}
-
-it("defaults to the unified overview and keeps four detail destinations without effects", async () => {
-  const h = await mount();
-  expect(h.content().getAttribute("data-home-view")).toBe("overview");
-  expect(homeTitle(h.c.getSnapshot())).toBe("Overview");
-  expect(h.content().textContent).toContain(
-    "Connection, work and recent activity.",
-  );
-  for (const [label, view, text] of [
-    ["Current work", "work", "No current work"],
-    ["Needs attention", "attention", "To review"],
-    ["Recent activity", "activity", "No recent events"],
-    ["Overview", "overview", "Connection, work and recent activity."],
-  ]) {
-    // Count badges are intentionally omitted by the semantic label lookup.
-    const navButton = [
-      ...h.host.querySelectorAll('nav[aria-label="Home views"] button'),
-    ].find(
-      (button) =>
-        button.querySelector(".home-candidate-label")?.textContent === label,
-    )! as HTMLButtonElement;
-    await act(async () => navButton.click());
-    expect(h.c.getSnapshot().destination).toMatchObject({
-      area: "home",
-      homeView: view,
-      homeSelection: null,
-    });
-    expect(h.content().textContent).toContain(text);
-  }
-  noEffects(h.f);
-});
-it("routes the inspected workspace identity to its explicit Setup destination", async () => {
-  const value = readySettings();
-  const second = {
-    ...folder,
-    workspaceId: "33333333-3333-4333-8333-333333333333",
-    root: "/work/Second",
-    rootIdentity: { device: "1", inode: "3" },
-  };
-  value.computer.workspaces.push(second);
-  const h = await mount([], {
-    configuration: { status: "ready", settings: value },
-  });
-  await act(async () =>
-    h.c.navigate({
-      area: "home",
-      homeView: "attention",
-      homeSelection: { kind: "attention", id: `folder:${second.workspaceId}` },
-    }),
-  );
-  expect(h.content().textContent).toContain("Second needs an access check");
-  await h.click("Manage workspaces");
-  expect(h.c.getSnapshot().destination).toMatchObject({
-    area: "setup",
-    page: "general",
-    setupStep: "folders",
-    workspaceId: second.workspaceId,
-  });
-  noEffects(h.f);
-});
-it("keeps task inspectors in Home and clears them when reselecting the same view", async () => {
-  const h = await mount([running]);
-  await h.click("View work");
-  const row = h
-    .content()
-    .querySelector<HTMLButtonElement>(".home-candidate-record")!;
-  await act(async () => row.click());
-  expect(h.c.getSnapshot().destination).toMatchObject({
-    area: "home",
-    homeView: "work",
-    homeSelection: { kind: "task", id: running.taskId, turnId: running.turnId },
-  });
-  expect(homeTitle(h.c.getSnapshot())).toBe("Review Atlas");
-  expect(h.content().textContent).toContain(
-    "Task completion does not verify workspace access",
-  );
-  await act(async () =>
-    (
-      h.host.querySelector(
-        'nav button[aria-current="page"]',
-      ) as HTMLButtonElement
-    ).click(),
-  );
-  expect(h.c.getSnapshot().destination.homeSelection).toBeNull();
-  noEffects(h.f);
-});
-it("opens only the explicit matching ChatGPT destination without task activation effects", async () => {
-  const h = await mount([running]);
-  await act(async () =>
-    h.c.navigate({
-      area: "home",
-      homeView: "work",
-      homeSelection: {
-        kind: "task",
-        id: running.taskId,
-        turnId: running.turnId,
-      },
-    }),
-  );
-  await h.click("Open ChatGPT");
-  expect(h.c.getSnapshot().destination).toMatchObject({
-    area: "chatgpt",
-    taskId: running.taskId,
-  });
-  noEffects(h.f);
-});
-it("cannot open a different task or turn after a current window is reused", async () => {
-  const h = await mount([running]);
-  await act(async () =>
-    h.c.navigate({
-      area: "home",
-      homeView: "work",
-      homeSelection: {
-        kind: "task",
-        id: running.taskId,
-        turnId: running.turnId,
-      },
-    }),
-  );
-  await act(async () =>
-    h.f.emit("tasks", {
-      revision: 2,
-      tasks: [{ ...running, turnId: "new-turn", label: "Different work" }],
-    }),
-  );
-  expect(h.content().textContent).toContain("This window has moved on");
-  expect(h.content().querySelector(".home-candidate-actions")).toBeNull();
-  noEffects(h.f);
-});
-it("rechecks task identity at click time even before React has rerendered", async () => {
-  const h = await mount([running]);
-  await act(async () =>
-    h.c.navigate({
-      area: "home",
-      homeView: "work",
-      homeSelection: {
-        kind: "task",
-        id: running.taskId,
-        turnId: running.turnId,
-      },
-    }),
-  );
-  const captured = h.button("Open ChatGPT");
-  const original = h.c.getSnapshot();
-  const navigate = vi.spyOn(h.c, "navigate");
-  vi.spyOn(h.c, "getSnapshot").mockReturnValue({
-    ...original,
-    tasks: { revision: 2, tasks: [{ ...running, turnId: "reused" }] },
-  });
-  await act(async () => captured.click());
-  expect(navigate).not.toHaveBeenCalled();
-  noEffects(h.f);
-});
-it("shows only three recent records, while retained selected events remain inspectable", async () => {
-  const records = [
-    event("old", 1),
-    event("two", 2),
-    event("three", 3),
-    event("four", 4),
-  ];
-  const h = await mount([running], { activity: records });
-  await act(async () => h.c.navigate({ area: "home", homeView: "activity" }));
-  expect(
-    [...h.content().querySelectorAll(".home-candidate-record strong")].map(
-      (node) => node.textContent,
-    ),
-  ).toEqual(["Event four", "Event three", "Event two"]);
-  await act(async () =>
-    h.c.navigate({
-      area: "home",
-      homeView: "activity",
-      homeSelection: { kind: "activity", id: "old", turnId: running.turnId },
-    }),
-  );
-  expect(h.content().textContent).toContain("Event old");
-  expect(h.content().textContent).toContain("No operation recorded");
-  await h.click("Open in Activity");
-  expect(h.c.getSnapshot().destination.area).toBe("activity");
-  expect(h.c.getSnapshot().destination.activityId).toBe("old");
-  expect(h.c.getSnapshot().overlay).toBe("activity");
-  noEffects(h.f);
-});
-it("does not route an old event to a reused turn and preserves unknown event evidence", async () => {
-  const old = { ...event("old", 1, "prior-turn"), phase: "outcome_unknown" };
-  const h = await mount([running], { activity: [old] });
-  await act(async () =>
-    h.c.navigate({
-      area: "home",
-      homeView: "activity",
-      homeSelection: { kind: "activity", id: old.id, turnId: old.turnId },
-    }),
-  );
-  expect(h.button("Open ChatGPT").disabled).toBe(true);
-  expect(h.content().textContent).toContain("outcome unknown");
-  await h.click("Open ChatGPT");
-  expect(h.c.getSnapshot().destination.area).toBe("home");
-  noEffects(h.f);
-});
-it.each(["starting", "stale", "unavailable", "incompatible"] as const)(
-  "keeps %s evidence honest and disables retained ChatGPT routing",
-  async (status) => {
-    const h = await mount([completed], { status });
-    await act(async () =>
-      h.c.navigate({
-        area: "home",
-        homeView: "work",
-        homeSelection: {
-          kind: "task",
-          id: running.taskId,
-          turnId: running.turnId,
-        },
-      }),
-    );
-    expect(h.content().textContent).toContain(
-      `Current evidence unavailable · ${status}`,
-    );
-    expect(h.button("Open ChatGPT").disabled).toBe(true);
-    noEffects(h.f);
-  },
-);
-it("keeps unavailable observations separate from confirmed running work", async () => {
-  const unavailable: ProductTask = {
-    ...running,
-    agent: {
-      phase: "running",
-      workspaceId: "atlas",
-      parentDelivery: "pending",
-      workspaceEnforcement: "not_applicable",
-      resultAvailable: false,
-      observation: "unavailable",
+    click: async (label: string) => {
+      const b = [...host.querySelectorAll("button")].find(
+        (b) => b.textContent?.trim() === label,
+      );
+      expect(b, label).toBeTruthy();
+      await act(async () => b!.click());
     },
   };
-  const h = await mount([unavailable]);
-  expect(h.content().textContent).toContain("Observation unavailable");
-  expect(h.host.querySelector('[aria-label="1 working"]')).toBeNull();
-  await act(async () =>
-    h.c.navigate({
-      area: "home",
-      homeView: "work",
-      homeSelection: {
-        kind: "task",
-        id: running.taskId,
-        turnId: running.turnId,
-      },
-    }),
-  );
-  expect(h.button("Open ChatGPT").disabled).toBe(true);
-  noEffects(h.f);
-});
-it("shows all-clear only from current Computer evidence, independently of optional embedded sign-in", async () => {
-  const value = readySettings();
-  const h = await mount([completed], {
-    configuration: { status: "ready", settings: value },
-  });
-  expect(
-    h.content().querySelector(".home-candidate-status-row")?.textContent,
-  ).toContain("Computer ready");
-  expect(h.content().querySelector(".home-candidate-attention")).toBeNull();
-  await act(async () => h.c.navigate({ area: "home", homeView: "attention" }));
-  expect(h.content().textContent).toContain(
-    "There are no unresolved items in the available evidence",
-  );
-  noEffects(h.f);
-});
-it("shows a ready empty Home from verified Computer evidence without inventing work", async () => {
-  const h = await mount([], {
-    configuration: { status: "ready", settings: readySettings() },
-  });
-  expect(
-    h.content().querySelector(".home-candidate-status-row")?.textContent,
-  ).toContain("Computer ready");
-  expect(h.content().textContent).toContain("No active window records.");
-  expect(h.content().textContent).toContain("Computer ready");
-  expect(h.content().textContent).not.toContain("Your workspace starts here");
-  expect(h.content().textContent).not.toContain("Review setup status");
-  expect(h.c.getSnapshot().tasks.tasks).toEqual([]);
-  expect(h.c.getSnapshot().activity).toEqual([]);
-  const connection = h
-    .content()
-    .querySelector<HTMLButtonElement>(".home-candidate-status-row")!;
-  await act(async () => connection.click());
-  expect(h.c.getSnapshot().destination).toMatchObject({
-    area: "setup",
-    page: "general",
-    setupStep: "connection",
-  });
-  noEffects(h.f);
-});
-it("does not promote an empty Home to ready from stale or withdrawn Computer evidence", async () => {
-  const value = readySettings();
-  const h = await mount([], {
-    configuration: { status: "ready", settings: value },
-    status: "stale",
-  });
-  expect(h.content().textContent).not.toContain("Ready when you are");
-  expect(h.content().textContent).toContain(
-    "Connection, work and recent activity.",
-  );
-  expect(h.content().textContent).not.toContain("No active window records.");
-  value.setup.computer.outcomeUnknown = true;
-  await h.set({
-    status: "current",
-    configuration: { status: "ready", settings: value },
-  });
-  expect(h.content().textContent).not.toContain("Ready when you are");
-  expect(h.content().textContent).toContain(
-    "Connection, work and recent activity.",
-  );
-  expect(h.content().textContent).toContain("Outcome unknown");
-  noEffects(h.f);
-});
-it("opens Setup explicitly from an empty overview without claiming folder access is optional", async () => {
+}
+it("shows only Finish setup and the four truthful steps when unfinished", async () => {
   const h = await mount();
-  expect(h.host.querySelector(".home-candidate-navigation h2")).toBeNull();
+  expect(h.host.querySelectorAll("section")).toHaveLength(1);
+  expect(h.host.querySelectorAll(".home-setup-steps li")).toHaveLength(4);
+  expect(h.host.querySelector('[aria-current="step"]')?.textContent).toContain(
+    "Sign in to ChatGPT",
+  );
+  expect(h.host.textContent).not.toMatch(
+    /Connection settings|Manage access|Check sign-in|Recent activity|Current work|Computer access|tunnel client|observation/,
+  );
+  expect(h.f.api.configure).not.toHaveBeenCalled();
+  expect(h.f.api.task).not.toHaveBeenCalled();
   await h.click("Continue setup");
-  expect(h.c.getSnapshot().destination.area).toBe("setup");
-  noEffects(h.f);
-});
-it("keeps optional embedded unknown evidence distinct from confirmed Computer readiness", async () => {
-  const value = readySettings();
-  value.setup.chatgpt.outcomeUnknown = true;
-  const h = await mount([completed], {
-    configuration: { status: "ready", settings: value },
-  });
-  await act(async () => h.c.navigate({ area: "home", homeView: "access" }));
-  expect(h.content().textContent).toContain("Computer ready");
-  expect(h.content().textContent).toContain("Outcome unknown");
-  await act(async () => h.c.navigate({ area: "home", homeView: "attention" }));
-  expect(h.content().textContent).toContain("A ChatGPT action needs review");
-  expect(h.content().textContent).not.toContain("Review connection evidence");
-  noEffects(h.f);
-});
-it("task completion cannot verify a configured folder; only matching access evidence can", async () => {
-  const value = settings();
-  value.computer.workspaces = [folder];
-  const h = await mount([completed], {
-    configuration: { status: "ready", settings: value },
-  });
-  await act(async () => h.c.navigate({ area: "home", homeView: "access" }));
-  expect(h.content().textContent).toContain("1 shared · 0 verified");
-  expect(h.content().textContent).toContain("Not checked");
-  const checked = {
-    ...value,
-    computer: {
-      ...value.computer,
-      workspaces: [
-        {
-          ...folder,
-          accessCheck: {
-            buildId: bootstrap().build.buildId,
-            computerGeneration: value.computer.generation,
-            verifiedAt: "2026-10-06T10:00:00.000Z",
-            rootIdentity: folder.rootIdentity,
-          },
-        },
-      ],
-    },
-  };
-  await h.set({ configuration: { status: "ready", settings: checked } });
-  expect(h.content().textContent).toContain("1 shared · 1 verified");
-  await h.set({
-    configuration: {
-      status: "ready",
-      settings: {
-        ...checked,
-        computer: { ...checked.computer, generation: 2 },
-      },
-    },
-  });
-  expect(h.content().textContent).toContain("1 shared · 0 verified");
-  expect(h.content().textContent).toContain("Check needed");
-  noEffects(h.f);
-});
-it("does not treat missing configuration as zero folders or verified access", async () => {
-  const h = await mount([], { configuration: null });
-  expect(h.c.getSnapshot().status).toBe("current");
-  expect(h.content().textContent).not.toContain("Current state needs review");
-  await act(async () => h.c.navigate({ area: "home", homeView: "attention" }));
-  expect(h.content().textContent).toContain("Setup evidence is unavailable");
-  await act(async () => h.c.navigate({ area: "home", homeView: "overview" }));
-  await act(async () => h.c.navigate({ area: "home", homeView: "access" }));
-  expect(h.content().textContent).toContain("Evidence unavailable");
-  expect(h.content().textContent).not.toContain("No workspaces added");
-  noEffects(h.f);
-});
-it("derives unknown and refused attention without rerunning operations", async () => {
-  const h = await mount([{ ...running, lifecycle: "outcome_unknown" }], {
-    intents: {
-      uncertain: { id: "uncertain", state: "unknown", code: null },
-      refused: { id: "refused", state: "refused", code: "REFUSED" },
-    },
-  });
-  await act(async () => h.c.navigate({ area: "home", homeView: "attention" }));
-  expect(h.content().textContent).toContain("Outcome unknown");
-  expect(h.content().textContent).toContain("Refused");
-  const row = [
-    ...h
-      .content()
-      .querySelectorAll<HTMLButtonElement>(".home-candidate-record"),
-  ].find((row) => row.textContent?.includes("Refused"))!;
-  await act(async () => row.click());
-  expect(h.c.getSnapshot().destination.homeSelection).toBeNull();
   expect(h.c.getSnapshot().destination).toMatchObject({
     area: "setup",
-    page: "general",
-    setupStep: "connection",
+    setupStep: "signin",
   });
-  noEffects(h.f);
 });
-it("keeps unknown action identity and opens Unresolved actions for review", async () => {
-  const h = await mount([], {
-    intents: {
-      "settings:model.preview:": {
-        id: "settings:model.preview:",
-        state: "unknown",
-        code: "MODEL_PREVIEW_UNKNOWN",
-      },
-    },
+it("marks done/current/pending steps and continues at the first unfinished step", async () => {
+  const value = working();
+  const settings = readySettings(true);
+  settings.connectors.secureMcp.runtime = null;
+  settings.connectors.secureMcp.attachment = null;
+  const h = await mount({
+    ...value,
+    configuration: { status: "ready", settings },
   });
-  await act(async () =>
-    h.c.navigate({
-      area: "home",
-      homeView: "attention",
-      homeSelection: {
-        kind: "attention",
-        id: "intent:settings:model.preview:",
-      },
-    }),
+  expect(h.host.querySelectorAll('[data-state="done"]')).toHaveLength(2);
+  expect(h.host.querySelector('[aria-current="step"]')?.textContent).toContain(
+    "Connect this Mac",
   );
-  expect(h.content().textContent).toContain("settings:model.preview:");
-  expect(h.content().textContent).toContain("MODEL_PREVIEW_UNKNOWN");
-  expect(h.content().textContent).not.toContain("Open full Activity");
-  await h.click("Inspect action details");
-  expect(h.c.getSnapshot().overlay).toBe("unresolved-actions");
-  noEffects(h.f);
+  expect(h.host.querySelectorAll('[data-state="pending"]')).toHaveLength(1);
+  await h.click("Continue setup");
+  expect(h.c.getSnapshot().destination.setupStep).toBe("connection");
 });
-it.each(["pending", "delivery"] as const)(
-  "routes a %s folder edit to its existing observation surface without substituting another operation",
-  async (state) => {
-    const value = readySettings();
-    const operationId = "33333333-3333-4333-8333-333333333333";
-    if (state === "pending")
-      value.computer.pendingEdit = {
-        operationId,
-        workspaceId: folder.workspaceId,
-        relativePath: "file.txt",
-        computerGeneration: 1,
-        submittedAt: "2026-10-06T10:00:00.000Z",
-      };
-    const h = await mount([], {
-      configuration: { status: "ready", settings: value },
-      workspaceEditDelivery: state === "delivery" ? operationId : null,
-    });
-    await act(async () =>
-      h.c.navigate({
-        area: "home",
-        homeView: "attention",
-        homeSelection: { kind: "attention", id: `folder-edit:${operationId}` },
-      }),
-    );
-    expect(h.content().textContent).toContain(operationId);
-    await h.click("Inspect action details");
-    expect(h.c.getSnapshot().overlay).toBe("unresolved-actions");
-    await act(async () => h.c.overlay("none"));
-    await h.set({
-      configuration: { status: "ready", settings: readySettings() },
-      workspaceEditDelivery: "44444444-4444-4444-8444-444444444444",
-    });
-    expect(h.c.getSnapshot().overlay).toBe("none");
-    expect(h.content().textContent).not.toContain("44444444");
-    noEffects(h.f);
-  },
-);
-it("shows missing attention and event inspectors without substituting another record", async () => {
-  const h = await mount();
-  await act(async () =>
-    h.c.navigate({
-      area: "home",
-      homeView: "attention",
-      homeSelection: { kind: "attention", id: "removed" },
-    }),
-  );
-  expect(h.content().textContent).toContain("This item is no longer present");
-  await act(async () =>
-    h.c.navigate({
-      area: "home",
-      homeView: "activity",
-      homeSelection: { kind: "activity", id: "removed" },
-    }),
-  );
-  expect(h.content().textContent).toContain(
-    "This event is no longer available",
-  );
-  noEffects(h.f);
-});
-it.each([
-  ["Manage connection", "setup", "connection"],
-  ["Manage workspaces", "setup", "folders"],
-  ["Open Setup", "setup", null],
-] as const)(
-  "leaves Home only through the named %s destination",
-  async (label, area, page) => {
-    const h = await mount();
-    await act(async () => h.c.navigate({ area: "home", homeView: "access" }));
-    await h.click(label);
-    expect(h.c.getSnapshot().destination.area).toBe(area);
-    if (page)
-      expect(h.c.getSnapshot().destination).toMatchObject({
-        page: "general",
-        setupStep: page,
-      });
-    noEffects(h.f);
-  },
-);
-
-it("uses the approved icon vocabulary for Home views and explicit ChatGPT actions", async () => {
-  const h = await mount([running]);
-  const glyphs = [
-    ...h.host.querySelectorAll('nav[aria-label="Home views"] svg'),
-  ];
-  expect(glyphs).toHaveLength(4);
-  for (const [index, name] of [
-    "home",
-    "chat",
-    "attention",
-    "activity",
-  ].entries()) {
-    expect(glyphs[index]?.getAttribute("viewBox")).toBe(designIconViewBox);
-    expect(glyphs[index]?.querySelector("path")?.getAttribute("d")).toBe(
-      designIconPath(name),
-    );
-  }
-  await h.click("View work");
-  await act(async () =>
-    h
-      .content()
-      .querySelector<HTMLButtonElement>(".home-candidate-record")!
-      .click(),
-  );
-  const heading = h.content().querySelector(".home-candidate-detail-heading")!;
-  expect(heading.querySelector("h2")?.textContent).toBe(running.label);
-  expect(heading.querySelector(".home-candidate-number")?.textContent).toBe(
-    "1",
-  );
-  expect(heading.querySelector(".home-candidate-badge")?.textContent).toBe(
-    "Working",
-  );
-  const open = h.button("Open ChatGPT");
-  expect(open.classList.contains("home-candidate-primary")).toBe(true);
-  expect(open.querySelector("path")?.getAttribute("d")).toBe(
-    designIconPath("chat"),
-  );
-  noEffects(h.f);
-});
-it("keeps the sidebar readiness symbol tied to current verified Computer evidence", async () => {
-  const h = await mount([completed]);
-  const symbol = () =>
-    h.host.querySelector(".home-candidate-connection-symbol")!;
-  expect(symbol().classList.contains("is-ready")).toBe(false);
-  expect(symbol().querySelector("path")?.getAttribute("d")).toBe(
-    designIconPath("connection"),
-  );
-  const configuration = { status: "ready" as const, settings: readySettings() };
-  await h.set({ configuration });
-  expect(symbol().classList.contains("is-ready")).toBe(true);
-  expect(symbol().querySelector("path")?.getAttribute("d")).toBe(
-    designIconPath("check"),
-  );
-  await h.set({ configuration, status: "stale" });
-  expect(symbol().classList.contains("is-ready")).toBe(false);
-  expect(
-    h.host.querySelector(".home-candidate-connection-link")?.textContent,
-  ).toContain("Evidence unavailable");
-  noEffects(h.f);
-});
-it("preserves the Home view and stable inspector selection across Back and Forward", async () => {
-  const h = await mount([running]);
-  await h.click("View work");
-  await act(async () =>
-    h
-      .content()
-      .querySelector<HTMLButtonElement>(".home-candidate-record")!
-      .click(),
-  );
-  const selected = h.c.getSnapshot().destination;
-  await h.click("Open ChatGPT");
-  await act(async () => h.c.travel(-1));
-  expect(h.c.getSnapshot().destination).toEqual(selected);
-  expect(
-    h.content().querySelector(".home-candidate-detail-heading h2")?.textContent,
-  ).toBe(running.label);
-  await act(async () => h.c.travel(-1));
+it("keeps Finish setup when all four checks pass without persisted completion", async () => {
+  const value = working();
+  const settings = readySettings(true);
+  const h = await mount({
+    ...value,
+    configuration: { status: "ready", settings },
+  });
   expect(h.c.getSnapshot().destination).toMatchObject({
-    area: "home",
-    homeView: "work",
-    homeSelection: null,
+    area: "setup",
+    setupStep: "overview",
   });
-  await act(async () => h.c.travel(1));
-  expect(h.c.getSnapshot().destination).toEqual(selected);
-  await act(async () => h.c.travel(1));
+  expect(h.host.querySelectorAll('[data-state="done"]')).toHaveLength(4);
+  expect(h.host.textContent).toContain("Finish setup");
+  expect(h.host.textContent).not.toContain("Farol is working");
+  expect(h.f.api.configure).not.toHaveBeenCalled();
+  await h.click("Continue setup");
+  expect(h.c.getSnapshot().destination.setupStep).toBe("attachment");
+  expect(h.f.api.configure).not.toHaveBeenCalled();
+});
+it("working Home has one status card, newest three events, and no empty attention section", async () => {
+  const h = await mount({
+    ...working(),
+    activity: [
+      event("old", 1),
+      event("middle", 4),
+      event("new", 7),
+      event("last", 10),
+    ],
+  });
+  expect(h.host.textContent).toContain("Farol is working");
+  expect(h.host.textContent).toContain(
+    "ChatGPT can reach this Mac · 1 workspace · checked",
+  );
+  expect(h.host.querySelector(".home-attention")).toBeNull();
+  expect(h.host.querySelector(".home-setup-card")).toBeNull();
+  expect(
+    [...h.host.querySelectorAll(".home-row-label")].map((e) => e.textContent),
+  ).toEqual(["Event last", "Event new", "Event middle"]);
+  expect(h.f.api.configure).not.toHaveBeenCalled();
+  await h.click("Show all");
+  expect(h.c.getSnapshot().destination.area).toBe("activity");
+});
+it("opens the exact recent event in Activity without a command", async () => {
+  const h = await mount({ ...working(), activity: [event("event-1", 1)] });
+  await act(async () =>
+    h.host.querySelector<HTMLButtonElement>(".home-row")!.click(),
+  );
+  expect(h.c.getSnapshot().destination).toMatchObject({
+    area: "activity",
+    activityId: "event-1",
+  });
+  expect(h.f.api.configure).not.toHaveBeenCalled();
+});
+it("keeps task attention and routes the same task without activating or retrying it", async () => {
+  const failed = {
+    ...task(),
+    provider: "chatgpt" as const,
+    lifecycle: "failed" as const,
+  };
+  const h = await mount({
+    ...working(),
+    tasks: { revision: 1, tasks: [failed] },
+  });
+  expect(h.host.querySelector(".home-attention")?.textContent).toContain(
+    "Task 1",
+  );
+  // Latest controller state must still contain the same exact task.
+  await act(async () => h.f.emit("tasks", { revision: 1, tasks: [failed] }));
+  await act(async () =>
+    h.host.querySelector<HTMLButtonElement>(".home-attention button")!.click(),
+  );
   expect(h.c.getSnapshot().destination).toMatchObject({
     area: "chatgpt",
-    taskId: running.taskId,
+    taskId: failed.taskId,
   });
-  noEffects(h.f);
+  expect(h.f.api.task).not.toHaveBeenCalled();
 });
-
-it("keeps an unrecorded attachment neutral beside a current local tunnel, with one direct check destination", async () => {
-  const value = readySettings();
-  value.connectors.secureMcp.attachment = null;
-  value.setup.connect.verified = null;
-  const h = await mount([], {
-    configuration: { status: "ready", settings: value },
-  });
-  const row = h
-    .content()
-    .querySelector<HTMLButtonElement>(".home-candidate-status-row")!;
-  expect(row.textContent).toContain("Local connection running");
-  expect(row.textContent).toContain(
-    "A ChatGPT connection check is not recorded",
-  );
-  expect(row.querySelector(".is-ready")).not.toBeNull();
-  expect(h.content().textContent).not.toContain("Computer ready");
-  expect(h.content().querySelector(".home-candidate-attention")).toBeNull();
-  await act(async () => row.click());
-  expect(h.c.getSnapshot().destination).toMatchObject({
-    area: "setup",
-    setupStep: "attachment",
-  });
-  noEffects(h.f);
-});
-it.each(["build", "generation", "stopped", "pending", "unknown"] as const)(
-  "never marks the local connection healthy when its %s evidence changes",
-  async (cause) => {
-    const value = readySettings();
-    if (cause === "build")
-      value.connectors.secureMcp.runtime!.buildId = "f".repeat(64);
-    if (cause === "generation") value.connectors.secureMcp.generation++;
-    if (cause === "stopped") value.connectors.secureMcp.runtime = null;
-    if (cause === "unknown") value.setup.connect.outcomeUnknown = true;
-    const h = await mount([], {
-      configuration: { status: "ready", settings: value },
-      ...(cause === "pending"
-        ? {
-            intents: {
-              "settings:connector.start:": {
-                id: "settings:connector.start:",
-                state: "pending",
-                code: null,
-              },
-            },
-          }
-        : {}),
-    });
-    const row = h.content().querySelector(".home-candidate-status-row")!;
-    expect(row.querySelector(".is-ready")).toBeNull();
-    expect(row.textContent).not.toContain("Local connection running");
-    expect(row.textContent).not.toContain("Connection verified from ChatGPT");
-    expect(
-      h.content().querySelector(".home-candidate-attention"),
-    ).not.toBeNull();
-    noEffects(h.f);
+it.each(["stale", "unavailable"] as const)(
+  "does not claim working from %s records",
+  async (status) => {
+    const h = await mount({ ...working(), status });
+    expect(h.host.textContent).toContain("Finish setup");
+    expect(h.host.textContent).not.toContain("Farol is working");
   },
 );
-it("does not turn an optional unavailable embedded observation into an external connection failure", async () => {
-  const value = readySettings();
-  value.setup.chatgpt.unavailable = "CHATGPT_OBSERVATION_UNAVAILABLE";
-  value.setup.chatgpt.reachable = "unreachable";
-  const h = await mount([], {
-    configuration: { status: "ready", settings: value },
-  });
-  expect(h.content().textContent).toContain("Sign-in not checked · optional");
-  expect(h.content().textContent).toContain("Computer ready");
-  expect(h.content().querySelector(".home-candidate-attention")).toBeNull();
-  noEffects(h.f);
+it("never claims working from saved connection evidence without the required sign-in check", async () => {
+  const value = working();
+  const h = await mount({ ...value, setupSignInCheck: null });
+  expect(h.host.textContent).toContain("Finish setup");
 });
-it("opens the exact unchecked workspace directly from Home without a review-page chain", async () => {
-  const value = readySettings();
-  value.computer.workspaces[0]!.accessCheck = null;
-  value.setup.computer.verified = null;
-  const h = await mount([], {
-    configuration: { status: "ready", settings: value },
+it("Check now uses the existing health command once and does not submit another while pending", async () => {
+  const h = await mount(working());
+  const value = working();
+  vi.mocked(h.f.api.bootstrap).mockResolvedValue({
+    ...bootstrap(),
+    configuration: value.configuration as ReturnType<
+      typeof bootstrap
+    >["configuration"],
   });
-  const row = [
-    ...h.content().querySelectorAll<HTMLButtonElement>(".home-candidate-issue"),
-  ].find((row) => row.textContent?.includes("Atlas needs an access check"))!;
-  await act(async () => row.click());
-  expect(h.c.getSnapshot().destination).toMatchObject({
-    area: "setup",
-    page: "general",
-    setupStep: "folders",
-    workspaceId: folder.workspaceId,
+  await act(async () => h.c.refresh());
+  const result = deferred<unknown>();
+  vi.mocked(h.f.api.configure).mockReturnValue(result.promise);
+  await h.click("Check now");
+  expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
+    kind: "connector.check-health",
   });
-  noEffects(h.f);
+  expect(h.host.querySelector(".home-status-card button")?.textContent).toBe(
+    "Checking…",
+  );
+  await act(async () =>
+    h.host
+      .querySelector<HTMLButtonElement>(".home-status-card button")!
+      .click(),
+  );
+  expect(h.f.api.configure).toHaveBeenCalledTimes(1);
+  await act(async () =>
+    result.resolve({ ok: true, snapshot: value.configuration }),
+  );
+  expect(h.host.textContent).toContain("Connection check finished.");
+});
+it("missing configuration cannot become a fabricated zero-workspace success", async () => {
+  const h = await mount({
+    ...working(),
+    configuration: { status: "ready", settings: settings() },
+  });
+  expect(h.host.textContent).toContain("Finish setup");
+  expect(h.host.textContent).not.toContain("0 workspaces · checked");
+});
+
+it("routes unresolved update evidence to the existing sheet from working Home", async () => {
+  const h = await mount({
+    ...working(),
+    update: {
+      phase: "failed",
+      code: "UPDATE_UNCONFIRMED",
+      recoveryRequired: true,
+    },
+  });
+  expect(h.host.querySelector(".home-attention")?.textContent).toContain(
+    "An action needs review",
+  );
+  await act(async () =>
+    h.host.querySelector<HTMLButtonElement>(".home-attention button")!.click(),
+  );
+  expect(h.c.getSnapshot().overlay).toBe("unresolved-actions");
+  expect(h.f.api.installedUpdate).not.toHaveBeenCalledWith(
+    expect.objectContaining({ kind: "restart-confirmed" }),
+  );
 });

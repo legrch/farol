@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import type { Ref } from "react";
+import { useEffect, useRef, useState, useImperativeHandle } from "react";
 import {
   RecoveryReadResultSchema,
   type RecoveryArchiveEntry,
@@ -25,6 +26,8 @@ export function StoredReplies({
   otherBusy,
   onBusy,
   context = "recovery",
+  checkRef,
+  onChecked,
 }: {
   api: Pick<StartupRecoveryAPI, "read">;
   available: boolean;
@@ -32,6 +35,8 @@ export function StoredReplies({
   otherBusy: boolean;
   onBusy(value: boolean): void;
   context?: "recovery" | "retired";
+  checkRef?: Ref<{ check(): void }>;
+  onChecked?(status: "inspected" | "refused" | "unavailable" | "unknown"): void;
 }) {
   const [rows, setRows] = useState<RecoveryArchiveEntry[]>([]);
   const [next, setNext] = useState("");
@@ -79,6 +84,7 @@ export function StoredReplies({
       if (epoch.current !== current) return;
       if (result.status !== "ok") {
         setPhase(result.status);
+        onChecked?.(result.status);
         return;
       }
       if (selected) {
@@ -116,13 +122,25 @@ export function StoredReplies({
         setLoaded(true);
       }
       setPhase("ready");
+      onChecked?.("inspected");
     } catch {
-      if (epoch.current === current) setPhase("unknown");
+      if (epoch.current === current) {
+        setPhase("unknown");
+        onChecked?.("unknown");
+      }
     } finally {
       pending.current = false;
       if (epoch.current === current) onBusy(false);
     }
   };
+  useImperativeHandle(checkRef, () => ({
+    check: () => {
+      if (failed) onChecked?.(phase as "refused" | "unavailable" | "unknown");
+      else if (!available) onChecked?.("unavailable");
+      else if (loaded) onChecked?.("inspected");
+      else void perform();
+    },
+  }));
   return (
     <section
       className="recovery-archive"
@@ -169,7 +187,7 @@ export function StoredReplies({
           This stored read could not be confirmed. The reader is paused and
           original records remain in place.{" "}
           {context === "recovery"
-            ? "You can inspect available folders or Quit."
+            ? "You can inspect available workspaces or Quit."
             : "Other app functions remain independent of this reader."}
         </p>
       ) : null}

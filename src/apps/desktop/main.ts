@@ -1,4 +1,15 @@
 import {
+  recordedModelTurn,
+  recordedCompaction,
+} from "../../../apps/desktop/operations/model-turn";
+import { operationsDirectory } from "../../../apps/desktop/operations/paths";
+import { OperationsStore } from "../../../apps/desktop/operations/store";
+import { observeOperation } from "../../../apps/desktop/operations/observe";
+import {
+  configurationOperation,
+  configurationResultTarget,
+} from "../../../apps/desktop/operations/configuration";
+import {
   setupCompletionAllowed,
   type SetupCompletionContext,
 } from "../../ui/setup-completion";
@@ -971,6 +982,7 @@ async function initializeInstalledUpdater(): Promise<void> {
   if (buildEnvironment !== "preview") return;
   try {
     installedUpdater = await createInstalledUpdateRuntime({
+      operations: operationsStore(),
       directory,
       userData: app.getPath("userData"),
       build: buildIdentity,
@@ -3167,7 +3179,18 @@ async function executeProductAgent(
   return taskSuccess(task.taskId);
 }
 
-async function runProductTaskCommand(
+function runProductTaskCommand(
+  value: unknown,
+): Promise<ProductTaskCommandResult> {
+  const parsed = ProductTaskCommandSchema.safeParse(value);
+  if (!parsed.success) return runProductTaskCommandObserved(value);
+  return observeOperation(
+    operationsStore(),
+    { source: "Codex", kind: `task.${parsed.data.kind}`, target: {} },
+    () => runProductTaskCommandObserved(value),
+  );
+}
+async function runProductTaskCommandObserved(
   value: unknown,
 ): Promise<ProductTaskCommandResult> {
   const command = ProductTaskCommandSchema.safeParse(value);
@@ -3753,27 +3776,32 @@ async function stopAndConfirmComputerMcp(
 ): Promise<void> {
   if (!connector) throw new Error("CONNECTOR_STOP_UNCONFIRMED");
   const lifecycle = computerMcpLifecycle();
-  await drainComputerConnector({
-    beginStop: () => lifecycle.beginStop(),
-    startInFlight: inFlightStart,
-    waitForMcpStop: () => lifecycle.waitForStop(),
-    stopConnector: () => connector.stop(),
-    closeSavedChat: async () => {
-      // Wait for admitted account work before closing its Browser endpoint.
-      try {
-        if (savedChat) {
-          await savedChat.close();
-          if (savedChatBridgeRuntime === savedChat)
-            savedChatBridgeRuntime = null;
-        }
-      } finally {
-        // Withdraw the original Go owner even when the old adapter drain fails.
-        // A failure remains unconfirmed; it cannot authorize a new launch.
-        await core?.closeComputerConnector(reason);
-      }
-    },
-    confirmStop: () => lifecycle.confirmStop(),
-  });
+  await observeOperation(
+    operationsStore(),
+    { source: "You", kind: "connection.stop", target: {} },
+    () =>
+      drainComputerConnector({
+        beginStop: () => lifecycle.beginStop(),
+        startInFlight: inFlightStart,
+        waitForMcpStop: () => lifecycle.waitForStop(),
+        stopConnector: () => connector.stop(),
+        closeSavedChat: async () => {
+          // Wait for admitted account work before closing its Browser endpoint.
+          try {
+            if (savedChat) {
+              await savedChat.close();
+              if (savedChatBridgeRuntime === savedChat)
+                savedChatBridgeRuntime = null;
+            }
+          } finally {
+            // Withdraw the original Go owner even when the old adapter drain fails.
+            // A failure remains unconfirmed; it cannot authorize a new launch.
+            await core?.closeComputerConnector(reason);
+          }
+        },
+        confirmStop: () => lifecycle.confirmStop(),
+      }),
+  );
 }
 
 function devMcpProofRoot(): string {
@@ -4807,6 +4835,15 @@ function currentConnectionStatus(): ConnectionStatusView {
   return retainedConnectionView;
 }
 
+function observedConnectorHealth(
+  connector: SecureMcpConnectorRuntime,
+): Promise<boolean> {
+  return observeOperation(
+    operationsStore(),
+    { source: "Setup", kind: "connection.health", target: {} },
+    () => connector.checkHealth(),
+  );
+}
 function startConnectorTransportWatch(): void {
   if (connectorTransportWatch || quitInProgress) return;
   connectorTransportWatch = new ConnectorTransportWatch({
@@ -4816,7 +4853,7 @@ function startConnectorTransportWatch(): void {
       // Tunnel HTTP readiness cannot stand in for the original Go owner.
       // Lost backend settlement fences recovery; never respawn it here.
       if (!original.core.backendAvailable) return "unknown";
-      const healthy = await original.connector.checkHealth();
+      const healthy = await observedConnectorHealth(original.connector);
       if (!original.core.backendAvailable) return "unknown";
       const terminal = original.connector.getTunnelObservation();
       if (terminal && terminal.runtimeGeneration !== original.runtimeGeneration)
@@ -4942,10 +4979,43 @@ function startConnectorTransportWatch(): void {
   });
 }
 
+function startObservedDesktopGoCore(
+  ...args: Parameters<typeof startDesktopGoCore>
+): ReturnType<typeof startDesktopGoCore> {
+  return observeOperation(
+    operationsStore(),
+    { source: "Setup", kind: "hub.start", target: {} },
+    () => startDesktopGoCore(...args),
+  );
+}
 function reportOwnedBackendLifecycle(
   observation:
     BackendLifecycleObservation | ConnectorRuntimeLifecycleObservation,
 ): void {
+  try {
+    operationsStore().record(
+      {
+        source: "Setup",
+        kind:
+          observation.source === "go-backend"
+            ? "hub.lifecycle"
+            : "connection.lifecycle",
+        target: {},
+      },
+      observation.state === "outcome_unknown" ||
+        observation.event === "cleanup-unknown"
+        ? "unknown"
+        : observation.event === "failure"
+          ? "failed"
+          : observation.exitCode === 0
+            ? "done"
+            : "unknown",
+      observation.code,
+      0,
+    );
+  } catch {
+    // Optional operations projection cannot suppress the original diagnostic.
+  }
   // Project only the original producer's closed terminal facts. This sink never
   // looks up mutable host state or changes admission, recovery or drain results.
   try {
@@ -5012,7 +5082,21 @@ async function recordConnectorRuntime(
   return recorded.ok ? null : ProductConfigurationResultSchema.parse(recorded);
 }
 
-async function startSecureMcpConnector(
+function startSecureMcpConnector(
+  repair: boolean,
+  resumeAfterQuit = false,
+): Promise<ProductConfigurationResult> {
+  return observeOperation(
+    operationsStore(),
+    {
+      source: resumeAfterQuit ? "Setup" : "You",
+      kind: repair ? "connection.repair" : "connection.start",
+      target: {},
+    },
+    () => startSecureMcpConnectorObserved(repair, resumeAfterQuit),
+  );
+}
+async function startSecureMcpConnectorObserved(
   repair: boolean,
   resumeAfterQuit = false,
 ): Promise<ProductConfigurationResult> {
@@ -6348,7 +6432,36 @@ async function configureSaveAndConnect(
   }
 }
 
-async function configureProduct(
+let operationsLog: OperationsStore | undefined;
+function operationsStore(): OperationsStore {
+  return (operationsLog ??= new OperationsStore(
+    operationsDirectory(app.getPath("userData")),
+  ));
+}
+function configureProduct(value: unknown): Promise<ProductConfigurationResult> {
+  const parsed = ProductConfigurationCommandSchema.safeParse(value);
+  if (!parsed.success) return configureProductObserved(value);
+  const metadata = configurationOperation(parsed.data);
+  return observeOperation(operationsStore(), metadata, () => {
+    const original = configureProductObserved(value);
+    void original.then(
+      (result) => {
+        try {
+          if (result.snapshot.status === "ready") {
+            const workspaces = result.snapshot.settings.computer.workspaces;
+            operationsStore().setWorkspaceLabels(workspaces);
+            Object.assign(metadata.target, configurationResultTarget(result));
+          }
+        } catch {
+          // Optional labels cannot replace the configuration result or notification.
+        }
+      },
+      () => undefined,
+    );
+    return original;
+  });
+}
+async function configureProductObserved(
   value: unknown,
 ): Promise<ProductConfigurationResult> {
   const parsed = ProductConfigurationCommandSchema.safeParse(value);
@@ -7083,7 +7196,7 @@ async function configureAdmittedProduct(
           current.connectorGeneration !== connector.generation
         )
           return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
-        const healthy = await originalConnector.checkHealth();
+        const healthy = await observedConnectorHealth(originalConnector);
         const after = originalOwner.snapshot();
         if (
           configuration !== originalOwner ||
@@ -8081,12 +8194,14 @@ async function configureAdmittedProduct(
           return configurationFailure("SUPPORT_EXPORT_CANCELLED");
         }
         const tasks = productTasksState().tasks;
+        const supportConfiguration = configuration.snapshot();
         const receipt = await writeSupportExport(
           target,
           createSupportExport({
+            operations: await operationsStore().snapshot(),
             generatedAt: new Date().toISOString(),
             build: buildIdentity,
-            configuration: configuration.snapshot(),
+            configuration: supportConfiguration,
             runtime: {
               state: runtimeState,
               errorCode: supportRuntimeErrorCode(runtimeError),
@@ -8117,6 +8232,9 @@ async function configureAdmittedProduct(
                     countsFrom: "current" as const,
                   },
           }),
+          supportConfiguration.status === "ready"
+            ? supportConfiguration.settings.computer.workspaces
+            : [],
         );
         return ProductConfigurationResultSchema.parse({
           ok: true,
@@ -11146,6 +11264,19 @@ async function consumeSse(
       ) {
         pendingComputer.delete(task.taskId);
       }
+      if (parsed.data.kind === "turn.terminal") {
+        const event = parsed.data;
+        operationsStore().record(
+          { source: "Codex", kind: "chat.turn", target: {} },
+          event.phase === "completed"
+            ? "done"
+            : event.phase === "outcome_unknown"
+              ? "unknown"
+              : "failed",
+          event.code,
+          0,
+        );
+      }
       taskViewHost.webContents.send(channels.runtimeEvent, parsed.data);
     }
   }
@@ -11305,6 +11436,14 @@ async function runContextFixtureControl(
 }
 
 function installIpc(): void {
+  const settings = configuration?.snapshot();
+  if (settings?.status === "ready")
+    operationsStore().setWorkspaceLabels(settings.settings.computer.workspaces);
+  ipcMain.handle(channels.operations, (event) =>
+    isTrustedIpcSender(event, window)
+      ? operationsStore().snapshot()
+      : { entries: [], corruptLines: 0, writeFailures: 1 },
+  );
   ipcMain.handle(channels.installedUpdate, (event, value: unknown) =>
     isTrustedIpcSender(event, window)
       ? installedUpdateCommand(value)
@@ -12026,7 +12165,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       return snapshot.settings;
     };
     desktopGoCore = await runDesktopStartupBoundary("go-core", () =>
-      startDesktopGoCore({
+      startObservedDesktopGoCore({
         compiledArtifact: compiledGoCore,
         compiledResources: compiledGoResources,
         compiledShell: desktopShellSelection(
@@ -12053,6 +12192,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
             // a missing profile cannot select the legacy browser executor instead.
             driver: (lookup) =>
               new GoChatBrowserDriver({
+                operations: operationsStore(),
                 lookup,
                 translations: goChatStartupProfile?.snapshot.translations ?? [],
                 ...(goChatStartupProfile
@@ -12160,11 +12300,15 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     modelLifecycle = new FarolModelLifecycle({
       stateRoot: modelEndpointStateRoot(),
       model: ROUTE_B_MODEL,
-      handler: modelSyntheticReply
-        ? syntheticModelTurnHandler(modelSyntheticReply)
-        : routeBModelTurnHandler(() => routeBRuntime?.endpoint ?? null),
-      compactionHandler: routeBModelCompactionHandler(
-        () => routeBRuntime?.endpoint ?? null,
+      handler: recordedModelTurn(
+        operationsStore(),
+        modelSyntheticReply
+          ? syntheticModelTurnHandler(modelSyntheticReply)
+          : routeBModelTurnHandler(() => routeBRuntime?.endpoint ?? null),
+      ),
+      compactionHandler: recordedCompaction(
+        operationsStore(),
+        routeBModelCompactionHandler(() => routeBRuntime?.endpoint ?? null),
       ),
     });
     try {
@@ -12451,7 +12595,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       closers.push(
         ...goCoreQuitClosers(
           beforeCore,
-          core ? () => core.close() : null,
+          core
+            ? () =>
+                observeOperation(
+                  operationsStore(),
+                  { source: "You", kind: "hub.stop", target: {} },
+                  () => core.close(),
+                )
+            : null,
           () => Date.now() < context.deadlineAt,
         ),
       );

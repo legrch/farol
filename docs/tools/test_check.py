@@ -42,6 +42,7 @@ class DocumentationCheckTests(unittest.TestCase):
             "Settings → Diagnostics", "Settings > Diagnostics", "Settings › Diagnostics",
             "Settings / Diagnostics", "Review Diagnostics", "Open the Diagnostics",
             "Settings → This Mac", "This Mac settings page", "page named This Mac", "Open This Mac",
+            "Home → Check sign-in", "Home > Check sign-in",
         ])
         for name in names:
             for example in examples:

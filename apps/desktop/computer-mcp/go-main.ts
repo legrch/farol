@@ -1,3 +1,5 @@
+import { operationsDirectoryFromLifecycleRoot } from "../operations/paths";
+import { OperationsStore } from "../operations/store";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import {
   ConnectorMutationBridge,
@@ -65,6 +67,10 @@ export async function runGoComputerMcp(file: string): Promise<void> {
     launch.opened,
     launch.challengeSha256,
   );
+  const operations = new OperationsStore(
+    operationsDirectoryFromLifecycleRoot(launch.lifecycleRoot),
+  );
+  await operations.loadWorkspaceLabels();
   let effectOutcomeUnknown = false;
   const handle = serveStdio(
     () =>
@@ -73,6 +79,7 @@ export async function runGoComputerMcp(file: string): Promise<void> {
         launch.opened.execution,
         client.verifiedContext,
         {
+          operations,
           lifecycle,
           fence,
           verification,
@@ -106,6 +113,7 @@ export async function runGoComputerMcp(file: string): Promise<void> {
         handle.close(),
         lifecycle.waitForHandlers(),
       ]);
+      await operations.shutdown();
       await client.close();
       if (client.terminal && client.terminal.reason !== "closed")
         transportFailed = true;

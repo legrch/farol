@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { recordableOperationCode } from "../../../apps/desktop/renderer/operations-vocabulary";
 
 import { FarolModelRuntimeState } from "./farol-model-runtime-state";
 
@@ -184,7 +185,7 @@ export function routeBModelTurnHandler(
       } catch {
         return { ok: false, reason: "FAROL_MODEL_ROUTE_UNREACHABLE" };
       }
-      return { ok: false, reason: routeRefusalCode(response.status, text) };
+      return { ok: false, reason: routeRefusalCode(text) };
     }
     if (!response.body) {
       return { ok: false, reason: "FAROL_MODEL_ROUTE_UNREACHABLE" };
@@ -300,14 +301,15 @@ async function* sseEventStream(
   }
 }
 
-function routeRefusalCode(status: number, body: string): string {
+function routeRefusalCode(body: string): string {
   try {
     const parsed = JSON.parse(body) as { error?: { code?: unknown } };
-    if (typeof parsed.error?.code === "string") return parsed.error.code;
+    if (parsed.error?.code !== undefined)
+      return recordableOperationCode(parsed.error.code) ?? "provider_error";
   } catch {
     // Falls through to the generic, content-free code below.
   }
-  return `FAROL_MODEL_ROUTE_REFUSED_${status}`;
+  return "FAROL_MODEL_ROUTE_REFUSED";
 }
 
 function parseSseBlock(block: string): FarolModelSseEvent | null {

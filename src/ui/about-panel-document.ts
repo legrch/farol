@@ -9,7 +9,7 @@ export interface AboutPanelContent {
   styleSha256: string;
 }
 
-export const ABOUT_PANEL_CSS = `:root{color-scheme:light dark;font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:light-dark(#25242b,#f2f1f6);background:light-dark(#faf9fc,#25242b)}*{box-sizing:border-box}body{margin:0;padding:54px 24px 32px;text-align:center;user-select:text}img{width:76px;height:76px;display:block;margin:0 auto 18px}h1{font-size:23px;line-height:1.2;letter-spacing:-.45px;font-weight:650;margin:0 0 14px}p{font-size:13px;line-height:1.5;margin:4px 0;color:light-dark(#6b6875,#bbb7c7)}.date{font-size:12px;margin-top:10px}`;
+export const ABOUT_PANEL_CSS = `body::before{content:"";position:fixed;inset:0 0 auto;height:34px;-webkit-app-region:drag}button,a,input,summary{-webkit-app-region:no-drag}:root{color-scheme:light dark;font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:light-dark(#25242b,#f2f1f6);background:light-dark(#faf9fc,#25242b)}*{box-sizing:border-box}body{margin:0;padding:54px 24px 32px;text-align:center;user-select:text}img{width:76px;height:76px;display:block;margin:0 auto 18px}h1{font-size:23px;line-height:1.2;letter-spacing:-.45px;font-weight:650;margin:0 0 14px}p{font-size:13px;line-height:1.5;margin:4px 0;color:light-dark(#6b6875,#bbb7c7)}.date{font-size:12px;margin-top:10px}`;
 
 export function aboutPanelDocument(input: AboutPanelContent): string {
   if (!/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/u.test(input.icon)) {

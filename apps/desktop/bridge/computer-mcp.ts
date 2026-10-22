@@ -1,3 +1,8 @@
+import type {
+  OperationMetadata,
+  OperationsRecorder,
+} from "../renderer/operations-contract";
+import { operationResult } from "../operations/observe";
 import { randomUUID } from "node:crypto";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
@@ -26,6 +31,7 @@ export type GoComputerMcpFence = Readonly<{
   >;
 }>;
 export type GoComputerMcpOptions = Readonly<{
+  operations?: OperationsRecorder;
   fence: GoComputerMcpFence;
   lifecycle?: GoComputerMcpLifecycle;
   verification?: Pick<
@@ -211,6 +217,25 @@ function encode(value: object, isError = false): CallToolResult {
 
 // The host supplies an already authorized execution and exact backend context.
 // ComputerBridge retains wire validation; Go owns policy and all operations.
+function operationTarget(input: {
+  workspaceId?: string;
+  relativePath?: string;
+  relativeDirectory?: string;
+  relativeCwd?: string;
+  command?: string;
+}): OperationMetadata["target"] {
+  const command = input.command?.trim().split(/\s/u)[0];
+  return {
+    ...(input.workspaceId ? { workspace: input.workspaceId } : {}),
+    ...((input.relativePath ?? input.relativeDirectory ?? input.relativeCwd)
+      ? {
+          relativePath:
+            input.relativePath ?? input.relativeDirectory ?? input.relativeCwd,
+        }
+      : {}),
+    ...(command && /^[A-Za-z0-9._-]{1,80}$/u.test(command) ? { command } : {}),
+  };
+}
 export function createGoComputerMcpServer(
   bridge: ComputerBridge,
   binding: ComputerConnectorExecution,
@@ -235,12 +260,21 @@ export function createGoComputerMcpServer(
     }
   };
   const run = async (
+    metadata: OperationMetadata,
     signal: AbortSignal,
     operation: (call: ComputerCall) => Promise<{ readonly status: string }>,
     operationId?: string,
     cancelOperationId?: string,
     effect = false,
   ): Promise<CallToolResult> => {
+    const started = performance.now();
+    const finish =
+      options.operations?.begin?.(metadata) ??
+      ((
+        outcome: "done" | "refused" | "failed" | "unknown" | "pending",
+        code: string | null,
+        durationMs: number,
+      ) => options.operations?.record(metadata, outcome, code, durationMs));
     const call = Object.freeze({
       requestId: randomUUID(),
       context: selectedContext,
@@ -257,8 +291,14 @@ export function createGoComputerMcpServer(
         },
         true,
       );
-    if (signal.aborted)
+    if (signal.aborted) {
+      finish(
+        "refused",
+        "computer_mcp_aborted_before_dispatch",
+        performance.now() - started,
+      );
       return failure("refused", "computer_mcp_aborted_before_dispatch");
+    }
     let release: (() => void) | null | undefined;
     let releaseAdmission: (() => Promise<void>) | undefined;
     let dispatched = false;
@@ -369,6 +409,8 @@ export function createGoComputerMcpServer(
         retainUnknown();
       }
     }
+    const recorded = operationResult(result.structuredContent);
+    finish(recorded.outcome, recorded.code, performance.now() - started);
     return result;
   };
   const identity = (call: ComputerCall) => ({
@@ -394,12 +436,20 @@ export function createGoComputerMcpServer(
         annotations,
       },
       async (_input, ctx) =>
-        run(ctx.mcpReq.signal, async (call) => ({
-          status: "ok",
-          requestId: call.requestId,
-          context: call.context,
-          data: await observeConnectionStatus(observation, exposure),
-        })),
+        run(
+          {
+            source: "ChatGPT",
+            kind: "computer_connection_status",
+            target: operationTarget({}), // Connection-wide status has no workspace, path or command.
+          },
+          ctx.mcpReq.signal,
+          async (call) => ({
+            status: "ok",
+            requestId: call.requestId,
+            context: call.context,
+            data: await observeConnectionStatus(observation, exposure),
+          }),
+        ),
     );
   }
   if (options.verification) {
@@ -416,12 +466,20 @@ export function createGoComputerMcpServer(
         annotations,
       },
       async ({ challenge }, ctx) =>
-        run(ctx.mcpReq.signal, async (call) => ({
-          status: "ok",
-          requestId: call.requestId,
-          context: call.context,
-          data: await verification.verifyCatalogue(challenge, call.requestId),
-        })),
+        run(
+          {
+            source: "ChatGPT",
+            kind: "farol_connector_verify_catalogue",
+            target: operationTarget({}), // Empty-catalogue verification has no workspace, path or command.
+          },
+          ctx.mcpReq.signal,
+          async (call) => ({
+            status: "ok",
+            requestId: call.requestId,
+            context: call.context,
+            data: await verification.verifyCatalogue(challenge, call.requestId),
+          }),
+        ),
     );
     server.registerTool(
       "farol_connector_verify",
@@ -436,16 +494,24 @@ export function createGoComputerMcpServer(
         annotations,
       },
       async ({ challenge, workspaceId }, ctx) =>
-        run(ctx.mcpReq.signal, async (call) => ({
-          status: "ok",
-          requestId: call.requestId,
-          context: call.context,
-          data: await verification.verify(
-            challenge,
-            workspaceId,
-            call.requestId,
-          ),
-        })),
+        run(
+          {
+            source: "ChatGPT",
+            kind: "farol_connector_verify",
+            target: operationTarget({ workspaceId }),
+          },
+          ctx.mcpReq.signal,
+          async (call) => ({
+            status: "ok",
+            requestId: call.requestId,
+            context: call.context,
+            data: await verification.verify(
+              challenge,
+              workspaceId,
+              call.requestId,
+            ),
+          }),
+        ),
     );
   }
 
@@ -468,6 +534,11 @@ export function createGoComputerMcpServer(
       },
       async ({ operationId, expectedSha256, ...input }, ctx) =>
         run(
+          {
+            source: "ChatGPT",
+            kind: "computer_workspace_write",
+            target: operationTarget(input),
+          },
           ctx.mcpReq.signal,
           (call) =>
             mutations.write(
@@ -496,6 +567,11 @@ export function createGoComputerMcpServer(
       },
       async ({ operationId, expectedSha256, ...input }, ctx) =>
         run(
+          {
+            source: "ChatGPT",
+            kind: "computer_workspace_edit",
+            target: operationTarget(input),
+          },
           ctx.mcpReq.signal,
           (call) =>
             mutations.edit(
@@ -519,6 +595,11 @@ export function createGoComputerMcpServer(
       },
       async (input, ctx) =>
         run(
+          {
+            source: "ChatGPT",
+            kind: "computer_mutation_read",
+            target: operationTarget(input),
+          },
           ctx.mcpReq.signal,
           (call) => mutations.read(input, call),
           input.operationId,
@@ -528,6 +609,21 @@ export function createGoComputerMcpServer(
 
   if (options.processes) {
     const processes = options.processes;
+    // Server-local observation metadata only; never retains command arguments or I/O.
+    const starts = new Map<
+      string,
+      { target: OperationMetadata["target"]; handle?: string }
+    >();
+    const processTarget = (input: {
+      operationId: string;
+      handle: string;
+    }): OperationMetadata["target"] => {
+      const start = starts.get(input.operationId);
+      return start &&
+        (start.handle === undefined || start.handle === input.handle)
+        ? { ...start.target }
+        : { handle: input.handle, start: "unknown" };
+    };
     const effectAnnotations = {
       ...annotations,
       readOnlyHint: false,
@@ -545,13 +641,42 @@ export function createGoComputerMcpServer(
       },
       async ({ operationId, stdin, ...input }, ctx) =>
         run(
+          {
+            source: "ChatGPT",
+            kind: "computer_shell_start",
+            target: operationTarget(input),
+          },
           ctx.mcpReq.signal,
-          (call) =>
-            processes.start(
-              { ...input, ...(stdin === undefined ? {} : { stdin }) },
-              operationId,
-              call,
-            ),
+          async (call) => {
+            let start = starts.get(operationId);
+            const first = start === undefined;
+            if (!start) {
+              // Bound retention; evicted or previous-connection starts stay explicitly unknown.
+              if (starts.size >= 1024)
+                starts.delete(starts.keys().next().value!);
+              start = { target: operationTarget(input) };
+              starts.set(operationId, start);
+            }
+            const forgetRefused = () => {
+              if (first && starts.get(operationId) === start)
+                starts.delete(operationId);
+            };
+            try {
+              const result = await processes.start(
+                { ...input, ...(stdin === undefined ? {} : { stdin }) },
+                operationId,
+                call,
+              );
+              if (result.status === "refused") forgetRefused();
+              // Never let a repeated operation ID relabel the original start.
+              else if (first && result.data) start.handle = result.data.handle;
+              return result;
+            } catch (error) {
+              if (error instanceof BridgeError && error.state === "refused")
+                forgetRefused();
+              throw error;
+            }
+          },
           operationId,
           undefined,
           true,
@@ -572,6 +697,11 @@ export function createGoComputerMcpServer(
       },
       async ({ stdoutOffset, stderrOffset, ...input }, ctx) =>
         run(
+          {
+            source: "ChatGPT",
+            kind: "computer_shell_read",
+            target: processTarget(input),
+          },
           ctx.mcpReq.signal,
           (call) =>
             processes.read(
@@ -601,6 +731,11 @@ export function createGoComputerMcpServer(
       },
       async ({ cancelOperationId, ...input }, ctx) =>
         run(
+          {
+            source: "ChatGPT",
+            kind: "computer_shell_cancel",
+            target: processTarget(input),
+          },
           ctx.mcpReq.signal,
           (call) => processes.cancel(input, cancelOperationId, call),
           input.operationId,
@@ -622,14 +757,22 @@ export function createGoComputerMcpServer(
         annotations,
       },
       async (input, ctx) =>
-        run(ctx.mcpReq.signal, async () => ({
-          status: "ok",
-          data: await reader.read(
-            input.includeResult === undefined
-              ? {}
-              : { includeResult: input.includeResult },
-          ),
-        })),
+        run(
+          {
+            source: "Codex",
+            kind: "codex_selected_thread_read",
+            target: operationTarget({}), // Selected provider history exposes no workspace, path or command target.
+          },
+          ctx.mcpReq.signal,
+          async () => ({
+            status: "ok",
+            data: await reader.read(
+              input.includeResult === undefined
+                ? {}
+                : { includeResult: input.includeResult },
+            ),
+          }),
+        ),
     );
   }
 
@@ -642,7 +785,15 @@ export function createGoComputerMcpServer(
       annotations,
     },
     async (_input, ctx) =>
-      run(ctx.mcpReq.signal, (call) => bridge.catalogue(identity(call), call)),
+      run(
+        {
+          source: "ChatGPT",
+          kind: "computer_workspace_catalogue",
+          target: operationTarget({}), // Discovery spans the catalogue rather than one workspace target.
+        },
+        ctx.mcpReq.signal,
+        (call) => bridge.catalogue(identity(call), call),
+      ),
   );
   server.registerTool(
     "computer_workspace_bootstrap",
@@ -654,8 +805,14 @@ export function createGoComputerMcpServer(
       annotations,
     },
     async (input, ctx) =>
-      run(ctx.mcpReq.signal, (call) =>
-        bridge.bootstrap({ ...identity(call), ...input }, call),
+      run(
+        {
+          source: "ChatGPT",
+          kind: "computer_workspace_bootstrap",
+          target: operationTarget(input),
+        },
+        ctx.mcpReq.signal,
+        (call) => bridge.bootstrap({ ...identity(call), ...input }, call),
       ),
   );
   server.registerTool(
@@ -668,8 +825,14 @@ export function createGoComputerMcpServer(
       annotations,
     },
     async (input, ctx) =>
-      run(ctx.mcpReq.signal, (call) =>
-        bridge.list({ ...identity(call), ...input }, call),
+      run(
+        {
+          source: "ChatGPT",
+          kind: "computer_workspace_list",
+          target: operationTarget(input),
+        },
+        ctx.mcpReq.signal,
+        (call) => bridge.list({ ...identity(call), ...input }, call),
       ),
   );
   server.registerTool(
@@ -682,24 +845,31 @@ export function createGoComputerMcpServer(
       annotations,
     },
     async ({ workspaceId, relativePath, offset, length }, ctx) =>
-      run(ctx.mcpReq.signal, (call) =>
-        bridge.read(
-          {
-            ...identity(call),
-            workspaceId,
-            relativePath,
-            // The current wire uses a uint64 decimal offset and uint32 length.
-            ...(offset === undefined && length === undefined
-              ? {}
-              : {
-                  range: {
-                    offset: String(offset ?? 0),
-                    length: length ?? 65536,
-                  },
-                }),
-          },
-          call,
-        ),
+      run(
+        {
+          source: "ChatGPT",
+          kind: "computer_workspace_read",
+          target: operationTarget({ workspaceId, relativePath }),
+        },
+        ctx.mcpReq.signal,
+        (call) =>
+          bridge.read(
+            {
+              ...identity(call),
+              workspaceId,
+              relativePath,
+              // The current wire uses a uint64 decimal offset and uint32 length.
+              ...(offset === undefined && length === undefined
+                ? {}
+                : {
+                    range: {
+                      offset: String(offset ?? 0),
+                      length: length ?? 65536,
+                    },
+                  }),
+            },
+            call,
+          ),
       ),
   );
   server.registerTool(
@@ -712,8 +882,14 @@ export function createGoComputerMcpServer(
       annotations,
     },
     async (input, ctx) =>
-      run(ctx.mcpReq.signal, (call) =>
-        bridge.search({ ...identity(call), ...input }, call),
+      run(
+        {
+          source: "ChatGPT",
+          kind: "computer_workspace_search",
+          target: operationTarget(input),
+        },
+        ctx.mcpReq.signal,
+        (call) => bridge.search({ ...identity(call), ...input }, call),
       ),
   );
   return server;

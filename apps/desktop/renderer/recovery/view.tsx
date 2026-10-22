@@ -13,6 +13,11 @@ export function StartupRecovery({ api }: { api: StartupRecoveryAPI }) {
   const [state, setState] = useState<RecoveryState | { status: "loading" }>({
     status: "loading",
   });
+  const [openedPaused, setOpenedPaused] = useState(false);
+  const [checked, setChecked] = useState<
+    "idle" | "inspected" | "refused" | "unavailable" | "unknown"
+  >("idle");
+  const checkRef = useRef<{ check(): void }>(null);
   const [folderId, setFolderId] = useState("");
   const [panel, setPanel] = useState<"folders" | "archive">("folders");
   const [archiveBusy, setArchiveBusy] = useState(false);
@@ -104,11 +109,20 @@ export function StartupRecovery({ api }: { api: StartupRecoveryAPI }) {
   };
   return (
     <main className="startup-recovery-view" aria-labelledby="recovery-title">
-      <p className="recovery-eyebrow">Previous work unconfirmed</p>
-      <h1 id="recovery-title">Your previous session needs recovery</h1>
+      <header className="recovery-titlebar" data-window-drag-region="recovery">
+        <span>Farol</span>
+      </header>
+      <p className="recovery-eyebrow">
+        {openedPaused ? "Commands paused" : "Previous work unconfirmed"}
+      </p>
+      <h1 id="recovery-title">
+        {openedPaused
+          ? "Your workspaces and stored replies"
+          : "Your previous session needs recovery"}
+      </h1>
       <p>
-        The previous session did not finish cleanly. Recovery keeps its records
-        while commands and connection actions stay paused.
+        The previous session closed before its work was confirmed. Check stored
+        records or open workspaces with commands paused.
       </p>
       {state.status === "loading" ? (
         <p role="status">Reading saved settings…</p>
@@ -116,9 +130,8 @@ export function StartupRecovery({ api }: { api: StartupRecoveryAPI }) {
         <p role="status">Closing recovery…</p>
       ) : state.status === "settings_unavailable" ? (
         <p className="recovery-note" role="alert">
-          Saved settings are unavailable. Existing files have been left in
-          place. Quit and review the retained diagnostics before continuing
-          recovery.
+          Saved settings could not be read. Existing records are preserved; quit
+          and inspect the retained diagnostics.
         </p>
       ) : (
         <section
@@ -130,8 +143,8 @@ export function StartupRecovery({ api }: { api: StartupRecoveryAPI }) {
             <span>Revision {state.revision}</span>
           </div>
           <p className="recovery-note">
-            Connection and commands are paused. You can inspect approved folders
-            when the local read service is available.
+            Connection and commands are paused. You can inspect approved
+            workspaces and stored replies without repeating previous actions.
           </p>
           <nav className="recovery-views" aria-label="Recovery views">
             <button
@@ -140,7 +153,7 @@ export function StartupRecovery({ api }: { api: StartupRecoveryAPI }) {
               disabled={busy}
               onClick={() => setPanel("folders")}
             >
-              Folders
+              Workspaces
             </button>
             <button
               type="button"
@@ -153,20 +166,20 @@ export function StartupRecovery({ api }: { api: StartupRecoveryAPI }) {
           </nav>
           <div hidden={panel !== "folders"}>
             {state.computer === "starting" ? (
-              <p role="status">Starting folder reads…</p>
+              <p role="status">Starting workspace reads…</p>
             ) : null}
             {state.computer === "unavailable" ? (
               <p role="status">
-                Folder reads are unavailable. Your saved folder selection is
-                still shown below.
+                Workspace reads are unavailable. Your saved workspace selection
+                is still shown below.
               </p>
             ) : null}
             {state.folders.length === 0 ? (
-              <p>No approved folders are saved.</p>
+              <p>No approved workspaces are saved.</p>
             ) : (
               <>
                 <div className="recovery-folder-controls">
-                  <label htmlFor="recovery-folder">Saved folder</label>
+                  <label htmlFor="recovery-folder">Saved workspace</label>
                   <div>
                     <select
                       id="recovery-folder"
@@ -179,7 +192,7 @@ export function StartupRecovery({ api }: { api: StartupRecoveryAPI }) {
                         if (!paused) setReadState("idle");
                       }}
                     >
-                      <option value="">Choose a folder</option>
+                      <option value="">Choose a workspace</option>
                       {state.folders.map((item) => (
                         <option key={item.workspaceId} value={item.workspaceId}>
                           {item.label}
@@ -191,7 +204,7 @@ export function StartupRecovery({ api }: { api: StartupRecoveryAPI }) {
                       disabled={!available || busy || !folder}
                       onClick={() => void read("list", ".")}
                     >
-                      Open folder
+                      Open workspace
                     </button>
                   </div>
                 </div>
@@ -201,13 +214,13 @@ export function StartupRecovery({ api }: { api: StartupRecoveryAPI }) {
             {busy ? <p role="status">Reading…</p> : null}
             {readState === "refused" ? (
               <p role="alert">
-                Access was refused. Choose an approved folder or Quit; no
+                Access was refused. Choose an approved workspace or Quit; no
                 permission was changed.
               </p>
             ) : null}
             {paused ? (
               <p role="alert">
-                This read could not be confirmed. Folder reads are paused; no
+                This read could not be confirmed. Workspace reads are paused; no
                 action was repeated.
               </p>
             ) : null}
@@ -286,6 +299,8 @@ export function StartupRecovery({ api }: { api: StartupRecoveryAPI }) {
           </div>
           <div hidden={panel !== "archive"}>
             <StoredReplies
+              checkRef={checkRef}
+              onChecked={setChecked}
               api={api}
               available={state.archive === "available"}
               starting={state.archive === "starting"}
@@ -299,7 +314,45 @@ export function StartupRecovery({ api }: { api: StartupRecoveryAPI }) {
         <p className="recovery-note">
           Recovery has not confirmed the previous operations or resumed them.
         </p>
-        <button type="button" onClick={() => api.quit()}>
+        {checked !== "idle" ? (
+          <p role="status">
+            {checked === "inspected"
+              ? "Stored records were inspected; previous operations remain unconfirmed."
+              : "The previous operations could not be confirmed. Their records are preserved."}
+          </p>
+        ) : null}
+        {state.status === "ready" && !openedPaused ? (
+          <div className="recovery-actions">
+            <button
+              type="button"
+              disabled={
+                busy || state.archive === "starting" || checked !== "idle"
+              }
+              onClick={() => {
+                setPanel("archive");
+                if (state.archive !== "available") setChecked("unavailable");
+                else checkRef.current?.check();
+              }}
+            >
+              Check previous operations
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setOpenedPaused(true);
+                setPanel("folders");
+              }}
+            >
+              Open with commands paused
+            </button>
+          </div>
+        ) : null}
+        <button
+          className="recovery-quit"
+          type="button"
+          onClick={() => api.quit()}
+        >
           Quit
         </button>
       </footer>

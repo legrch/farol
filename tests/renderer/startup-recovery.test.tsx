@@ -68,11 +68,11 @@ it("shows saved Settings independently and requires an explicit folder action", 
     );
     expect(f.host.textContent).toContain("Revision 7");
     expect(f.host.textContent).toContain("Connection and commands are paused");
-    expect(button(f.host, "Open folder").disabled).toBe(true);
+    expect(button(f.host, "Open workspace").disabled).toBe(true);
     expect(f.api.read).not.toHaveBeenCalled();
     await select(f);
     expect(f.host.textContent).toContain("/synthetic/work");
-    expect(button(f.host, "Open folder").disabled).toBe(false);
+    expect(button(f.host, "Open workspace").disabled).toBe(false);
     await act(async () => button(f.host, "Quit").click());
     expect(f.api.quit).toHaveBeenCalledOnce();
     expect(f.host.querySelectorAll("iframe, a, input")).toHaveLength(0);
@@ -104,7 +104,7 @@ it("opens approved subfolders and shows metadata with the original relative path
   });
   try {
     await select(f);
-    await act(async () => button(f.host, "Open folder").click());
+    await act(async () => button(f.host, "Open workspace").click());
     await act(async () => button(f.host, "▸folder/").click());
     expect(f.api.read).toHaveBeenLastCalledWith({
       kind: "list",
@@ -136,12 +136,12 @@ it.each(["unknown", "unavailable"])(
     f.api.read.mockResolvedValueOnce({ status });
     try {
       await select(f);
-      await act(async () => button(f.host, "Open folder").click());
+      await act(async () => button(f.host, "Open workspace").click());
       expect(f.host.querySelector('[role="alert"]')?.textContent).toContain(
         "no action was repeated",
       );
-      expect(button(f.host, "Open folder").disabled).toBe(true);
-      await act(async () => button(f.host, "Open folder").click());
+      expect(button(f.host, "Open workspace").disabled).toBe(true);
+      await act(async () => button(f.host, "Open workspace").click());
       expect(f.api.read).toHaveBeenCalledTimes(1);
       expect(button(f.host, "Quit").disabled).toBe(false);
     } finally {
@@ -162,9 +162,9 @@ it("rejects malformed and crossed read responses before rendering their entries"
   });
   try {
     await select(f);
-    await act(async () => button(f.host, "Open folder").click());
+    await act(async () => button(f.host, "Open workspace").click());
     expect(f.host.textContent).not.toContain("private");
-    expect(button(f.host, "Open folder").disabled).toBe(true);
+    expect(button(f.host, "Open workspace").disabled).toBe(true);
   } finally {
     await f.dispose();
   }
@@ -178,13 +178,13 @@ it.each([
   try {
     expect(f.api.read).not.toHaveBeenCalled();
     if (state.status === "settings_unavailable")
-      expect(f.host.textContent).toContain("Saved settings are unavailable");
+      expect(f.host.textContent).toContain("Saved settings could not be read");
     else if ("folders" in state && state.folders.length === 0)
-      expect(f.host.textContent).toContain("No approved folders");
+      expect(f.host.textContent).toContain("No approved workspaces");
     else {
       await select(f);
-      expect(button(f.host, "Open folder").disabled).toBe(true);
-      expect(f.host.textContent).toContain("Folder reads are unavailable");
+      expect(button(f.host, "Open workspace").disabled).toBe(true);
+      expect(f.host.textContent).toContain("Workspace reads are unavailable");
     }
     expect(button(f.host, "Quit").disabled).toBe(false);
   } finally {
@@ -217,12 +217,12 @@ it("shows saved Settings during startup and observes readiness without initiatin
   });
   try {
     expect(f.host.textContent).toContain("Revision 7");
-    expect(f.host.textContent).toContain("Starting folder reads");
+    expect(f.host.textContent).toContain("Starting workspace reads");
     expect(button(f.host, "Load stored replies").disabled).toBe(true);
     f.api.state.mockResolvedValue(ready);
     await act(async () => new Promise((resolve) => setTimeout(resolve, 180)));
     await select(f);
-    expect(button(f.host, "Open folder").disabled).toBe(false);
+    expect(button(f.host, "Open workspace").disabled).toBe(false);
     expect(f.api.read).not.toHaveBeenCalled();
     expect(f.api.state).toHaveBeenCalledTimes(2);
   } finally {
@@ -277,7 +277,7 @@ it.each(["<script>not executable</script>\nSaved text ✓", "", " \n\t"])(
       );
       expect(f.host.textContent).toContain("Outcome unconfirmed");
       expect(f.host.textContent).not.toContain("completed");
-      await act(async () => button(f.host, "Folders").click());
+      await act(async () => button(f.host, "Workspaces").click());
       await act(async () => button(f.host, "Stored replies").click());
       expect(f.api.read).toHaveBeenCalledTimes(2);
       expect(
@@ -355,9 +355,9 @@ it.each(["unknown", "refused", "unavailable", "crossed cursor"])(
       expect(f.host.textContent).toContain("The reader is paused");
       await act(async () => button(f.host, "Load stored replies").click());
       expect(f.api.read).toHaveBeenCalledTimes(1);
-      await act(async () => button(f.host, "Folders").click());
+      await act(async () => button(f.host, "Workspaces").click());
       await select(f);
-      expect(button(f.host, "Open folder").disabled).toBe(false);
+      expect(button(f.host, "Open workspace").disabled).toBe(false);
       expect(button(f.host, "Quit").disabled).toBe(false);
     } finally {
       await f.dispose();
@@ -437,11 +437,80 @@ it("observes original backend loss without another read and keeps the already di
     const count = f.api.state.mock.calls.length;
     await act(async () => new Promise((resolve) => setTimeout(resolve, 1100)));
     expect(f.api.state).toHaveBeenCalledTimes(count);
-    await act(async () => button(f.host, "Folders").click());
+    await act(async () => button(f.host, "Workspaces").click());
     await select(f);
-    expect(button(f.host, "Open folder").disabled).toBe(true);
+    expect(button(f.host, "Open workspace").disabled).toBe(true);
     expect(f.host.textContent).toContain("Revision 7");
     expect(button(f.host, "Quit").disabled).toBe(false);
+  } finally {
+    await f.dispose();
+  }
+});
+
+it("opens the existing workspace/reply view with commands paused without submitting anything", async () => {
+  const f = await mount();
+  try {
+    await act(async () => button(f.host, "Open with commands paused").click());
+    expect(f.host.querySelector("h1")?.textContent).toBe(
+      "Your workspaces and stored replies",
+    );
+    expect(f.host.textContent).toContain("Commands paused");
+    expect(f.host.textContent).toContain("Workspaces");
+    expect(f.api.read).not.toHaveBeenCalled();
+    expect(f.api.quit).not.toHaveBeenCalled();
+  } finally {
+    await f.dispose();
+  }
+});
+it.each(["refused", "unavailable", "unknown"])(
+  "checks once and preserves %s before opening with commands paused",
+  async (status) => {
+    const f = await mount();
+    f.api.read.mockResolvedValue({ status });
+    try {
+      await act(async () =>
+        button(f.host, "Check previous operations").click(),
+      );
+      expect(f.api.read).toHaveBeenCalledExactlyOnceWith({
+        kind: "archive-list",
+        after: "",
+      });
+      expect(button(f.host, "Check previous operations").disabled).toBe(true);
+      expect(f.host.textContent).toContain("could not be confirmed");
+      await act(async () =>
+        button(f.host, "Open with commands paused").click(),
+      );
+      expect(f.api.read).toHaveBeenCalledOnce();
+      expect(f.api.quit).not.toHaveBeenCalled();
+    } finally {
+      await f.dispose();
+    }
+  },
+);
+it("an empty stored observation never invents a clean predecessor or enables commands", async () => {
+  const f = await mount();
+  f.api.read.mockResolvedValue({
+    status: "ok",
+    data: {
+      kind: "archive-list",
+      observation: "stored_unconfirmed",
+      after: "",
+      entries: [],
+      next: "",
+      unresolved: false,
+    },
+  });
+  try {
+    await act(async () => button(f.host, "Check previous operations").click());
+    expect(f.host.textContent).toContain(
+      "previous operations remain unconfirmed",
+    );
+    expect(
+      [...f.host.querySelectorAll("button")].some(
+        (b) => b.textContent === "Continue",
+      ),
+    ).toBe(false);
+    expect(button(f.host, "Open with commands paused").disabled).toBe(false);
   } finally {
     await f.dispose();
   }

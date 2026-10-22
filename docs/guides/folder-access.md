@@ -29,6 +29,6 @@ To narrow access, select **Read only** and inspect the confirmed result. To remo
 
 An admitted workspace change settles the configured connection through the existing stop/access/check operations. Wait for the original result; a separate manual stop or second submission is not part of this ordinary flow. Finish the Workspaces step before reconnecting under **Connect this Mac**. Removing the last workspace leaves no workspace access and blocks continuing the guided flow until a workspace is added and checked.
 
-Pending work or an unknown result may pause permission changes. If Setup is open, use **Find a page → Home** to reach the sidebar. Choose **Review unresolved actions** in the sidebar to open **Unresolved actions**. This control appears only while something is unresolved. Inspect the original action and use **Refresh status** to observe available evidence. Do not widen access or remove the workspace to erase an uncertain effect. See [Recovery](recovery.md).
+Pending work or an unknown result may pause permission changes. Choose **Review unresolved actions** in the sidebar to open **Unresolved actions**. This control appears only while something is unresolved. Inspect the original action and use **Refresh status** to observe available evidence. Do not widen access or remove the workspace to erase an uncertain effect. See [Recovery](recovery.md).
 
 [User guides](README.md) · [Detailed setup semantics](../setup-connection.md)
