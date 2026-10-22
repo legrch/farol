@@ -16,6 +16,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createOwnerLaunchResultCollector } from "./owner-launch-result.mjs";
 import { ownerLaunchEnvironment } from "./launch-snapshot.mjs";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
+import { parseDevDisplay } from "../src/apps/desktop/window-placement.ts";
 import { prepareDevBuild } from "./dev-process-control.mjs";
 import {
   dependencyDrift,
@@ -710,10 +711,14 @@ export async function launchPreview(
           electronBin,
           [
             "_output/build/app/main.cjs",
-            ...(acceptanceProfile ||
-            secondaryDisplay ||
-            displayOptions.builtInDisplayOnly === true ||
-            reviewMarker !== undefined
+            ...(displayOptions.devSecondaryDisplay === true
+              ? ["--display=secondary"]
+              : []),
+            ...(displayOptions.devSecondaryDisplay !== true &&
+            (acceptanceProfile ||
+              secondaryDisplay ||
+              displayOptions.builtInDisplayOnly === true ||
+              reviewMarker !== undefined)
               ? ["--preview-window-mode=secondary-visible"]
               : []),
             ...(displayOptions.builtInDisplayOnly === true
@@ -845,6 +850,7 @@ export async function main(argv, overrides = {}) {
       (freshReview && acceptanceProfile)
     )
       throw new Error("DEV_REVIEW_PROFILE_ARGUMENT_INVALID");
+    if (parseDevDisplay(argv)) displayOptions.devSecondaryDisplay = true;
     buildArguments = devGoBuildArguments(argv);
   } catch (error) {
     logError(error.message);

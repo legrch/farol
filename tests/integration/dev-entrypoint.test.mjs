@@ -469,6 +469,36 @@ describe("dev.mjs main() orchestration with an already-declared toolchain", () =
     }
   });
 
+  it("forwards ordinary secondary placement without enabling a fixed test viewport", async () => {
+    let choice;
+    const { overrides } = baseOverrides({
+      launch: async (...args) => {
+        choice = args;
+      },
+    });
+    await main(["--display=secondary"], overrides);
+    expect(choice).toEqual([
+      false,
+      false,
+      undefined,
+      {
+        builtInDisplayOnly: false,
+        allowPrimaryDisplay: false,
+        devSecondaryDisplay: true,
+      },
+    ]);
+  });
+
+  it("rejects ambiguous display choices before process lookup or build", async () => {
+    const { overrides, calls } = baseOverrides({
+      prepareBuild: async () => {
+        calls.push("prepare");
+      },
+    });
+    await main(["--display=secondary", "--secondary-display"], overrides);
+    expect(calls).toEqual(["exit:1"]);
+  });
+
   it("builds and launches when --check is not passed", async () => {
     const { overrides, calls } = baseOverrides();
     await main([], overrides);

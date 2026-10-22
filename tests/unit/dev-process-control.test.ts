@@ -53,6 +53,10 @@ describe("exact Dev command correlation", () => {
       expect(retainedDevMarkerMatches(file, marker)).toBe(false);
       await fs.writeFile(file, "{");
       expect(retainedDevMarkerMatches(file, marker)).toBe(false);
+      expect(control.readRetainedDevMarker(file, marker)).toEqual({
+        matches: false,
+        reason: "RUN_MARKER_JSON_INVALID",
+      });
       await fs.unlink(file);
       await fs.mkdir(file);
       expect(retainedDevMarkerMatches(file, marker)).toBe(false);
@@ -166,4 +170,114 @@ describe("exact Dev command correlation", () => {
       ).toThrow("DEV_PROCESS_IDENTITY_REFUSED");
     }
   });
+});
+
+describe("stop identity observations", () => {
+  const inspect = (overrides = {}) =>
+    control.inspectDevStopIdentity({
+      marker,
+      scope,
+      native: () => native,
+      command: () => ({ status: 0, text: command }),
+      markerMatches: () => true,
+      bootTime: () => 10000,
+      ...overrides,
+    });
+  it("correlates the renamed supervisor without relying on its erased argv", () => {
+    expect(
+      inspect({
+        command: () => ({
+          status: 0,
+          text: `501 ${marker.processStart} Farol Dev`,
+        }),
+      }),
+    ).toMatchObject({ status: "present", identity: { pid: marker.pid } });
+  });
+  it("confirms process exit between native inspection and ps instead of refusing clean shutdown", () => {
+    let reads = 0;
+    expect(
+      inspect({
+        native: () => (++reads === 1 ? native : { status: "absent" }),
+        command: () => ({ status: 1, text: "" }),
+      }),
+    ).toEqual({ status: "absent" });
+    expect(reads).toBe(2);
+  });
+  it.each([
+    native,
+    { ...native, token: "reused" },
+    { status: "unreadable", reason: "INSPECTION_PERMISSION_DENIED" },
+  ])("never treats ps absence alone as authority (%#)", (confirmation) => {
+    let reads = 0;
+    expect(
+      inspect({
+        native: () => (++reads === 1 ? native : confirmation),
+        command: () => ({ status: 1, text: "" }),
+      }),
+    ).toMatchObject({
+      status: "unreadable",
+      reason: expect.stringContaining(
+        "ps reported absence; native confirmation:",
+      ),
+    });
+  });
+  it("reports the exact failed read and preserves refused observations", () => {
+    expect(
+      inspect({
+        native: () => ({ status: "refused", reason: "COMMAND_MISMATCH" }),
+      }),
+    ).toEqual({
+      status: "unreadable",
+      reason: "native inspection: refused/COMMAND_MISMATCH",
+    });
+    expect(inspect({ markerMatches: () => false })).toEqual({
+      status: "unreadable",
+      reason: "retained run marker: changed or could not be read",
+    });
+    expect(
+      inspect({
+        command: () => {
+          throw Error("DEV_PROCESS_LOOKUP_UNREADABLE");
+        },
+      }),
+    ).toEqual({
+      status: "unreadable",
+      reason: "identity read: DEV_PROCESS_LOOKUP_UNREADABLE",
+    });
+  });
+  it("does not classify another checkout by the shared Farol Dev process title", () => {
+    const owned = [
+      `${root}/node_modules/electron/dist/Electron.app/`,
+      `${root}/_output/build/app/`,
+    ];
+    expect(control.devInventoryOwnsLine("111 Farol Dev", owned)).toBe(false);
+    expect(
+      control.devInventoryOwnsLine(
+        `112 ${executable} ${root}/_output/build/app/runtime.cjs`,
+        owned,
+      ),
+    ).toBe(true);
+    expect(
+      control.devInventoryOwnsLine(
+        "113 /other/farol/_output/build/app/runtime.cjs",
+        owned,
+      ),
+    ).toBe(false);
+  });
+});
+
+it("requires exact native exclusion before ignoring a named inventory process", () => {
+  expect(control.devInventoryCandidateAbsent({ status: "absent" })).toBe(true);
+  expect(
+    control.devInventoryCandidateAbsent({
+      status: "refused",
+      reason: "COMMAND_MISMATCH",
+    }),
+  ).toBe(true);
+  for (const seen of [
+    { status: "present", commandVerified: true },
+    { status: "unreadable" },
+    { status: "refused", reason: "INSPECTION_PERMISSION_DENIED" },
+  ])
+    expect(control.devInventoryCandidateAbsent(seen)).toBe(false);
 });

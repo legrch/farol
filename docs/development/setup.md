@@ -20,6 +20,22 @@ npm run check:toolchain
 task dev
 ```
 
+To keep ordinary Dev off your working display:
+
+```sh
+task dev -- --display=secondary
+```
+
+This prefers a non-primary Sidecar/iPad display, then another non-primary display.
+The window fits that display's work area in Electron DIP coordinates, is positioned
+before its first show, and shows without activation. Disconnecting or changing the
+display hides the window until an eligible display is available. A missing secondary
+or a work area smaller than the supported 640×520 minimum refuses startup; Dev never
+falls back to the primary display. Plain `task dev` keeps its existing behavior.
+`--secondary-display` retains the visible-test meaning and its exact 1180×760
+viewport requirement; use `--display=secondary` for ordinary Dev on smaller Sidecar
+work areas. Do not combine ordinary and visible-test display options.
+
 `task dev` uses the ordinary saved Farol Dev profile and requires the Go backend.
 Place the separately approved local [Go input declaration](#declared-go-backend-inputs)
 at `_output/go-build-inputs.json` (ignored by Git), or select an explicit absolute
@@ -31,7 +47,7 @@ An ordinary `task dev` stops the previous Dev from this exact checkout/profile
 before replacing dependencies or rebuilding shared outputs. It checks the private
 run marker, executable, account, boot and precise native lifetime, allows 30 seconds
 to stop, then forces that process once if necessary. Other profiles and installed
-Farol are not stopped. A refused or uncertain lookup/signal blocks the build.
+Farol are not stopped. A refused or uncertain lookup/signal blocks the build and reports the failed identity read. Quit the previous Dev from that checkout/profile using its own Quit command, then run `task dev` again; the launcher never signals an unproven process.
 **Ctrl+C** stops what the launcher started and escalates automatically if it hangs.
 Neither process disappearance nor forced stop means application work was drained:
 retained UNKNOWN and interrupted-profile recovery guards still apply.

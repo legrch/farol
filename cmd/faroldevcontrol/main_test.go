@@ -118,6 +118,18 @@ func TestLifetimeToken(t *testing.T) {
 	}
 }
 
+func TestOrdinarySecondaryDisplayCommand(t *testing.T) {
+	q := fixtureRequest()
+	if !matchesProcArgs(procArgs(q.Executable, q.Executable, q.AppPath, "--display=secondary"), q) {
+		t.Fatal("ordinary secondary Dev command refused")
+	}
+	for _, flag := range []string{"--display=primary", "--display", "--display=secondary --user-data-dir=/other"} {
+		if matchesProcArgs(procArgs(q.Executable, q.Executable, q.AppPath, flag), q) {
+			t.Fatalf("accepted unexpected display command %q", flag)
+		}
+	}
+}
+
 func TestQualifiedCommandInspection(t *testing.T) {
 	q := fixtureRequest()
 	q.Action, q.UID, q.Token, q.Signal = "inspect", 0, "", ""

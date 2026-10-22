@@ -245,7 +245,7 @@ func matchesProcArgs(raw []byte, q request) bool {
 	for i := 2; i < argc; i++ {
 		flag, ok := readString()
 		if !ok || seen[flag] || !contains([]string{
-			"--preview-window-mode=secondary-visible", "--built-in-display-only", "--allow-primary-display",
+			"--preview-window-mode=secondary-visible", "--built-in-display-only", "--allow-primary-display", "--display=secondary",
 		}, flag) {
 			return false
 		}

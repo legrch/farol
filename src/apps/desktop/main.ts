@@ -250,6 +250,8 @@ import {
   writeInstanceAcknowledgement,
 } from "./single-instance";
 import {
+  parseDevDisplay,
+  selectDevWindowPlacement,
   parseAllowPrimaryDisplay,
   parseBuiltInDisplayOnly,
   parseSidecarDisplayOnly,
@@ -742,7 +744,12 @@ const legacySetupTestMode =
 const contextOwnerId = "owner-desktop";
 const contextProviderProfileId = "profile-isolated-farol";
 const contextModel = ROUTE_B_MODEL;
-const windowMode = parsePreviewWindowMode(process.argv);
+const devSecondaryDisplay = parseDevDisplay(process.argv);
+if (devSecondaryDisplay && buildEnvironment !== "dev")
+  throw new Error("DEV_DISPLAY_ARGUMENT_INVALID");
+const windowMode = devSecondaryDisplay
+  ? "secondary-visible"
+  : parsePreviewWindowMode(process.argv);
 // Explicit-only: the owner-handed overnight run passes this itself. Its
 // absence keeps every display-selection outcome exactly as before.
 const allowPrimaryDisplay = parseAllowPrimaryDisplay(process.argv);
@@ -11334,14 +11341,7 @@ async function createWindow(): Promise<void> {
   if (quitInProgress || installedUpdateAdmission) return;
   const testPlacement =
     windowMode === "secondary-visible"
-      ? selectPreviewWindowPlacement(
-          screen.getAllDisplays(),
-          screen.getPrimaryDisplay().id,
-          initialWindowSize,
-          allowPrimaryDisplay,
-          builtInDisplayOnly,
-          sidecarDisplayOnly,
-        )
+      ? selectedVisibleTestPlacement(initialWindowSize)
       : null;
   window = new BrowserWindow({
     title: displayWindowTitle,
@@ -11456,6 +11456,12 @@ async function createWindow(): Promise<void> {
 function selectedVisibleTestPlacement(
   requested: Readonly<{ width: number; height: number }>,
 ) {
+  if (devSecondaryDisplay)
+    return selectDevWindowPlacement(
+      screen.getAllDisplays(),
+      screen.getPrimaryDisplay().id,
+      requested,
+    );
   return selectPreviewWindowPlacement(
     screen.getAllDisplays(),
     screen.getPrimaryDisplay().id,
