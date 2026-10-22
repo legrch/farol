@@ -2491,9 +2491,8 @@ export class WindowController implements RendererFacade {
       return false;
     const tasks = this.state.tasks.tasks;
     if (
-      tasks.length === 0
-        ? action.taskId !== ""
-        : !tasks.some((task) => task.taskId === action.taskId)
+      action.taskId !== "" &&
+      !tasks.some((task) => task.taskId === action.taskId)
     )
       return false;
     const previous = this.state.destination;

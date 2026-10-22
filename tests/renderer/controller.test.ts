@@ -2067,7 +2067,7 @@ describe("F0 window owner", () => {
     expect(f.api.configure).not.toHaveBeenCalled();
     c.dispose();
   });
-  it("R35 removed or missing task targets are never adopted or retried", async () => {
+  it("R35 removed or unrecognized nonempty task targets are never adopted or retried", async () => {
     const f = fixture();
     const c = new WindowController(f.api);
     await c.start();
@@ -2075,7 +2075,7 @@ describe("F0 window owner", () => {
     c.navigate({ area: "chatgpt", taskId: "task-1" });
     const state = c.getSnapshot();
     f.emit("action", sectionIntent("browser", 1, "removed"));
-    f.emit("action", sectionIntent("settings", 2));
+    f.emit("action", sectionIntent("settings", 2, "unrecognized"));
     expect(c.getSnapshot()).toBe(state);
     f.emit("tasks", { revision: 2, tasks: [] });
     c.navigate({ area: "settings", page: "appearance", taskId: "" });
@@ -4296,6 +4296,36 @@ it.each(["chatgpt.open-sign-in", "chatgpt.open-browser"] as const)(
       "browser",
       "retained",
     ]);
+    c.dispose();
+  },
+);
+
+it.each(["chatgpt.open-sign-in", "chatgpt.open-browser"] as const)(
+  "%s keeps native section shortcuts usable with a home document and retained tasks",
+  async (kind) => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    f.emit("tasks", { revision: 1, tasks: [task("retained")] });
+    c.navigate({ area: "setup", setupStep: "signin" });
+    await c.configure({ kind }, `settings:${kind}:`);
+    expect(c.getSnapshot().destination.taskId).toBe("");
+    const targets = [
+      ["activity", "activity"],
+      ["settings", "settings"],
+      ["computer", "setup"],
+      ["browser", "chatgpt"],
+    ];
+    for (const [index, [section, area]] of targets.entries()) {
+      const count = vi.mocked(f.api.layout).mock.calls.length;
+      f.emit("action", sectionIntent(section, index + 1, ""));
+      expect(c.getSnapshot().destination).toMatchObject({ area, taskId: "" });
+      expect(f.api.layout).toHaveBeenCalledTimes(count + 1);
+    }
+    const selected = c.getSnapshot().destination;
+    f.emit("action", sectionIntent("activity", 5, "unrecognized"));
+    expect(c.getSnapshot().destination).toBe(selected);
+    expect(f.api.task).not.toHaveBeenCalled();
     c.dispose();
   },
 );
