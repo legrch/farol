@@ -59,7 +59,7 @@ export function candidateToolchainDirectories(home) {
 
 export function toolchainMissingMessage() {
   return (
-    `Farol Dev needs Node ${DECLARED_NODE_VERSIONS.join(" or ")} with npm ${DECLARED_NPM_VERSION}, and none was found ` +
+    `${harnessDesktopIdentity("dev", "/").applicationName} needs Node ${DECLARED_NODE_VERSIONS.join(" or ")} with npm ${DECLARED_NPM_VERSION}, and none was found ` +
     "at the running interpreter or at the usual nvm/Homebrew locations. Install one, for example " +
     "'nvm install 24.20.0' or 'brew install node@26', then run 'task dev' again."
   );
@@ -419,8 +419,7 @@ export function describeLaunchResult(outcome) {
   if (outcome === "startup-failed") {
     return {
       exitCode: 1,
-      message:
-        "Farol Dev main-process startup failed. The classified cause is above; fix it, then run 'task dev' again.",
+      message: `${harnessDesktopIdentity("dev", "/").applicationName} main-process startup failed. The classified cause is above; fix it, then run 'task dev' again.`,
     };
   }
   return {
@@ -519,7 +518,7 @@ export async function runOwnerManagedChild({
 
 // A fresh review has a fixed namespace and a launcher-minted identity. It never
 // accepts an owner path, HOME override, E2E seam, or a reusable acceptance root.
-const REVIEW_NAMESPACE = "Farol Dev Review";
+const REVIEW_NAMESPACE = `${harnessDesktopIdentity("dev", "/").applicationName} Review`;
 const REVIEW_RECEIPT = ".farol-dev-review-profile";
 const REVIEW_TOKEN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -564,7 +563,7 @@ export async function runDevBuild(
       throw new Error("DEV_GO_INPUTS_REQUIRED");
   } catch {
     report(
-      "Farol Dev requires a valid approved Go input declaration. Place it at " +
+      `${harnessDesktopIdentity("dev", "/").applicationName} requires a valid approved Go input declaration. Place it at ` +
         `${DEFAULT_GO_INPUTS_FILE} or select --go-inputs=/absolute/path.json. ` +
         "See README: Develop from source. No desktop was launched.",
     );
@@ -872,7 +871,7 @@ export async function main(argv, overrides = {}) {
   }
 
   log(
-    `Farol Dev toolchain: Node ${currentNode}, npm ${getCurrentNpmVersion()}.`,
+    `${harnessDesktopIdentity("dev", "/").applicationName} toolchain: Node ${currentNode}, npm ${getCurrentNpmVersion()}.`,
   );
 
   // Close the exact prior Dev BEFORE dependency replacement or shared builds.
@@ -904,7 +903,7 @@ export async function main(argv, overrides = {}) {
 
   if (checkOnly) {
     log(
-      "Farol Dev check complete: toolchain, dependencies, and build are current. Not launching.",
+      `${harnessDesktopIdentity("dev", "/").applicationName} check complete: toolchain, dependencies, and build are current. Not launching.`,
     );
     return;
   }
@@ -926,11 +925,15 @@ export async function main(argv, overrides = {}) {
     log(
       "Development bytes, not a packaged candidate. Profile retained; this opener cannot reopen it. No automatic retry or recovery.",
     );
-    log("Running Farol Dev on the secondary display. Press Ctrl+C to stop.");
+    log(
+      `Running ${harnessDesktopIdentity("dev", "/").applicationName} on the secondary display. Press Ctrl+C to stop.`,
+    );
     await launch(false, true, review.marker, displayOptions);
     return;
   }
-  log("Running Farol Dev in this terminal. Press Ctrl+C to stop.");
+  log(
+    `Running ${harnessDesktopIdentity("dev", "/").applicationName} in this terminal. Press Ctrl+C to stop.`,
+  );
   await launch(acceptanceProfile, secondaryDisplay, undefined, displayOptions);
 }
 

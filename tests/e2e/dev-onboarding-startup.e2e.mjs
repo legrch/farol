@@ -313,8 +313,11 @@ try {
   // A missing override must fail before the first app-ready boundary and
   // leave even a synthetic ordinary-Dev startup marker untouched.
   const ordinaryMarker = path.join(
-    isolatedHome,
-    "Library/Application Support/Farol Dev/farol-state/running.json",
+    harnessDesktopIdentity(
+      "dev",
+      path.join(isolatedHome, "Library/Application Support"),
+    ).userData,
+    "farol-state/running.json",
   );
   await fs.mkdir(path.dirname(ordinaryMarker), {
     recursive: true,
@@ -1191,5 +1194,5 @@ try {
     throw new Error("DEV_REACT_CLEANUP_UNCONFIRMED");
 }
 process.stdout.write(
-  `Farol Dev React Setup: ${report.status}; exact source ${source.commit}; evidence ${evidenceRoot}\n`,
+  `${harnessDesktopIdentity("dev", "/").applicationName} React Setup: ${report.status}; exact source ${source.commit}; evidence ${evidenceRoot}\n`,
 );

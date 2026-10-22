@@ -502,8 +502,11 @@ const chatAddress = chatFixture.address();
 assert.ok(chatAddress && typeof chatAddress !== "string");
 const fixtureUrl = `http://127.0.0.1:${chatAddress.port}/`;
 const ownerPreviewStateRoot = path.join(
-  os.homedir(),
-  "Library/Application Support/io.github.legrch.farol/farol-state",
+  harnessDesktopIdentity(
+    "preview",
+    path.join(os.homedir(), "Library/Application Support"),
+  ).userData,
+  "farol-state",
 );
 const profiles = new Map();
 const profileAdmissions = new Map();

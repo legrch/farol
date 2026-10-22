@@ -48,8 +48,11 @@ const entry = packaged
   ? path.join(appRoot, "Contents/Resources/app/main.cjs")
   : path.join(root, "_output/build/app/main.cjs");
 const ownerState = path.join(
-  os.homedir(),
-  "Library/Application Support/io.github.legrch.farol/farol-state",
+  harnessDesktopIdentity(
+    "preview",
+    path.join(os.homedir(), "Library/Application Support"),
+  ).userData,
+  "farol-state",
 );
 const observations = [];
 let primaryFailure;

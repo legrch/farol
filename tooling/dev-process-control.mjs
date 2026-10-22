@@ -144,7 +144,10 @@ export async function prepareDevBuild({
   const appPath = path.join(writerRoot, "_output/build/app/main.cjs");
   const home = os.userInfo().homedir;
   if (process.env.HOME !== home) throw Error("DEV_PROCESS_HOME_REFUSED");
-  const profileName = path.join(home, "Library/Application Support/Farol Dev");
+  const profileName = harnessDesktopIdentity(
+    "dev",
+    path.join(home, "Library/Application Support"),
+  ).userData;
   const profilePath = fs.existsSync(profileName)
     ? fs.realpathSync(profileName)
     : profileName;
@@ -230,7 +233,7 @@ export async function prepareDevBuild({
           }
         };
         log(
-          "Stopping the previous Farol Dev before rebuilding its app outputs...",
+          `Stopping the previous ${harnessDesktopIdentity("dev", "/").applicationName} before rebuilding its app outputs...`,
         );
         const result = await stopRetainedDevProcess(retained, scope, {
           clock: () => performance.now(),

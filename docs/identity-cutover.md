@@ -82,7 +82,11 @@ and process names from `desktopIdentity` in the desktop environment contract.
 Serialized Electron callbacks receive that calculated identity as an argument.
 They must not capture a Node-side variable or substitute a display name for a
 profile directory. The unit identity guard scans `tests/e2e`, shared fixtures and tooling; only
-its explicit product/build contract list owns fixed identity assertions.
+its explicit product/build contract list owns fixed identity assertions. It checks
+identity substrings in string literals, template quasis and constant concatenations,
+and scans every non-binary harness file, including JSON, shell, Python, plist
+and YAML. Protective rejection cases have exact-value exceptions; historical
+readers have explicit file exceptions.
 Historical package readers and protective rejection fixtures retain historical
 paths, without granting access to those profiles.
 
