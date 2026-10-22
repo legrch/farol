@@ -1096,7 +1096,7 @@ it("completed setup defaults to Home even when its current runtime needs reconne
   expect(f.api.configure).not.toHaveBeenCalled();
   c.dispose();
 });
-it("a saved completion witness restores Home without treating a stopped connector as ready", async () => {
+it("a verified attachment without finished Setup still opens Welcome", async () => {
   const f = fixture();
   const data = bootstrap();
   data.configuration.settings.general.openAtLaunch = "home";
@@ -1114,7 +1114,10 @@ it("a saved completion witness restores Home without treating a stopped connecto
   vi.mocked(f.api.bootstrap).mockResolvedValue(data);
   const c = new WindowController(f.api);
   await c.start();
-  expect(c.getSnapshot().destination.area).toBe("home");
+  expect(c.getSnapshot().destination).toMatchObject({
+    area: "setup",
+    setupStep: "overview",
+  });
   expect(computerSetup(c.getSnapshot()).ready).toBe(false);
   expect(f.api.configure).not.toHaveBeenCalled();
   c.dispose();

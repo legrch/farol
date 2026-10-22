@@ -128,8 +128,22 @@ export async function mount({
   const f = fixture();
   let saved = value;
   const configuration = () => ({ status: "ready" as const, settings: saved });
-  const configure = async (command: ProductConfigurationCommand) =>
-    command.kind === "chatgpt.observe-sign-in"
+  const configure = async (command: ProductConfigurationCommand) => {
+    if (command.kind === "setup.progress") {
+      saved = ProductSettingsSchema.parse({
+        ...saved,
+        revision: saved.revision + 1,
+        setup: {
+          ...saved.setup,
+          journey: {
+            currentStep: command.currentStep,
+            dismissed: command.dismissed,
+          },
+        },
+      });
+      return { ok: true, snapshot: configuration() };
+    }
+    return command.kind === "chatgpt.observe-sign-in"
       ? signInReply(command, signIn, configuration())
       : command.kind === "chatgpt.verify" && signIn === "authenticated"
         ? {
@@ -142,6 +156,7 @@ export async function mount({
             },
           }
         : { ok: true, snapshot: configuration() };
+  };
   vi.mocked(f.api.bootstrap).mockImplementation(async () => ({
     ...bootstrap(),
     configuration: configuration(),

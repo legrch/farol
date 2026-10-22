@@ -1495,6 +1495,39 @@ describe("Farol product configuration", () => {
     },
   );
 
+  it("persists explicit Setup completion through setup.progress across restart", async () => {
+    const root = await stateRoot();
+    const first = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await first.initialize();
+    expect(first.snapshot()).toMatchObject({
+      status: "ready",
+      settings: { setup: { journey: { dismissed: false } } },
+    });
+    const command = ProductConfigurationCommandSchema.parse({
+      kind: "setup.progress",
+      currentStep: "connect",
+      dismissed: true,
+    });
+    if (command.kind !== "setup.progress") throw new Error("wrong command");
+    const { kind: _kind, ...journey } = command;
+    expect(await first.setSetupJourney(journey)).toMatchObject({ ok: true });
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    expect(restarted.snapshot()).toMatchObject({
+      status: "ready",
+      settings: {
+        general: { openAtLaunch: "home" },
+        setup: { journey: { currentStep: "connect", dismissed: true } },
+      },
+    });
+  });
+
   it("persists working preferences and workspace approval across restart", async () => {
     const root = await stateRoot();
     const first = new ProductConfigurationService(

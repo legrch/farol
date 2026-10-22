@@ -39,7 +39,6 @@ import {
   type ChatHistoryContext,
 } from "../../pkg/ipc/chat-history";
 import { adoptReadConversation } from "./read-conversation-state";
-import { computerSetup } from "./computer-setup";
 import {
   validNavigation,
   sheets,
@@ -714,9 +713,7 @@ export class WindowController implements RendererFacade {
           this.patch({ sidebar: settings.general.sidebarDefault });
           if (
             !this.pendingSectionNavigation &&
-            (settings.setup.journey.dismissed ||
-              settings.connectors.secureMcp.lastVerifiedAttachment !== null ||
-              computerSetup(this.state).ready)
+            settings.setup.journey.dismissed
           ) {
             const launch = settings.general.openAtLaunch;
             this.navigate(
