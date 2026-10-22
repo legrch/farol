@@ -40,6 +40,6 @@ if (violations.length > 0) {
   process.exitCode = 1;
 } else {
   process.stdout.write(
-    `Farol Next lint: ${productionFiles.length} production files checked.\n`,
+    `Farol lint: ${productionFiles.length} production files checked.\n`,
   );
 }

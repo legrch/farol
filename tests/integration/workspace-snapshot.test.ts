@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   NativeReadonlyWorkspace,
-  NEXT_SAFE_OPEN_HELPER,
+  SAFE_OPEN_HELPER,
 } from "../../src/modules/computer/infra/native/native-readonly-workspace";
 import {
   createWorkspaceSnapshot,
@@ -25,7 +25,7 @@ function options(
 ): WorkspaceSnapshotOptions {
   return {
     helperPath: sourceHelper,
-    helper: NEXT_SAFE_OPEN_HELPER,
+    helper: SAFE_OPEN_HELPER,
     attestInterpreter: async () => "/usr/bin/python3",
     runtimeDirectory,
     ...overrides,
@@ -60,11 +60,11 @@ async function initRepo(dir: string): Promise<void> {
 
 beforeEach(async () => {
   root = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-snapshot-src-")),
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-snapshot-src-")),
   );
   await fs.chmod(root, 0o700);
   runtimeDirectory = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-snapshot-runtime-")),
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-snapshot-runtime-")),
   );
 });
 
@@ -189,7 +189,7 @@ describe("workspace snapshot (N02)", () => {
           // is already open; renaming the directory's contents away now must
           // not be visible to the walk that is already in progress.
           const outside = await fs.mkdtemp(
-            path.join(os.tmpdir(), "farol-next-snapshot-outside-"),
+            path.join(os.tmpdir(), "farol-snapshot-outside-"),
           );
           await fs.writeFile(
             path.join(outside, "sentinel.txt"),
@@ -255,7 +255,7 @@ describe("workspace snapshot (N02)", () => {
 
   it("refuses a .git file pointing outside the approved tree", async () => {
     const outside = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-snapshot-external-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-snapshot-external-")),
     );
     try {
       await fs.writeFile(
@@ -327,9 +327,7 @@ describe("workspace snapshot (N02)", () => {
 
   it("recreates a symlink without ever following it, and never discloses what it points to", async () => {
     const outside = await fs.realpath(
-      await fs.mkdtemp(
-        path.join(os.tmpdir(), "farol-next-snapshot-linktarget-"),
-      ),
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-snapshot-linktarget-")),
     );
     try {
       await fs.writeFile(
@@ -603,7 +601,7 @@ describe("workspace snapshot (N02)", () => {
 
       const workspace = new NativeReadonlyWorkspace({
         helperPath: sourceHelper,
-        helper: NEXT_SAFE_OPEN_HELPER,
+        helper: SAFE_OPEN_HELPER,
         attestInterpreter: async () => "/usr/bin/python3",
         // Resolved the same way the sibling native-verification-command
         // tests resolve it: the real reviewed Apple Git, without repeating
@@ -757,10 +755,10 @@ describe("workspace snapshot (N02)", () => {
 
   it("snapshots a linked worktree's own gitdir and the repository's common gitdir", async () => {
     const primary = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-snapshot-primary-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-snapshot-primary-")),
     );
     let worktree = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-snapshot-wt-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-snapshot-wt-")),
     );
     await fs.rm(worktree, { recursive: true, force: true });
     try {
@@ -822,7 +820,7 @@ describe("workspace snapshot refusals (N02)", () => {
 
   beforeEach(async () => {
     fixturesDirectory = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-snapshot-fake-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-snapshot-fake-")),
     );
   });
 
@@ -953,7 +951,7 @@ describe("workspace snapshot refusals (N02)", () => {
       await createWorkspaceSnapshot(
         request,
         options({
-          helper: { ...NEXT_SAFE_OPEN_HELPER, sha256: "0".repeat(64) },
+          helper: { ...SAFE_OPEN_HELPER, sha256: "0".repeat(64) },
         }),
       ),
     ).toEqual(untrusted);
@@ -962,8 +960,8 @@ describe("workspace snapshot refusals (N02)", () => {
         request,
         options({
           helper: {
-            ...NEXT_SAFE_OPEN_HELPER,
-            size: NEXT_SAFE_OPEN_HELPER.size + 1,
+            ...SAFE_OPEN_HELPER,
+            size: SAFE_OPEN_HELPER.size + 1,
           },
         }),
       ),

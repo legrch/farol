@@ -3853,7 +3853,7 @@ describe("request-owned native workspace readback", () => {
       };
       value.setup.computer.reachable = "reachable";
       value.setup.computer.verified = {
-        profile: "farol-next",
+        profile: "farol",
         configRevision: value.computer.generation,
         workspaceId,
         runtimeGeneration: "a".repeat(64),

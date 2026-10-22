@@ -113,8 +113,8 @@ const manifest: ReleaseManifest = {
   schema: "farol.github-release/1",
   repository: "legrch/farol",
   channel: "owner-beta",
-  product: "Farol Next Preview",
-  bundleId: "local.farol.next.preview",
+  product: "Farol",
+  bundleId: "io.github.legrch.farol",
   version: "0.1.1-owner.beta.1",
   buildVersion: "3",
   sourceCommit: "a".repeat(40),
@@ -132,8 +132,8 @@ const manifest: ReleaseManifest = {
 };
 const build = BuildIdentitySchema.parse({
   schema: 1,
-  product: "Farol Next Preview",
-  bundleId: "local.farol.next.preview",
+  product: "Farol",
+  bundleId: "io.github.legrch.farol",
   buildId: "9".repeat(64),
   version: "0.1.0-owner.beta.1",
   updateChannel: "github-owner-beta",
@@ -261,7 +261,10 @@ beforeEach(async () => {
   root = await fs.realpath(root);
   vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: root });
   slot = path.join(root, "Applications/Farol.app");
-  userData = path.join(root, "Library/Application Support/Farol Next Preview");
+  userData = path.join(
+    root,
+    "Library/Application Support/io.github.legrch.farol",
+  );
   staging = path.join(root, "verified-stage/Farol.app");
   ready = path.join(userData, "installed-updates/ready.json");
   await fs.mkdir(slot, { recursive: true });
@@ -270,9 +273,9 @@ beforeEach(async () => {
   await fs.writeFile(
     slot + ".receipt.json",
     JSON.stringify({
-      schema: "farol.next.promotion-plan/1",
+      schema: "farol.promotion-plan/1",
       operation: "applied",
-      product: "Farol Next Preview",
+      product: "Farol",
       version: build.version,
       sourceCommit: build.sourceCommit,
       sourceTreeDigest: build.sourceTreeDigest,
@@ -457,7 +460,7 @@ describe("supervised installed updater (native files/lease, mocked package/proce
       "promotion",
     );
     expect(held).not.toBeNull();
-    const state = await fs.stat(path.join(userData, "farol-next-state"), {
+    const state = await fs.stat(path.join(userData, "farol-state"), {
       bigint: true,
     });
     const original = {
@@ -513,7 +516,7 @@ describe("supervised installed updater (native files/lease, mocked package/proce
       .digest("hex");
     const input = await selected(predecessorBuild);
     const store = new ProductSettingsStore({
-      root: path.join(userData, "farol-next-state"),
+      root: path.join(userData, "farol-state"),
     });
     const readiness = {
       visited: false,
@@ -547,7 +550,7 @@ describe("supervised installed updater (native files/lease, mocked package/proce
       ),
     });
     await store.save(settings);
-    const file = path.join(userData, "farol-next-state/config.json");
+    const file = path.join(userData, "farol-state/config.json");
     return {
       input: {
         ...input,
@@ -790,7 +793,7 @@ describe("supervised installed updater (native files/lease, mocked package/proce
       await fs.writeFile(
         adopted(),
         `${JSON.stringify({
-          schema: "farol.next.adopted-baseline/1",
+          schema: "farol.adopted-baseline/1",
           slot,
           userData,
           manifest: publishedBuild(),
@@ -2170,7 +2173,7 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
         buildId: "6".repeat(64),
       };
       const receipt = {
-        schema: "farol.next.closed-repair/1",
+        schema: "farol.closed-repair/1",
         operationId,
         phase: "installed",
         destination: slot,
@@ -2208,7 +2211,7 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
         await fs.writeFile(
           path.join(root, "Applications", ".farol-closed-repair.json"),
           JSON.stringify({
-            schema: "farol.next.closed-repair-journal/1",
+            schema: "farol.closed-repair-journal/1",
             phase:
               scenario === "pending-journal"
                 ? "receipt_intent"
@@ -2386,7 +2389,7 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       if (kind !== "update-root")
         await fs.rename(replaced, replaced + ".original");
       if (kind === "ancestor") {
-        await fs.mkdir(path.join(outside, "Farol Next Preview"), {
+        await fs.mkdir(path.join(outside, "io.github.legrch.farol"), {
           mode: 0o700,
         });
       }
@@ -6501,7 +6504,7 @@ describe("selected shared slot (redirected disposable filesystem, mocked helper)
       archiveName: `Farol-${build.version}-darwin-arm64.zip`,
     });
     const recordFor = (overrides: Record<string, unknown> = {}) => ({
-      schema: "farol.next.adopted-baseline/1",
+      schema: "farol.adopted-baseline/1",
       slot: sharedSlot,
       userData,
       manifest: published(),
@@ -6694,7 +6697,7 @@ describe("first-launch adoption in the user slot (disposable files; GitHub and n
     expect(stat.mode & 0o777).toBe(0o600);
     expect(stat.nlink).toBe(1);
     expect(JSON.parse(await fs.readFile(adoptedFile(), "utf8"))).toEqual({
-      schema: "farol.next.adopted-baseline/1",
+      schema: "farol.adopted-baseline/1",
       slot,
       userData,
       manifest: published(),
@@ -6859,7 +6862,7 @@ describe("first-launch adoption in the user slot (disposable files; GitHub and n
   it("accepts a record another writer already published for this build and does not rewrite it", async () => {
     await dragged();
     const other = {
-      schema: "farol.next.adopted-baseline/1",
+      schema: "farol.adopted-baseline/1",
       slot,
       userData,
       manifest: published(),
@@ -6888,7 +6891,7 @@ describe("first-launch adoption in the user slot (disposable files; GitHub and n
     await fs.writeFile(
       adoptedFile(),
       `${JSON.stringify({
-        schema: "farol.next.adopted-baseline/1",
+        schema: "farol.adopted-baseline/1",
         slot: "/Applications/Farol.app",
         userData,
         manifest: published(),
@@ -6915,7 +6918,7 @@ describe("first-launch adoption in the user slot (disposable files; GitHub and n
     await fs.mkdir(path.dirname(adoptedFile()), { mode: 0o700 });
     await fs.writeFile(
       stray,
-      `${JSON.stringify({ schema: "farol.next.adopted-baseline/1" })}\n`,
+      `${JSON.stringify({ schema: "farol.adopted-baseline/1" })}\n`,
       { mode: 0o600 },
     );
     await noRecord();
@@ -7020,7 +7023,7 @@ describe("first-launch adoption in the user slot (disposable files; GitHub and n
       expect(offline.snapshot()).toMatchObject({ phase: "available" });
       expect(
         JSON.parse(await fs.readFile(adoptedFile(), "utf8")),
-      ).toMatchObject({ schema: "farol.next.adopted-baseline/1" });
+      ).toMatchObject({ schema: "farol.adopted-baseline/1" });
       await offline.close();
     },
   );
@@ -7082,7 +7085,7 @@ describe("first-launch adoption in the user slot (disposable files; GitHub and n
     expect(controller.snapshot()).toMatchObject({ phase: "available" });
     expect(mocks.find).toHaveBeenCalledTimes(2);
     expect(JSON.parse(await fs.readFile(adoptedFile(), "utf8"))).toMatchObject({
-      schema: "farol.next.adopted-baseline/1",
+      schema: "farol.adopted-baseline/1",
       slot,
       userData,
       manifest: publishedNext(),
@@ -7149,7 +7152,7 @@ describe("first-launch adoption in the user slot (disposable files; GitHub and n
   it("keeps a record that changed while the superseded one was being replaced", async () => {
     await adoptedOld();
     const winner = {
-      schema: "farol.next.adopted-baseline/1",
+      schema: "farol.adopted-baseline/1",
       slot,
       userData,
       manifest: publishedNext(),

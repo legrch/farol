@@ -14,18 +14,21 @@ import { trustedOwnerHome } from "./promotion-destination.mjs";
 import {
   activationObligations,
   assertActivationDrained,
-  promotionUserData,
 } from "./promotion-obligations.mjs";
 import * as leases from "./promotion-lease.mjs";
 import { readArtifactManifest } from "./promote-preview.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
 
+// Explicit old-beta selectors for this legacy install reader.
+const LEGACY_PROFILE_DIRECTORY = "Farol Next Preview";
+const LEGACY_STATE_DIRECTORY = "farol-next-state";
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const schema = "farol.preview-retirement/1";
 const HELPER_SHA256 =
-  "461accbf164f7b20ee570db83b470379889ace0bcb823d25873805be9499e484";
+  "5aee39bb39ee70e4a7030963fc0dd46b6702af71c197d3af84e036d2b845bbaa";
 const LIBRARY_SHA256 =
-  "49486432c2af8ec1ec7dbe95504d2daa5baf61128ba05db6970e459656265b03";
+  "cb49e66027f1026a88e5be1326779676305422d739c977f985e096b101bde1e5";
 
 export function parsePreviewRetirementOptions(args) {
   const values = {};
@@ -202,14 +205,18 @@ export async function runPreviewRetirementCli(args, dependencies = {}) {
     const options = parsePreviewRetirementOptions(args);
     const home =
       dependencies.home ?? trustedOwnerHome(os.userInfo(), process.geteuid());
-    const userData = promotionUserData(home);
+    const userData = path.join(
+      home,
+      "Library/Application Support",
+      LEGACY_PROFILE_DIRECTORY,
+    );
     for (const p of [
       home,
       path.join(home, "Applications"),
       path.join(home, "Library"),
       path.join(home, "Library/Application Support"),
       userData,
-      path.join(userData, "farol-next-state"),
+      path.join(userData, LEGACY_STATE_DIRECTORY),
     ]) {
       const s = await fs.lstat(p);
       if (

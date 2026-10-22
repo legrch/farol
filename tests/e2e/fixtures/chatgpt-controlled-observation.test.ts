@@ -291,7 +291,7 @@ async function controlledPage() {
       viewId: "42",
       viewGeneration: 1,
       documentGeneration: 1,
-      partition: "persist:farol-next-chatgpt",
+      partition: "persist:farol-app-chatgpt",
     },
     selection,
     previous: { userId: "previous-user", assistantId: "previous-reply" },

@@ -85,7 +85,7 @@ export class EventStream<Event extends TaskEvent> {
       "content-type": "text/event-stream; charset=utf-8",
       "x-accel-buffering": "no",
     });
-    if (!response.write(": farol-next\n\n")) {
+    if (!response.write(": farol\n\n")) {
       response.destroy();
       return noop;
     }

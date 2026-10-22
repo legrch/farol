@@ -136,9 +136,7 @@ async function stealLease(root: string): Promise<void> {
 }
 
 async function userData(): Promise<string> {
-  const root = await fs.mkdtemp(
-    path.join(os.tmpdir(), "farol-next-edit-lease-"),
-  );
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-edit-lease-"));
   roots.push(root);
   return root;
 }
@@ -254,7 +252,7 @@ describe("guarded workspace edit takes the promotion lease", () => {
     const root = await userData();
     const generation = "generation-a";
     const service = new ProductConfigurationService(
-      new ProductSettingsStore({ root: path.join(root, "farol-next-state") }),
+      new ProductSettingsStore({ root: path.join(root, "farol-state") }),
       dependencies(admissionLeaseGuard(root, generation)),
     );
     await service.initialize();
@@ -302,7 +300,7 @@ describe("guarded workspace edit takes the promotion lease", () => {
     const root = await userData();
     const generation = "generation-b";
     const service = new ProductConfigurationService(
-      new ProductSettingsStore({ root: path.join(root, "farol-next-state") }),
+      new ProductSettingsStore({ root: path.join(root, "farol-state") }),
       dependencies(admissionLeaseGuard(root, generation)),
     );
     await service.initialize();
@@ -342,7 +340,7 @@ describe("guarded workspace edit takes the promotion lease", () => {
     const root = await userData();
     const generation = "generation-c";
     const service = new ProductConfigurationService(
-      new ProductSettingsStore({ root: path.join(root, "farol-next-state") }),
+      new ProductSettingsStore({ root: path.join(root, "farol-state") }),
       dependencies(admissionLeaseGuard(root, generation)),
     );
     await service.initialize();
@@ -377,7 +375,7 @@ describe("guarded workspace edit takes the promotion lease", () => {
   it("keeps behaving as before when no promotionLease dependency is configured", async () => {
     const root = await userData();
     const service = new ProductConfigurationService(
-      new ProductSettingsStore({ root: path.join(root, "farol-next-state") }),
+      new ProductSettingsStore({ root: path.join(root, "farol-state") }),
       dependencies(undefined),
     );
     await service.initialize();
@@ -408,7 +406,7 @@ describe("the guarded edit's fence sits at the durable write (S35-H1R)", () => {
     seam: { steal: (() => Promise<void>) | null },
   ): ProductSettingsStore {
     return new ProductSettingsStore(
-      { root: path.join(root, "farol-next-state") },
+      { root: path.join(root, "farol-state") },
       {
         beforeCommit: async () => {
           const pending = seam.steal;
@@ -420,7 +418,7 @@ describe("the guarded edit's fence sits at the durable write (S35-H1R)", () => {
   }
 
   function settingsFileOf(root: string): string {
-    return path.join(root, "farol-next-state", "config.json");
+    return path.join(root, "farol-state", "config.json");
   }
 
   it("S35-H1R refuses, releases the hold and leaves the settings bytes untouched when the lease is stolen between the entry check and the write", async () => {

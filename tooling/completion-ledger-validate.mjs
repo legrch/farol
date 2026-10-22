@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 // rule 4) but never counted as current proof of anything.
 
 export const COMPLETION_LEDGER_VALIDATE_SCHEMA =
-  "farol.next.completion-ledger-validate/v1";
+  "farol.completion-ledger-validate/v1";
 
 // The rows' single defined verdict field. `summary` is expected to be the
 // count of rows grouped by this field's value.

@@ -12,6 +12,10 @@ import { observeUpdateSlot } from "./update-slot-observer.mjs";
 
 // Combined app/profile limits, checked by a metadata-only inventory before any
 // content is copied. Reads use one 1 MiB buffer, never an entire profile file.
+// Explicit old-beta selectors for this legacy install reader.
+const LEGACY_PRODUCT_NAME = "Farol Next Preview";
+const LEGACY_STATE_DIRECTORY = "farol-next-state";
+
 const MAX_ENTRIES = 100_000;
 const MAX_FILE_BYTES = 512 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 16 * 1024 * 1024 * 1024;
@@ -646,9 +650,9 @@ export async function preserveClosedInstalledPair({
     const installed = path.join(home, "Applications/Farol.app");
     const userData = path.join(
       home,
-      "Library/Application Support/Farol Next Preview",
+      `Library/Application Support/${LEGACY_PRODUCT_NAME}`,
     );
-    const stateRoot = path.join(userData, "farol-next-state");
+    const stateRoot = path.join(userData, LEGACY_STATE_DIRECTORY);
     requireValue(
       !inside(installed, parent) && !inside(userData, parent),
       "DESTINATION_OVERLAP",
@@ -899,7 +903,8 @@ export async function preserveClosedInstalledPair({
       source,
       profileDigest,
       settingsSha256:
-        savedProfile.get("farol-next-state/config.json")?.digest ?? null,
+        savedProfile.get(`${LEGACY_STATE_DIRECTORY}/config.json`)?.digest ??
+        null,
       verify() {
         if (refused) return Promise.resolve(false);
         if (inFlight) return inFlight;

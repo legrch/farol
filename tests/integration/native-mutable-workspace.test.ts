@@ -9,7 +9,7 @@ import type {
 } from "../../src/modules/computer/app/port/mutable-workspace";
 import {
   NativeReadonlyWorkspace,
-  NEXT_SAFE_OPEN_HELPER,
+  SAFE_OPEN_HELPER,
 } from "../../src/modules/computer/infra/native/native-readonly-workspace";
 import { approvedRootOf } from "../fixtures/root-identity";
 
@@ -58,14 +58,14 @@ function request(
 function workspace(): NativeReadonlyWorkspace {
   return new NativeReadonlyWorkspace({
     helperPath: sourceHelper,
-    helper: NEXT_SAFE_OPEN_HELPER,
+    helper: SAFE_OPEN_HELPER,
     attestInterpreter: async () => "/usr/bin/python3",
   });
 }
 
 beforeEach(async () => {
   root = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-mutation-")),
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-mutation-")),
   );
   await fs.chmod(root, 0o700);
   await fs.mkdir(path.join(root, ".git"), { mode: 0o700 });
@@ -133,7 +133,7 @@ describe("native mutable Computer workspace", () => {
       await fs.mkdir(store, { mode: 0o700 });
       const native = new NativeReadonlyWorkspace({
         helperPath: sourceHelper,
-        helper: NEXT_SAFE_OPEN_HELPER,
+        helper: SAFE_OPEN_HELPER,
         attestInterpreter: async () => "/usr/bin/python3",
         homeDirectory: root,
       });
@@ -832,7 +832,7 @@ describe("C05-05 cancellation of helper work", () => {
   function countedWorkspace(interpreter: string): NativeReadonlyWorkspace {
     return new NativeReadonlyWorkspace({
       helperPath: sourceHelper,
-      helper: NEXT_SAFE_OPEN_HELPER,
+      helper: SAFE_OPEN_HELPER,
       attestInterpreter: async () => interpreter,
     });
   }

@@ -52,7 +52,7 @@ func TestFinalIdentity(t *testing.T) {
 		profile  Profile
 		identity Identity
 	}{
-		{Production, Identity{"Farol", "io.github.legrch.farol", "Farol", "persist:farol"}},
+		{Production, Identity{"Farol", "io.github.legrch.farol", "io.github.legrch.farol", "persist:farol-runtime"}},
 		{Development, Identity{"Farol Dev", "io.github.legrch.farol.dev", "Farol Dev", "persist:farol-dev"}},
 	} {
 		identity, err := FinalIdentity(tc.profile)
@@ -68,7 +68,7 @@ func TestFinalIdentity(t *testing.T) {
 func TestPrepareExactCurrentAlpha(t *testing.T) {
 	s := alphaSnapshot()
 	decision := wantAction(t, s, PrepareIntent)
-	if decision.From != AlphaDirectory || decision.To != "Farol" || decision.Expected != s.Source.Object {
+	if decision.From != AlphaDirectory || decision.To != "io.github.legrch.farol" || decision.Expected != s.Source.Object {
 		t.Fatalf("unbound relocation: %+v", decision)
 	}
 	// Only a durable, exact Prepared record makes a first dispatch eligible.
@@ -149,7 +149,7 @@ func TestCurrentAlphaPreservation(t *testing.T) {
 	}
 	tree[decision.To] = tree[decision.From]
 	delete(tree, decision.From)
-	if !reflect.DeepEqual(before, tree["Farol"]) {
+	if !reflect.DeepEqual(before, tree["io.github.legrch.farol"]) {
 		t.Fatal("alpha data was changed, filtered or recreated")
 	}
 	if tree["Farol Dev"]["fixture"] != "dev-stays" {

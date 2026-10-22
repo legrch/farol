@@ -42,7 +42,7 @@ func (w *preservedCommandOutput) SetWriteDeadline(deadline time.Time) error {
 }
 
 func preservedCommandArgs() []string {
-	return []string{"--profile", "synthetic", "--profile-root", "/private/tmp/Farol Dev/farol-next-state/go-core", "--profile-device", "1", "--profile-inode", "2", "--expected-build", BuildID}
+	return []string{"--profile", "synthetic", "--profile-root", "/private/tmp/Farol Dev/farol-state/go-core", "--profile-device", "1", "--profile-inode", "2", "--expected-build", BuildID}
 }
 
 type preservedCommandUntouched struct{}
@@ -59,11 +59,11 @@ func TestPreservedProfileCommandRejectsArgumentsAndNamespaceBeforeIO(t *testing.
 		cases = append(cases, args)
 	}
 	for _, root := range []string{
-		"/private/tmp/Farol Next Preview/farol-next-state/go-core",
-		"/private/tmp/Farol/farol-next-state/go-core",
-		"/private/tmp/Farol Dev copy/farol-next-state/go-core",
+		"/private/tmp/Farol/farol-state/go-core",
+		"/private/tmp/Farol/farol-state/go-core",
+		"/private/tmp/Farol Dev copy/farol-state/go-core",
 		"/private/tmp/Farol Dev/go-core",
-		"/private/tmp/Farol Dev/farol-next-state/../farol-next-state/go-core",
+		"/private/tmp/Farol Dev/farol-state/../farol-state/go-core",
 	} {
 		args := preservedCommandArgs()
 		args[3] = root

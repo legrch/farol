@@ -27,9 +27,9 @@ const { test } = await import(
 const plist = `<?xml version="1.0"?><plist><dict>
 <key>CFBundleDisplayName</key><string>Farol</string>
 <key>CFBundleName</key><string>Farol</string>
-<key>CFBundleIdentifier</key><string>local.farol.next.preview</string>
+<key>CFBundleIdentifier</key><string>io.github.legrch.farol</string>
 <key>CFBundleIconFile</key><string>farol.icns</string>
-<key>CFBundleExecutable</key><string>Farol Next Preview</string>
+<key>CFBundleExecutable</key><string>Farol</string>
 <key>CFBundleVersion</key><string>1</string>
 </dict></plist>`;
 // SYNTHETIC content fixtures only: these headers are NOT rendered icons and
@@ -215,7 +215,7 @@ for (const [name, mutate] of [
       await fs.writeFile(
         file,
         (await fs.readFile(file, "utf8")).replace(
-          "<string>Farol Next Preview</string>",
+          "<string>Farol</string>",
           "<string>Injected</string>",
         ),
       );

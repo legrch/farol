@@ -44,7 +44,7 @@ export function emitStartupStage(
   enabled: boolean,
   write: (line: string) => void,
 ): void {
-  if (enabled) write(`FAROL_NEXT_STARTUP_STAGE:${stage}\n`);
+  if (enabled) write(`FAROL_STARTUP_STAGE:${stage}\n`);
 }
 
 export function primaryStartupReady(state: {

@@ -141,7 +141,7 @@ async function connector(workspaces: readonly string[]) {
       generation: 2,
     },
   );
-  const client = new Client({ name: "farol-next-test", version: "1.0.0" });
+  const client = new Client({ name: "farol-test", version: "1.0.0" });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
   await Promise.all([
@@ -180,7 +180,7 @@ describe("CC-20 a checkpoint cannot resurrect revoked authority", () => {
 
   it("restores the hostile checkpoint into the next prompt after a restart, yet the revoked workspace stays refused at the real policy consumer while the kept one still reads", async () => {
     const root = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-authority-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-authority-")),
     );
     roots.push(root);
     // Before the checkpoint: both workspaces are approved and readable.
@@ -231,7 +231,7 @@ describe("CC-20 a checkpoint cannot resurrect revoked authority", () => {
     const compose = async () => {
       const controller = createCodexContextController({
         ownerId: "owner-desktop",
-        providerProfileId: "profile-isolated-next",
+        providerProfileId: "profile-isolated-farol",
         stateRoot: path.join(root, "context-continuity"),
         summaryRoutes: {
           retained: () => conversation,

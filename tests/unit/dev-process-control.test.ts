@@ -72,7 +72,7 @@ describe("exact Dev command correlation", () => {
   it("reads the actual private run-marker owner directory without doubling the filename", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-dev-marker-"));
     try {
-      const state = path.join(root, "farol-next-state");
+      const state = path.join(root, "farol-state");
       await fs.mkdir(state, { mode: 0o700 });
       const value = {
         schema: 1,

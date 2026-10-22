@@ -178,7 +178,7 @@ func TestRelaunchSelfMeasurementUsesCapturedPortAndOriginalBound(t *testing.T) {
 func TestLaunchArgumentsMustNameTheVerifiedImage(t *testing.T) {
 	request := port.HelperRequest{Home: "/Users/owner"}
 	hint := "--farol-installed-update-relaunch={}"
-	capture := "/Users/owner/Library/Application Support/Farol Next Preview/installed-updates/op/launch-Farol.app"
+	capture := "/Users/owner/Library/Application Support/io.github.legrch.farol/installed-updates/op/launch-Farol.app"
 	for _, tc := range []struct {
 		name    string
 		shared  bool

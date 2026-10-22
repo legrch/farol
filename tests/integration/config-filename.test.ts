@@ -17,7 +17,7 @@ async function fixture() {
     path.join(os.tmpdir(), "farol-config-name-"),
   );
   roots.push(userData);
-  const root = path.join(userData, "farol-next-state");
+  const root = path.join(userData, "farol-state");
   const store = new ProductSettingsStore({ root });
   const service = new ProductConfigurationService(store);
   await service.initialize();

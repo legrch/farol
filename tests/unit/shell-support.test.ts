@@ -50,7 +50,7 @@ function fixture(): ShellSupportDeclaration {
     },
     runtime: {
       version: "44.4.2",
-      treeDigestVersion: "farol.next.tree-digest/v2",
+      treeDigestVersion: "farol.tree-digest/v2",
       treeSHA256: "7".repeat(64),
       distributionSHA256: "8".repeat(64),
     },
@@ -284,7 +284,7 @@ describe("strict Shell support value parsing", () => {
     ["qualification.network", "approved"],
     ["mechanism.path", "/bin/sandbox-exec"],
     ["watchdog.relativePath", "/" + fixture().watchdog.relativePath],
-    ["runtime.treeDigestVersion", "farol.next.tree-digest/v1"],
+    ["runtime.treeDigestVersion", "farol.tree-digest/v1"],
   ])("rejects fixed class/range crossing %s %#", (path, value) =>
     invalid(changed(path as string, value)),
   );

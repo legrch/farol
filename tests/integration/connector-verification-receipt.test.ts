@@ -21,7 +21,7 @@ afterEach(async () => {
 
 async function receiptRoot(): Promise<string> {
   const root = await fs.mkdtemp(
-    path.join(os.tmpdir(), "farol-next-connector-receipt-"),
+    path.join(os.tmpdir(), "farol-connector-receipt-"),
   );
   roots.push(root);
   return path.join(root, "private");

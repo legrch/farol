@@ -66,9 +66,9 @@ async function fixture() {
   const appPath = path.join(home, "Applications/Farol.app");
   const support = path.join(
     home,
-    "Library/Application Support/Farol Next Preview",
+    "Library/Application Support/io.github.legrch.farol",
   );
-  const state = path.join(support, "farol-next-state");
+  const state = path.join(support, "farol-state");
   const operationId = "1".repeat(32);
   const op = path.join(support, "installed-updates", operationId);
   await fs.mkdir(home, { mode: 0o700 });

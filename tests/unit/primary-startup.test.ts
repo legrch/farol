@@ -14,8 +14,8 @@ describe("primary startup coordination", () => {
     emitStartupStage("lock-primary", true, (line) => lines.push(line));
     emitStartupStage("run-marker", true, (line) => lines.push(line));
     expect(lines).toEqual([
-      "FAROL_NEXT_STARTUP_STAGE:lock-primary\n",
-      "FAROL_NEXT_STARTUP_STAGE:run-marker\n",
+      "FAROL_STARTUP_STAGE:lock-primary\n",
+      "FAROL_STARTUP_STAGE:run-marker\n",
     ]);
   });
 

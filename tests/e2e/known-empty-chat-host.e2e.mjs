@@ -142,7 +142,7 @@ try {
     }),
     processesAbsent: () => {
       current.assertClosedConnectorProcesses(
-        path.join(userData, "farol-next-state/secure-mcp-connector"),
+        path.join(userData, "farol-state/secure-mcp-connector"),
       );
       current.assertClosedConnectorProcesses(profile.root);
     },

@@ -31,7 +31,7 @@ const viewFields = {
   viewGeneration: z.number().int().positive(),
   documentGeneration: z.number().int().nonnegative(),
   partition: z.enum([
-    "persist:farol-next-chatgpt",
+    "persist:farol-app-chatgpt",
     "persist:farol-dev-chatgpt",
     "persist:farol-owner-preview-chatgpt",
   ]),

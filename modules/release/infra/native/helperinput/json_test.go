@@ -284,7 +284,7 @@ func TestStaticOldParserOracle(t *testing.T) {
 	if err := json.Unmarshal(oldParserVectors, &corpus); err != nil {
 		t.Fatal(err)
 	}
-	if corpus.SourceSHA256 != "f2f864871ed29536f345f5d9e13e8e74d59a3b4be6f7b7028ef915743b167f85" || len(corpus.Vectors) != 48 {
+	if corpus.SourceSHA256 != "9bd3bf1e06984deeae37cdc61c30063d01b466d26a518952c599fba9c1142c02" || len(corpus.Vectors) != 48 {
 		t.Fatal("unexpected oracle provenance or vector count")
 	}
 	for _, vector := range corpus.Vectors {

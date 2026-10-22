@@ -54,7 +54,7 @@ describe("startup and updater use the same native exclusion", () => {
       async (verify, lease) => {
         borrowed = lease;
         expect(lease.file).toBe(
-          path.join(userData, "farol-next-state", "promotion.lease"),
+          path.join(userData, "farol-state", "promotion.lease"),
         );
         expect(lease.record).toMatchObject({
           role: "admission",
@@ -91,7 +91,7 @@ describe("startup and updater use the same native exclusion", () => {
     "refuses %s intent before readiness and preserves its bytes and inode",
     async (_name, bytes) => {
       const userData = await root();
-      const state = path.join(userData, "farol-next-state");
+      const state = path.join(userData, "farol-state");
       await fs.mkdir(state, { mode: 0o700 });
       const pending = path.join(state, "installed-replacement.pending");
       const marker = path.join(state, "running.json");
@@ -130,7 +130,7 @@ describe("startup and updater use the same native exclusion", () => {
     "refuses a %s pending entry without opening or changing it",
     async (kind) => {
       const userData = await root();
-      const state = path.join(userData, "farol-next-state");
+      const state = path.join(userData, "farol-state");
       await fs.mkdir(state, { mode: 0o700 });
       const pending = path.join(state, "installed-replacement.pending");
       if (kind === "symlink") await fs.symlink("absent-intent-target", pending);
@@ -159,7 +159,7 @@ describe("startup and updater use the same native exclusion", () => {
       const userData = await root();
       const pending = path.join(
         userData,
-        "farol-next-state",
+        "farol-state",
         "installed-replacement.pending",
       );
       const original = fs.lstat.bind(fs);
@@ -189,7 +189,7 @@ describe("startup and updater use the same native exclusion", () => {
 
   it("keeps startup fenced after the exact disposable maintenance holder dies", async () => {
     const userData = await root();
-    const state = path.join(userData, "farol-next-state");
+    const state = path.join(userData, "farol-state");
     await fs.mkdir(state, { mode: 0o700 });
     const pending = path.join(state, "installed-replacement.pending");
     await fs.writeFile(pending, "fixture replacement outcome unknown\n", {
@@ -254,7 +254,7 @@ describe("startup and updater use the same native exclusion", () => {
 
   it("rechecks newly present intent before marker publication under the original lease", async () => {
     const userData = await root();
-    const state = path.join(userData, "farol-next-state");
+    const state = path.join(userData, "farol-state");
     const pending = path.join(state, "installed-replacement.pending");
     const marker = path.join(state, "running.json");
     const publish = vi.fn();
@@ -285,7 +285,7 @@ describe("startup and updater use the same native exclusion", () => {
       "promotion",
     );
     expect(maintenance).not.toBeNull();
-    const state = path.join(userData, "farol-next-state");
+    const state = path.join(userData, "farol-state");
     const pending = path.join(state, "installed-replacement.pending");
     const retained = path.join(state, "fixture-completed-intent");
     const bytes = "fixture known completion, no replacement exercised\n";
@@ -323,7 +323,7 @@ describe("startup and updater use the same native exclusion", () => {
       "promotion",
     );
     expect(promotion).not.toBeNull();
-    const marker = path.join(userData, "farol-next-state", "running.json");
+    const marker = path.join(userData, "farol-state", "running.json");
     const bytes = "original synthetic unconfirmed marker\n";
     await fs.writeFile(marker, bytes, { mode: 0o600 });
     const original = await fs.lstat(marker);
@@ -360,7 +360,7 @@ describe("startup and updater use the same native exclusion", () => {
     const readiness = new Promise<void>((resolve) => {
       ready = resolve;
     });
-    const marker = path.join(userData, "farol-next-state", "running.json");
+    const marker = path.join(userData, "farol-state", "running.json");
     const startup = withStartupPromotionLease(
       userData,
       "candidate",

@@ -29,18 +29,14 @@ async function main(): Promise<void> {
     "startup-failure",
   ]);
   const parsedScenario = scenarioSchema.safeParse(
-    process.env.FAROL_NEXT_PREVIEW_SCENARIO,
+    process.env.FAROL_PREVIEW_SCENARIO,
   );
   const parsedMode = z
     .enum(["empty", "demo"])
-    .safeParse(process.env.FAROL_NEXT_PREVIEW_MODE);
+    .safeParse(process.env.FAROL_PREVIEW_MODE);
   const parsedIdentity = z
-    .enum([
-      "farol-next-preview-runtime",
-      "farol-dev-runtime",
-      "farol-owner-preview-runtime",
-    ])
-    .safeParse(process.env.FAROL_NEXT_RUNTIME_IDENTITY);
+    .enum(["farol-runtime", "farol-dev-runtime", "farol-owner-preview-runtime"])
+    .safeParse(process.env.FAROL_RUNTIME_IDENTITY);
   const scenario = parsedScenario.success ? parsedScenario.data : "normal";
   if (scenario === "startup-failure") {
     throw new Error("RUNTIME_START_FAILURE_FIXTURE");
@@ -50,9 +46,7 @@ async function main(): Promise<void> {
       startPreviewRuntime(
         scenario,
         parsedMode.success ? parsedMode.data : "empty",
-        parsedIdentity.success
-          ? parsedIdentity.data
-          : "farol-next-preview-runtime",
+        parsedIdentity.success ? parsedIdentity.data : "farol-runtime",
       ),
     {
       onStop: (stop) => {
@@ -80,6 +74,6 @@ async function main(): Promise<void> {
 }
 
 void main().catch(() => {
-  process.stderr.write("Farol Next runtime failed to start.\n");
+  process.stderr.write("Farol runtime failed to start.\n");
   process.exit(1);
 });

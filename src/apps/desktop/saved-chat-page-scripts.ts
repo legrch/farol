@@ -6,7 +6,7 @@ import {
 } from "./chatgpt-public-turn";
 import { publicMarkdownBlock } from "./chatgpt-public-markdown";
 
-// These scripts run only in the isolated Next ChatGPT partition. First-message
+// These scripts run only in the isolated Farol ChatGPT partition. First-message
 // helpers return content-free metadata. Follow-up observation returns only the
 // bounded public frame of the caller-bound turn, never account text or full history.
 
@@ -173,7 +173,7 @@ export const SavedChatPhysicalBindingSchema = z.strictObject({
   viewGeneration: savedGeneration,
   documentGeneration: savedGeneration,
   partition: z.enum([
-    "persist:farol-next-chatgpt",
+    "persist:farol-app-chatgpt",
     "persist:farol-dev-chatgpt",
     "persist:farol-owner-preview-chatgpt",
   ]),
@@ -285,7 +285,7 @@ async function savedChatFollowUpPage(
     composer: HTMLElement;
     clicked: boolean;
   };
-  const key = Symbol.for("farol-next.saved-chat-follow-up.v1");
+  const key = Symbol.for("farol.saved-chat-follow-up.v1");
   const pending = Reflect.get(globalThis, key) as Pending | undefined;
   const binding = JSON.stringify(input.binding);
   const refuse = (

@@ -15,7 +15,7 @@ func callerContractRequest(scope conversation.ComputerContext) conversation.Begi
 	s := conversation.CallerScope{SessionID: "session", ThreadID: "thread", TurnID: "turn", RootTurnID: "root", Model: "chatgpt"}
 	raw, _ := json.Marshal(map[string]string{"sessionId": s.SessionID, "threadId": s.ThreadID, "turnId": s.TurnID, "rootTurnId": s.RootTurnID})
 	hash, _ := (intent.SHA256{}).Digest(raw)
-	return conversation.BeginCallerToolRequest{Context: scope, Scope: s, ProducerOperationID: "relay-original", Call: conversation.CallerFunctionCall{ItemID: "fc-caller", CallID: "farol_next_call_" + hash[:16] + "0123456789abcdef", Name: "exec_command", Arguments: `{"cmd":"fixture"}`}}
+	return conversation.BeginCallerToolRequest{Context: scope, Scope: s, ProducerOperationID: "relay-original", Call: conversation.CallerFunctionCall{ItemID: "fc-caller", CallID: "farol_call_" + hash[:16] + "0123456789abcdef", Name: "exec_command", Arguments: `{"cmd":"fixture"}`}}
 }
 func TestCallerContractExactOutputReceiptAndSameConversation(t *testing.T) {
 	h, b, _, _, scope := runningRelayHandle(t)

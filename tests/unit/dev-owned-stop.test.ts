@@ -178,7 +178,7 @@ describe("exact retained Dev stop (pure injected ports)", () => {
     ["profilePath", "/fixture/other/Farol Dev"],
     ["executable", "/Applications/Farol.app/Contents/MacOS/Farol"],
     ["environment", "preview"],
-    ["applicationId", "local.farol.next.preview"],
+    ["applicationId", "io.github.legrch.farol"],
     ["installed", true],
   ])("refuses current %s mismatch without signaling", async (field, value) => {
     const h = harness();
@@ -249,7 +249,7 @@ describe("exact retained Dev stop (pure injected ports)", () => {
     ["writerRoot", "/fixture//farol"],
     ["writerRoot", "/fixture/farol/"],
     ["appPath", "relative/main.cjs"],
-    ["profilePath", "/fixture/Farol Next Preview"],
+    ["profilePath", "/fixture/Farol"],
     ["installed", true],
   ])("rejects invalid retained %s (%#) before lookup", async (field, value) => {
     const h = harness();

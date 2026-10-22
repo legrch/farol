@@ -51,11 +51,11 @@ async function bundle(at, version, buildId, payload) {
   await fs.mkdir(path.join(at, "Contents/Resources/app"), { recursive: true });
   await fs.writeFile(
     path.join(at, "Contents/Info.plist"),
-    `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>local.farol.next.preview</string><key>CFBundleShortVersionString</key><string>${version}</string></dict></plist>`,
+    `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>io.github.legrch.farol</string><key>CFBundleShortVersionString</key><string>${version}</string></dict></plist>`,
   );
   await fs.writeFile(
     path.join(at, "Contents/Resources/app/build-identity.json"),
-    JSON.stringify({ bundleId: "local.farol.next.preview", version, buildId }),
+    JSON.stringify({ bundleId: "io.github.legrch.farol", version, buildId }),
   );
   await fs.writeFile(path.join(at, "Contents/payload"), payload);
   return { digest: await treeDigest(at), version, buildId };
@@ -69,9 +69,9 @@ async function fixture() {
   const appPath = path.join(home, "Applications/Farol.app");
   const userData = path.join(
     home,
-    "Library/Application Support/Farol Next Preview",
+    "Library/Application Support/io.github.legrch.farol",
   );
-  const state = path.join(userData, "farol-next-state");
+  const state = path.join(userData, "farol-state");
   const operationId = "e".repeat(32);
   const op = path.join(userData, "installed-updates", operationId);
   const source = await bundle(appPath, "0.1.0", "1".repeat(64), "N");

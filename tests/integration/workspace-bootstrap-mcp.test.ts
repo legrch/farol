@@ -16,7 +16,7 @@ import {
 import { createReadonlyComputerMcpServer } from "../../src/modules/computer/infra/mcp/create-readonly-computer-mcp";
 import {
   NativeReadonlyWorkspace,
-  NEXT_SAFE_OPEN_HELPER,
+  SAFE_OPEN_HELPER,
 } from "../../src/modules/computer/infra/native/native-readonly-workspace";
 import { ReadonlyComputerContractHandler } from "../../src/modules/computer/infra/readonly-contract-handler";
 import { InMemoryAuthorityRepository } from "../../src/modules/computer/infra/repo/in-memory-authorities";
@@ -120,7 +120,7 @@ async function connect(
   let revoked = false;
   const native = new NativeReadonlyWorkspace({
     helperPath: path.resolve("resources/native/safe_open.py"),
-    helper: NEXT_SAFE_OPEN_HELPER,
+    helper: SAFE_OPEN_HELPER,
     attestInterpreter: async () => "/usr/bin/python3",
   });
   const handler = new ReadonlyComputerContractHandler(

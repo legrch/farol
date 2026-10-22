@@ -26,7 +26,7 @@ const generation = "current-startup-generation";
 function fixture() {
   const events: string[] = [];
   const lease: PromotionLeaseHandle = Object.freeze({
-    file: `${userData}/farol-next-state/promotion.lease`,
+    file: `${userData}/farol-state/promotion.lease`,
     record: Object.freeze({
       schema: 1,
       generation,

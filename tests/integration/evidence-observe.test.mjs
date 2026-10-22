@@ -68,11 +68,11 @@ describe("EV-03/EV-08 effect observer", () => {
     const table = [
       "PID COMMAND",
       "1 /sbin/launchd",
-      "42 /Applications/Farol Next Preview.app/Contents/MacOS/Farol Next Preview",
-      "43 /Applications/Farol Next Preview.app/Contents/Frameworks/x (Renderer)",
+      "42 /Applications/Farol.app/Contents/MacOS/Farol",
+      "43 /Applications/Farol.app/Contents/Frameworks/x (Renderer)",
       "",
     ].join("\n");
-    expect(countProcesses(/Farol Next Preview/u, table)).toBe(2);
+    expect(countProcesses(/Farol/u, table)).toBe(2);
     expect(countProcesses(/Legacy/u, table)).toBe(0);
     expect(
       summarizeSamples(
@@ -106,9 +106,7 @@ describe("EV-03/EV-08 effect observer", () => {
   });
 
   it("binds its receipt to the attempt it watched from before its start until after its terminal receipt, and the verifier accepts exactly that run", async () => {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-observe-"),
-    );
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-observe-"));
     roots.push(root);
     const laneRoot = path.join(root, "_output", "evidence", "e2e");
     await fs.mkdir(laneRoot, { recursive: true });
@@ -158,7 +156,7 @@ describe("EV-03/EV-08 effect observer", () => {
     await fs.writeFile(
       path.join(attempt.directory, "exit.json"),
       JSON.stringify({
-        schema: "farol.next.evidence-attempt/v1",
+        schema: "farol.evidence-attempt/v1",
         attemptId: attempt.attemptId,
         exitCode: 0,
         exitedAt: new Date().toISOString(),
@@ -213,9 +211,7 @@ describe("EV-03/EV-08 effect observer", () => {
   });
 
   it("is not healthy when it never saw the product's own process, however clean the files it hashed", async () => {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-observe-"),
-    );
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-observe-"));
     roots.push(root);
     const laneRoot = path.join(root, "_output", "evidence", "e2e");
     await fs.mkdir(laneRoot, { recursive: true });
@@ -267,9 +263,7 @@ describe("EV-03/EV-08 effect observer", () => {
   });
 
   it("does not count a product process that was gone before the attempt it binds had started", async () => {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-observe-"),
-    );
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-observe-"));
     roots.push(root);
     const laneRoot = path.join(root, "_output", "evidence", "e2e");
     await fs.mkdir(laneRoot, { recursive: true });
@@ -322,9 +316,7 @@ describe("EV-03/EV-08 effect observer", () => {
   });
 
   it("reports an unhealthy receipt when no attempt ever appears, and never binds to a run that started before it did", async () => {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-observe-"),
-    );
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-observe-"));
     roots.push(root);
     // The lane's pointer names an earlier, already finished attempt.
     const earlier = await openEvidenceAttempt(

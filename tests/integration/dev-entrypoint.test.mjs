@@ -98,7 +98,7 @@ describe("dev.mjs toolchain selection", () => {
 describe("dev.mjs dependency evaluation", () => {
   it("passes when every installed entry matches the lock and nothing required is absent", () => {
     const committedPackages = {
-      "": { name: "farol-next-preview" },
+      "": { name: "farol" },
       "node_modules/zod": { version: "4.6.5", integrity: "sha512-abc" },
       "node_modules/@esbuild/aix-ppc64": {
         version: "0.28.2",

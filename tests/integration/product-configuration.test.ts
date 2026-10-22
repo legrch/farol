@@ -314,7 +314,7 @@ describe("connector credential publication fence", () => {
 
 async function stateRoot(): Promise<string> {
   const root = await fs.mkdtemp(
-    path.join(os.tmpdir(), "farol-next-product-settings-"),
+    path.join(os.tmpdir(), "farol-product-settings-"),
   );
   roots.push(root);
   return path.join(root, "state");
@@ -803,7 +803,7 @@ describe("Computer evidence approval generations", () => {
   );
 });
 
-describe("Farol Next product configuration", () => {
+describe("Farol product configuration", () => {
   it("roundtrips exact Codex read selection through the Settings command and save with generation guards", async () => {
     const root = await stateRoot();
     const store = new ProductSettingsStore({ root });
@@ -1681,7 +1681,7 @@ describe("Farol Next product configuration", () => {
         connectors: {
           secureMcp: {
             generation: 1,
-            profile: "farol-next",
+            profile: "farol",
             tunnelId: null,
             tunnelClient: null,
             credential: "missing",
@@ -1710,7 +1710,7 @@ describe("Farol Next product configuration", () => {
       version: "0.0.14+0f870e50a973fa820d4c409000059e181e8d242b",
       protocol: "openai-tunnel-client/v1",
     });
-    await service.configureSecureMcpTunnel({ tunnelId: "tunnel_farol_next" });
+    await service.configureSecureMcpTunnel({ tunnelId: "tunnel_farol" });
     await service.recordSecureMcpCredential("stored");
     await service.recordSecureMcpRuntime({
       state: "ready",
@@ -1802,8 +1802,8 @@ describe("Farol Next product configuration", () => {
           connectors: {
             secureMcp: {
               generation: 4,
-              profile: "farol-next",
-              tunnelId: "tunnel_farol_next",
+              profile: "farol",
+              tunnelId: "tunnel_farol",
               credential: "stored",
               runtime: {
                 state: "ready",
@@ -1837,7 +1837,7 @@ describe("Farol Next product configuration", () => {
               needsAction: null,
               unavailable: null,
               verified: {
-                profile: "farol-next",
+                profile: "farol",
                 configRevision: 4,
                 workspaceId,
                 runtimeGeneration: "b".repeat(64),
@@ -1909,7 +1909,7 @@ describe("Farol Next product configuration", () => {
       version: "0.0.14+0f870e50a973fa820d4c409000059e181e8d242b",
       protocol: "openai-tunnel-client/v1",
     });
-    await service.configureSecureMcpTunnel({ tunnelId: "tunnel_farol_next" });
+    await service.configureSecureMcpTunnel({ tunnelId: "tunnel_farol" });
     await service.recordSecureMcpCredential("stored");
     await service.recordSecureMcpRuntime({
       state: "ready",
@@ -1997,7 +1997,7 @@ describe("Farol Next product configuration", () => {
         version: "0.0.14+0f870e50a973fa820d4c409000059e181e8d242b",
         protocol: "openai-tunnel-client/v1",
       });
-      await service.configureSecureMcpTunnel({ tunnelId: "tunnel_farol_next" });
+      await service.configureSecureMcpTunnel({ tunnelId: "tunnel_farol" });
       await service.recordSecureMcpCredential("stored");
       await service.recordSecureMcpRuntime({
         state: "ready",
@@ -2335,7 +2335,7 @@ describe("Farol Next product configuration", () => {
                 executableSha256: "a".repeat(64),
                 schemaSha256: "b".repeat(64),
                 buildId: "c".repeat(64),
-                dynamicTool: "farol_next_ping",
+                dynamicTool: "farol_ping",
                 verifiedAt: "2026-09-16T10:00:00.000Z",
               },
             },
@@ -3325,7 +3325,7 @@ describe("Farol Next product configuration", () => {
               configured: false,
               reachable: "reachable",
               verified: null,
-              needsAction: "Sign in to ChatGPT in the isolated Next window.",
+              needsAction: "Sign in to ChatGPT in the isolated Farol window.",
             },
           },
         },
@@ -3334,8 +3334,8 @@ describe("Farol Next product configuration", () => {
 
     const authenticated = await service.recordChatGptObservation({
       state: "authenticated",
-      profile: "chatgpt.next-partition/1",
-      runtimeGeneration: "persist:farol-next-chatgpt",
+      profile: "chatgpt.app-partition/1",
+      runtimeGeneration: "persist:farol-app-chatgpt",
       buildId: "a".repeat(64),
       protocol: "chatgpt-page-readiness/1",
     });
@@ -3352,9 +3352,9 @@ describe("Farol Next product configuration", () => {
               unavailable: null,
               outcomeUnknown: false,
               verified: {
-                profile: "chatgpt.next-partition/1",
+                profile: "chatgpt.app-partition/1",
                 workspaceId: null,
-                runtimeGeneration: "persist:farol-next-chatgpt",
+                runtimeGeneration: "persist:farol-app-chatgpt",
                 buildId: "a".repeat(64),
                 protocol: "chatgpt-page-readiness/1",
                 verifiedAt: "2026-09-16T10:00:00.000Z",
@@ -3451,7 +3451,7 @@ describe("Farol Next product configuration", () => {
         state === "authenticated"
           ? {
               state,
-              profile: "chatgpt.next-partition/1",
+              profile: "chatgpt.app-partition/1",
               runtimeGeneration: "synthetic",
               buildId: "a".repeat(64),
               protocol: "chatgpt-page-readiness/1",
@@ -3516,7 +3516,7 @@ describe("Farol Next product configuration", () => {
           {
             path: "README.md",
             line: 1,
-            text: "Farol Next workspace verification fixture",
+            text: "Farol workspace verification fixture",
             truncated: false,
           },
         ],
@@ -3846,7 +3846,7 @@ describe("Farol Next product configuration", () => {
     expect(
       ProductConfigurationCommandSchema.safeParse({
         kind: "connector.configure",
-        tunnelId: "tunnel_farol_next",
+        tunnelId: "tunnel_farol",
         runtimeKey: "sk-runtime-example-1234567890",
       }).success,
     ).toBe(true);
@@ -3931,8 +3931,7 @@ describe("owner-selected embedded app binding", () => {
     };
     expect((await seed.recordSecureMcpTunnelClient(client)).ok).toBe(true);
     expect(
-      (await seed.configureSecureMcpTunnel({ tunnelId: "tunnel_farol_next" }))
-        .ok,
+      (await seed.configureSecureMcpTunnel({ tunnelId: "tunnel_farol" })).ok,
     ).toBe(true);
     expect((await seed.recordSecureMcpCredential("stored")).ok).toBe(true);
     const current = seed.snapshot();

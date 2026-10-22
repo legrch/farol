@@ -40,9 +40,9 @@ afterEach(async () => {
 
 function request(
   identity: LaunchIdentity,
-): Extract<InstanceRequest, { schema: "farol.next.single-instance/2" }> {
+): Extract<InstanceRequest, { schema: "farol.single-instance/2" }> {
   return {
-    schema: "farol.next.single-instance/2",
+    schema: "farol.single-instance/2",
     nonce: "c".repeat(32),
     ...identity,
   };
@@ -51,9 +51,9 @@ function request(
 function runtimeIdentity(sourceDirty: boolean): BuildIdentity {
   return {
     schema: 1,
-    product: "Farol Next Preview",
+    product: "Farol",
     version: "0.1.0-preview.0",
-    bundleId: "local.farol.next.preview",
+    bundleId: "io.github.legrch.farol",
     updateChannel: "local-preview-only",
     builtAt: new Date(0).toISOString(),
     sourceCommit: primary.sourceCommit,
@@ -104,7 +104,7 @@ function goCoreDeclaration() {
   };
 }
 
-describe("Farol Next single-instance identity", () => {
+describe("Farol single-instance identity", () => {
   it("explains a verified background-only refusal without claiming an identity failure", () => {
     const hidden = createInstanceRequest(primary, true);
     const acknowledgement = {
@@ -113,12 +113,12 @@ describe("Farol Next single-instance identity", () => {
       status: "reopen-failed" as const,
     };
     expect(secondInstanceRefusalMessage(hidden, acknowledgement)).toBe(
-      "Farol Next refused the background launch because this exact candidate is already running. Quit it before starting a hidden instance.",
+      "Farol refused the background launch because this exact candidate is already running. Quit it before starting a hidden instance.",
     );
     const verificationFailure =
-      "Farol Next refused the second launch because the running build could not be verified as this exact candidate.";
+      "Farol refused the second launch because the running build could not be verified as this exact candidate.";
     expect(secondInstanceRefusalMessage(hidden, null)).toBe(
-      "Farol Next could not confirm background-only admission with the running instance. Quit it before starting a hidden instance.",
+      "Farol could not confirm background-only admission with the running instance. Quit it before starting a hidden instance.",
     );
     expect(
       secondInstanceRefusalMessage(hidden, {
@@ -137,12 +137,12 @@ describe("Farol Next single-instance identity", () => {
   it("uses a distinct background request version while ordinary requests stay on version 2", () => {
     const ordinary = createInstanceRequest(primary);
     const hidden = createInstanceRequest(primary, true);
-    expect(ordinary.schema).toBe("farol.next.single-instance/2");
-    expect(hidden.schema).toBe("farol.next.single-instance/3");
+    expect(ordinary.schema).toBe("farol.single-instance/2");
+    expect(hidden.schema).toBe("farol.single-instance/3");
     // Frozen older-consumer contract: its strict v2 request never accepted
     // unknown intent fields. This is protocol evidence, not a live old primary.
     const olderRequest = z.strictObject({
-      schema: z.literal("farol.next.single-instance/2"),
+      schema: z.literal("farol.single-instance/2"),
       nonce: z.string(),
       environment: z.enum(["preview", "dev"]),
       sourceCommit: z.string(),
@@ -166,7 +166,7 @@ describe("Farol Next single-instance identity", () => {
       pollMs: 1,
     });
     expect(acknowledgement).toMatchObject({
-      schema: "farol.next.single-instance/2",
+      schema: "farol.single-instance/2",
       nonce: hidden.nonce,
       status: "reopen-failed",
     });
@@ -185,7 +185,7 @@ describe("Farol Next single-instance identity", () => {
     });
     expect(acknowledgement).toBeNull();
     expect(secondInstanceRefusalMessage(hidden, acknowledgement)).toBe(
-      "Farol Next could not confirm background-only admission with the running instance. Quit it before starting a hidden instance.",
+      "Farol could not confirm background-only admission with the running instance. Quit it before starting a hidden instance.",
     );
   });
 
@@ -220,7 +220,7 @@ describe("Farol Next single-instance identity", () => {
       expect(
         decideSecondInstance(primary, {
           ...ordinary,
-          schema: "farol.next.single-instance/3",
+          schema: "farol.single-instance/3",
           backgroundOnly,
         }),
       ).toBeNull();
@@ -246,7 +246,7 @@ describe("Farol Next single-instance identity", () => {
 
   it("binds the runtime identity to the exact build manifest", async () => {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-instance-build-"),
+      path.join(os.tmpdir(), "farol-instance-build-"),
     );
     roots.push(root);
     const clean = await writeBuildFixture(root, {
@@ -441,7 +441,7 @@ describe("Farol Next single-instance identity", () => {
 
   it("round-trips one nonce-bound acknowledgement and consumes it", async () => {
     const userData = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-instance-ack-"),
+      path.join(os.tmpdir(), "farol-instance-ack-"),
     );
     roots.push(userData);
     const second = request(primary);
@@ -462,7 +462,7 @@ describe("Farol Next single-instance identity", () => {
 
   it("publishes only a complete acknowledgement while a reader is polling", async () => {
     const userData = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-instance-atomic-"),
+      path.join(os.tmpdir(), "farol-instance-atomic-"),
     );
     roots.push(userData);
     const second = request(primary);

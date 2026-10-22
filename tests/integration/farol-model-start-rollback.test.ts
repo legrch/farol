@@ -23,7 +23,7 @@ import { FarolModelRuntimeState } from "../../src/apps/desktop/farol-model-runti
 // and they ask the port itself — `status()` cannot see a listener nobody
 // owns, so `status()` alone would have agreed with the defect.
 
-const MODEL = "farol-next/mind";
+const MODEL = "legacy-route/mind";
 
 const roots: string[] = [];
 const endpoints: FarolModelEndpoint[] = [];

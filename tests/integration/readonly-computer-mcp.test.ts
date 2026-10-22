@@ -24,7 +24,7 @@ import {
 import { createReadonlyComputerMcpServer } from "../../src/modules/computer/infra/mcp/create-readonly-computer-mcp";
 import {
   NativeReadonlyWorkspace,
-  NEXT_SAFE_OPEN_HELPER,
+  SAFE_OPEN_HELPER,
 } from "../../src/modules/computer/infra/native/native-readonly-workspace";
 import { ReadonlyComputerContractHandler } from "../../src/modules/computer/infra/readonly-contract-handler";
 import { InMemoryAuthorityRepository } from "../../src/modules/computer/infra/repo/in-memory-authorities";
@@ -39,7 +39,7 @@ let git = "";
 let head = "";
 
 beforeEach(async () => {
-  root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-mcp-"));
+  root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-mcp-"));
   root = await fs.realpath(root);
   await fs.chmod(root, 0o700);
   git = (await executeFile("/usr/bin/xcrun", ["--find", "git"])).stdout.trim();
@@ -146,7 +146,7 @@ describe("read-only Computer MCP adapter", () => {
         new InMemoryComputerApprovalRepository([approval]),
         new NativeReadonlyWorkspace({
           helperPath: sourceHelper,
-          helper: NEXT_SAFE_OPEN_HELPER,
+          helper: SAFE_OPEN_HELPER,
           attestInterpreter: async () => "/usr/bin/python3",
           attestGit: async () => git,
         }),
@@ -169,7 +169,7 @@ describe("read-only Computer MCP adapter", () => {
       turnId: "turn-a",
       generation: 2,
     });
-    const client = new Client({ name: "farol-next-test", version: "1.0.0" });
+    const client = new Client({ name: "farol-test", version: "1.0.0" });
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair();
     await Promise.all([
@@ -465,7 +465,7 @@ describe("read-only Computer MCP adapter", () => {
       turnId: "turn-a",
       generation: 2,
     });
-    const client = new Client({ name: "farol-next-test", version: "1.0.0" });
+    const client = new Client({ name: "farol-test", version: "1.0.0" });
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair();
     await Promise.all([
@@ -591,7 +591,7 @@ describe("read-only Computer MCP adapter", () => {
       undefined,
       fence,
     );
-    const client = new Client({ name: "farol-next-test", version: "1.0.0" });
+    const client = new Client({ name: "farol-test", version: "1.0.0" });
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair();
     await Promise.all([
@@ -725,7 +725,7 @@ describe("read-only Computer MCP adapter", () => {
       turnId: "turn-a",
       generation: 2,
     });
-    const client = new Client({ name: "farol-next-test", version: "1.0.0" });
+    const client = new Client({ name: "farol-test", version: "1.0.0" });
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair();
     await Promise.all([
@@ -831,7 +831,7 @@ describe("read-only Computer MCP adapter", () => {
       turnId: "turn-a",
       generation: 2,
     });
-    const client = new Client({ name: "farol-next-test", version: "1.0.0" });
+    const client = new Client({ name: "farol-test", version: "1.0.0" });
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair();
     await Promise.all([

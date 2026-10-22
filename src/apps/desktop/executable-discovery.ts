@@ -189,7 +189,7 @@ function tunnelClientFixedSeeds(): readonly CandidateSeed[] {
  * exact table (verified against the installed npm package on this Mac) and
  * vendors the native binary at
  * `<platform-package>/vendor/<target-triple>/bin/codex`. Discovery mirrors
- * only the macOS entries, since Farol Next is a macOS-only product.
+ * only the macOS entries, since Farol is a macOS-only product.
  */
 const NPM_PLATFORM_PACKAGE: Readonly<
   Record<string, Readonly<{ packageName: string; targetTriple: string }>>

@@ -5,12 +5,12 @@ const npmVersion = /^npm\/([^ ]+)/u.exec(npmAgent)?.[1] ?? null;
 
 if (!supportedNode.has(process.versions.node) || npmVersion !== requiredNpm) {
   process.stderr.write(
-    `Farol Next toolchain mismatch: Node ${process.versions.node}, npm ${npmVersion ?? "unknown"}; ` +
+    `Farol toolchain mismatch: Node ${process.versions.node}, npm ${npmVersion ?? "unknown"}; ` +
       `expected Node ${[...supportedNode].join(" or ")} with npm ${requiredNpm}.\n`,
   );
   process.exitCode = 1;
 } else {
   process.stdout.write(
-    `Farol Next toolchain: Node ${process.versions.node}, npm ${npmVersion}.\n`,
+    `Farol toolchain: Node ${process.versions.node}, npm ${npmVersion}.\n`,
   );
 }

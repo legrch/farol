@@ -81,7 +81,7 @@ function settings(): ProductSettings {
     connectors: {
       secureMcp: {
         generation: 17,
-        profile: "farol-next",
+        profile: "farol",
         tunnelId: null,
         tunnelClient: null,
         credential: "stored",

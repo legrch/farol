@@ -134,9 +134,9 @@ const AcceptedBuild = z.strictObject({
   buildId: Digest,
 });
 const PromotionReceipt = z.strictObject({
-  schema: z.literal("farol.next.promotion-plan/1"),
+  schema: z.literal("farol.promotion-plan/1"),
   operation: z.literal("applied"),
-  product: z.literal("Farol Next Preview"),
+  product: z.literal("Farol"),
   version: z.string().max(128),
   sourceCommit: z.string().regex(/^[a-f0-9]{40}$/u),
   sourceTreeDigest: Digest,
@@ -156,7 +156,7 @@ const PromotionReceipt = z.strictObject({
 });
 // A cold repair is a distinct installer result, never a synthetic live-update receipt.
 const ClosedRepairReceipt = z.strictObject({
-  schema: z.literal("farol.next.closed-repair/1"),
+  schema: z.literal("farol.closed-repair/1"),
   operationId: z.string().regex(/^[a-f0-9]{32}$/u),
   phase: z.enum(["installed", "rolled_back"]),
   destination: z.string().max(4096),
@@ -176,7 +176,7 @@ const RepairInode = z.tuple([
   z.number().int().nonnegative(),
 ]);
 const ClosedRepairJournal = z.strictObject({
-  schema: z.literal("farol.next.closed-repair-journal/1"),
+  schema: z.literal("farol.closed-repair-journal/1"),
   phase: z.enum(["installed", "rolled_back"]),
   receipt: ClosedRepairReceipt,
   sourceInode: RepairInode,
@@ -639,7 +639,7 @@ async function observeSharedSlotStartup(
   const app = "/Applications/Farol.app";
   const profile = path.join(
     os.userInfo().homedir,
-    "Library/Application Support/Farol Next Preview",
+    "Library/Application Support/io.github.legrch.farol",
   );
   const root = path.join(profile, "installed-updates");
   const build = BuildIdentitySchema.parse(options.build);
@@ -919,7 +919,7 @@ async function observeCompletedPrivateLaunch(
 ): Promise<InstalledUpdateRelaunchGuard | null> {
   const profile = path.join(
     os.userInfo().homedir,
-    "Library/Application Support/Farol Next Preview",
+    "Library/Application Support/io.github.legrch.farol",
   );
   const root = path.join(profile, "installed-updates");
   const app = path.resolve(options.directory, "../../..");
@@ -1087,7 +1087,7 @@ export async function waitForInstalledUpdateRelaunch(
   const build = BuildIdentitySchema.parse(options.build);
   const profile = path.join(
     os.userInfo().homedir,
-    "Library/Application Support/Farol Next Preview",
+    "Library/Application Support/io.github.legrch.farol",
   );
   const root = path.join(profile, "installed-updates");
   const actualApp = path.resolve(options.directory, "../../..");
@@ -1847,7 +1847,7 @@ export async function createSupervisedInstalledUpdateRuntime(
       : installedFarolSlot(options.installedResourcesDirectory);
   const profile = path.join(
     os.userInfo().homedir,
-    "Library/Application Support/Farol Next Preview",
+    "Library/Application Support/io.github.legrch.farol",
   );
   const resources = {
     app: options.resources.app,
@@ -1901,10 +1901,10 @@ export async function createSupervisedInstalledUpdateRuntime(
     if (build.version !== "0.2.0-owner.beta.3") return true;
     if (!Digest.safeParse(options.preservedSettingsSha256).success)
       return false;
-    await canonicalOwnedDirectory(path.join(profile, "farol-next-state"), true);
+    await canonicalOwnedDirectory(path.join(profile, "farol-state"), true);
     let digest: string | null = null;
     const config = await readRecord(
-      path.join(profile, "farol-next-state/config.json"),
+      path.join(profile, "farol-state/config.json"),
       true,
       (value) => {
         digest = value;
@@ -1930,7 +1930,7 @@ export async function createSupervisedInstalledUpdateRuntime(
         name === "ready.json" ? Retained.parse(raw) : SavedReceipt.parse(raw);
       if (record.notes !== undefined) return false;
     }
-    await canonicalOwnedDirectory(path.join(profile, "farol-next-state"), true);
+    await canonicalOwnedDirectory(path.join(profile, "farol-state"), true);
     return true;
   };
   if (!(await verifyOriginalState())) return null;
@@ -2048,7 +2048,7 @@ async function createRuntime(
     options.userData !==
       path.join(
         os.userInfo().homedir,
-        "Library/Application Support/Farol Next Preview",
+        "Library/Application Support/io.github.legrch.farol",
       )
   )
     return null;

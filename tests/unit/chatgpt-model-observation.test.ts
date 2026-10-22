@@ -141,7 +141,7 @@ describe("ChatGPT model before-send validation (pure fixtures)", () => {
   }
 
   it.each([
-    "farol-next/chatgpt",
+    "legacy-route/chatgpt",
     "chatgpt",
     "farol/chatgpt",
     "Fixture Model",
@@ -161,7 +161,7 @@ describe("ChatGPT model before-send validation (pure fixtures)", () => {
 
   it.each([
     "fixture-model",
-    "farol-next/chatgpt",
+    "legacy-route/chatgpt",
     "chatgpt",
     "farol/chatgpt",
     "fixture model",

@@ -167,7 +167,7 @@ const viewSchema = {
     .nonnegative()
     .max(Number.MAX_SAFE_INTEGER),
   partition: z.enum([
-    "persist:farol-next-chatgpt",
+    "persist:farol-app-chatgpt",
     "persist:farol-dev-chatgpt",
     "persist:farol-owner-preview-chatgpt",
   ]),
@@ -372,7 +372,7 @@ async function physicalPage(
     spentOperations: Set<string>;
     composers: WeakMap<HTMLElement, string>;
   };
-  const key = Symbol.for("farol-next.physical-page.v1");
+  const key = Symbol.for("farol.physical-page.v1");
   const getStore = (): Store => {
     let store = Reflect.get(globalThis, key) as Store | undefined;
     if (!store) {

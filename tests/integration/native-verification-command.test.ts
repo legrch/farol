@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ReadonlyWorkspaceRequest } from "../../src/modules/computer/app/port/readonly-workspace";
 import {
   NativeReadonlyWorkspace,
-  NEXT_SAFE_OPEN_HELPER,
+  SAFE_OPEN_HELPER,
 } from "../../src/modules/computer/infra/native/native-readonly-workspace";
 import {
   discoverLinkedGitMetadata,
@@ -75,7 +75,7 @@ function workspace(
 ): NativeReadonlyWorkspace {
   return new NativeReadonlyWorkspace({
     helperPath: sourceHelper,
-    helper: NEXT_SAFE_OPEN_HELPER,
+    helper: SAFE_OPEN_HELPER,
     attestInterpreter: async () => "/usr/bin/python3",
     attestGit,
     runtimeDirectory,
@@ -89,7 +89,7 @@ function snapshotFactory(): SnapshotFactory {
   return (snapshotRequest) =>
     createWorkspaceSnapshot(snapshotRequest, {
       helperPath: sourceHelper,
-      helper: NEXT_SAFE_OPEN_HELPER,
+      helper: SAFE_OPEN_HELPER,
       attestInterpreter: async () => "/usr/bin/python3",
       runtimeDirectory,
     });
@@ -256,14 +256,14 @@ async function fingerprintTree(
 }
 
 beforeEach(async () => {
-  root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-command-"));
+  root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-command-"));
   root = await fs.realpath(root);
   await fs.chmod(root, 0o700);
   runtimeDirectory = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-command-runtime-")),
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-command-runtime-")),
   );
   fixturesDirectory = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-command-fixtures-")),
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-command-fixtures-")),
   );
   git = (await executeFile("/usr/bin/xcrun", ["--find", "git"])).stdout.trim();
   await executeFile(git, ["init", "--quiet", root]);
@@ -311,7 +311,7 @@ describe("native verification command", () => {
     // desktop and the Computer MCP server build.
     const product = new NativeReadonlyWorkspace({
       helperPath: sourceHelper,
-      helper: NEXT_SAFE_OPEN_HELPER,
+      helper: SAFE_OPEN_HELPER,
       runtimeDirectory,
     });
     await expect(product.execute(request())).resolves.toMatchObject({
@@ -327,7 +327,7 @@ describe("native verification command", () => {
   it("attests and caches the reviewed Apple Git chain before production execution", async () => {
     const productionWorkspace = new NativeReadonlyWorkspace({
       helperPath: sourceHelper,
-      helper: NEXT_SAFE_OPEN_HELPER,
+      helper: SAFE_OPEN_HELPER,
       runtimeDirectory,
     });
 
@@ -432,7 +432,7 @@ int main(void) {
   it("supports one exact linked worktree while never authorizing its metadata parent", async () => {
     const mainRoot = root;
     const worktreeParent = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-command-worktree-parent-"),
+      path.join(os.tmpdir(), "farol-command-worktree-parent-"),
     );
     const linkedRoot = path.join(worktreeParent, "checkout");
     const parentCanary = path.join(worktreeParent, "parent-canary");
@@ -514,7 +514,7 @@ int main(void) {
   it("AUTH-09 refuses linked metadata the owner never approved before opening it", async () => {
     const mainRoot = root;
     const worktreeParent = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-command-worktree-grant-"),
+      path.join(os.tmpdir(), "farol-command-worktree-grant-"),
     );
     const linkedRoot = path.join(worktreeParent, "checkout");
     const gitDirectory = path.join(mainRoot, ".git", "worktrees", "checkout");
@@ -575,7 +575,7 @@ int main(void) {
   it("rejects a linked worktree that redirects its Git file to arbitrary metadata", async () => {
     const mainRoot = root;
     const worktreeParent = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-command-worktree-metadata-"),
+      path.join(os.tmpdir(), "farol-command-worktree-metadata-"),
     );
     const linkedRoot = path.join(worktreeParent, "checkout");
     let originalGitFile = "";
@@ -649,7 +649,7 @@ int main(void) {
   it("rejects writable linked-worktree metadata", async () => {
     const mainRoot = root;
     const worktreeParent = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-command-worktree-writable-"),
+      path.join(os.tmpdir(), "farol-command-worktree-writable-"),
     );
     const linkedRoot = path.join(worktreeParent, "checkout");
     let gitDirectory = "";
@@ -705,7 +705,7 @@ int main(void) {
 
   it("refuses a linked Git directory instead of following command metadata outside the grant", async () => {
     const outside = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-command-gitdir-"),
+      path.join(os.tmpdir(), "farol-command-gitdir-"),
     );
     try {
       await fs.rename(path.join(root, ".git"), path.join(outside, ".git"));
@@ -771,7 +771,7 @@ int main(void) {
 
   it("never lets the verifier read a sentinel outside the approved root", async () => {
     const outside = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-command-sentinel-"),
+      path.join(os.tmpdir(), "farol-command-sentinel-"),
     );
     const sentinel = path.join(outside, "sentinel.txt");
     await fs.writeFile(sentinel, "OUTSIDE-SENTINEL\n", { mode: 0o600 });
@@ -1054,7 +1054,7 @@ int main(void) {
 
     it("distinguishes an unborn HEAD from a failed command", async () => {
       const unborn = await fs.realpath(
-        await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-command-unborn-")),
+        await fs.mkdtemp(path.join(os.tmpdir(), "farol-command-unborn-")),
       );
       const mainRoot = root;
       try {
@@ -1093,7 +1093,7 @@ int main(void) {
     it("reports the linked-worktree layout and coverage for both commands", async () => {
       const mainRoot = root;
       const worktreeParent = await fs.mkdtemp(
-        path.join(os.tmpdir(), "farol-next-command-layout-"),
+        path.join(os.tmpdir(), "farol-command-layout-"),
       );
       const linkedRoot = path.join(worktreeParent, "checkout");
       try {
@@ -1301,7 +1301,7 @@ int main(void) {
         snapshotRequest,
         {
           helperPath: sourceHelper,
-          helper: NEXT_SAFE_OPEN_HELPER,
+          helper: SAFE_OPEN_HELPER,
           attestInterpreter: async () => "/usr/bin/python3",
           runtimeDirectory,
         },
@@ -1827,9 +1827,7 @@ int main(void) {
         ...initArguments: string[]
       ): Promise<string> {
         const directory = await fs.realpath(
-          await fs.mkdtemp(
-            path.join(os.tmpdir(), "farol-next-command-format-"),
-          ),
+          await fs.mkdtemp(path.join(os.tmpdir(), "farol-command-format-")),
         );
         await fs.chmod(directory, 0o700);
         await executeFile(git, [
@@ -2227,7 +2225,7 @@ int main(void) {
     it("still writes a refreshed index under the narrowed grant, on a linked worktree", async () => {
       const mainRoot = root;
       const worktreeParent = await fs.mkdtemp(
-        path.join(os.tmpdir(), "farol-next-command-worktree-refresh-"),
+        path.join(os.tmpdir(), "farol-command-worktree-refresh-"),
       );
       const linkedRoot = path.join(worktreeParent, "checkout");
       try {

@@ -1,6 +1,6 @@
 {
   "source": "resources/native/update_helper.py",
-  "sha256": "f2f864871ed29536f345f5d9e13e8e74d59a3b4be6f7b7028ef915743b167f85",
+  "sha256": "9bd3bf1e06984deeae37cdc61c30063d01b466d26a518952c599fba9c1142c02",
   "functions": ["private_launch_path", "relaunch_arguments", "selected_slot"],
   "limits": "Synthetic pure argument/encoding parity; no native identity, copy, journal, launch or installation evidence",
   "cases": [
@@ -120,11 +120,11 @@
         "pid": 5678,
         "processStart": "Thu Oct 15 12:34:56 2026"
       },
-      "privateLaunch": "/synthetic/home/Library/Application Support/Farol Next Preview/installed-updates/11111111111111111111111111111111/launch-Farol.app",
+      "privateLaunch": "/synthetic/home/Library/Application Support/io.github.legrch.farol/installed-updates/11111111111111111111111111111111/launch-Farol.app",
       "arguments": [
         "/usr/bin/open",
         "-a",
-        "/synthetic/home/Library/Application Support/Farol Next Preview/installed-updates/11111111111111111111111111111111/launch-Farol.app",
+        "/synthetic/home/Library/Application Support/io.github.legrch.farol/installed-updates/11111111111111111111111111111111/launch-Farol.app",
         "--args",
         "--farol-installed-update-relaunch={\"operationId\":\"11111111111111111111111111111111\",\"action\":\"apply\",\"phase\":\"completed\",\"helper\":{\"pid\":5678,\"processStart\":\"Thu Oct 15 12:34:56 2026\"},\"buildId\":\"5555555555555555555555555555555555555555555555555555555555555555\"}"
       ]
@@ -162,11 +162,11 @@
         "pid": 5678,
         "processStart": "x\u0000\n\u007f<&>\ud83d\ude00"
       },
-      "privateLaunch": "/synthetic/Owner Space/\u00e9tage\ud83d\ude00/Library/Application Support/Farol Next Preview/installed-updates/11111111111111111111111111111111/launch-Farol.app",
+      "privateLaunch": "/synthetic/Owner Space/\u00e9tage\ud83d\ude00/Library/Application Support/io.github.legrch.farol/installed-updates/11111111111111111111111111111111/launch-Farol.app",
       "arguments": [
         "/usr/bin/open",
         "-a",
-        "/synthetic/Owner Space/\u00e9tage\ud83d\ude00/Library/Application Support/Farol Next Preview/installed-updates/11111111111111111111111111111111/launch-Farol.app",
+        "/synthetic/Owner Space/\u00e9tage\ud83d\ude00/Library/Application Support/io.github.legrch.farol/installed-updates/11111111111111111111111111111111/launch-Farol.app",
         "--args",
         "--farol-installed-update-relaunch={\"operationId\":\"11111111111111111111111111111111\",\"action\":\"apply\",\"phase\":\"completed\",\"helper\":{\"pid\":5678,\"processStart\":\"x\\u0000\\n\\u007f<&>\\ud83d\\ude00\"},\"buildId\":\"5555555555555555555555555555555555555555555555555555555555555555\"}"
       ]

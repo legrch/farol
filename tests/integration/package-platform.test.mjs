@@ -57,11 +57,9 @@ describe("package macOS runtime floor", () => {
       execFileSync("/usr/bin/plutil", ["-lint", outerPlist]);
       expect(plistValue(outerPlist, "LSMinimumSystemVersion")).toBe(floor);
       expect(plistValue(outerPlist, "CFBundleIdentifier")).toBe(
-        "local.farol.next.preview",
+        "io.github.legrch.farol",
       );
-      expect(plistValue(outerPlist, "CFBundleExecutable")).toBe(
-        "Farol Next Preview",
-      );
+      expect(plistValue(outerPlist, "CFBundleExecutable")).toBe("Farol");
       expect(plistValue(outerPlist, "CFBundleShortVersionString")).toBe(
         "0.2.0",
       );

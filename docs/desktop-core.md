@@ -13,7 +13,7 @@ was built with `task package` and declared Go inputs on 4 October 2026. Its buil
 is `478c020d323b1ec0114e1b38a2270f9ddedf83109706b8c030db4d42f0eab17b`;
 artifact SHA-256 is
 `4e1099c9f91ed84659e31b80bd00505d083114a40745635fda0c3dfa1c88000c`.
-It remains unsigned `local.farol.next.preview`, version `0.1.9-owner.beta.1`,
+It remains unsigned `io.github.legrch.farol`, version `0.1.9-owner.beta.1`,
 build `11`. These are local candidate facts, not a release or installation.
 
 `tests/e2e/go-core-startup.e2e.mjs --run-native --reopen` exercised the actual
@@ -175,7 +175,7 @@ React/Go guarded-edit journey on 4 October 2026. Build ID:
 `64bf86ec797b207f85c59c5ee20e77a2c949b02a7c1f83d702d684c1df7d8924`.
 Artifact SHA-256:
 `39e9f112046092e1982cd9b540444ed1a243b5dabcb6240034b5c68c1ff404cf`.
-It remains unsigned `local.farol.next.preview`, version `0.1.10-owner.beta.1`,
+It remains unsigned `io.github.legrch.farol`, version `0.1.10-owner.beta.1`,
 build `12`. It is a local candidate, separate from the installed access hotfix;
 no installation, release or live-provider qualification is claimed.
 
@@ -283,7 +283,7 @@ React edit, unacknowledged Quit, same-profile reopen, retained Observe and
 - Artifact SHA-256: `6a75463930b99d5260a3c376dfb70766015b47a2a547c4f298f38869104d9b97`.
 - Report: `_output/evidence/go-core-startup-cfc89a8d-284a-4697-a882-0f4ec1015969.json`.
 
-The package remains unsigned `local.farol.next.preview`, version
+The package remains unsigned `io.github.legrch.farol`, version
 `0.1.10-owner.beta.1`, build `12`. Package verification before and after the run
 bound the unchanged artifact, complete source tree and sealed Go executable.
 The harness and package use the same exact commit. No installation, update,
@@ -345,7 +345,7 @@ host/Go edit-snapshot path on 4 October 2026. Build ID:
 `df54f25d1653527c9f81430165b3a89aeb1602fdee098169c41966964eddbc1a`.
 Artifact SHA-256:
 `95b7829b5d6a743877d3e4e299afd26f34ed9e486bcd13b5c23e2eb4eecb7e59`.
-It is unsigned `local.farol.next.preview`, version `0.1.10-owner.beta.1`, build
+It is unsigned `io.github.legrch.farol`, version `0.1.10-owner.beta.1`, build
 `12`. Matching version metadata does not make it the separately installed access
 hotfix from source `569bd4d`. This React/Go package was neither installed nor released.
 

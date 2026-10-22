@@ -66,7 +66,7 @@ export function guidedSettingsFixture() {
     connectors: {
       secureMcp: {
         generation: 1,
-        profile: "farol-next",
+        profile: "farol",
         tunnelId: "tunnel_ui_fixture",
         credential: "stored",
         tunnelClient: {

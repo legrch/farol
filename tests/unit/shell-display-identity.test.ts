@@ -39,8 +39,8 @@ function present(environment: "preview" | "dev", overrides = {}) {
   );
   const bootstrap = identitySchema.parse({
     schema: 3,
-    productName: "Farol Next Preview",
-    bundleId: "local.farol.next.preview",
+    productName: "Farol",
+    bundleId: "io.github.legrch.farol",
     environment,
     displayName: identity.displayName,
     displayEdition: identity.displayEdition,
@@ -99,7 +99,7 @@ describe("desktop display identity in the shell", () => {
       "Farol",
       "",
       "Farol",
-      "Farol · local.farol.next.preview",
+      "Farol · io.github.legrch.farol",
       "farol-mark.svg",
     ],
     [
@@ -134,7 +134,7 @@ describe("desktop display identity in the shell", () => {
     ["preview", { displayEdition: "Development" }],
     ["dev", { displayEdition: "" }],
     ["preview", { displayName: "Farol Dev" }],
-    ["dev", { applicationId: "local.farol.next.preview" }],
+    ["dev", { applicationId: "io.github.legrch.farol" }],
   ] as const)(
     "rejects inconsistent %s display identity",
     (environment, overrides) => {
@@ -147,7 +147,7 @@ describe("desktop display identity in the shell", () => {
   it.each([
     { displayEdition: "Developer Preview" },
     { displayEdition: "Preview" },
-    { productName: "Farol" },
+    { productName: "Legacy Product" },
     { bundleId: "local.farol.dev" },
     { unexpected: true },
   ])("rejects invalid bootstrap identity: %j", (overrides) => {

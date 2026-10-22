@@ -111,7 +111,7 @@ class FakePeer implements CodexChatGptHostPeer {
 describe("isolated Codex to ChatGPT host route", () => {
   it.each([
     "farol/chatgpt",
-    "farol-next/chatgpt",
+    "legacy-route/chatgpt",
     "chatgpt-release-a",
     "deepseek",
   ])(
@@ -140,9 +140,9 @@ describe("isolated Codex to ChatGPT host route", () => {
   );
 
   it.each([
-    { observedProvider: "farol_next" },
+    { observedProvider: "legacy_provider" },
     { observedProvider: "openai" },
-    { observedModel: "farol-next/chatgpt" },
+    { observedModel: "legacy-route/chatgpt" },
     { observedModel: "farol/chatgpt" },
   ])("refuses a retained prior route %j before resuming", async (observed) => {
     const peer = new FakePeer(observed);
@@ -286,9 +286,9 @@ describe("isolated Codex to ChatGPT host route", () => {
 
   it.each([
     { observedProvider: "openai" },
-    { observedProvider: "farol_next" },
+    { observedProvider: "legacy_provider" },
     { observedModel: "gpt-6-astra" },
-    { observedModel: "farol-next/chatgpt" },
+    { observedModel: "legacy-route/chatgpt" },
     { observedModel: "farol/chatgpt" },
   ])(
     "refuses provider/model substitution %j before starting a turn",

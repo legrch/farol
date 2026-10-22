@@ -2,7 +2,7 @@
 
 The one-shot `tooling/recover-installed-empty-chat.mjs` entry is owner maintenance,
 not normal startup, reconnect, task resume, update replay, or a general reset.
-It selects only the existing trusted owner's `Farol Next Preview` profile and a
+It selects only the existing trusted owner's `Farol` profile and a
 clean, packaged, exact source/build. The Go producer is independently reproduced.
 There are no HOME, profile, executable, force, retry, or resume overrides.
 

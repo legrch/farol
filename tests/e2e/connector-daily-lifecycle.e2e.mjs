@@ -236,7 +236,7 @@ async function hidden(run) {
 }
 async function settings(run) {
   const result = await bounded(
-    run.window.evaluate(() => window.farolNext.bootstrap()),
+    run.window.evaluate(() => window.farol.bootstrap()),
     "DAILY_BOOTSTRAP_TIMEOUT",
   );
   assert.deepEqual(result.build, build);
@@ -246,7 +246,7 @@ async function settings(run) {
 async function configure(run, command) {
   // Exactly one public command. A lost/refused reply terminates this case.
   const result = await bounded(
-    run.window.evaluate((value) => window.farolNext.configure(value), command),
+    run.window.evaluate((value) => window.farol.configure(value), command),
     "DAILY_CONFIGURATION_TIMEOUT",
     30000,
   );
@@ -299,20 +299,20 @@ function captureMain(run, application) {
 }
 async function launch(run) {
   const options = {
-    executablePath: path.join(appPath, "Contents/MacOS/Farol Next Preview"),
+    executablePath: path.join(appPath, "Contents/MacOS/Farol"),
     args: ["--preview-window-mode=hidden"],
     env: {
       HOME: run.home.path,
       TMPDIR: temporaryRoot,
       PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
       LANG: "en_US.UTF-8",
-      FAROL_NEXT_E2E: "1",
-      FAROL_NEXT_E2E_APP_DATA: run.appData,
-      FAROL_NEXT_E2E_TEST_ROOT: run.home.path,
-      FAROL_NEXT_E2E_TEST_PROOF: run.proof,
-      FAROL_NEXT_E2E_WORKSPACE_ROOT: run.workspace,
-      FAROL_NEXT_E2E_CHATGPT_URL: run.fixtureUrl,
-      FAROL_NEXT_E2E_TUNNEL_CLIENT: run.tunnelExecutable,
+      FAROL_E2E: "1",
+      FAROL_E2E_APP_DATA: run.appData,
+      FAROL_E2E_TEST_ROOT: run.home.path,
+      FAROL_E2E_TEST_PROOF: run.proof,
+      FAROL_E2E_WORKSPACE_ROOT: run.workspace,
+      FAROL_E2E_CHATGPT_URL: run.fixtureUrl,
+      FAROL_E2E_TUNNEL_CLIENT: run.tunnelExecutable,
     },
     timeout: 15000,
   };
@@ -357,7 +357,7 @@ async function launch(run) {
   );
   assert.equal(actual.isPackaged, true);
   assert.equal(actual.userDataOverride, false);
-  assert.equal(actual.userData, path.join(run.appData, "Farol Next Preview"));
+  assert.equal(actual.userData, path.join(run.appData, "Farol"));
   run.nativePaths = actual;
   run.isolated = true;
   run.userData = actual.userData;
@@ -371,7 +371,7 @@ async function launch(run) {
     path: singletonRoot,
     identity: await identity(singletonRoot),
   };
-  run.state = path.join(actual.userData, "farol-next-state");
+  run.state = path.join(actual.userData, "farol-state");
   run.connectorRoot = path.join(run.state, "secure-mcp-connector");
   await bounded(
     waitForReactShell(run.window),
@@ -379,16 +379,14 @@ async function launch(run) {
     30000,
   );
   await poll(
-    () => optionalText(path.join(run.home.path, ".farol-next-startup-stage")),
+    () => optionalText(path.join(run.home.path, ".farol-startup-stage")),
     (value) => value.trim() === "startup-complete",
     "DAILY_STARTUP_TIMEOUT",
     30000,
   );
   await poll(
     () =>
-      optionalText(
-        path.join(run.home.path, ".farol-next-connector-resume-stage"),
-      ),
+      optionalText(path.join(run.home.path, ".farol-connector-resume-stage")),
     (value) => value.trim() === "connector-resume-skipped",
     "DAILY_WATCH_STARTUP_TIMEOUT",
   );
@@ -531,7 +529,7 @@ async function initialVerify(run, current, selected) {
     await bounded(client.connect(transport), "DAILY_MCP_CONNECT_TIMEOUT");
     const result = await bounded(
       client.callTool({
-        name: "farol_next_connector_verify",
+        name: "farol_connector_verify",
         arguments: {
           challenge: current.connectors.secureMcp.challenge.value,
           workspaceId: current.setup.computer.verified.workspaceId,
@@ -1051,15 +1049,12 @@ async function dispose(run) {
       await sameRoot(run.home);
       await sameRoot(run.auxiliary);
       assert.equal(
-        await fs.readFile(
-          path.join(run.home.path, ".farol-next-e2e-root"),
-          "utf8",
-        ),
+        await fs.readFile(path.join(run.home.path, ".farol-e2e-root"), "utf8"),
         run.proof,
       );
       assert.equal(
         await fs.readFile(
-          path.join(run.auxiliary.path, ".farol-next-e2e-root"),
+          path.join(run.auxiliary.path, ".farol-e2e-root"),
           "utf8",
         ),
         run.proof,
@@ -1171,7 +1166,7 @@ async function fresh(name) {
     // Required prefix belongs to the existing admission contract; this is always
     // a new allocation, never a lookup or adoption of prior fixture roots.
     for (const [key, prefix] of [
-      ["home", "farol-next-e2e-home-"],
+      ["home", "farol-e2e-home-"],
       ["auxiliary", "farol-guided-setup-"],
     ]) {
       const directory = await fs.realpath(
@@ -1179,16 +1174,15 @@ async function fresh(name) {
       );
       run[key] = { path: directory, identity: await identity(directory) };
       evidence.roots.push(run[key]);
-      await fs.writeFile(
-        path.join(directory, ".farol-next-e2e-root"),
-        run.proof,
-        { mode: 0o600, flag: "wx" },
-      );
+      await fs.writeFile(path.join(directory, ".farol-e2e-root"), run.proof, {
+        mode: 0o600,
+        flag: "wx",
+      });
     }
     run.appData = path.join(run.home.path, "app-data");
     run.workspace = path.join(run.auxiliary.path, "approved-folder");
     await fs.mkdir(run.appData, { mode: 0o700 });
-    await fs.mkdir(path.join(run.appData, "Farol Next Preview"), {
+    await fs.mkdir(path.join(run.appData, "Farol"), {
       mode: 0o700,
     });
     await fs.mkdir(run.workspace, { mode: 0o700 });
@@ -1256,10 +1250,7 @@ async function fresh(name) {
       try {
         await sameRoot(record);
         assert.equal(
-          await fs.readFile(
-            path.join(record.path, ".farol-next-e2e-root"),
-            "utf8",
-          ),
+          await fs.readFile(path.join(record.path, ".farol-e2e-root"), "utf8"),
           run.proof,
         );
         await fs.rm(record.path, { recursive: true });

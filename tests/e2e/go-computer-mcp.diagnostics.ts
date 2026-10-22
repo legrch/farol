@@ -430,7 +430,7 @@ export class Peer {
     assert.equal(this.buffer.length, 0);
     assert.equal(
       this.stderr.toString("utf8"),
-      "Farol Next Computer MCP failed to start.\n",
+      "Farol Computer MCP failed to start.\n",
     );
     if (this.failure) throw this.failure;
   }

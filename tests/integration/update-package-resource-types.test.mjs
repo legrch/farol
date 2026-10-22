@@ -324,8 +324,8 @@ describe("extracted artifact descriptor and bounded read", () => {
       await disposable(async ({ directory, stage }) => {
         const archive = path.join(directory, "archive.zip");
         const manifest = {
-          product: "Farol Next Preview",
-          bundleId: "local.farol.next.preview",
+          product: "Farol",
+          bundleId: "io.github.legrch.farol",
           version: "0.1.0-owner.beta.1",
           buildVersion: "2",
           channel: "owner-beta",

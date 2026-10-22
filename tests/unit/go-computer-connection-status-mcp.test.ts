@@ -82,9 +82,7 @@ it("does not advertise status merely because verification exists", async () => {
     },
   });
   const tools = (await f.client.listTools()).tools;
-  expect(tools.some((x) => x.name === "farol_next_connector_verify")).toBe(
-    true,
-  );
+  expect(tools.some((x) => x.name === "farol_connector_verify")).toBe(true);
   expect(tools.some((x) => x.name === "computer_connection_status")).toBe(
     false,
   );

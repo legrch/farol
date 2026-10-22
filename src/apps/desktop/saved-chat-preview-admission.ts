@@ -21,7 +21,7 @@ export function savedChatPreviewQualified(
       input.environment === "owner-preview") &&
     input.ownerOptIn === "1" &&
     !input.outcomeUnknown &&
-    verification?.profile === "chatgpt.next-partition/1" &&
+    verification?.profile === "chatgpt.app-partition/1" &&
     verification.runtimeGeneration === `${input.partition}:${input.buildId}` &&
     verification.buildId === input.buildId &&
     verification.protocol === "chatgpt-page-readiness/1"

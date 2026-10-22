@@ -63,7 +63,7 @@ async function fixture() {
     await fs.mkdtemp(path.join(os.tmpdir(), "farol-closed-recovery-")),
   );
   roots.push(userData);
-  const state = path.join(userData, "farol-next-state");
+  const state = path.join(userData, "farol-state");
   await fs.mkdir(state, { mode: 0o700 });
   const { root, credentials } = await desktopRoots(userData);
   await fs.mkdir(root, { mode: 0o700, recursive: true });

@@ -22,7 +22,7 @@ const scope = ".";
 const { artifactFile, appPath } = candidatePaths(root);
 
 function fail(message) {
-  process.stderr.write(`Farol Next Preview is not runnable: ${message}\n`);
+  process.stderr.write(`Farol is not runnable: ${message}\n`);
   process.exitCode = 1;
 }
 
@@ -41,7 +41,7 @@ function verify(artifactPath, candidateAppPath, environment) {
 }
 
 async function main() {
-  if (process.env.FAROL_NEXT_OWNER_LAUNCH !== "1") {
+  if (process.env.FAROL_OWNER_LAUNCH !== "1") {
     throw new Error("use the canonical owner command 'task run'");
   }
   const launchArguments = ownerLaunchArguments(process.argv.slice(2));
@@ -71,7 +71,7 @@ async function main() {
     );
   } catch {
     throw new Error(
-      "package is stale or source is not exact; commit the intended Next source and run 'task package'",
+      "package is stale or source is not exact; commit the intended Farol source and run 'task package'",
     );
   }
 
@@ -101,10 +101,7 @@ async function main() {
       artifact,
       "CANDIDATE_SOURCE_CHANGED_DURING_VERIFICATION",
     );
-    const executable = path.join(
-      snapshot.appPath,
-      "Contents/MacOS/Farol Next Preview",
-    );
+    const executable = path.join(snapshot.appPath, "Contents/MacOS/Farol");
     await fs.access(executable);
     process.stdout.write(
       `launching isolated verified candidate ${snapshot.appPath} from ${appPath}\n`,
@@ -155,7 +152,7 @@ async function main() {
     if (outcome.signal) {
       if (ownerStopSignal) {
         process.stdout.write(
-          `Farol Next Preview stopped (owner ${ownerStopSignal === "SIGINT" ? "Ctrl+C" : ownerStopSignal}). Nothing else was touched.\n`,
+          `Farol stopped (owner ${ownerStopSignal === "SIGINT" ? "Ctrl+C" : ownerStopSignal}). Nothing else was touched.\n`,
         );
         process.exitCode = 130;
         return;
@@ -172,7 +169,7 @@ async function main() {
       ownerLaunchResult !== "reopened"
     ) {
       throw new Error(
-        `running Farol Next instance rejected the exact candidate (${ownerLaunchResult}); quit it and launch again`,
+        `running Farol instance rejected the exact candidate (${ownerLaunchResult}); quit it and launch again`,
       );
     }
   } finally {

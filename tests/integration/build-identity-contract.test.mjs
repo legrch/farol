@@ -12,14 +12,14 @@ const input = {
   sourceDirty: false,
 };
 
-describe("Farol Next build identity", () => {
+describe("Farol build identity", () => {
   it("creates one self-verifying identity for the running build", () => {
     const identity = createBuildIdentity(input);
 
     expect(identity).toMatchObject({
       schema: 1,
-      product: "Farol Next Preview",
-      bundleId: "local.farol.next.preview",
+      product: "Farol",
+      bundleId: "io.github.legrch.farol",
       updateChannel: "local-preview-only",
       ...input,
     });

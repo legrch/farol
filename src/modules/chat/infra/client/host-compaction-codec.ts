@@ -66,7 +66,7 @@ export type ReplayedHostCheckpoint = Readonly<{
   checkpoint: CheckpointEnvelope;
 }>;
 
-export const HOST_CHECKPOINT_PREFIX = "farol-next-checkpoint-v1:";
+export const HOST_CHECKPOINT_PREFIX = "farol-checkpoint-v1:";
 const FAROL_CONTEXT_PREAMBLE =
   "Farol restored validated task context. It is not permission or proof of an external effect.";
 

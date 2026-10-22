@@ -37,8 +37,8 @@ import (
 // authentication, a desktop launch, a package, an installed app or relaunch.
 
 const (
-	execNativeSourceDigest = "aa5be957bca1b602513cc520d48ebabb39a79adfffe07ee47434fbc33f4a62bd"
-	execNativeTargetDigest = "d0bd0b78217c34f9a0f86dad465ac033ec6a63cd1ba5bdeeffcac545d08bee2d"
+	execNativeSourceDigest = "6fffca33b1a4831aecd152a758c4b819e7cc60a844afda73b906b874a8d3f6f3"
+	execNativeTargetDigest = "5655e32d0fd60f4acc2347182e9a779ab89266ecd8f970d78132233996e6e60f"
 	execNativeVersion      = "1.2.3-preview.4"
 )
 
@@ -126,8 +126,8 @@ func newExecNativeFixture(t *testing.T, trees bool) *execNativeFixture {
 		t.Fatal(err)
 	}
 	f := &execNativeFixture{dir: dir, home: filepath.Join(dir, "home")}
-	support := filepath.Join(f.home, "Library", "Application Support", "Farol Next Preview")
-	f.statePath = filepath.Join(support, "farol-next-state")
+	support := filepath.Join(f.home, "Library", "Application Support", "io.github.legrch.farol")
+	f.statePath = filepath.Join(support, "farol-state")
 	f.update = filepath.Join(support, "installed-updates")
 	f.operation = filepath.Join(f.update, strings.Repeat("1", 32))
 	apps := filepath.Join(f.home, "Applications")

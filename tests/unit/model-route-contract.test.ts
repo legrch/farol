@@ -17,7 +17,7 @@ describe("Farol provider-local model names", () => {
 
   it.each([
     "farol/chatgpt",
-    "farol-next/chatgpt",
+    "legacy-route/chatgpt",
     "ChatGPT",
     " chatgpt",
     "chatgpt ",
@@ -61,7 +61,12 @@ describe("Farol provider-local model names", () => {
   });
 
   it("requires the exact Farol provider without interpreting a slash", () => {
-    for (const provider of ["farol_next", "openai", "farol/chatgpt", "Farol"]) {
+    for (const provider of [
+      "legacy_provider",
+      "openai",
+      "farol/chatgpt",
+      "Farol",
+    ]) {
       const route = { provider, model: "chatgpt" };
       expect(FarolModelRouteSchema.safeParse(route).success).toBe(false);
       expect(findFarolModel(route)).toBeNull();

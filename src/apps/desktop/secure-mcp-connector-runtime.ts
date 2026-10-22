@@ -19,7 +19,7 @@ const SAFE_PATH = [
   "/usr/sbin",
   "/sbin",
 ].join(":");
-const PROFILE = "farol-next";
+const PROFILE = "farol";
 const HEALTH_URL_FILE = "health.url";
 const PID_FILE = "tunnel-client.pid";
 const TUNNEL_EXITED = "farol-tunnel-exited-v1";

@@ -24,7 +24,7 @@ describe("Farol Dev naming contract", () => {
     expect(identity.userData).toBe(path.join(appData, "Farol Dev"));
     expect(identity.sessionData).toBe(identity.userData);
     expect(identity.codexHome).toBe(
-      path.join(identity.userData, "farol-next-private", "codex-home"),
+      path.join(identity.userData, "farol-private", "codex-home"),
     );
   });
 
@@ -33,10 +33,10 @@ describe("Farol Dev naming contract", () => {
       displayName: "Farol",
       displayEdition: "",
       applicationName: "Farol",
-      applicationId: "local.farol.next.preview",
-      userData: path.join(appData, "Farol Next Preview"),
-      runtimeIdentity: "farol-next-preview-runtime",
-      runtimeServiceName: "Farol Next Runtime",
+      applicationId: "io.github.legrch.farol",
+      userData: path.join(appData, "io.github.legrch.farol"),
+      runtimeIdentity: "farol-runtime",
+      runtimeServiceName: "Farol Runtime",
     });
   });
 });

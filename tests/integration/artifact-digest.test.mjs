@@ -12,7 +12,7 @@ const nextRoot = path.resolve(import.meta.dirname, "../..");
 
 // The promotion helper verifies the promoted copy with its own Python
 // implementation of the same tree digest; both must agree byte for byte.
-function pythonTreeDigest(directory) {
+function pythonTreeDigest(directory, helperName = "promotion-apply.py") {
   const program = `
 import importlib.util, os, sys
 spec = importlib.util.spec_from_file_location("farol_promotion_apply", sys.argv[1])
@@ -34,7 +34,7 @@ finally:
       "-B",
       "-c",
       program,
-      path.join(nextRoot, "tooling/promotion-apply.py"),
+      path.join(nextRoot, "tooling", helperName),
       directory,
     ],
     { encoding: "utf8" },
@@ -58,7 +58,7 @@ async function tree(prefix, files) {
 
 function verifyPackageManifest(artifact) {
   return fs
-    .mkdtemp(path.join(os.tmpdir(), "farol-next-digest-manifest-"))
+    .mkdtemp(path.join(os.tmpdir(), "farol-digest-manifest-"))
     .then(async (directory) => {
       try {
         const file = path.join(directory, "artifact.json");
@@ -77,7 +77,7 @@ function verifyPackageManifest(artifact) {
 describe("packaged tree identity", () => {
   it("requires the artifact root itself to be an ordinary directory", async () => {
     const parent = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-digest-root-"),
+      path.join(os.tmpdir(), "farol-digest-root-"),
     );
     try {
       const realRoot = path.join(parent, "real");
@@ -99,10 +99,10 @@ describe("packaged tree identity", () => {
 
   it("binds entry type as well as path, mode, and payload", async () => {
     const fileRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-digest-file-"),
+      path.join(os.tmpdir(), "farol-digest-file-"),
     );
     const linkRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-digest-link-"),
+      path.join(os.tmpdir(), "farol-digest-link-"),
     );
     try {
       const file = path.join(fileRoot, "entry");
@@ -120,7 +120,7 @@ describe("packaged tree identity", () => {
 
   it("rejects absolute and escaping symlinks in a packaged tree", async () => {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-digest-escape-"),
+      path.join(os.tmpdir(), "farol-digest-escape-"),
     );
     try {
       await fs.mkdir(path.join(root, "nested"));
@@ -147,8 +147,8 @@ describe("packaged tree identity", () => {
     );
 
     it("separates a file that embeds entry framing from a real second entry", async () => {
-      const one = await tree("farol-next-digest-one-", [["a.bin", injected]]);
-      const two = await tree("farol-next-digest-two-", [
+      const one = await tree("farol-digest-one-", [["a.bin", injected]]);
+      const two = await tree("farol-digest-two-", [
         ["a.bin", Buffer.alloc(0)],
         ["b.bin", Buffer.from("payload", "utf8")],
       ]);
@@ -161,18 +161,54 @@ describe("packaged tree identity", () => {
     });
 
     it("declares its version and stays deterministic for identical trees", async () => {
-      expect(TREE_DIGEST_VERSION).toBe("farol.next.tree-digest/v2");
+      expect(TREE_DIGEST_VERSION).toBe("farol.tree-digest/v2");
       const files = [
         ["Contents/Info.plist", Buffer.from("<plist/>\n", "utf8")],
         ["Contents/MacOS/run", Buffer.from("#!/bin/sh\n", "utf8"), 0o755],
       ];
-      const first = await tree("farol-next-digest-same-a-", files);
-      const second = await tree("farol-next-digest-same-b-", files);
+      const first = await tree("farol-digest-same-a-", files);
+      const second = await tree("farol-digest-same-b-", files);
       try {
         expect(await treeDigest(first)).toBe(await treeDigest(second));
       } finally {
         await fs.rm(first, { recursive: true, force: true });
         await fs.rm(second, { recursive: true, force: true });
+      }
+    });
+
+    it("matches the independent Go golden vectors after the namespace cutover", async () => {
+      // The same pinned bytes/modes appear in Go TestGoldenDigestVectors.
+      // These fixtures exercise encoding, not a native installation.
+      const fixtures = [
+        {
+          files: [],
+          digest:
+            "f243c18a765ab113276bdd73d5bb5c7646608045e484acddfa0f11497dd85dc0",
+        },
+        {
+          files: [["a", Buffer.from("bc")]],
+          digest:
+            "5b8a1384ad1c22e82d6ff9077d200b3a4a4763e3a4cf90993917854671933dc2",
+        },
+        {
+          files: [["ab", Buffer.from("c")]],
+          digest:
+            "eff359e15b19f0599bcc2582c8e2a98fb153dc70ed2a5036202996b05b991f5c",
+        },
+      ];
+      for (const fixture of fixtures) {
+        const root = await tree("farol-digest-golden-", fixture.files);
+        try {
+          expect(await treeDigest(root)).toBe(fixture.digest);
+          for (const helper of [
+            "promotion-apply.py",
+            "closed-preview-repair.py",
+          ]) {
+            expect(pythonTreeDigest(root, helper)).toBe(fixture.digest);
+          }
+        } finally {
+          await fs.rm(root, { recursive: true, force: true });
+        }
       }
     });
 
@@ -185,15 +221,12 @@ describe("packaged tree identity", () => {
         [["dirfile", Buffer.from("x", "utf8")]],
         [["dir/sub/file", Buffer.from("x", "utf8")]],
       ];
-      const root = await tree("farol-next-digest-base-", base);
+      const root = await tree("farol-digest-base-", base);
       const others = [];
       try {
         const expected = await treeDigest(root);
         for (const [index, files] of variants.entries()) {
-          const other = await tree(
-            `farol-next-digest-variant-${index}-`,
-            files,
-          );
+          const other = await tree(`farol-digest-variant-${index}-`, files);
           others.push(other);
           expect(await treeDigest(other)).not.toBe(expected);
         }
@@ -205,14 +238,12 @@ describe("packaged tree identity", () => {
     });
 
     it("agrees with the promotion helper's Python implementation", async () => {
-      const one = await tree("farol-next-digest-py-one-", [
-        ["a.bin", injected],
-      ]);
-      const two = await tree("farol-next-digest-py-two-", [
+      const one = await tree("farol-digest-py-one-", [["a.bin", injected]]);
+      const two = await tree("farol-digest-py-two-", [
         ["a.bin", Buffer.alloc(0)],
         ["b.bin", Buffer.from("payload", "utf8")],
       ]);
-      const nested = await tree("farol-next-digest-py-nested-", [
+      const nested = await tree("farol-digest-py-nested-", [
         ["Contents/Resources/app/main.cjs", Buffer.from("main\n", "utf8")],
         ["Contents/MacOS/run", Buffer.from("#!/bin/sh\n", "utf8"), 0o755],
       ]);
@@ -222,7 +253,14 @@ describe("packaged tree identity", () => {
       );
       try {
         for (const directory of [one, two, nested]) {
-          expect(pythonTreeDigest(directory)).toBe(await treeDigest(directory));
+          for (const helper of [
+            "promotion-apply.py",
+            "closed-preview-repair.py",
+          ]) {
+            expect(pythonTreeDigest(directory, helper)).toBe(
+              await treeDigest(directory),
+            );
+          }
         }
         expect(pythonTreeDigest(one)).not.toBe(pythonTreeDigest(two));
       } finally {
@@ -239,7 +277,7 @@ describe("packaged tree identity", () => {
 
       const unknown = await verifyPackageManifest({
         schema: 5,
-        treeDigestVersion: "farol.next.tree-digest/v9",
+        treeDigestVersion: "farol.tree-digest/v9",
       });
       expect(unknown.status).not.toBe(0);
       expect(unknown.stderr).toContain("PACKAGE_TREE_DIGEST_VERSION_INVALID");

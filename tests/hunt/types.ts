@@ -1,11 +1,11 @@
-export const MODEL_VERSION = "farol-next-hunt-model/v1" as const;
-export const COMMAND_TABLE_VERSION = "farol-next-hunt-commands/v1" as const;
-export const REPLAY_ID = "farol-next-hunt-replay/v1" as const;
+export const MODEL_VERSION = "farol-hunt-model/v1" as const;
+export const COMMAND_TABLE_VERSION = "farol-hunt-commands/v1" as const;
+export const REPLAY_ID = "farol-hunt-replay/v1" as const;
 export const BUILD_IDENTITY_PLACEHOLDER =
   "<build-identity-recorded-by-final-runner>" as const;
 
 export const CONTROLLED_SCHEDULE = {
-  identity: "farol-next-hunt/schedule/serial-v1",
+  identity: "farol-hunt/schedule/serial-v1",
   mode: "serial",
   clock: "fixed-1000",
 } as const;

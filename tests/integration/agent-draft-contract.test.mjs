@@ -119,8 +119,8 @@ describe("the Agent draft is held by the renderer, not by the fields", () => {
     // change still applies whoever sent it.
     const source = await shell();
     const handler = source.slice(
-      source.indexOf("window.farolNext.onShellAction("),
-      source.indexOf("window.farolNext.onWindowState("),
+      source.indexOf("window.farol.onShellAction("),
+      source.indexOf("window.farol.onWindowState("),
     );
     expect(handler).toContain("refreshSettingsAfterReturn()");
     expect(handler).toContain("chatGptSignInOpened = false");
@@ -148,8 +148,8 @@ describe("a background shell action does not take the editor", () => {
     // what took the editor and the draft's fields with it.
     const source = await shell();
     const handler = source.slice(
-      source.indexOf("window.farolNext.onShellAction("),
-      source.indexOf("window.farolNext.onWindowState("),
+      source.indexOf("window.farol.onShellAction("),
+      source.indexOf("window.farol.onWindowState("),
     );
     expect(handler).toContain("decideShellAction(");
     expect(handler).toContain("draftHeld:");
@@ -165,8 +165,8 @@ describe("a background shell action does not take the editor", () => {
   it("re-reads readiness for every outcome it does not prove duplicate", async () => {
     const source = await shell();
     const handler = source.slice(
-      source.indexOf("window.farolNext.onShellAction("),
-      source.indexOf("window.farolNext.onWindowState("),
+      source.indexOf("window.farol.onShellAction("),
+      source.indexOf("window.farol.onWindowState("),
     );
     expect(handler).toContain("if (!decision.refreshReadiness) return;");
     expect(handler).toContain("refreshSettingsAfterReturn()");
@@ -202,8 +202,8 @@ describe("a background shell action does not take the editor", () => {
   it("only ever deduplicates an event that carried an id", async () => {
     const source = await shell();
     const handler = source.slice(
-      source.indexOf("window.farolNext.onShellAction("),
-      source.indexOf("window.farolNext.onWindowState("),
+      source.indexOf("window.farol.onShellAction("),
+      source.indexOf("window.farol.onWindowState("),
     );
     expect(handler).toContain("if (provenance.eventId !== null)");
     expect(handler).toContain("handledShellActionIds.add(provenance.eventId)");
@@ -283,8 +283,8 @@ describe("a run can read the decision that was made", () => {
     // that, rather than leave the decision inferred from the outcome.
     const source = await shell();
     const handler = source.slice(
-      source.indexOf("window.farolNext.onShellAction("),
-      source.indexOf("window.farolNext.onWindowState("),
+      source.indexOf("window.farol.onShellAction("),
+      source.indexOf("window.farol.onWindowState("),
     );
     expect(handler).toContain("console.debug(");
     expect(handler).toContain('"farol.shell-action"');

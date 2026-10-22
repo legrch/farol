@@ -139,7 +139,7 @@ func TestWholeRootPreservationAndDevSeparation(t *testing.T) {
 	if _, err := os.Lstat(source); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("source remains: %v", err)
 	}
-	if after := contents(t, filepath.Join(parent, "Farol")); !reflect.DeepEqual(after, before) {
+	if after := contents(t, filepath.Join(parent, "io.github.legrch.farol")); !reflect.DeepEqual(after, before) {
 		t.Fatal("opaque bytes, file identity or modes changed")
 	}
 	if afterDev := contents(t, dev); !reflect.DeepEqual(afterDev, beforeDev) {
@@ -151,7 +151,7 @@ func TestPhysicalCollisionRefusesWithoutRename(t *testing.T) {
 	for _, kind := range []string{"directory", "file", "symlink"} {
 		t.Run(kind, func(t *testing.T) {
 			parent, f, expected := fixture(t)
-			path := filepath.Join(parent, "Farol")
+			path := filepath.Join(parent, "io.github.legrch.farol")
 			switch kind {
 			case "directory":
 				if err := os.Mkdir(path, 0700); err != nil {
@@ -233,10 +233,10 @@ func TestUnknownNativeOutcomeCannotRedispatch(t *testing.T) {
 			}
 			if failure == "changed-readback" {
 				f.sync = func(int) error {
-					if err := os.Rename(filepath.Join(parent, "Farol"), filepath.Join(parent, "original")); err != nil {
+					if err := os.Rename(filepath.Join(parent, "io.github.legrch.farol"), filepath.Join(parent, "original")); err != nil {
 						return err
 					}
-					return os.Mkdir(filepath.Join(parent, "Farol"), 0700)
+					return os.Mkdir(filepath.Join(parent, "io.github.legrch.farol"), 0700)
 				}
 			}
 			if _, err := f.move(expected, admit); !possibleEffect(err) {
@@ -435,7 +435,7 @@ func TestConsumerRequiresDurableDispatchAndRetainsObservation(t *testing.T) {
 	if a.err != nil {
 		t.Fatal("Close changed external admission")
 	}
-	if _, err := os.Stat(filepath.Join(parent, "Farol")); err != nil {
+	if _, err := os.Stat(filepath.Join(parent, "io.github.legrch.farol")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -446,7 +446,7 @@ func TestConsumerNoPreparedProjectionCannotArm(t *testing.T) {
 			parent, s, b, j, a := consumerFixture(t)
 			j.record.Phase = phase
 			if phase != port.MigrationDispatched {
-				if err := os.Rename(filepath.Join(parent, migration.AlphaDirectory), filepath.Join(parent, "Farol")); err != nil {
+				if err := os.Rename(filepath.Join(parent, migration.AlphaDirectory), filepath.Join(parent, "io.github.legrch.farol")); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -654,10 +654,10 @@ func TestConsumerPostMoveJournalLossAndRootChangeStayUnknown(t *testing.T) {
 				case "journal-crossed":
 					j.record.Binding.Operation = "other-operation"
 				case "root-changed":
-					if err := os.Rename(filepath.Join(parent, "Farol"), filepath.Join(parent, "original")); err != nil {
+					if err := os.Rename(filepath.Join(parent, "io.github.legrch.farol"), filepath.Join(parent, "original")); err != nil {
 						return err
 					}
-					return os.Mkdir(filepath.Join(parent, "Farol"), 0700)
+					return os.Mkdir(filepath.Join(parent, "io.github.legrch.farol"), 0700)
 				case "cancelled":
 					cancel()
 				}
@@ -861,7 +861,7 @@ func TestLostClaimAcknowledgmentCannotRearm(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(parent, migration.AlphaDirectory)); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := os.Stat(filepath.Join(parent, "Farol")); !errors.Is(err, fs.ErrNotExist) {
+			if _, err := os.Stat(filepath.Join(parent, "io.github.legrch.farol")); !errors.Is(err, fs.ErrNotExist) {
 				t.Fatalf("claim relocated a root: %v", err)
 			}
 		})
@@ -899,7 +899,7 @@ func TestChangedProofAfterClaimCannotArm(t *testing.T) {
 			if a.claims.Load() != 1 {
 				t.Fatal("claim dispatched more than once")
 			}
-			if _, err := os.Stat(filepath.Join(parent, "Farol")); !errors.Is(err, fs.ErrNotExist) {
+			if _, err := os.Stat(filepath.Join(parent, "io.github.legrch.farol")); !errors.Is(err, fs.ErrNotExist) {
 				t.Fatalf("unarmed acquisition moved a root: %v", err)
 			}
 		})

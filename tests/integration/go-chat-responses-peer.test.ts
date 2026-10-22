@@ -47,7 +47,7 @@ describe("controlled real-Go Chat peer", () => {
         viewId: "controlled-view",
         viewGeneration: 1,
         documentGeneration: 1,
-        partition: "persist:farol-next-chatgpt",
+        partition: "persist:farol-app-chatgpt",
       };
       const forbidden = async (): Promise<never> => {
         throw new Error("unexpected physical action");

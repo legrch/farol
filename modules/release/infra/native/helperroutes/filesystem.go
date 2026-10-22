@@ -200,13 +200,13 @@ func (o *owner) open(ctx context.Context, homePath, op string) error {
 		return err
 	}
 	current = o.home
-	for _, part := range []string{"Library", "Application Support", "Farol Next Preview"} {
+	for _, part := range []string{"Library", "Application Support", "io.github.legrch.farol"} {
 		current, err = o.add(ctx, current, part, owned)
 		if err != nil {
 			return err
 		}
 	}
-	o.state, err = o.add(ctx, current, "farol-next-state", state)
+	o.state, err = o.add(ctx, current, "farol-state", state)
 	if err != nil {
 		return err
 	}

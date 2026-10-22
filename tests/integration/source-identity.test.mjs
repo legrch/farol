@@ -51,7 +51,7 @@ function git(repository, ...arguments_) {
 
 async function repositoryWithOneFile(body = "export {};\n") {
   const repository = await fs.mkdtemp(
-    path.join(os.tmpdir(), "farol-next-source-identity-"),
+    path.join(os.tmpdir(), "farol-source-identity-"),
   );
   await fs.mkdir(path.join(repository, "nested"), { recursive: true });
   await fs.writeFile(path.join(repository, "main.ts"), body);
@@ -243,7 +243,7 @@ describe("source identity distinguishes a difference from a failure", () => {
 describe("source identity", () => {
   it("binds the committed tree and ignores task-local filesystem noise", async () => {
     const repository = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-source-identity-"),
+      path.join(os.tmpdir(), "farol-source-identity-"),
     );
     try {
       // The fixture itself is the standalone repository root.
@@ -258,7 +258,7 @@ describe("source identity", () => {
       git(
         repository,
         "-c",
-        "user.name=Farol Next Test",
+        "user.name=Farol Test",
         "-c",
         "user.email=test@example.invalid",
         "commit",
@@ -298,7 +298,7 @@ describe("source identity", () => {
       git(
         repository,
         "-c",
-        "user.name=Farol Next Test",
+        "user.name=Farol Test",
         "-c",
         "user.email=test@example.invalid",
         "commit",
@@ -333,7 +333,7 @@ describe("source identity", () => {
       git(
         repository,
         "-c",
-        "user.name=Farol Next Test",
+        "user.name=Farol Test",
         "-c",
         "user.email=test@example.invalid",
         "commit",
@@ -348,7 +348,7 @@ describe("source identity", () => {
 
   it("compares tracked files larger than Node's default spawn buffer", async () => {
     const repository = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-source-identity-large-"),
+      path.join(os.tmpdir(), "farol-source-identity-large-"),
     );
     try {
       // A Retina comparison PNG exceeds the 1 MiB execFileSync default.
@@ -366,7 +366,7 @@ describe("source identity", () => {
       git(
         repository,
         "-c",
-        "user.name=Farol Next Test",
+        "user.name=Farol Test",
         "-c",
         "user.email=test@example.invalid",
         "commit",

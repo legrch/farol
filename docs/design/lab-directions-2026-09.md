@@ -1,4 +1,4 @@
-# Farol Next design-lab specification
+# Farol design-lab specification
 
 This historical September 2026 lab record retains its original status and scope. Relative prototype paths refer to [design-lab/](../../design-lab/); use the [current renderer contract](../desktop/renderer.md) for present source behavior and acceptance limits.
 
@@ -132,7 +132,7 @@ The accent never encodes a state: Running has its own cool-white lamp in every a
   spoken description. Accessible names do not change. Below 980 px the rail is the default, and the toggle opens the full
   sidebar above the content instead of pushing it; Escape, choosing a section, or clicking outside
   closes it, and Escape returns focus to the toggle.
-- **Toolbar.** The brand mark, `Farol Next`, the `Interactive lab · synthetic data` disclosure,
+- **Toolbar.** The brand mark, `Farol`, the `Interactive lab · synthetic data` disclosure,
   the quick switcher, and the lab-only `Fixture ·` state control. The whole row and the sidebar
   title area are window drag regions with every control excluded.
 - **Task tabs.** On top of the content. The selected tab is lit: a raised surface tinted by the
@@ -252,7 +252,7 @@ muted 6.5:1, quiet 4.8:1, lamps 5.3:1 to 13.4:1, moonlight action ink 15.4:1.
 
 ### Composition
 
-- **Unified title bar.** Traffic lights, the brand lamp, `Farol Next`, the permanent
+- **Unified title bar.** Traffic lights, the brand lamp, `Farol`, the permanent
   `Interactive lab · synthetic data` disclosure, the quick switcher, and the lab-only fixture
   control (labelled `Fixture ·`) on the left; the section segmented control and the runtime
   readiness on the right. The whole row is a window drag region with the controls excluded. The

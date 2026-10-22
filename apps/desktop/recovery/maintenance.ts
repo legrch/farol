@@ -81,7 +81,7 @@ export async function runStartupPreservedMaintenance(
       ? names.map((name) => path.join(path.dirname(userData), name))
       : [userData];
     for (const root of roots) {
-      const state = path.join(root, "farol-next-state");
+      const state = path.join(root, "farol-state");
       assertClosedConnectorProcesses(path.join(state, "secure-mcp-connector"));
       assertClosedConnectorProcesses(path.join(state, "go-core"));
     }

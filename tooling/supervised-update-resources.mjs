@@ -275,8 +275,8 @@ export async function captureSupervisedUpdateResources({
       });
       requireValue(
         matchesClaims(identity, claims) &&
-          identity.product === "Farol Next Preview" &&
-          identity.bundleId === "local.farol.next.preview" &&
+          identity.product === "Farol" &&
+          identity.bundleId === "io.github.legrch.farol" &&
           identity.updateChannel === channelForVersion(claims.version) &&
           identity.signing === "unsigned" &&
           identity.notarized === false,

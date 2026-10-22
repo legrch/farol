@@ -426,7 +426,7 @@ function page({
     documentGeneration: 7,
     partition: e2eOrigin
       ? "persist:farol-dev-chatgpt"
-      : "persist:farol-next-chatgpt",
+      : "persist:farol-app-chatgpt",
     ...(isHome
       ? { phase: "home", url: pageHome, conversationId: null }
       : { phase: "conversation", url: pageConversation, conversationId }),
@@ -800,7 +800,7 @@ describe("physical PAGE review refinements: targeted synthetic RED regressions",
       const p = page({ isHome: true, e2eOrigin });
       let binding: PhysicalBinding = p.binding;
       if (mutation === "partition")
-        binding = { ...binding, partition: "persist:farol-next-chatgpt" };
+        binding = { ...binding, partition: "persist:farol-app-chatgpt" };
       if (mutation === "origin") {
         p.location.href = "http://localhost:38518/chatgpt";
         binding = { ...binding, url: p.location.href };
@@ -1305,7 +1305,7 @@ describe("physical PAGE scripts: synthetic DOM source qualification only", () =>
     expect(p.composer.contains(p.connector)).toBe(true);
     expect(p.effects).toMatchObject({ send: 1, insert: 1, setters: 0 });
     const memory = await p.run<string>(
-      `JSON.stringify([...globalThis[Symbol.for("farol-next.physical-page.v1")].operations.values()])`,
+      `JSON.stringify([...globalThis[Symbol.for("farol.physical-page.v1")].operations.values()])`,
     );
     expect(memory).not.toContain("Next");
   });
@@ -2097,7 +2097,7 @@ describe("physical PAGE scripts: synthetic DOM source qualification only", () =>
     });
     expect(rawObserve).not.toHaveProperty("selection");
     const memory = await p.run<string>(
-      `JSON.stringify(globalThis[Symbol.for("farol-next.physical-page.v1")], (_key, value) => value instanceof Map ? [...value.values()] : value)`,
+      `JSON.stringify(globalThis[Symbol.for("farol.physical-page.v1")], (_key, value) => value instanceof Map ? [...value.values()] : value)`,
     );
     expect(memory).not.toContain(prompt);
     expect(memory).not.toContain("private-account");

@@ -110,7 +110,7 @@ async function fixture() {
     );
   }
   await fs.chmod(home, 0o700);
-  await fs.mkdir(path.join(userData, "farol-next-state"), {
+  await fs.mkdir(path.join(userData, "farol-state"), {
     recursive: true,
     mode: 0o700,
   });
@@ -131,9 +131,9 @@ async function fixture() {
   await fs.writeFile(path.join(op, "journal.json"), journal, { mode: 0o600 });
   const oldDigest = await treeDigest(oldApp);
   const receipt = {
-    schema: "farol.next.promotion-plan/1",
+    schema: "farol.promotion-plan/1",
     operation: "applied",
-    product: "Farol Next Preview",
+    product: "Farol",
     version: oldBuild.version,
     sourceCommit: oldBuild.sourceCommit,
     sourceTreeDigest: oldBuild.sourceTreeDigest,
@@ -322,10 +322,7 @@ describe("one-shot installed replacement", () => {
         });
         await expect(
           fs.lstat(
-            path.join(
-              f.userData,
-              "farol-next-state/installed-replacement.pending",
-            ),
+            path.join(f.userData, "farol-state/installed-replacement.pending"),
           ),
         ).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
@@ -492,7 +489,7 @@ describe("one-shot installed replacement", () => {
             fs.lstat(
               path.join(
                 f.userData,
-                "farol-next-state/installed-replacement.pending",
+                "farol-state/installed-replacement.pending",
               ),
             ),
           ).rejects.toMatchObject({ code: "ENOENT" });
@@ -502,9 +499,7 @@ describe("one-shot installed replacement", () => {
           );
           if (!apply)
             await expect(
-              fs.lstat(
-                path.join(f.userData, "farol-next-state/promotion.lease"),
-              ),
+              fs.lstat(path.join(f.userData, "farol-state/promotion.lease")),
             ).rejects.toMatchObject({ code: "ENOENT" });
         },
       );
@@ -517,7 +512,7 @@ describe("one-shot installed replacement", () => {
     expect(result.operation).toBe("plan-only");
     await expect(fs.lstat(f.custody)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
-      fs.lstat(path.join(f.userData, "farol-next-state/promotion.lease")),
+      fs.lstat(path.join(f.userData, "farol-state/promotion.lease")),
     ).rejects.toMatchObject({ code: "ENOENT" });
     expect(await fs.readFile(f.oldApp + ".receipt.json", "utf8")).toBe(
       f.oldReceipt,
@@ -550,10 +545,7 @@ describe("one-shot installed replacement", () => {
       );
       await expect(
         fs.lstat(
-          path.join(
-            f.userData,
-            "farol-next-state/installed-replacement.pending",
-          ),
+          path.join(f.userData, "farol-state/installed-replacement.pending"),
         ),
       ).rejects.toMatchObject({ code: "ENOENT" });
     },
@@ -592,10 +584,7 @@ describe("one-shot installed replacement", () => {
       });
       await expect(
         fs.lstat(
-          path.join(
-            f.userData,
-            "farol-next-state/installed-replacement.pending",
-          ),
+          path.join(f.userData, "farol-state/installed-replacement.pending"),
         ),
       ).rejects.toMatchObject({ code: "ENOENT" });
       expect(await fs.readFile(f.oldApp + ".receipt.json", "utf8")).toBe(
@@ -723,7 +712,7 @@ os.write(1, b"EXIT\n")
       expect(await isPromotionLeaseHeld(f.userData)).toBe(true);
       const promotionFile = path.join(
         f.userData,
-        "farol-next-state/promotion.lease",
+        "farol-state/promotion.lease",
       );
       const updaterFile = path.join(f.custody, "installed-updates/lock");
 
@@ -787,10 +776,7 @@ os.write(1, b"EXIT\n")
       expect(
         (
           await fs.lstat(
-            path.join(
-              f.userData,
-              "farol-next-state/installed-replacement.pending",
-            ),
+            path.join(f.userData, "farol-state/installed-replacement.pending"),
           )
         ).isFile(),
       ).toBe(true);
@@ -870,11 +856,11 @@ os.write(1, b"EXIT\n")
       await fs.readFile(f.oldApp + ".receipt.json", "utf8"),
     );
     expect(receipt).toEqual(result.receipt);
-    expect(receipt.schema).toBe("farol.next.promotion-plan/1");
+    expect(receipt.schema).toBe("farol.promotion-plan/1");
     expect(receipt.sourceCommit).toBe(f.artifact.sourceCommit);
     await expect(
       fs.lstat(
-        path.join(f.userData, "farol-next-state/installed-replacement.pending"),
+        path.join(f.userData, "farol-state/installed-replacement.pending"),
       ),
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -999,7 +985,7 @@ os.listdir = fault_listdir
       const nativePrefix = prefix
         .replace(
           "STATE_PATH",
-          JSON.stringify(path.join(f.userData, "farol-next-state")),
+          JSON.stringify(path.join(f.userData, "farol-state")),
         )
         .replace(
           "RETIRED_PATH",
@@ -1038,8 +1024,8 @@ deps.native = async (request, lease, updater, register) => {
     return runReplacementNative(request, lease, updater, register);
   const helper = await fs.readFile(${JSON.stringify(helperFile)});
   const library = await fs.readFile(${JSON.stringify(libraryFile)});
-  if (sha(helper) !== "e5c37e394392fcdf657b90ed5204abb45aa1504e4a8891c4721cef3a6517ed28" ||
-      sha(library) !== "739ff487dbffbd3e232c3b90e22c234cebd4f735b226101187ea60a1f62691ce")
+  if (sha(helper) !== "6556805b67a67c9c22de3f46b879cda857e2a58be48569b263f01a59c6ae1326" ||
+      sha(library) !== "be78ebefca9280329b766c0aee9dbfdd9adfdab2020f373df236441fdb476ec6")
     throw Error("FIXTURE_HELPER_ATTESTATION_FAILED");
   const child = spawn("/usr/bin/python3", ["-I", "-S", "-B", "-"], {
     cwd: "/", env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" },
@@ -1098,7 +1084,7 @@ catch (error) { process.send({ kind: "replacement-failed", message: error.messag
         expect(owner.child.signalCode).toBe(null);
         const pending = path.join(
           f.userData,
-          "farol-next-state/installed-replacement.pending",
+          "farol-state/installed-replacement.pending",
         );
         if (fault === "completion-lost-result")
           await expect(fs.lstat(pending)).rejects.toMatchObject({
@@ -1228,7 +1214,7 @@ catch (error) { process.send({ kind: "replacement-failed", message: error.messag
         expect(await kernelLockHeld(lockFile)).toBe(true);
         expect(
           await kernelLockHeld(
-            path.join(f.userData, "farol-next-state/promotion.lease"),
+            path.join(f.userData, "farol-state/promotion.lease"),
           ),
         ).toBe(true);
         process.kill(owner.child.pid, "SIGKILL");
@@ -1240,7 +1226,7 @@ catch (error) { process.send({ kind: "replacement-failed", message: error.messag
         expect(await kernelLockHeld(lockFile)).toBe(false);
         expect(
           await kernelLockHeld(
-            path.join(f.userData, "farol-next-state/promotion.lease"),
+            path.join(f.userData, "farol-state/promotion.lease"),
           ),
         ).toBe(false);
       } finally {

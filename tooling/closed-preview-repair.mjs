@@ -14,17 +14,21 @@ import { trustedOwnerHome } from "./promotion-destination.mjs";
 import * as leases from "./promotion-lease.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
 
+// Explicit old-beta selectors for this legacy install reader.
+const LEGACY_PRODUCT_NAME = "Farol Next Preview";
+const LEGACY_STATE_DIRECTORY = "farol-next-state";
+
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const helperPath = fileURLToPath(
   new URL("./closed-preview-repair.py", import.meta.url),
 );
 const HELPER_SHA256 =
-  "49486432c2af8ec1ec7dbe95504d2daa5baf61128ba05db6970e459656265b03";
-const schema = "farol.next.closed-repair/1";
+  "cb49e66027f1026a88e5be1326779676305422d739c977f985e096b101bde1e5";
+const schema = "farol.closed-repair/1";
 const sha = /^[0-9a-f]{64}$/u;
 const operation = /^[0-9a-f]{32}$/u;
 const profileFor = (home) =>
-  path.join(home, "Library/Application Support/Farol Next Preview");
+  path.join(home, `Library/Application Support/${LEGACY_PRODUCT_NAME}`);
 
 async function safeBytes(file, maximum, privateMode = false) {
   const handle = await fs.open(
@@ -79,7 +83,7 @@ async function preflightHome(home) {
     path.join(home, "Library"),
     path.join(home, "Library/Application Support"),
     profileFor(home),
-    path.join(profileFor(home), "farol-next-state"),
+    path.join(profileFor(home), LEGACY_STATE_DIRECTORY),
   ]) {
     const info = await fs.lstat(directory);
     if (
@@ -92,7 +96,7 @@ async function preflightHome(home) {
       throw new Error("CLOSED_REPAIR_PARENT_UNSAFE");
     if (
       (directory === profileFor(home) ||
-        directory.endsWith("/farol-next-state")) &&
+        directory.endsWith(`/${LEGACY_STATE_DIRECTORY}`)) &&
       (info.mode & 0o077) !== 0
     )
       throw new Error("CLOSED_REPAIR_PROFILE_UNSAFE");
@@ -327,7 +331,7 @@ export async function runClosedRepairCli(args, dependencies = {}) {
     )
       throw new Error("CLOSED_REPAIR_ACTIVATION_NOT_DRAINED");
     const quit = await safeBytes(
-      path.join(userData, "farol-next-state/last-quit.json"),
+      path.join(userData, `${LEGACY_STATE_DIRECTORY}/last-quit.json`),
       8192,
       true,
     );
@@ -353,7 +357,7 @@ export async function runClosedRepairCli(args, dependencies = {}) {
     return 0;
   } catch (error) {
     stderr.write(
-      `Farol Next Preview cold repair refused: ${error instanceof Error ? error.message : "unconfirmed failure"}\n`,
+      `Farol legacy cold repair refused: ${error instanceof Error ? error.message : "unconfirmed failure"}\n`,
     );
     return 1;
   } finally {

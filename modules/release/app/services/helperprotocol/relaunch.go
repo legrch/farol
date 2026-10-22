@@ -49,7 +49,7 @@ func (s *Service) BuildRelaunchArguments(ctx context.Context, completion string,
 	// Trusted composition must not replace that contract with raw argument text.
 	selected := r.Home + "/Applications/Farol.app"
 	if r.InstallLocation != nil && *r.InstallLocation == "shared" {
-		expected := r.Home + "/Library/Application Support/Farol Next Preview/installed-updates/" + r.OperationID + "/launch-Farol.app"
+		expected := r.Home + "/Library/Application Support/io.github.legrch.farol/installed-updates/" + r.OperationID + "/launch-Farol.app"
 		if capturedPath == nil || *capturedPath != expected {
 			return nil, failure("launch_image_unconfirmed")
 		}

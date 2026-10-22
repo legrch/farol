@@ -186,7 +186,7 @@ func TestRouteErrorsRetainPrimaryAndCleanup(t *testing.T) {
 					return fd, err
 				},
 				openat: func(parent int, name string, flags int, mode uint32) (int, error) {
-					if point == "state-open" && name == "farol-next-state" {
+					if point == "state-open" && name == "farol-state" {
 						primaryObserved = true
 						return -1, primary
 					}

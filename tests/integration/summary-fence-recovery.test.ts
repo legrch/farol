@@ -63,7 +63,7 @@ function binding(taskId: string): ContextBinding {
     taskId,
     hostThreadId: taskId,
     sessionId: taskId,
-    providerProfileId: "profile-isolated-next",
+    providerProfileId: "profile-isolated-farol",
     modelId: "chatgpt",
     mode: "chatgpt",
   };
@@ -227,7 +227,7 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
 
   it("keeps a crashed original summary and its fence when task cleanup cannot prove completion, without a second submission", async () => {
     const root = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-recovery-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-fence-recovery-")),
     );
     roots.push(root);
     const launchRoot = path.join(root, "computer-authority");
@@ -282,7 +282,7 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
       undefined,
       new PrivateExecutionFence({ root: launchRoot }),
     );
-    const client = new Client({ name: "farol-next-test", version: "1.0.0" });
+    const client = new Client({ name: "farol-test", version: "1.0.0" });
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair();
     await Promise.all([
@@ -336,7 +336,7 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
     const firstFence = new PrivateExecutionFence({ root: launchRoot });
     const first = createCodexContextController({
       ownerId: "owner-desktop",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       stateRoot,
       summaryRoutes: {
         retained: (binding) => (binding.taskId === threadId ? firstLife : null),
@@ -375,7 +375,7 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
       );
       expect(crashed.status).toBe(422);
       expect(await crashed.text()).toContain(
-        "FAROL_NEXT_COMPACTION_SUMMARY_OUTCOME_UNKNOWN",
+        "FAROL_COMPACTION_SUMMARY_OUTCOME_UNKNOWN",
       );
       expect(summaries).toBe(1);
       // What a crash leaves behind: one raised record, one possibly sent
@@ -413,7 +413,7 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
       const secondFence = new PrivateExecutionFence({ root: launchRoot });
       const second = createCodexContextController({
         ownerId: "owner-desktop",
-        providerProfileId: "profile-isolated-next",
+        providerProfileId: "profile-isolated-farol",
         stateRoot,
         summaryRoutes: {
           retained: (binding) =>
@@ -453,7 +453,7 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
       );
       expect(repeated.status).toBe(422);
       expect(await repeated.text()).toContain(
-        "FAROL_NEXT_COMPACTION_SUMMARY_OUTCOME_UNKNOWN",
+        "FAROL_COMPACTION_SUMMARY_OUTCOME_UNKNOWN",
       );
       expect(summaries).toBe(1);
       expect(await computerRead()).toMatchObject({
@@ -511,7 +511,7 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
 
   it("keeps every record when the store cannot be read, drops what the store settled, and settles two summaries independently", async () => {
     const root = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-recovery-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-fence-recovery-")),
     );
     roots.push(root);
     const launchRoot = path.join(root, "computer-authority");
@@ -653,9 +653,7 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
         "%s deletion releases only a confirmed task and preserves other tasks",
         async (outcome) => {
           const root = await fs.realpath(
-            await fs.mkdtemp(
-              path.join(os.tmpdir(), "farol-next-fence-cleanup-"),
-            ),
+            await fs.mkdtemp(path.join(os.tmpdir(), "farol-fence-cleanup-")),
           );
           roots.push(root);
           const launchRoot = path.join(root, "computer-authority");
@@ -772,7 +770,7 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
   );
   it("holds the connector closed when a required fence record cannot be materialized, until a later start reconciles for real", async () => {
     const launchRoot = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-recovery-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-fence-recovery-")),
     );
     roots.push(launchRoot);
     const fence = new PrivateExecutionFence({ root: launchRoot });
@@ -781,7 +779,7 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
       taskId: "task-held",
       hostThreadId: "task-held",
       sessionId: "task-held",
-      providerProfileId: "profile-isolated-next",
+      providerProfileId: "profile-isolated-farol",
       modelId: "chatgpt",
       mode: "chatgpt",
     };

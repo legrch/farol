@@ -36,7 +36,7 @@ HOME = Path(os.path.expanduser("~"))
 NEW_PROFILES = (
     "Library/Application Support/Farol Dev",
     "Library/Application Support/Farol DEV",
-    "Library/Application Support/Farol Next Preview",
+    "Library/Application Support/io.github.legrch.farol",
     "Library/Application Support/Farol Dev Acceptance",
     "Library/Application Support/Farol Dev Acceptance/Farol Dev",
     "Library/Application Support/Farol Dev Acceptance/Farol DEV",
@@ -58,10 +58,10 @@ def _owner_launch_profiles(command: list[str]) -> frozenset[str]:
                 parent = "Library/Application Support/Farol Dev Acceptance"
                 return frozenset((parent, selected_dev_profile(parent)))
             return frozenset((selected_dev_profile("Library/Application Support"),))
-        if command[1] == "tooling/run-preview.mjs" and os.environ.get("FAROL_NEXT_OWNER_LAUNCH") == "1":
-            return frozenset(("Library/Application Support/Farol Next Preview",))
+        if command[1] == "tooling/run-preview.mjs" and os.environ.get("FAROL_OWNER_LAUNCH") == "1":
+            return frozenset(("Library/Application Support/io.github.legrch.farol",))
     if command == ["npm", "run", "preview"]:
-        return frozenset(("Library/Application Support/Farol Next Preview",))
+        return frozenset(("Library/Application Support/io.github.legrch.farol",))
     return frozenset()
 
 def _environment_paths():
@@ -84,7 +84,7 @@ def _environment_paths():
     # sessions, settings or authentication data. Startup markers are the only
     # content-hashed files: a test touching an owner generation must fail.
     watched += tuple(
-        HOME / profile / "farol-next-state" / marker
+        HOME / profile / "farol-state" / marker
         for profile in NEW_PROFILES
         for marker in ("running.json", "last-quit.json")
     )

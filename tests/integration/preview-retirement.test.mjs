@@ -29,7 +29,7 @@ async function write(file, value, mode = 0o600) {
   );
 }
 async function bundle(directory, n) {
-  const identity = createBuildIdentity({
+  const currentIdentity = createBuildIdentity({
     version: `0.1.${n}-owner.beta.1`,
     buildVersion: String(n),
     updateChannel: "github-owner-beta",
@@ -38,6 +38,14 @@ async function bundle(directory, n) {
     sourceTreeDigest: String(n).repeat(64),
     sourceDirty: false,
   });
+  // Explicit legacy metadata for this old-install reader, never a writer default.
+  const { buildId: _currentBuildId, ...body } = currentIdentity;
+  const legacyBody = {
+    ...body,
+    product: "Farol Next Preview",
+    bundleId: "local.farol.next.preview",
+  };
+  const identity = { ...legacyBody, buildId: hash(JSON.stringify(legacyBody)) };
   await write(
     path.join(directory, "Contents/Resources/app/build-identity.json"),
     identity,
@@ -45,7 +53,7 @@ async function bundle(directory, n) {
   );
   await write(
     path.join(directory, "Contents/Info.plist"),
-    `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>local.farol.next.preview</string><key>CFBundleShortVersionString</key><string>0.1.${n}</string><key>CFBundleVersion</key><string>${n}</string></dict></plist>`,
+    `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${identity.bundleId}</string><key>CFBundleShortVersionString</key><string>0.1.${n}</string><key>CFBundleVersion</key><string>${n}</string></dict></plist>`,
     0o644,
   );
   await fs.chmod(directory, 0o755);
@@ -84,7 +92,7 @@ async function fixture() {
   await fs.mkdir(quarantine, { mode: 0o700 });
   const shape = ({ identity: _, ...build }) => build;
   const receipt = {
-    schema: "farol.next.closed-repair/1",
+    schema: "farol.closed-repair/1",
     operationId: repairId,
     phase: "installed",
     destination: preview,
@@ -104,7 +112,7 @@ async function fixture() {
     return [s.dev, s.ino];
   };
   const journal = {
-    schema: "farol.next.closed-repair-journal/1",
+    schema: "farol.closed-repair-journal/1",
     phase: "installed",
     receipt,
     sourceInode: await inode(previous),
@@ -112,7 +120,7 @@ async function fixture() {
     updatesInode: await inode(quarantine),
   };
   const normal = {
-    schema: "farol.next.promotion-plan/1",
+    schema: "farol.promotion-plan/1",
     operation: "applied",
     product: "Farol Next Preview",
     version: initial.version,
@@ -158,7 +166,7 @@ async function fixture() {
   const candidateRoot = path.join(root, "candidate");
   const artifact = {
     schema: 6,
-    product: "Farol Next Preview",
+    product: "Farol",
     version: "0.1.7-owner.beta.1",
     buildId: "d".repeat(64),
     artifactPath: path.join(candidateRoot, "_output/package/Farol.app"),

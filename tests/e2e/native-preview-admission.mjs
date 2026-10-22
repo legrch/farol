@@ -41,14 +41,14 @@ const allowedEnvironment = new Set([
   "TMPDIR",
   "PATH",
   "LANG",
-  "FAROL_NEXT_ENVIRONMENT",
-  "FAROL_NEXT_E2E",
-  "FAROL_NEXT_E2E_APP_DATA",
-  "FAROL_NEXT_E2E_TEST_ROOT",
-  "FAROL_NEXT_E2E_TEST_PROOF",
-  "FAROL_NEXT_E2E_WORKSPACE_ROOT",
-  "FAROL_NEXT_E2E_CHATGPT_URL",
-  "FAROL_NEXT_E2E_TUNNEL_CLIENT",
+  "FAROL_ENVIRONMENT",
+  "FAROL_E2E",
+  "FAROL_E2E_APP_DATA",
+  "FAROL_E2E_TEST_ROOT",
+  "FAROL_E2E_TEST_PROOF",
+  "FAROL_E2E_WORKSPACE_ROOT",
+  "FAROL_E2E_CHATGPT_URL",
+  "FAROL_E2E_TUNNEL_CLIENT",
 ]);
 const invalid = (detail) => new Error(`NATIVE_ISOLATION_${detail}`);
 function absolute(value) {
@@ -90,12 +90,12 @@ async function proofRoot(root, proof, auxiliary = false) {
     !(
       auxiliary
         ? /^farol-guided-setup-[A-Za-z0-9]{6,}$/u
-        : /^farol-next-e2e-home-[A-Za-z0-9]{6,}$/u
+        : /^farol-e2e-home-[A-Za-z0-9]{6,}$/u
     ).test(path.basename(root))
   )
     throw invalid("ROOT_INVALID");
   const rootIdentity = await directory(root);
-  const file = path.join(root, ".farol-next-e2e-root");
+  const file = path.join(root, ".farol-e2e-root");
   const before = await fs.lstat(file);
   if (
     !before.isFile() ||
@@ -341,8 +341,7 @@ function endpoint(launch, fixture) {
     !Number.isInteger(address.port) ||
     address.port < 1 ||
     address.port > 65535 ||
-    launch.env.FAROL_NEXT_E2E_CHATGPT_URL !==
-      `http://127.0.0.1:${address.port}/`
+    launch.env.FAROL_E2E_CHATGPT_URL !== `http://127.0.0.1:${address.port}/`
   )
     throw invalid("ENDPOINT_INVALID");
 }
@@ -406,13 +405,13 @@ export async function assertNativePreviewAdmission(ownerStateRoot, isolation) {
       Array.isArray(env) ||
       Object.keys(env).some((key) => !allowedEnvironment.has(key)) ||
       Object.values(env).some((value) => typeof value !== "string") ||
-      env.FAROL_NEXT_E2E !== "1" ||
+      env.FAROL_E2E !== "1" ||
       env.HOME !== profileRoot ||
-      env.FAROL_NEXT_E2E_TEST_ROOT !== profileRoot ||
-      env.FAROL_NEXT_E2E_TEST_PROOF !== proof ||
+      env.FAROL_E2E_TEST_ROOT !== profileRoot ||
+      env.FAROL_E2E_TEST_PROOF !== proof ||
       env.PATH !== "/usr/bin:/bin:/usr/sbin:/sbin" ||
       env.LANG !== "en_US.UTF-8" ||
-      ![undefined, "dev"].includes(env.FAROL_NEXT_ENVIRONMENT)
+      ![undefined, "dev"].includes(env.FAROL_ENVIRONMENT)
     )
       throw invalid("ENVIRONMENT_INVALID");
     absolute(launchOptions.executablePath);
@@ -437,18 +436,14 @@ export async function assertNativePreviewAdmission(ownerStateRoot, isolation) {
     const rootProof = await proofRoot(profileRoot, proof);
     const temp = await fs.realpath(absolute(env.TMPDIR));
     if (temp !== path.dirname(profileRoot)) throw invalid("TEMP_INVALID");
-    const environment = env.FAROL_NEXT_ENVIRONMENT ?? "preview";
-    const appData = desktopAppDataPath(
-      environment,
-      env.FAROL_NEXT_E2E_APP_DATA,
-      {
-        enabled: true,
-        override: env.FAROL_NEXT_E2E_APP_DATA,
-        testRoot: profileRoot,
-        testHome: env.HOME,
-        testProof: proof,
-      },
-    );
+    const environment = env.FAROL_ENVIRONMENT ?? "preview";
+    const appData = desktopAppDataPath(environment, env.FAROL_E2E_APP_DATA, {
+      enabled: true,
+      override: env.FAROL_E2E_APP_DATA,
+      testRoot: profileRoot,
+      testHome: env.HOME,
+      testProof: proof,
+    });
     absolute(appData);
     const selected = desktopUserDataPath(
       desktopIdentity(environment, appData),
@@ -471,7 +466,7 @@ export async function assertNativePreviewAdmission(ownerStateRoot, isolation) {
       directories[value] = await directory(value);
     await tree(profileRoot);
     try {
-      await fs.lstat(path.join(selected, "farol-next-state/running.json"));
+      await fs.lstat(path.join(selected, "farol-state/running.json"));
       throw invalid("PRIOR_RUN_UNCONFIRMED");
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
@@ -482,10 +477,7 @@ export async function assertNativePreviewAdmission(ownerStateRoot, isolation) {
       auxiliary = await proofRoot(auxiliaryRoot, proof, true);
       await tree(auxiliaryRoot);
     }
-    for (const key of [
-      "FAROL_NEXT_E2E_WORKSPACE_ROOT",
-      "FAROL_NEXT_E2E_TUNNEL_CLIENT",
-    ]) {
+    for (const key of ["FAROL_E2E_WORKSPACE_ROOT", "FAROL_E2E_TUNNEL_CLIENT"]) {
       const value = env[key];
       if (value === undefined) continue;
       absolute(value);
@@ -509,7 +501,7 @@ export async function assertNativePreviewAdmission(ownerStateRoot, isolation) {
     // profile. First admission requires absence; reopen requires our exact inode.
     const relayRoot = path.join(
       temp,
-      `farol-next-relay-${createHash("sha256").update(selected).digest("hex").slice(0, 16)}`,
+      `farol-relay-${createHash("sha256").update(selected).digest("hex").slice(0, 16)}`,
     );
     const prior = previous === undefined ? undefined : admissions.get(previous);
     if (
@@ -561,7 +553,7 @@ export async function assertNativePreviewAdmission(ownerStateRoot, isolation) {
       userData: selected,
       relayRoot,
       windowMode: "hidden",
-      endpoint: env.FAROL_NEXT_E2E_CHATGPT_URL,
+      endpoint: env.FAROL_E2E_CHATGPT_URL,
     });
     if (previous !== undefined) admissions.delete(previous);
     admissions.set(receipt, {

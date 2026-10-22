@@ -7,7 +7,7 @@ import type { PublicTurnFrameSchema } from "../../src/apps/desktop/chatgpt-publi
 // route and binds every call to the full original Go lease/operation.
 export type PhysicalFrame = z.infer<typeof PublicTurnFrameSchema>;
 export type PhysicalPartition =
-  | "persist:farol-next-chatgpt"
+  | "persist:farol-app-chatgpt"
   | "persist:farol-dev-chatgpt"
   | "persist:farol-owner-preview-chatgpt";
 export type PhysicalView = Readonly<{

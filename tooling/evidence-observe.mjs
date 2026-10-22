@@ -20,7 +20,7 @@ import { laneContract } from "./evidence-cases.mjs";
 // saw before it stopped watching -- eligibility binds against that digest,
 // not merely against the receipt's presence.
 
-export const EFFECT_OBSERVER_SCHEMA = "farol.next.effect-observer/v1";
+export const EFFECT_OBSERVER_SCHEMA = "farol.effect-observer/v1";
 
 const ATTEMPT_ID = /^\d{8}T\d{9}Z-[0-9a-f]{8}$/u;
 const RECEIPTS = new Set([
@@ -318,7 +318,7 @@ async function main(arguments_) {
     attemptId: option(arguments_, "--attempt"),
     subject,
     processPattern: new RegExp(
-      option(arguments_, "--process") ?? "Farol(?: Next Preview)?(?:\\.app/|$)",
+      option(arguments_, "--process") ?? "Farol(?:\\.app/|$)",
       "u",
     ),
     intervalMs: Number(option(arguments_, "--interval-ms") ?? 500),

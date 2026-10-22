@@ -37,7 +37,7 @@ async function enter(url: string) {
     new Proxy(browserWindow, {
       get(target, key) {
         if (key === "location") return new URL(url);
-        if (key === "farolNext") return bridge();
+        if (key === "farol") return bridge();
         if (key === "addEventListener")
           return target.addEventListener.bind(target);
         return Reflect.get(target, key, target);

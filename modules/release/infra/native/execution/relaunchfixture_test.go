@@ -104,7 +104,7 @@ func copyFile(t *testing.T, from, to string, mode os.FileMode) {
 func treeDigest(t *testing.T, root string) string {
 	t.Helper()
 	h := sha256.New()
-	h.Write([]byte("farol.next.tree-digest/v2\x00"))
+	h.Write([]byte("farol.tree-digest/v2\x00"))
 	put32 := func(n int) {
 		var b [4]byte
 		binary.BigEndian.PutUint32(b[:], uint32(n))
@@ -187,7 +187,7 @@ func newRelaunchFixture(t *testing.T, open openFunc, exe string) *relaunchFixtur
 	build := func(digest string) port.HelperBuild {
 		return port.HelperBuild{Digest: digest, Version: "1.2.3-preview.4", BuildID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 	}
-	request.Source = build("aa5be957bca1b602513cc520d48ebabb39a79adfffe07ee47434fbc33f4a62bd")
+	request.Source = build("6fffca33b1a4831aecd152a758c4b819e7cc60a844afda73b906b874a8d3f6f3")
 	request.Target = build(treeDigest(t, app))
 	request.Drain = port.HelperDrain{Status: "reconciled", AcceptedSource: request.Source.BuildID, AcceptedTarget: request.Target.BuildID}
 	request.PID, request.ProcessStart, request.WaitSeconds = 123, "symbolic-process-start", 30

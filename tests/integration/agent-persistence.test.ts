@@ -206,9 +206,7 @@ describe("private Agent assignment persistence", () => {
   });
 
   async function stateRoot(): Promise<string> {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-agent-state-"),
-    );
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-agent-state-"));
     roots.push(root);
     return root;
   }

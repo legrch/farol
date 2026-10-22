@@ -100,11 +100,9 @@ const isolatedAppData = path.join(temporaryRoot, "app-data");
 await fs.mkdir(isolatedHome, { recursive: true, mode: 0o700 });
 await fs.mkdir(isolatedAppData, { recursive: true, mode: 0o700 });
 const e2eRootProof = randomUUID();
-await fs.writeFile(
-  path.join(temporaryRoot, ".farol-next-e2e-root"),
-  e2eRootProof,
-  { mode: 0o600 },
-);
+await fs.writeFile(path.join(temporaryRoot, ".farol-e2e-root"), e2eRootProof, {
+  mode: 0o600,
+});
 const tunnelFixture = path.join(temporaryRoot, "tunnel-client.cjs");
 const tunnelFixtureSource = await fs.readFile(
   new URL("./tunnel-client.fixture.cjs", import.meta.url),
@@ -117,14 +115,14 @@ await fs.writeFile(
 );
 
 const environment = {
-  FAROL_NEXT_E2E: "1",
-  FAROL_NEXT_E2E_APP_DATA: isolatedAppData,
-  FAROL_NEXT_E2E_TEST_ROOT: temporaryRoot,
-  FAROL_NEXT_E2E_TEST_PROOF: e2eRootProof,
+  FAROL_E2E: "1",
+  FAROL_E2E_APP_DATA: isolatedAppData,
+  FAROL_E2E_TEST_ROOT: temporaryRoot,
+  FAROL_E2E_TEST_PROOF: e2eRootProof,
   ...(useInstalledTunnelClient
     ? {}
-    : { FAROL_NEXT_E2E_TUNNEL_CLIENT: tunnelFixture }),
-  FAROL_NEXT_ENVIRONMENT: "dev",
+    : { FAROL_E2E_TUNNEL_CLIENT: tunnelFixture }),
+  FAROL_ENVIRONMENT: "dev",
   HOME: isolatedHome,
   LANG: "en_US.UTF-8",
   LC_ALL: "en_US.UTF-8",
@@ -157,7 +155,7 @@ async function launchApplication(env) {
   await ready(first);
   await assertHiddenWindows(result);
   const userData = await result.evaluate(({ app }) => app.getPath("userData"));
-  record.stateRoot = path.join(userData, "farol-next-state");
+  record.stateRoot = path.join(userData, "farol-state");
   const marker = JSON.parse(
     await fs.readFile(path.join(record.stateRoot, "running.json"), "utf8"),
   );
@@ -243,7 +241,7 @@ async function ready(window) {
   // Native bootstrap is asynchronous; Playwright predicates do not establish
   // awaited IPC completion. Poll only this bounded read-only projection.
   for (let attempt = 0; attempt < 100; attempt++) {
-    const value = await window.evaluate(() => window.farolNext.bootstrap());
+    const value = await window.evaluate(() => window.farol.bootstrap());
     if (
       value.runtimeState === "ready" &&
       value.configuration.status === "ready"
@@ -325,12 +323,12 @@ try {
   browserFixture = await startChatGptFixture();
   // Reuse the existing local provider fixture for browser ownership only.
   // No sign-in, model turn, Send, or answer is requested by this journey.
-  environment.FAROL_NEXT_E2E_CHATGPT_URL = browserFixture.url;
+  environment.FAROL_E2E_CHATGPT_URL = browserFixture.url;
   // A missing override must fail before the first app-ready boundary and
   // leave even a synthetic ordinary-Dev startup marker untouched.
   const ordinaryMarker = path.join(
     isolatedHome,
-    "Library/Application Support/Farol Dev/farol-next-state/running.json",
+    "Library/Application Support/Farol Dev/farol-state/running.json",
   );
   await fs.mkdir(path.dirname(ordinaryMarker), {
     recursive: true,
@@ -340,7 +338,7 @@ try {
     mode: 0o600,
   });
   const missingOverrideEnv = { ...environment };
-  delete missingOverrideEnv.FAROL_NEXT_E2E_APP_DATA;
+  delete missingOverrideEnv.FAROL_E2E_APP_DATA;
   launchUnresolved = true;
   const refusedProfile = await runBoundedProcess(
     executable,
@@ -425,7 +423,7 @@ try {
     0,
   );
   assert.deepEqual(
-    (await window.evaluate(() => window.farolNext.bootstrap())).configuration,
+    (await window.evaluate(() => window.farol.bootstrap())).configuration,
     beforeReview,
   );
   report.checks.push(
@@ -521,7 +519,7 @@ try {
   // Only the test side operates the local fixture's synthetic login control;
   // no ready settings or expected provider answer enter the adapter directly.
   const opened = await window.evaluate(() =>
-    window.farolNext.configure({ kind: "chatgpt.open-browser" }),
+    window.farol.configure({ kind: "chatgpt.open-browser" }),
   );
   assert.equal(opened.ok, true, JSON.stringify(opened));
   const fixtureHome = await fixtureContents();
@@ -540,7 +538,7 @@ try {
     "FIXTURE_LOGIN_CONTROL_REQUIRED",
   );
   const readiness = await window.evaluate(() =>
-    window.farolNext.configure({ kind: "chatgpt.verify" }),
+    window.farol.configure({ kind: "chatgpt.verify" }),
   );
   assert.equal(readiness.ok, true, JSON.stringify(readiness));
   assert.equal(readiness.evidence?.kind, "chatgpt.readiness");
@@ -556,7 +554,7 @@ try {
   // resulting task event does not imply that the renderer selected it. Home
   // must still conceal its browser; no automatic task replacement is allowed.
   const created = await window.evaluate(() =>
-    window.farolNext.task({ kind: "task.create-chatgpt" }),
+    window.farol.task({ kind: "task.create-chatgpt" }),
   );
   assert.equal(created.ok, true, JSON.stringify(created));
   const retainedTaskId = created.selectedTaskId;
@@ -1065,8 +1063,8 @@ try {
   const expectedLegacyPath = await fs.realpath(legacyDirectory);
   const legacyEnvironment = {
     ...environment,
-    FAROL_NEXT_E2E_APP_DATA: legacyAppData,
-    FAROL_NEXT_E2E_WORKSPACE_ROOT: workspaceRoot,
+    FAROL_E2E_APP_DATA: legacyAppData,
+    FAROL_E2E_WORKSPACE_ROOT: workspaceRoot,
   };
   let savedWorkspace;
   for (let launch = 0; launch < 2; launch += 1) {
@@ -1104,7 +1102,7 @@ try {
         .waitFor();
       let value;
       for (let attempt = 0; attempt < 100; attempt++) {
-        value = await legacyWindow.evaluate(() => window.farolNext.bootstrap());
+        value = await legacyWindow.evaluate(() => window.farol.bootstrap());
         const settings =
           value.configuration.status === "ready"
             ? value.configuration.settings
@@ -1173,9 +1171,7 @@ try {
         "partial-folder-Quit-reopen-retained-obvious-continuation-no-false-ready",
       );
       await save();
-      const value = await legacyWindow.evaluate(() =>
-        window.farolNext.bootstrap(),
-      );
+      const value = await legacyWindow.evaluate(() => window.farol.bootstrap());
       assert.deepEqual(
         value.configuration.settings.computer.workspaces,
         savedWorkspace.workspaces,
@@ -1214,7 +1210,7 @@ try {
   );
   assert.match(
     broken.stderr,
-    /FAROL_NEXT_STARTUP_FAILURE:INSTANCE_BUILD_IDENTITY_INVALID/u,
+    /FAROL_STARTUP_FAILURE:INSTANCE_BUILD_IDENTITY_INVALID/u,
   );
   assert.doesNotMatch(broken.stderr, /App threw an error during load/u);
   assert.doesNotMatch(broken.stderr, /Uncaught Exception/u);

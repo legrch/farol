@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleIdentifier</key>
-	<string>local.farol.next.preview</string>
+	<string>io.github.legrch.farol</string>
 	<key>CFBundleShortVersionString</key>
 	<string>1.2.3</string>
 	<key>unknown</key>

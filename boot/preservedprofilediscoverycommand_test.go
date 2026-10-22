@@ -15,7 +15,7 @@ func TestPreservedProfileDiscoveryCommandRejectsBeforeIO(t *testing.T) {
 		}
 	}
 	args := preservedCommandArgs()
-	args[3] = "/private/tmp/Farol Next Preview/farol-next-state/go-core"
+	args[3] = "/private/tmp/Farol/farol-state/go-core"
 	var diagnostic bytes.Buffer
 	if code := runPreservedProfileDiscovery(args, preservedCommandUntouched{}, preservedCommandUntouched{}, &diagnostic); code != 2 {
 		t.Fatal("installed namespace reached discovery", code)

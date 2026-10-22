@@ -17,7 +17,7 @@ import {
 import { createReadonlyComputerMcpServer } from "../../src/modules/computer/infra/mcp/create-readonly-computer-mcp";
 import {
   NativeReadonlyWorkspace,
-  NEXT_SAFE_OPEN_HELPER,
+  SAFE_OPEN_HELPER,
 } from "../../src/modules/computer/infra/native/native-readonly-workspace";
 import { Sha256WorkspaceMutationDigester } from "../../src/modules/computer/infra/native/sha256-workspace-mutation-digester";
 import { MutableComputerContractHandler } from "../../src/modules/computer/infra/mutable-contract-handler";
@@ -36,7 +36,7 @@ function digest(value: string): string {
 
 beforeEach(async () => {
   root = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-mutable-mcp-")),
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-mutable-mcp-")),
   );
   await fs.chmod(root, 0o700);
   await fs.mkdir(path.join(root, ".git"), { mode: 0o700 });
@@ -119,7 +119,7 @@ describe("mutable Computer MCP adapter", () => {
     const approvals = new InMemoryComputerApprovalRepository([approval]);
     const native = new NativeReadonlyWorkspace({
       helperPath: sourceHelper,
-      helper: NEXT_SAFE_OPEN_HELPER,
+      helper: SAFE_OPEN_HELPER,
       attestInterpreter: async () => "/usr/bin/python3",
     });
     const mutable = new MutableComputerContractHandler(
@@ -151,7 +151,7 @@ describe("mutable Computer MCP adapter", () => {
       binding,
       mutable,
     );
-    const client = new Client({ name: "farol-next-test", version: "1.0.0" });
+    const client = new Client({ name: "farol-test", version: "1.0.0" });
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair();
     await Promise.all([

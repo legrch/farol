@@ -119,7 +119,7 @@ const temporaryRoot = await fs.realpath(
   await fs.mkdtemp(path.join(os.tmpdir(), "farol-guided-setup-")),
 );
 const proof = randomUUID();
-await fs.writeFile(path.join(temporaryRoot, ".farol-next-e2e-root"), proof, {
+await fs.writeFile(path.join(temporaryRoot, ".farol-e2e-root"), proof, {
   mode: 0o600,
 });
 const workspace = path.join(temporaryRoot, "approved-folder");
@@ -149,7 +149,7 @@ async function fixtureVerification(challenge, settings) {
   // tunnel-client init recorded; never scan host sockets or evaluate shell text.
   const connectorRoot = path.join(
     activeFixtureProfile.userData,
-    "farol-next-state/secure-mcp-connector",
+    "farol-state/secure-mcp-connector",
   );
   const initArguments = JSON.parse(
     await fs.readFile(
@@ -231,7 +231,7 @@ async function fixtureVerification(challenge, settings) {
     await bounded(client.connect(transport), "FIXTURE_MCP_CONNECT_TIMEOUT");
     const result = await bounded(
       client.callTool({
-        name: "farol_next_connector_verify",
+        name: "farol_connector_verify",
         arguments: {
           challenge: challenge.value,
           workspaceId: challenge.workspaceId,
@@ -491,7 +491,7 @@ assert.ok(chatAddress && typeof chatAddress !== "string");
 const fixtureUrl = `http://127.0.0.1:${chatAddress.port}/`;
 const ownerPreviewStateRoot = path.join(
   os.homedir(),
-  "Library/Application Support/Farol Next Preview/farol-next-state",
+  "Library/Application Support/io.github.legrch.farol/farol-state",
 );
 const profiles = new Map();
 const profileAdmissions = new Map();
@@ -571,7 +571,7 @@ async function closeOwned() {
 async function waitForResumeStage(expected) {
   const file = path.join(
     activeFixtureProfile.home,
-    ".farol-next-connector-resume-stage",
+    ".farol-connector-resume-stage",
   );
   const deadline = Date.now() + 15000;
   for (;;) {
@@ -649,9 +649,9 @@ async function launch(environment, mode = "normal", profile = mode) {
   const freshProfile = !profileRoot;
   if (!profileRoot) {
     profileRoot = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-e2e-home-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-e2e-home-")),
     );
-    await fs.writeFile(path.join(profileRoot, ".farol-next-e2e-root"), proof, {
+    await fs.writeFile(path.join(profileRoot, ".farol-e2e-root"), proof, {
       mode: 0o600,
     });
     profiles.set(profile, profileRoot);
@@ -664,19 +664,19 @@ async function launch(environment, mode = "normal", profile = mode) {
     environment === "dev"
       ? path.join(appData, "Farol Dev")
       : normalPackagedProfile
-        ? path.join(appData, "Farol Next Preview")
+        ? path.join(appData, "io.github.legrch.farol")
         : path.join(profileRoot, "user-data");
   await fs.mkdir(home, { recursive: true, mode: 0o700 });
   await fs.mkdir(appData, { recursive: true, mode: 0o700 });
   await fs.mkdir(userData, { recursive: true, mode: 0o700 });
-  const startupMarker = path.join(home, ".farol-next-startup-stage");
+  const startupMarker = path.join(home, ".farol-startup-stage");
   await fs.rm(startupMarker, { force: true });
-  await fs.rm(path.join(home, ".farol-next-connector-resume-stage"), {
+  await fs.rm(path.join(home, ".farol-connector-resume-stage"), {
     force: true,
   });
   const launchOptions = {
     executablePath: normalPackagedProfile
-      ? path.join(appRoot, "Contents/MacOS/Farol Next Preview")
+      ? path.join(appRoot, "Contents/MacOS/Farol")
       : executable,
     args: [
       ...(normalPackagedProfile ? [] : [entry, `--user-data-dir=${userData}`]),
@@ -687,14 +687,14 @@ async function launch(environment, mode = "normal", profile = mode) {
       TMPDIR: os.tmpdir(),
       PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
       LANG: "en_US.UTF-8",
-      ...(environment === "dev" ? { FAROL_NEXT_ENVIRONMENT: "dev" } : {}),
-      FAROL_NEXT_E2E: "1",
-      FAROL_NEXT_E2E_APP_DATA: appData,
-      FAROL_NEXT_E2E_TEST_ROOT: profileRoot,
-      FAROL_NEXT_E2E_TEST_PROOF: proof,
-      FAROL_NEXT_E2E_WORKSPACE_ROOT: workspace,
-      FAROL_NEXT_E2E_CHATGPT_URL: fixtureUrl,
-      ...(behavior ? { FAROL_NEXT_E2E_TUNNEL_CLIENT: tunnelFixture } : {}),
+      ...(environment === "dev" ? { FAROL_ENVIRONMENT: "dev" } : {}),
+      FAROL_E2E: "1",
+      FAROL_E2E_APP_DATA: appData,
+      FAROL_E2E_TEST_ROOT: profileRoot,
+      FAROL_E2E_TEST_PROOF: proof,
+      FAROL_E2E_WORKSPACE_ROOT: workspace,
+      FAROL_E2E_CHATGPT_URL: fixtureUrl,
+      ...(behavior ? { FAROL_E2E_TUNNEL_CLIENT: tunnelFixture } : {}),
     },
     timeout: 15000,
   };
@@ -792,7 +792,7 @@ async function launch(environment, mode = "normal", profile = mode) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   observations.push({ kind: "startup-complete", pid: child.pid, environment });
-  const ownedStateRoot = path.join(nativePaths.userData, "farol-next-state");
+  const ownedStateRoot = path.join(nativePaths.userData, "farol-state");
   const runMarker = await readOwnedStartupMarker(
     ownedStateRoot,
     profileRoot,
@@ -810,7 +810,7 @@ async function launch(environment, mode = "normal", profile = mode) {
       );
     });
   });
-  const bootstrap = await window.evaluate(() => window.farolNext.bootstrap());
+  const bootstrap = await window.evaluate(() => window.farol.bootstrap());
   if (behavior)
     assert.deepEqual(
       bootstrap.build,
@@ -880,8 +880,8 @@ async function checkBackgroundSecondary() {
     stderr,
     /refused the background launch because this exact candidate is already running/u,
   );
-  assert.match(stderr, /FAROL_NEXT_SECOND_INSTANCE_RESULT:reopen-failed/u);
-  assert.doesNotMatch(stderr, /FAROL_NEXT_SECOND_INSTANCE_RESULT:reopened/u);
+  assert.match(stderr, /FAROL_SECOND_INSTANCE_RESULT:reopen-failed/u);
+  assert.doesNotMatch(stderr, /FAROL_SECOND_INSTANCE_RESULT:reopened/u);
   assert.equal(application.process().pid, primaryPid);
   const windows = await application.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows().map((window) => ({
@@ -915,7 +915,7 @@ try {
     assert.equal(identity.userDataOverride, false);
     assert.equal(identity.userData, activeFixtureProfile.userData);
     assert.equal(identity.sessionData, identity.userData);
-    assert.equal(path.basename(identity.userData), "Farol Next Preview");
+    assert.equal(path.basename(identity.userData), "Farol");
     observations.push({
       kind: "packaged-normal-profile-without-user-data-override",
       ...identity,
@@ -944,9 +944,7 @@ try {
         .click();
       const discoveryDeadline = Date.now() + 15000;
       for (;;) {
-        const result = await window.evaluate(() =>
-          window.farolNext.bootstrap(),
-        );
+        const result = await window.evaluate(() => window.farol.bootstrap());
         if (
           result.configuration.status === "ready" &&
           result.configuration.settings.connectors.secureMcp.tunnelClient !==
@@ -1034,8 +1032,7 @@ try {
         ?.textContent.includes("Access checked"),
     );
     saved = await readSetupSettings(window);
-    const build = (await window.evaluate(() => window.farolNext.bootstrap()))
-      .build;
+    const build = (await window.evaluate(() => window.farol.bootstrap())).build;
     assert.equal(
       saved.setup.computer.verified.workspaceId,
       saved.computer.workspaces[0].workspaceId,
@@ -1102,7 +1099,7 @@ try {
     let retainedWorkspaces = saved.computer.workspaces;
     let verifiedWorkspaces = retainedWorkspaces;
     const retainedProfile = { ...activeFixtureProfile };
-    const stateRoot = path.join(retainedProfile.userData, "farol-next-state");
+    const stateRoot = path.join(retainedProfile.userData, "farol-state");
     const configFile = path.join(stateRoot, "config.json");
     let policyConfigSha256;
     let policyRunMarker;
@@ -1651,7 +1648,7 @@ try {
           kind: "failure-ui-feedback",
           ...(await bounded(
             shell.evaluate(async () => {
-              const bootstrap = await window.farolNext.bootstrap();
+              const bootstrap = await window.farol.bootstrap();
               return {
                 feedback: document.querySelector(
                   '.setup-page .settings-page > p[role="status"]',

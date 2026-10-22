@@ -19,7 +19,7 @@ afterEach(async () => {
 describe("unregistered app copy name", () => {
   it.each([
     ["Farol.app", `Farol${UNREGISTERED_COPY_SUFFIX}`],
-    ["Farol Next Preview.app", `Farol Next Preview${UNREGISTERED_COPY_SUFFIX}`],
+    ["Farol.app", `Farol${UNREGISTERED_COPY_SUFFIX}`],
   ])("maps %s to a name that is not an application package", (name, copy) => {
     expect(unregisteredAppCopyName(name)).toBe(copy);
     expect(unregisteredAppCopyName(name).endsWith(".app")).toBe(false);

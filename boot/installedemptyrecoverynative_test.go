@@ -19,7 +19,7 @@ import (
 // models a journal that was always empty; this is never a recovery action.
 func installedEmptyRecoveryFixture(t *testing.T) emptyRecoveryInspectionInput {
 	t.Helper()
-	in := emptyRecoveryFixtureNamed(t, true, false, "Farol Next Preview")
+	in := emptyRecoveryFixtureNamed(t, true, false, "io.github.legrch.farol")
 	for _, expected := range in.Mutations {
 		if err := os.Remove(filepath.Join(in.Profile.Root, "computer", "mutations", expected.Key)); err != nil {
 			t.Fatal(err)

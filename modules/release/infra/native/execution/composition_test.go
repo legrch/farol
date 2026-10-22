@@ -110,7 +110,7 @@ func newCompositionFixtureAt(t *testing.T, directory string, canonicalHome ...bo
 		Target: port.HelperBuild{Digest: strings.Repeat("c", 64), Version: "1.2.4-preview.4", BuildID: strings.Repeat("d", 64)}}
 	parent := filepath.Join(root, "operations")
 	if len(canonicalHome) == 1 && canonicalHome[0] {
-		parent = filepath.Join(root, "Library/Application Support/Farol Next Preview/installed-updates")
+		parent = filepath.Join(root, "Library/Application Support/io.github.legrch.farol/installed-updates")
 	}
 	path := filepath.Join(parent, request.OperationID)
 	apps := filepath.Join(root, "Applications")

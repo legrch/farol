@@ -35,9 +35,9 @@ export function packageInfoPlist({
   <key>CFBundleIconFile</key>
   <string>farol.icns</string>
   <key>CFBundleExecutable</key>
-  <string>Farol Next Preview</string>
+  <string>Farol</string>
   <key>CFBundleIdentifier</key>
-  <string>local.farol.next.preview</string>
+  <string>io.github.legrch.farol</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>

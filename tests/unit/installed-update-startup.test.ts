@@ -42,7 +42,7 @@ import {
 const home = "/Users/farol-startup-fixture";
 const profile = path.join(
   home,
-  "Library/Application Support/Farol Next Preview",
+  "Library/Application Support/io.github.legrch.farol",
 );
 const slot = path.join(home, "Applications/Farol.app");
 const directory = path.join(slot, "Contents/Resources/app");
@@ -55,8 +55,8 @@ const prefix = "--farol-installed-update-relaunch=";
 function identity(version: string, buildVersion: string, commit: string) {
   const build = BuildIdentitySchema.parse({
     schema: 1,
-    product: "Farol Next Preview",
-    bundleId: "local.farol.next.preview",
+    product: "Farol",
+    bundleId: "io.github.legrch.farol",
     updateChannel: "github-owner-beta",
     version,
     buildVersion,
@@ -243,8 +243,8 @@ function unboundSharedFixture(
     schema: "farol.github-release/1",
     repository: "legrch/farol",
     channel: "owner-beta",
-    product: "Farol Next Preview",
-    bundleId: "local.farol.next.preview",
+    product: "Farol",
+    bundleId: "io.github.legrch.farol",
     version: targetBuild.version,
     buildVersion: targetBuild.buildVersion,
     sourceCommit: targetBuild.sourceCommit,
@@ -393,9 +393,9 @@ describe("installed updater startup correlation (pure ports only)", () => {
     f.builds.set("/Applications/Farol.app", target);
     f.records.delete(f.receiptFile);
     f.records.set("/Applications/Farol.app.receipt.json", {
-      schema: "farol.next.promotion-plan/1",
+      schema: "farol.promotion-plan/1",
       operation: "applied",
-      product: "Farol Next Preview",
+      product: "Farol",
       version: targetBuild.version,
       sourceCommit: targetBuild.sourceCommit,
       sourceTreeDigest: targetBuild.sourceTreeDigest,
@@ -472,8 +472,8 @@ describe("installed updater startup correlation (pure ports only)", () => {
         schema: "farol.github-release/1",
         repository: "legrch/farol",
         channel: "owner-beta",
-        product: "Farol Next Preview",
-        bundleId: "local.farol.next.preview",
+        product: "Farol",
+        bundleId: "io.github.legrch.farol",
         version: targetBuild.version,
         buildVersion: targetBuild.buildVersion,
         sourceCommit: targetBuild.sourceCommit,
@@ -683,8 +683,8 @@ describe("installed updater startup correlation (pure ports only)", () => {
         schema: "farol.github-release/1",
         repository: "legrch/farol",
         channel: "owner-beta",
-        product: "Farol Next Preview",
-        bundleId: "local.farol.next.preview",
+        product: "Farol",
+        bundleId: "io.github.legrch.farol",
         version: targetBuild.version,
         buildVersion: targetBuild.buildVersion,
         sourceCommit: targetBuild.sourceCommit,
@@ -1463,7 +1463,7 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
       },
     };
     const record = (overrides: Record<string, unknown> = {}) => ({
-      schema: "farol.next.adopted-baseline/1",
+      schema: "farol.adopted-baseline/1",
       slot: sharedApp,
       userData: profile,
       manifest: structuredClone(published),
@@ -1509,7 +1509,7 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
       true,
     );
     expect(f.records.get(adoptedFile)).toEqual({
-      schema: "farol.next.adopted-baseline/1",
+      schema: "farol.adopted-baseline/1",
       slot: sharedApp,
       userData: profile,
       manifest: f.published,
@@ -1884,7 +1884,7 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
   it("keeps the update-receipt path unchanged and offline even beside an adopted record", async () => {
     const f = unboundSharedFixture("completed");
     f.records.set(adoptedFile, {
-      schema: "farol.next.adopted-baseline/1",
+      schema: "farol.adopted-baseline/1",
       slot: sharedApp,
       userData: profile,
       manifest: f.manifest,
@@ -1901,9 +1901,9 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
   it("keeps the owner-tool receipt path unchanged and offline", async () => {
     const f = unboundSharedFixture("operation");
     f.records.set("/Applications/Farol.app.receipt.json", {
-      schema: "farol.next.promotion-plan/1",
+      schema: "farol.promotion-plan/1",
       operation: "applied",
-      product: "Farol Next Preview",
+      product: "Farol",
       version: sourceBuild.version,
       sourceCommit: sourceBuild.sourceCommit,
       sourceTreeDigest: sourceBuild.sourceTreeDigest,

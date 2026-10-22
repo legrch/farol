@@ -35,11 +35,11 @@ await fs.chmod(profile, 0o700);
 const home = path.join(profile, "home"),
   appData = path.join(profile, "app-data");
 const userData = path.join(appData, "Farol Dev"),
-  stateRoot = path.join(userData, "farol-next-state");
+  stateRoot = path.join(userData, "farol-state");
 for (const dir of [home, stateRoot])
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
 const proof = randomUUID();
-await fs.writeFile(path.join(profile, ".farol-next-e2e-root"), proof, {
+await fs.writeFile(path.join(profile, ".farol-e2e-root"), proof, {
   mode: 0o600,
   flag: "wx",
 });
@@ -92,11 +92,11 @@ try {
         PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
         LANG: "en_US.UTF-8",
         LC_ALL: "en_US.UTF-8",
-        FAROL_NEXT_ENVIRONMENT: "dev",
-        FAROL_NEXT_E2E: "1",
-        FAROL_NEXT_E2E_APP_DATA: appData,
-        FAROL_NEXT_E2E_TEST_ROOT: profile,
-        FAROL_NEXT_E2E_TEST_PROOF: proof,
+        FAROL_ENVIRONMENT: "dev",
+        FAROL_E2E: "1",
+        FAROL_E2E_APP_DATA: appData,
+        FAROL_E2E_TEST_ROOT: profile,
+        FAROL_E2E_TEST_PROOF: proof,
       },
       timeout: 15000,
     });
@@ -112,14 +112,14 @@ try {
     const page = await application.firstWindow({ timeout: 15000 });
     await page.waitForFunction(
       (expected) =>
-        window.farolNext &&
-        window.farolNext
+        window.farol &&
+        window.farol
           .bootstrap()
           .then((value) => value.runtimeState === expected),
       ordinal === 1 ? "failed" : "ready",
       { timeout: 15000 },
     );
-    const bootstrap = await page.evaluate(() => window.farolNext.bootstrap());
+    const bootstrap = await page.evaluate(() => window.farol.bootstrap());
     assert.equal(bootstrap.build.buildId, build.identity.buildId);
     assert.equal(bootstrap.runtimeState, ordinal === 1 ? "failed" : "ready");
     launch.runtimeState = bootstrap.runtimeState;
@@ -149,9 +149,7 @@ try {
             reject(Error("ORIGINAL_STARTUP_COMPLETION_UNKNOWN"));
             return;
           }
-          if (
-            startupTokens.includes("FAROL_NEXT_STARTUP_STAGE:startup-complete")
-          ) {
+          if (startupTokens.includes("FAROL_STARTUP_STAGE:startup-complete")) {
             resolve();
             return;
           }

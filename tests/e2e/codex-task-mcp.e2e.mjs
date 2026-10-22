@@ -461,7 +461,7 @@ try {
       generation: 1,
     },
     savedChat: {
-      protocol: "farol-next-saved-chat/v1",
+      protocol: "farol-saved-chat/v1",
       socketPath: savedChatSocketPath,
       token: savedChatToken,
     },

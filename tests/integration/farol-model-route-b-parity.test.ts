@@ -30,7 +30,7 @@ import {
 // inner already owns, the inner is the real provider; where a test must
 // hold or break the inner mid-answer, it is a synthetic upstream.
 
-const MODEL = "farol-next/mind";
+const MODEL = "legacy-route/mind";
 const INNER_TOKEN = "route-b-test-token";
 const METADATA_HEADER = "x-codex-turn-metadata";
 
@@ -264,7 +264,7 @@ const compactedConversation: CodexChatGptConversation = {
  *
  * The summary-only compaction adapter is a port the provider requires
  * before it serves `/v1/responses/compact` at all -- without it every
- * compaction answers 501 `FAROL_NEXT_COMPACTION_UNSUPPORTED`, measured
+ * compaction answers 501 `FAROL_COMPACTION_UNSUPPORTED`, measured
  * here before these rows were written. It is supplied as a fixture that
  * always returns the same replacement history, so what these rows exercise
  * is the provider's own identity validation, which runs before the port is

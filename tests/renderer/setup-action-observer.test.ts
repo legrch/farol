@@ -118,7 +118,7 @@ function pageAdapter(onClick: () => Promise<void>, initial = settings()) {
   const bootstrap = vi.fn(() => ({
     configuration: { status: "ready", settings: current },
   }));
-  vi.stubGlobal("farolNext", { bootstrap });
+  vi.stubGlobal("farol", { bootstrap });
   let observation: Observation | null = null;
   let disposed = false;
   const clicks: string[] = [];

@@ -118,7 +118,7 @@ export function sourceIdentity(root, scope) {
   );
   const restoredChange =
     restoreFault === "artifact"
-      ? 'p = pathlib.Path(stage, "artifact.json"); a = json.loads(p.read_bytes()); a["artifactPath"] = "Farol Next Preview.app"; p.write_text(json.dumps(a))\n'
+      ? 'p = pathlib.Path(stage, "artifact.json"); a = json.loads(p.read_bytes()); a["artifactPath"] = "Foreign.app"; p.write_text(json.dumps(a))\n'
       : restoreFault === "core"
         ? 'p = pathlib.Path(stage, "Farol.app/Contents/Resources/app/farol-backend"); p.chmod(0o700); p.write_bytes(bytes(64))\n'
         : restoreFault === "path"
@@ -202,11 +202,11 @@ process.stdout.write(JSON.stringify(actual));
   await fs.chmod(executable, 0o755);
   const artifact = {
     schema: 7,
-    treeDigestVersion: "farol.next.tree-digest/v2",
-    product: "Farol Next Preview",
+    treeDigestVersion: "farol.tree-digest/v2",
+    product: "Farol",
     version,
     buildVersion: "20",
-    bundleId: "local.farol.next.preview",
+    bundleId: "io.github.legrch.farol",
     buildId: "a".repeat(64),
     builtAt: "2026-10-10T00:00:00.000Z",
     sourceCommit: head,
@@ -517,7 +517,7 @@ print(json.dumps(sorted({n.split("/")[0] for n in z.namelist()})))
     },
   );
 
-  it.each(["Farol Next Preview.app", "../Farol.app", "Farol.app"])(
+  it.each(["Legacy.app", "../Farol.app", "Foreign.app"])(
     "refuses noncanonical artifact path %s",
     async (claimed) => {
       const f = await fixture();

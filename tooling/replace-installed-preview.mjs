@@ -33,16 +33,16 @@ import { compareReleaseVersions } from "../src/modules/release/domain/github-ver
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const HELPER_SHA256 =
-  "e5c37e394392fcdf657b90ed5204abb45aa1504e4a8891c4721cef3a6517ed28";
+  "6556805b67a67c9c22de3f46b879cda857e2a58be48569b263f01a59c6ae1326";
 const LIBRARY_SHA256 =
-  "739ff487dbffbd3e232c3b90e22c234cebd4f735b226101187ea60a1f62691ce";
+  "be78ebefca9280329b766c0aee9dbfdd9adfdab2020f373df236441fdb476ec6";
 const sha = (raw) => createHash("sha256").update(raw).digest("hex");
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 // Same normal receipt DTO as the installed-update owner; keep strict shape parity.
 const NormalPromotionReceipt = z.strictObject({
-  schema: z.literal("farol.next.promotion-plan/1"),
+  schema: z.literal("farol.promotion-plan/1"),
   operation: z.literal("applied"),
-  product: z.literal("Farol Next Preview"),
+  product: z.literal("Farol"),
   version: z.string().max(128),
   sourceCommit: z.string().regex(/^[a-f0-9]{40}$/u),
   sourceTreeDigest: Digest,
@@ -351,7 +351,7 @@ export async function snapshotInstalledReplacement(
 ) {
   const userData = promotionUserData(home);
   const apps = replacementApplications(home, installLocation);
-  const state = path.join(userData, "farol-next-state");
+  const state = path.join(userData, "farol-state");
   const updates = path.join(userData, "installed-updates");
   await safeDirectory(home);
   const applications = await applicationsDirectory(home, installLocation);
@@ -424,8 +424,8 @@ function processProof(home, helpers, installLocation = "legacy") {
   const scopes = [
     path.join(replacementApplications(home, installLocation), "Farol.app/"),
     path.join(promotionUserData(home), "installed-updates") + path.sep,
-    path.join(promotionUserData(home), "farol-next-state/go-core"),
-    path.join(promotionUserData(home), "farol-next-state/secure-mcp-connector"),
+    path.join(promotionUserData(home), "farol-state/go-core"),
+    path.join(promotionUserData(home), "farol-state/secure-mcp-connector"),
   ];
   for (const line of table.stdout.split("\n")) {
     if (
@@ -466,7 +466,7 @@ export async function prepareCleanReplacementLock(
   const appsInfo = await applicationsDirectory(home, installLocation);
   const profileInfo = await safeDirectory(userData, true);
   const stateInfo = await safeDirectory(
-    path.join(userData, "farol-next-state"),
+    path.join(userData, "farol-state"),
     true,
   );
   const updates = path.join(userData, "installed-updates");
@@ -729,7 +729,7 @@ export async function replaceInstalledPreview(
   try {
     // Check safe parents before the existing lease's mkdir behavior can run.
     await safeDirectory(userData, true);
-    await safeDirectory(path.join(userData, "farol-next-state"), true);
+    await safeDirectory(path.join(userData, "farol-state"), true);
     if (apply) {
       lease = await acquirePromotionLease(
         userData,
@@ -859,7 +859,7 @@ export async function replaceInstalledPreview(
     )
       fail("REPLACEMENT_UPDATER_LOCK_CHANGED");
     const receipt = {
-      schema: "farol.next.promotion-plan/1",
+      schema: "farol.promotion-plan/1",
       operation: "applied",
       product: artifact.product,
       version: artifact.version,

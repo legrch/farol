@@ -224,7 +224,7 @@ export function createGoComputerMcpServer(
   if (typeof fence?.acquireAdmission !== "function")
     throw new BridgeError("refused", "invalid_computer_mcp_fence");
   const server = new McpServer({
-    name: "farol-next-computer",
+    name: "farol-computer",
     version: "0.1.0-preview.0",
   });
   const stopping = async (): Promise<boolean> => {
@@ -405,7 +405,7 @@ export function createGoComputerMcpServer(
   if (options.verification) {
     const verification = options.verification;
     server.registerTool(
-      "farol_next_connector_verify_catalogue",
+      "farol_connector_verify_catalogue",
       {
         title: "Verify Farol without workspace access",
         description:
@@ -424,7 +424,7 @@ export function createGoComputerMcpServer(
         })),
     );
     server.registerTool(
-      "farol_next_connector_verify",
+      "farol_connector_verify",
       {
         title: "Verify the current Go Computer connector",
         description:

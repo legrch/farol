@@ -165,8 +165,8 @@ function scripted(...replies: HttpsResponse[]): OpenHttps {
 function transport(root: string, openHttps: OpenHttps) {
   const verifyPackage = vi.fn(async () => ({
     identity: {
-      product: "Farol Next Preview",
-      bundleId: "local.farol.next.preview",
+      product: "Farol",
+      bundleId: "io.github.legrch.farol",
       version: "0.1.1",
       buildVersion: "2",
       updateChannel: "github-stable",
@@ -177,7 +177,7 @@ function transport(root: string, openHttps: OpenHttps) {
       signing: "unsigned",
       notarized: false,
     },
-    stagedAppPath: "/fixture/stage/Farol Next Preview.app",
+    stagedAppPath: "/fixture/stage/Farol.app",
     stagingRoot: "/fixture/stage",
   }));
   return {
@@ -787,7 +787,7 @@ describe("GitHub HTTPS transport", () => {
     ).toMatchObject({
       ok: true,
       value: {
-        stagedAppPath: "/fixture/stage/Farol Next Preview.app",
+        stagedAppPath: "/fixture/stage/Farol.app",
         stagingRoot: "/fixture/stage",
       },
     });

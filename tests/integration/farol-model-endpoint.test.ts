@@ -22,7 +22,7 @@ const endpoints: FarolModelEndpoint[] = [];
 
 // The one model the endpoint serves in these tests (the Route B model in
 // production; main.ts passes ROUTE_B_MODEL).
-const MODEL = "farol-next/mind";
+const MODEL = "legacy-route/mind";
 
 afterEach(async () => {
   await Promise.all(endpoints.splice(0).map((endpoint) => endpoint.stop()));

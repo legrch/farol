@@ -5182,9 +5182,9 @@ describe("ChatGPT embedded task surface", () => {
     expect(surfaceFactory).toHaveBeenCalledTimes(1);
     expect(surfaceFactory).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "ChatGPT · Farol Next",
+        title: "ChatGPT · Farol",
         webPreferences: expect.objectContaining({
-          partition: "persist:farol-next-chatgpt",
+          partition: "persist:farol-app-chatgpt",
           sandbox: true,
           contextIsolation: true,
           nodeIntegration: false,
@@ -7484,7 +7484,7 @@ describe("saved conversation physical binding (mock Electron only)", () => {
       viewGeneration: 1,
       documentGeneration: 7,
       conversationUrl,
-      partition: "persist:farol-next-chatgpt",
+      partition: "persist:farol-app-chatgpt",
     });
     expect(
       await candidate.savedChatFollowUp(request, "prepare", () => false),

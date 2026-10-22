@@ -1700,7 +1700,7 @@ describe("owner setup entry feedback", () => {
 
 function proof(value: ProductSettings) {
   return {
-    profile: "farol-next",
+    profile: "farol",
     configRevision: value.computer.generation,
     workspaceId,
     runtimeGeneration: "a".repeat(64),
@@ -4244,7 +4244,7 @@ describe("review regressions: retained action origins and exact edit delivery", 
       attachment().querySelector(".attachment-technical summary")?.textContent,
     ).toBe("Technical details");
     expect(h.button("Copy verification request").disabled).toBe(false);
-    expect(attachment().textContent).toContain("farol_next_connector_verify");
+    expect(attachment().textContent).toContain("farol_connector_verify");
     expect(attachment().textContent).toContain(workspaceId);
     expect(attachment().textContent).toContain(selectionId);
     expect(h.button("Check attachment").disabled).toBe(false);
@@ -4283,7 +4283,7 @@ describe("review regressions: retained action origins and exact edit delivery", 
       expect(writeText).toHaveBeenCalledTimes(1);
       const request = writeText.mock.calls[0]![0] as string;
       expect(request).toContain("Farol Dev connector");
-      expect(request).toContain("farol_next_connector_verify exactly once");
+      expect(request).toContain("farol_connector_verify exactly once");
       expect(request).toContain(
         JSON.stringify({
           challenge: selectionId,

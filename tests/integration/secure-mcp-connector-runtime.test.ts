@@ -33,7 +33,7 @@ afterEach(async () => {
 
 async function fixture() {
   const root = await fs.mkdtemp(
-    path.join(os.tmpdir(), "farol-next-secure-mcp-runtime-"),
+    path.join(os.tmpdir(), "farol-secure-mcp-runtime-"),
   );
   roots.push(root);
   const runtimeRoot = path.join(root, "connector");
@@ -51,9 +51,8 @@ async function fixture() {
     credentialPath,
     executablePath: "/opt/homebrew/bin/tunnel-client",
     electronPath:
-      "/Applications/Farol Next Preview.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron",
-    mcpEntry:
-      "/Applications/Farol Next Preview.app/Contents/Resources/app/computer-mcp.cjs",
+      "/Applications/Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron",
+    mcpEntry: "/Applications/Farol.app/Contents/Resources/app/computer-mcp.cjs",
     launchContract: path.join(root, "launch", "computer-launch.json"),
   };
 }
@@ -941,7 +940,7 @@ describe("secure MCP connector runtime", () => {
     );
     const input = {
       executablePath: selected.executablePath,
-      tunnelId: "tunnel_farol_next",
+      tunnelId: "tunnel_farol",
       credentialReference: `file:${selected.credentialPath}`,
       mcp: {
         electronPath: selected.electronPath,
@@ -977,7 +976,7 @@ describe("secure MCP connector runtime", () => {
     await expect(
       runtime.configure({
         executablePath: selected.executablePath,
-        tunnelId: "tunnel_farol_next",
+        tunnelId: "tunnel_farol",
         credentialReference: `file:${selected.credentialPath}`,
         mcp: {
           electronPath: selected.electronPath,
@@ -1210,7 +1209,7 @@ describe("secure MCP connector runtime", () => {
 
     await runtime.configure({
       executablePath: selected.executablePath,
-      tunnelId: "tunnel_farol_next",
+      tunnelId: "tunnel_farol",
       credentialReference: `file:${selected.credentialPath}`,
       mcp: {
         electronPath: selected.electronPath,
@@ -1231,8 +1230,8 @@ describe("secure MCP connector runtime", () => {
     expect(run).toHaveBeenCalledTimes(2);
     const init = run.mock.calls[0]?.[0];
     expect(init?.arguments.slice(0, 2)).toEqual(["init", "--force"]);
-    expect(init && option(init, "--profile")).toBe("farol-next");
-    expect(init && option(init, "--tunnel-id")).toBe("tunnel_farol_next");
+    expect(init && option(init, "--profile")).toBe("farol");
+    expect(init && option(init, "--tunnel-id")).toBe("tunnel_farol");
     expect(init && option(init, "--control-plane-api-key-ref")).toBe(
       `file:${selected.credentialPath}`,
     );
@@ -1251,7 +1250,7 @@ describe("secure MCP connector runtime", () => {
     expect(run.mock.calls[1]?.[0].arguments).toEqual([
       "doctor",
       "--profile",
-      "farol-next",
+      "farol",
       "--profile-dir",
       path.join(selected.runtimeRoot, "profiles"),
       "--json",

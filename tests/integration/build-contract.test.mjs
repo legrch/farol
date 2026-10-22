@@ -12,7 +12,7 @@ import {
 describe("build entry contract", () => {
   it("rejects a build entry changed after its manifest was created", async () => {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-build-contract-"),
+      path.join(os.tmpdir(), "farol-build-contract-"),
     );
     try {
       await Promise.all(
@@ -33,7 +33,7 @@ describe("build entry contract", () => {
 
   it("rejects missing, additional, and path-shaped manifest entries", async () => {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-build-contract-shape-"),
+      path.join(os.tmpdir(), "farol-build-contract-shape-"),
     );
     try {
       await Promise.all(
@@ -63,7 +63,7 @@ describe("build entry contract", () => {
     "synthetic://workspace/status",
   ])("rejects the forbidden built capability token %s", async (token) => {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-absence-contract-"),
+      path.join(os.tmpdir(), "farol-absence-contract-"),
     );
     try {
       await Promise.all(

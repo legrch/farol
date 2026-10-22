@@ -98,13 +98,10 @@ export async function verifyPackageContent({
     ? bridgeEntrySets([...BUILD_ENTRIES, ...GO_CORE_ENTRIES])
     : [layout.branded ? BUILD_ENTRIES : LEGACY_BUILD_ENTRIES];
   assertArtifactPath?.();
-  requireValue(
-    artifact.product === "Farol Next Preview",
-    "PACKAGE_PRODUCT_INVALID",
-  );
+  requireValue(artifact.product === "Farol", "PACKAGE_PRODUCT_INVALID");
   requireValue(artifact.version === expectedVersion, "PACKAGE_VERSION_INVALID");
   requireValue(
-    artifact.bundleId === "local.farol.next.preview",
+    artifact.bundleId === "io.github.legrch.farol",
     "PACKAGE_BUNDLE_ID_INVALID",
   );
   requireValue(
@@ -169,8 +166,7 @@ export async function verifyPackageContent({
     "PACKAGE_CONTENTS_SET_INVALID",
   );
   requireValue(
-    (await fs.readdir(path.join(contents, "MacOS"))).join("\0") ===
-      "Farol Next Preview",
+    (await fs.readdir(path.join(contents, "MacOS"))).join("\0") === "Farol",
     "PACKAGE_EXECUTABLE_SET_INVALID",
   );
   requireValue(
@@ -300,7 +296,7 @@ export async function verifyPackageContent({
     await fs.readFile(path.join(resources, "package.json"), "utf8"),
   );
   requireValue(
-    embeddedPackage.name === "farol-next-preview-app" &&
+    embeddedPackage.name === "farol-app" &&
       embeddedPackage.productName === layout.displayName &&
       embeddedPackage.version === artifact.version &&
       embeddedPackage.main === "main.cjs",
@@ -339,7 +335,7 @@ export async function verifyPackageContent({
     "PACKAGE_PLIST_BUNDLE_MISMATCH",
   );
   requireValue(
-    plistValue(mainPlist, "CFBundleExecutable") === "Farol Next Preview",
+    plistValue(mainPlist, "CFBundleExecutable") === "Farol",
     "PACKAGE_PLIST_EXECUTABLE_MISMATCH",
   );
   requireValue(
@@ -357,7 +353,7 @@ export async function verifyPackageContent({
         measuredBuildVersion === expectedBuildVersion),
     "PACKAGE_PLIST_BUILD_VERSION_MISMATCH",
   );
-  await fs.access(path.join(appPath, "Contents/MacOS/Farol Next Preview"));
+  await fs.access(path.join(appPath, "Contents/MacOS/Farol"));
   await fs.access(path.join(resources, "THIRD_PARTY_NOTICES.txt"));
   const notices = await fs.readFile(
     path.join(resources, "THIRD_PARTY_NOTICES.txt"),
@@ -380,7 +376,7 @@ export async function verifyPackageContent({
     "PACKAGE_WS_NOTICE_INVALID",
   );
 
-  const launcherPath = path.join(appPath, "Contents/MacOS/Farol Next Preview");
+  const launcherPath = path.join(appPath, "Contents/MacOS/Farol");
   const launcherStat = await fs.lstat(launcherPath);
   requireValue(
     launcherStat.isFile() &&

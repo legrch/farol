@@ -8,7 +8,7 @@ import { build } from "esbuild";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scratch = await fs.mkdtemp(
-  path.join(os.tmpdir(), "farol-next-route-b-probe-"),
+  path.join(os.tmpdir(), "farol-route-b-probe-"),
 );
 const output = path.join(scratch, "probe.mjs");
 

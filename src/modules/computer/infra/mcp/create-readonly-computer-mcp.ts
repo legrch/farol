@@ -772,7 +772,7 @@ export function createReadonlyComputerMcpServer(
   workspaceCatalogueIds?: readonly string[],
 ): McpServer {
   const server = new McpServer({
-    name: "farol-next-computer",
+    name: "farol-computer",
     version: "0.1.0-preview.0",
   });
   // Keep unresolved leases reachable: a failed group-cleanup proof must not
@@ -1729,9 +1729,9 @@ export function createReadonlyComputerMcpServer(
 
   if (connectorVerification) {
     server.registerTool(
-      "farol_next_connector_verify",
+      "farol_connector_verify",
       {
-        title: "Verify the Farol Next Computer connector",
+        title: "Verify the Farol Computer connector",
         description:
           "Consume one owner-visible challenge, list one approved workspace root through the current Computer TaskGrant, and retain only a content-free correlation receipt.",
         inputSchema: ConnectorVerificationInputSchema,
@@ -1753,11 +1753,11 @@ export function createReadonlyComputerMcpServer(
 
   if (callerRelay) {
     server.registerTool(
-      "farol_next_caller_tools",
+      "farol_host_tools",
       {
         title: "Use the active Codex task's native tools",
         description:
-          "Describe or invoke only the exact native host tools bound to one opaque Farol Next turn ticket. The relay validates the current host schema, turn binding, stable operation ID, and at-most-once delivery before the host can execute anything.",
+          "Describe or invoke only the exact native host tools bound to one opaque Farol turn ticket. The relay validates the current host schema, turn binding, stable operation ID, and at-most-once delivery before the host can execute anything.",
         inputSchema: CodexCallerRelayOperationSchema,
         annotations: CALLER_RELAY_ANNOTATIONS,
       },

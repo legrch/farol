@@ -23,8 +23,8 @@ The producer derives its root from its own location. Its only package inputs are
 requires schema 7 and the embedded Go core; schema 5 and schema 6 remain historical
 verification/recovery boundaries, not alternative producer inputs. The owning
 `package-layout.mjs` contract must also confirm the schema-7 core and `Farol.app`
-layout. Product and bundle identity remain `Farol Next Preview` and
-`local.farol.next.preview` for compatibility. This command does not change package
+layout. Product and bundle identity remain `Farol` and
+`io.github.legrch.farol` for compatibility. This command does not change package
 versions, build versions, or retained historical releases.
 
 The preparation gates are:

@@ -16,7 +16,7 @@ it.each(["/responses", "/responses/compact"])(
     const dispatches: string[] = [];
     const endpoint = new FarolModelEndpoint({
       state,
-      model: "farol-next/mind",
+      model: "legacy-route/mind",
       handler: async () => {
         dispatches.push("turn");
         return { ok: true, events: [] };
@@ -40,7 +40,7 @@ it.each(["/responses", "/responses/compact"])(
         authenticated!();
         return value;
       };
-      const body = JSON.stringify({ model: "farol-next/mind", input: [] });
+      const body = JSON.stringify({ model: "legacy-route/mind", input: [] });
       const response = new Promise<{
         status: number | undefined;
         body: string;
@@ -125,7 +125,7 @@ it.each(["/responses", "/responses/compact"])(
     const dispatches: string[] = [];
     const endpoint = new FarolModelEndpoint({
       state,
-      model: "farol-next/mind",
+      model: "legacy-route/mind",
       handler: async () => {
         dispatches.push("turn");
         return { ok: true, events: [] };
@@ -150,7 +150,7 @@ it.each(["/responses", "/responses/compact"])(
         tokenRead();
         return current;
       };
-      const body = JSON.stringify({ model: "farol-next/mind", input: [] });
+      const body = JSON.stringify({ model: "legacy-route/mind", input: [] });
       const response = new Promise<{
         status: number | undefined;
         body: string;
@@ -240,7 +240,7 @@ it.each(["/responses", "/responses/compact"])(
     };
     const endpoint = new FarolModelEndpoint({
       state,
-      model: "farol-next/mind",
+      model: "legacy-route/mind",
       handler: async () => {
         await observeDispatch();
         return { ok: true, events: [] };
@@ -259,7 +259,7 @@ it.each(["/responses", "/responses/compact"])(
           authorization: `Bearer ${token}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify({ model: "farol-next/mind", input: [] }),
+        body: JSON.stringify({ model: "legacy-route/mind", input: [] }),
       });
       await entered;
       endpoint.seal();

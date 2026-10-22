@@ -19,7 +19,9 @@ MAX_CENTRAL_DIRECTORY = 16 * 1024 * 1024
 MAX_PATH_PARTS = 128
 MAX_LINK = 4096
 CHUNK = 1024 * 1024
-APP_NAMES = ("Farol Next Preview.app", "Farol.app")
+# Schema-5 archive input only; new packages use Farol.app.
+LEGACY_APP_NAME = "Farol Next Preview.app"
+APP_NAMES = (LEGACY_APP_NAME, "Farol.app")
 
 
 class Refusal(Exception):

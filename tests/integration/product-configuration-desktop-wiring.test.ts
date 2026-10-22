@@ -78,7 +78,7 @@ afterEach(async () => {
 
 async function userData(): Promise<string> {
   const root = await fs.mkdtemp(
-    path.join(os.tmpdir(), "farol-next-desktop-wiring-"),
+    path.join(os.tmpdir(), "farol-desktop-wiring-"),
   );
   roots.push(root);
   return root;
@@ -161,7 +161,7 @@ describe("desktop wiring: main.ts's own construction path shares the promotion l
       const root = await userData();
       const buildId = "build-go-edit";
       const service = new ProductConfigurationService(
-        new ProductSettingsStore({ root: path.join(root, "farol-next-state") }),
+        new ProductSettingsStore({ root: path.join(root, "farol-state") }),
         { promotionLease: desktopPromotionLeaseGuard(root, buildId) },
       );
       await service.initialize();
@@ -230,7 +230,7 @@ describe("desktop wiring: main.ts's own construction path shares the promotion l
     // Exactly `main.ts`'s construction: `ProductConfigurationService` built
     // with the `promotionLease` dependency.
     const service = new ProductConfigurationService(
-      new ProductSettingsStore({ root: path.join(root, "farol-next-state") }),
+      new ProductSettingsStore({ root: path.join(root, "farol-state") }),
       { promotionLease: desktopPromotionLeaseGuard(root, buildId) },
     );
     await service.initialize();

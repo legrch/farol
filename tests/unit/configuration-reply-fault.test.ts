@@ -48,7 +48,7 @@ function failedReply(): ProductConfigurationResult {
 
 function armed(deliveries: string): Record<string, string | undefined> {
   return {
-    FAROL_NEXT_E2E: "1",
+    FAROL_E2E: "1",
     [WORKSPACE_EDIT_REPLY_DELIVERIES_ENV]: deliveries,
   };
 }
@@ -57,9 +57,9 @@ describe("the guarded-edit reply fault", () => {
   it("delivers every reply when the lane is not armed", () => {
     for (const env of [
       {},
-      { FAROL_NEXT_E2E: "1" },
+      { FAROL_E2E: "1" },
       { [WORKSPACE_EDIT_REPLY_DELIVERIES_ENV]: "0" },
-      { FAROL_NEXT_E2E: "0", [WORKSPACE_EDIT_REPLY_DELIVERIES_ENV]: "0" },
+      { FAROL_E2E: "0", [WORKSPACE_EDIT_REPLY_DELIVERIES_ENV]: "0" },
     ]) {
       const decide = createConfigurationReplyFault(env);
       for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -158,10 +158,10 @@ describe("the shared E2E budget", () => {
   it("is unarmed unless both gates are set", () => {
     for (const env of [
       {},
-      { FAROL_NEXT_E2E: "1" },
+      { FAROL_E2E: "1" },
       { [WORKSPACE_EDIT_ACK_HOLD_ENV]: "0" },
-      { FAROL_NEXT_E2E: "0", [WORKSPACE_EDIT_ACK_HOLD_ENV]: "0" },
-      { FAROL_NEXT_E2E: "true", [WORKSPACE_EDIT_ACK_HOLD_ENV]: "0" },
+      { FAROL_E2E: "0", [WORKSPACE_EDIT_ACK_HOLD_ENV]: "0" },
+      { FAROL_E2E: "true", [WORKSPACE_EDIT_ACK_HOLD_ENV]: "0" },
     ]) {
       expect(e2eBudget(env, WORKSPACE_EDIT_ACK_HOLD_ENV, "NEVER")).toBeNull();
     }
@@ -175,7 +175,7 @@ describe("the shared E2E budget", () => {
     ] as const) {
       expect(
         e2eBudget(
-          { FAROL_NEXT_E2E: "1", [WORKSPACE_EDIT_ACK_HOLD_ENV]: raw },
+          { FAROL_E2E: "1", [WORKSPACE_EDIT_ACK_HOLD_ENV]: raw },
           WORKSPACE_EDIT_ACK_HOLD_ENV,
           "NEVER",
         ),
@@ -187,7 +187,7 @@ describe("the shared E2E budget", () => {
     for (const raw of ["-1", "1.5", "one", "NaN", "1e400", "1 2"]) {
       expect(() =>
         e2eBudget(
-          { FAROL_NEXT_E2E: "1", [WORKSPACE_EDIT_ACK_HOLD_ENV]: raw },
+          { FAROL_E2E: "1", [WORKSPACE_EDIT_ACK_HOLD_ENV]: raw },
           WORKSPACE_EDIT_ACK_HOLD_ENV,
           WORKSPACE_EDIT_ACK_HOLD_INVALID,
         ),
@@ -197,7 +197,7 @@ describe("the shared E2E budget", () => {
 
   it("reads each seam's own variable, never another's", () => {
     const env = {
-      FAROL_NEXT_E2E: "1",
+      FAROL_E2E: "1",
       [WORKSPACE_EDIT_REPLY_DELIVERIES_ENV]: "7",
     };
     expect(

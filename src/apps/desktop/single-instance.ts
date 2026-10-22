@@ -36,7 +36,7 @@ const buildIdentitySchema = z.discriminatedUnion("schema", [
 ]);
 
 const instanceIdentitySchema = z.strictObject({
-  schema: z.literal("farol.next.single-instance/2"),
+  schema: z.literal("farol.single-instance/2"),
   nonce,
   environment: z.enum(["preview", "dev", "owner-preview"]),
   sourceCommit,
@@ -45,7 +45,7 @@ const instanceIdentitySchema = z.strictObject({
 });
 
 const backgroundInstanceRequestSchema = instanceIdentitySchema.extend({
-  schema: z.literal("farol.next.single-instance/3"),
+  schema: z.literal("farol.single-instance/3"),
   backgroundOnly: z.literal(true),
 });
 
@@ -137,11 +137,11 @@ export function createInstanceRequest(
   };
   return backgroundOnly
     ? {
-        schema: "farol.next.single-instance/3",
+        schema: "farol.single-instance/3",
         ...request,
         backgroundOnly: true,
       }
-    : { schema: "farol.next.single-instance/2", ...request };
+    : { schema: "farol.single-instance/2", ...request };
 }
 
 export function secondInstanceRefusalMessage(
@@ -149,16 +149,16 @@ export function secondInstanceRefusalMessage(
   acknowledgement: InstanceAcknowledgement | null,
 ): string {
   if (request.backgroundOnly && acknowledgement === null) {
-    return "Farol Next could not confirm background-only admission with the running instance. Quit it before starting a hidden instance.";
+    return "Farol could not confirm background-only admission with the running instance. Quit it before starting a hidden instance.";
   }
   if (
     request.backgroundOnly &&
     acknowledgement?.status === "reopen-failed" &&
     sameLaunchIdentity(request, acknowledgement)
   ) {
-    return "Farol Next refused the background launch because this exact candidate is already running. Quit it before starting a hidden instance.";
+    return "Farol refused the background launch because this exact candidate is already running. Quit it before starting a hidden instance.";
   }
-  return "Farol Next refused the second launch because the running build could not be verified as this exact candidate.";
+  return "Farol refused the second launch because the running build could not be verified as this exact candidate.";
 }
 
 export function decideSecondInstance(
@@ -296,7 +296,7 @@ export async function writeInstanceAcknowledgement(
   await ensureAcknowledgementDirectory(userData);
   const identity = primary ?? request;
   const acknowledgement: InstanceAcknowledgement = {
-    schema: "farol.next.single-instance/2",
+    schema: "farol.single-instance/2",
     nonce: request.nonce,
     environment: identity.environment,
     sourceCommit: identity.sourceCommit,

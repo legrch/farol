@@ -105,13 +105,13 @@ function selectionFor(target: FarolModelProviderSelection): string {
 
 describe("Farol Model managed provider block", () => {
   it("previews and updates only owned route fields without relabelling foreign state", async () => {
-    const unrelated = '[unrelated]\nlabel = "farol-next/chatgpt"\n';
+    const unrelated = '[unrelated]\nlabel = "legacy-route/chatgpt"\n';
     const configPath = await disposableConfig(unrelated);
     const oldSpec = {
       ...envKeySpec,
-      providerName: "farol_next",
-      displayName: "Farol Next",
-      model: "farol-next/chatgpt",
+      providerName: "legacy_provider",
+      displayName: "Farol",
+      model: "legacy-route/chatgpt",
     };
     await applyFarolModelConfigBlock(configPath, oldSpec);
     await applyFarolModelProviderSelection(configPath, oldSpec);
@@ -133,7 +133,7 @@ describe("Farol Model managed provider block", () => {
     expect(updated).toContain('model_provider = "farol"');
     expect(updated).toContain('model = "chatgpt"');
     expect(updated).toContain("[model_providers.farol]");
-    expect(updated).not.toContain("[model_providers.farol_next]");
+    expect(updated).not.toContain("[model_providers.legacy_provider]");
     expect(updated).toContain(unrelated);
     await rollbackFarolModelProviderSelection(configPath);
     await rollbackFarolModelConfigBlock(configPath);
@@ -734,7 +734,7 @@ describe("Farol Model provider selection (separate consent)", () => {
     expect(second.status).toBe("noop");
     expect(await fs.readFile(configPath, "utf8")).toBe(afterFirst);
 
-    const changed = { ...selection, model: "farol-next/other" };
+    const changed = { ...selection, model: "legacy-route/other" };
     const preview = await previewFarolModelProviderSelection(
       configPath,
       changed,

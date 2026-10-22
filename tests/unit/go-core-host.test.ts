@@ -426,9 +426,9 @@ beforeEach(async () => {
     compiledArtifact: structuredClone(artifact),
     build: {
       schema: 1,
-      product: "Farol Next Preview",
+      product: "Farol",
       version: "0.1.0",
-      bundleId: "local.farol.next.preview",
+      bundleId: "io.github.legrch.farol",
       updateChannel: "local-preview-only",
       builtAt: "2026-10-03T00:00:00.000Z",
       sourceCommit: artifact.build.sourceSHA,

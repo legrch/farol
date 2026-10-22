@@ -411,7 +411,7 @@ export async function run(input: {
       Array.isArray(object(search.data).matches) &&
         (object(search.data).matches as JSONValue[]).length === 1,
     );
-    const verified = await peer.call("farol_next_connector_verify", {
+    const verified = await peer.call("farol_connector_verify", {
       workspaceId,
       challenge,
     });

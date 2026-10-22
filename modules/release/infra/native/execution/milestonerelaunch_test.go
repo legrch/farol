@@ -412,7 +412,7 @@ func TestLaunchTargetBindsTheCaptureToTheInstallLocation(t *testing.T) {
 			return &other
 		}, "launch_image_unconfirmed"},
 		{"legacy with a capture", false, func(f *relaunchFixture) *string {
-			path := f.config.Request.Home + "/Library/Application Support/Farol Next Preview/installed-updates/" + f.config.Request.OperationID + "/launch-Farol.app"
+			path := f.config.Request.Home + "/Library/Application Support/io.github.legrch.farol/installed-updates/" + f.config.Request.OperationID + "/launch-Farol.app"
 			return &path
 		}, "launch_image_unexpected"},
 	} {

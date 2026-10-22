@@ -72,7 +72,7 @@ function codexHostOf(executableSha256 = EXECUTABLE_SHA) {
       executableSha256,
       schemaSha256: SCHEMA_SHA,
       buildId: BUILD_ID,
-      dynamicTool: "farol_next_ping" as const,
+      dynamicTool: "farol_ping" as const,
       verifiedAt: TIMESTAMP,
     },
     agentVerification: {
@@ -145,7 +145,7 @@ function settingsOf(
         reachable: "reachable",
         outcomeUnknown: false,
         verified: {
-          profile: "farol-next",
+          profile: "farol",
           configRevision: generation,
           workspaceId,
           runtimeGeneration: "next-1",

@@ -251,7 +251,7 @@ export async function recoverClosedComputer(
     expectedRunSha256: input.expectedRunSha256,
     expectedQuitSha256: input.expectedQuitSha256,
   });
-  const state = path.join(input.userData, "farol-next-state");
+  const state = path.join(input.userData, "farol-state");
   const root = path.join(state, "secure-mcp-connector", "computer-authority");
   for (const directory of [input.userData, state, path.dirname(root), root])
     await privateDirectory(directory);

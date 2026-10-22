@@ -77,7 +77,7 @@ tasks:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/dev.mjs {{.CLI_ARGS}}
 
   package:
-    desc: Build, assemble, and verify the explicit unsigned Farol Next Preview app
+    desc: Build, assemble, and verify the explicit unsigned Farol app
     cmds:
       # A candidate is built from a clean environment by the declared Node
       # itself, not through npm: no NODE_OPTIONS, NODE_PATH, npm node-options
@@ -100,7 +100,7 @@ tasks:
           "$node_path" {{.CLI_ARGS}}
 
   run:
-    desc: Launch the exact verified Farol Next packaged candidate; never builds or installs Legacy
+    desc: Launch the exact verified Farol packaged candidate; never builds or installs Legacy
     cmds:
       - |
         clean_path=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
@@ -109,8 +109,8 @@ tasks:
           exit 1
         fi
         /usr/bin/env -i \
-          FAROL_NEXT_OWNER_LAUNCH=1 \
-          FAROL_NEXT_SAVED_CHAT_PREVIEW="${FAROL_NEXT_SAVED_CHAT_PREVIEW:-0}" \
+          FAROL_OWNER_LAUNCH=1 \
+          FAROL_SAVED_CHAT_PREVIEW="${FAROL_SAVED_CHAT_PREVIEW:-0}" \
           HOME="${HOME:?task run requires HOME}" \
           LANG="${LANG:-en_US.UTF-8}" \
           LC_ALL="${LC_ALL:-}" \
@@ -217,7 +217,7 @@ tasks:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run test:e2e:dev -- {{.CLI_ARGS}}
 
   test:soak:
-    desc: Run the hidden deterministic 50-cycle Farol Next lifecycle and resource soak
+    desc: Run the hidden deterministic 50-cycle Farol lifecycle and resource soak
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run test:e2e:soak -- {{.CLI_ARGS}}
 

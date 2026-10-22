@@ -28,7 +28,7 @@ async function assertInstalledReplacementAbsent(
 ): Promise<void> {
   const pending = path.join(
     userData,
-    "farol-next-state",
+    "farol-state",
     "installed-replacement.pending",
   );
   try {

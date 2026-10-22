@@ -69,7 +69,7 @@ function configured(): ProductSettings {
     connectors: {
       secureMcp: {
         generation: 3,
-        profile: "farol-next",
+        profile: "farol",
         credential: "stored",
         tunnelId: "tunnel_fixture",
         tunnelClient: {

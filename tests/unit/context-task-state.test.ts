@@ -17,8 +17,8 @@ const binding: ContextBinding = {
   taskId: "task-context-1",
   hostThreadId: "task-context-1",
   sessionId: "task-context-1",
-  providerProfileId: "profile-isolated-next",
-  modelId: "farol-next/mind",
+  providerProfileId: "profile-isolated-farol",
+  modelId: "legacy-route/mind",
   mode: "mind",
 };
 

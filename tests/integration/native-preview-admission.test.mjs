@@ -98,7 +98,7 @@ describe("owned native startup witness", () => {
   };
   async function state() {
     const base = await root();
-    const owned = path.join(base, "user-data/farol-next-state");
+    const owned = path.join(base, "user-data/farol-state");
     await fs.mkdir(owned, { recursive: true });
     await fs.writeFile(
       path.join(owned, "running.json"),
@@ -144,12 +144,12 @@ describe("owned native startup witness", () => {
 describe("hidden disposable Setup admission", () => {
   async function selection(environment = "preview", normalProfile = false) {
     const profileRoot = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-e2e-home-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-e2e-home-")),
     );
     roots.push(profileRoot);
     await fs.chmod(profileRoot, 0o700);
     const proof = randomUUID();
-    await fs.writeFile(path.join(profileRoot, ".farol-next-e2e-root"), proof, {
+    await fs.writeFile(path.join(profileRoot, ".farol-e2e-root"), proof, {
       mode: 0o600,
     });
     const appData = path.join(profileRoot, "app-data");
@@ -157,7 +157,7 @@ describe("hidden disposable Setup admission", () => {
       environment === "dev"
         ? path.join(appData, "Farol Dev")
         : normalProfile
-          ? path.join(appData, "Farol Next Preview")
+          ? path.join(appData, "io.github.legrch.farol")
           : path.join(profileRoot, "user-data");
     await fs.mkdir(appData, { mode: 0o700 });
     await fs.mkdir(userData, { mode: 0o700 });
@@ -184,12 +184,12 @@ describe("hidden disposable Setup admission", () => {
         TMPDIR: os.tmpdir(),
         PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
         LANG: "en_US.UTF-8",
-        FAROL_NEXT_E2E: "1",
-        FAROL_NEXT_E2E_APP_DATA: appData,
-        FAROL_NEXT_E2E_TEST_ROOT: profileRoot,
-        FAROL_NEXT_E2E_TEST_PROOF: proof,
-        FAROL_NEXT_E2E_CHATGPT_URL: "http://127.0.0.1:32123/",
-        ...(environment === "dev" ? { FAROL_NEXT_ENVIRONMENT: "dev" } : {}),
+        FAROL_E2E: "1",
+        FAROL_E2E_APP_DATA: appData,
+        FAROL_E2E_TEST_ROOT: profileRoot,
+        FAROL_E2E_TEST_PROOF: proof,
+        FAROL_E2E_CHATGPT_URL: "http://127.0.0.1:32123/",
+        ...(environment === "dev" ? { FAROL_ENVIRONMENT: "dev" } : {}),
       },
       timeout: 15000,
     };
@@ -472,7 +472,7 @@ describe("hidden disposable Setup admission", () => {
     [
       "disabled E2E",
       (s) => {
-        s.launchOptions.env.FAROL_NEXT_E2E = "0";
+        s.launchOptions.env.FAROL_E2E = "0";
       },
     ],
     [
@@ -484,13 +484,13 @@ describe("hidden disposable Setup admission", () => {
     [
       "foreign appData",
       (s) => {
-        s.launchOptions.env.FAROL_NEXT_E2E_APP_DATA = "/owner/app-data";
+        s.launchOptions.env.FAROL_E2E_APP_DATA = "/owner/app-data";
       },
     ],
     [
       "proof mismatch",
       (s) => {
-        s.launchOptions.env.FAROL_NEXT_E2E_TEST_PROOF = randomUUID();
+        s.launchOptions.env.FAROL_E2E_TEST_PROOF = randomUUID();
       },
     ],
     [
@@ -508,7 +508,7 @@ describe("hidden disposable Setup admission", () => {
     [
       "unknown environment",
       (s) => {
-        s.launchOptions.env.FAROL_NEXT_ENVIRONMENT = "production";
+        s.launchOptions.env.FAROL_ENVIRONMENT = "production";
       },
     ],
     [
@@ -545,20 +545,19 @@ describe("hidden disposable Setup admission", () => {
     [
       "public Browser URL",
       (s) => {
-        s.launchOptions.env.FAROL_NEXT_E2E_CHATGPT_URL = "https://chatgpt.com/";
+        s.launchOptions.env.FAROL_E2E_CHATGPT_URL = "https://chatgpt.com/";
       },
     ],
     [
       "wrong fixture port",
       (s) => {
-        s.launchOptions.env.FAROL_NEXT_E2E_CHATGPT_URL =
-          "http://127.0.0.1:32124/";
+        s.launchOptions.env.FAROL_E2E_CHATGPT_URL = "http://127.0.0.1:32124/";
       },
     ],
     [
       "fixture credentials",
       (s) => {
-        s.launchOptions.env.FAROL_NEXT_E2E_CHATGPT_URL =
+        s.launchOptions.env.FAROL_E2E_CHATGPT_URL =
           "http://user:secret@127.0.0.1:32123/";
       },
     ],
@@ -586,13 +585,13 @@ describe("hidden disposable Setup admission", () => {
     [
       "unowned workspace",
       (s) => {
-        s.launchOptions.env.FAROL_NEXT_E2E_WORKSPACE_ROOT = "/owner/work";
+        s.launchOptions.env.FAROL_E2E_WORKSPACE_ROOT = "/owner/work";
       },
     ],
     [
       "unowned executable",
       (s) => {
-        s.launchOptions.env.FAROL_NEXT_E2E_TUNNEL_CLIENT = "/owner/client";
+        s.launchOptions.env.FAROL_E2E_TUNNEL_CLIENT = "/owner/client";
       },
     ],
   ])("refuses %s before launch", async (_name, change) => {
@@ -612,7 +611,7 @@ describe("hidden disposable Setup admission", () => {
     "descendant-hardlink",
   ])("refuses unsafe %s metadata", async (kind) => {
     const selected = await selection();
-    const file = path.join(selected.profileRoot, ".farol-next-e2e-root");
+    const file = path.join(selected.profileRoot, ".farol-e2e-root");
     const other = await root();
     if (kind === "root-mode") await fs.chmod(selected.profileRoot, 0o755);
     if (kind === "proof-mode") await fs.chmod(file, 0o644);
@@ -626,7 +625,7 @@ describe("hidden disposable Setup admission", () => {
       await fs.symlink(selected.profileRoot, path.join(other, "home"));
       selected.profileRoot =
         selected.launchOptions.env.HOME =
-        selected.launchOptions.env.FAROL_NEXT_E2E_TEST_ROOT =
+        selected.launchOptions.env.FAROL_E2E_TEST_ROOT =
           path.join(other, "home");
     }
     if (kind === "descendant-link")
@@ -649,7 +648,7 @@ describe("hidden disposable Setup admission", () => {
     await fs.rename(selected.profileRoot, outside);
     selected.profileRoot =
       selected.launchOptions.env.HOME =
-      selected.launchOptions.env.FAROL_NEXT_E2E_TEST_ROOT =
+      selected.launchOptions.env.FAROL_E2E_TEST_ROOT =
         outside;
     await expect(admit(selected)).rejects.toThrow(
       "NATIVE_ISOLATION_NOT_ESTABLISHED",
@@ -663,7 +662,7 @@ describe("hidden disposable Setup admission", () => {
     roots.push(auxiliaryRoot);
     await fs.chmod(auxiliaryRoot, 0o700);
     await fs.writeFile(
-      path.join(auxiliaryRoot, ".farol-next-e2e-root"),
+      path.join(auxiliaryRoot, ".farol-e2e-root"),
       selected.proof,
       { mode: 0o600 },
     );
@@ -672,8 +671,8 @@ describe("hidden disposable Setup admission", () => {
     await fs.mkdir(workspace, { mode: 0o700 });
     await fs.writeFile(tunnel, "synthetic executable", { mode: 0o700 });
     selected.auxiliaryRoot = auxiliaryRoot;
-    selected.launchOptions.env.FAROL_NEXT_E2E_WORKSPACE_ROOT = workspace;
-    selected.launchOptions.env.FAROL_NEXT_E2E_TUNNEL_CLIENT = tunnel;
+    selected.launchOptions.env.FAROL_E2E_WORKSPACE_ROOT = workspace;
+    selected.launchOptions.env.FAROL_E2E_TUNNEL_CLIENT = tunnel;
     const receipt = await admit(selected);
     const observed = await recheckNativePreviewIsolation(
       receipt,
@@ -706,7 +705,7 @@ describe("hidden disposable Setup admission", () => {
     if (kind === "no-windows") selected.actual.windows = [];
     if (kind === "proof")
       await fs.writeFile(
-        path.join(selected.profileRoot, ".farol-next-e2e-root"),
+        path.join(selected.profileRoot, ".farol-e2e-root"),
         selected.proof,
       );
     if (kind === "directory") {
@@ -770,7 +769,7 @@ describe("hidden disposable Setup admission", () => {
   });
   it("refuses a marker in its disposable profile without reading it", async () => {
     const selected = await selection();
-    const stateRoot = path.join(selected.actual.userData, "farol-next-state");
+    const stateRoot = path.join(selected.actual.userData, "farol-state");
     await fs.mkdir(stateRoot, { mode: 0o700 });
     const file = path.join(stateRoot, "running.json");
     await fs.writeFile(file, "synthetic unknown prior run", { mode: 0o600 });

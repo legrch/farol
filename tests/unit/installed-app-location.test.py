@@ -93,9 +93,9 @@ class LocationTests(unittest.TestCase):
                     update.parse_request()
 
     def test_promotion_request_legacy_and_explicit_selection(self):
-        base = dict(schema="farol.next.promotion-apply/1", home="/Users/fixture", source="/candidate/Farol.app",
+        base = dict(schema="farol.promotion-apply/1", home="/Users/fixture", source="/candidate/Farol.app",
                     artifactSha256="1" * 64, receiptText='{"operation":"applied"}', testHook=False,
-                    lease=dict(file="/Users/fixture/Library/Application Support/Farol Next Preview/farol-next-state/promotion.lease", device="1", inode="2"))
+                    lease=dict(file="/Users/fixture/Library/Application Support/io.github.legrch.farol/farol-state/promotion.lease", device="1", inode="2"))
         for location in (None, "legacy", "shared"):
             value = dict(base)
             if location is not None:

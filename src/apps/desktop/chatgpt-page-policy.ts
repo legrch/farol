@@ -1,4 +1,4 @@
-export const CHATGPT_PARTITION = "persist:farol-next-chatgpt";
+export const CHATGPT_PARTITION = "persist:farol-app-chatgpt";
 export const CHATGPT_HOME = "https://chatgpt.com/";
 
 const exactAllowedHosts = new Set([
