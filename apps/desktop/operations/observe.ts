@@ -13,6 +13,33 @@ const object = (v: unknown): Record<string, unknown> =>
     ? (v as Record<string, unknown>)
     : {};
 
+/** ConnectorProcessBridge validates this diagnostic cohort against Go process
+ * Read/completedState. A terminal READ confirms an observation even for nonzero
+ * exits or signals; it does not establish command success or durable retention.
+ * Do not parse output here or promote a generic terminal state.
+ */
+function confirmedProcessRead(data: Record<string, unknown>): boolean {
+  return (
+    data.state === "terminal" &&
+    data.rootState === "exited" &&
+    data.rootWaited === true &&
+    data.groupCleanup === "confirmed" &&
+    data.descendantCleanup === "confirmed" &&
+    data.outputDrained === true &&
+    (data.supervisorState === undefined || data.supervisorState === "exited") &&
+    (data.exitCode !== undefined
+      ? typeof data.exitCode === "number" &&
+        Number.isInteger(data.exitCode) &&
+        data.exitCode >= 0 &&
+        data.exitCode <= 255 &&
+        data.exitSignal === 0
+      : typeof data.exitSignal === "number" &&
+        Number.isInteger(data.exitSignal) &&
+        data.exitSignal >= 1 &&
+        data.exitSignal <= 128)
+  );
+}
+
 /** Reads only closed code/state fields, never messages, bodies or exception text.
  * Unknown evidence dominates every terminal assertion, including `ok: true`.
  * Pending evidence dominates terminal assertions until settlement is confirmed.
@@ -52,7 +79,7 @@ export function operationResult(value: unknown): {
     evidence.outcome,
     evidence.phase,
     data.status,
-    data.state,
+    confirmedProcessRead(data) ? "completed" : data.state,
     data.phase,
     data.outcome,
     attempt.outcome,

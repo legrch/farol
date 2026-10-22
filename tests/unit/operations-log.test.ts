@@ -1,3 +1,13 @@
+import {
+  classifyConfigurationResponse,
+  configurationEffectOutcome,
+} from "../../src/ui/configuration-outcome";
+import { ConnectorProcessBridge } from "../../apps/desktop/bridge/connector-process";
+import type {
+  ComputerConnectorOpened,
+  ComputerConnectorProcessResult,
+  Outcome,
+} from "../../apps/desktop/bridge/wire";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 import {
@@ -2539,4 +2549,303 @@ it("fails closed when owner configuration has an ambiguous duplicate ID", async 
     supportWith(earlier, ownerConfiguration(duplicates)).operations!.entries[0]!
       .target,
   ).toEqual({ workspace: unknownWorkspace });
+});
+
+it.each(["symlink", "mkdir failure"])(
+  "stops all maintenance after rejected preparation: %s",
+  async (failure) => {
+    const parent = fs.mkdtempSync(
+      path.join(os.tmpdir(), "farol-rejected-operations-"),
+    );
+    roots.push(parent);
+    const target = path.join(parent, "target");
+    fs.mkdirSync(target, { mode: 0o700 });
+    const directory =
+      failure === "symlink" ? path.join(parent, "operations") : target;
+    if (failure === "symlink") fs.symlinkSync(target, directory, "dir");
+    const now = 1792670400000;
+    const expired = OperationEntrySchema.parse({
+      ...metadata,
+      id: "11111111-1111-4111-8111-111111111111",
+      at: now - 31 * dayMs,
+      outcome: "done",
+      code: null,
+      durationMs: 1,
+    });
+    const name = `${expired.at}-11111111-1111-4111-8111-111111111111.jsonl`;
+    fs.writeFileSync(path.join(target, name), JSON.stringify(expired) + "\n", {
+      mode: 0o600,
+    });
+    const before = fs
+      .readdirSync(target)
+      .sort()
+      .map((entry) => [entry, fs.readFileSync(path.join(target, entry))]);
+    const mkdir = vi.fn(
+      async (...args: Parameters<typeof fs.promises.mkdir>) => {
+        if (failure === "mkdir failure")
+          throw Error("injected preparation failure");
+        return fs.promises.mkdir(...args);
+      },
+    );
+    const io = { ...fs.promises, mkdir: mkdir as typeof fs.promises.mkdir };
+    const readdir = vi.spyOn(io, "readdir");
+    const store = new OperationsStore(
+      directory,
+      () => now,
+      retentionLimits,
+      io,
+    );
+    stores.push(store);
+    const unchanged = () =>
+      expect(
+        fs
+          .readdirSync(target)
+          .sort()
+          .map((entry) => [entry, fs.readFileSync(path.join(target, entry))]),
+      ).toEqual(before);
+    // Wait for startup retention without using flush to initiate it.
+    await expect
+      .poll(async () => (await store.snapshot(5000)).writeFailures)
+      .toBeGreaterThan(0);
+    unchanged();
+    const value = { status: "unknown", code: "PROCESS_OBSERVATION_UNKNOWN" };
+    const original = Promise.resolve(value);
+    expect(observeOperation(store, metadata, () => original)).toBe(original);
+    expect(await original).toBe(value);
+    store.setWorkspaceLabels([{ workspaceId: "w", label: "Docs" }]);
+    expect(await store.flush(5000)).toBe(false);
+    unchanged();
+    expect(await store.snapshot(5000)).toMatchObject({
+      entries: [],
+      droppedEntries: 2,
+      unrecordedUncertainEntries: 2,
+    });
+    const attempts = mkdir.mock.calls.length;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(mkdir.mock.calls.length).toBe(attempts);
+    expect(await store.shutdown(5000)).toBe(false);
+    unchanged();
+    // Reads on a safe directory are allowed; no drain may follow failed prepare.
+    if (failure === "symlink") expect(readdir).not.toHaveBeenCalled();
+  },
+);
+
+it("preserves the settings producer's unknown effect after failed write readback", () => {
+  const value = {
+    ok: false,
+    error: "SETTINGS_WRITE_FAILED",
+    snapshot: { status: "error", error: "SETTINGS_CORRUPT" },
+  };
+  const configured = classifyConfigurationResponse({
+    settled: "fulfilled",
+    value,
+  });
+  expect(configured.kind).toBe("refused");
+  expect(configurationEffectOutcome(configured)).toBe("unknown");
+  expect(operationResult(value)).toEqual({
+    outcome: "unknown",
+    code: value.error,
+  });
+});
+
+// Real bridge validation with injected wire replies; no native process is run.
+const processContext = { profileId: "profile", backendGeneration: "backend" };
+const processOpened: ComputerConnectorOpened = {
+  endpoint: {
+    binding: {
+      ...processContext,
+      buildId: "build",
+      runtimeId: "runtime",
+      connectorGeneration: "1",
+    },
+    socketPath: "/fixture/socket",
+    token: "a".repeat(64),
+  },
+  execution: {
+    ownerId: "owner",
+    sessionId: "session",
+    taskId: "task",
+    taskEpoch: "1",
+    participantId: "participant",
+    turnId: "turn",
+    generation: "1",
+  },
+  admissionOperationId: "admission",
+};
+const processInput = {
+  operationId: "original",
+  handle: "handle",
+  stdoutOffset: "0",
+  stderrOffset: "0",
+};
+async function validatedProcessRead(
+  patch: Partial<ComputerConnectorProcessResult> = {},
+) {
+  const data: ComputerConnectorProcessResult = {
+    ...processInput,
+    execution: processOpened.execution,
+    callId: "read-call",
+    state: "terminal",
+    rootState: "exited",
+    rootWaited: true,
+    exitCode: 0,
+    exitSignal: 0,
+    groupCleanup: "confirmed",
+    descendantCleanup: "confirmed",
+    outputDrained: true,
+    stdoutBase64: "",
+    stderrBase64: "",
+    stdoutNext: "0",
+    stderrNext: "0",
+    stdoutBytes: "0",
+    stderrBytes: "0",
+    outputLimitReached: false,
+    cancelRequested: false,
+    timedOut: false,
+    authorityLost: false,
+    ...patch,
+  };
+  if (patch.exitSignal) delete (data as { exitCode?: number }).exitCode;
+  const bridge = new ConnectorProcessBridge(
+    {
+      request: vi.fn(
+        async () =>
+          ({
+            status: "ok",
+            requestId: "read-call",
+            context: processContext,
+            data,
+          }) as unknown as Outcome,
+      ),
+    },
+    processOpened,
+    processContext,
+  );
+  return bridge.read(processInput, {
+    requestId: "read-call",
+    context: processContext,
+  });
+}
+
+it.each(["zero", "nonzero", "signal"])(
+  "records a validated %s terminal process read as a completed observation",
+  async (exit) => {
+    const value = await validatedProcessRead(
+      exit === "signal"
+        ? { exitSignal: 15 }
+        : { exitCode: exit === "nonzero" ? 7 : 0 },
+    );
+    expect(value.status).toBe("ok");
+    expect(value.data?.state).toBe("terminal");
+    expect(value.data?.exitCode).toBe(
+      exit === "signal" ? undefined : exit === "nonzero" ? 7 : 0,
+    );
+    expect(value.data?.exitSignal).toBe(exit === "signal" ? 15 : 0);
+    const record = vi.fn();
+    const original = Promise.resolve(value);
+    expect(
+      observeOperation(
+        { record },
+        { ...metadata, kind: "computer_shell_read" },
+        () => original,
+      ),
+    ).toBe(original);
+    expect(await original).toBe(value);
+    expect(record.mock.calls[0]!.slice(1, 3)).toEqual(["done", null]);
+    expect(operationResult(value).outcome).toBe("done");
+  },
+);
+
+it("never reads process output bodies or messages to classify a terminal observation", async () => {
+  const value = await validatedProcessRead();
+  const unreadable = {
+    get() {
+      throw Error("must not inspect output");
+    },
+  };
+  const data = { ...value.data };
+  Object.defineProperties(data, {
+    stdoutBase64: unreadable,
+    stderrBase64: unreadable,
+    message: unreadable,
+  });
+  expect(operationResult({ ...value, data }).outcome).toBe("done");
+});
+
+it("keeps generic terminal and incomplete or contradictory process proof unknown", async () => {
+  const value = await validatedProcessRead();
+  expect(
+    operationResult({ status: "ok", data: { state: "terminal" } }).outcome,
+  ).toBe("unknown");
+  for (const field of [
+    "rootState",
+    "rootWaited",
+    "groupCleanup",
+    "descendantCleanup",
+    "outputDrained",
+    "exitCode",
+    "exitSignal",
+  ]) {
+    const data = { ...value.data } as Record<string, unknown>;
+    delete data[field];
+    expect(operationResult({ ...value, data }).outcome, field).toBe("unknown");
+  }
+  for (const patch of [
+    { rootState: "running" },
+    { rootWaited: false },
+    { groupCleanup: "pending" },
+    { groupCleanup: "unverified" },
+    { descendantCleanup: "pending" },
+    { descendantCleanup: "unverified" },
+    { outputDrained: false },
+    { supervisorState: "running" },
+    { supervisorState: "unknown" },
+    { exitCode: -1 },
+    { exitCode: 256 },
+    { exitCode: 0.5 },
+    { exitSignal: 15 },
+  ])
+    expect(
+      operationResult({ ...value, data: { ...value.data, ...patch } }).outcome,
+    ).toBe("unknown");
+});
+
+it("keeps unknown, pending and sticky producer uncertainty above confirmed terminal facts", async () => {
+  const value = await validatedProcessRead();
+  for (const code of [
+    "PROCESS_OBSERVATION_UNKNOWN",
+    "OPERATION_CODE_UNMAPPED",
+    "PRIVATE_UNLISTED_CODE",
+  ])
+    expect(operationResult({ ...value, code }).outcome).toBe("unknown");
+  for (const code of ["PROCESS_COMPLETION_PENDING", "pending"]) {
+    expect(operationResult({ ...value, code }).outcome).toBe("pending");
+    expect(
+      operationResult({ ...value, data: { ...value.data, code } }).outcome,
+    ).toBe("pending");
+  }
+  expect(operationResult({ ...value, status: "pending" }).outcome).toBe(
+    "pending",
+  );
+  expect(operationResult({ ...value, status: "unknown" }).outcome).toBe(
+    "unknown",
+  );
+  expect(
+    operationResult({ ...value, evidence: { state: "unknown" } }).outcome,
+  ).toBe("unknown");
+  expect(
+    operationResult({ ...value, evidence: { state: "pending" } }).outcome,
+  ).toBe("pending");
+  expect(
+    operationResult(await validatedProcessRead({ supervisorState: "exited" }))
+      .outcome,
+  ).toBe("done");
+  const sticky = await validatedProcessRead({ state: "unknown" });
+  expect(sticky).toMatchObject({
+    status: "unknown",
+    code: "PROCESS_OBSERVATION_UNKNOWN",
+    data: { rootWaited: true, outputDrained: true },
+  });
+  expect(operationResult(sticky).outcome).toBe("unknown");
 });

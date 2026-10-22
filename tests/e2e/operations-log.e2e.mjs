@@ -130,7 +130,7 @@ try {
     await page
       .locator(".rail")
       .evaluate((el) => el.getBoundingClientRect().width),
-    208,
+    214,
   );
   await screenshot("b2-default-expanded-real");
   const selected = await page.evaluate(() =>

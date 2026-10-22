@@ -308,6 +308,15 @@ export class OperationsStore implements OperationsRecorder {
       this.labels = undefined;
       try {
         await this.prepare();
+      } catch {
+        // Rejected preparation grants no maintenance through this path. Consume
+        // the batch once and retain diagnostics in memory until a future pass.
+        this.writeFailures++;
+        this.lost(batch);
+        diagnosticsFailed = true;
+        continue;
+      }
+      try {
         if (labels)
           await this.replace(
             path.join(this.directory, "workspace-labels.json"),
