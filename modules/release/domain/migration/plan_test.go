@@ -52,7 +52,7 @@ func TestFinalIdentity(t *testing.T) {
 		profile  Profile
 		identity Identity
 	}{
-		{Production, Identity{"Farol", "io.github.legrch.farol", "io.github.legrch.farol", "persist:farol"}},
+		{Production, Identity{"Farol", "io.github.legrch.farol", "io.github.legrch.farol", "persist:farol-runtime"}},
 		{Development, Identity{"Farol Dev", "io.github.legrch.farol.dev", "Farol Dev", "persist:farol-dev"}},
 	} {
 		identity, err := FinalIdentity(tc.profile)
