@@ -99,50 +99,81 @@ describe("CI safety and selection", () => {
       );
     },
   );
-  it("checks accepted-main ancestry and both lightweight and annotated remote tags", () => {
-    for (const annotated of [false, true]) {
-      const calls = [];
-      const git = (...args) => {
-        calls.push(args);
-        if (args[0] === "rev-parse")
-          return annotated && args[1] === `refs/tags/v${version}`
-            ? "b".repeat(40)
-            : head;
-        if (args[0] === "merge-base") return "";
-        return (
-          `${annotated ? "b".repeat(40) : head}\trefs/tags/v${version}` +
-          (annotated ? `\n${head}\trefs/tags/v${version}^{}` : "")
-        );
-      };
-      expect(verifyReleaseTag(`v${version}`, git)).toBe(head);
-      expect(calls).toContainEqual([
-        "merge-base",
-        "--is-ancestor",
-        head,
-        "refs/remotes/origin/main",
-      ]);
-    }
+  const tagObject = "b".repeat(40);
+  // A fake git for an annotated local tag; `remote` is the ls-remote output.
+  const annotatedGit =
+    (remote, calls = [], overrides = {}) =>
+    (...args) => {
+      calls.push(args);
+      if (overrides[args[0]]) return overrides[args[0]](...args);
+      if (args[0] === "rev-parse")
+        return args[1] === `refs/tags/v${version}` ? tagObject : head;
+      if (args[0] === "cat-file") return "tag";
+      if (args[0] === "merge-base") return "";
+      return remote;
+    };
+  const publishedAnnotated = `${tagObject}\trefs/tags/v${version}\n${head}\trefs/tags/v${version}^{}`;
+  it("accepts an annotated tag on accepted main whose remote matches", () => {
+    const calls = [];
+    expect(
+      verifyReleaseTag(`v${version}`, annotatedGit(publishedAnnotated, calls)),
+    ).toBe(head);
+    expect(calls).toContainEqual([
+      "merge-base",
+      "--is-ancestor",
+      head,
+      "refs/remotes/origin/main",
+    ]);
+  });
+  it("refuses a lightweight tag locally or on the remote", () => {
+    expect(() =>
+      verifyReleaseTag(
+        `v${version}`,
+        annotatedGit(`${head}\trefs/tags/v${version}`, [], {
+          "rev-parse": () => head,
+          "cat-file": () => "commit",
+        }),
+      ),
+    ).toThrow("RELEASE_TAG_NOT_ANNOTATED");
+    expect(() =>
+      verifyReleaseTag(
+        `v${version}`,
+        annotatedGit(publishedAnnotated, [], { "cat-file": () => "commit" }),
+      ),
+    ).toThrow("RELEASE_TAG_NOT_ANNOTATED");
+    expect(() =>
+      verifyReleaseTag(
+        `v${version}`,
+        annotatedGit(`${tagObject}\trefs/tags/v${version}`),
+      ),
+    ).toThrow("RELEASE_REMOTE_TAG_CHANGED");
   });
   it("refuses moved remote tags and non-main source", () => {
     expect(() =>
-      verifyReleaseTag(`v${version}`, (...args) =>
-        args[0] === "ls-remote"
-          ? `${"b".repeat(40)}\trefs/tags/v${version}\n${head}\trefs/tags/v${version}^{}`
-          : head,
+      verifyReleaseTag(
+        `v${version}`,
+        annotatedGit(
+          `${"c".repeat(40)}\trefs/tags/v${version}\n${head}\trefs/tags/v${version}^{}`,
+        ),
       ),
     ).toThrow("RELEASE_REMOTE_TAG_CHANGED");
     expect(() =>
-      verifyReleaseTag(`v${version}`, (...args) =>
-        args[0] === "ls-remote"
-          ? `${"b".repeat(40)}\trefs/tags/v${version}`
-          : head,
+      verifyReleaseTag(
+        `v${version}`,
+        annotatedGit(
+          `${tagObject}\trefs/tags/v${version}\n${"c".repeat(40)}\trefs/tags/v${version}^{}`,
+        ),
       ),
     ).toThrow("RELEASE_REMOTE_TAG_CHANGED");
     expect(() =>
-      verifyReleaseTag(`v${version}`, (...args) => {
-        if (args[0] === "merge-base") throw Error("not on main");
-        return head;
-      }),
+      verifyReleaseTag(
+        `v${version}`,
+        annotatedGit(publishedAnnotated, [], {
+          "merge-base": () => {
+            throw Error("not on main");
+          },
+        }),
+      ),
     ).toThrow("not on main");
   });
   it("dry-runs the asset handoff without packaging or exposing private evidence", async () => {

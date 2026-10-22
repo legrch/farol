@@ -21,6 +21,10 @@ export function verifyReleaseTag(
   const tagged = git("rev-parse", `refs/tags/${tag}^{commit}`);
   if (tagged !== head) throw Error("RELEASE_TAG_HEAD_MISMATCH");
   const tagObject = git("rev-parse", `refs/tags/${tag}`);
+  // A lightweight tag carries no tagger or message; only an annotated tag
+  // object may start a release.
+  if (tagObject === head || git("cat-file", "-t", `refs/tags/${tag}`) !== "tag")
+    throw Error("RELEASE_TAG_NOT_ANNOTATED");
   git("merge-base", "--is-ancestor", head, "refs/remotes/origin/main");
   const remote = git(
     "ls-remote",
@@ -34,9 +38,10 @@ export function verifyReleaseTag(
       .filter(Boolean)
       .map((line) => line.split(/\s+/u).reverse()),
   );
-  const remoteCommit =
-    refs.get(`refs/tags/${tag}^{}`) ?? refs.get(`refs/tags/${tag}`);
-  if (remoteCommit !== head || refs.get(`refs/tags/${tag}`) !== tagObject)
+  if (
+    refs.get(`refs/tags/${tag}^{}`) !== head ||
+    refs.get(`refs/tags/${tag}`) !== tagObject
+  )
     throw Error("RELEASE_REMOTE_TAG_CHANGED");
   return head;
 }
