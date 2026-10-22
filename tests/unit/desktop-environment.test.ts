@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
 import { transformSync } from "esbuild";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   codexChildHomePath,
@@ -95,6 +95,7 @@ function isolatedAppData() {
   return { home, appData, proof };
 }
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const home of isolatedHomes.splice(0)) {
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -781,5 +782,180 @@ describe("fresh review profile selection", () => {
         acceptanceProfile,
       }),
     ).toThrow("DESKTOP_REVIEW_PROFILE_INVALID");
+  });
+});
+
+describe("native-layout disposable E2E app-data admission", () => {
+  function fixture() {
+    const root = fs.realpathSync.native(
+      fs.mkdtempSync(path.join(os.tmpdir(), "farol-e2e-home-")),
+    );
+    isolatedHomes.push(root);
+    fs.chmodSync(root, 0o700);
+    const home = path.join(root, "home");
+    const library = path.join(home, "Library");
+    const appData = path.join(library, "Application Support");
+    for (const directory of [home, library, appData])
+      fs.mkdirSync(directory, { mode: 0o700 });
+    const proof = randomUUID();
+    const marker = path.join(root, ".farol-e2e-root");
+    fs.writeFileSync(marker, proof, { mode: 0o600, flag: "wx" });
+    const options = {
+      enabled: true,
+      override: appData,
+      testRoot: root,
+      testHome: home,
+      testProof: proof,
+    };
+    return { root, home, library, appData, marker, proof, options };
+  }
+
+  it.each(["preview", "dev"] as const)(
+    "admits only the proven native layout for enabled %s E2E",
+    (environment) => {
+      const f = fixture();
+      expect(
+        desktopAppDataPath(environment, "/fixture/ordinary", f.options),
+      ).toBe(f.appData);
+      expect(fs.readdirSync(f.appData)).toEqual([]);
+      expect(
+        desktopAppDataPath(environment, "/fixture/ordinary", {
+          ...f.options,
+          enabled: false,
+        }),
+      ).toBe("/fixture/ordinary");
+      expect(desktopIdentity("preview", f.appData).userData).toBe(
+        path.join(f.home, "Library/Application Support/io.github.legrch.farol"),
+      );
+    },
+  );
+
+  it.each(["root", "home", "library", "appData"] as const)(
+    "refuses a symlinked %s even when it resolves to the owned directory",
+    (component) => {
+      const f = fixture();
+      const original = f[component];
+      const moved = `${original}-retained`;
+      fs.renameSync(original, moved);
+      fs.symlinkSync(moved, original);
+      if (component === "root") isolatedHomes.push(moved);
+      expect(() =>
+        desktopAppDataPath("preview", "/fixture/ordinary", f.options),
+      ).toThrow("DESKTOP_E2E_APP_DATA_INVALID");
+    },
+  );
+
+  it.each(["root", "home", "library", "appData"] as const)(
+    "refuses non-private or special permission bits on %s without repair",
+    (component) => {
+      const f = fixture();
+      for (const mode of [0o750, 0o770, 0o1700]) {
+        fs.chmodSync(f[component], mode);
+        expect(() =>
+          desktopAppDataPath("preview", "/fixture/ordinary", f.options),
+        ).toThrow("DESKTOP_E2E_APP_DATA_INVALID");
+        expect(fs.lstatSync(f[component]).mode & 0o7777).toBe(mode);
+      }
+    },
+  );
+
+  it("refuses wrong ownership even on a private physical component", () => {
+    const f = fixture();
+    const original = fs.lstatSync;
+    vi.spyOn(fs, "lstatSync").mockImplementation(((file: fs.PathLike) => {
+      const info = original(file);
+      if (file === f.library) info.uid += 1;
+      return info;
+    }) as typeof fs.lstatSync);
+    expect(() =>
+      desktopAppDataPath("preview", "/fixture/ordinary", f.options),
+    ).toThrow("DESKTOP_E2E_APP_DATA_INVALID");
+  });
+
+  it("rejects missing, outside, non-canonical and unproven path selections", () => {
+    const f = fixture();
+    const other = fixture();
+    for (const change of [
+      { override: other.appData },
+      { testHome: other.home },
+      { testRoot: other.root },
+      { testHome: undefined },
+      { testProof: undefined },
+      { testProof: other.proof },
+      { testProof: "not-a-uuid" },
+      { override: `${f.home}/Library/../Library/Application Support` },
+      { override: path.join(f.appData, "extra") },
+      { override: path.join(f.root, "unproven/Library/Application Support") },
+    ]) {
+      expect(() =>
+        desktopAppDataPath("preview", "/fixture/ordinary", {
+          ...f.options,
+          ...change,
+        }),
+      ).toThrow("DESKTOP_E2E_APP_DATA_INVALID");
+    }
+    fs.rmdirSync(f.appData);
+    expect(() =>
+      desktopAppDataPath("preview", "/fixture/ordinary", f.options),
+    ).toThrow("DESKTOP_E2E_APP_DATA_INVALID");
+  });
+
+  it.each(["wrong", "oversized", "mode", "symlink", "hardlink"])(
+    "rejects %s proof metadata or bytes",
+    (kind) => {
+      const f = fixture();
+      if (kind === "wrong") fs.writeFileSync(f.marker, randomUUID());
+      if (kind === "oversized") fs.writeFileSync(f.marker, "x".repeat(65));
+      if (kind === "mode") fs.chmodSync(f.marker, 0o640);
+      if (kind === "hardlink") fs.linkSync(f.marker, `${f.marker}-alias`);
+      if (kind === "symlink") {
+        fs.renameSync(f.marker, `${f.marker}-retained`);
+        fs.symlinkSync(`${f.marker}-retained`, f.marker);
+      }
+      expect(() =>
+        desktopAppDataPath("preview", "/fixture/ordinary", f.options),
+      ).toThrow("DESKTOP_E2E_APP_DATA_INVALID");
+    },
+  );
+
+  it.each(["root", "home", "library", "appData", "marker"] as const)(
+    "detects replacement of %s during the proof read",
+    (component) => {
+      const f = fixture();
+      const original = fs.readSync;
+      vi.spyOn(fs, "readSync").mockImplementation(((
+        ...args: Parameters<typeof fs.readSync>
+      ) => {
+        const count = Reflect.apply(original, fs, args);
+        const selected = f[component];
+        const retained = `${selected}-retained`;
+        fs.renameSync(selected, retained);
+        if (component === "marker") {
+          fs.writeFileSync(selected, f.proof, { mode: 0o600 });
+        } else {
+          fs.mkdirSync(selected, { mode: 0o700 });
+        }
+        if (component === "root") isolatedHomes.push(retained);
+        return count;
+      }) as typeof fs.readSync);
+      expect(() =>
+        desktopAppDataPath("preview", "/fixture/ordinary", f.options),
+      ).toThrow("DESKTOP_E2E_APP_DATA_INVALID");
+    },
+  );
+
+  it("does not admit the native layout beneath the older visual root shapes", () => {
+    const f = fixture();
+    const renamed = f.root.replace("farol-e2e-home-", "onboarding-visual-");
+    fs.renameSync(f.root, renamed);
+    isolatedHomes.push(renamed);
+    expect(() =>
+      desktopAppDataPath("preview", "/fixture/ordinary", {
+        ...f.options,
+        testRoot: renamed,
+        testHome: path.join(renamed, "home"),
+        override: path.join(renamed, "home/Library/Application Support"),
+      }),
+    ).toThrow("DESKTOP_E2E_APP_DATA_INVALID");
   });
 });
