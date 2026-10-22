@@ -10,6 +10,10 @@ import { _electron } from "playwright-core";
 import { desktopIdentity } from "../../tooling/harness-identity.ts";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { qualifyGoBuild } from "./qualified-go-build.mjs";
+import {
+  assertRuntimeObservation,
+  observeElectronRuntime,
+} from "../../tooling/runtime-contract.mjs";
 import { setupStep } from "./current-react-setup.mjs";
 import {
   startChatGptFixture,
@@ -21,6 +25,18 @@ const root = process.cwd();
 const source = sourceIdentity(root);
 const buildRoot = path.join(root, "_output/build/app");
 const build = await qualifyGoBuild(buildRoot, source);
+const declaredRuntime = process.env.FAROL_RENDERER_TEST_ELECTRON_ROOT;
+assert.ok(
+  declaredRuntime && path.isAbsolute(declaredRuntime),
+  "EXPLICIT_ABSOLUTE_REVIEWED_ELECTRON_ROOT_REQUIRED",
+);
+const runtimeRoot = await fs.realpath(declaredRuntime);
+const runtime = await observeElectronRuntime(runtimeRoot);
+assertRuntimeObservation(runtime);
+const executablePath = path.join(
+  runtimeRoot,
+  "dist/Electron.app/Contents/MacOS/Electron",
+);
 const attemptId = randomUUID();
 const output = path.join(
   root,
@@ -42,6 +58,7 @@ const report = {
   attemptId,
   source,
   buildId: build.identity.buildId,
+  runtime,
   profile,
   mode: "hidden",
   status: "running",
@@ -230,10 +247,7 @@ async function close() {
 try {
   fixture = await startChatGptFixture();
   application = await _electron.launch({
-    executablePath: path.join(
-      root,
-      "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
-    ),
+    executablePath,
     args: [path.join(buildRoot, "main.cjs"), "--preview-window-mode=hidden"],
     env: {
       FAROL_E2E: "1",
@@ -353,19 +367,17 @@ try {
   await observe("compact-640x600", documentId, true);
   await screenshot("compact", documentId);
   // Renderer controls must fit without being covered by the native viewport.
-  const geometry = await page
-    .locator(".toolbar")
-    .evaluate((toolbar) => ({
-      width: toolbar.clientWidth,
-      scrollWidth: toolbar.scrollWidth,
-      buttons: [...toolbar.querySelectorAll("button")]
-        .filter((b) => b.getBoundingClientRect().width > 0)
-        .map((b) => ({
-          label: b.getAttribute("aria-label") || b.textContent.trim(),
-          left: b.getBoundingClientRect().left,
-          right: b.getBoundingClientRect().right,
-        })),
-    }));
+  const geometry = await page.locator(".toolbar").evaluate((toolbar) => ({
+    width: toolbar.clientWidth,
+    scrollWidth: toolbar.scrollWidth,
+    buttons: [...toolbar.querySelectorAll("button")]
+      .filter((b) => b.getBoundingClientRect().width > 0)
+      .map((b) => ({
+        label: b.getAttribute("aria-label") || b.textContent.trim(),
+        left: b.getBoundingClientRect().left,
+        right: b.getBoundingClientRect().right,
+      })),
+  }));
   assert.ok(
     geometry.scrollWidth <= geometry.width,
     "SIGN_IN_COMPACT_TOOLBAR_OVERFLOW",
