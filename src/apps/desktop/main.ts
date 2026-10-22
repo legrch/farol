@@ -12273,8 +12273,6 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     demoMode,
     legacySetupTestMode,
     dismissed: initialSettings?.setup.journey.dismissed ?? false,
-    completedPreviously:
-      initialSettings?.connectors.secureMcp.lastVerifiedAttachment != null,
     currentStep: initialSettings?.setup.journey.currentStep ?? "chatgpt",
     openAtLaunch: initialSettings?.general.openAtLaunch ?? "home",
   });
