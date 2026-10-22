@@ -11366,6 +11366,9 @@ async function createWindow(): Promise<void> {
   observeRendererLifecycle(window.webContents, buildIdentity.buildId, (line) =>
     process.stderr.write(line),
   );
+  // The renderer's neutral HTML title must not replace the Dev window identity.
+  if (buildEnvironment === "dev")
+    window.on("page-title-updated", (event) => event.preventDefault());
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   window.webContents.on("before-input-event", (event, input) => {
