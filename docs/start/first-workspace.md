@@ -1,6 +1,6 @@
 # Try your first workspace
 
-Use a small folder containing only files you are comfortable returning to ChatGPT. Start with an accepted installation and a [configured connection](first-connection.md).
+Use a small folder containing only files you are comfortable returning to ChatGPT. Start with an accepted installation and follow [the connection guide](first-connection.md); Workspaces is the second Setup step.
 
 ## Prepare a sample
 
@@ -8,24 +8,24 @@ In Finder, create a folder named `Farol sample` in a location you control. Add a
 
 ## Review saved access before using it
 
-1. In **Setup → Workspaces**, choose **Add workspace…** and select the sample folder.
-2. Review its path and **Saved access**. The current source saves **Read & write** when adding a folder; the picker does not create a read-only grant.
-3. Under **Workspace access**, select **Read-only** and choose **Save**. Wait for the confirmed save and automatic access check/connection restoration. If **Verify workspace** is offered afterward, use it and inspect its result.
-4. Confirm **Saved access: Read-only** and **Access checked** for this folder. Keep the sample folder selected for Connection when its check is needed.
+1. In **Setup → Workspaces**, choose **+ Add workspace** and select the sample folder.
+2. Review its path and **Access**. Adding a workspace saves **Read & write** and checks access; the picker does not create a read-only grant.
+3. Select **Read only** in the row's **Access** control. It saves and checks access immediately. Wait for the confirmed result. If **Check access** is offered afterward, use it and inspect its result.
+4. Confirm **Access: Read only** and **✓ Works** for this workspace. Every listed workspace needs a current check before **Continue** advances to **Connect this Mac**.
 
-A **Save** that is pending or unknown is not a confirmed permission change. Use [Recovery](../guides/recovery.md) before another submission. **Cancel** discards an unsaved draft; it does not undo an action already submitted.
+A pending or unknown change is not a confirmed permission change. Use [Recovery](../guides/recovery.md) before another submission. Navigating away does not undo an action already submitted.
 
 ## Ask ChatGPT to read it
 
-Complete the current [attachment check](../guides/chatgpt-connection.md#verify-the-attachment) if one is needed. In a conversation with the matching Farol app selected, send a request such as:
+Complete **Connect this Mac** and the current [attachment check](../guides/chatgpt-connection.md#verify-the-attachment) in **Add to ChatGPT** if needed. In a conversation with the matching Farol app selected, send a request such as:
 
 > Use Farol to list my approved workspaces and read hello.txt in the Farol sample workspace. Do not change files or run commands.
 
-Review the tool result and compare it with the file you created. Refused or unavailable access is a result to investigate; it is not an empty folder or permission to select a broader path.
+Review the tool result and compare it with the file you created. Refused or unavailable access is a result to investigate; it is not an empty workspace or permission to select a broader path.
 
 ## Finish the trial
 
-Keep the grant if you need it, or use **Remove → Confirm removal** beside the workspace. The files remain on disk. Removing the last workspace restores a configured connection with no file access. See [Folder access](../guides/folder-access.md) before moving to real project data.
+Keep the grant if you need it, or use **Remove [workspace name]** beside the workspace and wait for the confirmed result. The files remain on disk. Removing the last workspace leaves no workspace access and blocks continuing the guided flow until a workspace is added and checked. See [Workspace access](../guides/folder-access.md) before moving to real project data.
 
 This exercise is a user procedure derived from source and retained File evidence. It has not been executed as a fresh-recipient installation acceptance test for this documentation change.
 

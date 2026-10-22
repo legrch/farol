@@ -10,6 +10,7 @@ import { runBoundedProcess } from "./bounded-process.mjs";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { verifyInputManifest } from "../../tooling/build-contract.mjs";
 import { verifyGoCoreArtifact } from "../../tooling/go-core-artifact.mjs";
+import { retiredJourneyReport } from "../../tooling/setup-journey-retirement.mjs";
 import {
   shellGeometry,
   shellRailWidth,
@@ -19,24 +20,7 @@ import {
   stopChatGptFixture,
 } from "./fixtures/chatgpt-site.mjs";
 
-import {
-  openSetup,
-  setupStep,
-  setupAction,
-  assertSetupOverview,
-} from "./current-react-setup.mjs";
-
-const uncheckedOverview = {
-  ready: false,
-  hasWorkspaces: false,
-  signIn: "unknown",
-  states: {
-    signin: "needed",
-    folders: "needed",
-    connection: "needed",
-    attachment: "needed",
-  },
-};
+import { openSetup, setupStep, setupAction } from "./current-react-setup.mjs";
 
 const root = process.cwd();
 const useInstalledTunnelClient = process.argv.includes(
@@ -83,6 +67,7 @@ const report = {
   buildId: identity.buildId,
   launches: [],
   checks: [],
+  retirements: [],
   status: "running",
 };
 const save = () =>
@@ -399,66 +384,33 @@ try {
     await window.locator("#setup-dialog, #guided-onboarding").count(),
     0,
   );
-  // Current React Setup, not the retained legacy wizard selectors.
+  // Current welcome/progress navigation only, never legacy checklist readiness.
   const beforeReview = bootstrap.configuration;
   await openSetup(window);
-  for (const [step, label] of [
-    ["overview", "Overview"],
-    ["signin", "Sign in"],
-    ["connection", "Connection"],
-    ["folders", "Workspaces"],
-    ["attachment", "Check"],
-  ]) {
-    await setupStep(window, step, label);
+  await window
+    .getByRole("heading", { name: "Welcome to Farol", exact: true })
+    .waitFor();
+  for (const step of ["signin", "folders", "connection", "attachment"]) {
+    await setupStep(window, step);
     assert.equal(
-      await window
-        .locator('.rail [aria-label="Setup"]')
-        .getAttribute("aria-current"),
-      "page",
+      await window.locator(".setup-page").getAttribute("data-setup-step"),
+      step,
     );
   }
-  await assertSetupOverview(window, uncheckedOverview);
-  assert.equal(
-    await window.locator('.rail [aria-label="New chat"]').count(),
-    0,
-  );
   assert.deepEqual(
     (await window.evaluate(() => window.farol.bootstrap())).configuration,
     beforeReview,
   );
-  report.checks.push(
-    "fresh-current-React-Setup-navigation-no-effects-no-false-ready",
-  );
+  report.checks.push("fresh-current-React-Setup-navigation-no-saved-effects");
   await save();
-  await window
-    .getByRole("navigation", { name: "Sections", exact: true })
-    .getByRole("button", { name: "Home", exact: true })
-    .click();
-  for (const name of [
-    "General",
-    "Appearance",
-    "Workspaces",
-    "This Mac",
-    "Connection",
-    "Shortcuts",
-    "Diagnostics",
-  ]) {
+  for (const name of ["General", "Appearance", "Shortcuts"])
     await settingsPage(window, name);
-  }
   assert.deepEqual(
     await window
       .locator('nav[aria-label="Settings navigation"] button')
       .allTextContents(),
-    [
-      "General",
-      "Appearance",
-      "Workspaces",
-      "This Mac",
-      "Connection",
-      "Keyboard shortcuts",
-      "Diagnostics",
-    ],
-    "SETTINGS_NAVIGATION_MUST_NOT_RESTORE_UPDATES_PAGE",
+    ["General", "Appearance", "Keyboard shortcuts"],
+    "SETTINGS_NAVIGATION_CURRENT_CATEGORIES",
   );
   assert.equal(
     await application.evaluate(({ Menu }) => {
@@ -1089,9 +1041,9 @@ try {
     if (launch === 0) {
       await openSetup(legacyWindow);
       await setupStep(legacyWindow, "folders", "Workspaces");
-      await setupAction(legacyWindow, "Add workspace…");
+      await setupAction(legacyWindow, "+ Add workspace");
       const detail = legacyWindow.locator(
-        ".setup-page .workspace-detail:visible",
+        ".setup-page .setup-workspace-row:visible",
       );
       await detail.waitFor();
       assert.equal(await detail.count(), 1);
@@ -1134,42 +1086,12 @@ try {
         "DEV_STARTUP_SMOKE_WORKSPACE_VERIFICATION_MISSING",
       );
     } else {
-      // A saved verified folder is still partial without connection/attachment.
-      await legacyWindow
-        .locator(".toolbar-title strong")
-        .getByText("Overview", { exact: true })
-        .waitFor();
-      await legacyWindow
-        .getByRole("button", { name: "Continue setup", exact: true })
-        .click();
-      await legacyWindow
-        .locator('.setup-page[data-setup-step="overview"]')
-        .waitFor();
-      await assertSetupOverview(legacyWindow, {
-        ready: false,
-        hasWorkspaces: true,
-        signIn: uncheckedOverview.signIn,
-        states: { ...uncheckedOverview.states, folders: "verified" },
-      });
-      await legacyWindow
-        .getByRole("region", { name: "Setup overview", exact: true })
-        .getByRole("button", { name: "Set up Connection", exact: true })
-        .click();
-      assert.equal(
-        await legacyWindow
-          .locator(".setup-page")
-          .getAttribute("data-setup-step"),
-        "connection",
+      const retirement = retiredJourneyReport(
+        "startup-partial-profile-overview-continuation",
+        "Continue setup and Set up Connection checklist cards were removed; Setup now uses the welcome/progress flow.",
       );
-      await assertSetupOverview(legacyWindow, {
-        ready: false,
-        hasWorkspaces: true,
-        signIn: uncheckedOverview.signIn,
-        states: { ...uncheckedOverview.states, folders: "verified" },
-      });
-      report.checks.push(
-        "partial-folder-Quit-reopen-retained-obvious-continuation-no-false-ready",
-      );
+      report.retirements.push(retirement);
+      report.status = "NOT_RUN";
       await save();
       const value = await legacyWindow.evaluate(() => window.farol.bootstrap());
       assert.deepEqual(
@@ -1236,7 +1158,11 @@ try {
     });
   }
   report.status =
-    passed && cleanupConfirmed && !launchUnresolved ? "passed" : "failed";
+    passed && cleanupConfirmed && !launchUnresolved
+      ? report.retirements.length > 0
+        ? "NOT_RUN"
+        : "passed"
+      : "failed";
   report.cleanup = {
     cleanupConfirmed,
     launchUnresolved,
@@ -1251,5 +1177,5 @@ try {
     throw new Error("DEV_REACT_CLEANUP_UNCONFIRMED");
 }
 process.stdout.write(
-  `Farol Dev React Setup: PASS; exact source ${source.commit}; evidence ${evidenceRoot}\n`,
+  `Farol Dev React Setup: ${report.status}; exact source ${source.commit}; evidence ${evidenceRoot}\n`,
 );

@@ -963,7 +963,7 @@ it("Home local views and exact record identities survive Back and Forward withou
   expect(f.api.task).not.toHaveBeenCalled();
   c.dispose();
 });
-it("workspace presentation identity belongs to the exact Settings history entry and generic entry clears it", async () => {
+it("workspace presentation identity belongs to the exact Setup history entry and generic entry clears it", async () => {
   const f = fixture();
   const c = new WindowController(f.api);
   await c.start();
@@ -974,14 +974,14 @@ it("workspace presentation identity belongs to the exact Settings history entry 
     homeSelection: { kind: "attention", id: "folder:second" },
   });
   const home = c.getSnapshot().destination;
-  c.navigate({ area: "settings", page: "folders", workspaceId: "second" });
+  c.navigate({ area: "setup", setupStep: "folders", workspaceId: "second" });
   expect(c.getSnapshot().destination.workspaceId).toBe("second");
   c.travel(-1);
   expect(c.getSnapshot().destination).toEqual(home);
   c.travel(1);
   expect(c.getSnapshot().destination.workspaceId).toBe("second");
   c.navigate({ area: "home" });
-  c.navigate({ area: "settings", page: "folders" });
+  c.navigate({ area: "setup", setupStep: "folders" });
   expect(c.getSnapshot().destination.workspaceId).toBeUndefined();
   c.travel(-1);
   c.travel(-1);
@@ -1008,7 +1008,7 @@ it("Setup is a separate history destination with the same Settings host surface 
   expect(c.getSnapshot().destination).toMatchObject({
     area: "setup",
     setupStep: "folders",
-    page: "folders",
+    page: "general",
   });
   expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.[0]).toBe("settings");
   expect(f.api.configure).not.toHaveBeenCalled();
@@ -1072,7 +1072,7 @@ describe("F0 window owner", () => {
   it.each([
     { launch: "home", area: "home", page: "general" },
     { launch: "browser", area: "chatgpt", page: "general" },
-    { launch: "computer", area: "settings", page: "computer" },
+    { launch: "computer", area: "setup", page: "general" },
     { launch: "settings", area: "settings", page: "general" },
     { launch: "activity", area: "activity", page: "general" },
   ] as const)(
@@ -1093,6 +1093,7 @@ describe("F0 window owner", () => {
       expect(c.getSnapshot().destination).toMatchObject({
         area,
         page,
+        ...(launch === "computer" ? { setupStep: "folders" } : {}),
         taskId: "retained",
       });
       for (const area of ["home", "setup", "chatgpt"] as const) {
@@ -1191,9 +1192,10 @@ describe("F0 window owner", () => {
       await started;
       if (owner === "pending navigation")
         expect(c.getSnapshot().destination).toEqual({
-          area: "settings",
-          page: "computer",
+          area: "setup",
+          page: "general",
           taskId: "newer",
+          setupStep: "folders",
         });
       else if (
         owner === "task selection" ||
@@ -1406,11 +1408,11 @@ describe("F0 window owner", () => {
     const f = fixture();
     const c = new WindowController(f.api);
     await c.start();
-    c.navigate({ area: "settings", page: "folders" });
+    c.navigate({ area: "setup", setupStep: "folders" });
     c.navigate({ page: "appearance" });
     c.travel(-1);
     c.overlay("search");
-    c.navigate({ page: "folders" });
+    c.navigate({ area: "setup", setupStep: "folders" });
     expect(c.getSnapshot().overlay).toBe("none");
     expect(c.getSnapshot().back).toBe(true);
     expect(c.getSnapshot().forward).toBe(true);
@@ -1535,14 +1537,14 @@ describe("F0 window owner", () => {
     const action = c.task({ kind: "task.create-chatgpt" }, "new");
     const off = c.subscribe(() => {});
     off();
-    c.navigate({ area: "settings", page: "folders" });
+    c.navigate({ area: "setup", setupStep: "folders" });
     wait.resolve({
       ok: true,
       state: { revision: 1, tasks: [task()] },
       selectedTaskId: "task-1",
     });
     await action;
-    expect(c.getSnapshot().destination.area).toBe("settings");
+    expect(c.getSnapshot().destination.area).toBe("setup");
     expect(f.api.task).toHaveBeenCalledTimes(1);
     c.dispose();
   });
@@ -1778,7 +1780,12 @@ describe("F0 window owner", () => {
       start: { area: "settings", page: "general" },
       section: "computer",
       rail: false,
-      expected: { area: "settings", page: "computer", taskId: "" },
+      expected: {
+        area: "setup",
+        page: "general",
+        setupStep: "folders",
+        taskId: "",
+      },
     },
     {
       name: "Appearance to Settings General",
@@ -1857,7 +1864,12 @@ describe("F0 window owner", () => {
   );
   it.each([
     { section: "browser", area: "chatgpt", page: "general" },
-    { section: "computer", area: "settings", page: "computer" },
+    {
+      section: "computer",
+      area: "setup",
+      page: "general",
+      setupStep: "folders",
+    },
     { section: "activity", area: "activity", page: "general" },
     { section: "settings", area: "settings", page: "general" },
   ])(
@@ -2048,7 +2060,7 @@ describe("F0 window owner", () => {
     f.emit("action", action);
     expect(c.getSnapshot()).toBe(done);
     f.emit("action", sectionIntent("computer", 2));
-    expect(c.getSnapshot().destination.page).toBe("computer");
+    expect(c.getSnapshot().destination.setupStep).toBe("folders");
     c.dispose();
   });
   it("R35 stale state cannot navigate or replay the refused intent after recovery", async () => {
@@ -2100,9 +2112,10 @@ describe("F0 window owner", () => {
     });
     await started;
     expect(c.getSnapshot().destination).toEqual({
-      area: "settings",
-      page: "computer",
+      area: "setup",
+      page: "general",
       taskId: "task-1",
+      setupStep: "folders",
     });
     expect(c.getSnapshot().sidebar).toBe("rail");
     expect(destinations).not.toContain("chatgpt");
@@ -2178,10 +2191,10 @@ describe("F0 window owner", () => {
     const f = fixture();
     const c = new WindowController(f.api);
     await c.start();
-    c.navigate({ area: "settings", page: "folders" });
+    c.navigate({ area: "setup", setupStep: "folders" });
     c.navigate({ page: "appearance" });
     c.travel(-1);
-    expect(c.getSnapshot().destination.page).toBe("folders");
+    expect(c.getSnapshot().destination.setupStep).toBe("folders");
     expect(c.getSnapshot().forward).toBe(true);
     c.travel(1);
     expect(c.getSnapshot().destination.page).toBe("appearance");
@@ -2348,7 +2361,11 @@ it("R30 repeated native actions and background completion do not navigate", asyn
     eventId: "22222222-2222-4222-8222-222222222222",
     source: "settings-command",
   });
-  expect(c.getSnapshot().destination.page).toBe("connection");
+  expect(c.getSnapshot().destination).toMatchObject({
+    area: "setup",
+    page: "general",
+    setupStep: "connection",
+  });
   f.emit("action", {
     ...action,
     eventId: "33333333-3333-4333-8333-333333333333",
@@ -2526,8 +2543,9 @@ it("R06 R35 configured launch preferences are lifecycle-owned while a new profil
   const c = new WindowController(f.api);
   await c.start();
   expect(c.getSnapshot().destination).toMatchObject({
-    area: "settings",
-    page: "computer",
+    area: "setup",
+    page: "general",
+    setupStep: "folders",
   });
   expect(c.getSnapshot().sidebar).toBe("rail");
   expect(f.api.configure).not.toHaveBeenCalled();
@@ -2586,7 +2604,7 @@ it("ends a drag during update admission without resuming native browser input", 
   f.emit("update", { phase: "failed", code: "UPDATE_ABORTED" });
   expect(f.api.layout).not.toHaveBeenCalled(); // Missing settlement fields are not an ACK.
   const held = c.getSnapshot().destination;
-  c.navigate({ area: "settings", page: "diagnostics" });
+  c.overlay("unresolved-actions");
   c.presentation();
   expect(c.getSnapshot().destination).toBe(held);
   expect(f.api.layout).not.toHaveBeenCalled();
@@ -2621,7 +2639,7 @@ it.each([
     const f = fixture();
     const c = new WindowController(f.api);
     await c.start();
-    c.navigate({ area: "settings", page: "diagnostics" });
+    c.overlay("unresolved-actions");
     c.overlay("update");
     f.emit("update", { phase: "applying", version: "1.0" });
     const before = c.getSnapshot();
@@ -3367,7 +3385,7 @@ describe("bounded Setup sign-in observation", () => {
     return { f, c, wait, data, command: observationCommand(f) };
   }
   it.each(["authenticated", "signed_out", "unknown"] as const)(
-    "uses current %s evidence over exact fresh saved readiness without changing publication or intent eligibility",
+    "keeps current %s observation distinct from saved Setup evidence without changing publication or eligibility",
     async (state) => {
       const h = await pending();
       try {
@@ -3393,7 +3411,11 @@ describe("bounded Setup sign-in observation", () => {
               : "Sign-in not checked",
         );
         expect(setupChecklist(after).entries[0]?.status).toBe(
-          signInPresentation(after).label,
+          state === "signed_out"
+            ? "Signed out"
+            : state === "authenticated"
+              ? "Signed in"
+              : "Sign-in not checked",
         );
         expect(after.route).toBe("loading");
       } finally {
@@ -3409,7 +3431,7 @@ describe("bounded Setup sign-in observation", () => {
       await c.start();
       c.navigate({ area: "setup", setupStep: "overview" });
       c.navigate({ area: "setup", setupStep: "folders" });
-      c.navigate({ area: "settings", page: "connection" });
+      c.navigate({ area: "setup", setupStep: "connection" });
       await c.refresh();
       expect(f.api.configure).not.toHaveBeenCalled();
       c.navigate({ area: "setup", setupStep: "signin" });
@@ -3637,7 +3659,7 @@ describe("bounded Setup sign-in observation", () => {
       expect(h.c.getSnapshot().configuration).toBe(publication);
       expect(h.c.getSnapshot().signInObservation?.state).toBe("signed_out");
       expect(h.c.getSnapshot().intents).toEqual({});
-      h.c.navigate({ area: "settings", page: "connection" });
+      h.c.navigate({ area: "setup", setupStep: "connection" });
       h.f.emit("action", returned(2));
       expect(h.f.api.configure).toHaveBeenCalledTimes(2);
     } finally {
@@ -3798,9 +3820,13 @@ describe("bounded Setup sign-in observation", () => {
         h.c.navigate({ area: "setup", setupStep: "overview" });
         expect(h.c.getSnapshot().signInObservation).toBe(sample);
         expect(setupChecklist(h.c.getSnapshot()).entries[0]?.status).toBe(
-          label,
+          state === "signed_out"
+            ? "Signed out"
+            : state === "authenticated"
+              ? "Signed in"
+              : "Sign-in not checked",
         );
-        h.c.navigate({ area: "settings", page: "connection" });
+        h.c.navigate({ area: "setup", setupStep: "connection" });
         expect(h.c.getSnapshot().signInObservation).toBe(sample);
         expect(signInPresentation(h.c.getSnapshot()).label).toBe(label);
         await h.c.refresh();

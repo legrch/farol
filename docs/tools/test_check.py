@@ -23,6 +23,8 @@ class DocumentationCheckTests(unittest.TestCase):
         self.write("package.json", '{"scripts": {}}')
         self.write("Taskfile.yml", "version: '3'\ntasks:\n")
         self.write("docs/tools/placement-exceptions.json", "{}")
+        policy = Path(__file__).resolve().parents[2] / doccheck.GUIDE_POLICY
+        self.write(doccheck.GUIDE_POLICY, policy.read_text())
 
     def write(self, name, content):
         file = self.root / name
@@ -31,6 +33,52 @@ class DocumentationCheckTests(unittest.TestCase):
 
     def errors(self):
         return doccheck.check(self.root)[0]
+
+    def test_retired_ui_labels_fail_in_every_current_reader_scope(self):
+        policy = json.loads((self.root / doccheck.GUIDE_POLICY).read_text())
+        names = [*policy["readerFiles"], "docs/guides/nested/recovery.MD", "docs/start/nested/setup.md"]
+        examples = [rule["label"] for rule in policy["retiredLabels"] if "pattern" not in rule]
+        examples.extend([
+            "Settings → Diagnostics", "Settings > Diagnostics", "Settings › Diagnostics",
+            "Settings / Diagnostics", "Review Diagnostics", "Open the Diagnostics",
+            "Settings → This Mac", "This Mac settings page", "page named This Mac", "Open This Mac",
+        ])
+        for name in names:
+            for example in examples:
+                with self.subTest(name=name, example=example):
+                    self.write(name, f"# Guide\n\n{example}\n")
+                    self.assertTrue(any(name in error and "retired UI label" in error for error in self.errors()))
+            self.write(name, "# Guide\n")
+
+    def test_wrapped_formatted_retired_routes_fail(self):
+        self.write("docs/guides/recovery.md", "# Recovery\n\nOpen **Connection**\n**help**.\n")
+        self.assertTrue(any("retired UI label: Connection help" in error for error in self.errors()))
+
+    def test_current_ui_labels_and_ordinary_folder_words_pass(self):
+        self.write("docs/guides/recovery.md", """# Recovery
+
+Setup → Sign in → Workspaces → Connect this Mac → Add to ChatGPT.
+Check sign-in; + Add workspace; Read only; Check access; Connect; Test in ChatGPT.
+Settings → General → Update recovery…; Setup status; Save support file….
+Review unresolved actions → Unresolved actions → Refresh status.
+Inspect action details; Observe existing edit; Record result delivery.
+This Mac has folders. Diagnostics can be useful evidence.
+""")
+        self.assertEqual([], self.errors())
+
+    def test_history_adrs_and_past_release_notes_are_excluded_from_ui_check(self):
+        names = [
+            "docs/reference/history/setup.md", "docs/archive/example.md",
+            "docs/adr/001-setup.md", "docs/adrs/001-setup.md",
+            "docs/releases/v0.1.md", "docs/release-notes/v0.1.md",
+            "docs/guides/history/setup.md", "docs/guides/archive/setup.md",
+            "docs/guides/adr/001-setup.md", "docs/start/adrs/001-setup.md",
+            "docs/guides/ADR-001-setup.md", "docs/start/release-notes-v0.1.md",
+            "docs/guides/releases/v0.1.md", "docs/start/release-notes/v0.1.md",
+        ]
+        for name in names:
+            self.write(name, "# Historical\n\nConnection help → Connection diagnostics\n")
+        self.assertEqual([], self.errors())
 
     def test_root_entrypoints_and_canonical_docs_pass(self):
         self.write("AGENTS.md", "# Repository policy\n")

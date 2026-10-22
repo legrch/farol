@@ -470,6 +470,9 @@ async function current(window, observed) {
   );
 }
 export async function applyMutationJourney(io) {
+  throw new Error(
+    "E2E_JOURNEY_RETIRED:settings-mutation-diagnostics-refresh: The mutation journey depends on the removed Settings Diagnostics refresh projection before entering Folders; the current UI has no equivalent observer",
+  );
   const {
     window,
     workspaceId,
@@ -660,6 +663,9 @@ export async function applyMutationJourney(io) {
   return applied.settings;
 }
 export async function reopenMutationJourney(io) {
+  throw new Error(
+    "E2E_JOURNEY_RETIRED:settings-mutation-reopen-diagnostics-observer: Reopen observation depends on the removed Settings Diagnostics page; the current UI has no equivalent observer",
+  );
   const { window, configure, report, ledger, hidden, active, save } = io;
   const before = await readMutationState(io);
   const original = Buffer.from(readCanary.text);

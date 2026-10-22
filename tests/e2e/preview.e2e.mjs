@@ -29,6 +29,8 @@ import {
   isSegmentSelected,
   shouldRunDevelopmentSegment,
 } from "../../tooling/e2e-selection.mjs";
+import { previewRetirementPlan } from "../../tooling/preview-setup-retirement.mjs";
+import { reportRetiredJourney } from "../../tooling/setup-journey-retirement.mjs";
 import { retentionDiagnostics } from "../../tooling/soak-retention.mjs";
 import {
   assertBuildIdentity,
@@ -85,7 +87,11 @@ const soakIdleMs = integerOption("soak-idle-ms", 0, 120_000);
 // rejects a selector that matches nothing.  A selected run is reported as
 // SELECTED and never PASS, so it can neither be bound as evidence nor stand
 // in for a lane's required cases.
-const selection = createSelection(process.argv);
+const requestedSelection = createSelection(process.argv);
+// Special workloads are composite journeys with the same removed prerequisite.
+// Invalid special/partial combinations retain their existing failure below.
+const retirement = previewRetirementPlan(requestedSelection);
+const selection = retirement.selection;
 const selectionActive = selection !== null;
 const segmentSelected = (name) => isSegmentSelected(selection, name);
 async function assertSameFixtureExecutable(actual, expected) {
@@ -94,7 +100,8 @@ async function assertSameFixtureExecutable(actual, expected) {
 // Each special lane drives one declared workload end to end, so combining it
 // with a partial selection would name an attempt after more than it ran.
 assert.equal(
-  selectionActive && (lifecycleSoak || persistenceFault || twoGenerationState),
+  requestedSelection !== null &&
+    (lifecycleSoak || persistenceFault || twoGenerationState),
   false,
   "E2E_SELECTION_EXCLUSIVE_WITH_SPECIAL_LANE",
 );
@@ -120,6 +127,26 @@ assert.equal(
     path.isAbsolute(predecessorArtifactOption),
   "E2E_PREDECESSOR_ARTIFACT_OPTION",
 );
+for (const entry of retirement.retired)
+  reportRetiredJourney(entry.journey, entry.reason);
+if (
+  requestedSelection === null &&
+  (lifecycleSoak || persistenceFault || twoGenerationState)
+) {
+  reportRetiredJourney(
+    "preview-special-setup-prerequisite",
+    "This composite workload requires the removed native Setup dialog; no native workload was started.",
+  );
+  process.exit(0);
+}
+if (selection?.segments.length === 0) {
+  reportRetiredJourney(
+    "preview-selected-journeys",
+    "All selected journeys were retired; see the preceding named NOT_RUN records.",
+  );
+  process.exit(0);
+}
+
 // The soak lane is named by the bytes it drives: the development build or
 // the sealed package, never one presented as the other.
 const evidenceLane = lifecycleSoak
@@ -3629,6 +3656,12 @@ async function nativeWindowTitle(application, url) {
 // journey advances, so the next click waits for the step to change: clicking
 // ahead of the save repeats a step and the dialog never closes.
 async function finishSetupByNext(instance) {
+  // This native journey drives the removed #setup-dialog first-run flow.
+  // Current Setup is the React overview welcome followed by sign-in, folders,
+  // connection, and attachment; this fixture has not been migrated to it.
+  throw new Error(
+    "E2E_JOURNEY_RETIRED:preview-setup-continue-steps: #setup-dialog and #setup-next were removed; current Setup uses the React overview welcome and sign-in/folders/connection/attachment flow",
+  );
   const dialog = instance.window.locator("#setup-dialog");
   await dialog.waitFor({ state: "visible" });
   for (let step = 0; step < setupScreens.length; step += 1) {
@@ -3657,6 +3690,11 @@ async function finishSetupByNext(instance) {
 // the dialog wedged. Returns the step ids in the order they were actually
 // shown, so a skipped step is visible rather than merely not asserted.
 async function finishSetupByDoubleClick(instance) {
+  // This native pointer journey targets the removed #setup-dialog and its
+  // Continue control. The current React Setup flow has different surfaces.
+  throw new Error(
+    "E2E_JOURNEY_RETIRED:preview-setup-double-click-steps: #setup-dialog and #setup-next were removed; current Setup uses the React overview welcome and sign-in/folders/connection/attachment flow",
+  );
   const dialog = instance.window.locator("#setup-dialog");
   await dialog.waitFor({ state: "visible" });
   const shown = [];
@@ -3931,6 +3969,12 @@ async function completeSetup(
   configureHost = false,
   agentEvidenceScope = null,
 ) {
+  // Many preview journeys use this helper to drive the removed native
+  // #setup-dialog. Keep their bodies and assertions intact, but report the
+  // obsolete prerequisite explicitly until those journeys use React Setup.
+  throw new Error(
+    "E2E_JOURNEY_RETIRED:preview-first-run-setup-dialog: #setup-dialog and its #setup-* controls were removed; current Setup uses the React overview welcome and sign-in/folders/connection/attachment flow",
+  );
   const dialog = instance.window.locator("#setup-dialog");
   await dialog.waitFor({ state: "visible" });
   assert.equal(
@@ -7301,6 +7345,12 @@ devNewTaskAffordanceSegment: {
   ) {
     break devNewTaskAffordanceSegment;
   }
+  // This development journey's onboarding prerequisite targets the removed
+  // #guided-onboarding/#onboarding-* UI. Retire at the branch entry before
+  // launching its native fixture; preserve the task assertions below.
+  throw new Error(
+    "E2E_JOURNEY_RETIRED:preview-dev-new-task-guided-onboarding: #guided-onboarding and #onboarding-* were removed; current Setup uses the React overview welcome and sign-in/folders/connection/attachment flow",
+  );
   segmentMark("dev-new-task-affordance", "start");
   const devNewTask = await launch([], "secondary-visible", "ordinary", {
     environment: { FAROL_ENVIRONMENT: "dev" },
@@ -7596,6 +7646,11 @@ chatgptRecoverySegment: try {
   // A fresh profile opens first-run Setup, which is modal: the recovery
   // notice must be on the Setup dialog the owner is looking at, not on the
   // Settings panel the dialog covers.
+  // The recovery journey's native notice assertion depends on the removed
+  // #setup-dialog surface; preserve its remaining checks, but retire here.
+  throw new Error(
+    "E2E_JOURNEY_RETIRED:preview-chatgpt-recovery-notice-in-setup: #setup-dialog and #setup-feedback were removed; current Setup uses the React overview welcome and sign-in/folders/connection/attachment flow",
+  );
   await interruptedChatGptTask.window
     .locator("#setup-dialog")
     .waitFor({ state: "visible" });
@@ -8095,6 +8150,12 @@ demoMainSegment: try {
       () => document.documentElement.dataset.section,
     ),
     "settings",
+  );
+  // The Settings Diagnostics category was removed; current Settings has only
+  // General, Appearance, and Shortcuts. Retire this diagnostics UI proof here
+  // rather than treating a missing category as a passing assertion.
+  throw new Error(
+    "E2E_JOURNEY_RETIRED:preview-settings-diagnostics-category: the Settings Diagnostics UI was removed; Settings now exposes only General, Appearance, and Shortcuts",
   );
   await normal.window.locator("#diagnostics-group").evaluate((element) => {
     element.open = true;
@@ -8711,6 +8772,11 @@ demoMainSegment: try {
   });
   await normal.window.locator("#open-connections").click();
   await normal.window.locator('[data-panel="computer"].active').waitFor();
+  // The compact Setup review capture targets the removed native dialog. The
+  // surrounding Settings and Computer assertions remain separate evidence.
+  throw new Error(
+    "E2E_JOURNEY_RETIRED:preview-setup-review-compact: #review-setup and #setup-dialog were removed; current Setup uses the React overview welcome and sign-in/folders/connection/attachment flow",
+  );
   await normal.window.locator("#review-setup").click();
   const reviewedSetup = normal.window.locator("#setup-dialog");
   await reviewedSetup.waitFor({ state: "visible" });
@@ -13638,6 +13704,7 @@ const report = {
         ? "BLOCKED"
         : "PASS",
   selection,
+  retiredJourneys: retirement.retired,
   productAgentQualification,
   harnessObservations,
   lane: development ? "development-build" : "sealed-package",

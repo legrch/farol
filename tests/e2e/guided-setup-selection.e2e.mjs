@@ -11,6 +11,7 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { _electron as electron } from "playwright-core";
+import { reportRetiredJourney } from "../../tooling/setup-journey-retirement.mjs";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { assertBuildIdentity } from "../../tooling/build-identity-contract.mjs";
 import {
@@ -24,6 +25,7 @@ import {
   waitForReactShell,
   openSetup,
   setupStep,
+  connectMac,
   readSetupSettings,
   setupAction,
   assertSetupOverview,
@@ -73,6 +75,11 @@ assert.ok(
   "SHELL_REQUIRES_PACKAGED_BEHAVIOR_WITHOUT_RESUME_REFUSAL",
 );
 assert.ok(!(behavior && devOnly));
+reportRetiredJourney(
+  "guided-legacy-setup-composite",
+  "The retained composite requires removed Setup overview, advanced permission policy, and external challenge-card prerequisites.",
+);
+process.exit(0);
 const root = process.cwd();
 const appRoot = path.join(root, "_output/package/Farol.app");
 const executable = packaged
@@ -592,6 +599,10 @@ async function waitForResumeStage(expected) {
 }
 
 async function verifyDisplayedAttachment(window) {
+  // The external challenge-card journey is different from Test in ChatGPT.
+  throw new Error(
+    "E2E_JOURNEY_RETIRED:guided-external-challenge-card: the displayed challenge card and Check attachment action were removed; current Setup uses Test in ChatGPT",
+  );
   await setupStep(window, "attachment", "Check");
   const card = window.locator(
     '.setup-page [data-connector-challenge="pending"]',
@@ -935,34 +946,15 @@ try {
     await setupStep(window, "connection", "Connection");
     await window.locator('.setup-page[data-setup-step="connection"]').waitFor();
     if (behavior) {
-      // Explicit discovery selects only this run's disposable fixture through
-      // the owned E2E seam. Save & connect may establish an explicitly empty
-      // authority; local readiness is not external attachment or file access.
-      await window
-        .locator(".setup-page")
-        .getByRole("button", { name: "Find connection helper", exact: true })
-        .click();
-      const discoveryDeadline = Date.now() + 15000;
-      for (;;) {
-        const result = await window.evaluate(() => window.farol.bootstrap());
-        if (
-          result.configuration.status === "ready" &&
-          result.configuration.settings.connectors.secureMcp.tunnelClient !==
-            null
-        )
-          break;
-        if (Date.now() >= discoveryDeadline)
-          throw new Error("GUIDED_SETUP_HELPER_DISCOVERY_TIMEOUT");
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
+      // The current form uses the selected helper and exposes Tunnel ID, Key,
+      // and Connect directly; it has no separate discovery action.
       await window
         .getByLabel("Tunnel ID", { exact: true })
         .fill("new_fixture_tunnel");
       await window
-        .getByLabel("Runtime key", { exact: true })
+        .getByLabel("Key", { exact: true })
         .fill("synthetic-owned-fixture-runtime-key");
-      await setupAction(window, "Save & connect");
-      await window.locator(".credentials-saved").waitFor({ state: "visible" });
+      await connectMac(window);
       const configured = await readSetupSettings(window);
       assert.ok(configured.connectors.secureMcp.tunnelClient);
       assert.equal(configured.connectors.secureMcp.credential, "stored");
@@ -972,49 +964,18 @@ try {
       assert.equal(configured.setup.connect.verified, null);
       assert.equal(configured.connectors.secureMcp.attachment, null);
       assert.equal(configured.setup.connect.outcomeUnknown, false);
-      await window.getByText("Connection help", { exact: true }).click();
-      await window
-        .getByRole("button", { name: "Connection diagnostics", exact: true })
-        .click();
-      await window.getByText("Action details", { exact: true }).click();
-      const setupResult = window
-        .getByRole("list", { name: "Retained actions", exact: true })
-        .locator("li")
-        .filter({ hasText: "settings:connector.save-and-connect:" });
       assert.equal(
-        await setupResult.count(),
-        1,
-        "SAVE_CONNECT_ORIGINAL_RESULT_MISSING",
-      );
-      const originalResult = await setupResult.innerText();
-      // The exact completed Save result is retained independently of local
-      // runtime readiness. Neither observation grants workspace access.
-      assert.match(
-        originalResult,
-        /^settings:connector\.save-and-connect:[0-9a-f-]+: applied$/u,
-        "SAVE_CONNECT_OUTCOME_UNCONFIRMED",
-      );
-      await openSetup(window);
-      await setupStep(window, "connection", "Connection");
-      await window
-        .getByRole("button", { name: "Edit connection", exact: true })
-        .click();
-      assert.equal(
-        await window.getByLabel("Runtime key", { exact: true }).inputValue(),
+        await window.getByLabel("Key", { exact: true }).inputValue(),
         "",
+        "STORED_CONNECTION_KEY_MUST_NOT_BE_RENDERED",
       );
-      await window
-        .getByLabel("Runtime key", { exact: true })
-        .fill("unused-fixture-replacement-runtime-key");
-      await window.getByRole("button", { name: "Cancel", exact: true }).click();
-      assert.deepEqual(await readSetupSettings(window), configured);
     }
     // The selected design keeps Workspaces directly reachable from Setup.
     await setupStep(window, "folders", "Workspaces");
-    await setupAction(window, "Add workspace…");
+    await setupAction(window, "+ Add workspace");
     // Settings retains hidden pages; Diagnostics projects the same folder.
     // Observe only the current guided form, not its hidden diagnostic record.
-    const folder = window.locator(".setup-page .workspace-detail:visible");
+    const folder = window.locator(".setup-page .setup-workspace-row:visible");
     await folder.waitFor();
     assert.equal(await folder.count(), 1);
     let saved = await readSetupSettings(window);
@@ -1028,8 +989,8 @@ try {
     assert.notEqual(saved.computer.commands, "workspace");
     await window.waitForFunction(() =>
       document
-        .querySelector(".setup-page .workspace-detail .badges")
-        ?.textContent.includes("Access checked"),
+        .querySelector(".setup-page .setup-workspace-row .setup-success")
+        ?.textContent.includes("Works"),
     );
     saved = await readSetupSettings(window);
     const build = (await window.evaluate(() => window.farol.bootstrap())).build;
@@ -1056,6 +1017,11 @@ try {
       });
     } else assert.equal(saved.setup.connect.verified, null);
     if (behavior) {
+      // The former explicit Save form no longer exists; current row edits
+      // dispatch directly and are covered in renderer/settings.test.tsx.
+      throw new Error(
+        "E2E_JOURNEY_RETIRED:guided-workspace-access-save-form: the workspace-detail Save form was replaced by immediate row access controls and automatic checks",
+      );
       for (const access of ["read", "write"]) {
         const original = await readSetupSettings(window);
         await window
@@ -1104,6 +1070,9 @@ try {
     let policyConfigSha256;
     let policyRunMarker;
     if (behavior) {
+      throw new Error(
+        "E2E_JOURNEY_RETIRED:guided-advanced-permission-form: Settings This Mac policy and explicit Save permissions were removed; workspace rows now own access and Commands",
+      );
       // Save while connected through the current React form. The acknowledged
       // edit owns drain/check/reconnect; no manual Verify or Connect click and
       // no configuration-byte writes or direct IPC mutation are substitutes.
@@ -1331,7 +1300,7 @@ try {
       await window
         .getByRole("button", { name: "Connection diagnostics", exact: true })
         .click();
-      await setupAction(window, "Stop connection", { scope: ".settings-page" });
+      await setupAction(window, "Disconnect", { scope: ".setup-page" });
       saved = await readSetupSettings(window);
       assert.deepEqual(saved.computer, beforeStop.computer);
       assert.deepEqual(saved.setup.computer, beforeStop.setup.computer);
@@ -1466,7 +1435,7 @@ try {
       continue;
     }
     await setupStep(window, "connection", "Connection");
-    await setupAction(window, "Connect this Mac");
+    await connectMac(window);
     let state = await readSetupSettings(window);
     assert.equal(state.connectors.secureMcp.runtime.state, "ready");
     assert.equal(state.connectors.secureMcp.attachment, null);

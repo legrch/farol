@@ -10,7 +10,7 @@ Find information in local files, understand a project, or make approved edits. C
 
 ## What is Farol?
 
-Farol is a Mac app that connects your chosen folders to ChatGPT. Each approved folder is a **workspace**. You can use ChatGPT in your usual browser; signing in inside Farol is optional.
+Farol is a Mac app that connects your chosen folders to ChatGPT. Each approved folder is a **workspace**. After Setup, you can use the connected ChatGPT app in your usual browser. The guided Setup flow requires signing in inside Farol for its connection test.
 
 ## What can I do with it?
 
@@ -40,18 +40,18 @@ Use the latest release page for the current download and its checksums. Public d
 
 With an accepted installation running:
 
-1. Review **Setup → Sign in**. Use **Continue** if already signed in, or **Skip for now** when using ChatGPT in another browser.
-2. In **Connection**, follow the guide to create or select a tunnel, save its restricted runtime key in Farol, and add or select the matching ChatGPT app.
-3. In **Workspaces**, choose a folder if you want file access.
-4. Complete **Check** to confirm that ChatGPT can reach this Mac.
+1. Open **Setup → Start setup**. In **Sign in**, choose **Sign in** or **Open ChatGPT**, return and choose **Check sign-in**, then **Continue** after **✓ Sign-in checked**.
+2. In **Workspaces**, use **+ Add workspace** and review its **Access**. Every listed workspace must show **✓ Works**; at least one is required to continue.
+3. In **Connect this Mac**, choose **Open OpenAI Tunnels**, follow the tunnel/key instructions, enter **Tunnel ID** and **Key**, and choose **Connect** once. Wait for **✓ Connected**.
+4. In **Add to ChatGPT**, choose **Open ChatGPT Apps** and attach the matching tunnel. Choose **Test in ChatGPT** once, then **Start using Farol** after **✓ Everything works**.
 
-Sign-in inside Farol is optional when you use ChatGPT in another browser: choose **Skip for now** in **Sign in**. It is needed for the built-in ChatGPT connection check.
+**Back** reviews an earlier step without repeating an action. If an action is pending or unknown, observe its original result through [Recovery](docs/guides/recovery.md) before another change.
 
 [Follow the connection guide →](docs/start/first-connection.md) · [Try a sample folder →](docs/start/first-workspace.md)
 
 ## Choose folder access
 
-Start with a small folder containing non-sensitive sample files. **Add workspace… currently saves Read & write access.** For a read-only trial, change **Workspace access** to **Read-only** and save before asking ChatGPT to use it. File changes still require approval.
+Start with a small folder containing non-sensitive sample files. **+ Add workspace currently saves Read & write access.** For a read-only trial, choose **Read only** in the workspace row's **Access** control and wait for the confirmed save/check before asking ChatGPT to use it. File changes still require approval.
 
 [Folder permissions](docs/guides/folder-access.md) explains checking, changing and removing access. Removing a workspace keeps your files on disk.
 
@@ -59,9 +59,9 @@ Start with a small folder containing non-sensitive sample files. **Add workspace
 
 Open **Farol.app** from its existing accepted installation location; see [installation paths](docs/start/installation.md#installation-paths-and-adoption). The nested **Electron Runtime.app** is an internal component, not a separate app to launch or keep in the Dock.
 
-For an installation already set up for trusted updates, choose **Check for Updates…** from Farol's menu, then **Install and Relaunch** when ready. Closing the window leaves Farol running; **Command+Q** quits it.
+For an installation already set up for trusted updates, open **Settings → General**, review **Version**, and choose **Check for updates**, then **Install and Relaunch** when ready. Closing the window leaves Farol running; **Command+Q** quits it.
 
-Follow [Updating Farol](docs/guides/updates.md) or [Recovery](docs/guides/recovery.md). If an action has an unknown result, inspect that result before repeating it.
+Follow [Updating Farol](docs/guides/updates.md) or [Recovery](docs/guides/recovery.md). For a recorded update, open **Settings → General → Update recovery…**. If an action has an unknown result, use **Find a page → Home** if Setup is open, then choose **Review unresolved actions** in the sidebar; it appears only while something is unresolved. Inspect the original result before another change. General also offers **Setup status**, **Open Setup**, **Install updates automatically** and **Save support file…**.
 
 ## Privacy and security
 

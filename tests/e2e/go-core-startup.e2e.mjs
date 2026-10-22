@@ -140,6 +140,7 @@ import {
   runHistoryReadJourney,
 } from "./lib/chat-history-witness.mjs";
 import { browserFailureCollector } from "./lib/browser-failure-witness.mjs";
+import { reportRetiredJourney } from "../../tooling/setup-journey-retirement.mjs";
 
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -168,7 +169,7 @@ const contract = Object.freeze({
   readDiscard:
     "Explicit packaged --reopen --read-discard: normal configure add-workspace -> Verify -> check-folder -> list-workspace with independent Computer/Chat journal observations and exact canary listing, fixture chatgpt.verify readiness, Go read-preview metadata, duplicate prepare, exact Discard/cancel/ACK, duplicate discard without writes, known Quit, original handoff consumed by one same-profile/package successor; requires production handoff support for acknowledged never-reserved NOT_DISPATCHED history",
   readAccount:
-    "Explicit packaged --reopen --read-discard --read-account: React verified folder/Choose file -> explicit Inspect current account -> ChatGPT/Home remount and same-revision Diagnostics refresh -> explicit Use this account -> known original duplicate account commands -> React exact Discard -> known Quit/reopen; exactly one inspect GET and one fresh confirmation GET, zero attempted/accepted Sends",
+    "E2E_JOURNEY_RETIRED:account-refresh-diagnostics-observer: The packaged read-account journey depended on the removed Settings Diagnostics same-revision refresh observer",
   readAccountLimits,
   chatTwoTurn:
     "Explicit Dev --candidate-root --chat-two-turn: attested normal main.cjs/real Go; synthetic settings.tasks before startup; existing normal workspace setup; React Prepare/Inspect/Confirm/Send, useful incremental text before controlled terminal, retained result, explicit ACK + independently read Go settle/release, same conversation second Send/result with retained first; one ordinary Quit, separate journey/terminal evidence, quarantine every failed or unconfirmed profile",
@@ -3792,6 +3793,18 @@ function selfTest() {
 
 async function main(args) {
   const selected = selection(args);
+  if (
+    selected.mode === "--run-native" &&
+    (selected.readAccount || selected.settingsEditMutation)
+  ) {
+    reportRetiredJourney(
+      selected.readAccount
+        ? "go-core-read-account-settings-edit-observer"
+        : "go-core-settings-edit-mutation-observer",
+      "The selected native mode requires the removed Settings Diagnostics observer.",
+    );
+    return;
+  }
   const report = {
     contract,
     scenario: selected.settingsIdleDelay

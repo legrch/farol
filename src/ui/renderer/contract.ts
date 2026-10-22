@@ -54,17 +54,20 @@ export type PreloadApi = Readonly<{
   onShellAction(listener: (value: unknown) => void): () => void;
   onWindowState(listener: (value: unknown) => void): () => void;
 }>;
-export type SettingsPage =
-  | "general"
-  | "appearance"
-  | "folders"
-  | "computer"
-  | "connection"
-  | "model"
-  | "shortcuts"
-  | "diagnostics";
+import type {
+  SettingsPage,
+  SetupStep,
+  HomeView,
+  NavigationArea,
+  Sheet,
+} from "../../../apps/desktop/renderer/navigation-destinations";
+export type {
+  SettingsPage,
+  SetupStep,
+  HomeView,
+} from "../../../apps/desktop/renderer/navigation-destinations";
 export type Destination = Readonly<{
-  area: "home" | "chatgpt" | "activity" | "setup" | "settings";
+  area: NavigationArea;
   page: SettingsPage;
   taskId: string;
   homeView?: HomeView;
@@ -80,10 +83,6 @@ export type Destination = Readonly<{
   /** Workspace presentation selection only; never an active Computer binding. */
   workspaceId?: string | null;
 }>;
-export type HomeView =
-  "overview" | "work" | "attention" | "activity" | "access";
-export type SetupStep =
-  "overview" | "signin" | "folders" | "connection" | "attachment" | "finish";
 export type UpdateAction =
   | "check"
   | "download"
@@ -161,8 +160,15 @@ export type WindowSnapshot = Readonly<{
   connectionStatus?: ConnectionStatusView;
   route: "loading" | "loaded" | "failed";
   signInObservation: SignInObservation | null;
+  /** Window-owned explicit check, bound to the authenticated document sample. */
+  setupSignInCheck?: Readonly<{
+    buildId: string;
+    binding: NonNullable<SignInObservation["binding"]>;
+  }> | null;
   update: InstalledUpdateView;
   intents: Readonly<Record<string, Intent>>;
+  /** Window-local attempt order; historical refusals cannot override a newer check. */
+  setupCheckOrder?: Readonly<Record<string, number>>;
   shortcuts: NavigationShortcuts;
   workspaceEditDelivery: string | null;
   readConversation:
@@ -201,8 +207,7 @@ export type WindowSnapshot = Readonly<{
   /** Window-local geometry; not a saved configuration setting. */
   sidebarWidth: number;
   sidebarResizing: boolean;
-  overlay:
-    "none" | "search" | "task" | "update" | "update-recovery" | "activity";
+  overlay: "none" | Sheet;
   window: WindowState;
   appearance: Appearance;
   /** Legacy has no authenticated generation/sequence or general operation query. */

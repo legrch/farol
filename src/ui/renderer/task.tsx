@@ -11,11 +11,11 @@ import { ProductAgentScopeSelectionSchema } from "../../modules/chat/contract/pr
 export function taskActionFeedback(label: string, result: Intent) {
   if (result.state === "pending") return `${label}: In progress…`;
   if (result.state === "unknown")
-    return `${label}: Outcome unknown. The action may have taken effect. Review the retained result in Diagnostics before continuing.`;
+    return `${label}: Outcome unknown. The action may have taken effect. Review the retained result in Unresolved actions before continuing.`;
   if (result.state === "refused")
     return result.code === "TASK_OPERATION_IN_PROGRESS"
       ? `${label}: Another action is still in progress. Wait for its result.`
-      : `${label}: Could not be completed. See Diagnostics for details.`;
+      : `${label}: Could not be completed. Review the action result above.`;
   return `${label}: Confirmed.`;
 }
 export function TaskEditor({
@@ -99,14 +99,18 @@ export function TaskEditor({
   const resultView = results.length > 0 && (
     <section aria-label="Chat action results">
       {results}
-      <button
-        className="text-button"
-        onClick={() =>
-          facade.navigate({ area: "settings", page: "diagnostics" })
-        }
-      >
-        Inspect action details
-      </button>
+      {actionLabels.some(([action]) =>
+        ["pending", "unknown"].includes(
+          resultFor(`${action}:${taskId}`)?.state ?? "",
+        ),
+      ) && (
+        <button
+          className="text-button"
+          onClick={() => facade.overlay("unresolved-actions")}
+        >
+          Inspect action details
+        </button>
+      )}
     </section>
   );
   const authority: AgentAuthority | null =

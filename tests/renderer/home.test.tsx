@@ -214,7 +214,7 @@ it("defaults to the unified overview and keeps four detail destinations without 
   }
   noEffects(h.f);
 });
-it("routes the inspected workspace identity to its explicit Settings destination", async () => {
+it("routes the inspected workspace identity to its explicit Setup destination", async () => {
   const value = readySettings();
   const second = {
     ...folder,
@@ -236,8 +236,9 @@ it("routes the inspected workspace identity to its explicit Settings destination
   expect(h.content().textContent).toContain("Second needs an access check");
   await h.click("Manage workspaces");
   expect(h.c.getSnapshot().destination).toMatchObject({
-    area: "settings",
-    page: "folders",
+    area: "setup",
+    page: "general",
+    setupStep: "folders",
     workspaceId: second.workspaceId,
   });
   noEffects(h.f);
@@ -464,8 +465,9 @@ it("shows a ready empty Home from verified Computer evidence without inventing w
     .querySelector<HTMLButtonElement>(".home-candidate-status-row")!;
   await act(async () => connection.click());
   expect(h.c.getSnapshot().destination).toMatchObject({
-    area: "settings",
-    page: "connection",
+    area: "setup",
+    page: "general",
+    setupStep: "connection",
   });
   noEffects(h.f);
 });
@@ -584,12 +586,13 @@ it("derives unknown and refused attention without rerunning operations", async (
   await act(async () => row.click());
   expect(h.c.getSnapshot().destination.homeSelection).toBeNull();
   expect(h.c.getSnapshot().destination).toMatchObject({
-    area: "settings",
-    page: "diagnostics",
+    area: "setup",
+    page: "general",
+    setupStep: "connection",
   });
   noEffects(h.f);
 });
-it("keeps unknown action identity and directs its review to retained Diagnostics", async () => {
+it("keeps unknown action identity and opens Unresolved actions for review", async () => {
   const h = await mount([], {
     intents: {
       "settings:model.preview:": {
@@ -613,10 +616,7 @@ it("keeps unknown action identity and directs its review to retained Diagnostics
   expect(h.content().textContent).toContain("MODEL_PREVIEW_UNKNOWN");
   expect(h.content().textContent).not.toContain("Open full Activity");
   await h.click("Inspect action details");
-  expect(h.c.getSnapshot().destination).toMatchObject({
-    area: "settings",
-    page: "diagnostics",
-  });
+  expect(h.c.getSnapshot().overlay).toBe("unresolved-actions");
   noEffects(h.f);
 });
 it.each(["pending", "delivery"] as const)(
@@ -645,16 +645,13 @@ it.each(["pending", "delivery"] as const)(
     );
     expect(h.content().textContent).toContain(operationId);
     await h.click("Inspect action details");
-    expect(h.c.getSnapshot().destination).toMatchObject({
-      area: "settings",
-      page: "diagnostics",
-    });
-    await act(async () => h.c.travel(-1));
+    expect(h.c.getSnapshot().overlay).toBe("unresolved-actions");
+    await act(async () => h.c.overlay("none"));
     await h.set({
       configuration: { status: "ready", settings: readySettings() },
       workspaceEditDelivery: "44444444-4444-4444-8444-444444444444",
     });
-    expect(h.content().textContent).toContain("This item is no longer present");
+    expect(h.c.getSnapshot().overlay).toBe("none");
     expect(h.content().textContent).not.toContain("44444444");
     noEffects(h.f);
   },
@@ -682,8 +679,8 @@ it("shows missing attention and event inspectors without substituting another re
   noEffects(h.f);
 });
 it.each([
-  ["Manage connection", "settings", "connection"],
-  ["Manage workspaces", "settings", "folders"],
+  ["Manage connection", "setup", "connection"],
+  ["Manage workspaces", "setup", "folders"],
   ["Open Setup", "setup", null],
 ] as const)(
   "leaves Home only through the named %s destination",
@@ -692,7 +689,11 @@ it.each([
     await act(async () => h.c.navigate({ area: "home", homeView: "access" }));
     await h.click(label);
     expect(h.c.getSnapshot().destination.area).toBe(area);
-    if (page) expect(h.c.getSnapshot().destination.page).toBe(page);
+    if (page)
+      expect(h.c.getSnapshot().destination).toMatchObject({
+        page: "general",
+        setupStep: page,
+      });
     noEffects(h.f);
   },
 );
@@ -870,8 +871,9 @@ it("opens the exact unchecked workspace directly from Home without a review-page
   ].find((row) => row.textContent?.includes("Atlas needs an access check"))!;
   await act(async () => row.click());
   expect(h.c.getSnapshot().destination).toMatchObject({
-    area: "settings",
-    page: "folders",
+    area: "setup",
+    page: "general",
+    setupStep: "folders",
     workspaceId: folder.workspaceId,
   });
   noEffects(h.f);
