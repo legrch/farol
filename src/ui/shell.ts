@@ -471,13 +471,13 @@ let sidebarOverlayOpen = false;
 let shellOverlay: ShellOverlay = "none";
 let settingsCategory: "preferences" | "shortcuts" | "model" | "diagnostics" =
   "preferences";
-const navigationShortcutStorageKey = "farol.navigation-shortcuts.v1";
+const navigationShortcutStorageName = "farol.navigation-shortcuts.v1";
 function storedNavigationShortcuts(): NavigationShortcuts {
   try {
     return (
       parseNavigationShortcuts(
         JSON.parse(
-          localStorage.getItem(navigationShortcutStorageKey) ?? "null",
+          localStorage.getItem(navigationShortcutStorageName) ?? "null",
         ),
       ) ?? { ...defaultNavigationShortcuts }
     );
@@ -3758,8 +3758,8 @@ async function applyShortcutDraft(): Promise<void> {
   }
   let previous: string | null;
   try {
-    previous = localStorage.getItem(navigationShortcutStorageKey);
-    localStorage.setItem(navigationShortcutStorageKey, JSON.stringify(parsed));
+    previous = localStorage.getItem(navigationShortcutStorageName);
+    localStorage.setItem(navigationShortcutStorageName, JSON.stringify(parsed));
   } catch {
     feedback.textContent = "Shortcuts could not be saved in this profile.";
     feedback.dataset.state = "error";
@@ -3785,8 +3785,8 @@ async function applyShortcutDraft(): Promise<void> {
   ) {
     try {
       if (previous === null)
-        localStorage.removeItem(navigationShortcutStorageKey);
-      else localStorage.setItem(navigationShortcutStorageKey, previous);
+        localStorage.removeItem(navigationShortcutStorageName);
+      else localStorage.setItem(navigationShortcutStorageName, previous);
     } catch {
       // The next launch will re-validate the saved value before activation.
     }

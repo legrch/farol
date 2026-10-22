@@ -38,6 +38,6 @@ dfc0ac2871e6762d347c262f1e106585921d22e9:reports/expected-git-refs.json:generic-
 dfc0ac2871e6762d347c262f1e106585921d22e9:reports/expected-git-refs.json:generic-api-key:86
 
 # Exact generic-api-key false positive for the renamed local-storage key name
-# navigationShortcutStorageKey = "farol.navigation-shortcuts.v1" (not a secret).
+# (the local-storage name of the navigation shortcuts; not a secret).
 02382cf8f5d038ba1d653c58af071ca80bf07769:src/ui/shell.ts:generic-api-key:474
 444b2a31b7389a6128d1c5e1fd3bb17899ac859b:.gitleaksignore:generic-api-key:41
