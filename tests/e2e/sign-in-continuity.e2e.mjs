@@ -314,6 +314,24 @@ try {
         ),
     { id: documentId, marker: attemptId },
   );
+  // Fresh profiles offer Open ChatGPT until a bound page read is available.
+  // Enter the explicit host sign-in command once on that already selected
+  // surface, so Return exercises the real sign-in outcome callback too.
+  await page.evaluate(() => {
+    window.__continuityActions = [];
+    window.farol.onShellAction((event) => {
+      if (event.source === "auth-window-closed")
+        window.__continuityActions.push({
+          action: event.action,
+          generation: event.authWindowGeneration,
+        });
+    });
+  });
+  const signInOpen = await page.evaluate(() =>
+    window.farol.configure({ kind: "chatgpt.open-sign-in" }),
+  );
+  assert.equal(signInOpen.ok, true, "SIGN_IN_FIXTURE_OPEN_REFUSED");
+  report.explicitHostSignIn = "opened-once-on-retained-document";
   await observe("opened-wide", documentId, true);
   await screenshot("wide", documentId);
   // The popup is an entirely local synthetic auth cancellation, with no login.
@@ -348,10 +366,22 @@ try {
   );
   // Join the normal bounded observation after popup closure. It cannot prove
   // authentication or own a destination change.
-  const observed = await page.evaluate(() =>
-    window.farol.configure({ kind: "chatgpt.observe-sign-in" }),
+  const observed = await page.evaluate(
+    (buildId) =>
+      window.farol.configure({
+        kind: "chatgpt.observe-sign-in",
+        observationId: "continuity-read",
+        buildId,
+      }),
+    build.identity.buildId,
   );
-  report.signInObservationOk = observed.ok;
+  assert.equal(observed.ok, true, "SIGN_IN_FIXTURE_OBSERVATION_REFUSED");
+  assert.equal(observed.evidence.kind, "chatgpt.sign-in-status");
+  assert.equal(observed.evidence.state, "signed_out");
+  report.signInObservation = {
+    state: observed.evidence.state,
+    bound: observed.evidence.binding !== null,
+  };
   await observe("cancelled-popup-retains-browser", documentId, true);
   assert.equal(await page.locator(".sign-in-context").count(), 1);
   await application.evaluate(
@@ -391,6 +421,14 @@ try {
     .click();
   await page.locator('.setup-page[data-setup-step="signin"]').waitFor();
   await observe("explicit-return-exact-signin", documentId, false);
+  await page.waitForFunction(() =>
+    window.__continuityActions.some((event) => event.generation !== null),
+  );
+  report.returnActions = await page.evaluate(() => window.__continuityActions);
+  assert.equal(
+    await page.locator('.setup-page[data-setup-step="signin"]').count(),
+    1,
+  );
   await page.locator('.rail [aria-label="ChatGPT"]').click();
   await observe("reopen-same-document", documentId, true);
   await page.getByRole("button", { name: "Find a page", exact: true }).click();
