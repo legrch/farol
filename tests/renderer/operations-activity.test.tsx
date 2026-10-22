@@ -247,6 +247,8 @@ it("shows only resolved owner targets from current and legacy store records", as
       JSON.stringify({
         ...snapshot.entries[0],
         id: crypto.randomUUID(),
+        // Fixture chronology must not depend on whether Date.now calls tie.
+        at: Math.max(...snapshot.entries.map((entry) => entry.at)) + 1,
         target: { workspace: privateSentence, relativePath: privatePath },
       }) + "\n",
     );
