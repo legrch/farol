@@ -41,23 +41,26 @@ the disk cannot store even diagnostics, counts remain in that process's memory;
 no logger can promise durable evidence on an unavailable disk.
 
 The closed schema stores time, source, operation kind, workspace label, relative
-path, executable name, outcome, stable code and duration. The optional lifecycle
+path, closed command category, outcome, closed code and duration. The optional lifecycle
 field contains only a UUID and started/observed phase. The names-only workspace
 label index is atomically replaced in the same private directory; it grants no
-access. Commands exclude arguments; search patterns, file contents, prompts,
+access. Command categories are `git` and `other`, never arbitrary executable names; search patterns, file contents, prompts,
 replies, credentials and raw exception text are never projected.
 
 Shell read/cancel observations inherit the dispatched start's workspace, relative
-directory and executable name by original operation ID, checking the returned
+directory and command category by original operation ID, checking the returned
 handle when available. This server-local metadata cache keeps at most 1,024
 starts, excludes proven refusals and never relabels a retained ID. For an unknown, evicted or
-previous-connection start, the target contains only the supplied handle and
-`start: "unknown"`; Activity displays that limitation. This lookup grants no
+previous-connection start, the target contains only the fixed `handle: "unrecognized"` marker and
+`start: "unknown"`; the supplied handle is never recorded; Activity displays that limitation. This lookup grants no
 execution authority and never reads command arguments, stdin or output.
 
 The recorder observes admission without granting it. Promise-based desktop
-observers invoke the original action first, enqueue its start observation, attach
-isolated settlement callbacks and return the exact original promise. They add no
+observers enqueue their start observation first, invoke the action inside a guarded
+region, attach isolated settlement callbacks and return the exact original promise.
+A synchronous throw records `failed` / `OPERATION_SYNC_THROW` and rethrows the
+exact original exception synchronously. Unclassified asynchronous rejections remain
+`unknown` / `OPERATION_OUTCOME_UNKNOWN`. They add no
 await or result transformation to health checks, Stop or Quit. The MCP tool
 adapter enqueues its start at the existing handler boundary. A flushed unmatched
 start remains pending across restart. Its separately appended observation supplies
@@ -65,6 +68,47 @@ the actual result; the raw start line is never edited. Activity folds only such
 matched start markers. Explicit unknown and pending results remain immutable,
 including after a later independent read-back. A helper ACK is pending, not proof
 that an update was installed. No logger invokes retries or reconciliation.
+
+## Closed vocabulary and field provenance (B9)
+
+`apps/desktop/renderer/operations-vocabulary.ts` owns one static set of recordable
+codes: `farolOperationCodes`, the explicit `providerOperationCodes`, and
+`provider_error`. Provider codes are limited to `server_error`,
+`rate_limit_exceeded`, `invalid_api_key`, `insufficient_quota`,
+`invalid_request_error`, `context_length_exceeded`, and
+`content_policy_violation`. An unlisted code of any type becomes `provider_error`;
+absence remains null. New Farol classifications require an explicit source change
+before their detail is recordable. A regex, uppercase spelling, HTTP status suffix,
+provider failed-frame code, or handler refusal reason never extends the set.
+
+`createTotalOperationsRecorder` validates before calling any sink, including
+`begin`, `record`, finish handles and workspace labels. The strict store/read/export
+schemas independently reject records outside the vocabulary. Existing invalid disk
+lines are counted as corruption and excluded from snapshots/export; they are not
+rewritten or replayed. The HTTP model adapter uses the same code classifier before
+returning upstream refusal codes. Model SSE frames and action results remain
+unchanged outside the diagnostic projection.
+
+| Stored field                            | Origin and recording rule                                                                                                                                                                                      |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `source`                                | Farol adapter selection; exact `ChatGPT`, `Setup`, `You`, `Updater`, `Codex` enum.                                                                                                                             |
+| `kind`                                  | Static Farol operation names and validated command discriminants; exact `operationKinds` enum. Arbitrary strings are rejected, including regex-shaped names.                                                   |
+| `target.workspace`                      | Owner-configured workspace name/ID; 1–160 UTF-16 units, Unicode letters/marks/numbers and space, `.`, `_`, `(`, `)`, `@`, `-` only.                                                                            |
+| `target.relativePath`                   | Selected relative-path metadata; 1–4096 units, the same characters plus `/`; no absolute path, empty segment, traversal, backslash, control or bidi format character. `.` is allowed.                          |
+| `target.command`                        | MCP's selected executable word or Farol's fixed Git action, reduced at the recorder boundary to `git` or `other`; no arbitrary tool-argument word survives.                                                    |
+| `target.handle`, `target.start`         | Unmatched process arguments have no trusted start metadata; fixed `unrecognized` and `unknown` only. Matched starts retain their validated target; raw handles are never persisted.                            |
+| `outcome`, `code`                       | Farol's closed outcome classifier and the single closed code set above. Provider, ChatGPT, process, tool and network text cannot add a value.                                                                  |
+| `id`, `lifecycle.id`, `lifecycle.phase` | UUIDs minted by the store and exact `started`/`observed` phase. Adapter metadata cannot supply or override them.                                                                                               |
+| `at`, `durationMs`                      | Farol wall/monotonic clocks; finite, nonnegative safe integers. Duration is rounded locally; invalid numeric values are rejected.                                                                              |
+| Workspace label index                   | Only `workspaceId`/`label` selected from owner configuration; same name bounds, at most 128 pairs. Other configuration fields never reach the sink. Disk label values are validated again before substitution. |
+| Diagnostic/index counters               | Local increments or counts of validated/read records; nonnegative safe integers at the snapshot/export boundary. No external text or error message is retained.                                                |
+
+Workspace names and relative paths are the explicit owner-metadata exception, not
+code or kind vocabularies. International names and normal relative filenames remain
+visible. Raw file/process/network contents, command arguments, search text, prompts,
+answers and exception messages have no log field. Unknown target/metadata keys are
+rejected. Failing observation never suppresses work, changes promise identity,
+adds an await turn or retries an operation.
 
 ## Recording boundaries
 
@@ -153,7 +197,9 @@ and snapshot deadlines, overflow/loss counters, protected-queue exhaustion,
 orphan completions, error isolation, cross-writer diagnostics and FIFO rotation. The MCP table in
 `tests/unit/go-computer-mcp.test.ts` invokes every registered tool through the SDK
 with fabricated start/refused contract fixtures and asserts the exact content-free
-target. It covers inherited shell targets, unmatched handles/IDs, a start without
+target after recorder normalization. The recorder/export hostile-input matrix in
+`operations-log.test.ts` then checks every external text field, legacy disk rejection,
+owner metadata bounds and every approved code. It covers inherited shell targets, unmatched handles/IDs, a start without
 a returned handle, refused/evicted starts, and retained IDs without relabeling.
 These are policy/adapter fixtures, not live providers or native effects.
 

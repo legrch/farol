@@ -133,7 +133,7 @@ it("loads durable operations independently of the empty runtime tasks and refres
     kind: "connector.check-health",
     target: {},
     outcome: "refused",
-    code: "CONNECTOR_NOT_READY",
+    code: "CONNECTION_NOT_READY",
     durationMs: 7,
   };
   const c = new WindowController({

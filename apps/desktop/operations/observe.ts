@@ -3,13 +3,13 @@ import type {
   OperationMetadata,
   OperationsRecorder,
 } from "../renderer/operations-contract";
+import { recordableOperationCode } from "../renderer/operations-vocabulary";
 
 const object = (v: unknown): Record<string, unknown> =>
   v !== null && typeof v === "object" && !Array.isArray(v)
     ? (v as Record<string, unknown>)
     : {};
-const code = (v: unknown): string | null =>
-  typeof v === "string" && /^[A-Za-z0-9._-]{1,120}$/u.test(v) ? v : null;
+const code = recordableOperationCode;
 /** Classification reads only closed status/code fields, never error text or bodies. */
 export function operationResult(value: unknown): {
   outcome: OperationEntry["outcome"];
@@ -111,18 +111,22 @@ export function observeOperation<T>(
   action: () => Promise<T>,
 ): Promise<T> {
   const start = performance.now();
-  const original = action();
-  let finish: ReturnType<NonNullable<OperationsRecorder["begin"]>>;
+  let finish: ReturnType<NonNullable<OperationsRecorder["begin"]>> = () => {};
   try {
     finish =
       recorder.begin?.(metadata) ??
       ((outcome, code, durationMs) =>
         recorder.record(metadata, outcome, code, durationMs));
   } catch {
-    return original;
+    // Observation failure cannot suppress the action or alter its timing.
   }
-  const record = (value: unknown, rejected: boolean) => {
+  const record = (value: unknown, rejected: boolean, synchronous = false) => {
     try {
+      if (synchronous) {
+        // Even a thrown proxy/getter is opaque: do not inspect the exception.
+        finish("failed", "OPERATION_SYNC_THROW", performance.now() - start);
+        return;
+      }
       const classified = object(value);
       const state = classified.state;
       const known =
@@ -150,6 +154,13 @@ export function observeOperation<T>(
       // The observer cannot replace settlement, including the original error.
     }
   };
+  let original: Promise<T>;
+  try {
+    original = action();
+  } catch (error) {
+    record(error, true, true);
+    throw error;
+  }
   void original.then(
     (value) => record(value, false),
     (error) => record(error, true),

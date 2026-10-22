@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  operationKinds,
+  recordableOperationCodes,
+} from "./operations-vocabulary";
 
 export const operationSources = [
   "ChatGPT",
@@ -14,51 +18,44 @@ export const operationOutcomes = [
   "unknown",
   "pending",
 ] as const;
-const label = z
+export const OperationLabelSchema = z
   .string()
+  .min(1)
   .max(160)
-  .regex(/^[^\x00-\x1f\x7f]*$/u);
-export const OperationEntrySchema = z.strictObject({
-  id: z.string().uuid(),
-  at: z.number().int().nonnegative(),
-  source: z.enum(operationSources),
-  kind: z
+  .regex(/^[\p{L}\p{M}\p{N} ._()@-]+$/u);
+export const OperationTargetSchema = z.strictObject({
+  workspace: OperationLabelSchema.optional(),
+  relativePath: z
     .string()
     .min(1)
-    .max(120)
-    .regex(/^[A-Za-z0-9._-]+$/u),
-  target: z.strictObject({
-    workspace: label.optional(),
-    relativePath: z
-      .string()
-      .max(4096)
-      .refine(
-        (v) =>
-          v === "." ||
-          (!v.startsWith("/") &&
-            !v.includes("\\") &&
-            v.split("/").every((s) => s && s !== ".." && s !== ".") &&
-            !/[\x00-\x1f\x7f]/u.test(v)),
-      )
-      .optional(),
-    command: z
-      .string()
-      .max(80)
-      .regex(/^[A-Za-z0-9._-]+$/u)
-      .optional(),
-    handle: z
-      .string()
-      .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u)
-      .optional(),
-    start: z.literal("unknown").optional(),
-  }),
-  outcome: z.enum(operationOutcomes),
-  code: z
-    .string()
-    .max(120)
-    .regex(/^[A-Za-z0-9._-]+$/u)
-    .nullable(),
-  durationMs: z.number().int().nonnegative(),
+    .max(4096)
+    .regex(/^[\p{L}\p{M}\p{N} ._()@/-]+$/u)
+    .refine(
+      (v) =>
+        v === "." ||
+        (!v.startsWith("/") &&
+          v.split("/").every((s) => s && s !== ".." && s !== ".")),
+    )
+    .optional(),
+  command: z.enum(["git", "other"]).optional(),
+  // Unmatched tool-supplied handles have no trusted metadata provenance.
+  handle: z.literal("unrecognized").optional(),
+  start: z.literal("unknown").optional(),
+});
+export const OperationMetadataSchema = z.strictObject({
+  source: z.enum(operationSources),
+  kind: z.enum(operationKinds),
+  target: OperationTargetSchema,
+});
+export const OperationOutcomeSchema = z.enum(operationOutcomes);
+export const OperationDurationSchema = z.number().int().nonnegative().safe();
+export const OperationEntrySchema = z.strictObject({
+  id: z.string().uuid(),
+  at: z.number().int().nonnegative().safe(),
+  ...OperationMetadataSchema.shape,
+  outcome: OperationOutcomeSchema,
+  code: z.enum(recordableOperationCodes).nullable(),
+  durationMs: OperationDurationSchema,
   lifecycle: z
     .strictObject({
       id: z.string().uuid(),
@@ -67,19 +64,30 @@ export const OperationEntrySchema = z.strictObject({
     .optional(),
 });
 export type OperationEntry = z.infer<typeof OperationEntrySchema>;
-export type OperationMetadata = Pick<
-  OperationEntry,
-  "source" | "kind" | "target"
->;
+export type OperationMetadata = Pick<OperationEntry, "source"> & {
+  kind: string;
+  target: Omit<OperationEntry["target"], "command" | "handle"> & {
+    command?: string | undefined;
+    handle?: string | undefined;
+  };
+};
+export const OperationWorkspaceLabelsSchema = z
+  .array(
+    z.strictObject({
+      workspaceId: OperationLabelSchema,
+      label: OperationLabelSchema,
+    }),
+  )
+  .max(128);
 export const OperationsDiagnosticsSchema = z.strictObject({
-  writeFailures: z.number().int().nonnegative(),
-  droppedEntries: z.number().int().nonnegative().default(0),
-  unrecordedUncertainEntries: z.number().int().nonnegative().default(0),
+  writeFailures: z.number().int().nonnegative().safe(),
+  droppedEntries: z.number().int().nonnegative().safe().default(0),
+  unrecordedUncertainEntries: z.number().int().nonnegative().safe().default(0),
 });
 export const OperationsSnapshotSchema = z.strictObject({
   ...OperationsDiagnosticsSchema.shape,
   entries: z.array(OperationEntrySchema).max(20000),
-  corruptLines: z.number().int().nonnegative(),
+  corruptLines: z.number().int().nonnegative().safe(),
 });
 export type OperationsSnapshot = z.infer<typeof OperationsSnapshotSchema>;
 /** Injected at the adapter which owns the operation. Never accepts payloads.

@@ -8,6 +8,7 @@ import type {
   OperationEntry,
 } from "../renderer/operations-contract";
 import { observeOperation } from "./observe";
+import { recordableOperationCode } from "../renderer/operations-vocabulary";
 
 /** Watches only the closed SSE event name. No request or response data is logged. */
 export function recordedModelTurn(
@@ -41,10 +42,7 @@ export function recordedModelTurn(
         const rawCode =
           record(record(data.response).error).code ?? record(data.error).code;
         terminalCode =
-          typeof rawCode === "string" &&
-          /^[A-Za-z0-9._-]{1,120}$/u.test(rawCode)
-            ? rawCode
-            : "MODEL_RESPONSE_FAILED";
+          recordableOperationCode(rawCode) ?? "MODEL_RESPONSE_FAILED";
         outcome = /unknown|unconfirmed|unreachable/iu.test(terminalCode)
           ? "unknown"
           : "failed";
@@ -60,11 +58,12 @@ export function recordedModelTurn(
     try {
       const result = await handler(request);
       if (!result.ok) {
+        const code = recordableOperationCode(result.reason) ?? "MODEL_REFUSED";
         finish(
-          /unknown|unconfirmed/iu.test(result.reason) ? "unknown" : "refused",
-          /^[A-Za-z0-9._-]{1,120}$/u.test(result.reason)
-            ? result.reason
-            : "MODEL_REFUSED",
+          /unknown|unconfirmed|unreachable/iu.test(code)
+            ? "unknown"
+            : "refused",
+          code,
           performance.now() - started,
         );
         return result;
@@ -102,9 +101,6 @@ export function recordedCompaction(
     observeOperation(
       recorder,
       { source: "Codex", kind: "model.responses.compact", target: {} },
-      async () => {
-        const result = await handler(request);
-        return result;
-      },
+      () => handler(request),
     );
 }

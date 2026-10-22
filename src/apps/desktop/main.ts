@@ -6411,22 +6411,24 @@ function configureProduct(value: unknown): Promise<ProductConfigurationResult> {
     parsed.data,
     configuration?.snapshot(),
   );
-  const original = configureProductObserved(value);
-  void original.then(
-    (result) => {
-      try {
-        if (result.snapshot.status === "ready") {
-          const workspaces = result.snapshot.settings.computer.workspaces;
-          operationsStore().setWorkspaceLabels(workspaces);
-          Object.assign(metadata.target, configurationResultTarget(result));
+  return observeOperation(operationsStore(), metadata, () => {
+    const original = configureProductObserved(value);
+    void original.then(
+      (result) => {
+        try {
+          if (result.snapshot.status === "ready") {
+            const workspaces = result.snapshot.settings.computer.workspaces;
+            operationsStore().setWorkspaceLabels(workspaces);
+            Object.assign(metadata.target, configurationResultTarget(result));
+          }
+        } catch {
+          // Optional labels cannot replace the configuration result or notification.
         }
-      } catch {
-        // Optional labels cannot replace the configuration result or notification.
-      }
-    },
-    () => undefined,
-  );
-  return observeOperation(operationsStore(), metadata, () => original);
+      },
+      () => undefined,
+    );
+    return original;
+  });
 }
 async function configureProductObserved(
   value: unknown,

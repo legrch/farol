@@ -10,6 +10,7 @@ import {
   OperationEntrySchema,
   type OperationMetadata,
 } from "../../apps/desktop/renderer/operations-contract";
+import { createTotalOperationsRecorder } from "../../apps/desktop/operations/recorder";
 import { BridgeError } from "../../apps/desktop/bridge/client.ts";
 import { ComputerBridge } from "../../apps/desktop/bridge/computer.ts";
 import {
@@ -1897,7 +1898,7 @@ it.each(recordedToolCases)(
       cancel: refused,
     };
     const { client, tools } = await setup({
-      operations: { record },
+      operations: createTotalOperationsRecorder({ record }),
       respond: refused,
       verification: { verify: refused, verifyCatalogue: refused },
       connectionStatus: { observe: refused },
@@ -1936,14 +1937,21 @@ it.each(recordedToolCases)(
     await client.callTool({ name, arguments: input });
     expect(record).toHaveBeenCalledOnce();
     const [metadata, outcome, code, durationMs] = record.mock.calls[0]!;
+    const safeTarget = {
+      ...target,
+      ...(target.command === undefined
+        ? {}
+        : { command: target.command === "git" ? "git" : "other" }),
+      ...(target.handle === undefined ? {} : { handle: "unrecognized" }),
+    };
     expect(metadata).toEqual({
       kind: name,
       source: name === "codex_selected_thread_read" ? "Codex" : "ChatGPT",
-      target,
+      target: safeTarget,
     });
     expect(outcome).toBe(name === "computer_shell_start" ? "done" : "refused");
     expect(code).toBe(
-      name === "computer_shell_start" ? null : "FIXTURE_REFUSAL",
+      name === "computer_shell_start" ? null : "provider_error",
     );
     expect(durationMs).toEqual(expect.any(Number));
     const entry = OperationEntrySchema.parse({
@@ -1954,7 +1962,7 @@ it.each(recordedToolCases)(
       id: "00000000-0000-4000-8000-000000000000",
       at: 0,
     });
-    expect(entry.target).toEqual(target);
+    expect(entry.target).toEqual(safeTarget);
     expect(JSON.stringify(record.mock.calls)).not.toMatch(
       /PRIVATE-CANARY|PRIVATE-STDIN|PRIVATE-OUTPUT|private-challenge|secret|"(?:content|text|stdin|stdout|stderr|arguments|edits|pattern)":/,
     );

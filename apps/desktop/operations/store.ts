@@ -5,6 +5,7 @@ import { createTotalOperationsRecorder } from "./recorder";
 import {
   OperationEntrySchema,
   OperationsDiagnosticsSchema,
+  OperationLabelSchema,
   type OperationMetadata,
   type OperationEntry,
   type OperationsRecorder,
@@ -353,12 +354,13 @@ export class OperationsStore implements OperationsRecorder {
           workspace && Object.hasOwn(labels, workspace)
             ? labels[workspace]
             : undefined;
-        const resolved =
-          typeof label === "string" &&
-          label.length <= 160 &&
-          !/[\x00-\x1f\x7f]/u.test(label)
-            ? { ...entry, target: { ...entry.target, workspace: label } }
-            : entry;
+        const parsedLabel = OperationLabelSchema.safeParse(label);
+        const resolved = parsedLabel.success
+          ? {
+              ...entry,
+              target: { ...entry.target, workspace: parsedLabel.data },
+            }
+          : entry;
         const line = JSON.stringify(resolved) + "\n";
         await handle.writeFile(line);
         size += Buffer.byteLength(line);
