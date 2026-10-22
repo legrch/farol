@@ -17,6 +17,7 @@ vi.mock("node:net", () => ({
 vi.mock("node:fs/promises", () => ({
   default: {
     mkdir: boundaries.mkdir,
+    realpath: async (value: string) => value,
     lstat: boundaries.lstat,
     chmod: boundaries.chmod,
     rm: boundaries.rm,

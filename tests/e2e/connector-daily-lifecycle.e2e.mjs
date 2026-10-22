@@ -28,6 +28,7 @@ import { waitForReactShell } from "./current-react-setup.mjs";
 import {
   assertNativePreviewAdmission,
   recheckNativePreviewIsolation,
+  refreshNativePreviewIsolation,
   readOwnedStartupMarker,
 } from "./native-preview-admission.mjs";
 
@@ -44,10 +45,25 @@ const build = assertBuildIdentity(
     await fs.readFile(path.join(resources, "build-identity.json"), "utf8"),
   ),
 );
-assert.match(
+// Acceptance fixes keep the committed release metadata; both stable and beta
+// packages must match that exact source rather than require a version bump.
+const expectedRelease = JSON.parse(
+  await fs.readFile(path.join(root, "package.json"), "utf8"),
+);
+assert.equal(
   build.version,
-  /-owner\.beta\.[0-9]+$/u,
-  "DAILY_OWNER_BETA_REQUIRED",
+  expectedRelease.version,
+  "DAILY_RELEASE_VERSION_CHANGED",
+);
+assert.equal(
+  build.buildVersion,
+  expectedRelease.farolRelease.buildVersion,
+  "DAILY_RELEASE_BUILD_CHANGED",
+);
+assert.equal(
+  build.updateChannel,
+  expectedRelease.farolRelease.updateChannel,
+  "DAILY_RELEASE_CHANNEL_CHANGED",
 );
 assertExactSourceIdentity(sourceIdentity(root), build);
 assertExactSourceIdentity(sourceIdentity(root), artifact);
@@ -835,6 +851,11 @@ async function normalQuit(run) {
   assert.equal(run.quitAttempted, false, "DAILY_QUIT_CANNOT_BE_RETRIED");
   assert.ok(run.isolated, "DAILY_QUIT_PROFILE_UNCONFIRMED");
   await hidden(run);
+  run.admission = await bounded(
+    refreshNativePreviewIsolation(run.admission, run.application),
+    "DAILY_PRE_QUIT_ISOLATION_TIMEOUT",
+  );
+  assert.equal(run.admission.relayObserved, true, "DAILY_RELAY_UNCONFIRMED");
   const configHash = hash(
     await fs.readFile(path.join(run.state, "config.json")),
   );

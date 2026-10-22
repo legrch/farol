@@ -1230,6 +1230,12 @@ let taskCountsBeforeRuntimeExit: Readonly<{
   failed: number;
 }> | null = null;
 let callerRelayRuntime: CodexCallerRelayRuntime | null = null;
+if (process.env.FAROL_E2E === "1") {
+  // Main-process metadata readback only: no token, socket client or control API.
+  Object.defineProperty(app, "__farolE2ERelayDirectory", {
+    get: () => callerRelayRuntime?.directoryWitness() ?? null,
+  });
+}
 let savedChatBridgeRuntime: Awaited<
   ReturnType<typeof startSavedChatBridge>
 > | null = null;

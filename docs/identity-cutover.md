@@ -92,7 +92,12 @@ paths, without granting access to those profiles.
 
 Native admission can precede the startup phase that creates the caller relay.
 A harness that reopens a profile refreshes its isolation witness from the
-original live child before Quit. Clean Quit removes the socket and preserves
+original live child before Quit. The relay retains the result of its own root
+creation, including its physical path, device/inode, birth time and process
+identity. A read-only E2E main-process getter reports that witness. First adoption
+requires creation by that child after process start and before refresh; merely
+opening a socket in a harness-created directory does not qualify. Initial window
+echoes never adopt a new relay from harness metadata alone. Clean Quit removes the socket and preserves
 the private relay directory. Reopen still requires the previously witnessed
 directory identity, an absent run marker and a graceful original child exit;
 an unwitnessed or replaced relay directory remains an isolation refusal.

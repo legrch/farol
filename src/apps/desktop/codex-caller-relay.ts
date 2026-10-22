@@ -79,7 +79,21 @@ export type CodexCallerRelayTurn = Readonly<{
   close(): void;
 }>;
 
+export type CallerRelayDirectoryWitness = Readonly<{
+  path: string;
+  dev: number;
+  ino: number;
+  uid: number;
+  mode: number;
+  birthtimeMs: number;
+  pid: number;
+  processStartedAtMs: number;
+  observedAtMs: number;
+  created: boolean;
+}>;
+
 export type CodexCallerRelayRuntime = Readonly<{
+  directoryWitness(): CallerRelayDirectoryWitness;
   endpoint: CodexCallerRelayEndpoint;
   openTurn(
     input: Readonly<{
@@ -127,9 +141,11 @@ function safeRoot(root: string): boolean {
   return path.isAbsolute(root) && !root.includes("\0") && root !== "/";
 }
 
-async function prepareRoot(root: string): Promise<void> {
+async function prepareRoot(root: string): Promise<CallerRelayDirectoryWitness> {
   if (!safeRoot(root)) throw new Error("CALLER_RELAY_ROOT_INVALID");
-  await fs.mkdir(root, { recursive: true, mode: 0o700 });
+  // Node returns the first directory this mkdir actually created. An existing
+  // root must never be reported as created by this runtime, even if we use it.
+  const created = await fs.mkdir(root, { recursive: true, mode: 0o700 });
   const info = await fs.lstat(root);
   const effectiveUser = process.geteuid?.();
   if (
@@ -140,6 +156,21 @@ async function prepareRoot(root: string): Promise<void> {
     throw new Error("CALLER_RELAY_ROOT_UNSAFE");
   }
   if ((info.mode & 0o077) !== 0) await fs.chmod(root, 0o700);
+  const final = await fs.lstat(root);
+  if (final.dev !== info.dev || final.ino !== info.ino)
+    throw new Error("CALLER_RELAY_ROOT_CHANGED");
+  return Object.freeze({
+    path: await fs.realpath(root),
+    dev: final.dev,
+    ino: final.ino,
+    uid: final.uid,
+    mode: final.mode,
+    birthtimeMs: final.birthtimeMs,
+    pid: process.pid,
+    processStartedAtMs: performance.timeOrigin,
+    observedAtMs: performance.timeOrigin + performance.now(),
+    created: created === root,
+  });
 }
 
 async function assertSocketAvailable(socketPath: string): Promise<void> {
@@ -160,7 +191,7 @@ export async function startCodexCallerRelay(
   if (token.length < 32 || token.length > 512 || /[\0\r\n]/u.test(token)) {
     throw new Error("CALLER_RELAY_TOKEN_INVALID");
   }
-  await prepareRoot(options.root);
+  const directory = await prepareRoot(options.root);
   const socketPath = path.join(options.root, SOCKET_BASENAME);
   if (Buffer.byteLength(socketPath) > 100) {
     throw new Error("CALLER_RELAY_SOCKET_PATH_TOO_LONG");
@@ -473,6 +504,7 @@ export async function startCodexCallerRelay(
     token,
   };
   return {
+    directoryWitness: () => directory,
     endpoint,
     openTurn: (input) => {
       if (closed) throw new Error("CALLER_RELAY_CLOSED");

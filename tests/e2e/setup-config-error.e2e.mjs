@@ -15,6 +15,7 @@ import {
 import {
   assertNativePreviewAdmission,
   recheckNativePreviewIsolation,
+  refreshNativePreviewIsolation,
   readOwnedStartupMarker,
 } from "./native-preview-admission.mjs";
 import {
@@ -335,6 +336,16 @@ try {
         run.failureStage = stage;
       } finally {
         if (owned) {
+          if (!primaryFailure && isolationWitness) {
+            try {
+              isolationWitness = await fixtureWait(
+                refreshNativePreviewIsolation(isolationWitness, application),
+                "SETUP_CONFIG_PRE_QUIT_ISOLATION_TIMEOUT",
+              );
+            } catch (error) {
+              cleanupFailures.push(error);
+            }
+          }
           const result = await closeOriginalChild(
             application,
             owned,

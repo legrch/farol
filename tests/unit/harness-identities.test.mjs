@@ -89,8 +89,17 @@ function violations(source, file = "fixture.mjs") {
   });
   function joined(node) {
     if (node?.type === "StringLiteral") return node.value;
-    if (node?.type === "TemplateLiteral" && node.expressions.length === 0)
-      return node.quasis[0].value.cooked;
+    if (node?.type === "TemplateLiteral") {
+      let value = node.quasis[0].value.cooked;
+      if (value === null) return undefined;
+      for (let index = 0; index < node.expressions.length; index++) {
+        const expression = joined(node.expressions[index]);
+        const quasi = node.quasis[index + 1].value.cooked;
+        if (expression === undefined || quasi === null) return undefined;
+        value += expression + quasi;
+      }
+      return value;
+    }
     if (node?.type === "BinaryExpression" && node.operator === "+") {
       const left = joined(node.left),
         right = joined(node.right);
@@ -181,6 +190,7 @@ it.each([
     "fixture.ts",
   ],
   ['const profile = "io.github.legrch." + "farol";', "fixture.mjs"],
+  ['const profile = `io.github.${"legrch.farol"}`;', "fixture.mjs"],
   ...["json", "sh", "py", "plist", "yaml", "yml", "go", "txt"].map(
     (extension) => [
       'profile: "/home/Library/Application Support/io.github.legrch.farol/farol-state"',
