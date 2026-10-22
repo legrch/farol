@@ -2533,10 +2533,19 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     const second = await createInstalledUpdateRuntime(options());
     await second!.initialize();
     expect(second!.snapshot()).toMatchObject({
-      phase: "ready",
-      deferred: true,
+      phase: "failed",
+      recoveryRequired: false,
+      code: "UPDATE_ROLLED_BACK",
     });
-    expect(JSON.parse(await fs.readFile(ready, "utf8")).operation).toBeNull();
+    await expect(fs.stat(ready)).rejects.toMatchObject({ code: "ENOENT" });
+    const saved = JSON.parse(
+      await fs.readFile(
+        path.join(userData, "installed-updates/last-update.json"),
+        "utf8",
+      ),
+    );
+    expect(saved.phase).toBe("rolled_back");
+    expect(saved.operation).toEqual(dispatched.operation);
     expect(mocks.helper).toHaveBeenCalledTimes(1);
     expect(mocks.download).toHaveBeenCalledTimes(1);
     expect(quit).not.toHaveBeenCalled();
@@ -3793,20 +3802,23 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
         { mode: 0o600 },
       );
       await fs.mkdir(path.join(opRoot, "previous.app"));
-      mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => ({
-        stdout: JSON.stringify(
-          args[0]!.endsWith("update-obligations.mjs")
-            ? {
-                drained: true,
-                obligationCount: 0,
-                unreadableCount: 0,
-                changedCount: 0,
-              }
-            : args[1]!.endsWith("previous.app")
-              ? source
-              : target,
-        ),
-      }));
+      mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => {
+        if (_file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+        return {
+          stdout: JSON.stringify(
+            args[0]!.endsWith("update-obligations.mjs")
+              ? {
+                  drained: true,
+                  obligationCount: 0,
+                  unreadableCount: 0,
+                  changedCount: 0,
+                }
+              : args[1]!.endsWith("previous.app")
+                ? source
+                : target,
+          ),
+        };
+      });
       const updatedOptions = {
         ...options(),
         build: { ...build, version: target.version, buildId: target.buildId },
@@ -4069,6 +4081,16 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
               processStart: scenario === "capture-failed" ? null : helperStart,
             },
           });
+        } else if (
+          scenario === "changed-journal" ||
+          scenario === "changed-companion"
+        ) {
+          expect(next!.snapshot()).toMatchObject({ phase: "idle" });
+          await expect(fs.stat(intentFile)).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+          if (scenario === "changed-companion")
+            expect(next!.snapshot()).not.toHaveProperty("rollbackVersion");
         } else {
           expect(next!.snapshot()).toMatchObject({
             phase: "failed",
@@ -4151,22 +4173,20 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       await second!.initialize();
       if (observation === "absent") {
         expect(second!.snapshot()).toMatchObject({
-          phase: "ready",
-          deferred: true,
+          phase: "failed",
+          recoveryRequired: false,
+          code: "UPDATE_ROLLED_BACK",
         });
-        expect(
-          JSON.parse(await fs.readFile(ready, "utf8")).operation,
-        ).toBeNull();
-        await expect(
-          fs.lstat(
-            path.join(
-              userData,
-              "installed-updates",
-              record.operation.operationId,
-              "staged.app",
-            ),
+        await expect(fs.stat(ready)).rejects.toMatchObject({ code: "ENOENT" });
+        // The unexchanged staged target stays evidence; the operation is settled.
+        await fs.access(
+          path.join(
+            userData,
+            "installed-updates",
+            record.operation.operationId,
+            "staged.app",
           ),
-        ).rejects.toMatchObject({ code: "ENOENT" });
+        );
       } else {
         expect(second!.snapshot()).toMatchObject({
           phase: "failed",
@@ -4198,10 +4218,12 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
         ),
       };
     });
-    const remove = fs.rm.bind(fs);
-    vi.spyOn(fs, "rm").mockRejectedValueOnce(
-      new Error("fixture interrupted cleanup"),
-    );
+    mocks.reclaimArchive.mockResolvedValueOnce({
+      ok: false,
+      certainty: "unknown",
+      kind: "interrupted",
+      reason: "stage_cleanup",
+    });
     const second = await createInstalledUpdateRuntime(options());
     await second!.initialize();
     expect(second!.snapshot()).toMatchObject({
@@ -4209,13 +4231,16 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       recoveryRequired: true,
     });
     expect(
-      JSON.parse(await fs.readFile(ready, "utf8")).preparation,
+      JSON.parse(await fs.readFile(ready, "utf8")).operation,
     ).toMatchObject({ source, target });
     second!.close();
-    vi.mocked(fs.rm).mockImplementation(remove);
     const third = await createInstalledUpdateRuntime(options());
     await third!.initialize();
-    expect(third!.snapshot()).toMatchObject({ phase: "ready", deferred: true });
+    expect(third!.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: false,
+      code: "UPDATE_ROLLED_BACK",
+    });
     expect(mocks.copyApp).toHaveBeenCalledTimes(1);
     expect(mocks.helper).toHaveBeenCalledTimes(1);
     expect(mocks.download).toHaveBeenCalledTimes(1);
@@ -4342,9 +4367,20 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
   );
 
   for (const phase of [
+    null,
     "prepared",
     "predecessor_saved",
     "new_installed",
+    "verified",
+    "launch_requested",
+    "completed",
+    "rollback_started",
+    "rolled_back",
+    "cancelled",
+    "cancel_launch_requested",
+    "cancel_completed",
+    "rollback_launch_requested",
+    "rollback_completed",
   ] as const) {
     for (const installed of ["source", "target", "neither"] as const) {
       it(`self-heals ${phase} from installed content: ${installed}`, async () => {
@@ -4357,15 +4393,16 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
           op.operationId,
           "journal.json",
         );
-        await fs.writeFile(
-          journal,
-          JSON.stringify({
-            schema: "farol.installed-update-journal/1",
-            ...op,
-            phase,
-          }),
-          { mode: 0o600 },
-        );
+        if (phase !== null)
+          await fs.writeFile(
+            journal,
+            JSON.stringify({
+              schema: "farol.installed-update-journal/1",
+              ...op,
+              phase,
+            }),
+            { mode: 0o600 },
+          );
         await first.close();
         const current =
           installed === "target"
@@ -4400,9 +4437,14 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
             recoveryRequired: true,
             code: "UPDATE_RECOVERY_IDENTITY_MISMATCH",
           });
-          expect(JSON.parse(await fs.readFile(journal, "utf8")).phase).toBe(
-            phase,
-          );
+          if (phase !== null)
+            expect(JSON.parse(await fs.readFile(journal, "utf8")).phase).toBe(
+              phase,
+            );
+          else
+            await expect(fs.stat(journal)).rejects.toMatchObject({
+              code: "ENOENT",
+            });
         } else {
           expect(next!.snapshot()).toMatchObject(
             installed === "target"
@@ -4423,9 +4465,178 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
           expect(mocks.helper).toHaveBeenCalledTimes(1);
         }
         await next!.close();
+        if (installed !== "neither") {
+          for (let restart = 0; restart < 2; restart++) {
+            const reopened = await createInstalledUpdateRuntime({
+              ...options(),
+              build: {
+                ...build,
+                version: current.version,
+                buildId: current.buildId,
+              },
+            });
+            await reopened!.initialize();
+            expect(reopened!.snapshot()).toMatchObject({ phase: "idle" });
+            expect(JSON.parse(await fs.readFile(journal, "utf8")).phase).toBe(
+              installed === "target" ? "completed" : "rolled_back",
+            );
+            await reopened!.close();
+          }
+          expect(mocks.helper).toHaveBeenCalledTimes(1);
+        }
       });
     }
   }
+
+  it.each([
+    "rollback_started",
+    "rollback_launch_requested",
+    "rolled_back",
+    "rollback_completed",
+  ])(
+    "P1 reconciles restored source with pending restore and stale target receipt at %s",
+    async (phase) => {
+      const first = await prepared();
+      await first.restart();
+      await first.close();
+      const record = JSON.parse(await fs.readFile(ready, "utf8"));
+      const op = record.operation;
+      const updateRoot = path.join(userData, "installed-updates");
+      const journalFile = path.join(updateRoot, op.operationId, "journal.json");
+      await fs.writeFile(
+        journalFile,
+        JSON.stringify({
+          schema: "farol.installed-update-journal/1",
+          ...op,
+          phase,
+        }),
+        { mode: 0o600 },
+      );
+      await fs.writeFile(
+        path.join(updateRoot, "last-update.json"),
+        JSON.stringify({
+          ...record,
+          observedAt: "2026-10-22T00:00:00.000Z",
+          phase: "completed",
+          runningBuildId: target.buildId,
+        }),
+        { mode: 0o600 },
+      );
+      await fs.unlink(ready);
+      await fs.writeFile(
+        path.join(updateRoot, "restore-pending.json"),
+        JSON.stringify({
+          schema: "farol.update-restore-intent/1",
+          action: "rollback",
+          operation: op,
+          priorPhase: "completed",
+          installedBefore: target,
+          helper: { pid: 234, processStart: "Thu Oct 22 00:00:00 2026" },
+        }),
+        { mode: 0o600 },
+      );
+      mocks.exec.mockImplementation(async (file: string) => {
+        if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+        return { stdout: JSON.stringify(source) };
+      });
+      for (let restart = 0; restart < 3; restart++) {
+        const next = await createInstalledUpdateRuntime(options());
+        await next!.initialize();
+        expect(next!.snapshot()).toMatchObject({ phase: "idle" });
+        expect(JSON.parse(await fs.readFile(journalFile, "utf8")).phase).toBe(
+          "rolled_back",
+        );
+        expect(
+          JSON.parse(
+            await fs.readFile(
+              path.join(updateRoot, "last-update.json"),
+              "utf8",
+            ),
+          ).runningBuildId,
+        ).toBe(source.buildId);
+        await expect(
+          fs.stat(path.join(updateRoot, "restore-pending.json")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        await next!.close();
+      }
+      expect(mocks.helper).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["new_installed", "completed"] as const)(
+    "P2 keeps %s target settlement stable with damaged readable predecessor and interrupted cleanup",
+    async (phase) => {
+      const first = await prepared();
+      await first.restart();
+      await first.close();
+      const record = JSON.parse(await fs.readFile(ready, "utf8"));
+      const op = record.operation;
+      const opRoot = path.join(userData, "installed-updates", op.operationId);
+      const journalFile = path.join(opRoot, "journal.json");
+      const previous = path.join(opRoot, "previous.app");
+      await fs.mkdir(previous);
+      await fs.writeFile(
+        path.join(previous, "damaged-payload"),
+        "preserve this evidence",
+      );
+      await fs.writeFile(
+        journalFile,
+        JSON.stringify({
+          schema: "farol.installed-update-journal/1",
+          ...op,
+          phase,
+        }),
+        { mode: 0o600 },
+      );
+      mocks.exec.mockImplementation(async (file: string, args: string[]) => {
+        if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+        // Identity is readable, but measured predecessor content is damaged.
+        return {
+          stdout: JSON.stringify(
+            args[1] === previous
+              ? { ...source, digest: "0".repeat(64) }
+              : target,
+          ),
+        };
+      });
+      const currentOptions = {
+        ...options(),
+        build: { ...build, version: target.version, buildId: target.buildId },
+      };
+      mocks.reclaimArchive.mockResolvedValueOnce({
+        ok: false,
+        certainty: "unknown",
+        kind: "interrupted",
+        reason: "stage_cleanup",
+      });
+      const interrupted = await createInstalledUpdateRuntime(currentOptions);
+      await interrupted!.initialize();
+      expect(interrupted!.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_ARCHIVE_CLEANUP_UNCONFIRMED",
+      });
+      expect(JSON.parse(await fs.readFile(journalFile, "utf8")).phase).toBe(
+        "completed",
+      );
+      await interrupted!.close();
+      for (let restart = 0; restart < 3; restart++) {
+        const next = await createInstalledUpdateRuntime(currentOptions);
+        await next!.initialize();
+        expect(next!.snapshot()).toMatchObject({ phase: "idle" });
+        expect(next!.snapshot()).not.toHaveProperty("rollbackVersion");
+        await next!.restore("recover");
+        await next!.restore("rollback");
+        expect(JSON.parse(await fs.readFile(journalFile, "utf8")).phase).toBe(
+          "completed",
+        );
+        expect(
+          await fs.readFile(path.join(previous, "damaged-payload"), "utf8"),
+        ).toBe("preserve this evidence");
+        await next!.close();
+      }
+      expect(mocks.helper).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each(["new_installed", "rollback_completed"])(
     "defers automatic retry after %s while allowing deliberate retry across restarts",
@@ -4522,11 +4733,14 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     await fs.mkdir(
       path.join(userData, "installed-updates", op.operationId, "previous.app"),
     );
-    mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => ({
-      stdout: JSON.stringify(
-        args[1]!.endsWith("previous.app") ? source : target,
-      ),
-    }));
+    mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => {
+      if (_file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+      return {
+        stdout: JSON.stringify(
+          args[1]!.endsWith("previous.app") ? source : target,
+        ),
+      };
+    });
     const updatedBuild = {
       ...build,
       version: manifest.version,
@@ -4585,20 +4799,23 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       rollbackVersion: source.version,
     });
     expect(mocks.discover).toHaveBeenCalledTimes(2);
-    mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => ({
-      stdout: JSON.stringify(
-        args[0]!.endsWith("update-obligations.mjs")
-          ? {
-              drained: true,
-              obligationCount: 0,
-              unreadableCount: 0,
-              changedCount: 0,
-            }
-          : args[1]!.endsWith("previous.app")
-            ? source
-            : target,
-      ),
-    }));
+    mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => {
+      if (_file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+      return {
+        stdout: JSON.stringify(
+          args[0]!.endsWith("update-obligations.mjs")
+            ? {
+                drained: true,
+                obligationCount: 0,
+                unreadableCount: 0,
+                changedCount: 0,
+              }
+            : args[1]!.endsWith("previous.app")
+              ? source
+              : target,
+        ),
+      };
+    });
     await next!.restore("rollback");
     expect(mocks.helper).toHaveBeenCalledTimes(2);
     expect(mocks.helper.mock.calls[1]![1]).toMatchObject({
@@ -4701,18 +4918,21 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       await fs.writeFile(slot + ".receipt.json", JSON.stringify(promotion), {
         mode: 0o600,
       });
-      mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => ({
-        stdout: JSON.stringify(
-          args[0]!.endsWith("update-obligations.mjs")
-            ? {
-                drained: true,
-                obligationCount: 0,
-                unreadableCount: 0,
-                changedCount: 0,
-              }
-            : { ...source, version: sourceVersion },
-        ),
-      }));
+      mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => {
+        if (_file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+        return {
+          stdout: JSON.stringify(
+            args[0]!.endsWith("update-obligations.mjs")
+              ? {
+                  drained: true,
+                  obligationCount: 0,
+                  unreadableCount: 0,
+                  changedCount: 0,
+                }
+              : { ...source, version: sourceVersion },
+          ),
+        };
+      });
       const original = await prepared(selectedSource);
       await original.restart();
       const retained = JSON.parse(await fs.readFile(ready, "utf8"));
@@ -4729,11 +4949,14 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       );
       await fs.mkdir(path.join(opRoot, "previous.app"));
       const journal = await fs.readFile(path.join(opRoot, "journal.json"));
-      mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => ({
-        stdout: JSON.stringify(
-          args[1]!.endsWith("previous.app") ? op.source : op.target,
-        ),
-      }));
+      mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => {
+        if (_file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+        return {
+          stdout: JSON.stringify(
+            args[1]!.endsWith("previous.app") ? op.source : op.target,
+          ),
+        };
+      });
       const current = await createInstalledUpdateRuntime({
         ...options(),
         build: {
@@ -7031,20 +7254,23 @@ describe("first-launch adoption in the user slot (disposable files; GitHub and n
     await fs.mkdir(
       path.join(userData, "installed-updates", op.operationId, "previous.app"),
     );
-    mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => ({
-      stdout: JSON.stringify(
-        args[0]!.endsWith("update-obligations.mjs")
-          ? {
-              drained: true,
-              obligationCount: 0,
-              unreadableCount: 0,
-              changedCount: 0,
-            }
-          : args[1]!.endsWith("previous.app")
-            ? source
-            : target,
-      ),
-    }));
+    mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => {
+      if (_file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+      return {
+        stdout: JSON.stringify(
+          args[0]!.endsWith("update-obligations.mjs")
+            ? {
+                drained: true,
+                obligationCount: 0,
+                unreadableCount: 0,
+                changedCount: 0,
+              }
+            : args[1]!.endsWith("previous.app")
+              ? source
+              : target,
+        ),
+      };
+    });
     const updatedBuild = {
       ...build,
       version: manifest.version,

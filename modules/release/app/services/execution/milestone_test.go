@@ -452,6 +452,173 @@ func TestHelperMilestoneFailedOrLateLaunchNeverCompletesOrRetries(t *testing.T) 
 	}
 }
 
+// These cases stop only the symbolic app policy at its journal seams. They
+// record the phase a helper could leave behind at each write boundary; they do
+// not qualify journal durability or any native recovery behavior.
+func TestHelperMilestoneInterruptedApplyJournalWrites(t *testing.T) {
+	for _, tc := range []struct {
+		phase string
+		when  string // before: write refusal; after: helper stops just after persistence
+		want  string
+	}{
+		{"prepared", "before", ""}, {"prepared", "after", "prepared"},
+		{"new_installed", "before", "prepared"}, {"new_installed", "after", "new_installed"},
+		{"verified", "before", "new_installed"}, {"verified", "after", "verified"},
+		{"launch_requested", "before", "verified"}, {"launch_requested", "after", "launch_requested"},
+		{"completed", "before", "launch_requested"}, {"completed", "after", "completed"},
+	} {
+		t.Run(tc.phase+"/"+tc.when, func(t *testing.T) {
+			request, r := milestoneFixture("apply", true)
+			request.Relaunch = true
+			r.request = captureRequest(request)
+			m, err := testMilestone(context.Background(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ready, err := m.Inspect(context.Background(), r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			writeEvent := "write:" + tc.phase
+			if tc.phase == "prepared" {
+				writeEvent = "prepare"
+			}
+			if tc.when == "before" {
+				r.before = func(name string) error {
+					if name == writeEvent {
+						cancel() // model helper loss at the failed write; suppress compensation
+						return errors.New("injected journal write refusal")
+					}
+					return nil
+				}
+			} else {
+				r.after = func(name string) {
+					if name == writeEvent {
+						cancel()
+					}
+				}
+			}
+			launch := newMilestoneLaunch(request, r)
+			_, _ = m.Execute(ctx, r, ready, launch)
+			if r.phase != tc.want {
+				t.Fatalf("persisted phase %q, want %q; trace=%v", r.phase, tc.want, r.trace)
+			}
+			app, hasApp := r.trees[port.App]
+			prev, hasPrevious := r.trees[port.Previous]
+			if tc.phase == "prepared" {
+				staged, hasStaged := r.trees[port.Staged]
+				if !hasApp || app.build != request.Source || !hasStaged || staged.build != request.Target || hasPrevious {
+					t.Fatalf("interrupted preparation pair changed: trees=%+v", r.trees)
+				}
+			} else if !hasApp || app.build != request.Target || !hasPrevious || prev.build != request.Source {
+				t.Fatalf("interrupted target install pair changed: app=%+v previous=%+v trees=%+v", app, prev, r.trees)
+			}
+			launches := 0
+			for _, event := range r.trace {
+				if event == "launch" {
+					launches++
+				}
+			}
+			wantLaunches := 0
+			if tc.phase == "completed" || tc.want == "completed" {
+				wantLaunches = 1 // completion can fail only after LaunchTarget returned
+			}
+			if launches != wantLaunches {
+				t.Fatalf("unexpected target launch count %d: %v", launches, r.trace)
+			}
+			before := append([]string(nil), r.trace...)
+			_, retryErr := m.Execute(context.Background(), r, ready, launch)
+			requireExecutionCode(t, retryErr, "execution_attempt_unknown", true)
+			if !reflect.DeepEqual(before, r.trace) {
+				t.Fatal("reusing attempt repeated launch or writes", r.trace)
+			}
+		})
+	}
+}
+
+func TestHelperMilestoneInterruptedRollbackJournalWrites(t *testing.T) {
+	for _, tc := range []struct {
+		phase, when, want string
+		launch            bool
+	}{
+		{"rollback_started", "before", "verified", false},
+		{"rollback_started", "after", "rollback_started", false},
+		{"rolled_back", "before", "rollback_started", false},
+		{"rolled_back", "after", "rolled_back", false},
+		{"rollback_launch_requested", "before", "rolled_back", true},
+		{"rollback_launch_requested", "after", "rollback_launch_requested", true},
+		{"rollback_completed", "before", "rollback_launch_requested", true},
+		{"rollback_completed", "after", "rollback_completed", true},
+	} {
+		t.Run(tc.phase+"/"+tc.when, func(t *testing.T) {
+			request, r := milestoneFixture("rollback", false)
+			request.Relaunch = tc.launch
+			r.request = captureRequest(request)
+			m, err := testMilestone(context.Background(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ready, err := m.Inspect(context.Background(), r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.when == "before" {
+				r.before = func(name string) error {
+					if name == "write:"+tc.phase {
+						cancel()
+						return errors.New("injected journal write refusal")
+					}
+					return nil
+				}
+			} else {
+				r.after = func(name string) {
+					if name == "write:"+tc.phase {
+						cancel()
+					}
+				}
+			}
+			launch := newMilestoneLaunch(request, r)
+			_, _ = m.Execute(ctx, r, ready, launch)
+			if r.phase != tc.want {
+				t.Fatalf("persisted phase %q, want %q; trace=%v", r.phase, tc.want, r.trace)
+			}
+			app, hasApp := r.trees[port.App]
+			previous, hasPrevious := r.trees[port.Previous]
+			failed, hasFailed := r.trees[port.Failed]
+			if (tc.want == "verified" || tc.want == "rollback_started") && tc.phase != "rolled_back" {
+				if !hasApp || app.build != request.Target || !hasPrevious || previous.build != request.Source || hasFailed {
+					t.Fatalf("rollback had not yet restored source: trees=%+v", r.trees)
+				}
+			} else if !hasApp || app.build != request.Source || hasPrevious || !hasFailed || failed.build != request.Target {
+				t.Fatalf("rollback did not retain restored source and rejected target: trees=%+v", r.trees)
+			}
+			previousLaunches := 0
+			for _, event := range r.trace {
+				if event == "launch-previous" {
+					previousLaunches++
+				}
+			}
+			wantPreviousLaunches := 0
+			if tc.phase == "rollback_completed" {
+				wantPreviousLaunches = 1 // that write follows the completed launch call
+			}
+			if previousLaunches != wantPreviousLaunches {
+				t.Fatalf("unexpected previous launch count %d: %v", previousLaunches, r.trace)
+			}
+			before := append([]string(nil), r.trace...)
+			_, retryErr := m.Execute(context.Background(), r, ready, launch)
+			requireExecutionCode(t, retryErr, "execution_attempt_unknown", true)
+			if !reflect.DeepEqual(before, r.trace) {
+				t.Fatal("reusing attempt relaunched or repeated writes", r.trace)
+			}
+		})
+	}
+}
+
 func TestHelperMilestoneOneAttemptAndRequestCapture(t *testing.T) {
 	request, r := milestoneFixture("apply", true)
 	m, _ := testMilestone(context.Background(), request)

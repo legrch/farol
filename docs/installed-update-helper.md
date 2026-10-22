@@ -57,6 +57,69 @@ A later release may drop `update-helper.py` and its build entry only after a rel
 
 ## Phases and recovery
 
+### Desktop startup invariant
+
+`installedUpdateStartupDecision` in the desktop runtime is the single startup
+decision table. Ordinary shared-slot startup, correlated helper relaunch,
+private-target reopen, and updater initialization all use it after authenticating
+the operation, accepted manifest, slot binding, and executing build. A journal
+must belong to that exact operation. Invalid records and unsafe paths remain
+boundary failures; they never become accepted content.
+
+The following rows apply **independently to every readable phase**: `none`
+(an authenticated operation whose journal has not been created), `prepared`,
+`predecessor_saved`, `new_installed`, `verified`, `launch_requested`, `completed`,
+`rollback_started`, `rolled_back`, `cancelled`, `cancel_launch_requested`,
+`cancel_completed`, `rollback_launch_requested`, and `rollback_completed`.
+`rollback_started` is the wire spelling of an in-progress rollback. With no
+operation, ordinary installer/adoption authentication applies instead.
+
+| Journal phase    | Helper observation | Installed content         | This running process | Decision             | May continue startup |
+| ---------------- | ------------------ | ------------------------- | -------------------- | -------------------- | -------------------- |
+| Each phase above | Confirmed live     | Any                       | Any                  | Wait for this helper | No                   |
+| Each phase above | Exit unconfirmed   | Any                       | Any                  | Refuse               | No                   |
+| Each phase above | Confirmed exited   | Neither source nor target | Any                  | Refuse               | No                   |
+| Each phase above | Confirmed exited   | Exact target              | Target               | Settle `completed`   | Yes                  |
+| Each phase above | Confirmed exited   | Exact target              | Source or other      | Settle `completed`   | No                   |
+| Each phase above | Confirmed exited   | Exact source              | Source               | Settle `rolled_back` | Yes                  |
+| Each phase above | Confirmed exited   | Exact source              | Target or other      | Settle `rolled_back` | No                   |
+
+Exact content means digest, version, and build ID together. The running process
+must match that accepted build ID and version, with its executable resources
+independently captured/verified. Clean process absence or verified PID reuse
+confirms that the recorded original helper has ended. Missing identity,
+unreadable process status, or a live helper never permits settlement. A pending
+restore has its own helper: the ended original apply helper cannot stand in for
+it. A proved not-started restore is reconciled separately without replay.
+
+Startup guards observe this table without writing update state or launching an
+application. Updater initialization owns the sole canonical settlement writer:
+it rechecks installed content, journal phase, and helper exit, then writes
+`completed` or `rolled_back` only if needed. A mismatching running process cannot
+publish a receipt for another build. Archive reclamation and receipt publication
+follow; interrupted housekeeping is resumed from the same canonical decision.
+Neither terminal helper phases nor stale `last-update.json` override measured
+content. A restored source therefore starts after interruption at
+`rollback_started` or `rollback_launch_requested`, including when the saved
+receipt still names the target and `ready.json` is absent.
+
+Preserved `previous.app`, `staged.app`, `failed.app`, and rejected-target metadata
+are evidence, not startup prerequisites. Only an exact readable predecessor can
+enable app-only rollback, subject to state compatibility; a missing, damaged, or
+unreadable predecessor disables rollback on **every** restart. It does not turn
+accepted installed content into a recovery failure on the next initialization.
+Settlement never moves or deletes companions, dispatches a helper, repeats an
+uncertain launch, or reopens the operation. A later deliberate update/rollback
+still requires its existing action admission.
+
+Canonical desktop `completed`/`rolled_back` attest installed content only. They
+do not claim that a prior LaunchServices request returned or that activation
+succeeded. Unit tables enumerate every phase/helper/content/running-build row
+and repeated decisions; disposable runtime fixtures cover receipt/cleanup
+interruptions and repeated lifetimes. Go helper tests inject interruption before
+and after actual policy journal-write seams. These are source/fixture evidence,
+without installed-state, native crash-durability, or LaunchServices acceptance.
+
 `prepared` is durable before the single Darwin `renameatx_np(..., RENAME_SWAP)` between the fixed app slot and `staged.app`. The syscall leaves the slot occupied on either side; an unsupported filesystem refuses without a two-rename fallback. The helper verifies both exact bundles and directory identities before exchange, fsyncs both parents afterward, then renames the displaced N from `staged.app` to `previous.app`. `new_installed` precedes final target verification; `verified` means both current N+1 and previous N passed exact digest and embedded identity checks. `predecessor_saved` remains readable only for recovery of a journal written by the former helper.
 
 An explicit `recover` uses the **same operation ID and accepted source/target**. It never repeats apply. With `prepared` and the original pair (slot=N, staged=N+1), it records `cancelled`, keeps both bundles, and relaunches N when requested. With `prepared` and the exchanged pair (slot=N+1, staged=N), it verifies both, names N `previous.app`, and records `verified`; the same result follows if that rename happened before the crash. `rollback_started` describes a rollback already journaled: exact slot=N+1 and previous=N proves the exchange has not occurred, so `recover` performs it once; exact slot=N and previous=N+1 proves it occurred, so `recover` only names the latter `failed.app`. Both end as `rolled_back`. If rejected target bytes no longer match N+1 after a crash during verification rollback, recovery refuses without moving either directory; the previous same-invocation inode check cannot be reconstructed from the journal. Live recovery admits only an exact pair before Quit ACK. `recover` also accepts a settled pair without changing it. A pre-existing empty slot from the older two-rename protocol is repaired only after verifying its preserved N and staged N+1; the new protocol never creates that gap. `rollback` starts only from a verified target pair, requires the exact _current_ PID/start time and observed exit, then atomically exchanges N+1 with previous N and preserves N+1 as `failed.app`. A second `rollback` on `rollback_started` is refused; use explicit `recover` after readback. Unknown or mismatched bytes, identities, paths, process state, or journal state are refusals requiring operator reconciliation. No path is deleted or overwritten.
