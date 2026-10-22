@@ -6,12 +6,17 @@ import { Settings } from "../../src/ui/renderer/settings";
 import { Shell } from "../../src/ui/renderer/shell";
 import { Services } from "../../src/ui/renderer/services";
 import { WindowController } from "../../src/ui/renderer/controller";
+import type { RendererFacade } from "../../src/ui/renderer/contract";
 import {
   ProductSettingsSchema,
   type ProductSettings,
   type ProductConfigurationCommand,
 } from "../../src/pkg/product-settings/contract";
-import type { SetupStep, SettingsPage } from "../../src/ui/renderer/contract";
+import type {
+  SetupStep,
+  SettingsPage,
+  WindowSnapshot,
+} from "../../src/ui/renderer/contract";
 import { bootstrap, fixture, settings, signInReply } from "./fixture";
 
 // Scripted renderer/IPC evidence only: no native filesystem, account or tunnel.
@@ -85,6 +90,11 @@ export function readySettings(attachment = false) {
     },
   });
   if (attachment) {
+    value.connectors.secureMcp.chatgptApp = {
+      name: "Farol",
+      tunnelId: "synthetic-tunnel",
+      connectorGeneration: 1,
+    };
     value.setup.connect.verified = witness;
     value.setup.connect.reachable = "reachable";
     value.connectors.secureMcp.attachment = {
@@ -118,15 +128,25 @@ export async function mount({
   const f = fixture();
   let saved = value;
   const configuration = () => ({ status: "ready" as const, settings: saved });
+  const configure = async (command: ProductConfigurationCommand) =>
+    command.kind === "chatgpt.observe-sign-in"
+      ? signInReply(command, signIn, configuration())
+      : command.kind === "chatgpt.verify" && signIn === "authenticated"
+        ? {
+            ok: true,
+            snapshot: configuration(),
+            evidence: {
+              kind: "chatgpt.readiness" as const,
+              state: "authenticated" as const,
+              code: null,
+            },
+          }
+        : { ok: true, snapshot: configuration() };
   vi.mocked(f.api.bootstrap).mockImplementation(async () => ({
     ...bootstrap(),
     configuration: configuration(),
   }));
-  vi.mocked(f.api.configure).mockImplementation(async (command) =>
-    command.kind === "chatgpt.observe-sign-in"
-      ? signInReply(command, signIn, configuration())
-      : { ok: true, snapshot: configuration() },
-  );
+  vi.mocked(f.api.configure).mockImplementation(configure);
   const c = new WindowController(f.api);
   await c.start();
   c.navigate(
@@ -192,9 +212,42 @@ export async function mount({
         : handler(command),
     );
   }
-  async function remount() {
+  async function remount(snapshot?: WindowSnapshot, facade?: RendererFacade) {
     await act(async () => root.render(null));
-    await render();
+    if (snapshot) await renderSetup(snapshot, facade);
+    else await render();
+  }
+  async function renderSetup(
+    snapshot = c.getSnapshot(),
+    facade: RendererFacade = c,
+  ) {
+    await act(async () =>
+      root.render(
+        <StrictMode>
+          <Setup snapshot={snapshot} facade={facade} />
+        </StrictMode>,
+      ),
+    );
+  }
+  async function confirmSignIn() {
+    const destination = c.getSnapshot().destination;
+    if (destination.area !== "setup" || destination.setupStep !== "signin")
+      await navigate("signin");
+    const settleObservation = async () => {
+      const pending = vi.mocked(f.api.configure).mock.results.at(-1)?.value as
+        Promise<unknown> | undefined;
+      if (pending) await act(async () => pending);
+    };
+    await settleObservation();
+    await act(async () => {
+      await c.configure(
+        { kind: "chatgpt.verify" },
+        "settings:chatgpt.verify:setup-fixture",
+      );
+    });
+    await settleObservation();
+    if (destination.area === "setup" && destination.setupStep !== "signin")
+      await navigate(destination.setupStep ?? "overview");
   }
   return {
     f,
@@ -206,6 +259,8 @@ export async function mount({
     publish,
     reply,
     remount,
+    renderSetup,
+    confirmSignIn,
     visible,
     configuration,
   };

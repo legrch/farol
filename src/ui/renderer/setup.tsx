@@ -1,5 +1,7 @@
+import { useRef, useState } from "react";
+import { setupStepCheck } from "./setup-gate";
 import type { RendererFacade, WindowSnapshot } from "./contract";
-import { Settings } from "./settings";
+import { Settings, retainedSetupIntents, useSetupIntents } from "./settings";
 import { setupChecklist } from "./setup-navigation";
 import { adjacentSetupSection, visibleSetupSection } from "./setup-checklist";
 import type { SetupSection } from "./setup-checklist";
@@ -32,39 +34,58 @@ const context: Record<SetupSection, { title: string; description: string }> = {
   },
 };
 /** Inline, read-only progress. Navigation cannot bypass a step's check. */
-export function SetupNavigation({ snapshot }: Props) {
+export function SetupNavigation({
+  snapshot,
+  facade,
+  inputsChanged = false,
+}: Props & { inputsChanged?: boolean }) {
+  const local = useSetupIntents(facade, snapshot);
   const selected = visibleSetupSection(snapshot.destination.setupStep);
   if (selected === "overview") return null;
   return (
     <ol className="setup-progress" aria-label="Setup progress">
-      {setupChecklist(snapshot).entries.map((entry, index) => (
-        <li
-          key={entry.step}
-          aria-current={entry.step === selected ? "step" : undefined}
-          data-check-state={entry.state}
-        >
-          <span aria-hidden="true">
-            {entry.state === "verified" && entry.step !== selected
-              ? "✓"
-              : index + 1}
-          </span>{" "}
-          {entry.label}
-        </li>
-      ))}
+      {setupChecklist(snapshot, inputsChanged, local).entries.map(
+        (entry, index) => (
+          <li
+            key={entry.step}
+            aria-current={entry.step === selected ? "step" : undefined}
+            data-check-state={entry.state}
+          >
+            <span aria-hidden="true">
+              {entry.state === "verified" && entry.step !== selected
+                ? "✓"
+                : index + 1}
+            </span>{" "}
+            {entry.label}
+          </li>
+        ),
+      )}
     </ol>
   );
 }
 export function Setup({ snapshot, facade }: Props) {
   const step = visibleSetupSection(snapshot.destination.setupStep);
-  const checklist = setupChecklist(snapshot);
+  const [inputsChanged, setInputsChanged] = useState(false);
+  const changed = useRef(false);
+  const local = useSetupIntents(facade, snapshot);
+  const checklist = setupChecklist(snapshot, inputsChanged, local);
   const previous = adjacentSetupSection(step, -1);
   const next = adjacentSetupSection(step, 1);
   const passed =
-    checklist.entries.find((entry) => entry.step === step)?.state ===
-    "verified";
+    step !== "overview" &&
+    setupStepCheck(
+      snapshot,
+      step,
+      inputsChanged && (step === "connection" || step === "attachment"),
+      local,
+    ).allowed;
   return (
     <div className="setup-page setup-wizard" data-setup-step={step}>
-      <SetupNavigation snapshot={snapshot} facade={facade} />
+      <SetupNavigation
+        snapshot={snapshot}
+        facade={facade}
+        inputsChanged={inputsChanged}
+      />
       <header className="setup-wizard-intro">
         <h1>{context[step].title}</h1>
         <p className="description">{context[step].description}</p>
@@ -106,6 +127,11 @@ export function Setup({ snapshot, facade }: Props) {
           snapshot={snapshot}
           facade={facade}
           setupStep={step === "overview" ? "connection" : step}
+          setupInputsChanged={inputsChanged}
+          onSetupInputsChange={(dirty) => {
+            changed.current = dirty;
+            setInputsChanged(dirty);
+          }}
         />
       </div>
       {step !== "overview" && (
@@ -133,10 +159,16 @@ export function Setup({ snapshot, facade }: Props) {
                 visibleSetupSection(latest.destination.setupStep) !== step
               )
                 return;
-              const current = setupChecklist(latest);
+              const local = retainedSetupIntents(facade, latest);
+              const current = setupChecklist(latest, changed.current, local);
               if (
-                current.entries.find((entry) => entry.step === step)?.state !==
-                "verified"
+                !setupStepCheck(
+                  latest,
+                  step,
+                  changed.current &&
+                    (step === "connection" || step === "attachment"),
+                  local,
+                ).allowed
               )
                 return;
               if (next) facade.navigate({ area: "setup", setupStep: next });

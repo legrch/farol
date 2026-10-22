@@ -363,7 +363,7 @@ describe("Connection", () => {
       expect(h.button("Disconnect")?.disabled).toBe(true);
       expect(h.button("Connect")?.disabled).toBe(true);
       expect(h.f.api.configure).toHaveBeenCalledTimes(1);
-      expect(h.host.textContent).toContain("could not confirm");
+      expect(h.host.textContent).toContain("could not be confirmed");
     },
   );
   it("offers disconnect for an unhealthy retained runtime, but fences unknown runtime state", async () => {

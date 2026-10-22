@@ -24,7 +24,10 @@ describe("linear Setup", () => {
       step: "folders",
       value: readySettings(),
       shell: true,
+      signIn: "authenticated",
     });
+    await h.confirmSignIn();
+    expect(h.c.getSnapshot().setupSignInCheck).toBeTruthy();
     const line = h.host.querySelector('[aria-label="Setup progress"]')!;
     expect(
       [...line.querySelectorAll("li")].map((x) => x.textContent?.trim()),
@@ -45,7 +48,10 @@ describe("linear Setup", () => {
   it.each(["signin", "folders", "connection", "attachment"] as const)(
     "gates %s on its actual check",
     async (step) => {
-      const h = await mount({ step });
+      const h = await mount({
+        step,
+        signIn: step === "attachment" ? "authenticated" : "signed_out",
+      });
       expect(
         h.button(step === "attachment" ? "Start using Farol" : "Continue")
           ?.disabled,
@@ -57,6 +63,7 @@ describe("linear Setup", () => {
         await h.navigate("folders");
         await h.navigate("signin");
       }
+      if (step === "attachment") await h.confirmSignIn();
       // A signed-out current page must still block sign-in even with an older saved witness.
       expect(
         h.button(step === "attachment" ? "Start using Farol" : "Continue")
@@ -71,6 +78,11 @@ describe("linear Setup", () => {
     h.reply(() => ({
       ok: true,
       snapshot: { status: "ready", settings: readySettings() },
+      evidence: {
+        kind: "chatgpt.readiness",
+        state: "authenticated",
+        code: null,
+      },
     }));
     await h.click("Check sign-in");
     expect(h.button("Continue")?.disabled).toBe(false);
@@ -148,6 +160,8 @@ describe("Add to ChatGPT", () => {
       shell: true,
       signIn: "authenticated",
     });
+    await h.confirmSignIn();
+    expect(h.c.getSnapshot().setupSignInCheck).toBeTruthy();
     let value = readySettings();
     const wait = deferred<unknown>();
     h.reply((command) => {

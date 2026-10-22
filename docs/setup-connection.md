@@ -2,7 +2,7 @@
 
 Open **Setup**, choose **Start setup**, and follow **Sign in → Workspaces → Connect this Mac → Add to ChatGPT**. The progress line shows the checks that passed. **Continue** stays disabled until the current step passes. **Back** lets you review an earlier step without repeating an action.
 
-Setup uses your own ChatGPT account and the workspaces you approve on this Mac. Opening Setup does not reset your profile, replace a key or send a ChatGPT message. A returning profile keeps its saved settings and current checks.
+Setup uses your own ChatGPT account and the workspaces you approve on this Mac. Opening Setup does not reset your profile, replace a key or send a ChatGPT message. A returning profile keeps its saved settings. A saved check permits Continue only while its evidence still matches the current inputs: the signed-in document, every workspace and its access, the tunnel ID/key/helper generation, and the selected ChatGPT app. Sign-in needs an explicit successful check in the current window. Unknown, pending, refused, missing and stale results all block Continue and show a cause with one recovery action. Refresh observes an existing result; it never resubmits an unknown action. Editing the tunnel ID or entering a replacement key withdraws Continue until the new inputs pass their check.
 
 ## 1. Sign in
 

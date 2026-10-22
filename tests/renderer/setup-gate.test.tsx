@@ -1,0 +1,550 @@
+import { describe, expect, it, vi } from "vitest";
+import { act } from "react";
+import type {
+  RendererFacade,
+  WindowSnapshot,
+} from "../../src/ui/renderer/contract";
+import type { ProductSettings } from "../../src/pkg/product-settings/contract";
+import { setupStepCheck } from "../../src/ui/renderer/setup-gate";
+import type { SetupCheckpoint } from "../../src/ui/renderer/setup-checklist";
+import {
+  buildId,
+  change,
+  mount,
+  readySettings,
+  workspaceId,
+} from "./setup-fixture";
+
+const steps: readonly SetupCheckpoint[] = [
+  "signin",
+  "folders",
+  "connection",
+  "attachment",
+];
+const states = [
+  "success-current",
+  "success-stale",
+  "unknown",
+  "pending",
+  "refused",
+  "missing",
+] as const;
+type Case = (typeof states)[number];
+type BindingMutation = Readonly<{
+  name: string;
+  step: SetupCheckpoint;
+  expectedState: "success" | "stale" | "unknown" | "pending";
+  mutate: (
+    snapshot: WindowSnapshot,
+    settings: ProductSettings,
+  ) => WindowSnapshot;
+}>;
+function expectedAction(state: Case) {
+  if (state === "success-current") return null;
+  return state === "unknown" || state === "pending"
+    ? "Refresh status"
+    : "Read the setup guide";
+}
+
+function intentId(step: SetupCheckpoint) {
+  switch (step) {
+    case "signin":
+      return "settings:chatgpt.verify:synthetic";
+    case "folders":
+      return `settings:computer.verify-workspace:${workspaceId}`;
+    case "connection":
+      return "settings:connector.start:synthetic";
+    case "attachment":
+      return "settings:connector.verify-app:synthetic";
+  }
+}
+
+function syntheticSnapshot(
+  source: WindowSnapshot,
+  step: SetupCheckpoint,
+  state: Case,
+): WindowSnapshot {
+  const settings = readySettings(true);
+  const binding = { documentGeneration: 7, sequence: 19 };
+  let currentBuildId = buildId;
+  let intents: WindowSnapshot["intents"] = {};
+  let setupSignInCheck: WindowSnapshot["setupSignInCheck"] = {
+    buildId,
+    binding,
+  };
+
+  if (state === "success-stale") {
+    currentBuildId = "4".repeat(64);
+  } else if (state === "missing") {
+    switch (step) {
+      case "signin":
+        settings.setup.chatgpt.verified = null;
+        settings.setup.chatgpt.reachable = "unreachable";
+        setupSignInCheck = null;
+        break;
+      case "folders":
+        settings.computer.workspaces = [];
+        settings.setup.computer.verified = null;
+        break;
+      case "connection":
+        settings.setup.computer.verified = null;
+        settings.connectors.secureMcp.runtime = null;
+        break;
+      case "attachment":
+        settings.setup.connect.verified = null;
+        settings.setup.connect.reachable = "unreachable";
+        settings.connectors.secureMcp.attachment = null;
+        break;
+    }
+  } else if (
+    state === "unknown" ||
+    state === "pending" ||
+    state === "refused"
+  ) {
+    intents = {
+      [intentId(step)]: {
+        id: intentId(step),
+        state,
+        code: null,
+      },
+    };
+  }
+  return {
+    ...source,
+    status: "current",
+    runtime: "ready",
+    buildId: currentBuildId,
+    configuration: { status: "ready", settings },
+    intents,
+    signInObservation: {
+      observationId: "synthetic-observation",
+      buildId,
+      counter: 1,
+      pending: false,
+      state: "authenticated",
+      binding,
+    },
+    setupSignInCheck,
+  };
+}
+
+describe("rendered Setup gate", () => {
+  it.each(
+    steps.flatMap((step) => states.map((state) => [step, state] as const)),
+  )(
+    "%s renders the %s result and only permits a current confirmed success",
+    async (step, state) => {
+      const h = await mount({ step });
+      const snapshot = syntheticSnapshot(h.c.getSnapshot(), step, state);
+      const facade = new Proxy(h.c, {
+        get(target, property) {
+          if (property === "getSnapshot") return () => snapshot;
+          const value = Reflect.get(target, property, target) as unknown;
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      }) as unknown as RendererFacade;
+
+      await h.renderSetup(snapshot, facade);
+
+      const advance = h.button(
+        step === "attachment" ? "Start using Farol" : "Continue",
+      );
+      expect(advance).toBeTruthy();
+      expect(advance!.disabled).toBe(state !== "success-current");
+
+      const status = h.host.querySelector<HTMLElement>(".setup-gate-status");
+      const expected = setupStepCheck(
+        snapshot,
+        step,
+        state === "success-stale",
+      );
+      const resultState =
+        state === "success-current"
+          ? "success"
+          : state === "success-stale"
+            ? "stale"
+            : state;
+      if (state === "success-current") {
+        expect(status?.dataset.resultState).toBe(resultState);
+        expect(status?.textContent).toContain(expected.cause);
+        expect(status?.querySelectorAll("button")).toHaveLength(0);
+      } else {
+        expect(status?.dataset.resultState).toBe(resultState);
+        expect(status?.textContent).toContain(expected.cause);
+        expect(status?.querySelectorAll("button")).toHaveLength(1);
+        expect(status?.querySelector("button")?.textContent?.trim()).toBe(
+          expectedAction(state),
+        );
+      }
+    },
+  );
+
+  it.each(["refused", "unknown"] as const)(
+    "a newer confirmed check supersedes an old %s only when its outcome is known",
+    async (state) => {
+      const h = await mount({ step: "connection" });
+      const original = syntheticSnapshot(
+        h.c.getSnapshot(),
+        "connection",
+        "success-current",
+      );
+      const old = "settings:connector.save-and-connect:old-attempt";
+      const health = "settings:connector.check-health:";
+      const snapshot: WindowSnapshot = {
+        ...original,
+        intents: {
+          [old]: { id: old, state, code: null },
+          [health]: { id: health, state: "applied", code: null },
+        },
+        setupCheckOrder: { [old]: 1, [health]: 2 },
+      };
+      const facade = new Proxy(h.c, {
+        get(target, property) {
+          if (property === "getSnapshot") return () => snapshot;
+          const value = Reflect.get(target, property, target) as unknown;
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      }) as unknown as RendererFacade;
+      await h.renderSetup(snapshot, facade);
+      expect(h.button("Continue")?.disabled).toBe(state === "unknown");
+      expect(
+        h.host.querySelector<HTMLElement>(".setup-gate-status")?.dataset
+          .resultState,
+      ).toBe(state === "unknown" ? "unknown" : "success");
+    },
+  );
+
+  const bindingMutations: readonly BindingMutation[] = [
+    {
+      name: "sign-in rejects a changed document generation",
+      step: "signin",
+      expectedState: "stale",
+      mutate: (snapshot) => ({
+        ...snapshot,
+        signInObservation: {
+          ...snapshot.signInObservation!,
+          binding: { documentGeneration: 8, sequence: 20 },
+        },
+      }),
+    },
+    {
+      name: "sign-in accepts a newer sequence in the same document",
+      step: "signin",
+      expectedState: "success",
+      mutate: (snapshot) => ({
+        ...snapshot,
+        signInObservation: {
+          ...snapshot.signInObservation!,
+          binding: { documentGeneration: 7, sequence: 20 },
+        },
+      }),
+    },
+    {
+      name: "sign-in blocks a missing observation",
+      step: "signin",
+      expectedState: "stale",
+      mutate: (snapshot) => ({ ...snapshot, signInObservation: null }),
+    },
+    {
+      name: "sign-in blocks an unknown observation",
+      step: "signin",
+      expectedState: "unknown",
+      mutate: (snapshot) => ({
+        ...snapshot,
+        signInObservation: {
+          ...snapshot.signInObservation!,
+          state: "unknown",
+          binding: null,
+        },
+      }),
+    },
+    {
+      name: "sign-in blocks a pending observation",
+      step: "signin",
+      expectedState: "pending",
+      mutate: (snapshot) => ({
+        ...snapshot,
+        signInObservation: {
+          ...snapshot.signInObservation!,
+          pending: true,
+        },
+      }),
+    },
+    {
+      name: "workspaces require accessCheck for every current grant",
+      step: "folders",
+      expectedState: "stale",
+      mutate: (_snapshot, settings) => {
+        const { accessCheck: _oldCheck, ...workspace } =
+          settings.computer.workspaces[0]!;
+        settings.computer.workspaces.push({
+          ...workspace,
+          workspaceId: "44444444-4444-4444-8444-444444444444",
+          root: "/approved/second-project",
+          label: "Second project",
+        });
+        return _snapshot;
+      },
+    },
+    {
+      name: "changed workspace access invalidates the computer generation",
+      step: "folders",
+      expectedState: "stale",
+      mutate: (_snapshot, settings) => {
+        settings.computer.workspaces[0]!.access = "write";
+        settings.computer.generation += 1;
+        return _snapshot;
+      },
+    },
+    {
+      name: "connection rejects a changed connector generation",
+      step: "connection",
+      expectedState: "stale",
+      mutate: (_snapshot, settings) => {
+        settings.connectors.secureMcp.generation += 1;
+        return _snapshot;
+      },
+    },
+    {
+      name: "connection rejects a changed tunnel ID at a new generation",
+      step: "connection",
+      expectedState: "stale",
+      mutate: (_snapshot, settings) => {
+        settings.connectors.secureMcp.tunnelId = "changed-tunnel-id";
+        settings.connectors.secureMcp.generation += 1;
+        return _snapshot;
+      },
+    },
+    {
+      name: "connection rejects a key replacement at a new generation",
+      step: "connection",
+      expectedState: "stale",
+      mutate: (_snapshot, settings) => {
+        settings.connectors.secureMcp.generation += 1;
+        return _snapshot;
+      },
+    },
+    {
+      name: "connection rejects a changed tunnel helper at a new generation",
+      step: "connection",
+      expectedState: "stale",
+      mutate: (_snapshot, settings) => {
+        settings.connectors.secureMcp.tunnelClient!.version = "2.0.0";
+        settings.connectors.secureMcp.generation += 1;
+        return _snapshot;
+      },
+    },
+    {
+      name: "connection rejects a missing credential",
+      step: "connection",
+      expectedState: "stale",
+      mutate: (_snapshot, settings) => {
+        settings.connectors.secureMcp.credential = "missing";
+        settings.connectors.secureMcp.generation += 1;
+        return _snapshot;
+      },
+    },
+    {
+      name: "connection rejects a missing tunnel helper",
+      step: "connection",
+      expectedState: "stale",
+      mutate: (_snapshot, settings) => {
+        settings.connectors.secureMcp.tunnelClient = null;
+        settings.connectors.secureMcp.generation += 1;
+        return _snapshot;
+      },
+    },
+    {
+      name: "attachment rejects a changed selected app name",
+      step: "attachment",
+      expectedState: "stale",
+      mutate: (_snapshot, settings) => {
+        settings.connectors.secureMcp.chatgptApp!.name = "Other";
+        return _snapshot;
+      },
+    },
+    {
+      name: "attachment rejects a changed selected app tunnel",
+      step: "attachment",
+      expectedState: "stale",
+      mutate: (_snapshot, settings) => {
+        settings.connectors.secureMcp.chatgptApp!.tunnelId = "other-tunnel";
+        return _snapshot;
+      },
+    },
+    {
+      name: "attachment rejects a changed selected app generation",
+      step: "attachment",
+      expectedState: "stale",
+      mutate: (_snapshot, settings) => {
+        settings.connectors.secureMcp.chatgptApp!.connectorGeneration += 1;
+        return _snapshot;
+      },
+    },
+  ];
+
+  it.each(bindingMutations)(
+    "$name",
+    async ({ step, expectedState, mutate }) => {
+      const h = await mount({ step });
+      const snapshot = syntheticSnapshot(
+        h.c.getSnapshot(),
+        step,
+        "success-current",
+      );
+      const configuration = snapshot.configuration;
+      if (configuration?.status !== "ready")
+        throw new Error("fixture not ready");
+      const mutated = mutate(snapshot, configuration.settings);
+      const facade = new Proxy(h.c, {
+        get(target, property) {
+          if (property === "getSnapshot") return () => mutated;
+          const current = Reflect.get(target, property, target) as unknown;
+          return typeof current === "function" ? current.bind(target) : current;
+        },
+      }) as unknown as RendererFacade;
+      await h.renderSetup(mutated, facade);
+
+      const allowed = expectedState === "success";
+      expect(
+        h.button(step === "attachment" ? "Start using Farol" : "Continue")
+          ?.disabled,
+      ).toBe(!allowed);
+      expect(
+        h.host.querySelector<HTMLElement>(".setup-gate-status")?.dataset
+          .resultState,
+      ).toBe(expectedState);
+    },
+  );
+
+  it("requires all four current checks before attachment can finish Setup", async () => {
+    const h = await mount({ step: "attachment" });
+    const snapshot = syntheticSnapshot(h.c.getSnapshot(), "signin", "missing");
+    const facade = new Proxy(h.c, {
+      get(target, property) {
+        if (property === "getSnapshot") return () => snapshot;
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as unknown as RendererFacade;
+    await h.renderSetup(snapshot, facade);
+    expect(setupStepCheck(snapshot, "attachment").allowed).toBe(true);
+    expect(h.button("Start using Farol")?.disabled).toBe(true);
+  });
+
+  it("refreshing an unknown result does not resubmit its original check", async () => {
+    const h = await mount({ step: "connection" });
+    const snapshot = syntheticSnapshot(
+      h.c.getSnapshot(),
+      "connection",
+      "unknown",
+    );
+    const facade = new Proxy(h.c, {
+      get(target, property) {
+        if (property === "getSnapshot") return () => snapshot;
+        const current = Reflect.get(target, property, target) as unknown;
+        return typeof current === "function" ? current.bind(target) : current;
+      },
+    }) as unknown as RendererFacade;
+    await h.renderSetup(snapshot, facade);
+    const submissions = vi.mocked(h.f.api.configure).mock.calls.length;
+    await h.click("Refresh status");
+    expect(vi.mocked(h.f.api.configure)).toHaveBeenCalledTimes(submissions);
+  });
+
+  it("retains a thrown connection check as unknown across remount without retry", async () => {
+    const h = await mount({ step: "connection", value: readySettings(true) });
+    const snapshot = syntheticSnapshot(
+      h.c.getSnapshot(),
+      "connection",
+      "success-current",
+    );
+    let healthAttempts = 0;
+    let markAttempted!: () => void;
+    const attempted = new Promise<void>((resolve) => {
+      markAttempted = resolve;
+    });
+    const configure: RendererFacade["configure"] = async (
+      command,
+      intention,
+    ) => {
+      if (command.kind === "connector.check-health") {
+        healthAttempts++;
+        markAttempted();
+        throw new Error("synthetic adapter loss");
+      }
+      return h.c.configure(command, intention);
+    };
+    const facade = new Proxy(h.c, {
+      get(target, property) {
+        if (property === "getSnapshot") return () => snapshot;
+        if (property === "configure") return configure;
+        const current = Reflect.get(target, property, target) as unknown;
+        return typeof current === "function" ? current.bind(target) : current;
+      },
+    }) as unknown as RendererFacade;
+    await h.renderSetup(snapshot, facade);
+    expect(h.button("Connect")?.disabled).toBe(false);
+    await h.click("Connect");
+    await act(async () => {
+      await attempted;
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(healthAttempts).toBe(1);
+    expect(
+      h.host.querySelector<HTMLElement>(".setup-gate-status")?.dataset
+        .resultState,
+    ).toBe("unknown");
+    expect(h.button("Continue")?.disabled).toBe(true);
+
+    await h.remount(snapshot, facade);
+    expect(
+      h.host.querySelector<HTMLElement>(".setup-gate-status")?.dataset
+        .resultState,
+    ).toBe("unknown");
+    expect(h.button("Continue")?.disabled).toBe(true);
+    expect(h.button("Connect")?.disabled).toBe(true);
+    expect(healthAttempts).toBe(1);
+  });
+
+  it.each([
+    ["Tunnel ID", "synthetic-tunnel-draft"],
+    ["Key", "synthetic-key-draft"],
+  ])(
+    "marks a changed %s draft stale until connection is checked",
+    async (label, value) => {
+      const h = await mount({ step: "connection" });
+      const snapshot = syntheticSnapshot(
+        h.c.getSnapshot(),
+        "connection",
+        "success-current",
+      );
+      const facade = new Proxy(h.c, {
+        get(target, property) {
+          if (property === "getSnapshot") return () => snapshot;
+          const current = Reflect.get(target, property, target) as unknown;
+          return typeof current === "function" ? current.bind(target) : current;
+        },
+      }) as unknown as RendererFacade;
+      await h.renderSetup(snapshot, facade);
+      const input = [
+        ...h.host.querySelectorAll<HTMLInputElement>("input"),
+      ].find((item) =>
+        item.closest("label")?.textContent?.trim().startsWith(label),
+      );
+      expect(input).toBeTruthy();
+      await change(input!, value);
+      const status = h.host.querySelector<HTMLElement>(".setup-gate-status");
+      expect(status?.dataset.resultState).toBe("stale");
+      expect(status?.textContent).toContain(
+        setupStepCheck(snapshot, "connection", true).cause,
+      );
+      expect(status?.querySelectorAll("button")).toHaveLength(1);
+      expect(status?.querySelector("button")?.textContent?.trim()).toBe(
+        "Read the setup guide",
+      );
+      expect(h.button("Continue")?.disabled).toBe(true);
+    },
+  );
+});

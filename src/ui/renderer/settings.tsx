@@ -1,3 +1,4 @@
+import { setupStepCheck } from "./setup-gate";
 import { setupChecklist } from "./setup-navigation";
 import {
   automaticUpdateAvailable,
@@ -43,6 +44,8 @@ export type SettingsProps = Readonly<{
   snapshot: WindowSnapshot;
   facade: RendererFacade;
   setupStep?: "signin" | "connection" | "folders" | "attachment" | undefined;
+  setupInputsChanged?: boolean | undefined;
+  onSetupInputsChange?: ((changed: boolean) => void) | undefined;
 }>;
 type ActionDispatch =
   | Readonly<{ state: "not-sent" }>
@@ -134,6 +137,29 @@ function settledEdit(
     ? current
     : null;
 }
+/** Retained transport outcomes also fence Setup when the facade lost its receipt. */
+export function retainedSetupIntents(
+  facade: RendererFacade,
+  snapshot: WindowSnapshot,
+): readonly Intent[] {
+  const feedback = feedbackByWindow.get(facade);
+  if (!feedback) return [];
+  return [
+    ...Object.values(feedback.intents).map(
+      (intent) => settledEdit(intent, snapshot) ?? intent,
+    ),
+    ...(feedback.unretained
+      ? [{ id: "setup:unretained", state: "unknown" as const, code: null }]
+      : []),
+  ];
+}
+export function useSetupIntents(
+  facade: RendererFacade,
+  snapshot: WindowSnapshot,
+) {
+  useSettingsFeedback(facade);
+  return retainedSetupIntents(facade, snapshot);
+}
 export function useSettingsAttention(
   facade: RendererFacade,
   snapshot: WindowSnapshot,
@@ -212,7 +238,13 @@ function Command({
 }
 
 /** Presentation only: mounting, observation and background updates never save. */
-export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
+export function Settings({
+  snapshot,
+  facade,
+  setupStep,
+  setupInputsChanged,
+  onSetupInputsChange,
+}: SettingsProps) {
   const configuration = snapshot.configuration;
   const [lastReady, setLastReady] = useState<ProductSettings | null>(() =>
     configuration?.status === "ready" ? configuration.settings : null,
@@ -432,22 +464,19 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
     settings: displayedSettings,
     actions,
     setupStep,
+    setupInputsChanged,
+    onSetupInputsChange,
   };
   const pageFeedback = feedback.pages[feedbackPage(snapshot.destination)];
-  const signInUnknown =
-    setupStep === "signin" &&
-    signInPresentation(snapshot, retained(snapshot)).outcomeUnknown;
-  const pausedWithoutResult =
-    setupStep &&
-    pageFeedback?.result?.state !== "unknown" &&
-    pageFeedback?.result?.state !== "refused" &&
-    (computerFences.unknown ||
-      feedback.unretained ||
-      signInUnknown ||
-      snapshot.status !== "current" ||
-      snapshot.runtime !== "ready" ||
-      !snapshot.buildId ||
-      configuration?.status !== "ready");
+  const gate = setupStep
+    ? setupStepCheck(
+        snapshot,
+        setupStep,
+        setupInputsChanged &&
+          (setupStep === "connection" || setupStep === "attachment"),
+        retainedSetupIntents(facade, snapshot),
+      )
+    : null;
   return (
     <div
       className="settings-page"
@@ -472,20 +501,29 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
       ) : null}
       {setupStep ? (
         <>
-          {pausedWithoutResult && (
-            <div className="notice setup-failure" role="alert">
-              <p>
-                {signInUnknown
-                  ? "The sign-in result could not be confirmed. Refresh its saved result before continuing; do not repeat it."
-                  : actions.computerPauseReason}
-              </p>
-              <button
-                type="button"
-                className="text-button"
-                onClick={() => void actions.refresh()}
-              >
-                Refresh status
-              </button>
+          {gate && (
+            <div
+              className="notice setup-gate-status"
+              role={gate.allowed ? "status" : "alert"}
+              data-result-state={gate.state}
+            >
+              <p>{gate.cause}</p>
+              {gate.action && (
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => {
+                    if (gate.action?.kind === "refresh") void actions.refresh();
+                    else
+                      void actions.run({
+                        kind: "onboarding.open-help",
+                        destination: gate.action?.destination ?? "setup-guide",
+                      });
+                  }}
+                >
+                  {gate.action.label}
+                </button>
+              )}
             </div>
           )}
           {setupStep === "folders" ? (
@@ -765,11 +803,6 @@ const folderSetupByWindow = new WeakMap<
 function Folders(props: PageProps) {
   const { settings, facade, snapshot, actions } = props;
   const [adding, setAdding] = useState(false);
-  const feedback = useSettingsFeedback(facade);
-  const result = feedback.pages["setup:folders"]?.result;
-  const failed =
-    (result?.state === "refused" || result?.state === "unknown") &&
-    !result.code?.endsWith("_CANCELLED");
   let flow = folderSetupByWindow.get(facade);
   if (!flow) {
     flow = { access: new GuidedWorkspaceAccess(), busy: false };
@@ -1022,7 +1055,6 @@ function Folders(props: PageProps) {
       {settings.computer.workspaces.length === 0 && (
         <p className="description">Add a workspace to continue.</p>
       )}
-      {failed && <SetupFailure result={result ?? null} actions={actions} />}
     </>
   );
 }
@@ -1052,18 +1084,40 @@ function Connection(props: PageProps) {
   if (props.setupStep === "attachment") return <AddToChatGPT {...props} />;
   return <ConnectMac {...props} />;
 }
-function ConnectMac({ settings, snapshot, facade, actions }: PageProps) {
+function ConnectMac({
+  settings,
+  snapshot,
+  facade,
+  actions,
+  onSetupInputsChange,
+}: PageProps) {
   const connector = settings.connectors.secureMcp;
   const [tunnelId, setTunnelId] = useState(connector.tunnelId ?? "");
   const [key, setKey] = useState("");
+  const savedTunnelId = useRef(connector.tunnelId ?? "");
+  useEffect(() => {
+    if (tunnelId === savedTunnelId.current && key.length === 0)
+      setTunnelId(connector.tunnelId ?? "");
+    savedTunnelId.current = connector.tunnelId ?? "";
+  }, [connector.tunnelId, tunnelId, key]);
   const [busy, setBusy] = useState(false);
   const running = useRef(false);
   const composing = useRef(false);
   const feedback = useSettingsFeedback(facade);
   const result = feedback.pages["setup:connection"]?.result;
-  const setup = computerSetup(snapshot);
   const failed = result?.state === "refused" || result?.state === "unknown";
-  const connected = setup.localConnectionCurrent && !failed;
+  const draftChanged =
+    tunnelId !== (connector.tunnelId ?? "") || key.length > 0;
+  useEffect(() => {
+    onSetupInputsChange?.(draftChanged);
+  }, [draftChanged, onSetupInputsChange]);
+  const connected =
+    setupStepCheck(
+      snapshot,
+      "connection",
+      draftChanged,
+      retainedSetupIntents(facade, snapshot),
+    ).allowed && !failed;
   const valid =
     key.length > 0
       ? ProductConfigurationCommandSchema.safeParse({
@@ -1186,7 +1240,13 @@ function ConnectMac({ settings, snapshot, facade, actions }: PageProps) {
             className="field"
             value={tunnelId}
             maxLength={160}
-            onChange={(event) => setTunnelId(event.currentTarget.value)}
+            onChange={(event) => {
+              setTunnelId(event.currentTarget.value);
+              onSetupInputsChange?.(
+                event.currentTarget.value !== (connector.tunnelId ?? "") ||
+                  key.length > 0,
+              );
+            }}
             required
             disabled={busy}
           />
@@ -1203,7 +1263,13 @@ function ConnectMac({ settings, snapshot, facade, actions }: PageProps) {
             placeholder={
               connector.credential === "stored" ? "Key saved" : "Paste your key"
             }
-            onChange={(event) => setKey(event.currentTarget.value)}
+            onChange={(event) => {
+              setKey(event.currentTarget.value);
+              onSetupInputsChange?.(
+                event.currentTarget.value.length > 0 ||
+                  tunnelId !== (connector.tunnelId ?? ""),
+              );
+            }}
             disabled={busy}
           />
         </label>
@@ -1239,13 +1305,6 @@ function ConnectMac({ settings, snapshot, facade, actions }: PageProps) {
           Disconnect
         </Command>
       )}
-      {(failed || helperMissing) && (
-        <SetupFailure
-          result={result ?? null}
-          actions={actions}
-          helperMissing={helperMissing}
-        />
-      )}
       {!connected && !failed && !helperMissing && !busy && (
         <p className="description">
           Enter your tunnel ID and key, then connect.
@@ -1254,87 +1313,20 @@ function ConnectMac({ settings, snapshot, facade, actions }: PageProps) {
     </>
   );
 }
-function SetupFailure({
-  result,
-  actions,
-  helperMissing = false,
-}: {
-  result: Intent | null;
-  actions: Actions;
-  helperMissing?: boolean;
-}) {
-  const unknown =
-    result?.state === "unknown" || result?.code === "SETTINGS_WRITE_FAILED";
-  const keyRejected =
-    /(?:KEY_REJECTED|AUTHENTICATION_FAILED)/u.test(result?.code ?? "") &&
-    !unknown;
-  const keyStore = result?.code === "CONNECTOR_CREDENTIAL_STORE_FAILED";
-  const workspaceFailure = result?.id.startsWith("settings:computer.");
-  return (
-    <div className="notice setup-failure" role="alert">
-      <p>
-        {unknown
-          ? "Farol could not confirm the last action. Check its saved result before continuing; do not repeat it."
-          : helperMissing
-            ? "This Mac could not find a usable connection helper. Install tunnel-client for this account."
-            : keyRejected
-              ? "OpenAI did not accept this key. It may be revoked or belong to another tunnel."
-              : keyStore
-                ? "Farol could not save the key on this Mac. Check this account’s key storage before connecting again."
-                : workspaceFailure
-                  ? "Farol could not check this workspace. Make sure it still exists and this account can open it."
-                  : result?.code === "CONNECTOR_POLLING_EXPIRED"
-                    ? "The connection started, but its health check did not finish. The connection is not confirmed."
-                    : "This Mac could not complete the check. Check the setup guide before trying again."}
-      </p>
-      {unknown ? (
-        <button
-          type="button"
-          className="text-button"
-          onClick={() => void actions.refresh()}
-        >
-          Refresh status
-        </button>
-      ) : (
-        <Command
-          actions={actions}
-          command={{
-            kind: "onboarding.open-help",
-            destination: keyRejected ? "tunnels" : "setup-guide",
-          }}
-        >
-          {keyRejected
-            ? "Create a new key in OpenAI Tunnels"
-            : helperMissing
-              ? "How to install tunnel-client"
-              : "Read the setup guide"}
-        </Command>
-      )}
-    </div>
-  );
-}
 function SignInStep({ snapshot, facade, actions }: PageProps) {
   const signIn = signInPresentation(snapshot);
-  const saved =
-    snapshot.configuration?.status === "ready"
-      ? snapshot.configuration.settings.setup.chatgpt
-      : null;
-  const verified =
-    !signIn.pending &&
-    !signIn.outcomeUnknown &&
-    snapshot.signInObservation?.state !== "signed_out" &&
-    saved?.verified?.buildId === snapshot.buildId &&
-    saved.reachable === "reachable";
-  const feedback = useSettingsFeedback(facade);
-  const result = feedback.pages["setup:signin"]?.result;
+  const verified = setupStepCheck(
+    snapshot,
+    "signin",
+    false,
+    retainedSetupIntents(facade, snapshot),
+  ).allowed;
   return (
     <section aria-label="ChatGPT sign-in">
       {verified ? (
         <p className="setup-success" role="status">
           ✓ Sign-in checked
         </p>
-      ) : result?.state === "unknown" || result?.state === "refused" ? (
-        <SetupFailure result={result} actions={actions} />
       ) : (
         <>
           <p className="description">
@@ -1469,7 +1461,12 @@ function AddToChatGPT({ settings, snapshot, facade, actions }: PageProps) {
           checks the reply from this Mac. It checks workspace access without
           reading file contents.
         </p>
-        {setup.ready ? (
+        {setupStepCheck(
+          snapshot,
+          "attachment",
+          false,
+          retainedSetupIntents(facade, snapshot),
+        ).allowed ? (
           <div className="setup-success" role="status">
             <strong>✓ Everything works</strong>
             <p>
@@ -1482,9 +1479,7 @@ function AddToChatGPT({ settings, snapshot, facade, actions }: PageProps) {
           </div>
         ) : (
           <>
-            {failed ? (
-              <SetupFailure result={result ?? null} actions={actions} />
-            ) : (
+            {!failed && (
               <p className="description">
                 {setup.canVerifyEmbeddedApp
                   ? "Create the app above, then run the check once."

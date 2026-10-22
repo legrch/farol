@@ -3400,7 +3400,11 @@ describe("bounded Setup sign-in observation", () => {
               : "Sign-in not checked",
         );
         expect(setupChecklist(after).entries[0]?.status).toBe(
-          state === "signed_out" ? "Signed out" : "Sign-in checked",
+          state === "signed_out"
+            ? "Signed out"
+            : state === "authenticated"
+              ? "Signed in"
+              : "Sign-in not checked",
         );
         expect(after.route).toBe("loading");
       } finally {
@@ -3805,7 +3809,11 @@ describe("bounded Setup sign-in observation", () => {
         h.c.navigate({ area: "setup", setupStep: "overview" });
         expect(h.c.getSnapshot().signInObservation).toBe(sample);
         expect(setupChecklist(h.c.getSnapshot()).entries[0]?.status).toBe(
-          state === "signed_out" ? "Signed out" : "Sign-in checked",
+          state === "signed_out"
+            ? "Signed out"
+            : state === "authenticated"
+              ? "Signed in"
+              : "Sign-in not checked",
         );
         h.c.navigate({ area: "settings", page: "connection" });
         expect(h.c.getSnapshot().signInObservation).toBe(sample);

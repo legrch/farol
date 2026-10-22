@@ -1143,6 +1143,7 @@ export class WindowController implements RendererFacade {
     this.historyRevision++;
     this.patch({ chatHistoryEpoch: this.historyRevision });
   }
+  private setupCheckSequence = 0;
   private dispatch(
     key: string,
     payload: unknown,
@@ -1206,6 +1207,14 @@ export class WindowController implements RendererFacade {
         ...this.state.intents,
         [key]: { id: key, state: "pending", code: null },
       },
+      ...(key.startsWith("settings:")
+        ? {
+            setupCheckOrder: {
+              ...this.state.setupCheckOrder,
+              [key]: ++this.setupCheckSequence,
+            },
+          }
+        : {}),
     });
     void (async () => {
       let result: Intent;
@@ -1265,7 +1274,12 @@ export class WindowController implements RendererFacade {
     // including known refusals. A new label must not release that latch.
     if (command.kind === "chatgpt.present-browser")
       intention = "settings:chatgpt.present-browser:";
-    if (command.kind === "chatgpt.verify") this.invalidateSignInObservation();
+    const signInCheck =
+      command.kind === "chatgpt.verify" ? this.state.signInObservation : null;
+    if (command.kind === "chatgpt.verify") {
+      this.patch({ setupSignInCheck: null });
+      this.invalidateSignInObservation();
+    }
     return this.dispatch(
       intention,
       command,
@@ -1587,6 +1601,23 @@ export class WindowController implements RendererFacade {
             ? { connectorAttempt: outcome.result.connectorAttempt }
             : {}),
         };
+        if (
+          command.kind === "chatgpt.verify" &&
+          result.state === "applied" &&
+          result.chatGptReadiness?.state === "authenticated" &&
+          signInCheck?.state === "authenticated" &&
+          !signInCheck.pending &&
+          signInCheck.binding !== null &&
+          signInCheck.buildId === this.state.buildId
+        ) {
+          this.patch({
+            setupSignInCheck: {
+              buildId: signInCheck.buildId,
+              binding: signInCheck.binding,
+            },
+          });
+        }
+        if (command.kind === "chatgpt.verify") this.observeSignIn();
         const value = outcome.result.ok ? outcome.result.evidence : undefined;
         if (
           command.kind === "computer.prepare-workspace-edit" &&

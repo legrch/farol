@@ -161,8 +161,15 @@ export type WindowSnapshot = Readonly<{
   connectionStatus?: ConnectionStatusView;
   route: "loading" | "loaded" | "failed";
   signInObservation: SignInObservation | null;
+  /** Window-owned explicit check, bound to the authenticated document sample. */
+  setupSignInCheck?: Readonly<{
+    buildId: string;
+    binding: NonNullable<SignInObservation["binding"]>;
+  }> | null;
   update: InstalledUpdateView;
   intents: Readonly<Record<string, Intent>>;
+  /** Window-local attempt order; historical refusals cannot override a newer check. */
+  setupCheckOrder?: Readonly<Record<string, number>>;
   shortcuts: NavigationShortcuts;
   workspaceEditDelivery: string | null;
   readConversation:
