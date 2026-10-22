@@ -231,7 +231,6 @@ const DownloadIntent = z.strictObject({
 });
 const Journal = Operation.extend({
   schema: z.literal("farol.installed-update-journal/1"),
-  note: z.literal("predecessor_drain_unconfirmed").optional(),
   phase: z.enum([
     "prepared",
     "predecessor_saved",

@@ -4488,9 +4488,14 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     }
   }
 
-  it.each(["source", "target"] as const)(
-    "preserves present JSON-null journal and archive for installed %s",
-    async (installed) => {
+  it.each([
+    ["JSON-null", "source"],
+    ["JSON-null", "target"],
+    ["drain-note", "source"],
+    ["drain-note", "target"],
+  ] as const)(
+    "preserves present %s journal and archive for installed %s",
+    async (kind, installed) => {
       const first = await prepared();
       await first.restart();
       await first.close();
@@ -4501,7 +4506,17 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
         record.operation.operationId,
         "journal.json",
       );
-      await fs.writeFile(journal, "null\n", { mode: 0o600 });
+      const raw = `${JSON.stringify(
+        kind === "JSON-null"
+          ? null
+          : {
+              ...record.operation,
+              schema: "farol.installed-update-journal/1",
+              phase: "prepared",
+              note: "predecessor_drain_unconfirmed",
+            },
+      )}\n`;
+      await fs.writeFile(journal, raw, { mode: 0o600 });
       const current = installed === "target" ? target : source;
       mocks.exec.mockImplementation(async (file: string) => {
         if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
@@ -4516,7 +4531,7 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
         phase: "failed",
         recoveryRequired: true,
       });
-      expect(await fs.readFile(journal, "utf8")).toBe("null\n");
+      expect(await fs.readFile(journal, "utf8")).toBe(raw);
       expect(JSON.parse(await fs.readFile(ready, "utf8"))).toEqual(record);
       expect(mocks.reclaimArchive).not.toHaveBeenCalled();
       expect(mocks.helper).toHaveBeenCalledTimes(1);
