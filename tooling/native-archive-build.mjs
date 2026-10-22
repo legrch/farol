@@ -11,10 +11,25 @@ const MODULE = "golang.org/x/text";
 const MODULE_VERSION = "v0.28.0";
 const MODULE_SUM = "h1:rhazDwis8INMIwQ4tpjLDzUhx6RlXqZNPEM0huQojng=";
 const GO_VERSION = "go1.26.2";
-const GO_BINARY_SHA256 =
-  "912f19a1a95ffe44a9e349d8283c74eb1d2eace37aad3ca6ef7b9ae321eb709f";
-const GO_SDK_SHA256 =
-  "6683400b4531ac46ed6ae2da36a98c082d864f6a5ed9208260536241f7499a8c";
+// Each trusted compiler is an exact go binary and SDK tree pair. The Homebrew
+// build is the owner's Mac; the official go.dev archive is what hosted CI
+// installs. Both compile the byte-identical archive pinned below.
+const TRUSTED_COMPILERS = Object.freeze([
+  Object.freeze({
+    origin: "homebrew go 1.26.2",
+    binarySha256:
+      "912f19a1a95ffe44a9e349d8283c74eb1d2eace37aad3ca6ef7b9ae321eb709f",
+    sdkSha256:
+      "6683400b4531ac46ed6ae2da36a98c082d864f6a5ed9208260536241f7499a8c",
+  }),
+  Object.freeze({
+    origin: "go.dev go1.26.2.darwin-arm64.tar.gz",
+    binarySha256:
+      "005640c7ff93028cb704283b0f737f2db3faf8b51b2561170c769b83905da646",
+    sdkSha256:
+      "489fc7aab97296629ee7da3c0273b1c24eb46fd6accdc5fa3e5fce8cda979b8d",
+  }),
+]);
 
 // Measured from the pinned compiler and source after native parity tests.
 // The candidate still requires its separate source review and package gates.
@@ -128,17 +143,19 @@ async function compiler() {
     refuse("NATIVE_ARCHIVE_COMPILER_PLATFORM_UNSUPPORTED");
   const executable = await fs.realpath("/opt/homebrew/bin/go");
   const sdk = path.dirname(path.dirname(executable));
-  if (
-    path.basename(executable) !== "go" ||
-    path.basename(path.dirname(executable)) !== "bin" ||
-    digest(await regularBytes(executable, 64 * 1024 * 1024)) !==
-      GO_BINARY_SHA256
-  )
-    refuse("NATIVE_ARCHIVE_COMPILER_UNTRUSTED");
+  const binarySha256 =
+    path.basename(executable) === "go" &&
+    path.basename(path.dirname(executable)) === "bin"
+      ? digest(await regularBytes(executable, 64 * 1024 * 1024))
+      : null;
+  const trusted = TRUSTED_COMPILERS.find(
+    (candidate) => candidate.binarySha256 === binarySha256,
+  );
+  if (!trusted) refuse("NATIVE_ARCHIVE_COMPILER_UNTRUSTED");
   const measured = await snapshotTree(sdk);
-  if (measured.sha256 !== GO_SDK_SHA256)
+  if (measured.sha256 !== trusted.sdkSha256)
     refuse("NATIVE_ARCHIVE_COMPILER_SDK_UNTRUSTED");
-  return { executable, sdk, measured };
+  return { executable, sdk, measured, sdkSha256: trusted.sdkSha256 };
 }
 
 async function privateDirectory(directory) {
@@ -347,7 +364,7 @@ export async function compileNativeArchive({
     );
     if (
       dependencyBefore.sha256 !== dependencyAfter.sha256 ||
-      (await snapshotTree(selected.sdk)).sha256 !== GO_SDK_SHA256
+      (await snapshotTree(selected.sdk)).sha256 !== selected.sdkSha256
     )
       refuse("NATIVE_ARCHIVE_COMPILER_INPUT_CHANGED");
     return {
@@ -356,7 +373,7 @@ export async function compileNativeArchive({
         {
           kind: "dependency",
           path: `native/compiler/${GO_VERSION}`,
-          sha256: GO_SDK_SHA256,
+          sha256: selected.sdkSha256,
         },
         {
           kind: "dependency",

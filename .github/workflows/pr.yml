@@ -74,6 +74,9 @@ jobs:
       - uses: ./.github/actions/setup-ci
       - name: Run the portable source profile
         run: task ci:cloud
+      - name: Show the failed portable cases
+        if: failure()
+        run: node tooling/print-failed-scope.mjs _output/evidence/test-scopes
       - name: Require unchanged source
         run: |
           git diff --check
