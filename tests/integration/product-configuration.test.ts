@@ -397,7 +397,7 @@ function dependencies() {
 }
 
 // Synthetic main-side receipts and disposable settings, never live provider proof.
-async function setupCompletionFixture() {
+async function setupCompletionFixture(appName = "Farol") {
   const root = await stateRoot();
   const store = new ProductSettingsStore({ root });
   const first = new ProductConfigurationService(store, dependencies());
@@ -445,7 +445,7 @@ async function setupCompletionFixture() {
       verifiedAt,
     },
     chatgptApp: {
-      name: "Farol",
+      name: appName,
       tunnelId: "synthetic-tunnel",
       connectorGeneration: 1,
     },
@@ -1666,6 +1666,22 @@ describe("Farol product configuration", () => {
         status: "ready",
         settings: { general: { openAtLaunch } },
       });
+    },
+  );
+
+  it.each(["Farol Dev", "Farol Preview", "Office Mac"])(
+    "completes Setup with the current verified app target %s",
+    async (appName) => {
+      const { service, context } = await setupCompletionFixture(appName);
+      const before = service.snapshot();
+      if (before.status !== "ready") throw Error("settings missing");
+      expect(setupCompletionAllowed(before.settings, context)).toBe(true);
+      expect(
+        await service.setSetupJourney(
+          { currentStep: "connect", dismissed: true },
+          (settings) => setupCompletionAllowed(settings, context),
+        ),
+      ).toMatchObject({ ok: true });
     },
   );
 

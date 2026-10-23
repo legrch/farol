@@ -33,7 +33,7 @@ type Case = (typeof states)[number];
 type BindingMutation = Readonly<{
   name: string;
   step: SetupCheckpoint;
-  expectedState: "success" | "stale" | "unknown" | "pending";
+  expectedState: "missing" | "success" | "stale" | "unknown" | "pending";
   mutate: (
     snapshot: WindowSnapshot,
     settings: ProductSettings,
@@ -494,11 +494,16 @@ describe("rendered Setup gate", () => {
       },
     },
     {
-      name: "attachment rejects a changed selected app name",
+      name: "attachment rejects a saved app-name change after its old proof is withdrawn",
       step: "attachment",
-      expectedState: "stale",
+      expectedState: "missing",
       mutate: (_snapshot, settings) => {
         settings.connectors.secureMcp.chatgptApp!.name = "Other";
+        // The configuration service withdraws these proofs when it saves a new
+        // name. A valid different name alone is no longer a stale binding.
+        settings.connectors.secureMcp.attachment = null;
+        settings.connectors.secureMcp.lastVerifiedAttachment = null;
+        settings.setup.connect.verified = null;
         return _snapshot;
       },
     },

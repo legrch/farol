@@ -1482,6 +1482,20 @@ function AddToChatGPT({
     nameChanged,
     retainedSetupIntents(facade, snapshot),
   );
+  const canPrepareTest = (current: WindowSnapshot) => {
+    if (current.configuration?.status !== "ready") return false;
+    return (
+      computerSetup(current).canReconnect &&
+      current.configuration.settings.connectors.secureMcp.challenge === null &&
+      !setupStepCheck(
+        current,
+        "attachment",
+        false,
+        retainedSetupIntents(facade, current),
+      ).allowed
+    );
+  };
+  const needsNewTest = !nameChanged && canPrepareTest(snapshot);
   async function saveName() {
     if (!nameValid || busy.current || !connector.tunnelId) return;
     await actions.run({
@@ -1671,12 +1685,7 @@ function AddToChatGPT({
             </button>
           )}
         </div>
-        {setupStepCheck(
-          snapshot,
-          "attachment",
-          false,
-          retainedSetupIntents(facade, snapshot),
-        ).allowed ? (
+        {gate.allowed ? (
           <div className="setup-success" role="status">
             <strong>✓ Everything works</strong>
             <p>
@@ -1687,13 +1696,31 @@ function AddToChatGPT({
               . No file contents were read.
             </p>
           </div>
+        ) : needsNewTest ? (
+          <>
+            <p className="description">
+              Prepare a fresh test for this app by refreshing this Mac’s
+              connection. Your saved key and workspace settings stay in place.
+            </p>
+            <Command
+              className="primary"
+              actions={actions}
+              command={{ kind: "connector.repair" }}
+              disabled={checking || !nameValid}
+              admit={canPrepareTest}
+            >
+              Prepare new test
+            </Command>
+          </>
         ) : (
           <>
             {!failed && (
               <p className="description">
-                {setup.canVerifyEmbeddedApp
-                  ? "Create the app above, then run the check once."
-                  : "Finish sign-in, workspace and connection checks before testing in ChatGPT."}
+                {nameChanged
+                  ? "Save the app name above before preparing a new test."
+                  : setup.canVerifyEmbeddedApp
+                    ? "Create the app above, then run the check once."
+                    : "Finish sign-in, workspace and connection checks before testing in ChatGPT."}
               </p>
             )}
             <button
