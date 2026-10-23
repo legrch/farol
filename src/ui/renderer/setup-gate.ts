@@ -149,7 +149,7 @@ export function setupStepCheck(
           : inputsChanged
             ? "stale"
             : step === "signin" && observation?.state === "unknown"
-              ? "unknown"
+              ? "missing"
               : confirmed
                 ? "success"
                 : hasCheck
@@ -222,7 +222,9 @@ export function setupStepCheck(
             ? refusalCause
             : state === "stale"
               ? staleCopy[step]
-              : `${label} has no current confirmed check. Complete this step before continuing.`;
+              : step === "signin" && observation?.state === "unknown"
+                ? "Farol could not read your ChatGPT sign-in status. Choose Check again to read the current session."
+                : `${label} has no current confirmed check. Complete this step before continuing.`;
   return {
     state,
     allowed: state === "success",
@@ -239,12 +241,14 @@ export function setupStepCheck(
         ? null
         : state === "unknown" || state === "pending"
           ? { kind: "refresh", label: "Refresh status" }
-          : state === "refused"
-            ? refusalAction
-            : {
-                kind: "guide",
-                label: "Read the setup guide",
-                destination: "setup-guide",
-              },
+          : step === "signin" && observation?.state === "unknown"
+            ? { kind: "refresh", label: "Check again" }
+            : state === "refused"
+              ? refusalAction
+              : {
+                  kind: "guide",
+                  label: "Read the setup guide",
+                  destination: "setup-guide",
+                },
   };
 }

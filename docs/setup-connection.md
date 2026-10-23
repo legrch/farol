@@ -1,12 +1,12 @@
 # Set up Farol with ChatGPT
 
-Open **Setup**, choose **Start setup**, and follow **Sign in → Workspaces → Connect this Mac → Add to ChatGPT**. The progress line shows the checks that passed. **Continue** stays disabled until the current step passes. **Back** lets you review an earlier step without repeating an action.
+Open **Setup**, choose **Start setup**, and follow **Sign in → Workspaces → Connect this Mac → Add to ChatGPT**. The progress line shows the checks that passed. Select any step in it to review that step; navigation does not run its action. **Continue** stays disabled until the current step passes. **Back** lets you review an earlier step without repeating an action.
 
-Setup uses your own ChatGPT account and the workspaces you approve on this Mac. Opening Setup does not reset your profile, replace a key or send a ChatGPT message. A returning profile keeps its saved settings. A saved check permits Continue only while its evidence still matches the current inputs: the signed-in document, every workspace and its access, the tunnel ID/key/helper generation, and the selected ChatGPT app. Sign-in needs an explicit successful check in the current window. Unknown, pending, refused, missing and stale results all block Continue and show a cause with one recovery action. Refresh observes an existing result; it never resubmits an unknown action. Editing the tunnel ID or entering a replacement key withdraws Continue until the new inputs pass their check.
+Setup uses your own ChatGPT account and the workspaces you approve on this Mac. Opening Setup does not reset your profile, replace a key or send a ChatGPT message. A returning profile keeps its saved settings. A saved check permits Continue only while its evidence still matches the current inputs: the signed-in document, every workspace and its access, the tunnel ID/key/helper generation, and the selected ChatGPT app. Sign-in needs a successful check in the current window. Farol runs that check automatically after the owner login flow or for a previously verified session. Unknown, pending, refused, missing and stale results all block Continue and show a cause with one recovery action. Refresh observes an existing result; it never resubmits an unknown action. Editing the tunnel ID or entering a replacement key withdraws Continue until the new inputs pass their check.
 
 ## 1. Sign in
 
-Choose **Sign in**, or **Open ChatGPT** if Farol cannot recognize the existing page. Farol opens the retained ChatGPT page inside the same shell, with the sidebar still available. The toolbar shows **Setup · Sign in** and **Back to setup**. Finish signing in, then choose **Back to setup** to return to the Sign in step. Closing a sign-in popup, a failed or cancelled sign-in, and passive page observations never return you automatically. You can visit another area and select ChatGPT again without replacing its retained document or starting sign-in again. If a retained page later fails to load, Farol keeps it and shows the failure with a next action. Navigation does not retry it. When your signed-in page is recognized, choose **Check sign-in**. This saves the existing account-readiness check needed by the embedded ChatGPT test. Opening a page alone is not a passed check.
+Choose **Sign in**, or **Open ChatGPT** if Farol cannot recognize the existing page. Farol opens the retained ChatGPT page inside the same shell, with the sidebar still available. The toolbar shows **Setup · Sign in** and **Back to setup**. Finish signing in, then choose **Back to setup** to return to the Sign in step. Closing a sign-in popup, a failed or cancelled sign-in, and passive page observations never return you automatically. You can visit another area and select ChatGPT again without replacing its retained document or starting sign-in again. If a retained page later fails to load, Farol keeps it and shows the failure with a next action. Navigation does not retry it. When your signed-in page is recognized, Farol automatically saves the account-readiness check needed by the embedded ChatGPT test. **Check sign-in** remains available if the step still needs confirmation. Opening a page alone is not a passed check.
 
 When **✓ Sign-in checked** appears, choose **Continue**. There is no skip in this guided flow. A connection used outside Farol can still have independent external verification; that does not replace this flow's sign-in check.
 
@@ -25,7 +25,7 @@ Workspace changes use the existing admitted stop/access/check operations. Finish
 
 ## 3. Connect this Mac
 
-The three small illustrated cards show **Create a tunnel → Create a key → Copy both here**. They highlight once in order; choose **Replay** to watch again. Reduced motion keeps all three cards static. The drawings never sign in, create a tunnel or display a real tunnel ID or key.
+The three cards show **Create a tunnel → Create a key → Copy both here**. Select a card to open its instructions at your own pace. The cards never sign in, create a tunnel or display a real tunnel ID or key.
 
 1. Choose **Open OpenAI Tunnels** to open [OpenAI organization tunnels](https://platform.openai.com/settings/organization/tunnels).
 2. Create a tunnel named **Farol** and select the ChatGPT workspace you intend to use. Copy its tunnel ID.
@@ -44,17 +44,17 @@ If a key cannot be saved, check this account's key storage before reconnecting. 
 
 ## 4. Add to ChatGPT
 
-The second three-card strip shows **Settings → Connectors**, **Add Farol: name, Tunnel, ID**, and **Test in ChatGPT**. It plays once, with the same Replay and reduced-motion behavior. Choose **Open ChatGPT Apps**, then open **Settings → Apps → Create** in ChatGPT and enter:
+The second three-card strip shows **Settings → Connectors**, **Add Farol: name, Tunnel, ID**, and **Test in ChatGPT**. Select a card to open its step-by-step instructions; the instructions stay open until you close them. Choose **Open ChatGPT Apps**, then open **Settings → Apps → Create** in ChatGPT and enter:
 
 | Field      | Value                                         |
 | ---------- | --------------------------------------------- |
-| Name       | **Farol**                                     |
+| Name       | The editable app name shown in Farol          |
 | Connection | **Tunnel**, with the tunnel ID shown in Farol |
 | Sign-in    | **None**                                      |
 
 Use the app attached to this exact tunnel. Keep development and production profiles and tunnels separate; the app's display name does not select the Farol environment. ChatGPT may require an eligible account, workspace permission or developer mode before it offers Create; see [OpenAI's custom-app setup guidance](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt).
 
-Return to Farol and choose **Test in ChatGPT** once. Farol selects the app named **Farol** for this tunnel, sends one short request in a Temporary Chat using Instant, and checks the matching receipt from this Mac. **Back to setup** returns from the embedded check without sending it again.
+Return to Farol and choose **Test in ChatGPT** once. Farol selects the exact app name saved in Setup for this tunnel, sends one short request in a separate ordinary chat using Instant, and checks the matching receipt from this Mac. **Back to setup** returns from the embedded check without sending it again.
 
 **✓ Everything works** means ChatGPT used Farol, reached this Mac and verified access to the approved workspace. The existing bounded check lists the approved root and verifies a receipt; it does **not** read a file's contents or prove that a README was read. A model's reply alone, a saved app name or a local connection is insufficient.
 

@@ -1,4 +1,7 @@
-import { browserPresentationAllowed } from "./command-eligibility";
+import {
+  browserPresentationAllowed,
+  commandAllowed,
+} from "./command-eligibility";
 import { defaultSidebarPreference } from "../../../apps/desktop/renderer/sidebar-presentation";
 import { OperationsSnapshotSchema } from "../../../apps/desktop/renderer/operations-contract";
 import {
@@ -464,6 +467,8 @@ export class WindowController implements RendererFacade {
   private refreshPending = false;
   private eventOrdinal = 0;
   private signInCounter = 0;
+  private readonly automaticSignInChecks = new Set<string>();
+  private automaticSignInRequested = false;
   private signInTimer: ReturnType<typeof setTimeout> | null = null;
   private authWindowGeneration = -1;
   private history: Destination[] = [home];
@@ -953,6 +958,10 @@ export class WindowController implements RendererFacade {
   async refresh(): Promise<void> {
     await this.refreshReadback();
   }
+  refreshSignInStatus(): void {
+    if (!this.isSignInEntry() || this.state.signInObservation?.pending) return;
+    this.observeSignIn();
+  }
   async refreshReadback(): Promise<NativeRefreshResult> {
     if (this.disposed) return { status: "unqualified", reason: "disposed" };
     const order = this.configOrder.begin();
@@ -1315,6 +1324,10 @@ export class WindowController implements RendererFacade {
       if (result.state !== "unknown" && !retainSettlement)
         this.commands.delete(key);
       this.patch({ intents: { ...this.state.intents, [key]: result } });
+      // A read may have settled behind this command's pending fence (notably
+      // Back to setup). Reconsider it only after the original command settles;
+      // commandAllowed still preserves every pending/unknown writer fence.
+      this.confirmSetupSignIn();
       resolve(result);
     })();
     return promise;
@@ -1342,6 +1355,13 @@ export class WindowController implements RendererFacade {
     if (command.kind === "chatgpt.present-browser")
       return this.presentBrowser();
     const requestedDestination = this.state.destination;
+    if (
+      (command.kind === "chatgpt.open-sign-in" ||
+        command.kind === "chatgpt.open-browser") &&
+      requestedDestination.area === "setup" &&
+      requestedDestination.setupStep === "signin"
+    )
+      this.automaticSignInRequested = true;
     const signInCheck =
       command.kind === "chatgpt.verify" ? this.state.signInObservation : null;
     if (command.kind === "chatgpt.verify") {
@@ -2162,7 +2182,7 @@ export class WindowController implements RendererFacade {
       destination = { ...destination, area: "settings" };
     if (destination.taskId !== undefined) this.taskSelectionRevision++;
     this.presentationRevision++;
-    const wasSignIn = this.isSignInEntry();
+    const wasSignIn = this.isSetupSignInObservationEntry();
     const next: Destination = {
       area: destination.area ?? this.state.destination.area,
       page: destination.page ?? this.state.destination.page,
@@ -2231,14 +2251,14 @@ export class WindowController implements RendererFacade {
     });
     this.presentation();
     this.presentBrowserOnNavigation();
-    if (!wasSignIn && this.isSignInEntry()) {
+    if (!wasSignIn && this.isSetupSignInObservationEntry()) {
       this.invalidateSignInObservation();
       this.observeSignIn();
     }
   }
   travel(direction: -1 | 1): void {
     if (this.disposed || this.state.update.phase === "applying") return;
-    const wasSignIn = this.isSignInEntry();
+    const wasSignIn = this.isSetupSignInObservationEntry();
     const cursor = this.cursor + direction;
     if (cursor < 0 || cursor >= this.history.length) return;
     this.presentationRevision++;
@@ -2256,7 +2276,7 @@ export class WindowController implements RendererFacade {
     });
     this.presentation();
     this.presentBrowserOnNavigation();
-    if (!wasSignIn && this.isSignInEntry()) {
+    if (!wasSignIn && this.isSetupSignInObservationEntry()) {
       this.invalidateSignInObservation();
       this.observeSignIn();
     }
@@ -2265,6 +2285,14 @@ export class WindowController implements RendererFacade {
     return (
       this.state.destination.area === "setup" &&
       this.state.destination.setupStep === "signin"
+    );
+  }
+  private isSetupSignInObservationEntry(): boolean {
+    return (
+      this.isSignInEntry() ||
+      (this.state.destination.area === "setup" &&
+        this.state.destination.setupStep === "attachment" &&
+        this.state.setupSignInCheck != null)
     );
   }
   private retireSignInObservation(): void {
@@ -2281,7 +2309,7 @@ export class WindowController implements RendererFacade {
     if (
       this.disposed ||
       this.booting ||
-      !this.isSignInEntry() ||
+      !this.isSetupSignInObservationEntry() ||
       current.status !== "current" ||
       current.runtime !== "ready" ||
       current.update.phase === "applying" ||
@@ -2316,7 +2344,7 @@ export class WindowController implements RendererFacade {
       !this.disposed &&
       this.signInCounter === counter &&
       this.state.signInObservation === pending &&
-      this.isSignInEntry() &&
+      this.isSetupSignInObservationEntry() &&
       this.state.status === "current" &&
       this.state.runtime === "ready" &&
       this.state.update.phase !== "applying" &&
@@ -2346,6 +2374,8 @@ export class WindowController implements RendererFacade {
           binding: exact ? evidence.binding : null,
         },
       });
+      if (exact && evidence.state === "authenticated")
+        this.confirmSetupSignIn();
     };
     // Host observation is bounded to two seconds. A lost IPC reply also expires;
     // its later delivery cannot revive or settle any original effect UNKNOWN.
@@ -2358,6 +2388,41 @@ export class WindowController implements RendererFacade {
         settle();
       }
     })();
+  }
+  private confirmSetupSignIn(): void {
+    const state = this.state;
+    const observation = state.signInObservation;
+    const check = state.setupSignInCheck;
+    const saved =
+      state.configuration?.status === "ready"
+        ? state.configuration.settings.setup.chatgpt.verified
+        : null;
+    // Passive inspection alone never starts a settings writer. Confirm after
+    // the owner's login flow, or renew a previously verified session.
+    if (!this.automaticSignInRequested && !saved) return;
+    if (
+      !this.isSetupSignInObservationEntry() ||
+      state.route !== "loaded" ||
+      !observation ||
+      observation.pending ||
+      observation.state !== "authenticated" ||
+      !observation.binding ||
+      !commandAllowed(state, "chatgpt.verify")
+    )
+      return;
+    if (
+      check?.buildId === state.buildId &&
+      check.binding.documentGeneration ===
+        observation.binding.documentGeneration &&
+      check.binding.sequence <= observation.binding.sequence
+    )
+      return;
+    const key = `${observation.buildId}:${observation.binding.documentGeneration}`;
+    if (this.automaticSignInChecks.has(key)) return;
+    // One existing verifier per authenticated document. A lost write/response
+    // retains its original fence; neither refresh nor navigation retries it.
+    this.automaticSignInChecks.add(key);
+    void this.configure({ kind: "chatgpt.verify" }, "settings:chatgpt.verify:");
   }
   private presentBrowser(): Promise<Intent> {
     const intention = "settings:chatgpt.present-browser:";

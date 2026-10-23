@@ -1,5 +1,5 @@
 import { createQuitDrain } from "../../../src/apps/desktop/quit-drain.ts";
-import fs from "node:fs/promises";
+import { writeFileSync } from "node:fs";
 
 const receiptFile = process.argv[2];
 
@@ -20,8 +20,12 @@ const drain = createQuitDrain({
   ],
   record: async (receipt) => {
     if (receiptFile) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      await fs.writeFile(receiptFile, JSON.stringify(receipt), { mode: 0o600 });
+      // This process fixture proves that a referenced drain reaches the real
+      // Quit, even when preparation owns no active handle. Record its input
+      // synchronously so host scheduling cannot turn the assertion into a race
+      // against an intentionally bounded asynchronous diagnostic. Reserved and
+      // stalled recorder budgets are covered by quit-drain's clocked tests.
+      writeFileSync(receiptFile, JSON.stringify(receipt), { mode: 0o600 });
     }
     process.stdout.write(`RECEIPT ${JSON.stringify(receipt)}\n`);
   },

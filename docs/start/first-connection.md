@@ -6,7 +6,7 @@ Start from an accepted running Farol installation. New users should read [instal
 
 Open **Setup**, choose **Start setup**, and follow **Sign in → Workspaces → Connect this Mac → Add to ChatGPT**. **Continue** advances only after the current step passes. **Back** reviews an earlier step without repeating an action. Navigation does not save settings, grant access or submit a verification message.
 
-In **Sign in**, choose **Sign in** or **Open ChatGPT**, finish signing in with your own account, then return and choose **Check sign-in**. When **✓ Sign-in checked** appears, choose **Continue**. This guided flow requires the sign-in check; there is no skip. Signing in does not establish local workspace access or an external connection.
+In **Sign in**, choose **Sign in** or **Open ChatGPT**, finish signing in with your own account, then return to Setup. Farol confirms the signed-in page automatically; choose **Check sign-in** only if the step still needs confirmation. When **✓ Sign-in checked** appears, choose **Continue**. This guided flow requires the sign-in check; there is no skip. Signing in does not establish local workspace access or an external connection.
 
 ## Choose workspace access
 
@@ -31,7 +31,7 @@ The key clears from the entry field on submission and is not read back into it. 
 
 In **Add to ChatGPT**, follow [ChatGPT app connection](../guides/chatgpt-connection.md) to attach the same tunnel in your intended ChatGPT workspace. Reuse the app already attached to that tunnel. Its display name does not select an environment; the tunnel and running Farol instance must match.
 
-Choose **Test in ChatGPT** once. Farol sends one short verification request in a Temporary Chat using Instant and checks the matching receipt from this Mac. **Back to setup** returns from the embedded check without resending.
+Choose **Test in ChatGPT** once. Farol sends one short verification request in a separate ordinary chat using Instant and checks the matching receipt from this Mac. **Back to setup** returns from the embedded check without resending.
 
 **✓ Everything works** requires the matching attachment receipt and current workspace access checks. A visible app chip or a model reply alone is insufficient. The check does not read file contents. Choose **Start using Farol** when all four steps have current checks.
 

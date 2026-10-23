@@ -222,10 +222,72 @@ describe("linear Setup", () => {
     expect(line.querySelector('[aria-current="step"]')?.textContent).toContain(
       "Workspaces",
     );
-    expect(line.querySelectorAll("button")).toHaveLength(0);
+    expect(line.querySelectorAll("button")).toHaveLength(4);
     expect(h.host.querySelector(".contextual-sidebar")).toBeNull();
     expect(h.host.querySelector(".rail")).toBeTruthy();
     expect(h.host.querySelectorAll("details")).toHaveLength(0);
+  });
+  it("lets progress buttons review any step without running checks or changing settings", async () => {
+    const h = await mount({
+      step: "attachment",
+      value: readySettings(true),
+      shell: true,
+      signIn: "authenticated",
+    });
+    await h.confirmSignIn();
+    const progress = h.host.querySelector('[aria-label="Setup progress"]')!;
+    expect(
+      progress.querySelector('[aria-label="1. Sign in, completed"]'),
+    ).toBeTruthy();
+    const effectCalls = () =>
+      vi
+        .mocked(h.f.api.configure)
+        .mock.calls.filter(([c]) => c.kind !== "chatgpt.observe-sign-in");
+    const configureCalls = effectCalls().length;
+    const settingsBeforeNavigation = structuredClone(h.configuration());
+    const stage = h.host.querySelector<HTMLElement>("main.stage")!;
+    stage.scrollTop = 180;
+
+    for (const [step, label] of [
+      ["signin", "1. Sign in, completed"],
+      ["folders", "2. Workspaces, completed"],
+      ["connection", "3. Connect this Mac, completed"],
+      ["attachment", "4. Add to ChatGPT, completed"],
+    ] as const) {
+      const button = progress.querySelector<HTMLButtonElement>(
+        `[aria-label="${label}"]`,
+      )!;
+      await act(async () => button.click());
+      expect(h.c.getSnapshot().destination).toMatchObject({
+        area: "setup",
+        setupStep: step,
+      });
+      expect(progress.querySelector('[aria-current="step"]')).toBe(button);
+      expect(stage.scrollTop).toBe(0);
+    }
+
+    expect(h.c.getSnapshot().destination.setupStep).toBe("attachment");
+    expect(h.configuration()).toEqual(settingsBeforeNavigation);
+    expect(effectCalls()).toHaveLength(configureCalls);
+  });
+  it("does not let progress navigation skip the final attachment gate", async () => {
+    const h = await mount({ step: "signin" });
+    const progress = h.host.querySelector('[aria-label="Setup progress"]')!;
+    const configureCalls = vi.mocked(h.f.api.configure).mock.calls.length;
+    const settingsBeforeNavigation = structuredClone(h.configuration());
+
+    await act(async () =>
+      progress
+        .querySelector<HTMLButtonElement>('[aria-label="4. Add to ChatGPT"]')!
+        .click(),
+    );
+
+    expect(h.c.getSnapshot().destination.setupStep).toBe("attachment");
+    expect(h.button("Start using Farol")?.disabled).toBe(true);
+    expect(h.configuration()).toEqual(settingsBeforeNavigation);
+    expect(vi.mocked(h.f.api.configure).mock.calls).toHaveLength(
+      configureCalls,
+    );
   });
   it.each(["signin", "folders", "connection", "attachment"] as const)(
     "gates %s on its actual check",

@@ -323,6 +323,16 @@ export function Settings({
         !facade.reconcileWorkspaceReadback
       ) {
         await facade.refresh();
+        if (setupStep === "signin") {
+          const check = setupStepCheck(
+            facade.getSnapshot(),
+            "signin",
+            false,
+            retainedSetupIntents(facade, facade.getSnapshot()),
+          );
+          if (check.state !== "unknown" && check.state !== "pending")
+            facade.refreshSignInStatus?.();
+        }
         return;
       }
       const receipt = await facade.refreshReadback();
@@ -1415,7 +1425,7 @@ function SignInStep({ snapshot, facade, actions }: PageProps) {
             {signIn.pending
               ? "Checking sign-in…"
               : signIn.signedIn
-                ? "Your account is signed in. Check it once to continue."
+                ? "You’re signed in. Farol is confirming this step automatically."
                 : "Sign in to your ChatGPT account, then return here."}
           </p>
           <Command
@@ -1639,7 +1649,7 @@ function AddToChatGPT({
       <section className="setup-test" aria-label="Test in ChatGPT">
         <h3>2. Check the connection</h3>
         <p className="description">
-          Farol opens a temporary chat, selects Instant and sends one test
+          Farol opens a separate chat, selects Instant and sends one test
           message to your app. The reply confirms that ChatGPT can reach this
           Mac — without reading file contents.
         </p>

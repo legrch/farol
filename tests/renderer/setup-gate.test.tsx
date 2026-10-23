@@ -385,9 +385,9 @@ describe("rendered Setup gate", () => {
       mutate: (snapshot) => ({ ...snapshot, signInObservation: null }),
     },
     {
-      name: "sign-in blocks an unknown observation",
+      name: "sign-in needs a new status read after an inconclusive observation",
       step: "signin",
-      expectedState: "unknown",
+      expectedState: "missing",
       mutate: (snapshot) => ({
         ...snapshot,
         signInObservation: {

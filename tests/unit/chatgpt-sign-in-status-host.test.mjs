@@ -23,7 +23,9 @@ const continuityCallbacks = new Map();
 function visit(node) {
   if (
     node.type === "FunctionDeclaration" &&
-    ["currentSurfaceLayout", "applyLayout"].includes(node.id?.name)
+    ["currentSurfaceLayout", "applyLayout", "configureProduct"].includes(
+      node.id?.name,
+    )
   )
     continuityFunctions.set(node.id.name, source.slice(node.start, node.end));
   if (
@@ -105,6 +107,42 @@ function harness(state = "authenticated") {
   return { context, observation, handle, returned };
 }
 describe("bounded Sign in status host disclosure", () => {
+  it("does not journal an inconclusive pure sign-in read as an unresolved effect", async () => {
+    const command = { kind: "chatgpt.observe-sign-in", buildId, observationId };
+    const reply = {
+      ok: true,
+      evidence: {
+        kind: "chatgpt.sign-in-status",
+        observationId,
+        buildId,
+        state: "unknown",
+        binding: null,
+      },
+    };
+    const configurationOperation = vi.fn(() => {
+      throw Error("must not create effect metadata");
+    });
+    const operationsStore = vi.fn(() => {
+      throw Error("must not journal pure read");
+    });
+    const configureProductObserved = vi.fn(async () => reply);
+    const handle = vm.runInNewContext(
+      stripTypeScriptTypes(
+        `${continuityFunctions.get("configureProduct")}\nconfigureProduct`,
+      ),
+      {
+        ProductConfigurationCommandSchema,
+        configureProductObserved,
+        configurationOperation,
+        operationsStore,
+      },
+    );
+    expect(await handle(command)).toBe(reply);
+    expect(configureProductObserved).toHaveBeenCalledExactlyOnceWith(command);
+    expect(configurationOperation).not.toHaveBeenCalled();
+    expect(operationsStore).not.toHaveBeenCalled();
+  });
+
   it("admits only exact content-free input and refuses known status without binding", () => {
     const h = harness();
     expect(ProductConfigurationCommandSchema.parse(h.context.command)).toEqual(

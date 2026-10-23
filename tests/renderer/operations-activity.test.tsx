@@ -284,3 +284,26 @@ it("shows only resolved owner targets from current and legacy store records", as
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+it("keeps historical sign-in query diagnostics in Activity without presenting them as replayable effects", async () => {
+  const f = fixture(),
+    c = new WindowController(f.api);
+  await c.start();
+  try {
+    const diagnostic = {
+      ...entries[1]!,
+      id: "status-read",
+      kind: "chatgpt.observe-sign-in",
+    };
+    const snapshot = {
+      ...c.getSnapshot(),
+      activity: [diagnostic, entries[1]!],
+    };
+    const rows = unresolvedActions(snapshot);
+    expect(rows.some((row) => row.id === "operation:status-read")).toBe(false);
+    expect(rows.some((row) => row.id === "operation:two")).toBe(true);
+    expect(snapshot.activity).toEqual([diagnostic, entries[1]!]);
+  } finally {
+    c.dispose();
+  }
+});

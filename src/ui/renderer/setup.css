@@ -3,7 +3,7 @@
   container-type: inline-size;
 }
 .setup-wizard-intro {
-  margin-bottom: 30px;
+  margin-bottom: 28px;
 }
 .setup-wizard-intro > .description {
   font-size: 13px;
@@ -17,7 +17,7 @@
   justify-content: space-between;
   align-items: center;
   gap: 16px;
-  margin-top: 30px;
+  margin-top: 20px;
 }
 .setup-wizard {
   max-width: 760px;
@@ -62,31 +62,48 @@
   list-style: none;
   display: flex;
   flex-wrap: wrap;
-  gap: 12px 20px;
-  padding: 0 0 18px;
-  margin: 0 0 32px;
+  gap: 8px 14px;
+  padding: 0 0 12px;
+  margin: 0 0 22px;
   border-bottom: 1px solid var(--line);
   font-size: 12px;
   color: var(--muted);
   position: sticky;
   top: 0;
-  z-index: 2;
-  background: var(--bg);
-  padding-top: 16px;
-  box-shadow: 0 -16px 0 var(--bg);
+  z-index: 3;
+  background-color: var(--bg);
+  padding-top: 10px;
+  box-shadow: 0 -10px 0 var(--bg);
+  isolation: isolate;
 }
-.setup-progress li[aria-current="step"] {
+.setup-progress-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 3px 5px;
+  border: 0;
+  border-radius: 5px;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+.setup-progress-step:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.setup-progress-step[aria-current="step"] {
   font-weight: 600;
   color: var(--fg);
 }
-.setup-progress li[data-check-state="verified"] > span {
+.setup-progress li[data-check-state="verified"] .setup-progress-step > span {
   color: var(--good);
 }
 .setup-wizard-footer {
   position: sticky;
   bottom: 0;
   z-index: 2;
-  padding: 16px 0;
+  padding: 8px 0;
   border-top: 1px solid var(--line);
   background: var(--bg);
   box-shadow: 0 16px 0 var(--bg);
@@ -326,7 +343,8 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 12px;
-  margin-top: 18px;
+  margin-top: 20px;
+  padding-top: 4px;
 }
 .connection-key-hint {
   margin: 8px 0 0;
@@ -370,9 +388,28 @@
   margin-top: 8px;
 }
 .setup-progress li {
-  display: flex;
-  align-items: baseline;
-  gap: 4px;
+  display: block;
+}
+.setup-wizard [aria-label="ChatGPT sign-in"] > .description {
+  max-width: 58ch;
+  margin: 0 0 18px;
+  line-height: 1.65;
+}
+.setup-wizard [aria-label="ChatGPT sign-in"] > button {
+  margin: 2px 0 10px;
+}
+.setup-wizard [aria-label="Create the ChatGPT app"] > .description {
+  margin: 8px 0 16px;
+  line-height: 1.6;
+}
+.setup-wizard .setup-test > h3 {
+  margin-bottom: 10px;
+}
+.setup-wizard .setup-test > .setup-result {
+  margin: 18px 0;
+}
+.setup-wizard .setup-test > .primary {
+  margin-top: 4px;
 }
 .workspace-row-path strong {
   overflow-wrap: anywhere;
