@@ -87,13 +87,33 @@ describe("repository delivery policy", () => {
       },
     ],
     [
-      "artifact-name fallback instead of immutable artifact ID",
+      "missing private draft ID pin",
       (_p, r) => {
-        const step = r.jobs.publish.steps.find((s) =>
-          s.uses?.startsWith("actions/download-artifact@"),
-        );
-        delete step.with["artifact-ids"];
-        step.with.name = "public-release-assets";
+        delete r.on.workflow_dispatch.inputs.draft_release_id;
+      },
+    ],
+    [
+      "public Actions binary upload",
+      (_p, r) => {
+        r.jobs.build.steps.push({
+          uses: "actions/upload-artifact@" + "a".repeat(40),
+          with: { path: "_output/release" },
+        });
+      },
+    ],
+    [
+      "binary cache transfer",
+      (_p, r) => {
+        r.jobs.build.steps.push({
+          uses: "actions/cache@" + "a".repeat(40),
+          with: { path: "_output" },
+        });
+      },
+    ],
+    [
+      "binary log transfer",
+      (_p, r) => {
+        r.jobs.build.steps.push({ run: "base64 _output/release/app.zip" });
       },
     ],
     [

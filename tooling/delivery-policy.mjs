@@ -1,4 +1,3 @@
-import { productName } from "./harness-identity.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { parseDocument } from "yaml";
@@ -41,13 +40,14 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
   assert.deepEqual(Object.keys(inputs), [
     "action",
     "candidate_run_id",
+    "draft_release_id",
     "manifest_sha256",
   ]);
   assert.equal(inputs.action.required, true);
   assert.equal(inputs.action.type, "choice");
   assert.deepEqual(inputs.action.options, ["prepare", "publish"]);
   assert.equal(inputs.action.default, "prepare");
-  for (const key of ["candidate_run_id", "manifest_sha256"])
+  for (const key of ["candidate_run_id", "draft_release_id", "manifest_sha256"])
     assert.equal(inputs[key].type, "string");
   assert.deepEqual(Object.keys(release.jobs), policy.releaseJobs);
   assert.equal(
@@ -159,31 +159,34 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
   assert.match(build, /task ci\n/u);
   assert.match(build, /task package -- --go-inputs=/u);
   assert.match(build, /tooling\/prepare-release-archive\.py/u);
-  const upload = release.jobs.build.steps.find((step) =>
-    step.uses?.startsWith("actions/upload-artifact@"),
+  assert.match(build, /tooling\/verify-release-assets\.mjs/u);
+  // Release preparation must never transfer unqualified bytes through Actions
+  // artifacts, caches, logs or a release fallback. Keep its exact step contract.
+  assert.deepEqual(
+    release.jobs.build.steps.map((step) => step.uses ?? step.name),
+    [
+      release.jobs.build.steps[0].uses,
+      "Fetch the pushed tag object as published",
+      "./.github/actions/setup-ci",
+      "Verify exact owner-beta source and accepted-main ancestry",
+      "Provision approved backend build inputs",
+      "Run the full unchanged source gate including secret scans",
+      "Build the exact clean candidate",
+      "D16 — Developer ID signing and notarization placeholder",
+      "Prepare and verify the three public assets",
+    ],
   );
-  assert.ok(upload);
-  assert.equal(upload.with.name, "${{ steps.candidate.outputs.artifactName }}");
-  assert.deepEqual(upload.with.path.trim().split("\n"), [
-    `_output/release/\${{ steps.candidate.outputs.tag }}/${productName}-\${{ steps.candidate.outputs.version }}-darwin-arm64.zip`,
-    "_output/release/${{ steps.candidate.outputs.tag }}/farol-release.json",
-    "_output/release/${{ steps.candidate.outputs.tag }}/SHA256SUMS",
-  ]);
-  const download = release.jobs.publish.steps.find((step) =>
-    step.uses?.startsWith("actions/download-artifact@"),
+  assert.doesNotMatch(
+    JSON.stringify(release),
+    /actions\/(?:upload|download)-artifact|actions\/cache|gh release|curl|wget/u,
   );
-  assert.ok(download);
-  assert.equal(
-    download.with["artifact-ids"],
-    "${{ steps.candidate.outputs.artifactId }}",
-  );
-  assert.equal(download.with["run-id"], "${{ inputs.candidate_run_id }}");
-  assert.equal(download.with["github-token"], "${{ github.token }}");
-  assert.equal(download.with.path, "_output/public-release");
-  assert.equal(download.with["merge-multiple"], true);
-  const publish = commands(release.jobs.publish);
-  assert.deepEqual(publish.trim().split(/\n+/u), [
-    "node tooling/release-candidate.mjs metadata",
+  assert.doesNotMatch(build, /base64|cat |tee |git push/u);
+  const publish = release.jobs.publish;
+  assert.deepEqual(publish.steps.map((step) => step.run).filter(Boolean), [
     "node tooling/release-candidate.mjs publish",
   ]);
+  assert.equal(publish.steps.length, 3);
+  assert.ok(publish.steps[0].uses.startsWith("actions/checkout@"));
+  assert.ok(publish.steps[1].uses.startsWith("actions/setup-node@"));
+  assert.deepEqual(publish.steps[2].env, { GH_TOKEN: "${{ github.token }}" });
 }

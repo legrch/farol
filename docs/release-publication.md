@@ -125,69 +125,114 @@ See [`github-release-contract.md`](./github-release-contract.md) and
 [`update-package-verifier.md`](./update-package-verifier.md) for the owning
 publication and consumer contracts.
 
-## Qualified two-phase Actions publication (D31)
+## Private qualified draft publication (D31)
 
-The release workflow has two separate phases. A `v*` tag push or a
-`workflow_dispatch` with `action: prepare` runs the full existing `task ci`,
-`task package`, offline archive preparation and `verifyReleaseAssets` gates.
-The selected ref must contain an exact owner-beta version in `package.json`,
-with `farolRelease.updateChannel: github-owner-beta`, and its exact commit must
-be an ancestor of accepted `origin/main`. A tag event additionally verifies the
-existing exact annotated remote version tag. A prepare dispatch creates no tag
-or release. Tag runs also only prepare; they never automatically publish.
+The hosted build is source/package evidence. A `v*` push or an explicit
+`workflow_dispatch` with `action: prepare` runs the same full `task ci`, clean
+`task package`, offline three-asset preparation and `verifyReleaseAssets` gates.
+The exact owner-beta version and `github-owner-beta` channel come from
+`package.json`, and the source must be an ancestor of accepted `origin/main`.
+Tag runs also verify the exact annotated remote version tag. Neither route
+publishes automatically or uploads binary artifacts. Do not transfer the hosted
+rebuild through Actions artifacts, caches or workflow logs, or fall back to a
+public release upload. The existing dependency-download caches remain unchanged.
 
-Preparation uploads only the three explicitly named public files listed above,
-never the producer's private directory or diagnostic evidence. The immutable
-artifact name is `farol-public-<run-id>-<run-attempt>-<full-source-SHA>`; retention
-is seven days. Preserve the exact run and artifact identity. An expired, deleted,
-replaced or missing artifact cannot be published through this handoff.
+Actions artifacts in this public repository are downloadable by signed-in
+readers, so they cannot hold an unqualified candidate privately. Draft releases
+are visible only to users with push access. See GitHub's
+[artifact download documentation](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts)
+and [Releases API documentation](https://docs.github.com/en/rest/releases/releases).
+The exact locally native-qualified archive is staged in a private draft; a
+hosted rebuild at the same source may differ in `builtAt`, `buildId` or app bytes
+and is never automatically selected for publication.
 
-Lead downloads that exact artifact for qualification and records the SHA256 of
-its **unmodified** `farol-release.json`. Source review, CP1/CP2, native/package,
-installed/live and owner qualification must cover the downloaded exact asset.
-Receipts for a different local build do not qualify it: `builtAt`, `buildId` and
-application bytes can differ even at the same source commit. Lead retains those
-private receipts separately; they are never public assets.
+### Gated operator sequence
 
-Only after those gates, a repository writer/Lead may select `action: publish`
-on the same source SHA, supplying `candidate_run_id` and `manifest_sha256` (64
-lower-case hexadecimal characters). The selected ref's `github.sha`, checkout
-HEAD, candidate run and manifest source must all match, and that source must
-still be on accepted main ancestry. The manifest digest binds the bytes Lead
-selected; it is **not proof of human/native acceptance**. Repository write
-access and Lead's deliberate publication after CP1/CP2 are the existing trust
-root. No new approval service, provider setting, environment or secret is needed.
+These are operator instructions for Root/Lead after the actual owner gates.
+This source change performs no staging, tag push, dispatch or publication.
 
-Before download and again immediately before publication, the publisher checks
-GitHub metadata for this exact repository ID/name and workflow ID/path, a
-distinct earlier completed successful run and its current attempt, a successful
-`build` job and skipped `publish` job, and exactly one unexpired run-bound
-artifact with matching source/repository/run identity. Only a tag push for the
-exact version or a build-only prepare dispatch qualifies. Failed, running,
-unknown, foreign, publish-only, same-run and stale-source candidates refuse.
-Missing/extra jobs or artifact metadata also refuse; incomplete pagination is
-not treated as a complete set. The download selects the validated artifact ID
-from the specified run, then rechecks that ID to detect replacement.
+1. Freeze the exact clean accepted-main source/version. Build locally with
+   `task package`, prepare the three assets using the offline producer above,
+   and qualify those exact local bytes through CP1/CP2, native/package,
+   installed/live and owner gates. Retain all private receipts separately.
+   Source review or a manifest digest alone cannot close these gates.
+2. After those gates and the actual owner decision, create and push the exact
+   annotated `v<package.json version>` tag at that source under Root's release
+   authority. Never move, replace, force or reuse a conflicting tag. Observe its
+   actual tag-triggered workflow run through successful full CI/package
+   completion (`build: success`, `publish: skipped`); a prepare dispatch is not a
+   substitute. Retain its exact run ID and current attempt.
+3. Stage **only** the three qualified local files with the normal operator
+   command below. First reconcile any existing release/draft; there is no
+   overwrite, clobber, asset replacement or public-upload fallback. The draft
+   must stay unpublished and prerelease. Preserve its immutable release ID and
+   the three uploaded asset IDs, names and sizes. Never include `private/` or
+   recursively upload the output directory.
 
-The publisher does **not rebuild**. It first checks the supplied manifest digest,
-requires exactly the three ordinary public files with no `private/` exception,
-and invokes the existing `verifyReleaseAssets` for source/version, archive size,
-archive SHA256 and checksum verification. It refuses an existing release,
-including drafts or partial uploads. The authenticated release listing must be
-complete (fewer than 100 entries); larger or malformed listings fail closed for
-Lead reconciliation rather than assuming no draft exists. An existing tag must be annotated and name
-this exact version and source commit; otherwise publication refuses. If absent,
-it creates a new annotated exact version tag and a new unsigned prerelease with
-exactly the three verified assets, `--verify-tag`, `--prerelease` and
-`--latest=false`. There is no overwrite, force replacement or asset-update path.
-Only the publisher has `contents: write`; preparation has read permissions.
+   ```sh
+   gh release create "v<version>" \
+     --repo legrch/farol --draft --verify-tag --prerelease --latest=false \
+     --title "Farol v<version> (unsigned prerelease)" \
+     --notes "Unsigned and not notarized (D16)." \
+     "<qualified-output>/Farol-<version>-darwin-arm64.zip" \
+     "<qualified-output>/farol-release.json" \
+     "<qualified-output>/SHA256SUMS"
+   ```
 
-A created tag may cause another build-only run when the event source permits
-it; that new build cannot auto-publish or qualify different bytes. GitHub's
-ordinary token event suppression may prevent that redundant run. Any timeout,
-API refusal or unknown tag/release/upload outcome is terminal: preserve state
-for Lead reconciliation and do not automatically retry. Tag creation and release
-upload are separate remote effects, not a transaction; a partial result never
-establishes publication success. The mocked regression tests prove local gate
-ordering and refusal before effect calls with synthetic assets; they do not
-qualify hosted Actions, real publication, native execution or owner acceptance.
+4. Hash the unmodified qualified local `farol-release.json` with SHA256. After
+   the tag build succeeds and the staged draft identities are verified, select
+   `action: publish` on that exact source, supplying `candidate_run_id`,
+   `draft_release_id` and `manifest_sha256` (64 lower-case hex characters).
+   The supplied digest is Root's exact-byte assertion after qualification, not
+   proof of native or owner qualification. Repository write access and the
+   deliberate owner-gated operator action remain the trust root; no new repo,
+   setting, secret, permission service or qualification receipt store is added.
+
+### Publisher boundary
+
+Only `publish` has `contents: write`. Its `actions: read` is needed to read the
+prior/current run and job metadata, not to download Actions artifacts. Before
+download it verifies dispatch SHA/checkout/main ancestry, strict owner-beta
+version, exact repository ID/name and workflow ID/path, a distinct earlier
+successful **tag** run at the same source and its exact current attempt, and
+exactly two completed jobs (`build: success`, `publish: skipped`). Failed,
+running, unknown, foreign, publish-only, same-run or prepare-dispatch candidates
+refuse. Incomplete job or release listings fail closed.
+
+The exact remote tag must already be annotated, name this version and point
+directly to this source commit. The supplied release ID must identify the
+unpublished private draft for that tag with `prerelease: true`,
+`published_at: null` and exactly three uploaded assets with unique immutable
+IDs, expected names and bounded sizes. The separate asset listing must agree.
+An existing public release, another same-tag draft, extra/private file, missing
+asset or tag mismatch refuses. Authenticated release listing must contain fewer
+than 100 entries; larger listings require Lead reconciliation rather than an
+assumption about unseen drafts.
+
+The publisher downloads only explicit Asset API IDs on `api.github.com`, never
+API-supplied arbitrary asset URLs. Each download permits at most one HTTPS 302
+redirect to `release-assets.githubusercontent.com` or `objects.githubusercontent.com`;
+URLs with credentials, explicit ports or fragments refuse. Authorization is
+never forwarded to the redirected host. Each asset has a 120-second deadline,
+byte reads are bounded to metadata size plus one sentinel byte, and output can
+never exceed that size or the contract maximum (ZIP 2 GiB, manifest 16 KiB,
+checksums 1 KiB). A new physical directory and exclusive no-follow ordinary
+files prevent reuse or overwrite. Partial output remains private failed output.
+
+It then binds the supplied manifest SHA256 and calls the existing
+`verifyReleaseAssets` for archive size/digest/checksums and source/version. It
+re-fetches run/attempt, remote tag object, draft and asset identities before
+mutation and refuses any change. It does not rebuild, create a tag/release,
+upload/replace assets, delete or edit a published release. Its only final
+mutation is `PATCH /repos/legrch/farol/releases/<same-id>` with
+`{draft:false, prerelease:true, make_latest:"false"}`. This is a final read gate,
+not an atomic compare-and-swap: Root must keep the selected tag/draft/assets
+quiescent while the serialized workflow runs. No separate concurrent writer is
+authorized by this sequence.
+
+HTTP denials, timeouts, unknown transport or partial effects are terminal with
+stable error codes. Tokens, headers, presigned URLs and full private API bodies
+are never logged. Reconcile the original operation; never retry an unknown or
+refused publication. Mocked transports and synthetic archive tests establish
+local refusal/order/size/redirect behavior only. They do not qualify real GitHub
+visibility or publication, hosted CI, native execution or owner acceptance.

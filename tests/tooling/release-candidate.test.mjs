@@ -2,11 +2,14 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { productName } from "../../tooling/harness-identity.ts";
 import {
   candidateIdentity,
   validateCandidate,
   publishCandidate,
+  downloadDraftAssets,
+  githubApi,
 } from "../../tooling/release-candidate.mjs";
 
 const head = "a".repeat(40);
@@ -17,42 +20,44 @@ const document = {
 };
 const roots = [];
 afterEach(() => {
+  vi.useRealTimers();
   for (const root of roots.splice(0))
     fs.rmSync(root, { recursive: true, force: true });
 });
+const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 function fixture() {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "farol-candidate-"));
-  roots.push(directory);
-  // Temporary synthetic bytes exercise the REAL public verifier, not native ZIP
-  // extraction, package attestation, hosted Actions or owner qualification.
+  const root = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "farol-candidate-")),
+  );
+  roots.push(root);
+  const directory = path.join(root, "download");
+  // Mock transports and synthetic archive bytes exercise the real handoff
+  // verifier. These are not native, hosted Actions or qualification evidence.
   const bytes = Buffer.from("synthetic archive");
-  const archiveName = `Farol-${version}-darwin-arm64.zip`;
-  const archiveSha256 = createHash("sha256").update(bytes).digest("hex");
-  fs.writeFileSync(path.join(directory, archiveName), bytes);
-  fs.writeFileSync(
-    path.join(directory, "SHA256SUMS"),
-    `${archiveSha256}  ${archiveName}\n`,
-  );
-  fs.writeFileSync(
-    path.join(directory, "farol-release.json"),
-    JSON.stringify({
-      schema: "farol.github-release/1",
-      repository: "legrch/farol",
-      version,
-      sourceCommit: head,
-      sourceDirty: false,
-      platform: "darwin",
-      arch: "arm64",
-      signing: "unsigned",
-      notarized: false,
-      archiveName,
-      archiveSha256,
-      archiveSize: bytes.length,
-    }),
-  );
-  const expectedDigest = createHash("sha256")
-    .update(fs.readFileSync(path.join(directory, "farol-release.json")))
-    .digest("hex");
+  const archiveName = `${productName}-${version}-darwin-arm64.zip`;
+  const files = new Map([
+    [archiveName, bytes],
+    ["SHA256SUMS", Buffer.from(`${hash(bytes)}  ${archiveName}\n`)],
+    [
+      "farol-release.json",
+      Buffer.from(
+        JSON.stringify({
+          schema: "farol.github-release/1",
+          repository: "legrch/farol",
+          version,
+          sourceCommit: head,
+          sourceDirty: false,
+          platform: "darwin",
+          arch: "arm64",
+          signing: "unsigned",
+          notarized: false,
+          archiveName,
+          archiveSha256: hash(bytes),
+          archiveSize: bytes.length,
+        }),
+      ),
+    ],
+  ]);
   const repo = { id: 10, full_name: "legrch/farol" };
   const run = {
     id: 100,
@@ -64,7 +69,7 @@ function fixture() {
     path: ".github/workflows/release.yml",
     head_sha: head,
     head_branch: `v${version}`,
-    event: "workflow_dispatch",
+    event: "push",
     status: "completed",
     conclusion: "success",
     updated_at: "2026-10-22T10:00:00Z",
@@ -73,6 +78,7 @@ function fixture() {
     ...run,
     id: 101,
     run_number: 6,
+    event: "workflow_dispatch",
     status: "in_progress",
     conclusion: null,
     created_at: "2026-10-23T10:00:00Z",
@@ -82,7 +88,7 @@ function fixture() {
     current,
     run,
     identity,
-    expectedDigest,
+    expectedDigest: hash(files.get("farol-release.json")),
     jobs: {
       total_count: 2,
       jobs: [
@@ -97,108 +103,141 @@ function fixture() {
         status: "completed",
       })),
     },
-    artifacts: {
-      total_count: 1,
-      artifacts: [
-        {
-          id: 200,
-          name: identity.artifactName,
-          size_in_bytes: 100,
-          expired: false,
-          expires_at: "2099-01-01T00:00:00Z",
-          workflow_run: {
-            id: run.id,
-            head_sha: head,
-            repository_id: 10,
-            head_repository_id: 10,
-          },
-        },
-      ],
-    },
+  };
+  const assets = [...files].map(([name, bytes], index) => ({
+    id: 200 + index,
+    name,
+    size: bytes.length,
+    state: "uploaded",
+    browser_download_url: "https://untrusted.invalid/ignored",
+  }));
+  const draft = {
+    id: 300,
+    tag_name: identity.tag,
+    draft: true,
+    prerelease: true,
+    published_at: null,
+    assets,
   };
   const effects = [],
     reads = [],
+    requests = [],
     gitCalls = [];
   const base = "/repos/legrch/farol";
+  const tagObject = "b".repeat(40);
   const responses = new Map([
     [`${base}/releases/tags/${identity.tag}`, null],
-    [`${base}/releases?per_page=100`, []],
-    [`${base}/git/ref/tags/${identity.tag}`, null],
+    [`${base}/releases?per_page=100`, [draft]],
+    [`${base}/releases/300`, draft],
+    [`${base}/releases/300/assets?per_page=100`, assets],
+    [
+      `${base}/git/ref/tags/${identity.tag}`,
+      {
+        ref: `refs/tags/${identity.tag}`,
+        object: { type: "tag", sha: tagObject },
+      },
+    ],
+    [
+      `${base}/git/tags/${tagObject}`,
+      {
+        sha: tagObject,
+        tag: identity.tag,
+        object: { type: "commit", sha: head },
+      },
+    ],
   ]);
+  const fetchImpl = async (url, options) => {
+    requests.push({ url, options });
+    const selected = assets.find(
+      (asset) =>
+        url === `https://api.github.com${base}/releases/assets/${asset.id}`,
+    );
+    if (!selected) throw Error("unexpected fetch");
+    return new Response(files.get(selected.name));
+  };
   const options = {
-    metadata,
+    readMetadata: async () => structuredClone(metadata),
+    releaseId: draft.id,
     directory,
     dispatchSha: head,
     git: (...args) => {
       gitCalls.push(args);
       return args[0] === "rev-parse" ? head : "";
     },
-    api: async (endpoint, { body } = {}) => {
+    api: async (endpoint, { body, method } = {}) => {
       if (body) {
-        effects.push({ endpoint, body });
-        return { sha: "b".repeat(40) };
+        effects.push({ endpoint, body, method });
+        return { ...draft, draft: false, published_at: "2026-10-23T11:00:00Z" };
       }
       reads.push(endpoint);
       if (!responses.has(endpoint)) throw Error("unexpected read");
       const value = responses.get(endpoint);
       if (value instanceof Error) throw value;
-      return value;
+      return structuredClone(value);
     },
-    release: (tag, files) => {
-      effects.push({ tag, files });
-    },
+    download: (assets, directory, identity) =>
+      downloadDraftAssets(
+        assets,
+        directory,
+        identity,
+        "synthetic-token",
+        fetchImpl,
+      ),
   };
   return {
     options,
     metadata,
+    root,
     directory,
+    files,
+    assets,
+    draft,
     effects,
     reads,
+    requests,
     responses,
     gitCalls,
     base,
+    tagObject,
+    fetchImpl,
   };
 }
 
-describe("qualified publication handoff (mocked remote, synthetic assets)", () => {
-  it.each(["workflow_dispatch", "push"])(
-    "publishes exact prior %s bytes after ancestry checks",
-    async (event) => {
-      const f = fixture();
-      f.metadata.run.event = event;
-      expect(validateCandidate(f.metadata)).toBe(200);
-      await publishCandidate(f.options);
-      expect(f.gitCalls).toContainEqual([
-        "merge-base",
-        "--is-ancestor",
-        head,
-        "refs/remotes/origin/main",
-      ]);
-      expect(f.effects).toEqual([
-        {
-          endpoint: `${f.base}/git/tags`,
-          body: {
-            tag: `v${version}`,
-            message: `Farol v${version}`,
-            object: head,
-            type: "commit",
-          },
-        },
-        {
-          endpoint: `${f.base}/git/refs`,
-          body: { ref: `refs/tags/v${version}`, sha: "b".repeat(40) },
-        },
-        {
-          tag: `v${version}`,
-          files: [
-            `Farol-${version}-darwin-arm64.zip`,
-            "farol-release.json",
-            "SHA256SUMS",
-          ].map((file) => path.join(f.directory, file)),
-        },
-      ]);
-    },
-  );
+describe("private qualified draft publication (mocked HTTP only)", () => {
+  it("downloads only pinned IDs and PATCHes the same draft once after all checks", async () => {
+    const f = fixture();
+    await publishCandidate(f.options);
+    expect(f.gitCalls).toContainEqual([
+      "merge-base",
+      "--is-ancestor",
+      head,
+      "refs/remotes/origin/main",
+    ]);
+    expect(f.effects).toEqual([
+      {
+        endpoint: `${f.base}/releases/300`,
+        method: "PATCH",
+        body: { draft: false, prerelease: true, make_latest: "false" },
+      },
+    ]);
+    expect(fs.statSync(f.directory).mode & 0o777).toBe(0o700);
+    for (const name of f.files.keys())
+      expect(fs.statSync(path.join(f.directory, name)).mode & 0o777).toBe(
+        0o600,
+      );
+    expect(f.requests).toHaveLength(3);
+    for (const { url, options } of f.requests) {
+      expect(url).toMatch(
+        /^https:\/\/api.github.com\/repos\/legrch\/farol\/releases\/assets\/20[0-2]$/u,
+      );
+      expect(options.redirect).toBe("manual");
+      expect(options.headers.Authorization).toBe("Bearer synthetic-token");
+      expect(options.signal.aborted).toBe(true);
+    }
+    expect(
+      f.reads.filter((endpoint) => endpoint === `${f.base}/releases/300`),
+    ).toHaveLength(2);
+  });
   it.each([
     [
       "failed",
@@ -256,7 +295,13 @@ describe("qualified publication handoff (mocked remote, synthetic assets)", () =
       },
     ],
     [
-      "publisher is tag event",
+      "prepare dispatch",
+      (m) => {
+        m.run.event = "workflow_dispatch";
+      },
+    ],
+    [
+      "publisher tag event",
       (m) => {
         m.current.event = "push";
       },
@@ -288,7 +333,6 @@ describe("qualified publication handoff (mocked remote, synthetic assets)", () =
     [
       "wrong tag",
       (m) => {
-        m.run.event = "push";
         m.run.head_branch = "main";
       },
     ],
@@ -305,7 +349,7 @@ describe("qualified publication handoff (mocked remote, synthetic assets)", () =
       },
     ],
     [
-      "non-prepare dispatch",
+      "publish-only run",
       (m) => {
         m.jobs.jobs[0].conclusion = "skipped";
         m.jobs.jobs[1].conclusion = "success";
@@ -336,61 +380,6 @@ describe("qualified publication handoff (mocked remote, synthetic assets)", () =
       },
     ],
     [
-      "expired",
-      (m) => {
-        m.artifacts.artifacts[0].expired = true;
-      },
-    ],
-    [
-      "past expiry",
-      (m) => {
-        m.artifacts.artifacts[0].expires_at = "2020-01-01T00:00:00Z";
-      },
-    ],
-    [
-      "unknown expiry",
-      (m) => {
-        delete m.artifacts.artifacts[0].expires_at;
-      },
-    ],
-    [
-      "missing artifact",
-      (m) => {
-        m.artifacts.artifacts = [];
-        m.artifacts.total_count = 0;
-      },
-    ],
-    [
-      "extra artifact",
-      (m) => {
-        m.artifacts.total_count++;
-      },
-    ],
-    [
-      "artifact name mismatch",
-      (m) => {
-        m.artifacts.artifacts[0].name = "public-release-assets";
-      },
-    ],
-    [
-      "artifact run mismatch",
-      (m) => {
-        m.artifacts.artifacts[0].workflow_run.id++;
-      },
-    ],
-    [
-      "artifact source mismatch",
-      (m) => {
-        m.artifacts.artifacts[0].workflow_run.head_sha = "c".repeat(40);
-      },
-    ],
-    [
-      "artifact repository mismatch",
-      (m) => {
-        m.artifacts.artifacts[0].workflow_run.repository_id++;
-      },
-    ],
-    [
       "wrong attempt",
       (m) => {
         m.run.run_attempt++;
@@ -408,14 +397,14 @@ describe("qualified publication handoff (mocked remote, synthetic assets)", () =
         m.expectedDigest = "f".repeat(64);
       },
     ],
-  ])("rejects %s before any publication effect", async (_name, mutate) => {
+  ])("rejects %s before the publication effect", async (_name, mutate) => {
     const f = fixture();
     mutate(f.metadata);
     await expect(publishCandidate(f.options)).rejects.toThrow();
     expect(f.effects).toEqual([]);
   });
   it.each(["checkout", "dispatch", "ancestry"])(
-    "rejects stale %s source before remote effects",
+    "refuses stale %s source",
     async (fault) => {
       const f = fixture();
       if (fault === "dispatch") f.options.dispatchSha = "c".repeat(40);
@@ -423,12 +412,7 @@ describe("qualified publication handoff (mocked remote, synthetic assets)", () =
         f.options.git = (command) => {
           if (fault === "ancestry" && command === "merge-base")
             throw Error("not accepted main");
-          return "c".repeat(40);
-        };
-      if (fault === "ancestry")
-        f.options.git = (command) => {
-          if (command === "merge-base") throw Error("not accepted main");
-          return head;
+          return fault === "ancestry" ? head : "c".repeat(40);
         };
       await expect(publishCandidate(f.options)).rejects.toThrow();
       expect(f.effects).toEqual([]);
@@ -436,111 +420,494 @@ describe("qualified publication handoff (mocked remote, synthetic assets)", () =
     },
   );
   it.each([
+    "missing tag",
+    "lightweight",
+    "wrong source",
+    "wrong draft ID",
+    "published",
+    "not prerelease",
+    "wrong tag",
+    "published timestamp",
+    "extra draft",
+    "public release",
+    "incomplete listing",
+    "extra asset",
+    "duplicate name",
+    "duplicate ID",
+    "zero size",
+    "pending upload",
+    "oversized zip",
+    "oversized manifest",
+    "oversized sums",
+    "listed assets mismatch",
+    "denied",
+    "unknown",
+  ])("refuses %s without mutation", async (fault) => {
+    const f = fixture();
+    const ref = f.responses.get(`${f.base}/git/ref/tags/v${version}`);
+    if (fault === "missing tag")
+      f.responses.set(`${f.base}/git/ref/tags/v${version}`, Error("HTTP 404"));
+    if (fault === "lightweight") ref.object.type = "commit";
+    if (fault === "wrong source")
+      f.responses.get(`${f.base}/git/tags/${f.tagObject}`).object.sha =
+        "c".repeat(40);
+    if (fault === "wrong draft ID") f.draft.id++;
+    if (fault === "published") f.draft.draft = false;
+    if (fault === "not prerelease") f.draft.prerelease = false;
+    if (fault === "wrong tag") f.draft.tag_name = "v0.0.0";
+    if (fault === "published timestamp")
+      f.draft.published_at = "2026-10-22T00:00:00Z";
+    if (fault === "extra draft")
+      f.responses
+        .get(`${f.base}/releases?per_page=100`)
+        .push({ ...f.draft, id: 301 });
+    if (fault === "public release")
+      f.responses.set(`${f.base}/releases/tags/v${version}`, {
+        ...f.draft,
+        id: 301,
+        draft: false,
+      });
+    if (fault === "incomplete listing")
+      f.responses.set(
+        `${f.base}/releases?per_page=100`,
+        Array(100).fill(f.draft),
+      );
+    if (fault === "extra asset")
+      f.assets.push({
+        id: 204,
+        name: "private.txt",
+        size: 1,
+        state: "uploaded",
+      });
+    if (fault === "duplicate name") f.assets[1].name = f.assets[0].name;
+    if (fault === "duplicate ID") f.assets[1].id = f.assets[0].id;
+    if (fault === "zero size") f.assets[0].size = 0;
+    if (fault === "pending upload") f.assets[0].state = "starter";
+    if (fault === "oversized zip") f.assets[0].size = 2147483649;
+    if (fault === "oversized manifest") f.assets[2].size = 16385;
+    if (fault === "oversized sums") f.assets[1].size = 1025;
+    if (fault === "listed assets mismatch")
+      f.responses.set(
+        `${f.base}/releases/300/assets?per_page=100`,
+        f.assets.map((a) => ({ ...a, id: a.id + 5 })),
+      );
+    if (fault === "denied" || fault === "unknown")
+      f.responses.set(`${f.base}/releases/300`, Error(fault));
+    await expect(publishCandidate(f.options)).rejects.toThrow();
+    expect(f.effects).toEqual([]);
+    expect(f.requests).toEqual([]);
+  });
+  it.each([
+    "run attempt",
+    "tag object",
+    "draft",
+    "asset ID",
+    "asset size",
+    "asset name",
+    "asset removed",
+    "published",
+  ])("revalidates changed %s after downloading", async (fault) => {
+    const f = fixture(),
+      download = f.options.download;
+    f.options.download = async (...args) => {
+      await download(...args);
+      if (fault === "run attempt") f.metadata.run.run_attempt++;
+      if (fault === "tag object") {
+        const object = "c".repeat(40);
+        f.responses.get(`${f.base}/git/ref/tags/v${version}`).object.sha =
+          object;
+        f.responses.set(`${f.base}/git/tags/${object}`, {
+          sha: object,
+          tag: `v${version}`,
+          object: { type: "commit", sha: head },
+        });
+      }
+      if (fault === "draft") f.draft.id++;
+      if (fault === "asset ID") f.assets[0].id++;
+      if (fault === "asset size") f.assets[0].size++;
+      if (fault === "asset name") f.assets[0].name = "private.txt";
+      if (fault === "asset removed") f.assets.pop();
+      if (fault === "published") f.draft.draft = false;
+    };
+    await expect(publishCandidate(f.options)).rejects.toThrow();
+    expect(f.effects).toEqual([]);
+  });
+  it.each([
     "extra",
     "private",
     "missing",
     "archive",
     "checksum",
     "manifest source",
-  ])("rejects %s downloaded files before any effect", async (fault) => {
-    const f = fixture();
-    if (fault === "extra")
-      fs.writeFileSync(path.join(f.directory, "extra.txt"), "x");
-    if (fault === "private") fs.mkdirSync(path.join(f.directory, "private"));
-    if (fault === "missing")
-      fs.unlinkSync(path.join(f.directory, "SHA256SUMS"));
-    if (fault === "archive")
-      fs.writeFileSync(
-        path.join(f.directory, `Farol-${version}-darwin-arm64.zip`),
-        "different bytes",
-      );
-    if (fault === "checksum")
-      fs.writeFileSync(path.join(f.directory, "SHA256SUMS"), "invalid");
-    if (fault === "manifest source") {
-      const file = path.join(f.directory, "farol-release.json");
-      const m = JSON.parse(fs.readFileSync(file));
-      m.sourceCommit = "c".repeat(40);
-      fs.writeFileSync(file, JSON.stringify(m));
-      f.metadata.expectedDigest = createHash("sha256")
-        .update(fs.readFileSync(file))
-        .digest("hex");
-    }
+  ])("verifies actual downloaded %s bytes", async (fault) => {
+    const f = fixture(),
+      download = f.options.download;
+    f.options.download = async (...args) => {
+      await download(...args);
+      if (fault === "extra")
+        fs.writeFileSync(path.join(f.directory, "extra.txt"), "x");
+      if (fault === "private") fs.mkdirSync(path.join(f.directory, "private"));
+      if (fault === "missing")
+        fs.unlinkSync(path.join(f.directory, "SHA256SUMS"));
+      if (fault === "archive")
+        fs.writeFileSync(
+          path.join(f.directory, `${productName}-${version}-darwin-arm64.zip`),
+          "changed",
+        );
+      if (fault === "checksum")
+        fs.writeFileSync(path.join(f.directory, "SHA256SUMS"), "invalid");
+      if (fault === "manifest source") {
+        const file = path.join(f.directory, "farol-release.json"),
+          manifest = JSON.parse(fs.readFileSync(file));
+        manifest.sourceCommit = "c".repeat(40);
+        fs.writeFileSync(file, JSON.stringify(manifest));
+        f.metadata.expectedDigest = hash(fs.readFileSync(file));
+      }
+    };
     await expect(publishCandidate(f.options)).rejects.toThrow();
     expect(f.effects).toEqual([]);
   });
-  function existingTag(f, type = "tag", source = head) {
-    const object = "b".repeat(40);
-    f.responses.set(`${f.base}/git/ref/tags/v${version}`, {
-      ref: `refs/tags/v${version}`,
-      object: { type, sha: object },
-    });
-    f.responses.set(`${f.base}/git/tags/${object}`, {
-      sha: object,
-      tag: `v${version}`,
-      object: { type: "commit", sha: source },
-    });
-  }
-  it("uses an existing exact annotated tag without rewriting it", async () => {
-    const f = fixture();
-    existingTag(f);
-    await publishCandidate(f.options);
-    expect(f.effects).toHaveLength(1);
-    expect(f.effects[0].tag).toBe(`v${version}`);
-  });
-  it.each([
-    "release exists",
-    "draft exists",
-    "incomplete releases",
-    "lightweight tag",
-    "wrong tag source",
-    "unknown release",
-    "unknown tag",
-  ])("refuses %s without overwrite", async (fault) => {
-    const f = fixture();
-    if (fault === "release exists")
-      f.responses.set(`${f.base}/releases/tags/v${version}`, {
-        id: 1,
-        assets: [],
-      });
-    if (fault === "draft exists")
-      f.responses.set(`${f.base}/releases?per_page=100`, [
-        { tag_name: `v${version}`, draft: true, assets: [] },
-      ]);
-    if (fault === "incomplete releases")
-      f.responses.set(
-        `${f.base}/releases?per_page=100`,
-        Array.from({ length: 100 }, () => ({ tag_name: "v0.1.0" })),
-      );
-    if (fault === "lightweight tag") existingTag(f, "commit");
-    if (fault === "wrong tag source") existingTag(f, "tag", "c".repeat(40));
-    if (fault === "unknown release")
-      f.responses.set(`${f.base}/releases/tags/v${version}`, Error("HTTP 403"));
-    if (fault === "unknown tag")
-      f.responses.set(`${f.base}/git/ref/tags/v${version}`, Error("HTTP 500"));
-    await expect(publishCandidate(f.options)).rejects.toThrow();
-    expect(f.effects).toEqual([]);
-  });
-  it("does not release or retry after an unknown tag write", async () => {
+  it("never retries an unknown final PATCH or edits an already published release", async () => {
     const f = fixture(),
       api = f.options.api;
     f.options.api = async (endpoint, options = {}) => {
       if (options.body) {
         f.effects.push(endpoint);
-        throw Error("timeout");
+        throw Error("RELEASE_CANDIDATE_GITHUB_TRANSPORT_UNKNOWN");
       }
       return api(endpoint, options);
     };
-    await expect(publishCandidate(f.options)).rejects.toThrow("timeout");
-    expect(f.effects).toEqual([`${f.base}/git/tags`]);
+    await expect(publishCandidate(f.options)).rejects.toThrow(
+      "TRANSPORT_UNKNOWN",
+    );
+    expect(f.effects).toEqual([`${f.base}/releases/300`]);
+  });
+  it("retains an unexpected PATCH response as unknown without retry", async () => {
+    const f = fixture(),
+      api = f.options.api;
+    f.options.api = async (endpoint, options) => {
+      const result = await api(endpoint, options);
+      return options?.body ? { ...result, id: 301 } : result;
+    };
+    await expect(publishCandidate(f.options)).rejects.toThrow(
+      "PUBLICATION_RESPONSE_UNKNOWN",
+    );
+    expect(f.effects).toHaveLength(1);
   });
   it.each([
     "0.2.8",
     "0.2.8-rc.1",
     "0.2.8-owner.beta.01",
     "v0.2.8-owner.beta.1",
-  ])("requires an exact owner-beta version: %s", (bad) => {
+  ])("requires strict owner-beta: %s", (version) => {
     expect(() =>
-      candidateIdentity({ ...document, version: bad }, head, 100, 1),
+      candidateIdentity({ ...document, version }, head, 100, 1),
     ).toThrow();
+  });
+});
+
+describe("bounded private asset transport (no network)", () => {
+  it.each([
+    "release-assets.githubusercontent.com",
+    "objects.githubusercontent.com",
+  ])("follows one HTTPS redirect to %s without authorization", async (host) => {
+    const f = fixture(),
+      calls = [];
+    await downloadDraftAssets(
+      f.assets,
+      f.directory,
+      f.metadata.identity,
+      "synthetic-token",
+      async (url, options) => {
+        calls.push({ url, options });
+        if (url.startsWith("https://api.github.com/"))
+          return new Response(null, {
+            status: 302,
+            headers: {
+              location: `https://${host}/asset?synthetic-signature=ignored`,
+            },
+          });
+        return new Response(
+          f.files.get(
+            [...f.files.keys()].sort((a, b) => a.localeCompare(b))[
+              Math.floor((calls.length - 1) / 2)
+            ],
+          ),
+        );
+      },
+    );
+    expect(calls).toHaveLength(6);
+    for (const [index, call] of calls.entries())
+      expect(call.options.headers).toEqual(
+        index % 2
+          ? {}
+          : {
+              Authorization: "Bearer synthetic-token",
+              Accept: "application/octet-stream",
+              "X-GitHub-Api-Version": "2022-11-28",
+            },
+      );
+  });
+  it.each([
+    "http://release-assets.githubusercontent.com/a",
+    "https://evil.invalid/a",
+    "https://release-assets.githubusercontent.com.evil.invalid/a",
+    "https://user:password@objects.githubusercontent.com/a",
+    "https://objects.githubusercontent.com:8443/a",
+    "https://objects.githubusercontent.com:443/a",
+    " https://objects.githubusercontent.com:443/a",
+    "https://objects.githubusercontent.com/a#secret",
+    "/relative",
+  ])("rejects unsafe redirects without forwarding: %s", async (location) => {
+    const f = fixture(),
+      request = vi.fn(
+        async () => new Response(null, { status: 302, headers: { location } }),
+      );
+    await expect(
+      downloadDraftAssets(
+        f.assets,
+        f.directory,
+        f.metadata.identity,
+        "synthetic-token",
+        request,
+      ),
+    ).rejects.toThrow("REDIRECT_INVALID");
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    "second redirect",
+    "denied",
+    "truncated",
+    "oversized",
+    "declared size",
+    "compressed",
+    "transport",
+    "body failure",
+  ])("refuses %s with bounded local output and no retry", async (fault) => {
+    const f = fixture(),
+      calls = [];
+    const first = [...f.assets].sort((a, b) => a.name.localeCompare(b.name))[0];
+    const request = async (url, options) => {
+      calls.push({ url, options });
+      if (fault === "transport")
+        throw Error("private url and token must not escape");
+      if (fault === "second redirect")
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://objects.githubusercontent.com/a" },
+        });
+      if (fault === "denied")
+        return new Response("private error", { status: 403 });
+      if (fault === "truncated")
+        return new Response(new Uint8Array(first.size - 1));
+      if (fault === "oversized")
+        return new Response(new Uint8Array(first.size + 100000));
+      if (fault === "declared size")
+        return new Response(new Uint8Array(first.size), {
+          headers: { "content-length": String(first.size + 1) },
+        });
+      if (fault === "compressed")
+        return new Response(new Uint8Array(first.size), {
+          headers: { "content-encoding": "gzip" },
+        });
+      return new Response(
+        new ReadableStream({
+          type: "bytes",
+          pull(controller) {
+            controller.error(Error("private body failure"));
+          },
+        }),
+      );
+    };
+    await expect(
+      downloadDraftAssets(
+        f.assets,
+        f.directory,
+        f.metadata.identity,
+        "synthetic-token",
+        request,
+      ),
+    ).rejects.toThrow(/^RELEASE_CANDIDATE_[A-Z0-9_]+$/u);
+    expect(calls).toHaveLength(fault === "second redirect" ? 2 : 1);
+    expect(
+      fs.statSync(path.join(f.directory, first.name)).size,
+    ).toBeLessThanOrEqual(first.size);
+  });
+  it("reads at most the metadata size plus one sentinel byte from oversized streams", async () => {
+    const f = fixture();
+    const first = [...f.assets].sort((a, b) => a.name.localeCompare(b.name))[0];
+    let supplied = 0;
+    await expect(
+      downloadDraftAssets(
+        f.assets,
+        f.directory,
+        f.metadata.identity,
+        "synthetic-token",
+        async () =>
+          new Response(
+            new ReadableStream({
+              type: "bytes",
+              pull(controller) {
+                const request = controller.byobRequest;
+                supplied += request.view.byteLength;
+                request.view.fill(1);
+                request.respond(request.view.byteLength);
+              },
+            }),
+          ),
+      ),
+    ).rejects.toThrow("ASSET_SIZE_MISMATCH");
+    expect(supplied).toBe(first.size + 1);
+    expect(fs.statSync(path.join(f.directory, first.name)).size).toBe(0);
+  });
+  it("rejects a substituted output directory before another asset can be opened", async () => {
+    const f = fixture();
+    const target = path.join(f.root, "foreign");
+    fs.mkdirSync(target);
+    const request = vi.fn(async (...args) => {
+      fs.renameSync(f.directory, path.join(f.root, "retained"));
+      fs.symlinkSync(target, f.directory);
+      return f.fetchImpl(...args);
+    });
+    await expect(
+      downloadDraftAssets(
+        f.assets,
+        f.directory,
+        f.metadata.identity,
+        "synthetic-token",
+        request,
+      ),
+    ).rejects.toThrow("DIRECTORY_CHANGED");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(fs.readdirSync(target)).toEqual([]);
+  });
+  it("aborts a stalled byte stream on a finite deadline", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const pending = downloadDraftAssets(
+      f.assets,
+      f.directory,
+      f.metadata.identity,
+      "synthetic-token",
+      async (_url, { signal }) =>
+        new Response(
+          new ReadableStream({
+            type: "bytes",
+            start(controller) {
+              signal.addEventListener(
+                "abort",
+                () => controller.error(Error("aborted")),
+                { once: true },
+              );
+            },
+          }),
+        ),
+    );
+    const result = expect(pending).rejects.toThrow("ASSET_TRANSPORT_UNKNOWN");
+    await vi.advanceTimersByTimeAsync(120001);
+    await result;
+  });
+  it.each(["existing", "symlink directory", "symlink parent"])(
+    "refuses %s without network or overwrite",
+    async (fault) => {
+      const f = fixture(),
+        request = vi.fn();
+      let directory = f.directory;
+      if (fault === "existing") fs.mkdirSync(directory);
+      if (fault === "symlink directory") fs.symlinkSync(f.root, directory);
+      if (fault === "symlink parent") {
+        const link = path.join(f.root, "link");
+        fs.symlinkSync(f.root, link);
+        directory = path.join(link, "new");
+      }
+      await expect(
+        downloadDraftAssets(
+          f.assets,
+          directory,
+          f.metadata.identity,
+          "synthetic-token",
+          request,
+        ),
+      ).rejects.toThrow();
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+  it("creates only ordinary exclusive private files and does not follow a substituted symlink", async () => {
+    const f = fixture(),
+      request = f.fetchImpl;
+    const target = path.join(f.root, "preserve");
+    fs.writeFileSync(target, "unchanged");
+    const sorted = [...f.assets].sort((a, b) => a.name.localeCompare(b.name));
+    let calls = 0;
+    await expect(
+      downloadDraftAssets(
+        f.assets,
+        f.directory,
+        f.metadata.identity,
+        "synthetic-token",
+        async (...args) => {
+          calls++;
+          if (calls === 1)
+            fs.symlinkSync(target, path.join(f.directory, sorted[1].name));
+          return request(...args);
+        },
+      ),
+    ).rejects.toThrow();
+    expect(calls).toBe(1);
+    expect(fs.readFileSync(target, "utf8")).toBe("unchanged");
+  });
+});
+
+describe("fixed GitHub API transport", () => {
+  it("allows only exact draft publication PATCH and keeps auth on the API host", async () => {
+    const request = vi.fn(async () => new Response("{}"));
+    const api = githubApi("synthetic-token", request);
+    await api("/repos/legrch/farol/releases/300", {
+      method: "PATCH",
+      body: { draft: false, prerelease: true, make_latest: "false" },
+    });
+    expect(request.mock.calls[0][0]).toBe(
+      "https://api.github.com/repos/legrch/farol/releases/300",
+    );
+    expect(request.mock.calls[0][1].redirect).toBe("error");
+    await expect(api("https://evil.invalid")).rejects.toThrow(
+      "ENDPOINT_INVALID",
+    );
+    await expect(
+      api("/repos/legrch/farol/releases", { method: "POST", body: {} }),
+    ).rejects.toThrow("METHOD_INVALID");
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+  it.each([401, 403, 404, 500])(
+    "treats HTTP %s as terminal except explicit absence",
+    async (status) => {
+      const request = vi.fn(
+        async () => new Response("private body", { status }),
+      );
+      const api = githubApi("synthetic-token", request);
+      await expect(api("/repos/legrch/farol/releases/300")).rejects.toThrow(
+        `GITHUB_HTTP_${status}`,
+      );
+      expect(request).toHaveBeenCalledTimes(1);
+    },
+  );
+  it("accepts only HTTP 404 as absence", async () => {
+    const api = githubApi(
+      "synthetic-token",
+      async () => new Response(null, { status: 404 }),
+    );
+    expect(
+      await api("/repos/legrch/farol/releases/tags/v1", { absent: true }),
+    ).toBeNull();
+  });
+  it.each(["network", "json"])("redacts private %s failures", async (fault) => {
+    const request = vi.fn(async () => {
+      if (fault === "network") throw Error("private-token-and-url");
+      return new Response("private-body");
+    });
+    await expect(
+      githubApi("synthetic-token", request)("/repos/legrch/farol/releases/300"),
+    ).rejects.toThrow(/^RELEASE_CANDIDATE_GITHUB_[A-Z_]+$/u);
+    expect(request).toHaveBeenCalledTimes(1);
   });
 });

@@ -238,18 +238,9 @@ describe("two-phase release workflow", () => {
     ])
       expect(commands).toContain(gate);
     expect(commands).not.toMatch(/gh release|git push/u);
-    const upload = release.jobs.build.steps.find((step) =>
-      step.uses?.startsWith("actions/upload-artifact@"),
+    expect(JSON.stringify(release)).not.toMatch(
+      /actions\/(?:upload|download)-artifact|actions\/cache/u,
     );
-    expect(upload.with.name).toBe(
-      "${{ steps.candidate.outputs.artifactName }}",
-    );
-    expect(upload.with.path.trim().split("\n")).toEqual([
-      "_output/release/${{ steps.candidate.outputs.tag }}/Farol-${{ steps.candidate.outputs.version }}-darwin-arm64.zip",
-      "_output/release/${{ steps.candidate.outputs.tag }}/farol-release.json",
-      "_output/release/${{ steps.candidate.outputs.tag }}/SHA256SUMS",
-    ]);
-    expect(upload.with["if-no-files-found"]).toBe("error");
   });
   it("permits publishing only by a separate explicit dispatch, without rebuilding", () => {
     const job = release.jobs.publish;
@@ -261,17 +252,12 @@ describe("two-phase release workflow", () => {
     expect(release.permissions).toEqual({ contents: "read" });
     expect(release.jobs.build.permissions).toBeUndefined();
     const commands = job.steps.map((step) => step.run ?? "").filter(Boolean);
-    expect(commands).toEqual([
-      "node tooling/release-candidate.mjs metadata",
-      "node tooling/release-candidate.mjs publish",
-    ]);
-    const download = job.steps.find((step) =>
-      step.uses?.startsWith("actions/download-artifact@"),
+    expect(commands).toEqual(["node tooling/release-candidate.mjs publish"]);
+    expect(release.on.workflow_dispatch.inputs.draft_release_id.type).toBe(
+      "string",
     );
-    expect(download.with["artifact-ids"]).toBe(
-      "${{ steps.candidate.outputs.artifactId }}",
+    expect(JSON.stringify(job)).not.toMatch(
+      /download-artifact|task package|release create/u,
     );
-    expect(download.with["run-id"]).toBe("${{ inputs.candidate_run_id }}");
-    expect(download.with.name).toBeUndefined();
   });
 });

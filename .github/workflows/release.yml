@@ -6,16 +6,19 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: Prepare build-only assets, or publish previously qualified exact assets
+        description: Run build-only checks, or publish an exact qualified private draft
         required: true
         type: choice
         options: [prepare, publish]
         default: prepare
       candidate_run_id:
-        description: Prior successful build-only run ID (publish only)
+        description: Prior successful tag build-only run ID (publish only)
+        type: string
+      draft_release_id:
+        description: Existing private draft release ID containing qualified local assets (publish only)
         type: string
       manifest_sha256:
-        description: SHA256 of the qualified downloaded farol-release.json (publish only)
+        description: SHA256 of the native-qualified local farol-release.json (publish only)
         type: string
 
 permissions:
@@ -67,15 +70,8 @@ jobs:
           mkdir -p _output/release
           /usr/bin/python3 -I tooling/prepare-release-archive.py "$(git rev-parse HEAD)" "$GITHUB_WORKSPACE/_output/release/$RELEASE_TAG"
           node tooling/verify-release-assets.mjs "$GITHUB_WORKSPACE/_output/release/$RELEASE_TAG"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ${{ steps.candidate.outputs.artifactName }}
-          if-no-files-found: error
-          retention-days: 7
-          path: |
-            _output/release/${{ steps.candidate.outputs.tag }}/Farol-${{ steps.candidate.outputs.version }}-darwin-arm64.zip
-            _output/release/${{ steps.candidate.outputs.tag }}/farol-release.json
-            _output/release/${{ steps.candidate.outputs.tag }}/SHA256SUMS
+      # Hosted preparation stays on this runner. Public Actions artifacts are
+      # readable before owner qualification; never upload binaries or diagnostics.
 
   publish:
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'publish'
@@ -92,23 +88,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24.20.0
-      - name: Bind the previous successful build-only run and immutable artifact
-        id: candidate
+      - name: Verify the tag build and qualified private draft, then publish once
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node tooling/release-candidate.mjs metadata
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          artifact-ids: ${{ steps.candidate.outputs.artifactId }}
-          run-id: ${{ inputs.candidate_run_id }}
-          github-token: ${{ github.token }}
-          path: _output/public-release
-          merge-multiple: true
-      - name: Verify exact bytes and no-overwrite preconditions, then publish once
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CANDIDATE_ARTIFACT_ID: ${{ steps.candidate.outputs.artifactId }}
-        # Re-fetch metadata, verify the supplied manifest SHA256, then invoke the
-        # existing verifyReleaseAssets before creating an annotated tag/release.
-        # No CI, package, archive preparation or rebuild in the publisher.
+        # Read prior run/job metadata with actions:read; only this job can PATCH
+        # the exact private draft. No rebuild, tag/release creation or asset upload.
         run: node tooling/release-candidate.mjs publish
