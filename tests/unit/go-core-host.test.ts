@@ -372,6 +372,7 @@ function transport(fault?: Fault) {
       "core.status",
       "computer.authority.deactivate",
       "computer.authority.publish",
+      "computer.settings.inspect",
       "computer.settings.list",
       "computer.settings.search",
       "computer.settings.snapshot",
