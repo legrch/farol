@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -384,7 +385,9 @@ afterEach(() => {
 });
 
 function proofFixture() {
-  const root = fs.mkdtempSync("/private/tmp/farol-e2e-home-");
+  const root = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "farol-e2e-home-")),
+  );
   temporaryRoots.push(root);
   fs.chmodSync(root, 0o700);
   const home = path.join(root, "home");
