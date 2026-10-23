@@ -24,7 +24,7 @@ export const operationCodesByOutcome = {
     "approved",
     "authenticated",
     "available",
-    "backend_child_closed",
+    "backend_requested_clean_exit",
     "closed_predecessor_ready",
     "completed",
     "confirmed",
@@ -1866,6 +1866,7 @@ export const operationCodesByOutcome = {
     "write-failed",
   ],
   unknown: [
+    "backend_child_closed",
     "backend_unclassified_failure",
     "client_closed",
     "crossed_response_context",
