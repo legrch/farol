@@ -36,6 +36,18 @@ falls back to the primary display. Plain `task dev` keeps its existing behavior.
 viewport requirement; use `--display=secondary` for ordinary Dev on smaller Sidecar
 work areas. Do not combine ordinary and visible-test display options.
 
+To start a clean first-run profile without changing the saved daily Dev profile:
+
+```sh
+task dev:clean
+task dev:clean -- --display=secondary
+```
+
+Each `task dev:clean` launch creates a new isolated profile. It keeps the same Dev
+build and launch behavior, and accepts the ordinary `--display=secondary`
+placement option. The lower-level `--fresh-review-profile` flag remains available
+on `task dev` for cases that need to choose the profile explicitly.
+
 `task dev` uses the ordinary saved Farol Dev profile and requires the Go backend.
 Place the separately approved local [Go input declaration](#declared-go-backend-inputs)
 at `_output/go-build-inputs.json` (ignored by Git), or select an explicit absolute

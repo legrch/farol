@@ -83,6 +83,11 @@ tasks:
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/dev.mjs {{.CLI_ARGS}}
 
+  dev:clean:
+    desc: Start Dev with a new isolated first-run profile; preserve daily Dev
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/dev.mjs --fresh-review-profile {{.CLI_ARGS}}
+
   package:
     desc: Build, assemble, and verify the explicit unsigned Farol app
     cmds:
