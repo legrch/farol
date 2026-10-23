@@ -283,7 +283,8 @@ private physical `home/Library/Application Support` directories. No home, slot,
 operation, report destination, launcher or retry option can be supplied.
 
 The actual source app is copied into the new home's `Applications/Farol.app`;
-the actual target is copied into one fresh operation's `staged.app`. Internal
+the actual target is copied into one fresh operation's `staged.app` only after
+its slot binding has been confirmed. Internal
 symlinks and modes are preserved and complete tree digests are reverified.
 Hidden, unfocused source Electron starts directly with the proven E2E home and
 signed-out loopback fixture. Native home/userData/sessionData/app paths, actual
@@ -295,7 +296,11 @@ witness.
 
 The packaged target Go binary publishes the actual slot binding through
 `publish-installed-slot-binding --build-id <compiled-build-id>`, with fd3 bytes
-and the pinned operation-directory descriptor on fd4. It then runs
+and the pinned operation-directory descriptor on fd4. First publication must see
+the fresh empty operation directory. Only after confirmed publication does the
+controller copy and verify `staged.app`; a refused or unknown publisher cannot
+stage or advance to a live helper. The native Go publisher's guard stays strict.
+It then runs
 `run-live-release-helper` with the exact live request on fd3 and one bounded,
 strictly correlated ACK on fd4. Only `waiting_for_exit` permits one actual
 `app.quit()` request. The original child must close with code 0, a fresh parsed

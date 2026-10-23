@@ -29,6 +29,7 @@ import {
   completeHandoff,
   slotBinding,
   copyApp,
+  publishAndStage,
   readBounded,
   recheckHome,
   LIMITS,
@@ -868,3 +869,62 @@ it("pins request correlation before asynchronous handoff", async () => {
   expect((await helper.completed).status).toBe("passed");
   expect(calls).toHaveLength(1);
 });
+
+// Real temporary directories and copy owner; the publisher port models the
+// native empty-directory guard exercised by the Go slotbinding test below.
+it("publishes the empty operation before copying any staged app bytes", async () => {
+  const f = await pairFixture();
+  const operation = path.join(await temporary(), "operation");
+  await fs.mkdir(operation, { mode: 0o700 });
+  const target = {
+    appPath: f.target.appPath,
+    artifactSha256: f.target.artifact.artifactSha256,
+  };
+  const binding = slotBinding(request()),
+    calls = [];
+  await publishAndStage(target, operation, request(), {}, [], {
+    publish: async () => {
+      expect(await fs.readdir(operation)).toEqual([]);
+      calls.push("published");
+      await fs.writeFile(path.join(operation, "slot-binding.json"), binding, {
+        flag: "wx",
+        mode: 0o600,
+      });
+    },
+    copy: async (...args) => {
+      expect(
+        await fs.readFile(path.join(operation, "slot-binding.json")),
+      ).toEqual(binding);
+      calls.push("staged");
+      await copyApp(...args);
+    },
+  });
+  expect(calls).toEqual(["published", "staged"]);
+  expect(await treeDigest(path.join(operation, "staged.app"))).toBe(
+    target.artifactSha256,
+  );
+});
+it.each(["nonempty", "refused", "unknown"])(
+  "never stages or advances after %s publication",
+  async (kind) => {
+    const operation = path.join(await temporary(), "operation");
+    await fs.mkdir(operation, { mode: 0o700 });
+    if (kind === "nonempty") await fs.mkdir(path.join(operation, "staged.app"));
+    const copy = vi.fn(),
+      nextNativeEffect = vi.fn();
+    await expect(
+      publishAndStage({}, operation, request(), {}, [], {
+        publish: async () => {
+          if ((await fs.readdir(operation)).length !== 0)
+            throw Error("native empty-directory refusal");
+          throw Error(kind);
+        },
+        copy,
+      }).then(nextNativeEffect),
+    ).rejects.toThrow(
+      kind === "nonempty" ? "native empty-directory refusal" : kind,
+    );
+    expect(copy).not.toHaveBeenCalled();
+    expect(nextNativeEffect).not.toHaveBeenCalled();
+  },
+);

@@ -462,3 +462,40 @@ func TestReadOpenReplacementCannotFollowOrBlock(t *testing.T) {
 		})
 	}
 }
+
+// The desktop update witness must publish first: its staged directory would
+// otherwise deterministically trip the real native publisher's nonempty guard.
+func TestFirstPublicationMustPrecedeStaging(t *testing.T) {
+	for _, stageFirst := range []bool{true, false} {
+		name := "publication-before-stage"
+		if stageFirst {
+			name = "stage-before-publication"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := setup(t)
+			staged := filepath.Join(f.dir, "staged.app")
+			if stageFirst {
+				if err := os.Mkdir(staged, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				decision(t, f, context.Background(), port.SlotBindingRefused)
+				if _, err := os.Lstat(f.file()); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("published into populated operation", err)
+				}
+				if _, err := os.Stat(staged); err != nil {
+					t.Fatal("removed refused caller staging", err)
+				}
+				return
+			}
+			decision(t, f, context.Background(), port.SlotBindingConfirmed)
+			if err := os.Mkdir(staged, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := os.ReadFile(f.file()); err != nil || !bytes.Equal(got, f.data) {
+				t.Fatal("staging changed binding", err)
+			}
+			// A previously confirmed identical binding stays valid after later staging.
+			decision(t, f, context.Background(), port.SlotBindingConfirmed)
+		})
+	}
+}
