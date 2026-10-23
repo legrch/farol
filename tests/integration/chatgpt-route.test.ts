@@ -7889,3 +7889,64 @@ describe("confirmed update browser closure (native surfaces mocked)", () => {
     });
   });
 });
+
+// In-memory Electron surface and layout fixtures, never live provider/native proof.
+describe("retained home presentation", () => {
+  it.each(["loaded", "failed"] as const)(
+    "reveals the same %s signed-out document without a reload or a Send",
+    async (load) => {
+      const surface = embeddedSurface();
+      const executeJavaScript = vi.fn(async () => ({
+        composerVisible: false,
+        signInVisible: true,
+      }));
+      Object.assign(surface.webContents, { executeJavaScript });
+      const surfaceFactory = vi.fn(() => surface);
+      const changes: string[] = [];
+      const candidate = new ChatGptRoute({
+        homeUrl: "https://chatgpt.com/",
+        initialUrl: "https://chatgpt.com/",
+        e2eOrigin: null,
+        parent: () => null,
+        surfaceFactory: surfaceFactory as unknown as ChatGptRouteSurfaceFactory,
+        onLoadStateChanged: (state) => changes.push(state),
+      });
+      expect(await candidate.open()).toEqual({ status: "opened" });
+      expect(await candidate.observe()).toMatchObject({ state: "signed_out" });
+      if (load === "failed")
+        surface.webContents.emit(
+          "did-fail-load",
+          {},
+          -102,
+          "fixture error",
+          "https://chatgpt.com/",
+          true,
+        );
+      surface.hide();
+      const reads = executeJavaScript.mock.calls.length;
+      const before = changes.slice();
+      for (let entry = 0; entry < 2; entry++) {
+        expect(await candidate.open()).toEqual({
+          status: load === "loaded" ? "opened" : "unreachable",
+        });
+        expect(Reflect.get(candidate, "load")).toBe(load);
+      }
+      expect(surfaceFactory).toHaveBeenCalledTimes(1);
+      expect(surface.loadURL).toHaveBeenCalledExactlyOnceWith(
+        "https://chatgpt.com/",
+      );
+      expect(surface.destroy).not.toHaveBeenCalled();
+      expect(surface.reveal).toHaveBeenCalledTimes(3);
+      expect(executeJavaScript).toHaveBeenCalledTimes(reads);
+      expect(changes).toEqual(before);
+      if (load === "failed") {
+        expect(await candidate.observeSignInStatus()).toEqual({
+          state: "unknown",
+          binding: null,
+        });
+        expect(executeJavaScript).toHaveBeenCalledTimes(reads);
+      }
+      candidate.dispose();
+    },
+  );
+});

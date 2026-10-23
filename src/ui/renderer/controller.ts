@@ -1,3 +1,4 @@
+import { browserPresentationAllowed } from "./command-eligibility";
 import { defaultSidebarPreference } from "../../../apps/desktop/renderer/sidebar-presentation";
 import { OperationsSnapshotSchema } from "../../../apps/desktop/renderer/operations-contract";
 import {
@@ -1213,7 +1214,12 @@ export class WindowController implements RendererFacade {
     run: () => Promise<Intent>,
     setupOperationId?: string,
     retainSettlement = false,
+    presentationOnly = false,
   ): Promise<Intent> {
+    const admitted = () =>
+      presentationOnly
+        ? browserPresentationAllowed(this.state)
+        : this.state.status === "current";
     // Only a digest survives an uncertain result; never retain credentials or
     // private command bodies in the intention map.
     const fingerprint = async (): Promise<string> => {
@@ -1244,7 +1250,7 @@ export class WindowController implements RendererFacade {
           state: "refused",
           code: "COMMAND_BINDING_UNAVAILABLE",
         }));
-    if (this.disposed || this.state.status !== "current") {
+    if (this.disposed || !admitted()) {
       const result: Intent = {
         id: key,
         state: "refused",
@@ -1296,7 +1302,7 @@ export class WindowController implements RendererFacade {
       }
       try {
         result =
-          this.disposed || this.state.status !== "current"
+          this.disposed || !admitted()
             ? { id: key, state: "refused", code: "CURRENT_STATE_REQUIRED" }
             : await run();
       } catch {
@@ -1333,10 +1339,8 @@ export class WindowController implements RendererFacade {
         state: "refused",
         code: "SIGN_IN_OBSERVATION_WINDOW_OWNED",
       });
-    // Presentation has one window-owned intention across clicks and remounts,
-    // including known refusals. A new label must not release that latch.
     if (command.kind === "chatgpt.present-browser")
-      intention = "settings:chatgpt.present-browser:";
+      return this.presentBrowser();
     const requestedDestination = this.state.destination;
     const signInCheck =
       command.kind === "chatgpt.verify" ? this.state.signInObservation : null;
@@ -1349,28 +1353,6 @@ export class WindowController implements RendererFacade {
       command,
       async () => {
         const before = this.state;
-        if (command.kind === "chatgpt.present-browser") {
-          // Recheck after the digest await; navigation or admission may have
-          // changed while the synchronous pending latch was being published.
-          if (
-            before.runtime !== "ready" ||
-            before.update.phase === "applying" ||
-            before.destination.area !== "chatgpt"
-          )
-            return {
-              id: intention,
-              state: "refused",
-              code: "CHATGPT_PRESENTATION_UNAVAILABLE",
-            };
-          if (
-            before.route === "loaded" ||
-            before.tasks.tasks.length > 0 ||
-            before.destination.taskId !== "" ||
-            before.intents["settings:chatgpt.open-browser:"] ||
-            before.intents["settings:chatgpt.open-sign-in:"]
-          )
-            return { id: intention, state: "applied", code: null };
-        }
         if (
           command.kind === "connector.save-and-connect" &&
           command.buildId !== before.buildId
@@ -1813,7 +1795,6 @@ export class WindowController implements RendererFacade {
       command.kind === "connector.save-and-connect"
         ? command.operationId
         : undefined,
-      command.kind === "chatgpt.present-browser",
     );
   }
   private sameEditOwner(
@@ -2378,23 +2359,72 @@ export class WindowController implements RendererFacade {
       }
     })();
   }
+  private presentBrowser(): Promise<Intent> {
+    const intention = "settings:chatgpt.present-browser:";
+    return this.dispatch(
+      intention,
+      { kind: "chatgpt.present-browser" },
+      async () => {
+        const state = this.state;
+        if (state.destination.area !== "chatgpt")
+          return {
+            id: intention,
+            state: "refused",
+            code: "CHATGPT_PRESENTATION_UNAVAILABLE",
+          };
+        if (state.route === "loaded" || state.destination.taskId !== "")
+          return { id: intention, state: "applied", code: null };
+        // Own unresolved/failed opens retain their evidence and latch. An old
+        // applied sign-in intent is no reason to hide the retained document.
+        if (
+          ["chatgpt.open-browser", "chatgpt.open-sign-in"].some((kind) => {
+            const intent = state.intents[`settings:${kind}:`];
+            return intent && intent.state !== "applied";
+          })
+        )
+          return {
+            id: intention,
+            state: "refused",
+            code: "CHATGPT_PRESENTATION_UNAVAILABLE",
+          };
+        const parsed = ProductConfigurationResultSchema.safeParse(
+          await this.api.configure({ kind: "chatgpt.present-browser" }),
+        );
+        if (!parsed.success)
+          return {
+            id: intention,
+            state: "unknown",
+            code: "CONFIGURATION_OUTCOME_UNKNOWN",
+          };
+        // Transport compatibility only: do not adopt settings, readiness or
+        // authority from a browser presentation acknowledgement.
+        return {
+          id: intention,
+          state: parsed.data.ok ? "applied" : "refused",
+          code: parsed.data.ok ? null : parsed.data.error,
+        };
+      },
+      undefined,
+      true,
+      true,
+    );
+  }
   private presentBrowserOnNavigation(): void {
     const state = this.state;
     if (
       this.disposed ||
       this.booting ||
-      state.status !== "current" ||
-      state.runtime !== "ready" ||
-      state.update.phase === "applying" ||
+      !browserPresentationAllowed(state) ||
       state.destination.area !== "chatgpt" ||
       (state.destination.connectionCheckReturn === true &&
         state.intents["settings:connector.verify-app:"]?.state === "pending") ||
       state.route === "loaded" ||
-      state.tasks.tasks.length > 0 ||
       state.destination.taskId !== "" ||
       state.intents["settings:chatgpt.present-browser:"] ||
-      state.intents["settings:chatgpt.open-browser:"] ||
-      state.intents["settings:chatgpt.open-sign-in:"]
+      ["chatgpt.open-browser", "chatgpt.open-sign-in"].some((kind) => {
+        const intent = state.intents[`settings:${kind}:`];
+        return intent && intent.state !== "applied";
+      })
     )
       return;
     // Loading is not absence: only the host may decide whether open() needs
@@ -2465,7 +2495,11 @@ export class WindowController implements RendererFacade {
           ? "settings"
           : "activity",
       state.destination.taskId,
-      state.status !== "current",
+      state.status !== "current" &&
+        !(
+          state.destination.area === "chatgpt" &&
+          browserPresentationAllowed(state)
+        ),
       false,
       sidebar,
       state.overlay === "none"

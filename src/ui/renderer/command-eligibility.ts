@@ -95,12 +95,32 @@ export function dependencyFences(
   return { pending, unknown };
 }
 
+// A known shell can present its isolated browser without Computer or Settings
+// readiness. This grants no configuration, task, Send or sign-in authority.
+export function browserPresentationAllowed(snapshot: WindowSnapshot): boolean {
+  return (
+    snapshot.buildId !== null &&
+    snapshot.status !== "starting" &&
+    snapshot.status !== "incompatible" &&
+    snapshot.update.phase !== "applying"
+  );
+}
+
 export function commandAllowed(
   snapshot: WindowSnapshot,
   kind: Kind,
   workspaceId?: string,
   local: readonly Intent[] = [],
 ) {
+  if (kind === "chatgpt.present-browser")
+    return (
+      browserPresentationAllowed(snapshot) &&
+      ![snapshot.intents["settings:chatgpt.present-browser:"], ...local].some(
+        (intent) =>
+          intent?.id === "settings:chatgpt.present-browser:" &&
+          (intent.state === "pending" || intent.state === "unknown"),
+      )
+    );
   if (
     !kinds.has(kind) ||
     snapshot.status !== "current" ||

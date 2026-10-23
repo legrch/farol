@@ -1135,6 +1135,9 @@ export function Shell() {
           ) : (
             <strong>{title(state, activityFilter)}</strong>
           )}
+          {destination.area === "chatgpt" && state.route === "failed" && (
+            <small role="status">ChatGPT page load failed</small>
+          )}
           {state.environment === "dev" && <small>Development</small>}
           {state.environment === "owner-preview" && <small>Preview</small>}
         </div>

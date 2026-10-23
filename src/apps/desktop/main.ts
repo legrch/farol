@@ -1298,7 +1298,6 @@ const managedChatGptRoutes = new Set<ChatGptRoute>();
 const SIGN_IN_SURFACE_ID = "farol-sign-in";
 let browserHomeSurfaceOpen = false;
 let checkFeedbackVisible = false;
-let browserHomeLoadState: "loading" | "loaded" | "failed" = "loading";
 const liveTaskConversationUrls = new Map<string, string | null>();
 let liveTaskStore: PrivateLiveTaskStore | null = null;
 let productAgentStore: PrivateProductAgentStore | null = null;
@@ -6538,6 +6537,10 @@ async function configureUnfencedProduct(
   const parsed = ProductConfigurationCommandSchema.safeParse(value);
   if (!parsed.success) return configurationFailure("SETTINGS_INPUT_INVALID");
   const command = parsed.data;
+  // Browser presentation neither writes nor publishes configuration evidence.
+  // Keep request/quit/update admission, without a Settings reply publication.
+  if (command.kind === "chatgpt.present-browser")
+    return configureAdmittedProduct(command);
   const admission = configurationAdmission(command.kind, {
     agentActive: codexAgentOperationActive(),
     connectorRunning:
@@ -8386,19 +8389,16 @@ async function configureAdmittedProduct(
     case "chatgpt.present-browser": {
       if (!embeddedBrowserEnabled() || !chatGptRoute)
         return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
-      if (chatGptTaskAdmission || connectorTaskAdmission)
+      applyLayout();
+      if (chatGptTaskAdmission)
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
       // Task and sign-in surfaces already have their own retained identities.
       // Navigation must reveal them, never replace them with the home route.
-      if (
-        chatGptSignInOpenGeneration !== null ||
-        productTasksState().tasks.length
-      )
+      if (chatGptSignInOpenGeneration !== null || selectedTaskId !== "")
         return ProductConfigurationResultSchema.parse({
           ok: true,
           snapshot: configuration.snapshot(),
         });
-      applyLayout();
       let opened: Awaited<ReturnType<ChatGptRoute["open"]>>;
       try {
         // open() joins an in-flight open or retains the existing document. It
@@ -8407,6 +8407,9 @@ async function configureAdmittedProduct(
       } catch {
         opened = { status: "unreachable" };
       }
+      // Route failure may conceal its page. Reapply current shell ownership so
+      // a retained failed home document remains accessible without retrying it.
+      applyLayout();
       if (opened.status !== "opened")
         return configurationFailure("CHATGPT_PAGE_UNREACHABLE");
       return ProductConfigurationResultSchema.parse({
@@ -11038,9 +11041,8 @@ function currentSurfaceLayout() {
     overlay: shellOverlay,
     section,
     setupOpen,
-    runtimeReady: showBrowserHome
-      ? browserHomeLoadState !== "failed"
-      : selectedViewKind === "chatgpt" || runtimeState === "ready",
+    runtimeReady: runtimeState === "ready",
+    browserDocumentPresent: selectedViewKind === "chatgpt",
     selectedTaskPresent: showBrowserHome || taskViews.has(selectedTaskId),
     browserChromeVisible:
       showBrowserHome || productTasksState().tasks.length > 0,
@@ -11058,7 +11060,7 @@ function applyLayout(): void {
   const layout = currentSurfaceLayout();
   if (!layout) return;
   const visibleTaskId =
-    !installedUpdateAdmission && layout.pageVisible
+    !quitInProgress && !installedUpdateAdmission && layout.pageVisible
       ? layout.showBrowserHome
         ? SIGN_IN_SURFACE_ID
         : selectedTaskId
@@ -12373,7 +12375,6 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       if (!embeddedBrowserEnabled()) return;
       // Retained document readiness survives concealment and sign-in. Current
       // layout alone decides whether its native surface is visible or focused.
-      browserHomeLoadState = state;
       applyLayout();
       window?.webContents.send(channels.browserRouteState, { state });
     },
