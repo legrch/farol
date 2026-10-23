@@ -6165,6 +6165,39 @@ function codexAgentCheckWorkspace(
   );
 }
 
+async function inspectOwnerWorkspace(
+  generation: number,
+  workspace: Pick<ApprovedProductWorkspace, "workspaceId" | "root">,
+  identity: WorkspaceRootIdentity,
+  diagnosticAction: string,
+): Promise<{ ok: true } | { ok: false; code: string }> {
+  if (!desktopGoCore) return { ok: false, code: "WORKSPACE_READ_FAILED" };
+  try {
+    const result = await desktopGoCore.inspectSettingsWorkspace(
+      generation,
+      workspace.workspaceId,
+      ".",
+    );
+    const current = configuration?.snapshot();
+    if (
+      result.root.path !== workspace.root ||
+      result.root.device !== identity.device ||
+      result.root.inode !== identity.inode ||
+      current?.status !== "ready" ||
+      current.settings.computer.generation !== generation
+    )
+      return { ok: false, code: "WORKSPACE_ROOT_CHANGED" };
+    return { ok: true };
+  } catch (error) {
+    return refuseComputerSettingsList(
+      error,
+      console.warn,
+      diagnosticAction,
+      "go-settings-inspect",
+    );
+  }
+}
+
 async function listOwnerWorkspace(
   generation: number,
   workspace: Pick<ApprovedProductWorkspace, "workspaceId" | "root">,
@@ -9516,11 +9549,10 @@ async function configureAdmittedProduct(
         return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
       // Recheck only the already approved root through the same descriptor.
       // No child names/content are returned and no selected-folder binding changes.
-      const checked = await listOwnerWorkspace(
+      const checked = await inspectOwnerWorkspace(
         snapshot.settings.computer.generation,
         workspace,
         identity,
-        ".",
         `settings:computer.check-folder:${workspace.workspaceId}`,
       );
       const reachable = checked.ok;
@@ -9592,11 +9624,10 @@ async function configureAdmittedProduct(
       // Go performs bounded content-free inspection under the exact published
       // approval. Native binding and final current authority are both checked.
       const generation = snapshot.settings.computer.generation;
-      const result = await listOwnerWorkspace(
+      const result = await inspectOwnerWorkspace(
         generation,
         workspace,
         measured,
-        ".",
         `settings:computer.verify-workspace:${workspace.workspaceId}`,
       );
       if (!result.ok) return workspaceReadFailure(result.code);
@@ -9606,7 +9637,7 @@ async function configureAdmittedProduct(
         workspace.root,
         workspace.gitHistoryApproved === true,
       );
-      // The listing takes a moment, and a connector or Agent may have started
+      // The inspection takes a moment, and a connector or Agent may have started
       // meanwhile; a re-verification rebinds the authority either would carry,
       // so it is admitted again right before it commits.
       const readmitted = configurationAdmission(command.kind, {
@@ -9641,11 +9672,9 @@ async function configureAdmittedProduct(
       return ProductConfigurationResultSchema.parse({
         ...recorded,
         evidence: {
-          kind: "computer.workspace-list",
+          kind: "computer.workspace-inspection",
           workspaceId: workspace.workspaceId,
           relativePath: ".",
-          entries: result.entries,
-          truncated: result.truncated,
         },
       });
     }

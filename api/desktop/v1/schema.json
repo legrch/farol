@@ -96,7 +96,8 @@
     "chat.archive.list": "read",
     "chat.archive.read": "read",
     "computer.connector.polling": "read",
-    "computer.connector.health": "read"
+    "computer.connector.health": "read",
+    "computer.settings.inspect": "read"
   },
   "definitions": {
     "Context": {
@@ -5767,6 +5768,41 @@
         "nextRetryMillis": {
           "type": "decimal",
           "optional": true
+        }
+      }
+    },
+    "ComputerSettingsInspectRequest": {
+      "type": "object",
+      "fields": {
+        "publication": {
+          "type": "ComputerAuthorityPublication"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        }
+      }
+    },
+    "ComputerSettingsInspectResponse": {
+      "type": "object",
+      "fields": {
+        "publication": {
+          "type": "ComputerAuthorityPublication"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "root": {
+          "type": "ComputerSettingsRoot"
         }
       }
     }

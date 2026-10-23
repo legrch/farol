@@ -1327,6 +1327,17 @@ export class WindowController implements RendererFacade {
       // A read may have settled behind this command's pending fence (notably
       // Back to setup). Reconsider it only after the original command settles;
       // commandAllowed still preserves every pending/unknown writer fence.
+      // Navigation during a connector check cannot observe readiness while
+      // that route owns its task. Sample again after the original command
+      // settles; this pure query cannot replay the check or settle an effect.
+      if (
+        key === "settings:connector.verify-app:" &&
+        result.state !== "unknown" &&
+        this.isSetupSignInObservationEntry()
+      ) {
+        this.invalidateSignInObservation();
+        this.observeSignIn();
+      }
       this.confirmSetupSignIn();
       resolve(result);
     })();

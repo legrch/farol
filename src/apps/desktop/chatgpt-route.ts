@@ -484,6 +484,11 @@ export const toggleChatGptSidebarScript = `(() => {
 // Connector checks must not inherit the owner's current conversation or model.
 // These probes intentionally inspect provider controls instead of trusting a
 // URL parameter or a saved ChatGPT preference as proof of the active mode.
+// The provider includes its generation in the selected model label. Match
+// only the whole Instant label, never a menu option or a Pro/Thinking label.
+export const instantModelLabelPattern =
+  /^(?:(?:GPT[- ]?)?\d+(?:\.\d+)?\s+)?Instant$/iu;
+
 export const temporaryInstantProfileProbe = `(() => {
   const visible = (element) => {
     if (!(element instanceof HTMLElement)) return false;
@@ -507,7 +512,7 @@ export const temporaryInstantProfileProbe = `(() => {
     /^(Personalized|Unpersonalized)$/u.test((button.textContent || "").trim()));
   const modelButton = controls.find((button) =>
     button.getAttribute("aria-label") === "Select ChatGPT model");
-  const instant = modelButton && /^Instant$/u.test((modelButton.innerText || "").trim());
+  const instant = modelButton && new RegExp(${JSON.stringify(instantModelLabelPattern.source)}, "iu").test((modelButton.innerText || "").trim());
   return { composerReady: !!composer, draftPresent: draft.trim().length > 0,
     temporary, personalized, personalizationReady, instant: !!instant, modelReady: !!modelButton };
 })()`;
@@ -1152,7 +1157,7 @@ export function activateTaskScript(
         (button.textContent || "").trim() === "Personalized" && button.getClientRects().length > 0) ||
       ![...document.querySelectorAll("button")].some((button) =>
         button.getAttribute("aria-label") === "Select ChatGPT model" &&
-        (button.innerText || "").trim() === "Instant" && button.getClientRects().length > 0))
+        new RegExp(${JSON.stringify(instantModelLabelPattern.source)}, "iu").test((button.innerText || "").trim()) && button.getClientRects().length > 0))
       return { profileLost: true };`
         : ""
     }
@@ -1163,7 +1168,7 @@ export function activateTaskScript(
         button.getAttribute("aria-label") === "Turn off temporary chat" && button.getClientRects().length > 0) ||
       ![...document.querySelectorAll("button")].some((button) =>
         button.getAttribute("aria-label") === "Select ChatGPT model" &&
-        (button.innerText || "").trim() === "Instant" && button.getClientRects().length > 0))
+        new RegExp(${JSON.stringify(instantModelLabelPattern.source)}, "iu").test((button.innerText || "").trim()) && button.getClientRects().length > 0))
       return { profileLost: true };`
         : ""
     }
@@ -2165,12 +2170,18 @@ export class ChatGptRoute {
   async open(): Promise<ChatGptOpenResult> {
     if (this.updateAdmission) return { status: "unreachable" };
     if (this.opening) {
+      // Owner navigation exposes the retained browser immediately while its
+      // original preload completes. Protected submission surfaces still wait.
+      if (this.options.requireAppForManualMessages !== true) {
+        this.routeWindow?.reveal();
+        this.routeWindow?.focus();
+      }
       const opened = await this.opening;
       return opened.status === "opened" ? this.open() : opened;
     }
     const retained = this.routeWindow;
     if (retained && !retained.isDestroyed()) {
-      if (this.options.requiredAppName !== undefined) {
+      if (this.options.requireAppForManualMessages === true) {
         if (this.load !== "loaded") return { status: "unreachable" };
         const gate = await this.installCurrentRouteAppSubmissionGate(
           retained.webContents,
@@ -2185,7 +2196,8 @@ export class ChatGptRoute {
       if (
         this.routeWindow !== retained ||
         retained.isDestroyed() ||
-        (this.options.requiredAppName !== undefined && this.load !== "loaded")
+        (this.options.requireAppForManualMessages === true &&
+          this.load !== "loaded")
       ) {
         return { status: "unreachable" };
       }
@@ -2474,6 +2486,10 @@ export class ChatGptRoute {
       }, 100);
     });
 
+    if (reveal && this.options.requireAppForManualMessages !== true) {
+      candidate.reveal();
+      candidate.focus();
+    }
     const openDeadline = Date.now() + ROUTE_OPEN_DEADLINE_MS;
     try {
       await this.awaitRouteOpenStep(
@@ -2482,7 +2498,7 @@ export class ChatGptRoute {
         openDeadline,
       );
       if (this.routeDocumentLoadFailed) {
-        candidate.hide();
+        if (this.options.requireAppForManualMessages === true) candidate.hide();
         return { status: "unreachable" };
       }
       const gate = await this.awaitRouteOpenStep(
@@ -2496,12 +2512,12 @@ export class ChatGptRoute {
         return { status: "unreachable" };
       }
       if (this.routeDocumentLoadFailed) {
-        candidate.hide();
+        if (this.options.requireAppForManualMessages === true) candidate.hide();
         return { status: "unreachable" };
       }
       this.load = "loaded";
       this.options.onLoadStateChanged?.("loaded");
-      if (reveal) {
+      if (reveal && this.options.requireAppForManualMessages === true) {
         candidate.reveal();
         candidate.focus();
       }
@@ -2510,7 +2526,10 @@ export class ChatGptRoute {
       this.load = "failed";
       this.options.onLoadStateChanged?.("failed");
       if (error instanceof RouteOpenTimedOut) {
-        if (!candidate.isDestroyed()) {
+        if (
+          this.options.requireAppForManualMessages === true &&
+          !candidate.isDestroyed()
+        ) {
           try {
             candidate.hide();
           } catch {
@@ -2518,13 +2537,6 @@ export class ChatGptRoute {
           }
         }
         return { status: "unreachable" };
-      }
-      if (
-        reveal &&
-        this.options.requiredAppName === undefined &&
-        !candidate.isDestroyed()
-      ) {
-        candidate.reveal();
       }
       return { status: "unreachable" };
     }
@@ -2542,9 +2554,12 @@ export class ChatGptRoute {
         new Promise<never>((_resolve, reject) => {
           timer = setTimeout(
             () => {
-              // A page load or app gate may never settle. Destroy this attempt
-              // before returning so it cannot reveal later.
-              if (this.routeWindow === candidate) {
+              // Only protected submission surfaces are retired at the gate deadline.
+              // A slow ordinary browser keeps its original visible navigation.
+              if (
+                this.routeWindow === candidate &&
+                this.options.requireAppForManualMessages === true
+              ) {
                 if (this.signInMode) {
                   this.signInMode = false;
                   if (activeSignInRoute === this) activeSignInRoute = null;
@@ -4876,7 +4891,7 @@ export class ChatGptRoute {
           this.routeDocumentGeneration += 1;
           if (!inPlace) this.chatPhysicalDocumentGeneration += 1;
           if (!inPlace) this.routeDocumentLoadFailed = false;
-          if (!inPlace && this.options.requiredAppName !== undefined) {
+          if (!inPlace && this.options.requireAppForManualMessages === true) {
             this.routeWindow?.hide();
           }
           this.load = inPlace ? "loaded" : "failed";
@@ -5029,7 +5044,7 @@ export class ChatGptRoute {
           this.reconcilePopupWindow(popup);
         });
       }
-      if (this.options.requiredAppName !== undefined) {
+      if (this.options.requireAppForManualMessages === true) {
         popup.webContents.on(
           "did-start-navigation",
           (_event, _url, inPlace, isMainFrame) => {
@@ -5079,7 +5094,7 @@ export class ChatGptRoute {
       return;
     }
     if (
-      this.options.requiredAppName !== undefined &&
+      this.options.requireAppForManualMessages === true &&
       !this.submissionGatedPopupWindows.has(popup)
     ) {
       return;

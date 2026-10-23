@@ -79,3 +79,26 @@ shell/Git or production executor retirement is part of this slice.
 The required final boundary review remains PENDING under the existing review
 provider quota fence. Lead owns aggregate projection, review choice, root activation,
 accepted main, packaging/install and same-chat Brain/code renewal qualification.
+
+## Setup directory inspection
+
+Adding or changing a folder starts its access check automatically. Setup uses
+`computer.settings.inspect`, a content-free read under the exact current owner
+publication, rather than requiring a stable listing of every child. The native
+adapter opens the selected directory through no-follow descriptors, verifies its
+physical identity and rechecks the approved root. Child-file churn does not
+invalidate that access result. Listing and file operations retain their own
+snapshot, scope and identity checks.
+
+The response contains the original publication, workspace ID, relative path and
+physical root binding; it contains no child names or file contents. Current
+approval, exclusions, withdrawal and cancellation remain authoritative before
+dispatch and disclosure. The host records a green folder check only after the
+bound result and current configuration agree. A missing inspector fails closed;
+it never falls back to listing or grants wider access.
+
+The desktop adapter waits at most twice (100 ms, then 250 ms) for local
+publication/read contention or a known undispatched backpressure failure before
+trying the pure inspection. Changed generations, genuine refusals, unknown
+responses and mutations are never automatically replayed. Persistent failures
+remain actionable recovery states rather than successful checks.

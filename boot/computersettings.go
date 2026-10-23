@@ -163,6 +163,48 @@ func (s *ComputerIngress) settingsListMethod() desktop.Method {
 	}}
 }
 
+func (s *ComputerIngress) settingsInspect(ctx context.Context, in wire.ComputerSettingsInspectRequest) (*wire.ComputerSettingsInspectResponse, error) {
+	if ctx == nil || ctx.Err() != nil || validateIngress("ComputerSettingsInspectRequest", in) != nil || s.native == nil {
+		return nil, computerUnavailable()
+	}
+	if err := s.refreshCurrentApproval(ctx); err != nil {
+		return nil, err
+	}
+	contract, err := s.settingsContract(ctx, in.Publication)
+	if err != nil {
+		return nil, err
+	}
+	result, err := contract.Inspect(ctx, browsect.InspectRequest{WorkspaceID: in.WorkspaceId, RelativePath: in.RelativePath})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, computerUnavailable()
+	}
+	return &wire.ComputerSettingsInspectResponse{
+		Publication: in.Publication, WorkspaceId: result.WorkspaceID, RelativePath: result.RelativePath,
+		Root: wire.ComputerSettingsRoot{Path: result.Root.Path, Device: result.Root.Device, Inode: result.Root.Inode},
+	}, nil
+}
+
+func (s *ComputerIngress) settingsInspectMethod() desktop.Method {
+	return desktop.Method{Concurrent: true, Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
+		if r.OperationID != "" || ipc.ValidateJSON(r.Body) != nil || wire.Validate("ComputerSettingsInspectRequest", r.Body) != nil {
+			return invalidIngress()
+		}
+		var body wire.ComputerSettingsInspectRequest
+		if json.Unmarshal(r.Body, &body) != nil {
+			return invalidIngress()
+		}
+		value, err := s.settingsInspect(ctx, body)
+		var failure *browsect.Failure
+		if errors.As(err, &failure) {
+			return &desktop.Outcome{Status: "refused", Code: failure.Code}, nil
+		}
+		return ingressOutcome(value, err)
+	}}
+}
+
 // Snapshot reads full raw-byte identity under the same owner publication. It
 // creates no Chat/Task admission and returns no file body to the host or UI.
 func (s *ComputerIngress) settingsSnapshot(ctx context.Context, in wire.ComputerSettingsSnapshotRequest) (*wire.ComputerSettingsSnapshotResponse, error) {

@@ -61,3 +61,9 @@ type Workspace interface {
 	Read(context.Context, ReadRequest) (*ReadResponse, error)
 	List(context.Context, ListRequest) (*ListResponse, error)
 }
+
+// DirectoryInspector checks a selected physical directory without listing its
+// contents. It proves access and binding, not a stable directory snapshot.
+type DirectoryInspector interface {
+	Inspect(context.Context, ListRequest) (*DirectoryBinding, error)
+}

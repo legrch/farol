@@ -248,6 +248,19 @@ export class DesktopGoCore {
     );
     return { admission, result };
   }
+  inspectSettingsWorkspace(
+    computerGeneration: number,
+    workspaceId: string,
+    relativePath: string,
+  ) {
+    if (this.closeResult)
+      throw new BridgeError("unavailable", "host_computer_unavailable");
+    return this.authority.inspectSettings(
+      computerGeneration,
+      workspaceId,
+      relativePath,
+    );
+  }
   listSettingsWorkspace(
     computerGeneration: number,
     workspaceId: string,

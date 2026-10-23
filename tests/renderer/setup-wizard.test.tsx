@@ -392,7 +392,7 @@ describe("Add to ChatGPT", () => {
         ?.value,
     ).toBe("Farol");
     expect(h.host.querySelector(".setup-app-values")?.textContent).toContain(
-      "ConnectionTunnel · synthetic-tunnelSign-inNone",
+      "ConnectionTunnel · synthetic-tunnelApp authenticationNo additional sign-in",
     );
     expect(h.host.textContent).toContain("without reading file contents");
     expect(h.host.querySelectorAll("details")).toHaveLength(0);
@@ -523,18 +523,20 @@ const walkthroughs = [
     label: "Create a tunnel and a key",
     open: "Open OpenAI Tunnels",
     destination: "tunnels",
+    initiallyOpen: false,
   },
   {
     step: "attachment",
     label: "Add to ChatGPT",
     open: "Open ChatGPT Apps",
     destination: "chatgpt",
+    initiallyOpen: true,
   },
 ] as const;
 describe("on-demand Setup instructions", () => {
   it.each(walkthroughs)(
-    "keeps $step guidance closed until requested and never advances on a timer",
-    async ({ step, label, open, destination }) => {
+    "shows $step guidance in its expected initial state and never advances on a timer",
+    async ({ step, label, open, destination, initiallyOpen = false }) => {
       vi.useFakeTimers();
       const h = await mount({ step, value: readySettings() });
       const region = h.host.querySelector<HTMLElement>(
@@ -544,8 +546,29 @@ describe("on-demand Setup instructions", () => {
         ...h.host.querySelectorAll<HTMLButtonElement>(".walkthrough-step"),
       ];
       expect(cards).toHaveLength(3);
-      expect(region.hidden).toBe(true);
+      expect(region.hidden).toBe(!initiallyOpen);
+      if (step === "attachment") {
+        expect(region.textContent).toContain("open Apps or Connectors");
+        expect(h.host.textContent).toContain("No additional sign-in");
+        const section = h.host.querySelector(
+          '[aria-label="Create the ChatGPT app"]',
+        )!;
+        const children = [...section.children];
+        expect(
+          children.indexOf(section.querySelector(".setup-walkthrough")!),
+        ).toBeLessThan(
+          children.indexOf(section.querySelector(".setup-app-values")!),
+        );
+      }
       for (const [i, card] of cards.entries()) {
+        if (initiallyOpen && i === 0) {
+          expect(card.getAttribute("aria-expanded")).toBe("true");
+          expect(region.hidden).toBe(false);
+          expect(
+            region.querySelectorAll("ol > li").length,
+          ).toBeGreaterThanOrEqual(2);
+          continue;
+        }
         await act(async () => card.click());
         expect(card.getAttribute("aria-expanded")).toBe("true");
         expect(card.getAttribute("aria-controls")).toBe(region.id);

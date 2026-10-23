@@ -176,6 +176,7 @@ export async function startDesktopGoRecovery(
     const computer = [
       "computer.authority.deactivate",
       "computer.authority.publish",
+      "computer.settings.inspect",
       "computer.settings.list",
       "computer.settings.search",
       "computer.settings.snapshot",

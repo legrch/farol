@@ -44,6 +44,7 @@ const nativeCodes = new Set([
 export type ComputerCheckStage =
   | "go-unavailable"
   | "go-settings-list"
+  | "go-settings-inspect"
   | "root-recheck"
   | "begin-stop"
   | "confirm-stop";
@@ -120,8 +121,9 @@ export function refuseComputerSettingsList(
   error: unknown,
   sink: (event: string, diagnostic: string) => void,
   action?: string,
+  stage: "go-settings-list" | "go-settings-inspect" = "go-settings-list",
 ): { ok: false; code: string } {
-  const diagnostic = computerCheckDiagnostic("go-settings-list", error);
+  const diagnostic = computerCheckDiagnostic(stage, error);
   const result = {
     ok: false as const,
     code:

@@ -1105,7 +1105,9 @@ function Folders(props: PageProps) {
       </div>
       <button
         type="button"
-        className="subtle"
+        className={
+          settings.computer.workspaces.length === 0 ? "primary" : "subtle"
+        }
         disabled={paused || !actions.allowed("computer.choose-workspace")}
         onClick={() => void choose()}
       >
@@ -1584,6 +1586,18 @@ function AddToChatGPT({
         <p className="description">
           Create a new app, or use the one already connected to this tunnel.
         </p>
+        <SetupWalkthrough
+          kind="chatgpt"
+          openLink={
+            <Command
+              className="text-button"
+              actions={actions}
+              command={{ kind: "onboarding.open-help", destination: "chatgpt" }}
+            >
+              Open ChatGPT Apps
+            </Command>
+          }
+        />
         <dl className="setup-app-values">
           <div>
             <dt>Name</dt>
@@ -1629,22 +1643,16 @@ function AddToChatGPT({
             <dd>Tunnel · {connector.tunnelId ?? "Connect this Mac first"}</dd>
           </div>
           <div>
-            <dt>Sign-in</dt>
-            <dd>None</dd>
+            <dt>App authentication</dt>
+            <dd>
+              No additional sign-in
+              <p className="description">
+                Choose None in the app’s authentication settings. Your ChatGPT
+                account stays signed in separately.
+              </p>
+            </dd>
           </div>
         </dl>
-        <SetupWalkthrough
-          kind="chatgpt"
-          openLink={
-            <Command
-              className="text-button"
-              actions={actions}
-              command={{ kind: "onboarding.open-help", destination: "chatgpt" }}
-            >
-              Open ChatGPT Apps
-            </Command>
-          }
-        />
       </section>
       <section className="setup-test" aria-label="Test in ChatGPT">
         <h3>2. Check the connection</h3>

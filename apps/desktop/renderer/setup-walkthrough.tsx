@@ -25,7 +25,7 @@ const chatgptCards: readonly Card[] = [
   },
   {
     title: "Enter your app details",
-    detail: "Sign-in: None",
+    detail: "No additional sign-in",
   },
   {
     title: "Test in ChatGPT",
@@ -52,17 +52,17 @@ const tunnelInstructions: readonly (readonly string[])[] = [
 ];
 const appInstructions: readonly (readonly string[])[] = [
   [
-    "Open ChatGPT Apps from the link below.",
     "In ChatGPT settings, open Apps or Connectors and choose to add an app.",
+    "Use the Open ChatGPT Apps link below to open the app setup page.",
   ],
   [
-    "Use the exact app name shown in Farol above. Keep a separate name for Dev if you already use Farol.",
-    "Choose Tunnel and paste the tunnel ID shown above.",
-    "Set sign-in to None and create the app. An existing app using this tunnel can be kept.",
+    "Use the exact app name shown in Farol below. Keep a separate name for Dev if you already use Farol.",
+    "Choose Tunnel and paste the tunnel ID shown below.",
+    "Set App authentication to None, then create the app. This is the connector setting, separate from your ChatGPT account sign-in.",
   ],
   [
     "Return to Farol and choose Test in ChatGPT once.",
-    "Farol prepares a temporary chat using Instant, selects your app and sends one test message.",
+    "Farol opens a separate ordinary Instant chat, selects your app and sends one test message.",
     "Wait for the result. If it cannot be confirmed, inspect the saved result before trying another action.",
   ],
 ];
@@ -79,11 +79,17 @@ export function SetupWalkthrough({
   const instructions = kind === "tunnel" ? tunnelInstructions : appInstructions;
   const label =
     kind === "tunnel" ? "Create a tunnel and a key" : "Add to ChatGPT";
-  const [selected, setSelected] = useState<number | null>(null);
+  const [selected, setSelected] = useState<number | null>(() =>
+    kind === "chatgpt" ? 0 : null,
+  );
   const regionId = useId();
   return (
     <div className="setup-walkthrough">
-      <p className="walkthrough-hint">Choose a step for instructions.</p>
+      <p className="walkthrough-hint">
+        {kind === "chatgpt"
+          ? "Follow these instructions before creating the app."
+          : "Choose a step for instructions."}
+      </p>
       <ol className="walkthrough-cards" aria-label={`${label} walkthrough`}>
         {cards.map((card, index) => (
           <li key={card.title} data-active={selected === index}>
