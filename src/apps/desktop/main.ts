@@ -12375,7 +12375,6 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       if (!embeddedBrowserEnabled()) return;
       // Retained document readiness survives concealment and sign-in. Current
       // layout alone decides whether its native surface is visible or focused.
-      browserHomeLoadState = state;
       applyLayout();
       window?.webContents.send(channels.browserRouteState, { state });
     },

@@ -256,7 +256,6 @@ function continuityHarness(width = 1180, height = 760) {
     quitInProgress: false,
     selectedTaskId: "",
     browserHomeSurfaceOpen: true,
-    browserHomeLoadState: "loaded",
     sidebarMode: "full",
     sidebarWidth: 152,
     shellOverlay: "none",

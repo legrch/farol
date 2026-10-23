@@ -3,7 +3,7 @@ import { stripTypeScriptTypes } from "node:module";
 import vm from "node:vm";
 import { parse } from "@babel/parser";
 import type { Rectangle } from "electron";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   NativeViewVisibility,
   type NativeViewHost,
@@ -390,7 +390,6 @@ function desktopFixture() {
     taskSurfaceFailures: new Set<string>(),
     publishTaskSurfaceStatus: () => undefined,
     browserHomeSurfaceOpen: false,
-    browserHomeLoadState: "loaded" as "loading" | "loaded" | "failed",
     liveTaskRoutes: new Map<
       string,
       { open(): Promise<{ status: "opened" }> }
@@ -521,9 +520,12 @@ describe("desktop layout attachment integration (source callbacks + fake host)",
       f.context.browserHomeSurfaceOpen = true;
       f.context.section = "settings";
       f.context.productTasksState = () => ({ tasks: [] });
+      const send = vi.spyOn(f.host.webContents, "send");
       f.api.onLoadStateChanged(state);
       expect(f.context.browserHomeSurfaceOpen).toBe(true);
-      expect(f.context.browserHomeLoadState).toBe(state);
+      expect(send).toHaveBeenCalledWith("fixture-route", {
+        state,
+      });
       expect(f.view.webContents.destroyed).toBe(false);
       expect(f.host.children).toEqual([]);
     },
