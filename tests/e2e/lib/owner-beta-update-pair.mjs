@@ -961,6 +961,9 @@ async function startApp(candidate, home, fixture, report, owners, launch) {
   });
   const owner = retainChild(app.child, lifetime);
   owner.app = app;
+  // Application stdout is diagnostic, not a helper protocol. Drain without
+  // retaining content so backpressure cannot prevent the owned app from quitting.
+  owner.child.stdout?.resume();
   owner.windowObservation = collectWindowObservation(owner.child.stderr);
   owners.push(owner);
   await bounded(app.ready(), 15000, "APP_LAUNCH_UNKNOWN");
@@ -1124,6 +1127,28 @@ async function quitApp(owner) {
   // The original terminal and full stream settle after debugger detachment.
 }
 
+// First publication owns an empty operation directory. Staging is admitted
+// only after the actual publisher has confirmed the binding, never in parallel.
+export async function publishAndStage(
+  target,
+  operation,
+  request,
+  publication,
+  owners,
+  ports = { publish: publishBinding, copy: copyApp },
+) {
+  check(
+    typeof ports.publish === "function" && typeof ports.copy === "function",
+    "PREPARATION_PORTS_INVALID",
+  );
+  await ports.publish(target, operation, request, publication, owners);
+  await ports.copy(
+    target.appPath,
+    path.join(operation, "staged.app"),
+    target.artifactSha256,
+  );
+}
+
 export async function runNativePair(pair) {
   const repositoryRoot = path.resolve(import.meta.dirname, "../../..");
   check(process.platform === "darwin", "DARWIN_REQUIRED");
@@ -1171,11 +1196,6 @@ export async function runNativePair(pair) {
     await fs.mkdir(operation, { mode: 0o700 });
     report.operationId = operationId;
     report.operation = operation;
-    await copyApp(
-      pair.target.appPath,
-      path.join(operation, "staged.app"),
-      pair.target.artifactSha256,
-    );
     const server = createServer((_request, response) => {
       response.writeHead(200, {
         "Content-Type": "text/html",
@@ -1229,7 +1249,7 @@ export async function runNativePair(pair) {
     const apply = request("apply", source);
     const publication = {};
     report.publications.push(publication);
-    await publishBinding(pair.target, operation, apply, publication, owners);
+    await publishAndStage(pair.target, operation, apply, publication, owners);
     async function updateAndQuit(input, predecessor) {
       await recheckHome(home);
       await remeasure(pair.target);
