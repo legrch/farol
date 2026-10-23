@@ -170,10 +170,18 @@ describe("rendered Setup gate", () => {
         expect(status?.querySelectorAll("button")).toHaveLength(0);
       } else {
         expect(status?.dataset.resultState).toBe(resultState);
-        expect(status?.textContent).toContain(expected.cause);
-        expect(status?.querySelectorAll("button")).toHaveLength(1);
+        expect(status?.textContent).toContain(
+          step === "attachment" && state === "missing"
+            ? "Add the app above, then run the check once."
+            : expected.cause,
+        );
+        expect(status?.querySelectorAll("button")).toHaveLength(
+          step === "attachment" && state === "missing" ? 0 : 1,
+        );
         expect(status?.querySelector("button")?.textContent?.trim()).toBe(
-          expectedAction(state),
+          step === "attachment" && state === "missing"
+            ? undefined
+            : expectedAction(state),
         );
       }
     },
@@ -236,7 +244,7 @@ describe("rendered Setup gate", () => {
     const error = h.host.querySelector<HTMLElement>(".setup-action-error");
     if (expected === "success") {
       expect(status?.textContent).toContain(
-        "check passed for the current inputs",
+        setupStepCheck(snapshot, step).cause,
       );
       expect(status?.querySelectorAll("button")).toHaveLength(0);
       expect(error?.textContent).toContain(
@@ -585,11 +593,21 @@ describe("rendered Setup gate", () => {
 
   it("retains a thrown connection check as unknown across remount without retry", async () => {
     const h = await mount({ step: "connection", value: readySettings(true) });
-    const snapshot = syntheticSnapshot(
+    const base = syntheticSnapshot(
       h.c.getSnapshot(),
       "connection",
       "success-current",
     );
+    const snapshot: WindowSnapshot = {
+      ...base,
+      intents: {
+        "settings:connector.check-health:": {
+          id: "settings:connector.check-health:",
+          state: "refused",
+          code: "CONNECTOR_POLLING_EXPIRED",
+        },
+      },
+    };
     let healthAttempts = 0;
     let markAttempted!: () => void;
     const attempted = new Promise<void>((resolve) => {

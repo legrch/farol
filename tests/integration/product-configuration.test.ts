@@ -105,6 +105,63 @@ describe("workspace stopped publication revision", () => {
     );
   });
 
+  it("withdraws app proof when the name changes while preserving the working tunnel", async () => {
+    const { service, store, original } = await connected();
+    const connector = original.settings.connectors.secureMcp;
+    const binding = {
+      name: "Farol",
+      tunnelId: connector.tunnelId!,
+      connectorGeneration: connector.generation,
+    };
+    expect((await service.selectSecureMcpChatGptApp(binding)).ok).toBe(true);
+    const identity = {
+      runtimeGeneration: connector.runtime!.runtimeGeneration,
+      computerGeneration: original.settings.computer.generation,
+      buildId: connector.runtime!.buildId,
+    };
+    const challenge = "00000000-0000-4000-8000-000000000099";
+    expect(
+      (await service.recordSecureMcpChallenge({ ...identity, challenge })).ok,
+    ).toBe(true);
+    expect(
+      (
+        await service.recordSecureMcpAttachment({
+          ...identity,
+          workspaceId: null,
+          challengeSha256: createHash("sha256").update(challenge).digest("hex"),
+          receiptSha256: "e".repeat(64),
+        })
+      ).ok,
+    ).toBe(true);
+    const before = service.snapshot();
+    if (before.status !== "ready") throw Error("settings missing");
+    expect(before.settings.connectors.secureMcp.attachment).not.toBeNull();
+    expect((await service.selectSecureMcpChatGptApp(binding)).ok).toBe(true);
+    const unchanged = service.snapshot();
+    if (unchanged.status !== "ready") throw Error("settings missing");
+    expect(unchanged.settings.connectors.secureMcp.attachment).toEqual(
+      before.settings.connectors.secureMcp.attachment,
+    );
+    expect(
+      (
+        await service.selectSecureMcpChatGptApp({
+          ...binding,
+          name: "Farol Dev",
+        })
+      ).ok,
+    ).toBe(true);
+    const after = await store.load();
+    expect(after?.connectors.secureMcp.chatgptApp?.name).toBe("Farol Dev");
+    expect(after?.connectors.secureMcp.attachment).toBeNull();
+    expect(after?.connectors.secureMcp.lastVerifiedAttachment).toBeNull();
+    expect(after?.setup.connect.verified).toBeNull();
+    expect(after?.setup.connect.reachable).toBe("unknown");
+    expect(after?.connectors.secureMcp.runtime).toEqual(connector.runtime);
+    expect(after?.connectors.secureMcp.generation).toBe(connector.generation);
+    expect(after?.connectors.secureMcp.credential).toBe("stored");
+    expect(after?.computer).toEqual(original.settings.computer);
+  });
+
   it("refuses a general write queued before the original stopped publication", async () => {
     const { store, service, original } = await connected();
     let entered!: () => void;

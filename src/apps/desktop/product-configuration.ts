@@ -1494,6 +1494,7 @@ export class ProductConfigurationService {
         connector.generation !== parsed.data.connectorGeneration
       )
         return this.failure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
+      const changed = connector.chatgptApp?.name !== parsed.data.name;
       return this.commit((settings) => ({
         ...settings,
         revision: settings.revision + 1,
@@ -1502,8 +1503,23 @@ export class ProductConfigurationService {
           secureMcp: {
             ...settings.connectors.secureMcp,
             chatgptApp: parsed.data,
+            ...(changed
+              ? { attachment: null, lastVerifiedAttachment: null }
+              : {}),
           },
         },
+        ...(changed
+          ? {
+              setup: {
+                ...settings.setup,
+                connect: pendingConnectorReadiness(
+                  settings.setup.connect,
+                  connector,
+                  "Check the selected app in ChatGPT.",
+                ),
+              },
+            }
+          : {}),
       }));
     });
   }

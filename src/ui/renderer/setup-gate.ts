@@ -1,4 +1,5 @@
 import { setupCompletionChecks } from "../setup-completion";
+import { chatGptPreSubmitRemedy } from "../chatgpt-pre-submit-remedy";
 import { dependencyFences } from "./command-eligibility";
 import type { Intent, WindowSnapshot } from "./contract";
 import type { SetupCheckpoint } from "./setup-checklist";
@@ -162,19 +163,27 @@ export function setupStepCheck(
     step === "connection" &&
     refusal?.id.startsWith("settings:connector.discover-client:") &&
     !connector?.tunnelClient;
-  const refusalCause = helperMissing
-    ? "This Mac could not find a usable connection helper. Install tunnel-client for this account."
-    : keyRejected
-      ? "OpenAI did not accept this key. It may be revoked or belong to another tunnel."
-      : refusal?.code === "CONNECTOR_CREDENTIAL_STORE_FAILED"
-        ? "Farol could not save the key on this Mac. Check this account’s key storage before connecting again."
-        : refusal?.code === "CONNECTOR_POLLING_EXPIRED"
-          ? "The connection started, but its health check did not finish. The connection is not confirmed."
-          : confirmed && !blockingRefusal
-            ? "The action could not be completed. Check the setup guide before trying again."
-            : step === "folders"
-              ? "Farol could not check this workspace. Make sure it still exists and this account can open it."
-              : `${label} check was refused. Review the setup instructions before continuing.`;
+  const preSubmitRemedy =
+    step === "attachment"
+      ? chatGptPreSubmitRemedy(refusal?.code ?? null)
+      : null;
+  const refusalCause =
+    preSubmitRemedy ??
+    (helperMissing
+      ? "This Mac could not find a usable connection helper. Install tunnel-client for this account."
+      : keyRejected
+        ? "OpenAI did not accept this key. It may be revoked or belong to another tunnel."
+        : refusal?.code === "CONNECTOR_CREDENTIAL_STORE_FAILED"
+          ? "Farol could not save the key on this Mac. Check this account’s key storage before connecting again."
+          : refusal?.code === "CONNECTOR_POLLING_EXPIRED"
+            ? "The connection started, but its health check did not finish. The connection is not confirmed."
+            : confirmed && !blockingRefusal
+              ? "The action could not be completed. Check the setup guide before trying again."
+              : step === "folders"
+                ? "Farol could not check this workspace. Make sure it still exists and this account can open it."
+                : step === "attachment"
+                  ? "The ChatGPT check did not finish. Check that the app name below matches the app you added in ChatGPT and that it uses this tunnel."
+                  : `${label} could not be checked. Review this step before continuing.`);
   const refusalAction: SetupAction = {
     kind: "guide",
     label: keyRejected
@@ -184,9 +193,27 @@ export function setupStepCheck(
         : "Read the setup guide",
     destination: keyRejected ? "tunnels" : "setup-guide",
   };
+  const successCopy: Record<SetupCheckpoint, string> = {
+    signin: "Your ChatGPT sign-in is confirmed. Continue to choose workspaces.",
+    folders:
+      "All listed workspaces passed their access checks. You can continue.",
+    connection: "This Mac is connected. Continue to add your app in ChatGPT.",
+    attachment:
+      "ChatGPT reached this Mac and confirmed the approved workspace access.",
+  };
+  const staleCopy: Record<SetupCheckpoint, string> = {
+    signin:
+      "Sign-in needs a fresh check in this window. Choose Check sign-in to continue.",
+    folders:
+      "Workspace settings changed or their checks are no longer current. Review the access results below.",
+    connection:
+      "The connection details changed or need checking again. Connect using the current details.",
+    attachment:
+      "The selected app or connection changed. Check the current app before continuing.",
+  };
   const cause =
     state === "success"
-      ? `${label} check passed for the current inputs.`
+      ? successCopy[step]
       : state === "unknown"
         ? `${label} result could not be confirmed. Refresh its saved result; do not repeat the action.`
         : state === "pending"
@@ -194,7 +221,7 @@ export function setupStepCheck(
           : state === "refused"
             ? refusalCause
             : state === "stale"
-              ? `${label} inputs changed or the previous check is no longer current. Check the current inputs before continuing.`
+              ? staleCopy[step]
               : `${label} has no current confirmed check. Complete this step before continuing.`;
   return {
     state,

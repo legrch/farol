@@ -22,6 +22,7 @@ import {
 import type { ReactNode } from "react";
 import {
   ProductConfigurationCommandSchema,
+  SecureMcpAppSelectionSchema,
   type ApprovedProductWorkspace,
   type ProductConfigurationCommand,
   type ProductSettings,
@@ -529,12 +530,30 @@ export function Settings({
       ) : null}
       {setupStep ? (
         <>
-          {gate && (
+          {setupStep === "folders" ? (
+            <Folders {...props} />
+          ) : (
+            <Connection {...props} />
+          )}
+          {gate && setupStep !== "attachment" && (
             <div
-              className="notice setup-gate-status"
+              className="setup-gate-status setup-result"
               role={gate.allowed ? "status" : "alert"}
               data-result-state={gate.state}
             >
+              <strong>
+                {gate.state === "success"
+                  ? setupStep === "signin"
+                    ? "✓ Sign-in checked"
+                    : "Ready to continue"
+                  : gate.state === "pending"
+                    ? "Checking…"
+                    : gate.state === "unknown"
+                      ? "Check the last result"
+                      : gate.state === "refused"
+                        ? "This step needs attention"
+                        : "Your next step"}
+              </strong>
               <p>{gate.cause}</p>
               {gate.action && (
                 <button
@@ -555,7 +574,7 @@ export function Settings({
             </div>
           )}
           {gate?.actionError && (
-            <div className="notice setup-action-error" role="alert">
+            <div className="setup-result setup-action-error" role="alert">
               <p>{gate.actionError.cause}</p>
               <button
                 type="button"
@@ -571,11 +590,6 @@ export function Settings({
                 {gate.actionError.action.label}
               </button>
             </div>
-          )}
-          {setupStep === "folders" ? (
-            <Folders {...props} />
-          ) : (
-            <Connection {...props} />
           )}
         </>
       ) : (
@@ -1088,9 +1102,11 @@ function Folders(props: PageProps) {
         {adding ? "Checking workspace…" : "+ Add workspace"}
       </button>
       <p className="description">
-        Adding a workspace checks it at once. Commands lets ChatGPT run git,
-        tests and builds; each run still asks you first. Command access is
-        shared by all workspaces.
+        Workspace access is checked automatically when you add or change a
+        workspace. “Works” means that check passed for the current settings; no
+        repeat check is needed to continue. Commands lets ChatGPT run git, tests
+        and builds; each run still asks you first. Command access is shared by
+        all workspaces.
       </p>
       {settings.computer.commands === "verification" && (
         <p className="description">
@@ -1184,7 +1200,7 @@ function ConnectMac({
           : "Paste the complete key without spaces or line breaks."
       : null;
   async function connect() {
-    if (running.current || composing.current || !valid) return;
+    if (running.current || composing.current || !valid || connected) return;
     running.current = true;
     setBusy(true);
     const origin = facade.getSnapshot();
@@ -1310,7 +1326,7 @@ function ConnectMac({
             maxLength={512}
             value={key}
             placeholder={
-              connector.credential === "stored" ? "Key saved" : "Paste your key"
+              connector.credential === "stored" ? "••••••••" : "Paste your key"
             }
             onChange={(event) => {
               setKey(event.currentTarget.value);
@@ -1320,40 +1336,61 @@ function ConnectMac({
               );
             }}
             disabled={busy}
+            aria-describedby="connection-key-hint"
           />
         </label>
-        <button
-          className="primary"
-          disabled={
-            busy || !valid || !actions.allowed("connector.save-and-connect")
-          }
-        >
-          {busy ? "Connecting…" : "Connect"}
-        </button>
+        <p className="description connection-key-hint" id="connection-key-hint">
+          {connector.credential === "stored"
+            ? "Key saved on this Mac. Paste a new key only to replace it."
+            : "Your key is saved privately on this Mac."}
+        </p>
+        <div className="connection-actions">
+          {!connected && (
+            <button
+              className="primary"
+              disabled={
+                busy ||
+                connected ||
+                !valid ||
+                !actions.allowed("connector.save-and-connect")
+              }
+            >
+              {busy
+                ? "Connecting…"
+                : connected
+                  ? "Connected"
+                  : draftChanged && connector.runtime !== null
+                    ? "Save and connect"
+                    : "Connect"}
+            </button>
+          )}
+          {connected && (
+            <span className="setup-success" role="status">
+              ✓ Connected to this Mac
+            </span>
+          )}
+          {connector.runtime !== null && (
+            <Command
+              actions={actions}
+              command={{ kind: "connector.stop" }}
+              disabled={busy}
+              admit={(current) =>
+                current.configuration?.status === "ready" &&
+                current.configuration.settings.connectors.secureMcp.runtime !==
+                  null
+              }
+            >
+              Disconnect
+            </Command>
+          )}
+        </div>
       </form>
       {fieldError && (
         <p className="description" role="status">
           {fieldError}
         </p>
       )}
-      {connected && (
-        <p className="setup-success" role="status">
-          ✓ Connected
-        </p>
-      )}
-      {connector.runtime !== null && (
-        <Command
-          actions={actions}
-          command={{ kind: "connector.stop" }}
-          disabled={busy}
-          admit={(current) =>
-            current.configuration?.status === "ready" &&
-            current.configuration.settings.connectors.secureMcp.runtime !== null
-          }
-        >
-          Disconnect
-        </Command>
-      )}
+
       {!connected && !failed && !helperMissing && !busy && (
         <p className="description">
           Enter your tunnel ID and key, then connect.
@@ -1372,11 +1409,7 @@ function SignInStep({ snapshot, facade, actions }: PageProps) {
   ).allowed;
   return (
     <section aria-label="ChatGPT sign-in">
-      {verified ? (
-        <p className="setup-success" role="status">
-          ✓ Sign-in checked
-        </p>
-      ) : (
+      {verified ? null : (
         <>
           <p className="description">
             {signIn.pending
@@ -1407,17 +1440,61 @@ function SignInStep({ snapshot, facade, actions }: PageProps) {
     </section>
   );
 }
-function AddToChatGPT({ settings, snapshot, facade, actions }: PageProps) {
+function AddToChatGPT({
+  settings,
+  snapshot,
+  facade,
+  actions,
+  onSetupInputsChange,
+}: PageProps) {
   const connector = settings.connectors.secureMcp;
+  const defaultName =
+    snapshot.environment === "dev"
+      ? "Farol Dev"
+      : snapshot.environment === "owner-preview"
+        ? "Farol Preview"
+        : "Farol";
+  const selectedName = connector.chatgptApp?.name ?? defaultName;
+  const [appName, setAppName] = useState(selectedName);
+  const previousName = useRef(selectedName);
+  useEffect(() => {
+    if (appName === previousName.current) setAppName(selectedName);
+    previousName.current = selectedName;
+  }, [appName, selectedName]);
+  const nameChanged = appName !== selectedName;
+  useEffect(() => {
+    onSetupInputsChange?.(nameChanged);
+  }, [nameChanged, onSetupInputsChange]);
+  const nameValid = SecureMcpAppSelectionSchema.safeParse({
+    name: appName,
+    tunnelId: connector.tunnelId,
+    connectorGeneration: connector.generation,
+  }).success;
   const setup = computerSetup(snapshot);
   const busy = useRef(false);
   const [checking, setChecking] = useState(false);
   const feedback = useSettingsFeedback(facade);
   const result = feedback.pages["setup:attachment"]?.result;
   const failed = result?.state === "refused" || result?.state === "unknown";
+  const gate = setupStepCheck(
+    snapshot,
+    "attachment",
+    nameChanged,
+    retainedSetupIntents(facade, snapshot),
+  );
+  async function saveName() {
+    if (!nameValid || busy.current || !connector.tunnelId) return;
+    await actions.run({
+      kind: "connector.select-chatgpt-app",
+      name: appName,
+      tunnelId: connector.tunnelId,
+      connectorGeneration: connector.generation,
+    });
+  }
   async function test() {
     if (
       busy.current ||
+      !nameValid ||
       !computerSetup(facade.getSnapshot()).canVerifyEmbeddedApp
     )
       return;
@@ -1429,7 +1506,7 @@ function AddToChatGPT({ settings, snapshot, facade, actions }: PageProps) {
       const saved = current.configuration.settings.connectors.secureMcp;
       if (!saved.tunnelId) return;
       if (
-        saved.chatgptApp?.name !== "Farol" ||
+        saved.chatgptApp?.name !== appName ||
         saved.chatgptApp.tunnelId !== saved.tunnelId ||
         saved.chatgptApp.connectorGeneration !== saved.generation
       ) {
@@ -1437,7 +1514,7 @@ function AddToChatGPT({ settings, snapshot, facade, actions }: PageProps) {
           (
             await actions.run({
               kind: "connector.select-chatgpt-app",
-              name: "Farol",
+              name: appName,
               tunnelId: saved.tunnelId,
               connectorGeneration: saved.generation,
             })
@@ -1478,6 +1555,60 @@ function AddToChatGPT({ settings, snapshot, facade, actions }: PageProps) {
   return (
     <>
       <section aria-label="Create the ChatGPT app">
+        <h3>1. Add your app in ChatGPT</h3>
+
+        <p className="description">
+          Create a new app, or use the one already connected to this tunnel.
+        </p>
+        <dl className="setup-app-values">
+          <div>
+            <dt>Name</dt>
+            <dd>
+              <input
+                className="field"
+                aria-label="ChatGPT app name"
+                aria-describedby="chatgpt-app-name-hint"
+                value={appName}
+                maxLength={64}
+                disabled={
+                  checking || !actions.allowed("connector.select-chatgpt-app")
+                }
+                onChange={(event) => setAppName(event.currentTarget.value)}
+              />
+              <p className="description" id="chatgpt-app-name-hint">
+                Use the exact name shown in ChatGPT. For a separate test app,
+                use Farol Dev.
+              </p>
+              {nameChanged && (
+                <button
+                  type="button"
+                  className="subtle"
+                  disabled={
+                    !nameValid ||
+                    !actions.allowed("connector.select-chatgpt-app")
+                  }
+                  onClick={() => void saveName()}
+                >
+                  Save app name
+                </button>
+              )}
+              {!nameValid && (
+                <p className="description" role="status">
+                  Enter 1–64 letters, numbers, spaces, periods, underscores or
+                  hyphens. Start with a letter or number.
+                </p>
+              )}
+            </dd>
+          </div>
+          <div>
+            <dt>Connection</dt>
+            <dd>Tunnel · {connector.tunnelId ?? "Connect this Mac first"}</dd>
+          </div>
+          <div>
+            <dt>Sign-in</dt>
+            <dd>None</dd>
+          </div>
+        </dl>
         <SetupWalkthrough
           kind="chatgpt"
           openLink={
@@ -1490,31 +1621,56 @@ function AddToChatGPT({ settings, snapshot, facade, actions }: PageProps) {
             </Command>
           }
         />
-        <p className="description">
-          In ChatGPT, create an app with these values:
-        </p>
-        <dl className="setup-app-values">
-          <div>
-            <dt>Name</dt>
-            <dd>Farol</dd>
-          </div>
-          <div>
-            <dt>Connection</dt>
-            <dd>Tunnel · {connector.tunnelId ?? "Connect this Mac first"}</dd>
-          </div>
-          <div>
-            <dt>Sign-in</dt>
-            <dd>None</dd>
-          </div>
-        </dl>
       </section>
       <section className="setup-test" aria-label="Test in ChatGPT">
-        <h3>Test in ChatGPT</h3>
+        <h3>2. Check the connection</h3>
         <p className="description">
-          Farol sends one short message in a Temporary Chat using Instant and
-          checks the reply from this Mac. It checks workspace access without
-          reading file contents.
+          Farol opens a temporary chat, selects Instant and sends one test
+          message to your app. The reply confirms that ChatGPT can reach this
+          Mac — without reading file contents.
         </p>
+        <div
+          className="setup-result setup-gate-status"
+          role={
+            gate.state === "refused" || gate.state === "unknown"
+              ? "alert"
+              : "status"
+          }
+          data-result-state={gate.state}
+        >
+          <strong>
+            {gate.allowed
+              ? "ChatGPT is connected"
+              : gate.state === "pending"
+                ? "Checking the connection…"
+                : gate.state === "unknown"
+                  ? "The last result needs checking"
+                  : gate.state === "refused"
+                    ? "The check stopped"
+                    : "Ready when your app is added"}
+          </strong>
+          <p>
+            {gate.state === "missing"
+              ? "Add the app above, then run the check once."
+              : gate.cause}
+          </p>
+          {gate.action && gate.state !== "missing" && (
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => {
+                if (gate.action?.kind === "refresh") void actions.refresh();
+                else
+                  void actions.run({
+                    kind: "onboarding.open-help",
+                    destination: gate.action?.destination ?? "setup-guide",
+                  });
+              }}
+            >
+              {gate.action.label}
+            </button>
+          )}
+        </div>
         {setupStepCheck(
           snapshot,
           "attachment",
@@ -1545,6 +1701,7 @@ function AddToChatGPT({ settings, snapshot, facade, actions }: PageProps) {
               className="primary"
               disabled={
                 checking ||
+                !nameValid ||
                 !actions.allowed("connector.verify-app") ||
                 !setup.canVerifyEmbeddedApp
               }

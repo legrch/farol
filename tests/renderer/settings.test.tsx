@@ -298,7 +298,7 @@ describe("Connection", () => {
       )!,
       "synthetic-replacement-key",
     );
-    await h.click("Connect");
+    await h.click("Save and connect");
     expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
       kind: "connector.stop",
     });
@@ -460,7 +460,12 @@ describe("Connection", () => {
       error: "CONNECTOR_POLLING_EXPIRED",
       snapshot: h.configuration(),
     }));
-    await h.click("Connect");
+    await act(async () => {
+      await h.c.configure(
+        { kind: "connector.check-health" },
+        "settings:connector.check-health:",
+      );
+    });
     expect(h.button("Continue")?.disabled).toBe(true);
     expect(h.host.textContent).not.toContain("✓ Connected");
   });

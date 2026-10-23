@@ -68,6 +68,12 @@
   border-bottom: 1px solid var(--line);
   font-size: 12px;
   color: var(--muted);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg);
+  padding-top: 16px;
+  box-shadow: 0 -16px 0 var(--bg);
 }
 .setup-progress li[aria-current="step"] {
   font-weight: 600;
@@ -77,8 +83,13 @@
   color: var(--good);
 }
 .setup-wizard-footer {
-  padding-top: 20px;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding: 16px 0;
   border-top: 1px solid var(--line);
+  background: var(--bg);
+  box-shadow: 0 16px 0 var(--bg);
 }
 @container (max-width: 460px) {
   .setup-progress {
@@ -123,6 +134,11 @@
 .setup-workspaces {
   margin-bottom: 20px;
 }
+.setup-workspaces ~ .description {
+  margin-top: 10px;
+  line-height: 1.6;
+  max-width: 66ch;
+}
 .setup-walkthrough {
   margin: 16px 0;
 }
@@ -136,11 +152,68 @@
 }
 .walkthrough-cards > li {
   min-width: 0;
-  min-height: 120px;
-  padding: 10px;
+  padding: 0;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--rail);
+}
+.walkthrough-hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+.walkthrough-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  height: 100%;
+  padding: 14px 12px;
+  text-align: left;
+  background: transparent;
+}
+.walkthrough-step-number {
+  display: grid !important;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--fg) !important;
+}
+.walkthrough-step-copy {
+  flex: 1;
+  min-width: 0;
+}
+.walkthrough-cards .walkthrough-step-copy > strong {
+  margin: 0;
+}
+.walkthrough-disclosure {
+  font-size: 16px !important;
+  color: var(--accent) !important;
+}
+.walkthrough-detail {
+  padding: 18px 20px;
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--rail);
+}
+.walkthrough-detail h4 {
+  margin: 0;
+  font-size: 13px;
+}
+.walkthrough-detail ol {
+  margin: 12px 0;
+  padding-left: 20px;
+  line-height: 1.65;
+}
+.walkthrough-detail li + li {
+  margin-top: 8px;
+}
+.walkthrough-detail[hidden] {
+  display: none;
 }
 .walkthrough-cards > li[data-active="true"] {
   border-color: var(--accent);
@@ -160,53 +233,17 @@
   color: var(--muted);
   font-size: 11px;
 }
-.walkthrough-drawing {
-  display: block;
-  width: 100%;
-  height: 54px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--sheet);
-  stroke: var(--line);
-  stroke-width: 1;
-}
-.walkthrough-drawing text {
-  fill: var(--muted);
-  stroke: none;
-  font: 7px system-ui;
-}
-.walkthrough-cursor {
-  fill: var(--accent);
-  stroke: var(--sheet);
-  animation: walkthrough-point 1600ms ease-out both;
-}
-@keyframes walkthrough-point {
-  from {
-    transform: translate(-14px, 14px);
-  }
-  to {
-    transform: translate(0, 0);
-  }
-}
 .walkthrough-actions {
   display: flex;
   align-items: center;
   gap: 18px;
   margin-top: 10px;
 }
-.walkthrough-actions > :last-child {
-  color: var(--muted);
-}
 .connection-credentials {
   margin: 24px 0;
 }
 .setup-failure p {
   margin: 0 0 10px;
-}
-@media (prefers-reduced-motion: reduce) {
-  .walkthrough-cursor {
-    animation: none;
-  }
 }
 .setup-app-values {
   margin: 18px 0;
@@ -226,6 +263,96 @@
 }
 .setup-test {
   margin-top: 30px;
+}
+.setup-result {
+  margin: 20px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+  border-radius: 8px;
+  background: var(--rail);
+  line-height: 1.55;
+}
+.setup-result > strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.setup-result > p {
+  color: var(--muted);
+  max-width: 64ch;
+}
+.setup-result[data-result-state="success"] {
+  border-left-color: var(--good);
+}
+.setup-result[data-result-state="refused"],
+.setup-result[data-result-state="unknown"],
+.setup-action-error {
+  border-left-color: var(--warn);
+}
+.setup-result > button {
+  margin-top: 8px;
+  padding-left: 0;
+}
+.setup-test > .description {
+  margin: 8px 0 16px;
+  max-width: 62ch;
+  line-height: 1.6;
+}
+.setup-test > .primary {
+  min-height: 36px;
+}
+.setup-app-values .field {
+  width: min(100%, 320px);
+}
+.setup-app-values .description {
+  margin: 7px 0;
+  max-width: 50ch;
+}
+.setup-app-values > div {
+  align-items: start;
+  gap: 12px;
+  padding: 14px 0;
+}
+.setup-app-values dt {
+  padding-top: 7px;
+}
+.setup-app-values dd {
+  min-width: 0;
+}
+.connection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+}
+.connection-key-hint {
+  margin: 8px 0 0;
+}
+@container (max-width: 460px) {
+  .setup-app-values > div {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .setup-app-values dt {
+    padding-top: 0;
+  }
+  .walkthrough-cards {
+    grid-template-columns: 1fr;
+  }
+  .walkthrough-cards > li {
+    min-height: 0;
+  }
+  .walkthrough-drawing {
+    display: none;
+  }
+}
+@container (max-width: 580px) {
+  .walkthrough-cards {
+    grid-template-columns: 1fr;
+  }
 }
 .settings-setup-status {
   display: flex;

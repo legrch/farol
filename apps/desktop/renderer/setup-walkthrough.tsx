@@ -1,60 +1,73 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 
 type Card = Readonly<{
   title: string;
   detail: string;
-  screen: string;
-  action: string;
-  lines: readonly [string, string];
 }>;
 const tunnelCards: readonly Card[] = [
   {
     title: "Create a tunnel",
     detail: "On the Tunnels page",
-    screen: "Tunnels",
-    action: "Create tunnel",
-    lines: ["Name: Farol", "Workspace"],
   },
   {
     title: "Create a key",
     detail: "Permission: Restricted",
-    screen: "API keys",
-    action: "Create key",
-    lines: ["Restricted", "Tunnels: Read and Use"],
   },
   {
     title: "Copy both here",
     detail: "Tunnel ID and key",
-    screen: "Connect this Mac",
-    action: "Copy",
-    lines: ["Tunnel ID", "Key: ••••••••"],
   },
 ];
 const chatgptCards: readonly Card[] = [
   {
     title: "Settings → Connectors",
     detail: "Open ChatGPT settings",
-    screen: "Settings",
-    action: "Connectors",
-    lines: ["General", "Connectors"],
   },
   {
-    title: "Add Farol: name, Tunnel, ID",
+    title: "Enter your app details",
     detail: "Sign-in: None",
-    screen: "Add Farol",
-    action: "Create",
-    lines: ["Name: Farol", "Tunnel · Tunnel ID"],
   },
   {
     title: "Test in ChatGPT",
     detail: "Return to Farol to test",
-    screen: "Farol",
-    action: "Test",
-    lines: ["ChatGPT → This Mac", "Workspace access"],
   },
 ];
 
-/** Offline drawings only. Never receives credentials, IDs or provider page contents. */
+const tunnelInstructions: readonly (readonly string[])[] = [
+  [
+    "Open OpenAI Tunnels and choose Create tunnel.",
+    "Give the tunnel a name you can recognize. Use Farol Dev for a separate test connection.",
+    "Choose the workspace that contains your ChatGPT app, then create the tunnel.",
+  ],
+  [
+    "In OpenAI, open API keys and create a new key.",
+    "Choose Restricted permissions. Allow Tunnels: Read and Use.",
+    "Copy the key while it is shown. Paste it only into Farol’s Key field.",
+  ],
+  [
+    "Copy the complete tunnel ID into Tunnel ID below.",
+    "Paste the key into Key, then choose Connect once.",
+    "When the connection is confirmed, choose Continue to add the app in ChatGPT.",
+  ],
+];
+const appInstructions: readonly (readonly string[])[] = [
+  [
+    "Open ChatGPT Apps from the link below.",
+    "In ChatGPT settings, open Apps or Connectors and choose to add an app.",
+  ],
+  [
+    "Use the exact app name shown in Farol above. Keep a separate name for Dev if you already use Farol.",
+    "Choose Tunnel and paste the tunnel ID shown above.",
+    "Set sign-in to None and create the app. An existing app using this tunnel can be kept.",
+  ],
+  [
+    "Return to Farol and choose Test in ChatGPT once.",
+    "Farol prepares a temporary chat using Instant, selects your app and sends one test message.",
+    "Wait for the result. If it cannot be confirmed, inspect the saved result before trying another action.",
+  ],
+];
+
+/** Offline guidance only. Expands on demand; never advances or runs a check. */
 export function SetupWalkthrough({
   kind = "tunnel",
   openLink,
@@ -63,92 +76,65 @@ export function SetupWalkthrough({
   openLink: ReactNode;
 }) {
   const cards = kind === "tunnel" ? tunnelCards : chatgptCards;
+  const instructions = kind === "tunnel" ? tunnelInstructions : appInstructions;
   const label =
     kind === "tunnel" ? "Create a tunnel and a key" : "Add to ChatGPT";
-  const [reduced, setReduced] = useState(
-    () =>
-      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
-  );
-  const [scene, setScene] = useState(0);
-  const [replay, setReplay] = useState(0);
-  useEffect(() => {
-    const query = window.matchMedia?.("(prefers-reduced-motion: reduce)");
-    if (!query) return;
-    const change = () => setReduced(query.matches);
-    query.addEventListener("change", change);
-    change();
-    return () => query.removeEventListener("change", change);
-  }, []);
-  useEffect(() => {
-    if (reduced || scene >= cards.length) return;
-    const timer = window.setTimeout(() => setScene((value) => value + 1), 1600);
-    return () => window.clearTimeout(timer);
-  }, [reduced, scene, replay, cards.length]);
-  const playing = !reduced && scene < cards.length;
+  const [selected, setSelected] = useState<number | null>(null);
+  const regionId = useId();
   return (
-    <div className="setup-walkthrough" data-playing={playing}>
+    <div className="setup-walkthrough">
+      <p className="walkthrough-hint">Choose a step for instructions.</p>
       <ol className="walkthrough-cards" aria-label={`${label} walkthrough`}>
-        {cards.map((card, index) => {
-          const active = playing && scene === index;
-          return (
-            <li key={card.title} data-active={active}>
-              <ScreenDrawing card={card} active={active} key={replay} />
-              <strong>
-                {index + 1} · {card.title}
-              </strong>
-              <span>{card.detail}</span>
-            </li>
-          );
-        })}
+        {cards.map((card, index) => (
+          <li key={card.title} data-active={selected === index}>
+            <button
+              type="button"
+              className="walkthrough-step"
+              aria-expanded={selected === index}
+              aria-controls={regionId}
+              onClick={() => setSelected(selected === index ? null : index)}
+            >
+              <span className="walkthrough-step-number" aria-hidden="true">
+                {index + 1}
+              </span>
+              <span className="walkthrough-step-copy">
+                <strong>{card.title}</strong>
+                <span>{card.detail}</span>
+              </span>
+              <span className="walkthrough-disclosure" aria-hidden="true">
+                {selected === index ? "−" : "+"}
+              </span>
+            </button>
+          </li>
+        ))}
       </ol>
-      <div className="walkthrough-actions">
-        {openLink}
-        <button
-          type="button"
-          className="text-button"
-          aria-label={`Replay ${label} walkthrough`}
-          disabled={reduced}
-          onClick={() => {
-            setScene(0);
-            setReplay((value) => value + 1);
-          }}
-        >
-          <span aria-hidden="true">↻ </span>Replay
-        </button>
-      </div>
+      <section
+        id={regionId}
+        className="walkthrough-detail"
+        aria-label={`${label} instructions`}
+        hidden={selected === null}
+      >
+        {selected !== null && (
+          <>
+            <h4>
+              {selected + 1}. {cards[selected]!.title}
+            </h4>
+            <ol>
+              {instructions[selected]!.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ol>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => setSelected(null)}
+            >
+              Close instructions
+            </button>
+          </>
+        )}
+      </section>
+      <div className="walkthrough-actions">{openLink}</div>
     </div>
-  );
-}
-
-function ScreenDrawing({ card, active }: { card: Card; active: boolean }) {
-  return (
-    <svg
-      className="walkthrough-drawing"
-      viewBox="0 0 190 58"
-      aria-hidden="true"
-    >
-      <path d="M0 16H190M42 16V58" />
-      <path d="M8 25H32M8 33H27M8 41H30" />
-      <text x="8" y="11">
-        {card.screen}
-      </text>
-      <rect x="116" y="3" width="68" height="11" rx="3" />
-      <text x="150" y="11" textAnchor="middle">
-        {card.action}
-      </text>
-      <rect x="48" y="23" width="134" height="12" rx="3" />
-      <rect x="48" y="40" width="134" height="12" rx="3" />
-      {card.lines.map((line, index) => (
-        <text key={line} x="53" y={31 + index * 17}>
-          {line}
-        </text>
-      ))}
-      {active && (
-        <path
-          className="walkthrough-cursor"
-          d="m150 10 1 14 4-4 4 6 3-2-4-6 6-1Z"
-        />
-      )}
-    </svg>
   );
 }

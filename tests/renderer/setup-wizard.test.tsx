@@ -1,6 +1,6 @@
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mount, readySettings } from "./setup-fixture";
+import { change, mount, readySettings } from "./setup-fixture";
 import { bootstrap, deferred, fixture, signInReply } from "./fixture";
 import { WindowController } from "../../src/ui/renderer/controller";
 import { setupChecklist } from "../../src/ui/renderer/setup-navigation";
@@ -285,6 +285,7 @@ describe("linear Setup", () => {
   });
   it("keeps unknown checks blocked across navigation, refresh and remount", async () => {
     const value = readySettings();
+    value.connectors.secureMcp.runtime = null;
     const h = await mount({ step: "connection", value });
     h.reply(() => {
       throw new Error("scripted loss");
@@ -324,8 +325,12 @@ describe("linear Setup", () => {
 describe("Add to ChatGPT", () => {
   it("shows exact values and the honest bounded test description", async () => {
     const h = await mount({ step: "attachment", value: readySettings() });
-    expect(h.host.querySelector(".setup-app-values")?.textContent).toBe(
-      "NameFarolConnectionTunnel · synthetic-tunnelSign-inNone",
+    expect(
+      h.host.querySelector<HTMLInputElement>('[aria-label="ChatGPT app name"]')
+        ?.value,
+    ).toBe("Farol");
+    expect(h.host.querySelector(".setup-app-values")?.textContent).toContain(
+      "ConnectionTunnel · synthetic-tunnelSign-inNone",
     );
     expect(h.host.textContent).toContain("without reading file contents");
     expect(h.host.querySelectorAll("details")).toHaveLength(0);
@@ -438,137 +443,107 @@ describe("Add to ChatGPT", () => {
   });
 });
 
-const originalMatchMedia = window.matchMedia;
-afterEach(() => {
-  window.matchMedia = originalMatchMedia;
-  vi.useRealTimers();
-});
 const walkthroughs = [
   {
     step: "connection",
     label: "Create a tunnel and a key",
-    titles: ["1 · Create a tunnel", "2 · Create a key", "3 · Copy both here"],
     open: "Open OpenAI Tunnels",
     destination: "tunnels",
   },
   {
     step: "attachment",
     label: "Add to ChatGPT",
-    titles: [
-      "1 · Settings → Connectors",
-      "2 · Add Farol: name, Tunnel, ID",
-      "3 · Test in ChatGPT",
-    ],
     open: "Open ChatGPT Apps",
     destination: "chatgpt",
   },
 ] as const;
-describe("compact walkthroughs", () => {
+describe("on-demand Setup instructions", () => {
   it.each(walkthroughs)(
-    "shows all $step cards in order with accessible names and no real IDs",
-    async ({ step, label, titles, open, destination }) => {
+    "keeps $step guidance closed until requested and never advances on a timer",
+    async ({ step, label, open, destination }) => {
+      vi.useFakeTimers();
       const h = await mount({ step, value: readySettings() });
-      const list = h.host.querySelector(
-        `ol[aria-label="${label} walkthrough"]`,
+      const region = h.host.querySelector<HTMLElement>(
+        `[aria-label="${label} instructions"]`,
       )!;
-      expect(
-        [...list.querySelectorAll("li > strong")].map((x) => x.textContent),
-      ).toEqual(titles);
-      expect(list.querySelectorAll('svg[aria-hidden="true"]')).toHaveLength(3);
-      expect(list.textContent).not.toContain("synthetic-tunnel");
-      expect(h.button(`Replay ${label} walkthrough`)?.textContent).toBe(
-        "↻ Replay",
-      );
-      const actions = h.host.querySelector(".walkthrough-actions")!;
-      expect(actions.querySelectorAll("button")).toHaveLength(2);
-      expect(actions.querySelector("button")?.textContent?.trim()).toBe(open);
+      const cards = [
+        ...h.host.querySelectorAll<HTMLButtonElement>(".walkthrough-step"),
+      ];
+      expect(cards).toHaveLength(3);
+      expect(region.hidden).toBe(true);
+      for (const [i, card] of cards.entries()) {
+        await act(async () => card.click());
+        expect(card.getAttribute("aria-expanded")).toBe("true");
+        expect(card.getAttribute("aria-controls")).toBe(region.id);
+        expect(region.hidden).toBe(false);
+        expect(
+          region.querySelectorAll("ol > li").length,
+        ).toBeGreaterThanOrEqual(2);
+        const before = region.textContent;
+        await act(async () => vi.advanceTimersByTime(60000));
+        expect(region.textContent).toBe(before);
+        expect(
+          cards.filter((c) => c.getAttribute("aria-expanded") === "true"),
+        ).toEqual([cards[i]]);
+      }
+      await h.click("Close instructions");
+      expect(region.hidden).toBe(true);
       expect(h.f.api.configure).not.toHaveBeenCalled();
       await h.click(open);
       expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
         kind: "onboarding.open-help",
         destination,
       });
+      vi.useRealTimers();
     },
   );
-  it.each(walkthroughs)(
-    "plays $step once in order and replays from the first card without IPC",
-    async ({ step, label }) => {
-      vi.useFakeTimers();
-      const h = await mount({ step, value: readySettings() });
-      const active = () =>
-        [...h.host.querySelectorAll(".walkthrough-cards > li")].findIndex(
-          (x) => x.getAttribute("data-active") === "true",
-        );
-      expect(active()).toBe(0);
-      await act(async () => vi.advanceTimersByTime(1600));
-      expect(active()).toBe(1);
-      // Replay also restarts the first card's full duration while playing.
-      await h.click(`Replay ${label} walkthrough`);
-      expect(active()).toBe(0);
-      await act(async () => vi.advanceTimersByTime(1599));
-      expect(active()).toBe(0);
-      await act(async () => vi.advanceTimersByTime(1));
-      expect(active()).toBe(1);
-      await act(async () => vi.advanceTimersByTime(1600));
-      expect(active()).toBe(2);
-      await act(async () => vi.advanceTimersByTime(1600));
-      expect(active()).toBe(-1);
-      expect(h.host.querySelector(".walkthrough-cursor")).toBeNull();
-      await act(async () => vi.advanceTimersByTime(20000));
-      expect(active()).toBe(-1);
-      await h.click(`Replay ${label} walkthrough`);
-      expect(active()).toBe(0);
-      expect(h.f.api.configure).not.toHaveBeenCalled();
-    },
-  );
-  it.each(walkthroughs)(
-    "keeps all three $step cards static under reduced motion, including Replay",
-    async ({ step, label }) => {
-      window.matchMedia = vi.fn().mockReturnValue({
-        matches: true,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-      });
-      vi.useFakeTimers();
-      const h = await mount({ step, value: readySettings() });
-      const cards = h.host.querySelector(".walkthrough-cards")!;
-      const before = cards.innerHTML;
-      expect(cards.querySelectorAll("li")).toHaveLength(3);
-      expect(cards.querySelector('[data-active="true"]')).toBeNull();
-      expect(h.host.querySelector(".walkthrough-cursor")).toBeNull();
-      expect(h.button(`Replay ${label} walkthrough`)?.disabled).toBe(true);
-      await h.click(`Replay ${label} walkthrough`);
-      await act(async () => vi.advanceTimersByTime(20000));
-      expect(cards.innerHTML).toBe(before);
-      expect(h.f.api.configure).not.toHaveBeenCalled();
-    },
-  );
-  it("stops motion immediately when the preference changes and cleans up on navigation", async () => {
-    let change = () => {};
-    const query = {
-      matches: false,
-      addEventListener: vi.fn((_event, listener) => {
-        change = listener;
-      }),
-      removeEventListener: vi.fn(),
-    };
-    window.matchMedia = vi.fn().mockReturnValue(query);
-    vi.useFakeTimers();
-    const h = await mount({ step: "connection" });
-    expect(h.host.querySelector(".walkthrough-cursor")).toBeTruthy();
-    await act(async () => {
-      query.matches = true;
-      change();
-    });
-    expect(h.host.querySelector(".walkthrough-cursor")).toBeNull();
-    expect(h.host.querySelector('[data-active="true"]')).toBeNull();
-    await act(async () => vi.advanceTimersByTime(10000));
-    expect(h.host.querySelector('[data-active="true"]')).toBeNull();
-    await h.navigate("folders");
-    expect(query.removeEventListener).toHaveBeenCalledWith(
-      "change",
-      expect.any(Function),
+  it("saves a separate app name without opening ChatGPT or starting a check", async () => {
+    const h = await mount({ step: "attachment", value: readySettings() });
+    await change(
+      h.host.querySelector<HTMLInputElement>(
+        '[aria-label="ChatGPT app name"]',
+      )!,
+      "Farol Dev",
     );
+    h.reply((command) => {
+      expect(command).toMatchObject({
+        kind: "connector.select-chatgpt-app",
+        name: "Farol Dev",
+        tunnelId: "synthetic-tunnel",
+        connectorGeneration: 1,
+      });
+      const value = readySettings();
+      value.revision++;
+      value.connectors.secureMcp.chatgptApp = {
+        name: "Farol Dev",
+        tunnelId: "synthetic-tunnel",
+        connectorGeneration: 1,
+      };
+      return { ok: true, snapshot: { status: "ready", settings: value } };
+    });
+    await h.click("Save app name");
+    expect(h.f.api.configure).toHaveBeenCalledTimes(1);
+    expect(h.c.getSnapshot().destination.setupStep).toBe("attachment");
+    await h.navigate("connection");
+    await h.navigate("attachment");
+    expect(
+      h.host.querySelector<HTMLInputElement>('[aria-label="ChatGPT app name"]')
+        ?.value,
+    ).toBe("Farol Dev");
+  });
+  it("shows a masked saved key and cannot reconnect unchanged confirmed inputs", async () => {
+    const h = await mount({ step: "connection", value: readySettings() });
+    const key = h.host.querySelector<HTMLInputElement>(
+      'input[type="password"]',
+    )!;
+    expect(key.value).toBe("");
+    expect(key.placeholder).toBe("••••••••");
+    expect(h.button("Connect")).toBeUndefined();
+    expect(h.host.textContent).toContain("✓ Connected to this Mac");
+    await h.remount();
+    expect(h.button("Connect")).toBeUndefined();
     expect(h.f.api.configure).not.toHaveBeenCalled();
+    expect(h.button("Continue")?.disabled).toBe(false);
   });
 });
+afterEach(() => vi.useRealTimers());
