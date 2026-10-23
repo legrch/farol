@@ -319,6 +319,7 @@ it("keeps the original lifecycle diagnostic when operations recording throws", (
 // observation alone cannot prove that durable Activity keeps its classification.
 const lifecycleRecordingCases: [string, Record<string, unknown>, string][] = [
   ["requested clean exit", {}, "done"],
+  ["unqualified child-close", { code: "backend_child_closed" }, "unknown"],
   ["unexpected active exit", { phase: "active" }, "unknown"],
   ["unexpected startup exit", { phase: "startup" }, "unknown"],
   ["forced exit", { forced: true }, "unknown"],
@@ -347,9 +348,18 @@ it.each(lifecycleRecordingCases)(
   "preserves %s in the real operations recorder",
   (_name, change, expected) => {
     const { report, records, diagnostics } = sink();
-    report({ ...backend, phase: "closing", exitCode: 0, ...change });
+    report({
+      ...backend,
+      code: "backend_requested_clean_exit",
+      phase: "closing",
+      exitCode: 0,
+      ...change,
+    });
     expect(records).toEqual([
-      { outcome: expected, code: change.code ?? "backend_child_closed" },
+      {
+        outcome: expected,
+        code: change.code ?? "backend_requested_clean_exit",
+      },
     ]);
     expect(diagnostics().unmappedCodes).toBe(0);
   },

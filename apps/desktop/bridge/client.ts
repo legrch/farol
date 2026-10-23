@@ -173,6 +173,7 @@ type BackendLifecycleCode =
   | (typeof lifecycleCodeValues)[number]
   | "backend_unclassified_failure"
   | "backend_child_closed"
+  | "backend_requested_clean_exit"
   | "backend_cleanup_unconfirmed";
 const lifecycleCodes = new Set<string>(lifecycleCodeValues);
 const lifecycleSignals = new Set([
@@ -327,7 +328,12 @@ export class Client {
       this.childClosed = true;
       this.observeLifecycle(
         "child-close",
-        "backend_child_closed",
+        this.closeRequested &&
+          exitCode === 0 &&
+          signal === null &&
+          !this.forcedTermination
+          ? "backend_requested_clean_exit"
+          : "backend_child_closed",
         "observed",
         exitCode,
         signal,

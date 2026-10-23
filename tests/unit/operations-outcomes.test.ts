@@ -281,3 +281,25 @@ it.each([
     ]);
   },
 );
+
+it("does not infer successful shutdown from an unqualified child-close code", () => {
+  expect(operationResult({ code: "backend_child_closed" })).toEqual({
+    outcome: "unknown",
+    code: "backend_child_closed",
+  });
+});
+
+it.each(["unknown", "outcome_unknown", "pending"])(
+  "retains %s even with the qualified backend exit code",
+  (state) => {
+    expect(
+      operationResult({ code: "backend_requested_clean_exit", state }).outcome,
+    ).toBe(state === "pending" ? "pending" : "unknown");
+  },
+);
+it("recognizes the producer-qualified backend requested clean exit code", () => {
+  expect(operationResult({ code: "backend_requested_clean_exit" })).toEqual({
+    outcome: "done",
+    code: "backend_requested_clean_exit",
+  });
+});
