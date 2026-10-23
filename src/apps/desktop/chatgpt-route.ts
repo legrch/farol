@@ -513,8 +513,15 @@ export const temporaryInstantProfileProbe = `(() => {
   const modelButton = controls.find((button) =>
     button.getAttribute("aria-label") === "Select ChatGPT model");
   const instant = modelButton && new RegExp(${JSON.stringify(instantModelLabelPattern.source)}, "iu").test((modelButton.innerText || "").trim());
+  // This is the selected public model control only. Retain a bounded label
+  // solely when every token belongs to the known model vocabulary; redact
+  // unrecognized text instead of emitting arbitrary provider content.
+  const label = (modelButton?.innerText || "").trim();
+  const visibleModelLabel = label.length <= 80 &&
+    /(?:Instant|Thinking|Pro|Auto)/u.test(label) &&
+    /^(?:(?:ChatGPT|GPT|Instant|Thinking|Pro|Auto|Fast)|[0-9.\\s\\p{Cf} -])+$/u.test(label) ? label : null;
   return { composerReady: !!composer, draftPresent: draft.trim().length > 0,
-    temporary, personalized, personalizationReady, instant: !!instant, modelReady: !!modelButton };
+    temporary, personalized, personalizationReady, instant: !!instant, modelReady: !!modelButton, visibleModelLabel };
 })()`;
 
 export const openInstantPowerPickerScript = `(() => {
@@ -563,6 +570,7 @@ const temporaryInstantProfileSchema = z.object({
   personalizationReady: z.boolean(),
   instant: z.boolean(),
   modelReady: z.boolean(),
+  visibleModelLabel: z.string().max(80).nullable().optional(),
 });
 const instantPowerSliderSchema = z.object({
   ready: z.boolean(),
@@ -1358,7 +1366,7 @@ export type ChatGptUpdateIdleEffectGuard = Readonly<{
   canStartEffect(): boolean;
 }>;
 
-/** Closed, content-free evidence for a pre-submission Instant refusal. */
+/** Pre-submission evidence; only the allowlisted public model label is text. */
 export type ChatGptProfilePreparationDiagnostic = Readonly<{
   stage: "hydrate" | "picker" | "slider" | "selected-model";
   expectedTemporary: boolean;
@@ -1373,6 +1381,7 @@ export type ChatGptProfilePreparationDiagnostic = Readonly<{
     temporary: boolean;
     modelReady: boolean;
     instant: boolean;
+    visibleModelLabel: string | null;
   }> | null;
   sliderReady: boolean;
   sliderAtMinimum: boolean;
@@ -2900,6 +2909,7 @@ export class ChatGptRoute {
               temporary: result.data.temporary,
               modelReady: result.data.modelReady,
               instant: result.data.instant,
+              visibleModelLabel: result.data.visibleModelLabel ?? null,
             }
           : null;
         return result;
