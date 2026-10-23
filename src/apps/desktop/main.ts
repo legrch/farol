@@ -1805,6 +1805,13 @@ function createManagedChatGptRoute(options: ChatGptRouteOptions): ChatGptRoute {
       );
       options.onUpdateAdmissionDiagnostic?.(diagnostic);
     },
+    onProfilePreparationDiagnostic: (diagnostic) => {
+      if (runtimeEnvironment === "dev")
+        process.stderr.write(
+          `FAROL_PROFILE_PREPARATION_DIAGNOSTIC ${JSON.stringify(diagnostic)}\n`,
+        );
+      options.onProfilePreparationDiagnostic?.(diagnostic);
+    },
     onDisposed: () => managedChatGptRoutes.delete(route),
   });
   managedChatGptRoutes.add(route);

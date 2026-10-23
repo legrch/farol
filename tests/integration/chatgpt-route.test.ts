@@ -89,6 +89,8 @@ describe("temporary Instant connector profile", () => {
     hydrating?: Profile,
   ) {
     const route = devTaskRoute(vi.fn());
+    const diagnostic = vi.fn();
+    Reflect.get(route, "options").onProfilePreparationDiagnostic = diagnostic;
     let current = initial;
     let currentUrl = "https://chatgpt.com/";
     let minimum = false;
@@ -143,6 +145,7 @@ describe("temporary Instant connector profile", () => {
     ) => Promise<string | null>;
     return {
       prepare: (temporary = true) => prepare.call(route, surface, temporary),
+      diagnostic,
       loadURL,
       sendInputEvent,
       executeJavaScript,
@@ -290,6 +293,47 @@ describe("temporary Instant connector profile", () => {
       );
       expect(sliderReads).toBe(2);
       expect(route.pickerOpens()).toBe(1);
+      expect(route.sendInputEvent).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "reports only closed profile evidence even when its observer throws (%s)",
+    async (observerThrows) => {
+      const route = profileRoute();
+      const execute = route.executeJavaScript.getMockImplementation()!;
+      if (observerThrows)
+        route.diagnostic.mockImplementation(() => {
+          throw new Error("observer failure");
+        });
+      route.executeJavaScript.mockImplementation(async (script: string) => {
+        if (script === focusInstantPowerSliderScript) {
+          route.navigate("https://chatgpt.com/c/private-value");
+          return { ready: true, atMinimum: false };
+        }
+        return execute(script);
+      });
+      await expect(route.prepare()).resolves.toBe(
+        "CHATGPT_INSTANT_MODEL_REQUIRED",
+      );
+      expect(route.diagnostic).toHaveBeenCalledExactlyOnceWith({
+        stage: "slider",
+        expectedTemporary: true,
+        logicalDocumentChanged: true,
+        physicalDocumentChanged: false,
+        urlChanged: true,
+        operationChanged: false,
+        surfaceChanged: false,
+        probe: {
+          composerReady: true,
+          draftPresent: false,
+          temporary: true,
+          modelReady: true,
+          instant: false,
+        },
+        sliderReady: true,
+        sliderAtMinimum: false,
+      });
       expect(route.sendInputEvent).not.toHaveBeenCalled();
     },
   );

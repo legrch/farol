@@ -1358,6 +1358,26 @@ export type ChatGptUpdateIdleEffectGuard = Readonly<{
   canStartEffect(): boolean;
 }>;
 
+/** Closed, content-free evidence for a pre-submission Instant refusal. */
+export type ChatGptProfilePreparationDiagnostic = Readonly<{
+  stage: "hydrate" | "picker" | "slider" | "selected-model";
+  expectedTemporary: boolean;
+  logicalDocumentChanged: boolean;
+  physicalDocumentChanged: boolean;
+  urlChanged: boolean;
+  operationChanged: boolean;
+  surfaceChanged: boolean;
+  probe: Readonly<{
+    composerReady: boolean;
+    draftPresent: boolean;
+    temporary: boolean;
+    modelReady: boolean;
+    instant: boolean;
+  }> | null;
+  sliderReady: boolean;
+  sliderAtMinimum: boolean;
+}>;
+
 export type ChatGptRouteOptions = Readonly<{
   homeUrl: string;
   initialUrl: string;
@@ -1387,6 +1407,9 @@ export type ChatGptRouteOptions = Readonly<{
   // its original promise and does not notify again. Successful operations are quiet.
   onUpdateAdmissionDiagnostic?: (
     diagnostic: ChatGptUpdateAdmissionDiagnostic,
+  ) => void;
+  onProfilePreparationDiagnostic?: (
+    diagnostic: ChatGptProfilePreparationDiagnostic,
   ) => void;
   // Candidate source profile. Production composition must opt in only after
   // native DOM qualification; callbacks alone never enable unproved selectors.
@@ -2864,12 +2887,24 @@ export class ChatGptRoute {
     | null
   > {
     const contents = candidate.webContents;
+    let observed: ChatGptProfilePreparationDiagnostic["probe"] = null;
     const read = async () => {
       try {
-        return temporaryInstantProfileSchema.safeParse(
+        const result = temporaryInstantProfileSchema.safeParse(
           await contents.executeJavaScript(temporaryInstantProfileProbe, true),
         );
+        observed = result.success
+          ? {
+              composerReady: result.data.composerReady,
+              draftPresent: result.data.draftPresent,
+              temporary: result.data.temporary,
+              modelReady: result.data.modelReady,
+              instant: result.data.instant,
+            }
+          : null;
+        return result;
       } catch {
+        observed = null;
         return temporaryInstantProfileSchema.safeParse(null);
       }
     };
@@ -2890,6 +2925,8 @@ export class ChatGptRoute {
       return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
     const profileUrl = contents.getURL();
     const profileDocumentGeneration = this.routeDocumentGeneration;
+    const profilePhysicalDocumentGeneration =
+      this.chatPhysicalDocumentGeneration;
     const profileObservationGeneration = this.taskObservationGeneration;
     const profileIdentityLost = () =>
       this.routeWindow !== candidate ||
@@ -2897,6 +2934,33 @@ export class ChatGptRoute {
       this.routeDocumentGeneration !== profileDocumentGeneration ||
       this.taskObservationGeneration !== profileObservationGeneration ||
       contents.getURL() !== profileUrl;
+    let stage: ChatGptProfilePreparationDiagnostic["stage"] = "hydrate";
+    let sliderReady = false;
+    let sliderAtMinimum = false;
+    const refuseInstant = (): "CHATGPT_INSTANT_MODEL_REQUIRED" => {
+      try {
+        this.options.onProfilePreparationDiagnostic?.({
+          stage,
+          expectedTemporary: temporary,
+          logicalDocumentChanged:
+            this.routeDocumentGeneration !== profileDocumentGeneration,
+          physicalDocumentChanged:
+            this.chatPhysicalDocumentGeneration !==
+            profilePhysicalDocumentGeneration,
+          urlChanged: contents.getURL() !== profileUrl,
+          operationChanged:
+            this.taskObservationGeneration !== profileObservationGeneration,
+          surfaceChanged:
+            this.routeWindow !== candidate || candidate.isDestroyed(),
+          probe: observed,
+          sliderReady,
+          sliderAtMinimum,
+        });
+      } catch {
+        // Observers cannot change admission or make a refused action retryable.
+      }
+      return "CHATGPT_INSTANT_MODEL_REQUIRED";
+    };
     const deadline = Date.now() + 12_000;
     let profile = await read();
     while (
@@ -2920,8 +2984,9 @@ export class ChatGptRoute {
     )
       return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
     if (!profile.data.modelReady || profileIdentityLost())
-      return "CHATGPT_INSTANT_MODEL_REQUIRED";
+      return refuseInstant();
 
+    stage = "picker";
     try {
       if (
         (await contents.executeJavaScript(
@@ -2930,14 +2995,15 @@ export class ChatGptRoute {
         )) !== true ||
         profileIdentityLost()
       )
-        return "CHATGPT_INSTANT_MODEL_REQUIRED";
+        return refuseInstant();
       // Opening a provider menu does not acknowledge that its controls have
       // rendered. Observe the same opened picker for a bounded interval; never
       // click it again or reinterpret an unrecognized result as readiness.
+      stage = "slider";
       const pickerDeadline = Date.now() + 2_000;
       let minimumObserved = false;
       for (let attempt = 0; attempt < 8; attempt += 1) {
-        if (profileIdentityLost()) return "CHATGPT_INSTANT_MODEL_REQUIRED";
+        if (profileIdentityLost()) return refuseInstant();
         let slider = instantPowerSliderSchema.safeParse(
           await contents.executeJavaScript(focusInstantPowerSliderScript, true),
         );
@@ -2947,7 +3013,7 @@ export class ChatGptRoute {
           Date.now() < pickerDeadline
         ) {
           await delay(100);
-          if (profileIdentityLost()) return "CHATGPT_INSTANT_MODEL_REQUIRED";
+          if (profileIdentityLost()) return refuseInstant();
           slider = instantPowerSliderSchema.safeParse(
             await contents.executeJavaScript(
               focusInstantPowerSliderScript,
@@ -2955,8 +3021,11 @@ export class ChatGptRoute {
             ),
           );
         }
+        sliderReady = slider.success && slider.data.ready;
+        sliderAtMinimum =
+          slider.success && slider.data.ready && slider.data.atMinimum === true;
         if (profileIdentityLost() || !slider.success || !slider.data.ready)
-          return "CHATGPT_INSTANT_MODEL_REQUIRED";
+          return refuseInstant();
         if (slider.data.atMinimum) {
           minimumObserved = true;
           break;
@@ -2965,12 +3034,13 @@ export class ChatGptRoute {
         contents.sendInputEvent({ type: "keyUp", keyCode: "Left" });
         await delay(80);
       }
-      if (!minimumObserved) return "CHATGPT_INSTANT_MODEL_REQUIRED";
+      if (!minimumObserved) return refuseInstant();
       contents.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
       contents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
     } catch {
-      return "CHATGPT_INSTANT_MODEL_REQUIRED";
+      return refuseInstant();
     }
+    stage = "selected-model";
     let selected = await read();
     const selectedDeadline = Date.now() + 2_000;
     while (
@@ -2979,7 +3049,7 @@ export class ChatGptRoute {
       Date.now() < selectedDeadline
     ) {
       await delay(100);
-      if (profileIdentityLost()) return "CHATGPT_INSTANT_MODEL_REQUIRED";
+      if (profileIdentityLost()) return refuseInstant();
       selected = await read();
     }
     if (
@@ -2991,7 +3061,7 @@ export class ChatGptRoute {
       !selected.data.modelReady ||
       !selected.data.instant
     )
-      return "CHATGPT_INSTANT_MODEL_REQUIRED";
+      return refuseInstant();
 
     // Ordinary connector checks need app access, which Temporary Chat does not
     // provide. Their freshly navigated, empty Instant composer needs no
