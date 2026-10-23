@@ -18,23 +18,30 @@ function parseLinuxProcessState(stat, pid) {
   return match[2];
 }
 
-async function observeProcessLiveness(pid) {
+async function observeProcessLiveness(
+  pid,
+  {
+    kill = process.kill,
+    readFile = fs.readFile,
+    platform = process.platform,
+  } = {},
+) {
   try {
-    process.kill(pid, 0);
+    kill(pid, 0);
   } catch (error) {
     if (error?.code === "ESRCH") return "absent";
     throw error;
   }
-  if (process.platform !== "linux") return "live";
+  if (platform !== "linux") return "live";
 
   let stat;
   try {
-    stat = await fs.readFile(`/proc/${pid}/stat`, "utf8");
+    stat = await readFile(`/proc/${pid}/stat`, "utf8");
   } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
+    if (error?.code !== "ENOENT" && error?.code !== "ESRCH") throw error;
     // A disappearing proc entry still needs the ordinary absence proof.
     try {
-      process.kill(pid, 0);
+      kill(pid, 0);
     } catch (absenceError) {
       if (absenceError?.code === "ESRCH") return "absent";
       throw absenceError;
@@ -88,6 +95,46 @@ describe("bounded E2E child process", () => {
       "INVALID_LINUX_PROCESS_STAT",
     );
   });
+
+  it.each([
+    { readCode: "ESRCH", proofCode: "ESRCH", result: "absent" },
+    { readCode: "ESRCH", proofCode: undefined, errorCode: "ESRCH" },
+    { readCode: "ESRCH", proofCode: "EPERM", errorCode: "EPERM" },
+    { readCode: "ENOENT", proofCode: "ESRCH", result: "absent" },
+    { readCode: "ENOENT", proofCode: undefined, errorCode: "ENOENT" },
+    { readCode: "ENOENT", proofCode: "EPERM", errorCode: "EPERM" },
+    { readCode: "EACCES", errorCode: "EACCES" },
+    { readCode: "EIO", errorCode: "EIO" },
+  ])(
+    "requires an absence proof after /proc read $readCode (proof $proofCode)",
+    async ({ readCode, proofCode, result, errorCode }) => {
+      const readError = Object.assign(new Error(readCode), { code: readCode });
+      const proofError = proofCode
+        ? Object.assign(new Error(proofCode), { code: proofCode })
+        : undefined;
+      let killCalls = 0;
+      const observe = observeProcessLiveness(123, {
+        platform: "linux",
+        kill() {
+          killCalls += 1;
+          if (killCalls === 1) return;
+          if (proofError) throw proofError;
+        },
+        async readFile() {
+          throw readError;
+        },
+      });
+
+      if (result) {
+        await expect(observe).resolves.toBe(result);
+      } else {
+        await expect(observe).rejects.toMatchObject({ code: errorCode });
+      }
+      expect(killCalls).toBe(
+        readCode === "ESRCH" || readCode === "ENOENT" ? 2 : 1,
+      );
+    },
+  );
 
   it("bounds inherited pipes and terminates its fixture descendant", async () => {
     const root = await fs.mkdtemp(
