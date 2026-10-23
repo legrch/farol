@@ -773,6 +773,9 @@ const allowPrimaryDisplay = parseAllowPrimaryDisplay(process.argv);
 const builtInDisplayOnly = parseBuiltInDisplayOnly(process.argv);
 const sidecarDisplayOnly = parseSidecarDisplayOnly(process.argv);
 const initialWindowSize = parsePreviewWindowSize(process.argv, windowMode);
+const explicitPreviewWindowSize = process.argv.some((argument) =>
+  argument.startsWith("--preview-window-size="),
+);
 const demoTasks = [
   {
     ownerId: "demo-local-preview",
@@ -11653,7 +11656,18 @@ function chatGptWindowPresentation(): ChatGptWindowPresentation | undefined {
   if (windowMode === "hidden") return { mode: "hidden" };
   return {
     mode: "secondary-visible",
-    place: (requested) => selectedVisibleTestPlacement(requested).bounds,
+    // Fixed test viewports stay exact. An explicit interactive viewport and
+    // ordinary Dev may fit auth windows within their selected display.
+    size: devSecondaryDisplay || explicitPreviewWindowSize ? "fit" : "exact",
+    place: (requested) =>
+      selectedVisibleTestPlacement(
+        explicitPreviewWindowSize
+          ? {
+              width: Math.min(requested.width, initialWindowSize.width),
+              height: Math.min(requested.height, initialWindowSize.height),
+            }
+          : requested,
+      ).bounds,
   };
 }
 

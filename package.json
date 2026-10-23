@@ -1,9 +1,9 @@
 {
   "name": "farol",
-  "version": "0.2.8-owner.beta.10",
+  "version": "0.2.8-owner.beta.9",
   "farolRelease": {
     "updateChannel": "github-owner-beta",
-    "buildVersion": "46"
+    "buildVersion": "45"
   },
   "private": true,
   "description": "Isolated local preview of the Farol modular monolith.",

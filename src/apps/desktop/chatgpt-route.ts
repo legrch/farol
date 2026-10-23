@@ -1398,6 +1398,7 @@ export type ChatGptWindowPresentation =
   | Readonly<{ mode: "hidden" }>
   | Readonly<{
       mode: "secondary-visible";
+      size?: "exact" | "fit";
       place(
         requested: Readonly<{ width: number; height: number }>,
       ): Readonly<{ x: number; y: number; width: number; height: number }>;
@@ -1433,8 +1434,14 @@ export function resolveChatGptWindowPresentation(
   if (
     !Number.isSafeInteger(bounds.x) ||
     !Number.isSafeInteger(bounds.y) ||
-    bounds.width !== requested.width ||
-    bounds.height !== requested.height
+    !Number.isSafeInteger(bounds.width) ||
+    !Number.isSafeInteger(bounds.height) ||
+    (presentation.size === "fit"
+      ? bounds.width < 720 ||
+        bounds.height < 560 ||
+        bounds.width > requested.width ||
+        bounds.height > requested.height
+      : bounds.width !== requested.width || bounds.height !== requested.height)
   ) {
     throw new Error("CHATGPT_WINDOW_PLACEMENT_INVALID");
   }

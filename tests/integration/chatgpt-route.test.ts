@@ -2200,6 +2200,38 @@ describe("ChatGPT test-window presentation", () => {
     ).toThrow("CHATGPT_WINDOW_PLACEMENT_INVALID");
   });
 
+  it.each([1080, 720])(
+    "fits a %i px auth surface inside an explicit Sidecar viewport",
+    (width) => {
+      const bounds = { x: -1110, y: 30, width, height: 720 };
+      expect(
+        resolveChatGptWindowPresentation(
+          { mode: "secondary-visible", size: "fit", place: () => bounds },
+          { width, height: 760 },
+        ),
+      ).toEqual({ bounds, reveal: "show-inactive", focus: false });
+    },
+  );
+
+  it.each([
+    { width: 719, height: 720 },
+    { width: 720, height: 559 },
+    { width: 1081, height: 720 },
+    { width: 1080, height: 761 },
+    { width: 720.5, height: 720 },
+  ])("rejects unsafe fitted auth dimensions %j", (dimensions) => {
+    expect(() =>
+      resolveChatGptWindowPresentation(
+        {
+          mode: "secondary-visible",
+          size: "fit",
+          place: () => ({ x: -1110, y: 30, ...dimensions }),
+        },
+        { width: 1080, height: 760 },
+      ),
+    ).toThrow("CHATGPT_WINDOW_PLACEMENT_INVALID");
+  });
+
   it("hides a separate route before fail-closed topology re-evaluation", async () => {
     const surface = { ...embeddedSurface(), kind: "window" as const };
     const candidate = new ChatGptRoute({
