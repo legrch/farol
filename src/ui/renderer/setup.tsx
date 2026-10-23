@@ -38,7 +38,11 @@ export function SetupNavigation({
   snapshot,
   facade,
   inputsChanged = false,
-}: Props & { inputsChanged?: boolean }) {
+  onNavigate,
+}: Props & {
+  inputsChanged?: boolean;
+  onNavigate: (step: SetupSection) => void;
+}) {
   const local = useSetupIntents(facade, snapshot);
   const selected = visibleSetupSection(snapshot.destination.setupStep);
   if (selected === "overview") return null;
@@ -46,17 +50,21 @@ export function SetupNavigation({
     <ol className="setup-progress" aria-label="Setup progress">
       {setupChecklist(snapshot, inputsChanged, local).entries.map(
         (entry, index) => (
-          <li
-            key={entry.step}
-            aria-current={entry.step === selected ? "step" : undefined}
-            data-check-state={entry.state}
-          >
-            <span aria-hidden="true">
-              {entry.state === "verified" && entry.step !== selected
-                ? "✓"
-                : index + 1}
-            </span>{" "}
-            {entry.label}
+          <li key={entry.step} data-check-state={entry.state}>
+            <button
+              type="button"
+              className="setup-progress-step"
+              aria-label={`${index + 1}. ${entry.label}${entry.state === "verified" ? ", completed" : ""}`}
+              aria-current={entry.step === selected ? "step" : undefined}
+              onClick={() => onNavigate(entry.step)}
+            >
+              <span aria-hidden="true">
+                {entry.state === "verified" && entry.step !== selected
+                  ? "✓"
+                  : index + 1}
+              </span>{" "}
+              {entry.label}
+            </button>
           </li>
         ),
       )}
@@ -64,6 +72,7 @@ export function SetupNavigation({
   );
 }
 export function Setup({ snapshot, facade }: Props) {
+  const root = useRef<HTMLDivElement>(null);
   const step = visibleSetupSection(snapshot.destination.setupStep);
   const [inputsChanged, setInputsChanged] = useState(false);
   const changed = useRef(false);
@@ -71,6 +80,17 @@ export function Setup({ snapshot, facade }: Props) {
   const checklist = setupChecklist(snapshot, inputsChanged, local);
   const previous = adjacentSetupSection(step, -1);
   const next = adjacentSetupSection(step, 1);
+  function navigateToStep(setupStep: SetupSection) {
+    // Shell owns scrolling in this main element and remembers per-destination
+    // positions. Reset it before changing setup destination so a reviewed step
+    // opens at its title even when the previous step was scrolled down.
+    const stage = root.current?.closest<HTMLElement>("main.stage");
+    if (stage) {
+      stage.scrollTop = 0;
+      stage.scrollLeft = 0;
+    }
+    facade.navigate({ area: "setup", setupStep });
+  }
   const passed =
     step !== "overview" &&
     setupStepCheck(
@@ -80,11 +100,12 @@ export function Setup({ snapshot, facade }: Props) {
       local,
     ).allowed;
   return (
-    <div className="setup-page setup-wizard" data-setup-step={step}>
+    <div ref={root} className="setup-page setup-wizard" data-setup-step={step}>
       <SetupNavigation
         snapshot={snapshot}
         facade={facade}
         inputsChanged={inputsChanged}
+        onNavigate={navigateToStep}
       />
       <header className="setup-wizard-intro">
         <h1>{context[step].title}</h1>
@@ -101,9 +122,7 @@ export function Setup({ snapshot, facade }: Props) {
           <button
             type="button"
             className="primary"
-            onClick={() =>
-              facade.navigate({ area: "setup", setupStep: "signin" })
-            }
+            onClick={() => navigateToStep("signin")}
           >
             Start setup
           </button>
@@ -143,12 +162,7 @@ export function Setup({ snapshot, facade }: Props) {
           <button
             type="button"
             className="subtle"
-            onClick={() =>
-              facade.navigate({
-                area: "setup",
-                setupStep: previous ?? "overview",
-              })
-            }
+            onClick={() => navigateToStep(previous ?? "overview")}
           >
             Back
           </button>
@@ -175,7 +189,7 @@ export function Setup({ snapshot, facade }: Props) {
                 ).allowed
               )
                 return;
-              if (next) facade.navigate({ area: "setup", setupStep: next });
+              if (next) navigateToStep(next);
               else if (current.ready) {
                 const result = await facade.configure(
                   {

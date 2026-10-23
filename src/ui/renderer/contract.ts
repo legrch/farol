@@ -268,6 +268,7 @@ export interface RendererFacade {
   acknowledgeWorkspaceEdit(operationId: string): Promise<Intent>;
   shortcuts(value: NavigationShortcuts): Promise<Intent>;
   refresh(): Promise<void>;
+  refreshSignInStatus?(): void;
   refreshReadback?(): Promise<NativeRefreshResult>;
   reconcileWorkspaceReadback?(
     receipt: NativeRefreshResult,

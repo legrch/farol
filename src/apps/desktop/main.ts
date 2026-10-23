@@ -1862,7 +1862,7 @@ function createLiveChatGptRoute(
     },
     onConversationChanged: recordConversationUrl,
     onTaskActivityChanged: recordTaskActivity,
-    ...(process.env.FAROL_E2E === "1"
+    ...(process.env.FAROL_E2E === "1" && chatGptE2eOrigin !== null
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
       : {}),
   });
@@ -1897,7 +1897,7 @@ function createContextSummaryFallbackRoute(
     parent: () => window,
     ...chatGptWindowPresentationOption(),
     title: `Context recovery · ${displayProductName}`,
-    ...(process.env.FAROL_E2E === "1"
+    ...(process.env.FAROL_E2E === "1" && chatGptE2eOrigin !== null
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
       : {}),
   });
@@ -5715,7 +5715,7 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
           claimed = true;
         },
       },
-      "temporary-instant",
+      "connector-instant",
       { name: appName },
     );
     if (
@@ -6426,6 +6426,10 @@ function operationsStore(): OperationsStore {
 function configureProduct(value: unknown): Promise<ProductConfigurationResult> {
   const parsed = ProductConfigurationCommandSchema.safeParse(value);
   if (!parsed.success) return configureProductObserved(value);
+  // This bounded page query has no effect to reconcile. Inconclusive status
+  // remains a diagnostic, never a durable unresolved operation.
+  if (parsed.data.kind === "chatgpt.observe-sign-in")
+    return configureProductObserved(parsed.data);
   const metadata = configurationOperation(parsed.data);
   return observeOperation(operationsStore(), metadata, () => {
     const original = configureProductObserved(value);
@@ -12359,7 +12363,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     ...(embeddedBrowserEnabled()
       ? { surfaceFactory: signInChatGptSurfaceFactory() }
       : {}),
-    ...(process.env.FAROL_E2E === "1"
+    ...(process.env.FAROL_E2E === "1" && chatGptE2eOrigin !== null
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
       : {}),
     onSignInOutcome: (status, diagnostic) => {
@@ -12454,6 +12458,9 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   }
   await runDesktopStartupBoundary("local-runtime", startRuntime);
   await runDesktopStartupBoundary("main-window", ensureWindow);
+  // Warm the retained browser in its isolated profile while Setup is visible.
+  // The existing layout owns visibility; this never signs in or submits a turn.
+  if (embeddedBrowserEnabled()) void chatGptRoute?.preload().catch(() => {});
   screen.on("display-added", reconcileVisibleTestDisplay);
   screen.on("display-removed", reconcileVisibleTestDisplay);
   screen.on("display-metrics-changed", reconcileVisibleTestDisplay);

@@ -36,6 +36,9 @@ export function unresolvedActions(
       code: intent.code,
     }));
   for (const entry of snapshot.activity) {
+    // Older builds recorded inconclusive pure page reads as uncertain effects.
+    // Keep their original Activity records; there is no action to replay here.
+    if (entry.kind === "chatgpt.observe-sign-in") continue;
     if (entry.outcome !== "unknown" && entry.outcome !== "pending") continue;
     rows.push({
       id: `operation:${entry.id}`,

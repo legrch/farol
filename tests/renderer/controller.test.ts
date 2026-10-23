@@ -4529,3 +4529,84 @@ it("can present despite a failed Settings read without adopting its reply snapsh
   expect(f.api.task).not.toHaveBeenCalled();
   c.dispose();
 });
+
+describe("automatic Setup sign-in after the owner login flow", () => {
+  it.each([false, true])(
+    "confirms once and preserves an uncertain verifier: %s",
+    async (uncertain) => {
+      const f = fixture();
+      const data = bootstrap();
+      const ready = settings();
+      Object.assign(ready.setup.chatgpt, {
+        visited: true,
+        configured: true,
+        reachable: "reachable",
+        verified: {
+          profile: "chatgpt",
+          configRevision: 1,
+          workspaceId: null,
+          runtimeGeneration: "fixture-session",
+          buildId: data.build.buildId,
+          protocol: "chatgpt-page-readiness/1",
+          verifiedAt: "2026-10-23T00:00:00.000Z",
+        },
+      });
+      let checks = 0;
+      vi.mocked(f.api.configure).mockImplementation(async (command) => {
+        if (command.kind === "chatgpt.observe-sign-in")
+          return signInReply(command, "authenticated");
+        if (command.kind === "chatgpt.verify") {
+          checks++;
+          if (uncertain) throw Error("fixture lost writer reply");
+          return {
+            ok: true,
+            snapshot: { status: "ready", settings: ready },
+            evidence: {
+              kind: "chatgpt.readiness",
+              state: "authenticated",
+              code: null,
+            },
+          };
+        }
+        return { ok: true, snapshot: data.configuration };
+      });
+      const c = new WindowController(f.api);
+      await c.start();
+      try {
+        c.navigate({ area: "setup", setupStep: "signin" });
+        await c.configure(
+          { kind: "chatgpt.open-sign-in" },
+          "settings:chatgpt.open-sign-in:",
+        );
+        f.emit("route", { state: "loaded" });
+        c.navigate({ area: "setup", setupStep: "signin" });
+        await vi.waitFor(() =>
+          expect(
+            c.getSnapshot().intents["settings:chatgpt.verify:"]?.state,
+          ).toBe(uncertain ? "unknown" : "applied"),
+        );
+        if (!uncertain)
+          await vi.waitFor(() =>
+            expect(c.getSnapshot().signInObservation?.pending).toBe(false),
+          );
+        expect(checks).toBe(1);
+        const original = c.getSnapshot().intents["settings:chatgpt.verify:"];
+        c.navigate({ area: "setup", setupStep: "folders" });
+        c.navigate({ area: "setup", setupStep: "signin" });
+        await vi.waitFor(() =>
+          expect(c.getSnapshot().signInObservation?.pending).toBe(false),
+        );
+        expect(checks).toBe(1);
+        expect(c.getSnapshot().intents["settings:chatgpt.verify:"]).toBe(
+          original,
+        );
+        expect(setupChecklist(c.getSnapshot()).entries[0]?.state).toBe(
+          uncertain ? "unknown" : "verified",
+        );
+        expect(f.api.task).not.toHaveBeenCalled();
+      } finally {
+        c.dispose();
+      }
+    },
+  );
+});

@@ -1138,6 +1138,7 @@ export function activateTaskScript(
   expectedHref: string,
   requiredAppName?: string,
   requireTemporaryInstant = false,
+  requireOrdinaryInstant = false,
 ): string {
   return `(() => {
     const expectedHref = ${JSON.stringify(expectedHref)};
@@ -1149,6 +1150,17 @@ export function activateTaskScript(
         button.getAttribute("aria-label") === "Turn off temporary chat" && button.getClientRects().length > 0) ||
       ![...document.querySelectorAll("button")].some((button) =>
         (button.textContent || "").trim() === "Personalized" && button.getClientRects().length > 0) ||
+      ![...document.querySelectorAll("button")].some((button) =>
+        button.getAttribute("aria-label") === "Select ChatGPT model" &&
+        (button.innerText || "").trim() === "Instant" && button.getClientRects().length > 0))
+      return { profileLost: true };`
+        : ""
+    }
+    ${
+      requireOrdinaryInstant
+        ? `if (new URL(location.href).searchParams.has("temporary-chat") ||
+      [...document.querySelectorAll("button")].some((button) =>
+        button.getAttribute("aria-label") === "Turn off temporary chat" && button.getClientRects().length > 0) ||
       ![...document.querySelectorAll("button")].some((button) =>
         button.getAttribute("aria-label") === "Select ChatGPT model" &&
         (button.innerText || "").trim() === "Instant" && button.getClientRects().length > 0))
@@ -1536,7 +1548,7 @@ export type ChatGptTaskObserver = Readonly<{
   // one turn, never both. Items describe visible output, not tool execution.
   onVisibleItem?: (item: VisibleOutputItem) => void | Promise<void>;
   onDispatchIntent?: () => void | Promise<void>;
-  // Only an app-bound temporary connector check may finish from its exact
+  // Only an app-bound connector check may finish from its exact
   // local receipt. This proves the connector effect, never a model answer.
   readConnectorReceipt?: () => Promise<boolean>;
   onCorrelation?: (
@@ -2152,7 +2164,10 @@ export class ChatGptRoute {
 
   async open(): Promise<ChatGptOpenResult> {
     if (this.updateAdmission) return { status: "unreachable" };
-    if (this.opening) return this.opening;
+    if (this.opening) {
+      const opened = await this.opening;
+      return opened.status === "opened" ? this.open() : opened;
+    }
     const retained = this.routeWindow;
     if (retained && !retained.isDestroyed()) {
       if (this.options.requiredAppName !== undefined) {
@@ -2184,6 +2199,22 @@ export class ChatGptRoute {
     }
 
     const opening = this.openRouteWindow();
+    this.opening = opening;
+    try {
+      return await opening;
+    } finally {
+      if (this.opening === opening) this.opening = null;
+    }
+  }
+
+  /** Load the existing browser profile without revealing, focusing or sending. */
+  async preload(): Promise<ChatGptOpenResult> {
+    if (this.updateAdmission || this.taskInFlight)
+      return { status: "unreachable" };
+    if (this.opening) return this.opening;
+    if (this.routeWindow && !this.routeWindow.isDestroyed())
+      return { status: this.load === "loaded" ? "opened" : "unreachable" };
+    const opening = this.openRouteWindow(false);
     this.opening = opening;
     try {
       return await opening;
@@ -2336,7 +2367,7 @@ export class ChatGptRoute {
     void this.pendingSignInObservation.then(close, close);
   }
 
-  private async openRouteWindow(): Promise<ChatGptOpenResult> {
+  private async openRouteWindow(reveal = true): Promise<ChatGptOpenResult> {
     const parent = this.options.parent();
     const restoreParent = parent?.isVisible() ?? false;
     const routeSession = session.fromPartition(
@@ -2470,8 +2501,10 @@ export class ChatGptRoute {
       }
       this.load = "loaded";
       this.options.onLoadStateChanged?.("loaded");
-      candidate.reveal();
-      candidate.focus();
+      if (reveal) {
+        candidate.reveal();
+        candidate.focus();
+      }
       return { status: "opened" };
     } catch (error) {
       this.load = "failed";
@@ -2487,6 +2520,7 @@ export class ChatGptRoute {
         return { status: "unreachable" };
       }
       if (
+        reveal &&
         this.options.requiredAppName === undefined &&
         !candidate.isDestroyed()
       ) {
@@ -2807,6 +2841,7 @@ export class ChatGptRoute {
 
   private async prepareTemporaryInstantProfile(
     candidate: ChatGptRouteSurface,
+    temporary = true,
   ): Promise<
     | "CHATGPT_COMPOSER_DRAFT_PRESENT"
     | "CHATGPT_TEMPORARY_CHAT_REQUIRED"
@@ -2829,7 +2864,8 @@ export class ChatGptRoute {
     if (initial.data.draftPresent) return "CHATGPT_COMPOSER_DRAFT_PRESENT";
 
     const temporaryUrl = new URL(this.options.homeUrl);
-    temporaryUrl.searchParams.set("temporary-chat", "true");
+    if (temporary) temporaryUrl.searchParams.set("temporary-chat", "true");
+    else temporaryUrl.searchParams.delete("temporary-chat");
     try {
       await candidate.loadURL(temporaryUrl.href);
     } catch {
@@ -2852,7 +2888,7 @@ export class ChatGptRoute {
       Date.now() < deadline &&
       (!profile.success ||
         !profile.data.composerReady ||
-        !profile.data.temporary ||
+        profile.data.temporary !== temporary ||
         !profile.data.modelReady)
     ) {
       await delay(200);
@@ -2863,7 +2899,7 @@ export class ChatGptRoute {
     if (
       !profile.success ||
       !profile.data.composerReady ||
-      !profile.data.temporary ||
+      profile.data.temporary !== temporary ||
       !profile.data.modelReady ||
       profile.data.draftPresent
     )
@@ -2936,11 +2972,16 @@ export class ChatGptRoute {
       !selected.success ||
       !selected.data.composerReady ||
       selected.data.draftPresent ||
-      !selected.data.temporary ||
+      selected.data.temporary !== temporary ||
       !selected.data.modelReady ||
       !selected.data.instant
     )
       return "CHATGPT_INSTANT_MODEL_REQUIRED";
+
+    // Ordinary connector checks need app access, which Temporary Chat does not
+    // provide. Their freshly navigated, empty Instant composer needs no
+    // personalization toggle; preserve the owner's account preferences.
+    if (!temporary) return null;
 
     // Personalization controls may depend on the selected provider model.
     // Confirm Instant before waiting for or selecting Personalized; neither
@@ -2961,7 +3002,7 @@ export class ChatGptRoute {
       !profile.success ||
       !profile.data.composerReady ||
       profile.data.draftPresent ||
-      !profile.data.temporary ||
+      profile.data.temporary !== temporary ||
       !profile.data.instant ||
       !profile.data.personalizationReady
     )
@@ -3020,21 +3061,22 @@ export class ChatGptRoute {
     observer: ChatGptTaskObserver & {
       readConnectorReceipt: () => Promise<boolean>;
     },
-    profile: "temporary-instant",
+    profile: "temporary-instant" | "connector-instant",
     appTarget: Readonly<{ name: string }>,
   ): Promise<ChatGptConnectorCheckResult>;
   async runReadonlyTask(
     prompt: string,
     attachments?: readonly StagedChatGptAttachment[],
     observer?: ChatGptTaskObserver,
-    profile?: "ordinary" | "temporary-instant",
+    profile?: "ordinary" | "temporary-instant" | "connector-instant",
     appTarget?: Readonly<{ name: string }>,
   ): Promise<ChatGptReadonlyTaskResult>;
   async runReadonlyTask(
     prompt: string,
     attachments: readonly StagedChatGptAttachment[] = [],
     observer: ChatGptTaskObserver = {},
-    profile: "ordinary" | "temporary-instant" = "ordinary",
+    profile:
+      "ordinary" | "temporary-instant" | "connector-instant" = "ordinary",
     appTarget?: Readonly<{ name: string }>,
   ): Promise<ChatGptConnectorCheckResult> {
     // Capture this operation's explicit target before any navigation. Never
@@ -3128,7 +3170,7 @@ export class ChatGptRoute {
           outputText: observedText,
         };
       }
-      if (profile === "temporary-instant") {
+      if (profile === "temporary-instant" || profile === "connector-instant") {
         const running = await candidate.webContents
           .executeJavaScript(activityProbe, true)
           .then((answer) => activityProbeSchema.safeParse(answer))
@@ -3142,19 +3184,25 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
-        const profileFailure =
-          await this.prepareTemporaryInstantProfile(candidate);
+        const profileFailure = await this.prepareTemporaryInstantProfile(
+          candidate,
+          profile === "temporary-instant",
+        );
         if (profileFailure !== null) {
           return {
             state: "failed_before_submit",
-            code: profileFailure,
+            code:
+              profile === "connector-instant" &&
+              profileFailure === "CHATGPT_TEMPORARY_CHAT_REQUIRED"
+                ? "CHATGPT_UI_UNRECOGNIZED"
+                : profileFailure,
             deltaCount,
             observedCharacters,
             outputText: observedText,
           };
         }
       }
-      if (profile === "temporary-instant") {
+      if (profile === "temporary-instant" || profile === "connector-instant") {
         // Profile preparation may navigate. Its composer/model probes are not
         // authentication evidence for the new document's dispatch.
         const currentReadiness = await this.observe();
@@ -3485,6 +3533,7 @@ export class ChatGptRoute {
               dispatchIdentityUrl,
               requiredAppName,
               profile === "temporary-instant",
+              profile === "connector-instant",
             ),
             true,
           ),
@@ -3602,7 +3651,8 @@ export class ChatGptRoute {
           };
         }
         if (
-          profile === "temporary-instant" &&
+          (profile === "temporary-instant" ||
+            profile === "connector-instant") &&
           appTarget !== undefined &&
           observer.readConnectorReceipt
         ) {
