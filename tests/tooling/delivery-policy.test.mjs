@@ -80,6 +80,34 @@ describe("repository delivery policy", () => {
         r.jobs.publish.needs = "build";
       },
     ],
+    [
+      "missing exact-asset qualification input",
+      (_p, r) => {
+        delete r.on.workflow_dispatch.inputs.manifest_sha256;
+      },
+    ],
+    [
+      "artifact-name fallback instead of immutable artifact ID",
+      (_p, r) => {
+        const step = r.jobs.publish.steps.find((s) =>
+          s.uses?.startsWith("actions/download-artifact@"),
+        );
+        delete step.with["artifact-ids"];
+        step.with.name = "public-release-assets";
+      },
+    ],
+    [
+      "write-capable preparation",
+      (_p, r) => {
+        r.jobs.build.permissions = { contents: "write" };
+      },
+    ],
+    [
+      "publisher rebuild",
+      (_p, r) => {
+        r.jobs.publish.steps.at(-1).run += "\ntask package";
+      },
+    ],
   ])("rejects policy drift: %s", (_name, mutate) => {
     const p = structuredClone(pr),
       r = structuredClone(release);

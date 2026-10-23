@@ -35,7 +35,20 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
     "ready_for_review",
   ]);
   assert.deepEqual(Object.keys(pr.jobs), policy.requiredChecks);
-  assert.deepEqual(release.on, { push: { tags: [policy.tagPattern] } });
+  assert.deepEqual(Object.keys(release.on), ["push", "workflow_dispatch"]);
+  assert.deepEqual(release.on.push, { tags: [policy.tagPattern] });
+  const inputs = release.on.workflow_dispatch.inputs;
+  assert.deepEqual(Object.keys(inputs), [
+    "action",
+    "candidate_run_id",
+    "manifest_sha256",
+  ]);
+  assert.equal(inputs.action.required, true);
+  assert.equal(inputs.action.type, "choice");
+  assert.deepEqual(inputs.action.options, ["prepare", "publish"]);
+  assert.equal(inputs.action.default, "prepare");
+  for (const key of ["candidate_run_id", "manifest_sha256"])
+    assert.equal(inputs[key].type, "string");
   assert.deepEqual(Object.keys(release.jobs), policy.releaseJobs);
   assert.equal(
     pr.concurrency.group,
@@ -48,7 +61,10 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
     assert.deepEqual(workflow.permissions, { contents: "read" });
     for (const [id, job] of Object.entries(workflow.jobs)) {
       if (workflow === release && id === "publish")
-        assert.deepEqual(job.permissions, { contents: "write" });
+        assert.deepEqual(job.permissions, {
+          contents: "write",
+          actions: "read",
+        });
       else assert.equal(job.permissions, undefined);
       assert.ok(
         Number.isInteger(job["timeout-minutes"]) && job["timeout-minutes"] > 0,
@@ -128,9 +144,17 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
   assert.match(commands(pr.jobs.required), /test "\$PORTABLE" = success/u);
   assert.match(commands(pr.jobs.required), /test "\$NATIVE" = success/u);
   assert.equal(release.jobs.build["runs-on"], "macos-26");
-  assert.equal(release.jobs.publish.needs, "build");
+  assert.equal(
+    release.jobs.build.if,
+    "github.event_name == 'push' || inputs.action == 'prepare'",
+  );
+  assert.equal(
+    release.jobs.publish.if,
+    "github.event_name == 'workflow_dispatch' && inputs.action == 'publish'",
+  );
+  assert.equal(release.jobs.publish.needs, undefined);
   const build = commands(release.jobs.build);
-  assert.match(build, /tooling\/verify-release-tag\.mjs/u);
+  assert.match(build, /node tooling\/release-candidate\.mjs prepare/u);
   assert.match(build, /tooling\/ci-go-inputs\.mjs/u);
   assert.match(build, /task ci\n/u);
   assert.match(build, /task package -- --go-inputs=/u);
@@ -139,16 +163,27 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
     step.uses?.startsWith("actions/upload-artifact@"),
   );
   assert.ok(upload);
+  assert.equal(upload.with.name, "${{ steps.candidate.outputs.artifactName }}");
   assert.deepEqual(upload.with.path.trim().split("\n"), [
-    `_output/release/\${{ github.ref_name }}/${productName}-*-darwin-arm64.zip`,
-    "_output/release/${{ github.ref_name }}/farol-release.json",
-    "_output/release/${{ github.ref_name }}/SHA256SUMS",
+    `_output/release/\${{ steps.candidate.outputs.tag }}/${productName}-\${{ steps.candidate.outputs.version }}-darwin-arm64.zip`,
+    "_output/release/${{ steps.candidate.outputs.tag }}/farol-release.json",
+    "_output/release/${{ steps.candidate.outputs.tag }}/SHA256SUMS",
   ]);
+  const download = release.jobs.publish.steps.find((step) =>
+    step.uses?.startsWith("actions/download-artifact@"),
+  );
+  assert.ok(download);
+  assert.equal(
+    download.with["artifact-ids"],
+    "${{ steps.candidate.outputs.artifactId }}",
+  );
+  assert.equal(download.with["run-id"], "${{ inputs.candidate_run_id }}");
+  assert.equal(download.with["github-token"], "${{ github.token }}");
+  assert.equal(download.with.path, "_output/public-release");
+  assert.equal(download.with["merge-multiple"], true);
   const publish = commands(release.jobs.publish);
-  assert.match(publish, /tooling\/verify-release-tag\.mjs/u);
-  assert.match(publish, /tooling\/verify-release-assets\.mjs/u);
-  assert.match(publish, /gh release create/u);
-  for (const flag of ["--verify-tag", "--prerelease", "--latest=false"])
-    assert.ok(publish.includes(flag));
-  assert.doesNotMatch(publish, /--clobber|gh release (?:upload|edit|delete)/u);
+  assert.deepEqual(publish.trim().split(/\n+/u), [
+    "node tooling/release-candidate.mjs metadata",
+    "node tooling/release-candidate.mjs publish",
+  ]);
 }
