@@ -307,6 +307,101 @@ describe("temporary Instant connector profile", () => {
     expect(route.personalizationOpens()).toBe(1);
   });
 
+  it("selects Instant before waiting for model-dependent personalization controls", async () => {
+    const route = profileRoute(regular, {
+      ...temporary,
+      personalized: false,
+      personalizationReady: false,
+    });
+    const execute = route.executeJavaScript.getMockImplementation()!;
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
+    route.executeJavaScript.mockImplementation(async (script: string) => {
+      if (script === openTemporaryPersonalizationScript)
+        expect(route.sendInputEvent).toHaveBeenCalledWith({
+          type: "keyDown",
+          keyCode: "Left",
+        });
+      const result = await execute(script);
+      return script === temporaryInstantProfileProbe &&
+        typeof result === "object" &&
+        result !== null &&
+        "instant" in result &&
+        result.instant === true
+        ? { ...result, personalizationReady: true }
+        : result;
+    });
+    await expect(route.prepare()).resolves.toBeNull();
+    expect(route.pickerOpens()).toBe(1);
+    expect(route.personalizationOpens()).toBe(1);
+  });
+
+  it("refuses to continue if personalization is still unavailable after selecting Instant", async () => {
+    const route = profileRoute(regular, {
+      ...temporary,
+      personalized: false,
+      personalizationReady: false,
+    });
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
+    await expect(route.prepare()).resolves.toBe(
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+    );
+    expect(route.pickerOpens()).toBe(1);
+    expect(route.personalizationOpens()).toBe(0);
+  });
+
+  it("does not select personalization after the profile document changes", async () => {
+    const route = profileRoute(regular, { ...temporary, personalized: false });
+    const execute = route.executeJavaScript.getMockImplementation()!;
+    route.executeJavaScript.mockImplementation(async (script: string) => {
+      const result = await execute(script);
+      if (script === openTemporaryPersonalizationScript) route.navigate();
+      return result;
+    });
+    await expect(route.prepare()).resolves.toBe(
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+    );
+    expect(route.executeJavaScript).not.toHaveBeenCalledWith(
+      selectTemporaryPersonalizationScript,
+      true,
+    );
+  });
+
+  it.each(["model", "draft"] as const)(
+    "checks the %s again after personalization before continuing",
+    async (changed) => {
+      const route = profileRoute(regular, {
+        ...temporary,
+        personalized: false,
+      });
+      const execute = route.executeJavaScript.getMockImplementation()!;
+      let personalized = false;
+      route.executeJavaScript.mockImplementation(async (script: string) => {
+        const result = await execute(script);
+        if (script === selectTemporaryPersonalizationScript)
+          personalized = true;
+        return script === temporaryInstantProfileProbe &&
+          personalized &&
+          typeof result === "object" &&
+          result !== null
+          ? {
+              ...result,
+              ...(changed === "model"
+                ? { instant: false }
+                : { draftPresent: true }),
+            }
+          : result;
+      });
+      await expect(route.prepare()).resolves.toBe(
+        changed === "model"
+          ? "CHATGPT_INSTANT_MODEL_REQUIRED"
+          : "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      );
+      expect(route.pickerOpens()).toBe(1);
+    },
+  );
+
   it("waits for the temporary chat controls to hydrate before choosing the model", async () => {
     const loading = {
       ...temporary,
