@@ -4985,7 +4985,12 @@ function reportOwnedBackendLifecycle(
         ? "unknown"
         : observation.event === "failure"
           ? "failed"
-          : observation.exitCode === 0
+          : observation.state === "observed" &&
+              observation.phase === "closing" &&
+              observation.event === "child-close" &&
+              observation.exitCode === 0 &&
+              observation.signal === null &&
+              !observation.forced
             ? "done"
             : "unknown",
       observation.code,
