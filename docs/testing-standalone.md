@@ -268,8 +268,9 @@ and its non-secret environment allowlist. Both sources must be clean and match
 the exact pinned commits/tree identities. Preflight checks canonical schema-7
 artifact paths, self-consistent build identities, owner-beta channels, sealed
 schema-4 build entries/input declarations, Go binary declarations/digests and
-complete app trees. Both bundles must contain the native E2E app-data seam and
-the selected sources/binaries must support the direct live helper protocol.
+complete app trees. Both bundles must contain the native E2E app-data seam, the early window-lifetime
+observer and its declared schema, and the selected sources/binaries must support
+the direct live helper protocol.
 These static capability checks do not prove native execution.
 
 Replace only `--check` with `--run-native` when the root owns the native lane.
@@ -302,6 +303,27 @@ strictly correlated ACK on fd4. Only `waiting_for_exit` permits one actual
 must disappear, and hidden-lifetime evidence must settle. Only then can the
 helper's original terminal plus the installed full-tree digest authorize the
 next lifetime.
+
+The shared native-lifetime proof is also used by first-launch/reopen and the
+built-source sign-in continuity witness. Before the one Quit request, it reads
+and pins the fixed private receipt (or its absence) and brands that observation
+in the controller's memory with the actual PID. After actual process/stream
+close, qualification requires an atomic replacement with a different inode in
+the same physical directory, monotonic observation order for that current
+request, and a parsed drained receipt without unconfirmed children. Wall-clock
+dates remain diagnostic; unchanged future-dated receipts, in-place writes,
+serialized/replayed observations and foreign process exits cannot qualify.
+
+The E2E-only window observer is the main entry's first import, before product
+composition, and arms only with the same proven disposable root and explicit
+hidden mode. It never controls windows. Immutable cumulative counters retain
+creation, show/focus, closed-window and observer-fault evidence even before the
+controller receives its public app handle. The controller requires the actual
+PID's healthy initial/pre-Quit snapshots, both synchronous Node-exit and app-quit
+frames, complete original stderr termination and no remaining open windows.
+Missing fields, faults, counter/frame overflow, malformed/truncated frames or
+any visible/focused window make the lifetime unconfirmed. A late attached
+listener or a current hidden snapshot alone cannot prove the full lifetime.
 
 The sequence is source startup → direct-Go apply → target startup/clean quit →
 target reopen → direct-Go manual rollback using that actual running target and

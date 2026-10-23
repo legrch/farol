@@ -5,11 +5,12 @@ import path from "node:path";
 import os from "node:os";
 import {
   readQuitObservation,
+  beginQuitObservation,
   assertFreshQuit,
 } from "../e2e/lib/native-quit-observation.mjs";
 
 const roots = [];
-const clean = { code: 0, signal: null };
+const clean = { pid: 77, code: 0, signal: null };
 const receipt = (at, extra = {}) =>
   JSON.stringify({ schema: 1, at, drained: true, unconfirmed: [], ...extra }) +
   "\n";
@@ -33,52 +34,43 @@ afterEach(async () => {
 it("requires a new physical receipt for the first quit", async () => {
   const { root, file } = await fixture();
   const before = await readQuitObservation(root);
-  const requestedAt = Date.now();
+  const request = beginQuitObservation(before, 77);
   await replace(file, receipt(new Date().toISOString()));
   const after = await readQuitObservation(root);
-  expect(
-    assertFreshQuit(before, after, { requestedAt, exit: clean }).drained,
-  ).toBe(true);
+  expect(assertFreshQuit(request, after, clean).drained).toBe(true);
   expect(JSON.stringify(after)).not.toContain('"unconfirmed"');
 });
 it("rejects an unchanged future-dated old receipt despite clean exit and a newer timestamp", async () => {
   const { root, file } = await fixture();
   await replace(file, receipt(new Date(Date.now() + 60000).toISOString()));
   const before = await readQuitObservation(root);
-  const requestedAt = Date.now();
+  const request = beginQuitObservation(before, 77);
   const after = await readQuitObservation(root);
-  expect(() =>
-    assertFreshQuit(before, after, { requestedAt, exit: clean }),
-  ).toThrow("QUIT_NOT_REPLACED");
+  expect(() => assertFreshQuit(request, after, clean)).toThrow(
+    "QUIT_NOT_REPLACED",
+  );
 });
 it("requires atomic replacement, not an in-place rewrite with a recent date", async () => {
   const { root, file } = await fixture();
   await replace(file, receipt(new Date(0).toISOString()));
   const before = await readQuitObservation(root);
-  const requestedAt = Date.now();
+  const request = beginQuitObservation(before, 77);
   await fs.writeFile(file, receipt(new Date().toISOString()));
   const after = await readQuitObservation(root);
-  expect(() =>
-    assertFreshQuit(before, after, { requestedAt, exit: clean }),
-  ).toThrow("QUIT_NOT_REPLACED");
+  expect(() => assertFreshQuit(request, after, clean)).toThrow(
+    "QUIT_NOT_REPLACED",
+  );
 });
-it.each(["future", "old", "undrained", "children", "nonzero", "signal"])(
+it.each(["undrained", "children", "nonzero", "signal", "foreign-pid"])(
   "does not upgrade a newly replaced but %s receipt",
   async (kind) => {
     const { root, file } = await fixture();
     const before = await readQuitObservation(root);
-    const requestedAt = Date.now();
-    const at = new Date(
-      kind === "future"
-        ? requestedAt + 60000
-        : kind === "old"
-          ? requestedAt - 60000
-          : Date.now(),
-    ).toISOString();
+    const request = beginQuitObservation(before, 77);
     await replace(
       file,
       receipt(
-        at,
+        new Date().toISOString(),
         kind === "undrained"
           ? { drained: false }
           : kind === "children"
@@ -87,49 +79,63 @@ it.each(["future", "old", "undrained", "children", "nonzero", "signal"])(
       ),
     );
     const after = await readQuitObservation(root);
-    expect(() =>
-      assertFreshQuit(before, after, {
-        requestedAt,
-        exit:
-          kind === "nonzero"
-            ? { code: 1, signal: null }
-            : kind === "signal"
-              ? { code: null, signal: "SIGTERM" }
-              : clean,
-      }),
-    ).toThrow();
+    const exit =
+      kind === "nonzero"
+        ? { pid: 77, code: 1, signal: null }
+        : kind === "signal"
+          ? { pid: 77, code: null, signal: "SIGTERM" }
+          : kind === "foreign-pid"
+            ? { pid: 78, code: 0, signal: null }
+            : clean;
+    expect(() => assertFreshQuit(request, after, exit)).toThrow();
   },
 );
 it("accepts a new atomic receipt after a prior lifetime without trusting the prior date", async () => {
   const { root, file } = await fixture();
   await replace(file, receipt(new Date(Date.now() + 60000).toISOString()));
   const before = await readQuitObservation(root);
-  const requestedAt = Date.now();
+  const request = beginQuitObservation(before, 77);
   await replace(file, receipt(new Date().toISOString()));
   const after = await readQuitObservation(root);
   expect(after.identity.ino).not.toBe(before.identity.ino);
-  expect(
-    assertFreshQuit(before, after, { requestedAt, exit: clean }).unconfirmed,
-  ).toEqual([]);
+  expect(assertFreshQuit(request, after, clean).unconfirmed).toEqual([]);
 });
-it("does not accept caller-forged or serialized observations", async () => {
+it("does not accept caller-forged or serialized observations and does not replay a failed mark", async () => {
   const { root, file } = await fixture();
   const before = await readQuitObservation(root);
-  const requestedAt = Date.now();
+  expect(() =>
+    beginQuitObservation(JSON.parse(JSON.stringify(before)), 77),
+  ).toThrow("QUIT_REQUEST_REQUIRED");
+  const request = beginQuitObservation(before, 77);
   await replace(file, receipt(new Date().toISOString()));
   const after = await readQuitObservation(root);
   expect(() =>
-    assertFreshQuit(JSON.parse(JSON.stringify(before)), after, {
-      requestedAt,
-      exit: clean,
-    }),
+    assertFreshQuit(request, JSON.parse(JSON.stringify(after)), clean),
   ).toThrow("QUIT_OBSERVATION_REQUIRED");
-  expect(() =>
-    assertFreshQuit(before, JSON.parse(JSON.stringify(after)), {
-      requestedAt,
-      exit: clean,
-    }),
-  ).toThrow("QUIT_OBSERVATION_REQUIRED");
+  expect(() => assertFreshQuit(request, after, clean)).toThrow(
+    "QUIT_REQUEST_REQUIRED",
+  );
+});
+it.each([new Date(0).toISOString(), "2099-01-01T00:00:00.000Z"])(
+  "uses physical replacement rather than wall date %s",
+  async (at) => {
+    const { root, file } = await fixture();
+    const before = await readQuitObservation(root);
+    const request = beginQuitObservation(before, 77);
+    await replace(file, receipt(at));
+    const after = await readQuitObservation(root);
+    expect(assertFreshQuit(request, after, clean).at).toBe(at);
+  },
+);
+it("cannot reuse an earlier completed read after issuing the current request", async () => {
+  const { root, file } = await fixture();
+  const before = await readQuitObservation(root);
+  await replace(file, receipt(new Date().toISOString()));
+  const oldAfter = await readQuitObservation(root);
+  const request = beginQuitObservation(before, 77);
+  expect(() => assertFreshQuit(request, oldAfter, clean)).toThrow(
+    "QUIT_OBSERVATION_REQUIRED",
+  );
 });
 it.each(["alias", "mode", "hardlink", "oversize"])(
   "refuses an unsafe %s receipt without reading through it",

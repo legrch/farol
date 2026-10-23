@@ -17,6 +17,16 @@ import {
 } from "../../tooling/runtime-contract.mjs";
 import { setupStep } from "./current-react-setup.mjs";
 import {
+  readQuitObservation,
+  beginQuitObservation,
+  assertFreshQuit,
+} from "./lib/native-quit-observation.mjs";
+import {
+  collectWindowObservation,
+  assertWindowSnapshot,
+  assertWindowLifetime,
+} from "./lib/native-window-observation.mjs";
+import {
   startChatGptFixture,
   stopChatGptFixture,
 } from "./fixtures/chatgpt-site.mjs";
@@ -84,7 +94,14 @@ const save = () =>
     { mode: 0o600 },
   );
 await save();
-let fixture, application, page, terminal, mainId, stateRoot, startedAt;
+let fixture,
+  application,
+  page,
+  terminal,
+  closed,
+  windowObservation,
+  mainId,
+  stateRoot;
 let stopped = false;
 async function poll(read, accept, label) {
   const deadline = Date.now() + 20000;
@@ -218,6 +235,14 @@ async function screenshot(label, documentId) {
 }
 async function close() {
   assert.equal(stopped, false, "SIGN_IN_CLOSE_ALREADY_REQUESTED");
+  const windowBefore = await application.evaluate(({ app }) =>
+    typeof app.__farolE2EWindowLifetime === "function"
+      ? app.__farolE2EWindowLifetime()
+      : null,
+  );
+  assertWindowSnapshot(windowBefore, report.pid);
+  report.quitBefore = await readQuitObservation(stateRoot);
+  report.quitRequest = beginQuitObservation(report.quitBefore, report.pid);
   stopped = true;
   const owned = application;
   let timer;
@@ -234,13 +259,15 @@ async function close() {
     await save();
     assert.equal(exitCode, 0);
     assert.equal(signal, null);
-    const quit = JSON.parse(
-      await fs.readFile(path.join(stateRoot, "last-quit.json"), "utf8"),
+    await Promise.race([closed, deadline]);
+    const exit = { pid: report.pid, code: exitCode, signal };
+    report.windowLifetime = assertWindowLifetime(
+      windowBefore,
+      windowObservation.snapshot(),
+      exit,
     );
-    report.quit = quit;
-    assert.equal(quit.drained, true);
-    assert.deepEqual(quit.unconfirmed, []);
-    assert.ok(Date.parse(quit.at) >= Date.parse(startedAt));
+    report.quitAfter = await readQuitObservation(stateRoot);
+    report.quit = assertFreshQuit(report.quitRequest, report.quitAfter, exit);
     await assert.rejects(fs.lstat(path.join(stateRoot, "running.json")), {
       code: "ENOENT",
     });
@@ -271,6 +298,8 @@ try {
     timeout: 20000,
   });
   terminal = once(application.process(), "exit");
+  closed = once(application.process(), "close");
+  windowObservation = collectWindowObservation(application.process().stderr);
   report.pid = application.process().pid;
   let stderr = "";
   application.process().stderr?.on("data", (chunk) => {
@@ -286,7 +315,13 @@ try {
     userData: app.getPath("userData"),
     sessionData: app.getPath("sessionData"),
     id: BrowserWindow.getAllWindows()[0].id,
+    windowObservation:
+      typeof app.__farolE2EWindowLifetime === "function"
+        ? app.__farolE2EWindowLifetime()
+        : null,
   }));
+  assertWindowSnapshot(paths.windowObservation, report.pid);
+  report.windowInitial = paths.windowObservation;
   mainId = paths.id;
   assert.equal(paths.userData, desktopIdentity("dev", appData).userData);
   assert.equal(paths.sessionData, paths.userData);
@@ -295,7 +330,6 @@ try {
     await fs.readFile(path.join(stateRoot, "running.json"), "utf8"),
   );
   assert.equal(running.pid, report.pid);
-  startedAt = running.startedAt;
   await setupStep(page, "signin");
   const opening = page
     .locator('.setup-page[data-setup-step="signin"]')

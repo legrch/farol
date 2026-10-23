@@ -34,7 +34,17 @@ import {
   desktopIdentity,
   productBundleName,
 } from "../../../tooling/harness-identity.ts";
-import { parseQuitReceipt } from "../../../src/apps/desktop/quit-receipt.ts";
+import {
+  readQuitObservation,
+  beginQuitObservation,
+  assertFreshQuit,
+} from "./native-quit-observation.mjs";
+import {
+  E2E_WINDOW_LIFETIME_SCHEMA,
+  collectWindowObservation,
+  assertWindowSnapshot,
+  assertWindowLifetime,
+} from "./native-window-observation.mjs";
 import {
   readRunMarker,
   readProcessStart,
@@ -297,6 +307,11 @@ export async function checkCandidate(expected, provenance = sourceIdentity) {
       seam.includes("function assertNativeE2EAppData("),
     "E2E_SEAM_UNSUPPORTED",
   );
+  check(
+    desktop.includes("__farolE2EWindowLifetime") &&
+      desktop.includes(E2E_WINDOW_LIFETIME_SCHEMA),
+    "EARLY_WINDOW_OBSERVER_UNSUPPORTED",
+  );
   const helper = (
     await readBounded(
       path.join(expected.root, "boot/releasehelperlive.go"),
@@ -468,19 +483,6 @@ export function classifyTerminal(
       status = "passed";
   }
   return { status, ...exit, terminal, protocolError };
-}
-export function assertDrainedQuit(text, requestedAt, exit) {
-  const parsed = parseQuitReceipt(text);
-  check(
-    exit.code === 0 &&
-      exit.signal === null &&
-      parsed.ok &&
-      parsed.receipt.drained === true &&
-      parsed.receipt.unconfirmed.length === 0 &&
-      Date.parse(parsed.receipt.at) >= requestedAt,
-    "QUIT_UNCONFIRMED",
-  );
-  return parsed.receipt;
 }
 export function slotBinding(request) {
   const build = (value) => ({
@@ -964,29 +966,7 @@ async function startApp(candidate, home, fixture, report, owners, launch) {
       // A timed-out launch remains the same original attempt, even if its
       // handle arrives after the failure report. Never replace or signal it.
       if (report.status === "failed") releaseObservers(owner);
-      lifetime.hiddenQuit = null;
-      let diagnostics = "";
-      owner.child.stderr?.on("data", (chunk) => {
-        diagnostics += chunk.toString("utf8");
-        const lines = diagnostics.split("\n");
-        diagnostics = lines.pop().slice(-16384);
-        for (const line of lines) {
-          if (!line.startsWith("FAROL_UPDATE_PAIR_QUIT:")) continue;
-          try {
-            const parsed = JSON.parse(
-              line.slice("FAROL_UPDATE_PAIR_QUIT:".length),
-            );
-            if (
-              keys(parsed, ["pid", "violations"]) &&
-              parsed.pid === owner.child.pid &&
-              parsed.violations === 0
-            )
-              lifetime.hiddenQuit = parsed;
-          } catch {
-            /* Malformed diagnostics never prove a hidden lifetime. */
-          }
-        }
-      });
+      owner.windowObservation = collectWindowObservation(owner.child.stderr);
       return owner;
     },
     () => {
@@ -1004,25 +984,6 @@ async function startApp(candidate, home, fixture, report, owners, launch) {
   const page = await bounded(app.firstWindow(), 15000, "APP_WINDOW_UNKNOWN");
   const actual = await bounded(
     app.evaluate(({ app, BrowserWindow }) => {
-      globalThis.__farolPairVisibility = [];
-      const watch = (window) => {
-        if (window.isVisible() || window.isFocused())
-          globalThis.__farolPairVisibility.push("initial");
-        for (const event of ["show", "focus"])
-          window.on(event, () => globalThis.__farolPairVisibility.push(event));
-      };
-      BrowserWindow.getAllWindows().forEach(watch);
-      app.on("browser-window-created", (_event, window) => watch(window));
-      app.once("will-quit", () =>
-        process.stderr.write(
-          "FAROL_UPDATE_PAIR_QUIT:" +
-            JSON.stringify({
-              pid: process.pid,
-              violations: globalThis.__farolPairVisibility.length,
-            }) +
-            "\n",
-        ),
-      );
       return {
         pid: process.pid,
         home: app.getPath("home"),
@@ -1030,7 +991,10 @@ async function startApp(candidate, home, fixture, report, owners, launch) {
         sessionData: app.getPath("sessionData"),
         isPackaged: app.isPackaged,
         appPath: app.getAppPath(),
-        violations: globalThis.__farolPairVisibility.length,
+        windowObservation:
+          typeof app.__farolE2EWindowLifetime === "function"
+            ? app.__farolE2EWindowLifetime()
+            : null,
       };
     }),
     15000,
@@ -1042,10 +1006,10 @@ async function startApp(candidate, home, fixture, report, owners, launch) {
       actual.userData === home.userData &&
       actual.sessionData === home.userData &&
       actual.isPackaged === true &&
-      actual.appPath === path.join(installed, "Contents/Resources/app") &&
-      actual.violations === 0,
+      actual.appPath === path.join(installed, "Contents/Resources/app"),
     "APP_IDENTITY_MISMATCH",
   );
+  assertWindowSnapshot(actual.windowObservation, owner.child.pid);
   lifetime.native = actual;
   const deadline = Date.now() + 30000;
   for (;;) {
@@ -1091,13 +1055,20 @@ async function quitApp(owner) {
     "QUIT_ALREADY_ATTEMPTED_OR_EXITED",
   );
   await recheckHome(owner.home);
-  const violations = await bounded(
-    owner.app.evaluate(() => globalThis.__farolPairVisibility.length),
+  const windowBefore = await bounded(
+    owner.app.evaluate(({ app }) =>
+      typeof app.__farolE2EWindowLifetime === "function"
+        ? app.__farolE2EWindowLifetime()
+        : null,
+    ),
     5000,
     "VISIBILITY_UNKNOWN",
   );
-  check(violations === 0, "VISIBILITY_VIOLATION");
-  const requestedAt = Date.now();
+  assertWindowSnapshot(windowBefore, owner.child.pid);
+  const before = await readQuitObservation(owner.state);
+  const request = beginQuitObservation(before, owner.child.pid);
+  owner.lifetime.quitBefore = before;
+  owner.lifetime.quitRequest = request;
   owner.lifetime.quitAttempted = true;
   owner.lifetime.quitDispatch = "pending";
   const dispatch = owner.app
@@ -1113,18 +1084,15 @@ async function quitApp(owner) {
       },
     );
   const exit = await bounded(owner.terminal, LIMITS.quitMs, "QUIT_UNKNOWN");
-  check(
-    owner.lifetime.hiddenQuit?.pid === owner.child.pid &&
-      owner.lifetime.hiddenQuit.violations === 0,
-    "HIDDEN_LIFETIME_UNCONFIRMED",
+  const terminal = { pid: owner.child.pid, ...exit };
+  owner.lifetime.windowLifetime = assertWindowLifetime(
+    windowBefore,
+    owner.windowObservation.snapshot(),
+    terminal,
   );
-  const receipt = assertDrainedQuit(
-    (
-      await readBounded(path.join(owner.state, "last-quit.json"), 8192)
-    ).toString("utf8"),
-    requestedAt,
-    exit,
-  );
+  const after = await readQuitObservation(owner.state);
+  owner.lifetime.quitAfter = after;
+  const receipt = assertFreshQuit(request, after, terminal);
   check(
     (await readRunMarker(owner.state)).status === "absent",
     "RUNNING_MARKER_RETAINED",
@@ -1297,7 +1265,9 @@ export async function runNativePair(pair) {
     report.status = "passed";
   } catch (error) {
     report.status = "failed";
-    report.failure = /^OWNER_BETA_[A-Z_]+$/u.test(error.message)
+    report.failure = /^(?:OWNER_BETA|NATIVE_LIFETIME)_[A-Z_]+$/u.test(
+      error.message,
+    )
       ? error.message
       : "OWNER_BETA_UNEXPECTED_REFUSAL_OR_UNKNOWN";
     report.quarantine =

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import {
   parseQuitReceipt,
   QUIT_RECEIPT_FILE_NAME,
@@ -9,6 +10,8 @@ import {
 } from "../../../src/apps/desktop/quit-receipt.ts";
 
 const observations = new WeakMap();
+const requests = new WeakMap();
+const begun = new WeakSet();
 const require = (ok, name) => {
   if (!ok) throw new Error(`NATIVE_LIFETIME_${name}`);
 };
@@ -68,7 +71,7 @@ export async function readQuitObservation(stateRoot) {
       identity: null,
       sha256: null,
     });
-    observations.set(missing, null);
+    observations.set(missing, { text: null, monotonic: performance.now() });
     return missing;
   }
   try {
@@ -102,40 +105,62 @@ export async function readQuitObservation(stateRoot) {
       identity,
       sha256: createHash("sha256").update(data).digest("hex"),
     });
-    observations.set(result, data.toString("utf8"));
+    observations.set(result, {
+      text: data.toString("utf8"),
+      monotonic: performance.now(),
+    });
     return result;
   } finally {
     await handle.close();
   }
 }
 
-// Payload validation is deliberately weaker than a native lifetime witness.
-// Native callers must also prove actual atomic replacement with assertFreshQuit.
-export function parseDrainedQuit(text, requestedAt, exit) {
+// A mark only binds this controller's observations; it grants no Quit authority.
+export function beginQuitObservation(before, pid) {
+  require(observations.has(before) &&
+    !begun.has(before) &&
+    Number.isSafeInteger(pid) &&
+    pid > 1, "QUIT_REQUEST_REQUIRED");
+  begun.add(before);
+  const request = Object.freeze({ pid, requestedAtMs: Date.now() });
+  requests.set(request, {
+    before,
+    monotonic: performance.now(),
+    consumed: false,
+  });
+  return request;
+}
+
+// Wall time is diagnostic. Freshness is established by the current request's
+// monotonic observation order and actual atomic replacement, never receipt age.
+export function parseDrainedQuit(text, exit) {
   const parsed = parseQuitReceipt(text);
   require(exit.code === 0 &&
     exit.signal === null &&
     parsed.ok &&
     parsed.receipt.drained &&
-    parsed.receipt.unconfirmed.length === 0 &&
-    Date.parse(parsed.receipt.at) >= requestedAt, "QUIT_UNCONFIRMED");
+    parsed.receipt.unconfirmed.length === 0, "QUIT_UNCONFIRMED");
   return parsed.receipt;
 }
 
-export function assertFreshQuit(before, after, { requestedAt, exit }) {
-  require(observations.has(before) &&
-    observations.has(after) &&
+export function assertFreshQuit(request, after, exit) {
+  const issued = requests.get(request);
+  require(issued && !issued.consumed, "QUIT_REQUEST_REQUIRED");
+  issued.consumed = true;
+  const { before } = issued;
+  const prior = observations.get(before),
+    current = observations.get(after);
+  require(current &&
     before !== after &&
     before.file === after.file &&
     sameDirectory(before.directory, after.directory) &&
-    after.status === "present", "QUIT_OBSERVATION_REQUIRED");
+    after.status === "present" &&
+    prior.monotonic <= issued.monotonic &&
+    current.monotonic >= issued.monotonic, "QUIT_OBSERVATION_REQUIRED");
   require(before.status === "absent" ||
     (before.status === "present" &&
       before.identity.dev === after.identity.dev &&
       before.identity.ino !== after.identity.ino), "QUIT_NOT_REPLACED");
-  const receipt = parseDrainedQuit(observations.get(after), requestedAt, exit);
-  require(Number.isSafeInteger(requestedAt) &&
-    after.observedAtMs >= requestedAt &&
-    Date.parse(receipt.at) <= after.observedAtMs, "QUIT_CLOCK_UNCONFIRMED");
-  return receipt;
+  require(exit.pid === request.pid, "QUIT_PROCESS_MISMATCH");
+  return parseDrainedQuit(current.text, exit);
 }

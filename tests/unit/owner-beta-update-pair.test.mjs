@@ -13,6 +13,7 @@ import {
   snapshotBuildEntries,
 } from "../../tooling/build-contract.mjs";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
+import { parseDrainedQuit } from "../e2e/lib/native-quit-observation.mjs";
 import {
   treeDigest,
   TREE_DIGEST_VERSION,
@@ -24,7 +25,6 @@ import {
   parseFrame,
   parseACK,
   classifyTerminal,
-  assertDrainedQuit,
   startLiveHelper,
   completeHandoff,
   slotBinding,
@@ -160,7 +160,7 @@ async function fixture(ordinal) {
   await fs.writeFile(path.join(resources, "input-manifest.json"), "[]");
   await fs.writeFile(
     path.join(resources, "main.cjs"),
-    "function assertNativeE2EAppData() {} // inert, never executed\n",
+    "function assertNativeE2EAppData() {} // __farolE2EWindowLifetime farol.e2e-window-lifetime/1; inert, never executed\n",
   );
   await fs.writeFile(
     path.join(root, "src/apps/desktop/desktop-environment.ts"),
@@ -305,6 +305,7 @@ describe("preflight has no native/allocation capability", () => {
     "tree",
     "seam",
     "protocol",
+    "early-observer",
   ])("refuses %s before all effects", async (kind) => {
     const f = await pairFixture();
     f.selection.mode = "--run-native";
@@ -340,6 +341,22 @@ describe("preflight has no native/allocation capability", () => {
       f.target.artifact.artifactSha256 = await treeDigest(f.target.appPath);
       f.target.expected.artifactSha256 = f.target.artifact.artifactSha256;
     }
+    if (kind === "early-observer") {
+      await fs.writeFile(
+        path.join(f.target.resources, "main.cjs"),
+        "function assertNativeE2EAppData() {} // inert fixture without early window observer",
+      );
+      f.target.manifest.entrySha256 = await snapshotBuildEntries(
+        f.target.resources,
+        f.target.manifest.entries,
+      );
+      await fs.writeFile(
+        path.join(f.target.resources, "build-manifest.json"),
+        JSON.stringify(f.target.manifest),
+      );
+      f.target.artifact.artifactSha256 = await treeDigest(f.target.appPath);
+      f.target.expected.artifactSha256 = f.target.artifact.artifactSha256;
+    }
     if (kind === "tree")
       await fs.writeFile(
         path.join(f.target.appPath, "unexpected"),
@@ -359,7 +376,11 @@ describe("preflight has no native/allocation capability", () => {
       f.target.artifactFile,
       JSON.stringify(f.target.artifact),
     );
-    await expect(preflightWithoutEffects(f.selection, f)).rejects.toThrow();
+    await expect(preflightWithoutEffects(f.selection, f)).rejects.toThrow(
+      kind === "early-observer"
+        ? "EARLY_WINDOW_OBSERVER_UNSUPPORTED"
+        : undefined,
+    );
     expect(f.counts.allocation).toBe(0);
     expect(f.counts.helper).toBe(0);
     expect(f.counts.electron).toBe(0);
@@ -700,30 +721,26 @@ it("refuses recovery, relaunch and forged closed proof before even injected spaw
     ).toThrow();
   expect(calls).toHaveLength(0);
 });
-it("a clean exit requires a fresh parsed drained receipt with no unconfirmed children", () => {
+it("checks drain payload and terminal without treating wall date as native freshness", () => {
   const at = "2026-10-23T01:00:00.000Z",
-    requested = Date.parse(at),
     exit = { code: 0, signal: null };
   const receipt = { schema: 1, at, drained: true, unconfirmed: [] };
-  expect(assertDrainedQuit(JSON.stringify(receipt), requested, exit)).toEqual(
-    receipt,
-  );
+  expect(parseDrainedQuit(JSON.stringify(receipt), exit)).toEqual(receipt);
   for (const changed of [
     { ...receipt, drained: false },
     { ...receipt, unconfirmed: ["runtime"] },
-    { ...receipt, at: "2026-10-22T01:00:00.000Z" },
     { schema: 2 },
   ])
-    expect(() =>
-      assertDrainedQuit(JSON.stringify(changed), requested, exit),
-    ).toThrow("QUIT_UNCONFIRMED");
+    expect(() => parseDrainedQuit(JSON.stringify(changed), exit)).toThrow(
+      "QUIT_UNCONFIRMED",
+    );
   expect(() =>
-    assertDrainedQuit(JSON.stringify(receipt), requested, {
+    parseDrainedQuit(JSON.stringify(receipt), {
       code: 1,
       signal: null,
     }),
   ).toThrow();
-  expect(() => assertDrainedQuit("corrupt", requested, exit)).toThrow();
+  expect(() => parseDrainedQuit("corrupt", exit)).toThrow();
 });
 it("serializes only the actual legacy slot pair in the frozen canonical order", () => {
   const r = request();
@@ -807,14 +824,13 @@ it.each(["nonzero-terminal", "drain-failure"])(
       completeHandoff(helper, async () => {
         quits++;
         if (kind === "drain-failure")
-          assertDrainedQuit(
+          parseDrainedQuit(
             JSON.stringify({
               schema: 1,
               at: new Date().toISOString(),
               drained: false,
               unconfirmed: ["runtime"],
             }),
-            0,
             { code: 0, signal: null },
           );
       }),
