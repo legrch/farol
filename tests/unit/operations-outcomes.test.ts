@@ -15,16 +15,18 @@ import type { ProductConfigurationResult } from "../../src/pkg/product-settings/
 import type { ProductTaskCommandResult } from "../../src/modules/chat/contract/product-task";
 import type { ReadonlyComputerCallResponse } from "../../src/modules/computer/contract/readonly-computer-contract";
 import type { MutableComputerCallResponse } from "../../src/modules/computer/contract/mutable-computer-contract";
+import type { BackendLifecycleObservation } from "../../apps/desktop/bridge/client";
 
 type Mapped<T> = Exclude<T, OperationOutcomeCode> extends never ? true : false;
 // Compiler coverage comes from the actual inferred contracts, including enums
 // imported from other files, rather than depending only on literal extraction.
 const closedContractCoverage: [
+  Mapped<BackendLifecycleObservation["code"]>,
   Mapped<Extract<ProductConfigurationResult, { ok: false }>["error"]>,
   Mapped<Extract<ProductTaskCommandResult, { ok: false }>["error"]>,
   Mapped<Extract<ReadonlyComputerCallResponse, { ok: false }>["error"]["code"]>,
   Mapped<Extract<MutableComputerCallResponse, { ok: false }>["error"]["code"]>,
-] = [true, true, true, true];
+] = [true, true, true, true, true];
 
 const metadata = { source: "You", kind: "general.update", target: {} } as const;
 
@@ -97,7 +99,7 @@ it("cannot complete a model turn after conflicting terminal frames or a lost str
 });
 
 it("maps every declared TS contract/producer code and Go result kind exactly once", () => {
-  expect(closedContractCoverage).toEqual([true, true, true, true]);
+  expect(closedContractCoverage).toEqual([true, true, true, true, true]);
   const declared = declaredOperationOutcomes();
   const entries = Object.values(operationCodesByOutcome).flat();
   expect(new Set(entries).size).toBe(entries.length);
