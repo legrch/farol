@@ -341,18 +341,31 @@ terminal code/signal, native paths, installed digests, quit receipts and failure
 quarantine classifications, without raw logs or authentication/transcripts.
 Disposable profiles remain outside Git. Any refusal, malformed output, timeout,
 nonzero exit or uncertain terminal stops controller progression, with no retry,
-replacement launch, follow-up signal or recovery. The pinned Playwright 1.63.0
-Electron launcher owns a detached process group and may force-kill that group
-when initialization rejects or times out, before returning a public app handle.
-This witness does not claim a signal-free launch-failure path. Such rejection
-remains an unconfirmed original launch, never proof of no spawn or clean exit;
-the fresh home and partial state are quarantined without another attempt.
-App launch occurs only before a helper is started or after the previous helper's
-terminal, drain and installed-tree verification have settled. Vendor abort
-cleanup cannot authorize the next helper, Quit, recovery or replacement launch.
-The root retains known original handles, unconfirmed launches and all partially
-modified state for reconciliation. A report-write failure is itself a failed
-run, never acceptance.
+replacement launch, follow-up signal or recovery. The pair runner launches its
+own detached native child directly and retains the actual handle before Node
+inspector initialization. A bounded loopback inspector transport supplies only
+main-process evaluation; renderer bootstrap reads go through the actual main
+window's WebContents. It installs no process signal/exit handler and has no
+implicit Quit or kill callback. The transport uses the repository's pinned `ws`
+client; disconnect closes only that owned debugger socket and rejects pending
+requests. Its destruction is never evidence of native process exit.
+
+Only the controller's one explicit evaluation dispatches `app.quit()`. It then
+disconnects the debugger so the inspector cannot delay native exit, and requires
+the original child's terminal, complete streams and lifetime/drain proof before
+progressing. Every failure finalizer disconnects its owned debugger transports
+and releases observation references without sending Quit or a process signal.
+Known original PIDs, incomplete initialization and partially modified homes are
+quarantined. App launch occurs only before a helper is started or after the
+previous helper's terminal, drain and installed-tree verification have settled.
+No framework shutdown handler can dispatch an additional Quit after failure.
+A report-write failure is itself a failed run, never acceptance.
+
+The separate first-launch and sign-in continuity witnesses still use pinned
+Playwright. Its initialization rejection may force-kill its newly detached
+launch group before exposing a public app handle; those witnesses cannot claim
+a signal-free vendor launch-failure path. That boundary is not used by the pair
+runner, and no such rejection proves no spawn or clean exit.
 
 `tests/unit/owner-beta-update-pair.test.mjs` uses inert Mach-O-header files,
 in-memory child streams and injected effect counters. It covers preflight
@@ -364,7 +377,8 @@ acceptance. Source checks:
 ```sh
 node node_modules/vitest/vitest.mjs run \
   tests/unit/desktop-environment.test.ts \
-  tests/unit/owner-beta-update-pair.test.mjs
+  tests/unit/owner-beta-update-pair.test.mjs \
+  tests/unit/native-electron-driver.test.mjs
 node --check tests/e2e/owner-beta-update-pair.e2e.mjs
 node --check tests/e2e/lib/owner-beta-update-pair.mjs
 npm run typecheck

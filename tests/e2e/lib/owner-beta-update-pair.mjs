@@ -938,15 +938,15 @@ async function startApp(candidate, home, fixture, report, owners, launch) {
     status: "starting",
   };
   report.lifetimes.push(lifetime);
-  let app;
-  const pending = launch({
+  // The native child is retained synchronously, before debugger initialization.
+  // The test-owned driver has no implicit Quit, kill or signal/exit callbacks.
+  const app = launch({
     executablePath: path.join(
       installed,
       "Contents/MacOS",
       desktopIdentity("preview", home.appData).applicationName,
     ),
     args: ["--preview-window-mode=hidden"],
-    timeout: 15000,
     env: {
       HOME: home.home,
       TMPDIR: home.parent,
@@ -958,48 +958,41 @@ async function startApp(candidate, home, fixture, report, owners, launch) {
       FAROL_E2E_TEST_PROOF: home.proof,
       FAROL_E2E_CHATGPT_URL: fixture.url,
     },
-  }).then(
-    (value) => {
-      app = value;
-      const owner = retainChild(value.process(), lifetime);
-      owners.push(owner);
-      // A timed-out launch remains the same original attempt, even if its
-      // handle arrives after the failure report. Never replace or signal it.
-      if (report.status === "failed") releaseObservers(owner);
-      owner.windowObservation = collectWindowObservation(owner.child.stderr);
-      return owner;
-    },
-    () => {
-      // The pinned Playwright launcher may abort its own detached process group
-      // before exposing a public app handle. Rejection proves neither no spawn
-      // nor a clean terminal; preserve this original launch as UNKNOWN.
-      lifetime.status = "outcome_unknown";
-      lifetime.launchRejected = true;
-      throw code("APP_LAUNCH_UNKNOWN");
-    },
-  );
-  // Retain the original late launch; timeout never authorizes another launch.
-  pending.catch(() => {});
-  const owner = await bounded(pending, 20000, "APP_LAUNCH_UNKNOWN");
-  const page = await bounded(app.firstWindow(), 15000, "APP_WINDOW_UNKNOWN");
-  const actual = await bounded(
-    app.evaluate(({ app, BrowserWindow }) => {
-      return {
-        pid: process.pid,
-        home: app.getPath("home"),
-        userData: app.getPath("userData"),
-        sessionData: app.getPath("sessionData"),
-        isPackaged: app.isPackaged,
-        appPath: app.getAppPath(),
-        windowObservation:
-          typeof app.__farolE2EWindowLifetime === "function"
-            ? app.__farolE2EWindowLifetime()
-            : null,
-      };
-    }),
-    15000,
-    "APP_PATHS_UNKNOWN",
-  );
+  });
+  const owner = retainChild(app.child, lifetime);
+  owner.app = app;
+  owner.windowObservation = collectWindowObservation(owner.child.stderr);
+  owners.push(owner);
+  await bounded(app.ready(), 15000, "APP_LAUNCH_UNKNOWN");
+  const deadline = Date.now() + 30000;
+  let actual;
+  for (;;) {
+    actual = await bounded(
+      app.evaluate(({ app, BrowserWindow }) => {
+        if (!app.isReady()) return null;
+        const main = BrowserWindow.getAllWindows()[0];
+        if (!main) return null;
+        return {
+          pid: process.pid,
+          home: app.getPath("home"),
+          userData: app.getPath("userData"),
+          sessionData: app.getPath("sessionData"),
+          isPackaged: app.isPackaged,
+          appPath: app.getAppPath(),
+          windowId: main.id,
+          windowObservation:
+            typeof app.__farolE2EWindowLifetime === "function"
+              ? app.__farolE2EWindowLifetime()
+              : null,
+        };
+      }),
+      Math.max(1, deadline - Date.now()),
+      "APP_PATHS_UNKNOWN",
+    );
+    if (actual !== null) break;
+    check(Date.now() < deadline, "APP_PATHS_UNKNOWN");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
   check(
     actual.pid === owner.child.pid &&
       actual.home === home.home &&
@@ -1011,25 +1004,27 @@ async function startApp(candidate, home, fixture, report, owners, launch) {
   );
   assertWindowSnapshot(actual.windowObservation, owner.child.pid);
   lifetime.native = actual;
-  const deadline = Date.now() + 30000;
   for (;;) {
     const ready = await bounded(
-      page.evaluate(async () => {
+      app.evaluate(({ BrowserWindow }, id) => {
+        const main = BrowserWindow.fromId(id);
+        if (!main || main.webContents.isLoadingMainFrame()) return null;
+        return main.webContents.executeJavaScript(`(async () => {
+        if (!window.farol) return null;
         const value = await window.farol.bootstrap();
-        return {
-          buildId: value.build.buildId,
-          runtimeState: value.runtimeState,
-          tasks: value.tasks.length,
-        };
-      }),
+        return {buildId:value.build.buildId, runtimeState:value.runtimeState, tasks:value.tasks.length};
+      })()`);
+      }, actual.windowId),
       Math.max(1, deadline - Date.now()),
       "APP_READY_UNKNOWN",
     );
-    check(
-      ready.buildId === candidate.buildId && ready.tasks === 0,
-      "APP_BUILD_OR_WORK_MISMATCH",
-    );
-    if (ready.runtimeState === "ready") break;
+    if (ready !== null) {
+      check(
+        ready.buildId === candidate.buildId && ready.tasks === 0,
+        "APP_BUILD_OR_WORK_MISMATCH",
+      );
+      if (ready.runtimeState === "ready") break;
+    }
     check(Date.now() < deadline, "APP_READY_UNKNOWN");
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
@@ -1083,6 +1078,14 @@ async function quitApp(owner) {
         owner.lifetime.quitDispatch = "transport-ended-or-rejected";
       },
     );
+  // A Node inspector can delay native exit. Settle this one dispatch, then
+  // detach only its transport; no cleanup path can request another Quit.
+  try {
+    await bounded(dispatch, 5000, "QUIT_DISPATCH_UNKNOWN");
+  } catch {
+    owner.lifetime.quitDispatch = "transport-unconfirmed";
+  }
+  await bounded(owner.app.disconnect(), 5000, "DRIVER_DISCONNECT_UNKNOWN");
   const exit = await bounded(owner.terminal, LIMITS.quitMs, "QUIT_UNKNOWN");
   const terminal = { pid: owner.child.pid, ...exit };
   owner.lifetime.windowLifetime = assertWindowLifetime(
@@ -1097,11 +1100,9 @@ async function quitApp(owner) {
     (await readRunMarker(owner.state)).status === "absent",
     "RUNNING_MARKER_RETAINED",
   );
-  await bounded(dispatch, 5000, "QUIT_DISPATCH_UNKNOWN");
   owner.lifetime.quit = receipt;
   owner.lifetime.status = "closed";
-  // Disconnect after the witnessed close. No second app.quit is ever issued.
-  await bounded(owner.app.close(), 5000, "DRIVER_CLOSE_UNKNOWN");
+  // The original terminal and full stream settle after debugger detachment.
 }
 
 export async function runNativePair(pair) {
@@ -1114,7 +1115,7 @@ export async function runNativePair(pair) {
       "ARCH_MISMATCH",
     );
   const { createServer } = await import("node:http");
-  const { _electron: electron } = await import("playwright-core");
+  const { spawnNativeElectron } = await import("./native-electron-driver.mjs");
   const report = {
     schema: "farol.owner-beta-update-pair/1",
     runId: randomUUID(),
@@ -1157,7 +1158,10 @@ export async function runNativePair(pair) {
       pair.target.artifactSha256,
     );
     const server = createServer((_request, response) => {
-      response.writeHead(200, { "Content-Type": "text/html" });
+      response.writeHead(200, {
+        "Content-Type": "text/html",
+        Connection: "close",
+      });
       response.end(
         "<!doctype html><title>Signed out fixture</title><p>Signed out</p>",
       );
@@ -1183,7 +1187,7 @@ export async function runNativePair(pair) {
       fixture,
       report,
       owners,
-      electron.launch.bind(electron),
+      spawnNativeElectron,
     );
     const request = (action, predecessor) => ({
       schema: "farol.installed-update/1",
@@ -1240,7 +1244,7 @@ export async function runNativePair(pair) {
       fixture,
       report,
       owners,
-      electron.launch.bind(electron),
+      spawnNativeElectron,
     );
     await quitApp(targetFirst);
     const targetReopen = await startApp(
@@ -1249,7 +1253,7 @@ export async function runNativePair(pair) {
       fixture,
       report,
       owners,
-      electron.launch.bind(electron),
+      spawnNativeElectron,
     );
     await updateAndQuit(request("rollback", targetReopen), targetReopen);
     source = await startApp(
@@ -1258,25 +1262,40 @@ export async function runNativePair(pair) {
       fixture,
       report,
       owners,
-      electron.launch.bind(electron),
+      spawnNativeElectron,
     );
     await quitApp(source);
     await recheckHome(home);
     report.status = "passed";
   } catch (error) {
     report.status = "failed";
-    report.failure = /^(?:OWNER_BETA|NATIVE_LIFETIME)_[A-Z_]+$/u.test(
-      error.message,
-    )
-      ? error.message
-      : "OWNER_BETA_UNEXPECTED_REFUSAL_OR_UNKNOWN";
+    report.failure =
+      /^(?:OWNER_BETA|NATIVE_LIFETIME|NATIVE_ELECTRON)_[A-Z_]+$/u.test(
+        error.message,
+      )
+        ? error.message
+        : "OWNER_BETA_UNEXPECTED_REFUSAL_OR_UNKNOWN";
     report.quarantine =
-      "Retain disposable home, staged/installed bytes and original known handles; no controller retry, additional signal, recovery or replacement launch. Playwright launch abort may already have signalled its own detached group; unconfirmed launch/terminal remains UNKNOWN";
+      "Retain disposable home, staged/installed bytes and original known processes; no retry, additional Quit/signal, recovery or replacement launch. Debugger detachment is transport-only and never proves process exit";
   } finally {
-    // The controller issues no follow-up signal or replacement after failure.
-    // Playwright may have already aborted its own launch group. Persist only
-    // observed terminals; an exception is never child-exit or no-spawn proof.
-    for (const owner of owners) releaseObservers(owner);
+    // Release only owned debugger transports and observation references. A
+    // failed or missing terminal never authorizes a native cleanup effect.
+    for (const owner of owners) {
+      if (owner.app) {
+        try {
+          await bounded(
+            owner.app.disconnect(),
+            5000,
+            "DRIVER_DISCONNECT_UNKNOWN",
+          );
+        } catch {
+          report.status = "failed";
+          report.driverDisconnectUnconfirmed ??= [];
+          report.driverDisconnectUnconfirmed.push(owner.child.pid ?? null);
+        }
+      }
+      releaseObservers(owner);
+    }
     if (fixture) {
       fixture.server.close();
       fixture.server.unref();
