@@ -1324,6 +1324,10 @@ export class WindowController implements RendererFacade {
       if (result.state !== "unknown" && !retainSettlement)
         this.commands.delete(key);
       this.patch({ intents: { ...this.state.intents, [key]: result } });
+      // A read may have settled behind this command's pending fence (notably
+      // Back to setup). Reconsider it only after the original command settles;
+      // commandAllowed still preserves every pending/unknown writer fence.
+      this.confirmSetupSignIn();
       resolve(result);
     })();
     return promise;
@@ -2178,7 +2182,7 @@ export class WindowController implements RendererFacade {
       destination = { ...destination, area: "settings" };
     if (destination.taskId !== undefined) this.taskSelectionRevision++;
     this.presentationRevision++;
-    const wasSignIn = this.isSignInEntry();
+    const wasSignIn = this.isSetupSignInObservationEntry();
     const next: Destination = {
       area: destination.area ?? this.state.destination.area,
       page: destination.page ?? this.state.destination.page,
@@ -2247,14 +2251,14 @@ export class WindowController implements RendererFacade {
     });
     this.presentation();
     this.presentBrowserOnNavigation();
-    if (!wasSignIn && this.isSignInEntry()) {
+    if (!wasSignIn && this.isSetupSignInObservationEntry()) {
       this.invalidateSignInObservation();
       this.observeSignIn();
     }
   }
   travel(direction: -1 | 1): void {
     if (this.disposed || this.state.update.phase === "applying") return;
-    const wasSignIn = this.isSignInEntry();
+    const wasSignIn = this.isSetupSignInObservationEntry();
     const cursor = this.cursor + direction;
     if (cursor < 0 || cursor >= this.history.length) return;
     this.presentationRevision++;
@@ -2272,7 +2276,7 @@ export class WindowController implements RendererFacade {
     });
     this.presentation();
     this.presentBrowserOnNavigation();
-    if (!wasSignIn && this.isSignInEntry()) {
+    if (!wasSignIn && this.isSetupSignInObservationEntry()) {
       this.invalidateSignInObservation();
       this.observeSignIn();
     }
@@ -2281,6 +2285,14 @@ export class WindowController implements RendererFacade {
     return (
       this.state.destination.area === "setup" &&
       this.state.destination.setupStep === "signin"
+    );
+  }
+  private isSetupSignInObservationEntry(): boolean {
+    return (
+      this.isSignInEntry() ||
+      (this.state.destination.area === "setup" &&
+        this.state.destination.setupStep === "attachment" &&
+        this.state.setupSignInCheck != null)
     );
   }
   private retireSignInObservation(): void {
@@ -2297,7 +2309,7 @@ export class WindowController implements RendererFacade {
     if (
       this.disposed ||
       this.booting ||
-      !this.isSignInEntry() ||
+      !this.isSetupSignInObservationEntry() ||
       current.status !== "current" ||
       current.runtime !== "ready" ||
       current.update.phase === "applying" ||
@@ -2332,7 +2344,7 @@ export class WindowController implements RendererFacade {
       !this.disposed &&
       this.signInCounter === counter &&
       this.state.signInObservation === pending &&
-      this.isSignInEntry() &&
+      this.isSetupSignInObservationEntry() &&
       this.state.status === "current" &&
       this.state.runtime === "ready" &&
       this.state.update.phase !== "applying" &&
@@ -2389,7 +2401,7 @@ export class WindowController implements RendererFacade {
     // the owner's login flow, or renew a previously verified session.
     if (!this.automaticSignInRequested && !saved) return;
     if (
-      !this.isSignInEntry() ||
+      !this.isSetupSignInObservationEntry() ||
       state.route !== "loaded" ||
       !observation ||
       observation.pending ||
