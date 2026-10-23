@@ -37,6 +37,7 @@ function harness() {
     chatGptTaskAdmission: false,
     connectorTaskAdmission: false,
     chatGptSignInOpenGeneration: null,
+    selectedTaskId: "",
     productTasksState: vi.fn(() => ({ tasks: [] })),
     configuration: { snapshot: vi.fn(() => snapshot) },
     browserHomeSurfaceOpen: false,
@@ -90,29 +91,40 @@ describe("explicit ChatGPT presentation host mechanics", () => {
     },
   );
 
-  it.each(["chatGptTaskAdmission", "connectorTaskAdmission"])(
-    "refuses conflicting host admission before presenting: %s",
-    async (owner) => {
-      const h = harness();
-      h.context[owner] = true;
-      expect(await h.handle()).toMatchObject({
-        ok: false,
-        error: "CHATGPT_TASK_IN_PROGRESS",
-      });
-      expect(h.context.chatGptRoute.open).not.toHaveBeenCalled();
-      expect(h.context.applyLayout).not.toHaveBeenCalled();
-    },
-  );
+  it("refuses presentation while a ChatGPT task admission is in progress", async () => {
+    const h = harness();
+    h.context.chatGptTaskAdmission = true;
+    expect(await h.handle()).toMatchObject({
+      ok: false,
+      error: "CHATGPT_TASK_IN_PROGRESS",
+    });
+    expect(h.context.chatGptRoute.open).not.toHaveBeenCalled();
+    expect(h.context.chatGptRoute.retryFailedOpen).not.toHaveBeenCalled();
+    expect(h.context.applyLayout).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a retained selected task during connector admission without opening another route", async () => {
+    const h = harness();
+    h.context.connectorTaskAdmission = true;
+    h.context.selectedTaskId = "original-task";
+    expect(await h.handle()).toEqual({ ok: true, snapshot: h.snapshot });
+    expect(h.context.selectedTaskId).toBe("original-task");
+    expect(h.context.chatGptRoute.open).not.toHaveBeenCalled();
+    expect(h.context.chatGptRoute.retryFailedOpen).not.toHaveBeenCalled();
+    expect(h.context.browserHomeSurfaceOpen).toBe(false);
+  });
 
   it.each(["sign-in", "task"])(
     "retains the existing %s identity",
     async (kind) => {
       const h = harness();
       if (kind === "sign-in") h.context.chatGptSignInOpenGeneration = 4;
-      else
+      else {
         h.context.productTasksState.mockReturnValue({
           tasks: [{ id: "original-task" }],
         });
+        h.context.selectedTaskId = "original-task";
+      }
       expect(await h.handle()).toEqual({ ok: true, snapshot: h.snapshot });
       expect(h.context.chatGptRoute.open).not.toHaveBeenCalled();
       expect(h.context.chatGptRoute.retryFailedOpen).not.toHaveBeenCalled();
@@ -130,7 +142,7 @@ describe("explicit ChatGPT presentation host mechanics", () => {
     // Renderer navigation owns the destination. This command alone neither
     // changes it nor claims that a native document has been constructed.
     expect(h.context.browserHomeSurfaceOpen).toBe(false);
-    expect(h.context.applyLayout).toHaveBeenCalledTimes(1);
+    expect(h.context.applyLayout).toHaveBeenCalledTimes(2);
     expect(h.context.publishLayout).not.toHaveBeenCalled();
   });
 
@@ -167,7 +179,7 @@ describe("explicit ChatGPT presentation host mechanics", () => {
     settle({ status: "opened" });
     expect((await original).ok).toBe(true);
     expect(h.context.section).toBe("home");
-    expect(h.context.applyLayout).toHaveBeenCalledTimes(1);
+    expect(h.context.applyLayout).toHaveBeenCalledTimes(2);
     expect(h.context.publishLayout).not.toHaveBeenCalled();
   });
 });
