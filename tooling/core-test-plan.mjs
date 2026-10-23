@@ -17,14 +17,20 @@ export function coreTestSteps({ nested, node, go }) {
       executable: node,
       args: ["tooling/check-go-architecture.mjs"],
     },
-    { id: "root-go-race", executable: go, args: ["test", "-race", "./..."] },
+    // Bound test-binary concurrency independently of the runner's CPU count.
+    // Native filesystem checks retain their real operation deadlines under race.
+    {
+      id: "root-go-race",
+      executable: go,
+      args: ["test", "-p=2", "-race", "./..."],
+    },
     { id: "root-go-vet", executable: go, args: ["vet", "./..."] },
     ...(nested
       ? [
           {
             id: "nested-go-race",
             executable: go,
-            args: ["test", "-race", "./..."],
+            args: ["test", "-p=2", "-race", "./..."],
             cwd: "resources/native/go",
           },
           {

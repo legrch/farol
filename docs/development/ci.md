@@ -27,6 +27,13 @@ native-selection runner in `tooling/ci-native.mjs`, then runs that selection and
 portable overlap avoids brittle inverse test-name filters. This preserves native coverage for the files excluded or partially
 selected by the Cloud profile.
 
+The core gate runs every Go package with race detection and at most two test
+binaries at once (`go test -p=2 -race ./...`), for both root and transitional
+nested modules. This bounds filesystem and process contention independently of
+the host CPU count. It changes no test selection, operation timeout, race check
+or unavailable/unknown result predicate. A passing isolated test is diagnostic
+evidence; only the completed aggregate gate accepts the candidate.
+
 The final Ubuntu `required` job is the stable status check. It rejects failed or
 cancelled checks. It accepts skipped heavy checks only when path classification
 has established that the change is docs-only. A successful portable source
