@@ -4,6 +4,7 @@ import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
 import { parse } from "@babel/parser";
 import { expect, it } from "vitest";
+import { createTotalOperationsRecorder } from "../../apps/desktop/operations/recorder";
 
 // Execute the actual desktop diagnostic sink and its selected callback values.
 // Child/native mechanics are covered separately with controlled producers;
@@ -36,6 +37,13 @@ function selected(
 
 function sink(fail = false, recordingFails = false) {
   const lines: string[] = [];
+  const records: { outcome: string; code: string | null }[] = [];
+  const recorder = createTotalOperationsRecorder({
+    record: (_metadata, outcome, code) => {
+      if (recordingFails) throw Error("CONTROLLED_RECORDER_CLOSED");
+      records.push({ outcome, code });
+    },
+  });
   const declaration = selected(
     main,
     mainTree,
@@ -47,11 +55,7 @@ function sink(fail = false, recordingFails = false) {
   const report = vm.runInNewContext(
     `${stripTypeScriptTypes(declaration)}; reportOwnedBackendLifecycle`,
     {
-      operationsStore: () => ({
-        record: () => {
-          if (recordingFails) throw Error("CONTROLLED_RECORDER_CLOSED");
-        },
-      }),
+      operationsStore: () => recorder,
       console: {
         warn: (line: string) => {
           if (fail) throw Error("CONTROLLED_SINK_CLOSED");
@@ -60,7 +64,7 @@ function sink(fail = false, recordingFails = false) {
       },
     },
   ) as (observation: unknown) => void;
-  return { report, lines };
+  return { report, lines, records, diagnostics: () => recorder.diagnostics() };
 }
 
 const backend = {
@@ -310,3 +314,53 @@ it("keeps the original lifecycle diagnostic when operations recording throws", (
     backend,
   );
 });
+
+// Exercise the actual sink through the actual closed-code recorder. A producer
+// observation alone cannot prove that durable Activity keeps its classification.
+const lifecycleRecordingCases: [string, Record<string, unknown>, string][] = [
+  ["requested clean exit", {}, "done"],
+  ["unqualified child-close", { code: "backend_child_closed" }, "unknown"],
+  ["unexpected active exit", { phase: "active" }, "unknown"],
+  ["unexpected startup exit", { phase: "startup" }, "unknown"],
+  ["forced exit", { forced: true }, "unknown"],
+  ["nonzero exit", { exitCode: 1 }, "unknown"],
+  ["signal exit", { exitCode: null, signal: "SIGTERM" }, "unknown"],
+  ["conflicting terminal", { signal: "SIGTERM" }, "unknown"],
+  ["missing terminal", { exitCode: null }, "unknown"],
+  ["unavailable producer", { state: "unavailable" }, "unknown"],
+  ["unknown producer", { state: "outcome_unknown" }, "unknown"],
+  [
+    "pending request",
+    { event: "failure", code: "client_closed", state: "outcome_unknown" },
+    "unknown",
+  ],
+  [
+    "cleanup unknown",
+    {
+      event: "cleanup-unknown",
+      code: "backend_cleanup_unconfirmed",
+      state: "outcome_unknown",
+    },
+    "unknown",
+  ],
+];
+it.each(lifecycleRecordingCases)(
+  "preserves %s in the real operations recorder",
+  (_name, change, expected) => {
+    const { report, records, diagnostics } = sink();
+    report({
+      ...backend,
+      code: "backend_requested_clean_exit",
+      phase: "closing",
+      exitCode: 0,
+      ...change,
+    });
+    expect(records).toEqual([
+      {
+        outcome: expected,
+        code: change.code ?? "backend_requested_clean_exit",
+      },
+    ]);
+    expect(diagnostics().unmappedCodes).toBe(0);
+  },
+);

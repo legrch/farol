@@ -204,75 +204,138 @@ describe("inherited Shell startup metadata", () => {
 });
 
 describe("native backend launch binding", () => {
-  it("reports spontaneous original backend death immediately with retained phase and safe facts", async () => {
-    const { child } = fixture(false);
+  it.each([
+    { exitCode: null, signal: "SIGTERM" as const },
+    { exitCode: 0, signal: null },
+    { exitCode: 17, signal: null },
+  ])(
+    "reports spontaneous original backend death ($exitCode/$signal) without qualifying shutdown",
+    async ({ exitCode, signal }) => {
+      const { child } = fixture(false);
+      const diagnostic = vi.fn();
+      const identity = {
+        hostLifetimeId: "host-one",
+        childLaunchId: "child-one",
+      };
+      const client = new Client(
+        child as unknown as ChildProcessWithoutNullStreams,
+        true,
+        undefined,
+        diagnostic,
+        identity,
+      );
+      const decoder = new Decoder();
+      child.stdin.on("data", (bytes: Buffer) =>
+        decoder.push(bytes, (request: unknown) => {
+          const original = request as { id: string };
+          child.stdout.write(
+            frame({
+              jsonrpc: "2.0",
+              id: original.id,
+              result: {
+                status: "ok",
+                requestId: original.id,
+                context: { profileId: "profile", backendGeneration: "backend" },
+                data: {
+                  protocolMajor: 1,
+                  protocolMinor: 0,
+                  buildId: "build",
+                  profileId: "profile",
+                  backendGeneration: "backend",
+                  capabilities: [],
+                  maxFrameBytes: 1048576,
+                },
+              },
+            }),
+          );
+        }),
+      );
+      vi.mocked(Client.prototype.handshake).mockRestore();
+      await client.handshake(
+        {
+          protocolMajor: 1,
+          protocolMinor: 0,
+          buildId: "build",
+          profileId: "profile",
+        },
+        1000,
+      );
+      identity.hostLifetimeId = "mutated-host";
+      child.stderr.write("private account transcript secret path");
+      child.emit("close", exitCode, signal);
+      expect(diagnostic.mock.calls[0]?.[0]).toEqual({
+        source: "go-backend",
+        phase: "active",
+        event: "child-close",
+        code: "backend_child_closed",
+        state: "observed",
+        exitCode,
+        signal,
+        forced: false,
+        hostLifetimeId: "host-one",
+        childLaunchId: "child-one",
+      });
+      expect(client.lifecycleObservations).toHaveLength(2);
+      expect(Object.isFrozen(client.lifecycleObservations[0])).toBe(true);
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toMatch(
+        /private|account|transcript|secret|path|mutated/,
+      );
+      await client.close();
+      expect(child.kill).not.toHaveBeenCalled();
+    },
+  );
+  it("records only the actual terminal fact for a quiescent requested close", async () => {
+    const { native } = fixture();
     const diagnostic = vi.fn();
-    const identity = { hostLifetimeId: "host-one", childLaunchId: "child-one" };
+    const client = await spawnCore("/owned/backend", "profile", "test", 1000, {
+      ...native,
+      onLifecycleObservation: diagnostic,
+    });
+    expect(await client.closeAndObserve()).toEqual({
+      exitCode: 0,
+      signal: null,
+      forced: false,
+    });
+    expect(
+      diagnostic.mock.calls.map(([value]) => [
+        value.phase,
+        value.event,
+        value.state,
+      ]),
+    ).toEqual([["closing", "child-close", "observed"]]);
+    expect(diagnostic.mock.calls[0]?.[0].code).toBe(
+      "backend_requested_clean_exit",
+    );
+  });
+  it("retains UNKNOWN for a request still pending at requested close", async () => {
+    const { child } = fixture();
+    vi.mocked(Client.prototype.handshake).mockRestore();
+    const diagnostic = vi.fn();
     const client = new Client(
       child as unknown as ChildProcessWithoutNullStreams,
       true,
       undefined,
       diagnostic,
-      identity,
     );
-    const decoder = new Decoder();
-    child.stdin.on("data", (bytes: Buffer) =>
-      decoder.push(bytes, (request: unknown) => {
-        const original = request as { id: string };
-        child.stdout.write(
-          frame({
-            jsonrpc: "2.0",
-            id: original.id,
-            result: {
-              status: "ok",
-              requestId: original.id,
-              context: { profileId: "profile", backendGeneration: "backend" },
-              data: {
-                protocolMajor: 1,
-                protocolMinor: 0,
-                buildId: "build",
-                profileId: "profile",
-                backendGeneration: "backend",
-                capabilities: [],
-                maxFrameBytes: 1048576,
-              },
-            },
-          }),
-        );
-      }),
-    );
-    vi.mocked(Client.prototype.handshake).mockRestore();
-    await client.handshake(
-      {
-        protocolMajor: 1,
-        protocolMinor: 0,
-        buildId: "build",
-        profileId: "profile",
-      },
-      1000,
-    );
-    identity.hostLifetimeId = "mutated-host";
-    child.stderr.write("private account transcript secret path");
-    child.emit("close", null, "SIGTERM");
-    expect(diagnostic.mock.calls[0]?.[0]).toEqual({
-      source: "go-backend",
-      phase: "active",
-      event: "child-close",
-      code: "backend_child_closed",
-      state: "observed",
-      exitCode: null,
-      signal: "SIGTERM",
-      forced: false,
-      hostLifetimeId: "host-one",
-      childLaunchId: "child-one",
-    });
-    expect(client.lifecycleObservations).toHaveLength(2);
-    expect(Object.isFrozen(client.lifecycleObservations[0])).toBe(true);
-    expect(JSON.stringify(diagnostic.mock.calls)).not.toMatch(
-      /private|account|transcript|secret|path|mutated/,
-    );
+    const pending = expect(
+      client.handshake(
+        {
+          protocolMajor: 1,
+          protocolMinor: 0,
+          buildId: "test",
+          profileId: "profile",
+        },
+        1000,
+      ),
+    ).rejects.toMatchObject({ state: "unknown", code: "client_closed" });
     await client.close();
-    expect(child.kill).not.toHaveBeenCalled();
+    await pending;
+    expect(diagnostic.mock.calls[0]?.[0]).toMatchObject({
+      phase: "closing",
+      event: "failure",
+      code: "client_closed",
+      state: "outcome_unknown",
+    });
   });
   it("preserves requested-close and cleanup UNKNOWN evidence through late close and throwing sink", async () => {
     vi.useFakeTimers();
@@ -299,12 +362,9 @@ describe("native backend launch binding", () => {
         value.event,
         value.code,
       ]),
-    ).toEqual([
-      ["closing", "failure", "client_closed"],
-      ["closing", "cleanup-unknown", "backend_cleanup_unconfirmed"],
-    ]);
+    ).toEqual([["closing", "cleanup-unknown", "backend_cleanup_unconfirmed"]]);
     child.emit("close", 0, null);
-    expect(diagnostic.mock.calls[2]?.[0]).toMatchObject({
+    expect(diagnostic.mock.calls[1]?.[0]).toMatchObject({
       phase: "closing",
       event: "child-close",
       exitCode: 0,
@@ -314,7 +374,7 @@ describe("native backend launch binding", () => {
     await expect(client.closeAndObserve()).rejects.toMatchObject({
       code: "backend_cleanup_unconfirmed",
     });
-    expect(diagnostic).toHaveBeenCalledTimes(3);
+    expect(diagnostic).toHaveBeenCalledTimes(2);
     expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
   });
   it("retains startup failure and sanitizes malformed terminal diagnostic facts", async () => {

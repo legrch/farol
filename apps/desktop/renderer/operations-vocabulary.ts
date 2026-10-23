@@ -2,7 +2,7 @@ import {
   mappedOperationCodes,
   mappedOperationOutcome,
   type OperationOutcomeCode,
-} from "./operation-outcomes";
+} from "./operation-outcomes.ts";
 
 /** Static recording vocabulary. Never extend it from runtime/provider values. */
 export const operationKinds = [

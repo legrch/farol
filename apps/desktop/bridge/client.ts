@@ -173,6 +173,7 @@ type BackendLifecycleCode =
   | (typeof lifecycleCodeValues)[number]
   | "backend_unclassified_failure"
   | "backend_child_closed"
+  | "backend_requested_clean_exit"
   | "backend_cleanup_unconfirmed";
 const lifecycleCodes = new Set<string>(lifecycleCodeValues);
 const lifecycleSignals = new Set([
@@ -327,7 +328,12 @@ export class Client {
       this.childClosed = true;
       this.observeLifecycle(
         "child-close",
-        "backend_child_closed",
+        this.closeRequested &&
+          exitCode === 0 &&
+          signal === null &&
+          !this.forcedTermination
+          ? "backend_requested_clean_exit"
+          : "backend_child_closed",
         "observed",
         exitCode,
         signal,
@@ -894,13 +900,22 @@ export class Client {
   ): void {
     if (this.stopped) return;
     this.stopped = true;
-    this.observeLifecycle(
-      "failure",
-      lifecycleCodes.has(code)
-        ? (code as BackendLifecycleCode)
-        : "backend_unclassified_failure",
-      state === "unavailable" ? "unavailable" : "outcome_unknown",
-    );
+    // Closing a quiet transport is not an operation with an unknown result.
+    // Outstanding requests, unexpected failures and unconfirmed child cleanup
+    // retain their original UNKNOWN evidence; terminal observation is separate.
+    if (!(
+      this.closeRequested &&
+      code === "client_closed" &&
+      this.pending.size === 0
+    )) {
+      this.observeLifecycle(
+        "failure",
+        lifecycleCodes.has(code)
+          ? (code as BackendLifecycleCode)
+          : "backend_unclassified_failure",
+        state === "unavailable" ? "unavailable" : "outcome_unknown",
+      );
+    }
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       clearImmediate(pending.timeoutCheck);

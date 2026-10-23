@@ -2,7 +2,7 @@ import { z } from "zod";
 import {
   operationKinds,
   recordableOperationCodes,
-} from "./operations-vocabulary";
+} from "./operations-vocabulary.ts";
 
 export const operationSources = [
   "ChatGPT",
