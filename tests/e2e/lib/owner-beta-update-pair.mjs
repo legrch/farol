@@ -965,6 +965,25 @@ async function startApp(candidate, home, fixture, report, owners, launch) {
   owners.push(owner);
   await bounded(app.ready(), 15000, "APP_LAUNCH_UNKNOWN");
   const deadline = Date.now() + 30000;
+  // A Node inspector context can precede Electron's module initialization.
+  // Require the product's actual current-process startup before any evaluation.
+  for (;;) {
+    const startup = await readRunMarker(state);
+    if (startup.status !== "absent") {
+      check(
+        startup.status === "read" &&
+          startup.marker.pid === owner.child.pid &&
+          startup.marker.processStart !== null &&
+          sameBoot(startup.marker.bootTime, currentBootTimeMs()) &&
+          readProcessStart(owner.child.pid) === startup.marker.processStart,
+        "RUNNING_IDENTITY_UNKNOWN",
+      );
+      lifetime.startupMarker = startup.marker;
+      break;
+    }
+    check(Date.now() < deadline, "APP_STARTUP_UNKNOWN");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
   let actual;
   for (;;) {
     actual = await bounded(

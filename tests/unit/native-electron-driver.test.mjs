@@ -2,6 +2,7 @@
 import { EventEmitter, once } from "node:events";
 import WebSocket, { WebSocketServer } from "ws";
 import { createServer } from "node:http";
+import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { spawnNativeElectron } from "../e2e/lib/native-electron-driver.mjs";
 
@@ -353,7 +354,7 @@ it("evaluates only through the selected Node context with correlated JSON values
   const sent = socket.sent[1];
   expect(sent.method).toBe("Runtime.evaluate");
   expect(sent.params).toEqual({
-    expression: `(${Function.prototype.toString.call(fn)})(require('electron'),JSON.parse(${JSON.stringify(JSON.stringify(arg))}))`,
+    expression: `(${Function.prototype.toString.call(fn)})(require('electron/main'),JSON.parse(${JSON.stringify(JSON.stringify(arg))}))`,
     contextId: 42,
     includeCommandLineAPI: true,
     returnByValue: true,
@@ -723,4 +724,31 @@ it("disposes a real ws connection stuck before upgrade without waiting for hands
     for (const peer of peers) peer.destroy(); // Exact disposable fixture sockets only.
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+it("never resolves the npm installer shim when native Electron is not initialized", async () => {
+  const { driver, socket } = await initialized();
+  let installerAttempts = 0;
+  const pending = driver.evaluate(({ app }) => app.isReady());
+  const rejected = expect(pending).rejects.toThrow("EVALUATION_EXCEPTION");
+  await tick();
+  const sent = socket.sent[1];
+  expect(() =>
+    runInNewContext(sent.params.expression, {
+      require: (name) => {
+        if (name === "electron") {
+          installerAttempts++;
+          return { app: { isReady: () => false } };
+        }
+        expect(name).toBe("electron/main");
+        throw Error("native module is not initialized");
+      },
+    }),
+  ).toThrow("native module is not initialized");
+  socket.reply(sent.id, {
+    exceptionDetails: { text: "native module unavailable" },
+  });
+  await rejected;
+  expect(installerAttempts).toBe(0);
+  expect(driver.child.kill).not.toHaveBeenCalled();
 });

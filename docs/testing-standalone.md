@@ -344,8 +344,12 @@ nonzero exit or uncertain terminal stops controller progression, with no retry,
 replacement launch, follow-up signal or recovery. The pair runner launches its
 own detached native child directly and retains the actual handle before Node
 inspector initialization. A bounded loopback inspector transport supplies only
-main-process evaluation; renderer bootstrap reads go through the actual main
-window's WebContents. It installs no process signal/exit handler and has no
+main-process evaluation. The actual matching PID/process-start/boot startup
+marker must exist before the first evaluation; inspector availability alone
+cannot prove Electron initialization. Evaluation resolves the explicit native
+`electron/main` alias, so an early context cannot invoke the npm `electron`
+installer shim. Renderer bootstrap reads go through the actual main window's
+WebContents. It installs no process signal/exit handler and has no
 implicit Quit or kill callback. The transport uses the repository's pinned `ws`
 client; disconnect closes only that owned debugger socket and rejects pending
 requests. Its destruction is never evidence of native process exit.

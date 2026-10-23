@@ -358,8 +358,10 @@ export function spawnNativeElectron(options, ports = {}) {
         if (typeof fn !== "function" || !jsonValue(arg)) throw new Error();
         const source = Function.prototype.toString.call(fn);
         if (source.includes("[native code]")) throw new Error();
+        // The explicit native alias fails closed before Electron initialization;
+        // bare electron can resolve the npm installer shim in an early context.
         // Parse JSON as data: an object literal would reinterpret a __proto__ key.
-        expression = `(${source})(require('electron'),JSON.parse(${JSON.stringify(JSON.stringify(arg))}))`;
+        expression = `(${source})(require('electron/main'),JSON.parse(${JSON.stringify(JSON.stringify(arg))}))`;
         if (bytes(expression) > MAX_EXPRESSION) throw new Error();
       } catch {
         throw unknown("EVALUATION_INVALID");
