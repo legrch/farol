@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
 import { createBuildIdentity } from "../../tooling/build-identity-contract.mjs";
 import { promotionUserData } from "../../tooling/promotion-obligations.mjs";
@@ -54,8 +54,7 @@ async function kernelLockHeld(file) {
     await handle?.close();
   }
 }
-async function waitFor(predicate) {
-  const deadline = Date.now() + 5000;
+async function waitFor(predicate, deadline = Date.now() + 5000) {
   while (!(await predicate())) {
     if (Date.now() >= deadline) throw Error("REPLACEMENT_FIXTURE_WAIT_TIMEOUT");
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -68,6 +67,12 @@ function exactProcess(pid, column) {
     timeout: 1000,
   });
 }
+beforeEach(() => {
+  // A failed original observation retains custody. Do not create another
+  // native replacement fixture while that obligation is still unresolved.
+  if (originalCloses.size || unconfirmedHelpers.size)
+    throw Error("REPLACEMENT_PRIOR_NATIVE_UNCONFIRMED");
+});
 afterEach(async () => {
   if (originalCloses.size || unconfirmedHelpers.size)
     throw Error(`REPLACEMENT_FIXTURE_CLOSE_UNCONFIRMED:${roots.join(",")}`);
@@ -877,6 +882,10 @@ os.write(1, b"EXIT\n")
   ])(
     "retains both original locks and live owner after %s, regardless of pending presence after original child close",
     async (fault) => {
+      // Observe within this case's existing 15 s lifetime budget. A separate
+      // 5 s poll deadline could kill the owner before its original native
+      // child reported closure on a loaded host. Leave 1 s for assertions.
+      const observationDeadline = Date.now() + 14_000;
       const f = await fixture();
       if (fault === "custody-substituted-before-open")
         await fs.chmod(f.oldApp, 0o700);
@@ -1077,8 +1086,10 @@ catch (error) { process.send({ kind: "replacement-failed", message: error.messag
           unconfirmedHelpers.delete(f.r);
       });
       try {
-        await waitFor(() =>
-          messages.some((message) => message.kind === "replacement-failed"),
+        await waitFor(
+          () =>
+            messages.some((message) => message.kind === "replacement-failed"),
+          observationDeadline,
         );
         expect(owner.child.exitCode).toBe(null);
         expect(owner.child.signalCode).toBe(null);
@@ -1230,6 +1241,21 @@ catch (error) { process.send({ kind: "replacement-failed", message: error.messag
           ),
         ).toBe(false);
       } finally {
+        if (unconfirmedHelpers.has(f.r)) {
+          // Keep the original owner, locks and files. A timeout is not proof
+          // that its native child stopped, so do not signal the owner away.
+          await fs.writeFile(
+            path.join(f.r, "unconfirmed-test-owner.json"),
+            JSON.stringify({
+              schema: 1,
+              ownerPid: owner.child.pid,
+              fault,
+              originalNativeTerminal: "unknown",
+            }) + "\n",
+            { mode: 0o600, flag: "wx" },
+          );
+          throw Error("REPLACEMENT_FIXTURE_NATIVE_CLOSE_UNCONFIRMED");
+        }
         if (owner.child.exitCode === null && owner.child.signalCode === null)
           owner.child.kill("SIGKILL");
         await owner.closed;
