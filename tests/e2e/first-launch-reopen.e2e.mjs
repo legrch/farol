@@ -8,7 +8,17 @@ import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { _electron as electron } from "playwright-core";
 import { desktopIdentity } from "../../tooling/harness-identity.ts";
-import { parseQuitReceipt } from "../../src/apps/desktop/quit-receipt.ts";
+import {
+  readQuitObservation,
+  beginQuitObservation,
+  assertFreshQuit,
+} from "./lib/native-quit-observation.mjs";
+import {
+  collectWindowObservation,
+  assertWindowSnapshot,
+  assertWindowLifetime,
+} from "./lib/native-window-observation.mjs";
+import { parseFirstLaunchOperations } from "./lib/first-launch-operations.mjs";
 import {
   candidatePaths,
   assertCanonicalArtifactPath,
@@ -133,7 +143,18 @@ async function quit() {
     uid: relay.uid,
   };
   const child = application.process();
-  const requestedAt = Date.now();
+  const windowBefore = await bounded(
+    application.evaluate(({ app }) =>
+      typeof app.__farolE2EWindowLifetime === "function"
+        ? app.__farolE2EWindowLifetime()
+        : null,
+    ),
+    "FIRST_LAUNCH_WINDOW_OBSERVATION_TIMEOUT",
+  );
+  assertWindowSnapshot(windowBefore, child.pid);
+  const state = path.join(identity.userData, "farol-state");
+  current.quitBefore = await readQuitObservation(state);
+  current.quitRequest = beginQuitObservation(current.quitBefore, child.pid);
   current.quitAttempted = true;
   current.quitDispatch = "pending";
   const request = application
@@ -152,27 +173,21 @@ async function quit() {
   await bounded(current.closed, "FIRST_LAUNCH_STREAM_CLOSE_UNKNOWN", 5000);
   assert.equal(child.exitCode, 0);
   assert.equal(child.signalCode, null);
-  assert.ok(
-    current.lifecycle.some(
-      (entry) =>
-        entry.event === "will-quit" &&
-        entry.pid === child.pid &&
-        entry.visibilityViolations === 0,
-    ),
-    "FIRST_LAUNCH_HIDDEN_LIFETIME_UNCONFIRMED",
+  const exit = {
+    pid: child.pid,
+    code: child.exitCode,
+    signal: child.signalCode,
+  };
+  current.windowLifetime = assertWindowLifetime(
+    windowBefore,
+    current.windowObservation.snapshot(),
+    exit,
   );
-  const state = path.join(identity.userData, "farol-state");
-  const parsed = parseQuitReceipt(
-    await fs.readFile(path.join(state, "last-quit.json"), "utf8"),
-  );
-  assert.ok(parsed.ok);
-  assert.equal(parsed.receipt.drained, true);
-  assert.deepEqual(parsed.receipt.unconfirmed, []);
-  assert.ok(Date.parse(parsed.receipt.at) >= requestedAt);
+  current.quitAfter = await readQuitObservation(state);
+  current.quit = assertFreshQuit(current.quitRequest, current.quitAfter, exit);
   await assert.rejects(fs.lstat(path.join(state, "running.json")), {
     code: "ENOENT",
   });
-  current.quit = parsed.receipt;
   const afterRelay = await fs.lstat(witness.relayRoot);
   current.relayAfterQuit = {
     dev: afterRelay.dev,
@@ -189,6 +204,7 @@ async function quit() {
   await bounded(application.close(), "FIRST_LAUNCH_DRIVER_CLOSE_UNKNOWN", 5000);
   await bounded(request, "FIRST_LAUNCH_QUIT_DISPATCH_UNKNOWN", 5000);
   application = undefined;
+  delete current.windowObservation;
   current.status = "passed";
 }
 try {
@@ -213,20 +229,7 @@ try {
       current.closed = new Promise((resolve) =>
         child.once("close", (code, signal) => resolve({ code, signal })),
       );
-      // Retain only classified lifecycle diagnostics, never app/profile bytes.
-      current.lifecycle = [];
-      let buffer = "";
-      child.stderr?.on("data", (chunk) => {
-        buffer += chunk.toString();
-        const lines = buffer.split("\n");
-        buffer = lines.pop().slice(-16384);
-        for (const line of lines) {
-          if (line.startsWith("FAROL_FIRST_LAUNCH_QUIT:"))
-            current.lifecycle.push(
-              JSON.parse(line.slice("FAROL_FIRST_LAUNCH_QUIT:".length)),
-            );
-        }
-      });
+      current.windowObservation = collectWindowObservation(child.stderr);
       return value;
     });
     await bounded(pending, "FIRST_LAUNCH_DISPATCH_UNKNOWN", 20000);
@@ -242,29 +245,15 @@ try {
     );
     assert.equal(actual.userData, identity.userData);
     assert.equal(actual.isPackaged, true);
-    await application.evaluate(({ app, BrowserWindow }) => {
-      globalThis.__farolFirstLaunchVisibilityViolations = [];
-      const watch = (window) => {
-        for (const event of ["show", "focus"])
-          window.on(event, () =>
-            globalThis.__farolFirstLaunchVisibilityViolations.push(event),
-          );
-      };
-      BrowserWindow.getAllWindows().forEach(watch);
-      app.on("browser-window-created", (_event, window) => watch(window));
-      app.once("will-quit", () =>
-        process.stderr.write(
-          "FAROL_FIRST_LAUNCH_QUIT:" +
-            JSON.stringify({
-              event: "will-quit",
-              pid: process.pid,
-              visibilityViolations:
-                globalThis.__farolFirstLaunchVisibilityViolations.length,
-            }) +
-            "\n",
-        ),
-      );
-    });
+    current.windowInitial = await bounded(
+      application.evaluate(({ app }) =>
+        typeof app.__farolE2EWindowLifetime === "function"
+          ? app.__farolE2EWindowLifetime()
+          : null,
+      ),
+      "FIRST_LAUNCH_WINDOW_OBSERVATION_TIMEOUT",
+    );
+    assertWindowSnapshot(current.windowInitial, current.pid);
     await bounded(waitForReactShell(page), "FIRST_LAUNCH_RENDERER_TIMEOUT");
     await page
       .getByRole("heading", { name: "Welcome to Farol", exact: true })
@@ -314,6 +303,33 @@ try {
       profileRoot,
       current.pid,
     );
+    const operations = parseFirstLaunchOperations(
+      await bounded(
+        page.evaluate(() => window.farol.operations()),
+        "FIRST_LAUNCH_OPERATIONS_TIMEOUT",
+      ),
+    );
+    current.operationDiagnostics = {
+      writeFailures: operations.writeFailures,
+      corruptLines: operations.corruptLines,
+      unrecordedUncertainEntries: operations.unrecordedUncertainEntries,
+    };
+    assert.equal(operations.writeFailures, 0);
+    assert.equal(operations.corruptLines, 0);
+    assert.equal(operations.unrecordedUncertainEntries, 0);
+    current.unresolvedOperations = operations.entries
+      .filter(
+        (entry) => entry.outcome === "unknown" || entry.outcome === "pending",
+      )
+      .map(({ id, kind, outcome, code }) => ({ id, kind, outcome, code }));
+    assert.deepEqual(
+      current.unresolvedOperations,
+      [],
+      "FIRST_LAUNCH_UNRESOLVED_OPERATIONS",
+    );
+    await page
+      .getByRole("button", { name: "Unresolved actions", exact: true })
+      .waitFor({ state: "hidden" });
     current.startup = {
       destination: "setup",
       welcome: "Welcome to Farol",

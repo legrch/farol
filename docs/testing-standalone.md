@@ -242,3 +242,150 @@ race/vet, protocol and strict desktop/root TypeScript checks are mapped. The
 source test scopes do not replace those gates. Full release qualification also
 retains applicable installed workflows and explicit live-provider checks, outside
 the deterministic engineering union.
+
+## Disposable owner-beta update pair
+
+`tests/e2e/owner-beta-update-pair.e2e.mjs` is a separate root-operated witness
+for two actual sealed owner-beta packages. It is not registered in an aggregate.
+Select both candidate repository roots and all six expected identity pins:
+
+```sh
+node tests/e2e/owner-beta-update-pair.e2e.mjs --check \
+  --source-root /absolute/source-repository \
+  --source-sha <40hex> --source-build-id <64hex> \
+  --source-artifact-sha <64hex> \
+  --target-root /absolute/target-repository \
+  --target-sha <40hex> --target-build-id <64hex> \
+  --target-artifact-sha <64hex>
+```
+
+`--check` performs read-only preflight and prints a content-free summary. It
+creates no report, profile, operation or other file, starts no fixture server,
+and launches no native/helper/Electron child. The only subprocess exception is
+the existing canonical `sourceIdentity()` owner's fixed read-only `/usr/bin/git`
+provenance reads, using `GIT_OPTIONAL_LOCKS=0`, disabled global/system Git config
+and its non-secret environment allowlist. Both sources must be clean and match
+the exact pinned commits/tree identities. Preflight checks canonical schema-7
+artifact paths, self-consistent build identities, owner-beta channels, sealed
+schema-4 build entries/input declarations, Go binary declarations/digests and
+complete app trees. Both bundles must contain the native E2E app-data seam, the early window-lifetime
+observer and its declared schema, and the selected sources/binaries must support
+the direct live helper protocol.
+These static capability checks do not prove native execution.
+
+Replace only `--check` with `--run-native` when the root owns the native lane.
+This worker packet does not execute that mode. It requires Darwin, matching
+native Go architecture and a physical OS temporary parent whose ancestors pass
+the unchanged Go helper ownership/mode guards. A sticky writable ancestor such
+as `/private/tmp` is refused before allocation; there is no fallback or permission
+repair. The runner mints its own `farol-e2e-home-*` root and UUID proof, with
+private physical `home/Library/Application Support` directories. No home, slot,
+operation, report destination, launcher or retry option can be supplied.
+
+The actual source app is copied into the new home's `Applications/Farol.app`;
+the actual target is copied into one fresh operation's `staged.app`. Internal
+symlinks and modes are preserved and complete tree digests are reverified.
+Hidden, unfocused source Electron starts directly with the proven E2E home and
+signed-out loopback fixture. Native home/userData/sessionData/app paths, actual
+PID/process start, boot identity, build and the real `running.json` must agree
+before updating. Empty task state is checked before declaring the test drain
+reconciled. No account setup, provider call, profile copying, settings changes,
+user-agent/security workaround or global home-identity patch is part of this
+witness.
+
+The packaged target Go binary publishes the actual slot binding through
+`publish-installed-slot-binding --build-id <compiled-build-id>`, with fd3 bytes
+and the pinned operation-directory descriptor on fd4. It then runs
+`run-live-release-helper` with the exact live request on fd3 and one bounded,
+strictly correlated ACK on fd4. Only `waiting_for_exit` permits one actual
+`app.quit()` request. The original child must close with code 0, a fresh parsed
+`last-quit.json` must say drained with no unconfirmed children, the running marker
+must disappear, and hidden-lifetime evidence must settle. Only then can the
+helper's original terminal plus the installed full-tree digest authorize the
+next lifetime.
+
+The shared native-lifetime proof is also used by first-launch/reopen and the
+built-source sign-in continuity witness. Before the one Quit request, it reads
+and pins the fixed private receipt (or its absence) and brands that observation
+in the controller's memory with the actual PID. After actual process/stream
+close, qualification requires an atomic replacement with a different inode in
+the same physical directory, monotonic observation order for that current
+request, and a parsed drained receipt without unconfirmed children. Wall-clock
+dates remain diagnostic; unchanged future-dated receipts, in-place writes,
+serialized/replayed observations and foreign process exits cannot qualify.
+
+The E2E-only window observer is the main entry's first import, before product
+composition, and arms only with the same proven disposable root and explicit
+hidden mode. It never controls windows. Immutable cumulative counters retain
+creation, show/focus, closed-window and observer-fault evidence even before the
+controller receives its public app handle. The controller requires the actual
+PID's healthy initial/pre-Quit snapshots, both synchronous Node-exit and app-quit
+frames, complete original stderr termination and no remaining open windows.
+Missing fields, faults, counter/frame overflow, malformed/truncated frames or
+any visible/focused window make the lifetime unconfirmed. A late attached
+listener or a current hidden snapshot alone cannot prove the full lifetime.
+
+The sequence is source startup → direct-Go apply → target startup/clean quit →
+target reopen → direct-Go manual rollback using that actual running target and
+the same operation → source startup/clean quit. Apply and rollback always use
+`relaunch:false`. Neither LaunchServices nor `/usr/bin/open` is invoked. Recovery
+is explicitly **NOT RUN**, because the current live recovery contract requires
+`relaunch:true`; there is no forged closed lease, crash/recovery fixture or Go
+policy override. The normal Desktop updater, production installation, live
+authentication and full CP2 acceptance are also **NOT RUN**. A successful native
+report establishes only this two-artifact direct-Go apply/rollback journey.
+
+Atomic reports go only into the runner repository's ignored
+`_output/evidence/owner-beta-update-pair/`. They retain pins, attempts, ACKs,
+terminal code/signal, native paths, installed digests, quit receipts and failure
+quarantine classifications, without raw logs or authentication/transcripts.
+Disposable profiles remain outside Git. Any refusal, malformed output, timeout,
+nonzero exit or uncertain terminal stops controller progression, with no retry,
+replacement launch, follow-up signal or recovery. The pair runner launches its
+own detached native child directly and retains the actual handle before Node
+inspector initialization. A bounded loopback inspector transport supplies only
+main-process evaluation. The actual matching PID/process-start/boot startup
+marker must exist before the first evaluation; inspector availability alone
+cannot prove Electron initialization. Evaluation resolves the explicit native
+`electron/main` alias, so an early context cannot invoke the npm `electron`
+installer shim. Renderer bootstrap reads go through the actual main window's
+WebContents. It installs no process signal/exit handler and has no
+implicit Quit or kill callback. The transport uses the repository's pinned `ws`
+client; disconnect closes only that owned debugger socket and rejects pending
+requests. Its destruction is never evidence of native process exit.
+
+Only the controller's one explicit evaluation dispatches `app.quit()`. It then
+disconnects the debugger so the inspector cannot delay native exit, and requires
+the original child's terminal, complete streams and lifetime/drain proof before
+progressing. Every failure finalizer disconnects its owned debugger transports
+and releases observation references without sending Quit or a process signal.
+Known original PIDs, incomplete initialization and partially modified homes are
+quarantined. App launch occurs only before a helper is started or after the
+previous helper's terminal, drain and installed-tree verification have settled.
+No framework shutdown handler can dispatch an additional Quit after failure.
+A report-write failure is itself a failed run, never acceptance.
+
+The separate first-launch and sign-in continuity witnesses still use pinned
+Playwright. Its initialization rejection may force-kill its newly detached
+launch group before exposing a public app handle; those witnesses cannot claim
+a signal-free vendor launch-failure path. That boundary is not used by the pair
+runner, and no such rejection proves no spawn or clean exit.
+
+`tests/unit/owner-beta-update-pair.test.mjs` uses inert Mach-O-header files,
+in-memory child streams and injected effect counters. It covers preflight
+refusal before native allocation/launch, the read-only Git exception, strict
+framing, bounded/malformed/refused/late ACKs, terminal uncertainty, fresh drain
+receipts and exact path/copy isolation. These fixtures never count as native
+acceptance. Source checks:
+
+```sh
+node node_modules/vitest/vitest.mjs run \
+  tests/unit/desktop-environment.test.ts \
+  tests/unit/owner-beta-update-pair.test.mjs \
+  tests/unit/native-electron-driver.test.mjs
+node --check tests/e2e/owner-beta-update-pair.e2e.mjs
+node --check tests/e2e/lib/owner-beta-update-pair.mjs
+npm run typecheck
+npm run lint
+npm run docs:check
+```
