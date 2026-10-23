@@ -375,7 +375,7 @@ describe("workspace shell authority", () => {
       operationId: "renewal-shell-first",
       workspaceId: "fixture",
       relativeCwd: ".",
-      command: "printf deadline-ready; while true; do sleep 0.05; done",
+      command: "printf deadline-ready; exec sleep 20",
       timeoutMs: 5_000,
       write: false,
     });
@@ -388,7 +388,7 @@ describe("workspace shell authority", () => {
       operationId: "renewal-shell-second",
       workspaceId: "fixture",
       relativeCwd: ".",
-      command: "printf deadline-ready; while true; do sleep 0.05; done",
+      command: "printf deadline-ready; exec sleep 20",
       timeoutMs: 5_000,
       write: false,
     });
