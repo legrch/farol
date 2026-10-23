@@ -6,7 +6,7 @@ Start from an accepted running Farol installation. New users should read [instal
 
 Open **Setup**, choose **Start setup**, and follow **Sign in → Workspaces → Connect this Mac → Add to ChatGPT**. **Continue** advances only after the current step passes. **Back** reviews an earlier step without repeating an action. Navigation does not save settings, grant access or submit a verification message.
 
-In **Sign in**, choose **Sign in** or **Open ChatGPT**, finish signing in with your own account, then return and choose **Check sign-in**. When **✓ Sign-in checked** appears, choose **Continue**. This guided flow requires the sign-in check; there is no skip. Signing in does not establish local workspace access or an external connection.
+In **Sign in**, choose **Sign in** or **Open ChatGPT**, finish signing in with your own account, then return to Setup. Farol confirms the signed-in page automatically; choose **Check sign-in** only if the step still needs confirmation. When **✓ Sign-in checked** appears, choose **Continue**. This guided flow requires the sign-in check; there is no skip. Signing in does not establish local workspace access or an external connection.
 
 ## Choose workspace access
 
