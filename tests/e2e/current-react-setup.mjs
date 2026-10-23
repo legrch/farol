@@ -139,14 +139,33 @@ const retiredActions = {
 function retired(journey, reason) {
   throw new Error(`E2E_JOURNEY_RETIRED:${journey}: ${reason}`);
 }
-export async function setupAction(page, name) {
+// Check access binds its one click and fresh receipt to the selected row. The
+// single-workspace shorthand remains available; multiple rows need an exact ID.
+export async function setupAction(page, name, { workspaceId } = {}) {
   if (name === "+ Add workspace" || name === "Check access") {
     const before = await readSetupSettings(page);
     assert.equal(connectionOutcomeUnknown(before), false);
-    await page
-      .locator(".setup-page")
-      .getByRole("button", { name, exact: true })
-      .click();
+    const target =
+      name === "Check access"
+        ? workspaceId === undefined && before.computer.workspaces.length === 1
+          ? before.computer.workspaces[0]
+          : before.computer.workspaces.find(
+              (workspace) => workspace.workspaceId === workspaceId,
+            )
+        : null;
+    if (name === "Check access")
+      assert.ok(
+        target,
+        workspaceId === undefined
+          ? "SETUP_WORKSPACE_TARGET_REQUIRED"
+          : `SETUP_WORKSPACE_TARGET_MISSING:${workspaceId}`,
+      );
+    const scope = target
+      ? page
+          .locator(".setup-workspace-row")
+          .filter({ has: page.getByText(target.root, { exact: true }) })
+      : page.locator(".setup-page");
+    await scope.getByRole("button", { name, exact: true }).click();
     const deadline = Date.now() + 15_000;
     for (;;) {
       const current = await readSetupSettings(page);
@@ -159,6 +178,9 @@ export async function setupAction(page, name) {
         return (
           workspace.accessCheck?.checkId &&
           workspace.accessCheck.checkId !== prior?.accessCheck?.checkId &&
+          (!target ||
+            (workspace.workspaceId === target.workspaceId &&
+              workspace.root === target.root)) &&
           (name !== "+ Add workspace" || !prior)
         );
       });
