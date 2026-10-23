@@ -73,6 +73,13 @@ describe("repository delivery policy", () => {
         r.jobs.publish.steps.at(-1).run = "gh release create v1 --latest";
       },
     ],
+    [
+      "automatic tag publication",
+      (p, r) => {
+        delete r.jobs.publish.if;
+        r.jobs.publish.needs = "build";
+      },
+    ],
   ])("rejects policy drift: %s", (_name, mutate) => {
     const p = structuredClone(pr),
       r = structuredClone(release);

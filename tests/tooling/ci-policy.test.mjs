@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it, expect } from "vitest";
+import { readWorkflow } from "../../tooling/delivery-policy.mjs";
 import { docsOnly } from "../../tooling/ci-paths.mjs";
 import {
   verifyVersion,
@@ -211,5 +212,66 @@ describe("CI safety and selection", () => {
     await expect(
       verifyReleaseAssets(root, { version, head }),
     ).rejects.toThrow();
+  });
+});
+
+describe("two-phase release workflow", () => {
+  const release = readWorkflow(".github/workflows/release.yml");
+  it("keeps tag and prepare runs build-only with unchanged full package gates", () => {
+    expect(release.on.push).toEqual({ tags: ["v*"] });
+    expect(release.on.workflow_dispatch.inputs.action.options).toEqual([
+      "prepare",
+      "publish",
+    ]);
+    expect(release.jobs.build.if).toBe(
+      "github.event_name == 'push' || inputs.action == 'prepare'",
+    );
+    const commands = release.jobs.build.steps
+      .map((step) => step.run ?? "")
+      .join("\n");
+    for (const gate of [
+      "task ci\n",
+      "task package -- --go-inputs=",
+      "tooling/ci-go-inputs.mjs",
+      "tooling/prepare-release-archive.py",
+      "tooling/verify-release-assets.mjs",
+    ])
+      expect(commands).toContain(gate);
+    expect(commands).not.toMatch(/gh release|git push/u);
+    const upload = release.jobs.build.steps.find((step) =>
+      step.uses?.startsWith("actions/upload-artifact@"),
+    );
+    expect(upload.with.name).toBe(
+      "${{ steps.candidate.outputs.artifactName }}",
+    );
+    expect(upload.with.path.trim().split("\n")).toEqual([
+      "_output/release/${{ steps.candidate.outputs.tag }}/Farol-${{ steps.candidate.outputs.version }}-darwin-arm64.zip",
+      "_output/release/${{ steps.candidate.outputs.tag }}/farol-release.json",
+      "_output/release/${{ steps.candidate.outputs.tag }}/SHA256SUMS",
+    ]);
+    expect(upload.with["if-no-files-found"]).toBe("error");
+  });
+  it("permits publishing only by a separate explicit dispatch, without rebuilding", () => {
+    const job = release.jobs.publish;
+    expect(job.if).toBe(
+      "github.event_name == 'workflow_dispatch' && inputs.action == 'publish'",
+    );
+    expect(job.needs).toBeUndefined();
+    expect(job.permissions).toEqual({ contents: "write", actions: "read" });
+    expect(release.permissions).toEqual({ contents: "read" });
+    expect(release.jobs.build.permissions).toBeUndefined();
+    const commands = job.steps.map((step) => step.run ?? "").filter(Boolean);
+    expect(commands).toEqual([
+      "node tooling/release-candidate.mjs metadata",
+      "node tooling/release-candidate.mjs publish",
+    ]);
+    const download = job.steps.find((step) =>
+      step.uses?.startsWith("actions/download-artifact@"),
+    );
+    expect(download.with["artifact-ids"]).toBe(
+      "${{ steps.candidate.outputs.artifactId }}",
+    );
+    expect(download.with["run-id"]).toBe("${{ inputs.candidate_run_id }}");
+    expect(download.with.name).toBeUndefined();
   });
 });
