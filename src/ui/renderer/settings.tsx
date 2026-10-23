@@ -953,6 +953,55 @@ function Folders(props: PageProps) {
     }
   }
 
+  async function remove(workspaceId: string) {
+    if (folderFlow.busy || folderFlow.access.requiresReadback()) return;
+    const before = facade.getSnapshot();
+    if (before.configuration?.status !== "ready") return;
+    const previous = before.configuration.settings.computer;
+    const expected = {
+      ...previous,
+      generation: previous.generation + 1,
+      workspaces: previous.workspaces.filter(
+        (item) => item.workspaceId !== workspaceId,
+      ),
+    };
+    let remaining: string | undefined;
+    folderFlow.busy = true;
+    setAdding(true);
+    try {
+      const result = await actions.run({
+        kind: "computer.remove-workspace",
+        workspaceId,
+      });
+      const current = facade.getSnapshot();
+      // Follow only this acknowledged removal. A navigation, unknown outcome
+      // or any other scope change cannot schedule additional configuration work.
+      if (
+        result?.state === "applied" &&
+        current.destination === before.destination &&
+        current.buildId === before.buildId &&
+        soleIntent(
+          before,
+          current,
+          "computer.remove-workspace",
+          intention("computer.remove-workspace", workspaceId),
+        ) &&
+        current.configuration?.status === "ready" &&
+        JSON.stringify(current.configuration.settings.computer) ===
+          JSON.stringify(expected)
+      ) {
+        remaining =
+          current.configuration.settings.computer.workspaces[0]?.workspaceId;
+      }
+    } finally {
+      folderFlow.busy = false;
+      setAdding(false);
+    }
+    // The existing guarded flow checks every retained folder with its saved
+    // access/commands, and keeps original unknown effects fenced.
+    if (remaining !== undefined) await update(remaining);
+  }
+
   async function update(
     workspaceId: string,
     plan: { access?: "read" | "write"; commands?: "none" | "workspace" } = {},
@@ -1090,12 +1139,7 @@ function Folders(props: PageProps) {
                     workspace.workspaceId,
                   )
                 }
-                onClick={() =>
-                  void actions.run({
-                    kind: "computer.remove-workspace",
-                    workspaceId: workspace.workspaceId,
-                  })
-                }
+                onClick={() => void remove(workspace.workspaceId)}
               >
                 Remove {folderDisplayName(workspace)}
               </button>

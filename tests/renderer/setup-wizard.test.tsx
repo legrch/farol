@@ -1,6 +1,6 @@
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { change, mount, readySettings } from "./setup-fixture";
+import { change, mount, readySettings, buildId } from "./setup-fixture";
 import { bootstrap, deferred, fixture, signInReply } from "./fixture";
 import { WindowController } from "../../src/ui/renderer/controller";
 import { setupChecklist } from "../../src/ui/renderer/setup-navigation";
@@ -779,3 +779,108 @@ describe("on-demand Setup instructions", () => {
   });
 });
 afterEach(() => vi.useRealTimers());
+
+describe("automatic checks after removing a Setup folder", () => {
+  it.each(["applied", "refused", "unknown", "crossed"] as const)(
+    "follows only its own acknowledged unchanged-scope removal: %s",
+    async (outcome) => {
+      let value = readySettings();
+      const retained = value.computer.workspaces[0]!;
+      const scratchId = "44444444-4444-4444-8444-444444444444";
+      value.computer.workspaces.push({
+        ...structuredClone(retained),
+        workspaceId: scratchId,
+        root: "/approved/scratch",
+        label: "Scratch",
+      });
+      value.connectors.secureMcp.runtime = null;
+      value.connectors.secureMcp.challenge = null;
+      const h = await mount({ step: "folders", value });
+      const calls: string[] = [];
+      h.reply((command) => {
+        calls.push(command.kind);
+        if (command.kind === "computer.remove-workspace") {
+          if (outcome === "unknown")
+            throw Error("scripted lost removal acknowledgement");
+          if (outcome === "refused")
+            return {
+              ok: false,
+              error: "WORKSPACE_NOT_FOUND",
+              snapshot: { status: "ready", settings: value },
+            };
+          value = {
+            ...value,
+            revision: value.revision + 1,
+            computer: {
+              ...value.computer,
+              generation: value.computer.generation + 1,
+              workspaces: value.computer.workspaces.filter(
+                (w) => w.workspaceId !== scratchId,
+              ),
+            },
+            setup: {
+              ...value.setup,
+              computer: {
+                ...value.setup.computer,
+                reachable: "unknown",
+                verified: null,
+              },
+            },
+          };
+          if (outcome === "crossed") value.computer.commands = "workspace";
+        } else if (command.kind === "computer.verify-workspace") {
+          expect(command.workspaceId).toBe(retained.workspaceId);
+          value = {
+            ...value,
+            revision: value.revision + 1,
+            computer: {
+              ...value.computer,
+              workspaces: value.computer.workspaces.map((w) => ({
+                ...w,
+                accessCheck: {
+                  buildId,
+                  computerGeneration: value.computer.generation,
+                  rootIdentity: w.rootIdentity!,
+                  verifiedAt: "2026-10-24T00:00:00.000Z",
+                  checkId: command.checkId!,
+                },
+              })),
+            },
+            setup: {
+              ...value.setup,
+              computer: {
+                ...value.setup.computer,
+                reachable: "reachable",
+                outcomeUnknown: false,
+                verified: {
+                  ...retainedWitness(),
+                  configRevision: value.computer.generation,
+                  workspaceId: retained.workspaceId,
+                },
+              },
+            },
+          };
+        } else throw Error("unexpected follow-up " + command.kind);
+        return { ok: true, snapshot: { status: "ready", settings: value } };
+      });
+      function retainedWitness() {
+        return readySettings().setup.computer.verified!;
+      }
+      await h.click("Remove scratch");
+      await vi.waitFor(() =>
+        expect(calls).toEqual(
+          outcome === "applied"
+            ? ["computer.remove-workspace", "computer.verify-workspace"]
+            : ["computer.remove-workspace"],
+        ),
+      );
+      if (outcome === "applied") {
+        await vi.waitFor(() =>
+          expect(h.button("Continue")?.disabled).toBe(false),
+        );
+        expect(h.host.textContent).toContain("✓ Works");
+        expect(h.host.textContent).not.toContain("Check access");
+      }
+    },
+  );
+});
