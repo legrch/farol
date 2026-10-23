@@ -1,3 +1,4 @@
+import "../../../apps/desktop/bridge/e2e-window-bootstrap.ts";
 import {
   recordedModelTurn,
   recordedCompaction,
