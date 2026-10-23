@@ -109,6 +109,8 @@ describe("helper resource type and descriptor binding", () => {
       const archive = path.join(directory, "invalid.zip");
       await fs.writeFile(archive, "not a ZIP");
       const probe = `
+// Simulate bounded cold process startup before any native extraction effect.
+await new Promise((resolve) => setTimeout(resolve, 2200));
 import fs from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 const [modulePath, helperPath, stage, archive] = process.argv.slice(1);
@@ -134,7 +136,9 @@ catch (error) { process.stdout.write(JSON.stringify({ code: error.code ?? null, 
           stage,
           archive,
         ],
-        deadline,
+        // This finite extraction scenario includes cold Node/native startup;
+        // the separate FIFO/nonblocking admission cases retain their 2 s cap.
+        { ...deadline, timeout: 10_000 },
       );
       assertExited(result);
       expect(JSON.parse(result.stdout)).toEqual({
