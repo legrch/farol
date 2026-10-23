@@ -96,7 +96,7 @@ export function setupCompletionChecks(
           connector?.attachment?.challengeSha256 ===
             challenge.challengeSha256)) &&
       connector &&
-      selectedConnectorApp(connector) === "Farol",
+      selectedConnectorApp(connector) !== null,
     ),
   };
 }

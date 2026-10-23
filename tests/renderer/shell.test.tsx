@@ -3224,3 +3224,60 @@ it.each([false, true])(
     expect(f.api.task).not.toHaveBeenCalled();
   },
 );
+
+it.each(["starting", "offline", "failed"] as const)(
+  "retains the permanent ChatGPT rail and browser layout while Computer is %s",
+  async (runtime) => {
+    const { host, c, f, root } = await mount();
+    await act(async () => {
+      f.emit("runtime", {
+        state: runtime,
+        error: null,
+        identity: null,
+        embeddedNode: null,
+        embeddedElectron: null,
+      });
+      button(host, "ChatGPT").click();
+    });
+    expect(
+      host.querySelector('.rail [aria-label="ChatGPT"][aria-current="page"]'),
+    ).not.toBeNull();
+    expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.slice(0, 3)).toEqual([
+      "browser",
+      "",
+      false,
+    ]);
+    await act(async () => {
+      f.emit("route", { state: "failed" });
+      root.render(null);
+    });
+    await act(async () =>
+      root.render(
+        <StrictMode>
+          <Services value={c}>
+            <Shell />
+          </Services>
+        </StrictMode>,
+      ),
+    );
+    expect(host.querySelector("header")?.textContent).toContain(
+      "ChatGPT page load failed",
+    );
+    expect(host.textContent).not.toContain("Sign-in checked");
+    expect(host.textContent).not.toContain(
+      "Connected — ChatGPT can reach this Mac",
+    );
+    expect(f.api.configure).toHaveBeenCalledExactlyOnceWith({
+      kind: "chatgpt.present-browser",
+    });
+    expect(f.api.task).not.toHaveBeenCalled();
+    await act(async () => c.overlay("update"));
+    expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.[5]).toBe("task-menu");
+    await act(async () => c.dismissOverlay());
+    expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.[5]).toBe("none");
+    await act(async () => c.navigate({ area: "home" }));
+    await act(async () => c.travel(-1));
+    expect(c.getSnapshot().destination.area).toBe("chatgpt");
+    expect(f.api.configure).toHaveBeenCalledTimes(1);
+  },
+);

@@ -22,6 +22,9 @@ export function deriveSurfaceLayout(input: {
   section: SurfaceSection;
   setupOpen: boolean;
   runtimeReady: boolean;
+  // Retained ChatGPT documents have their own lifecycle, including signed-out
+  // and failed-load pages. Computer readiness is independent of this evidence.
+  browserDocumentPresent?: boolean;
   selectedTaskPresent: boolean;
   browserChromeVisible?: boolean;
   compactBrowser?: boolean;
@@ -39,7 +42,7 @@ export function deriveSurfaceLayout(input: {
     sidebarWidth,
     autoRail,
     pageVisible:
-      input.runtimeReady &&
+      (input.browserDocumentPresent === true || input.runtimeReady) &&
       input.selectedTaskPresent &&
       input.section === "browser" &&
       !input.setupOpen &&

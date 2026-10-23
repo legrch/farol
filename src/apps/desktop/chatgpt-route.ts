@@ -1398,6 +1398,7 @@ export type ChatGptWindowPresentation =
   | Readonly<{ mode: "hidden" }>
   | Readonly<{
       mode: "secondary-visible";
+      size?: "exact" | "fit";
       place(
         requested: Readonly<{ width: number; height: number }>,
       ): Readonly<{ x: number; y: number; width: number; height: number }>;
@@ -1433,8 +1434,14 @@ export function resolveChatGptWindowPresentation(
   if (
     !Number.isSafeInteger(bounds.x) ||
     !Number.isSafeInteger(bounds.y) ||
-    bounds.width !== requested.width ||
-    bounds.height !== requested.height
+    !Number.isSafeInteger(bounds.width) ||
+    !Number.isSafeInteger(bounds.height) ||
+    (presentation.size === "fit"
+      ? bounds.width < 720 ||
+        bounds.height < 560 ||
+        bounds.width > requested.width ||
+        bounds.height > requested.height
+      : bounds.width !== requested.width || bounds.height !== requested.height)
   ) {
     throw new Error("CHATGPT_WINDOW_PLACEMENT_INVALID");
   }
@@ -2846,7 +2853,6 @@ export class ChatGptRoute {
       (!profile.success ||
         !profile.data.composerReady ||
         !profile.data.temporary ||
-        !profile.data.personalizationReady ||
         !profile.data.modelReady)
     ) {
       await delay(200);
@@ -2858,41 +2864,10 @@ export class ChatGptRoute {
       !profile.success ||
       !profile.data.composerReady ||
       !profile.data.temporary ||
-      !profile.data.personalizationReady ||
       !profile.data.modelReady ||
       profile.data.draftPresent
     )
       return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    if (!profile.data.personalized) {
-      try {
-        if (
-          (await contents.executeJavaScript(
-            openTemporaryPersonalizationScript,
-            true,
-          )) !== true
-        )
-          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-        let selected = false;
-        for (let attempt = 0; attempt < 10; attempt += 1) {
-          if (
-            (await contents.executeJavaScript(
-              selectTemporaryPersonalizationScript,
-              true,
-            )) === true
-          ) {
-            selected = true;
-            break;
-          }
-          await delay(100);
-        }
-        if (!selected) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-        profile = await read();
-        if (!profile.success || !profile.data.personalized)
-          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-      } catch {
-        return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-      }
-    }
     if (!profile.data.modelReady || profileIdentityLost())
       return "CHATGPT_INSTANT_MODEL_REQUIRED";
 
@@ -2956,15 +2931,87 @@ export class ChatGptRoute {
       if (profileIdentityLost()) return "CHATGPT_INSTANT_MODEL_REQUIRED";
       selected = await read();
     }
+    if (
+      profileIdentityLost() ||
+      !selected.success ||
+      !selected.data.composerReady ||
+      selected.data.draftPresent ||
+      !selected.data.temporary ||
+      !selected.data.modelReady ||
+      !selected.data.instant
+    )
+      return "CHATGPT_INSTANT_MODEL_REQUIRED";
+
+    // Personalization controls may depend on the selected provider model.
+    // Confirm Instant before waiting for or selecting Personalized; neither
+    // state alone authorizes preparation of a message or submission.
+    const personalizationDeadline = Date.now() + 2_000;
+    profile = selected;
+    while (
+      profile.success &&
+      !profile.data.personalizationReady &&
+      Date.now() < personalizationDeadline
+    ) {
+      await delay(100);
+      if (profileIdentityLost()) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+      profile = await read();
+    }
+    if (
+      profileIdentityLost() ||
+      !profile.success ||
+      !profile.data.composerReady ||
+      profile.data.draftPresent ||
+      !profile.data.temporary ||
+      !profile.data.instant ||
+      !profile.data.personalizationReady
+    )
+      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+    if (!profile.data.personalized) {
+      try {
+        if (
+          (await contents.executeJavaScript(
+            openTemporaryPersonalizationScript,
+            true,
+          )) !== true ||
+          profileIdentityLost()
+        )
+          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+        let selected = false;
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+          if (profileIdentityLost()) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+          if (
+            (await contents.executeJavaScript(
+              selectTemporaryPersonalizationScript,
+              true,
+            )) === true
+          ) {
+            selected = true;
+            break;
+          }
+          await delay(100);
+        }
+        if (!selected) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+        profile = await read();
+        if (!profile.success || !profile.data.personalized)
+          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+      } catch {
+        return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+      }
+    }
+    const ready = await read();
+    if (ready.success && (!ready.data.modelReady || !ready.data.instant))
+      return "CHATGPT_INSTANT_MODEL_REQUIRED";
     return !profileIdentityLost() &&
-      selected.success &&
-      selected.data.composerReady &&
-      !selected.data.draftPresent &&
-      selected.data.temporary &&
-      selected.data.personalized &&
-      selected.data.instant
+      ready.success &&
+      ready.data.composerReady &&
+      !ready.data.draftPresent &&
+      ready.data.temporary &&
+      ready.data.personalizationReady &&
+      ready.data.personalized &&
+      ready.data.modelReady &&
+      ready.data.instant
       ? null
-      : "CHATGPT_INSTANT_MODEL_REQUIRED";
+      : "CHATGPT_TEMPORARY_CHAT_REQUIRED";
   }
 
   async runReadonlyTask(

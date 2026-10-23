@@ -307,6 +307,101 @@ describe("temporary Instant connector profile", () => {
     expect(route.personalizationOpens()).toBe(1);
   });
 
+  it("selects Instant before waiting for model-dependent personalization controls", async () => {
+    const route = profileRoute(regular, {
+      ...temporary,
+      personalized: false,
+      personalizationReady: false,
+    });
+    const execute = route.executeJavaScript.getMockImplementation()!;
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
+    route.executeJavaScript.mockImplementation(async (script: string) => {
+      if (script === openTemporaryPersonalizationScript)
+        expect(route.sendInputEvent).toHaveBeenCalledWith({
+          type: "keyDown",
+          keyCode: "Left",
+        });
+      const result = await execute(script);
+      return script === temporaryInstantProfileProbe &&
+        typeof result === "object" &&
+        result !== null &&
+        "instant" in result &&
+        result.instant === true
+        ? { ...result, personalizationReady: true }
+        : result;
+    });
+    await expect(route.prepare()).resolves.toBeNull();
+    expect(route.pickerOpens()).toBe(1);
+    expect(route.personalizationOpens()).toBe(1);
+  });
+
+  it("refuses to continue if personalization is still unavailable after selecting Instant", async () => {
+    const route = profileRoute(regular, {
+      ...temporary,
+      personalized: false,
+      personalizationReady: false,
+    });
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
+    await expect(route.prepare()).resolves.toBe(
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+    );
+    expect(route.pickerOpens()).toBe(1);
+    expect(route.personalizationOpens()).toBe(0);
+  });
+
+  it("does not select personalization after the profile document changes", async () => {
+    const route = profileRoute(regular, { ...temporary, personalized: false });
+    const execute = route.executeJavaScript.getMockImplementation()!;
+    route.executeJavaScript.mockImplementation(async (script: string) => {
+      const result = await execute(script);
+      if (script === openTemporaryPersonalizationScript) route.navigate();
+      return result;
+    });
+    await expect(route.prepare()).resolves.toBe(
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+    );
+    expect(route.executeJavaScript).not.toHaveBeenCalledWith(
+      selectTemporaryPersonalizationScript,
+      true,
+    );
+  });
+
+  it.each(["model", "draft"] as const)(
+    "checks the %s again after personalization before continuing",
+    async (changed) => {
+      const route = profileRoute(regular, {
+        ...temporary,
+        personalized: false,
+      });
+      const execute = route.executeJavaScript.getMockImplementation()!;
+      let personalized = false;
+      route.executeJavaScript.mockImplementation(async (script: string) => {
+        const result = await execute(script);
+        if (script === selectTemporaryPersonalizationScript)
+          personalized = true;
+        return script === temporaryInstantProfileProbe &&
+          personalized &&
+          typeof result === "object" &&
+          result !== null
+          ? {
+              ...result,
+              ...(changed === "model"
+                ? { instant: false }
+                : { draftPresent: true }),
+            }
+          : result;
+      });
+      await expect(route.prepare()).resolves.toBe(
+        changed === "model"
+          ? "CHATGPT_INSTANT_MODEL_REQUIRED"
+          : "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      );
+      expect(route.pickerOpens()).toBe(1);
+    },
+  );
+
   it("waits for the temporary chat controls to hydrate before choosing the model", async () => {
     const loading = {
       ...temporary,
@@ -2196,6 +2291,38 @@ describe("ChatGPT test-window presentation", () => {
           place: () => ({ x: 0, y: 0, width: 719, height: 760 }),
         },
         { width: 720, height: 760 },
+      ),
+    ).toThrow("CHATGPT_WINDOW_PLACEMENT_INVALID");
+  });
+
+  it.each([1080, 720])(
+    "fits a %i px auth surface inside an explicit Sidecar viewport",
+    (width) => {
+      const bounds = { x: -1110, y: 30, width, height: 720 };
+      expect(
+        resolveChatGptWindowPresentation(
+          { mode: "secondary-visible", size: "fit", place: () => bounds },
+          { width, height: 760 },
+        ),
+      ).toEqual({ bounds, reveal: "show-inactive", focus: false });
+    },
+  );
+
+  it.each([
+    { width: 719, height: 720 },
+    { width: 720, height: 559 },
+    { width: 1081, height: 720 },
+    { width: 1080, height: 761 },
+    { width: 720.5, height: 720 },
+  ])("rejects unsafe fitted auth dimensions %j", (dimensions) => {
+    expect(() =>
+      resolveChatGptWindowPresentation(
+        {
+          mode: "secondary-visible",
+          size: "fit",
+          place: () => ({ x: -1110, y: 30, ...dimensions }),
+        },
+        { width: 1080, height: 760 },
       ),
     ).toThrow("CHATGPT_WINDOW_PLACEMENT_INVALID");
   });
@@ -7856,4 +7983,65 @@ describe("confirmed update browser closure (native surfaces mocked)", () => {
       code: "UPDATE_BROWSER_BUSY",
     });
   });
+});
+
+// In-memory Electron surface and layout fixtures, never live provider/native proof.
+describe("retained home presentation", () => {
+  it.each(["loaded", "failed"] as const)(
+    "reveals the same %s signed-out document without a reload or a Send",
+    async (load) => {
+      const surface = embeddedSurface();
+      const executeJavaScript = vi.fn(async () => ({
+        composerVisible: false,
+        signInVisible: true,
+      }));
+      Object.assign(surface.webContents, { executeJavaScript });
+      const surfaceFactory = vi.fn(() => surface);
+      const changes: string[] = [];
+      const candidate = new ChatGptRoute({
+        homeUrl: "https://chatgpt.com/",
+        initialUrl: "https://chatgpt.com/",
+        e2eOrigin: null,
+        parent: () => null,
+        surfaceFactory: surfaceFactory as unknown as ChatGptRouteSurfaceFactory,
+        onLoadStateChanged: (state) => changes.push(state),
+      });
+      expect(await candidate.open()).toEqual({ status: "opened" });
+      expect(await candidate.observe()).toMatchObject({ state: "signed_out" });
+      if (load === "failed")
+        surface.webContents.emit(
+          "did-fail-load",
+          {},
+          -102,
+          "fixture error",
+          "https://chatgpt.com/",
+          true,
+        );
+      surface.hide();
+      const reads = executeJavaScript.mock.calls.length;
+      const before = changes.slice();
+      for (let entry = 0; entry < 2; entry++) {
+        expect(await candidate.open()).toEqual({
+          status: load === "loaded" ? "opened" : "unreachable",
+        });
+        expect(Reflect.get(candidate, "load")).toBe(load);
+      }
+      expect(surfaceFactory).toHaveBeenCalledTimes(1);
+      expect(surface.loadURL).toHaveBeenCalledExactlyOnceWith(
+        "https://chatgpt.com/",
+      );
+      expect(surface.destroy).not.toHaveBeenCalled();
+      expect(surface.reveal).toHaveBeenCalledTimes(3);
+      expect(executeJavaScript).toHaveBeenCalledTimes(reads);
+      expect(changes).toEqual(before);
+      if (load === "failed") {
+        expect(await candidate.observeSignInStatus()).toEqual({
+          state: "unknown",
+          binding: null,
+        });
+        expect(executeJavaScript).toHaveBeenCalledTimes(reads);
+      }
+      candidate.dispose();
+    },
+  );
 });

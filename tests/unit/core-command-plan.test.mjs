@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { coreTestSteps } from "../../tooling/core-test-plan.mjs";
 
 describe("preserved public core command chain", () => {
-  it("preserves every original core command, flag, order, protocol file and nested-module context", () => {
+  it("preserves full race coverage with bounded package concurrency, command order and nested context", () => {
     expect(
       coreTestSteps({ nested: true, node: "node", go: "go" }).map(
         ({ executable, args, cwd }) => [executable, args, cwd ?? "."],
@@ -10,9 +10,9 @@ describe("preserved public core command chain", () => {
     ).toEqual([
       ["node", ["tooling/generate-desktop-wire.mjs", "--check"], "."],
       ["node", ["tooling/check-go-architecture.mjs"], "."],
-      ["go", ["test", "-race", "./..."], "."],
+      ["go", ["test", "-p=2", "-race", "./..."], "."],
       ["go", ["vet", "./..."], "."],
-      ["go", ["test", "-race", "./..."], "resources/native/go"],
+      ["go", ["test", "-p=2", "-race", "./..."], "resources/native/go"],
       ["go", ["vet", "./..."], "resources/native/go"],
       [
         "node",

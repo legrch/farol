@@ -1,6 +1,6 @@
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mount, readySettings } from "./setup-fixture";
+import { change, mount, readySettings } from "./setup-fixture";
 import { bootstrap, deferred, fixture, signInReply } from "./fixture";
 import { WindowController } from "../../src/ui/renderer/controller";
 import { setupChecklist } from "../../src/ui/renderer/setup-navigation";
@@ -285,6 +285,7 @@ describe("linear Setup", () => {
   });
   it("keeps unknown checks blocked across navigation, refresh and remount", async () => {
     const value = readySettings();
+    value.connectors.secureMcp.runtime = null;
     const h = await mount({ step: "connection", value });
     h.reply(() => {
       throw new Error("scripted loss");
@@ -324,8 +325,12 @@ describe("linear Setup", () => {
 describe("Add to ChatGPT", () => {
   it("shows exact values and the honest bounded test description", async () => {
     const h = await mount({ step: "attachment", value: readySettings() });
-    expect(h.host.querySelector(".setup-app-values")?.textContent).toBe(
-      "NameFarolConnectionTunnel · synthetic-tunnelSign-inNone",
+    expect(
+      h.host.querySelector<HTMLInputElement>('[aria-label="ChatGPT app name"]')
+        ?.value,
+    ).toBe("Farol");
+    expect(h.host.querySelector(".setup-app-values")?.textContent).toContain(
+      "ConnectionTunnel · synthetic-tunnelSign-inNone",
     );
     expect(h.host.textContent).toContain("without reading file contents");
     expect(h.host.querySelectorAll("details")).toHaveLength(0);
@@ -335,74 +340,86 @@ describe("Add to ChatGPT", () => {
       destination: "chatgpt",
     });
   });
-  it("selects Farol for the current tunnel and runs the existing check exactly once", async () => {
-    const h = await mount({
-      step: "attachment",
-      value: readySettings(),
-      shell: true,
-      signIn: "authenticated",
-    });
-    await h.confirmSignIn();
-    expect(h.c.getSnapshot().setupSignInCheck).toBeTruthy();
-    let value = readySettings();
-    const wait = deferred<unknown>();
-    h.reply((command) => {
-      if (command.kind === "connector.select-chatgpt-app") {
-        value = structuredClone(value);
-        value.revision = 2;
-        value.connectors.secureMcp.chatgptApp = {
-          name: "Farol",
-          tunnelId: "synthetic-tunnel",
-          connectorGeneration: 1,
-        };
-        return { ok: true, snapshot: { status: "ready", settings: value } };
-      }
-      return wait.promise;
-    });
-    expect(h.button("Test in ChatGPT")?.disabled).toBe(false);
-    await h.click("Test in ChatGPT");
-    expect(h.c.getSnapshot().destination).toMatchObject({
-      area: "chatgpt",
-      connectionCheckReturn: true,
-    });
-    expect(h.button("Back to setup")).toBeTruthy();
-    await h.click("Back to setup");
-    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
-    expect(
-      vi
-        .mocked(h.f.api.configure)
-        .mock.calls.filter(([c]) => c.kind === "connector.verify-app"),
-    ).toHaveLength(1);
-    await act(async () =>
-      wait.resolve({
-        ok: true,
-        snapshot: {
-          status: "ready",
-          settings: { ...readySettings(true), revision: 3 },
-        },
-      }),
-    );
-    expect(h.host.textContent).toContain("✓ Everything works");
-    expect(h.host.textContent).toContain("No file contents were read");
-    expect(h.button("Start using Farol")?.disabled).toBe(false);
-    h.reply((command) => {
-      expect(command).toEqual({
-        kind: "setup.progress",
-        currentStep: "connect",
-        dismissed: true,
+  it.each(["Farol", "Farol Dev", "Farol Preview"])(
+    "selects %s and completes the verified Setup journey",
+    async (appName) => {
+      const h = await mount({
+        step: "attachment",
+        value: readySettings(),
+        shell: true,
+        signIn: "authenticated",
       });
-      const settings = readySettings(true);
-      settings.revision = 4;
-      settings.setup.journey = { currentStep: "connect", dismissed: true };
-      return { ok: true, snapshot: { status: "ready", settings } };
-    });
-    await h.click("Start using Farol");
-    expect(h.c.getSnapshot().destination.area).toBe("home");
-    expect(h.c.getSnapshot().configuration).toMatchObject({
-      status: "ready",
-      settings: { setup: { journey: { dismissed: true } } },
-    });
-  });
+      await h.confirmSignIn();
+      await change(
+        h.host.querySelector<HTMLInputElement>(
+          '[aria-label="ChatGPT app name"]',
+        )!,
+        appName,
+      );
+      expect(h.c.getSnapshot().setupSignInCheck).toBeTruthy();
+      let value = readySettings();
+      const wait = deferred<unknown>();
+      h.reply((command) => {
+        if (command.kind === "connector.select-chatgpt-app") {
+          value = structuredClone(value);
+          value.revision = 2;
+          value.connectors.secureMcp.chatgptApp = {
+            name: appName,
+            tunnelId: "synthetic-tunnel",
+            connectorGeneration: 1,
+          };
+          return { ok: true, snapshot: { status: "ready", settings: value } };
+        }
+        return wait.promise;
+      });
+      expect(h.button("Test in ChatGPT")?.disabled).toBe(false);
+      await h.click("Test in ChatGPT");
+      expect(h.c.getSnapshot().destination).toMatchObject({
+        area: "chatgpt",
+        connectionCheckReturn: true,
+      });
+      expect(h.button("Back to setup")).toBeTruthy();
+      await h.click("Back to setup");
+      expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
+      expect(
+        vi
+          .mocked(h.f.api.configure)
+          .mock.calls.filter(([c]) => c.kind === "connector.verify-app"),
+      ).toHaveLength(1);
+      const verified = readySettings(true);
+      verified.connectors.secureMcp.chatgptApp!.name = appName;
+      await act(async () =>
+        wait.resolve({
+          ok: true,
+          snapshot: {
+            status: "ready",
+            settings: { ...verified, revision: 3 },
+          },
+        }),
+      );
+      expect(h.host.textContent).toContain("✓ Everything works");
+      expect(h.host.textContent).toContain("No file contents were read");
+      expect(h.button("Start using Farol")?.disabled).toBe(false);
+      h.reply((command) => {
+        expect(command).toEqual({
+          kind: "setup.progress",
+          currentStep: "connect",
+          dismissed: true,
+        });
+        const settings = readySettings(true);
+        settings.connectors.secureMcp.chatgptApp!.name = appName;
+        settings.revision = 4;
+        settings.setup.journey = { currentStep: "connect", dismissed: true };
+        return { ok: true, snapshot: { status: "ready", settings } };
+      });
+      await h.click("Start using Farol");
+      expect(h.c.getSnapshot().destination.area).toBe("home");
+      expect(h.c.getSnapshot().configuration).toMatchObject({
+        status: "ready",
+        settings: { setup: { journey: { dismissed: true } } },
+      });
+    },
+  );
   it("does not submit the ChatGPT test or steal navigation after a late app selection", async () => {
     const h = await mount({ step: "attachment", value: readySettings() });
     const waiting = deferred<unknown>();
@@ -438,137 +455,242 @@ describe("Add to ChatGPT", () => {
   });
 });
 
-const originalMatchMedia = window.matchMedia;
-afterEach(() => {
-  window.matchMedia = originalMatchMedia;
-  vi.useRealTimers();
-});
 const walkthroughs = [
   {
     step: "connection",
     label: "Create a tunnel and a key",
-    titles: ["1 · Create a tunnel", "2 · Create a key", "3 · Copy both here"],
     open: "Open OpenAI Tunnels",
     destination: "tunnels",
   },
   {
     step: "attachment",
     label: "Add to ChatGPT",
-    titles: [
-      "1 · Settings → Connectors",
-      "2 · Add Farol: name, Tunnel, ID",
-      "3 · Test in ChatGPT",
-    ],
     open: "Open ChatGPT Apps",
     destination: "chatgpt",
   },
 ] as const;
-describe("compact walkthroughs", () => {
+describe("on-demand Setup instructions", () => {
   it.each(walkthroughs)(
-    "shows all $step cards in order with accessible names and no real IDs",
-    async ({ step, label, titles, open, destination }) => {
+    "keeps $step guidance closed until requested and never advances on a timer",
+    async ({ step, label, open, destination }) => {
+      vi.useFakeTimers();
       const h = await mount({ step, value: readySettings() });
-      const list = h.host.querySelector(
-        `ol[aria-label="${label} walkthrough"]`,
+      const region = h.host.querySelector<HTMLElement>(
+        `[aria-label="${label} instructions"]`,
       )!;
-      expect(
-        [...list.querySelectorAll("li > strong")].map((x) => x.textContent),
-      ).toEqual(titles);
-      expect(list.querySelectorAll('svg[aria-hidden="true"]')).toHaveLength(3);
-      expect(list.textContent).not.toContain("synthetic-tunnel");
-      expect(h.button(`Replay ${label} walkthrough`)?.textContent).toBe(
-        "↻ Replay",
-      );
-      const actions = h.host.querySelector(".walkthrough-actions")!;
-      expect(actions.querySelectorAll("button")).toHaveLength(2);
-      expect(actions.querySelector("button")?.textContent?.trim()).toBe(open);
+      const cards = [
+        ...h.host.querySelectorAll<HTMLButtonElement>(".walkthrough-step"),
+      ];
+      expect(cards).toHaveLength(3);
+      expect(region.hidden).toBe(true);
+      for (const [i, card] of cards.entries()) {
+        await act(async () => card.click());
+        expect(card.getAttribute("aria-expanded")).toBe("true");
+        expect(card.getAttribute("aria-controls")).toBe(region.id);
+        expect(region.hidden).toBe(false);
+        expect(
+          region.querySelectorAll("ol > li").length,
+        ).toBeGreaterThanOrEqual(2);
+        const before = region.textContent;
+        await act(async () => vi.advanceTimersByTime(60000));
+        expect(region.textContent).toBe(before);
+        expect(
+          cards.filter((c) => c.getAttribute("aria-expanded") === "true"),
+        ).toEqual([cards[i]]);
+      }
+      await h.click("Close instructions");
+      expect(region.hidden).toBe(true);
       expect(h.f.api.configure).not.toHaveBeenCalled();
       await h.click(open);
       expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
         kind: "onboarding.open-help",
         destination,
       });
+      vi.useRealTimers();
     },
   );
-  it.each(walkthroughs)(
-    "plays $step once in order and replays from the first card without IPC",
-    async ({ step, label }) => {
-      vi.useFakeTimers();
-      const h = await mount({ step, value: readySettings() });
-      const active = () =>
-        [...h.host.querySelectorAll(".walkthrough-cards > li")].findIndex(
-          (x) => x.getAttribute("data-active") === "true",
-        );
-      expect(active()).toBe(0);
-      await act(async () => vi.advanceTimersByTime(1600));
-      expect(active()).toBe(1);
-      // Replay also restarts the first card's full duration while playing.
-      await h.click(`Replay ${label} walkthrough`);
-      expect(active()).toBe(0);
-      await act(async () => vi.advanceTimersByTime(1599));
-      expect(active()).toBe(0);
-      await act(async () => vi.advanceTimersByTime(1));
-      expect(active()).toBe(1);
-      await act(async () => vi.advanceTimersByTime(1600));
-      expect(active()).toBe(2);
-      await act(async () => vi.advanceTimersByTime(1600));
-      expect(active()).toBe(-1);
-      expect(h.host.querySelector(".walkthrough-cursor")).toBeNull();
-      await act(async () => vi.advanceTimersByTime(20000));
-      expect(active()).toBe(-1);
-      await h.click(`Replay ${label} walkthrough`);
-      expect(active()).toBe(0);
-      expect(h.f.api.configure).not.toHaveBeenCalled();
-    },
-  );
-  it.each(walkthroughs)(
-    "keeps all three $step cards static under reduced motion, including Replay",
-    async ({ step, label }) => {
-      window.matchMedia = vi.fn().mockReturnValue({
-        matches: true,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
+  it.each(["refused", "unknown"] as const)(
+    "does not submit or automatically repeat a fresh-test preparation that is %s",
+    async (outcome) => {
+      const value = readySettings();
+      value.connectors.secureMcp.challenge = null;
+      value.connectors.secureMcp.chatgptApp = {
+        name: "Farol Dev",
+        tunnelId: "synthetic-tunnel",
+        connectorGeneration: 1,
+      };
+      const h = await mount({
+        step: "attachment",
+        value,
+        signIn: "authenticated",
       });
-      vi.useFakeTimers();
-      const h = await mount({ step, value: readySettings() });
-      const cards = h.host.querySelector(".walkthrough-cards")!;
-      const before = cards.innerHTML;
-      expect(cards.querySelectorAll("li")).toHaveLength(3);
-      expect(cards.querySelector('[data-active="true"]')).toBeNull();
-      expect(h.host.querySelector(".walkthrough-cursor")).toBeNull();
-      expect(h.button(`Replay ${label} walkthrough`)?.disabled).toBe(true);
-      await h.click(`Replay ${label} walkthrough`);
-      await act(async () => vi.advanceTimersByTime(20000));
-      expect(cards.innerHTML).toBe(before);
-      expect(h.f.api.configure).not.toHaveBeenCalled();
+      await h.confirmSignIn();
+      h.reply((command) => {
+        expect(command).toEqual({ kind: "connector.repair" });
+        if (outcome === "unknown") throw Error("scripted lost reply");
+        return {
+          ok: false,
+          error: "CONNECTOR_RUNTIME_UNREACHABLE",
+          snapshot: h.configuration(),
+        };
+      });
+      await h.click("Prepare new test");
+      await h.remount();
+      const calls = vi.mocked(h.f.api.configure).mock.calls;
+      expect(calls.filter(([c]) => c.kind === "connector.repair")).toHaveLength(
+        1,
+      );
+      expect(
+        calls.filter(([c]) => c.kind === "connector.verify-app"),
+      ).toHaveLength(0);
+      expect(h.button("Start using Farol")?.disabled).toBe(true);
+      if (outcome === "unknown")
+        expect(h.button("Prepare new test")).toBeUndefined();
     },
   );
-  it("stops motion immediately when the preference changes and cleans up on navigation", async () => {
-    let change = () => {};
-    const query = {
-      matches: false,
-      addEventListener: vi.fn((_event, listener) => {
-        change = listener;
-      }),
-      removeEventListener: vi.fn(),
-    };
-    window.matchMedia = vi.fn().mockReturnValue(query);
-    vi.useFakeTimers();
-    const h = await mount({ step: "connection" });
-    expect(h.host.querySelector(".walkthrough-cursor")).toBeTruthy();
-    await act(async () => {
-      query.matches = true;
-      change();
+
+  it("withdraws the success card immediately when the displayed app name changes", async () => {
+    const h = await mount({
+      step: "attachment",
+      value: readySettings(true),
+      signIn: "authenticated",
     });
-    expect(h.host.querySelector(".walkthrough-cursor")).toBeNull();
-    expect(h.host.querySelector('[data-active="true"]')).toBeNull();
-    await act(async () => vi.advanceTimersByTime(10000));
-    expect(h.host.querySelector('[data-active="true"]')).toBeNull();
-    await h.navigate("folders");
-    expect(query.removeEventListener).toHaveBeenCalledWith(
-      "change",
-      expect.any(Function),
+    await h.confirmSignIn();
+    expect(h.host.textContent).toContain("✓ Everything works");
+    await change(
+      h.host.querySelector<HTMLInputElement>(
+        '[aria-label="ChatGPT app name"]',
+      )!,
+      "Farol Dev",
     );
+    expect(h.host.textContent).not.toContain("✓ Everything works");
+    expect(h.button("Start using Farol")?.disabled).toBe(true);
+  });
+
+  it("prepares one fresh test after a verified app is renamed without a manual disconnect", async () => {
+    let value = readySettings(true);
+    const h = await mount({
+      step: "attachment",
+      value,
+      signIn: "authenticated",
+    });
+    await h.confirmSignIn();
+    await change(
+      h.host.querySelector<HTMLInputElement>(
+        '[aria-label="ChatGPT app name"]',
+      )!,
+      "Farol Dev",
+    );
+    h.reply((command) => {
+      expect(command.kind).toBe("connector.select-chatgpt-app");
+      value = structuredClone(value);
+      value.revision++;
+      value.connectors.secureMcp.chatgptApp!.name = "Farol Dev";
+      value.connectors.secureMcp.attachment = null;
+      value.connectors.secureMcp.lastVerifiedAttachment = null;
+      value.setup.connect.verified = null;
+      value.setup.connect.reachable = "unknown";
+      return { ok: true, snapshot: { status: "ready", settings: value } };
+    });
+    await h.click("Save app name");
+    expect(h.button("Start using Farol")?.disabled).toBe(true);
+    expect(h.button("Prepare new test")?.disabled).toBe(false);
+    const pending = deferred<unknown>();
+    h.reply((command) => {
+      expect(command).toEqual({ kind: "connector.repair" });
+      return pending.promise;
+    });
+    const prepare = h.button("Prepare new test")!;
+    await act(async () => {
+      prepare.click();
+      prepare.click();
+    });
+    expect(
+      vi
+        .mocked(h.f.api.configure)
+        .mock.calls.filter(([c]) => c.kind === "connector.repair"),
+    ).toHaveLength(1);
+    value = readySettings();
+    value.revision = 4;
+    value.connectors.secureMcp.chatgptApp = {
+      name: "Farol Dev",
+      tunnelId: "synthetic-tunnel",
+      connectorGeneration: 1,
+    };
+    value.connectors.secureMcp.runtime!.runtimeGeneration = "e".repeat(64);
+    value.connectors.secureMcp.challenge!.runtimeGeneration = "e".repeat(64);
+    value.connectors.secureMcp.challenge!.value =
+      "44444444-4444-4444-8444-444444444444";
+    await act(async () =>
+      pending.resolve({
+        ok: true,
+        snapshot: { status: "ready", settings: value },
+      }),
+    );
+    expect(h.button("Test in ChatGPT")?.disabled).toBe(false);
+    h.reply((command) => {
+      expect(command).toEqual({ kind: "connector.verify-app" });
+      const ready = readySettings(true);
+      ready.revision = 5;
+      ready.connectors.secureMcp.chatgptApp!.name = "Farol Dev";
+      ready.connectors.secureMcp.runtime!.runtimeGeneration = "e".repeat(64);
+      ready.connectors.secureMcp.attachment!.runtimeGeneration = "e".repeat(64);
+      ready.setup.connect.verified!.runtimeGeneration = "e".repeat(64);
+      return { ok: true, snapshot: { status: "ready", settings: ready } };
+    });
+    await h.click("Test in ChatGPT");
+    await h.navigate("attachment");
+    expect(h.button("Start using Farol")?.disabled).toBe(false);
+    expect(h.host.textContent).toContain("✓ Everything works");
+  });
+
+  it("saves a separate app name without opening ChatGPT or starting a check", async () => {
+    const h = await mount({ step: "attachment", value: readySettings() });
+    await change(
+      h.host.querySelector<HTMLInputElement>(
+        '[aria-label="ChatGPT app name"]',
+      )!,
+      "Farol Dev",
+    );
+    h.reply((command) => {
+      expect(command).toMatchObject({
+        kind: "connector.select-chatgpt-app",
+        name: "Farol Dev",
+        tunnelId: "synthetic-tunnel",
+        connectorGeneration: 1,
+      });
+      const value = readySettings();
+      value.revision++;
+      value.connectors.secureMcp.chatgptApp = {
+        name: "Farol Dev",
+        tunnelId: "synthetic-tunnel",
+        connectorGeneration: 1,
+      };
+      return { ok: true, snapshot: { status: "ready", settings: value } };
+    });
+    await h.click("Save app name");
+    expect(h.f.api.configure).toHaveBeenCalledTimes(1);
+    expect(h.c.getSnapshot().destination.setupStep).toBe("attachment");
+    await h.navigate("connection");
+    await h.navigate("attachment");
+    expect(
+      h.host.querySelector<HTMLInputElement>('[aria-label="ChatGPT app name"]')
+        ?.value,
+    ).toBe("Farol Dev");
+  });
+  it("shows a masked saved key and cannot reconnect unchanged confirmed inputs", async () => {
+    const h = await mount({ step: "connection", value: readySettings() });
+    const key = h.host.querySelector<HTMLInputElement>(
+      'input[type="password"]',
+    )!;
+    expect(key.value).toBe("");
+    expect(key.placeholder).toBe("••••••••");
+    expect(h.button("Connect")).toBeUndefined();
+    expect(h.host.textContent).toContain("✓ Connected to this Mac");
+    await h.remount();
+    expect(h.button("Connect")).toBeUndefined();
     expect(h.f.api.configure).not.toHaveBeenCalled();
+    expect(h.button("Continue")?.disabled).toBe(false);
   });
 });
+afterEach(() => vi.useRealTimers());

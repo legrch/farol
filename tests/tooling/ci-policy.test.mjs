@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it, expect } from "vitest";
+import { readWorkflow } from "../../tooling/delivery-policy.mjs";
 import { docsOnly } from "../../tooling/ci-paths.mjs";
 import {
   verifyVersion,
@@ -211,5 +212,52 @@ describe("CI safety and selection", () => {
     await expect(
       verifyReleaseAssets(root, { version, head }),
     ).rejects.toThrow();
+  });
+});
+
+describe("two-phase release workflow", () => {
+  const release = readWorkflow(".github/workflows/release.yml");
+  it("keeps tag and prepare runs build-only with unchanged full package gates", () => {
+    expect(release.on.push).toEqual({ tags: ["v*"] });
+    expect(release.on.workflow_dispatch.inputs.action.options).toEqual([
+      "prepare",
+      "publish",
+    ]);
+    expect(release.jobs.build.if).toBe(
+      "github.event_name == 'push' || inputs.action == 'prepare'",
+    );
+    const commands = release.jobs.build.steps
+      .map((step) => step.run ?? "")
+      .join("\n");
+    for (const gate of [
+      "task ci\n",
+      "task package -- --go-inputs=",
+      "tooling/ci-go-inputs.mjs",
+      "tooling/prepare-release-archive.py",
+      "tooling/verify-release-assets.mjs",
+    ])
+      expect(commands).toContain(gate);
+    expect(commands).not.toMatch(/gh release|git push/u);
+    expect(JSON.stringify(release)).not.toMatch(
+      /actions\/(?:upload|download)-artifact|actions\/cache/u,
+    );
+  });
+  it("permits publishing only by a separate explicit dispatch, without rebuilding", () => {
+    const job = release.jobs.publish;
+    expect(job.if).toBe(
+      "github.event_name == 'workflow_dispatch' && inputs.action == 'publish'",
+    );
+    expect(job.needs).toBeUndefined();
+    expect(job.permissions).toEqual({ contents: "write", actions: "read" });
+    expect(release.permissions).toEqual({ contents: "read" });
+    expect(release.jobs.build.permissions).toBeUndefined();
+    const commands = job.steps.map((step) => step.run ?? "").filter(Boolean);
+    expect(commands).toEqual(["node tooling/release-candidate.mjs publish"]);
+    expect(release.on.workflow_dispatch.inputs.draft_release_id.type).toBe(
+      "string",
+    );
+    expect(JSON.stringify(job)).not.toMatch(
+      /download-artifact|task package|release create/u,
+    );
   });
 });

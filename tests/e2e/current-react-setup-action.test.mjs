@@ -99,6 +99,98 @@ describe("current Setup one-shot helpers", () => {
     );
     expect(h.click).toHaveBeenCalledTimes(1);
   });
+  it("targets the requested workspace row when more than one is present", async () => {
+    const target = {
+      workspaceId: "target",
+      root: "/synthetic/target",
+      accessCheck: { checkId: "target-before" },
+    };
+    const other = {
+      workspaceId: "other",
+      root: "/synthetic/other",
+      accessCheck: { checkId: "other-before" },
+    };
+    const h = pageFixture([
+      state([other, target]),
+      state([other, { ...target, accessCheck: { checkId: "target-after" } }]),
+    ]);
+    await setupAction(h.page, "Check access", {
+      workspaceId: target.workspaceId,
+    });
+    expect(h.click).toHaveBeenCalledTimes(1);
+    expect(h.page.getByText).toHaveBeenCalledTimes(2);
+    for (const call of h.page.getByText.mock.calls)
+      expect(call).toEqual([target.root, { exact: true }]);
+  });
+  it.each([undefined, "missing"])(
+    "refuses an ambiguous or missing workspace target (%s) before a click",
+    async (workspaceId) => {
+      const h = pageFixture([
+        state([
+          { workspaceId: "one", root: "/synthetic/one" },
+          { workspaceId: "two", root: "/synthetic/two" },
+        ]),
+      ]);
+      await expect(
+        setupAction(h.page, "Check access", { workspaceId }),
+      ).rejects.toThrow(
+        workspaceId === undefined
+          ? "SETUP_WORKSPACE_TARGET_REQUIRED"
+          : "SETUP_WORKSPACE_TARGET_MISSING:missing",
+      );
+      expect(h.click).not.toHaveBeenCalled();
+      expect(h.page.evaluate).toHaveBeenCalledTimes(1);
+    },
+  );
+  it.each(["other", "new"])(
+    "does not credit a fresh check from an unrelated %s workspace",
+    async (source) => {
+      const target = {
+        workspaceId: "target",
+        root: "/synthetic/target",
+        accessCheck: { checkId: "target-before" },
+      };
+      const other = {
+        workspaceId: source,
+        root: `/synthetic/${source}`,
+        accessCheck: { checkId: "other-before" },
+      };
+      const h = pageFixture([
+        state(source === "other" ? [target, other] : [target]),
+        state([target, { ...other, accessCheck: { checkId: "other-after" } }]),
+      ]);
+      vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(15_001);
+      await expect(
+        setupAction(h.page, "Check access", {
+          workspaceId: target.workspaceId,
+        }),
+      ).rejects.toThrow("SETUP_ACTION_UNCONFIRMED:Check access");
+      expect(h.click).toHaveBeenCalledTimes(1);
+      expect(h.page.evaluate).toHaveBeenCalledTimes(2);
+    },
+  );
+  it("does not credit a changed root under the target workspace ID", async () => {
+    const target = {
+      workspaceId: "target",
+      root: "/synthetic/original",
+      accessCheck: { checkId: "before" },
+    };
+    const h = pageFixture([
+      state([target]),
+      state([
+        {
+          ...target,
+          root: "/synthetic/replacement",
+          accessCheck: { checkId: "after" },
+        },
+      ]),
+    ]);
+    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(15_001);
+    await expect(setupAction(h.page, "Check access")).rejects.toThrow(
+      "SETUP_ACTION_UNCONFIRMED:Check access",
+    );
+    expect(h.click).toHaveBeenCalledTimes(1);
+  });
   it("requires a stopped runtime before Connect and confirms its new runtime", async () => {
     const running = state([], { state: "ready" });
     const h = pageFixture([state(), running]);

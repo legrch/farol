@@ -186,3 +186,38 @@ describe("renderer alignment with the unchanged native host", () => {
     },
   );
 });
+
+// Pure geometry only: input/accessibility detachment is a native host gate.
+describe("retained ChatGPT document visibility", () => {
+  it("keeps a retained signed-out or failed browser present while the Computer is unavailable", () => {
+    expect(
+      deriveSurfaceLayout({
+        ...base,
+        runtimeReady: false,
+        browserDocumentPresent: true,
+      }),
+    ).toMatchObject({
+      pageVisible: true,
+      pageBounds: { x: 294, y: 58, width: 886, height: 702 },
+    });
+  });
+  it.each([
+    { setupOpen: true },
+    { section: "settings" as const },
+    { section: "activity" as const },
+    { overlay: "sidebar" as const },
+    { overlay: "task-menu" as const },
+    { overlay: "quick-switcher" as const },
+    { overlay: "context-preview" as const },
+    { selectedTaskPresent: false },
+  ])("retains concealment and input ownership for shell state %#", (change) => {
+    expect(
+      deriveSurfaceLayout({
+        ...base,
+        runtimeReady: false,
+        browserDocumentPresent: true,
+        ...change,
+      }).pageVisible,
+    ).toBe(false);
+  });
+});

@@ -73,6 +73,61 @@ describe("repository delivery policy", () => {
         r.jobs.publish.steps.at(-1).run = "gh release create v1 --latest";
       },
     ],
+    [
+      "automatic tag publication",
+      (p, r) => {
+        delete r.jobs.publish.if;
+        r.jobs.publish.needs = "build";
+      },
+    ],
+    [
+      "missing exact-asset qualification input",
+      (_p, r) => {
+        delete r.on.workflow_dispatch.inputs.manifest_sha256;
+      },
+    ],
+    [
+      "missing private draft ID pin",
+      (_p, r) => {
+        delete r.on.workflow_dispatch.inputs.draft_release_id;
+      },
+    ],
+    [
+      "public Actions binary upload",
+      (_p, r) => {
+        r.jobs.build.steps.push({
+          uses: "actions/upload-artifact@" + "a".repeat(40),
+          with: { path: "_output/release" },
+        });
+      },
+    ],
+    [
+      "binary cache transfer",
+      (_p, r) => {
+        r.jobs.build.steps.push({
+          uses: "actions/cache@" + "a".repeat(40),
+          with: { path: "_output" },
+        });
+      },
+    ],
+    [
+      "binary log transfer",
+      (_p, r) => {
+        r.jobs.build.steps.push({ run: "base64 _output/release/app.zip" });
+      },
+    ],
+    [
+      "write-capable preparation",
+      (_p, r) => {
+        r.jobs.build.permissions = { contents: "write" };
+      },
+    ],
+    [
+      "publisher rebuild",
+      (_p, r) => {
+        r.jobs.publish.steps.at(-1).run += "\ntask package";
+      },
+    ],
   ])("rejects policy drift: %s", (_name, mutate) => {
     const p = structuredClone(pr),
       r = structuredClone(release);

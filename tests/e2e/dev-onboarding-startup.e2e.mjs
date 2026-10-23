@@ -1066,9 +1066,9 @@ try {
       assert.equal(await detail.count(), 1);
       // The original Add action saves and checks the selected workspace.
       await detail
-        .locator(".badges")
-        .filter({ hasText: /^Access checked(?: · Current workspace)?$/u })
-        .waitFor();
+        .locator('.workspace-row-result[role="status"] .setup-success')
+        .filter({ hasText: "Works" })
+        .waitFor({ state: "visible" });
       let value;
       for (let attempt = 0; attempt < 100; attempt++) {
         value = await legacyWindow.evaluate(() => window.farol.bootstrap());

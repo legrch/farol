@@ -253,9 +253,9 @@ function continuityHarness(width = 1180, height = 760) {
     },
     section: "settings",
     setupOpen: false,
+    quitInProgress: false,
     selectedTaskId: "",
     browserHomeSurfaceOpen: true,
-    browserHomeLoadState: "loaded",
     sidebarMode: "full",
     sidebarWidth: 152,
     shellOverlay: "none",
@@ -359,7 +359,7 @@ describe("retained sign-in host continuity", () => {
         expect(c.section).toBe("browser");
         expect(c.taskViews.get("fixture-sign-in")).toBe(view);
         expect(api.layout()).toMatchObject({
-          pageVisible: state !== "failed",
+          pageVisible: true,
           pageBounds: {
             x: rail,
             y: 58,

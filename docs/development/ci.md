@@ -27,6 +27,13 @@ native-selection runner in `tooling/ci-native.mjs`, then runs that selection and
 portable overlap avoids brittle inverse test-name filters. This preserves native coverage for the files excluded or partially
 selected by the Cloud profile.
 
+The core gate runs every Go package with race detection and at most two test
+binaries at once (`go test -p=2 -race ./...`), for both root and transitional
+nested modules. This bounds filesystem and process contention independently of
+the host CPU count. It changes no test selection, operation timeout, race check
+or unavailable/unknown result predicate. A passing isolated test is diagnostic
+evidence; only the completed aggregate gate accepts the candidate.
+
 The final Ubuntu `required` job is the stable status check. It rejects failed or
 cancelled checks. It accepts skipped heavy checks only when path classification
 has established that the change is docs-only. A successful portable source
@@ -35,19 +42,62 @@ acceptance, installation, or live behavior.
 
 ## Tagged release flow
 
-`.github/workflows/release.yml` runs only for tags matching `v*`. It verifies
-that the tag is exactly `v<package.json version>`, that the source commit is an
-ancestor of `origin/main`, and that the remote tag remains unchanged during the
-run. Tag runs are serialized and are not cancelled by newer runs.
+`.github/workflows/release.yml` accepts `v*` tag pushes and explicit
+`workflow_dispatch` actions `prepare` and `publish`. Tag and prepare runs are
+build-only: on `macos-26` they verify the strict owner-beta version/channel,
+exact source on accepted `origin/main` ancestry, provision approved Go inputs,
+run the unchanged full `task ci`, then clean `task package` and offline
+three-asset preparation/verification. A tag push additionally verifies the
+annotated remote tag. Runs are serialized without cancellation.
 
-On `macos-26`, the workflow provisions approved Go inputs, runs `task ci`, then
-`task package` from clean
-committed bytes. The existing `tooling/prepare-release-archive.py <head>
-_output/release/<tag>` tool assembles the release assets. The publication step
-uploads only the ZIP archive, `farol-release.json`, and `SHA256SUMS` as a GitHub
-prerelease. It does not update a `latest` pointer or overwrite an existing
-release. Private evidence under `private/` is never uploaded. The release
-remains unsigned and not notarized (D16).
+Build-only runs upload no binary artifacts and never auto-publish. Actions
+artifacts in the public repository are downloadable by signed-in readers; do
+not transfer unqualified binaries through artifacts, caches, workflow logs or
+a public-upload fallback. Hosted rebuilt bytes are source/package evidence
+only; they are not automatically selected for publication. Existing caches
+hold dependency downloads only.
+
+Root/Lead separately qualifies the exact locally prepared ZIP,
+`farol-release.json` and `SHA256SUMS` through CP1/CP2, native/package,
+installed/live and actual owner gates. Only then, under Root's release authority,
+the operator creates the exact annotated accepted-main version tag, waits for
+its actual successful full tag build, and stages only those qualified local
+files with `gh release create --draft --verify-tag --prerelease --latest=false`.
+Draft releases are private to push-access users. Preserve the draft release ID,
+uploaded asset IDs/names/sizes and the local manifest SHA256; private evidence
+stays local. The complete gated command sequence and GitHub visibility sources
+are in [release publication](../release-publication.md#private-qualified-draft-publication-d31).
+This guide performs no staging or external action.
+
+A separate explicit `action: publish` dispatch at the same source takes
+`candidate_run_id`, `draft_release_id` and `manifest_sha256`. Only a distinct
+prior successful tag run with `build: success`, `publish: skipped`, matching
+repository/workflow/source/current attempt qualifies; prepare dispatches do not.
+The supplied manifest digest is an exact-byte assertion after qualification,
+not proof of that qualification. The publisher verifies checkout/dispatch SHA,
+main ancestry, exact annotated remote tag, unpublished prerelease draft ID and
+exactly three uploaded asset IDs/names/sizes, including complete matching asset
+and release listings. Existing public releases, other same-tag drafts, extra or
+private files, missing assets and tag mismatches refuse.
+
+It downloads private assets by explicit API IDs only, permits one HTTPS redirect
+to the two documented GitHub-owned asset hosts without forwarding Authorization,
+bounds byte reads to metadata size plus one and contract maxima with finite
+deadlines, and creates exclusive no-follow files in a new physical directory.
+It binds the supplied manifest digest and reuses `verifyReleaseAssets` for
+archive/checksum/source verification. Before mutation it re-fetches and checks
+the same run/attempt, remote tag, draft and asset identities. It never rebuilds,
+creates tags/releases, uploads/replaces assets, deletes or edits an already
+published release. Its only final mutation is PATCH of that same still-draft
+release with `{draft:false, prerelease:true, make_latest:"false"}`. Root keeps
+the selected draft/assets/tag quiescent during this final read gate; the API
+provides no atomic compare-and-swap here.
+
+The release remains unsigned and not notarized (D16). Denied/unknown HTTP,
+timeouts and partial effects remain terminal: retain private evidence and
+reconcile, with no retry or overwrite. No token, response headers, presigned
+URL or full private API body is logged. Mocked regression tests prove local
+contract behavior only, not actual staging/publication or release readiness.
 
 ### Trust model
 
@@ -59,9 +109,9 @@ Forks and pull requests cannot create tags here, and pull request workflows get
 no write permission or secrets.
 
 The trust root for a release is therefore repository write access. Today only
-the owner has it. The `main` ruleset blocks deletion and force-push but not
-direct pushes, so write access already allows changing `main` and its
-workflows; a tag adds no access beyond that. The ancestry, annotated-tag and
+the owner has it. The owner currently selects no branch protection or rulesets; write access
+already permits changing `main` and its workflows. A tag adds no access beyond
+that. The ancestry, annotated-tag and
 remote-identity checks keep an honest release consistent with reviewed `main`.
 
 Pull request checks are evidence for the reviewer, not a merge authority. The
@@ -106,16 +156,18 @@ The declared Go inputs are ignored build outputs, never public release assets.
 
 All GitHub Actions are pinned to commit SHAs. npm, Go, and Electron downloads
 use caches. Repository contents permission is read-only by default; only the
-separate release publication job receives `contents: write`. The workflow
-explicitly exports `GH_TOKEN` only for the publication step; the job-scoped
+separate release publication job receives `contents: write`. The publisher retains `actions: read` solely for run/job metadata checks.
+The workflow explicitly exports `GH_TOKEN` only for the publication step; the job-scoped
 automatic GitHub token remains governed by GitHub Actions permissions.
 
 ## Lead activation and provisional timing
 
 To activate the checks, the Lead pushes the feature branch, opens a pull
 request, and observes actual check timings and native attestation. After the
-reviewed candidate is merged, the Lead can push an immutable test tag matching
-the package version to exercise the tagged release flow. This page records the
+reviewed candidate is merged, the Lead can exercise build-only preparation. Only after the actual native and owner
+gates may Root create the immutable annotated version tag and stage the exact
+qualified local files as a private draft, then deliberately dispatch publication
+after its tag build succeeds. This page records the
 process; it does not perform a push or publish a release.
 
 These durations are planning estimates, not measurements or qualified service

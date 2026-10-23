@@ -83,7 +83,7 @@ describe("Goal17 explicit ChatGPT presentation", () => {
     c.dispose();
   });
 
-  it("keeps update applying and stale-state presentation guards on explicit ChatGPT entry", async () => {
+  it("keeps update admission while presenting ChatGPT independently of offline Computer state", async () => {
     const f = fixture();
     const c = new WindowController(f.api);
     await c.start();
@@ -107,9 +107,17 @@ describe("Goal17 explicit ChatGPT presentation", () => {
     expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.slice(0, 3)).toEqual([
       "browser",
       "",
-      true,
+      false,
     ]);
-    expect(f.api.configure).not.toHaveBeenCalled();
+    await c.configure(
+      { kind: "chatgpt.present-browser" },
+      "settings:chatgpt.present-browser:",
+    );
+    expect(f.api.configure).toHaveBeenCalledExactlyOnceWith({
+      kind: "chatgpt.present-browser",
+    });
+    expect(c.getSnapshot().status).toBe("stale");
+    expect(c.getSnapshot().runtime).toBe("offline");
     expect(f.api.task).not.toHaveBeenCalled();
     c.dispose();
   });
@@ -264,30 +272,31 @@ describe("Goal18 explicit ChatGPT host presentation", () => {
     c.dispose();
   });
 
-  it("does not open home for an unselected retained Task or a retained task destination", async () => {
+  it("presents an explicitly selected home without selecting an unselected retained task", async () => {
     const f = fixture();
     const c = new WindowController(f.api);
     await c.start();
     f.emit("tasks", { revision: 1, tasks: [task("retained")] });
     c.navigate({ area: "chatgpt" });
     expect(c.getSnapshot().destination.taskId).toBe("");
+    await c.configure(command, intention);
+    expect(f.api.configure).toHaveBeenCalledExactlyOnceWith(command);
     c.navigate({ taskId: "retained" });
     f.emit("tasks", { revision: 2, tasks: [] });
     c.navigate({ area: "setup" });
     c.travel(-1);
     expect(c.getSnapshot().destination.taskId).toBe("retained");
-    expect(f.api.configure).not.toHaveBeenCalled();
+    expect(f.api.configure).toHaveBeenCalledTimes(1);
     expect(f.api.task).not.toHaveBeenCalled();
     c.dispose();
   });
 
-  it.each(["stale", "incompatible", "applying"] as const)(
+  it.each(["incompatible", "applying"] as const)(
     "does not admit presentation from %s state",
     async (fence) => {
       const f = fixture();
       const c = new WindowController(f.api);
       await c.start();
-      if (fence === "stale") f.emit("tasks", {});
       if (fence === "incompatible") {
         vi.mocked(f.api.bootstrap).mockResolvedValue({});
         await c.refresh();
@@ -304,7 +313,7 @@ describe("Goal18 explicit ChatGPT host presentation", () => {
     },
   );
 
-  it.each(["applying", "stale", "navigate", "loaded", "task"] as const)(
+  it.each(["applying", "incompatible", "navigate", "loaded", "task"] as const)(
     "rechecks the %s fence after the pending latch and before the host effect",
     async (fence) => {
       const f = fixture();
@@ -318,11 +327,17 @@ describe("Goal18 explicit ChatGPT host presentation", () => {
         c.navigate({ area: "chatgpt" });
         if (fence === "applying")
           f.emit("update", { phase: "applying", version: "1.0" });
-        if (fence === "stale") f.emit("tasks", {});
+        if (fence === "incompatible") {
+          vi.mocked(f.api.bootstrap).mockResolvedValue({});
+          await c.refresh();
+        }
         if (fence === "navigate")
           c.navigate({ area: "setup", setupStep: "folders" });
         if (fence === "loaded") f.emit("route", { state: "loaded" });
-        if (fence === "task") f.emit("tasks", { revision: 1, tasks: [task()] });
+        if (fence === "task") {
+          f.emit("tasks", { revision: 1, tasks: [task()] });
+          c.navigate({ taskId: task().taskId });
+        }
         digest.resolve(new ArrayBuffer(32));
         const result = await c.configure(command, intention);
         expect(result.state).toBe(
@@ -4329,3 +4344,188 @@ it.each(["chatgpt.open-sign-in", "chatgpt.open-browser"] as const)(
     c.dispose();
   },
 );
+
+// Source/transport regressions only; these do not exercise an owner session.
+describe("retained browser independent of Computer readiness", () => {
+  it.each(["starting", "offline", "failed"] as const)(
+    "explicitly presents once while the Mac runtime is %s without publishing readiness",
+    async (runtime) => {
+      const f = fixture();
+      const c = new WindowController(f.api);
+      await c.start();
+      f.emit("runtime", {
+        state: runtime,
+        error: null,
+        identity: null,
+        embeddedNode: null,
+        embeddedElectron: null,
+      });
+      const before = c.getSnapshot();
+      // A newer Settings snapshot in the transport must not gain publication.
+      vi.mocked(f.api.configure).mockResolvedValue({
+        ok: true,
+        snapshot: { status: "ready", settings: settings(99) },
+      });
+      c.navigate({ area: "chatgpt" });
+      await c.configure({ kind: "chatgpt.present-browser" }, "another-label");
+      const after = c.getSnapshot();
+      expect(after.configuration).toBe(before.configuration);
+      expect(after.runtime).toBe(runtime);
+      expect(after.status).toBe(before.status);
+      expect(after.setupSignInCheck).toBeFalsy();
+      expect(after.signInObservation).toBeFalsy();
+      expect(after.route).toBe("loading");
+      expect(commandAllowed(after, "connector.start")).toBe(false);
+      expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.slice(0, 3)).toEqual([
+        "browser",
+        "",
+        false,
+      ]);
+      c.navigate({ area: "home" });
+      c.travel(-1);
+      c.travel(1);
+      await c.refresh();
+      expect(f.api.configure).toHaveBeenCalledExactlyOnceWith({
+        kind: "chatgpt.present-browser",
+      });
+      expect(f.api.task).not.toHaveBeenCalled();
+      c.dispose();
+    },
+  );
+
+  it.each(["chatgpt.open-browser", "chatgpt.open-sign-in"] as const)(
+    "an applied %s receipt cannot permanently veto later browser presentation",
+    async (kind) => {
+      const f = fixture();
+      const c = new WindowController(f.api);
+      await c.start();
+      c.navigate({ area: "setup", setupStep: "signin" });
+      const saved = c.getSnapshot().destination;
+      await c.configure({ kind }, `settings:${kind}:`);
+      f.emit("runtime", {
+        state: "offline",
+        error: null,
+        identity: null,
+        embeddedNode: null,
+        embeddedElectron: null,
+      });
+      const configuration = c.getSnapshot().configuration;
+      c.navigate({ area: "home" });
+      c.navigate({ area: "chatgpt" });
+      await c.configure(
+        { kind: "chatgpt.present-browser" },
+        "settings:chatgpt.present-browser:",
+      );
+      expect(
+        vi.mocked(f.api.configure).mock.calls.map(([command]) => command.kind),
+      ).toEqual(["chatgpt.observe-sign-in", kind, "chatgpt.present-browser"]);
+      expect(c.getSnapshot().configuration).toBe(configuration);
+      expect(c.getSnapshot().setupSignInCheck).toBeFalsy();
+      c.returnToSetup();
+      expect(c.getSnapshot().destination).toEqual(saved);
+      expect(f.api.task).not.toHaveBeenCalled();
+      c.dispose();
+    },
+  );
+
+  it("keeps an unknown shared write and its permission fences while presenting the browser", async () => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    vi.mocked(f.api.configure).mockRejectedValueOnce(
+      new Error("lost acknowledgement"),
+    );
+    const original = await c.configure(
+      { kind: "computer.rename", name: "This Mac" },
+      "settings:computer.rename:",
+    );
+    expect(original.state).toBe("unknown");
+    expect(commandAllowed(c.getSnapshot(), "connector.start")).toBe(false);
+    expect(commandAllowed(c.getSnapshot(), "chatgpt.present-browser")).toBe(
+      true,
+    );
+    c.navigate({ area: "chatgpt" });
+    await c.configure(
+      { kind: "chatgpt.present-browser" },
+      "settings:chatgpt.present-browser:",
+    );
+    expect(c.getSnapshot().intents[original.id]).toBe(original);
+    expect(commandAllowed(c.getSnapshot(), "connector.start")).toBe(false);
+    expect(f.api.configure).toHaveBeenCalledTimes(2);
+    expect(f.api.task).not.toHaveBeenCalled();
+    c.dispose();
+  });
+});
+
+it.each(["checking", "reconnecting", "unavailable", "stopped"] as const)(
+  "keeps signed-out browser presentation independent of connector %s",
+  async (connection) => {
+    const f = fixture();
+    let observe!: (value: unknown) => void;
+    const c = new WindowController({
+      ...f.api,
+      onConnectionStatus: (listener) => {
+        observe = listener;
+        return () => {};
+      },
+    });
+    await c.start();
+    observe({
+      revision: 1,
+      state: connection,
+      marker: "?",
+      label: "Connection not confirmed",
+      detail: "Fixture only",
+      delivery: "Unconfirmed",
+      attention: true,
+      validUntilMillis: null,
+    });
+    c.navigate({ area: "chatgpt" });
+    await c.configure(
+      { kind: "chatgpt.present-browser" },
+      "settings:chatgpt.present-browser:",
+    );
+    expect(c.getSnapshot().connectionStatus?.state).toBe(connection);
+    expect(c.getSnapshot().setupSignInCheck).toBeFalsy();
+    const configuration = c.getSnapshot().configuration;
+    expect(
+      configuration?.status === "ready" &&
+        configuration.settings.setup.chatgpt.verified,
+    ).toBeNull();
+    expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.slice(0, 3)).toEqual([
+      "browser",
+      "",
+      false,
+    ]);
+    expect(f.api.configure).toHaveBeenCalledExactlyOnceWith({
+      kind: "chatgpt.present-browser",
+    });
+    expect(f.api.task).not.toHaveBeenCalled();
+    c.dispose();
+  },
+);
+
+it("can present despite a failed Settings read without adopting its reply snapshot", async () => {
+  const f = fixture();
+  vi.mocked(f.api.bootstrap).mockResolvedValue({
+    ...bootstrap(),
+    configuration: { status: "error", error: "SETTINGS_READ_FAILED" },
+  });
+  const c = new WindowController(f.api);
+  await c.start();
+  const before = c.getSnapshot();
+  expect(before.status).toBe("stale");
+  c.navigate({ area: "chatgpt" });
+  await c.configure(
+    { kind: "chatgpt.present-browser" },
+    "settings:chatgpt.present-browser:",
+  );
+  expect(c.getSnapshot().configuration).toBe(before.configuration);
+  expect(c.getSnapshot().status).toBe("stale");
+  expect(commandAllowed(c.getSnapshot(), "chatgpt.verify")).toBe(false);
+  expect((await c.task({ kind: "task.create-chatgpt" }, "new")).state).toBe(
+    "refused",
+  );
+  expect(f.api.task).not.toHaveBeenCalled();
+  c.dispose();
+});
