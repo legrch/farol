@@ -75,7 +75,22 @@ export async function connectMac(page) {
     .click();
   const deadline = Date.now() + 15_000;
   for (;;) {
+    const connecting = connection.getByRole("button", {
+      name: "Connecting…",
+      exact: true,
+    });
+    const pendingBefore = (await connecting.count()) > 0;
     const current = await readSetupSettings(page);
+    const pendingAfter = (await connecting.count()) > 0;
+    // Credential publication fences are durable while the original UI command
+    // is still pending. Observe that SAME command to settlement; neither its
+    // temporary fence nor an early ready snapshot is a final result or retry.
+    if (pendingBefore || pendingAfter) {
+      if (Date.now() >= deadline)
+        throw new Error("SETUP_CONNECT_ORIGINAL_PENDING");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      continue;
+    }
     if (connectionOutcomeUnknown(current))
       throw new Error("SETUP_CONNECT_OUTCOME_UNKNOWN");
     if (current.connectors.secureMcp.runtime?.state === "ready") {
