@@ -13,6 +13,7 @@ import {
   type NavigationShortcuts,
 } from "../../pkg/ipc/navigation-shortcuts";
 import {
+  useCallback,
   useEffect,
   useId,
   useRef,
@@ -54,7 +55,7 @@ type ActionDispatch =
   | Readonly<{ state: "not-sent" }>
   | Readonly<{ state: "attempted"; result: Intent | null }>;
 type Actions = {
-  refresh(): Promise<void>;
+  refresh(): Promise<Intent | null>;
   disabled: boolean;
   computerPauseReason: string | null;
   allowed(
@@ -332,9 +333,9 @@ export function Settings({
         ) {
           // Read the existing Go receipt; this command never creates a
           // challenge or opens/sends a ChatGPT test.
-          await actions.run({ kind: "connector.check-attachment" });
+          return actions.run({ kind: "connector.check-attachment" });
         }
-        return;
+        return null;
       }
       const receipt = await facade.refreshReadback();
       if (
@@ -344,7 +345,7 @@ export function Settings({
         receipt.status !== "adopted" ||
         flow.access.pendingReadback() !== pending
       )
-        return;
+        return null;
       const id = intention(
         pending.command.kind,
         "workspaceId" in pending.command
@@ -352,7 +353,7 @@ export function Settings({
           : undefined,
       );
       const resolved = facade.reconcileWorkspaceReadback(receipt, id, pending);
-      if (!resolved) return;
+      if (!resolved) return null;
       if (
         flow.access.reconcileReadback(
           receipt.configuration.settings,
@@ -370,6 +371,7 @@ export function Settings({
         }
         feedback.changed();
       }
+      return resolved;
     },
     disabled: !allowed("general.update"),
     computerPauseReason,
@@ -1497,6 +1499,8 @@ function SignInStep({ snapshot, facade, actions }: PageProps) {
     </section>
   );
 }
+const automaticAttachmentReads = new WeakMap<RendererFacade, string>();
+
 function AddToChatGPT({
   settings,
   snapshot,
@@ -1533,6 +1537,7 @@ function AddToChatGPT({
   const connectionDetails = useRef<HTMLDListElement>(null);
   const readingConfirmation = useRef(false);
   const [refreshingConfirmation, setRefreshingConfirmation] = useState(false);
+  const [confirmationRead, setConfirmationRead] = useState<string | null>(null);
   const feedback = useSettingsFeedback(facade);
   const result = feedback.pages["setup:attachment"]?.result;
   const failed = result?.state === "refused" || result?.state === "unknown";
@@ -1548,19 +1553,49 @@ function AddToChatGPT({
   const waitingForConfirmation =
     !gate.allowed &&
     !checking &&
-    gate.state !== "pending" &&
+    (gate.state !== "pending" || refreshingConfirmation) &&
     (gate.state === "unknown" || unconfirmedTest);
-  async function checkConfirmation() {
+  const checkConfirmation = useCallback(async () => {
     if (readingConfirmation.current || busy.current) return;
     readingConfirmation.current = true;
     setRefreshingConfirmation(true);
+    setConfirmationRead(null);
     try {
-      await actions.refresh();
+      const observed = await actions.refresh();
+      setConfirmationRead(
+        observed?.state === "applied"
+          ? "Status updated from this Dev’s saved confirmation."
+          : observed?.code === "CONNECTOR_ATTACHMENT_NOT_FOUND"
+            ? "No confirmation has reached this Dev. The earlier test remains unconfirmed."
+            : observed?.state === "unknown"
+              ? "The status read could not be confirmed. The saved attempt has been kept; it will not be repeated."
+              : "Status refreshed. No new confirmation is available; no message was sent.",
+      );
     } finally {
       readingConfirmation.current = false;
       setRefreshingConfirmation(false);
     }
-  }
+  }, [actions]);
+  const canObserveConfirmation = actions.allowed("connector.check-attachment");
+  const observationBinding = `${snapshot.buildId}:${connector.runtime?.runtimeGeneration}:${connector.challenge?.challengeSha256}`;
+  useEffect(() => {
+    if (
+      !waitingForConfirmation ||
+      !connector.appVerificationPending ||
+      !canObserveConfirmation ||
+      automaticAttachmentReads.get(facade) === observationBinding
+    )
+      return;
+    automaticAttachmentReads.set(facade, observationBinding);
+    void checkConfirmation();
+  }, [
+    waitingForConfirmation,
+    connector.appVerificationPending,
+    canObserveConfirmation,
+    facade,
+    observationBinding,
+    checkConfirmation,
+  ]);
   function reviewConnection() {
     connectionDetails.current?.scrollIntoView({ block: "center" });
     connectionDetails.current?.focus({ preventScroll: true });
@@ -1781,7 +1816,7 @@ function AddToChatGPT({
           {gate.action && gate.state !== "missing" && (
             <button
               type="button"
-              className={waitingForConfirmation ? "primary" : "text-button"}
+              className="text-button"
               disabled={refreshingConfirmation}
               onClick={() => {
                 if (waitingForConfirmation) void checkConfirmation();
@@ -1796,10 +1831,15 @@ function AddToChatGPT({
             >
               {waitingForConfirmation
                 ? refreshingConfirmation
-                  ? "Checking confirmation…"
-                  : "Check for confirmation"
+                  ? "Refreshing…"
+                  : "Refresh status"
                 : gate.action.label}
             </button>
+          )}
+          {confirmationRead && (
+            <p className="setup-confirmation-read" role="status">
+              {confirmationRead}
+            </p>
           )}
         </div>
         {gate.allowed ? (
@@ -1820,11 +1860,12 @@ function AddToChatGPT({
               className="text-button setup-review-connection"
               onClick={reviewConnection}
             >
-              Review connection
+              Show connection details
             </button>
             <p className="description">
-              Checking confirmation reads the saved result. It sends no new
-              message and keeps the earlier test in Unresolved actions.
+              Farol checks the saved confirmation automatically when you return
+              here. Refresh status checks again without sending a message. The
+              earlier test stays in Unresolved actions.
             </p>
           </>
         ) : needsNewTest ? (

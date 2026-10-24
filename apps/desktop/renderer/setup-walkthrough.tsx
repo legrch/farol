@@ -63,7 +63,7 @@ const appInstructions: readonly (readonly string[])[] = [
   ],
   [
     "Return to Farol. If Test in ChatGPT is available, run it once.",
-    "If an earlier test is unconfirmed, choose Check for confirmation. This reads the saved result without sending a new message.",
+    "If an earlier test is unconfirmed, Farol checks the saved confirmation automatically. Refresh status reads it again without sending a new message.",
     "Farol opens a separate ordinary Instant chat, selects your app and sends one test message.",
     "Wait for the result. If it cannot be confirmed, inspect the saved result before trying another action.",
   ],

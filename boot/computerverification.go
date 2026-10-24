@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strconv"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
@@ -16,6 +17,21 @@ import (
 	"github.com/legrch/farol/pkg/ipc"
 	"github.com/legrch/farol/transport/desktop"
 )
+
+// Verification consumes the workspace's published contract. Preserve its
+// classified read refusal instead of turning that independent DTO into a lost
+// owner result. An incomplete one-shot proof stays unknown and cannot replay.
+func connectorVerificationOutcome(value any, err error) (*desktop.Outcome, error) {
+	var workspace *workspacect.Failure
+	if errors.As(err, &workspace) {
+		return &desktop.Outcome{Status: "refused", Code: workspace.Code}, nil
+	}
+	var policy *authority.Failure
+	if errors.As(err, &policy) && policy.Code == "COMPUTER_CONNECTOR_VERIFICATION_UNCONFIRMED" {
+		return &desktop.Outcome{Status: "unknown", Code: policy.Code}, nil
+	}
+	return ingressOutcome(value, err)
+}
 
 func connectorVerificationState(ctx context.Context, slot *connectorSlot, lease *execution.Lease) (*wire.ComputerConnectorVerificationState, error) {
 	proof, err := slot.owner.CurrentVerification(ctx)
@@ -84,22 +100,22 @@ func (s *computerConnector) verificationMethodFor(slot *connectorSlot, catalogue
 			return invalidIngress()
 		}
 		if err := s.enter(ctx); err != nil {
-			return ingressOutcome(nil, err)
+			return connectorVerificationOutcome(nil, err)
 		}
 		defer func() { <-s.effects }()
 		if s.current != slot || slot.closing || slot.startupUncertain {
-			return ingressOutcome(nil, computerUnavailable())
+			return connectorVerificationOutcome(nil, computerUnavailable())
 		}
 		digest := sha256.Sum256([]byte(in.Challenge))
 		if err := s.root.refreshApproval(ctx, slot.renewalScope); err != nil {
-			return ingressOutcome(nil, err)
+			return connectorVerificationOutcome(nil, err)
 		}
 		if err := slot.owner.CheckVerificationChallenge(ctx, digest); err != nil {
-			return ingressOutcome(nil, err)
+			return connectorVerificationOutcome(nil, err)
 		}
 		previous, err := slot.owner.CurrentVerification(ctx)
 		if err != nil {
-			return ingressOutcome(nil, err)
+			return connectorVerificationOutcome(nil, err)
 		}
 		if previous == nil {
 			var err error
@@ -109,7 +125,7 @@ func (s *computerConnector) verificationMethodFor(slot *connectorSlot, catalogue
 				err = slot.owner.BeginVerification(ctx, digest, in.WorkspaceId, in.CallId)
 			}
 			if err != nil {
-				return ingressOutcome(nil, err)
+				return connectorVerificationOutcome(nil, err)
 			}
 		}
 		var lease *execution.Lease
@@ -119,18 +135,18 @@ func (s *computerConnector) verificationMethodFor(slot *connectorSlot, catalogue
 			lease, err = slot.route.admit(ctx, authority.List)
 		}
 		if err != nil {
-			return ingressOutcome(nil, err)
+			return connectorVerificationOutcome(nil, err)
 		}
 		if previous != nil {
 			if previous.Catalogue != catalogue || previous.WorkspaceID != in.WorkspaceId || previous.ChallengeDigest != digest {
-				return ingressOutcome(nil, computerUnavailable())
+				return connectorVerificationOutcome(nil, computerUnavailable())
 			}
 			state, err := connectorVerificationState(ctx, slot, lease)
-			return ingressOutcome(state, err)
+			return connectorVerificationOutcome(state, err)
 		}
 		service, err := workspacesvc.NewForExecution(lease, slot.route.workspace, slot.route.clock)
 		if err != nil {
-			return ingressOutcome(nil, err)
+			return connectorVerificationOutcome(nil, err)
 		}
 		e := slot.opened.Execution
 		epoch, _ := strconv.ParseUint(e.TaskEpoch, 10, 64)
@@ -140,37 +156,37 @@ func (s *computerConnector) verificationMethodFor(slot *connectorSlot, catalogue
 				ParticipantID: e.ParticipantId, TurnID: e.TurnId, Generation: generation, CallID: in.CallId}
 			out, err := workspacect.New(service).Catalogue(ctx, input)
 			if err != nil {
-				return ingressOutcome(nil, err)
+				return connectorVerificationOutcome(nil, err)
 			}
 			if out == nil || out.OwnerID != input.OwnerID || out.SessionID != input.SessionID || out.TaskID != input.TaskID || out.TaskEpoch != input.TaskEpoch ||
 				out.ParticipantID != input.ParticipantID || out.TurnID != input.TurnID || out.Generation != input.Generation || out.CallID != input.CallID || out.Workspaces == nil || len(out.Workspaces) != 0 {
-				return ingressOutcome(nil, computerUnavailable())
+				return connectorVerificationOutcome(nil, computerUnavailable())
 			}
 			observed := port.ConnectorVerification{Host: slot.guard.host, Binding: lease.Binding(), ChallengeDigest: digest, CallID: out.CallID, Catalogue: true}
 			if err := slot.owner.RecordVerification(ctx, digest, observed); err != nil {
-				return ingressOutcome(nil, err)
+				return connectorVerificationOutcome(nil, err)
 			}
 			state, err := connectorVerificationState(ctx, slot, lease)
-			return ingressOutcome(state, err)
+			return connectorVerificationOutcome(state, err)
 		}
 		input := workspacect.ListRequest{OwnerID: e.OwnerId, SessionID: e.SessionId, TaskID: e.TaskId, TaskEpoch: epoch,
 			ParticipantID: e.ParticipantId, TurnID: e.TurnId, Generation: generation, CallID: in.CallId, WorkspaceID: in.WorkspaceId, RelativePath: "."}
 		out, err := workspacect.New(service).List(ctx, input)
 		if err != nil {
-			return ingressOutcome(nil, err)
+			return connectorVerificationOutcome(nil, err)
 		}
 		if out == nil || out.OwnerID != input.OwnerID || out.SessionID != input.SessionID || out.TaskID != input.TaskID || out.TaskEpoch != input.TaskEpoch ||
 			out.ParticipantID != input.ParticipantID || out.TurnID != input.TurnID || out.Generation != input.Generation || out.CallID != input.CallID ||
 			out.WorkspaceID != input.WorkspaceID || out.RelativePath != "." || len(out.Entries) > 500 {
-			return ingressOutcome(nil, computerUnavailable())
+			return connectorVerificationOutcome(nil, computerUnavailable())
 		}
 		observed := port.ConnectorVerification{Host: slot.guard.host, Binding: lease.Binding(), ChallengeDigest: digest,
 			WorkspaceID: out.WorkspaceID, CallID: out.CallID, EntryCount: uint32(len(out.Entries)), Truncated: out.Truncated}
 		if err = slot.owner.RecordVerification(ctx, digest, observed); err != nil {
-			return ingressOutcome(nil, err)
+			return connectorVerificationOutcome(nil, err)
 		}
 		state, err := connectorVerificationState(ctx, slot, lease)
-		return ingressOutcome(state, err)
+		return connectorVerificationOutcome(state, err)
 	}}
 }
 
@@ -190,18 +206,18 @@ func (s *computerConnector) verificationObservationMethodFor(expected *connector
 			return invalidIngress()
 		}
 		if err := s.enter(ctx); err != nil {
-			return ingressOutcome(nil, err)
+			return connectorVerificationOutcome(nil, err)
 		}
 		defer func() { <-s.effects }()
 		slot := s.current
 		if slot == nil || expected != nil && slot != expected || slot.closing || slot.startupUncertain || in.Binding != slot.opened.Endpoint.Binding {
-			return ingressOutcome(nil, computerUnavailable())
+			return connectorVerificationOutcome(nil, computerUnavailable())
 		}
 		lease, err := slot.route.admitCatalogue(ctx)
 		if err != nil {
-			return ingressOutcome(nil, err)
+			return connectorVerificationOutcome(nil, err)
 		}
 		state, err := connectorVerificationState(ctx, slot, lease)
-		return ingressOutcome(state, err)
+		return connectorVerificationOutcome(state, err)
 	}}
 }

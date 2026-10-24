@@ -571,7 +571,7 @@ async function runScenario(scenario) {
         .click();
       assert.equal(await finish.isEnabled(), false);
       await page
-        .getByRole("button", { name: "Check for confirmation", exact: true })
+        .getByRole("button", { name: "Refresh status", exact: true })
         .click();
       settings = await poll(
         () => readSetupSettings(page),
@@ -592,7 +592,7 @@ async function runScenario(scenario) {
       // No new challenge, browser Send, settings verification or forced flags.
       await verifyReceipt(delayedPrompt);
       await page
-        .getByRole("button", { name: "Check for confirmation", exact: true })
+        .getByRole("button", { name: "Refresh status", exact: true })
         .click();
       report.lateReceiptReadback = {
         sendCount,

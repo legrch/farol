@@ -37,6 +37,7 @@ import {
   selectTemporaryPersonalizationScript,
   taskProbeScript,
   toggleChatGptSidebarScript,
+  readinessProbe,
   installManualAppGateScript,
   classifyChatGptProviderError,
   prepareTaskScript,
@@ -8414,3 +8415,107 @@ it.each(["open", "preload"] as const)(
     }
   },
 );
+
+it("accepts a current ordinary DOM before slow subresources finish without revealing or sending", async () => {
+  const surface = embeddedSurface();
+  const originalLoad = surface.loadURL.getMockImplementation()!;
+  surface.loadURL.mockImplementation(async (url) => {
+    await originalLoad(url);
+    await new Promise<void>(() => {});
+  });
+  Object.assign(surface.webContents, {
+    executeJavaScript: vi.fn(async () => ({
+      composerVisible: true,
+      signInVisible: false,
+    })),
+  });
+  const candidate = new ChatGptRoute({
+    homeUrl: "https://chatgpt.com/",
+    initialUrl: "https://chatgpt.com/",
+    e2eOrigin: null,
+    parent: () => null,
+    surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+  });
+  try {
+    const opening = candidate.preload();
+    surface.webContents.emit("dom-ready");
+    expect(await opening).toEqual({ status: "opened" });
+    expect((await candidate.observeSignInStatus()).state).toBe("authenticated");
+    expect(surface.reveal).not.toHaveBeenCalled();
+    expect(surface.focus).not.toHaveBeenCalled();
+    expect(surface.webContents.listenerCount("dom-ready")).toBe(0);
+  } finally {
+    candidate.dispose();
+  }
+});
+it("does not treat an ordinary DOM event as admission for a protected app surface", async () => {
+  vi.useFakeTimers();
+  const surface = embeddedSurface();
+  const originalLoad = surface.loadURL.getMockImplementation()!;
+  surface.loadURL.mockImplementation(async (url) => {
+    await originalLoad(url);
+    await new Promise<void>(() => {});
+  });
+  const candidate = new ChatGptRoute({
+    homeUrl: "https://chatgpt.com/",
+    initialUrl: "https://chatgpt.com/",
+    e2eOrigin: null,
+    parent: () => null,
+    requireAppForManualMessages: true,
+    requiredAppName: "Farol Dev",
+    surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+  });
+  try {
+    const opening = candidate.preload();
+    surface.webContents.emit("dom-ready");
+    expect(await candidate.observeSignInStatus()).toEqual({
+      state: "unknown",
+      binding: null,
+    });
+    await vi.advanceTimersByTimeAsync(30001);
+    expect(await opening).toEqual({ status: "unreachable" });
+    expect(surface.destroy).toHaveBeenCalledOnce();
+  } finally {
+    candidate.dispose();
+    vi.useRealTimers();
+  }
+});
+it("detects the visible composer when hydration retains an earlier hidden match", () => {
+  class Element {
+    constructor(public shown: boolean) {}
+    getBoundingClientRect() {
+      return { width: this.shown ? 200 : 0, height: this.shown ? 40 : 0 };
+    }
+  }
+  const hidden = new Element(false),
+    visible = new Element(true);
+  const answer = vm.runInNewContext(readinessProbe, {
+    HTMLElement: Element,
+    document: {
+      querySelectorAll: (selector: string) =>
+        selector.includes("prompt-textarea") ? [hidden, visible] : [],
+      querySelector: () => null,
+    },
+    getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+  });
+  expect(answer).toEqual({ composerVisible: true, signInVisible: false });
+});
+it("toggles the current provider's Toggle sidebar control", () => {
+  const click = vi.fn();
+  expect(
+    vm.runInNewContext(toggleChatGptSidebarScript, {
+      document: {
+        querySelectorAll: () => [
+          {
+            disabled: false,
+            getAttribute: () => "Toggle sidebar",
+            getClientRects: () => [1],
+            click,
+          },
+        ],
+      },
+      Set,
+    }),
+  ).toBe(true);
+  expect(click).toHaveBeenCalledOnce();
+});

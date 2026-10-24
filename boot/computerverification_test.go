@@ -11,18 +11,25 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	"github.com/legrch/farol/modules/computer/app/port"
+	"github.com/legrch/farol/modules/computer/domain/authority"
 	"github.com/legrch/farol/transport/desktop"
 )
 
-type verificationFailedNative struct{ *settingsNativeFixture }
+type verificationFailedNative struct {
+	*settingsNativeFixture
+	code string
+}
 
 func (n verificationFailedNative) List(ctx context.Context, request port.ListRequest) (*port.ListResponse, error) {
 	_, _ = n.settingsNativeFixture.List(ctx, request)
+	if n.code != "" {
+		return nil, authority.Fail(n.code, "native-workspace")
+	}
 	return nil, errors.New("native result unavailable")
 }
 func TestComputerConnectorVerificationFailedListIsNeverRepeated(t *testing.T) {
 	s, _, native, _ := verificationOpen(t)
-	s.current.route.workspace = verificationFailedNative{native}
+	s.current.route.workspace = verificationFailedNative{settingsNativeFixture: native}
 	method := s.verificationMethod(s.current)
 	for _, call := range []string{"original", "must-not-repeat"} {
 		out, err := verificationInvoke(t, method, wire.ComputerConnectorVerify{Challenge: "visible-challenge", WorkspaceId: "work", CallId: call})
@@ -32,6 +39,27 @@ func TestComputerConnectorVerificationFailedListIsNeverRepeated(t *testing.T) {
 		if native.calls != 1 {
 			t.Fatal("failed challenge repeated native List", native.calls)
 		}
+	}
+}
+
+func TestComputerConnectorVerificationPreservesListRefusalWithoutPoisoning(t *testing.T) {
+	for _, code := range []string{"WORKSPACE_RACE_DETECTED", "WORKSPACE_HELPER_FAILED"} {
+		t.Run(code, func(t *testing.T) {
+			s, journal, native, opened := verificationOpen(t)
+			before := journal.revision
+			s.current.route.workspace = verificationFailedNative{settingsNativeFixture: native, code: code}
+			out, err := verificationInvoke(t, s.verificationMethod(s.current), wire.ComputerConnectorVerify{Challenge: "visible-challenge", WorkspaceId: "work", CallId: "original"})
+			if err != nil || out == nil || out.Status != "refused" || out.Code != code {
+				t.Fatalf("lost classified refusal: %+v %v", out, err)
+			}
+			out, err = verificationInvoke(t, s.verificationObservationMethod(), wire.ComputerConnectorVerificationQuery{Binding: opened.Endpoint.Binding})
+			if err != nil || out == nil || out.Status != "unknown" || out.Code != "COMPUTER_CONNECTOR_VERIFICATION_UNCONFIRMED" {
+				t.Fatalf("incomplete proof misclassified: %+v %v", out, err)
+			}
+			if native.calls != 1 || journal.revision != before || s.root.unknown {
+				t.Fatal("read failure replayed List, changed journal or poisoned root", native.calls, journal.revision, before, s.root.unknown)
+			}
+		})
 	}
 }
 

@@ -185,7 +185,7 @@ describe("rendered Setup gate", () => {
           step === "attachment" && state === "missing"
             ? undefined
             : step === "attachment" && state === "unknown"
-              ? "Check for confirmation"
+              ? "Refresh status"
               : expectedAction(state),
         );
       }
@@ -277,7 +277,7 @@ describe("rendered Setup gate", () => {
         const submissions = effects().length;
         await h.click(
           step === "attachment" && expected === "unknown"
-            ? "Check for confirmation"
+            ? "Refresh status"
             : "Refresh status",
         );
         expect(effects()).toHaveLength(submissions);
@@ -778,14 +778,14 @@ it("does not tell a returning user to repeat successful steps for a pending app 
     "Finish sign-in, workspace and connection checks",
   );
   expect(h.button("Test in ChatGPT")).toBeUndefined();
-  expect(h.button("Check for confirmation")?.disabled).toBe(false);
+  expect(h.button("Refresh status")?.disabled).toBe(false);
   expect(h.button("Prepare new test")).toBeUndefined();
   const before = vi
     .mocked(h.f.api.configure)
     .mock.calls.filter(
       ([command]) => command.kind === "connector.verify-app",
     ).length;
-  await h.click("Check for confirmation");
+  await h.click("Refresh status");
   expect(
     vi
       .mocked(h.f.api.configure)

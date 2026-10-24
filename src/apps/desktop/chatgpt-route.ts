@@ -413,6 +413,8 @@ function signInBannerRemovalScript(): string {
 // document; never hide provider content or keep toggling after the owner opens it.
 export function collapseChatGptSidebarScript(): string {
   return `(() => {
+    if (globalThis.__farolDefaultSidebarInitialized) return;
+    globalThis.__farolDefaultSidebarInitialized = true;
     const labels = new Set(["Close sidebar", "Collapse sidebar", "Hide sidebar"]);
     const openLabels = new Set(["Open sidebar", "Show sidebar", "Expand sidebar"]);
     const cancelKey = "__farolDefaultSidebarCollapse";
@@ -436,7 +438,10 @@ export function collapseChatGptSidebarScript(): string {
       if (stopped) return;
       if (Date.now() > deadline) { stop(); return; }
       const close = [...document.querySelectorAll("button[aria-label]")].find(
-        (candidate) => labels.has(candidate.getAttribute("aria-label")) &&
+        (candidate) => (labels.has(candidate.getAttribute("aria-label")) ||
+            (candidate.getAttribute("aria-label") === "Toggle sidebar" &&
+              (candidate.getAttribute("aria-expanded") === "true" ||
+                candidate.closest?.('aside,nav,[data-testid="sidebar"],#stage-sidebar,#stage-slideover-sidebar')))) &&
           candidate.getAttribute("aria-expanded") !== "false" &&
           candidate.getClientRects().length > 0 &&
           !candidate.disabled
@@ -472,7 +477,7 @@ export const toggleChatGptSidebarScript = `(() => {
   const cancel = globalThis.__farolDefaultSidebarCollapse;
   if (typeof cancel === "function") cancel();
   const labels = new Set(["Close sidebar", "Collapse sidebar", "Hide sidebar",
-    "Open sidebar", "Show sidebar", "Expand sidebar"]);
+    "Open sidebar", "Show sidebar", "Expand sidebar", "Toggle sidebar"]);
   const button = [...document.querySelectorAll("button[aria-label]")].find(
     (candidate) => labels.has(candidate.getAttribute("aria-label")) &&
       candidate.getClientRects().length > 0 && !candidate.disabled);
@@ -619,18 +624,16 @@ const cancelTaskScript = `(() => {
   return { activated: true };
 })()`;
 
-const readinessProbe = `(() => {
+export const readinessProbe = `(() => {
   const visible = (element) => {
     if (!(element instanceof HTMLElement)) return false;
     const style = getComputedStyle(element);
     const box = element.getBoundingClientRect();
     return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
   };
-  const composer = [
-    document.querySelector("#prompt-textarea"),
-    document.querySelector('[data-testid="prompt-textarea"]'),
-    document.querySelector('[contenteditable="true"][data-virtualkeyboard="true"]')
-  ].some(visible);
+  const composer = [...document.querySelectorAll(
+    '#prompt-textarea,[data-testid="prompt-textarea"],[contenteditable="true"][data-virtualkeyboard="true"]'
+  )].some(visible);
   const explicitSignIn = [
     document.querySelector('[data-testid="login-button"]'),
     document.querySelector('a[href*="/auth/login"]'),
@@ -2572,11 +2575,33 @@ export class ChatGptRoute {
       candidate.reveal();
       candidate.focus();
     }
+    // An ordinary browser can observe a committed DOM while slow subresources
+    // still keep loadURL pending. Protected task surfaces keep their full-load
+    // gate; this milestone neither admits submission nor authenticates a page.
+    let domReady: (() => void) | undefined;
+    const ordinaryReady =
+      this.options.requireAppForManualMessages === true
+        ? null
+        : new Promise<void>((resolve) => {
+            domReady = () => {
+              if (
+                this.ownsRouteContents(candidate.webContents) &&
+                !this.routeDocumentLoadFailed &&
+                allowedChatGptPageUrl(
+                  candidate.webContents.getURL(),
+                  this.options.e2eOrigin,
+                )
+              )
+                resolve();
+            };
+            candidate.webContents.on("dom-ready", domReady);
+          });
     const openDeadline = Date.now() + ROUTE_OPEN_DEADLINE_MS;
     try {
+      const navigation = candidate.loadURL(this.entryUrl);
       await this.awaitRouteOpenStep(
         candidate,
-        candidate.loadURL(this.entryUrl),
+        ordinaryReady ? Promise.race([navigation, ordinaryReady]) : navigation,
         openDeadline,
       );
       if (this.routeDocumentLoadFailed) {
@@ -2598,6 +2623,15 @@ export class ChatGptRoute {
         return { status: "unreachable" };
       }
       this.load = "loaded";
+      if (
+        this.options.requireAppForManualMessages !== true &&
+        this.options.collapseSidebarByDefault &&
+        isChatGptPage(candidate.webContents.getURL(), this.options.homeUrl)
+      ) {
+        void candidate.webContents
+          .executeJavaScript(collapseChatGptSidebarScript(), true)
+          .catch(() => undefined);
+      }
       if (reveal && this.options.requireAppForManualMessages === true) {
         candidate.reveal();
         candidate.focus();
@@ -2620,6 +2654,8 @@ export class ChatGptRoute {
         return { status: "unreachable" };
       }
       return { status: "unreachable" };
+    } finally {
+      if (domReady) candidate.webContents.removeListener("dom-ready", domReady);
     }
   }
 
@@ -2777,7 +2813,7 @@ export class ChatGptRoute {
   // cannot become readiness for a subsequent task or settle an unknown effect.
   async observeSignInStatus(): Promise<ChatGptSignInStatusObservation> {
     this.currentReadinessObservation = null;
-    const unknown = (
+    const unconfirmedReadiness = (
       reason:
         "admission" | "document-not-current" | "unconfirmed" | "exception",
       pageState: ChatGptPageObservation["state"] | null = null,
@@ -2797,12 +2833,13 @@ export class ChatGptRoute {
     };
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      if (!this.readinessObservationAvailable()) return unknown("admission");
+      if (!this.readinessObservationAvailable())
+        return unconfirmedReadiness("admission");
       const startedAt = performance.now();
       const deadlineAt = startedAt + READINESS_OBSERVATION_MS;
       const read = this.captureReadinessRead();
       if (!this.isReadinessDocumentCurrent(read))
-        return unknown("document-not-current");
+        return unconfirmedReadiness("document-not-current");
       const answer = await Promise.race([
         this.readReadinessPage(false),
         new Promise<null>((resolve) => {
@@ -2822,7 +2859,10 @@ export class ChatGptRoute {
         read.sequence !== this.readinessReadSequence ||
         !this.isReadinessDocumentCurrent(read)
       )
-        return unknown("unconfirmed", answer?.observation.state ?? null);
+        return unconfirmedReadiness(
+          "unconfirmed",
+          answer?.observation.state ?? null,
+        );
       const result: ChatGptSignInStatusObservation = Object.freeze({
         state: answer.observation.state,
         binding: Object.freeze({
@@ -2839,7 +2879,7 @@ export class ChatGptRoute {
       return result;
     } catch {
       // Native exceptions never escape as page content or positive evidence.
-      return unknown("exception");
+      return unconfirmedReadiness("exception");
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }

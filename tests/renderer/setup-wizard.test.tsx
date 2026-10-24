@@ -520,9 +520,9 @@ describe("Add to ChatGPT", () => {
     });
     vi.mocked(h.f.api.configure).mockClear();
     const bootstraps = vi.mocked(h.f.api.bootstrap).mock.calls.length;
-    await h.click("Check for confirmation");
-    expect(h.button("Checking confirmation…")?.disabled).toBe(true);
-    await h.click("Checking confirmation…");
+    await h.click("Refresh status");
+    expect(h.button("Refreshing…")?.disabled).toBe(true);
+    await h.click("Refreshing…");
     expect(h.f.api.configure).toHaveBeenCalledTimes(1);
     expect(h.f.api.bootstrap).toHaveBeenCalledTimes(bootstraps + 1);
     await act(async () =>
@@ -533,7 +533,7 @@ describe("Add to ChatGPT", () => {
       }),
     );
     expect(h.f.api.configure).toHaveBeenCalledTimes(1);
-    expect(h.button("Check for confirmation")?.disabled).toBe(false);
+    expect(h.button("Refresh status")?.disabled).toBe(false);
     expect(h.button("Test in ChatGPT")).toBeUndefined();
     expect(h.button("Start using Farol")?.disabled).toBe(true);
     expect(
@@ -549,6 +549,23 @@ describe("Add to ChatGPT", () => {
       h.configuration().settings.connectors.secureMcp.attachment,
     ).toBeNull();
   });
+  it("automatically reads a pending app receipt once per binding without a Send or owner click", async () => {
+    const value = readySettings();
+    value.setup.connect.outcomeUnknown = true;
+    value.connectors.secureMcp.appVerificationPending = true;
+    const h = await mount({ step: "attachment", value });
+    const effects = () =>
+      vi
+        .mocked(h.f.api.configure)
+        .mock.calls.filter(([c]) => c.kind !== "chatgpt.observe-sign-in")
+        .map(([c]) => c.kind);
+    expect(effects()).toEqual(["connector.check-attachment"]);
+    await h.remount();
+    expect(effects()).toEqual(["connector.check-attachment"]);
+    expect(h.configuration().settings.setup.connect.outcomeUnknown).toBe(true);
+    expect(h.button("Start using Farol")?.disabled).toBe(true);
+    expect(h.button("Test in ChatGPT")).toBeUndefined();
+  });
   it("reviews this Mac's connection locally without changing its app or tunnel", async () => {
     const value = readySettings();
     value.setup.connect.outcomeUnknown = true;
@@ -562,7 +579,7 @@ describe("Add to ChatGPT", () => {
     const calls = vi.mocked(h.f.api.configure).mock.calls.length;
     const reads = vi.mocked(h.f.api.bootstrap).mock.calls.length;
     const destination = h.c.getSnapshot().destination;
-    await h.click("Review connection");
+    await h.click("Show connection details");
     expect(scroll).toHaveBeenCalledWith({ block: "center" });
     expect(document.activeElement).toBe(details);
     expect(h.c.getSnapshot().destination).toBe(destination);
@@ -595,7 +612,7 @@ describe("Add to ChatGPT", () => {
     expect(h.button("Start using Farol")?.disabled).toBe(true);
     await h.remount();
     expect(h.button("Test in ChatGPT")).toBeUndefined();
-    expect(h.button("Check for confirmation")?.disabled).toBe(false);
+    expect(h.button("Refresh status")?.disabled).toBe(false);
     expect(
       vi
         .mocked(h.f.api.configure)
@@ -1008,7 +1025,7 @@ it("shows local readiness separately from an unconfirmed app on Overview", async
   await h.click("Continue setup");
   expect(h.c.getSnapshot().destination.setupStep).toBe("attachment");
   expect(h.button("Start using Farol")?.disabled).toBe(true);
-  expect(h.host.textContent).toContain("It sends no new message");
+  expect(h.host.textContent).toContain("without sending a message");
   expect(
     vi
       .mocked(h.f.api.configure)

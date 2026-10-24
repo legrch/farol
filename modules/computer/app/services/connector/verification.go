@@ -165,7 +165,7 @@ func (s *Service) CurrentVerification(ctx context.Context) (*port.ConnectorVerif
 	err := s.withVerificationCurrent(ctx, func(binding *port.TaskBinding) error {
 		if binding != nil && s.verification != nil {
 			if s.verification.observation == nil {
-				return failure()
+				return authority.Fail("COMPUTER_CONNECTOR_VERIFICATION_UNCONFIRMED", "connector-owner")
 			}
 			value := *s.verification.observation
 			out = &value

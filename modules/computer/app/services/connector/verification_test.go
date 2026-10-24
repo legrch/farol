@@ -584,7 +584,7 @@ func TestConnectorVerificationAttemptCannotReplay(t *testing.T) {
 			}
 			out, err := f.owner.CurrentVerification(ctx)
 			var unavailable *authority.Failure
-			if out != nil || !errors.As(err, &unavailable) || unavailable.Code != "COMPUTER_AUTHORITY_STORE_UNAVAILABLE" || unavailable.Retry != "never" {
+			if out != nil || !errors.As(err, &unavailable) || unavailable.Code != "COMPUTER_CONNECTOR_VERIFICATION_UNCONFIRMED" || unavailable.Retry != "never" {
 				t.Fatal("unfinished attempt was not classified unavailable without retry", out, err)
 			}
 			verificationRenew(f, 72*time.Hour) // Known renewal cannot clear any failed or unknown attempt.

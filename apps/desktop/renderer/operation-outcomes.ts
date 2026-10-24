@@ -1869,6 +1869,9 @@ export const operationCodesByOutcome = {
   unknown: [
     "backend_child_closed",
     "backend_unclassified_failure",
+    "owner_outcome_unknown",
+    "document-not-current",
+    "exception",
     "client_closed",
     "crossed_response_context",
     "crossed_response_id",
@@ -1944,6 +1947,7 @@ export const operationCodesByOutcome = {
     "COMPUTER_MCP_SHELL_CLEANUP_UNVERIFIED",
     "COMPUTER_MUTATION_STORE_NOT_SETTLED",
     "CONNECTOR_ANCHOR_EXIT",
+    "COMPUTER_CONNECTOR_VERIFICATION_UNCONFIRMED",
     "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN",
     "CONNECTOR_CONFIGURE_OUTCOME_UNKNOWN",
     "CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN",
