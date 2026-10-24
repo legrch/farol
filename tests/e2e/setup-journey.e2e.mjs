@@ -34,6 +34,7 @@ import {
 import {
   assertNativePreviewAdmission,
   refreshNativePreviewIsolation,
+  recheckNativePreviewIsolation,
 } from "./native-preview-admission.mjs";
 
 assert.equal(process.argv.length, 2, "SETUP_JOURNEY_ARGUMENTS_INVALID");
@@ -317,19 +318,27 @@ try {
   terminal = once(application.process(), "exit");
   closed = once(application.process(), "close");
   page = await application.firstWindow();
-  await waitForReactShell(page);
   const paths = await application.evaluate(({ app, BrowserWindow }) => ({
+    pid: process.pid,
+    home: app.getPath("home"),
     userData: app.getPath("userData"),
     sessionData: app.getPath("sessionData"),
+    temp: app.getPath("temp"),
     windows: BrowserWindow.getAllWindows().map((w) => ({
       visible: w.isVisible(),
       focused: w.isFocused(),
     })),
   }));
+  admission = await recheckNativePreviewIsolation(
+    admission,
+    paths,
+    application.process(),
+  );
   userData = paths.userData;
   assert.equal(userData, desktopIdentity("dev", appData).userData);
   assert.equal(paths.sessionData, userData);
   assert.ok(paths.windows.every((w) => !w.visible && !w.focused));
+  await waitForReactShell(page);
   let settings = await readSetupSettings(page);
   assert.equal(settings.computer.workspaces.length, 0);
   assert.equal(settings.connectors.secureMcp.credential, "missing");
@@ -399,6 +408,9 @@ try {
     .getByRole("textbox", { name: "ChatGPT app name" })
     .fill("Farol Dev");
   await page.getByRole("textbox", { name: "ChatGPT app name" }).blur();
+  await page
+    .getByRole("button", { name: "Save app name", exact: true })
+    .click();
   await poll(
     () => readSetupSettings(page),
     (v) => v.connectors.secureMcp.chatgptApp?.name === "Farol Dev",
@@ -460,8 +472,11 @@ try {
   if (application && !quitAttempted && userData) {
     try {
       await quit();
-    } catch {
+    } catch (error) {
       report.cleanup = "retained";
+      report.cleanupError = /^[A-Z0-9_:.-]{1,100}$/u.test(error?.message ?? "")
+        ? error.message
+        : "SETUP_CLEANUP_FAILED";
       process.exitCode = 1;
     }
   }
