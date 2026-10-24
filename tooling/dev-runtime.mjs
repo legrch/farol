@@ -25,6 +25,18 @@ export const devExecutables = (root) => [
   root + VENDOR_EXECUTABLE_SUFFIX,
 ];
 
+export function devEntrypointForExecutable(root, executable) {
+  if (executable === root + DEV_CORE_EXECUTABLE_SUFFIX)
+    return path.join(root, "_output/dev-core/Contents/Resources/app/main.cjs");
+  if (
+    [root + DEV_EXECUTABLE_SUFFIX, root + VENDOR_EXECUTABLE_SUFFIX].includes(
+      executable,
+    )
+  )
+    return path.join(root, "_output/build/app/main.cjs");
+  return null;
+}
+
 export function devInfoPlist(plist) {
   for (const [key, before, after] of [
     ["CFBundleName", "Electron", devIdentity.applicationName],

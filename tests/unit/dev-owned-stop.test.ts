@@ -422,3 +422,42 @@ it("admits the isolated Dev bundle while retaining exact executable comparison",
   const result = await stopRetainedDevProcess(expected, scope, h.ports);
   expect(result.status).toBe("absent");
 });
+
+it("stops only the exact new protected runtime and entrypoint pair", async () => {
+  const selected = {
+    ...scope,
+    appPath: `${scope.writerRoot}/_output/dev-core/Contents/Resources/app/main.cjs`,
+  };
+  const retained = {
+    ...identity,
+    ...selected,
+    executable: `${scope.writerRoot}/_output/dev-core/Contents/Frameworks/Farol Dev.app/Contents/MacOS/Electron`,
+  };
+  let stopped = false;
+  let time = 0;
+  const signals: string[] = [];
+  const ports = {
+    clock: () => time,
+    sleep: async (ms: number) => {
+      time += ms;
+    },
+    inspect: () =>
+      stopped
+        ? { status: "absent" }
+        : { status: "present", identity: retained },
+    signal: (_pid: number, name: string) => {
+      signals.push(name);
+      stopped = true;
+      return { status: "sent" };
+    },
+  };
+  expect((await stopRetainedDevProcess(retained, selected, ports)).status).toBe(
+    "absent",
+  );
+  expect(signals).toEqual(["SIGTERM"]);
+  signals.length = 0;
+  const mixed = { ...retained, appPath: scope.appPath };
+  const result = await stopRetainedDevProcess(mixed, scope, ports);
+  expect(result.reason).toBe("RETAINED_IDENTITY_INVALID");
+  expect(signals).toEqual([]);
+});
