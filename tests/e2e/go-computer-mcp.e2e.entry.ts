@@ -86,6 +86,8 @@ export async function run(input: {
     providerCalls = 0,
     passed = false;
   const observations: Record<string, unknown>[] = [];
+  const backendLifecycle: Record<string, unknown>[] = [];
+  input.report.backendLifecycle = backendLifecycle;
   input.report.journey = { temporary, observations };
   Object.defineProperty(input.report, "requests", {
     enumerable: true,
@@ -270,6 +272,20 @@ export async function run(input: {
         // Retain the returned owner even if its after-checkpoint cannot persist.
         host = await startDesktopGoCore({
           previousHostDrainConfirmed: true,
+          onLifecycleObservation: (observation) => {
+            backendLifecycle.push({
+              source: observation.source,
+              phase: observation.phase,
+              event: observation.event,
+              code: observation.code,
+              state: observation.state,
+              exitCode: observation.exitCode,
+              signal: observation.signal,
+              forced: observation.forced,
+              hostLifetimeId: observation.hostLifetimeId,
+              childLaunchId: observation.childLaunchId,
+            });
+          },
           artifactRoot: input.artifactRoot,
           compiledArtifact: input.artifact,
           ...(input.shell
