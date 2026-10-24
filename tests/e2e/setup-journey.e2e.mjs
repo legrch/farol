@@ -52,6 +52,7 @@ const executablePath = path.join(
   runtimeRoot,
   "dist/Electron.app/Contents/MacOS/Electron",
 );
+const appName = "Farol Setup Fixture";
 const id = randomUUID();
 const output = path.join(root, "_output/evidence/setup-journey", id);
 await fs.mkdir(output, { recursive: true, mode: 0o700 });
@@ -155,7 +156,7 @@ async function verify(prompt) {
   const workspaceId = current.setup.computer.verified.workspaceId;
   assert.equal(
     prompt,
-    `Use the selected Farol Dev app to call farol_connector_verify once with challenge "${challenge.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`,
+    `Use the selected ${appName} app to call farol_connector_verify once with challenge "${challenge.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`,
   );
   const connectorRoot = path.join(userData, "farol-state/secure-mcp-connector");
   const args = JSON.parse(
@@ -280,7 +281,7 @@ async function quit() {
 }
 try {
   fixture = await startChatGptFixture({
-    setupVerification: { appName: "Farol Dev", verify },
+    setupVerification: { appName, verify },
   });
   const launchOptions = {
     executablePath,
@@ -404,16 +405,14 @@ try {
   report.currentStep = "attachment";
   await save();
   await page.getByRole("button", { name: "Continue", exact: true }).click();
-  await page
-    .getByRole("textbox", { name: "ChatGPT app name" })
-    .fill("Farol Dev");
+  await page.getByRole("textbox", { name: "ChatGPT app name" }).fill(appName);
   await page.getByRole("textbox", { name: "ChatGPT app name" }).blur();
   await page
     .getByRole("button", { name: "Save app name", exact: true })
     .click();
   await poll(
     () => readSetupSettings(page),
-    (v) => v.connectors.secureMcp.chatgptApp?.name === "Farol Dev",
+    (v) => v.connectors.secureMcp.chatgptApp?.name === appName,
     "SETUP_APP_NAME_NOT_SAVED",
   );
   const finish = page.getByRole("button", {
@@ -456,6 +455,9 @@ try {
   report.status = "passed-fixture-setup";
 } catch (error) {
   report.status = "failed";
+  // This runner owns a synthetic-only profile: bounded framework diagnostics
+  // cannot contain real account, key, prompt or workspace data.
+  report.failureDetail = String(error?.message ?? "").slice(0, 1024);
   report.error = /^[A-Z0-9_:.-]{1,100}$/u.test(error?.message ?? "")
     ? error.message
     : "SETUP_JOURNEY_FAILED";
