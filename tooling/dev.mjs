@@ -21,6 +21,7 @@ import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { parseDevDisplay } from "../src/apps/desktop/window-placement.ts";
 import { DevRuntimeSignatureError, prepareDevRuntime } from "./dev-runtime.mjs";
 import { prepareDevBuild } from "./dev-process-control.mjs";
+import { prepareDevCoreResources } from "./dev-core-resources.mjs";
 import { resolvePhysicalDevDataDirectoryName } from "./harness-identity.ts";
 import {
   dependencyDrift,
@@ -553,10 +554,24 @@ export async function runDevBuild(
   arguments_,
   {
     readInputs = readGoBuildInputs,
-    run = (args) =>
-      runInherited(process.execPath, ["tooling/build.mjs", ...args], {
-        cwd: vnextRoot,
-      }),
+    run = async (args) => {
+      const status = await runInherited(
+        process.execPath,
+        ["tooling/build.mjs", ...args],
+        { cwd: vnextRoot },
+      );
+      if (status === 0) {
+        try {
+          await prepareDevCoreResources(vnextRoot);
+        } catch (error) {
+          process.stderr.write(
+            `Dev resources refused: ${error.message}. No launch was attempted.\n`,
+          );
+          return 1;
+        }
+      }
+      return status;
+    },
     report = (line) => process.stderr.write(`${line}\n`),
   } = {},
 ) {

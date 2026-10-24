@@ -11,9 +11,9 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
+import { desktopCoreArtifactRoot } from "../../apps/desktop/dev-core-layout.ts";
 import {
   DesktopGoCore,
-  desktopShellSelection,
   startDesktopGoCore,
   type DesktopCoreSelection,
 } from "../../apps/desktop/go-core-host.ts";
@@ -761,57 +761,57 @@ describe("normal Go host startup", () => {
     expect(ports.provision).not.toHaveBeenCalled();
   });
 
-  it("starts source Dev with its Go File route and no packaged Shell selection", async () => {
+  it("qualifies source Dev Shell from its launcher-owned protected resource layout", async () => {
     const input = shellSelection();
-    const artifactRoot = "/synthetic/repo/_output/build/app";
+    const artifactRoot = desktopCoreArtifactRoot(
+      "/synthetic/repo/_output/build/app",
+      "dev",
+    );
+    const appRoot = "/synthetic/repo/_output/dev-core";
+    ports.runtime.mockResolvedValueOnce({
+      path: appRoot,
+      device: "11",
+      inode: "22",
+    });
     const f = transport();
     start.mockResolvedValue(f.client);
-    const host = await startDesktopGoCore({
-      ...input,
+    const host = await startDesktopGoCore({ ...input, artifactRoot });
+    expect(ports.resources).toHaveBeenCalledWith(
       artifactRoot,
-      compiledShell: desktopShellSelection(
-        input.compiledShell,
-        "dev",
-        artifactRoot,
-      ),
-    });
-    expect(ports.resources).toHaveBeenCalledTimes(1);
-    expect(ports.runtime).not.toHaveBeenCalled();
+      input.compiledResources,
+      expect.anything(),
+      expect.any(Number),
+    );
+    expect(ports.runtime).toHaveBeenCalledWith(
+      appRoot,
+      input.compiledShell!.support,
+      expect.any(Number),
+    );
     expect(start).toHaveBeenCalledTimes(1);
-    expect(start.mock.calls[0]![1]!.shellMetadata).toBeUndefined();
+    expect(start.mock.calls[0]![1]!.shellMetadata).toBeInstanceOf(Uint8Array);
+    expect(host.shellAvailable).toBe(true);
     await host.close();
+    expect(host.shellAvailable).toBe(false);
   });
 
   it.each(["dev", "preview"] as const)(
     "keeps packaged %s Shell checks mandatory with no failure fallback",
     async (environment) => {
       const input = shellSelection();
-      const compiledShell = desktopShellSelection(
-        input.compiledShell,
-        environment,
+      const artifactRoot = desktopCoreArtifactRoot(
         input.artifactRoot,
+        environment,
       );
-      expect(compiledShell).toBe(input.compiledShell);
+      expect(artifactRoot).toBe(input.artifactRoot);
       const failure = new BridgeError("refused", "shell_runtime_unqualified");
       ports.runtime.mockRejectedValueOnce(failure);
-      await expect(
-        startDesktopGoCore({ ...input, compiledShell }),
-      ).rejects.toBe(failure);
+      await expect(startDesktopGoCore({ ...input, artifactRoot })).rejects.toBe(
+        failure,
+      );
       expect(ports.provision).not.toHaveBeenCalled();
       expect(start).not.toHaveBeenCalled();
     },
   );
-
-  it("does not silently remove Shell from an unpackaged preview", () => {
-    const input = shellSelection();
-    expect(
-      desktopShellSelection(
-        input.compiledShell,
-        "preview",
-        "/synthetic/artifact",
-      ),
-    ).toBe(input.compiledShell);
-  });
 
   it("preserves runtime qualification refusal without launching a fallback", async () => {
     const input = shellSelection();

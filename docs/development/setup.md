@@ -74,6 +74,16 @@ Farol are not stopped. A refused or uncertain lookup/signal blocks the build and
 Neither process disappearance nor forced stop means application work was drained:
 retained UNKNOWN and interrupted-profile recovery guards still apply.
 Dev is not a package candidate.
+
+Ordinary Dev includes the Go Shell route. The launcher prepares a fixed
+`_output/dev-core/Contents/Resources/app` resource tree and an unmodified pinned
+vendor runtime beside it. The running desktop retains its separate Dev display
+bundle and profile. The Go host applies the same resource, runtime, protected-root
+and Shell support checks used for a package; workspace scope, Commands and task
+grants still apply to every command. Unexpected changes to the prepared tree
+refuse launch rather than being repaired or disabling Shell. No package install,
+credential import or profile reset is involved.
+
 `task dev -- --check` validates and builds without launching or changing profiles;
 `--fresh-review-profile` opens a new, retained disposable first-run Dev profile
 with ordinary window sizing. Combine it with `--display=secondary` for Sidecar;

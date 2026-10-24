@@ -42,7 +42,6 @@ import {
   runAdmittedConnectorSetup,
 } from "../../../apps/desktop/connector-setup-host";
 import {
-  desktopShellSelection,
   startDesktopGoCore,
   type DesktopGoCore,
 } from "../../../apps/desktop/go-core-host";
@@ -93,6 +92,7 @@ declare const __FAROL_GO_SHELL__: {
   readonly watchdogSourceBase64: string;
 } | null;
 import { createMenuBar } from "./menu-bar";
+import { desktopCoreArtifactRoot } from "../../../apps/desktop/dev-core-layout";
 import { promises as rawFs } from "original-fs";
 import {
   createInstalledUpdateRuntime,
@@ -11969,8 +11969,10 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
               home: app.getPath("home"),
               computerId: savedSettings.computer.computerId,
               build: buildIdentity,
-              artifactRoot:
+              artifactRoot: desktopCoreArtifactRoot(
                 installedResourcesOrigin?.execution.directory ?? directory,
+                runtimeEnvironment,
+              ),
               compiledArtifact: compiledGoCore,
               compiledResources: compiledGoResources,
               startup: {
@@ -12008,8 +12010,10 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
                 compiledArtifact: compiledGoCore,
                 compiledResources: compiledGoResources,
                 build: buildIdentity,
-                artifactRoot:
+                artifactRoot: desktopCoreArtifactRoot(
                   installedResourcesOrigin?.execution.directory ?? directory,
+                  runtimeEnvironment,
+                ),
                 stateRoot,
                 home: app.getPath("home"),
                 settings,
@@ -12202,17 +12206,15 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       startObservedDesktopGoCore({
         compiledArtifact: compiledGoCore,
         compiledResources: compiledGoResources,
-        compiledShell: desktopShellSelection(
-          compiledGoShell,
-          runtimeEnvironment,
-          installedResourcesOrigin?.execution.directory ?? directory,
-        ),
+        compiledShell: compiledGoShell,
         previousHostDrainConfirmed: previousHostAdmissionReady,
         build: buildIdentity,
         // The attested path must remain immutable through spawn and lifetime.
         // Shared installation paths are writable by other administrator accounts.
-        artifactRoot:
+        artifactRoot: desktopCoreArtifactRoot(
           installedResourcesOrigin?.execution.directory ?? directory,
+          runtimeEnvironment,
+        ),
         stateRoot,
         home: app.getPath("home"),
         settings: currentSettings,
@@ -12260,6 +12262,15 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
           }),
       }),
     );
+    if (runtimeEnvironment === "dev")
+      console.info(
+        "FAROL_DEV_SHELL:" +
+          JSON.stringify({
+            schema: 1,
+            buildId: buildIdentity.buildId,
+            available: desktopGoCore.shellAvailable,
+          }),
+      );
     await runDesktopStartupBoundary("go-settings", () => {
       const settingsOwner = configuration!;
       const settingsCore = desktopGoCore!;
