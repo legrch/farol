@@ -470,6 +470,8 @@ export class WindowController implements RendererFacade {
   private readonly automaticSignInChecks = new Set<string>();
   private automaticSignInRequested = false;
   private signInTimer: ReturnType<typeof setTimeout> | null = null;
+  private savedSignInReadTimer: ReturnType<typeof setTimeout> | null = null;
+  private savedSignInReadAttempts = 0;
   private authWindowGeneration = -1;
   private history: Destination[] = [home];
   private cursor = 0;
@@ -611,7 +613,10 @@ export class WindowController implements RendererFacade {
           this.patch({ route: parsed.data.state });
           // Page load retires the old sample. Read the newly loaded document
           // while this step is open; the event itself is never sign-in proof.
-          if (parsed.data.state === "loaded") this.observeSignIn();
+          if (parsed.data.state === "loaded") {
+            this.observeSignIn();
+            this.scheduleSavedSignInObservation();
+          }
         }
       }),
       this.api.onTaskSurfaceState((value) => {
@@ -766,6 +771,7 @@ export class WindowController implements RendererFacade {
       }
       if (this.disposed) return;
       if (this.state.route === "loaded") this.observeSignIn();
+      this.scheduleSavedSignInObservation();
       const revision = this.updateRevision;
       try {
         const value = await this.api.installedUpdate({ kind: "status" });
@@ -798,6 +804,9 @@ export class WindowController implements RendererFacade {
     this.disposed = true;
     this.retireConnectionStatusTimer();
     this.retireSignInObservation();
+    if (this.savedSignInReadTimer !== null)
+      clearTimeout(this.savedSignInReadTimer);
+    this.savedSignInReadTimer = null;
     this.state = immutable({ ...this.state, signInObservation: null });
     this.conversationDraft.dispose();
     this.pendingSectionNavigation = null;
@@ -1216,6 +1225,7 @@ export class WindowController implements RendererFacade {
     this.invalidateHistory();
     this.invalidateSignInObservation();
     this.patch({ chatHistoryContext: context });
+    this.scheduleSavedSignInObservation();
   }
   private invalidateHistory(): void {
     this.historyRevision++;
@@ -2399,6 +2409,7 @@ export class WindowController implements RendererFacade {
       });
       if (exact && evidence.state === "authenticated")
         this.confirmSetupSignIn();
+      this.scheduleSavedSignInObservation();
     };
     // Host observation is bounded to two seconds. A lost IPC reply also expires;
     // its later delivery cannot revive or settle any original effect UNKNOWN.
@@ -2411,6 +2422,50 @@ export class WindowController implements RendererFacade {
         settle();
       }
     })();
+  }
+  // A restored page can finish loading before its signed-in UI hydrates. Read
+  // that saved session a bounded number of times; never retry a Settings write
+  // or an external Send. Each read keeps the existing document/build checks.
+  private scheduleSavedSignInObservation(): void {
+    const state = this.state;
+    const saved =
+      state.configuration?.status === "ready"
+        ? state.configuration.settings.setup.chatgpt.verified
+        : null;
+    if (
+      this.disposed ||
+      this.booting ||
+      this.savedSignInReadTimer !== null ||
+      this.savedSignInReadAttempts >= 3 ||
+      state.route !== "loaded" ||
+      state.status !== "current" ||
+      state.runtime !== "ready" ||
+      !saved ||
+      saved.buildId === state.buildId ||
+      state.signInObservation?.state === "signed_out"
+    )
+      return;
+    const delays = [500, 1_500, 3_000];
+    this.savedSignInReadTimer = setTimeout(() => {
+      this.savedSignInReadTimer = null;
+      const current = this.state;
+      const verified =
+        current.configuration?.status === "ready"
+          ? current.configuration.settings.setup.chatgpt.verified
+          : null;
+      if (
+        this.disposed ||
+        !verified ||
+        verified.buildId === current.buildId ||
+        current.status !== "current" ||
+        current.runtime !== "ready" ||
+        current.route !== "loaded"
+      )
+        return;
+      this.savedSignInReadAttempts++;
+      if (!current.signInObservation?.pending) this.observeSignIn();
+      this.scheduleSavedSignInObservation();
+    }, delays[this.savedSignInReadAttempts]);
   }
   private confirmSetupSignIn(): void {
     const state = this.state;

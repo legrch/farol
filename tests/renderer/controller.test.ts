@@ -4764,3 +4764,60 @@ it("renews sign-in on the final Setup step after a connector check navigates its
     c.dispose();
   }
 });
+
+it("rechecks a restored hydrating session without a user click or another Send", async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  const data = bootstrap();
+  data.configuration.settings = readySettings();
+  data.configuration.settings.setup.chatgpt.verified!.buildId = "4".repeat(64);
+  vi.mocked(f.api.bootstrap).mockResolvedValue(data);
+  let observations = 0;
+  vi.mocked(f.api.configure).mockImplementation(async (command) => {
+    if (command.kind === "chatgpt.observe-sign-in")
+      return signInReply(
+        command,
+        ++observations === 1 ? "unknown" : "authenticated",
+        { status: "ready", settings: data.configuration.settings },
+      );
+    if (command.kind === "chatgpt.verify") {
+      const settings = structuredClone(data.configuration.settings);
+      settings.revision++;
+      settings.setup.chatgpt.verified!.buildId = data.build.buildId;
+      return {
+        ok: true,
+        snapshot: { status: "ready", settings },
+        evidence: {
+          kind: "chatgpt.readiness",
+          state: "authenticated",
+          code: null,
+        },
+      };
+    }
+    throw Error("unexpected effect");
+  });
+  const c = new WindowController(f.api);
+  try {
+    await c.start();
+    f.emit("route", { state: "loaded" });
+    await vi.advanceTimersByTimeAsync(600);
+    expect(c.getSnapshot().setupSignInCheck).toBeTruthy();
+    expect(setupChecklist(c.getSnapshot()).entries[0]?.state).toBe("verified");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(
+      vi
+        .mocked(f.api.configure)
+        .mock.calls.filter(([command]) => command.kind === "chatgpt.verify"),
+    ).toHaveLength(1);
+    expect(
+      vi
+        .mocked(f.api.configure)
+        .mock.calls.some(
+          ([command]) => command.kind === "connector.verify-app",
+        ),
+    ).toBe(false);
+  } finally {
+    c.dispose();
+    vi.useRealTimers();
+  }
+});
