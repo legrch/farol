@@ -29,6 +29,7 @@ async function ownedDirectory(directory) {
     (await fs.realpath(directory)) !== directory
   )
     throw new Error("DEV_CORE_DIRECTORY_UNSAFE");
+  return info;
 }
 
 async function readOwnedFile(file, maximum) {
@@ -73,6 +74,43 @@ async function publishReceipt(output, destination, value) {
   } finally {
     await fs.rm(temporary, { force: true });
   }
+}
+
+async function removeRetiredImage(output, receipt) {
+  if (receipt?.schema !== 3 || receipt.retired === null) return;
+  const retired = receipt.retired;
+  if (
+    !retired ||
+    typeof retired.name !== "string" ||
+    !/^\.dev-core-retired-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(
+      retired.name,
+    ) ||
+    !/^[0-9]+$/u.test(retired.device) ||
+    !/^[0-9]+$/u.test(retired.inode)
+  )
+    throw new Error("DEV_CORE_RETIRED_INVALID");
+  const directory = path.join(output, retired.name);
+  let info;
+  try {
+    info = await ownedDirectory(directory);
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  if (String(info.dev) !== retired.device || String(info.ino) !== retired.inode)
+    throw new Error("DEV_CORE_RETIRED_CHANGED");
+  // The complete image was atomically moved here before cleanup. Its retained
+  // directory identity permits resuming a partially completed recursive removal.
+  await fs.rm(directory, { recursive: true });
+}
+
+function settledReceipt(previous) {
+  const {
+    previousTreeDigest: _previous,
+    retired: _retired,
+    ...settled
+  } = previous;
+  return { ...settled, schema: 1 };
 }
 
 export async function prepareDevCoreResources(root) {
@@ -130,11 +168,11 @@ export async function prepareDevCoreResources(root) {
     // A pending publication records both complete images BEFORE retiring the
     // old one. Only either recorded image is recoverable; other edits refuse.
     if (
-      ![1, 2].includes(previous?.schema) ||
+      ![1, 2, 3].includes(previous?.schema) ||
       previous.root !== bundle ||
       (observedDigest !== previous.treeDigest &&
         !(
-          previous.schema === 2 &&
+          [2, 3].includes(previous.schema) &&
           observedDigest === previous.previousTreeDigest
         ))
     )
@@ -155,15 +193,19 @@ export async function prepareDevCoreResources(root) {
       verifyDevSignature(
         path.join(bundle, "Contents/Frameworks/Farol Dev.app"),
       );
-      if (previous.schema === 2) {
-        const { previousTreeDigest: _retired, ...settled } = previous;
-        await publishReceipt(output, receiptPath, { ...settled, schema: 1 });
+      await removeRetiredImage(output, previous);
+      if ([2, 3].includes(previous.schema)) {
+        await publishReceipt(output, receiptPath, settledReceipt(previous));
       }
       return destination;
     }
-  } else if (previous && (previous.schema !== 2 || previous.root !== bundle)) {
+  } else if (
+    previous &&
+    (![2, 3].includes(previous.schema) || previous.root !== bundle)
+  ) {
     throw new Error("DEV_CORE_RESOURCES_MISSING");
   }
+  await removeRetiredImage(output, previous);
   const staging = await fs.mkdtemp(path.join(output, ".dev-core-"));
   let published = false;
   try {
@@ -208,19 +250,35 @@ export async function prepareDevCoreResources(root) {
       if ((await treeDigest(bundle)) !== observedDigest)
         throw new Error("DEV_CORE_RESOURCES_CHANGED");
     }
-    await publishReceipt(output, receiptPath, {
-      ...receipt,
-      schema: 2,
-      previousTreeDigest: observedDigest,
-    });
+    let retired = null;
     if (present) {
-      await ownedDirectory(bundle);
-      if ((await treeDigest(bundle)) !== observedDigest)
+      const info = await ownedDirectory(bundle);
+      retired = {
+        name: `.dev-core-retired-${randomUUID()}`,
+        device: String(info.dev),
+        inode: String(info.ino),
+      };
+    }
+    const transition = {
+      ...receipt,
+      schema: 3,
+      previousTreeDigest: observedDigest,
+      retired,
+    };
+    await publishReceipt(output, receiptPath, transition);
+    if (present) {
+      const info = await ownedDirectory(bundle);
+      if (
+        (await treeDigest(bundle)) !== observedDigest ||
+        String(info.dev) !== retired.device ||
+        String(info.ino) !== retired.inode
+      )
         throw new Error("DEV_CORE_RESOURCES_CHANGED");
-      await fs.rm(bundle, { recursive: true });
+      await fs.rename(bundle, path.join(output, retired.name));
     }
     await fs.rename(staging, bundle);
     published = true;
+    await removeRetiredImage(output, transition);
     await publishReceipt(output, receiptPath, receipt);
     return destination;
   } finally {

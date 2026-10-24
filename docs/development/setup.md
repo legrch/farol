@@ -84,7 +84,9 @@ vendor runtime beside it. The running desktop retains its separate Dev display
 bundle and profile. The Go host applies the same resource, runtime, protected-root
 and Shell support checks used for a package; workspace scope, Commands and task
 grants still apply to every command. Unexpected changes to the prepared tree
-refuse launch rather than being repaired or disabling Shell. No package install,
+refuse launch rather than being repaired or disabling Shell. A replacement first
+atomically retires the previous complete image; interrupted recursive cleanup
+resumes only for the recorded retired directory identity. No package install,
 credential import or profile reset is involved.
 
 `task dev -- --check` validates and builds without launching or changing profiles;
