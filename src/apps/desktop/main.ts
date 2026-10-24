@@ -7412,6 +7412,12 @@ async function configureAdmittedProduct(
         return ProductConfigurationResultSchema.parse(stopped);
       } finally {
         connectorTaskAdmission = false;
+        // Observe the acknowledged stop now. The passive transport timer runs
+        // every 30 seconds; presentation must not wait for its next tick.
+        void connectorConnection
+          .sample()
+          .then(currentConnectionStatus)
+          .catch(() => undefined);
       }
     }
     case "host.select-codex": {
