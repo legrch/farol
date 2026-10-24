@@ -215,16 +215,16 @@ export function setupStepCheck(
     state === "success"
       ? successCopy[step]
       : state === "unknown"
-        ? `${label} result could not be confirmed. Refresh its saved result; do not repeat the action.`
+        ? `${label}: the last result could not be confirmed. Refresh status to read it — don’t repeat the action.`
         : state === "pending"
-          ? `${label} check is still in progress. Wait for its result.`
+          ? `${label} check in progress. The result appears here when it finishes.`
           : state === "refused"
             ? refusalCause
             : state === "stale"
               ? staleCopy[step]
               : step === "signin" && observation?.state === "unknown"
                 ? "Farol could not read your ChatGPT sign-in status. Choose Check again to read the current session."
-                : `${label} has no current confirmed check. Complete this step before continuing.`;
+                : `${label} isn’t checked yet. Finish this step to continue.`;
   return {
     state,
     allowed: state === "success",

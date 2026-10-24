@@ -60,10 +60,10 @@
 }
 .setup-progress {
   list-style: none;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 14px;
-  padding: 0 0 12px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  padding: 10px 0 12px;
   margin: 0 0 22px;
   border-bottom: 1px solid var(--line);
   font-size: 12px;
@@ -72,32 +72,62 @@
   top: 0;
   z-index: 3;
   background-color: var(--bg);
-  padding-top: 10px;
   box-shadow: 0 -10px 0 var(--bg);
   isolation: isolate;
 }
+/* Each step is a column with a state bar on top: done, current, then pending. */
+.setup-progress li {
+  display: block;
+  min-width: 0;
+}
 .setup-progress-step {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-height: 28px;
-  padding: 3px 5px;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  width: 100%;
+  min-height: 36px;
+  padding: 9px 6px 6px;
   border: 0;
-  border-radius: 5px;
+  border-top: 2px solid var(--line);
+  border-radius: 0;
   color: inherit;
   background: transparent;
   text-align: left;
+  line-height: 1.35;
+  overflow-wrap: break-word;
+  hyphens: none;
 }
-.setup-progress-step:hover {
+.setup-progress-step > span {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--button);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.setup-progress-step:hover:not(:disabled) {
   color: var(--fg);
   background: var(--hover);
+}
+.setup-progress li[data-check-state="verified"] .setup-progress-step {
+  border-top-color: var(--good);
+}
+.setup-progress li[data-check-state="verified"] .setup-progress-step > span {
+  color: var(--sheet);
+  background: var(--good);
 }
 .setup-progress-step[aria-current="step"] {
   font-weight: 600;
   color: var(--fg);
+  border-top-color: var(--accent);
 }
-.setup-progress li[data-check-state="verified"] .setup-progress-step > span {
-  color: var(--good);
+.setup-progress-step[aria-current="step"] > span {
+  color: var(--sheet);
+  background: var(--accent);
 }
 .setup-wizard-footer {
   position: sticky;
@@ -110,27 +140,31 @@
 }
 @container (max-width: 460px) {
   .setup-progress {
-    gap: 12px;
+    gap: 4px;
+  }
+  .setup-progress-step {
+    flex-direction: column;
+    gap: 4px;
   }
   .setup-wizard-intro h1 {
     font-size: 24px;
   }
 }
+/* Row: name and path, then controls; the check result and Remove share line two. */
 .setup-workspace-row {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 16px;
-  padding: 22px 0;
+  gap: 12px 20px;
+  padding: 20px 0;
   border-bottom: 1px solid var(--line);
 }
 .workspace-row-path {
-  flex: 1 1 220px;
   min-width: 0;
 }
 .workspace-row-path p {
   overflow-wrap: anywhere;
-  margin-top: 6px;
+  margin-top: 4px;
 }
 .setup-workspace-row label {
   display: flex;
@@ -139,14 +173,56 @@
   font-size: 12px;
 }
 .workspace-row-result {
+  grid-column: 1 / 3;
   display: flex;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 6px 12px;
   align-items: center;
-  flex-basis: 100%;
+  min-width: 0;
   font-size: 12px;
+}
+.setup-workspace-row > .text-button {
+  grid-column: 3;
+  justify-self: end;
+  min-height: 28px;
+}
+.workspace-row-result .setup-success {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--good) 12%, transparent);
+  font-weight: 600;
+}
+@container (max-width: 520px) {
+  .setup-workspace-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .workspace-row-path,
+  .workspace-row-result {
+    grid-column: 1 / -1;
+  }
+  .setup-workspace-row > .text-button {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
 }
 .setup-success {
   color: var(--good);
+}
+/* Text-style buttons keep their padded hit area but align to the column edge. */
+.setup-wizard-footer > .subtle:first-child,
+.setup-workspaces + .subtle {
+  margin-left: -12px;
+}
+.setup-workspaces + .subtle {
+  margin-top: 4px;
+  margin-bottom: 8px;
+}
+.setup-test > .setup-success {
+  margin: 4px 0 8px;
+}
+.setup-test > .setup-success p {
+  margin-top: 2px;
+  color: var(--muted);
 }
 .setup-workspaces {
   margin-bottom: 20px;
@@ -267,7 +343,7 @@
 }
 .setup-app-values > div {
   display: grid;
-  grid-template-columns: 100px minmax(0, 1fr);
+  grid-template-columns: 140px minmax(0, 1fr);
   padding: 10px 0;
   border-bottom: 1px solid var(--line);
 }
@@ -281,36 +357,66 @@
 .setup-test {
   margin-top: 30px;
 }
+/* Status cards: a state dot beside the title, then cause, then one action. */
 .setup-result {
+  --state: var(--muted);
+  position: relative;
   margin: 20px 0;
-  padding: 14px 16px;
+  padding: 14px 16px 14px 36px;
   border: 1px solid var(--line);
-  border-left: 3px solid var(--muted);
   border-radius: 8px;
   background: var(--rail);
   line-height: 1.55;
 }
+.setup-result::before {
+  content: "";
+  position: absolute;
+  left: 16px;
+  top: 20px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--state);
+}
 .setup-result > strong {
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   font-size: 13px;
   font-weight: 600;
 }
 .setup-result > p {
   color: var(--muted);
   max-width: 64ch;
+  overflow-wrap: break-word;
 }
 .setup-result[data-result-state="success"] {
-  border-left-color: var(--good);
+  --state: var(--good);
+}
+.setup-result[data-result-state="pending"] {
+  --state: var(--accent);
 }
 .setup-result[data-result-state="refused"],
 .setup-result[data-result-state="unknown"],
 .setup-action-error {
-  border-left-color: var(--warn);
+  --state: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 35%, var(--line));
+}
+.setup-action-error::before {
+  top: 19px;
 }
 .setup-result > button {
-  margin-top: 8px;
-  padding-left: 0;
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  margin-top: 10px;
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--sheet);
+  white-space: nowrap;
+}
+.setup-result > button:hover:not(:disabled) {
+  background: var(--hover);
 }
 .setup-test > .description {
   margin: 8px 0 16px;
@@ -386,9 +492,6 @@
 }
 .settings-setup-status .description {
   margin-top: 8px;
-}
-.setup-progress li {
-  display: block;
 }
 .setup-wizard [aria-label="ChatGPT sign-in"] > .description {
   max-width: 58ch;

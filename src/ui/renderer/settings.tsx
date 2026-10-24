@@ -559,10 +559,10 @@ export function Settings({
                   : gate.state === "pending"
                     ? "Checking…"
                     : gate.state === "unknown"
-                      ? "Check the last result"
+                      ? "Result unconfirmed"
                       : gate.state === "refused"
-                        ? "This step needs attention"
-                        : "Your next step"}
+                        ? "Needs attention"
+                        : "Not checked yet"}
               </strong>
               <p>{gate.cause}</p>
               {gate.action && (
@@ -1720,7 +1720,7 @@ function AddToChatGPT({
               : gate.state === "pending"
                 ? "Checking the connection…"
                 : gate.state === "unknown"
-                  ? "The last result needs checking"
+                  ? "Result unconfirmed"
                   : gate.state === "refused"
                     ? "The check stopped"
                     : "Ready when your app is added"}
@@ -1776,7 +1776,7 @@ function AddToChatGPT({
           </>
         ) : (
           <>
-            {!failed && (
+            {!failed && gate.state !== "pending" && (
               <p className="description">
                 {nameChanged
                   ? "Save the app name above before preparing a new test."
