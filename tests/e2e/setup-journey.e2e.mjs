@@ -23,6 +23,7 @@ import {
   openSetup,
   setupStep,
   connectMac,
+  disconnectMac,
   readSetupSettings,
 } from "./current-react-setup.mjs";
 import {
@@ -597,6 +598,37 @@ async function runScenario(scenario) {
     );
     report.finalState = "Home";
     report.sendCount = sendCount;
+    await save();
+    // Exercise the existing production Disconnect action once after completed
+    // Setup. Observe the same stop; never reconnect or send another message.
+    await setupStep(page, "connection");
+    const stopped = await disconnectMac(page);
+    assert.equal(stopped.connectors.secureMcp.runtime, null);
+    assert.equal(stopped.connectors.secureMcp.attachment, null);
+    await page
+      .locator('.setup-page[data-setup-step="connection"]')
+      .getByRole("button", { name: "Connect", exact: true })
+      .waitFor({ state: "visible" });
+    assert.equal(
+      await page
+        .getByRole("button", { name: "Disconnect", exact: true })
+        .count(),
+      0,
+    );
+    assert.equal(sendCount, 1);
+    const observation = await poll(
+      () => page.evaluate(() => window.farol.bootstrap()),
+      (value) => value.connectionStatus?.state === "stopped",
+      "SETUP_DISCONNECT_STATUS_NOT_STOPPED",
+    );
+    report.disconnect = {
+      clicks: 1,
+      runtime: null,
+      attachment: null,
+      state: observation.connectionStatus.state,
+      label: observation.connectionStatus.label,
+      sendCount,
+    };
     await save();
     await quit();
     report.status = "passed-fixture-setup";
