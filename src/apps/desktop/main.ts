@@ -35,6 +35,7 @@ import {
   ABOUT_PANEL_SIZE,
   DesktopAboutPanel,
 } from "../../../apps/desktop/about-panel";
+import { connectorRuntimeUncertain } from "../../pkg/product-settings/connector-uncertainty";
 import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
 import { connectorVerificationProof } from "./connector-verification-proof";
 import {
@@ -4432,7 +4433,7 @@ function captureConnectorTransport(): ConnectorTransportCapture | null {
     connector.hasUnresolvedEffect() ||
     settings.computer.pendingEdit ||
     settings.setup.computer.outcomeUnknown ||
-    settings.setup.connect.outcomeUnknown ||
+    connectorRuntimeUncertain(settings) ||
     selected.credential !== "stored" ||
     !runtime ||
     runtime.state === "outcome_unknown" ||
@@ -4485,7 +4486,7 @@ function connectorTransportCurrent(
       original.connectorGeneration ||
     snapshot.settings.computer.pendingEdit ||
     snapshot.settings.setup.computer.outcomeUnknown ||
-    snapshot.settings.setup.connect.outcomeUnknown ||
+    connectorRuntimeUncertain(snapshot.settings) ||
     snapshot.settings.connectors.secureMcp.credential !== "stored" ||
     !computerConnectorAdmission(summaryFenceRecovery).admissible ||
     (admitted
@@ -4710,7 +4711,7 @@ function captureConnectorStop(): Pick<
     state?.status !== "ready" ||
     quitInProgress ||
     installedUpdateAdmission ||
-    state.settings.setup.connect.outcomeUnknown ||
+    connectorRuntimeUncertain(state.settings) ||
     state.settings.computer.pendingEdit !== null ||
     state.settings.setup.computer.outcomeUnknown ||
     workspaceMutationAdmission ||
@@ -4771,7 +4772,7 @@ function ownerStoppedCurrent(original: OwnerStoppedCapture): boolean {
     connectorGeneration: state.settings.connectors.secureMcp.generation,
     backendAvailable: core.backendAvailable,
     stoppedSettings: state.settings.connectors.secureMcp.runtime === null,
-    setupOutcomeUnknown: state.settings.setup.connect.outcomeUnknown,
+    setupOutcomeUnknown: connectorRuntimeUncertain(state.settings),
     settingsEditPending: state.settings.computer.pendingEdit !== null,
     settingsOutcomeUnknown: state.settings.setup.computer.outcomeUnknown,
     workspaceMutationInProgress: workspaceMutationAdmission,
@@ -5163,9 +5164,7 @@ async function startAdmittedSecureMcpConnector(
   const retained = configuration.snapshot();
   if (
     retained.status === "ready" &&
-    (retained.settings.connectors.secureMcp.runtime?.state ===
-      "outcome_unknown" ||
-      retained.settings.setup.connect.outcomeUnknown)
+    connectorRuntimeUncertain(retained.settings)
   )
     return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
   // A start whose fence recovery could hold no record leaves the broker
@@ -5201,10 +5200,7 @@ async function startAdmittedSecureMcpConnector(
     return configurationFailure("SETTINGS_UNAVAILABLE");
   }
   const connector = snapshot.settings.connectors.secureMcp;
-  if (
-    connector.runtime?.state === "outcome_unknown" ||
-    snapshot.settings.setup.connect.outcomeUnknown
-  )
+  if (connectorRuntimeUncertain(snapshot.settings))
     return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
   if (!connector.tunnelClient || !connector.tunnelId) {
     return configurationFailure("CONNECTOR_CONFIGURE_FAILED");
@@ -6738,9 +6734,7 @@ async function configureDrainedWorkspaceChange(
         snapshot.settings.computer.generation === computerGeneration &&
         snapshot.settings.connectors.secureMcp.generation ===
           connectorGeneration &&
-        !snapshot.settings.setup.connect.outcomeUnknown &&
-        snapshot.settings.connectors.secureMcp.runtime?.state !==
-          "outcome_unknown"
+        !connectorRuntimeUncertain(snapshot.settings)
       );
     };
     const drain = new WorkspaceConfigurationDrain(command, {
@@ -7357,9 +7351,7 @@ async function configureAdmittedProduct(
       const current = configuration.snapshot();
       if (
         current.status === "ready" &&
-        (current.settings.connectors.secureMcp.runtime?.state ===
-          "outcome_unknown" ||
-          current.settings.setup.connect.outcomeUnknown)
+        connectorRuntimeUncertain(current.settings)
       )
         return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
       if (!secureMcpConnectorRuntime) {

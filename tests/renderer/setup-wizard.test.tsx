@@ -193,7 +193,7 @@ describe("linear Setup", () => {
     expect(h.host.querySelectorAll(".setup-welcome li")).toHaveLength(4);
     expect(h.host.querySelector(".contextual-sidebar")).toBeNull();
     expect(h.host.querySelector(".rail")).toBeTruthy();
-    expect(h.host.querySelector(".setup-progress")).toBeNull();
+    expect(h.host.querySelector(".setup-progress")).toBeTruthy();
     expect(h.button("Start setup")).toBeTruthy();
     expect(h.button("Read the setup guide")).toBeTruthy();
     expect(h.f.api.configure).not.toHaveBeenCalled();
@@ -214,6 +214,7 @@ describe("linear Setup", () => {
     expect(
       [...line.querySelectorAll("li")].map((x) => x.textContent?.trim()),
     ).toEqual([
+      "Overview",
       "✓ Sign in",
       "2 Workspaces",
       "✓ Connect this Mac",
@@ -222,7 +223,7 @@ describe("linear Setup", () => {
     expect(line.querySelector('[aria-current="step"]')?.textContent).toContain(
       "Workspaces",
     );
-    expect(line.querySelectorAll("button")).toHaveLength(4);
+    expect(line.querySelectorAll("button")).toHaveLength(5);
     expect(h.host.querySelector(".contextual-sidebar")).toBeNull();
     expect(h.host.querySelector(".rail")).toBeTruthy();
     expect(h.host.querySelectorAll("details")).toHaveLength(0);

@@ -811,3 +811,14 @@ describe("confirmed same-session update abort recovery (injected connector, no l
     expect(resumeConnector).not.toHaveBeenCalled();
   });
 });
+
+it("resumes known local runtime without replaying an uncertain external app check", () => {
+  const settings = configured();
+  settings.setup.connect.outcomeUnknown = true;
+  expect(check(settings)).toBe(false);
+  settings.connectors.secureMcp.appVerificationPending = true;
+  expect(check(settings)).toBe(true);
+  expect(settings.setup.connect.outcomeUnknown).toBe(true);
+  settings.connectors.secureMcp.runtime!.state = "outcome_unknown";
+  expect(check(settings)).toBe(false);
+});

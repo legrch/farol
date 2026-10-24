@@ -324,14 +324,7 @@ export function Settings({
       ) {
         await facade.refresh();
         if (setupStep === "signin") {
-          const check = setupStepCheck(
-            facade.getSnapshot(),
-            "signin",
-            false,
-            retainedSetupIntents(facade, facade.getSnapshot()),
-          );
-          if (check.state !== "unknown" && check.state !== "pending")
-            facade.refreshSignInStatus?.();
+          facade.refreshSignInStatus?.();
         }
         return;
       }

@@ -1,9 +1,10 @@
+import { connectorRuntimeUncertain } from "../../pkg/product-settings/connector-uncertainty";
 import { ProductConfigurationCommandSchema } from "../../pkg/product-settings/contract";
 import type { ProductConfigurationCommand } from "../../pkg/product-settings/contract";
 import type { Intent, WindowSnapshot } from "./contract";
 
 type Kind = ProductConfigurationCommand["kind"];
-type Dependency = "computer" | "chat" | "model" | "shared";
+type Dependency = "computer" | "chat" | "model" | "attachment" | "shared";
 const kinds = new Set<string>(
   ProductConfigurationCommandSchema.options.map(
     (option) => option.shape.kind.value,
@@ -31,6 +32,9 @@ function intentDependency(id: string): Dependency {
   const match = /^settings:([^:]+):([^:]*)$/u.exec(id);
   if (!match || !kinds.has(match[1]!)) return "shared";
   const kind = match[1] as Kind;
+  // This command's uncertain external Send has its own durable pending flag.
+  // It is not evidence of an uncertain credential/settings write.
+  if (match[2] === "" && kind === "connector.verify-app") return "attachment";
   if (match[2] === "" && modelCommands.has(kind)) return "model";
   if (match[2] === "" && browserCommands.has(kind)) return "chat";
   // Computer/connector commands can save the shared document or withdraw its
@@ -38,6 +42,12 @@ function intentDependency(id: string): Dependency {
   return "shared";
 }
 function commandDependency(kind: Kind): Dependency {
+  if (
+    kind === "connector.verify-app" ||
+    kind === "connector.check-attachment" ||
+    kind === "connector.select-chatgpt-app"
+  )
+    return "attachment";
   if (modelCommands.has(kind)) return "model";
   if (browserCommands.has(kind) || kind.startsWith("chatgpt.")) return "chat";
   if (kind.startsWith("computer.") || kind.startsWith("connector."))
@@ -63,7 +73,8 @@ export function dependencyFences(
     settings &&
     (settings.computer.pendingEdit ||
       settings.setup.computer.outcomeUnknown ||
-      settings.setup.connect.outcomeUnknown ||
+      connectorRuntimeUncertain(settings) ||
+      (target === "attachment" && settings.setup.connect.outcomeUnknown) ||
       settings.setup.hosts.outcomeUnknown ||
       settings.setup.verify.outcomeUnknown ||
       settings.connectors.secureMcp.runtime?.state === "outcome_unknown" ||
@@ -74,8 +85,17 @@ export function dependencyFences(
     // refused receipt is not proof that its publication never happened.
     if (intent.code === "SETTINGS_WRITE_FAILED") unknown = true;
     if (intent.state !== "pending" && intent.state !== "unknown") return;
-    const source =
+    let source =
       key === intent.id && retained ? intentDependency(intent.id) : "shared";
+    if (
+      source === "attachment" &&
+      intent.state === "unknown" &&
+      !(
+        settings?.connectors.secureMcp.appVerificationPending === true &&
+        intent.code === "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN"
+      )
+    )
+      source = "shared";
     if (observingModel && source === "model") return;
     if (!conflicts(source, target)) return;
     pending ||= intent.state === "pending";

@@ -1,4 +1,5 @@
 import type { ProductSettings } from "../pkg/product-settings/contract";
+import { connectorRuntimeUncertain } from "../pkg/product-settings/connector-uncertainty";
 import { selectedConnectorApp } from "../pkg/product-settings/connector-app-selection";
 import { allFoldersChecked } from "./folder-access-state";
 import { onboardingFacts } from "./guided-onboarding";
@@ -44,14 +45,12 @@ export function setupCompletionChecks(
     buildId &&
     settings &&
     !settings.computer.pendingEdit &&
-    !Object.values(settings.setup).some(
-      (step) => "outcomeUnknown" in step && step.outcomeUnknown,
-    ) &&
-    runtime?.state !== "outcome_unknown",
+    !connectorRuntimeUncertain(settings),
   );
   const folders = Boolean(
     admissible &&
     settings &&
+    !settings.setup.computer.outcomeUnknown &&
     facts.folder === "ready" &&
     workspace &&
     verified?.buildId === buildId &&
@@ -70,6 +69,7 @@ export function setupCompletionChecks(
   return {
     signin: Boolean(
       admissible &&
+      !settings?.setup.chatgpt.outcomeUnknown &&
       observation?.state === "authenticated" &&
       !observation.pending &&
       observation.buildId === buildId &&
@@ -85,6 +85,7 @@ export function setupCompletionChecks(
     connection,
     attachment: Boolean(
       admissible &&
+      !settings?.setup.connect.outcomeUnknown &&
       facts.attachmentCurrent &&
       witness?.buildId === buildId &&
       witness.configRevision === connector?.generation &&

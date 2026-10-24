@@ -263,9 +263,15 @@ describe("rendered Setup gate", () => {
       expect(error).toBeNull();
       expect(status?.querySelectorAll("button")).toHaveLength(1);
       if (expected === "unknown" || expected === "pending") {
-        const submissions = vi.mocked(h.f.api.configure).mock.calls.length;
+        const effects = () =>
+          vi
+            .mocked(h.f.api.configure)
+            .mock.calls.filter(
+              ([command]) => command.kind !== "chatgpt.observe-sign-in",
+            );
+        const submissions = effects().length;
         await h.click("Refresh status");
-        expect(vi.mocked(h.f.api.configure)).toHaveBeenCalledTimes(submissions);
+        expect(effects()).toHaveLength(submissions);
         await h.remount(snapshot, facade);
         expect(
           h.button(step === "attachment" ? "Start using Farol" : "Continue")
@@ -275,7 +281,7 @@ describe("rendered Setup gate", () => {
           h.host.querySelector<HTMLElement>(".setup-gate-status")?.dataset
             .resultState,
         ).toBe(expected);
-        expect(vi.mocked(h.f.api.configure)).toHaveBeenCalledTimes(submissions);
+        expect(effects()).toHaveLength(submissions);
       }
     }
   });
@@ -699,6 +705,55 @@ describe("rendered Setup gate", () => {
         "Read the setup guide",
       );
       expect(h.button("Continue")?.disabled).toBe(true);
+    },
+  );
+});
+
+describe("independent Setup facts with an uncertain app Send", () => {
+  it.each(["signin", "folders", "connection"] as const)(
+    "%s stays confirmed while attachment remains blocked",
+    async (step) => {
+      const h = await mount({ step });
+      const snapshot = syntheticSnapshot(
+        h.c.getSnapshot(),
+        step,
+        "success-current",
+      );
+      if (snapshot.configuration?.status !== "ready")
+        throw Error("fixture missing");
+      const settings = snapshot.configuration.settings;
+      settings.setup.connect.outcomeUnknown = true;
+      settings.setup.connect.verified = null;
+      settings.connectors.secureMcp.attachment = null;
+      settings.connectors.secureMcp.appVerificationPending = true;
+      const pendingSnapshot = {
+        ...snapshot,
+        intents: {
+          "settings:connector.verify-app:": {
+            id: "settings:connector.verify-app:",
+            state: "unknown",
+            code: "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN",
+          },
+        },
+      } as WindowSnapshot;
+      expect(setupStepCheck(pendingSnapshot, step).allowed).toBe(true);
+      expect(setupStepCheck(pendingSnapshot, "attachment").state).toBe(
+        "unknown",
+      );
+      const facade = new Proxy(h.c, {
+        get(target, key) {
+          if (key === "getSnapshot") return () => pendingSnapshot;
+          const value = Reflect.get(target, key, target) as unknown;
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      }) as unknown as RendererFacade;
+      await h.renderSetup(pendingSnapshot, facade);
+      expect(h.button("Continue")?.disabled).toBe(false);
+      expect(
+        pendingSnapshot.intents["settings:connector.verify-app:"]?.state,
+      ).toBe("unknown");
+      settings.connectors.secureMcp.runtime!.state = "outcome_unknown";
+      expect(setupStepCheck(pendingSnapshot, step).allowed).toBe(false);
     },
   );
 });

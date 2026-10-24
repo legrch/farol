@@ -252,6 +252,8 @@ export const SecureMcpConnectorSchema = z.strictObject({
   // Explicit owner choice for embedded checks, never inferred from the build
   // environment or a legacy product name. Old settings have no app selection.
   chatgptApp: SecureMcpAppSelectionSchema.nullable().optional(),
+  // An uncertain external Send is independent of local connector lifecycle.
+  appVerificationPending: z.boolean().optional(),
   runtime: SecureMcpRuntimeSchema.nullable(),
   challenge: SecureMcpChallengeSchema.nullable().default(null),
   attachment: SecureMcpAttachmentSchema.nullable(),

@@ -130,6 +130,15 @@ export function SetupWalkthrough({
                 <li key={line}>{line}</li>
               ))}
             </ol>
+            {selected < cards.length - 1 && (
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => setSelected(selected + 1)}
+              >
+                Next instruction
+              </button>
+            )}
             <button
               type="button"
               className="text-button"

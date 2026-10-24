@@ -45,9 +45,18 @@ export function SetupNavigation({
 }) {
   const local = useSetupIntents(facade, snapshot);
   const selected = visibleSetupSection(snapshot.destination.setupStep);
-  if (selected === "overview") return null;
   return (
     <ol className="setup-progress" aria-label="Setup progress">
+      <li>
+        <button
+          type="button"
+          className="setup-progress-step"
+          aria-current={selected === "overview" ? "step" : undefined}
+          onClick={() => onNavigate("overview")}
+        >
+          Overview
+        </button>
+      </li>
       {setupChecklist(snapshot, inputsChanged, local).entries.map(
         (entry, index) => (
           <li key={entry.step} data-check-state={entry.state}>
@@ -114,17 +123,34 @@ export function Setup({ snapshot, facade }: Props) {
       {step === "overview" && (
         <section className="setup-welcome" aria-label="Setup overview">
           <ol>
-            <li>Sign in to ChatGPT</li>
-            <li>Choose workspaces</li>
-            <li>Connect this Mac</li>
-            <li>Add Farol to ChatGPT and test it</li>
+            {checklist.entries.map((entry) => (
+              <li key={entry.step} data-check-state={entry.state}>
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => navigateToStep(entry.step)}
+                >
+                  {entry.state === "verified" ? "✓ " : ""}
+                  {entry.label}
+                </button>
+              </li>
+            ))}
           </ol>
           <button
             type="button"
             className="primary"
-            onClick={() => navigateToStep("signin")}
+            onClick={() =>
+              navigateToStep(
+                checklist.entries.find((entry) => entry.state !== "verified")
+                  ?.step ?? "attachment",
+              )
+            }
           >
-            Start setup
+            {checklist.ready
+              ? "Review setup"
+              : checklist.entries.some((entry) => entry.state === "verified")
+                ? "Continue setup"
+                : "Start setup"}
           </button>
           <button
             type="button"

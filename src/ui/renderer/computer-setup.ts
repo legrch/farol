@@ -112,9 +112,17 @@ export function computerSetup(snapshot: WindowSnapshot) {
       configured &&
       runtimeIdentityCurrent &&
       (runtime?.state === "ready" || runtime?.state === "unreachable"),
-    canCheckAttachment: admissible && folderCurrent && facts.runtimeCurrent,
+    canCheckAttachment:
+      admissible &&
+      !facts.outcomeUnknown &&
+      folderCurrent &&
+      facts.runtimeCurrent,
     canVerifyEmbeddedApp:
-      admissible && folderCurrent && challengeCurrent && embedded === "ready",
+      admissible &&
+      !facts.outcomeUnknown &&
+      folderCurrent &&
+      challengeCurrent &&
+      embedded === "ready",
     next: unknown
       ? "Inspect the existing outcome. Do not repeat an unknown action."
       : pending

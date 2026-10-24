@@ -1040,10 +1040,13 @@ export function Shell() {
   const completedSteps = checklist.entries.filter(
     (entry) => entry.state === "verified",
   ).length;
-  const connected = computerSetup(state).ready;
+  const computer = computerSetup(state);
+  const connected = computer.ready;
   const connectionLabel = connected
     ? "Connected — ChatGPT can reach this Mac"
-    : "Not connected yet";
+    : computer.localConnectionCurrent
+      ? "Tunnel connected — app check pending"
+      : "Not connected yet";
   const sidebarLabel = expanded ? "Collapse sidebar" : "Expand sidebar";
   const updateRailLabel =
     state.update.phase === "available"
@@ -1274,6 +1277,10 @@ export function Shell() {
               {connected ? (
                 <>
                   Connected<small>ChatGPT can reach this Mac</small>
+                </>
+              ) : computer.localConnectionCurrent ? (
+                <>
+                  Tunnel connected<small>App check pending</small>
                 </>
               ) : (
                 "Not connected yet"

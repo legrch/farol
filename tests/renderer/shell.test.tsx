@@ -1,3 +1,4 @@
+import { readySettings } from "./setup-fixture";
 import { StrictMode, act, useLayoutEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
@@ -3281,3 +3282,25 @@ it.each(["starting", "offline", "failed"] as const)(
     expect(f.api.configure).toHaveBeenCalledTimes(1);
   },
 );
+
+it("shows a connected local tunnel separately from an uncertain app check", async () => {
+  const data = completedBootstrap();
+  const settings = readySettings();
+  settings.setup.connect.outcomeUnknown = true;
+  settings.connectors.secureMcp.appVerificationPending = true;
+  settings.setup.journey.dismissed = true;
+  data.configuration.settings = settings;
+  const h = await mount(data);
+  expect(h.host.textContent).toContain("Tunnel connected");
+  expect(h.host.textContent).not.toContain(
+    "Connected — ChatGPT can reach this Mac",
+  );
+  expect(
+    h.host.querySelector('[aria-label="Review unresolved actions"]'),
+  ).toBeTruthy();
+  expect(
+    vi
+      .mocked(h.f.api.configure)
+      .mock.calls.some(([command]) => command.kind === "connector.verify-app"),
+  ).toBe(false);
+});

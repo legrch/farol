@@ -59,6 +59,83 @@ describe("workspace stopped publication revision", () => {
     return { store, service, original };
   }
 
+  it("retains an uncertain app Send across independent session and runtime renewal", async () => {
+    const { store, service, original } = await connected();
+    const identity = {
+      runtimeGeneration: "b".repeat(64),
+      computerGeneration: original.settings.computer.generation,
+      buildId: "c".repeat(64),
+    };
+    expect(
+      (
+        await service.recordSecureMcpChallenge({
+          ...identity,
+          challenge: "00000000-0000-4000-8000-000000000099",
+        })
+      ).ok,
+    ).toBe(true);
+    expect(
+      (await service.recordSecureMcpAppPending(identity.runtimeGeneration)).ok,
+    ).toBe(true);
+    expect((await service.beginSecureMcpCredentialChange()).ok).toBe(false);
+    expect((await service.recordSecureMcpStopped()).ok).toBe(true);
+    expect(
+      (
+        await service.recordSecureMcpRuntime({
+          ...identity,
+          state: "ready",
+          runtimeGeneration: "d".repeat(64),
+        })
+      ).ok,
+    ).toBe(true);
+    const reopened = new ProductConfigurationService(store, dependencies());
+    await reopened.initialize();
+    const after = reopened.snapshot();
+    if (after.status !== "ready") throw Error("settings missing");
+    expect(after.settings.setup.connect.outcomeUnknown).toBe(true);
+    expect(after.settings.connectors.secureMcp.appVerificationPending).toBe(
+      true,
+    );
+    expect(after.settings.connectors.secureMcp.runtime?.state).toBe("ready");
+    expect(after.settings.connectors.secureMcp.attachment).toBeNull();
+    expect(
+      (
+        await reopened.selectSecureMcpChatGptApp({
+          name: "Farol Dev",
+          tunnelId: "synthetic",
+          connectorGeneration: after.settings.connectors.secureMcp.generation,
+        })
+      ).ok,
+    ).toBe(false);
+  });
+
+  it("separates only the intact legacy app-pending record without clearing its UNKNOWN", async () => {
+    const { store, service, original } = await connected();
+    const identity = {
+      runtimeGeneration: "b".repeat(64),
+      computerGeneration: original.settings.computer.generation,
+      buildId: "c".repeat(64),
+    };
+    await service.recordSecureMcpChallenge({
+      ...identity,
+      challenge: "00000000-0000-4000-8000-000000000099",
+    });
+    await service.recordSecureMcpAppPending(identity.runtimeGeneration);
+    const saved = await store.load();
+    if (!saved) throw Error("settings missing");
+    delete saved.connectors.secureMcp.appVerificationPending;
+    await store.save(saved);
+    const reopened = new ProductConfigurationService(store, dependencies());
+    await reopened.initialize();
+    const after = reopened.snapshot();
+    if (after.status !== "ready") throw Error("settings missing");
+    expect(after.settings.setup.connect.outcomeUnknown).toBe(true);
+    expect(after.settings.connectors.secureMcp.appVerificationPending).toBe(
+      true,
+    );
+    expect((await reopened.recordSecureMcpStopped()).ok).toBe(true);
+  });
+
   it("persists explicit empty-catalogue attachment without granting file access", async () => {
     const { store, service, original } = await connected();
     expect(original.settings.computer.workspaces).toEqual([]);

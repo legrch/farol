@@ -63,7 +63,11 @@ export function setupStepCheck(
       : null;
   const fence = dependencyFences(
     snapshot,
-    step === "signin" ? "chat" : "computer",
+    step === "signin"
+      ? "chat"
+      : step === "attachment"
+        ? "attachment"
+        : "computer",
     local,
   );
   const intents = [...Object.values(snapshot.intents), ...local].filter(

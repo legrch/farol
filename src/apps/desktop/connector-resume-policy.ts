@@ -2,6 +2,7 @@ import type {
   ProductConfigurationSnapshot,
   ProductSettings,
 } from "../../pkg/product-settings/contract";
+import { connectorRuntimeUncertain } from "../../pkg/product-settings/connector-uncertainty";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 
 /** Restore a confirmed, same-session update drain only after admission releases.
@@ -110,7 +111,7 @@ export function shouldResumeComputerConnector(
         settings.setup.connect.unavailable === "CONNECTOR_UPDATE_DRAINED")) &&
     connector.runtime.connectorGeneration === connector.generation &&
     connector.runtime.computerGeneration === settings.computer.generation &&
-    !settings.setup.connect.outcomeUnknown &&
+    !connectorRuntimeUncertain(settings) &&
     !settings.setup.computer.outcomeUnknown &&
     (settings.computer.workspaces.length === 0 ||
       (settings.setup.computer.reachable === "reachable" &&
@@ -143,7 +144,7 @@ function isOwnVerificationRefresh(
     (delta !== 0 && delta !== 1) ||
     after.nativeHosts.taskRoute !== null ||
     after.computer.pendingEdit !== null ||
-    after.setup.connect.outcomeUnknown ||
+    connectorRuntimeUncertain(after) ||
     after.setup.computer.outcomeUnknown ||
     after.setup.computer.reachable !== "reachable" ||
     check?.workspaceId !== workspaceId ||

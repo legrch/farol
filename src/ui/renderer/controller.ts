@@ -765,6 +765,7 @@ export class WindowController implements RendererFacade {
           this.presentation();
       }
       if (this.disposed) return;
+      if (this.state.route === "loaded") this.observeSignIn();
       const revision = this.updateRevision;
       try {
         const value = await this.api.installedUpdate({ kind: "status" });
@@ -959,7 +960,11 @@ export class WindowController implements RendererFacade {
     await this.refreshReadback();
   }
   refreshSignInStatus(): void {
-    if (!this.isSignInEntry() || this.state.signInObservation?.pending) return;
+    if (
+      !this.isSetupSignInObservationEntry() ||
+      this.state.signInObservation?.pending
+    )
+      return;
     this.observeSignIn();
   }
   async refreshReadback(): Promise<NativeRefreshResult> {
@@ -2193,7 +2198,7 @@ export class WindowController implements RendererFacade {
       destination = { ...destination, area: "settings" };
     if (destination.taskId !== undefined) this.taskSelectionRevision++;
     this.presentationRevision++;
-    const wasSignIn = this.isSetupSignInObservationEntry();
+    const wasSignIn = this.isSignInEntry();
     const next: Destination = {
       area: destination.area ?? this.state.destination.area,
       page: destination.page ?? this.state.destination.page,
@@ -2262,14 +2267,18 @@ export class WindowController implements RendererFacade {
     });
     this.presentation();
     this.presentBrowserOnNavigation();
-    if (!wasSignIn && this.isSetupSignInObservationEntry()) {
+    if (
+      this.isSetupSignInObservationEntry() &&
+      (!wasSignIn || this.state.signInObservation === null) &&
+      (this.isSignInEntry() || this.state.route === "loaded")
+    ) {
       this.invalidateSignInObservation();
       this.observeSignIn();
     }
   }
   travel(direction: -1 | 1): void {
     if (this.disposed || this.state.update.phase === "applying") return;
-    const wasSignIn = this.isSetupSignInObservationEntry();
+    const wasSignIn = this.isSignInEntry();
     const cursor = this.cursor + direction;
     if (cursor < 0 || cursor >= this.history.length) return;
     this.presentationRevision++;
@@ -2287,7 +2296,11 @@ export class WindowController implements RendererFacade {
     });
     this.presentation();
     this.presentBrowserOnNavigation();
-    if (!wasSignIn && this.isSetupSignInObservationEntry()) {
+    if (
+      this.isSetupSignInObservationEntry() &&
+      (!wasSignIn || this.state.signInObservation === null) &&
+      (this.isSignInEntry() || this.state.route === "loaded")
+    ) {
       this.invalidateSignInObservation();
       this.observeSignIn();
     }
@@ -2301,9 +2314,8 @@ export class WindowController implements RendererFacade {
   private isSetupSignInObservationEntry(): boolean {
     return (
       this.isSignInEntry() ||
-      (this.state.destination.area === "setup" &&
-        this.state.destination.setupStep === "attachment" &&
-        this.state.setupSignInCheck != null)
+      (this.state.configuration?.status === "ready" &&
+        this.state.configuration.settings.setup.chatgpt.verified !== null)
     );
   }
   private retireSignInObservation(): void {

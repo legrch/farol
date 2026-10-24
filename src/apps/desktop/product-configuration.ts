@@ -1,3 +1,4 @@
+import { connectorRuntimeUncertain } from "../../pkg/product-settings/connector-uncertainty";
 import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
@@ -532,7 +533,7 @@ function pendingConnectorReadiness(
     verified: null,
     needsAction: nextAction,
     unavailable: null,
-    outcomeUnknown: false,
+    outcomeUnknown: connector.appVerificationPending === true,
   };
 }
 
@@ -1235,6 +1236,37 @@ export class ProductConfigurationService {
       this.currentError = settingsError(error);
       return;
     }
+    // Older builds used the same flag for an external Send and a credential
+    // write. Only the exact pending-app record with an intact challenge can be
+    // separated. Unknown credentials/runtime effects keep their original fence.
+    const savedConnector = this.current.connectors.secureMcp;
+    const savedRuntime = savedConnector.runtime;
+    const savedChallenge = savedConnector.challenge;
+    if (
+      this.current.setup.connect.outcomeUnknown &&
+      savedConnector.appVerificationPending !== true &&
+      this.current.setup.connect.needsAction ===
+        "Check the pending ChatGPT connection result before sending another check." &&
+      savedRuntime?.state === "ready" &&
+      savedRuntime.connectorGeneration === savedConnector.generation &&
+      savedRuntime.computerGeneration === this.current.computer.generation &&
+      savedChallenge?.runtimeGeneration === savedRuntime.runtimeGeneration &&
+      savedChallenge.buildId === savedRuntime.buildId &&
+      savedChallenge.computerGeneration === savedRuntime.computerGeneration
+    ) {
+      const migrated = await this.mutate((settings) => ({
+        ...settings,
+        revision: settings.revision + 1,
+        connectors: {
+          ...settings.connectors,
+          secureMcp: {
+            ...settings.connectors.secureMcp,
+            appVerificationPending: true,
+          },
+        },
+      }));
+      if (!migrated.ok) return;
+    }
     // Settings saved before folder identities existed may still name a
     // verified workspace without one; withdraw that verification before any
     // consumer reads it, and persist the withdrawal like any other change.
@@ -1598,7 +1630,8 @@ export class ProductConfigurationService {
                 ? "Inspect the connector before deliberately starting it again."
                 : "Run connector repair, then check readiness again.",
             unavailable: null,
-            outcomeUnknown,
+            outcomeUnknown:
+              outcomeUnknown || current.appVerificationPending === true,
           },
         },
       };
@@ -1650,7 +1683,7 @@ export class ProductConfigurationService {
             needsAction:
               "Attach this connector in ChatGPT, run the one-time challenge, then check its receipt.",
             unavailable: null,
-            outcomeUnknown: false,
+            outcomeUnknown: current.appVerificationPending === true,
           },
         },
       };
@@ -1708,6 +1741,7 @@ export class ProductConfigurationService {
               challenge: null,
               attachment,
               lastVerifiedAttachment: attachment,
+              appVerificationPending: false,
             },
           },
           setup: {
@@ -2186,6 +2220,13 @@ export class ProductConfigurationService {
       return this.commit((settings) => ({
         ...settings,
         revision: settings.revision + 1,
+        connectors: {
+          ...settings.connectors,
+          secureMcp: {
+            ...settings.connectors.secureMcp,
+            appVerificationPending: true,
+          },
+        },
         setup: {
           ...settings.setup,
           connect: {
@@ -2238,6 +2279,13 @@ export class ProductConfigurationService {
         (current) => ({
           ...current,
           revision: current.revision + 1,
+          connectors: {
+            ...current.connectors,
+            secureMcp: {
+              ...current.connectors.secureMcp,
+              appVerificationPending: false,
+            },
+          },
           setup: {
             ...current.setup,
             connect: {
@@ -3246,11 +3294,7 @@ export class ProductConfigurationService {
   ): Promise<MutationResult> {
     return this.exclusive(() => {
       const current = this.current;
-      if (
-        current &&
-        (current.connectors.secureMcp.runtime?.state === "outcome_unknown" ||
-          current.setup.connect.outcomeUnknown)
-      )
+      if (current && connectorRuntimeUncertain(current))
         return Promise.resolve(
           this.failure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"),
         );
@@ -3401,7 +3445,11 @@ export class ProductConfigurationService {
       (originalRuntime?.state === "outcome_unknown" &&
         (runtimeChanged || pendingCleared)) ||
       (before.setup.connect.outcomeUnknown &&
-        (runtimeChanged ||
+        ((runtimeChanged &&
+          !(
+            before.connectors.secureMcp.appVerificationPending === true &&
+            candidate.connectors.secureMcp.appVerificationPending === true
+          )) ||
           (pendingCleared && !allowProvenAppPendingResolution)))
     )
       return this.failure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
