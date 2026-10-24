@@ -4,7 +4,10 @@ import { stripTypeScriptTypes } from "node:module";
 import { parse } from "@babel/parser";
 import { expect, it } from "vitest";
 import { createTotalOperationsRecorder } from "../../apps/desktop/operations/recorder";
-import { desktopCoreArtifactRoot } from "../../apps/desktop/dev-core-layout";
+import {
+  desktopCoreArtifactRoot,
+  desktopDevShellImageMatches,
+} from "../../apps/desktop/dev-core-layout";
 
 // Execute the actual desktop diagnostic sink and its selected callback values.
 // Child/native mechanics are covered separately with controlled producers;
@@ -235,26 +238,36 @@ it("passes compiled Shell and the protected root through the actual desktop call
     watchdogSource: new Uint8Array(),
   };
   for (const runtimeEnvironment of ["dev", "preview", "owner-preview"]) {
-    for (const packaged of [false, true]) {
-      const directory = packaged
-        ? "/synthetic/Farol.app/Contents/Resources/app"
-        : "/synthetic/repo/_output/build/app";
+    for (const layout of ["raw", "packaged", "protected"] as const) {
+      const directory =
+        layout === "packaged"
+          ? "/synthetic/Farol.app/Contents/Resources/app"
+          : layout === "protected"
+            ? "/synthetic/repo/_output/dev-core/Contents/Resources/app"
+            : "/synthetic/repo/_output/build/app";
+      const executable =
+        layout === "protected"
+          ? "/synthetic/repo/_output/dev-core/Contents/Frameworks/Farol Dev.app/Contents/MacOS/Electron"
+          : "/synthetic/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron";
       const actual = vm.runInNewContext(
         `({${stripTypeScriptTypes(root)},${stripTypeScriptTypes(shell)}})`,
         {
           desktopCoreArtifactRoot,
+          desktopDevShellImageMatches,
+          realpathSync: (value: string) => value,
+          process: { execPath: executable },
           compiledGoShell,
           runtimeEnvironment,
           directory,
           installedResourcesOrigin: undefined,
         },
       );
-      expect(actual.compiledShell).toBe(compiledGoShell);
-      expect(actual.artifactRoot).toBe(
-        runtimeEnvironment === "dev" && !packaged
-          ? "/synthetic/repo/_output/dev-core/Contents/Resources/app"
-          : directory,
+      expect(actual.compiledShell).toBe(
+        runtimeEnvironment === "dev" && layout !== "protected"
+          ? undefined
+          : compiledGoShell,
       );
+      expect(actual.artifactRoot).toBe(directory);
     }
   }
 });
@@ -292,6 +305,9 @@ it("uses the authenticated private image for the actual Go and Shell caller", ()
       `({${stripTypeScriptTypes(root)},${stripTypeScriptTypes(shell)}})`,
       {
         desktopCoreArtifactRoot,
+        desktopDevShellImageMatches,
+        realpathSync: (value: string) => value,
+        process: { execPath: "/owner-private/Farol.app/Contents/MacOS/Farol" },
         compiledGoShell,
         runtimeEnvironment,
         directory: "/Applications/Farol.app/Contents/Resources/app",
@@ -299,7 +315,9 @@ it("uses the authenticated private image for the actual Go and Shell caller", ()
       },
     );
     expect(value.artifactRoot).toBe(privateRoot);
-    expect(value.compiledShell).toBe(compiledGoShell);
+    expect(value.compiledShell).toBe(
+      runtimeEnvironment === "dev" ? undefined : compiledGoShell,
+    );
   }
 });
 

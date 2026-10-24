@@ -352,3 +352,63 @@ it("refuses retained core backend or watchdog paths independently of a fresh-rev
     ),
   ).toBe(false);
 });
+
+it("probes each retained executable with its matching entrypoint before stopping", () => {
+  const executables = [
+    `${root}/_output/dev-core/Contents/Frameworks/Farol Dev.app/Contents/MacOS/Electron`,
+    `${root}/_output/dev-runtime/Farol Dev.app/Contents/MacOS/Electron`,
+    executable,
+  ];
+  for (const selected of executables) {
+    const requests: { executable: string; appPath: string }[] = [];
+    const expectedApp =
+      selected === executables[0]
+        ? `${root}/_output/dev-core/Contents/Resources/app/main.cjs`
+        : scope.appPath;
+    const seen = control.inspectDevExecutable(
+      "controlled",
+      marker.pid,
+      root,
+      scope.profilePath,
+      3000,
+      (_binary: string, request: { executable: string; appPath: string }) => {
+        requests.push(request);
+        expect(request.appPath).toBe(
+          request.executable === executables[0]
+            ? `${root}/_output/dev-core/Contents/Resources/app/main.cjs`
+            : scope.appPath,
+        );
+        return request.executable === selected
+          ? { ...native, executable: selected, appPath: expectedApp }
+          : { status: "refused", reason: "WRITER_EXECUTABLE_MISMATCH" };
+      },
+    );
+    const retainedScope = { ...scope, appPath: expectedApp };
+    expect(
+      correlateDevCommand(
+        `501 ${marker.processStart} ${selected} ${expectedApp}`,
+        marker,
+        retainedScope,
+        seen,
+        10000,
+      ),
+    ).toMatchObject({ executable: selected, appPath: expectedApp });
+    expect(requests.at(-1)?.executable).toBe(selected);
+    const crossed = {
+      ...seen,
+      appPath:
+        selected === executables[0]
+          ? scope.appPath
+          : `${root}/_output/dev-core/Contents/Resources/app/main.cjs`,
+    };
+    expect(() =>
+      correlateDevCommand(
+        command,
+        marker,
+        { ...scope, appPath: crossed.appPath },
+        crossed,
+        10000,
+      ),
+    ).toThrow("executable");
+  }
+});

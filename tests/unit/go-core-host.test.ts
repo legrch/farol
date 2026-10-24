@@ -764,7 +764,7 @@ describe("normal Go host startup", () => {
   it("qualifies source Dev Shell from its launcher-owned protected resource layout", async () => {
     const input = shellSelection();
     const artifactRoot = desktopCoreArtifactRoot(
-      "/synthetic/repo/_output/build/app",
+      "/synthetic/repo/_output/dev-core/Contents/Resources/app",
       "dev",
     );
     const appRoot = "/synthetic/repo/_output/dev-core";

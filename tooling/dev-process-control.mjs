@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { devExecutables } from "./dev-runtime.mjs";
+import { devExecutables, devEntrypointForExecutable } from "./dev-runtime.mjs";
 import { resolvePhysicalDevDataDirectoryName } from "./harness-identity.ts";
 import { performance } from "node:perf_hooks";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
@@ -89,7 +89,10 @@ export function correlateDevCommand(line, marker, scope, native, bootTime) {
     throw Error(`DEV_PROCESS_IDENTITY_REFUSED: ${field}`);
   };
   const { executable, appPath, profilePath } = native;
-  if (!devExecutables(scope.writerRoot).includes(executable))
+  if (
+    !devExecutables(scope.writerRoot).includes(executable) ||
+    devEntrypointForExecutable(scope.writerRoot, executable) !== appPath
+  )
     refuse("executable");
   if (!match) refuse("ps UID/start/command format");
   if (match[3] === harnessDesktopIdentity("dev", "/").applicationName)
@@ -198,17 +201,18 @@ async function buildControl(root, buildArguments) {
   return buildDevControl(root, inputs);
 }
 
-function inspectDevExecutable(
+export function inspectDevExecutable(
   binary,
   pid,
   root,
-  appPath,
   profilePath,
   remaining = 3000,
+  observe = nativeCall,
 ) {
   const deadline = performance.now() + remaining;
   for (const executable of devExecutables(root)) {
-    const seen = nativeCall(
+    const appPath = devEntrypointForExecutable(root, executable);
+    const seen = observe(
       binary,
       { action: "inspect", pid, executable, appPath, profilePath },
       deadline - performance.now(),
@@ -306,16 +310,19 @@ export async function prepareDevBuild({
         binary,
         marker.marker.pid,
         writerRoot,
-        appPath,
         profilePath,
       );
       if (native.status === "present") {
+        const retainedScope = {
+          ...scope,
+          appPath: devEntrypointForExecutable(writerRoot, native.executable),
+        };
         let retained;
         try {
           retained = correlateDevCommand(
             command.text,
             marker.marker,
-            scope,
+            retainedScope,
             native,
             currentBootTimeMs(),
           );
@@ -336,7 +343,7 @@ export async function prepareDevBuild({
           const deadline = performance.now() + remaining;
           const observation = inspectDevStopIdentity({
             marker: marker.marker,
-            scope,
+            scope: retainedScope,
             native: () =>
               nativeCall(
                 binary,
@@ -344,7 +351,7 @@ export async function prepareDevBuild({
                   action: "inspect",
                   pid,
                   executable: retained.executable,
-                  appPath,
+                  appPath: retained.appPath,
                   profilePath,
                 },
                 deadline - performance.now(),
@@ -375,7 +382,7 @@ export async function prepareDevBuild({
         log(
           `Stopping the previous ${harnessDesktopIdentity("dev", "/").applicationName} before rebuilding its app outputs...`,
         );
-        const result = await stopRetainedDevProcess(retained, scope, {
+        const result = await stopRetainedDevProcess(retained, retainedScope, {
           clock: () => performance.now(),
           sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
           inspect,
@@ -431,7 +438,6 @@ export async function prepareDevBuild({
       await getControl(),
       Number(titled[1]),
       writerRoot,
-      appPath,
       profilePath,
     );
     if (!devInventoryCandidateAbsent(seen))
