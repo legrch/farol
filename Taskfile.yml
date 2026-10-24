@@ -88,6 +88,12 @@ tasks:
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/dev.mjs --fresh-review-profile {{.CLI_ARGS}}
 
+  e2e:setup:
+    desc: Build exact Dev bytes and check the fixture-only four-step Setup journey
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/dev.mjs --check
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tests/e2e/setup-journey.e2e.mjs {{.CLI_ARGS}}
+
   package:
     desc: Build, assemble, and verify the explicit unsigned Farol app
     cmds:
