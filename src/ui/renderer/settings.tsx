@@ -1535,6 +1535,7 @@ function AddToChatGPT({
     if (current.configuration?.status !== "ready") return false;
     return (
       computerSetup(current).canReconnect &&
+      !computerSetup(current).facts.outcomeUnknown &&
       current.configuration.settings.connectors.secureMcp.challenge === null &&
       !setupStepCheck(
         current,
@@ -1769,7 +1770,7 @@ function AddToChatGPT({
           </>
         ) : (
           <>
-            {!failed && (
+            {!failed && gate.state !== "unknown" && (
               <p className="description">
                 {nameChanged
                   ? "Save the app name above before preparing a new test."

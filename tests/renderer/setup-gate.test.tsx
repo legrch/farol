@@ -757,3 +757,34 @@ describe("independent Setup facts with an uncertain app Send", () => {
     },
   );
 });
+
+it("does not tell a returning user to repeat successful steps for a pending app test", async () => {
+  const value = readySettings();
+  value.setup.connect.outcomeUnknown = true;
+  value.connectors.secureMcp.appVerificationPending = true;
+  const h = await mount({ step: "attachment", value, signIn: "authenticated" });
+  await h.confirmSignIn();
+  expect(setupStepCheck(h.c.getSnapshot(), "connection").allowed).toBe(true);
+  expect(h.host.textContent).not.toContain(
+    "Finish sign-in, workspace and connection checks",
+  );
+  expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
+  expect(h.button("Prepare new test")).toBeUndefined();
+  const before = vi
+    .mocked(h.f.api.configure)
+    .mock.calls.filter(
+      ([command]) => command.kind === "connector.verify-app",
+    ).length;
+  await h.click("Refresh status");
+  expect(
+    vi
+      .mocked(h.f.api.configure)
+      .mock.calls.filter(
+        ([command]) => command.kind === "connector.verify-app",
+      ),
+  ).toHaveLength(before);
+  const after = h.c.getSnapshot().configuration;
+  expect(
+    after?.status === "ready" && after.settings.setup.connect.outcomeUnknown,
+  ).toBe(true);
+});
