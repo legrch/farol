@@ -490,6 +490,7 @@ describe("temporary Instant connector profile", () => {
     "GPT-6.1 Instant",
     "6Instant",
     "Thinking effort6 Instant",
+    "Thinking effort\n6 Instant",
   ])(
     "classifies only the public %s model control despite hidden thinking-effort text",
     (label) => {
@@ -570,54 +571,87 @@ describe("temporary Instant connector profile", () => {
     },
   );
 
-  it.each(["Instant", "6 Instant", "GPT-6.1 Instant", "6 Pro", "Instant Pro"])(
-    "rechecks the full selected model label before Send: %s",
-    (label) => {
-      let sends = 0;
-      class HTMLElement {
-        constructor(
-          readonly innerText = "",
-          readonly ariaLabel: string | null = null,
-        ) {}
-        getAttribute(name: string) {
-          return name === "aria-label" ? this.ariaLabel : null;
+  describe.each([false, true])(
+    "pre-Send temporary mode %s",
+    (temporaryMode) => {
+      it.each([
+        "Instant",
+        "6 Instant",
+        "GPT-6.1 Instant",
+        "Thinking effort\n6 Instant",
+        "6 Pro",
+        "Instant Pro",
+        "Thinking effort6 Instant",
+        "Thinking\n6 Instant",
+        "Thinking effort\n6 Pro",
+        "Thinking effort\n6 Thinking",
+        "Thinking effort\nInstant Pro",
+      ])("rechecks the full selected model label before Send: %s", (label) => {
+        let sends = 0;
+        class HTMLElement {
+          constructor(
+            readonly innerText = "",
+            readonly ariaLabel: string | null = null,
+          ) {}
+          get textContent() {
+            return this.innerText;
+          }
+          getAttribute(name: string) {
+            return name === "aria-label" ? this.ariaLabel : null;
+          }
+          getClientRects() {
+            return [1];
+          }
+          getBoundingClientRect() {
+            return { width: 100, height: 32 };
+          }
         }
-        getClientRects() {
-          return [1];
+        class HTMLButtonElement extends HTMLElement {
+          disabled = false;
+          click() {
+            sends++;
+          }
         }
-        getBoundingClientRect() {
-          return { width: 100, height: 32 };
-        }
-      }
-      class HTMLButtonElement extends HTMLElement {
-        disabled = false;
-        click() {
-          sends++;
-        }
-      }
-      const send = new HTMLButtonElement();
-      const model = new HTMLButtonElement(label, "Select ChatGPT model");
-      const result = vm.runInNewContext(
-        activateTaskScript("https://chatgpt.com/", undefined, false, true),
-        {
-          location: { href: "https://chatgpt.com/" },
-          URL,
-          HTMLElement,
-          HTMLButtonElement,
-          getComputedStyle: () => ({ display: "block", visibility: "visible" }),
-          document: {
-            querySelectorAll: () => [model],
-            querySelector: () => send,
+        const send = new HTMLButtonElement();
+        const model = new HTMLButtonElement(label, "Select ChatGPT model");
+        const href = temporaryMode
+          ? "https://chatgpt.com/?temporary-chat=true"
+          : "https://chatgpt.com/";
+        const controls = temporaryMode
+          ? [
+              model,
+              new HTMLButtonElement("", "Turn off temporary chat"),
+              new HTMLButtonElement("Personalized"),
+            ]
+          : [model];
+        const result = vm.runInNewContext(
+          activateTaskScript(href, undefined, temporaryMode, !temporaryMode),
+          {
+            location: { href },
+            URL,
+            HTMLElement,
+            HTMLButtonElement,
+            getComputedStyle: () => ({
+              display: "block",
+              visibility: "visible",
+            }),
+            document: {
+              querySelectorAll: () => controls,
+              querySelector: () => send,
+            },
           },
-        },
-      );
-      const instant = ["Instant", "6 Instant", "GPT-6.1 Instant"].includes(
-        label,
-      );
-      expect(result).toEqual(
-        instant ? { activated: true } : { profileLost: true },
-      );
-      expect(sends).toBe(instant ? 1 : 0);
+        );
+        const instant = [
+          "Instant",
+          "6 Instant",
+          "GPT-6.1 Instant",
+          "Thinking effort\n6 Instant",
+        ].includes(label);
+        expect(result).toEqual(
+          instant ? { activated: true } : { profileLost: true },
+        );
+        expect(sends).toBe(instant ? 1 : 0);
+      });
     },
   );
 
@@ -5441,12 +5475,15 @@ describe("ChatGPT embedded task surface", () => {
     expect(onConversationChanged).toHaveBeenCalledExactlyOnceWith(null);
   });
 
-  it.each(["Instant", "6 Instant", "GPT-6 Instant", "GPT-6.1 Instant"])(
-    "recognizes the complete selected Instant label %s",
-    (label) => {
-      expect(instantModelLabelPattern.test(label)).toBe(true);
-    },
-  );
+  it.each([
+    "Instant",
+    "6 Instant",
+    "GPT-6 Instant",
+    "GPT-6.1 Instant",
+    "Thinking effort\n6 Instant",
+  ])("recognizes the complete selected Instant label %s", (label) => {
+    expect(instantModelLabelPattern.test(label)).toBe(true);
+  });
   it.each([
     "Pro",
     "6 Pro",
@@ -5454,6 +5491,12 @@ describe("ChatGPT embedded task surface", () => {
     "Instant Pro",
     "Choose Instant",
     "6 Instant extra",
+    "Thinking effort6 Instant",
+    "Thinking\n6 Instant",
+    "Thinking effort\n6 Pro",
+    "Thinking effort\n6 Thinking",
+    "Thinking effort\nInstant Pro",
+    "Thinking effort\nThinking effort\n6 Instant",
   ])("refuses a different or ambiguous model label %s", (label) => {
     expect(instantModelLabelPattern.test(label)).toBe(false);
   });

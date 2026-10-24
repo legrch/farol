@@ -110,7 +110,7 @@ export async function startChatGptFixture(options = {}) {
         <button data-testid="expire-button" type="button" hidden>Expire session</button>
         <button data-testid="blocked-nav-button" type="button">Navigate off-policy</button>
         <button data-testid="next-page-button" type="button">Next</button>
-        ${setup ? `<button type="button" aria-label="Select ChatGPT model" onclick="document.querySelector('#setup-model-power').hidden=false">6 Instant</button><input id="setup-model-power" type="range" min="0" max="2" value="0" hidden><span data-testid="composer-app-chip" data-plugin-id="plugin_asdk_app_SetupFixture" data-app-name="${setup.appName}">${setup.appName}</span>` : ""}
+        ${setup ? `<button type="button" aria-label="Select ChatGPT model" onclick="document.querySelector('#setup-model-power').hidden=false"><span style="display:block">Thinking effort</span><span style="display:block">6 Instant</span></button><input id="setup-model-power" type="range" min="0" max="2" value="0" hidden><span data-testid="composer-app-chip" data-plugin-id="plugin_asdk_app_SetupFixture" data-app-name="${setup.appName}">${setup.appName}</span>` : ""}
         <div id="prompt-textarea" contenteditable="true" data-virtualkeyboard="true" aria-label="Message" hidden></div>
         <input data-testid="attachment-input" type="file" multiple hidden />
         <div id="attachment-chips"></div>

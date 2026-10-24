@@ -486,8 +486,9 @@ export const toggleChatGptSidebarScript = `(() => {
 // URL parameter or a saved ChatGPT preference as proof of the active mode.
 // The provider includes its generation in the selected model label. Match
 // only the whole Instant label, never a menu option or a Pro/Thinking label.
+// The selected control can prefix that label with its "Thinking effort" heading.
 export const instantModelLabelPattern =
-  /^(?:(?:GPT[- ]?)?\d+(?:\.\d+)?\s+)?Instant$/iu;
+  /^(?:Thinking\s+effort\s+)?(?:(?:GPT[- ]?)?\d+(?:\.\d+)?\s+)?Instant$/iu;
 
 export const temporaryInstantProfileProbe = `(() => {
   const visible = (element) => {

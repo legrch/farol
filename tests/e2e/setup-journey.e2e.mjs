@@ -439,6 +439,17 @@ async function runScenario(scenario) {
       (v) => v.setup.chatgpt.reachable === "reachable",
       "SETUP_SIGNIN_NOT_CONFIRMED",
     );
+    const selectedModelLabel = await application.evaluate(
+      ({ webContents }, id) =>
+        webContents
+          .fromId(id)
+          .executeJavaScript(
+            `document.querySelector('[aria-label="Select ChatGPT model"]').innerText`,
+          ),
+      browserId[0],
+    );
+    assert.equal(selectedModelLabel, "Thinking effort\n6 Instant");
+    report.fixtureModelLabel = selectedModelLabel;
     report.steps.signin = "PASS";
     await save();
     report.currentStep = "folders";
