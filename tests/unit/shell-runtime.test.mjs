@@ -122,6 +122,20 @@ describe("Shell nested runtime qualification", () => {
     });
     expect(Object.isFrozen(result)).toBe(true);
   });
+  it("checks complete multi-megabyte files and rejects a changed trailing byte", async () => {
+    const f = await fixture();
+    const bytes = Buffer.alloc(3 * 1024 * 1024 + 17, 0x5a);
+    await fs.writeFile(f.resource, bytes);
+    f.declaration.runtime.treeSHA256 = await treeDigest(f.runtime);
+    await expect(run(f)).resolves.toMatchObject({ path: f.app });
+    const handle = await fs.open(f.resource, "r+");
+    try {
+      await handle.write(Buffer.from([0x00]), 0, 1, bytes.length - 1);
+    } finally {
+      await handle.close();
+    }
+    await expect(run(f)).rejects.toMatchObject(refused);
+  });
   it.each([
     ["changed bytes", async (f) => fs.writeFile(f.resource, "changed")],
     [

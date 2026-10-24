@@ -148,7 +148,7 @@ export async function verifyCoreResources(
     )
       refuse();
     const observations: [string, BigIntStats][] = [];
-    const buffer = Buffer.alloc(64 * 1024);
+    const buffer = Buffer.alloc(1024 * 1024);
     for (const file of files) {
       checkTime();
       const target = path.join(root, file.path);

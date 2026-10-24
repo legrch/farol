@@ -113,7 +113,7 @@ export async function attestShellRuntime(
     let totalBytes = 0;
     let helperSHA: string | undefined;
     const helper = path.join(appRoot, support.watchdog.relativePath);
-    const buffer = Buffer.alloc(64 * 1024);
+    const buffer = Buffer.alloc(1024 * 1024);
 
     async function fileHash(
       file: string,
