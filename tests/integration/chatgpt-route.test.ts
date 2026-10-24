@@ -331,6 +331,10 @@ describe("temporary Instant connector profile", () => {
           modelReady: true,
           instant: false,
           visibleModelLabel: null,
+          modelControlCount: 0,
+          labelHasInstant: false,
+          labelHasThinkingEffort: false,
+          labelHasFormatMarks: false,
         },
         sliderReady: true,
         sliderAtMinimum: false,
@@ -480,7 +484,13 @@ describe("temporary Instant connector profile", () => {
     expect(route.personalizationOpens()).toBe(0);
   });
 
-  it.each(["Instant", "6 Instant", "GPT-6.1 Instant", "6Instant"])(
+  it.each([
+    "Instant",
+    "6 Instant",
+    "GPT-6.1 Instant",
+    "6Instant",
+    "Thinking effort6 Instant",
+  ])(
     "classifies only the public %s model control despite hidden thinking-effort text",
     (label) => {
       class HTMLElement {
@@ -528,7 +538,7 @@ describe("temporary Instant connector profile", () => {
         composerReady: true,
         temporary: true,
         personalized: true,
-        instant: label !== "6Instant",
+        instant: !["6Instant", "Thinking effort6 Instant"].includes(label),
         visibleModelLabel: label,
       });
     },

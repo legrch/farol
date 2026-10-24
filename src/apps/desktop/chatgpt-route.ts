@@ -510,8 +510,9 @@ export const temporaryInstantProfileProbe = `(() => {
   const personalized = controls.some((button) => /^Personalized$/u.test((button.textContent || "").trim()));
   const personalizationReady = controls.some((button) =>
     /^(Personalized|Unpersonalized)$/u.test((button.textContent || "").trim()));
-  const modelButton = controls.find((button) =>
+  const modelButtons = controls.filter((button) =>
     button.getAttribute("aria-label") === "Select ChatGPT model");
+  const modelButton = modelButtons[0];
   const instant = modelButton && new RegExp(${JSON.stringify(instantModelLabelPattern.source)}, "iu").test((modelButton.innerText || "").trim());
   // This is the selected public model control only. Retain a bounded label
   // solely when every token belongs to the known model vocabulary; redact
@@ -519,9 +520,13 @@ export const temporaryInstantProfileProbe = `(() => {
   const label = (modelButton?.innerText || "").trim();
   const visibleModelLabel = label.length <= 80 &&
     /(?:Instant|Thinking|Pro|Auto)/u.test(label) &&
-    /^(?:(?:ChatGPT|GPT|Instant|Thinking|Pro|Auto|Fast)|[0-9.\\s\\p{Cf} -])+$/u.test(label) ? label : null;
+    /^(?:(?:ChatGPT|GPT|Instant|Thinking|effort|Pro|Auto|Fast)|[0-9.\\s\\p{Cf} -])+$/u.test(label) ? label : null;
   return { composerReady: !!composer, draftPresent: draft.trim().length > 0,
-    temporary, personalized, personalizationReady, instant: !!instant, modelReady: !!modelButton, visibleModelLabel };
+    temporary, personalized, personalizationReady, instant: !!instant, modelReady: !!modelButton, visibleModelLabel,
+    modelControlCount: Math.min(modelButtons.length, 100),
+    labelHasInstant: /Instant/u.test(label),
+    labelHasThinkingEffort: /Thinking\\s*effort/iu.test(label),
+    labelHasFormatMarks: /\\p{Cf}/u.test(label) };
 })()`;
 
 export const openInstantPowerPickerScript = `(() => {
@@ -571,6 +576,10 @@ const temporaryInstantProfileSchema = z.object({
   instant: z.boolean(),
   modelReady: z.boolean(),
   visibleModelLabel: z.string().max(80).nullable().optional(),
+  modelControlCount: z.number().int().min(0).max(100).optional(),
+  labelHasInstant: z.boolean().optional(),
+  labelHasThinkingEffort: z.boolean().optional(),
+  labelHasFormatMarks: z.boolean().optional(),
 });
 const instantPowerSliderSchema = z.object({
   ready: z.boolean(),
@@ -1382,6 +1391,10 @@ export type ChatGptProfilePreparationDiagnostic = Readonly<{
     modelReady: boolean;
     instant: boolean;
     visibleModelLabel: string | null;
+    modelControlCount: number;
+    labelHasInstant: boolean;
+    labelHasThinkingEffort: boolean;
+    labelHasFormatMarks: boolean;
   }> | null;
   sliderReady: boolean;
   sliderAtMinimum: boolean;
@@ -2910,6 +2923,11 @@ export class ChatGptRoute {
               modelReady: result.data.modelReady,
               instant: result.data.instant,
               visibleModelLabel: result.data.visibleModelLabel ?? null,
+              modelControlCount: result.data.modelControlCount ?? 0,
+              labelHasInstant: result.data.labelHasInstant ?? false,
+              labelHasThinkingEffort:
+                result.data.labelHasThinkingEffort ?? false,
+              labelHasFormatMarks: result.data.labelHasFormatMarks ?? false,
             }
           : null;
         return result;
