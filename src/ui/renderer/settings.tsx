@@ -1499,7 +1499,10 @@ function SignInStep({ snapshot, facade, actions }: PageProps) {
     </section>
   );
 }
-const automaticAttachmentReads = new WeakMap<RendererFacade, string>();
+const automaticAttachmentReads = new WeakMap<
+  RendererFacade,
+  { binding: string; destination: Destination }
+>();
 
 function AddToChatGPT({
   settings,
@@ -1583,10 +1586,15 @@ function AddToChatGPT({
       !waitingForConfirmation ||
       !connector.appVerificationPending ||
       !canObserveConfirmation ||
-      automaticAttachmentReads.get(facade) === observationBinding
+      (automaticAttachmentReads.get(facade)?.binding === observationBinding &&
+        automaticAttachmentReads.get(facade)?.destination ===
+          snapshot.destination)
     )
       return;
-    automaticAttachmentReads.set(facade, observationBinding);
+    automaticAttachmentReads.set(facade, {
+      binding: observationBinding,
+      destination: snapshot.destination,
+    });
     void checkConfirmation();
   }, [
     waitingForConfirmation,
@@ -1594,6 +1602,7 @@ function AddToChatGPT({
     canObserveConfirmation,
     facade,
     observationBinding,
+    snapshot.destination,
     checkConfirmation,
   ]);
   function reviewConnection() {

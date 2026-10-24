@@ -566,6 +566,27 @@ describe("Add to ChatGPT", () => {
     expect(h.button("Start using Farol")?.disabled).toBe(true);
     expect(h.button("Test in ChatGPT")).toBeUndefined();
   });
+  it("reads confirmation again on return to step four without replaying its test", async () => {
+    const value = readySettings();
+    value.setup.connect.outcomeUnknown = true;
+    value.connectors.secureMcp.appVerificationPending = true;
+    const h = await mount({ step: "attachment", value });
+    const reads = () =>
+      vi
+        .mocked(h.f.api.configure)
+        .mock.calls.filter(([c]) => c.kind === "connector.check-attachment");
+    expect(reads()).toHaveLength(1);
+    await h.navigate("folders");
+    await h.navigate("attachment");
+    expect(reads()).toHaveLength(2);
+    expect(
+      vi
+        .mocked(h.f.api.configure)
+        .mock.calls.some(([c]) => c.kind === "connector.verify-app"),
+    ).toBe(false);
+    expect(h.configuration().settings.setup.connect.outcomeUnknown).toBe(true);
+    expect(h.button("Start using Farol")?.disabled).toBe(true);
+  });
   it("reviews this Mac's connection locally without changing its app or tunnel", async () => {
     const value = readySettings();
     value.setup.connect.outcomeUnknown = true;
