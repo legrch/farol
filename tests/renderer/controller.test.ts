@@ -4971,3 +4971,77 @@ it.each(["unknown", "signed_out"] as const)(
     }
   },
 );
+
+it.each(["runtime-event", "configuration-refresh"] as const)(
+  "reconciles a loaded saved session when readiness arrives via %s",
+  async (boundary) => {
+    const f = fixture();
+    const data = {
+      ...bootstrap(),
+      browserRouteState: { state: "loaded" as const },
+    };
+    data.configuration.settings = readySettings();
+    if (boundary === "configuration-refresh") data.runtimeState = "offline";
+    vi.mocked(f.api.bootstrap).mockResolvedValue(data);
+    vi.mocked(f.api.configure).mockImplementation(async (command) => {
+      if (command.kind === "chatgpt.observe-sign-in")
+        return signInReply(command, "authenticated", {
+          status: "ready",
+          settings: data.configuration.settings,
+        });
+      if (command.kind === "chatgpt.verify")
+        return {
+          ok: true,
+          snapshot: data.configuration,
+          evidence: {
+            kind: "chatgpt.readiness",
+            state: "authenticated",
+            code: null,
+          },
+        };
+      throw Error("unexpected effect");
+    });
+    const c = new WindowController(f.api);
+    try {
+      await c.start();
+      if (boundary === "runtime-event") {
+        await vi.waitFor(() =>
+          expect(setupChecklist(c.getSnapshot()).entries[0]?.state).toBe(
+            "verified",
+          ),
+        );
+        f.emit("runtime", {
+          state: "ready",
+          error: null,
+          identity: null,
+          embeddedNode: null,
+          embeddedElectron: null,
+        });
+      } else {
+        vi.mocked(f.api.bootstrap).mockResolvedValue({
+          ...data,
+          runtimeState: "ready",
+        });
+        await c.refresh();
+      }
+      await vi.waitFor(() =>
+        expect(setupChecklist(c.getSnapshot()).entries[0]?.state).toBe(
+          "verified",
+        ),
+      );
+      expect(c.getSnapshot().destination.area).not.toBe("chatgpt");
+      expect(f.api.task).not.toHaveBeenCalled();
+      expect(
+        vi
+          .mocked(f.api.configure)
+          .mock.calls.every(([command]) =>
+            ["chatgpt.observe-sign-in", "chatgpt.verify"].includes(
+              command.kind,
+            ),
+          ),
+      ).toBe(true);
+    } finally {
+      c.dispose();
+    }
+  },
+);

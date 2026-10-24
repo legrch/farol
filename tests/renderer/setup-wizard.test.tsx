@@ -368,10 +368,18 @@ describe("linear Setup", () => {
       const value = readySettings();
       value.setup.connect.outcomeUnknown = true;
       const h = await mount({ step, value });
-      const alert = h.host.querySelector('[role="alert"]')!;
+      const alert = h.host.querySelector(
+        step === "attachment"
+          ? '.setup-test [role="status"]'
+          : '[role="alert"]',
+      )!;
       expect(alert).toBeTruthy();
       expect(alert.querySelectorAll("button")).toHaveLength(1);
-      expect(alert.textContent).toContain("could not be confirmed");
+      expect(alert.textContent).toContain(
+        step === "attachment"
+          ? "No confirmed connection result"
+          : "could not be confirmed",
+      );
       expect(
         h.button(step === "attachment" ? "Start using Farol" : "Continue")
           ?.disabled,
@@ -508,7 +516,7 @@ describe("Add to ChatGPT", () => {
     });
     await h.click("Test in ChatGPT");
     await h.navigate("attachment");
-    const failure = h.host.querySelector('[role="alert"]')!;
+    const failure = h.host.querySelector('.setup-test [role="status"]')!;
     expect(failure.querySelectorAll("button")).toHaveLength(1);
     expect(failure.textContent).not.toContain("Diagnostics");
     expect(h.button("Start using Farol")?.disabled).toBe(true);
@@ -890,4 +898,44 @@ describe("automatic checks after removing a Setup folder", () => {
       }
     },
   );
+});
+
+it("shows local readiness separately from an unconfirmed app on Overview", async () => {
+  const value = readySettings();
+  value.setup.connect.outcomeUnknown = true;
+  value.connectors.secureMcp.appVerificationPending = true;
+  const h = await mount({ step: "overview", value, signIn: "authenticated" });
+  await h.confirmSignIn();
+  await h.navigate("overview");
+  expect(
+    h.host.querySelector(".setup-overview-summary")?.textContent,
+  ).toContain("3 of 4 steps ready");
+  expect(h.host.textContent).toContain(
+    "Your Mac is ready. Confirm the app in ChatGPT",
+  );
+  const rows = h.host.querySelectorAll(".setup-overview-step");
+  expect(rows).toHaveLength(4);
+  for (const row of rows)
+    expect(row.getAttribute("aria-describedby")).toBeTruthy();
+  expect(
+    h.host.querySelectorAll('.setup-welcome li[data-check-state="verified"]'),
+  ).toHaveLength(3);
+  const sends = vi
+    .mocked(h.f.api.configure)
+    .mock.calls.filter(
+      ([command]) => command.kind === "connector.verify-app",
+    ).length;
+  await h.click("Continue setup");
+  expect(h.c.getSnapshot().destination.setupStep).toBe("attachment");
+  expect(h.button("Start using Farol")?.disabled).toBe(true);
+  expect(
+    h.host.querySelector('.setup-test [role="status"]')?.textContent,
+  ).toContain("without sending a new test");
+  expect(
+    vi
+      .mocked(h.f.api.configure)
+      .mock.calls.filter(
+        ([command]) => command.kind === "connector.verify-app",
+      ),
+  ).toHaveLength(sends);
 });

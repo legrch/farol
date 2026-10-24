@@ -605,6 +605,7 @@ export class WindowController implements RendererFacade {
               ? { status: "stale" as const }
               : {}),
           });
+          if (parsed.data.state === "ready") this.reconcileSavedSignIn();
         }
       }),
       this.api.onInstalledUpdateState((value) => this.adoptUpdate(value)),
@@ -1046,6 +1047,7 @@ export class WindowController implements RendererFacade {
         status,
         runtime,
       });
+      this.reconcileSavedSignIn();
       if (this.disposed) return { status: "unqualified", reason: "disposed" };
       if (!this.configOrder.isLatest(order))
         return { status: "unqualified", reason: "superseded" };
@@ -2443,6 +2445,13 @@ export class WindowController implements RendererFacade {
         settle();
       }
     })();
+  }
+  // A loaded browser can precede current backend/configuration readiness.
+  // Reconcile when those facts arrive too; no navigation or Send is needed.
+  private reconcileSavedSignIn(): void {
+    if (this.state.route === "loaded" && this.state.signInObservation === null)
+      this.observeSignIn();
+    this.scheduleSavedSignInObservation();
   }
   private resetSavedSignInObservation(): void {
     if (this.savedSignInReadTimer !== null)

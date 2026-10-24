@@ -1709,11 +1709,7 @@ function AddToChatGPT({
         </p>
         <div
           className="setup-result setup-gate-status"
-          role={
-            gate.state === "refused" || gate.state === "unknown"
-              ? "alert"
-              : "status"
-          }
+          role={gate.state === "refused" ? "alert" : "status"}
           data-result-state={gate.state}
         >
           <strong>
@@ -1722,7 +1718,7 @@ function AddToChatGPT({
               : gate.state === "pending"
                 ? "Checking the connection…"
                 : gate.state === "unknown"
-                  ? "The last result needs checking"
+                  ? "Waiting for ChatGPT confirmation"
                   : gate.state === "refused"
                     ? "The check stopped"
                     : "Ready when your app is added"}
@@ -1730,7 +1726,9 @@ function AddToChatGPT({
           <p>
             {gate.state === "missing"
               ? "Add the app above, then run the check once."
-              : gate.cause}
+              : gate.state === "unknown"
+                ? "No confirmed connection result is available. Refresh status checks for a saved confirmation without sending a new test."
+                : gate.cause}
           </p>
           {gate.action && gate.state !== "missing" && (
             <button

@@ -30,33 +30,87 @@
   margin: 0 0 12px;
 }
 .setup-welcome {
-  max-width: 520px;
+  max-width: 640px;
+}
+.setup-overview-summary {
+  margin: 0 0 20px;
+}
+.setup-overview-summary > strong {
+  font-size: 14px;
+}
+.setup-overview-summary > p {
+  margin: 8px 0 0;
+  line-height: 1.6;
 }
 .setup-welcome ol {
-  counter-reset: welcome;
   list-style: none;
-  padding: 8px 0 20px;
+  padding: 0;
+  margin: 0 0 24px;
+  border-top: 1px solid var(--line);
 }
 .setup-welcome li {
-  counter-increment: welcome;
+  margin: 0;
+  border-bottom: 1px solid var(--line);
+}
+.setup-overview-step {
   display: flex;
   align-items: center;
   gap: 14px;
-  margin: 18px 0;
+  width: 100%;
+  min-height: 76px;
+  padding: 16px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
 }
-.setup-welcome li::before {
-  content: counter(welcome);
+.setup-overview-step:hover {
+  background: var(--hover);
+}
+.setup-overview-marker {
   display: grid;
   place-items: center;
-  width: 28px;
+  flex: 0 0 28px;
   height: 28px;
   border-radius: 50%;
   background: var(--button);
   color: var(--muted);
 }
+.setup-welcome li[data-check-state="verified"] .setup-overview-marker,
+.setup-welcome li[data-check-state="verified"] .setup-overview-state {
+  color: var(--good);
+}
+.setup-overview-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+.setup-overview-copy > strong {
+  font-weight: 600;
+}
+.setup-overview-copy > .description {
+  font-size: 12px;
+  line-height: 1.5;
+}
+.setup-overview-state {
+  font-size: 12px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
 .setup-welcome > button {
   display: block;
   margin: 12px 0;
+}
+@container (max-width: 400px) {
+  .setup-overview-step {
+    gap: 10px;
+    padding-inline: 2px;
+  }
+  .setup-overview-state {
+    display: none;
+  }
 }
 .setup-progress {
   list-style: none;
@@ -432,4 +486,11 @@
 }
 .setup-gate-status[data-result-state="unknown"] > strong {
   display: none;
+}
+
+.setup-wizard .setup-test > .setup-result[data-result-state="unknown"] {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
 }

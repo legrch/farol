@@ -174,7 +174,9 @@ describe("rendered Setup gate", () => {
         expect(status?.textContent).toContain(
           step === "attachment" && state === "missing"
             ? "Add the app above, then run the check once."
-            : expected.cause,
+            : step === "attachment" && state === "unknown"
+              ? "No confirmed connection result is available."
+              : expected.cause,
         );
         expect(status?.querySelectorAll("button")).toHaveLength(
           step === "attachment" && state === "missing" ? 0 : 1,

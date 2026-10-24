@@ -87,6 +87,9 @@ export function Setup({ snapshot, facade }: Props) {
   const changed = useRef(false);
   const local = useSetupIntents(facade, snapshot);
   const checklist = setupChecklist(snapshot, inputsChanged, local);
+  const completedCount = checklist.entries.filter(
+    (entry) => entry.state === "verified",
+  ).length;
   const previous = adjacentSetupSection(step, -1);
   const next = adjacentSetupSection(step, 1);
   function navigateToStep(setupStep: SetupSection) {
@@ -117,21 +120,79 @@ export function Setup({ snapshot, facade }: Props) {
         onNavigate={navigateToStep}
       />
       <header className="setup-wizard-intro">
-        <h1>{context[step].title}</h1>
-        <p className="description">{context[step].description}</p>
+        <h1>
+          {step === "overview" && completedCount > 0
+            ? "Your setup"
+            : context[step].title}
+        </h1>
+        <p className="description">
+          {step === "overview" && completedCount > 0
+            ? "Your progress is saved. Review any step or finish the remaining setup."
+            : context[step].description}
+        </p>
       </header>
       {step === "overview" && (
         <section className="setup-welcome" aria-label="Setup overview">
+          <div className="setup-overview-summary" role="status">
+            <strong>{completedCount} of 4 steps ready</strong>
+            <p className="description">
+              {checklist.ready
+                ? "Everything is ready. You can review any step."
+                : checklist.entries
+                      .slice(0, 3)
+                      .every((entry) => entry.state === "verified")
+                  ? "Your Mac is ready. Confirm the app in ChatGPT to finish setup."
+                  : "Follow the steps below. Your progress is saved as you go."}
+            </p>
+          </div>
           <ol>
-            {checklist.entries.map((entry) => (
+            {checklist.entries.map((entry, index) => (
               <li key={entry.step} data-check-state={entry.state}>
                 <button
                   type="button"
-                  className="text-button"
+                  className="setup-overview-step"
+                  aria-label={entry.label}
+                  aria-describedby={`setup-overview-${entry.step}-status`}
                   onClick={() => navigateToStep(entry.step)}
                 >
-                  {entry.state === "verified" ? "✓ " : ""}
-                  {entry.label}
+                  <span className="setup-overview-marker" aria-hidden="true">
+                    {entry.state === "verified" ? "✓" : index + 1}
+                  </span>
+                  <span className="setup-overview-copy">
+                    <strong>{entry.label}</strong>
+                    <span
+                      className="description"
+                      id={`setup-overview-${entry.step}-status`}
+                    >
+                      {entry.state === "verified"
+                        ? {
+                            signin: "Signed in to ChatGPT",
+                            folders: "Workspace access checked",
+                            connection: "Tunnel connected",
+                            attachment: "App confirmed in ChatGPT",
+                          }[entry.step]
+                        : entry.state === "pending"
+                          ? "Checking…"
+                          : entry.state === "unknown"
+                            ? "Waiting for confirmation"
+                            : {
+                                signin: "Sign in with your ChatGPT account",
+                                folders: "Choose folders for ChatGPT",
+                                connection: "Connect this Mac with your tunnel",
+                                attachment:
+                                  "Add your app and confirm the connection",
+                              }[entry.step]}
+                    </span>
+                  </span>
+                  <span className="setup-overview-state">
+                    {entry.state === "verified"
+                      ? "Ready"
+                      : entry.state === "pending"
+                        ? "Checking"
+                        : entry.state === "needed"
+                          ? "Set up"
+                          : "Review"}
+                  </span>
                 </button>
               </li>
             ))}
