@@ -254,7 +254,7 @@ printf 'git-shell-accepted=%s\\n' "$head"
 // Same built Go/MCP process owner, one original start and one cancel request.
 // A cancellation ACK is followed by readback; it is never terminal proof alone.
 export async function runShellControlJourney(input: {
-  peer: Pick<Peer, "call">;
+  peer: Pick<Peer, "call" | "request">;
   workspaceId: string;
   relativeCwd: string;
   report: Record<string, unknown>;
@@ -274,7 +274,7 @@ export async function runShellControlJourney(input: {
     workspaceId: input.workspaceId,
     relativeCwd: input.relativeCwd,
     write: false,
-    command: "printf 'cancel-ready\\n'; exec sleep 20",
+    command: `exec python3 -B -c 'import time; print("cancel-ready", flush=True); time.sleep(20)'`,
   });
   witness.admission = { status: started.status, code: started.code ?? null };
   await input.checkpoint();
@@ -301,12 +301,18 @@ export async function runShellControlJourney(input: {
   const readyDeadline = Date.now() + 5000;
   while (Date.now() < readyDeadline) {
     const observed = await read();
+    assert.notEqual(
+      observed.state,
+      "exited",
+      "SHELL_CONTROL_EXITED_BEFORE_CANCEL",
+    );
     assert.equal(typeof observed.stdoutBase64, "string");
     if (
       Buffer.from(observed.stdoutBase64 as string, "base64").toString(
         "utf8",
       ) === "cancel-ready\n"
     ) {
+      assert.equal(observed.state, "running");
       ready = true;
       break;
     }
@@ -315,13 +321,20 @@ export async function runShellControlJourney(input: {
   assert.ok(ready, "SHELL_CANCEL_READINESS_UNCONFIRMED");
   witness.state = "cancel-intent";
   await input.checkpoint();
-  const cancelled = await input.peer.call("computer_shell_cancel", {
-    operationId,
-    handle,
-    cancelOperationId,
+  const cancellationReply = await input.peer.request("tools/call", {
+    name: "computer_shell_cancel",
+    arguments: { operationId, handle, cancelOperationId },
   });
-  witness.cancellation = cancelled;
+  witness.cancellation = {
+    isError: cancellationReply.isError === true,
+    response: cancellationReply.structuredContent,
+  };
   await input.checkpoint();
+  assert.equal(cancellationReply.isError === true, false);
+  const cancelled = cancellationReply.structuredContent as Record<
+    string,
+    unknown
+  >;
   assert.equal(cancelled.status, "ok");
   const ack = cancelled.data as Record<string, unknown>;
   assert.equal(ack.cancelOperationId, cancelOperationId);
