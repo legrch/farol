@@ -2279,7 +2279,25 @@ export class ChatGptRoute {
     try {
       return await opening;
     } finally {
-      if (this.opening === opening) this.opening = null;
+      this.releaseOpening(opening);
+    }
+  }
+
+  private releaseOpening(opening: Promise<ChatGptOpenResult>): void {
+    if (this.opening !== opening) return;
+    this.opening = null;
+    // A loaded event before this point cannot admit a sign-in read. Publish
+    // again only after the original opener releases its admission latch.
+    if (
+      this.load !== "loaded" ||
+      !this.routeWindow ||
+      this.routeWindow.isDestroyed()
+    )
+      return;
+    try {
+      this.options.onLoadStateChanged?.("loaded");
+    } catch {
+      // Observers cannot turn a completed browser open into an unknown result.
     }
   }
 
@@ -2295,7 +2313,7 @@ export class ChatGptRoute {
     try {
       return await opening;
     } finally {
-      if (this.opening === opening) this.opening = null;
+      this.releaseOpening(opening);
     }
   }
 
@@ -2580,7 +2598,6 @@ export class ChatGptRoute {
         return { status: "unreachable" };
       }
       this.load = "loaded";
-      this.options.onLoadStateChanged?.("loaded");
       if (reveal && this.options.requireAppForManualMessages === true) {
         candidate.reveal();
         candidate.focus();

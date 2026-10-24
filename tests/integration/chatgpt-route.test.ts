@@ -8376,3 +8376,41 @@ describe("retained home presentation", () => {
     },
   );
 });
+
+it.each(["open", "preload"] as const)(
+  "publishes loaded after %s releases its opening admission",
+  async (method) => {
+    const surface = embeddedSurface();
+    Object.assign(surface.webContents, {
+      executeJavaScript: vi.fn(async () => ({
+        composerVisible: true,
+        signInVisible: false,
+      })),
+    });
+    const reads: Promise<unknown>[] = [];
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+      onLoadStateChanged: (state) => {
+        if (state === "loaded") reads.push(candidate.observeSignInStatus());
+      },
+    });
+    try {
+      await candidate[method]();
+      expect(await Promise.all(reads)).toContainEqual({
+        state: "authenticated",
+        binding: expect.any(Object),
+      });
+      expect(surface.loadURL).toHaveBeenCalledTimes(1);
+      if (method === "preload") {
+        expect(surface.reveal).not.toHaveBeenCalled();
+        expect(surface.focus).not.toHaveBeenCalled();
+      }
+    } finally {
+      candidate.dispose();
+    }
+  },
+);
