@@ -85,6 +85,25 @@ describe("admitted source Dev resources", () => {
       }),
     );
   });
+  async function advanceBuild(hour) {
+    const identity = createBuildIdentity({
+      version: "1.0.0",
+      builtAt: `2026-10-24T0${hour}:00:00.000Z`,
+      sourceCommit: "b".repeat(40),
+      sourceTreeDigest: "c".repeat(64),
+      sourceDirty: false,
+    });
+    const bytes = Buffer.from(JSON.stringify(identity));
+    await fs.writeFile(path.join(source, "build-identity.json"), bytes);
+    const file = path.join(source, "build-manifest.json");
+    const manifest = JSON.parse(await fs.readFile(file, "utf8"));
+    manifest.buildId = identity.buildId;
+    manifest.entrySha256["build-identity.json"] = createHash("sha256")
+      .update(bytes)
+      .digest("hex");
+    await fs.writeFile(file, JSON.stringify(manifest));
+    return identity;
+  }
   afterEach(async () => {
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -141,6 +160,75 @@ describe("admitted source Dev resources", () => {
         ),
       ).buildId,
     ).toBe(identity.buildId);
+  });
+  it.each(["old-image-present", "old-image-removed"])(
+    "recovers a recorded interrupted replacement: %s",
+    async (point) => {
+      await prepareDevCoreResources(root);
+      const file = path.join(root, "_output/dev-core-resources.json");
+      const previous = JSON.parse(await fs.readFile(file, "utf8"));
+      await fs.writeFile(
+        file,
+        JSON.stringify({
+          ...previous,
+          schema: 2,
+          buildId: "f".repeat(64),
+          treeDigest: "e".repeat(64),
+          previousTreeDigest: previous.treeDigest,
+        }),
+      );
+      if (point === "old-image-removed")
+        await fs.rm(path.resolve(destination, "../../.."), { recursive: true });
+      const current = await advanceBuild(2);
+      expect(await prepareDevCoreResources(root)).toBe(destination);
+      const settled = JSON.parse(await fs.readFile(file, "utf8"));
+      expect(settled.schema).toBe(1);
+      expect(settled.buildId).toBe(current.buildId);
+      expect(settled.previousTreeDigest).toBeUndefined();
+    },
+  );
+  it("recovers a published new image with a pending receipt even after the next build", async () => {
+    await prepareDevCoreResources(root);
+    const file = path.join(root, "_output/dev-core-resources.json");
+    const previous = JSON.parse(await fs.readFile(file, "utf8"));
+    await advanceBuild(1);
+    await prepareDevCoreResources(root);
+    const published = JSON.parse(await fs.readFile(file, "utf8"));
+    await fs.writeFile(
+      file,
+      JSON.stringify({
+        ...published,
+        schema: 2,
+        previousTreeDigest: previous.treeDigest,
+      }),
+    );
+    const current = await advanceBuild(2);
+    expect(await prepareDevCoreResources(root)).toBe(destination);
+    expect(JSON.parse(await fs.readFile(file, "utf8")).buildId).toBe(
+      current.buildId,
+    );
+  });
+  it("does not repair unrecorded disappearance or edited pending resources", async () => {
+    await prepareDevCoreResources(root);
+    const file = path.join(root, "_output/dev-core-resources.json");
+    const previous = JSON.parse(await fs.readFile(file, "utf8"));
+    await fs.writeFile(
+      file,
+      JSON.stringify({
+        ...previous,
+        schema: 2,
+        previousTreeDigest: "e".repeat(64),
+      }),
+    );
+    await fs.appendFile(path.join(destination, "farol-backend"), "unexpected");
+    await expect(prepareDevCoreResources(root)).rejects.toThrow(
+      "DEV_CORE_RESOURCES_CHANGED",
+    );
+    await fs.rm(path.resolve(destination, "../../.."), { recursive: true });
+    await fs.writeFile(file, JSON.stringify(previous));
+    await expect(prepareDevCoreResources(root)).rejects.toThrow(
+      "DEV_CORE_RESOURCES_MISSING",
+    );
   });
   it("does not follow a substituted receipt link", async () => {
     await prepareDevCoreResources(root);

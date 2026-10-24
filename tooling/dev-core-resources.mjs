@@ -1,6 +1,7 @@
 // Dev resource preparation only. No package publication, profile or credential IO.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { desktopCoreArtifactRoot } from "../apps/desktop/dev-core-layout.ts";
 import { treeDigest } from "./artifact-digest.mjs";
 import {
@@ -60,6 +61,19 @@ async function readOwnedFile(file, maximum) {
   }
 }
 
+async function publishReceipt(output, destination, value) {
+  const temporary = path.join(output, `.dev-core-receipt-${randomUUID()}.json`);
+  try {
+    await fs.writeFile(temporary, JSON.stringify(value) + "\n", {
+      flag: "wx",
+      mode: 0o600,
+    });
+    await fs.rename(temporary, destination);
+  } finally {
+    await fs.rm(temporary, { force: true });
+  }
+}
+
 export async function prepareDevCoreResources(root) {
   await ownedDirectory(root);
   const output = path.join(root, "_output");
@@ -110,17 +124,24 @@ export async function prepareDevCoreResources(root) {
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
+  const observedDigest = present ? await treeDigest(bundle) : null;
   if (present) {
-    // Unexpected edits are evidence, not permission to overwrite a runtime.
+    // A pending publication records both complete images BEFORE retiring the
+    // old one. Only either recorded image is recoverable; other edits refuse.
     if (
-      previous?.schema !== 1 ||
+      ![1, 2].includes(previous?.schema) ||
       previous.root !== bundle ||
-      (await treeDigest(bundle)) !== previous.treeDigest
+      (observedDigest !== previous.treeDigest &&
+        !(
+          previous.schema === 2 &&
+          observedDigest === previous.previousTreeDigest
+        ))
     )
       throw new Error("DEV_CORE_RESOURCES_CHANGED");
     if (
       previous.buildId === build.buildId &&
-      previous.vendorDigest === runtime.extractedTreeDigest
+      previous.vendorDigest === runtime.extractedTreeDigest &&
+      observedDigest === previous.treeDigest
     ) {
       await verifyBuildEntries(destination, manifest.entrySha256, entries);
       await verifyInputManifest(destination, manifest);
@@ -130,9 +151,13 @@ export async function prepareDevCoreResources(root) {
           path.join(bundle, "Contents/Frameworks/Electron Runtime.app"),
         ),
       );
+      if (previous.schema === 2) {
+        const { previousTreeDigest: _retired, ...settled } = previous;
+        await publishReceipt(output, receiptPath, { ...settled, schema: 1 });
+      }
       return destination;
     }
-  } else if (previous) {
+  } else if (previous && (previous.schema !== 2 || previous.root !== bundle)) {
     throw new Error("DEV_CORE_RESOURCES_MISSING");
   }
   const staging = await fs.mkdtemp(path.join(output, ".dev-core-"));
@@ -161,30 +186,35 @@ export async function prepareDevCoreResources(root) {
     await verifyInputManifest(resources, manifest);
     await verifyGoCoreArtifact(resources, manifest.core, build);
     const digest = await treeDigest(staging);
-    // Build admission has already settled the exact earlier Dev before a new
-    // build. Same-build checks return above without replacing live resources.
+    // Publish the recoverable transition before removing any complete image.
+    // This covers process interruption, not a power-loss durability claim.
+    const receipt = {
+      schema: 1,
+      root: bundle,
+      buildId: build.buildId,
+      sourceCommit: build.sourceCommit,
+      vendorDigest: runtime.extractedTreeDigest,
+      treeDigest: digest,
+    };
     if (present) {
       await ownedDirectory(bundle);
-      if ((await treeDigest(bundle)) !== previous.treeDigest)
+      if ((await treeDigest(bundle)) !== observedDigest)
+        throw new Error("DEV_CORE_RESOURCES_CHANGED");
+    }
+    await publishReceipt(output, receiptPath, {
+      ...receipt,
+      schema: 2,
+      previousTreeDigest: observedDigest,
+    });
+    if (present) {
+      await ownedDirectory(bundle);
+      if ((await treeDigest(bundle)) !== observedDigest)
         throw new Error("DEV_CORE_RESOURCES_CHANGED");
       await fs.rm(bundle, { recursive: true });
     }
     await fs.rename(staging, bundle);
     published = true;
-    const stagedReceipt = path.join(output, path.basename(staging) + ".json");
-    await fs.writeFile(
-      stagedReceipt,
-      JSON.stringify({
-        schema: 1,
-        root: bundle,
-        buildId: build.buildId,
-        sourceCommit: build.sourceCommit,
-        vendorDigest: runtime.extractedTreeDigest,
-        treeDigest: digest,
-      }) + "\n",
-      { mode: 0o600 },
-    );
-    await fs.rename(stagedReceipt, receiptPath);
+    await publishReceipt(output, receiptPath, receipt);
     return destination;
   } finally {
     if (!published) await fs.rm(staging, { recursive: true, force: true });
