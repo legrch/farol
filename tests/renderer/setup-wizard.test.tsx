@@ -377,7 +377,7 @@ describe("linear Setup", () => {
       expect(alert.querySelectorAll("button")).toHaveLength(1);
       expect(alert.textContent).toContain(
         step === "attachment"
-          ? "No confirmed connection result"
+          ? "An earlier action is not confirmed"
           : "could not be confirmed",
       );
       expect(
@@ -503,6 +503,79 @@ describe("Add to ChatGPT", () => {
     expect(h.c.getSnapshot().destination.setupStep).toBe("folders");
     expect(h.f.api.configure).toHaveBeenCalledTimes(1);
   });
+  it("coalesces confirmation reads, keeps an absent receipt pending, and never starts another test", async () => {
+    const value = readySettings();
+    value.setup.connect.outcomeUnknown = true;
+    value.connectors.secureMcp.appVerificationPending = true;
+    const h = await mount({
+      step: "attachment",
+      value,
+      signIn: "authenticated",
+    });
+    await h.confirmSignIn();
+    const waiting = deferred<unknown>();
+    h.reply((command) => {
+      expect(command).toEqual({ kind: "connector.check-attachment" });
+      return waiting.promise;
+    });
+    vi.mocked(h.f.api.configure).mockClear();
+    const bootstraps = vi.mocked(h.f.api.bootstrap).mock.calls.length;
+    await h.click("Check for confirmation");
+    expect(h.button("Checking confirmation…")?.disabled).toBe(true);
+    await h.click("Checking confirmation…");
+    expect(h.f.api.configure).toHaveBeenCalledTimes(1);
+    expect(h.f.api.bootstrap).toHaveBeenCalledTimes(bootstraps + 1);
+    await act(async () =>
+      waiting.resolve({
+        ok: false,
+        error: "CONNECTOR_ATTACHMENT_NOT_FOUND",
+        snapshot: h.configuration(),
+      }),
+    );
+    expect(h.f.api.configure).toHaveBeenCalledTimes(1);
+    expect(h.button("Check for confirmation")?.disabled).toBe(false);
+    expect(h.button("Test in ChatGPT")).toBeUndefined();
+    expect(h.button("Start using Farol")?.disabled).toBe(true);
+    expect(
+      h.host
+        .querySelector(".setup-gate-status")
+        ?.getAttribute("data-confirmation-pending"),
+    ).toBe("true");
+    expect(h.configuration().settings.setup.connect.outcomeUnknown).toBe(true);
+    expect(
+      h.configuration().settings.connectors.secureMcp.appVerificationPending,
+    ).toBe(true);
+    expect(
+      h.configuration().settings.connectors.secureMcp.attachment,
+    ).toBeNull();
+  });
+  it("reviews this Mac's connection locally without changing its app or tunnel", async () => {
+    const value = readySettings();
+    value.setup.connect.outcomeUnknown = true;
+    value.connectors.secureMcp.appVerificationPending = true;
+    const h = await mount({ step: "attachment", value });
+    const details = h.host.querySelector<HTMLElement>(
+      '[aria-label="Connection details for this Mac"]',
+    )!;
+    const scroll = vi.fn();
+    details.scrollIntoView = scroll;
+    const calls = vi.mocked(h.f.api.configure).mock.calls.length;
+    const reads = vi.mocked(h.f.api.bootstrap).mock.calls.length;
+    const destination = h.c.getSnapshot().destination;
+    await h.click("Review connection");
+    expect(scroll).toHaveBeenCalledWith({ block: "center" });
+    expect(document.activeElement).toBe(details);
+    expect(h.c.getSnapshot().destination).toBe(destination);
+    expect(h.f.api.configure).toHaveBeenCalledTimes(calls);
+    expect(h.f.api.bootstrap).toHaveBeenCalledTimes(reads);
+    expect(h.configuration().settings.connectors.secureMcp).toBe(
+      value.connectors.secureMcp,
+    );
+    expect(details.textContent).toContain("synthetic-tunnel");
+    expect(h.host.textContent).toContain(
+      "A matching app name does not guarantee",
+    );
+  });
   it("shows one recovery action after an unknown app check and never repeats it", async () => {
     const value = readySettings();
     value.connectors.secureMcp.chatgptApp = {
@@ -521,7 +594,8 @@ describe("Add to ChatGPT", () => {
     expect(failure.textContent).not.toContain("Diagnostics");
     expect(h.button("Start using Farol")?.disabled).toBe(true);
     await h.remount();
-    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
+    expect(h.button("Test in ChatGPT")).toBeUndefined();
+    expect(h.button("Check for confirmation")?.disabled).toBe(false);
     expect(
       vi
         .mocked(h.f.api.configure)
@@ -538,7 +612,7 @@ const walkthroughs = [
     label: "Create a tunnel and a key",
     open: "Open OpenAI Tunnels",
     destination: "tunnels",
-    initiallyOpen: false,
+    initiallyOpen: true,
   },
   {
     step: "attachment",
@@ -548,7 +622,7 @@ const walkthroughs = [
     initiallyOpen: true,
   },
 ] as const;
-describe("on-demand Setup instructions", () => {
+describe("always-open Setup instructions", () => {
   it.each(walkthroughs)(
     "shows $step guidance in its expected initial state and never advances on a timer",
     async ({ step, label, open, destination, initiallyOpen = false }) => {
@@ -598,8 +672,14 @@ describe("on-demand Setup instructions", () => {
           cards.filter((c) => c.getAttribute("aria-expanded") === "true"),
         ).toEqual([cards[i]]);
       }
-      await h.click("Close instructions");
-      expect(region.hidden).toBe(true);
+      expect(h.button("Close instructions")).toBeUndefined();
+      await act(async () => cards[2]!.click());
+      expect(region.hidden).toBe(false);
+      await h.click("Previous instruction");
+      expect(cards[1]!.getAttribute("aria-current")).toBe("step");
+      await h.click("Next instruction");
+      expect(cards[2]!.getAttribute("aria-current")).toBe("step");
+      expect(region.hidden).toBe(false);
       expect(h.f.api.configure).not.toHaveBeenCalled();
       await h.click(open);
       expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
@@ -928,9 +1008,7 @@ it("shows local readiness separately from an unconfirmed app on Overview", async
   await h.click("Continue setup");
   expect(h.c.getSnapshot().destination.setupStep).toBe("attachment");
   expect(h.button("Start using Farol")?.disabled).toBe(true);
-  expect(
-    h.host.querySelector('.setup-test [role="status"]')?.textContent,
-  ).toContain("without sending a new test");
+  expect(h.host.textContent).toContain("It sends no new message");
   expect(
     vi
       .mocked(h.f.api.configure)

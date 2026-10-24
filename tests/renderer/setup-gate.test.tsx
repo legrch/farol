@@ -175,7 +175,7 @@ describe("rendered Setup gate", () => {
           step === "attachment" && state === "missing"
             ? "Add the app above, then run the check once."
             : step === "attachment" && state === "unknown"
-              ? "No confirmed connection result is available."
+              ? "An earlier action is not confirmed."
               : expected.cause,
         );
         expect(status?.querySelectorAll("button")).toHaveLength(
@@ -184,7 +184,9 @@ describe("rendered Setup gate", () => {
         expect(status?.querySelector("button")?.textContent?.trim()).toBe(
           step === "attachment" && state === "missing"
             ? undefined
-            : expectedAction(state),
+            : step === "attachment" && state === "unknown"
+              ? "Check for confirmation"
+              : expectedAction(state),
         );
       }
     },
@@ -273,7 +275,11 @@ describe("rendered Setup gate", () => {
               ([command]) => command.kind !== "chatgpt.observe-sign-in",
             );
         const submissions = effects().length;
-        await h.click("Refresh status");
+        await h.click(
+          step === "attachment" && expected === "unknown"
+            ? "Check for confirmation"
+            : "Refresh status",
+        );
         expect(effects()).toHaveLength(submissions);
         await h.remount(snapshot, facade);
         expect(
@@ -771,14 +777,15 @@ it("does not tell a returning user to repeat successful steps for a pending app 
   expect(h.host.textContent).not.toContain(
     "Finish sign-in, workspace and connection checks",
   );
-  expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
+  expect(h.button("Test in ChatGPT")).toBeUndefined();
+  expect(h.button("Check for confirmation")?.disabled).toBe(false);
   expect(h.button("Prepare new test")).toBeUndefined();
   const before = vi
     .mocked(h.f.api.configure)
     .mock.calls.filter(
       ([command]) => command.kind === "connector.verify-app",
     ).length;
-  await h.click("Refresh status");
+  await h.click("Check for confirmation");
   expect(
     vi
       .mocked(h.f.api.configure)

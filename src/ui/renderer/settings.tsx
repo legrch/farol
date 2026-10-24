@@ -1530,6 +1530,9 @@ function AddToChatGPT({
   const setup = computerSetup(snapshot);
   const busy = useRef(false);
   const [checking, setChecking] = useState(false);
+  const connectionDetails = useRef<HTMLDListElement>(null);
+  const readingConfirmation = useRef(false);
+  const [refreshingConfirmation, setRefreshingConfirmation] = useState(false);
   const feedback = useSettingsFeedback(facade);
   const result = feedback.pages["setup:attachment"]?.result;
   const failed = result?.state === "refused" || result?.state === "unknown";
@@ -1539,6 +1542,29 @@ function AddToChatGPT({
     nameChanged,
     retainedSetupIntents(facade, snapshot),
   );
+  const unconfirmedTest =
+    connector.appVerificationPending === true ||
+    snapshot.intents["settings:connector.verify-app:"]?.state === "unknown";
+  const waitingForConfirmation =
+    !gate.allowed &&
+    !checking &&
+    gate.state !== "pending" &&
+    (gate.state === "unknown" || unconfirmedTest);
+  async function checkConfirmation() {
+    if (readingConfirmation.current || busy.current) return;
+    readingConfirmation.current = true;
+    setRefreshingConfirmation(true);
+    try {
+      await actions.refresh();
+    } finally {
+      readingConfirmation.current = false;
+      setRefreshingConfirmation(false);
+    }
+  }
+  function reviewConnection() {
+    connectionDetails.current?.scrollIntoView({ block: "center" });
+    connectionDetails.current?.focus({ preventScroll: true });
+  }
   const canPrepareTest = (current: WindowSnapshot) => {
     if (current.configuration?.status !== "ready") return false;
     return (
@@ -1644,7 +1670,16 @@ function AddToChatGPT({
             </Command>
           }
         />
-        <dl className="setup-app-values">
+        <p className="description setup-connection-hint">
+          Use this Mac’s tunnel ID in ChatGPT. A matching app name does not
+          guarantee that the app connects to this Mac.
+        </p>
+        <dl
+          className="setup-app-values"
+          ref={connectionDetails}
+          tabIndex={-1}
+          aria-label="Connection details for this Mac"
+        >
           <div>
             <dt>Name</dt>
             <dd>
@@ -1703,39 +1738,55 @@ function AddToChatGPT({
       <section className="setup-test" aria-label="Test in ChatGPT">
         <h3>2. Check the connection</h3>
         <p className="description">
-          Farol opens a separate chat, selects Instant and sends one test
-          message to your app. The reply confirms that ChatGPT can reach this
-          Mac — without reading file contents.
+          {waitingForConfirmation
+            ? unconfirmedTest
+              ? "An earlier test has no confirmed result. A new test is paused so it cannot be sent twice."
+              : "An earlier action has no confirmed result. Check its saved status before starting a test."
+            : "Farol opens a separate chat, selects Instant and sends one test message to your app. The reply confirms that ChatGPT can reach this Mac — without reading file contents."}
         </p>
         <div
           className="setup-result setup-gate-status"
-          role={gate.state === "refused" ? "alert" : "status"}
+          role={
+            gate.state === "refused" && !waitingForConfirmation
+              ? "alert"
+              : "status"
+          }
           data-result-state={gate.state}
+          data-confirmation-pending={waitingForConfirmation || undefined}
         >
           <strong>
             {gate.allowed
               ? "ChatGPT is connected"
-              : gate.state === "pending"
-                ? "Checking the connection…"
-                : gate.state === "unknown"
-                  ? "Waiting for ChatGPT confirmation"
-                  : gate.state === "refused"
-                    ? "The check stopped"
-                    : "Ready when your app is added"}
+              : waitingForConfirmation
+                ? refreshingConfirmation
+                  ? "Checking confirmation…"
+                  : "Waiting for confirmation"
+                : gate.state === "pending"
+                  ? "Checking the connection…"
+                  : gate.state === "unknown"
+                    ? "Waiting for ChatGPT confirmation"
+                    : gate.state === "refused"
+                      ? "The check stopped"
+                      : "Ready when your app is added"}
           </strong>
           <p>
             {gate.state === "missing"
               ? "Add the app above, then run the check once."
-              : gate.state === "unknown"
-                ? "No confirmed connection result is available. Refresh status checks for a saved confirmation without sending a new test."
+              : waitingForConfirmation
+                ? unconfirmedTest
+                  ? "This Mac has not received confirmation. Check the saved result, or compare the app’s tunnel ID with the connection shown above."
+                  : "An earlier action is not confirmed. Checking status will not repeat it or start a ChatGPT test."
                 : gate.cause}
           </p>
           {gate.action && gate.state !== "missing" && (
             <button
               type="button"
-              className="text-button"
+              className={waitingForConfirmation ? "primary" : "text-button"}
+              disabled={refreshingConfirmation}
               onClick={() => {
-                if (gate.action?.kind === "refresh") void actions.refresh();
+                if (waitingForConfirmation) void checkConfirmation();
+                else if (gate.action?.kind === "refresh")
+                  void actions.refresh();
                 else
                   void actions.run({
                     kind: "onboarding.open-help",
@@ -1743,7 +1794,11 @@ function AddToChatGPT({
                   });
               }}
             >
-              {gate.action.label}
+              {waitingForConfirmation
+                ? refreshingConfirmation
+                  ? "Checking confirmation…"
+                  : "Check for confirmation"
+                : gate.action.label}
             </button>
           )}
         </div>
@@ -1758,6 +1813,20 @@ function AddToChatGPT({
               . No file contents were read.
             </p>
           </div>
+        ) : waitingForConfirmation ? (
+          <>
+            <button
+              type="button"
+              className="text-button setup-review-connection"
+              onClick={reviewConnection}
+            >
+              Review connection
+            </button>
+            <p className="description">
+              Checking confirmation reads the saved result. It sends no new
+              message and keeps the earlier test in Unresolved actions.
+            </p>
+          </>
         ) : needsNewTest ? (
           <>
             <p className="description">

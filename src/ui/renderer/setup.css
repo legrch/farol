@@ -488,9 +488,34 @@
   display: none;
 }
 
-.setup-wizard .setup-test > .setup-result[data-result-state="unknown"] {
+.setup-wizard .setup-test > .setup-result[data-result-state="unknown"],
+.setup-wizard .setup-test > .setup-result[data-confirmation-pending="true"] {
   border: 0;
   background: transparent;
   padding: 0;
   box-shadow: none;
+}
+
+.walkthrough-pagination {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 16px;
+}
+.walkthrough-pagination .walkthrough-next {
+  margin-left: auto;
+  min-width: 72px;
+}
+.setup-connection-hint {
+  margin: 18px 0 12px;
+  line-height: 1.6;
+  max-width: 64ch;
+}
+.setup-app-values:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 6px;
+  border-radius: 4px;
+}
+.setup-review-connection {
+  margin: 4px 0 12px;
 }
