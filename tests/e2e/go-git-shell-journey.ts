@@ -250,3 +250,96 @@ printf 'git-shell-accepted=%s\\n' "$head"
   await input.checkpoint();
   throw Error("ORIGINAL_SHELL_OUTCOME_UNKNOWN");
 }
+
+// Same built Go/MCP process owner, one original start and one cancel request.
+// A cancellation ACK is followed by readback; it is never terminal proof alone.
+export async function runShellControlJourney(input: {
+  peer: Pick<Peer, "call">;
+  workspaceId: string;
+  relativeCwd: string;
+  report: Record<string, unknown>;
+  checkpoint: () => Promise<unknown>;
+}) {
+  const operationId = randomUUID();
+  const cancelOperationId = randomUUID();
+  const witness: Record<string, unknown> = {
+    operationId,
+    cancelOperationId,
+    state: "start-intent",
+  };
+  input.report.shellControl = witness;
+  await input.checkpoint();
+  const started = await input.peer.call("computer_shell_start", {
+    operationId,
+    workspaceId: input.workspaceId,
+    relativeCwd: input.relativeCwd,
+    write: false,
+    command: "printf 'cancel-ready\\n'; exec sleep 20",
+  });
+  witness.admission = { status: started.status, code: started.code ?? null };
+  await input.checkpoint();
+  assert.equal(started.status, "ok");
+  const target = started.data as Record<string, unknown>;
+  assert.ok(target && typeof target.handle === "string");
+  const handle = target.handle;
+  witness.handle = handle;
+  const read = async () => {
+    const response = await input.peer.call("computer_shell_read", {
+      operationId,
+      handle,
+      stdoutOffset: 0,
+      stderrOffset: 0,
+    });
+    assert.equal(response.status, "ok");
+    const observed = response.data as Record<string, unknown>;
+    assert.equal(observed.operationId, operationId);
+    assert.equal(observed.handle, handle);
+    witness.last = observed;
+    return observed;
+  };
+  let ready = false;
+  const readyDeadline = Date.now() + 5000;
+  while (Date.now() < readyDeadline) {
+    const observed = await read();
+    assert.equal(typeof observed.stdoutBase64, "string");
+    if (
+      Buffer.from(observed.stdoutBase64 as string, "base64").toString(
+        "utf8",
+      ) === "cancel-ready\n"
+    ) {
+      ready = true;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.ok(ready, "SHELL_CANCEL_READINESS_UNCONFIRMED");
+  witness.state = "cancel-intent";
+  await input.checkpoint();
+  const cancelled = await input.peer.call("computer_shell_cancel", {
+    operationId,
+    handle,
+    cancelOperationId,
+  });
+  witness.cancellation = cancelled;
+  await input.checkpoint();
+  assert.equal(cancelled.status, "ok");
+  const ack = cancelled.data as Record<string, unknown>;
+  assert.equal(ack.cancelOperationId, cancelOperationId);
+  assert.equal(ack.status, "requested");
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    const observed = await read();
+    if (observed.state === "exited" && observed.outputDrained === true) {
+      assert.equal(observed.rootWaited, true);
+      assert.equal(observed.cancelRequested, true);
+      assert.equal(observed.groupCleanup, "confirmed");
+      witness.state = "passed-cancel-and-terminal-readback";
+      await input.checkpoint();
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  witness.state = "original-cancellation-unconfirmed-never-retry";
+  await input.checkpoint();
+  throw Error("ORIGINAL_SHELL_CANCEL_OUTCOME_UNKNOWN");
+}

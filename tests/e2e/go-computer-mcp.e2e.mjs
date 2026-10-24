@@ -261,6 +261,42 @@ try {
       output,
       report,
     });
+    if (shell) {
+      const disabledOutput = path.join(output, "commands-disabled");
+      await fs.mkdir(disabledOutput, { mode: 0o700 });
+      const disabledReport = {
+        schema: report.schema,
+        status: "native-running",
+        pins,
+        limits: report.limits,
+      };
+      report.commandsDisabled = {
+        report: path.join(disabledOutput, "report.json"),
+        status: "running",
+      };
+      try {
+        await run({
+          shell,
+          commandsDisabled: true,
+          artifactRoot,
+          build: identity,
+          artifact: manifest.core,
+          output: disabledOutput,
+          report: disabledReport,
+        });
+        disabledReport.status = "passed-native-commands-disabled";
+      } catch (error) {
+        disabledReport.status = "failed";
+        throw error;
+      } finally {
+        report.commandsDisabled.status = disabledReport.status;
+        await fs.writeFile(
+          path.join(disabledOutput, "report.json"),
+          JSON.stringify(disabledReport, null, 2) + "\n",
+          { mode: 0o600 },
+        );
+      }
+    }
     report.status = shellGit
       ? "passed-native-package-go-shell-git"
       : "passed-native-mcp-go-adapter";

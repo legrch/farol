@@ -24,6 +24,7 @@ import type { BuildIdentity } from "../../src/pkg/build-info/identity.ts";
 import { createOrdinaryGitEnvironment } from "../fixtures/ordinary-git-environment.mjs";
 import {
   runGitShellJourney,
+  runShellControlJourney,
   verifyGitWorkspaceScopes,
 } from "./go-git-shell-journey.ts";
 
@@ -44,6 +45,7 @@ export async function run(input: {
   output: string;
   report: Record<string, unknown>;
   shell?: { support: unknown; watchdogSource: Uint8Array; resources: unknown };
+  commandsDisabled?: true;
 }) {
   assert.equal(process.platform, "darwin");
   assert.equal(process.arch, "arm64");
@@ -222,7 +224,11 @@ export async function run(input: {
         true,
       );
       assert.equal(
-        (await configuration.updateComputerCommands("workspace")).ok,
+        (
+          await configuration.updateComputerCommands(
+            input.commandsDisabled ? "none" : "workspace",
+          )
+        ).ok,
         true,
       );
       assert.equal(
@@ -369,14 +375,74 @@ export async function run(input: {
       assert.ok(names.includes(name), name);
     assert.ok(!names.includes("computer_workspace_shell_start"));
     if (gitFixture && gitWorkspaceId) {
-      assert.ok(names.includes("computer_shell_start"));
-      await runGitShellJourney({
-        peer,
-        fixture: gitFixture,
-        workspaceId: gitWorkspaceId,
-        report: input.report,
-        checkpoint: () => diagnostics.checkpoint("git-shell-progress"),
-      });
+      for (const name of [
+        "computer_shell_start",
+        "computer_shell_read",
+        "computer_shell_cancel",
+      ])
+        assert.ok(names.includes(name), name);
+      if (input.commandsDisabled) {
+        const operationId = randomUUID();
+        const denied = await peer.call(
+          "computer_shell_start",
+          {
+            operationId,
+            workspaceId: gitWorkspaceId,
+            relativeCwd: path.relative(gitFixture.home, gitFixture.writer),
+            write: true,
+            command: "printf forbidden > disabled-command-canary.txt",
+          },
+          true,
+        );
+        observations.push({
+          stage: "commands-disabled",
+          operationId,
+          status: denied.status,
+          code: denied.code,
+        });
+        await diagnostics.checkpoint("commands-disabled-result");
+        assert.equal(denied.status, "refused");
+        assert.ok(
+          ["AUTHORITY_COMMAND_DENIED", "AUTHORITY_CAPABILITY_DENIED"].includes(
+            String(denied.code),
+          ),
+        );
+        assert.equal(denied.retry, "never");
+        await assert.rejects(
+          fs.lstat(path.join(gitFixture.writer, "disabled-command-canary.txt")),
+          { code: "ENOENT" },
+        );
+      } else {
+        const outsideShell = await peer.request("tools/call", {
+          name: "computer_shell_start",
+          arguments: {
+            operationId: randomUUID(),
+            workspaceId: gitWorkspaceId,
+            relativeCwd: "../outside",
+            write: false,
+            command: "printf forbidden",
+          },
+        });
+        assert.equal(outsideShell.isError, true);
+        observations.push({
+          stage: "outside-shell-cwd-refused",
+          isError: true,
+        });
+        await runGitShellJourney({
+          peer,
+          fixture: gitFixture,
+          workspaceId: gitWorkspaceId,
+          report: input.report,
+          checkpoint: () => diagnostics.checkpoint("git-shell-progress"),
+        });
+        await runShellControlJourney({
+          peer,
+          workspaceId: gitWorkspaceId,
+          relativeCwd: path.relative(gitFixture.home, gitFixture.writer),
+          report: input.report,
+          checkpoint: () => diagnostics.checkpoint("shell-control-progress"),
+        });
+      }
     }
     const catalogue = await peer.call("computer_workspace_catalogue", {});
     assert.equal(catalogue.status, "ok");
@@ -392,6 +458,12 @@ export async function run(input: {
       "AGENTS.md",
       "note space 日本語.md",
     ]);
+    const outside = await peer.request("tools/call", {
+      name: "computer_workspace_read",
+      arguments: { workspaceId, relativePath: "../outside" },
+    });
+    assert.equal(outside.isError, true);
+    observations.push({ stage: "outside-workspace-refused", isError: true });
     const bootstrap = await peer.call("computer_workspace_bootstrap", {
       workspaceId,
       relativeDirectory: ".",
@@ -460,6 +532,31 @@ export async function run(input: {
     assert.equal(object(edited.data).phase, "completed");
     const finalBytes = await fs.readFile(path.join(workspace, target));
     assert.equal(finalBytes.toString(), "new synthetic content\n");
+    const conflict = await peer.call(
+      "computer_workspace_write",
+      {
+        operationId: randomUUID(),
+        workspaceId,
+        relativePath: target,
+        content: "must not overwrite",
+        expectedSha256: hash(original),
+      },
+      true,
+    );
+    assert.equal(conflict.code, "WORKSPACE_MUTATION_CONFLICT");
+    assert.equal(
+      await fs.readFile(path.join(workspace, target), "utf8"),
+      "new synthetic content\n",
+    );
+    const readback = await peer.call("computer_workspace_read", {
+      workspaceId,
+      relativePath: target,
+    });
+    assert.equal(object(readback.data).text, "new synthetic content\n");
+    observations.push({
+      stage: "sha-conflict-and-mcp-readback",
+      code: conflict.code,
+    });
     await peer.close();
     peer = await connect();
     const replay = await peer.call("computer_mutation_read", {
