@@ -345,8 +345,17 @@ export async function runShellControlJourney(input: {
     if (observed.state === "exited" && observed.outputDrained === true) {
       assert.equal(observed.rootWaited, true);
       assert.equal(observed.cancelRequested, true);
-      assert.equal(observed.groupCleanup, "confirmed");
-      witness.state = "passed-cancel-and-terminal-readback";
+      assert.ok(
+        Number.isInteger(observed.exitSignal) &&
+          (observed.exitSignal as number) > 0,
+      );
+      // Darwin's published root-scoped contract deliberately does not infer
+      // group/descendant quiescence from this root Wait (see native cancel tests).
+      assert.equal(observed.groupCleanup, "unverified");
+      assert.equal(observed.descendantCleanup, "unverified");
+      witness.scope =
+        "owned-root-only; group and descendant cleanup unverified";
+      witness.state = "passed-owned-root-cancel-readback";
       await input.checkpoint();
       return;
     }
