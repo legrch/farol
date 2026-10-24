@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { prepareDevRuntime, verifyDevSignature } from "./dev-runtime.mjs";
 import { desktopCoreArtifactRoot } from "../apps/desktop/dev-core-layout.ts";
 import { treeDigest } from "./artifact-digest.mjs";
 import {
@@ -151,6 +152,9 @@ export async function prepareDevCoreResources(root) {
           path.join(bundle, "Contents/Frameworks/Electron Runtime.app"),
         ),
       );
+      verifyDevSignature(
+        path.join(bundle, "Contents/Frameworks/Farol Dev.app"),
+      );
       if (previous.schema === 2) {
         const { previousTreeDigest: _retired, ...settled } = previous;
         await publishReceipt(output, receiptPath, { ...settled, schema: 1 });
@@ -182,6 +186,9 @@ export async function prepareDevCoreResources(root) {
     await fs.mkdir(path.dirname(nested), { recursive: true, mode: 0o700 });
     await fs.cp(vendor, nested, { recursive: true, verbatimSymlinks: true });
     assertEmbeddedRuntime(await observeEmbeddedRuntime(nested));
+    // Build the actual branded host from independently pinned vendor inputs
+    // inside the protected image; never import the mutable legacy runtime cache.
+    await prepareDevRuntime(root, path.join(staging, "Contents/Frameworks"));
     await verifyBuildEntries(resources, manifest.entrySha256, entries);
     await verifyInputManifest(resources, manifest);
     await verifyGoCoreArtifact(resources, manifest.core, build);

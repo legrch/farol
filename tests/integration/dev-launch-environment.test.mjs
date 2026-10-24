@@ -44,7 +44,8 @@ const launchPreview = (
     marker,
     options,
     async () =>
-      root + "/_output/dev-runtime/Farol Dev.app/Contents/MacOS/Electron",
+      root +
+      "/_output/dev-core/Contents/Frameworks/Farol Dev.app/Contents/MacOS/Electron",
   );
 
 const SENTINEL = "FAROL_E2E_SENTINEL";
@@ -177,11 +178,11 @@ describe("development launcher environment", () => {
     expect(received.command).toBe(
       path.join(
         root,
-        "_output/dev-runtime/Farol Dev.app/Contents/MacOS/Electron",
+        "_output/dev-core/Contents/Frameworks/Farol Dev.app/Contents/MacOS/Electron",
       ),
     );
     expect(received.args).toEqual([
-      path.join(root, "_output/build/app/main.cjs"),
+      path.join(root, "_output/dev-core/Contents/Resources/app/main.cjs"),
       `--farol-dev-user-data-dir=${devLaunchProfile()}`,
     ]);
     expect(received.options.cwd).toBe(root);
@@ -221,7 +222,7 @@ describe("development launcher environment", () => {
       ),
     ).rejects.toBe(stop);
     expect(received.args).toEqual([
-      "/tmp/farol-dev-root/_output/build/app/main.cjs",
+      "/tmp/farol-dev-root/_output/dev-core/Contents/Resources/app/main.cjs",
       `--farol-dev-user-data-dir=${devLaunchProfile(true)}`,
       "--preview-window-mode=secondary-visible",
     ]);
@@ -245,7 +246,7 @@ describe("development launcher environment", () => {
       ),
     ).rejects.toBe(stop);
     expect(received.args).toEqual([
-      "/tmp/farol-dev-root/_output/build/app/main.cjs",
+      "/tmp/farol-dev-root/_output/dev-core/Contents/Resources/app/main.cjs",
       `--farol-dev-user-data-dir=${devLaunchProfile()}`,
       "--preview-window-mode=secondary-visible",
     ]);
@@ -271,7 +272,7 @@ describe("development launcher environment", () => {
       ),
     ).rejects.toBe(stop);
     expect(received.args).toEqual([
-      "/fixture/repository/_output/build/app/main.cjs",
+      "/fixture/repository/_output/dev-core/Contents/Resources/app/main.cjs",
       `--farol-dev-user-data-dir=${devLaunchProfile()}`,
       "--preview-window-mode=secondary-visible",
       "--built-in-display-only",
@@ -336,7 +337,7 @@ describe("fresh review environment (CPU-only)", () => {
       ),
     ).rejects.toBe(stop);
     expect(received.args).toEqual([
-      "/fixture/repository/_output/build/app/main.cjs",
+      "/fixture/repository/_output/dev-core/Contents/Resources/app/main.cjs",
       `--farol-dev-user-data-dir=${devLaunchProfile(false, marker)}`,
     ]);
     expect(received.options.env.FAROL_ACCEPTANCE_PROFILE).toBe(marker);

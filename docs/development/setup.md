@@ -75,7 +75,10 @@ Neither process disappearance nor forced stop means application work was drained
 retained UNKNOWN and interrupted-profile recovery guards still apply.
 Dev is not a package candidate.
 
-Ordinary Dev includes the Go Shell route. The launcher prepares a fixed
+Ordinary Dev includes the Go Shell route. Electron itself and the actual main,
+MCP, preload and renderer resources execute inside the same protected Dev image.
+The mutable `_output/build/app` tree is build input only, never a launch path.
+The launcher prepares a fixed
 `_output/dev-core/Contents/Resources/app` resource tree and an unmodified pinned
 vendor runtime beside it. The running desktop retains its separate Dev display
 bundle and profile. The Go host applies the same resource, runtime, protected-root
@@ -92,7 +95,7 @@ It never reuses the daily profile or enables E2E substitutions. Each invocation
 mints a new profile; the launcher does not retry or reopen a previous review.
 
 Dev launches an authenticated Electron copy at
-`_output/dev-runtime/Farol Dev.app`. Only this copy gets the `Farol Dev` bundle
+`_output/dev-core/Contents/Frameworks/Farol Dev.app`. Only this copy gets the `Farol Dev` bundle
 name, `local.farol.dev` bundle identifier and existing sunrise Dev icon for Dock,
 Cmd-Tab and the app menu. The desktop retains its explicit Dev paths, partitions,
 `app.setName`, About panel and `Farol Dev · Development` window title.

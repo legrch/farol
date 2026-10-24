@@ -55,8 +55,9 @@ describe("Dev-only macOS bundle presentation", () => {
       expect(() => devInfoPlist(plist)).toThrow("DEV_RUNTIME_PLIST_INVALID");
     },
   );
-  it("limits restart compatibility to two exact checkout executables", () => {
+  it("limits restart compatibility to three exact checkout executables", () => {
     expect(devExecutables("/fixture/farol")).toEqual([
+      "/fixture/farol/_output/dev-core/Contents/Frameworks/Farol Dev.app/Contents/MacOS/Electron",
       "/fixture/farol/_output/dev-runtime/Farol Dev.app/Contents/MacOS/Electron",
       "/fixture/farol/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
     ]);
@@ -141,9 +142,17 @@ describe("Dev bundle signing before launch", () => {
           : { status: 1, stderr: "fixture failure" },
       );
       const launch = vi.fn();
-      await expect(launchPreview(root, launch)).rejects.toThrow(
-        /Farol Dev .*No launch was attempted/u,
-      );
+      await expect(
+        launchPreview(
+          root,
+          launch,
+          false,
+          false,
+          undefined,
+          {},
+          prepareDevRuntime,
+        ),
+      ).rejects.toThrow(/Farol Dev .*No launch was attempted/u);
       expect(launch).not.toHaveBeenCalled();
       await expect(fs.access(destination)).rejects.toMatchObject({
         code: "ENOENT",
@@ -166,9 +175,17 @@ describe("Dev bundle signing before launch", () => {
     ]);
     spawnSync.mockReturnValueOnce({ status: 1 });
     const launch = vi.fn();
-    await expect(launchPreview(root, launch)).rejects.toThrow(
-      "signature verification failed",
-    );
+    await expect(
+      launchPreview(
+        root,
+        launch,
+        false,
+        false,
+        undefined,
+        {},
+        prepareDevRuntime,
+      ),
+    ).rejects.toThrow("signature verification failed");
     expect(launch).not.toHaveBeenCalled();
   });
 
@@ -198,7 +215,17 @@ describe("Dev bundle signing before launch", () => {
       status: null,
     });
     const launch = vi.fn();
-    await expect(launchPreview(root, launch)).rejects.toThrow("signing failed");
+    await expect(
+      launchPreview(
+        root,
+        launch,
+        false,
+        false,
+        undefined,
+        {},
+        prepareDevRuntime,
+      ),
+    ).rejects.toThrow("signing failed");
     expect(launch).not.toHaveBeenCalled();
   });
 

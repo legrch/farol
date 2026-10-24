@@ -331,3 +331,24 @@ it("requires exact native exclusion before ignoring a named inventory process", 
   ])
     expect(control.devInventoryCandidateAbsent(seen)).toBe(false);
 });
+
+it("refuses retained core backend or watchdog paths independently of a fresh-review profile", () => {
+  const roots = control.devOwnedOutputRoots(root, "/fixture/daily-profile");
+  for (const executable of [
+    `${root}/_output/dev-core/Contents/Resources/app/farol-backend`,
+    `${root}/_output/dev-core/Contents/Resources/app/farol-shell-watchdog`,
+  ]) {
+    expect(
+      control.devInventoryOwnsLine(
+        `123 ${executable} --state=/fixture/review-profile`,
+        roots,
+      ),
+    ).toBe(true);
+  }
+  expect(
+    control.devInventoryOwnsLine(
+      "124 /other/farol/_output/dev-core/Contents/Resources/app/farol-backend",
+      roots,
+    ),
+  ).toBe(false);
+});

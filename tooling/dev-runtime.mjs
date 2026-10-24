@@ -16,9 +16,11 @@ const devIdentity = desktopIdentity("dev", "/");
 const devBundleName = `${devIdentity.applicationName}.app`;
 
 export const DEV_EXECUTABLE_SUFFIX = `/_output/dev-runtime/${devBundleName}/Contents/MacOS/Electron`;
+export const DEV_CORE_EXECUTABLE_SUFFIX = `/_output/dev-core/Contents/Frameworks/${devBundleName}/Contents/MacOS/Electron`;
 export const VENDOR_EXECUTABLE_SUFFIX =
   "/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron";
 export const devExecutables = (root) => [
+  root + DEV_CORE_EXECUTABLE_SUFFIX,
   root + DEV_EXECUTABLE_SUFFIX,
   root + VENDOR_EXECUTABLE_SUFFIX,
 ];
@@ -56,7 +58,7 @@ function codesign(args, action) {
   return result.stderr;
 }
 
-function verifyDevSignature(app) {
+export function verifyDevSignature(app) {
   codesign(["--verify", "--deep", "--strict", app], "signature verification");
   const details = codesign(
     ["--display", "--verbose=4", app],
@@ -73,7 +75,10 @@ function verifyDevSignature(app) {
     );
 }
 
-export async function prepareDevRuntime(root) {
+export async function prepareDevRuntime(
+  root,
+  parent = path.join(root, "_output/dev-runtime"),
+) {
   const source = path.join(root, "node_modules/electron/dist/Electron.app");
   const observed = await observeEmbeddedRuntime(source);
   assertEmbeddedRuntime(observed);
@@ -94,7 +99,6 @@ export async function prepareDevRuntime(root) {
     .update(presentation)
     .update(icon)
     .digest("hex");
-  const parent = path.join(root, "_output/dev-runtime");
   const destination = path.join(parent, devBundleName);
   const receiptPath = path.join(parent, "signed-runtime.json");
   let receipt;
@@ -109,7 +113,7 @@ export async function prepareDevRuntime(root) {
         `${devIdentity.applicationName} bundle changed. No launch was attempted.`,
       );
     verifyDevSignature(destination);
-    return root + DEV_EXECUTABLE_SUFFIX;
+    return path.join(destination, "Contents/MacOS/Electron");
   }
   // Verify the copy before applying the four presentation-only plist fields.
   await fs.mkdir(parent, { recursive: true });
@@ -133,7 +137,7 @@ export async function prepareDevRuntime(root) {
     await fs.rm(destination, { recursive: true, force: true });
     await fs.rename(app, destination);
     await fs.writeFile(receiptPath, JSON.stringify({ inputs, output }));
-    return root + DEV_EXECUTABLE_SUFFIX;
+    return path.join(destination, "Contents/MacOS/Electron");
   } finally {
     await fs.rm(staging, { recursive: true, force: true });
   }

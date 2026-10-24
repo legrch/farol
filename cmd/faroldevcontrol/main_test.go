@@ -515,3 +515,22 @@ func TestStopProofTable(t *testing.T) {
 		}
 	}
 }
+
+func TestProtectedCoreDevBundlePaths(t *testing.T) {
+	root := "/fixture/Owner's Farol"
+	executable := root + coreElectronSuffix
+	app := root + "/" + coreAppPath
+	if !validDevPaths(executable, app) {
+		t.Fatal("protected Dev tuple refused")
+	}
+	for _, other := range []string{root + "/" + relativeAppPath, "/other/" + coreAppPath} {
+		if validDevPaths(executable, other) {
+			t.Fatal("mismatched Dev tuple admitted")
+		}
+	}
+	q := fixtureRequest()
+	q.Executable, q.AppPath = executable, app
+	if r := inspectProcCommand(procArgs(executable, executable, app, "--farol-dev-user-data-dir="+q.ProfilePath), q); r.Status != "present" {
+		t.Fatalf("protected command: %+v", r)
+	}
+}

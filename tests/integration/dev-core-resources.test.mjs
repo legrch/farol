@@ -9,6 +9,16 @@ import { BUILD_ENTRIES } from "../../tooling/build-contract.mjs";
 import { GO_CORE_ENTRIES } from "../../tooling/go-core-artifact.mjs";
 import { createBuildIdentity } from "../../tooling/build-identity-contract.mjs";
 
+vi.mock("../../tooling/dev-runtime.mjs", () => ({
+  prepareDevRuntime: vi.fn(async (_root, parent) => {
+    const file = path.join(parent, "Farol Dev.app/Contents/MacOS/Electron");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, "fixture signed runtime", { mode: 0o755 });
+    return file;
+  }),
+  verifyDevSignature: vi.fn(),
+}));
+
 vi.mock("../../tooling/source-identity.mjs", () => ({
   sourceIdentity: () => ({
     commit: "b".repeat(40),
@@ -33,7 +43,7 @@ vi.mock("../../tooling/go-core-artifact.mjs", async (original) => ({
 }));
 
 // Real disposable filesystem, entry SHA verification and layout selection.
-// Go input and vendor qualification are doubles; native proof is separate.
+// Go input, vendor qualification and Dev signing are doubles; native proof is separate.
 describe("admitted source Dev resources", () => {
   let root, source, destination;
   beforeEach(async () => {

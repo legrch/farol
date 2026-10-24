@@ -167,6 +167,17 @@ export function inspectDevStopIdentity({
   }
 }
 
+export function devOwnedOutputRoots(writerRoot, profilePath) {
+  return [
+    path.join(writerRoot, "node_modules/electron/dist/Electron.app/"),
+    path.join(writerRoot, "_output/build/app/"),
+    path.join(writerRoot, "_output/dev-runtime/"),
+    path.join(writerRoot, "_output/dev-core/"),
+    path.join(writerRoot, "_output/.dev-core-retired-"),
+    path.join(profilePath, "farol-state/"),
+  ];
+}
+
 export function devInventoryOwnsLine(line, ownedRoots) {
   // A product title alone does not identify a checkout. Its runtime/native
   // children retain exact writer paths and still block shared-output rebuilds.
@@ -248,7 +259,10 @@ export async function prepareDevBuild({
   if (process.platform !== "darwin")
     throw Error("DEV_PROCESS_PLATFORM_REFUSED");
   const writerRoot = fs.realpathSync(root);
-  const appPath = path.join(writerRoot, "_output/build/app/main.cjs");
+  const appPath = path.join(
+    writerRoot,
+    "_output/dev-core/Contents/Resources/app/main.cjs",
+  );
   const home = os.userInfo().homedir;
   if (process.env.HOME !== home) throw Error("DEV_PROCESS_HOME_REFUSED");
   const profileName =
@@ -402,12 +416,7 @@ export async function prepareDevBuild({
   // Other profiles/review windows and retained native children sharing these
   // outputs must also be absent. They are never killed by this launcher.
   const inventory = ps(["-ww", "-axo", "pid=,command="]);
-  const ownedRoots = [
-    path.join(writerRoot, "node_modules/electron/dist/Electron.app/"),
-    path.join(writerRoot, "_output/build/app/"),
-    path.join(writerRoot, "_output/dev-runtime/"),
-    path.join(profilePath, "farol-state/"),
-  ];
+  const ownedRoots = devOwnedOutputRoots(writerRoot, profilePath);
   for (const line of inventory.text.split("\n")) {
     if (devInventoryOwnsLine(line, ownedRoots))
       throw Error("DEV_BUILD_OWNED_PROCESSES_REMAIN");
