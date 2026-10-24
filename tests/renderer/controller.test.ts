@@ -3830,7 +3830,7 @@ describe("bounded Setup sign-in observation", () => {
     }
   });
   it.each(["authenticated", "signed_out", "unknown"] as const)(
-    "retains settled %s sample across Continue, Overview and Settings with a fresh read only on returning entry",
+    "retains settled %s across navigation and rereads unconfirmed sign-in on explicit entry",
     async (state) => {
       const h = await pending();
       try {
@@ -3861,11 +3861,17 @@ describe("bounded Setup sign-in observation", () => {
         );
         h.c.navigate({ area: "setup", setupStep: "signin" });
         await Promise.resolve();
-        expect(h.f.api.configure).toHaveBeenCalledTimes(2);
-        expect(h.c.getSnapshot().signInObservation?.observationId).not.toBe(
-          sample?.observationId,
-        );
-        expect(signInPresentation(h.c.getSnapshot()).signedIn).toBe(false);
+        if (state === "authenticated") {
+          expect(h.f.api.configure).toHaveBeenCalledTimes(1);
+          expect(h.c.getSnapshot().signInObservation).toBe(sample);
+          expect(signInPresentation(h.c.getSnapshot()).signedIn).toBe(true);
+        } else {
+          expect(h.f.api.configure).toHaveBeenCalledTimes(2);
+          expect(h.c.getSnapshot().signInObservation?.observationId).not.toBe(
+            sample?.observationId,
+          );
+          expect(signInPresentation(h.c.getSnapshot()).signedIn).toBe(false);
+        }
       } finally {
         h.c.dispose();
       }
@@ -4765,62 +4771,70 @@ it("renews sign-in on the final Setup step after a connector check navigates its
   }
 });
 
-it("rechecks a restored hydrating session without a user click or another Send", async () => {
-  vi.useFakeTimers();
-  const f = fixture();
-  const data = bootstrap();
-  data.configuration.settings = readySettings();
-  data.configuration.settings.setup.chatgpt.verified!.buildId = "4".repeat(64);
-  vi.mocked(f.api.bootstrap).mockResolvedValue(data);
-  let observations = 0;
-  vi.mocked(f.api.configure).mockImplementation(async (command) => {
-    if (command.kind === "chatgpt.observe-sign-in")
-      return signInReply(
-        command,
-        ++observations === 1 ? "unknown" : "authenticated",
-        { status: "ready", settings: data.configuration.settings },
+it.each([false, true])(
+  "rechecks a hydrating session without a click or Send (same build: %s)",
+  async (sameBuild) => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const data = bootstrap();
+    data.configuration.settings = readySettings();
+    if (!sameBuild)
+      data.configuration.settings.setup.chatgpt.verified!.buildId = "4".repeat(
+        64,
       );
-    if (command.kind === "chatgpt.verify") {
-      const settings = structuredClone(data.configuration.settings);
-      settings.revision++;
-      settings.setup.chatgpt.verified!.buildId = data.build.buildId;
-      return {
-        ok: true,
-        snapshot: { status: "ready", settings },
-        evidence: {
-          kind: "chatgpt.readiness",
-          state: "authenticated",
-          code: null,
-        },
-      };
+    vi.mocked(f.api.bootstrap).mockResolvedValue(data);
+    let observations = 0;
+    vi.mocked(f.api.configure).mockImplementation(async (command) => {
+      if (command.kind === "chatgpt.observe-sign-in")
+        return signInReply(
+          command,
+          ++observations === 1 ? "unknown" : "authenticated",
+          { status: "ready", settings: data.configuration.settings },
+        );
+      if (command.kind === "chatgpt.verify") {
+        const settings = structuredClone(data.configuration.settings);
+        settings.revision++;
+        settings.setup.chatgpt.verified!.buildId = data.build.buildId;
+        return {
+          ok: true,
+          snapshot: { status: "ready", settings },
+          evidence: {
+            kind: "chatgpt.readiness",
+            state: "authenticated",
+            code: null,
+          },
+        };
+      }
+      throw Error("unexpected effect");
+    });
+    const c = new WindowController(f.api);
+    try {
+      await c.start();
+      f.emit("route", { state: "loaded" });
+      await vi.advanceTimersByTimeAsync(600);
+      expect(c.getSnapshot().setupSignInCheck).toBeTruthy();
+      expect(setupChecklist(c.getSnapshot()).entries[0]?.state).toBe(
+        "verified",
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(
+        vi
+          .mocked(f.api.configure)
+          .mock.calls.filter(([command]) => command.kind === "chatgpt.verify"),
+      ).toHaveLength(1);
+      expect(
+        vi
+          .mocked(f.api.configure)
+          .mock.calls.some(
+            ([command]) => command.kind === "connector.verify-app",
+          ),
+      ).toBe(false);
+    } finally {
+      c.dispose();
+      vi.useRealTimers();
     }
-    throw Error("unexpected effect");
-  });
-  const c = new WindowController(f.api);
-  try {
-    await c.start();
-    f.emit("route", { state: "loaded" });
-    await vi.advanceTimersByTimeAsync(600);
-    expect(c.getSnapshot().setupSignInCheck).toBeTruthy();
-    expect(setupChecklist(c.getSnapshot()).entries[0]?.state).toBe("verified");
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(
-      vi
-        .mocked(f.api.configure)
-        .mock.calls.filter(([command]) => command.kind === "chatgpt.verify"),
-    ).toHaveLength(1);
-    expect(
-      vi
-        .mocked(f.api.configure)
-        .mock.calls.some(
-          ([command]) => command.kind === "connector.verify-app",
-        ),
-    ).toBe(false);
-  } finally {
-    c.dispose();
-    vi.useRealTimers();
-  }
-});
+  },
+);
 
 it("recovers browser load state from bootstrap when its event preceded renderer startup", async () => {
   const f = fixture();
@@ -4845,3 +4859,115 @@ it("recovers browser load state from bootstrap when its event preceded renderer 
     c.dispose();
   }
 });
+
+it("retains a confirmed document across Setup and browser navigation without a new read", async () => {
+  const f = fixture();
+  const data = bootstrap();
+  data.configuration.settings = readySettings();
+  vi.mocked(f.api.bootstrap).mockResolvedValue(data);
+  vi.mocked(f.api.configure).mockImplementation(async (command) => {
+    if (command.kind === "chatgpt.observe-sign-in")
+      return signInReply(command, "authenticated", {
+        status: "ready",
+        settings: data.configuration.settings,
+      });
+    if (command.kind === "chatgpt.verify")
+      return {
+        ok: true,
+        snapshot: data.configuration,
+        evidence: {
+          kind: "chatgpt.readiness",
+          state: "authenticated",
+          code: null,
+        },
+      };
+    throw Error("unexpected effect");
+  });
+  const c = new WindowController(f.api);
+  try {
+    await c.start();
+    f.emit("route", { state: "loaded" });
+    await vi.waitFor(() =>
+      expect(setupChecklist(c.getSnapshot()).entries[0]?.state).toBe(
+        "verified",
+      ),
+    );
+    const confirmed = c.getSnapshot().signInObservation;
+    const calls = vi.mocked(f.api.configure).mock.calls.length;
+    for (const setupStep of [
+      "overview",
+      "folders",
+      "connection",
+      "attachment",
+      "signin",
+    ] as const) {
+      c.navigate({ area: "setup", setupStep });
+      c.navigate({ area: "chatgpt" });
+      c.travel(-1);
+      c.travel(1);
+      expect(c.getSnapshot().signInObservation).toBe(confirmed);
+      expect(setupChecklist(c.getSnapshot()).entries[0]?.state).toBe(
+        "verified",
+      );
+    }
+    expect(f.api.configure).toHaveBeenCalledTimes(calls);
+    expect(f.api.task).not.toHaveBeenCalled();
+    // An actual document event still invalidates the old sample.
+    f.emit("route", { state: "loading" });
+    expect(c.getSnapshot().signInObservation).toBeNull();
+    expect(setupChecklist(c.getSnapshot()).entries[0]?.state).not.toBe(
+      "verified",
+    );
+  } finally {
+    c.dispose();
+  }
+});
+
+it.each(["unknown", "signed_out"] as const)(
+  "bounds passive hydration reads per document and stops at %s without effects",
+  async (answer) => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const data = bootstrap();
+    data.configuration.settings = readySettings();
+    data.configuration.settings.setup.connect.outcomeUnknown = true;
+    data.configuration.settings.connectors.secureMcp.appVerificationPending = true;
+    vi.mocked(f.api.bootstrap).mockResolvedValue(data);
+    vi.mocked(f.api.configure).mockImplementation(async (command) => {
+      if (command.kind === "chatgpt.observe-sign-in")
+        return signInReply(command, answer, {
+          status: "ready",
+          settings: data.configuration.settings,
+        });
+      throw Error("unexpected effect");
+    });
+    const c = new WindowController(f.api);
+    try {
+      await c.start();
+      f.emit("route", { state: "loaded" });
+      await vi.advanceTimersByTimeAsync(20_000);
+      const perDocument = answer === "unknown" ? 4 : 1;
+      expect(f.api.configure).toHaveBeenCalledTimes(perDocument);
+      const checks = setupChecklist(c.getSnapshot());
+      expect(checks.entries[0]?.state).not.toBe("verified");
+      expect(checks.entries[1]?.state).toBe("verified");
+      expect(checks.entries[2]?.state).toBe("verified");
+      expect(checks.entries[3]?.state).not.toBe("verified");
+      expect(checks.ready).toBe(false);
+      f.emit("route", { state: "loading" });
+      f.emit("route", { state: "loaded" });
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(f.api.configure).toHaveBeenCalledTimes(perDocument * 2);
+      expect(c.getSnapshot().configuration).toMatchObject({
+        settings: { setup: { connect: { outcomeUnknown: true } } },
+      });
+      expect(f.api.task).not.toHaveBeenCalled();
+      c.dispose();
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(f.api.configure).toHaveBeenCalledTimes(perDocument * 2);
+    } finally {
+      c.dispose();
+      vi.useRealTimers();
+    }
+  },
+);

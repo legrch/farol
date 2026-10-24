@@ -609,6 +609,7 @@ export class WindowController implements RendererFacade {
       }),
       this.api.onInstalledUpdateState((value) => this.adoptUpdate(value)),
       this.api.onBrowserRouteState((value) => {
+        this.resetSavedSignInObservation();
         this.invalidateSignInObservation();
         const parsed = BrowserRouteStatusSchema.safeParse(value);
         if (parsed.success) {
@@ -2293,7 +2294,10 @@ export class WindowController implements RendererFacade {
     this.presentBrowserOnNavigation();
     if (
       this.isSetupSignInObservationEntry() &&
-      (!wasSignIn || this.state.signInObservation === null) &&
+      (this.state.signInObservation === null ||
+        (!wasSignIn &&
+          this.isSignInEntry() &&
+          this.state.signInObservation.state !== "authenticated")) &&
       (this.isSignInEntry() || this.state.route === "loaded")
     ) {
       this.invalidateSignInObservation();
@@ -2322,7 +2326,10 @@ export class WindowController implements RendererFacade {
     this.presentBrowserOnNavigation();
     if (
       this.isSetupSignInObservationEntry() &&
-      (!wasSignIn || this.state.signInObservation === null) &&
+      (this.state.signInObservation === null ||
+        (!wasSignIn &&
+          this.isSignInEntry() &&
+          this.state.signInObservation.state !== "authenticated")) &&
       (this.isSignInEntry() || this.state.route === "loaded")
     ) {
       this.invalidateSignInObservation();
@@ -2437,9 +2444,15 @@ export class WindowController implements RendererFacade {
       }
     })();
   }
-  // A restored page can finish loading before its signed-in UI hydrates. Read
-  // that saved session a bounded number of times; never retry a Settings write
-  // or an external Send. Each read keeps the existing document/build checks.
+  private resetSavedSignInObservation(): void {
+    if (this.savedSignInReadTimer !== null)
+      clearTimeout(this.savedSignInReadTimer);
+    this.savedSignInReadTimer = null;
+    this.savedSignInReadAttempts = 0;
+  }
+  // Any loaded document can still be hydrating, including within the same
+  // build. Bound passive reads per document event; never retry a Settings write
+  // or an external Send. Explicit sign-out and settled answers stop the reads.
   private scheduleSavedSignInObservation(): void {
     const state = this.state;
     const saved =
@@ -2455,7 +2468,8 @@ export class WindowController implements RendererFacade {
       state.status !== "current" ||
       state.runtime !== "ready" ||
       !saved ||
-      saved.buildId === state.buildId ||
+      state.signInObservation?.pending === true ||
+      state.signInObservation?.state === "authenticated" ||
       state.signInObservation?.state === "signed_out"
     )
       return;
@@ -2470,15 +2484,16 @@ export class WindowController implements RendererFacade {
       if (
         this.disposed ||
         !verified ||
-        verified.buildId === current.buildId ||
+        current.signInObservation?.pending === true ||
+        current.signInObservation?.state === "authenticated" ||
+        current.signInObservation?.state === "signed_out" ||
         current.status !== "current" ||
         current.runtime !== "ready" ||
         current.route !== "loaded"
       )
         return;
       this.savedSignInReadAttempts++;
-      if (!current.signInObservation?.pending) this.observeSignIn();
-      this.scheduleSavedSignInObservation();
+      this.observeSignIn();
     }, delays[this.savedSignInReadAttempts]);
   }
   private confirmSetupSignIn(): void {
