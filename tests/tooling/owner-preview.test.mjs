@@ -253,8 +253,5 @@ test("Task and npm migrations preserve an explicitly named development caller", 
     scripts["preview:owner"],
     "node tooling/owner-preview.mjs build-run",
   );
-  assert.equal(
-    scripts["preview:development"],
-    "electron _output/build/app/main.cjs",
-  );
+  assert.equal(scripts["preview:development"], "node tooling/dev.mjs");
 });

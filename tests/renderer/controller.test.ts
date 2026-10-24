@@ -4675,6 +4675,11 @@ it.each([false, true])(
 
 it("renews sign-in on the final Setup step after a connector check navigates its browser", async () => {
   const f = fixture();
+  let checking = false;
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
   let documentGeneration = 1,
     checks = 0,
     sends = 0,
@@ -4689,7 +4694,10 @@ it("renews sign-in on the final Setup step after a connector check navigates its
   });
   vi.mocked(f.api.configure).mockImplementation(async (command) => {
     if (command.kind === "chatgpt.observe-sign-in") {
-      const reply = signInReply(command, "authenticated");
+      const reply = signInReply(
+        command,
+        checking ? "unknown" : "authenticated",
+      );
       return {
         ...reply,
         evidence: {
@@ -4712,9 +4720,12 @@ it("renews sign-in on the final Setup step after a connector check navigates its
     }
     if (command.kind === "connector.verify-app") {
       sends++;
+      checking = true;
       documentGeneration++;
       f.emit("route", { state: "loading" });
       f.emit("route", { state: "loaded" });
+      await pending;
+      checking = false;
       attached = true;
       return { ok: true, snapshot: current() };
     }
@@ -4732,12 +4743,17 @@ it("renews sign-in on the final Setup step after a connector check navigates its
     );
     expect(checks).toBe(1);
     c.navigate({ area: "chatgpt", connectionCheckReturn: true });
-    await c.configure(
+    const check = c.configure(
       { kind: "connector.verify-app" },
       "settings:connector.verify-app:",
     );
-    expect(c.getSnapshot().signInObservation).toBeNull();
     c.navigate({ area: "setup", setupStep: "attachment" });
+    await vi.waitFor(() => expect(sends).toBe(1));
+    await vi.waitFor(() =>
+      expect(c.getSnapshot().signInObservation?.state).toBe("unknown"),
+    );
+    finish();
+    await check;
     await vi.waitFor(() =>
       expect(setupChecklist(c.getSnapshot()).ready).toBe(true),
     );

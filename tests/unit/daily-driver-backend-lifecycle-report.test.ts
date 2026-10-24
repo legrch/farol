@@ -1,10 +1,13 @@
 import fs from "node:fs";
-import path from "node:path";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
 import { parse } from "@babel/parser";
 import { expect, it } from "vitest";
 import { createTotalOperationsRecorder } from "../../apps/desktop/operations/recorder";
+import {
+  desktopCoreArtifactRoot,
+  desktopDevShellImageMatches,
+} from "../../apps/desktop/dev-core-layout";
 
 // Execute the actual desktop diagnostic sink and its selected callback values.
 // Child/native mechanics are covered separately with controlled producers;
@@ -207,7 +210,7 @@ it("omits an absent optional observer from the actual native launch object", () 
   expect(Object.hasOwn(options, "codexRead")).toBe(false);
 });
 
-it("selects Shell for the actual desktop caller only in its supported layout", () => {
+it("passes compiled Shell and the protected root through the actual desktop caller", () => {
   const call = selected(
     main,
     mainTree,
@@ -216,42 +219,55 @@ it("selects Shell for the actual desktop caller only in its supported layout", (
       (node.callee as { name?: string }).name === "startObservedDesktopGoCore",
   );
   const tree = parse(call, { sourceType: "module", plugins: ["typescript"] });
-  const property = selected(
+  const root = selected(
+    call,
+    tree,
+    (node) =>
+      node.type === "ObjectProperty" &&
+      (node.key as { name?: string }).name === "artifactRoot",
+  );
+  const shell = selected(
     call,
     tree,
     (node) =>
       node.type === "ObjectProperty" &&
       (node.key as { name?: string }).name === "compiledShell",
   );
-  const selector = selected(
-    host,
-    hostTree,
-    (node) =>
-      node.type === "FunctionDeclaration" &&
-      (node.id as { name?: string }).name === "desktopShellSelection",
-  );
   const compiledGoShell = {
     support: "controlled",
     watchdogSource: new Uint8Array(),
   };
-  for (const runtimeEnvironment of ["dev", "preview"]) {
-    for (const packaged of [false, true]) {
-      const directory = packaged
-        ? "/synthetic/Farol.app/Contents/Resources/app"
-        : "/synthetic/repo/_output/build/app";
+  for (const runtimeEnvironment of ["dev", "preview", "owner-preview"]) {
+    for (const layout of ["raw", "packaged", "protected"] as const) {
+      const directory =
+        layout === "packaged"
+          ? "/synthetic/Farol.app/Contents/Resources/app"
+          : layout === "protected"
+            ? "/synthetic/repo/_output/dev-core/Contents/Resources/app"
+            : "/synthetic/repo/_output/build/app";
+      const executable =
+        layout === "protected"
+          ? "/synthetic/repo/_output/dev-core/Contents/Frameworks/Farol Dev.app/Contents/MacOS/Electron"
+          : "/synthetic/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron";
       const actual = vm.runInNewContext(
-        `${stripTypeScriptTypes(selector)}; ({${stripTypeScriptTypes(property)}}).compiledShell`,
+        `({${stripTypeScriptTypes(root)},${stripTypeScriptTypes(shell)}})`,
         {
-          path,
+          desktopCoreArtifactRoot,
+          desktopDevShellImageMatches,
+          realpathSync: (value: string) => value,
+          process: { execPath: executable },
           compiledGoShell,
           runtimeEnvironment,
           directory,
           installedResourcesOrigin: undefined,
         },
       );
-      expect(actual).toBe(
-        runtimeEnvironment === "dev" && !packaged ? undefined : compiledGoShell,
+      expect(actual.compiledShell).toBe(
+        runtimeEnvironment === "dev" && layout !== "protected"
+          ? undefined
+          : compiledGoShell,
       );
+      expect(actual.artifactRoot).toBe(directory);
     }
   }
 });
@@ -279,31 +295,30 @@ it("uses the authenticated private image for the actual Go and Shell caller", ()
       node.type === "ObjectProperty" &&
       (node.key as { name?: string }).name === "compiledShell",
   );
-  const selector = selected(
-    host,
-    hostTree,
-    (node) =>
-      node.type === "FunctionDeclaration" &&
-      (node.id as { name?: string } | undefined)?.name ===
-        "desktopShellSelection",
-  );
   const privateRoot = "/owner-private/Farol.app/Contents/Resources/app";
   const compiledGoShell = {
     support: "controlled",
     watchdogSource: new Uint8Array(),
   };
-  const value = vm.runInNewContext(
-    `${stripTypeScriptTypes(selector)}; ({${stripTypeScriptTypes(root)},${stripTypeScriptTypes(shell)}})`,
-    {
-      path,
-      compiledGoShell,
-      runtimeEnvironment: "preview",
-      directory: "/Applications/Farol.app/Contents/Resources/app",
-      installedResourcesOrigin: { execution: { directory: privateRoot } },
-    },
-  );
-  expect(value.artifactRoot).toBe(privateRoot);
-  expect(value.compiledShell).toBe(compiledGoShell);
+  for (const runtimeEnvironment of ["dev", "preview", "owner-preview"]) {
+    const value = vm.runInNewContext(
+      `({${stripTypeScriptTypes(root)},${stripTypeScriptTypes(shell)}})`,
+      {
+        desktopCoreArtifactRoot,
+        desktopDevShellImageMatches,
+        realpathSync: (value: string) => value,
+        process: { execPath: "/owner-private/Farol.app/Contents/MacOS/Farol" },
+        compiledGoShell,
+        runtimeEnvironment,
+        directory: "/Applications/Farol.app/Contents/Resources/app",
+        installedResourcesOrigin: { execution: { directory: privateRoot } },
+      },
+    );
+    expect(value.artifactRoot).toBe(privateRoot);
+    expect(value.compiledShell).toBe(
+      runtimeEnvironment === "dev" ? undefined : compiledGoShell,
+    );
+  }
 });
 
 it("keeps the original lifecycle diagnostic when operations recording throws", () => {
@@ -364,3 +379,80 @@ it.each(lifecycleRecordingCases)(
     expect(diagnostics().unmappedCodes).toBe(0);
   },
 );
+
+// A deliberate anchor KILL keeps group custody until the original Stop settles.
+// These notifications must not invent additional unknown user operations.
+it.each([
+  {
+    source: "connector-tunnel",
+    event: "exit",
+    code: "CONNECTOR_TUNNEL_EXIT",
+    state: "observed",
+    exitCode: 0,
+    signal: null,
+    forced: false,
+  },
+  {
+    source: "connector-anchor",
+    event: "disconnect",
+    code: "CONNECTOR_IPC_DISCONNECTED",
+    state: "outcome_unknown",
+    exitCode: null,
+    signal: null,
+    forced: true,
+  },
+  {
+    source: "connector-anchor",
+    event: "exit",
+    code: "CONNECTOR_ANCHOR_EXIT",
+    state: "observed",
+    exitCode: null,
+    signal: "SIGKILL",
+    forced: true,
+  },
+  {
+    source: "connector-anchor",
+    event: "close",
+    code: "CONNECTOR_ANCHOR_CLOSE",
+    state: "observed",
+    exitCode: null,
+    signal: "SIGKILL",
+    forced: true,
+  },
+])(
+  "keeps planned closing notification $code as a diagnostic",
+  (notification) => {
+    const { report, lines, records } = sink();
+    report({
+      ...notification,
+      phase: "closing",
+      runtimeGeneration: "original-runtime",
+    });
+    expect(records).toEqual([]);
+    expect(lines).toHaveLength(1);
+    report({
+      ...notification,
+      phase: "active",
+      runtimeGeneration: "original-runtime",
+    });
+    expect(records).toEqual([{ outcome: "unknown", code: notification.code }]);
+  },
+);
+it("retains an unconfirmed connector Stop as an unknown operation", () => {
+  const { report, records, lines } = sink();
+  report({
+    source: "connector-anchor",
+    phase: "closing",
+    event: "cleanup-unknown",
+    code: "CONNECTOR_STOP_UNCONFIRMED",
+    state: "outcome_unknown",
+    exitCode: null,
+    signal: null,
+    forced: true,
+    runtimeGeneration: "original-runtime",
+  });
+  expect(records).toEqual([
+    { outcome: "unknown", code: "CONNECTOR_STOP_UNCONFIRMED" },
+  ]);
+  expect(lines).toHaveLength(1);
+});

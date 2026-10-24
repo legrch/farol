@@ -11,7 +11,11 @@ import {
 } from "../../src/pkg/product-settings/contract";
 import { taskPolicy } from "../fixtures/task-policy";
 import { fixtureTaskSettingsCompare } from "../fixtures/task-settings-projection.ts";
-import type { Client } from "../../apps/desktop/bridge/client";
+import {
+  BridgeError,
+  RequestNotSentError,
+  type Client,
+} from "../../apps/desktop/bridge/client";
 import type { Json, Outcome } from "../../apps/desktop/bridge/wire";
 
 // Deterministic host/transport conformance only; the separate Go native CLI test
@@ -46,6 +50,13 @@ async function fixture(
           root: { path: "/synthetic/work", device: "1", inode: "2" },
           bytes: 7,
           sha256: "b".repeat(64),
+        };
+      else if (method === "computer.settings.inspect")
+        data = {
+          publication: input.publication!,
+          workspaceId: input.workspaceId!,
+          relativePath: input.relativePath!,
+          root: { path: "/synthetic/work", device: "1", inode: "2" },
         };
       else if (method === "computer.settings.list")
         data = {
@@ -410,6 +421,137 @@ describe("Go Computer host authority mapping", () => {
         f.bridge.listSettings(generation, workspaces[0]!.workspaceId, "."),
       ).rejects.toMatchObject({ code: "computer_publication_unavailable" });
       expect(f.request).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it("inspects for Settings under the exact publication without creating a Chat owner", async () => {
+    const f = await fixture();
+    const added = await f.add();
+    if (!added.ok || added.snapshot.status !== "ready") throw Error("fixture");
+    const { generation, workspaces } = added.snapshot.settings.computer;
+    const listed = await f.bridge.inspectSettings(
+      generation,
+      workspaces[0]!.workspaceId,
+      ".",
+    );
+    expect(listed.root).toEqual({
+      path: "/synthetic/work",
+      device: "1",
+      inode: "2",
+    });
+    expect(listed).not.toHaveProperty("entries");
+    expect(f.request.mock.calls[1]![1]).toMatchObject({
+      renewableOwnerConsent: true,
+    });
+    expect(f.request.mock.calls.map((call) => call[0])).toEqual([
+      "computer.authority.deactivate",
+      "computer.authority.publish",
+      "computer.settings.inspect",
+    ]);
+    expect(f.request.mock.calls[2]![2]?.operationId).toBeUndefined();
+    await expect(
+      f.bridge.inspectSettings(generation + 1, workspaces[0]!.workspaceId, "."),
+    ).rejects.toMatchObject({ code: "computer_publication_unavailable" });
+    expect(f.request).toHaveBeenCalledTimes(3);
+    // Actual Chat admission consumes only its own admission receipt. A later
+    // owner list neither fabricates nor renews that Chat membership.
+    await f.bridge.admitRead(intent);
+    await f.bridge.inspectSettings(generation, workspaces[0]!.workspaceId, ".");
+    expect(
+      f.request.mock.calls.filter((call) => call[0] === "chat.turn"),
+    ).toHaveLength(1);
+  });
+
+  it.each(["publication", "workspace", "backend", "operation", "shape"])(
+    "fences a crossed Settings %s result without another physical request",
+    async (fault) => {
+      const f = await fixture((method, result) => {
+        if (method !== "computer.settings.inspect") return result;
+        const data = result.data as Record<string, Json>;
+        if (fault === "backend")
+          return {
+            ...result,
+            context: { ...result.context, backendGeneration: "other" },
+          };
+        if (fault === "operation")
+          return { ...result, operationId: "unexpected" };
+        if (fault === "shape")
+          return { ...result, data: { ...data, root: null } };
+        return {
+          ...result,
+          data: {
+            ...data,
+            ...(fault === "workspace"
+              ? { workspaceId: "other" }
+              : {
+                  publication: {
+                    ...(data.publication as Record<string, Json>),
+                    settingsRevision: "999",
+                  },
+                }),
+          },
+        };
+      });
+      const added = await f.add();
+      if (!added.ok || added.snapshot.status !== "ready")
+        throw Error("fixture");
+      const { generation, workspaces } = added.snapshot.settings.computer;
+      await expect(
+        f.bridge.inspectSettings(generation, workspaces[0]!.workspaceId, "."),
+      ).rejects.toMatchObject({ state: "unknown" });
+      await expect(
+        f.bridge.inspectSettings(generation, workspaces[0]!.workspaceId, "."),
+      ).rejects.toMatchObject({ code: "computer_publication_unavailable" });
+      expect(f.request).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it.each(["backpressure", "refused", "unknown", "changed"])(
+    "only rechecks a known undispatched inspection: %s",
+    async (failure) => {
+      const f = await fixture();
+      const added = await f.add();
+      if (!added.ok || added.snapshot.status !== "ready")
+        throw Error("fixture");
+      const { generation, workspaces } = added.snapshot.settings.computer;
+      const original = f.request.getMockImplementation()!;
+      let inspections = 0;
+      f.request.mockImplementation(async (method, body, options) => {
+        if (method === "computer.settings.inspect") {
+          inspections++;
+          if (inspections === 1) {
+            if (failure === "backpressure") throw new RequestNotSentError();
+            throw new BridgeError(
+              failure === "changed"
+                ? "unavailable"
+                : (failure as "refused" | "unknown"),
+              failure === "changed"
+                ? "computer_publication_unavailable"
+                : "WORKSPACE_PATH_REFUSED",
+            );
+          }
+        }
+        return original(method, body, options);
+      });
+      const result = f.bridge.inspectSettings(
+        generation,
+        workspaces[0]!.workspaceId,
+        ".",
+      );
+      if (failure === "backpressure") {
+        await expect(result).resolves.toMatchObject({ relativePath: "." });
+        expect(inspections).toBe(2);
+      } else {
+        await expect(result).rejects.toBeInstanceOf(BridgeError);
+        expect(inspections).toBe(1);
+      }
+      expect(
+        f.request.mock.calls.every(
+          ([method, , options]) =>
+            method !== "computer.settings.inspect" ||
+            options?.operationId === undefined,
+        ),
+      ).toBe(true);
     },
   );
 

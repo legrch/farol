@@ -1,6 +1,6 @@
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { change, mount, readySettings } from "./setup-fixture";
+import { change, mount, readySettings, buildId } from "./setup-fixture";
 import { bootstrap, deferred, fixture, signInReply } from "./fixture";
 import { WindowController } from "../../src/ui/renderer/controller";
 import { setupChecklist } from "../../src/ui/renderer/setup-navigation";
@@ -392,7 +392,7 @@ describe("Add to ChatGPT", () => {
         ?.value,
     ).toBe("Farol");
     expect(h.host.querySelector(".setup-app-values")?.textContent).toContain(
-      "ConnectionTunnel · synthetic-tunnelSign-inNone",
+      "ConnectionTunnel · synthetic-tunnelApp authenticationNo additional sign-in",
     );
     expect(h.host.textContent).toContain("without reading file contents");
     expect(h.host.querySelectorAll("details")).toHaveLength(0);
@@ -523,18 +523,20 @@ const walkthroughs = [
     label: "Create a tunnel and a key",
     open: "Open OpenAI Tunnels",
     destination: "tunnels",
+    initiallyOpen: false,
   },
   {
     step: "attachment",
     label: "Add to ChatGPT",
     open: "Open ChatGPT Apps",
     destination: "chatgpt",
+    initiallyOpen: true,
   },
 ] as const;
 describe("on-demand Setup instructions", () => {
   it.each(walkthroughs)(
-    "keeps $step guidance closed until requested and never advances on a timer",
-    async ({ step, label, open, destination }) => {
+    "shows $step guidance in its expected initial state and never advances on a timer",
+    async ({ step, label, open, destination, initiallyOpen = false }) => {
       vi.useFakeTimers();
       const h = await mount({ step, value: readySettings() });
       const region = h.host.querySelector<HTMLElement>(
@@ -544,8 +546,29 @@ describe("on-demand Setup instructions", () => {
         ...h.host.querySelectorAll<HTMLButtonElement>(".walkthrough-step"),
       ];
       expect(cards).toHaveLength(3);
-      expect(region.hidden).toBe(true);
+      expect(region.hidden).toBe(!initiallyOpen);
+      if (step === "attachment") {
+        expect(region.textContent).toContain("open Apps or Connectors");
+        expect(h.host.textContent).toContain("No additional sign-in");
+        const section = h.host.querySelector(
+          '[aria-label="Create the ChatGPT app"]',
+        )!;
+        const children = [...section.children];
+        expect(
+          children.indexOf(section.querySelector(".setup-walkthrough")!),
+        ).toBeLessThan(
+          children.indexOf(section.querySelector(".setup-app-values")!),
+        );
+      }
       for (const [i, card] of cards.entries()) {
+        if (initiallyOpen && i === 0) {
+          expect(card.getAttribute("aria-expanded")).toBe("true");
+          expect(region.hidden).toBe(false);
+          expect(
+            region.querySelectorAll("ol > li").length,
+          ).toBeGreaterThanOrEqual(2);
+          continue;
+        }
         await act(async () => card.click());
         expect(card.getAttribute("aria-expanded")).toBe("true");
         expect(card.getAttribute("aria-controls")).toBe(region.id);
@@ -756,3 +779,108 @@ describe("on-demand Setup instructions", () => {
   });
 });
 afterEach(() => vi.useRealTimers());
+
+describe("automatic checks after removing a Setup folder", () => {
+  it.each(["applied", "refused", "unknown", "crossed"] as const)(
+    "follows only its own acknowledged unchanged-scope removal: %s",
+    async (outcome) => {
+      let value = readySettings();
+      const retained = value.computer.workspaces[0]!;
+      const scratchId = "44444444-4444-4444-8444-444444444444";
+      value.computer.workspaces.push({
+        ...structuredClone(retained),
+        workspaceId: scratchId,
+        root: "/approved/scratch",
+        label: "Scratch",
+      });
+      value.connectors.secureMcp.runtime = null;
+      value.connectors.secureMcp.challenge = null;
+      const h = await mount({ step: "folders", value });
+      const calls: string[] = [];
+      h.reply((command) => {
+        calls.push(command.kind);
+        if (command.kind === "computer.remove-workspace") {
+          if (outcome === "unknown")
+            throw Error("scripted lost removal acknowledgement");
+          if (outcome === "refused")
+            return {
+              ok: false,
+              error: "WORKSPACE_NOT_FOUND",
+              snapshot: { status: "ready", settings: value },
+            };
+          value = {
+            ...value,
+            revision: value.revision + 1,
+            computer: {
+              ...value.computer,
+              generation: value.computer.generation + 1,
+              workspaces: value.computer.workspaces.filter(
+                (w) => w.workspaceId !== scratchId,
+              ),
+            },
+            setup: {
+              ...value.setup,
+              computer: {
+                ...value.setup.computer,
+                reachable: "unknown",
+                verified: null,
+              },
+            },
+          };
+          if (outcome === "crossed") value.computer.commands = "workspace";
+        } else if (command.kind === "computer.verify-workspace") {
+          expect(command.workspaceId).toBe(retained.workspaceId);
+          value = {
+            ...value,
+            revision: value.revision + 1,
+            computer: {
+              ...value.computer,
+              workspaces: value.computer.workspaces.map((w) => ({
+                ...w,
+                accessCheck: {
+                  buildId,
+                  computerGeneration: value.computer.generation,
+                  rootIdentity: w.rootIdentity!,
+                  verifiedAt: "2026-10-24T00:00:00.000Z",
+                  checkId: command.checkId!,
+                },
+              })),
+            },
+            setup: {
+              ...value.setup,
+              computer: {
+                ...value.setup.computer,
+                reachable: "reachable",
+                outcomeUnknown: false,
+                verified: {
+                  ...retainedWitness(),
+                  configRevision: value.computer.generation,
+                  workspaceId: retained.workspaceId,
+                },
+              },
+            },
+          };
+        } else throw Error("unexpected follow-up " + command.kind);
+        return { ok: true, snapshot: { status: "ready", settings: value } };
+      });
+      function retainedWitness() {
+        return readySettings().setup.computer.verified!;
+      }
+      await h.click("Remove scratch");
+      await vi.waitFor(() =>
+        expect(calls).toEqual(
+          outcome === "applied"
+            ? ["computer.remove-workspace", "computer.verify-workspace"]
+            : ["computer.remove-workspace"],
+        ),
+      );
+      if (outcome === "applied") {
+        await vi.waitFor(() =>
+          expect(h.button("Continue")?.disabled).toBe(false),
+        );
+        expect(h.host.textContent).toContain("✓ Works");
+        expect(h.host.textContent).not.toContain("Check access");
+      }
+    },
+  );
+});

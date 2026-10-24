@@ -27,13 +27,15 @@ import (
 )
 
 const (
-	maxRequestBytes   = 32768
-	maxResponseBytes  = 32768
-	maxPID            = 1<<31 - 1
-	maxProcArgsBytes  = 1 << 20
-	devElectronSuffix = "/_output/dev-runtime/Farol Dev.app/Contents/MacOS/Electron"
-	electronSuffix    = "/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
-	relativeAppPath   = "_output/build/app/main.cjs"
+	maxRequestBytes    = 32768
+	maxResponseBytes   = 32768
+	maxPID             = 1<<31 - 1
+	maxProcArgsBytes   = 1 << 20
+	devElectronSuffix  = "/_output/dev-runtime/Farol Dev.app/Contents/MacOS/Electron"
+	coreElectronSuffix = "/_output/dev-core/Contents/Frameworks/Farol Dev.app/Contents/MacOS/Electron"
+	coreAppPath        = "_output/dev-core/Contents/Resources/app/main.cjs"
+	electronSuffix     = "/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
+	relativeAppPath    = "_output/build/app/main.cjs"
 )
 
 type identity struct {
@@ -179,6 +181,10 @@ func (q request) expected() identity { return identity{PID: q.PID, UID: q.UID, T
 func validDevPaths(executable, appPath string) bool {
 	if !canonicalPath(executable) || !canonicalPath(appPath) {
 		return false
+	}
+	if strings.HasSuffix(executable, coreElectronSuffix) {
+		root := strings.TrimSuffix(executable, coreElectronSuffix)
+		return canonicalPath(root) && appPath == root+"/"+coreAppPath
 	}
 	for _, suffix := range []string{devElectronSuffix, electronSuffix} {
 		if strings.HasSuffix(executable, suffix) {

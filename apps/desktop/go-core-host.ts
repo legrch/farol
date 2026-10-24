@@ -125,6 +125,7 @@ export class DesktopGoCore {
     ) => Promise<void>,
     private readonly hasMutationStorage = false,
     buildId?: string,
+    private readonly qualifiedShell = false,
   ) {
     this.authority = new GoComputerAuthority(client, client.verifiedContext);
     this.computer = new ComputerBridge(client);
@@ -248,6 +249,19 @@ export class DesktopGoCore {
     );
     return { admission, result };
   }
+  inspectSettingsWorkspace(
+    computerGeneration: number,
+    workspaceId: string,
+    relativePath: string,
+  ) {
+    if (this.closeResult)
+      throw new BridgeError("unavailable", "host_computer_unavailable");
+    return this.authority.inspectSettings(
+      computerGeneration,
+      workspaceId,
+      relativePath,
+    );
+  }
   listSettingsWorkspace(
     computerGeneration: number,
     workspaceId: string,
@@ -335,6 +349,10 @@ export class DesktopGoCore {
   }
   currentComputerConnectorBinding() {
     return this.connector?.currentBinding;
+  }
+  // Launch qualification only; workspace/task grants still decide each command.
+  get shellAvailable(): boolean {
+    return this.backendAvailable && this.qualifiedShell;
   }
   get backendAvailable(): boolean {
     if (this.closeResult) return false;
@@ -572,23 +590,6 @@ export class DesktopGoCore {
   }
 }
 
-// Source Dev has no protected application bundle. Select its existing File
-// route before startup; a selected package still must pass every Shell check.
-// This is not recovery from a failed attestation and never enables execution.
-export function desktopShellSelection(
-  compiledShell: DesktopCoreSelection["compiledShell"],
-  environment: "dev" | "preview" | "owner-preview",
-  artifactRoot: string,
-): DesktopCoreSelection["compiledShell"] {
-  const packageResources = path.join(
-    path.resolve(artifactRoot, "../../.."),
-    "Contents/Resources/app",
-  );
-  return environment === "dev" && packageResources !== artifactRoot
-    ? undefined
-    : compiledShell;
-}
-
 export async function startDesktopGoCore(
   selection: DesktopCoreSelection,
 ): Promise<DesktopGoCore> {
@@ -675,6 +676,7 @@ export async function startDesktopGoCore(
     },
   };
   let client: Client;
+  let qualifiedShell = false;
   const attested = new AttestedCore(artifact, {
     artifactRoot: selection.artifactRoot,
     build: expected.build,
@@ -696,6 +698,7 @@ export async function startDesktopGoCore(
             watchdogSource: shell.source,
           })
         : undefined;
+    qualifiedShell = shellMetadata !== undefined;
     client = await attested.start(DESKTOP_CORE_STARTUP_TIMEOUT_MS, {
       profile,
       ownerId: "owner-desktop",
@@ -725,6 +728,7 @@ export async function startDesktopGoCore(
     (ack) => attested.completeRetirement(ack),
     storage.settingsMutations,
     selection.build.buildId,
+    qualifiedShell,
   );
   try {
     await host.publishCurrent();

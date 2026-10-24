@@ -42,7 +42,6 @@ import {
   runAdmittedConnectorSetup,
 } from "../../../apps/desktop/connector-setup-host";
 import {
-  desktopShellSelection,
   startDesktopGoCore,
   type DesktopGoCore,
 } from "../../../apps/desktop/go-core-host";
@@ -93,6 +92,10 @@ declare const __FAROL_GO_SHELL__: {
   readonly watchdogSourceBase64: string;
 } | null;
 import { createMenuBar } from "./menu-bar";
+import {
+  desktopCoreArtifactRoot,
+  desktopDevShellImageMatches,
+} from "../../../apps/desktop/dev-core-layout";
 import { promises as rawFs } from "original-fs";
 import {
   createInstalledUpdateRuntime,
@@ -1804,6 +1807,13 @@ function createManagedChatGptRoute(options: ChatGptRouteOptions): ChatGptRoute {
         `FAROL_UPDATE_ADMISSION_DIAGNOSTIC ${diagnostic.stage}:${diagnostic.reason}\n`,
       );
       options.onUpdateAdmissionDiagnostic?.(diagnostic);
+    },
+    onProfilePreparationDiagnostic: (diagnostic) => {
+      if (runtimeEnvironment === "dev")
+        process.stderr.write(
+          `FAROL_PROFILE_PREPARATION_DIAGNOSTIC ${JSON.stringify(diagnostic)}\n`,
+        );
+      options.onProfilePreparationDiagnostic?.(diagnostic);
     },
     onDisposed: () => managedChatGptRoutes.delete(route),
   });
@@ -4973,31 +4983,39 @@ function reportOwnedBackendLifecycle(
     BackendLifecycleObservation | ConnectorRuntimeLifecycleObservation,
 ): void {
   try {
-    operationsStore().record(
-      {
-        source: "Setup",
-        kind:
-          observation.source === "go-backend"
-            ? "hub.lifecycle"
-            : "connection.lifecycle",
-        target: {},
-      },
-      observation.state === "outcome_unknown" ||
-        observation.event === "cleanup-unknown"
-        ? "unknown"
-        : observation.event === "failure"
-          ? "failed"
-          : observation.state === "observed" &&
-              observation.phase === "closing" &&
-              observation.event === "child-close" &&
-              observation.exitCode === 0 &&
-              observation.signal === null &&
-              !observation.forced
-            ? "done"
-            : "unknown",
-      observation.code,
-      0,
-    );
+    // Child notifications during an admitted connector Stop are diagnostics,
+    // not separate actions. The enclosing connection.stop records the final
+    // drain result; cleanup-unknown remains independently durable if it fails.
+    const connectorStopNotification =
+      observation.source !== "go-backend" &&
+      observation.phase === "closing" &&
+      observation.event !== "cleanup-unknown";
+    if (!connectorStopNotification)
+      operationsStore().record(
+        {
+          source: "Setup",
+          kind:
+            observation.source === "go-backend"
+              ? "hub.lifecycle"
+              : "connection.lifecycle",
+          target: {},
+        },
+        observation.state === "outcome_unknown" ||
+          observation.event === "cleanup-unknown"
+          ? "unknown"
+          : observation.event === "failure"
+            ? "failed"
+            : observation.state === "observed" &&
+                observation.phase === "closing" &&
+                observation.event === "child-close" &&
+                observation.exitCode === 0 &&
+                observation.signal === null &&
+                !observation.forced
+              ? "done"
+              : "unknown",
+        observation.code,
+        0,
+      );
   } catch {
     // Optional operations projection cannot suppress the original diagnostic.
   }
@@ -6163,6 +6181,39 @@ function codexAgentCheckWorkspace(
       relativePath,
     ),
   );
+}
+
+async function inspectOwnerWorkspace(
+  generation: number,
+  workspace: Pick<ApprovedProductWorkspace, "workspaceId" | "root">,
+  identity: WorkspaceRootIdentity,
+  diagnosticAction: string,
+): Promise<{ ok: true } | { ok: false; code: string }> {
+  if (!desktopGoCore) return { ok: false, code: "WORKSPACE_READ_FAILED" };
+  try {
+    const result = await desktopGoCore.inspectSettingsWorkspace(
+      generation,
+      workspace.workspaceId,
+      ".",
+    );
+    const current = configuration?.snapshot();
+    if (
+      result.root.path !== workspace.root ||
+      result.root.device !== identity.device ||
+      result.root.inode !== identity.inode ||
+      current?.status !== "ready" ||
+      current.settings.computer.generation !== generation
+    )
+      return { ok: false, code: "WORKSPACE_ROOT_CHANGED" };
+    return { ok: true };
+  } catch (error) {
+    return refuseComputerSettingsList(
+      error,
+      console.warn,
+      diagnosticAction,
+      "go-settings-inspect",
+    );
+  }
 }
 
 async function listOwnerWorkspace(
@@ -7364,6 +7415,12 @@ async function configureAdmittedProduct(
         return ProductConfigurationResultSchema.parse(stopped);
       } finally {
         connectorTaskAdmission = false;
+        // Observe the acknowledged stop now. The passive transport timer runs
+        // every 30 seconds; presentation must not wait for its next tick.
+        void connectorConnection
+          .sample()
+          .then(currentConnectionStatus)
+          .catch(() => undefined);
       }
     }
     case "host.select-codex": {
@@ -9516,11 +9573,10 @@ async function configureAdmittedProduct(
         return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
       // Recheck only the already approved root through the same descriptor.
       // No child names/content are returned and no selected-folder binding changes.
-      const checked = await listOwnerWorkspace(
+      const checked = await inspectOwnerWorkspace(
         snapshot.settings.computer.generation,
         workspace,
         identity,
-        ".",
         `settings:computer.check-folder:${workspace.workspaceId}`,
       );
       const reachable = checked.ok;
@@ -9592,11 +9648,10 @@ async function configureAdmittedProduct(
       // Go performs bounded content-free inspection under the exact published
       // approval. Native binding and final current authority are both checked.
       const generation = snapshot.settings.computer.generation;
-      const result = await listOwnerWorkspace(
+      const result = await inspectOwnerWorkspace(
         generation,
         workspace,
         measured,
-        ".",
         `settings:computer.verify-workspace:${workspace.workspaceId}`,
       );
       if (!result.ok) return workspaceReadFailure(result.code);
@@ -9606,7 +9661,7 @@ async function configureAdmittedProduct(
         workspace.root,
         workspace.gitHistoryApproved === true,
       );
-      // The listing takes a moment, and a connector or Agent may have started
+      // The inspection takes a moment, and a connector or Agent may have started
       // meanwhile; a re-verification rebinds the authority either would carry,
       // so it is admitted again right before it commits.
       const readmitted = configurationAdmission(command.kind, {
@@ -9641,11 +9696,9 @@ async function configureAdmittedProduct(
       return ProductConfigurationResultSchema.parse({
         ...recorded,
         evidence: {
-          kind: "computer.workspace-list",
+          kind: "computer.workspace-inspection",
           workspaceId: workspace.workspaceId,
           relativePath: ".",
-          entries: result.entries,
-          truncated: result.truncated,
         },
       });
     }
@@ -11919,8 +11972,10 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
               home: app.getPath("home"),
               computerId: savedSettings.computer.computerId,
               build: buildIdentity,
-              artifactRoot:
+              artifactRoot: desktopCoreArtifactRoot(
                 installedResourcesOrigin?.execution.directory ?? directory,
+                runtimeEnvironment,
+              ),
               compiledArtifact: compiledGoCore,
               compiledResources: compiledGoResources,
               startup: {
@@ -11958,8 +12013,10 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
                 compiledArtifact: compiledGoCore,
                 compiledResources: compiledGoResources,
                 build: buildIdentity,
-                artifactRoot:
+                artifactRoot: desktopCoreArtifactRoot(
                   installedResourcesOrigin?.execution.directory ?? directory,
+                  runtimeEnvironment,
+                ),
                 stateRoot,
                 home: app.getPath("home"),
                 settings,
@@ -12152,17 +12209,24 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       startObservedDesktopGoCore({
         compiledArtifact: compiledGoCore,
         compiledResources: compiledGoResources,
-        compiledShell: desktopShellSelection(
-          compiledGoShell,
-          runtimeEnvironment,
-          installedResourcesOrigin?.execution.directory ?? directory,
-        ),
+        // Legacy preview entrypoints retain File tools, but never qualify Shell
+        // against a different copy of the code actually executing this host.
+        compiledShell:
+          runtimeEnvironment === "dev" &&
+          !desktopDevShellImageMatches(
+            realpathSync(directory),
+            realpathSync(process.execPath),
+          )
+            ? undefined
+            : compiledGoShell,
         previousHostDrainConfirmed: previousHostAdmissionReady,
         build: buildIdentity,
         // The attested path must remain immutable through spawn and lifetime.
         // Shared installation paths are writable by other administrator accounts.
-        artifactRoot:
+        artifactRoot: desktopCoreArtifactRoot(
           installedResourcesOrigin?.execution.directory ?? directory,
+          runtimeEnvironment,
+        ),
         stateRoot,
         home: app.getPath("home"),
         settings: currentSettings,
@@ -12210,6 +12274,15 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
           }),
       }),
     );
+    if (runtimeEnvironment === "dev")
+      console.info(
+        "FAROL_DEV_SHELL:" +
+          JSON.stringify({
+            schema: 1,
+            buildId: buildIdentity.buildId,
+            available: desktopGoCore.shellAvailable,
+          }),
+      );
     await runDesktopStartupBoundary("go-settings", () => {
       const settingsOwner = configuration!;
       const settingsCore = desktopGoCore!;

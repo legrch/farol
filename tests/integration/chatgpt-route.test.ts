@@ -30,6 +30,7 @@ import {
   bindChatGptAppScript,
   collapseChatGptSidebarScript,
   temporaryInstantProfileProbe,
+  instantModelLabelPattern,
   openInstantPowerPickerScript,
   focusInstantPowerSliderScript,
   openTemporaryPersonalizationScript,
@@ -88,6 +89,8 @@ describe("temporary Instant connector profile", () => {
     hydrating?: Profile,
   ) {
     const route = devTaskRoute(vi.fn());
+    const diagnostic = vi.fn();
+    Reflect.get(route, "options").onProfilePreparationDiagnostic = diagnostic;
     let current = initial;
     let currentUrl = "https://chatgpt.com/";
     let minimum = false;
@@ -142,6 +145,7 @@ describe("temporary Instant connector profile", () => {
     ) => Promise<string | null>;
     return {
       prepare: (temporary = true) => prepare.call(route, surface, temporary),
+      diagnostic,
       loadURL,
       sendInputEvent,
       executeJavaScript,
@@ -293,6 +297,52 @@ describe("temporary Instant connector profile", () => {
     },
   );
 
+  it.each([false, true])(
+    "reports only closed profile evidence even when its observer throws (%s)",
+    async (observerThrows) => {
+      const route = profileRoute();
+      const execute = route.executeJavaScript.getMockImplementation()!;
+      if (observerThrows)
+        route.diagnostic.mockImplementation(() => {
+          throw new Error("observer failure");
+        });
+      route.executeJavaScript.mockImplementation(async (script: string) => {
+        if (script === focusInstantPowerSliderScript) {
+          route.navigate("https://chatgpt.com/c/private-value");
+          return { ready: true, atMinimum: false };
+        }
+        return execute(script);
+      });
+      await expect(route.prepare()).resolves.toBe(
+        "CHATGPT_INSTANT_MODEL_REQUIRED",
+      );
+      expect(route.diagnostic).toHaveBeenCalledExactlyOnceWith({
+        stage: "slider",
+        expectedTemporary: true,
+        logicalDocumentChanged: true,
+        physicalDocumentChanged: false,
+        urlChanged: true,
+        operationChanged: false,
+        surfaceChanged: false,
+        probe: {
+          composerReady: true,
+          draftPresent: false,
+          temporary: true,
+          modelReady: true,
+          instant: false,
+          visibleModelLabel: null,
+          modelControlCount: 0,
+          labelHasInstant: false,
+          labelHasThinkingEffort: false,
+          labelHasFormatMarks: false,
+        },
+        sliderReady: true,
+        sliderAtMinimum: false,
+      });
+      expect(route.sendInputEvent).not.toHaveBeenCalled();
+    },
+  );
+
   it("still requires the visible Instant label after reaching the slider minimum", async () => {
     const route = profileRoute();
     const execute = route.executeJavaScript.getMockImplementation()!;
@@ -434,55 +484,66 @@ describe("temporary Instant connector profile", () => {
     expect(route.personalizationOpens()).toBe(0);
   });
 
-  it("recognizes the visible Instant label when hidden button text describes thinking effort", () => {
-    class HTMLElement {
-      constructor(
-        readonly textContent = "",
-        readonly innerText = textContent,
-        readonly ariaLabel: string | null = null,
-      ) {}
-      getAttribute(name: string) {
-        return name === "aria-label" ? this.ariaLabel : null;
+  it.each([
+    "Instant",
+    "6 Instant",
+    "GPT-6.1 Instant",
+    "6Instant",
+    "Thinking effort6 Instant",
+    "Thinking effort\n6 Instant",
+  ])(
+    "classifies only the public %s model control despite hidden thinking-effort text",
+    (label) => {
+      class HTMLElement {
+        constructor(
+          readonly textContent = "",
+          readonly innerText = textContent,
+          readonly ariaLabel: string | null = null,
+        ) {}
+        getAttribute(name: string) {
+          return name === "aria-label" ? this.ariaLabel : null;
+        }
+        getBoundingClientRect() {
+          return { width: 100, height: 32 };
+        }
+        getClientRects() {
+          return [1];
+        }
       }
-      getBoundingClientRect() {
-        return { width: 100, height: 32 };
+      class HTMLTextAreaElement extends HTMLElement {
+        value = "";
       }
-      getClientRects() {
-        return [1];
-      }
-    }
-    class HTMLTextAreaElement extends HTMLElement {
-      value = "";
-    }
-    const composer = new HTMLTextAreaElement();
-    const controls = [
-      new HTMLElement("", "", "Turn off temporary chat"),
-      new HTMLElement("Personalized"),
-      new HTMLElement(
-        "Thinking effortInstant",
-        "Instant",
-        "Select ChatGPT model",
-      ),
-    ];
-    const result = vm.runInNewContext(temporaryInstantProfileProbe, {
-      document: {
-        querySelector: (selector: string) =>
-          selector === "#prompt-textarea" ? composer : null,
-        querySelectorAll: () => controls,
-      },
-      getComputedStyle: () => ({ display: "block", visibility: "visible" }),
-      location: { href: "https://chatgpt.com/?temporary-chat=true" },
-      HTMLElement,
-      HTMLTextAreaElement,
-      URL,
-    });
-    expect(result).toMatchObject({
-      composerReady: true,
-      temporary: true,
-      personalized: true,
-      instant: true,
-    });
-  });
+      const composer = new HTMLTextAreaElement();
+      const controls = [
+        new HTMLElement("", "", "Turn off temporary chat"),
+        new HTMLElement("Personalized"),
+        new HTMLElement(
+          "Thinking effortInstant",
+          label,
+          "Select ChatGPT model",
+        ),
+      ];
+      const result = vm.runInNewContext(temporaryInstantProfileProbe, {
+        document: {
+          querySelector: (selector: string) =>
+            selector === "#prompt-textarea" ? composer : null,
+          querySelectorAll: () => controls,
+        },
+        getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+        location: { href: "https://chatgpt.com/?temporary-chat=true" },
+        HTMLElement,
+        HTMLTextAreaElement,
+        URL,
+      });
+      expect(result).toMatchObject({
+        composerReady: true,
+        temporary: true,
+        personalized: true,
+        instant: !["6Instant", "Thinking effort6 Instant"].includes(label),
+        visibleModelLabel: label,
+      });
+    },
+  );
 
   it("fails closed when ChatGPT does not confirm temporary mode", async () => {
     const route = profileRoute(regular, regular);
@@ -507,6 +568,90 @@ describe("temporary Instant connector profile", () => {
           context,
         ),
       ).toEqual({ profileLost: true });
+    },
+  );
+
+  describe.each([false, true])(
+    "pre-Send temporary mode %s",
+    (temporaryMode) => {
+      it.each([
+        "Instant",
+        "6 Instant",
+        "GPT-6.1 Instant",
+        "Thinking effort\n6 Instant",
+        "6 Pro",
+        "Instant Pro",
+        "Thinking effort6 Instant",
+        "Thinking\n6 Instant",
+        "Thinking effort\n6 Pro",
+        "Thinking effort\n6 Thinking",
+        "Thinking effort\nInstant Pro",
+      ])("rechecks the full selected model label before Send: %s", (label) => {
+        let sends = 0;
+        class HTMLElement {
+          constructor(
+            readonly innerText = "",
+            readonly ariaLabel: string | null = null,
+          ) {}
+          get textContent() {
+            return this.innerText;
+          }
+          getAttribute(name: string) {
+            return name === "aria-label" ? this.ariaLabel : null;
+          }
+          getClientRects() {
+            return [1];
+          }
+          getBoundingClientRect() {
+            return { width: 100, height: 32 };
+          }
+        }
+        class HTMLButtonElement extends HTMLElement {
+          disabled = false;
+          click() {
+            sends++;
+          }
+        }
+        const send = new HTMLButtonElement();
+        const model = new HTMLButtonElement(label, "Select ChatGPT model");
+        const href = temporaryMode
+          ? "https://chatgpt.com/?temporary-chat=true"
+          : "https://chatgpt.com/";
+        const controls = temporaryMode
+          ? [
+              model,
+              new HTMLButtonElement("", "Turn off temporary chat"),
+              new HTMLButtonElement("Personalized"),
+            ]
+          : [model];
+        const result = vm.runInNewContext(
+          activateTaskScript(href, undefined, temporaryMode, !temporaryMode),
+          {
+            location: { href },
+            URL,
+            HTMLElement,
+            HTMLButtonElement,
+            getComputedStyle: () => ({
+              display: "block",
+              visibility: "visible",
+            }),
+            document: {
+              querySelectorAll: () => controls,
+              querySelector: () => send,
+            },
+          },
+        );
+        const instant = [
+          "Instant",
+          "6 Instant",
+          "GPT-6.1 Instant",
+          "Thinking effort\n6 Instant",
+        ].includes(label);
+        expect(result).toEqual(
+          instant ? { activated: true } : { profileLost: true },
+        );
+        expect(sends).toBe(instant ? 1 : 0);
+      });
     },
   );
 
@@ -5330,6 +5475,83 @@ describe("ChatGPT embedded task surface", () => {
     expect(onConversationChanged).toHaveBeenCalledExactlyOnceWith(null);
   });
 
+  it.each([
+    "Instant",
+    "6 Instant",
+    "GPT-6 Instant",
+    "GPT-6.1 Instant",
+    "Thinking effort\n6 Instant",
+  ])("recognizes the complete selected Instant label %s", (label) => {
+    expect(instantModelLabelPattern.test(label)).toBe(true);
+  });
+  it.each([
+    "Pro",
+    "6 Pro",
+    "Thinking",
+    "Instant Pro",
+    "Choose Instant",
+    "6 Instant extra",
+    "Thinking effort6 Instant",
+    "Thinking\n6 Instant",
+    "Thinking effort\n6 Pro",
+    "Thinking effort\n6 Thinking",
+    "Thinking effort\nInstant Pro",
+    "Thinking effort\nThinking effort\n6 Instant",
+  ])("refuses a different or ambiguous model label %s", (label) => {
+    expect(instantModelLabelPattern.test(label)).toBe(false);
+  });
+  it("keeps the ordinary Dev document visible through full auth navigation", async () => {
+    const surface = embeddedSurface();
+    const candidate = new ChatGptRoute({
+      initialUrl: "https://chatgpt.com/",
+      homeUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      requiredAppName: "Farol Dev",
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+    });
+    await candidate.open();
+    surface.hide.mockClear();
+    for (const url of [
+      "https://auth.openai.com/",
+      "https://accounts.google.com/",
+      "https://chatgpt.com/",
+    ]) {
+      surface.webContents.emit("did-start-navigation", {}, url, false, true);
+      expect(surface.hide).not.toHaveBeenCalled();
+      expect(surface.destroy).not.toHaveBeenCalled();
+    }
+    expect(surface.loadURL).toHaveBeenCalledTimes(1);
+    candidate.dispose();
+  });
+  it("reveals its original preload immediately on owner navigation without another load", async () => {
+    const surface = embeddedSurface();
+    const originalLoad = surface.loadURL.getMockImplementation()!;
+    let complete!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
+    surface.loadURL.mockImplementation(async (url) => {
+      await originalLoad(url);
+      await waiting;
+    });
+    const candidate = new ChatGptRoute({
+      initialUrl: "https://chatgpt.com/",
+      homeUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      requiredAppName: "Farol Dev",
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+    });
+    const preload = candidate.preload();
+    const open = candidate.open();
+    expect(surface.reveal).toHaveBeenCalled();
+    expect(surface.loadURL).toHaveBeenCalledTimes(1);
+    complete();
+    await Promise.all([preload, open]);
+    candidate.dispose();
+  });
+
   it("preloads one retained browser without reveal or focus, then opens the same document", async () => {
     const surface = embeddedSurface();
     const factory = vi.fn(() => surface);
@@ -5388,7 +5610,7 @@ describe("ChatGPT embedded task surface", () => {
     expect(surface.destroy).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses a Chromium error document and recreates it only on explicit retry", async () => {
+  it("keeps an ordinary browser error visible without accepting it as readiness", async () => {
     const first = embeddedSurface();
     const second = embeddedSurface();
     const originalLoad = first.loadURL.getMockImplementation()!;
@@ -5418,7 +5640,8 @@ describe("ChatGPT embedded task surface", () => {
     });
 
     await expect(candidate.open()).resolves.toEqual({ status: "unreachable" });
-    expect(first.reveal).not.toHaveBeenCalled();
+    expect(first.reveal).toHaveBeenCalledTimes(1);
+    expect(first.hide).not.toHaveBeenCalled();
     expect(changes).toEqual(["loading", "failed"]);
     await expect(candidate.retryFailedOpen()).resolves.toEqual({
       status: "opened",
@@ -5648,6 +5871,8 @@ describe("ChatGPT sign-in return", () => {
           parent: () => null,
           surfaceFactory: (() =>
             surface) as unknown as ChatGptRouteSurfaceFactory,
+          requiredAppName: "Farol Dev",
+          requireAppForManualMessages: true,
           onSignInOutcome: (status) => outcomes.push(status),
         });
 
@@ -5665,6 +5890,40 @@ describe("ChatGPT sign-in return", () => {
       }
     },
   );
+
+  it("keeps an ordinary slow sign-in browser alive past the observation deadline", async () => {
+    vi.useFakeTimers();
+    const surface = embeddedSurface();
+    let finish!: () => void;
+    surface.loadURL.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      requiredAppName: "Farol Dev",
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+    });
+    try {
+      const opening = candidate.openForSignIn("Sign in to ChatGPT — Farol Dev");
+      expect(surface.reveal).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(opening).resolves.toEqual({ status: "unreachable" });
+      expect(surface.hide).not.toHaveBeenCalled();
+      expect(surface.destroy).not.toHaveBeenCalled();
+      finish();
+      await Promise.resolve();
+      expect(surface.loadURL).toHaveBeenCalledTimes(1);
+    } finally {
+      candidate.dispose();
+      vi.useRealTimers();
+    }
+  });
 
   it("returns from an embedded sign-in without destroying its verified page", async () => {
     const surface = embeddedSurface();

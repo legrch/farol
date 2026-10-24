@@ -48,6 +48,14 @@ func (n *settingsNativeFixture) List(_ context.Context, request port.ListRequest
 	return &port.ListResponse{Binding: &port.DirectoryBinding{Root: request.Workspace.Root, ApprovedRoot: request.Workspace.ApprovedRoot, RelativePath: request.RelativePath}, Entries: []string{"note.md", "folder/"}}, nil
 }
 
+func (n *settingsNativeFixture) Inspect(_ context.Context, request port.ListRequest) (*port.DirectoryBinding, error) {
+	n.calls++
+	if n.after != nil {
+		n.after()
+	}
+	return &port.DirectoryBinding{Root: request.Workspace.Root, ApprovedRoot: request.Workspace.ApprovedRoot, RelativePath: request.RelativePath}, nil
+}
+
 func settingsFixture(t *testing.T) (*ComputerIngress, *settingsStoreFixture, *settingsNativeFixture, wire.ComputerSettingsListRequest) {
 	t.Helper()
 	clock := &computerClockFixture{now: time.UnixMilli(1900000000000)}
@@ -229,5 +237,105 @@ func TestSettingsListWireWithdrawalWhileNativeWaits(t *testing.T) {
 	var response wire.Response
 	if err != nil || json.Unmarshal(raw, &response) != nil || response.Result == nil || response.Result.Status != "refused" || len(response.Result.Data) != 0 || native.calls != 1 {
 		t.Fatalf("revoked native listing disclosed: %s %v", raw, err)
+	}
+}
+
+func TestSettingsInspectUsesPublishedOwnerWithoutChatAdmission(t *testing.T) {
+	root, store, native, request := settingsFixture(t)
+	// A real Chat admission may have advanced the same store before Settings.
+	// Its existence is neither required nor fabricated by this owner call.
+	store.revision++
+	root.guard.active = true
+	body, _ := json.Marshal(request)
+	out, err := root.Methods()["computer.settings.inspect"].Handle(context.Background(), desktop.Request{RequestID: "request", Body: body})
+	if err != nil || out == nil || out.Status != "ok" || wire.Validate("ComputerSettingsInspectResponse", out.Data) != nil {
+		t.Fatalf("owner list: %+v %v", out, err)
+	}
+	var result wire.ComputerSettingsInspectResponse
+	if err := json.Unmarshal(out.Data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Publication != request.Publication || result.WorkspaceId != request.WorkspaceId || result.Root.Device != "1" || native.calls != 1 {
+		t.Fatalf("crossed list: %+v, calls=%d", result, native.calls)
+	}
+	if root.chat != nil || store.admits != 0 || len(root.tasks) != 0 || len(root.turns) != 0 || store.revision != 5 || root.readFacade != nil {
+		t.Fatal("Settings fabricated Chat/Task membership or changed authority")
+	}
+}
+
+func TestSettingsInspectRejectsCrossedPublicationBeforeIO(t *testing.T) {
+	for _, field := range []string{"fence", "revision", "settings", "generation", "digest", "operation", "workspace"} {
+		t.Run(field, func(t *testing.T) {
+			root, _, native, request := settingsFixture(t)
+			switch field {
+			case "fence":
+				request.Publication.Fence = "2"
+			case "revision":
+				request.Publication.StoreRevision = "5"
+			case "settings":
+				request.Publication.SettingsRevision = "9"
+			case "generation":
+				request.Publication.Generation = "4"
+			case "digest":
+				request.Publication.ApprovalDigest = strings.Repeat("b", 64)
+			case "operation":
+				request.Publication.PublishOperationId = "other"
+			case "workspace":
+				request.WorkspaceId = "outside"
+			}
+			out, err := root.settingsInspect(context.Background(), wire.ComputerSettingsInspectRequest{Publication: request.Publication, WorkspaceId: request.WorkspaceId, RelativePath: request.RelativePath})
+			if err == nil || out != nil || native.calls != 0 {
+				t.Fatalf("crossed %s reached IO: %+v %v calls=%d", field, out, err, native.calls)
+			}
+		})
+	}
+}
+
+func TestSettingsInspectRechecksOriginalOwnerAfterNativeIO(t *testing.T) {
+	for _, change := range []string{"withdraw", "revision", "root", "exclusion", "owner", "computer", "expiry", "unknown", "publication"} {
+		t.Run(change, func(t *testing.T) {
+			root, store, native, request := settingsFixture(t)
+			native.after = func() {
+				switch change {
+				case "withdraw":
+					_, _ = root.guard.deactivate()
+				case "revision":
+					store.revision++
+				case "root":
+					store.approval.Workspaces[0].RootIdentity.Inode = "other"
+				case "exclusion":
+					store.approval.ExcludedPaths = []authority.Exclusion{{WorkspaceID: "work", Path: "/disposable/note.md"}}
+				case "owner":
+					store.approval.OwnerID = "other"
+				case "computer":
+					store.approval.ComputerID = "other"
+				case "expiry":
+					store.approval.ExpiresAt = store.approval.ExpiresAt.Add(time.Minute)
+				case "unknown":
+					root.unknown = true
+				case "publication":
+					root.publication.receipt.PublishOperationId = "new"
+				}
+			}
+			out, err := root.settingsInspect(context.Background(), wire.ComputerSettingsInspectRequest{Publication: request.Publication, WorkspaceId: request.WorkspaceId, RelativePath: request.RelativePath})
+			if err == nil || out != nil || native.calls != 1 {
+				t.Fatalf("late %s disclosed: %+v %v calls=%d", change, out, err, native.calls)
+			}
+		})
+	}
+}
+
+func TestSettingsInspectRejectsWithdrawalBeforeIOAndMalformedWire(t *testing.T) {
+	root, _, native, request := settingsFixture(t)
+	_, _ = root.guard.deactivate()
+	if out, err := root.settingsInspect(context.Background(), wire.ComputerSettingsInspectRequest{Publication: request.Publication, WorkspaceId: request.WorkspaceId, RelativePath: request.RelativePath}); err == nil || out != nil || native.calls != 0 {
+		t.Fatal("withdrawn owner reached IO")
+	}
+	method := root.Methods()["computer.settings.inspect"]
+	for _, body := range []string{`{}`, `{"publication":null}`, `{"workspaceId":"work","workspaceId":"other"}`} {
+		out, err := method.Handle(context.Background(), desktop.Request{RequestID: "request", Body: json.RawMessage(body)})
+		if err != nil || out == nil || out.Status != "refused" || native.calls != 0 {
+			t.Fatalf("invalid boundary accepted: %+v %v", out, err)
+		}
 	}
 }

@@ -19,8 +19,12 @@ import { createOwnerLaunchResultCollector } from "./owner-launch-result.mjs";
 import { ownerLaunchEnvironment } from "./launch-snapshot.mjs";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { parseDevDisplay } from "../src/apps/desktop/window-placement.ts";
-import { DevRuntimeSignatureError, prepareDevRuntime } from "./dev-runtime.mjs";
+import {
+  DevRuntimeSignatureError,
+  DEV_CORE_EXECUTABLE_SUFFIX,
+} from "./dev-runtime.mjs";
 import { prepareDevBuild } from "./dev-process-control.mjs";
+import { prepareDevCoreResources } from "./dev-core-resources.mjs";
 import { resolvePhysicalDevDataDirectoryName } from "./harness-identity.ts";
 import {
   dependencyDrift,
@@ -553,10 +557,24 @@ export async function runDevBuild(
   arguments_,
   {
     readInputs = readGoBuildInputs,
-    run = (args) =>
-      runInherited(process.execPath, ["tooling/build.mjs", ...args], {
-        cwd: vnextRoot,
-      }),
+    run = async (args) => {
+      const status = await runInherited(
+        process.execPath,
+        ["tooling/build.mjs", ...args],
+        { cwd: vnextRoot },
+      );
+      if (status === 0) {
+        try {
+          await prepareDevCoreResources(vnextRoot);
+        } catch (error) {
+          process.stderr.write(
+            `Dev resources refused: ${error.message}. No launch was attempted.\n`,
+          );
+          return 1;
+        }
+      }
+      return status;
+    },
     report = (line) => process.stderr.write(`${line}\n`),
   } = {},
 ) {
@@ -731,7 +749,10 @@ export async function launchPreview(
   secondaryDisplay = false,
   reviewMarker,
   displayOptions = {},
-  prepareRuntime = prepareDevRuntime,
+  prepareRuntime = async (root) => {
+    await prepareDevCoreResources(root);
+    return root + DEV_CORE_EXECUTABLE_SUFFIX;
+  },
 ) {
   const electronBin = await prepareRuntime(root);
   const { stopLabel, outcome, protocolError, resultCollector } =
@@ -740,7 +761,7 @@ export async function launchPreview(
         spawnProcess(
           electronBin,
           [
-            path.join(root, "_output/build/app/main.cjs"),
+            path.join(root, "_output/dev-core/Contents/Resources/app/main.cjs"),
             `--farol-dev-user-data-dir=${devLaunchProfile(acceptanceProfile, reviewMarker)}`,
             ...(displayOptions.devSecondaryDisplay === true
               ? ["--display=secondary"]

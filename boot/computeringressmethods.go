@@ -36,6 +36,7 @@ func invalidIngress() (*desktop.Outcome, error) {
 func (s *ComputerIngress) ownerMethods() map[string]desktop.Method {
 	return map[string]desktop.Method{
 		"computer.settings.list":     s.settingsListMethod(),
+		"computer.settings.inspect":  s.settingsInspectMethod(),
 		"computer.settings.search":   s.settingsSearchMethod(),
 		"computer.settings.snapshot": s.settingsSnapshotMethod(),
 		"computer.authority.deactivate": {Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {

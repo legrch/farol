@@ -36,13 +36,17 @@ describe("retired Settings/Setup receipt journeys", () => {
 });
 
 // Scripted page/state boundary only. No Electron, profile or native filesystem.
-function pageFixture(snapshots) {
+function pageFixture(snapshots, pendingSamples = []) {
   const click = vi.fn(async () => {});
   const waitFor = vi.fn(async () => {});
   const control = {
     click,
     waitFor,
-    getByRole: vi.fn(() => control),
+    getByRole: vi.fn((_role, options) =>
+      options.name === "Connecting…"
+        ? { count: async () => pendingSamples.shift() ?? 0 }
+        : control,
+    ),
     locator: vi.fn(() => control),
     filter: vi.fn(() => control),
   };
@@ -201,6 +205,39 @@ describe("current Setup one-shot helpers", () => {
       "SETUP_CONNECT_REQUIRES_STOPPED_RUNTIME",
     );
     expect(prior.click).not.toHaveBeenCalled();
+  });
+  it("waits for its original Connect to settle across its credential fence without another click", async () => {
+    const pending = state();
+    pending.setup.connect.outcomeUnknown = true;
+    const h = pageFixture(
+      [state(), pending, state([], { state: "ready" })],
+      [1, 1, 0, 0],
+    );
+    await connectMac(h.page);
+    expect(h.click).toHaveBeenCalledTimes(1);
+    expect(h.page.evaluate).toHaveBeenCalledTimes(3);
+  });
+  it("does not credit early readiness when the original Connect settles unknown", async () => {
+    const unknown = state();
+    unknown.setup.connect.outcomeUnknown = true;
+    const h = pageFixture(
+      [state(), state([], { state: "ready" }), unknown],
+      [1, 1, 0, 0],
+    );
+    await expect(connectMac(h.page)).rejects.toThrow(
+      "SETUP_CONNECT_OUTCOME_UNKNOWN",
+    );
+    expect(h.click).toHaveBeenCalledTimes(1);
+  });
+  it("bounds observation of an unresolved original Connect without another click", async () => {
+    const pending = state();
+    pending.setup.connect.outcomeUnknown = true;
+    const h = pageFixture([state(), pending], [1, 1]);
+    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(15001);
+    await expect(connectMac(h.page)).rejects.toThrow(
+      "SETUP_CONNECT_ORIGINAL_PENDING",
+    );
+    expect(h.click).toHaveBeenCalledTimes(1);
   });
   it.each([
     "connect",

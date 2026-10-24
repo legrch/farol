@@ -250,3 +250,118 @@ printf 'git-shell-accepted=%s\\n' "$head"
   await input.checkpoint();
   throw Error("ORIGINAL_SHELL_OUTCOME_UNKNOWN");
 }
+
+// Same built Go/MCP process owner, one original start and one cancel request.
+// A cancellation ACK is followed by readback; it is never terminal proof alone.
+export async function runShellControlJourney(input: {
+  peer: Pick<Peer, "call" | "request">;
+  workspaceId: string;
+  relativeCwd: string;
+  report: Record<string, unknown>;
+  checkpoint: () => Promise<unknown>;
+}) {
+  const operationId = randomUUID();
+  const cancelOperationId = randomUUID();
+  const witness: Record<string, unknown> = {
+    operationId,
+    cancelOperationId,
+    state: "start-intent",
+  };
+  input.report.shellControl = witness;
+  await input.checkpoint();
+  const started = await input.peer.call("computer_shell_start", {
+    operationId,
+    workspaceId: input.workspaceId,
+    relativeCwd: input.relativeCwd,
+    write: false,
+    command: `exec python3 -B -c 'import time; print("cancel-ready", flush=True); time.sleep(20)'`,
+  });
+  witness.admission = { status: started.status, code: started.code ?? null };
+  await input.checkpoint();
+  assert.equal(started.status, "ok");
+  const target = started.data as Record<string, unknown>;
+  assert.ok(target && typeof target.handle === "string");
+  const handle = target.handle;
+  witness.handle = handle;
+  const read = async () => {
+    const response = await input.peer.call("computer_shell_read", {
+      operationId,
+      handle,
+      stdoutOffset: 0,
+      stderrOffset: 0,
+    });
+    assert.equal(response.status, "ok");
+    const observed = response.data as Record<string, unknown>;
+    assert.equal(observed.operationId, operationId);
+    assert.equal(observed.handle, handle);
+    witness.last = observed;
+    return observed;
+  };
+  let ready = false;
+  const readyDeadline = Date.now() + 5000;
+  while (Date.now() < readyDeadline) {
+    const observed = await read();
+    assert.notEqual(
+      observed.state,
+      "exited",
+      "SHELL_CONTROL_EXITED_BEFORE_CANCEL",
+    );
+    assert.equal(typeof observed.stdoutBase64, "string");
+    if (
+      Buffer.from(observed.stdoutBase64 as string, "base64").toString(
+        "utf8",
+      ) === "cancel-ready\n"
+    ) {
+      assert.equal(observed.state, "running");
+      ready = true;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.ok(ready, "SHELL_CANCEL_READINESS_UNCONFIRMED");
+  witness.state = "cancel-intent";
+  await input.checkpoint();
+  const cancellationReply = await input.peer.request("tools/call", {
+    name: "computer_shell_cancel",
+    arguments: { operationId, handle, cancelOperationId },
+  });
+  witness.cancellation = {
+    isError: cancellationReply.isError === true,
+    response: cancellationReply.structuredContent,
+  };
+  await input.checkpoint();
+  assert.equal(cancellationReply.isError === true, false);
+  const cancelled = cancellationReply.structuredContent as Record<
+    string,
+    unknown
+  >;
+  assert.equal(cancelled.status, "ok");
+  const ack = cancelled.data as Record<string, unknown>;
+  assert.equal(ack.cancelOperationId, cancelOperationId);
+  assert.equal(ack.status, "requested");
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    const observed = await read();
+    if (observed.state === "exited" && observed.outputDrained === true) {
+      assert.equal(observed.rootWaited, true);
+      assert.equal(observed.cancelRequested, true);
+      assert.ok(
+        Number.isInteger(observed.exitSignal) &&
+          (observed.exitSignal as number) > 0,
+      );
+      // Darwin's published root-scoped contract deliberately does not infer
+      // group/descendant quiescence from this root Wait (see native cancel tests).
+      assert.equal(observed.groupCleanup, "unverified");
+      assert.equal(observed.descendantCleanup, "unverified");
+      witness.scope =
+        "owned-root-only; group and descendant cleanup unverified";
+      witness.state = "passed-owned-root-cancel-readback";
+      await input.checkpoint();
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  witness.state = "original-cancellation-unconfirmed-never-retry";
+  await input.checkpoint();
+  throw Error("ORIGINAL_SHELL_CANCEL_OUTCOME_UNKNOWN");
+}

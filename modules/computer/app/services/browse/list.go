@@ -24,6 +24,15 @@ type ListResult struct {
 // does not create an ambient timer or promise to interrupt blocked native IO;
 // native execution retains the caller's cancellation context.
 func (s *Service) List(ctx context.Context, query ListQuery) (*ListResult, error) {
+	return s.directory(ctx, query, false)
+}
+
+// Inspect returns physical directory access, without collecting child entries.
+func (s *Service) Inspect(ctx context.Context, query ListQuery) (*ListResult, error) {
+	return s.directory(ctx, query, true)
+}
+
+func (s *Service) directory(ctx context.Context, query ListQuery, inspectOnly bool) (*ListResult, error) {
 	if s == nil || s.current == nil || s.native == nil || s.clock == nil {
 		return nil, unavailable()
 	}
@@ -75,7 +84,18 @@ func (s *Service) List(ctx context.Context, query ListQuery) (*ListResult, error
 	}
 	nativeRequest := port.ListRequest{Workspace: descriptor, RelativePath: query.RelativePath}
 	nativeRequest.Workspace.DeniedPaths = slices.Clone(descriptor.DeniedPaths)
-	checked, err := s.native.List(ctx, nativeRequest)
+	var checked *port.ListResponse
+	if inspectOnly {
+		inspector, ok := s.native.(port.DirectoryInspector)
+		if !ok {
+			return nil, unavailable()
+		}
+		binding, failure := inspector.Inspect(ctx, nativeRequest)
+		err = failure
+		checked = &port.ListResponse{Binding: binding}
+	} else {
+		checked, err = s.native.List(ctx, nativeRequest)
+	}
 	if err != nil {
 		return nil, err
 	}

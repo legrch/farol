@@ -953,6 +953,55 @@ function Folders(props: PageProps) {
     }
   }
 
+  async function remove(workspaceId: string) {
+    if (folderFlow.busy || folderFlow.access.requiresReadback()) return;
+    const before = facade.getSnapshot();
+    if (before.configuration?.status !== "ready") return;
+    const previous = before.configuration.settings.computer;
+    const expected = {
+      ...previous,
+      generation: previous.generation + 1,
+      workspaces: previous.workspaces.filter(
+        (item) => item.workspaceId !== workspaceId,
+      ),
+    };
+    let remaining: string | undefined;
+    folderFlow.busy = true;
+    setAdding(true);
+    try {
+      const result = await actions.run({
+        kind: "computer.remove-workspace",
+        workspaceId,
+      });
+      const current = facade.getSnapshot();
+      // Follow only this acknowledged removal. A navigation, unknown outcome
+      // or any other scope change cannot schedule additional configuration work.
+      if (
+        result?.state === "applied" &&
+        current.destination === before.destination &&
+        current.buildId === before.buildId &&
+        soleIntent(
+          before,
+          current,
+          "computer.remove-workspace",
+          intention("computer.remove-workspace", workspaceId),
+        ) &&
+        current.configuration?.status === "ready" &&
+        JSON.stringify(current.configuration.settings.computer) ===
+          JSON.stringify(expected)
+      ) {
+        remaining =
+          current.configuration.settings.computer.workspaces[0]?.workspaceId;
+      }
+    } finally {
+      folderFlow.busy = false;
+      setAdding(false);
+    }
+    // The existing guarded flow checks every retained folder with its saved
+    // access/commands, and keeps original unknown effects fenced.
+    if (remaining !== undefined) await update(remaining);
+  }
+
   async function update(
     workspaceId: string,
     plan: { access?: "read" | "write"; commands?: "none" | "workspace" } = {},
@@ -1090,12 +1139,7 @@ function Folders(props: PageProps) {
                     workspace.workspaceId,
                   )
                 }
-                onClick={() =>
-                  void actions.run({
-                    kind: "computer.remove-workspace",
-                    workspaceId: workspace.workspaceId,
-                  })
-                }
+                onClick={() => void remove(workspace.workspaceId)}
               >
                 Remove {folderDisplayName(workspace)}
               </button>
@@ -1105,7 +1149,9 @@ function Folders(props: PageProps) {
       </div>
       <button
         type="button"
-        className="subtle"
+        className={
+          settings.computer.workspaces.length === 0 ? "primary" : "subtle"
+        }
         disabled={paused || !actions.allowed("computer.choose-workspace")}
         onClick={() => void choose()}
       >
@@ -1584,6 +1630,18 @@ function AddToChatGPT({
         <p className="description">
           Create a new app, or use the one already connected to this tunnel.
         </p>
+        <SetupWalkthrough
+          kind="chatgpt"
+          openLink={
+            <Command
+              className="text-button"
+              actions={actions}
+              command={{ kind: "onboarding.open-help", destination: "chatgpt" }}
+            >
+              Open ChatGPT Apps
+            </Command>
+          }
+        />
         <dl className="setup-app-values">
           <div>
             <dt>Name</dt>
@@ -1629,22 +1687,16 @@ function AddToChatGPT({
             <dd>Tunnel · {connector.tunnelId ?? "Connect this Mac first"}</dd>
           </div>
           <div>
-            <dt>Sign-in</dt>
-            <dd>None</dd>
+            <dt>App authentication</dt>
+            <dd>
+              No additional sign-in
+              <p className="description">
+                Choose None in the app’s authentication settings. Your ChatGPT
+                account stays signed in separately.
+              </p>
+            </dd>
           </div>
         </dl>
-        <SetupWalkthrough
-          kind="chatgpt"
-          openLink={
-            <Command
-              className="text-button"
-              actions={actions}
-              command={{ kind: "onboarding.open-help", destination: "chatgpt" }}
-            >
-              Open ChatGPT Apps
-            </Command>
-          }
-        />
       </section>
       <section className="setup-test" aria-label="Test in ChatGPT">
         <h3>2. Check the connection</h3>

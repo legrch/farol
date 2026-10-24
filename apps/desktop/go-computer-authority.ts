@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { taskSettingsFacts } from "./bridge/task-current-settings";
-import { BridgeError, type Client } from "./bridge/client";
+import { BridgeError, RequestNotSentError, type Client } from "./bridge/client";
 import { parseComputerSearchMatches } from "./bridge/computer";
 import {
   validate,
@@ -12,6 +12,7 @@ import {
   type ChatComputerAdmissionRequest,
   type ChatComputerAdmissionResponse,
   type ComputerSettingsListResponse,
+  type ComputerSettingsInspectResponse,
   type ComputerSettingsSnapshotResponse,
   type ComputerSettingsSearchResponse,
   type ComputerSearchMatch,
@@ -210,6 +211,39 @@ export class GoComputerAuthority {
     >;
   }
 
+  async inspectSettings(
+    computerGeneration: number,
+    workspaceId: string,
+    relativePath: string,
+  ): Promise<ComputerSettingsInspectResponse> {
+    // Recheck only a pure inspection that was not dispatched, or wait for the
+    // current local publication/read to settle. Refused/unknown host results,
+    // withdrawal and changed generations never select this path.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return (await this.settingsWorkspace(
+          "inspect",
+          computerGeneration,
+          workspaceId,
+          relativePath,
+        )) as ComputerSettingsInspectResponse;
+      } catch (error) {
+        const notSent =
+          error instanceof RequestNotSentError && error.code === "backpressure";
+        const locallyBusy =
+          error instanceof BridgeError &&
+          error.state === "unavailable" &&
+          error.code === "computer_publication_unavailable" &&
+          !this.blocked &&
+          (this.pending || this.settingsInFlight);
+        if (attempt === 2 || (!notSent && !locallyBusy)) throw error;
+        await new Promise<void>((resolve) =>
+          setTimeout(resolve, attempt === 0 ? 100 : 250),
+        );
+      }
+    }
+  }
+
   snapshotSettings(
     computerGeneration: number,
     workspaceId: string,
@@ -269,7 +303,7 @@ export class GoComputerAuthority {
   }
 
   private async settingsWorkspace(
-    kind: "list" | "snapshot" | "search",
+    kind: "list" | "snapshot" | "search" | "inspect",
     computerGeneration: number,
     workspaceId: string,
     relativePath: string,
@@ -277,10 +311,12 @@ export class GoComputerAuthority {
   ): Promise<
     | (Omit<ComputerSettingsListResponse, "entries"> & { entries: string[] })
     | ComputerSettingsSnapshotResponse
+    | ComputerSettingsInspectResponse
     | SettingsSearchResult
   > {
     const schema = {
       list: "ComputerSettingsList",
+      inspect: "ComputerSettingsInspect",
       snapshot: "ComputerSettingsSnapshot",
       search: "ComputerSettingsSearch",
     }[kind];
@@ -329,6 +365,7 @@ export class GoComputerAuthority {
         throw new BridgeError("unknown", "invalid_settings_workspace_result");
       const result = outcome.data as unknown as
         | ComputerSettingsListResponse
+        | ComputerSettingsInspectResponse
         | ComputerSettingsSnapshotResponse
         | ComputerSettingsSearchResponse;
       if (kind === "list") {

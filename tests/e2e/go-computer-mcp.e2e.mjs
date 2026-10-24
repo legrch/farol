@@ -35,7 +35,8 @@ const hash = (value) => createHash("sha256").update(value).digest("hex");
 const args = process.argv.slice(2),
   mode = args.shift();
 assert.ok(["--check", "--run-native"].includes(mode));
-const shellGit = args[0] === "--shell-git";
+const devShell = args[0] === "--dev-shell";
+const shellGit = devShell || args[0] === "--shell-git";
 if (shellGit) args.shift();
 const pins = {};
 while (args.length) {
@@ -81,6 +82,19 @@ try {
   const json = async (name) =>
     JSON.parse(await fs.readFile(path.join(artifactRoot, name), "utf8"));
   const identity = assertBuildIdentity(await json("build-identity.json"));
+  if (devShell) {
+    const { sourceIdentity } =
+      await import("../../tooling/source-identity.mjs");
+    const current = sourceIdentity(root);
+    assert.equal(current.dirty, false);
+    assert.equal(current.commit, identity.sourceCommit);
+    assert.equal(current.treeDigest, identity.sourceTreeDigest);
+    assert.equal(
+      artifactRoot,
+      path.join(root, "_output/dev-core/Contents/Resources/app"),
+      "DEV_SHELL_RESOURCE_ROOT_INVALID",
+    );
+  }
   const manifest = await json("build-manifest.json");
   assert.equal(identity.sourceCommit, pins["--source-sha"]);
   assert.equal(identity.buildId, pins["--build-id"]);
@@ -250,7 +264,9 @@ try {
         (v) => !v.startsWith("Not installed, shell/Git"),
       );
       report.limits.push(
-        "Package Go Shell with disposable HOME/repository; not Electron/tunnel/ChatGPT/installed or universal descendant proof",
+        devShell
+          ? "Source Dev Go Shell with disposable HOME/repository using launcher-prepared resources; not Electron startup/tunnel/ChatGPT/installed or universal descendant proof"
+          : "Package Go Shell with disposable HOME/repository; not Electron/tunnel/ChatGPT/installed or universal descendant proof",
       );
     }
     await run({
@@ -261,9 +277,47 @@ try {
       output,
       report,
     });
-    report.status = shellGit
-      ? "passed-native-package-go-shell-git"
-      : "passed-native-mcp-go-adapter";
+    if (shell) {
+      const disabledOutput = path.join(output, "commands-disabled");
+      await fs.mkdir(disabledOutput, { mode: 0o700 });
+      const disabledReport = {
+        schema: report.schema,
+        status: "native-running",
+        pins,
+        limits: report.limits,
+      };
+      report.commandsDisabled = {
+        report: path.join(disabledOutput, "report.json"),
+        status: "running",
+      };
+      try {
+        await run({
+          shell,
+          commandsDisabled: true,
+          artifactRoot,
+          build: identity,
+          artifact: manifest.core,
+          output: disabledOutput,
+          report: disabledReport,
+        });
+        disabledReport.status = "passed-native-commands-disabled";
+      } catch (error) {
+        disabledReport.status = "failed";
+        throw error;
+      } finally {
+        report.commandsDisabled.status = disabledReport.status;
+        await fs.writeFile(
+          path.join(disabledOutput, "report.json"),
+          JSON.stringify(disabledReport, null, 2) + "\n",
+          { mode: 0o600 },
+        );
+      }
+    }
+    report.status = devShell
+      ? "passed-native-dev-go-shell-git"
+      : shellGit
+        ? "passed-native-package-go-shell-git"
+        : "passed-native-mcp-go-adapter";
   }
 } catch {
   report.status = "failed";

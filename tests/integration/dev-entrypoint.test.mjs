@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -24,6 +25,7 @@ import {
 } from "../../tooling/dev.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const taskfile = fs.readFileSync(path.join(here, "../../Taskfile.yml"), "utf8");
 const signalTrapChild = path.join(
   here,
   "../fixtures/dev-tooling/signal-trap-child.mjs",
@@ -430,6 +432,12 @@ describe("dev.mjs main() orchestration with an already-declared toolchain", () =
       calls,
     };
   }
+
+  it("defines dev:clean as the isolated-profile wrapper and forwards task arguments", () => {
+    expect(taskfile).toMatch(
+      /  dev:clean:\n    desc: Start Dev with a new isolated first-run profile; preserve daily Dev\n    cmds:\n      - \/usr\/bin\/python3 -I \.\/scripts\/assert-owner-untouched\.py -- node tooling\/dev\.mjs --fresh-review-profile \{\{\.CLI_ARGS\}\}/,
+    );
+  });
 
   it("builds but does not launch when --check is passed", async () => {
     const { overrides, calls } = baseOverrides();

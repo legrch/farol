@@ -18,6 +18,7 @@ type Mutable struct {
 	filePolicy authority.FilePolicy
 	home       string
 	fs         mutationFS
+	protected  []fileVersion
 }
 
 func NewMutable(trustedHome string) *Mutable {
@@ -27,11 +28,23 @@ func NewMutable(trustedHome string) *Mutable {
 // NewMutableWithFilePolicy pairs with NewWithFilePolicy at the SAME trusted
 // composition boundary. It changes filename semantics, never the publication
 // guard, expected digest, descriptor validation or native transaction protocol.
-func NewMutableWithFilePolicy(trustedHome string, selected authority.FilePolicy) (*Mutable, error) {
+func NewMutableWithFilePolicy(trustedHome string, selected authority.FilePolicy, protectedRoots ...port.Root) (*Mutable, error) {
 	if _, err := NewWithFilePolicy(trustedHome, selected); err != nil {
 		return nil, err
 	}
-	return &Mutable{home: trustedHome, filePolicy: selected, fs: nativeMutationFS()}, nil
+	protected := make([]fileVersion, 0, len(protectedRoots))
+	for _, root := range protectedRoots {
+		if _, err := components(root.Path, true, false); err != nil || root.Path == "/" {
+			return nil, refusal("WORKSPACE_INVALID_REQUEST")
+		}
+		dev, e1 := strconv.ParseUint(root.Device, 10, 64)
+		ino, e2 := strconv.ParseUint(root.Inode, 10, 64)
+		if e1 != nil || e2 != nil || ino == 0 {
+			return nil, refusal("WORKSPACE_INVALID_REQUEST")
+		}
+		protected = append(protected, fileVersion{dev: dev, ino: ino})
+	}
+	return &Mutable{home: trustedHome, filePolicy: selected, fs: nativeMutationFS(), protected: protected}, nil
 }
 
 var _ port.MutableWorkspace = (*Mutable)(nil)
@@ -74,8 +87,9 @@ type directoryPin struct {
 	version    fileVersion
 }
 type mutationWalk struct {
-	fs   mutationFS
-	pins []directoryPin
+	fs        mutationFS
+	pins      []directoryPin
+	protected []fileVersion
 }
 
 func (w *mutationWalk) close() {
@@ -96,6 +110,14 @@ func (w *mutationWalk) add(parent int, name string) (int, error) {
 	if err != nil || v.mode&unix.S_IFMT != unix.S_IFDIR {
 		w.fs.close(fd)
 		return -1, refusal("WORKSPACE_PATH_REFUSED")
+	}
+	// Kernel directory identities cover physical path aliases too. These pins
+	// come only from trusted composition, independently of Commands and grants.
+	for _, protected := range w.protected {
+		if v.inode(protected) {
+			w.fs.close(fd)
+			return -1, refusal("WORKSPACE_PATH_REFUSED")
+		}
 	}
 	w.pins = append(w.pins, directoryPin{parent: parent, fd: fd, name: name, version: v})
 	return fd, nil
@@ -154,7 +176,7 @@ func (m *Mutable) root(d port.MutationDescriptor) (*mutationWalk, int, error) {
 		m.fs.close(fd)
 		return nil, -1, refusal("WORKSPACE_ROOT_CHANGED")
 	}
-	walk := &mutationWalk{fs: m.fs, pins: []directoryPin{{fd: fd, parent: -1, version: version}}}
+	walk := &mutationWalk{fs: m.fs, protected: m.protected, pins: []directoryPin{{fd: fd, parent: -1, version: version}}}
 	for i, part := range parts {
 		fd, err = walk.add(fd, part)
 		if err != nil {

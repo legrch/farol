@@ -2,7 +2,7 @@ import {
   LEGACY_DEV_DATA_DIRECTORY_NAME,
   desktopIdentity as harnessDesktopIdentity,
 } from "./harness-identity.ts";
-import { devExecutables } from "./dev-runtime.mjs";
+import { devExecutables, devEntrypointForExecutable } from "./dev-runtime.mjs";
 
 // Mechanical launcher sequencing only. No native lookup, process discovery,
 // profile access, recovery, startup, or implicit host ports live here.
@@ -62,7 +62,10 @@ function validScope(scope) {
     ["writerRoot", "appPath", "profilePath"].every((field) =>
       canonicalPath(scope[field]),
     ) &&
-    scope.appPath === `${scope.writerRoot}/_output/build/app/main.cjs` &&
+    [
+      `${scope.writerRoot}/_output/build/app/main.cjs`,
+      `${scope.writerRoot}/_output/dev-core/Contents/Resources/app/main.cjs`,
+    ].includes(scope.appPath) &&
     [
       harnessDesktopIdentity("dev", "/").userData,
       `/${LEGACY_DEV_DATA_DIRECTORY_NAME}`,
@@ -84,7 +87,9 @@ function validIdentity(identity) {
     identity.applicationId ===
       harnessDesktopIdentity("dev", "/").applicationId &&
     identity.installed === false &&
-    devExecutables(identity.writerRoot).includes(identity.executable)
+    devExecutables(identity.writerRoot).includes(identity.executable) &&
+    devEntrypointForExecutable(identity.writerRoot, identity.executable) ===
+      identity.appPath
   );
 }
 

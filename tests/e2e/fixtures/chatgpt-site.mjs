@@ -7,13 +7,54 @@ import { startControlledChatGptSite } from "./chatgpt-controlled-site.mjs";
 // answer is not generation-paused evidence. Controlled mode uses server barriers.
 export async function startChatGptFixture(options = {}) {
   assert.ok(
-    Object.keys(options).every((key) => key === "controlledScenario"),
+    Object.keys(options).every((key) =>
+      ["controlledScenario", "setupVerification"].includes(key),
+    ),
     "FIXTURE_OPTIONS_INVALID",
+  );
+  assert.ok(
+    !(options.controlledScenario && options.setupVerification),
+    "FIXTURE_MODES_CONFLICT",
   );
   if (options.controlledScenario !== undefined)
     return startControlledChatGptSite(options.controlledScenario);
-  const fixture = createServer((request, response) => {
+  const setup = options.setupVerification;
+  if (setup)
+    assert.ok(
+      typeof setup.appName === "string" &&
+        /^[A-Za-z0-9 ]{1,64}$/u.test(setup.appName) &&
+        typeof setup.verify === "function",
+      "SETUP_FIXTURE_INVALID",
+    );
+  const fixture = createServer(async (request, response) => {
     const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    if (pathname === "/setup-verify" && setup) {
+      if (request.method !== "POST") {
+        response.writeHead(405).end();
+        return;
+      }
+      let body = "";
+      for await (const chunk of request) {
+        body += chunk;
+        if (body.length > 8192) {
+          response.writeHead(413).end();
+          return;
+        }
+      }
+      try {
+        const input = JSON.parse(body);
+        assert.equal(typeof input.prompt, "string");
+        await setup.verify(input.prompt);
+        response
+          .writeHead(200, { "content-type": "application/json" })
+          .end('{"verified":true}');
+      } catch {
+        response
+          .writeHead(409, { "content-type": "application/json" })
+          .end('{"verified":false}');
+      }
+      return;
+    }
     if (pathname === "/chatgpt-popup") {
       response.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
@@ -45,6 +86,7 @@ export async function startChatGptFixture(options = {}) {
       return;
     }
     if (
+      !(setup && pathname === "/") &&
       pathname !== "/chatgpt" &&
       !/^\/chatgpt\/c\/[A-Za-z0-9-]{8,128}\/?$/u.test(pathname)
     ) {
@@ -56,7 +98,8 @@ export async function startChatGptFixture(options = {}) {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
       "content-security-policy":
-        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
+        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'" +
+        (setup ? "; connect-src 'self'" : ""),
     });
     response.end(`<!doctype html>
       <html><head><meta charset="utf-8"><title>ChatGPT readiness fixture</title>
@@ -67,6 +110,7 @@ export async function startChatGptFixture(options = {}) {
         <button data-testid="expire-button" type="button" hidden>Expire session</button>
         <button data-testid="blocked-nav-button" type="button">Navigate off-policy</button>
         <button data-testid="next-page-button" type="button">Next</button>
+        ${setup ? `<button type="button" aria-label="Select ChatGPT model" onclick="document.querySelector('#setup-model-power').hidden=false"><span style="display:block">Thinking effort</span><span style="display:block">6 Instant</span></button><input id="setup-model-power" type="range" min="0" max="2" value="0" hidden><span data-testid="composer-app-chip" data-plugin-id="plugin_asdk_app_SetupFixture" data-app-name="${setup.appName}">${setup.appName}</span>` : ""}
         <div id="prompt-textarea" contenteditable="true" data-virtualkeyboard="true" aria-label="Message" hidden></div>
         <input data-testid="attachment-input" type="file" multiple hidden />
         <div id="attachment-chips"></div>
@@ -202,7 +246,8 @@ export async function startChatGptFixture(options = {}) {
             send.hidden = false;
             send.disabled = true;
           });
-          send.addEventListener('click', () => {
+          document.addEventListener('keydown', event => { if (event.key === 'Escape') { const slider=document.querySelector('#setup-model-power'); if(slider) slider.hidden=true; } });
+          send.addEventListener('click', async () => {
             if (send.disabled) return;
             const activeGeneration = ++responseGeneration;
             window.__farolSubmitCount += 1;
@@ -211,7 +256,7 @@ export async function startChatGptFixture(options = {}) {
               ? storedMessageSequence + 1
               : 1;
             localStorage.setItem(messageSequenceStorageKey, String(messageSequence));
-            if (location.pathname === '/chatgpt') {
+            if (location.pathname === '/chatgpt' || location.pathname === '/') {
               history.replaceState(null, '', conversationPath);
             }
             send.disabled = true;
@@ -261,6 +306,16 @@ export async function startChatGptFixture(options = {}) {
               }],
               nextSafeStep: 'Confirm the exact host context, then observe the unknown operation.'
             };
+            if (${Boolean(setup)}) {
+              try {
+                const result = await fetch('/setup-verify', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({prompt:userText}) });
+                if (!result.ok) throw new Error('Synthetic connector check refused');
+              } catch {
+                assistant.textContent = 'Synthetic connector check refused.';
+                stop.hidden = true; send.hidden = false; send.disabled = false;
+                return;
+              }
+            }
             const chunks = contextSummary
               ? [JSON.stringify(checkpoint)]
               : [
@@ -299,7 +354,7 @@ export async function startChatGptFixture(options = {}) {
   assert.ok(address && typeof address !== "string");
   return {
     server: fixture,
-    url: `http://127.0.0.1:${address.port}/chatgpt`,
+    url: `http://127.0.0.1:${address.port}${setup ? "/" : "/chatgpt"}`,
   };
 }
 

@@ -36,6 +36,18 @@ falls back to the primary display. Plain `task dev` keeps its existing behavior.
 viewport requirement; use `--display=secondary` for ordinary Dev on smaller Sidecar
 work areas. Do not combine ordinary and visible-test display options.
 
+To start a clean first-run profile without changing the saved daily Dev profile:
+
+```sh
+task dev:clean
+task dev:clean -- --display=secondary
+```
+
+Each `task dev:clean` launch creates a new isolated profile. It keeps the same Dev
+build and launch behavior, and accepts the ordinary `--display=secondary`
+placement option. The lower-level `--fresh-review-profile` flag remains available
+on `task dev` for cases that need to choose the profile explicitly.
+
 `task dev` uses the ordinary saved Farol Dev profile and requires the Go backend.
 Place the separately approved local [Go input declaration](#declared-go-backend-inputs)
 at `_output/go-build-inputs.json` (ignored by Git), or select an explicit absolute
@@ -62,6 +74,26 @@ Farol are not stopped. A refused or uncertain lookup/signal blocks the build and
 Neither process disappearance nor forced stop means application work was drained:
 retained UNKNOWN and interrupted-profile recovery guards still apply.
 Dev is not a package candidate.
+
+Ordinary Dev includes the Go Shell route. Electron itself and the actual main,
+MCP, preload and renderer resources execute inside the same protected Dev image.
+For the canonical Dev launcher, `_output/build/app` is build input only.
+The launcher prepares a fixed
+`_output/dev-core/Contents/Resources/app` resource tree and an unmodified pinned
+vendor runtime beside it. The running desktop retains its separate Dev display
+bundle and profile. The Go host applies the same resource, runtime, protected-root
+and Shell support checks used for a package; workspace scope, Commands and task
+grants still apply to every command. Unexpected changes to the prepared tree
+refuse launch rather than being repaired or disabling Shell. A replacement first
+atomically retires the previous complete image. Retired images remain under
+`_output/.dev-core-retired-*`; launch never recursively deletes them, because a
+pathname identity check cannot make recursive removal atomic. Clean build outputs
+only after all owned Dev processes have exited. Workspace File writes and edits
+also exclude the actual backend image by kernel directory identity, independently
+of Commands. Legacy raw preview launches keep File tools but cannot qualify Shell
+against a separate image; `npm run preview:development` uses the canonical Dev
+launcher. No package install, credential import or profile reset is involved.
+
 `task dev -- --check` validates and builds without launching or changing profiles;
 `--fresh-review-profile` opens a new, retained disposable first-run Dev profile
 with ordinary window sizing. Combine it with `--display=secondary` for Sidecar;
@@ -70,7 +102,7 @@ It never reuses the daily profile or enables E2E substitutions. Each invocation
 mints a new profile; the launcher does not retry or reopen a previous review.
 
 Dev launches an authenticated Electron copy at
-`_output/dev-runtime/Farol Dev.app`. Only this copy gets the `Farol Dev` bundle
+`_output/dev-core/Contents/Frameworks/Farol Dev.app`. Only this copy gets the `Farol Dev` bundle
 name, `local.farol.dev` bundle identifier and existing sunrise Dev icon for Dock,
 Cmd-Tab and the app menu. The desktop retains its explicit Dev paths, partitions,
 `app.setName`, About panel and `Farol Dev · Development` window title.

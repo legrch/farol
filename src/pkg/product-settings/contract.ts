@@ -1237,6 +1237,11 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     truncated: z.boolean(),
   }),
   z.strictObject({
+    kind: z.literal("computer.workspace-inspection"),
+    workspaceId: IdentifierSchema,
+    relativePath: ProductScopeRelativePathSchema,
+  }),
+  z.strictObject({
     kind: z.literal("computer.workspace-list"),
     workspaceId: IdentifierSchema,
     relativePath: ProductScopeRelativePathSchema,

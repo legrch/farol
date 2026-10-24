@@ -197,7 +197,7 @@ func TestNativeRecoveryReadsRequireFreshPublicationAndPreserveUnknown(t *testing
 		names = append(names, name)
 	}
 	slices.Sort(names)
-	want := []string{"chat.archive.list", "chat.archive.read", "computer.authority.deactivate", "computer.authority.publish", "computer.settings.list", "computer.settings.search", "computer.settings.snapshot"}
+	want := []string{"chat.archive.list", "chat.archive.read", "computer.authority.deactivate", "computer.authority.publish", "computer.settings.inspect", "computer.settings.list", "computer.settings.search", "computer.settings.snapshot"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatal("unexpected recovery surface", names)
 	}
@@ -218,6 +218,11 @@ func TestNativeRecoveryReadsRequireFreshPublicationAndPreserveUnknown(t *testing
 		t.Fatal("missing refusal evidence")
 	}
 	request.Publication = recoveryPublish(t, r, workspace, 1)
+	inspected := recoveryCall(t, r, "computer.settings.inspect", "", wire.ComputerSettingsInspectRequest{Publication: request.Publication, WorkspaceId: binding.WorkspaceID, RelativePath: "."})
+	var inspection wire.ComputerSettingsInspectResponse
+	if inspected.Status != "ok" || json.Unmarshal(inspected.Data, &inspection) != nil || inspection.WorkspaceId != binding.WorkspaceID {
+		t.Fatalf("native inspection: %#v", inspected)
+	}
 	out := recoveryCall(t, r, "computer.settings.list", "", request)
 	var listed wire.ComputerSettingsListResponse
 	if out.Status != "ok" || json.Unmarshal(out.Data, &listed) != nil || string(listed.Entries) != `["note.md","untouched.txt"]` {
@@ -409,7 +414,7 @@ func TestNativeRecoveryCLIHasNoEffectOrTaskRoutes(t *testing.T) {
 		t.Fatal("invalid recovery identity")
 	}
 	peer = &hello.Context
-	expected := []string{"core.status", "chat.archive.list", "chat.archive.read", "computer.authority.deactivate", "computer.authority.publish", "computer.settings.list", "computer.settings.search", "computer.settings.snapshot"}
+	expected := []string{"core.status", "chat.archive.list", "chat.archive.read", "computer.authority.deactivate", "computer.authority.publish", "computer.settings.inspect", "computer.settings.list", "computer.settings.search", "computer.settings.snapshot"}
 	if !reflect.DeepEqual(identity.Capabilities, expected) {
 		t.Fatal("recovery advertised broader capabilities", identity.Capabilities)
 	}
