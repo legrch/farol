@@ -9,7 +9,10 @@ import { _electron } from "playwright-core";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
-import { desktopIdentity } from "../../tooling/harness-identity.ts";
+import {
+  desktopIdentity,
+  productName,
+} from "../../tooling/harness-identity.ts";
 import {
   assertRuntimeObservation,
   observeElectronRuntime,
@@ -53,7 +56,7 @@ const executablePath = path.join(
   "dist/Electron.app/Contents/MacOS/Electron",
 );
 async function runScenario(scenario) {
-  const appName = "Farol Setup Fixture";
+  const appName = `${productName} Setup Fixture`;
   const id = randomUUID();
   const output = path.join(root, "_output/evidence/setup-journey", id);
   await fs.mkdir(output, { recursive: true, mode: 0o700 });
@@ -487,7 +490,7 @@ async function runScenario(scenario) {
       "SETUP_APP_NAME_NOT_SAVED",
     );
     const finish = page.getByRole("button", {
-      name: "Start using Farol",
+      name: `Start using ${productName}`,
       exact: true,
     });
     assert.equal(await finish.isEnabled(), false);

@@ -13,12 +13,12 @@ it.each([true, false])(
       if (!ok) throw Error("synthetic refusal");
     });
     const f = await startChatGptFixture({
-      setupVerification: { appName: "Farol Dev", verify },
+      setupVerification: { appName: "Setup Fixture", verify },
     });
     fixtures.push(f);
     const html = await (await fetch(f.url)).text();
     expect(html).toContain('aria-label="Select ChatGPT model"');
-    expect(html).toContain('data-app-name="Farol Dev"');
+    expect(html).toContain('data-app-name="Setup Fixture"');
     const endpoint = new URL("/setup-verify", f.url);
     expect((await fetch(endpoint)).status).toBe(405);
     expect(verify).not.toHaveBeenCalled();
