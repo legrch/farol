@@ -1,10 +1,10 @@
 import fs from "node:fs";
-import path from "node:path";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
 import { parse } from "@babel/parser";
 import { expect, it } from "vitest";
 import { createTotalOperationsRecorder } from "../../apps/desktop/operations/recorder";
+import { desktopCoreArtifactRoot } from "../../apps/desktop/dev-core-layout";
 
 // Execute the actual desktop diagnostic sink and its selected callback values.
 // Child/native mechanics are covered separately with controlled producers;
@@ -207,7 +207,7 @@ it("omits an absent optional observer from the actual native launch object", () 
   expect(Object.hasOwn(options, "codexRead")).toBe(false);
 });
 
-it("selects Shell for the actual desktop caller only in its supported layout", () => {
+it("passes compiled Shell and the protected root through the actual desktop caller", () => {
   const call = selected(
     main,
     mainTree,
@@ -216,41 +216,44 @@ it("selects Shell for the actual desktop caller only in its supported layout", (
       (node.callee as { name?: string }).name === "startObservedDesktopGoCore",
   );
   const tree = parse(call, { sourceType: "module", plugins: ["typescript"] });
-  const property = selected(
+  const root = selected(
+    call,
+    tree,
+    (node) =>
+      node.type === "ObjectProperty" &&
+      (node.key as { name?: string }).name === "artifactRoot",
+  );
+  const shell = selected(
     call,
     tree,
     (node) =>
       node.type === "ObjectProperty" &&
       (node.key as { name?: string }).name === "compiledShell",
   );
-  const selector = selected(
-    host,
-    hostTree,
-    (node) =>
-      node.type === "FunctionDeclaration" &&
-      (node.id as { name?: string }).name === "desktopShellSelection",
-  );
   const compiledGoShell = {
     support: "controlled",
     watchdogSource: new Uint8Array(),
   };
-  for (const runtimeEnvironment of ["dev", "preview"]) {
+  for (const runtimeEnvironment of ["dev", "preview", "owner-preview"]) {
     for (const packaged of [false, true]) {
       const directory = packaged
         ? "/synthetic/Farol.app/Contents/Resources/app"
         : "/synthetic/repo/_output/build/app";
       const actual = vm.runInNewContext(
-        `${stripTypeScriptTypes(selector)}; ({${stripTypeScriptTypes(property)}}).compiledShell`,
+        `({${stripTypeScriptTypes(root)},${stripTypeScriptTypes(shell)}})`,
         {
-          path,
+          desktopCoreArtifactRoot,
           compiledGoShell,
           runtimeEnvironment,
           directory,
           installedResourcesOrigin: undefined,
         },
       );
-      expect(actual).toBe(
-        runtimeEnvironment === "dev" && !packaged ? undefined : compiledGoShell,
+      expect(actual.compiledShell).toBe(compiledGoShell);
+      expect(actual.artifactRoot).toBe(
+        runtimeEnvironment === "dev" && !packaged
+          ? "/synthetic/repo/_output/dev-core/Contents/Resources/app"
+          : directory,
       );
     }
   }
@@ -279,31 +282,25 @@ it("uses the authenticated private image for the actual Go and Shell caller", ()
       node.type === "ObjectProperty" &&
       (node.key as { name?: string }).name === "compiledShell",
   );
-  const selector = selected(
-    host,
-    hostTree,
-    (node) =>
-      node.type === "FunctionDeclaration" &&
-      (node.id as { name?: string } | undefined)?.name ===
-        "desktopShellSelection",
-  );
   const privateRoot = "/owner-private/Farol.app/Contents/Resources/app";
   const compiledGoShell = {
     support: "controlled",
     watchdogSource: new Uint8Array(),
   };
-  const value = vm.runInNewContext(
-    `${stripTypeScriptTypes(selector)}; ({${stripTypeScriptTypes(root)},${stripTypeScriptTypes(shell)}})`,
-    {
-      path,
-      compiledGoShell,
-      runtimeEnvironment: "preview",
-      directory: "/Applications/Farol.app/Contents/Resources/app",
-      installedResourcesOrigin: { execution: { directory: privateRoot } },
-    },
-  );
-  expect(value.artifactRoot).toBe(privateRoot);
-  expect(value.compiledShell).toBe(compiledGoShell);
+  for (const runtimeEnvironment of ["dev", "preview", "owner-preview"]) {
+    const value = vm.runInNewContext(
+      `({${stripTypeScriptTypes(root)},${stripTypeScriptTypes(shell)}})`,
+      {
+        desktopCoreArtifactRoot,
+        compiledGoShell,
+        runtimeEnvironment,
+        directory: "/Applications/Farol.app/Contents/Resources/app",
+        installedResourcesOrigin: { execution: { directory: privateRoot } },
+      },
+    );
+    expect(value.artifactRoot).toBe(privateRoot);
+    expect(value.compiledShell).toBe(compiledGoShell);
+  }
 });
 
 it("keeps the original lifecycle diagnostic when operations recording throws", () => {
