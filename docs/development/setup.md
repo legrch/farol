@@ -77,7 +77,7 @@ Dev is not a package candidate.
 
 Ordinary Dev includes the Go Shell route. Electron itself and the actual main,
 MCP, preload and renderer resources execute inside the same protected Dev image.
-The mutable `_output/build/app` tree is build input only, never a launch path.
+For the canonical Dev launcher, `_output/build/app` is build input only.
 The launcher prepares a fixed
 `_output/dev-core/Contents/Resources/app` resource tree and an unmodified pinned
 vendor runtime beside it. The running desktop retains its separate Dev display
@@ -85,9 +85,14 @@ bundle and profile. The Go host applies the same resource, runtime, protected-ro
 and Shell support checks used for a package; workspace scope, Commands and task
 grants still apply to every command. Unexpected changes to the prepared tree
 refuse launch rather than being repaired or disabling Shell. A replacement first
-atomically retires the previous complete image; interrupted recursive cleanup
-resumes only for the recorded retired directory identity. No package install,
-credential import or profile reset is involved.
+atomically retires the previous complete image. Retired images remain under
+`_output/.dev-core-retired-*`; launch never recursively deletes them, because a
+pathname identity check cannot make recursive removal atomic. Clean build outputs
+only after all owned Dev processes have exited. Workspace File writes and edits
+also exclude the actual backend image by kernel directory identity, independently
+of Commands. Legacy raw preview launches keep File tools but cannot qualify Shell
+against a separate image; `npm run preview:development` uses the canonical Dev
+launcher. No package install, credential import or profile reset is involved.
 
 `task dev -- --check` validates and builds without launching or changing profiles;
 `--fresh-review-profile` opens a new, retained disposable first-run Dev profile

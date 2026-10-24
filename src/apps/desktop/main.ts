@@ -92,7 +92,10 @@ declare const __FAROL_GO_SHELL__: {
   readonly watchdogSourceBase64: string;
 } | null;
 import { createMenuBar } from "./menu-bar";
-import { desktopCoreArtifactRoot } from "../../../apps/desktop/dev-core-layout";
+import {
+  desktopCoreArtifactRoot,
+  desktopDevShellImageMatches,
+} from "../../../apps/desktop/dev-core-layout";
 import { promises as rawFs } from "original-fs";
 import {
   createInstalledUpdateRuntime,
@@ -12206,7 +12209,16 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       startObservedDesktopGoCore({
         compiledArtifact: compiledGoCore,
         compiledResources: compiledGoResources,
-        compiledShell: compiledGoShell,
+        // Legacy preview entrypoints retain File tools, but never qualify Shell
+        // against a different copy of the code actually executing this host.
+        compiledShell:
+          runtimeEnvironment === "dev" &&
+          !desktopDevShellImageMatches(
+            realpathSync(directory),
+            realpathSync(process.execPath),
+          )
+            ? undefined
+            : compiledGoShell,
         previousHostDrainConfirmed: previousHostAdmissionReady,
         build: buildIdentity,
         // The attested path must remain immutable through spawn and lifetime.

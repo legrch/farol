@@ -2,6 +2,10 @@ package boot
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strconv"
+	"syscall"
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -32,15 +36,49 @@ func newComputerReaders(home string) (*computerFileOwners, error) {
 }
 
 func newComputerFileOwners(home string) (*computerFileOwners, error) {
+	image, err := currentComputerImageRoot()
+	if err != nil {
+		return nil, err
+	}
+	return newComputerFileOwnersWithImage(home, image)
+}
+
+// The kernel executable, never a transport field or Shell setting, identifies
+// the running image. Standalone backends protect their executable directory.
+func currentComputerImageRoot() (port.Root, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return port.Root{}, err
+	}
+	executable, err = filepath.EvalSymlinks(executable)
+	if err != nil {
+		return port.Root{}, err
+	}
+	image := filepath.Dir(executable)
+	if filepath.Base(executable) == "farol-backend" && filepath.Base(image) == "app" && filepath.Base(filepath.Dir(image)) == "Resources" && filepath.Base(filepath.Dir(filepath.Dir(image))) == "Contents" {
+		image = filepath.Dir(filepath.Dir(filepath.Dir(image)))
+	}
+	info, err := os.Stat(image)
+	if err != nil {
+		return port.Root{}, err
+	}
+	identity, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.IsDir() || image == string(filepath.Separator) {
+		return port.Root{}, authority.Fail("WORKSPACE_PATH_REFUSED", "native-image")
+	}
+	return port.Root{Path: image, Device: strconv.FormatUint(uint64(identity.Dev), 10), Inode: strconv.FormatUint(uint64(identity.Ino), 10)}, nil
+}
+
+func newComputerFileOwnersWithImage(home string, image port.Root) (*computerFileOwners, error) {
 	readers, err := newComputerReaders(home)
 	if err != nil {
 		return nil, err
 	}
-	legacyMutation, err := filesystem.NewMutableWithFilePolicy(home, authority.LegacyProtectedFiles)
+	legacyMutation, err := filesystem.NewMutableWithFilePolicy(home, authority.LegacyProtectedFiles, image)
 	if err != nil {
 		return nil, err
 	}
-	rootMutation, err := filesystem.NewMutableWithFilePolicy(home, authority.RootScopedFiles)
+	rootMutation, err := filesystem.NewMutableWithFilePolicy(home, authority.RootScopedFiles, image)
 	if err != nil {
 		return nil, err
 	}

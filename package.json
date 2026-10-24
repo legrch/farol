@@ -38,7 +38,7 @@
     "promote": "node tooling/promote-preview.mjs",
     "preview": "electron _output/build/app/main.cjs",
     "preview:owner": "node tooling/owner-preview.mjs build-run",
-    "preview:development": "electron _output/build/app/main.cjs",
+    "preview:development": "node tooling/dev.mjs",
     "preview:plan": "node tooling/owner-preview.mjs plan",
     "preview:build": "node tooling/owner-preview.mjs build",
     "preview:run": "node tooling/owner-preview.mjs run",

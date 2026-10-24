@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { desktopCoreArtifactRoot } from "../../apps/desktop/dev-core-layout.ts";
+import {
+  desktopCoreArtifactRoot,
+  desktopDevShellImageMatches,
+} from "../../apps/desktop/dev-core-layout.ts";
 import { prepareDevCoreResources } from "../../tooling/dev-core-resources.mjs";
 import { BUILD_ENTRIES } from "../../tooling/build-contract.mjs";
 import { GO_CORE_ENTRIES } from "../../tooling/go-core-artifact.mjs";
@@ -51,7 +54,7 @@ describe("admitted source Dev resources", () => {
       await fs.mkdtemp(path.join(os.tmpdir(), "farol-dev-core-")),
     );
     source = path.join(root, "_output/build/app");
-    destination = desktopCoreArtifactRoot(source, "dev");
+    destination = path.join(root, "_output/dev-core/Contents/Resources/app");
     await fs.mkdir(source, { recursive: true, mode: 0o700 });
     const vendor = path.join(
       root,
@@ -133,44 +136,39 @@ describe("admitted source Dev resources", () => {
       first.ino,
     );
   });
-  it("resumes interrupted cleanup without ever recursively removing the canonical image", async () => {
+  it("retains retired images without recursive deletion during publication or reuse", async () => {
     await prepareDevCoreResources(root);
     await advanceBuild(1);
-    const bundle = path.resolve(destination, "../../..");
     const original = fs.rm.bind(fs);
-    let retired;
     const cleanup = vi
       .spyOn(fs, "rm")
       .mockImplementation(async (target, options) => {
-        expect(target).not.toBe(bundle);
-        if (path.basename(target).startsWith(".dev-core-retired-")) {
-          retired = target;
-          await fs.unlink(path.join(target, "Contents/Resources/app/main.cjs"));
-          throw Object.assign(new Error("controlled interrupted cleanup"), {
-            code: "EIO",
-          });
-        }
+        expect(path.basename(target).startsWith(".dev-core-retired-")).toBe(
+          false,
+        );
         return original(target, options);
       });
     try {
-      await expect(prepareDevCoreResources(root)).rejects.toThrow(
-        "controlled interrupted cleanup",
+      expect(await prepareDevCoreResources(root)).toBe(destination);
+      expect(await prepareDevCoreResources(root)).toBe(destination);
+      const retired = (await fs.readdir(path.join(root, "_output"))).filter(
+        (name) => name.startsWith(".dev-core-retired-"),
       );
+      expect(retired).toHaveLength(1);
+      expect(
+        await fs.readFile(
+          path.join(
+            root,
+            "_output",
+            retired[0],
+            "Contents/Resources/app/main.cjs",
+          ),
+          "utf8",
+        ),
+      ).toBe("fixture main.cjs");
     } finally {
       cleanup.mockRestore();
     }
-    expect(retired).toBeDefined();
-    await expect(
-      fs.lstat(path.join(retired, "Contents/Resources/app/main.cjs")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    expect(await fs.readFile(path.join(destination, "main.cjs"), "utf8")).toBe(
-      "fixture main.cjs",
-    );
-    const receipt = path.join(root, "_output/dev-core-resources.json");
-    expect(JSON.parse(await fs.readFile(receipt, "utf8")).schema).toBe(3);
-    expect(await prepareDevCoreResources(root)).toBe(destination);
-    expect(JSON.parse(await fs.readFile(receipt, "utf8")).schema).toBe(1);
-    await expect(fs.lstat(retired)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("recovers interruption after atomic retirement but before publishing the new image", async () => {
@@ -195,7 +193,7 @@ describe("admitted source Dev resources", () => {
     }
     await expect(fs.lstat(bundle)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await prepareDevCoreResources(root)).toBe(destination);
-    await expect(fs.lstat(retired)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await fs.lstat(retired)).isDirectory()).toBe(true);
   });
 
   it("does not clean a retired directory whose recorded identity changed", async () => {
@@ -375,9 +373,9 @@ describe("admitted source Dev resources", () => {
   });
 });
 
-it("selects the fixed Dev layout without changing packaged or preview roots", () => {
+it("keeps actual runtime roots and qualifies only the matching protected Dev image", () => {
   expect(desktopCoreArtifactRoot("/repo/_output/build/app", "dev")).toBe(
-    "/repo/_output/dev-core/Contents/Resources/app",
+    "/repo/_output/build/app",
   );
   expect(desktopCoreArtifactRoot("/app/Contents/Resources/app", "dev")).toBe(
     "/app/Contents/Resources/app",
@@ -385,9 +383,20 @@ it("selects the fixed Dev layout without changing packaged or preview roots", ()
   expect(desktopCoreArtifactRoot("/repo/_output/build/app", "preview")).toBe(
     "/repo/_output/build/app",
   );
-  expect(() => desktopCoreArtifactRoot("/other/root", "dev")).toThrow(
-    "DEV_CORE_LAYOUT_INVALID",
-  );
+  const resources = "/repo/_output/dev-core/Contents/Resources/app";
+  const executable =
+    "/repo/_output/dev-core/Contents/Frameworks/Farol Dev.app/Contents/MacOS/Electron";
+  expect(desktopDevShellImageMatches(resources, executable)).toBe(true);
+  for (const [root, host] of [
+    ["/repo/_output/build/app", executable],
+    [
+      resources,
+      "/repo/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
+    ],
+    ["/other/_output/dev-core/Contents/Resources/app", executable],
+    ["relative", executable],
+  ])
+    expect(desktopDevShellImageMatches(root, host)).toBe(false);
   expect(() => desktopCoreArtifactRoot("relative", "dev")).toThrow(
     "DEV_CORE_LAYOUT_INVALID",
   );

@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { prepareDevRuntime, verifyDevSignature } from "./dev-runtime.mjs";
-import { desktopCoreArtifactRoot } from "../apps/desktop/dev-core-layout.ts";
 import { treeDigest } from "./artifact-digest.mjs";
 import {
   BUILD_ENTRIES,
@@ -76,7 +75,7 @@ async function publishReceipt(output, destination, value) {
   }
 }
 
-async function removeRetiredImage(output, receipt) {
+async function verifyRetiredImage(output, receipt) {
   if (receipt?.schema !== 3 || receipt.retired === null) return;
   const retired = receipt.retired;
   if (
@@ -99,9 +98,9 @@ async function removeRetiredImage(output, receipt) {
   }
   if (String(info.dev) !== retired.device || String(info.ino) !== retired.inode)
     throw new Error("DEV_CORE_RETIRED_CHANGED");
-  // The complete image was atomically moved here before cleanup. Its retained
-  // directory identity permits resuming a partially completed recursive removal.
-  await fs.rm(directory, { recursive: true });
+  // Retain old images. A path identity check cannot bind recursive deletion
+  // atomically to this inode; publication must never delete a substituted tree.
+  // Explicit build-output cleanup belongs outside this launch transition.
 }
 
 function settledReceipt(previous) {
@@ -145,7 +144,7 @@ export async function prepareDevCoreResources(root) {
   const vendor = path.join(root, "node_modules/electron/dist/Electron.app");
   const runtime = await observeEmbeddedRuntime(vendor);
   assertEmbeddedRuntime(runtime);
-  const destination = desktopCoreArtifactRoot(source, "dev");
+  const destination = path.join(output, "dev-core/Contents/Resources/app");
   const bundle = path.resolve(destination, "../../..");
   const receiptPath = path.join(output, "dev-core-resources.json");
   let previous;
@@ -193,7 +192,7 @@ export async function prepareDevCoreResources(root) {
       verifyDevSignature(
         path.join(bundle, "Contents/Frameworks/Farol Dev.app"),
       );
-      await removeRetiredImage(output, previous);
+      await verifyRetiredImage(output, previous);
       if ([2, 3].includes(previous.schema)) {
         await publishReceipt(output, receiptPath, settledReceipt(previous));
       }
@@ -205,7 +204,7 @@ export async function prepareDevCoreResources(root) {
   ) {
     throw new Error("DEV_CORE_RESOURCES_MISSING");
   }
-  await removeRetiredImage(output, previous);
+  await verifyRetiredImage(output, previous);
   const staging = await fs.mkdtemp(path.join(output, ".dev-core-"));
   let published = false;
   try {
@@ -278,7 +277,7 @@ export async function prepareDevCoreResources(root) {
     }
     await fs.rename(staging, bundle);
     published = true;
-    await removeRetiredImage(output, transition);
+    await verifyRetiredImage(output, transition);
     await publishReceipt(output, receiptPath, receipt);
     return destination;
   } finally {
