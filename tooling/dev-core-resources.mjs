@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { DEV_DISPLAY_NAME } from "./harness-identity.ts";
 import { prepareDevRuntime, verifyDevSignature } from "./dev-runtime.mjs";
 import { treeDigest } from "./artifact-digest.mjs";
 import {
@@ -190,7 +191,7 @@ export async function prepareDevCoreResources(root) {
         ),
       );
       verifyDevSignature(
-        path.join(bundle, "Contents/Frameworks/Farol Dev.app"),
+        path.join(bundle, "Contents/Frameworks", `${DEV_DISPLAY_NAME}.app`),
       );
       await verifyRetiredImage(output, previous);
       if ([2, 3].includes(previous.schema)) {
