@@ -4980,31 +4980,39 @@ function reportOwnedBackendLifecycle(
     BackendLifecycleObservation | ConnectorRuntimeLifecycleObservation,
 ): void {
   try {
-    operationsStore().record(
-      {
-        source: "Setup",
-        kind:
-          observation.source === "go-backend"
-            ? "hub.lifecycle"
-            : "connection.lifecycle",
-        target: {},
-      },
-      observation.state === "outcome_unknown" ||
-        observation.event === "cleanup-unknown"
-        ? "unknown"
-        : observation.event === "failure"
-          ? "failed"
-          : observation.state === "observed" &&
-              observation.phase === "closing" &&
-              observation.event === "child-close" &&
-              observation.exitCode === 0 &&
-              observation.signal === null &&
-              !observation.forced
-            ? "done"
-            : "unknown",
-      observation.code,
-      0,
-    );
+    // Child notifications during an admitted connector Stop are diagnostics,
+    // not separate actions. The enclosing connection.stop records the final
+    // drain result; cleanup-unknown remains independently durable if it fails.
+    const connectorStopNotification =
+      observation.source !== "go-backend" &&
+      observation.phase === "closing" &&
+      observation.event !== "cleanup-unknown";
+    if (!connectorStopNotification)
+      operationsStore().record(
+        {
+          source: "Setup",
+          kind:
+            observation.source === "go-backend"
+              ? "hub.lifecycle"
+              : "connection.lifecycle",
+          target: {},
+        },
+        observation.state === "outcome_unknown" ||
+          observation.event === "cleanup-unknown"
+          ? "unknown"
+          : observation.event === "failure"
+            ? "failed"
+            : observation.state === "observed" &&
+                observation.phase === "closing" &&
+                observation.event === "child-close" &&
+                observation.exitCode === 0 &&
+                observation.signal === null &&
+                !observation.forced
+              ? "done"
+              : "unknown",
+        observation.code,
+        0,
+      );
   } catch {
     // Optional operations projection cannot suppress the original diagnostic.
   }

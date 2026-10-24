@@ -364,3 +364,80 @@ it.each(lifecycleRecordingCases)(
     expect(diagnostics().unmappedCodes).toBe(0);
   },
 );
+
+// A deliberate anchor KILL keeps group custody until the original Stop settles.
+// These notifications must not invent additional unknown user operations.
+it.each([
+  {
+    source: "connector-tunnel",
+    event: "exit",
+    code: "CONNECTOR_TUNNEL_EXIT",
+    state: "observed",
+    exitCode: 0,
+    signal: null,
+    forced: false,
+  },
+  {
+    source: "connector-anchor",
+    event: "disconnect",
+    code: "CONNECTOR_IPC_DISCONNECTED",
+    state: "outcome_unknown",
+    exitCode: null,
+    signal: null,
+    forced: true,
+  },
+  {
+    source: "connector-anchor",
+    event: "exit",
+    code: "CONNECTOR_ANCHOR_EXIT",
+    state: "observed",
+    exitCode: null,
+    signal: "SIGKILL",
+    forced: true,
+  },
+  {
+    source: "connector-anchor",
+    event: "close",
+    code: "CONNECTOR_ANCHOR_CLOSE",
+    state: "observed",
+    exitCode: null,
+    signal: "SIGKILL",
+    forced: true,
+  },
+])(
+  "keeps planned closing notification $code as a diagnostic",
+  (notification) => {
+    const { report, lines, records } = sink();
+    report({
+      ...notification,
+      phase: "closing",
+      runtimeGeneration: "original-runtime",
+    });
+    expect(records).toEqual([]);
+    expect(lines).toHaveLength(1);
+    report({
+      ...notification,
+      phase: "active",
+      runtimeGeneration: "original-runtime",
+    });
+    expect(records).toEqual([{ outcome: "unknown", code: notification.code }]);
+  },
+);
+it("retains an unconfirmed connector Stop as an unknown operation", () => {
+  const { report, records, lines } = sink();
+  report({
+    source: "connector-anchor",
+    phase: "closing",
+    event: "cleanup-unknown",
+    code: "CONNECTOR_STOP_UNCONFIRMED",
+    state: "outcome_unknown",
+    exitCode: null,
+    signal: null,
+    forced: true,
+    runtimeGeneration: "original-runtime",
+  });
+  expect(records).toEqual([
+    { outcome: "unknown", code: "CONNECTOR_STOP_UNCONFIRMED" },
+  ]);
+  expect(lines).toHaveLength(1);
+});
