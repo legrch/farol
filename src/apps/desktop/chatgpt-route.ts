@@ -1455,6 +1455,17 @@ export type ChatGptRouteOptions = Readonly<{
   // `ChatGptSignInBlockedDiagnostic`): never a body, a query string, or a
   // full URL.
   onSignInBlocked?: (diagnostic: ChatGptSignInBlockedDiagnostic) => void;
+  // Dev-only, content-free page-read diagnostics; never sign-in evidence.
+  onSignInStatusDiagnostic?: (
+    value: Readonly<{
+      reason:
+        "admission" | "document-not-current" | "unconfirmed" | "exception";
+      opening: boolean;
+      taskInFlight: boolean;
+      loading: boolean;
+      pageState: ChatGptPageObservation["state"] | null;
+    }>,
+  ) => void;
 }>;
 
 export type ChatGptWindowPresentation =
@@ -2749,18 +2760,32 @@ export class ChatGptRoute {
   // cannot become readiness for a subsequent task or settle an unknown effect.
   async observeSignInStatus(): Promise<ChatGptSignInStatusObservation> {
     this.currentReadinessObservation = null;
-    const unknown = (): ChatGptSignInStatusObservation =>
-      Object.freeze({
-        state: "unknown" as const,
-        binding: null,
-      });
+    const unknown = (
+      reason:
+        "admission" | "document-not-current" | "unconfirmed" | "exception",
+      pageState: ChatGptPageObservation["state"] | null = null,
+    ): ChatGptSignInStatusObservation => {
+      try {
+        this.options.onSignInStatusDiagnostic?.({
+          reason,
+          opening: this.opening !== null,
+          taskInFlight: this.taskInFlight,
+          loading: this.load !== "loaded",
+          pageState,
+        });
+      } catch {
+        /* Diagnostics cannot change page-read admission. */
+      }
+      return Object.freeze({ state: "unknown" as const, binding: null });
+    };
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      if (!this.readinessObservationAvailable()) return unknown();
+      if (!this.readinessObservationAvailable()) return unknown("admission");
       const startedAt = performance.now();
       const deadlineAt = startedAt + READINESS_OBSERVATION_MS;
       const read = this.captureReadinessRead();
-      if (!this.isReadinessDocumentCurrent(read)) return unknown();
+      if (!this.isReadinessDocumentCurrent(read))
+        return unknown("document-not-current");
       const answer = await Promise.race([
         this.readReadinessPage(false),
         new Promise<null>((resolve) => {
@@ -2780,7 +2805,7 @@ export class ChatGptRoute {
         read.sequence !== this.readinessReadSequence ||
         !this.isReadinessDocumentCurrent(read)
       )
-        return unknown();
+        return unknown("unconfirmed", answer?.observation.state ?? null);
       const result: ChatGptSignInStatusObservation = Object.freeze({
         state: answer.observation.state,
         binding: Object.freeze({
@@ -2797,7 +2822,7 @@ export class ChatGptRoute {
       return result;
     } catch {
       // Native exceptions never escape as page content or positive evidence.
-      return unknown();
+      return unknown("exception");
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }

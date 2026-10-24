@@ -12466,6 +12466,20 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     onSignInBlocked: (diagnostic) => {
       chatGptSignInBlocked.record(diagnostic);
     },
+    ...(runtimeEnvironment === "dev"
+      ? {
+          onSignInStatusDiagnostic: (
+            value: Readonly<{
+              reason: string;
+              opening: boolean;
+              taskInFlight: boolean;
+              loading: boolean;
+              pageState: string | null;
+            }>,
+          ) =>
+            console.error("FAROL_SIGN_IN_OBSERVATION:" + JSON.stringify(value)),
+        }
+      : {}),
     onLoadStateChanged: (state) => {
       if (!embeddedBrowserEnabled()) return;
       // Retained document readiness survives concealment and sign-in. Current
