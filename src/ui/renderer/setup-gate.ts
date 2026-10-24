@@ -109,7 +109,18 @@ export function setupStepCheck(
     settings !== null;
   // Unknown is sticky even through observation loss or edits. A new input never
   // licenses repeating an operation whose original outcome remains unknown.
-  const unknown = fence.unknown || intents.some((i) => i.state === "unknown");
+  const unknown =
+    fence.unknown ||
+    intents.some(
+      (i) =>
+        i.state === "unknown" &&
+        !(
+          step === "attachment" &&
+          confirmed &&
+          i.id === "settings:connector.verify-app:" &&
+          i.code === "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN"
+        ),
+    );
   const pending =
     fence.pending || (step === "signin" && observation?.pending === true);
   const latestConfirmation = Math.max(

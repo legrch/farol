@@ -287,7 +287,10 @@ import {
   type StartupStage,
 } from "./primary-startup";
 import { readRuntimeBuildIdentity } from "./build-identity";
-import { waitForConnectorAppReceipt } from "./connector-app-receipt-wait";
+import {
+  currentConnectorAttachment,
+  waitForConnectorAppReceipt,
+} from "./connector-app-receipt-wait";
 import {
   ProductConfigurationService,
   ProductSettingsStore,
@@ -1655,6 +1658,10 @@ function bootstrap() {
       error: "SETTINGS_READ_FAILED",
     },
     runtimeState,
+    browserRouteState:
+      selectedTaskId === ""
+        ? { state: chatGptRoute?.loadState() ?? "loading" }
+        : undefined,
     connectionStatus: currentConnectionStatus(),
     runtimeError,
     runtimeIdentity: runtime?.identity ?? null,
@@ -5509,6 +5516,25 @@ async function checkSecureMcpAttachment(
     const connector = snapshot.settings.connectors.secureMcp;
     const runtime = connector.runtime;
     const challenge = connector.challenge;
+    const existing = currentConnectorAttachment(
+      snapshot.settings,
+      buildIdentity.buildId,
+      expectedWorkspaceId,
+    );
+    if (existing && expectedBinding === undefined) {
+      return ProductConfigurationResultSchema.parse({
+        ok: true,
+        snapshot,
+        evidence: {
+          kind: "connector.attachment",
+          runtimeGeneration: existing.runtimeGeneration,
+          computerGeneration: existing.computerGeneration,
+          workspaceId: existing.workspaceId,
+          challengeSha256: existing.challengeSha256,
+          receiptSha256: existing.receiptSha256,
+        },
+      });
+    }
     if (
       expectedWorkspaceId !== undefined &&
       connectorWorkspaceSelection(snapshot.settings) !== expectedWorkspaceId

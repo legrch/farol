@@ -4821,3 +4821,27 @@ it("rechecks a restored hydrating session without a user click or another Send",
     vi.useRealTimers();
   }
 });
+
+it("recovers browser load state from bootstrap when its event preceded renderer startup", async () => {
+  const f = fixture();
+  const data = bootstrap();
+  vi.mocked(f.api.bootstrap).mockResolvedValue({
+    ...data,
+    browserRouteState: { state: "loaded" },
+  });
+  const c = new WindowController(f.api);
+  try {
+    await c.start();
+    expect(c.getSnapshot().route).toBe("loaded");
+    expect(c.getSnapshot().setupSignInCheck).toBeFalsy();
+    const wait = deferred<unknown>();
+    vi.mocked(f.api.bootstrap).mockReturnValue(wait.promise);
+    const refresh = c.refresh();
+    f.emit("route", { state: "failed" });
+    wait.resolve({ ...data, browserRouteState: { state: "loaded" } });
+    await refresh;
+    expect(c.getSnapshot().route).toBe("failed");
+  } finally {
+    c.dispose();
+  }
+});

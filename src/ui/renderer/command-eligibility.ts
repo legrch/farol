@@ -1,3 +1,4 @@
+import { setupCompletionChecks } from "../setup-completion";
 import { connectorRuntimeUncertain } from "../../pkg/product-settings/connector-uncertainty";
 import { ProductConfigurationCommandSchema } from "../../pkg/product-settings/contract";
 import type { ProductConfigurationCommand } from "../../pkg/product-settings/contract";
@@ -63,18 +64,30 @@ export function dependencyFences(
   target: Dependency,
   local: readonly Intent[] = [],
   observingModel = false,
+  observingAttachment = false,
 ) {
   const settings =
     snapshot.configuration?.status === "ready"
       ? snapshot.configuration.settings
       : null;
+  const attachmentConfirmed = setupCompletionChecks(settings, {
+    buildId: snapshot.buildId ?? "",
+    current:
+      snapshot.status === "current" &&
+      snapshot.runtime === "ready" &&
+      snapshot.update.phase !== "applying",
+    signInObservation: snapshot.signInObservation ?? null,
+    signInCheck: snapshot.setupSignInCheck ?? null,
+  }).attachment;
   let pending = false;
   let unknown = Boolean(
     settings &&
     (settings.computer.pendingEdit ||
       settings.setup.computer.outcomeUnknown ||
       connectorRuntimeUncertain(settings) ||
-      (target === "attachment" && settings.setup.connect.outcomeUnknown) ||
+      (target === "attachment" &&
+        !observingAttachment &&
+        settings.setup.connect.outcomeUnknown) ||
       settings.setup.hosts.outcomeUnknown ||
       settings.setup.verify.outcomeUnknown ||
       settings.connectors.secureMcp.runtime?.state === "outcome_unknown" ||
@@ -91,11 +104,21 @@ export function dependencyFences(
       source === "attachment" &&
       intent.state === "unknown" &&
       !(
-        settings?.connectors.secureMcp.appVerificationPending === true &&
+        (settings?.connectors.secureMcp.appVerificationPending === true ||
+          attachmentConfirmed) &&
         intent.code === "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN"
       )
     )
       source = "shared";
+    // A matching current receipt qualifies today's fact without rewriting the
+    // earlier Send's history. Readback may inspect that fact, never replay Send.
+    if (
+      source === "attachment" &&
+      intent.state === "unknown" &&
+      intent.code === "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN" &&
+      (observingAttachment || attachmentConfirmed)
+    )
+      return;
     if (observingModel && source === "model") return;
     if (!conflicts(source, target)) return;
     pending ||= intent.state === "pending";
@@ -168,6 +191,7 @@ export function commandAllowed(
     commandDependency(kind),
     local,
     kind === "model.status",
+    kind === "connector.check-attachment",
   );
   return !fences.pending && !fences.unknown;
 }

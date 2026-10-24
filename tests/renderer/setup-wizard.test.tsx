@@ -514,7 +514,13 @@ describe("Add to ChatGPT", () => {
     expect(h.button("Start using Farol")?.disabled).toBe(true);
     await h.remount();
     expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
-    expect(h.f.api.configure).toHaveBeenCalledTimes(1);
+    expect(
+      vi
+        .mocked(h.f.api.configure)
+        .mock.calls.filter(
+          ([command]) => command.kind !== "chatgpt.observe-sign-in",
+        ),
+    ).toHaveLength(1);
   });
 });
 

@@ -325,6 +325,14 @@ export function Settings({
         await facade.refresh();
         if (setupStep === "signin") {
           facade.refreshSignInStatus?.();
+        } else if (
+          setupStep === "attachment" &&
+          facade.getSnapshot().destination === destination &&
+          actions.allowed("connector.check-attachment")
+        ) {
+          // Read the existing Go receipt; this command never creates a
+          // challenge or opens/sends a ChatGPT test.
+          await actions.run({ kind: "connector.check-attachment" });
         }
         return;
       }

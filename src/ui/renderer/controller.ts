@@ -141,6 +141,7 @@ export const BootstrapProjectionSchema = z.object({
   configuration: ProductConfigurationSnapshotSchema,
   runtimeState: z.enum(["starting", "ready", "offline", "failed"]),
   connectionStatus: ConnectionStatusViewSchema.optional(),
+  browserRouteState: BrowserRouteStatusSchema.optional(),
   selectedTaskId: z.string().default(""),
   taskRevision: z.number().int().nonnegative(),
   tasks: ProductTasksStateSchema.shape.tasks,
@@ -457,6 +458,7 @@ export class WindowController implements RendererFacade {
   private readonly configOrder = new ConfigurationRequestOrder();
   private tasksInitialized = false;
   private runtimeRevision = 0;
+  private browserRouteRevision = 0;
   private updateRevision = 0;
   private pendingUpdateCheck = false;
   private staleRevision = 0;
@@ -610,6 +612,7 @@ export class WindowController implements RendererFacade {
         this.invalidateSignInObservation();
         const parsed = BrowserRouteStatusSchema.safeParse(value);
         if (parsed.success) {
+          this.browserRouteRevision++;
           this.patch({ route: parsed.data.state });
           // Page load retires the old sample. Read the newly loaded document
           // while this step is open; the event itself is never sign-in proof.
@@ -631,6 +634,7 @@ export class WindowController implements RendererFacade {
       }),
     ];
     const runtimeAtStart = this.runtimeRevision;
+    const browserRouteAtStart = this.browserRouteRevision;
     const windowAtStart = this.state.window;
     const order = this.configOrder.begin();
     if (this.api.operations) {
@@ -654,6 +658,10 @@ export class WindowController implements RendererFacade {
           this.adoptConnectionStatusRead(data, connectionRead);
         this.patch({
           environment: data.environment,
+          ...(this.browserRouteRevision === browserRouteAtStart &&
+          data.browserRouteState
+            ? { route: data.browserRouteState.state }
+            : {}),
           buildId: data.build.buildId,
           installedVersion: {
             version: data.build.version,
@@ -980,6 +988,7 @@ export class WindowController implements RendererFacade {
     if (this.disposed) return { status: "unqualified", reason: "disposed" };
     const order = this.configOrder.begin();
     const runtimeRevision = this.runtimeRevision;
+    const browserRouteRevision = this.browserRouteRevision;
     const staleRevision = this.staleRevision;
     try {
       const connectionRead = this.beginConnectionStatusRead();
@@ -1001,6 +1010,12 @@ export class WindowController implements RendererFacade {
         this.invalidateHistory();
         this.patch({ status: "incompatible" });
         return { status: "unqualified", reason: "incompatible" };
+      }
+      if (
+        this.browserRouteRevision === browserRouteRevision &&
+        parsed.data.browserRouteState
+      ) {
+        this.patch({ route: parsed.data.browserRouteState.state });
       }
       const previousConfiguration = this.state.configuration;
       this.adoptConfiguration(parsed.data.configuration, order);
@@ -1347,7 +1362,6 @@ export class WindowController implements RendererFacade {
       // settles; this pure query cannot replay the check or settle an effect.
       if (
         key === "settings:connector.verify-app:" &&
-        result.state !== "unknown" &&
         this.isSetupSignInObservationEntry()
       ) {
         this.invalidateSignInObservation();

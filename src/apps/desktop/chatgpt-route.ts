@@ -1682,6 +1682,13 @@ export class ChatGptRoute {
     }
   }
 
+  /** Current presentation state, also available if a renderer missed the load event. */
+  loadState(): "loading" | "loaded" | "failed" {
+    return this.opening !== null && this.load !== "loaded"
+      ? "loading"
+      : this.load;
+  }
+
   /** Open browser documents may contain work outside Farol's task journal. */
   hasOpenUpdateSurface(): boolean {
     return (

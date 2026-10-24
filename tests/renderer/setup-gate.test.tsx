@@ -1,3 +1,4 @@
+import { commandAllowed } from "../../src/ui/renderer/command-eligibility";
 import { describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import type {
@@ -787,4 +788,45 @@ it("does not tell a returning user to repeat successful steps for a pending app 
   expect(
     after?.status === "ready" && after.settings.setup.connect.outcomeUnknown,
   ).toBe(true);
+});
+
+it("allows only receipt readback while app Send is unknown, and qualifies matching evidence without erasing history", async () => {
+  const h = await mount({ step: "attachment" });
+  const snapshot = syntheticSnapshot(
+    h.c.getSnapshot(),
+    "attachment",
+    "success-current",
+  );
+  if (snapshot.configuration?.status !== "ready")
+    throw Error("fixture missing");
+  const settings = snapshot.configuration.settings;
+  const id = "settings:connector.verify-app:";
+  const previous = {
+    id,
+    state: "unknown" as const,
+    code: "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN",
+  };
+  const pending = { ...snapshot, intents: { [id]: previous } };
+  expect(setupStepCheck(pending, "attachment").allowed).toBe(true);
+  expect(commandAllowed(pending, "setup.progress")).toBe(true);
+  expect(pending.intents[id]).toBe(previous);
+  settings.setup.connect.outcomeUnknown = true;
+  settings.connectors.secureMcp.appVerificationPending = true;
+  settings.connectors.secureMcp.attachment = null;
+  expect(setupStepCheck(pending, "attachment").allowed).toBe(false);
+  expect(commandAllowed(pending, "connector.verify-app")).toBe(false);
+  expect(commandAllowed(pending, "connector.check-attachment")).toBe(true);
+  const saveUnknown = {
+    ...pending,
+    intents: {
+      ...pending.intents,
+      "settings:connector.check-attachment:": {
+        id: "settings:connector.check-attachment:",
+        state: "unknown" as const,
+        code: "SETTINGS_WRITE_FAILED",
+      },
+    },
+  };
+  expect(commandAllowed(saveUnknown, "connector.check-attachment")).toBe(false);
+  expect(setupStepCheck(saveUnknown, "attachment").allowed).toBe(false);
 });

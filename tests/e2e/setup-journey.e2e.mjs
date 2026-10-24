@@ -127,6 +127,7 @@ async function runScenario(scenario) {
     admission,
     quitAttempted = false;
   let sendCount = 0;
+  let delayedPrompt = null;
   const peers = [];
   const hash = (x) => createHash("sha256").update(x).digest("hex");
   async function bounded(promise, label, ms = 15000) {
@@ -154,6 +155,13 @@ async function runScenario(scenario) {
   async function verify(prompt) {
     sendCount++;
     assert.equal(sendCount, 1, "SETUP_SEND_REPLAYED");
+    if (scenario === "late-receipt") {
+      delayedPrompt = prompt;
+      return;
+    }
+    await verifyReceipt(prompt);
+  }
+  async function verifyReceipt(prompt) {
     const current = await readSetupSettings(page);
     const c = current.connectors.secureMcp;
     const challenge = c.challenge;
@@ -283,7 +291,7 @@ async function runScenario(scenario) {
       assert.equal(peer.child.signalCode, null);
     }
   }
-  async function settledVerification() {
+  async function settledVerification(kind = "connector.verify-app") {
     const directory = path.join(userData, "farol-state/operations");
     const entries = [];
     for (const name of (await fs.readdir(directory)).filter((n) =>
@@ -298,7 +306,7 @@ async function runScenario(scenario) {
       for (const line of (await fs.readFile(file, "utf8")).trim().split("\n")) {
         if (!line) continue;
         const entry = JSON.parse(line);
-        if (entry.kind === "connector.verify-app") entries.push(entry);
+        if (entry.kind === kind) entries.push(entry);
       }
     }
     const starts = entries.filter((e) => e.lifecycle?.phase === "started");
@@ -544,15 +552,64 @@ async function runScenario(scenario) {
       };
     }
 
+    if (scenario === "late-receipt") {
+      const original = await poll(
+        settledVerification,
+        (v) => v !== null,
+        "SETUP_LATE_RECEIPT_ORIGINAL_UNSETTLED",
+        75000,
+      );
+      assert.equal(original.outcome, "unknown");
+      assert.equal(sendCount, 1);
+      report.verificationOperation = {
+        id: original.lifecycle.id,
+        outcome: original.outcome,
+        code: original.code,
+      };
+      await page
+        .getByRole("button", { name: "Back to setup", exact: true })
+        .click();
+      assert.equal(await finish.isEnabled(), false);
+      await page
+        .getByRole("button", { name: "Refresh status", exact: true })
+        .click();
+      settings = await poll(
+        () => readSetupSettings(page),
+        (v) => v.setup.connect.outcomeUnknown === true,
+        "SETUP_UNKNOWN_LOST_DURING_READBACK",
+      );
+      assert.equal(settings.connectors.secureMcp.attachment, null);
+      const missingReadback = await poll(
+        () => settledVerification("connector.check-attachment"),
+        (v) => v !== null,
+        "SETUP_MISSING_RECEIPT_READBACK_UNSETTLED",
+      );
+      assert.equal(missingReadback.outcome, "refused");
+      assert.equal(missingReadback.code, "CONNECTOR_ATTACHMENT_NOT_FOUND");
+      assert.equal(sendCount, 1);
+      assert.ok(delayedPrompt, "SETUP_DELAYED_SUBMISSION_MISSING");
+      // Complete the first and only synthetic tool call after its reply budget.
+      // No new challenge, browser Send, settings verification or forced flags.
+      await verifyReceipt(delayedPrompt);
+      await page
+        .getByRole("button", { name: "Refresh status", exact: true })
+        .click();
+      report.lateReceiptReadback = {
+        sendCount,
+        originalOutcome: (await settledVerification()).outcome,
+      };
+      assert.equal(report.lateReceiptReadback.originalOutcome, "unknown");
+    }
     await poll(
       () => readSetupSettings(page),
       (v) => v.connectors.secureMcp.attachment !== null,
       "SETUP_MATCHING_RECEIPT_NOT_CONFIRMED",
       30000,
     );
-    await page
-      .getByRole("button", { name: "Back to setup", exact: true })
-      .click();
+    if (scenario !== "late-receipt")
+      await page
+        .getByRole("button", { name: "Back to setup", exact: true })
+        .click();
     await page.getByText("✓ Everything works", { exact: true }).waitFor();
     assert.equal(sendCount, 1);
     assert.equal(await finish.isEnabled(), true);
@@ -682,7 +739,13 @@ async function runScenario(scenario) {
 }
 
 const matrix = [];
-for (const scenario of ["happy", "wrong-app", "wrong-nonce", "stale-receipt"]) {
+for (const scenario of [
+  "happy",
+  "wrong-app",
+  "wrong-nonce",
+  "stale-receipt",
+  "late-receipt",
+]) {
   const result = await runScenario(scenario);
   matrix.push(result);
   if (result.status === "failed" || process.exitCode) break;
@@ -695,7 +758,7 @@ const matrixOutput = path.join(
 await fs.mkdir(matrixOutput, { recursive: true, mode: 0o700 });
 const matrixReport = {
   status:
-    matrix.length === 4 && !process.exitCode
+    matrix.length === 5 && !process.exitCode
       ? "passed-fixture-setup-matrix"
       : "failed",
   source,
