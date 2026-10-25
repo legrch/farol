@@ -203,7 +203,11 @@ func retainPreservedProfileObservation(ctx context.Context, in preservedProfileI
 				in.Selection.LifecycleDigest = lv.SnapshotDigest
 				in.Selection.ResultsDigest = rv.SnapshotDigest
 			}
-			plan, err := selectPreservedProfilePlan(in.Selection, observation, hv.EmptyHead)
+			var retired *archivepolicy.RecordedEmptyRetirement
+			if lv.Retirement != nil {
+				retired = &archivepolicy.RecordedEmptyRetirement{PreviousRevision: lv.Retirement.PreviousRevision, Revision: lv.Retirement.Revision, TurnCount: lv.Retirement.TurnCount}
+			}
+			plan, err := selectPreservedProfilePlan(in.Selection, observation, hv.EmptyHead, retired)
 			if err != nil {
 				return err
 			}

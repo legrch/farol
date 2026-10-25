@@ -52,6 +52,13 @@ type Policy struct{}
 // of the enclosing maintenance. Historical retirement and unresolved results
 // settle nothing, and this plan cannot authorize recovery or current admission.
 func (Policy) Select(s port.PreservedRecoverySelection, o port.PreservedRecoveryObservation) (*port.PreservedRecoveryPlan, error) {
+	if o.WriteCount == 0 && o.TurnCount == 0 && o.PlanCount == 0 && o.ResultCount == 0 && !o.ResultsUnresolved {
+		return nil, Refused
+	}
+	return selectMetadata(s, o)
+}
+
+func selectMetadata(s port.PreservedRecoverySelection, o port.PreservedRecoveryObservation) (*port.PreservedRecoveryPlan, error) {
 	b := s.Current
 	if !operation(s.OperationID) || !id(b.Scope.ProfileID) || !id(b.Scope.BackendGeneration) || !id(s.Next.ProfileID) || !id(s.Next.BackendGeneration) || !id(s.BuildID) || !id(s.HostLifetimeID) || !id(s.ChildLaunchID) || s.Next.ProfileID != b.Scope.ProfileID || s.Next.BackendGeneration == b.Scope.BackendGeneration {
 		return nil, Refused
@@ -67,9 +74,6 @@ func (Policy) Select(s port.PreservedRecoverySelection, o port.PreservedRecovery
 		if count < 0 || count > 4096 {
 			return nil, Refused
 		}
-	}
-	if o.WriteCount == 0 && o.TurnCount == 0 && o.PlanCount == 0 && o.ResultCount == 0 && !o.ResultsUnresolved {
-		return nil, Refused
 	}
 	if len(o.Incarnations) == 0 || len(o.Incarnations) > 4096 || o.Incarnations[len(o.Incarnations)-1] != b.Scope.BackendGeneration {
 		return nil, Refused

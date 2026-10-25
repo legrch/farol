@@ -59,7 +59,7 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 		refusalCode           string
 	}{
 		{name: "startup-consumed-empty-three-incarnations", startupEmptyHistory: true},
-		{name: "startup-retired-empty-thirty-three-incarnations", startupEmptyHistory: true, startupRetiredHistory: true, previousConfirmedQuit: true, refusalCode: "preserved_inspection_unconfirmed"},
+		{name: "startup-retired-empty-thirty-three-incarnations", startupEmptyHistory: true, startupRetiredHistory: true, previousConfirmedQuit: true},
 		{name: "previous-quit-false"},
 		{name: "previous-quit-true", previousConfirmedQuit: true},
 		{name: "quit-absent", quitAbsent: true},

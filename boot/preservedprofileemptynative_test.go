@@ -16,7 +16,9 @@ import (
 	"testing"
 	"time"
 
+	archivepolicy "github.com/legrch/farol/modules/chat/app/capabilities/archive"
 	chatport "github.com/legrch/farol/modules/chat/app/port"
+	handoffsvc "github.com/legrch/farol/modules/chat/app/services/handoff"
 )
 
 // Native stores and canonical consumed history; process closure, terminal and
@@ -94,21 +96,84 @@ func preservedEmptyHistoryProfileFixture(t *testing.T, incarnations int, retired
 }
 
 // The daily shape is not the consumed-but-unretired test-profile shape. An
-// existing retirement and normal terminal cannot be used as a new empty-owner
-// recovery admission, even with no writes and an otherwise complete history.
-func TestPreservedProfileDiscoveryNativeRetiredEmptyDailyHistoryRefuses(t *testing.T) {
+// existing retirement and normal terminal select metadata only; the enclosing
+// host must still qualify its new maintenance and retain historical UNKNOWN.
+func TestPreservedProfileDiscoveryNativeRetiredEmptyDailyHistory(t *testing.T) {
 	in := preservedEmptyHistoryProfileFixture(t, 33, true)
 	before := snapshotPreservedObservationTree(t, in.Profile.Root)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	calls := 0
-	err := discoverPreservedProfile(ctx, preservedProfileDiscoveryRequest(in), func(preservedProfileInspection) error {
+	err := discoverPreservedProfile(ctx, preservedProfileDiscoveryRequest(in), func(v preservedProfileInspection) error {
 		calls++
+		base := chatport.PreservedRecoveryObservation{Scope: v.Lifecycle.Scope, ParentRoot: v.Handoff.ParentRoot, ChatRoot: v.Handoff.ChatRoot, ResultsRoot: v.Results.Root, ResultsStorageRoot: v.Results.StorageRoot, HandoffDigest: v.Handoff.HeadDigest, LifecycleDigest: v.Lifecycle.SnapshotDigest, ResultsDigest: v.Results.SnapshotDigest, HandoffSteps: len(v.Handoff.Stages), Incarnations: v.Lifecycle.Incarnations, RetirementPresent: true}
+		if len(base.Incarnations) != 33 || v.Lifecycle.Retirement == nil || v.Handoff.HeadStage != chatport.HandoffTerminated {
+			t.Fatal("daily fixture lost original retired history")
+		}
+		if plan, err := (archivepolicy.Policy{}).Select(v.Plan.Selection, base); plan != nil || err == nil {
+			t.Fatal("ordinary nonempty policy started accepting empty observations")
+		}
+		for _, fault := range []string{"missing-head", "not-empty-chain", "missing-ack", "missing-terminal", "bad-exit", "ack-digest", "head-digest", "missing-retirement", "retirement-revision", "retirement-turns", "retirement-absent", "root", "results-root", "lifecycle-digest", "scope", "reuse-generation", "reuse-host", "reuse-child", "writes", "unknown"} {
+			t.Run(fault, func(t *testing.T) {
+				s, o := v.Plan.Selection, base
+				h := *v.Handoff.EmptyHead
+				r := handoffsvc.Copy(*h.Record)
+				h.Record = &r
+				head := &h
+				retired := &archivepolicy.RecordedEmptyRetirement{PreviousRevision: v.Lifecycle.Retirement.PreviousRevision, Revision: v.Lifecycle.Retirement.Revision, TurnCount: v.Lifecycle.Retirement.TurnCount}
+				switch fault {
+				case "missing-head":
+					head = nil
+				case "not-empty-chain":
+					h.EmptyRetirementChain = false
+				case "missing-ack":
+					r.ACK = nil
+				case "missing-terminal":
+					r.Terminal = nil
+				case "bad-exit":
+					n := 1
+					r.Terminal.ExitCode = &n
+				case "ack-digest":
+					r.Terminal.KnownACKDigest = [32]byte{}
+				case "head-digest":
+					h.Digest[0] ^= 1
+				case "missing-retirement":
+					retired = nil
+				case "retirement-revision":
+					retired.Revision++
+				case "retirement-turns":
+					retired.TurnCount = 1
+				case "retirement-absent":
+					o.RetirementPresent = false
+				case "root":
+					s.Current.ChatRoot.Inode++
+				case "results-root":
+					o.ResultsStorageRoot = o.ChatRoot
+				case "lifecycle-digest":
+					s.LifecycleDigest[0] ^= 1
+				case "scope":
+					s.Current.Scope.BackendGeneration = "wrong"
+				case "reuse-generation":
+					s.Next.BackendGeneration = o.Incarnations[0]
+				case "reuse-host":
+					s.HostLifetimeID = r.Publication.Binding.HostLifetimeID
+				case "reuse-child":
+					s.ChildLaunchID = r.Publication.Binding.ChildLaunchID
+				case "writes":
+					o.WriteCount = 1
+				case "unknown":
+					o.ResultsUnresolved = true
+				}
+				if p, err := (archivepolicy.Policy{}).SelectRetiredEmpty(s, o, head, retired, emptyRecoveryRecordValidator{}); p != nil || err == nil {
+					t.Fatal("invalid retired selection admitted", fault, err)
+				}
+			})
+		}
 		return nil
 	})
 	unchangedPreservedObservationTree(t, in.Profile.Root, before)
-	if err == nil || calls != 0 {
-		t.Fatal("retired daily history acquired empty recovery metadata", err, calls)
+	if err != nil || calls != 1 {
+		t.Fatal("canonical retired daily metadata was not selected", err, calls)
 	}
 }
 
@@ -140,7 +205,7 @@ func TestPreservedProfileNativeEmptySelectionKeepsExistingRefusals(t *testing.T)
 		base := chatport.PreservedRecoveryObservation{Scope: v.Lifecycle.Scope, ParentRoot: v.Handoff.ParentRoot, ChatRoot: v.Handoff.ChatRoot, ResultsRoot: v.Results.Root, ResultsStorageRoot: v.Results.StorageRoot, HandoffDigest: v.Handoff.HeadDigest, LifecycleDigest: v.Lifecycle.SnapshotDigest, ResultsDigest: v.Results.SnapshotDigest, HandoffSteps: len(v.Handoff.Stages), Incarnations: v.Lifecycle.Incarnations}
 		unknown := base
 		unknown.ResultsUnresolved = true
-		if plan, err := selectPreservedProfilePlan(v.Plan.Selection, unknown, v.Handoff.EmptyHead); err != nil || plan == nil || !plan.RetainsUnresolvedResults {
+		if plan, err := selectPreservedProfilePlan(v.Plan.Selection, unknown, v.Handoff.EmptyHead, nil); err != nil || plan == nil || !plan.RetainsUnresolvedResults {
 			t.Fatal("unresolved results were routed as empty or lost", err)
 		}
 		for _, fault := range []string{"missing-head", "not-empty-chain", "retirement", "results-digest", "handoff-digest", "lifecycle-digest", "chat-root", "parent-root", "scope", "reuse-generation", "reuse-host", "reuse-child", "invalid-operation", "invalid-build", "steps"} {
@@ -179,7 +244,7 @@ func TestPreservedProfileNativeEmptySelectionKeepsExistingRefusals(t *testing.T)
 				case "steps":
 					o.HandoffSteps = 0
 				}
-				if plan, err := selectPreservedProfilePlan(s, o, h); err == nil || plan != nil {
+				if plan, err := selectPreservedProfilePlan(s, o, h, nil); err == nil || plan != nil {
 					t.Fatal("invalid empty selection gained archive metadata", fault)
 				}
 			})
@@ -193,9 +258,23 @@ func TestPreservedProfileNativeEmptySelectionKeepsExistingRefusals(t *testing.T)
 }
 
 func TestPreservedProfileNativeEmptyPreparationRetainsHistoryAndFence(t *testing.T) {
+	testPreservedEmptyPreparation(t, false)
+}
+
+func TestPreservedProfileNativeRetiredEmptyPreparationRetainsHistoryAndFence(t *testing.T) {
+	testPreservedEmptyPreparation(t, true)
+}
+
+func testPreservedEmptyPreparation(t *testing.T, retired bool) {
+	t.Helper()
 	for _, lostACK := range []bool{false, true} {
 		t.Run(map[bool]string{false: "acknowledged", true: "lost-ack"}[lostACK], func(t *testing.T) {
-			in := preservedEmptyProfileFixture(t)
+			var in preservedProfileInspectionInput
+			if retired {
+				in = preservedEmptyHistoryProfileFixture(t, 33, true)
+			} else {
+				in = preservedEmptyProfileFixture(t)
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			var oldChat NativeRoot

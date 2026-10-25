@@ -6,12 +6,16 @@ import (
 	"github.com/legrch/farol/modules/chat/app/services/emptyrecovery"
 )
 
-// Route canonical empty consumed history through the existing empty policy.
+// Route consumed history through the unchanged empty policy, and already
+// retired empty history through its independently checked metadata selector.
 // This selects only archive metadata under the same retained native claims;
 // process exclusion, durable intent and a new real ACK/terminal remain separate.
-func selectPreservedProfilePlan(s chatport.PreservedRecoverySelection, o chatport.PreservedRecoveryObservation, head *chatport.HandoffHead) (*chatport.PreservedRecoveryPlan, error) {
+func selectPreservedProfilePlan(s chatport.PreservedRecoverySelection, o chatport.PreservedRecoveryObservation, head *chatport.HandoffHead, retired *archivepolicy.RecordedEmptyRetirement) (*chatport.PreservedRecoveryPlan, error) {
 	if o.WriteCount != 0 || o.TurnCount != 0 || o.PlanCount != 0 || o.ResultCount != 0 || o.ResultsUnresolved {
 		return (archivepolicy.Policy{}).Select(s, o)
+	}
+	if o.RetirementPresent {
+		return (archivepolicy.Policy{}).SelectRetiredEmpty(s, o, head, retired, emptyRecoveryRecordValidator{})
 	}
 	// The empty policy validates consumed history and lifetime uniqueness. Keep
 	// the enclosing selection's additional complete-results/stage comparisons.
