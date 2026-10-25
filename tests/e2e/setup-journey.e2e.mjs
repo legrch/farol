@@ -293,11 +293,14 @@ async function runScenario(scenario) {
     }
   }
   async function settledVerification(kind = "connector.verify-app") {
+    assert.ok(
+      kind === "connector.verify-app" || kind === "connector.check-attachment",
+    );
     const directory = path.join(userData, "farol-state/operations");
     const entries = [];
-    for (const name of (await fs.readdir(directory)).filter((n) =>
-      /^[0-9]{13}-[a-f0-9-]{36}\.jsonl$/u.test(n),
-    )) {
+    for (const name of (await fs.readdir(directory))
+      .sort()
+      .filter((n) => /^[0-9]{13}-[a-f0-9-]{36}\.jsonl$/u.test(n))) {
       const file = path.join(directory, name);
       const info = await fs.lstat(file);
       assert.ok(
@@ -311,11 +314,13 @@ async function runScenario(scenario) {
       }
     }
     const starts = entries.filter((e) => e.lifecycle?.phase === "started");
-    assert.ok(starts.length <= 1, "SETUP_VERIFICATION_REPLAYED");
+    if (kind === "connector.verify-app")
+      assert.ok(starts.length <= 1, "SETUP_VERIFICATION_REPLAYED");
     if (starts.length === 0) return null;
+    const latest = starts.at(-1);
     const done = entries.filter(
       (e) =>
-        e.lifecycle?.id === starts[0].lifecycle.id &&
+        e.lifecycle?.id === latest.lifecycle.id &&
         e.lifecycle.phase === "observed",
     );
     assert.ok(done.length <= 1, "SETUP_VERIFICATION_SETTLEMENT_AMBIGUOUS");
@@ -579,13 +584,18 @@ async function runScenario(scenario) {
         .getByRole("button", { name: "Back to setup", exact: true })
         .click();
       assert.equal(await finish.isEnabled(), false);
-      if (scenario === "wrong-nonce")
+      if (scenario === "wrong-nonce") {
         assert.equal(
           await page
             .getByRole("button", { name: "Test in ChatGPT", exact: true })
-            .isEnabled(),
-          false,
+            .count(),
+          0,
         );
+        await page
+          .getByRole("button", { name: "Refresh status", exact: true })
+          .waitFor({ state: "visible" });
+        assert.equal(sendCount, 1);
+      }
       report.steps.attachment = "EXPECTED BLOCK";
       report.finalState = "Setup blocked";
       report.sendCount = sendCount;
