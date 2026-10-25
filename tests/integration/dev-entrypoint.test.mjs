@@ -949,3 +949,11 @@ describe("dev opener bounded orchestration", () => {
     expect(attempts).toBe(1);
   });
 });
+
+describe("persistent test task", () => {
+  it("wraps the existing isolated real profile and forwards arguments through the owner guard", () => {
+    expect(taskfile).toMatch(
+      /  dev:test:\n    desc: Start Dev with the saved isolated test profile; preserve daily Dev\n    cmds:\n      - \/usr\/bin\/python3 -I \.\/scripts\/assert-owner-untouched\.py -- node tooling\/dev\.mjs --acceptance-profile \{\{\.CLI_ARGS\}\}/,
+    );
+  });
+});

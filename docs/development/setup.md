@@ -43,6 +43,29 @@ task dev:clean
 task dev:clean -- --display=secondary
 ```
 
+For a reusable test profile, launch from the canonical checkout:
+
+```sh
+cd ~/code/farol
+task dev:test
+```
+
+`task dev:test` uses the existing `--acceptance-profile` mode. Its fixed storage
+is `~/Library/Application Support/Farol Dev Acceptance/Farol Dev`. It reuses that
+profile on later launches, with the normal real ChatGPT session and no E2E
+substitutions. Complete Google/OAuth/MFA yourself in this profile once; the
+launcher never imports credentials or cookies from daily Dev or clean reviews.
+Enter its test tunnel/key only in the application. Use a distinct Dev tunnel
+when another runtime uses the existing tunnel.
+
+Quit the current Dev normally before switching launch modes or rebuilding. The
+launcher preserves interrupted-state and UNKNOWN admission checks; the test task
+does not reset, repair or reopen a consumed clean-review profile. After a normal
+Quit, run `task dev:test` again to inspect retained sign-in/settings. The ordinary
+`task dev` still selects the daily profile. `task dev:clean` always creates an
+empty first-run profile. All three tasks accept `-- --display=secondary` and
+`-- --check` (the latter builds without launching or provisioning a profile).
+
 Each `task dev:clean` launch creates a new isolated profile. It keeps the same Dev
 build and launch behavior, and accepts the ordinary `--display=secondary`
 placement option. The lower-level `--fresh-review-profile` flag remains available
