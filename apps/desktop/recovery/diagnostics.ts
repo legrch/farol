@@ -27,6 +27,8 @@ export type MaintenanceObservation = Readonly<{
 }>;
 export type MaintenanceObserver = (value: MaintenanceObservation) => void;
 const codes = new Set([
+  "STARTUP_MAINTENANCE_RECEIPT_UNAVAILABLE",
+  "STARTUP_MAINTENANCE_RECEIPT_UNCONFIRMED",
   "STARTUP_PRESERVED_SELECTION_INVALID",
   "STARTUP_PRESERVED_SELECTION_CHANGED",
   "STARTUP_RECOVERY_HOST_UNCONFIRMED",
@@ -54,6 +56,10 @@ const bridgeCodes = new Set([
   "core_artifact_changed",
   "invalid_core_artifact",
   "native_profile_storage_invalid",
+  "preserved_inspection_selection_invalid",
+  "preserved_inspection_launch_unconfirmed",
+  "preserved_inspection_unconfirmed",
+  "preserved_inspection_cleanup_unconfirmed",
   "preserved_recovery_selection_invalid",
   "preserved_recovery_launch_unconfirmed",
   "preserved_recovery_unconfirmed",

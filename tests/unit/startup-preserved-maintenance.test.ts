@@ -1,6 +1,12 @@
-// Controlled composition ports only: no filesystem, attestation, process,
-// native lease, Go child, authority, Electron or installed recovery evidence.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+// Controlled policy/child ports; receipt cases additionally use real private
+// files. No actual attestation, process/lease, Go child, authority or Electron.
+import fs from "node:fs/promises";
+import path from "node:path";
+import os from "node:os";
+import { beginStartupMaintenanceAttempt } from "../../apps/desktop/recovery/receipt";
+import { BridgeError } from "../../apps/desktop/bridge/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runStartupPreservedMaintenance } from "../../apps/desktop/recovery/maintenance";
 import type { StartupPreservedSelection } from "../../apps/desktop/recovery/selection";
 import type { StartupPreservedRecoveryInput } from "../../apps/desktop/bridge/preserved-recovery-host";
@@ -45,6 +51,7 @@ vi.mock("../../src/apps/desktop/legacy-activation-obligations", () => ({
   activationObligations: ports.obligations,
 }));
 beforeEach(() => vi.resetAllMocks());
+afterEach(() => vi.restoreAllMocks());
 
 function fixture() {
   const root = "/private/synthetic/Farol Dev";
@@ -164,7 +171,106 @@ function fixture() {
   return { input, candidate, observed, expected, result, obligations };
 }
 
+async function receiptFixture() {
+  const f = fixture();
+  const base = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-maintenance-composition-")),
+  );
+  const userData = path.join(base, "Farol Dev"),
+    stateRoot = path.join(userData, "farol-state");
+  await fs.mkdir(stateRoot, { recursive: true, mode: 0o700 });
+  await fs.writeFile(
+    path.join(stateRoot, "running.json"),
+    "retained fixture run",
+    { mode: 0o600 },
+  );
+  await fs.writeFile(
+    path.join(stateRoot, "config.json"),
+    "retained fixture config",
+    { mode: 0o600 },
+  );
+  const candidate: StartupPreservedSelection = {
+    ...f.candidate,
+    expectedRunSha256: createHash("sha256")
+      .update("retained fixture run")
+      .digest("hex"),
+    expectedConfigSha256: createHash("sha256")
+      .update("retained fixture config")
+      .digest("hex"),
+  };
+  ports.select.mockResolvedValueOnce(candidate);
+  const attempt = await beginStartupMaintenanceAttempt({
+    stateRoot,
+    buildId: f.input.build.buildId,
+  });
+  const read = async () => {
+    const directory = path.join(stateRoot, "startup-maintenance-receipts");
+    const file = (await fs.readdir(directory)).find((n) =>
+      /^[a-f0-9-]{36}\.json$/u.test(n),
+    )!;
+    return JSON.parse(await fs.readFile(path.join(directory, file), "utf8"));
+  };
+  console.info("Retained receipt composition fixture:", base);
+  return { ...f, candidate, input: { ...f.input, userData, attempt }, read };
+}
+
 describe("one startup preserving-maintenance attempt", () => {
+  it("persists selection before discovery and UNKNOWN before one preparation", async () => {
+    const f = await receiptFixture();
+    ports.discover.mockImplementationOnce(async () => {
+      expect((await f.read()).selection).toMatchObject({
+        operationId: f.candidate.exact.operationId,
+        childLaunchId: f.candidate.exact.childLaunchId,
+      });
+      return f.observed;
+    });
+    ports.recover.mockImplementationOnce(async () => {
+      expect(await f.read()).toMatchObject({
+        phase: "preparing",
+        outcome: "UNKNOWN",
+        preparationMayHaveStarted: true,
+      });
+      return f.result;
+    });
+    await expect(runStartupPreservedMaintenance(f.input)).resolves.toBe(
+      f.result,
+    );
+    expect(ports.recover).toHaveBeenCalledOnce();
+    expect(await f.read()).toMatchObject({
+      phase: "completed",
+      outcome: "UNSAFE",
+      result: "prepared_for_cold_start",
+    });
+  });
+  it("records original uncertainty and never repeats its preparation", async () => {
+    const f = await receiptFixture(),
+      error = new BridgeError("unknown", "preserved_recovery_unconfirmed");
+    ports.recover.mockRejectedValueOnce(error);
+    await expect(runStartupPreservedMaintenance(f.input)).rejects.toBe(error);
+    expect(ports.recover).toHaveBeenCalledOnce();
+    expect(await f.read()).toMatchObject({
+      outcome: "UNKNOWN",
+      operationId: f.candidate.exact.operationId,
+      code: "preserved_recovery_unconfirmed",
+    });
+  });
+  it("blocks preparation when its durable write-ahead update fails", async () => {
+    const f = await receiptFixture();
+    ports.discover.mockImplementationOnce(async () => {
+      vi.spyOn(fs, "rename").mockRejectedValueOnce(
+        Error("private disk failure"),
+      );
+      return f.observed;
+    });
+    await expect(runStartupPreservedMaintenance(f.input)).rejects.toThrow(
+      "STARTUP_MAINTENANCE_RECEIPT_UNCONFIRMED",
+    );
+    expect(ports.recover).not.toHaveBeenCalled();
+    expect(await f.read()).toMatchObject({
+      outcome: "UNKNOWN",
+      preparationMayHaveStarted: true,
+    });
+  });
   it.each([
     ["select", "selection"],
     ["discover", "discovery"],

@@ -22,30 +22,65 @@ import {
 } from "../bridge/preserved-recovery-host";
 import { selectStartupPreservedRecovery } from "./selection";
 import { observeMaintenance, type MaintenanceObserver } from "./diagnostics";
+import type { MaintenanceAttempt } from "./receipt";
 import type { QualificationObserver } from "../bridge/qualification-metrics";
 
 // One original startup attempt, before any read-only or normal runtime child.
 // No renderer input, retry, settings writer, provider or new authority is added.
 // The enclosing Electron owner retains the actual admission lease and singleton.
+type StartupMaintenanceInput = Readonly<{
+  userData: string;
+  home: string;
+  computerId: string;
+  build: BuildIdentity;
+  artifactRoot: string;
+  compiledArtifact: unknown;
+  compiledResources: unknown;
+  startup: StartupPreservedRecoveryInput["startup"];
+  attempt?: MaintenanceAttempt;
+  onMaintenanceObservation?: MaintenanceObserver;
+  onQualificationObservation?: QualificationObserver;
+}>;
+type MaintenanceResult = Awaited<
+  ReturnType<typeof recoverStartupPreservedChat>
+>;
+
 export async function runStartupPreservedMaintenance(
-  input: Readonly<{
-    userData: string;
-    home: string;
-    computerId: string;
-    build: BuildIdentity;
-    artifactRoot: string;
-    compiledArtifact: unknown;
-    compiledResources: unknown;
-    startup: StartupPreservedRecoveryInput["startup"];
-    onMaintenanceObservation?: MaintenanceObserver;
-    onQualificationObservation?: QualificationObserver;
-  }>,
-): Promise<Awaited<ReturnType<typeof recoverStartupPreservedChat>>> {
+  input: StartupMaintenanceInput,
+): Promise<MaintenanceResult> {
+  try {
+    const result = await performStartupPreservedMaintenance(input);
+    try {
+      await input.attempt?.completed(result);
+    } catch {
+      /* Keep the original known result. */
+    }
+    return result;
+  } catch (error) {
+    try {
+      await input.attempt?.failed(error);
+    } catch {
+      /* Preserve the original failure. */
+    }
+    throw error;
+  }
+}
+async function performStartupPreservedMaintenance(
+  input: StartupMaintenanceInput,
+): Promise<MaintenanceResult> {
   const { userData, home, computerId, artifactRoot } = input;
   const observe = <T>(
     stage: Parameters<typeof observeMaintenance>[0],
     run: () => T | Promise<T>,
-  ) => observeMaintenance(stage, input.onMaintenanceObservation, run);
+  ) =>
+    observeMaintenance(
+      stage,
+      (value) => {
+        input.attempt?.observe(value);
+        input.onMaintenanceObservation?.(value);
+      },
+      run,
+    );
   const build = structuredClone(input.build);
   const compiledResources = structuredClone(input.compiledResources);
   const expected = await observe("host-inputs", () =>
@@ -69,6 +104,11 @@ export async function runStartupPreservedMaintenance(
       assertCurrent: current,
     }),
   );
+  await input.attempt?.selected({
+    ...candidate.exact,
+    failedRunSha256: candidate.expectedRunSha256,
+    configSha256: candidate.expectedConfigSha256,
+  });
   const attest = async () => {
     await observe("admission", current);
     const declaration = await observe("artifact", () =>
@@ -128,6 +168,7 @@ export async function runStartupPreservedMaintenance(
       Current: exact.current,
     },
   };
+  await input.attempt?.beforePreparation();
   return observe("preparation", () =>
     recoverStartupPreservedChat({
       userData,

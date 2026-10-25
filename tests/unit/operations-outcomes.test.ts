@@ -303,3 +303,13 @@ it("recognizes the producer-qualified backend requested clean exit code", () => 
     code: "backend_requested_clean_exit",
   });
 });
+
+it("does not turn a nondispatch assessment into a successful operation", () => {
+  for (const code of ["SAFE_TO_APPLY", "observing", "preparing"]) {
+    expect(mappedOperationOutcome(code)).toBe("unknown");
+    expect(operationResult({ outcome: code })).toMatchObject({
+      outcome: "unknown",
+    });
+    expect(operationResult({ code })).toEqual({ outcome: "unknown", code });
+  }
+});

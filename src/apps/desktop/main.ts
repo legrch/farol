@@ -26,6 +26,7 @@ import {
 } from "../../../apps/desktop/renderer/connection-status";
 import { startDesktopGoRecovery } from "../../../apps/desktop/recovery/core-host";
 import { createStartupRecoverySession } from "../../../apps/desktop/recovery/session";
+import { beginStartupMaintenanceAttempt } from "../../../apps/desktop/recovery/receipt";
 import { runStartupPreservedMaintenance } from "../../../apps/desktop/recovery/maintenance";
 import {
   openStartupRecoveryWindow,
@@ -12028,7 +12029,31 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
           .catch(() => null);
         if (savedSettings !== null) {
           try {
+            const attempt =
+              runtimeEnvironment === "dev" || process.env.FAROL_E2E === "1"
+                ? await beginStartupMaintenanceAttempt({
+                    stateRoot,
+                    buildId: buildIdentity.buildId,
+                    report: (notice) => {
+                      try {
+                        process.stderr.write(
+                          "FAROL_STARTUP_MAINTENANCE_RECEIPT:" +
+                            JSON.stringify({
+                              schema: 1,
+                              buildId: buildIdentity.buildId,
+                              pid: process.pid,
+                              ...notice,
+                            }) +
+                            "\n",
+                        );
+                      } catch {
+                        /* Receipt output is not admission evidence. */
+                      }
+                    },
+                  })
+                : undefined;
             await runStartupPreservedMaintenance({
+              ...(attempt ? { attempt } : {}),
               ...(runtimeEnvironment === "dev" || process.env.FAROL_E2E === "1"
                 ? {
                     onMaintenanceObservation: reportMaintenanceObservation,

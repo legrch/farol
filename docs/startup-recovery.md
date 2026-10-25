@@ -61,3 +61,44 @@ release startup exclusion, retire a predecessor or rewrite an outcome. Quit is a
 secondary action. There is no clean Continue action on this branch: the existing
 archive observer cannot prove predecessor settlement. Normal startup continues
 only through the separate qualified startup admission path described above.
+
+## Dev maintenance attempt receipts
+
+Ordinary Dev and explicitly admitted E2E startup write one private receipt under
+`farol-state/startup-maintenance-receipts/<attempt-id>.json` before preserving
+maintenance can run. The initial receipt is `UNKNOWN`; failure to establish it
+keeps the existing read-only Recovery branch and does not enter maintenance.
+The exact operation, host, child and future-generation correlation is persisted
+before discovery, and `preparationMayHaveStarted: true` is durable before the
+existing preparation owner is called. A missing final receipt therefore cannot
+be interpreted as an undispatched operation. An unconfirmed write-ahead update
+withholds preparation. This adds no retry, reset, new recovery route or normal
+startup permission, and does not alter installed/production startup behavior.
+
+The closed `outcome` values describe **prior-attempt reapplication**, not overall
+Computer readiness:
+
+- `SAFE_TO_APPLY` is limited to an observed resource deadline before any discovery
+  child or preparation, after the original verifier closed its readers. It is
+  evidence of known nondispatch only; a future separately admitted attempt still
+  needs all original identity, lease, process, durable-work and resource checks.
+- `UNSAFE` records a known guard refusal, or a completed `prepared_for_cold_start`
+  result that must not be applied twice. It does not label that successful
+  recovery as failed.
+- `UNKNOWN` retains an abandoned attempt, uncertain child/cleanup, any possible
+  preparation dispatch, unclassified failure or incomplete observation.
+
+Final recording never replaces the actual returned maintenance result/error.
+If final persistence fails, a content-free
+`FAROL_STARTUP_MAINTENANCE_RECEIPT` notice reports `confirmed:false` and `UNKNOWN`.
+The prior UNKNOWN may remain, or a new terminal observation may be present after
+an unacknowledged rename; readable bytes alone do not prove acknowledged durable
+publication. The caller retains that storage uncertainty without another write
+or recovery attempt. Diagnostic receipts never supply retry authority.
+Original run/configuration digests and physical state-root identity bind each
+receipt. Files are private, bounded and read back after fsync; updates pin the
+original receipt and parent identity. No credentials, configuration contents,
+paths, provider output, predecessor drain or invented child terminal facts are
+recorded. These diagnostic receipts are not a replacement for the existing Go
+maintenance completion/ACK/terminal contract or authority to settle old UNKNOWN.
+No receipt is backfilled for a historical attempt whose outcome was lost.
