@@ -5,3 +5,5 @@ docs/archive/coordinator-20261010/frozen/
 docs/archive/distribution-20261010/originals/
 # Exact independent oracle bytes also enter the pinned physical-tree digest.
 modules/release/infra/native/appidentity/testdata/oracle.json
+# Native-managed nested checkouts are independent candidates, not this source.
+/.claude/worktrees/
