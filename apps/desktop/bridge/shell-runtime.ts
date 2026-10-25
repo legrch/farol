@@ -72,9 +72,14 @@ export async function attestShellRuntime(
     // Electron virtualizes ASAR archives. Measure physical bytes/metadata like
     // the package producer, using its built-in original-fs module. A failed
     // import refuses; never fall back to the virtualized filesystem.
+    const physicalFsStarted = observer ? performance.now() : 0;
+    // Keep the optional Electron import directly in this try block. Moving it
+    // into a callback makes Node-only bundlers resolve an Electron builtin.
     const fs: typeof nodeFilesystem = process.versions.electron
-      ? (await metrics.time("setup", () => import("original-fs"))).promises
+      ? (await import("original-fs")).promises
       : nodeFilesystem;
+    if (observer)
+      metrics.duration("setup", performance.now() - physicalFsStarted);
     const support = metrics.sync("setup", () =>
       parseShellSupportDeclaration(independentlyTrustedSupport),
     );

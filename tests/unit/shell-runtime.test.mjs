@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
 import { attestShellRuntime } from "../../apps/desktop/bridge/shell-runtime.ts";
 
@@ -48,6 +50,25 @@ const refused = { state: "refused", code: "shell_runtime_unqualified" };
 const expired = { state: "refused", code: "shell_runtime_deadline_expired" };
 
 describe("Shell nested runtime qualification", () => {
+  it("keeps the physical Electron builtin optional in a plain Node bundle", async () => {
+    const result = await build({
+      entryPoints: [
+        fileURLToPath(
+          new URL(
+            "../../apps/desktop/bridge/shell-runtime.ts",
+            import.meta.url,
+          ),
+        ),
+      ],
+      bundle: true,
+      platform: "node",
+      format: "cjs",
+      write: false,
+      logLevel: "silent",
+    });
+    expect(result.outputFiles).toHaveLength(1);
+    expect(result.outputFiles[0].text).toContain("original-fs");
+  });
   it("attributes metadata and read delay without leaking paths or renewing the deadline", async () => {
     const f = await fixture();
     const expectedBytes =

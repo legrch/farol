@@ -103,6 +103,10 @@ export function qualificationMetrics(
     bytes: (count: number) => {
       bytes += count;
     },
+    duration: (kind: Work, milliseconds: number) => {
+      if (observer && Number.isFinite(milliseconds))
+        times[kind] += Math.max(0, milliseconds);
+    },
     async time<T>(kind: Work, run: () => Promise<T>): Promise<T> {
       if (!observer) return run();
       if (kind === "read") readCalls++;
