@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { once } from "node:events";
+import { spawn } from "node:child_process";
 import { _electron } from "playwright-core";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
@@ -44,12 +45,13 @@ import {
   recheckNativePreviewIsolation,
 } from "./native-preview-admission.mjs";
 
-const finishReopen = process.argv[2] === "--finish-reopen";
+const rebuildReopen = process.argv[2] === "--finish-rebuild-reopen";
+const finishReopen = rebuildReopen || process.argv[2] === "--finish-reopen";
 const separateOnly = process.argv[2] === "--separate-after-unknown";
 assert.deepEqual(
   process.argv.slice(2),
   finishReopen
-    ? ["--finish-reopen"]
+    ? [rebuildReopen ? "--finish-rebuild-reopen" : "--finish-reopen"]
     : separateOnly
       ? ["--separate-after-unknown"]
       : [],
@@ -58,7 +60,7 @@ assert.deepEqual(
 const root = process.cwd();
 const source = sourceIdentity(root);
 const buildRoot = path.join(root, "_output/build/app");
-const build = await qualifyGoBuild(buildRoot, source);
+let build = await qualifyGoBuild(buildRoot, source);
 const runtimeRoot = await fs.realpath(
   process.env.FAROL_RENDERER_TEST_ELECTRON_ROOT ??
     path.join(root, "node_modules/electron"),
@@ -1002,7 +1004,45 @@ async function runScenario(scenario) {
       let previousBackend = completed.backendGeneration;
       for (const ordinal of [1, 2]) {
         // The original fixture Finish is the only setup transition. Reopen the
-        // same private profile/build; do not navigate, reconnect or send again.
+        // same private profile; do not navigate, reconnect or send again.
+        if (rebuildReopen && ordinal === 2) {
+          const before = build.identity.buildId;
+          const builder = spawn(
+            process.execPath,
+            ["tooling/dev.mjs", "--check"],
+            {
+              cwd: root,
+              env: process.env,
+              stdio: ["ignore", "pipe", "pipe"],
+            },
+          );
+          const log = [];
+          for (const stream of [builder.stdout, builder.stderr])
+            stream.on("data", (chunk) => log.push(chunk));
+          const [code, signal] = await bounded(
+            once(builder, "close"),
+            "AUTO_HOME_REBUILD_UNKNOWN",
+            180000,
+          );
+          await fs.writeFile(
+            path.join(output, "rebuild.log"),
+            Buffer.concat(log),
+          );
+          assert.equal(code, 0, "AUTO_HOME_REBUILD_FAILED");
+          assert.equal(signal, null);
+          build = await qualifyGoBuild(buildRoot, source);
+          assert.notEqual(
+            build.identity.buildId,
+            before,
+            "AUTO_HOME_BUILD_NOT_RENEWED",
+          );
+          report.rebuild = {
+            source: source.commit,
+            before,
+            after: build.identity.buildId,
+          };
+          await save();
+        }
         const childAdmission = await assertNativePreviewAdmission(undefined, {
           profileRoot: home,
           proof,
@@ -1183,6 +1223,26 @@ async function runScenario(scenario) {
       state: observation.connectionStatus.state,
       label: observation.connectionStatus.label,
       sendCount,
+    };
+    await setupStep(page, "attachment");
+    const completedTest = page
+      .locator(".setup-wizard-footer")
+      .getByRole("button", {
+        name: "Test in ChatGPT",
+        exact: true,
+      });
+    assert.equal(
+      await completedTest.count(),
+      1,
+      "COMPLETED_CONNECTION_TEST_MISSING",
+    );
+    assert.equal(await completedTest.isEnabled(), false);
+    assert.equal((await readSetupSettings(page)).setup.journey.dismissed, true);
+    assert.equal(sendCount, separate ? 2 : 1);
+    report.completedConnectionReview = {
+      testVisible: true,
+      enabled: false,
+      completionPreserved: true,
     };
     await save();
     await quit();
