@@ -12,6 +12,30 @@ export type SeparateAppVerification = Readonly<{
   expected: SeparateAppVerificationScope;
   binding: ComputerConnectorBinding;
 }>;
+
+// IPC carries a request, never proof of owner consent. Main supplies the native
+// confirmation surface and rechecks the exact opened Go/window/settings scope.
+export async function confirmSeparateAppVerificationAttempt(
+  attempt: SeparateAppVerification,
+  ports: Readonly<{
+    current(attempt: SeparateAppVerification): boolean;
+    confirm(attempt: SeparateAppVerification): Promise<boolean>;
+  }>,
+): Promise<SeparateAppVerification> {
+  const captured = Object.freeze({
+    expected: Object.freeze(
+      SeparateAppVerificationScopeSchema.parse(attempt.expected),
+    ),
+    binding: Object.freeze({ ...attempt.binding }),
+  });
+  if (!ports.current(captured))
+    throw Error("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
+  if (!(await ports.confirm(captured)))
+    throw Error("CONNECTOR_APP_VERIFICATION_OWNER_CONSENT_REQUIRED");
+  if (!ports.current(captured))
+    throw Error("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
+  return captured;
+}
 import { constants as fsConstants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import path from "node:path";

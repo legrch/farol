@@ -363,6 +363,7 @@ import {
   type WorkspaceConfigurationCommand,
 } from "./workspace-configuration-drain";
 import {
+  confirmSeparateAppVerificationAttempt,
   connectorAppVerificationAttemptExists,
   prepareConnectorAppVerificationAttempt,
 } from "./connector-app-verification-attempt";
@@ -5762,8 +5763,73 @@ async function verifySecureMcpApp(
           return configurationFailure(
             "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
           );
-        separateAttempt = { expected: separate, binding: observed.binding };
-      } catch {
+        const owner = window;
+        if (!owner || owner.isDestroyed())
+          return configurationFailure(
+            "CONNECTOR_APP_VERIFICATION_OWNER_CONSENT_REQUIRED",
+          );
+        separateAttempt = await confirmSeparateAppVerificationAttempt(
+          { expected: separate, binding: observed.binding },
+          {
+            current: (attempt) => {
+              const latest = configuration!.snapshot();
+              return (
+                window === owner &&
+                !owner.isDestroyed() &&
+                desktopGoCore === verificationCore &&
+                latest.status === "ready" &&
+                separateAppVerificationScopeCurrent(
+                  latest.settings,
+                  attempt.expected,
+                  buildIdentity.buildId,
+                )
+              );
+            },
+            confirm: async () => {
+              const answer = await dialog.showMessageBox(owner, {
+                type: "question",
+                buttons: ["Cancel", "Test in ChatGPT"],
+                defaultId: 0,
+                cancelId: 0,
+                noLink: true,
+                message: "Run one separate connection test?",
+                detail: `Send one new test message using ${appName} for this connection. The earlier test remains unconfirmed in Unresolved actions; it will not be repeated or cleared.`,
+              });
+              return answer.response === 1;
+            },
+          },
+        );
+        // A native prompt can remain open while the runtime changes. Owner
+        // consent cannot carry a stale Go binding into a later dispatch.
+        const afterConsent =
+          await verificationCore.observeComputerConnectorVerification();
+        if (
+          desktopGoCore !== verificationCore ||
+          Object.entries(separateAttempt.binding).some(
+            ([key, value]) =>
+              afterConsent.binding[key as keyof typeof afterConsent.binding] !==
+              value,
+          )
+        )
+          return configurationFailure(
+            "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
+          );
+        if (
+          afterConsent.receipt !== undefined ||
+          afterConsent.catalogueReceipt !== undefined ||
+          afterConsent.receiptSha256 !== undefined
+        )
+          return configurationFailure(
+            "CONNECTOR_APP_VERIFICATION_ALREADY_ATTEMPTED",
+          );
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          (error.message ===
+            "CONNECTOR_APP_VERIFICATION_OWNER_CONSENT_REQUIRED" ||
+            error.message === "CONNECTOR_APP_VERIFICATION_STATE_CHANGED")
+        )
+          return configurationFailure(error.message);
         return configurationFailure(
           "CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE",
         );

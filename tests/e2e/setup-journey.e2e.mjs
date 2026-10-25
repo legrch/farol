@@ -592,10 +592,27 @@ async function runScenario(scenario) {
       name: `Start using ${productName}`,
       exact: true,
     });
-    assert.equal(await finish.isEnabled(), false);
-    await page
-      .getByRole("button", { name: "Test in ChatGPT", exact: true })
-      .click();
+    assert.equal(await finish.count(), 0);
+    const testAction = page.getByRole("button", {
+      name: "Test in ChatGPT",
+      exact: true,
+    });
+    assert.equal(await testAction.count(), 1);
+    assert.equal(
+      await page
+        .locator(".setup-wizard-footer")
+        .getByRole("button", { name: "Test in ChatGPT", exact: true })
+        .count(),
+      1,
+    );
+    await testAction.focus();
+    assert.equal(
+      await testAction.evaluate(
+        (element) => document.activeElement === element,
+      ),
+      true,
+    );
+    await testAction.click();
     if (scenario === "wrong-app" || scenario === "wrong-nonce") {
       const settled = await poll(
         settledVerification,
@@ -622,14 +639,14 @@ async function runScenario(scenario) {
       await page
         .getByRole("button", { name: "Back to setup", exact: true })
         .click();
-      assert.equal(await finish.isEnabled(), false);
+      assert.equal(await finish.count(), 0);
       if (scenario === "wrong-nonce") {
-        assert.equal(
-          await page
-            .getByRole("button", { name: "Test in ChatGPT", exact: true })
-            .count(),
-          0,
-        );
+        const blockedTest = page.getByRole("button", {
+          name: "Test in ChatGPT",
+          exact: true,
+        });
+        assert.equal(await blockedTest.count(), 1);
+        assert.equal(await blockedTest.isEnabled(), false);
         await page
           .getByRole("button", { name: "Refresh status", exact: true })
           .waitFor({ state: "visible" });
@@ -664,7 +681,7 @@ async function runScenario(scenario) {
       await page
         .getByRole("button", { name: "Back to setup", exact: true })
         .click();
-      assert.equal(await finish.isEnabled(), false);
+      assert.equal(await finish.count(), 0);
       await page
         .getByRole("button", { name: "Refresh status", exact: true })
         .click();
@@ -724,7 +741,7 @@ async function runScenario(scenario) {
       );
       assert.equal(changed.connectors.secureMcp.attachment, null);
       assert.equal(changed.connectors.secureMcp.lastVerifiedAttachment, null);
-      assert.equal(await finish.isEnabled(), false);
+      assert.equal(await finish.count(), 0);
       assert.equal(sendCount, 1);
       report.finalState = "Stale receipt blocked";
       report.sendCount = sendCount;
