@@ -44,7 +44,7 @@ func TestComputerConnectorVerificationFailedInspectionIsNeverRepeated(t *testing
 }
 
 func TestComputerConnectorVerificationPreservesInspectionRefusalWithoutPoisoning(t *testing.T) {
-	for _, code := range []string{"WORKSPACE_RACE_DETECTED", "WORKSPACE_HELPER_FAILED"} {
+	for _, code := range []string{"WORKSPACE_RACE_DETECTED", "WORKSPACE_HELPER_FAILED", "WORKSPACE_ROOT_CHANGED", "WORKSPACE_PATH_REFUSED"} {
 		t.Run(code, func(t *testing.T) {
 			s, journal, native, opened := verificationOpen(t)
 			before := journal.revision

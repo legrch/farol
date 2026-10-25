@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createFreshReviewProfile,
   createOwnerFreshReviewProfile,
+  devLaunchProfile,
 } from "../../tooling/dev.mjs";
 import {
   desktopAppDataPath,
@@ -167,6 +168,48 @@ describe("fresh disposable review profile producer/consumer", () => {
     expect(first.marker).not.toBe(second.marker);
     expect(fs.existsSync(first.appData)).toBe(true);
     expect(admit(root, second.marker)).toBe(second.appData);
+  });
+  it("reuses the saved test selection across fresh reviews without changing daily or saved state", () => {
+    const home = fixture();
+    const appData = path.join(home, "Library", "Application Support");
+    fs.mkdirSync(appData, { recursive: true, mode: 0o700 });
+    const savedAppData = admit(appData, "1");
+    const saved = desktopIdentity("dev", savedAppData).userData;
+    const daily = desktopIdentity("dev", appData).userData;
+    expect(devLaunchProfile(true, undefined, home)).toBe(saved);
+    expect(devLaunchProfile(false, undefined, home)).toBe(daily);
+    const files = [daily, saved].map((profile) => {
+      fs.mkdirSync(profile, { recursive: true, mode: 0o700 });
+      const file = path.join(profile, "fixture-unknown-state");
+      fs.writeFileSync(file, "synthetic retained UNKNOWN\n", { mode: 0o600 });
+      return file;
+    });
+    const snapshot = () =>
+      files.map((file) => {
+        const stat = fs.statSync(file, { bigint: true });
+        return {
+          bytes: fs.readFileSync(file),
+          device: stat.dev,
+          inode: stat.ino,
+          mode: stat.mode,
+          mtime: stat.mtimeNs,
+          ctime: stat.ctimeNs,
+        };
+      });
+    const before = snapshot();
+    const reviews = [
+      createFreshReviewProfile(appData),
+      createFreshReviewProfile(appData),
+    ];
+    expect(reviews[0].marker).not.toBe(reviews[1].marker);
+    for (const review of reviews) {
+      expect(admit(appData, review.marker)).toBe(review.appData);
+      expect(fs.existsSync(review.userData)).toBe(false);
+      expect(admit(appData, "1")).toBe(savedAppData);
+      expect(devLaunchProfile(true, undefined, home)).toBe(saved);
+      expect(snapshot()).toEqual(before);
+    }
+    // Selector/filesystem proof only, not persisted cookies or Electron reopen.
   });
   it("refuses an existing leaf without overwriting or deleting it", () => {
     const root = fixture();
