@@ -19,6 +19,7 @@ import (
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	chatport "github.com/legrch/farol/modules/chat/app/port"
 	delivery "github.com/legrch/farol/modules/computer/app/services/settingsdelivery"
+	mutationrepo "github.com/legrch/farol/modules/computer/infra/repos/mutation"
 	"golang.org/x/sys/unix"
 )
 
@@ -48,6 +49,7 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 	for _, scenario := range []struct {
 		name                  string
 		previousConfirmedQuit bool
+		startupEmptyHistory   bool
 		quitAbsent            bool
 		activeInstance        bool
 		unsafeInstance        bool
@@ -55,6 +57,7 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 		unsettledMutation     string
 		refusalCode           string
 	}{
+		{name: "startup-consumed-empty-three-incarnations", startupEmptyHistory: true},
 		{name: "previous-quit-false"},
 		{name: "previous-quit-true", previousConfirmedQuit: true},
 		{name: "quit-absent", quitAbsent: true},
@@ -73,7 +76,28 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			in, workspace := preservedProfileFixtureAt(t, base, true)
+			var in preservedProfileInspectionInput
+			var workspace string
+			if scenario.startupEmptyHistory {
+				in = preservedEmptyProfileFixture(t)
+				base = filepath.Dir(filepath.Dir(filepath.Dir(in.Profile.Root)))
+				workspace = filepath.Join(base, "workspace")
+				if err := os.Mkdir(workspace, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(workspace, "note.md"), []byte("one new fragment\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				metadata, err := json.Marshal(map[string]any{"schema": "farol-native-profile/2", "profileId": in.Profile.ProfileID, "computerId": in.ComputerID})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(in.Profile.Root, "profile.json"), metadata, 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				in, workspace = preservedProfileFixtureAt(t, base, true)
+			}
 			state := filepath.Dir(in.Profile.Root)
 			userData := filepath.Dir(state)
 			connector := filepath.Join(state, "secure-mcp-connector", "computer-authority")
@@ -170,6 +194,9 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 				refusedConfig = snapshotPreservedObservationTree(t, filepath.Join(state, "config.json"))
 				refusedMarker = snapshotPreservedObservationTree(t, activeMarker)
 			}
+			if in.Mutations == nil {
+				in.Mutations = []mutationrepo.ExpectedOwnerRecord{}
+			}
 			profile := in.Profile
 			in.Profile = ProfileBinding{}
 			in.Selection.HandoffDigest, in.Selection.LifecycleDigest, in.Selection.ResultsDigest = [32]byte{}, [32]byte{}, [32]byte{}
@@ -180,11 +207,12 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 				ExpectedQuitSha256                      string `json:",omitempty"`
 				PreservedProfile, PreviousConfirmedQuit bool
 				QuitAbsent                              bool `json:",omitempty"`
+				StartupMaintenance                      bool `json:",omitempty"`
 			}{
 				Input: in, Profile: profile,
 				ExpectedRunSha256: hex.EncodeToString(sumFixture(run)), ExpectedConfigSha256: hex.EncodeToString(sumFixture(config)),
 				ExpectedQuitSha256: expectedQuitSha256, PreservedProfile: true,
-				PreviousConfirmedQuit: scenario.previousConfirmedQuit, QuitAbsent: scenario.quitAbsent,
+				PreviousConfirmedQuit: scenario.previousConfirmedQuit, QuitAbsent: scenario.quitAbsent, StartupMaintenance: scenario.startupEmptyHistory,
 			}
 			raw, err := json.Marshal(fixture)
 			if err != nil {
@@ -238,10 +266,23 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 				t.Fatalf("original preserved host failed; retain %s: %v %s", userData, err, out)
 			}
 			var result struct {
-				Phase string `json:"phase"`
+				Phase                string `json:"phase"`
+				Archive, OperationID string
+				Selected             struct{ OperationID, BackendGeneration, HostLifetimeID, ChildLaunchID string }
 			}
 			if json.Unmarshal(out, &result) != nil || result.Phase != "prepared_for_cold_start" {
 				t.Fatal("missing original host result")
+			}
+			if scenario.startupEmptyHistory {
+				if result.OperationID != result.Selected.OperationID || result.Selected.BackendGeneration == in.Selection.Current.Scope.BackendGeneration || result.Selected.HostLifetimeID == "" || result.Selected.ChildLaunchID == "" {
+					t.Fatal("startup did not retain its own fresh exact selection")
+				}
+				in.Selection.OperationID, in.Selection.Next.BackendGeneration = result.Selected.OperationID, result.Selected.BackendGeneration
+				in.Selection.HostLifetimeID, in.Selection.ChildLaunchID = result.Selected.HostLifetimeID, result.Selected.ChildLaunchID
+				archive = filepath.Join(profile.Root, "chat-retired-"+in.Selection.OperationID)
+				if result.Archive != archive {
+					t.Fatal("startup completion crossed selected archive")
+				}
 			}
 			receipt, err := os.ReadFile(filepath.Join(archive, "maintenance-completed.json"))
 			var completed struct {

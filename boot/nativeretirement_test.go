@@ -25,6 +25,10 @@ func retirementStorageFixture(t *testing.T, mutations bool) (NativeLaunch, *Nati
 	return retirementStorageFixtureAt(t, mutations, false)
 }
 func retirementStorageFixtureAt(t *testing.T, mutations, desktopLayout bool, desktopName ...string) (NativeLaunch, *NativeRuntime) {
+	return retirementStorageFixtureOwnerAt(t, mutations, desktopLayout, "owner", desktopName...)
+}
+
+func retirementStorageFixtureOwnerAt(t *testing.T, mutations, desktopLayout bool, ownerID string, desktopName ...string) (NativeLaunch, *NativeRuntime) {
 	t.Helper()
 	if !*ingressNative {
 		t.Skip("Requires exclusive native lane and -ingress-native")
@@ -77,7 +81,7 @@ func retirementStorageFixtureAt(t *testing.T, mutations, desktopLayout bool, des
 	if err := unix.Lstat(root, &st); err != nil {
 		t.Fatal(err)
 	}
-	launch := NativeLaunch{Profile: ProfileBinding{ProfileID: "retirement-profile", Root: root, Device: uint64(st.Dev), Inode: st.Ino}, OwnerID: "owner", ComputerID: "computer", Home: root, StoreMode: "create", HostLifetimeID: "host-1", ChildLaunchID: "child-1"}
+	launch := NativeLaunch{Profile: ProfileBinding{ProfileID: "retirement-profile", Root: root, Device: uint64(st.Dev), Inode: st.Ino}, OwnerID: ownerID, ComputerID: "computer", Home: root, StoreMode: "create", HostLifetimeID: "host-1", ChildLaunchID: "child-1"}
 	launch.SettingsMutations = mutations
 	if mutations {
 		launch.Profile.ProfileID = "00000000-0000-4000-8000-000000000001"

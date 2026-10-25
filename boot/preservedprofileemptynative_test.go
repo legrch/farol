@@ -4,7 +4,12 @@ package boot
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
+	"fmt"
+	wire "github.com/legrch/farol/gen/desktop/v1"
+	delivery "github.com/legrch/farol/modules/computer/app/services/settingsdelivery"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -18,16 +23,59 @@ import (
 // Settings remain explicit fixture facts. This never opens a real Dev profile.
 func preservedEmptyProfileFixture(t *testing.T) preservedProfileInspectionInput {
 	t.Helper()
-	empty := emptyRecoveryFixtureWithMutations(t, true, false, "Farol Dev", false)
-	b, s := empty.Selection.Current, empty.Selection
-	return preservedProfileInspectionInput{
-		Profile: empty.Profile, OwnerID: empty.OwnerID, ComputerID: empty.ComputerID, AccessDigest: empty.AccessDigest,
-		Selection: chatport.PreservedRecoverySelection{
-			OperationID: s.OperationID,
-			Current:     chatport.PreservedRecoveryBinding{Scope: chatport.JournalScope{ProfileID: b.ProfileID, BackendGeneration: b.BackendGeneration}, ParentRoot: b.ParentRoot, ChatRoot: b.ChatRoot},
-			Next:        s.Next, BuildID: s.BuildID, HostLifetimeID: s.HostLifetimeID, ChildLaunchID: s.ChildLaunchID,
-		},
+	launch, runtime := retirementStorageFixtureOwnerAt(t, true, true, "owner-desktop", "Farol Dev")
+	generation := "generation-1"
+	for cycle := 1; cycle <= 2; cycle++ {
+		response := retirementCall(t, runtime, "core.retirement.prepare", wire.CoreRetirementPrepare{HandoffId: fmt.Sprintf("empty-history-%d", cycle)})
+		var publication wire.CoreRetirementPrepared
+		if response.Status != "ok" || json.Unmarshal(response.Data, &publication) != nil {
+			t.Fatal("empty history publication failed")
+		}
+		response = retirementCall(t, runtime, "core.retirement.ack", wire.CoreRetirementACK{HandoffId: publication.HandoffId, ReceiptDigest: publication.ReceiptDigest})
+		var ack wire.CoreRetirementAcknowledged
+		if response.Status != "ok" || json.Unmarshal(response.Data, &ack) != nil {
+			t.Fatal("empty history ACK failed")
+		}
+		if err := runtime.Close(); err != nil {
+			t.Fatal(err)
+		}
+		terminal := wire.CoreTerminalObservation{HandoffId: ack.HandoffId, ReceiptDigest: ack.ReceiptDigest, AckDigest: ack.AckDigest, BackendGeneration: generation, HostLifetimeId: launch.HostLifetimeID, ChildLaunchId: launch.ChildLaunchID, ExitCode: "0"}
+		if err := recordNativeTerminal(context.Background(), launch.Profile, terminal, func(wire.CoreRetirementAcknowledged) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+		generation = fmt.Sprintf("empty-generation-%d", cycle+1)
+		launch.StoreMode, launch.PreviousHostDrainConfirmed = "open", true
+		launch.HostLifetimeID, launch.ChildLaunchID = fmt.Sprintf("empty-host-%d", cycle+1), fmt.Sprintf("empty-child-%d", cycle+1)
+		var err error
+		runtime, err = NewNativeRuntime(context.Background(), launch, generation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runtime.settingsDelivery.store = &deliveryStoreFixture{value: delivery.Snapshot{Revision: 1, Current: delivery.Identity{ProfileID: launch.Profile.ProfileID, OwnerID: launch.OwnerID, ComputerID: launch.ComputerID, Generation: 1}}}
 	}
+	// The third consumed incarnation closes without a retirement/terminal. Native
+	// process absence is not inferred here; enclosing host fixtures own that gate.
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	qualified, err := QualifyProfile(launch.Profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer qualified.Close()
+	computer, chat, err := qualified.Roots()
+	if err != nil {
+		t.Fatal(err)
+	}
+	access, err := os.ReadFile(filepath.Join(computer.Path, "computer-access.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return preservedProfileInspectionInput{Profile: launch.Profile, OwnerID: launch.OwnerID, ComputerID: launch.ComputerID, AccessDigest: sha256.Sum256(access), Selection: chatport.PreservedRecoverySelection{
+		OperationID: freshEmptyRecoveryFixtureUUID(t),
+		Current:     chatport.PreservedRecoveryBinding{Scope: chatport.JournalScope{ProfileID: launch.Profile.ProfileID, BackendGeneration: generation}, ParentRoot: chatport.JournalRoot{Device: launch.Profile.Device, Inode: launch.Profile.Inode, OwnerUID: chat.OwnerUID}, ChatRoot: chatport.JournalRoot{Device: chat.Device, Inode: chat.Inode, OwnerUID: chat.OwnerUID}},
+		Next:        chatport.JournalScope{ProfileID: launch.Profile.ProfileID, BackendGeneration: "fresh-empty-maintenance"}, BuildID: BuildID, HostLifetimeID: "fresh-empty-host", ChildLaunchID: "fresh-empty-child",
+	}}
 }
 
 func TestPreservedProfileDiscoveryNativeConsumedEmptyHistory(t *testing.T) {
@@ -38,7 +86,7 @@ func TestPreservedProfileDiscoveryNativeConsumedEmptyHistory(t *testing.T) {
 	calls := 0
 	err := discoverPreservedProfile(ctx, preservedProfileDiscoveryRequest(in), func(v preservedProfileInspection) error {
 		calls++
-		if v.Lifecycle.WriteCount != 0 || v.Lifecycle.TurnCount != 0 || v.Results.ResultCount != 0 || len(v.Lifecycle.Incarnations) < 2 || v.Lifecycle.Retirement != nil {
+		if v.Lifecycle.WriteCount != 0 || v.Lifecycle.TurnCount != 0 || v.Results.ResultCount != 0 || len(v.Lifecycle.Incarnations) != 3 || v.Lifecycle.Retirement != nil {
 			t.Fatal("fixture did not retain consumed empty history")
 		}
 		return nil
