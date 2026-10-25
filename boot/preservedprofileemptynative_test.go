@@ -23,7 +23,7 @@ import (
 // Settings remain explicit fixture facts. This never opens a real Dev profile.
 func preservedEmptyProfileFixture(t *testing.T) preservedProfileInspectionInput {
 	t.Helper()
-	launch, runtime := retirementStorageFixtureOwnerAt(t, true, true, "owner-desktop", "Farol Dev")
+	launch, runtime := retirementStorageFixtureOwnerAt(t, true, true, "owner-desktop", true, "Farol Dev")
 	generation := "generation-1"
 	for cycle := 1; cycle <= 2; cycle++ {
 		response := retirementCall(t, runtime, "core.retirement.prepare", wire.CoreRetirementPrepare{HandoffId: fmt.Sprintf("empty-history-%d", cycle)})

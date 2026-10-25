@@ -417,6 +417,16 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 				t.Fatal("new real terminal handoff did not admit cold Go", err)
 			}
 			defer next.Close()
+			if scenario.startupEmptyHistory {
+				// This scenario qualifies startup only. The following existing cases
+				// own File/Chat capability probes with their own fixture identities.
+				unchangedPreservedObservationTree(t, archive, retainedArchive)
+				if err := next.Close(); err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("retained startup fixture %s, completion SHA256 %x; exact selection/pending/archive/fresh ACK/terminal and cold Go admitted; no Electron/provider/live-profile claim", userData, sha256.Sum256(receipt))
+				return
+			}
 			next.settingsDelivery.store = &deliveryStoreFixture{value: delivery.Snapshot{Revision: 1, Current: delivery.Identity{ProfileID: profile.ProfileID, OwnerID: in.OwnerID, ComputerID: in.ComputerID, Generation: 1}}}
 			publication := nativeSettingsPublication(t, next, workspace, 1)
 			before, err := os.ReadFile(filepath.Join(workspace, "note.md"))

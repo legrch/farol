@@ -25,10 +25,10 @@ func retirementStorageFixture(t *testing.T, mutations bool) (NativeLaunch, *Nati
 	return retirementStorageFixtureAt(t, mutations, false)
 }
 func retirementStorageFixtureAt(t *testing.T, mutations, desktopLayout bool, desktopName ...string) (NativeLaunch, *NativeRuntime) {
-	return retirementStorageFixtureOwnerAt(t, mutations, desktopLayout, "owner", desktopName...)
+	return retirementStorageFixtureOwnerAt(t, mutations, desktopLayout, "owner", false, desktopName...)
 }
 
-func retirementStorageFixtureOwnerAt(t *testing.T, mutations, desktopLayout bool, ownerID string, desktopName ...string) (NativeLaunch, *NativeRuntime) {
+func retirementStorageFixtureOwnerAt(t *testing.T, mutations, desktopLayout bool, ownerID string, retain bool, desktopName ...string) (NativeLaunch, *NativeRuntime) {
 	t.Helper()
 	if !*ingressNative {
 		t.Skip("Requires exclusive native lane and -ingress-native")
@@ -51,7 +51,7 @@ func retirementStorageFixtureOwnerAt(t *testing.T, mutations, desktopLayout bool
 	}
 	cleanupRoot := root
 	t.Cleanup(func() {
-		if !t.Failed() {
+		if !retain && !t.Failed() {
 			if err := os.RemoveAll(cleanupRoot); err != nil {
 				t.Error(err)
 			}
