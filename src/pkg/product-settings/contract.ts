@@ -238,21 +238,6 @@ export const SecureMcpAppSelectionSchema = z.strictObject({
   connectorGeneration: z.number().int().positive(),
 });
 
-export const SeparateAppVerificationScopeSchema = z.strictObject({
-  ownerAuthorized: z.literal(true),
-  tunnelId: SecureMcpAppSelectionSchema.shape.tunnelId,
-  appName: SecureMcpAppSelectionSchema.shape.name,
-  connectorGeneration: z.number().int().positive(),
-  computerGeneration: z.number().int().positive(),
-  runtimeGeneration: Sha256Schema,
-  challengeSha256: Sha256Schema,
-  buildId: Sha256Schema,
-  workspaceId: IdentifierSchema.nullable(),
-});
-export type SeparateAppVerificationScope = z.infer<
-  typeof SeparateAppVerificationScopeSchema
->;
-
 export const SecureMcpConnectorSchema = z.strictObject({
   generation: z.number().int().positive(),
   profile: z.literal("farol"),
@@ -608,6 +593,21 @@ export const ProductConfigurationSnapshotSchema = z.discriminatedUnion(
     }),
   ],
 );
+
+export const SeparateAppVerificationScopeSchema = z.strictObject({
+  ownerAuthorized: z.literal(true),
+  tunnelId: SecureMcpAppSelectionSchema.shape.tunnelId,
+  appName: SecureMcpAppSelectionSchema.shape.name,
+  connectorGeneration: z.number().int().positive(),
+  computerGeneration: z.number().int().positive(),
+  runtimeGeneration: Sha256Schema,
+  challengeSha256: Sha256Schema,
+  buildId: Sha256Schema,
+  workspaceId: IdentifierSchema.nullable(),
+});
+export type SeparateAppVerificationScope = z.infer<
+  typeof SeparateAppVerificationScopeSchema
+>;
 
 const ConnectorTunnelIdSchema = z
   .string()

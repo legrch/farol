@@ -163,6 +163,10 @@ describe("originalPredecessorSettingsReadable", () => {
     // 2026-10-22 re-audit: only the host ping literal and connector profile
     // literal/default changed. Earlier beta identity compatibility is no longer
     // promised; the retained shape below uses the current identity names.
+    // 2026-10-25 complete beta3 comparison: appVerificationPending is a new
+    // stored optional boolean; refuse every presence, including false. All
+    // other reachable expansions remain guarded below. Separate verification
+    // scope is command-only and is outside this stored-schema prefix.
     const contract = readFileSync(
       new URL("../../src/pkg/product-settings/contract.ts", import.meta.url),
       "utf8",
@@ -172,7 +176,7 @@ describe("originalPredecessorSettingsReadable", () => {
     );
     expect(sections).toHaveLength(2);
     expect(createHash("sha256").update(sections[0]!).digest("hex")).toBe(
-      "8101df17f98af6fb8ad08c7811dce0c093b45020c32bcd08915a3ee687bb18fc",
+      "6ed0f9778d3775877598d940f0419631f68b2232f6086a8dcbe0040381944250",
     );
     const packageJson = JSON.parse(
       readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
@@ -200,6 +204,28 @@ describe("originalPredecessorSettingsReadable", () => {
       expect(value).toStrictEqual(before);
     },
   );
+
+  it.each([true, false, null, undefined, "pending"])(
+    "refuses every appVerificationPending presence without altering it: %j",
+    (appVerificationPending) => {
+      const value = fixture();
+      Object.assign(value.connectors.secureMcp, { appVerificationPending });
+      const before = structuredClone(value);
+      if (typeof appVerificationPending === "boolean")
+        expect(ProductSettingsSchema.safeParse(value).success).toBe(true);
+      expect(originalPredecessorSettingsReadable(source, value)).toBe(false);
+      expect(value).toStrictEqual(before);
+    },
+  );
+  it("retains the absent external-check flag without inserting a default", () => {
+    const value = fixture();
+    const before = structuredClone(value);
+    expect(
+      ProductSettingsSchema.parse(value).connectors.secureMcp,
+    ).not.toHaveProperty("appVerificationPending");
+    expect(originalPredecessorSettingsReadable(source, value)).toBe(true);
+    expect(value).toStrictEqual(before);
+  });
 
   it.each(["attachment", "lastVerifiedAttachment"] as const)(
     "refuses retained %s with a null workspace without stripping proof",

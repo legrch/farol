@@ -1,3 +1,4 @@
+import { connectorRuntimeUncertain } from "../../src/pkg/product-settings/connector-uncertainty.ts";
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
@@ -192,6 +193,7 @@ function fixture({ pause, startResult = originalStart, openError } = {}) {
     ),
   };
   const context = {
+    connectorRuntimeUncertain,
     configuration: owner,
     connectorCredentialStore: {
       reference: port("credential", "fixture-key-reference"),

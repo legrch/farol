@@ -1,3 +1,4 @@
+import { connectorRuntimeUncertain } from "../../src/pkg/product-settings/connector-uncertainty.ts";
 import fs from "node:fs";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
@@ -189,6 +190,7 @@ function mainFixture() {
   };
   const saved = { ...original, owner, connector, core };
   const context = {
+    connectorRuntimeUncertain,
     configuration: owner,
     secureMcpConnectorRuntime: connector,
     desktopGoCore: core,

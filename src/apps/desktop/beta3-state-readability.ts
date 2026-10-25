@@ -48,10 +48,11 @@ function isStoredJson(value: unknown, ancestors = new Set<object>()): boolean {
 /** Readability by the ORIGINAL beta3 reader only, never arbitrary history.
  * Audited against 24cc7c32f12f2633156efef40c91ea0817109a4c at base
  * 681fe120af801f406569b0e068b2e638fbc5d29e plus the reader bridge. The
- * complete stored-schema closure has four incompatible expansions:
+ * complete stored-schema closure has five incompatible expansions:
  * general.openAtLaunch="home", nativeHosts.taskRoute.observeTurnId, workspace
  * accessCheck.checkId and nullable retained Secure MCP attachment workspaceId
- * (both attachment and lastVerifiedAttachment).
+ * (both attachment and lastVerifiedAttachment), and connector
+ * appVerificationPending.
  * Refuse their presence rather than removing them for the old strict reader.
  * Commands/results changes are not stored Settings; their checkId fields are
  * outside this closure. tasks was already unknown. Stored defaults and all
@@ -91,6 +92,7 @@ export function originalPredecessorSettingsReadable(
       return false;
     const connector = parsed.data.connectors.secureMcp;
     if (
+      Object.hasOwn(connector, "appVerificationPending") ||
       connector.attachment?.workspaceId === null ||
       connector.lastVerifiedAttachment?.workspaceId === null
     )

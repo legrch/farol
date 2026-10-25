@@ -1,3 +1,4 @@
+import { connectorRuntimeUncertain } from "../../src/pkg/product-settings/connector-uncertainty.ts";
 import fs from "node:fs";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
@@ -74,6 +75,7 @@ function fixture() {
   const connector = { hasUnresolvedEffect: vi.fn(() => false) };
   const reservation = new AuthorityTransitionReservation();
   const context = {
+    connectorRuntimeUncertain,
     configuration: owner,
     secureMcpConnectorRuntime: connector,
     desktopGoCore: core,

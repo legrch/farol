@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createBuildIdentity } from "../../tooling/build-identity-contract.mjs";
 import { BUILD_ENTRIES } from "../../tooling/build-contract.mjs";
 import { GO_CORE_ENTRIES } from "../../tooling/go-core-artifact.mjs";
-import { DEFAULT_GO_INPUTS_FILE, main } from "../../tooling/dev.mjs";
+import {
+  DEFAULT_GO_INPUTS_FILE,
+  devLaunchProfile,
+  main,
+} from "../../tooling/dev.mjs";
 import { qualifyGoBuild } from "../e2e/qualified-go-build.mjs";
 
 function fixture() {
@@ -194,6 +198,8 @@ it.each([
         {
           buildArguments: [`--go-inputs=${DEFAULT_GO_INPUTS_FILE}`],
           replace: false,
+          reuse: false,
+          profilePath: devLaunchProfile(false),
         },
       ],
       ["dependencies"],
@@ -229,6 +235,8 @@ it("refuses check-only dependency replacement and Go build when lifecycle admiss
       {
         buildArguments: [`--go-inputs=${DEFAULT_GO_INPUTS_FILE}`],
         replace: false,
+        reuse: false,
+        profilePath: devLaunchProfile(false),
       },
     ],
   ]);
