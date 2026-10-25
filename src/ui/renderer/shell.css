@@ -1724,6 +1724,23 @@ kbd {
   color: var(--accent);
 }
 
+/* Keep the return action aligned and visible above the native browser. */
+.connection-check-return {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: none;
+  white-space: nowrap;
+  color: var(--accent);
+  background: var(--tint);
+  font-weight: 600;
+}
+.connection-check-return > svg {
+  width: 16px;
+  height: 16px;
+}
+
 /* Sign-in context lives in shell chrome, above the native browser viewport. */
 .sign-in-context {
   display: flex;
