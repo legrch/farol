@@ -817,3 +817,74 @@ describe("ADR-0001 report-mode architecture guards", () => {
     }
   });
 });
+
+it("excludes only registered ignored child worktrees while retaining parent and unregistered checks", () => {
+  const directory = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "farol-go-worktree-boundary-")),
+  );
+  const git = (...args: string[]) => {
+    const result = spawnSync(
+      "git",
+      [
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-C",
+        directory,
+        ...args,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+  };
+  try {
+    git("init", "-q");
+    fs.writeFileSync(path.join(directory, "go.mod"), moduleFile);
+    fs.writeFileSync(
+      path.join(directory, ".gitignore"),
+      ".claude/worktrees/\n",
+    );
+    git("add", ".");
+    git("commit", "-qm", "fixture root");
+    const child = path.join(directory, ".claude/worktrees/worker");
+    git("worktree", "add", "--detach", child, "HEAD");
+    const unregistered = path.join(directory, ".claude/worktrees/unregistered");
+    fs.mkdirSync(unregistered, { recursive: true });
+    fs.writeFileSync(
+      path.join(unregistered, "go.mod"),
+      "module unregistered\n",
+    );
+    const bad = "modules/computer/domain/policy/policy.go";
+    for (const root of [directory, child]) {
+      fs.mkdirSync(path.dirname(path.join(root, bad)), { recursive: true });
+      fs.writeFileSync(path.join(root, bad), source("os"));
+    }
+    const result = spawnSync(
+      process.execPath,
+      [checker, "--root", directory, "--json"],
+      { encoding: "utf8" },
+    );
+    const report = JSON.parse(result.stdout) as Report;
+    expect(result.status).toBe(1);
+    expect(report.violations.some((f) => f.file === bad)).toBe(true);
+    expect(
+      report.violations.some(
+        (f) =>
+          f.file === ".claude/worktrees/unregistered/go.mod" &&
+          f.code === "GO_NESTED_MODULE",
+      ),
+    ).toBe(true);
+    expect(
+      report.violations.some((f) =>
+        f.file.startsWith(".claude/worktrees/worker/"),
+      ),
+    ).toBe(false);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

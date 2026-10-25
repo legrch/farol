@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -532,6 +533,51 @@ function localRule(from, to, target, source) {
   return null;
 }
 
+// A registered, ignored child checkout is another source owner, not this Go
+// module. Never infer that boundary from a directory name or a .git file alone.
+function registeredChildWorktrees(root) {
+  if (!fs.existsSync(path.join(root, ".git"))) return new Set();
+  const git = (...args) => {
+    const result = spawnSync("git", ["-C", root, ...args], {
+      encoding: "utf8",
+      timeout: 5000,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    if (result.error || result.status !== 0)
+      throw Error("Git source boundary unavailable");
+    return result.stdout;
+  };
+  const physicalRoot = fs.realpathSync(root);
+  if (
+    fs.realpathSync(git("rev-parse", "--show-toplevel").trim()) !== physicalRoot
+  )
+    throw Error("Git source root mismatch");
+  const children = new Set();
+  for (const field of git("worktree", "list", "--porcelain", "-z").split(
+    "\0",
+  )) {
+    if (!field.startsWith("worktree ")) continue;
+    const candidate = field.slice(9);
+    const relative = path.relative(physicalRoot, candidate);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative))
+      continue;
+    if (!fs.existsSync(candidate) || fs.realpathSync(candidate) !== candidate)
+      continue;
+    const ignored = spawnSync(
+      "git",
+      ["-C", root, "check-ignore", "--quiet", "--", relative],
+      {
+        timeout: 5000,
+      },
+    );
+    if (ignored.error || ![0, 1].includes(ignored.status))
+      throw Error("Git ignore boundary unavailable");
+    if (ignored.status === 0 && git("ls-files", "-z", "--", relative) === "")
+      children.add(relative.split(path.sep).join("/"));
+  }
+  return children;
+}
+
 export function checkGoArchitecture(root) {
   root = path.resolve(root);
   const violations = [];
@@ -544,6 +590,16 @@ export function checkGoArchitecture(root) {
   // filenames do not end in _test.go. They are not production architecture.
   // Root dist preserves historical generated output; nested source dist stays scanned.
   const skip = new Set([".git", "node_modules", "_output", "dist", "tests"]);
+  let childWorktrees = new Set();
+  try {
+    childWorktrees = registeredChildWorktrees(root);
+  } catch {
+    add(
+      "GO_WORKTREE_BOUNDARY_UNAVAILABLE",
+      ".git",
+      "Cannot establish registered source ownership",
+    );
+  }
   function walk(directory, relative = "") {
     for (const entry of fs
       .readdirSync(directory, { withFileTypes: true })
@@ -570,6 +626,7 @@ export function checkGoArchitecture(root) {
         add("GO_SYMLINK", name, "Source tree symlinks are not scanned");
         continue;
       }
+      if (entry.isDirectory() && childWorktrees.has(name)) continue;
       if (entry.isDirectory()) walk(absolute, name);
       else if (entry.name === "go.mod" && relative)
         add(
