@@ -30,7 +30,9 @@ type PreservedRecoveryObservation struct {
 	RetirementPresent, ResultsUnresolved                        bool
 }
 
-// PreservedRecoveryPlan selects preservation metadata for nonempty original Chat.
+// PreservedRecoveryPlan selects archive metadata for original Chat. Nonempty
+// observations use archive policy; consumed empty history uses empty-recovery
+// policy. Neither route changes the enclosing process/maintenance prerequisites.
 // It carries no retirement, ACK, terminal, restored handle or admission authority.
 // RetainsUnresolvedResults records only the observed unresolved-results status.
 type PreservedRecoveryPlan struct {

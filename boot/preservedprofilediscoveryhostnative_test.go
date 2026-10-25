@@ -47,12 +47,15 @@ func TestNativePreservedProfileDiscoveryWithBuiltCore(t *testing.T) {
 	originalBuild := BuildID
 	BuildID = manifest.BuildID
 	defer func() { BuildID = originalBuild }()
-	for _, withFile := range []bool{false, true} {
-		name := "empty-mutations"
-		if withFile {
-			name = "completed-file-mutation"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, scenario := range []struct {
+		name                   string
+		withFile, emptyHistory bool
+	}{
+		{name: "empty-mutations"},
+		{name: "completed-file-mutation", withFile: true},
+		{name: "consumed-empty-history", emptyHistory: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
 			temp := filepath.Join(repo, "_output/tmp")
 			if err := os.MkdirAll(temp, 0700); err != nil {
 				t.Fatal(err)
@@ -61,7 +64,24 @@ func TestNativePreservedProfileDiscoveryWithBuiltCore(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			in, workspace := preservedProfileFixtureAt(t, base, true, withFile)
+			var in preservedProfileInspectionInput
+			var workspace string
+			if scenario.emptyHistory {
+				in = preservedEmptyProfileFixture(t)
+				base = filepath.Dir(filepath.Dir(filepath.Dir(in.Profile.Root)))
+				workspace = filepath.Join(in.Profile.Root, "task")
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				err := discoverPreservedProfile(ctx, preservedProfileDiscoveryRequest(in), func(v preservedProfileInspection) error {
+					in.Selection = v.Plan.Selection
+					return nil
+				})
+				cancel()
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				in, workspace = preservedProfileFixtureAt(t, base, true, scenario.withFile)
+			}
 			snapshotPreservedProfileDiscoveryCustody(t, in, workspace)
 			selected := preservedProfileDiscoveryRequest(in)
 			selected.Profile = ProfileBinding{}

@@ -37,6 +37,10 @@ func emptyRecoveryFixtureStateAt(t *testing.T, desktopLayout, interrupted bool, 
 	return emptyRecoveryFixtureNamed(t, desktopLayout, interrupted, "Farol Dev", unacknowledged...)
 }
 func emptyRecoveryFixtureNamed(t *testing.T, desktopLayout, interrupted bool, name string, unacknowledged ...bool) emptyRecoveryInspectionInput {
+	return emptyRecoveryFixtureWithMutations(t, desktopLayout, interrupted, name, true, unacknowledged...)
+}
+
+func emptyRecoveryFixtureWithMutations(t *testing.T, desktopLayout, interrupted bool, name string, mutations bool, unacknowledged ...bool) emptyRecoveryInspectionInput {
 	fiveResults := interrupted || len(unacknowledged) == 1 && unacknowledged[0]
 	t.Helper()
 	launch, runtime := retirementStorageFixtureAt(t, true, desktopLayout, name)
@@ -102,6 +106,9 @@ func emptyRecoveryFixtureNamed(t *testing.T, desktopLayout, interrupted bool, na
 	kinds := []domain.Kind{domain.WriteKind, domain.EditKind}
 	if fiveResults {
 		kinds = append(kinds, domain.WriteKind, domain.EditKind, domain.EditKind)
+	}
+	if !mutations {
+		kinds = nil
 	}
 	for index, kind := range kinds {
 		operation := string(kind) + "-fixture"

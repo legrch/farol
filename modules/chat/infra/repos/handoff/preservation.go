@@ -19,6 +19,9 @@ type PreservationInspection struct {
 	HeadDigest           [32]byte
 	HeadStage            port.HandoffStage
 	Stages               []ClosedInspectionStage
+	// EmptyHead is copied canonical history for existing empty-recovery policy.
+	// It supplies no live origin and never crosses serialized diagnostics.
+	EmptyHead *port.HandoffHead `json:"-"`
 }
 
 type PreservationLease struct {
@@ -57,6 +60,7 @@ func (l *PreservationLease) Observation() (PreservationInspection, error) {
 	}
 	v := l.value
 	v.Stages = append([]ClosedInspectionStage(nil), v.Stages...)
+	v.EmptyHead = copyClosedInspectionHead(v.EmptyHead)
 	return v, nil
 }
 
@@ -133,6 +137,9 @@ func preservationValue(roots Roots, scope port.JournalScope, chain closedInspect
 		return PreservationInspection{}, fail(Refused, false)
 	}
 	v.HeadStage = r.Stage
+	if chain.head.EmptyRetirementChain {
+		v.EmptyHead = copyClosedInspectionHead(chain.head)
+	}
 	return v, nil
 }
 

@@ -16,7 +16,8 @@ import (
 
 // A closed maintenance owner independently selects these comparisons before IO.
 // None of the values supplies original process closure, effect success or current
-// authority. The old empty/interrupted/installed recovery inputs stay separate.
+// authority. Interrupted/installed recovery inputs stay separate; canonical
+// consumed empty history is routed through the existing empty policy.
 type preservedProfileInspectionInput struct {
 	Profile             ProfileBinding
 	Selection           chatport.PreservedRecoverySelection
@@ -202,7 +203,7 @@ func retainPreservedProfileObservation(ctx context.Context, in preservedProfileI
 				in.Selection.LifecycleDigest = lv.SnapshotDigest
 				in.Selection.ResultsDigest = rv.SnapshotDigest
 			}
-			plan, err := (archivepolicy.Policy{}).Select(in.Selection, observation)
+			plan, err := selectPreservedProfilePlan(in.Selection, observation, hv.EmptyHead)
 			if err != nil {
 				return err
 			}

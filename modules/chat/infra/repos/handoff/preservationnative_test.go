@@ -188,3 +188,45 @@ func TestPreservationNativeHandoffNeverRenewsOriginalDeadline(t *testing.T) {
 		t.Fatal("expired claim returned observation")
 	}
 }
+
+func TestPreservationNativeEmptyHeadIsCopiedAndNotSerialized(t *testing.T) {
+	if !*preservationNative {
+		t.Skip("requires explicit native inspection lane")
+	}
+	roots, scope := closedInspectionNativeFixture(t)
+	before := closedInspectionNativeInventory(t, roots.Chat.Path)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	lease, err := AcquirePreservationInspection(ctx, roots, scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Close()
+	v, err := lease.Observation()
+	if err != nil || v.EmptyHead == nil || !v.EmptyHead.EmptyRetirementChain || v.EmptyHead.Record == nil || v.EmptyHead.Record.Consumption == nil {
+		t.Fatal("canonical empty head missing", err)
+	}
+	raw, err := json.Marshal(v)
+	if err != nil || strings.Contains(string(raw), "EmptyHead") || strings.Contains(string(raw), "Receipt") || strings.Contains(string(raw), "Consumption") {
+		t.Fatal("internal empty history leaked", err)
+	}
+	v.EmptyHead.Record.Consumption.NextBinding.HostLifetimeID = "changed-copy"
+	*v.EmptyHead.Record.Terminal.ExitCode = 99
+	again, err := lease.Observation()
+	if err != nil || again.EmptyHead.Record.Consumption.NextBinding.HostLifetimeID == "changed-copy" || *again.EmptyHead.Record.Terminal.ExitCode == 99 {
+		t.Fatal("canonical head aliases observation", err)
+	}
+	if err := lease.Verify(); err != nil {
+		t.Fatal(err)
+	}
+	after := closedInspectionNativeInventory(t, roots.Chat.Path)
+	if len(before) != len(after) {
+		t.Fatal("observation changed inventory")
+	}
+	for name, prior := range before {
+		current, ok := after[name]
+		if !ok || prior.digest != current.digest || !stable(prior.meta, current.meta) {
+			t.Fatal("observation changed retained history")
+		}
+	}
+}
