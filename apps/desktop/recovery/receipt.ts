@@ -65,9 +65,10 @@ export async function beginStartupMaintenanceAttempt(
   const attemptId = randomUUID();
   let phase: MaintenanceReceiptNotice["phase"] = "observing";
   let outcome: MaintenanceAssessment = "UNKNOWN";
+  let reporter: ((notice: MaintenanceReceiptNotice) => void) | undefined;
   const report = (confirmed: boolean) => {
     try {
-      input.report?.(
+      reporter?.(
         Object.freeze({
           attemptId,
           phase,
@@ -80,25 +81,21 @@ export async function beginStartupMaintenanceAttempt(
     }
   };
   try {
+    const { stateRoot, buildId } = input;
+    reporter = input.report;
     if (
-      !path.isAbsolute(input.stateRoot) ||
-      path.resolve(input.stateRoot) !== input.stateRoot ||
-      !/^[a-f0-9]{64}$/u.test(input.buildId)
+      !path.isAbsolute(stateRoot) ||
+      path.resolve(stateRoot) !== stateRoot ||
+      !/^[a-f0-9]{64}$/u.test(buildId)
     )
       throw Error("STARTUP_MAINTENANCE_RECEIPT_UNAVAILABLE");
-    const stateIdentity = await host.privateRoot(input.stateRoot);
-    const run = await host.snapshot(
-      path.join(input.stateRoot, "running.json"),
-      4096,
-    );
+    const stateIdentity = await host.privateRoot(stateRoot);
+    const run = await host.snapshot(path.join(stateRoot, "running.json"), 4096);
     const configuration = await host.snapshot(
-      path.join(input.stateRoot, "config.json"),
+      path.join(stateRoot, "config.json"),
       256 * 1024,
     );
-    const directory = path.join(
-      input.stateRoot,
-      "startup-maintenance-receipts",
-    );
+    const directory = path.join(stateRoot, "startup-maintenance-receipts");
     await fs.mkdir(directory, { mode: 0o700 }).catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     });
@@ -115,7 +112,7 @@ export async function beginStartupMaintenanceAttempt(
     let result: "prepared_for_cold_start" | null = null;
     let code: string | null = null;
     const verifyDirectory = async () => {
-      const state = await host.privateRoot(input.stateRoot);
+      const state = await host.privateRoot(stateRoot);
       if (state.dev !== stateIdentity.dev || state.ino !== stateIdentity.ino)
         throw Error("STARTUP_MAINTENANCE_RECEIPT_UNCONFIRMED");
       const current = await host.privateRoot(directory);
@@ -148,7 +145,7 @@ export async function beginStartupMaintenanceAttempt(
           schema: "farol.startup-maintenance-attempt/1",
           attemptId,
           assessmentScope: "prior-attempt-reapplication",
-          buildId: input.buildId,
+          buildId: buildId,
           pid: process.pid,
           failedRunSha256: sum(run.bytes),
           configSha256: sum(configuration.bytes),
@@ -227,9 +224,8 @@ export async function beginStartupMaintenanceAttempt(
       try {
         await publish();
       } catch {
-        report(
-          false,
-        ); /* Do not infer durable publication or replace the original result. */
+        // Do not infer durable publication or replace the original result.
+        report(false);
       }
     };
     return Object.freeze({
@@ -242,29 +238,40 @@ export async function beginStartupMaintenanceAttempt(
         observations.push(Object.freeze({ ...value }));
       },
       async selected(value: MaintenanceSelection) {
-        if (
-          terminal ||
-          operationId !== null ||
-          !uuid.test(value.operationId) ||
-          value.buildId !== input.buildId ||
-          value.failedRunSha256 !== sum(run.bytes) ||
-          value.configSha256 !== sum(configuration.bytes) ||
-          ![
-            value.hostLifetimeId,
-            value.childLaunchId,
-            value.backendGeneration,
-          ].every((v) => /^[A-Za-z0-9:_-]{1,120}$/u.test(v))
-        )
-          throw Error("STARTUP_MAINTENANCE_RECEIPT_UNCONFIRMED");
-        operationId = value.operationId;
-        selection = Object.freeze({
+        // Capture each field once before validation; a later caller mutation or
+        // accessor must not change the binding that is actually persisted.
+        const candidate = {
+          operationId: value.operationId,
           buildId: value.buildId,
           failedRunSha256: value.failedRunSha256,
           configSha256: value.configSha256,
-          operationId,
           hostLifetimeId: value.hostLifetimeId,
           childLaunchId: value.childLaunchId,
           backendGeneration: value.backendGeneration,
+        };
+        if (
+          terminal ||
+          operationId !== null ||
+          !uuid.test(candidate.operationId) ||
+          candidate.buildId !== buildId ||
+          candidate.failedRunSha256 !== sum(run.bytes) ||
+          candidate.configSha256 !== sum(configuration.bytes) ||
+          ![
+            candidate.hostLifetimeId,
+            candidate.childLaunchId,
+            candidate.backendGeneration,
+          ].every((v) => /^[A-Za-z0-9:_-]{1,120}$/u.test(v))
+        )
+          throw Error("STARTUP_MAINTENANCE_RECEIPT_UNCONFIRMED");
+        operationId = candidate.operationId;
+        selection = Object.freeze({
+          buildId: candidate.buildId,
+          failedRunSha256: candidate.failedRunSha256,
+          configSha256: candidate.configSha256,
+          operationId,
+          hostLifetimeId: candidate.hostLifetimeId,
+          childLaunchId: candidate.childLaunchId,
+          backendGeneration: candidate.backendGeneration,
         });
         // Persist the exact selection before any discovery child can launch.
         await checkpoint();
@@ -273,9 +280,9 @@ export async function beginStartupMaintenanceAttempt(
         if (terminal || preparationMayHaveStarted || operationId === null)
           throw Error("STARTUP_MAINTENANCE_RECEIPT_UNCONFIRMED");
         try {
-          await host.unchanged(path.join(input.stateRoot, "running.json"), run);
+          await host.unchanged(path.join(stateRoot, "running.json"), run);
           await host.unchanged(
-            path.join(input.stateRoot, "config.json"),
+            path.join(stateRoot, "config.json"),
             configuration,
           );
         } catch {

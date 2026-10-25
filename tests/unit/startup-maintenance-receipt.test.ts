@@ -87,6 +87,39 @@ async function fixture() {
 }
 
 describe("durable startup maintenance attempt", () => {
+  it("pins its initial root/build/report instead of rereading caller-owned inputs", async () => {
+    const f = await fixture(),
+      attempt = await beginStartupMaintenanceAttempt(f.input);
+    f.input.stateRoot = path.join(f.base, "different-root");
+    f.input.buildId = "private-invalid-binding /Users/secret";
+    f.input.report = () => {
+      throw Error("changed sink");
+    };
+    await attempt.selected(selection);
+    const receipt = (await f.read()).value;
+    expect(receipt.buildId).toBe(selection.buildId);
+    expect(JSON.stringify(receipt)).not.toContain("/Users/secret");
+    expect(f.notices.at(-1)).toMatchObject({ confirmed: true });
+  });
+  it("validates and stores the same single snapshot of selected correlation fields", async () => {
+    const f = await fixture(),
+      attempt = await beginStartupMaintenanceAttempt(f.input);
+    const getter = vi
+      .fn()
+      .mockReturnValueOnce(selection.hostLifetimeId)
+      .mockReturnValue("/Users/secret");
+    const mutable = { ...selection };
+    Object.defineProperty(mutable, "hostLifetimeId", { get: getter });
+    await attempt.selected(mutable);
+    expect(getter).toHaveBeenCalledOnce();
+    expect((await f.read()).value.selection.hostLifetimeId).toBe(
+      selection.hostLifetimeId,
+    );
+    expect(JSON.stringify((await f.read()).value)).not.toContain(
+      "/Users/secret",
+    );
+  });
+
   it("refuses a selected binding from another run, configuration or build", async () => {
     for (const field of [
       "buildId",
