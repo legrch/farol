@@ -48,6 +48,7 @@ export class OperationsStore implements OperationsRecorder {
   private readonly retentionTimer: NodeJS.Timeout;
   private retentionPending = false;
   private closed = false;
+  private readonly activeLifecycles = new Set<string>();
   private diagnosticsDirty = false;
   private cached: OperationsSnapshot = {
     entries: [],
@@ -213,6 +214,7 @@ export class OperationsStore implements OperationsRecorder {
   private beginEntry(metadata: OperationMetadata) {
     const id = randomUUID();
     this.append(metadata, "pending", null, 0, { id, phase: "started" });
+    this.activeLifecycles.add(id);
     let observed = false;
     return (
       outcome: OperationEntry["outcome"],
@@ -221,6 +223,7 @@ export class OperationsStore implements OperationsRecorder {
     ) => {
       if (observed) return;
       observed = true;
+      this.activeLifecycles.delete(id);
       this.append(metadata, outcome, code, durationMs, {
         id,
         phase: "observed",
@@ -576,8 +579,19 @@ export class OperationsStore implements OperationsRecorder {
           );
         }),
       ]);
+      const diagnostics = this.mergeDiagnostics(snapshot);
       return resolveOperationsSnapshot(
-        { ...snapshot, ...this.mergeDiagnostics(snapshot) },
+        {
+          ...snapshot,
+          ...diagnostics,
+          activeLifecycleIds:
+            this.closed ||
+            snapshot.corruptLines > 0 ||
+            diagnostics.writeFailures > 0 ||
+            diagnostics.droppedEntries > 0
+              ? []
+              : [...this.activeLifecycles].slice(0, 20000),
+        },
         this.currentLabels ?? this.readLabelsCache,
       );
     } finally {

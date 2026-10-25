@@ -456,14 +456,24 @@ export function Settings({
         result: null,
         origin: current.destination,
       };
-      feedback.intents[id] = { id, state: "pending", code: null };
-      report("Saving or checking…", { id, state: "pending", code: null });
+      feedback.intents[id] = {
+        id,
+        state: "pending",
+        code: null,
+        inFlight: true,
+      };
+      report("Saving or checking…", feedback.intents[id]);
       try {
         const result = await facade.configure(command, id);
         // Keep every unresolved dependency, even when a newer independent
         // request owns the page message. Refresh/remount cannot settle it.
         feedback.intents[id] = result;
-        report(actionFeedback(result), result);
+        report(
+          command.kind === "onboarding.open-help" && result.state === "applied"
+            ? "Opened in your default browser. Return to Farol to continue setup."
+            : actionFeedback(result),
+          result,
+        );
         return { state: "attempted", result };
       } catch {
         // Keep a local fence too if an adapter throws before retaining its intent.

@@ -123,6 +123,8 @@ export const OperationsDiagnosticsSchema = z.strictObject({
 });
 export const OperationsSnapshotSchema = z.strictObject({
   ...OperationsDiagnosticsSchema.shape,
+  // Current writer memory only; never recovered from persisted entries.
+  activeLifecycleIds: z.array(z.string().uuid()).max(20000).optional(),
   entries: z.array(OperationEntrySchema).max(20000),
   corruptLines: z.number().int().nonnegative().safe(),
 });

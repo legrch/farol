@@ -1035,7 +1035,9 @@ export function Shell() {
   }, [facade, state.sidebar, state.status]);
   const settings = destination.area === "settings";
   const retained = useSetupIntents(facade, state);
-  const unresolved = unresolvedActions(state, retained).length > 0;
+  const unresolved = unresolvedActions(state, retained).some(
+    (action) => !action.inProgress,
+  );
   const checklist = setupChecklist(state, false, retained);
   const completedSteps = checklist.entries.filter(
     (entry) => entry.state === "verified",

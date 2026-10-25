@@ -307,3 +307,38 @@ it("keeps historical sign-in query diagnostics in Activity without presenting th
     c.dispose();
   }
 });
+
+it("keeps running work inspectable without treating it as abandoned and never hides UNKNOWN", async () => {
+  const f = fixture(),
+    c = new WindowController(f.api);
+  await c.start();
+  try {
+    const live = { ...entries[2]!, id: "live", inFlight: true as const };
+    const unknown = { ...entries[1]!, inFlight: true as const };
+    const busy = {
+      ...entries[2]!,
+      id: "busy",
+      kind: "chatgpt.open-browser",
+      code: "CHATGPT_TASK_IN_PROGRESS",
+      lifecycle: { id: crypto.randomUUID(), phase: "observed" as const },
+    };
+    const snapshot = {
+      ...c.getSnapshot(),
+      status: "current" as const,
+      runtime: "ready" as const,
+      activity: [live, unknown, busy],
+    };
+    const rows = unresolvedActions(snapshot);
+    expect(rows.find((r) => r.id === "operation:live")?.inProgress).toBe(true);
+    expect(rows.find((r) => r.id === "operation:two")?.inProgress).toBe(false);
+    expect(rows.some((r) => r.id === "operation:busy")).toBe(false);
+    expect(
+      unresolvedActions({ ...snapshot, status: "stale" }).find(
+        (r) => r.id === "operation:live",
+      )?.inProgress,
+    ).toBe(false);
+    expect(snapshot.activity).toEqual([live, unknown, busy]);
+  } finally {
+    c.dispose();
+  }
+});

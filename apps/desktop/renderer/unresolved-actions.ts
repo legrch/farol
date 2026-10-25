@@ -6,6 +6,7 @@ export type UnresolvedAction = Readonly<{
   cause: string;
   state: "pending" | "unknown";
   code?: string | null;
+  inProgress?: boolean;
 }>;
 const unresolved = (intent: Intent) =>
   intent.state === "pending" ||
@@ -29,6 +30,11 @@ export function unresolvedActions(
         ? intent.id.split(":")[1]!.replaceAll(".", " ").replaceAll("-", " ")
         : intent.id.replaceAll(":", " ").replaceAll("-", " "),
       state: intent.state === "pending" ? "pending" : "unknown",
+      inProgress:
+        snapshot.status === "current" &&
+        snapshot.runtime === "ready" &&
+        intent.state === "pending" &&
+        intent.inFlight === true,
       cause:
         intent.state === "pending"
           ? "This action is still waiting for its result. Wait for it to finish."
@@ -39,14 +45,30 @@ export function unresolvedActions(
     // Older builds recorded inconclusive pure page reads as uncertain effects.
     // Keep their original Activity records; there is no action to replay here.
     if (entry.kind === "chatgpt.observe-sign-in") continue;
+    // This exact legacy busy response refused opening a second browser. Keep
+    // the Activity bytes; it is not an unfinished provider action.
+    if (
+      entry.kind === "chatgpt.open-browser" &&
+      entry.outcome === "pending" &&
+      entry.code === "CHATGPT_TASK_IN_PROGRESS" &&
+      entry.lifecycle?.phase === "observed"
+    )
+      continue;
     if (entry.outcome !== "unknown" && entry.outcome !== "pending") continue;
     rows.push({
       id: `operation:${entry.id}`,
       label: `${entry.source}: ${entry.label}`,
       state: entry.outcome,
+      inProgress:
+        snapshot.status === "current" &&
+        snapshot.runtime === "ready" &&
+        entry.outcome === "pending" &&
+        entry.inFlight === true,
       code: entry.code,
       cause:
-        "This is the recorded outcome of an earlier operation. Inspect its original result; do not submit it again.",
+        entry.inFlight === true && entry.outcome === "pending"
+          ? "This action is still running. Wait for its result."
+          : "This is the recorded outcome of an earlier operation. Inspect its original result; do not submit it again.",
     });
   }
   const settings =

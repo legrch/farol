@@ -99,6 +99,8 @@ export type Intent = Readonly<{
   id: string;
   state: "pending" | "applied" | "refused" | "unknown";
   code: string | null;
+  /** Current dispatcher promise only; not a settlement or authority receipt. */
+  inFlight?: true;
   /** UI access observation; the original transport outcome is preserved. */
   workspaceReadback?: Readonly<{
     requestId: number;
@@ -119,6 +121,9 @@ export type Intent = Readonly<{
   }>;
 }>;
 export type ActivityEntry = Readonly<{
+  /** Current host writer still owns this exact lifecycle; not durable proof. */
+  inFlight?: true;
+  lifecycle?: OperationEntry["lifecycle"];
   source?: OperationEntry["source"];
   outcome?: OperationEntry["outcome"];
   target?: OperationEntry["target"];

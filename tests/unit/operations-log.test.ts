@@ -2849,3 +2849,46 @@ it("keeps unknown, pending and sticky producer uncertainty above confirmed termi
   });
   expect(operationResult(sticky).outcome).toBe("unknown");
 });
+
+it("reports only exact current-writer live lifecycles without persisting liveness", async () => {
+  const { store, directory } = setup();
+  const finish = store.begin({
+    source: "You",
+    kind: "computer.choose-workspace",
+    target: {},
+  });
+  await store.flush(5000);
+  const live = await store.snapshot(5000);
+  const id = live.entries[0]!.lifecycle!.id;
+  expect(live.activeLifecycleIds).toEqual([id]);
+  const reader = new OperationsStore(directory, () => 1792670400000);
+  stores.push(reader);
+  expect((await reader.snapshot(5000)).activeLifecycleIds).toEqual([]);
+  expect((await reader.snapshot(5000)).entries[0]!.outcome).toBe("pending");
+  finish("unknown", "OPERATION_OUTCOME_UNKNOWN", 1);
+  await store.flush(5000);
+  expect((await store.snapshot(5000)).activeLifecycleIds).toEqual([]);
+  expect((await store.snapshot(5000)).entries[0]!.outcome).toBe("unknown");
+  const raw = fs
+    .readdirSync(directory)
+    .filter((n) => n.endsWith(".jsonl"))
+    .map((n) => fs.readFileSync(path.join(directory, n), "utf8"))
+    .join("");
+  expect(raw).not.toContain("activeLifecycleIds");
+});
+
+it("records a busy browser request as refused while explicit uncertainty still dominates", () => {
+  expect(
+    operationResult({ ok: false, error: { code: "CHATGPT_TASK_IN_PROGRESS" } }),
+  ).toEqual({ outcome: "refused", code: "CHATGPT_TASK_IN_PROGRESS" });
+  expect(
+    operationResult({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_IN_PROGRESS",
+    }).outcome,
+  ).toBe("unknown");
+  expect(
+    operationResult({ state: "pending", code: "CHATGPT_TASK_IN_PROGRESS" })
+      .outcome,
+  ).toBe("pending");
+});

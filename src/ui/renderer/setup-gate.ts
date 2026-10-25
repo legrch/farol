@@ -121,8 +121,15 @@ export function setupStepCheck(
           i.code === "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN"
         ),
     );
+  const browserCheckRunning =
+    step === "signin" &&
+    observation?.state === "unknown" &&
+    snapshot.intents["settings:connector.verify-app:"]?.state === "pending" &&
+    snapshot.intents["settings:connector.verify-app:"]?.inFlight === true;
   const pending =
-    fence.pending || (step === "signin" && observation?.pending === true);
+    fence.pending ||
+    (step === "signin" && observation?.pending === true) ||
+    browserCheckRunning;
   const latestConfirmation = Math.max(
     0,
     ...intents
@@ -232,7 +239,9 @@ export function setupStepCheck(
       : state === "unknown"
         ? `${label} result could not be confirmed. Refresh its saved result; do not repeat the action.`
         : state === "pending"
-          ? `${label} check is still in progress. Wait for its result.`
+          ? browserCheckRunning
+            ? "The connection test is using ChatGPT. Sign-in will be checked again automatically when it finishes."
+            : `${label} check is still in progress. Wait for its result.`
           : state === "refused"
             ? refusalCause
             : state === "stale"

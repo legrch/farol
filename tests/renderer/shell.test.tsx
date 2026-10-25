@@ -3304,3 +3304,37 @@ it("shows a connected local tunnel separately from an uncertain app check", asyn
       .mock.calls.some(([command]) => command.kind === "connector.verify-app"),
   ).toBe(false);
 });
+
+it("keeps a live workspace chooser out of attention until its result is unknown", async () => {
+  const { f, c, host } = await mount();
+  let reply!: (value: unknown) => void;
+  vi.mocked(f.api.configure).mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        reply = resolve;
+      }),
+  );
+  let pending!: ReturnType<WindowController["configure"]>;
+  await act(async () => {
+    pending = c.configure(
+      { kind: "computer.choose-workspace" },
+      "settings:computer.choose-workspace:",
+    );
+  });
+  expect(
+    c.getSnapshot().intents["settings:computer.choose-workspace:"]?.inFlight,
+  ).toBe(true);
+  expect(
+    host.querySelector('[aria-label="Review unresolved actions"]'),
+  ).toBeNull();
+  await act(async () => {
+    reply({ ok: false, error: { code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN" } });
+    await pending;
+  });
+  expect(
+    c.getSnapshot().intents["settings:computer.choose-workspace:"]?.inFlight,
+  ).toBeUndefined();
+  expect(
+    host.querySelector('[aria-label="Review unresolved actions"]'),
+  ).not.toBeNull();
+});

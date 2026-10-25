@@ -49,7 +49,9 @@ export function Home({ snapshot, facade }: Props) {
     checklist.ready;
   const [checking, setChecking] = useState(false);
   const [checkResult, setCheckResult] = useState<string | null>(null);
-  const unresolved = unresolvedActions(snapshot, local);
+  const unresolved = unresolvedActions(snapshot, local).filter(
+    (action) => !action.inProgress,
+  );
   const tasks = snapshot.tasks.tasks.filter(
     (task) =>
       task.agent?.observation === "unavailable" ||

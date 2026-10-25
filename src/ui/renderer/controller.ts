@@ -888,6 +888,10 @@ export class WindowController implements RendererFacade {
       this.patch({
         activity: result.entries.map((entry) => ({
           ...entry,
+          ...(entry.lifecycle?.phase === "started" &&
+          result.activeLifecycleIds?.includes(entry.lifecycle.id)
+            ? { inFlight: true as const }
+            : {}),
           taskId: "",
           turnId: "",
           generation: 0,
@@ -1316,7 +1320,7 @@ export class WindowController implements RendererFacade {
     this.patch({
       intents: {
         ...this.state.intents,
-        [key]: { id: key, state: "pending", code: null },
+        [key]: { id: key, state: "pending", code: null, inFlight: true },
       },
       ...(key.startsWith("settings:")
         ? {
