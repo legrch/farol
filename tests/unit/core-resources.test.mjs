@@ -74,6 +74,8 @@ describe("compiled core resource closure", () => {
       stage: "core-resources",
       result: "passed",
       deadlineMs: deadline,
+      readerLimit: 4,
+      otherMs: null,
       files: f.declared.files.length,
       bytes: f.declared.files.reduce((n, v) => n + v.size, 0),
     });
@@ -83,6 +85,55 @@ describe("compiled core resource closure", () => {
     expect(JSON.stringify(observations)).not.toContain("preload.cjs");
     expect(Object.isFrozen(final)).toBe(true);
   });
+  it.each([false, true])(
+    "bounds concurrent readers and drains every descriptor before returning (corrupt=%s)",
+    async (corrupt) => {
+      const f = await fixture();
+      if (corrupt) {
+        const first = f.declared.files[0];
+        await fs.writeFile(
+          path.join(f.root, first.path),
+          Buffer.alloc(first.size, 9),
+        );
+      }
+      const original = fs.open.bind(fs);
+      let active = 0,
+        maximum = 0,
+        opened = 0,
+        closed = 0;
+      let release;
+      const firstBatch = new Promise((resolve) => {
+        release = resolve;
+      });
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await original(...args);
+        opened++;
+        active++;
+        maximum = Math.max(maximum, active);
+        if (opened === 4) release();
+        await firstBatch;
+        return {
+          stat: handle.stat.bind(handle),
+          read: handle.read.bind(handle),
+          close: async () => {
+            // An error in one reader must not publish a result before the
+            // other already-started readers have closed their descriptors.
+            await new Promise((resolve) => setImmediate(resolve));
+            await handle.close();
+            active--;
+            closed++;
+          },
+        };
+      });
+      const result = verify(f);
+      if (corrupt) await expect(result).rejects.toMatchObject(refused);
+      else await expect(result).resolves.toBeUndefined();
+      expect(maximum).toBe(4);
+      expect(active).toBe(0);
+      expect(closed).toBe(opened);
+      expect(opened).toBe(corrupt ? 4 : f.declared.files.length);
+    },
+  );
   it("does not let a failing metrics sink hide an integrity refusal", async () => {
     const f = await fixture();
     await fs.writeFile(path.join(f.root, "preload.cjs"), "changed");

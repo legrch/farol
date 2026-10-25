@@ -21,7 +21,8 @@ export type QualificationObservation = Readonly<{
   recheckMs: number;
   openMs: number;
   setupMs: number;
-  otherMs: number;
+  otherMs: number | null;
+  readerLimit: number;
   cpuUserMs: number;
   cpuSystemMs: number;
 }>;
@@ -33,6 +34,7 @@ export function qualificationMetrics(
   stage: QualificationStage,
   deadline: number,
   observer?: QualificationObserver,
+  readerLimit = 1,
 ) {
   const started = observer ? performance.now() : 0;
   const cpu = observer ? process.cpuUsage() : undefined;
@@ -78,12 +80,18 @@ export function qualificationMetrics(
           recheckMs: times.recheck,
           openMs: times.open,
           setupMs: times.setup,
-          otherMs: Math.max(
-            0,
-            now -
-              started -
-              Object.values(times).reduce((sum, value) => sum + value, 0),
-          ),
+          // Category durations sum work across readers; they can overlap.
+          // Only serial work admits an unmeasured wall-time remainder.
+          readerLimit,
+          otherMs:
+            readerLimit === 1
+              ? Math.max(
+                  0,
+                  now -
+                    started -
+                    Object.values(times).reduce((sum, value) => sum + value, 0),
+                )
+              : null,
           cpuUserMs: used.user / 1000,
           cpuSystemMs: used.system / 1000,
         }),

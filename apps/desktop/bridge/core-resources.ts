@@ -15,6 +15,7 @@ import {
 // never from the clock. Startup on a busy Mac measured 2 s for work that takes
 // 0.3 s idle, so the budget leaves room for a slow launch.
 export const CORE_QUALIFICATION_BUDGET_MS = 10_000;
+const CORE_RESOURCE_READERS = 4;
 
 const refuse = (): never => {
   throw new BridgeError("refused", "core_resources_unqualified");
@@ -77,7 +78,12 @@ export async function verifyCoreResources(
   deadline: number,
   observer?: QualificationObserver,
 ): Promise<void> {
-  const metrics = qualificationMetrics("core-resources", deadline, observer);
+  const metrics = qualificationMetrics(
+    "core-resources",
+    deadline,
+    observer,
+    CORE_RESOURCE_READERS,
+  );
   let result: QualificationResult = "refused";
   try {
     const declared = record(compiled, ["schema", "core", "files"]);
@@ -158,8 +164,8 @@ export async function verifyCoreResources(
     )
       refuse();
     const observations: [string, BigIntStats][] = [];
-    const buffer = Buffer.alloc(1024 * 1024);
-    for (const file of files) {
+    const verifyFile = async (file: (typeof files)[number]) => {
+      const buffer = Buffer.alloc(1024 * 1024);
       metrics.file();
       checkTime();
       const target = path.join(root, file.path);
@@ -210,10 +216,27 @@ export async function verifyCoreResources(
           )
         )
           refuse();
-        observations.push([target, before]);
+        return [target, before] as [string, BigIntStats];
       } finally {
         await metrics.time("open", () => handle.close());
       }
+    };
+    // File checks are independent. Bound live descriptors/buffers, wait for
+    // every reader to close, then retain declaration order for the original
+    // final path/root rechecks. The one original deadline is never renewed.
+    for (
+      let offset = 0;
+      offset < files.length;
+      offset += CORE_RESOURCE_READERS
+    ) {
+      checkTime();
+      const batch = await Promise.allSettled(
+        files.slice(offset, offset + CORE_RESOURCE_READERS).map(verifyFile),
+      );
+      for (const outcome of batch)
+        if (outcome.status === "rejected") throw outcome.reason;
+      for (const outcome of batch)
+        if (outcome.status === "fulfilled") observations.push(outcome.value);
     }
     for (const [target, before] of observations) {
       checkTime();
