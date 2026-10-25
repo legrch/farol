@@ -3789,27 +3789,29 @@ async function stopAndConfirmComputerMcp(
     operationsStore(),
     { source: "You", kind: "connection.stop", target: {} },
     () =>
-      drainComputerConnector({
-        beginStop: () => lifecycle.beginStop(),
-        startInFlight: inFlightStart,
-        waitForMcpStop: () => lifecycle.waitForStop(),
-        stopConnector: () => connector.stop(),
-        closeSavedChat: async () => {
-          // Wait for admitted account work before closing its Browser endpoint.
-          try {
-            if (savedChat) {
-              await savedChat.close();
-              if (savedChatBridgeRuntime === savedChat)
-                savedChatBridgeRuntime = null;
+      connector.observeStopAttempt(() =>
+        drainComputerConnector({
+          beginStop: () => lifecycle.beginStop(),
+          startInFlight: inFlightStart,
+          waitForMcpStop: () => lifecycle.waitForStop(),
+          stopConnector: () => connector.stop(),
+          closeSavedChat: async () => {
+            // Wait for admitted account work before closing its Browser endpoint.
+            try {
+              if (savedChat) {
+                await savedChat.close();
+                if (savedChatBridgeRuntime === savedChat)
+                  savedChatBridgeRuntime = null;
+              }
+            } finally {
+              // Withdraw the original Go owner even when the old adapter drain fails.
+              // A failure remains unconfirmed; it cannot authorize a new launch.
+              await core?.closeComputerConnector(reason);
             }
-          } finally {
-            // Withdraw the original Go owner even when the old adapter drain fails.
-            // A failure remains unconfirmed; it cannot authorize a new launch.
-            await core?.closeComputerConnector(reason);
-          }
-        },
-        confirmStop: () => lifecycle.confirmStop(),
-      }),
+          },
+          confirmStop: () => lifecycle.confirmStop(),
+        }),
+      ),
   );
 }
 

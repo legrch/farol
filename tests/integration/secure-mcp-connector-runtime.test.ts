@@ -1,3 +1,4 @@
+import { drainComputerConnector } from "../../src/apps/desktop/computer-connector-drain";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
@@ -179,6 +180,154 @@ async function controlledLifecycleRuntime(
 }
 
 describe("secure MCP connector runtime", () => {
+  it("groups a tunnel exit during durable Stop publication without reordering drain", async () => {
+    const observations: ConnectorRuntimeLifecycleObservation[] = [];
+    const { runtime, children } = await controlledLifecycleRuntime((value) =>
+      observations.push(value),
+    );
+    await runtime.start(startInput);
+    const child = children[0]!;
+    child.waitForExit.mockResolvedValue(true);
+    const order: string[] = [];
+    let release!: () => void;
+    const admitted = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const draining = runtime.observeStopAttempt(() =>
+      drainComputerConnector({
+        beginStop: async () => {
+          order.push("begin");
+          child.emit({
+            source: "connector-tunnel",
+            event: "exit",
+            code: "CONNECTOR_TUNNEL_EXIT",
+            state: "observed",
+            exitCode: 0,
+            signal: null,
+            forced: false,
+          });
+          await admitted;
+        },
+        startInFlight: null,
+        waitForMcpStop: async () => {
+          order.push("mcp-drained");
+        },
+        stopConnector: async () => {
+          order.push("anchor-stop");
+          await runtime.stop();
+        },
+        closeSavedChat: async () => {
+          order.push("account-close");
+        },
+        confirmStop: async () => {
+          order.push("confirmed");
+        },
+      }),
+    );
+    expect(observations).toMatchObject([
+      {
+        phase: "closing",
+        source: "connector-tunnel",
+        event: "exit",
+        state: "observed",
+        exitCode: 0,
+      },
+    ]);
+    expect(child.kill).not.toHaveBeenCalled();
+    release();
+    await draining;
+    expect(order).toEqual([
+      "begin",
+      "mcp-drained",
+      "anchor-stop",
+      "account-close",
+      "confirmed",
+    ]);
+    expect(observations).toHaveLength(1);
+  });
+  it.each([false, true])(
+    "preserves a rejected Stop and terminal uncertainty (%s)",
+    async (terminalDuringStop) => {
+      const observations: ConnectorRuntimeLifecycleObservation[] = [];
+      const { runtime, children } = await controlledLifecycleRuntime((value) =>
+        observations.push(value),
+      );
+      const started = await runtime.start(startInput);
+      const child = children[0]!;
+      const terminal = {
+        source: "connector-tunnel",
+        event: "exit",
+        code: "CONNECTOR_TUNNEL_EXIT",
+        state: "observed",
+        exitCode: 0,
+        signal: null,
+        forced: false,
+      };
+      const failure = new Error("fixture admission refused");
+      await expect(
+        runtime.observeStopAttempt(async () => {
+          if (terminalDuringStop) child.emit(terminal);
+          throw failure;
+        }),
+      ).rejects.toBe(failure);
+      expect(child.kill).not.toHaveBeenCalled();
+      if (terminalDuringStop) {
+        expect(observations).toMatchObject([
+          { phase: "closing", event: "exit", state: "observed" },
+          {
+            phase: "closing",
+            event: "cleanup-unknown",
+            state: "outcome_unknown",
+            code: "CONNECTOR_STOP_UNCONFIRMED",
+            runtimeGeneration: started.runtimeGeneration,
+          },
+        ]);
+      } else {
+        expect(observations).toEqual([]);
+        child.emit(terminal);
+        expect(observations).toMatchObject([
+          { phase: "active", event: "exit", state: "observed" },
+        ]);
+      }
+    },
+  );
+  it("keeps an unresolved Start observation distinct from a Stop attempt", async () => {
+    const diagnostic = vi.fn();
+    const { runtime, anchor, get } = await observedRuntime(diagnostic);
+    let release!: (value: boolean) => void;
+    get.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const starting = runtime.start(startInput);
+    await vi.waitFor(() => expect(get).toHaveBeenCalledOnce());
+    const failure = new Error("fixture stop refused");
+    await expect(
+      runtime.observeStopAttempt(async () => {
+        anchor.emit("message", {
+          kind: "farol-tunnel-terminal-v1",
+          source: "connector-tunnel",
+          event: "exit",
+          exitCode: 0,
+          signal: null,
+        });
+        throw failure;
+      }),
+    ).rejects.toBe(failure);
+    release(true);
+    await expect(starting).resolves.toMatchObject({
+      state: "unreachable",
+      code: "CONNECTOR_EXITED_BEFORE_READY",
+    });
+    expect(diagnostic.mock.calls).toHaveLength(1);
+    expect(diagnostic.mock.calls[0]![0]).toMatchObject({
+      phase: "startup",
+      event: "exit",
+    });
+  });
+
   it("forwards one content-free direct tunnel exit while its anchor stays alive (VM doubles)", async () => {
     const source = await fs.readFile(
       new URL(

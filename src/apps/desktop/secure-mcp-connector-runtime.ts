@@ -1171,6 +1171,47 @@ export class SecureMcpConnectorRuntime {
       : null;
   }
 
+  async observeStopAttempt<T>(operation: () => Promise<T>): Promise<T> {
+    const lifetime = this.childLifecycle;
+    // Publishing the existing durable Stop can end the tunnel before the
+    // anchor is stopped. Only annotate this original active lifetime; this
+    // scope supplies no admission, drain, terminal or cleanup authority.
+    if (!lifetime || lifetime.phase.value !== "active") return operation();
+    const before = lifetime.reported.size;
+    lifetime.phase.value = "closing";
+    try {
+      return await operation();
+    } catch (error) {
+      lifetime.phase.value = "active";
+      const key = "connector-anchor:cleanup-unknown";
+      // If Stop failed after a terminal notification, retain that uncertainty
+      // even when the enclosing failure is classified as a known refusal.
+      if (lifetime.reported.size !== before && !lifetime.reported.has(key)) {
+        lifetime.reported.add(key);
+        try {
+          void Promise.resolve(
+            this.onLifecycleObservation?.(
+              Object.freeze({
+                source: "connector-anchor",
+                phase: "closing",
+                event: "cleanup-unknown",
+                code: "CONNECTOR_STOP_UNCONFIRMED",
+                state: "outcome_unknown",
+                exitCode: null,
+                signal: null,
+                forced: false,
+                runtimeGeneration: lifetime.runtimeGeneration,
+              }),
+            ),
+          ).catch(() => undefined);
+        } catch {
+          /* Preserve the original Stop failure. */
+        }
+      }
+      throw error;
+    }
+  }
+
   async stop(): Promise<void> {
     if (this.hasUnresolvedEffect()) runtimeError("CONNECTOR_STOP_UNCONFIRMED");
     const child = this.child;

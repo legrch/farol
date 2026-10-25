@@ -315,7 +315,12 @@ describe("actual MCP stop retains its admitted saved-chat lifetime", () => {
       close: vi.fn(async () => undefined),
       closeComputerConnector: vi.fn(async () => undefined),
     };
-    const connector = { stop: vi.fn(async () => undefined) };
+    const connector = {
+      stop: vi.fn(async () => undefined),
+      observeStopAttempt: vi.fn(<T>(operation: () => Promise<T>) =>
+        operation(),
+      ),
+    };
     const context = vm.createContext({
       observeOperation,
       operationsStore: () => ({ record() {} }),
@@ -368,8 +373,23 @@ describe("actual MCP stop retains its admitted saved-chat lifetime", () => {
       confirmStop,
       core,
       connector,
+      beginStop,
     };
   }
+
+  it("observes the original connector Stop before publishing durable stop admission", async () => {
+    const h = harness(null);
+    const stopping = h.stopCurrent();
+    await vi.waitFor(() => expect(h.waitForStop).toHaveBeenCalledOnce());
+    expect(h.connector.observeStopAttempt).toHaveBeenCalledOnce();
+    expect(
+      h.connector.observeStopAttempt.mock.invocationCallOrder[0]!,
+    ).toBeLessThan(h.beginStop.mock.invocationCallOrder[0]!);
+    expect(h.connector.stop).not.toHaveBeenCalled();
+    h.stop.resolve();
+    await stopping;
+    expect(h.confirmStop).toHaveBeenCalledOnce();
+  });
 
   it.each(["before-dispatch", "pending-mcp-stop"] as const)(
     "never closes or clears a replacement bridge during Quit: %s",
