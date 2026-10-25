@@ -45,9 +45,14 @@ import {
 } from "./native-preview-admission.mjs";
 
 const finishReopen = process.argv[2] === "--finish-reopen";
+const separateOnly = process.argv[2] === "--separate-after-unknown";
 assert.deepEqual(
   process.argv.slice(2),
-  finishReopen ? ["--finish-reopen"] : [],
+  finishReopen
+    ? ["--finish-reopen"]
+    : separateOnly
+      ? ["--separate-after-unknown"]
+      : [],
   "SETUP_JOURNEY_ARGUMENTS_INVALID",
 );
 const root = process.cwd();
@@ -65,6 +70,8 @@ const executablePath = path.join(
   "dist/Electron.app/Contents/MacOS/Electron",
 );
 async function runScenario(scenario) {
+  const separate = scenario === "separate-after-unknown";
+  const trackQuits = finishReopen || separate;
   const appName = `${productName} Setup Fixture`;
   const id = randomUUID();
   const output = path.join(root, "_output/evidence/setup-journey", id);
@@ -107,7 +114,7 @@ async function runScenario(scenario) {
     liveProvider: "NOT RUN",
     installed: "NOT RUN",
     postFinishHome: finishReopen ? [] : undefined,
-    nativeQuits: finishReopen ? [] : undefined,
+    nativeQuits: trackQuits ? [] : undefined,
     steps: {
       signin: "NOT RUN",
       folders: "NOT RUN",
@@ -164,7 +171,7 @@ async function runScenario(scenario) {
   }
   async function verify(prompt) {
     sendCount++;
-    assert.equal(sendCount, 1, "SETUP_SEND_REPLAYED");
+    assert.ok(sendCount <= (separate ? 2 : 1), "SETUP_SEND_REPLAYED");
     if (scenario === "late-receipt") {
       delayedPrompt = prompt;
       return;
@@ -251,14 +258,16 @@ async function runScenario(scenario) {
           name: "farol_connector_verify",
           arguments: {
             challenge:
-              scenario === "wrong-nonce" ? randomUUID() : challenge.value,
+              scenario === "wrong-nonce" || (separate && sendCount === 1)
+                ? randomUUID()
+                : challenge.value,
             workspaceId,
           },
         }),
         "SETUP_MCP_VERIFY_TIMEOUT",
       );
       const value = result.structuredContent;
-      if (scenario === "wrong-nonce") {
+      if (scenario === "wrong-nonce" || (separate && sendCount === 1)) {
         assert.equal(
           value?.status,
           "refused",
@@ -303,7 +312,9 @@ async function runScenario(scenario) {
   }
   async function settledVerification(kind = "connector.verify-app") {
     assert.ok(
-      kind === "connector.verify-app" || kind === "connector.check-attachment",
+      kind === "connector.verify-app" ||
+        kind === "connector.verify-separate-app" ||
+        kind === "connector.check-attachment",
     );
     const directory = path.join(userData, "farol-state/operations");
     const entries = [];
@@ -323,7 +334,7 @@ async function runScenario(scenario) {
       }
     }
     const starts = entries.filter((e) => e.lifecycle?.phase === "started");
-    if (kind === "connector.verify-app")
+    if (kind !== "connector.check-attachment")
       assert.ok(starts.length <= 1, "SETUP_VERIFICATION_REPLAYED");
     if (starts.length === 0) return null;
     const latest = starts.at(-1);
@@ -344,7 +355,7 @@ async function runScenario(scenario) {
     const before = await readQuitObservation(stateRoot);
     const request = beginQuitObservation(before, report.pid);
     const original = application;
-    const dispatch = finishReopen
+    const dispatch = trackQuits
       ? application
           .evaluate(({ app }) => {
             app.quit();
@@ -354,7 +365,7 @@ async function runScenario(scenario) {
             () => "transport-ended-or-rejected",
           )
       : application.close();
-    if (!finishReopen) await bounded(dispatch, "SETUP_QUIT_TIMEOUT");
+    if (!trackQuits) await bounded(dispatch, "SETUP_QUIT_TIMEOUT");
     const [code, signal] = await bounded(
       terminal,
       "SETUP_TERMINAL_TIMEOUT",
@@ -372,13 +383,13 @@ async function runScenario(scenario) {
     await assert.rejects(fs.lstat(path.join(stateRoot, "running.json")), {
       code: "ENOENT",
     });
-    if (finishReopen) {
+    if (trackQuits) {
       await bounded(dispatch, "SETUP_QUIT_DISPATCH_TIMEOUT");
       await bounded(original.close(), "SETUP_QUIT_DRIVER_CLOSE_TIMEOUT");
     }
     application = null;
     report.cleanup = "confirmed";
-    if (finishReopen)
+    if (trackQuits)
       report.nativeQuits.push({
         pid: report.pid,
         terminal: report.terminal,
@@ -605,6 +616,40 @@ async function runScenario(scenario) {
         .count(),
       1,
     );
+    if (scenario === "happy" || separate) {
+      const originalViewport = await page.evaluate(() => ({
+        width: innerWidth,
+        height: innerHeight,
+      }));
+      await page.setViewportSize({ width: 320, height: 720 });
+      await testAction.scrollIntoViewIfNeeded();
+      const box = await testAction.boundingBox();
+      assert.ok(
+        box && box.x >= 0 && box.x + box.width <= 320,
+        "SETUP_FOOTER_OVERFLOW_320",
+      );
+      await testAction.focus();
+      await page.keyboard.press("Shift+Tab");
+      assert.equal(
+        await page
+          .getByRole("button", { name: "Back", exact: true })
+          .evaluate((element) => document.activeElement === element),
+        true,
+      );
+      await page.keyboard.press("Tab");
+      assert.equal(
+        await testAction.evaluate(
+          (element) => document.activeElement === element,
+        ),
+        true,
+      );
+      report.footer320 = {
+        viewport: "Chromium device metrics, not native Mac window sizing",
+        box,
+        keyboard: "Back then Test",
+      };
+      await page.setViewportSize(originalViewport);
+    }
     await testAction.focus();
     assert.equal(
       await testAction.evaluate(
@@ -613,6 +658,171 @@ async function runScenario(scenario) {
       true,
     );
     await testAction.click();
+    if (separate) {
+      const old = await poll(
+        settledVerification,
+        (v) => v !== null,
+        "SEPARATE_ORIGINAL_UNSETTLED",
+        75000,
+      );
+      assert.equal(old.outcome, "unknown");
+      assert.equal(sendCount, 1);
+      const original = await readSetupSettings(page);
+      const oldDigest = original.connectors.secureMcp.challenge.challengeSha256;
+      const claimRoot = path.join(
+        userData,
+        "farol-state/secure-mcp-connector/computer-authority",
+      );
+      const oldClaim = path.join(
+        claimRoot,
+        `app-verification-${oldDigest}.json`,
+      );
+      const oldClaimBytes = await fs.readFile(oldClaim);
+      report.originalUnknown = {
+        operation: old.lifecycle.id,
+        challengeSha256: oldDigest,
+        claimSha256: hash(oldClaimBytes),
+        outcome: old.outcome,
+      };
+      await quit();
+      const childAdmission = await assertNativePreviewAdmission(undefined, {
+        profileRoot: home,
+        proof,
+        launchOptions,
+        fixture: fixture.server,
+        auxiliaryRoot: auxiliary,
+        previous: admission,
+      });
+      application = await _electron.launch(launchOptions);
+      const child = application.process();
+      report.pid = child.pid;
+      terminal = once(child, "exit");
+      closed = once(child, "close");
+      quitAttempted = false;
+      let childOutput = "";
+      child.stderr.on("data", (chunk) => {
+        assert.ok(
+          childOutput.length + chunk.length <= 131072,
+          "SEPARATE_OUTPUT_LIMIT",
+        );
+        childOutput += chunk.toString("utf8");
+      });
+      page = await application.firstWindow();
+      await poll(
+        () =>
+          fs
+            .readFile(path.join(home, ".farol-startup-stage"), "utf8")
+            .catch((e) => {
+              if (e.code === "ENOENT") return "";
+              throw e;
+            }),
+        (v) => v.trim() === "startup-complete",
+        "SEPARATE_STARTUP_NOT_SETTLED",
+        30000,
+      );
+      assert.equal(
+        await poll(
+          () => parseOwnerLaunchResult(childOutput),
+          (v) => v !== null,
+          "SEPARATE_STARTUP_RESULT",
+        ),
+        "primary-started",
+      );
+      const paths = await application.evaluate(({ app, BrowserWindow }) => ({
+        pid: process.pid,
+        home: app.getPath("home"),
+        userData: app.getPath("userData"),
+        sessionData: app.getPath("sessionData"),
+        temp: app.getPath("temp"),
+        windows: BrowserWindow.getAllWindows().map((w) => ({
+          visible: w.isVisible(),
+          focused: w.isFocused(),
+        })),
+      }));
+      admission = await recheckNativePreviewIsolation(
+        childAdmission,
+        paths,
+        child,
+      );
+      await waitForReactShell(page);
+      await openSetup(page);
+      await setupStep(page, "attachment");
+      const renewed = await poll(
+        () => readSetupSettings(page),
+        (v) =>
+          v.connectors.secureMcp.runtime?.state === "ready" &&
+          v.connectors.secureMcp.challenge !== null,
+        "SEPARATE_RUNTIME_NOT_READY",
+        30000,
+      );
+      assert.equal(renewed.setup.connect.outcomeUnknown, true);
+      assert.equal(renewed.connectors.secureMcp.appVerificationPending, true);
+      assert.notEqual(
+        renewed.connectors.secureMcp.challenge.challengeSha256,
+        oldDigest,
+      );
+      assert.equal(
+        await page
+          .getByRole("button", { name: "Test in ChatGPT", exact: true })
+          .isEnabled(),
+        false,
+      );
+      // Fixture-owned native approval port only. No shipping bypass, real owner
+      // consent or live-provider acceptance is inferred from this override.
+      await application.evaluate(({ dialog }) => {
+        globalThis.__farolSeparateFixtureApprovals = 0;
+        dialog.showMessageBox = async (_owner, options) => {
+          if (
+            options.message !== "Run one separate connection test?" ||
+            options.defaultId !== 0
+          )
+            throw Error("SEPARATE_UNEXPECTED_NATIVE_PROMPT");
+          globalThis.__farolSeparateFixtureApprovals++;
+          return { response: 1, checkboxChecked: false };
+        };
+      });
+      await page
+        .getByRole("checkbox", { name: /Authorize a separate test/ })
+        .check();
+      await page
+        .getByRole("button", { name: "Test in ChatGPT", exact: true })
+        .click();
+      const fresh = await poll(
+        () => settledVerification("connector.verify-separate-app"),
+        (v) => v !== null,
+        "SEPARATE_RESULT_UNSETTLED",
+        75000,
+      );
+      assert.equal(fresh.outcome, "done");
+      assert.equal(sendCount, 2);
+      assert.equal(
+        await application.evaluate(
+          () => globalThis.__farolSeparateFixtureApprovals,
+        ),
+        1,
+      );
+      assert.equal((await settledVerification()).outcome, "unknown");
+      assert.deepEqual(await fs.readFile(oldClaim), oldClaimBytes);
+      const freshClaim = JSON.parse(
+        await fs.readFile(
+          path.join(
+            claimRoot,
+            `app-verification-${renewed.connectors.secureMcp.challenge.challengeSha256}.json`,
+          ),
+          "utf8",
+        ),
+      );
+      assert.equal(freshClaim.schema, 2);
+      assert.equal(freshClaim.predecessorOutcome, "unknown");
+      report.separateVerification = {
+        operation: fresh.lifecycle.id,
+        outcome: fresh.outcome,
+        nativeFixtureApprovals: 1,
+        liveSends: 0,
+        syntheticSends: 2,
+        claimAttemptId: freshClaim.attemptId,
+      };
+    }
     if (scenario === "wrong-app" || scenario === "wrong-nonce") {
       const settled = await poll(
         settledVerification,
@@ -723,7 +933,7 @@ async function runScenario(scenario) {
         .getByRole("button", { name: "Back to setup", exact: true })
         .click();
     await page.getByText("✓ Everything works", { exact: true }).waitFor();
-    assert.equal(sendCount, 1);
+    assert.equal(sendCount, separate ? 2 : 1);
     assert.equal(await finish.isEnabled(), true);
     report.steps.attachment = "PASS";
     if (scenario === "stale-receipt") {
@@ -1024,7 +1234,16 @@ async function runScenario(scenario) {
 const matrix = [];
 for (const scenario of finishReopen
   ? ["happy"]
-  : ["happy", "wrong-app", "wrong-nonce", "stale-receipt", "late-receipt"]) {
+  : separateOnly
+    ? ["separate-after-unknown"]
+    : [
+        "happy",
+        "wrong-app",
+        "wrong-nonce",
+        "stale-receipt",
+        "late-receipt",
+        "separate-after-unknown",
+      ]) {
   const result = await runScenario(scenario);
   matrix.push(result);
   if (result.status === "failed" || process.exitCode) break;
@@ -1037,7 +1256,8 @@ const matrixOutput = path.join(
 await fs.mkdir(matrixOutput, { recursive: true, mode: 0o700 });
 const matrixReport = {
   status:
-    matrix.length === (finishReopen ? 1 : 5) && !process.exitCode
+    matrix.length === (finishReopen || separateOnly ? 1 : 6) &&
+    !process.exitCode
       ? finishReopen
         ? "passed-fixture-finish-reopen"
         : "passed-fixture-setup-matrix"
