@@ -98,24 +98,29 @@ describe("preview window placement", () => {
     expect(placement.primary).toBe(false);
   });
 
-  it("refuses visible automation when only the primary display is available", () => {
-    const primaryInternal: PreviewDisplay = {
-      id: 1,
-      internal: true,
-      bounds: { x: 0, y: 0, width: 1000, height: 700 },
-      workArea: { x: 0, y: 24, width: 1000, height: 650 },
-    };
-
-    expect(() =>
-      selectPreviewWindowPlacement([primaryInternal], primaryInternal.id, {
-        width: 1180,
-        height: 760,
-      }),
-    ).toThrow("SECONDARY_DISPLAY_UNAVAILABLE");
-  });
-
-  it("refuses a secondary that cannot preserve the required viewport", () => {
-    expect(() =>
+  it.each([true, false])(
+    "automatically fits the sole primary display without a launch flag (%s)",
+    (internal) => {
+      const primary = {
+        ...externalPrimary,
+        internal,
+        workArea: { x: 0, y: 24, width: 1000, height: 650 },
+      };
+      expect(
+        selectPreviewWindowPlacement([primary], primary.id, {
+          width: 1180,
+          height: 760,
+        }),
+      ).toMatchObject({
+        displayId: primary.id,
+        primary: true,
+        selection: "owner-allowed-primary",
+        bounds: primary.workArea,
+      });
+    },
+  );
+  it("uses primary when a secondary cannot hold the requested viewport", () => {
+    expect(
       selectPreviewWindowPlacement(
         [
           externalPrimary,
@@ -127,9 +132,8 @@ describe("preview window placement", () => {
         externalPrimary.id,
         { width: 1180, height: 760 },
       ),
-    ).toThrow("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
+    ).toMatchObject({ displayId: externalPrimary.id, primary: true });
   });
-
   it("fails closed when Electron's display inventory is inconsistent", () => {
     expect(() =>
       selectPreviewWindowPlacement([], 1, { width: 1180, height: 760 }),
@@ -142,25 +146,17 @@ describe("preview window placement", () => {
     ).toThrow("WINDOW_PRIMARY_DISPLAY_MISSING");
   });
 
-  it("still refuses visible automation with only the primary display when the owner allowance is not passed", () => {
-    const primaryInternal: PreviewDisplay = {
-      id: 1,
-      internal: true,
-      bounds: { x: 0, y: 0, width: 1000, height: 700 },
-      workArea: { x: 0, y: 24, width: 1000, height: 650 },
-    };
-
-    expect(() =>
+  it("does not require the legacy primary-display allowance", () => {
+    expect(
       selectPreviewWindowPlacement(
-        [primaryInternal],
-        primaryInternal.id,
+        [externalPrimary],
+        externalPrimary.id,
         { width: 1180, height: 760 },
         false,
-      ),
-    ).toThrow("SECONDARY_DISPLAY_UNAVAILABLE");
+      ).primary,
+    ).toBe(true);
   });
-
-  it("falls back to the built-in primary display only when explicitly allowed and no non-primary display exists", () => {
+  it("keeps the legacy allowance compatible with automatic primary fallback", () => {
     const primaryInternal: PreviewDisplay = {
       id: 1,
       internal: true,
@@ -196,22 +192,19 @@ describe("preview window placement", () => {
     expect(placement.primary).toBe(false);
   });
 
-  it("still enforces the viewport requirement on the owner-allowed primary display", () => {
-    const tooSmallPrimary: PreviewDisplay = {
-      id: 1,
-      internal: true,
-      bounds: { x: 0, y: 0, width: 1000, height: 700 },
+  it("fits an oversized viewport to the primary work area", () => {
+    const primary = {
+      ...externalPrimary,
       workArea: { x: 0, y: 24, width: 1000, height: 650 },
     };
-
-    expect(() =>
+    expect(
       selectPreviewWindowPlacement(
-        [tooSmallPrimary],
-        tooSmallPrimary.id,
+        [primary],
+        primary.id,
         { width: 1180, height: 760 },
         true,
-      ),
-    ).toThrow("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
+      ).bounds,
+    ).toEqual(primary.workArea);
   });
 });
 
@@ -256,18 +249,17 @@ describe("built-in-display-only test placement", () => {
     expect(placement.selection).toBe("owner-allowed-primary");
   });
 
-  it("refuses an external-only display inventory", () => {
-    expect(() =>
+  it("falls back to external primary when no built-in display exists", () => {
+    expect(
       selectPreviewWindowPlacement(
         [externalPrimary],
         externalPrimary.id,
         { width: 1180, height: 760 },
-        true,
+        false,
         true,
       ),
-    ).toThrow("BUILT_IN_DISPLAY_UNAVAILABLE");
+    ).toMatchObject({ displayId: externalPrimary.id, primary: true });
   });
-
   it("requires the exact flag", () => {
     expect(parseBuiltInDisplayOnly(["electron", "main.cjs"])).toBe(false);
     expect(
@@ -303,18 +295,18 @@ describe("explicit iPad test presentation", () => {
       bounds: { x: -1118, y: 39, width: 1100, height: 740 },
     });
   });
-  it("hides when Sidecar disappears, is primary, or conflicts with a built-in constraint", () => {
-    expect(() =>
+  it("falls back after Sidecar removal and still rejects contradictory preferences", () => {
+    expect(
       selectPreviewWindowPlacement(
         [externalPrimary, builtInSecondary],
         5,
         { width: 1100, height: 740 },
-        true,
+        false,
         false,
         true,
       ),
-    ).toThrow("SIDECAR_DISPLAY_UNAVAILABLE");
-    expect(() =>
+    ).toMatchObject({ displayId: 5, primary: true });
+    expect(
       selectPreviewWindowPlacement(
         [sidecar, builtInSecondary],
         7,
@@ -323,7 +315,7 @@ describe("explicit iPad test presentation", () => {
         false,
         true,
       ),
-    ).toThrow("SIDECAR_DISPLAY_UNAVAILABLE");
+    ).toMatchObject({ displayId: 7, primary: true });
     expect(() =>
       selectPreviewWindowPlacement(
         [externalPrimary, sidecar],
@@ -335,8 +327,8 @@ describe("explicit iPad test presentation", () => {
       ),
     ).toThrow("VISIBLE_TEST_DISPLAY_CONFLICT");
   });
-  it("does not reinterpret the existing exact-viewport constraint", () => {
-    expect(() =>
+  it("uses primary when the preferred Sidecar cannot fit the requested viewport", () => {
+    expect(
       selectPreviewWindowPlacement(
         [externalPrimary, sidecar],
         5,
@@ -345,7 +337,7 @@ describe("explicit iPad test presentation", () => {
         false,
         true,
       ),
-    ).toThrow("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
+    ).toMatchObject({ displayId: 5, primary: true });
   });
 });
 
@@ -412,13 +404,17 @@ describe("ordinary Dev secondary placement", () => {
       }).bounds,
     ).toEqual({ x: -1346, y: 585, width: 1180, height: 760 });
   });
-  it("never falls back to primary when the secondary disappears", () => {
-    expect(() =>
+  it("falls back to primary when the secondary disappears", () => {
+    expect(
       selectDevWindowPlacement([externalPrimary], 5, {
         width: 1180,
         height: 760,
       }),
-    ).toThrow("DEV_SECONDARY_DISPLAY_UNAVAILABLE");
+    ).toMatchObject({
+      displayId: 5,
+      primary: true,
+      selection: "owner-allowed-primary",
+    });
     expect(
       selectDevWindowPlacement(
         [externalPrimary, { ...sidecar, id: 5 }, builtInSecondary],
@@ -443,7 +439,7 @@ describe("ordinary Dev secondary placement", () => {
         ),
       ).toThrow("WINDOW_DISPLAY_GEOMETRY_INVALID");
     }
-    expect(() =>
+    expect(
       selectDevWindowPlacement(
         [
           externalPrimary,
@@ -452,7 +448,19 @@ describe("ordinary Dev secondary placement", () => {
         5,
         { width: 1180, height: 760 },
       ),
-    ).toThrow("DEV_SECONDARY_DISPLAY_TOO_SMALL");
+    ).toMatchObject({ displayId: 5, primary: true });
+    expect(() =>
+      selectDevWindowPlacement(
+        [
+          {
+            ...externalPrimary,
+            workArea: { ...externalPrimary.workArea, width: 639 },
+          },
+        ],
+        5,
+        { width: 1180, height: 760 },
+      ),
+    ).toThrow("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
   });
   it("parses only the explicit ordinary Dev choice and rejects test conflicts", () => {
     expect(parseDevDisplay([])).toBe(false);

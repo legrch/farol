@@ -11818,10 +11818,8 @@ function reconcileVisibleTestDisplay(): void {
       window.setBounds(selectedVisibleTestPlacement(initialWindowSize).bounds);
       window.showInactive();
     } catch {
-      // The accepted test policy has a primary-display fallback only when the
-      // owner explicitly passed --allow-primary-display; otherwise none
-      // exists here. A later display event can re-evaluate and reveal this
-      // exact owned window.
+      // A missing secondary falls back to primary. Invalid/unavailable display
+      // geometry still waits for the next topology event on this owned window.
     }
   }
   for (const route of managedChatGptRoutes) {

@@ -47,9 +47,7 @@ export function parsePreviewWindowMode(
   return values[0];
 }
 
-// Owner-handed overnight runs with no second display pass this flag
-// explicitly; its absence keeps today's behavior unchanged (no primary-display
-// fallback). AGENTS.md (commit 6cbe53fd) is the accepted policy this encodes.
+// Legacy launch flag retained for compatibility. Primary fallback is automatic.
 export function parseAllowPrimaryDisplay(
   arguments_: readonly string[],
 ): boolean {
@@ -126,7 +124,7 @@ export function selectPreviewWindowPlacement(
   displays: readonly PreviewDisplay[],
   primaryDisplayId: number,
   requested: Readonly<{ width: number; height: number }>,
-  allowPrimaryDisplay = false,
+  _allowPrimaryDisplay = false,
   builtInDisplayOnly = false,
   sidecarDisplayOnly = false,
 ): PreviewWindowPlacement {
@@ -137,45 +135,32 @@ export function selectPreviewWindowPlacement(
   const primary = ordered.find((display) => display.id === primaryDisplayId);
   if (!primary) throw new Error("WINDOW_PRIMARY_DISPLAY_MISSING");
 
-  const nonPrimaryInternal = ordered.find(
-    (display) => display.id !== primaryDisplayId && display.internal,
-  );
-  const nonPrimary = ordered.find((display) => display.id !== primaryDisplayId);
-  // The built-in-only option is a separate, explicit owner-away constraint:
-  // an external monitor must never receive one of these test-owned windows.
-  const ownerAllowedPrimary =
-    allowPrimaryDisplay &&
-    primary.internal &&
-    (builtInDisplayOnly || !nonPrimary)
-      ? primary
-      : undefined;
   if (sidecarDisplayOnly && builtInDisplayOnly)
     throw new Error("VISIBLE_TEST_DISPLAY_CONFLICT");
-  const sidecar = ordered.find(
-    (display) =>
-      display.id !== primaryDisplayId &&
-      !display.internal &&
-      /\b(?:sidecar|ipad)\b/iu.test(display.label ?? ""),
-  );
-  if (sidecarDisplayOnly && !sidecar)
-    throw new Error("SIDECAR_DISPLAY_UNAVAILABLE");
-  const selected = sidecarDisplayOnly
-    ? sidecar
+  const secondary = ordered.filter((d) => d.id !== primaryDisplayId);
+  const sidecar = (d: PreviewDisplay) =>
+    !d.internal && /\b(?:sidecar|ipad)\b/iu.test(d.label ?? "");
+  const preferred = sidecarDisplayOnly
+    ? secondary.filter(sidecar)
     : builtInDisplayOnly
-      ? (nonPrimaryInternal ?? ownerAllowedPrimary)
-      : (nonPrimaryInternal ?? nonPrimary ?? ownerAllowedPrimary);
-  if (!selected) {
-    throw new Error(
-      builtInDisplayOnly
-        ? "BUILT_IN_DISPLAY_UNAVAILABLE"
-        : "SECONDARY_DISPLAY_UNAVAILABLE",
-    );
-  }
+      ? secondary.filter((d) => d.internal)
+      : [
+          ...secondary.filter((d) => d.internal),
+          ...secondary.filter((d) => !d.internal),
+        ];
+  // Display preferences never make a second screen a startup prerequisite.
+  // Keep exact requested bounds on a suitable secondary; fit the primary fallback.
+  const selected =
+    preferred.find(
+      (d) =>
+        d.workArea.width >= requested.width &&
+        d.workArea.height >= requested.height,
+    ) ?? primary;
   const isPrimary = selected.id === primaryDisplayId;
-  const selection = sidecarDisplayOnly
-    ? "sidecar"
-    : isPrimary
-      ? "owner-allowed-primary"
+  const selection = isPrimary
+    ? "owner-allowed-primary"
+    : sidecarDisplayOnly
+      ? "sidecar"
       : selected.internal
         ? "non-primary-internal"
         : "non-primary";
@@ -185,12 +170,19 @@ export function selectPreviewWindowPlacement(
     internal: selected.internal,
     primary: isPrimary,
     selection,
-    bounds: centeredBounds(selected.workArea, requested),
+    bounds: centeredBounds(
+      selected.workArea,
+      isPrimary
+        ? {
+            width: Math.min(requested.width, selected.workArea.width),
+            height: Math.min(requested.height, selected.workArea.height),
+          }
+        : requested,
+    ),
   };
 }
 
-// Ordinary Dev uses Electron's DIP work areas and may shrink its window. Test
-// viewports retain their exact-size contract in selectPreviewWindowPlacement.
+// Ordinary Dev fits Electron DIP work areas, preferring a secondary when usable.
 export function parseDevDisplay(arguments_: readonly string[]): boolean {
   const flags = arguments_.filter((value) => value.startsWith("--display"));
   if (flags.length === 0) return false;
@@ -226,8 +218,9 @@ export function selectDevWindowPlacement(
     secondary.find(
       (display) =>
         !display.internal && /\b(?:sidecar|ipad)\b/iu.test(display.label ?? ""),
-    ) ?? secondary[0];
-  if (!selected) throw new Error("DEV_SECONDARY_DISPLAY_UNAVAILABLE");
+    ) ??
+    secondary[0] ??
+    displays.find((d) => d.id === primaryDisplayId)!;
   const area = selected.workArea;
   if (
     ![
@@ -244,15 +237,22 @@ export function selectDevWindowPlacement(
     requested.height <= 0
   )
     throw new Error("WINDOW_DISPLAY_GEOMETRY_INVALID");
-  if (area.width < 640 || area.height < 520)
-    throw new Error("DEV_SECONDARY_DISPLAY_TOO_SMALL");
+  if (area.width < 640 || area.height < 520) {
+    const primary = displays.find((d) => d.id === primaryDisplayId)!;
+    if (selected.id !== primaryDisplayId)
+      return selectDevWindowPlacement([primary], primaryDisplayId, requested);
+    throw new Error("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
+  }
   return {
     displayId: selected.id,
     internal: selected.internal,
-    primary: false,
-    selection: /\b(?:sidecar|ipad)\b/iu.test(selected.label ?? "")
-      ? "sidecar"
-      : "non-primary",
+    primary: selected.id === primaryDisplayId,
+    selection:
+      selected.id === primaryDisplayId
+        ? "owner-allowed-primary"
+        : /\b(?:sidecar|ipad)\b/iu.test(selected.label ?? "")
+          ? "sidecar"
+          : "non-primary",
     bounds: centeredBounds(area, {
       width: Math.min(requested.width, area.width),
       height: Math.min(requested.height, area.height),
