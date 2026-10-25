@@ -7,6 +7,49 @@ import {
 } from "../../apps/desktop/recovery/diagnostics";
 
 describe("content-free preserving-maintenance diagnostics", () => {
+  it("reads each exception field once before allowing it into diagnostics", async () => {
+    const message = vi
+      .fn()
+      .mockReturnValueOnce("STARTUP_PRESERVED_SELECTION_INVALID")
+      .mockReturnValue("private-message");
+    const ordinary = new Error();
+    Object.defineProperty(ordinary, "message", { get: message });
+    expect(maintenanceFailureCode(ordinary)).toBe(
+      "STARTUP_PRESERVED_SELECTION_INVALID",
+    );
+    expect(message).toHaveBeenCalledOnce();
+    const failure = new BridgeError(
+      "unknown",
+      "preserved_recovery_unconfirmed",
+    );
+    const code = vi
+      .fn()
+      .mockReturnValueOnce("preserved_recovery_unconfirmed")
+      .mockReturnValue("private-code");
+    const state = vi
+      .fn()
+      .mockReturnValueOnce("unknown")
+      .mockReturnValue("private-state");
+    Object.defineProperty(failure, "code", { get: code });
+    Object.defineProperty(failure, "state", { get: state });
+    const sink = vi.fn();
+    let caught: unknown;
+    try {
+      await observeMaintenance("preparation", sink, () => {
+        throw failure;
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught === failure).toBe(true);
+    expect(code).toHaveBeenCalledOnce();
+    expect(state).toHaveBeenCalledOnce();
+    expect(sink.mock.calls.at(-1)![0]).toMatchObject({
+      result: "unknown",
+      code: "preserved_recovery_unconfirmed",
+    });
+    expect(JSON.stringify(sink.mock.calls)).not.toContain("private-");
+  });
   it("does not inspect or replace a hostile thrown object", async () => {
     const hostile = new Proxy(
       {},

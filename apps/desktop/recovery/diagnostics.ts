@@ -71,12 +71,12 @@ const filesystemCodes = new Set([
 // boundary; native paths, child output and arbitrary exception text never do.
 export function maintenanceFailureCode(error: unknown): string {
   try {
-    if (error instanceof BridgeError)
-      return bridgeCodes.has(error.code)
-        ? error.code
-        : "UNCLASSIFIED_BRIDGE_FAILURE";
-    if (error instanceof Error && codes.has(error.message))
-      return error.message;
+    if (error instanceof BridgeError) {
+      const code = error.code;
+      return bridgeCodes.has(code) ? code : "UNCLASSIFIED_BRIDGE_FAILURE";
+    }
+    const message = error instanceof Error ? error.message : undefined;
+    if (typeof message === "string" && codes.has(message)) return message;
     const descriptor =
       error && typeof error === "object"
         ? Object.getOwnPropertyDescriptor(error, "code")
@@ -130,13 +130,13 @@ export async function observeMaintenance<T>(
   } catch (error) {
     let result: MaintenanceObservation["result"] = "unknown";
     try {
-      if (
-        error instanceof BridgeError &&
-        ["unknown", "refused", "unavailable", "unsupported"].includes(
-          error.state,
+      if (error instanceof BridgeError) {
+        const state = error.state;
+        if (
+          ["unknown", "refused", "unavailable", "unsupported"].includes(state)
         )
-      )
-        result = error.state;
+          result = state;
+      }
     } catch {
       /* Keep unclassified failures unknown. */
     }
