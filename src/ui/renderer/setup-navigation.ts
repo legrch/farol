@@ -1,4 +1,5 @@
 import { computerSetup } from "./computer-setup";
+import { setupCompletionChecks } from "../setup-completion";
 import { setupStepCheck } from "./setup-gate";
 import { signInPresentation } from "./sign-in-presentation";
 import { setupSections } from "./setup-checklist";
@@ -7,12 +8,26 @@ import type { Intent, SetupStep, WindowSnapshot } from "./contract";
 
 export const setupSteps = setupSections;
 
-/** Sidebar, step success and navigation all consume the same gate. */
+/** Progress retains current receipts while the unchanged gate owns navigation. */
 export function setupChecklist(
   snapshot: WindowSnapshot,
   inputsChanged = false,
   local: readonly Intent[] = [],
 ) {
+  const settings =
+    snapshot.configuration?.status === "ready"
+      ? snapshot.configuration.settings
+      : null;
+  const confirmed = setupCompletionChecks(settings, {
+    buildId: snapshot.buildId ?? "",
+    current:
+      snapshot.status === "current" &&
+      snapshot.runtime === "ready" &&
+      snapshot.update.phase !== "applying",
+    signInObservation: snapshot.signInObservation ?? null,
+    signInCheck: snapshot.setupSignInCheck ?? null,
+  });
+  let allGatesAllowed = true;
   const entries: readonly SetupChecklistEntry[] = setupSections
     .filter(([step]) => step !== "overview")
     .map(([key, label]) => {
@@ -23,12 +38,20 @@ export function setupChecklist(
         inputsChanged && (step === "connection" || step === "attachment"),
         local,
       );
+      allGatesAllowed = allGatesAllowed && check.allowed;
+      // A live chooser/save can block commands without invalidating a receipt.
+      // Never retain progress through UNKNOWN, changed inputs or stale evidence.
+      const verified =
+        check.allowed ||
+        (check.state === "pending" &&
+          confirmed[step] &&
+          !(inputsChanged && (step === "connection" || step === "attachment")));
       return {
         step,
         label,
         description: check.cause,
         optional: false,
-        state: check.allowed
+        state: verified
           ? "verified"
           : check.state === "pending"
             ? "pending"
@@ -37,18 +60,16 @@ export function setupChecklist(
               : "needed",
         status:
           step === "signin"
-            ? check.allowed
+            ? verified
               ? "Sign-in checked"
               : signInPresentation(snapshot).label
             : check.cause,
-        action: check.allowed ? "Review" : "Set up",
+        action: verified ? "Review" : "Set up",
       };
     });
   return {
     entries,
-    ready:
-      computerSetup(snapshot).ready &&
-      entries.every((entry) => entry.state === "verified"),
+    ready: computerSetup(snapshot).ready && allGatesAllowed,
   };
 }
 

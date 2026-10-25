@@ -4,10 +4,73 @@ import { change, mount, readySettings, buildId } from "./setup-fixture";
 import { bootstrap, deferred, fixture, signInReply } from "./fixture";
 import { WindowController } from "../../src/ui/renderer/controller";
 import { setupChecklist } from "../../src/ui/renderer/setup-navigation";
+import { setupStepCheck } from "../../src/ui/renderer/setup-gate";
 import { computerSetup } from "../../src/ui/renderer/computer-setup";
 
 // Actual renderer/controller with scripted responses, never live verification.
 describe("linear Setup", () => {
+  it.each([false, true])(
+    "retains confirmed progress during the workspace chooser without opening gates (%s)",
+    async (complete) => {
+      const value = readySettings(complete);
+      if (!complete) {
+        value.computer.workspaces = [];
+        value.setup.computer.verified = null;
+        value.connectors.secureMcp.runtime = null;
+        value.connectors.secureMcp.challenge = null;
+      }
+      const h = await mount({
+        step: "folders",
+        value,
+        shell: true,
+        signIn: "authenticated",
+      });
+      await h.confirmSignIn();
+      const count = () =>
+        setupChecklist(h.c.getSnapshot()).entries.filter(
+          (e) => e.state === "verified",
+        ).length;
+      expect(count()).toBe(complete ? 4 : 1);
+      const waiting = deferred<unknown>();
+      h.reply((command) => {
+        expect(command.kind).toBe("computer.choose-workspace");
+        return waiting.promise;
+      });
+      await h.click("+ Add workspace");
+      expect(count()).toBe(complete ? 4 : 1);
+      expect(h.host.querySelector(".setup-count")?.textContent).toBe(
+        complete ? "✓" : "1 of 4",
+      );
+      const pending = h.c.getSnapshot();
+      expect(setupStepCheck(pending, "signin").allowed).toBe(false);
+      expect(setupStepCheck(pending, "folders").allowed).toBe(false);
+      expect(setupChecklist(pending).ready).toBe(false);
+      const stale = { ...pending, buildId: "f".repeat(64) };
+      expect(
+        setupChecklist(stale).entries.some((e) => e.state === "verified"),
+      ).toBe(false);
+      const id = "settings:computer.choose-workspace:";
+      const unknown = {
+        ...pending,
+        intents: {
+          ...pending.intents,
+          [id]: {
+            id,
+            state: "unknown" as const,
+            code: "FIXTURE_RESULT_UNKNOWN",
+          },
+        },
+      };
+      expect(
+        setupChecklist(unknown).entries.some((e) => e.state === "verified"),
+      ).toBe(false);
+      await act(async () =>
+        waiting.resolve({ ok: true, snapshot: h.configuration() }),
+      );
+      expect(count()).toBe(complete ? 4 : 1);
+      expect(setupChecklist(h.c.getSnapshot()).ready).toBe(complete);
+    },
+  );
   it.each([
     ["home", "home"],
     ["browser", "chatgpt"],
