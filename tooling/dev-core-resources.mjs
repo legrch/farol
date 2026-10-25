@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { DEV_DISPLAY_NAME } from "./harness-identity.ts";
-import { prepareDevRuntime, verifyDevSignature } from "./dev-runtime.mjs";
+import {
+  prepareDevRuntime,
+  verifyDevSignature,
+  DEV_CORE_EXECUTABLE_SUFFIX,
+} from "./dev-runtime.mjs";
 import { treeDigest } from "./artifact-digest.mjs";
 import {
   BUILD_ENTRIES,
@@ -284,4 +288,75 @@ export async function prepareDevCoreResources(root) {
   } finally {
     if (!published) await fs.rm(staging, { recursive: true, force: true });
   }
+}
+
+// Read-only qualification of an existing complete image. Never calls prepare,
+// publishes a receipt, replaces resources, or infers a live owner's readiness.
+export async function readPreparedDevCore(root) {
+  await ownedDirectory(root);
+  const output = path.join(root, "_output");
+  await ownedDirectory(output);
+  const bundle = path.join(output, "dev-core");
+  await ownedDirectory(bundle);
+  const receipt = JSON.parse(
+    (
+      await readOwnedFile(path.join(output, "dev-core-resources.json"), 8192)
+    ).bytes.toString("utf8"),
+  );
+  if (
+    receipt.schema !== 1 ||
+    receipt.root !== bundle ||
+    (await treeDigest(bundle)) !== receipt.treeDigest
+  )
+    throw Error(
+      "DEV_RUNNING_IMAGE_UNCONFIRMED: Quit Dev normally before rebuilding.",
+    );
+  const resources = path.join(bundle, "Contents/Resources/app");
+  const json = async (name) =>
+    JSON.parse(
+      (
+        await readOwnedFile(path.join(resources, name), 32 * 1024 * 1024)
+      ).bytes.toString("utf8"),
+    );
+  const build = assertBuildIdentity(await json("build-identity.json"));
+  try {
+    assertExactSourceIdentity(sourceIdentity(root), build);
+  } catch {
+    throw Error(
+      "DEV_RUNNING_SOURCE_UNCONFIRMED: Existing Dev was left running. Quit it normally before rebuilding changed sources.",
+    );
+  }
+  const manifest = await json("build-manifest.json");
+  const entries = [...BUILD_ENTRIES, ...GO_CORE_ENTRIES].sort();
+  if (
+    manifest.schema !== 4 ||
+    manifest.dirty ||
+    !manifest.inputExact ||
+    manifest.sourceMode !== "head-exact" ||
+    manifest.buildId !== build.buildId ||
+    receipt.buildId !== build.buildId ||
+    receipt.sourceCommit !== build.sourceCommit ||
+    JSON.stringify(manifest.entries) !== JSON.stringify(entries)
+  )
+    throw Error(
+      "DEV_RUNNING_IMAGE_UNCONFIRMED: Quit Dev normally before rebuilding.",
+    );
+  await verifyBuildEntries(resources, manifest.entrySha256, entries);
+  await verifyInputManifest(resources, manifest);
+  await verifyGoCoreArtifact(resources, manifest.core, build);
+  assertEmbeddedRuntime(
+    await observeEmbeddedRuntime(
+      path.join(bundle, "Contents/Frameworks/Electron Runtime.app"),
+    ),
+  );
+  verifyDevSignature(
+    path.join(bundle, "Contents/Frameworks", `${DEV_DISPLAY_NAME}.app`),
+  );
+  if ((await treeDigest(bundle)) !== receipt.treeDigest)
+    throw Error("DEV_RUNNING_IMAGE_CHANGED");
+  return {
+    executable: root + DEV_CORE_EXECUTABLE_SUFFIX,
+    buildId: build.buildId,
+    sourceCommit: build.sourceCommit,
+  };
 }

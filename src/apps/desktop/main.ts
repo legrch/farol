@@ -287,6 +287,7 @@ import {
 } from "./window-placement";
 import {
   PrimaryStartup,
+  devReopenPrimaryRefused,
   emitStartupStage,
   primaryStartupReady,
   previewStartupDelay,
@@ -12859,7 +12860,13 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
 
 const primaryInstanceLock = app.requestSingleInstanceLock(instanceRequest);
 startupStage(primaryInstanceLock ? "lock-primary" : "lock-secondary");
-if (!primaryInstanceLock) {
+if (
+  devReopenPrimaryRefused(runtimeEnvironment, process.argv, primaryInstanceLock)
+) {
+  app.releaseSingleInstanceLock();
+  process.stderr.write(`${secondInstanceResultPrefix}reopen-failed\n`);
+  app.exit(1);
+} else if (!primaryInstanceLock) {
   void waitForInstanceAcknowledgement(app.getPath("userData"), instanceRequest)
     .then(async (acknowledgement) => {
       const accepted =

@@ -82,3 +82,17 @@ export function previewStartupDelay(
     ? delay
     : 0;
 }
+
+// A launcher that only reopens an existing Dev must never win a race into
+// writable primary startup if the independently observed owner exits meanwhile.
+export function devReopenPrimaryRefused(
+  environment: string,
+  args: readonly string[],
+  acquired: boolean,
+): boolean {
+  return (
+    environment === "dev" &&
+    acquired &&
+    args.includes("--farol-dev-reopen-only")
+  );
+}

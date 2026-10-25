@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   PrimaryStartup,
+  devReopenPrimaryRefused,
   emitStartupStage,
   primaryStartupReady,
   previewStartupDelay,
@@ -113,4 +114,12 @@ describe("primary startup coordination", () => {
     expect(primaryStartupReady({ ...ready, stopping: true })).toBe(false);
     expect(primaryStartupReady({ ...ready, stopping: false })).toBe(true);
   });
+});
+
+it("refuses writable primary acquisition by a secondary-only Dev opener", () => {
+  const args = ["--farol-dev-reopen-only"];
+  expect(devReopenPrimaryRefused("dev", args, true)).toBe(true);
+  expect(devReopenPrimaryRefused("dev", args, false)).toBe(false);
+  expect(devReopenPrimaryRefused("dev", [], true)).toBe(false);
+  expect(devReopenPrimaryRefused("preview", args, true)).toBe(false);
 });

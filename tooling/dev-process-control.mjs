@@ -11,6 +11,7 @@ import { performance } from "node:perf_hooks";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { buildDevControl } from "./go-backend-build.mjs";
 import { stopRetainedDevProcess } from "./dev-owned-stop.mjs";
+import { readPreparedDevCore } from "./dev-core-resources.mjs";
 import {
   readRunMarker,
   currentBootTimeMs,
@@ -256,6 +257,8 @@ export async function prepareDevBuild({
   root,
   buildArguments,
   replace,
+  reuse = false,
+  qualifyImage = readPreparedDevCore,
   profilePath: selectedProfilePath,
   createControl = buildControl,
   log = () => {},
@@ -304,7 +307,10 @@ export async function prepareDevBuild({
       "command=",
     ]);
     if (command.status === 0 && command.text) {
-      if (!replace) throw Error("DEV_BUILD_LIVE_OUTPUTS_REFUSED");
+      if (!replace && !reuse)
+        throw Error(
+          "DEV_BUILD_LIVE_OUTPUTS_REFUSED: Quit the running Dev normally before rebuilding shared outputs.",
+        );
       const binary = await getControl();
       const native = inspectDevExecutable(
         binary,
@@ -330,6 +336,21 @@ export async function prepareDevBuild({
           throw Error(
             `${error.message}. Quit the previous ${harnessDesktopIdentity("dev", "/").applicationName} from this checkout/profile using its own Quit command, then run task dev again.`,
           );
+        }
+        if (reuse) {
+          const image = await qualifyImage(writerRoot);
+          if (
+            native.executable !== image.executable ||
+            retained.appPath !== appPath
+          )
+            throw Error("DEV_RUNNING_IMAGE_UNCONFIRMED");
+          // The secondary-only opener repeats exact-build/profile correlation
+          // through Electron's acknowledged singleton. It cannot become primary.
+          return {
+            status: "running",
+            profilePath,
+            existing: { ...image, pid: retained.pid },
+          };
         }
         let inspectionFailure = "none";
         const unreadable = (reason) => {
@@ -426,7 +447,9 @@ export async function prepareDevBuild({
   const ownedRoots = devOwnedOutputRoots(writerRoot, profilePath);
   for (const line of inventory.text.split("\n")) {
     if (devInventoryOwnsLine(line, ownedRoots))
-      throw Error("DEV_BUILD_OWNED_PROCESSES_REMAIN");
+      throw Error(
+        "DEV_BUILD_OWNED_PROCESSES_REMAIN: Another Dev profile or child uses this checkout. Quit it normally before switching profiles or rebuilding.",
+      );
     const titled = new RegExp(
       `^\\s*(\\d+)\\s+${RegExp.escape(harnessDesktopIdentity("dev", "/").applicationName)}$`,
       "u",

@@ -753,6 +753,7 @@ export async function launchPreview(
     await prepareDevCoreResources(root);
     return root + DEV_CORE_EXECUTABLE_SUFFIX;
   },
+  reopenOnly = false,
 ) {
   const electronBin = await prepareRuntime(root);
   const { stopLabel, outcome, protocolError, resultCollector } =
@@ -763,6 +764,7 @@ export async function launchPreview(
           [
             path.join(root, "_output/dev-core/Contents/Resources/app/main.cjs"),
             `--farol-dev-user-data-dir=${devLaunchProfile(acceptanceProfile, reviewMarker)}`,
+            ...(reopenOnly ? ["--farol-dev-reopen-only"] : []),
             ...(displayOptions.devSecondaryDisplay === true
               ? ["--display=secondary"]
               : []),
@@ -863,6 +865,22 @@ export async function main(argv, overrides = {}) {
     runBuild = runDevBuild,
     prepareBuild = (options) =>
       prepareDevBuild({ root: vnextRoot, ...options, log }),
+    reopenExisting = (
+      existing,
+      acceptanceProfile,
+      secondaryDisplay,
+      displayOptions,
+    ) =>
+      launchPreview(
+        vnextRoot,
+        spawn,
+        acceptanceProfile,
+        secondaryDisplay,
+        undefined,
+        displayOptions,
+        async () => existing.executable,
+        true,
+      ),
     createReviewProfile = createOwnerFreshReviewProfile,
     launch = (
       acceptanceProfile,
@@ -943,13 +961,29 @@ export async function main(argv, overrides = {}) {
     `${harnessDesktopIdentity("dev", "/").applicationName} toolchain: Node ${currentNode}, npm ${getCurrentNpmVersion()}.`,
   );
 
-  // Close the exact prior Dev BEFORE dependency replacement or shared builds.
-  // Check/review/acceptance do not stop the owner's ordinary profile.
+  // Qualify the selected live owner before any dependency or shared-output write.
+  // Reopen an exact current instance; never stop one to make room for a build.
   try {
-    await prepareBuild({
+    const prepared = await prepareBuild({
       buildArguments,
-      replace: !checkOnly && !freshReview && !acceptanceProfile,
+      replace: false,
+      reuse: !checkOnly && !freshReview,
+      ...(!freshReview
+        ? { profilePath: devLaunchProfile(acceptanceProfile) }
+        : {}),
     });
+    if (prepared?.status === "running") {
+      log(
+        "Opening the existing confirmed Dev; no build or stop was requested.",
+      );
+      await reopenExisting(
+        prepared.existing,
+        acceptanceProfile,
+        secondaryDisplay,
+        displayOptions,
+      );
+      return;
+    }
   } catch (error) {
     logError(error.message);
     exit(1);

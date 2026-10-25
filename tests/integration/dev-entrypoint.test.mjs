@@ -445,7 +445,7 @@ describe("dev.mjs main() orchestration with an already-declared toolchain", () =
     expect(calls).toEqual(["ensureDependencies", "runBuild"]);
   });
 
-  it("stops the exact prior Dev before dependencies or shared build outputs", async () => {
+  it("checks shared outputs without stopping the prior Dev before building", async () => {
     const { overrides, calls } = baseOverrides({
       prepareBuild: async ({ replace }) => {
         calls.push(`prepare:${replace}`);
@@ -453,13 +453,55 @@ describe("dev.mjs main() orchestration with an already-declared toolchain", () =
     });
     await main([], overrides);
     expect(calls).toEqual([
-      "prepare:true",
+      "prepare:false",
       "ensureDependencies",
       "runBuild",
       "launch",
     ]);
   });
 
+  it.each([[[]], [["--acceptance-profile"]]])(
+    "reopens the exact selected profile without dependencies, rebuild or stop (%j)",
+    async (flags) => {
+      const existing = { executable: "/synthetic/qualified/Electron" };
+      const { overrides, calls } = baseOverrides({
+        prepareBuild: async ({ replace, reuse, profilePath }) => {
+          expect(replace).toBe(false);
+          expect(reuse).toBe(true);
+          expect(profilePath).toContain(
+            flags.length ? "Farol Dev Acceptance" : "Farol Dev",
+          );
+          calls.push("qualify");
+          return { status: "running", existing };
+        },
+        reopenExisting: async (value, acceptance) => {
+          expect(value).toBe(existing);
+          expect(acceptance).toBe(flags.length > 0);
+          calls.push("reopen");
+        },
+      });
+      await main(flags, overrides);
+      expect(calls).toEqual(["qualify", "reopen"]);
+    },
+  );
+  it("refuses another profile before shared writes or a secondary launch", async () => {
+    const errors = [];
+    const { overrides, calls } = baseOverrides({
+      prepareBuild: async () => {
+        calls.push("qualify");
+        throw Error(
+          "Another Dev profile uses this checkout. Quit it normally.",
+        );
+      },
+      reopenExisting: async () => {
+        calls.push("must-not-reopen");
+      },
+      logError: (value) => errors.push(value),
+    });
+    await main(["--acceptance-profile"], overrides);
+    expect(calls).toEqual(["qualify", "exit:1"]);
+    expect(errors.join(" ")).toContain("Quit it normally");
+  });
   it("does not replace the daily profile for check/review/acceptance", async () => {
     for (const flag of [
       "--check",

@@ -7,12 +7,17 @@ import {
   desktopCoreArtifactRoot,
   desktopDevShellImageMatches,
 } from "../../apps/desktop/dev-core-layout.ts";
-import { prepareDevCoreResources } from "../../tooling/dev-core-resources.mjs";
+import {
+  prepareDevCoreResources,
+  readPreparedDevCore,
+} from "../../tooling/dev-core-resources.mjs";
 import { BUILD_ENTRIES } from "../../tooling/build-contract.mjs";
 import { GO_CORE_ENTRIES } from "../../tooling/go-core-artifact.mjs";
 import { createBuildIdentity } from "../../tooling/build-identity-contract.mjs";
 
 vi.mock("../../tooling/dev-runtime.mjs", () => ({
+  DEV_CORE_EXECUTABLE_SUFFIX:
+    "/_output/dev-core/Contents/Frameworks/Farol Dev.app/Contents/MacOS/Electron",
   prepareDevRuntime: vi.fn(async (_root, parent) => {
     const file = path.join(parent, "Farol Dev.app/Contents/MacOS/Electron");
     await fs.mkdir(path.dirname(file), { recursive: true });
@@ -121,6 +126,65 @@ describe("admitted source Dev resources", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it("qualifies a sealed current image without republishing or replacing it", async () => {
+    await prepareDevCoreResources(root);
+    const receipt = path.join(root, "_output/dev-core-resources.json");
+    const before = {
+      bytes: await fs.readFile(receipt),
+      stat: await fs.stat(receipt),
+    };
+    const bundleBefore = await fs.stat(path.join(root, "_output/dev-core"));
+    expect(await readPreparedDevCore(root)).toMatchObject({
+      sourceCommit: "b".repeat(40),
+      executable: path.join(
+        root,
+        "_output/dev-core/Contents/Frameworks/Farol Dev.app/Contents/MacOS/Electron",
+      ),
+    });
+    expect(await fs.readFile(receipt)).toEqual(before.bytes);
+    expect((await fs.stat(receipt)).mtimeMs).toBe(before.stat.mtimeMs);
+    expect((await fs.stat(path.join(root, "_output/dev-core"))).ino).toBe(
+      bundleBefore.ino,
+    );
+  });
+  it("leaves the image alone when current sources cannot qualify it", async () => {
+    await prepareDevCoreResources(root);
+    const module = await import("../../tooling/source-identity.mjs");
+    const original = module.sourceIdentity(root);
+    const source = vi
+      .spyOn(module, "sourceIdentity")
+      .mockReturnValueOnce({ ...original, dirty: true });
+    const receipt = path.join(root, "_output/dev-core-resources.json");
+    const bytes = await fs.readFile(receipt);
+    try {
+      await expect(readPreparedDevCore(root)).rejects.toThrow(
+        "DEV_RUNNING_SOURCE_UNCONFIRMED",
+      );
+      expect(await fs.readFile(receipt)).toEqual(bytes);
+    } finally {
+      source.mockRestore();
+    }
+  });
+  it("refuses a changed image instead of repairing it for reopen", async () => {
+    await prepareDevCoreResources(root);
+    const file = path.join(destination, "main.cjs");
+    await fs.writeFile(file, "changed fixture bytes");
+    await expect(readPreparedDevCore(root)).rejects.toThrow(
+      "DEV_RUNNING_IMAGE_UNCONFIRMED",
+    );
+    expect(await fs.readFile(file, "utf8")).toBe("changed fixture bytes");
+  });
+  it("refuses an unsettled image receipt without completing publication", async () => {
+    await prepareDevCoreResources(root);
+    const file = path.join(root, "_output/dev-core-resources.json");
+    const receipt = JSON.parse(await fs.readFile(file, "utf8"));
+    const bytes = JSON.stringify({ ...receipt, schema: 3 });
+    await fs.writeFile(file, bytes);
+    await expect(readPreparedDevCore(root)).rejects.toThrow(
+      "DEV_RUNNING_IMAGE_UNCONFIRMED",
+    );
+    expect(await fs.readFile(file, "utf8")).toBe(bytes);
+  });
   it("copies only declared bytes, preserves backend execute mode, and reuses the same resource identity", async () => {
     await fs.writeFile(path.join(source, "unrelated.txt"), "must not copy");
     expect(await prepareDevCoreResources(root)).toBe(destination);

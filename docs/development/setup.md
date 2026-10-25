@@ -76,21 +76,17 @@ file with `task dev -- --go-inputs=/absolute/path.json`. Missing, invalid or
 unauthenticated inputs refuse the build; Dev does not silently start without Go.
 The existing Go builder requires clean committed source. It verifies the SDK,
 modules and source instead of downloading or trusting an arbitrary local `go`.
-An ordinary `task dev` stops the previous Dev from this exact checkout/profile
-before replacing dependencies or rebuilding shared outputs. It checks the private
-run marker, account, boot and precise native lifetime. The native helper reads the
-exact executable through the kernel operation behind `proc_pidpath` and parses
-`KERN_PROCARGS2` for this checkout's absolute entrypoint and an explicit
-`--farol-dev-user-data-dir` equal to the selected marker directory's profile. These checks
-run again at each signal boundary. Dev preserves its original argv; its bundle
-and `app.setName` supply display naming. A renamed title, missing argv, another
-checkout or another profile (including ordinary versus fresh review) cannot
-supply stop authority. The Farol profile argument asserts the desktop's independently
-selected `userData`; it does not let Chromium create a fresh-review directory
-before admission. Older Dev processes with erased argv require their own
-Quit command. After proof, the launcher allows 30 seconds
-to stop, then forces that process once if necessary. Other profiles and installed
-Farol are not stopped. A refused or uncertain lookup/signal blocks the build and reports the failed identity read. Quit the previous Dev from that checkout/profile using its own Quit command, then run `task dev` again; the launcher never signals an unproven process.
+An ordinary `task dev` or `task dev:test` first checks its exact selected profile,
+private run marker, account, boot and native process lifetime. When the same
+profile is running from the current sealed Dev image, it opens that window
+through the acknowledged singleton without installing dependencies, rebuilding
+or stopping the original process. The secondary-only opener exits if that
+process disappears; it cannot start a replacement primary. A different profile,
+changed source/image or uncertain identity blocks shared writes and asks for a
+normal Quit. No tunnel selection or profile settings are changed by reopening.
+The physical profile in argv must match the native process and selected storage;
+process titles alone are insufficient. Legacy low-level process cleanup remains
+separate from this normal launch path.
 **Ctrl+C** stops what the launcher started and escalates automatically if it hangs.
 Neither process disappearance nor forced stop means application work was drained:
 retained UNKNOWN and interrupted-profile recovery guards still apply.
