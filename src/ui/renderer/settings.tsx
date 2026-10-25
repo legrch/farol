@@ -651,7 +651,9 @@ function General({ snapshot, facade, actions }: PageProps) {
       <section className="settings-setup-status" aria-label="Setup status">
         <div>
           <h3>
-            {checklist.ready ? "Farol is set up" : "Finish setting up Farol"}
+            {checklist.completed || checklist.ready
+              ? "Farol is set up"
+              : "Finish setting up Farol"}
           </h3>
           <p className="description">
             Sign-in, workspaces, connection and ChatGPT live in Setup.

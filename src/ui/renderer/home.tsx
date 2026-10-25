@@ -42,7 +42,9 @@ function eventState(phase: string | null) {
 export function Home({ snapshot, facade }: Props) {
   const local = useSetupIntents(facade, snapshot);
   const checklist = setupChecklist(snapshot, false, local);
-  const first = checklist.entries.find((entry) => entry.state !== "verified");
+  const first = checklist.entries.find(
+    (entry) => entry.liveState !== "verified",
+  );
   const working =
     snapshot.configuration?.status === "ready" &&
     snapshot.configuration.settings.setup.journey.dismissed &&
@@ -102,7 +104,32 @@ export function Home({ snapshot, facade }: Props) {
   return (
     <div className="home-candidate" data-home-view="overview">
       <h1>Home</h1>
-      {!working && !checking ? (
+      {checklist.completed && !working && !checking ? (
+        <section
+          className="home-status-card home-health-warning"
+          aria-label="Connection needs attention"
+          role="status"
+        >
+          <div>
+            <h2>Setup complete · connection needs attention</h2>
+            <p>
+              Your setup is saved.{" "}
+              {first?.description.replace("Completed during setup. ", "") ??
+                "Checking the current connection."}
+            </p>
+          </div>
+          <button
+            onClick={() =>
+              facade.navigate({
+                area: "setup",
+                setupStep: first?.step ?? "connection",
+              })
+            }
+          >
+            Review connection
+          </button>
+        </section>
+      ) : !working && !checking ? (
         <section className="home-setup-card" aria-labelledby="home-setup-title">
           <h2 id="home-setup-title">Finish setup</h2>
           <p>Complete these four steps to connect ChatGPT to this Mac.</p>

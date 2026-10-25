@@ -1800,6 +1800,51 @@ describe("Farol product configuration", () => {
     });
   });
 
+  it("keeps a real saved Finish across lost live receipts, step review and restart", async () => {
+    const { root, service, context } = await setupCompletionFixture();
+    expect(
+      await service.setSetupJourney(
+        { currentStep: "connect", dismissed: true },
+        (settings) => setupCompletionAllowed(settings, context),
+      ),
+    ).toMatchObject({ ok: true });
+    expect(await service.recordSecureMcpStopped()).toMatchObject({ ok: true });
+    expect(
+      await service.setSetupJourney({
+        currentStep: "computer",
+        dismissed: false,
+      }),
+    ).toMatchObject({ ok: true });
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    const saved = restarted.snapshot();
+    if (saved.status !== "ready") throw Error("settings missing");
+    expect(saved.settings.setup.journey).toEqual({
+      currentStep: "computer",
+      dismissed: true,
+    });
+    expect(saved.settings.connectors.secureMcp.attachment).toBeNull();
+    expect(setupCompletionAllowed(saved.settings, context)).toBe(false);
+    const snapshot = setupRendererSnapshot(saved.settings, context);
+    const checklist = setupChecklist(snapshot);
+    expect(checklist.completed).toBe(true);
+    expect(checklist.entries.every((entry) => entry.state === "verified")).toBe(
+      true,
+    );
+    expect(checklist.ready).toBe(false);
+    expect(setupStepCheck(snapshot, "attachment").allowed).toBe(false);
+    expect(
+      await restarted.setSetupJourney(
+        { currentStep: "connect", dismissed: true },
+        () => false,
+      ),
+    ).toMatchObject({ ok: true });
+    expect(setupCompletionAllowed(saved.settings, context)).toBe(false);
+  });
+
   it.each(
     (["signin", "folders", "connection", "attachment"] as const).flatMap(
       (step) =>

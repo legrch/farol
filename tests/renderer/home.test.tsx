@@ -209,14 +209,18 @@ it.each(["stale", "unavailable"] as const)(
   "does not claim working from %s records",
   async (status) => {
     const h = await mount({ ...working(), status });
-    expect(h.host.textContent).toContain("Finish setup");
+    expect(h.host.textContent).toContain(
+      "Setup complete · connection needs attention",
+    );
     expect(h.host.textContent).not.toContain("Farol is working");
   },
 );
 it("never claims working from saved connection evidence without the required sign-in check", async () => {
   const value = working();
   const h = await mount({ ...value, setupSignInCheck: null });
-  expect(h.host.textContent).toContain("Finish setup");
+  expect(h.host.textContent).toContain(
+    "Setup complete · connection needs attention",
+  );
 });
 it("Check now uses the existing health command once and does not submit another while pending", async () => {
   const h = await mount(working());
@@ -276,4 +280,24 @@ it("routes unresolved update evidence to the existing sheet from working Home", 
   expect(h.f.api.installedUpdate).not.toHaveBeenCalledWith(
     expect.objectContaining({ kind: "restart-confirmed" }),
   );
+});
+
+it("keeps saved completion and historical checks while current attachment is missing", async () => {
+  const value = working();
+  if (value.configuration?.status !== "ready")
+    throw Error("fixture settings missing");
+  value.configuration.settings.connectors.secureMcp.attachment = null;
+  const h = await mount(value);
+  expect(h.host.textContent).toContain(
+    "Setup complete · connection needs attention",
+  );
+  expect(h.host.textContent).not.toContain("Finish setup");
+  expect(h.host.textContent).not.toContain("Farol is working");
+  expect(h.f.api.configure).not.toHaveBeenCalled();
+  await h.click("Review connection");
+  expect(h.c.getSnapshot().destination).toMatchObject({
+    area: "setup",
+    setupStep: "attachment",
+  });
+  expect(h.f.api.configure).not.toHaveBeenCalled();
 });

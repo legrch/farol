@@ -16,6 +16,8 @@ export type SetupChecklistEntry = Readonly<{
   description: string;
   optional: false;
   state: SetupCheckState;
+  /** Current health only; completed Setup never grants a current capability. */
+  liveState: SetupCheckState;
   status: string;
   action: "Review" | "Set up";
 }>;

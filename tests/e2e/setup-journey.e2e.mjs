@@ -839,6 +839,7 @@ async function runScenario(scenario) {
         await page
           .getByRole("heading", { name: "Home", exact: true })
           .waitFor();
+        await page.locator(".home-health-warning").waitFor();
         const observed = await page.evaluate(async () => {
           const b = await window.farol.bootstrap();
           return {
@@ -846,6 +847,15 @@ async function runScenario(scenario) {
             profileId: b.chatHistoryContext?.profileId,
             backendGeneration: b.chatHistoryContext?.backendGeneration,
             runtimeState: b.runtimeState,
+            currentAttachment:
+              b.configuration.settings.connectors.secureMcp.attachment !== null,
+            homeHealthWarning:
+              document.querySelector(".home-health-warning") !== null,
+            finishSetupCard:
+              document.querySelector(".home-setup-card") !== null,
+            setupBadge: document
+              .querySelector('.rail [aria-label="Setup"]')
+              ?.getAttribute("title"),
             journeyDismissed: b.configuration.settings.setup.journey.dismissed,
             openAtLaunch: b.configuration.settings.general.openAtLaunch,
             rendererReady: document.querySelector("main.stage") !== null,
@@ -868,11 +878,36 @@ async function runScenario(scenario) {
           },
           { ...observed, outcome, homeNavigationUsed: false },
         );
+        assert.equal(
+          observed.currentAttachment,
+          false,
+          "AUTO_HOME_BORROWED_ATTACHMENT",
+        );
+        assert.equal(
+          observed.homeHealthWarning,
+          true,
+          "AUTO_HOME_MISSING_LIVE_WARNING",
+        );
+        assert.equal(
+          observed.finishSetupCard,
+          false,
+          "AUTO_HOME_REPEATS_SETUP",
+        );
+        assert.match(observed.setupBadge ?? "", /4 of 4 steps done/u);
         assert.equal(sendCount, 1, "AUTO_HOME_SENT_AGAIN");
         await page.screenshot({
           path: path.join(output, `automatic-home-${ordinal}.png`),
         });
-        const lifetime = { ordinal, pid: child.pid, witness };
+        const lifetime = {
+          ordinal,
+          pid: child.pid,
+          witness,
+          liveHealth: {
+            currentAttachment: observed.currentAttachment,
+            warning: observed.homeHealthWarning,
+            setupBadge: observed.setupBadge,
+          },
+        };
         report.postFinishHome.push(lifetime);
         await quit();
         lifetime.quit = report.quit;

@@ -1103,6 +1103,28 @@ it("completed setup defaults to Home even when its current runtime needs reconne
   expect(f.api.configure).not.toHaveBeenCalled();
   c.dispose();
 });
+it("opens completed Setup on Home twice while live checks change without granting attachment", async () => {
+  const f = fixture();
+  const data = bootstrap();
+  data.configuration.settings.setup.journey.dismissed = true;
+  data.configuration.settings.general.openAtLaunch = "home";
+  data.configuration.settings.connectors.secureMcp.attachment = null;
+  for (const state of ["ready", "unreachable"] as const) {
+    const saved = structuredClone(data);
+    if (saved.configuration.settings.connectors.secureMcp.runtime)
+      saved.configuration.settings.connectors.secureMcp.runtime.state = state;
+    vi.mocked(f.api.bootstrap).mockResolvedValue(saved);
+    const c = new WindowController(f.api);
+    await c.start();
+    expect(c.getSnapshot().destination.area).toBe("home");
+    expect(c.getSnapshot().configuration).toMatchObject({
+      settings: { setup: { journey: { dismissed: true } } },
+    });
+    expect(computerSetup(c.getSnapshot()).externalAccessVerified).toBe(false);
+    c.dispose();
+  }
+  expect(f.api.configure).not.toHaveBeenCalled();
+});
 it("a verified attachment without finished Setup still opens Welcome", async () => {
   const f = fixture();
   const data = bootstrap();

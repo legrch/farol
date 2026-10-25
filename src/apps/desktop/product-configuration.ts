@@ -3243,8 +3243,11 @@ export class ProductConfigurationService {
           return false;
         }
       };
-      if (parsed.data.dismissed && !complete())
-        return this.failure("SETUP_INCOMPLETE");
+      // Finish is a durable presentation fact. Reviewing a step or losing live
+      // receipts must not revoke it; only a FIRST Finish needs current proof.
+      const completing =
+        parsed.data.dismissed && this.current?.setup.journey.dismissed !== true;
+      if (completing && !complete()) return this.failure("SETUP_INCOMPLETE");
       return this.mutate(
         (settings) => ({
           ...settings,
@@ -3255,7 +3258,11 @@ export class ProductConfigurationService {
               ...settings.setup[settings.setup.journey.currentStep],
               visited: true,
             },
-            journey: parsed.data,
+            journey: {
+              ...parsed.data,
+              dismissed:
+                settings.setup.journey.dismissed || parsed.data.dismissed,
+            },
             [parsed.data.currentStep]: {
               ...settings.setup[parsed.data.currentStep],
               visited: true,
@@ -3264,8 +3271,7 @@ export class ProductConfigurationService {
         }),
         {
           assertBeforePublication: () => {
-            if (parsed.data.dismissed && !complete())
-              throw new SetupIncomplete();
+            if (completing && !complete()) throw new SetupIncomplete();
           },
         },
       );

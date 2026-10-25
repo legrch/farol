@@ -127,22 +127,30 @@ export function Setup({ snapshot, facade }: Props) {
         </h1>
         <p className="description">
           {step === "overview" && completedCount > 0
-            ? "Your progress is saved. Review any step or finish the remaining setup."
+            ? checklist.completed
+              ? "Setup is complete. Current connection checks are shown on Home."
+              : "Your progress is saved. Review any step or finish the remaining setup."
             : context[step].description}
         </p>
       </header>
       {step === "overview" && (
         <section className="setup-welcome" aria-label="Setup overview">
           <div className="setup-overview-summary" role="status">
-            <strong>{completedCount} of 4 steps ready</strong>
+            <strong>
+              {checklist.completed
+                ? "Setup complete"
+                : `${completedCount} of 4 steps ready`}
+            </strong>
             <p className="description">
-              {checklist.ready
-                ? "Everything is ready. You can review any step."
-                : checklist.entries
-                      .slice(0, 3)
-                      .every((entry) => entry.state === "verified")
-                  ? "Your Mac is ready. Confirm the app in ChatGPT to finish setup."
-                  : "Follow the steps below. Your progress is saved as you go."}
+              {checklist.completed
+                ? "All four setup steps were completed. Review current connection status on Home."
+                : checklist.ready
+                  ? "Everything is ready. You can review any step."
+                  : checklist.entries
+                        .slice(0, 3)
+                        .every((entry) => entry.state === "verified")
+                    ? "Your Mac is ready. Confirm the app in ChatGPT to finish setup."
+                    : "Follow the steps below. Your progress is saved as you go."}
             </p>
           </div>
           <ol>
@@ -207,7 +215,7 @@ export function Setup({ snapshot, facade }: Props) {
               )
             }
           >
-            {checklist.ready
+            {checklist.completed || checklist.ready
               ? "Review setup"
               : checklist.entries.some((entry) => entry.state === "verified")
                 ? "Continue setup"
@@ -256,7 +264,10 @@ export function Setup({ snapshot, facade }: Props) {
           <button
             type="button"
             className="primary"
-            disabled={!passed || (step === "attachment" && !checklist.ready)}
+            disabled={
+              !checklist.completed &&
+              (!passed || (step === "attachment" && !checklist.ready))
+            }
             onClick={async () => {
               const latest = facade.getSnapshot();
               if (
@@ -264,6 +275,17 @@ export function Setup({ snapshot, facade }: Props) {
                 visibleSetupSection(latest.destination.setupStep) !== step
               )
                 return;
+              if (
+                latest.configuration?.status === "ready" &&
+                latest.configuration.settings.setup.journey.dismissed
+              ) {
+                facade.navigate({
+                  area: "home",
+                  homeView: "overview",
+                  homeSelection: null,
+                });
+                return;
+              }
               const local = retainedSetupIntents(facade, latest);
               const current = setupChecklist(latest, changed.current, local);
               if (
@@ -301,7 +323,11 @@ export function Setup({ snapshot, facade }: Props) {
               }
             }}
           >
-            {next ? "Continue" : "Start using Farol"}
+            {checklist.completed
+              ? "Back to Home"
+              : next
+                ? "Continue"
+                : "Start using Farol"}
           </button>
         </footer>
       )}
