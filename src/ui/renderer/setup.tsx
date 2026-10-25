@@ -85,8 +85,13 @@ export function Setup({ snapshot, facade }: Props) {
   const step = visibleSetupSection(snapshot.destination.setupStep);
   const [inputsChanged, setInputsChanged] = useState(false);
   const changed = useRef(false);
+  const [testActionHost, setTestActionHost] = useState<HTMLElement | null>(
+    null,
+  );
   const local = useSetupIntents(facade, snapshot);
   const checklist = setupChecklist(snapshot, inputsChanged, local);
+  const finishPending =
+    snapshot.intents["settings:setup.progress:"]?.state === "pending";
   const completedCount = checklist.entries.filter(
     (entry) => entry.state === "verified",
   ).length;
@@ -242,6 +247,7 @@ export function Setup({ snapshot, facade }: Props) {
           facade={facade}
           setupStep={step === "overview" ? "connection" : step}
           setupInputsChanged={inputsChanged}
+          setupTestActionHost={testActionHost}
           onSetupInputsChange={(dirty) => {
             changed.current = dirty;
             setInputsChanged(dirty);
@@ -261,74 +267,81 @@ export function Setup({ snapshot, facade }: Props) {
           >
             Back
           </button>
-          <button
-            type="button"
-            className="primary"
-            disabled={
-              !checklist.completed &&
-              (!passed || (step === "attachment" && !checklist.ready))
-            }
-            onClick={async () => {
-              const latest = facade.getSnapshot();
-              if (
-                latest.destination.area !== "setup" ||
-                visibleSetupSection(latest.destination.setupStep) !== step
-              )
-                return;
-              if (
-                latest.configuration?.status === "ready" &&
-                latest.configuration.settings.setup.journey.dismissed
-              ) {
-                facade.navigate({
-                  area: "home",
-                  homeView: "overview",
-                  homeSelection: null,
-                });
-                return;
+          {step === "attachment" &&
+          !checklist.completed &&
+          !checklist.ready &&
+          !finishPending ? (
+            <div ref={setTestActionHost} className="setup-test-action-slot" />
+          ) : (
+            <button
+              type="button"
+              className="primary"
+              disabled={
+                !checklist.completed &&
+                (!passed || (step === "attachment" && !checklist.ready))
               }
-              const local = retainedSetupIntents(facade, latest);
-              const current = setupChecklist(latest, changed.current, local);
-              if (
-                !setupStepCheck(
-                  latest,
-                  step,
-                  changed.current &&
-                    (step === "connection" || step === "attachment"),
-                  local,
-                ).allowed
-              )
-                return;
-              if (next) navigateToStep(next);
-              else if (current.ready) {
-                const result = await facade.configure(
-                  {
-                    kind: "setup.progress",
-                    currentStep: "connect",
-                    dismissed: true,
-                  },
-                  "settings:setup.progress:",
-                );
-                const saved = facade.getSnapshot();
+              onClick={async () => {
+                const latest = facade.getSnapshot();
                 if (
-                  result.state === "applied" &&
-                  saved.configuration?.status === "ready" &&
-                  saved.configuration.settings.setup.journey.dismissed &&
-                  saved.destination === latest.destination
+                  latest.destination.area !== "setup" ||
+                  visibleSetupSection(latest.destination.setupStep) !== step
                 )
+                  return;
+                if (
+                  latest.configuration?.status === "ready" &&
+                  latest.configuration.settings.setup.journey.dismissed
+                ) {
                   facade.navigate({
                     area: "home",
                     homeView: "overview",
                     homeSelection: null,
                   });
-              }
-            }}
-          >
-            {checklist.completed
-              ? "Back to Home"
-              : next
-                ? "Continue"
-                : "Start using Farol"}
-          </button>
+                  return;
+                }
+                const local = retainedSetupIntents(facade, latest);
+                const current = setupChecklist(latest, changed.current, local);
+                if (
+                  !setupStepCheck(
+                    latest,
+                    step,
+                    changed.current &&
+                      (step === "connection" || step === "attachment"),
+                    local,
+                  ).allowed
+                )
+                  return;
+                if (next) navigateToStep(next);
+                else if (current.ready) {
+                  const result = await facade.configure(
+                    {
+                      kind: "setup.progress",
+                      currentStep: "connect",
+                      dismissed: true,
+                    },
+                    "settings:setup.progress:",
+                  );
+                  const saved = facade.getSnapshot();
+                  if (
+                    result.state === "applied" &&
+                    saved.configuration?.status === "ready" &&
+                    saved.configuration.settings.setup.journey.dismissed &&
+                    saved.destination === latest.destination
+                  )
+                    facade.navigate({
+                      area: "home",
+                      homeView: "overview",
+                      homeSelection: null,
+                    });
+                }
+              }}
+            >
+              {checklist.completed
+                ? "Back to Home"
+                : next
+                  ? "Continue"
+                  : "Start using Farol"}
+            </button>
+          )}
         </footer>
       )}
     </div>

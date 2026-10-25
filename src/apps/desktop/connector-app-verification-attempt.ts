@@ -1,3 +1,17 @@
+import { randomUUID } from "node:crypto";
+import {
+  SeparateAppVerificationScopeSchema,
+  type SeparateAppVerificationScope,
+} from "../../pkg/product-settings/contract";
+import {
+  validate,
+  type ComputerConnectorBinding,
+} from "../../../apps/desktop/bridge/wire";
+
+export type SeparateAppVerification = Readonly<{
+  expected: SeparateAppVerificationScope;
+  binding: ComputerConnectorBinding;
+}>;
 import { constants as fsConstants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import path from "node:path";
@@ -50,8 +64,19 @@ export async function connectorAppVerificationAttemptExists(
 export async function claimConnectorAppVerificationAttempt(
   root: string,
   challengeSha256: string,
+  separate?: SeparateAppVerification,
 ): Promise<void> {
   const target = attemptPath(root, challengeSha256);
+  if (
+    separate &&
+    (!SeparateAppVerificationScopeSchema.safeParse(separate.expected).success ||
+      !validate("ComputerConnectorBinding", separate.binding) ||
+      separate.expected.challengeSha256 !== challengeSha256 ||
+      separate.binding.buildId !== separate.expected.buildId ||
+      separate.binding.connectorGeneration !==
+        String(separate.expected.connectorGeneration))
+  )
+    throw Error("CONNECTOR_SEPARATE_APP_SCOPE_INVALID");
   await assertPrivateRoot(root);
   let handle;
   try {
@@ -65,7 +90,7 @@ export async function claimConnectorAppVerificationAttempt(
       0o600,
     );
     await handle.writeFile(
-      `${JSON.stringify({ schema: 1, challengeSha256, attemptedAt: new Date().toISOString() })}\n`,
+      `${JSON.stringify({ schema: separate ? 2 : 1, challengeSha256, attemptedAt: new Date().toISOString(), ...(separate ? { attemptId: randomUUID(), kind: "owner-authorized-separate-check", expected: separate.expected, binding: separate.binding, predecessorOutcome: "unknown" } : {}) })}\n`,
       "utf8",
     );
     await handle.sync();
@@ -97,8 +122,9 @@ export async function prepareConnectorAppVerificationAttempt(
   root: string,
   challengeSha256: string,
   recordPending: () => Promise<boolean>,
+  separate?: SeparateAppVerification,
 ): Promise<void> {
-  await claimConnectorAppVerificationAttempt(root, challengeSha256);
+  await claimConnectorAppVerificationAttempt(root, challengeSha256, separate);
   if (!(await recordPending())) {
     throw new Error("CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE");
   }

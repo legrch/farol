@@ -117,6 +117,13 @@ export function computerSetup(snapshot: WindowSnapshot) {
       !facts.outcomeUnknown &&
       folderCurrent &&
       facts.runtimeCurrent,
+    canVerifySeparateEmbeddedApp:
+      admissible &&
+      connector?.appVerificationPending === true &&
+      settings?.setup.connect.outcomeUnknown === true &&
+      folderCurrent &&
+      challengeCurrent &&
+      embedded === "ready",
     canVerifyEmbeddedApp:
       admissible &&
       !facts.outcomeUnknown &&

@@ -230,7 +230,9 @@ describe("Unresolved actions sheet", () => {
         "settings:chatgpt.open-browser:",
       );
     });
-    await h.click("Review unresolved actions");
+    // Active local work is not an unresolved incident in the rail.
+    expect(h.button("Review unresolved actions")).toBeUndefined();
+    await act(async () => h.c.overlay("unresolved-actions"));
     expect(h.host.querySelector(selector)?.textContent).toContain(
       "still waiting for its result",
     );

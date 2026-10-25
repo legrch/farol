@@ -83,6 +83,7 @@ export const operationKinds = [
   "connector.start",
   "connector.stop",
   "connector.verify-app",
+  "connector.verify-separate-app",
   "dev-proof.prepare",
   "dev-proof.run",
   "farol_connector_verify",

@@ -194,8 +194,8 @@ describe("linear Setup", () => {
       }
       if (outcome === "unknown") {
         await h.remount();
-        expect(h.button("Start using Farol")?.disabled).toBe(true);
-        await h.click("Start using Farol");
+        expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
+        await h.click("Test in ChatGPT");
         expect(
           vi
             .mocked(h.f.api.configure)
@@ -347,7 +347,7 @@ describe("linear Setup", () => {
     );
 
     expect(h.c.getSnapshot().destination.setupStep).toBe("attachment");
-    expect(h.button("Start using Farol")?.disabled).toBe(true);
+    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
     expect(h.configuration()).toEqual(settingsBeforeNavigation);
     expect(vi.mocked(h.f.api.configure).mock.calls).toHaveLength(
       configureCalls,
@@ -361,10 +361,10 @@ describe("linear Setup", () => {
         signIn: step === "attachment" ? "authenticated" : "signed_out",
       });
       expect(
-        h.button(step === "attachment" ? "Start using Farol" : "Continue")
+        h.button(step === "attachment" ? "Test in ChatGPT" : "Continue")
           ?.disabled,
       ).toBe(true);
-      await h.click(step === "attachment" ? "Start using Farol" : "Continue");
+      await h.click(step === "attachment" ? "Test in ChatGPT" : "Continue");
       expect(h.c.getSnapshot().destination.setupStep).toBe(step);
       await h.publish(readySettings(true));
       if (step === "signin") {
@@ -444,7 +444,7 @@ describe("linear Setup", () => {
           : "could not be confirmed",
       );
       expect(
-        h.button(step === "attachment" ? "Start using Farol" : "Continue")
+        h.button(step === "attachment" ? "Test in ChatGPT" : "Continue")
           ?.disabled,
       ).toBe(true);
     },
@@ -597,8 +597,8 @@ describe("Add to ChatGPT", () => {
     );
     expect(h.f.api.configure).toHaveBeenCalledTimes(1);
     expect(h.button("Refresh status")?.disabled).toBe(false);
-    expect(h.button("Test in ChatGPT")).toBeUndefined();
-    expect(h.button("Start using Farol")?.disabled).toBe(true);
+    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
+    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
     expect(
       h.host
         .querySelector(".setup-gate-status")
@@ -626,8 +626,8 @@ describe("Add to ChatGPT", () => {
     await h.remount();
     expect(effects()).toEqual(["connector.check-attachment"]);
     expect(h.configuration().settings.setup.connect.outcomeUnknown).toBe(true);
-    expect(h.button("Start using Farol")?.disabled).toBe(true);
-    expect(h.button("Test in ChatGPT")).toBeUndefined();
+    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
+    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
   });
   it("reads confirmation again on return to step four without replaying its test", async () => {
     const value = readySettings();
@@ -648,7 +648,7 @@ describe("Add to ChatGPT", () => {
         .mock.calls.some(([c]) => c.kind === "connector.verify-app"),
     ).toBe(false);
     expect(h.configuration().settings.setup.connect.outcomeUnknown).toBe(true);
-    expect(h.button("Start using Farol")?.disabled).toBe(true);
+    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
   });
   it("reviews this Mac's connection locally without changing its app or tunnel", async () => {
     const value = readySettings();
@@ -693,9 +693,9 @@ describe("Add to ChatGPT", () => {
     const failure = h.host.querySelector('.setup-test [role="status"]')!;
     expect(failure.querySelectorAll("button")).toHaveLength(1);
     expect(failure.textContent).not.toContain("Diagnostics");
-    expect(h.button("Start using Farol")?.disabled).toBe(true);
+    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
     await h.remount();
-    expect(h.button("Test in ChatGPT")).toBeUndefined();
+    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
     expect(h.button("Refresh status")?.disabled).toBe(false);
     expect(
       vi
@@ -824,7 +824,7 @@ describe("always-open Setup instructions", () => {
       expect(
         calls.filter(([c]) => c.kind === "connector.verify-app"),
       ).toHaveLength(0);
-      expect(h.button("Start using Farol")?.disabled).toBe(true);
+      expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
       if (outcome === "unknown")
         expect(h.button("Prepare new test")).toBeUndefined();
     },
@@ -845,7 +845,7 @@ describe("always-open Setup instructions", () => {
       "Farol Dev",
     );
     expect(h.host.textContent).not.toContain("✓ Everything works");
-    expect(h.button("Start using Farol")?.disabled).toBe(true);
+    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
   });
 
   it("prepares one fresh test after a verified app is renamed without a manual disconnect", async () => {
@@ -874,7 +874,7 @@ describe("always-open Setup instructions", () => {
       return { ok: true, snapshot: { status: "ready", settings: value } };
     });
     await h.click("Save app name");
-    expect(h.button("Start using Farol")?.disabled).toBe(true);
+    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
     expect(h.button("Prepare new test")?.disabled).toBe(false);
     const pending = deferred<unknown>();
     h.reply((command) => {
@@ -1108,7 +1108,7 @@ it("shows local readiness separately from an unconfirmed app on Overview", async
     ).length;
   await h.click("Continue setup");
   expect(h.c.getSnapshot().destination.setupStep).toBe("attachment");
-  expect(h.button("Start using Farol")?.disabled).toBe(true);
+  expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
   expect(h.host.textContent).toContain("without sending a message");
   expect(
     vi

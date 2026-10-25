@@ -3122,7 +3122,7 @@ it("compact collapse keeps the expanded preference and never opens a page-list o
   }
 });
 it("Setup keeps the same rail, active item, progress and gated Continue", async () => {
-  const { host, c } = await mount();
+  const { host, c } = await mount(bootstrap());
   await act(async () => c.toggleSidebar(false));
   await act(async () => c.navigate({ area: "setup", setupStep: "connection" }));
   expect(

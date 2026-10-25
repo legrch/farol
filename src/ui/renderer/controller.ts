@@ -1368,7 +1368,10 @@ export class WindowController implements RendererFacade {
       // that route owns its task. Sample again after the original command
       // settles; this pure query cannot replay the check or settle an effect.
       if (
-        key === "settings:connector.verify-app:" &&
+        [
+          "settings:connector.verify-app:",
+          "settings:connector.verify-separate-app:",
+        ].includes(key) &&
         this.isSetupSignInObservationEntry()
       ) {
         this.invalidateSignInObservation();
@@ -2602,7 +2605,10 @@ export class WindowController implements RendererFacade {
       !browserPresentationAllowed(state) ||
       state.destination.area !== "chatgpt" ||
       (state.destination.connectionCheckReturn === true &&
-        state.intents["settings:connector.verify-app:"]?.state === "pending") ||
+        [
+          "settings:connector.verify-app:",
+          "settings:connector.verify-separate-app:",
+        ].some((id) => state.intents[id]?.state === "pending")) ||
       state.route === "loaded" ||
       state.destination.taskId !== "" ||
       state.intents["settings:chatgpt.present-browser:"] ||

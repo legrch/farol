@@ -35,7 +35,12 @@ function intentDependency(id: string): Dependency {
   const kind = match[1] as Kind;
   // This command's uncertain external Send has its own durable pending flag.
   // It is not evidence of an uncertain credential/settings write.
-  if (match[2] === "" && kind === "connector.verify-app") return "attachment";
+  if (
+    match[2] === "" &&
+    (kind === "connector.verify-app" ||
+      kind === "connector.verify-separate-app")
+  )
+    return "attachment";
   if (match[2] === "" && modelCommands.has(kind)) return "model";
   if (match[2] === "" && browserCommands.has(kind)) return "chat";
   // Computer/connector commands can save the shared document or withdraw its
@@ -45,6 +50,7 @@ function intentDependency(id: string): Dependency {
 function commandDependency(kind: Kind): Dependency {
   if (
     kind === "connector.verify-app" ||
+    kind === "connector.verify-separate-app" ||
     kind === "connector.check-attachment" ||
     kind === "connector.select-chatgpt-app"
   )
@@ -191,7 +197,8 @@ export function commandAllowed(
     commandDependency(kind),
     local,
     kind === "model.status",
-    kind === "connector.check-attachment",
+    kind === "connector.check-attachment" ||
+      kind === "connector.verify-separate-app",
   );
   return !fences.pending && !fences.unknown;
 }

@@ -1,4 +1,7 @@
 import "../../../apps/desktop/bridge/e2e-window-bootstrap.ts";
+import { separateAppVerificationScopeCurrent } from "../../pkg/product-settings/separate-app-verification";
+import type { SeparateAppVerificationScope } from "../../pkg/product-settings/contract";
+import type { SeparateAppVerification } from "./connector-app-verification-attempt";
 import {
   recordedModelTurn,
   recordedCompaction,
@@ -5659,7 +5662,9 @@ async function checkSecureMcpAttachment(
 // One explicit owner click sends one small app-bound ChatGPT message. The
 // existing route proves the exact selected app before submit; only the local
 // Computer MCP receipt can complete the attachment, never the model's prose.
-async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
+async function verifySecureMcpApp(
+  separate?: SeparateAppVerificationScope,
+): Promise<ProductConfigurationResult> {
   if (!embeddedBrowserEnabled()) {
     return configurationFailure("CONNECTOR_APP_VERIFICATION_UNAVAILABLE");
   }
@@ -5721,7 +5726,49 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
       workspaceId,
       appName,
     };
-    if (settings.setup.connect.outcomeUnknown) {
+    let separateAttempt: SeparateAppVerification | undefined;
+    if (separate) {
+      if (
+        !separateAppVerificationScopeCurrent(
+          settings,
+          separate,
+          buildIdentity.buildId,
+        )
+      )
+        return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
+      try {
+        // Positive current-Go observation is distinct from absence of an old
+        // disk claim. No receipt or unsettled Go verification may be replayed.
+        const observed =
+          await verificationCore.observeComputerConnectorVerification();
+        if (
+          observed.receipt !== undefined ||
+          observed.catalogueReceipt !== undefined ||
+          observed.receiptSha256 !== undefined
+        )
+          return configurationFailure(
+            "CONNECTOR_APP_VERIFICATION_ALREADY_ATTEMPTED",
+          );
+        const current = configuration.snapshot();
+        if (
+          desktopGoCore !== verificationCore ||
+          current.status !== "ready" ||
+          !separateAppVerificationScopeCurrent(
+            current.settings,
+            separate,
+            buildIdentity.buildId,
+          )
+        )
+          return configurationFailure(
+            "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
+          );
+        separateAttempt = { expected: separate, binding: observed.binding };
+      } catch {
+        return configurationFailure(
+          "CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE",
+        );
+      }
+    } else if (settings.setup.connect.outcomeUnknown) {
       return configurationFailure("CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN");
     }
     const stateRoot = secureMcpLaunchRoot();
@@ -5782,8 +5829,15 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
           if (claimed) return;
           const admitted = configuration!.snapshot();
           if (
+            desktopGoCore !== verificationCore ||
             admitted.status !== "ready" ||
             expectedBinding === null ||
+            (separateAttempt &&
+              !separateAppVerificationScopeCurrent(
+                admitted.settings,
+                separateAttempt.expected,
+                buildIdentity.buildId,
+              )) ||
             !connectorAppBindingCurrent(admitted.settings, expectedBinding)
           )
             throw new Error("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
@@ -5796,6 +5850,7 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
                   runtime.runtimeGeneration,
                 )
               ).ok,
+            separateAttempt,
           );
           claimed = true;
         },
@@ -5813,7 +5868,10 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
         !connectorAppBindingCurrent(beforeSubmit.settings, expectedBinding)
       )
         return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
-      if (beforeSubmit.settings.setup.connect.outcomeUnknown) {
+      if (
+        !separateAttempt &&
+        beforeSubmit.settings.setup.connect.outcomeUnknown
+      ) {
         const cleared =
           await configuration.clearSecureMcpAppPendingBeforeSubmit(
             expectedBinding,
@@ -7414,6 +7472,8 @@ async function configureAdmittedProduct(
       return checkSecureMcpAttachment();
     case "connector.verify-app":
       return verifySecureMcpApp();
+    case "connector.verify-separate-app":
+      return verifySecureMcpApp(command.expected);
     case "dev-proof.prepare":
       return prepareDevMcpProof();
     case "dev-proof.run":

@@ -12,7 +12,9 @@ describe("current Setup evidence", () => {
   });
   it("keeps local connection distinct from ChatGPT attachment", async () => {
     const h = await mount({ step: "attachment", value: readySettings() });
-    expect(h.button("Start using Farol")?.disabled).toBe(true);
+    expect(h.button("Start using Farol")).toBeUndefined();
+    // Saved local prerequisites allow a test, but cannot expose Finish.
+    expect(h.button("Test in ChatGPT")?.disabled).toBe(false);
     expect(h.host.textContent).not.toContain("Everything works");
   });
   it("withdraws completion when attachment belongs to another build or generation", async () => {
@@ -22,7 +24,8 @@ describe("current Setup evidence", () => {
         value.connectors.secureMcp.attachment!.buildId = "f".repeat(64);
       else value.connectors.secureMcp.attachment!.computerGeneration++;
       const h = await mount({ step: "attachment", value });
-      expect(h.button("Start using Farol")?.disabled).toBe(true);
+      expect(h.button("Start using Farol")).toBeUndefined();
+      expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
     }
   });
   it("never reports file access from an empty workspace catalogue", async () => {
@@ -41,7 +44,8 @@ describe("current Setup evidence", () => {
     value.revision = 2;
     value.setup.connect.outcomeUnknown = true;
     await h.publish(value);
-    expect(h.button("Start using Farol")?.disabled).toBe(true);
+    expect(h.button("Start using Farol")).toBeUndefined();
+    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
     expect(h.host.textContent).not.toContain("Everything works");
   });
 });

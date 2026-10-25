@@ -238,6 +238,21 @@ export const SecureMcpAppSelectionSchema = z.strictObject({
   connectorGeneration: z.number().int().positive(),
 });
 
+export const SeparateAppVerificationScopeSchema = z.strictObject({
+  ownerAuthorized: z.literal(true),
+  tunnelId: SecureMcpAppSelectionSchema.shape.tunnelId,
+  appName: SecureMcpAppSelectionSchema.shape.name,
+  connectorGeneration: z.number().int().positive(),
+  computerGeneration: z.number().int().positive(),
+  runtimeGeneration: Sha256Schema,
+  challengeSha256: Sha256Schema,
+  buildId: Sha256Schema,
+  workspaceId: IdentifierSchema.nullable(),
+});
+export type SeparateAppVerificationScope = z.infer<
+  typeof SeparateAppVerificationScopeSchema
+>;
+
 export const SecureMcpConnectorSchema = z.strictObject({
   generation: z.number().int().positive(),
   profile: z.literal("farol"),
@@ -691,6 +706,10 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("connector.check-attachment") }),
   z.strictObject({ kind: z.literal("connector.check-health") }),
   z.strictObject({ kind: z.literal("connector.verify-app") }),
+  z.strictObject({
+    kind: z.literal("connector.verify-separate-app"),
+    expected: SeparateAppVerificationScopeSchema,
+  }),
   SecureMcpAppSelectionSchema.extend({
     kind: z.literal("connector.select-chatgpt-app"),
   }),

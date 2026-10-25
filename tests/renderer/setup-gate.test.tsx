@@ -148,7 +148,11 @@ describe("rendered Setup gate", () => {
       await h.renderSetup(snapshot, facade);
 
       const advance = h.button(
-        step === "attachment" ? "Start using Farol" : "Continue",
+        step === "attachment"
+          ? state === "success-current"
+            ? "Start using Farol"
+            : "Test in ChatGPT"
+          : "Continue",
       );
       expect(advance).toBeTruthy();
       expect(advance!.disabled).toBe(state !== "success-current");
@@ -241,8 +245,13 @@ describe("rendered Setup gate", () => {
     await h.renderSetup(snapshot, facade);
 
     expect(
-      h.button(step === "attachment" ? "Start using Farol" : "Continue")
-        ?.disabled,
+      h.button(
+        step === "attachment"
+          ? expected === "success"
+            ? "Start using Farol"
+            : "Test in ChatGPT"
+          : "Continue",
+      )?.disabled,
     ).toBe(expected !== "success");
     const status = h.host.querySelector<HTMLElement>(".setup-gate-status");
     expect(status?.dataset.resultState).toBe(expected);
@@ -283,7 +292,7 @@ describe("rendered Setup gate", () => {
         expect(effects()).toHaveLength(submissions);
         await h.remount(snapshot, facade);
         expect(
-          h.button(step === "attachment" ? "Start using Farol" : "Continue")
+          h.button(step === "attachment" ? "Test in ChatGPT" : "Continue")
             ?.disabled,
         ).toBe(true);
         expect(
@@ -566,8 +575,13 @@ describe("rendered Setup gate", () => {
 
       const allowed = expectedState === "success";
       expect(
-        h.button(step === "attachment" ? "Start using Farol" : "Continue")
-          ?.disabled,
+        h.button(
+          step === "attachment"
+            ? allowed
+              ? "Start using Farol"
+              : "Test in ChatGPT"
+            : "Continue",
+        )?.disabled,
       ).toBe(!allowed);
       expect(
         h.host.querySelector<HTMLElement>(".setup-gate-status")?.dataset
@@ -588,7 +602,7 @@ describe("rendered Setup gate", () => {
     }) as unknown as RendererFacade;
     await h.renderSetup(snapshot, facade);
     expect(setupStepCheck(snapshot, "attachment").allowed).toBe(true);
-    expect(h.button("Start using Farol")?.disabled).toBe(true);
+    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
   });
 
   it("refreshing an unknown result does not resubmit its original check", async () => {
@@ -777,7 +791,7 @@ it("does not tell a returning user to repeat successful steps for a pending app 
   expect(h.host.textContent).not.toContain(
     "Finish sign-in, workspace and connection checks",
   );
-  expect(h.button("Test in ChatGPT")).toBeUndefined();
+  expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
   expect(h.button("Refresh status")?.disabled).toBe(false);
   expect(h.button("Prepare new test")).toBeUndefined();
   const before = vi

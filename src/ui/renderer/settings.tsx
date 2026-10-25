@@ -1,3 +1,5 @@
+import { separateAppVerificationScopeCurrent } from "../../pkg/product-settings/separate-app-verification";
+import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
 import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
 import { setupStepCheck } from "./setup-gate";
 import { setupChecklist } from "./setup-navigation";
@@ -21,8 +23,10 @@ import {
   useSyncExternalStore,
 } from "react";
 import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   ProductConfigurationCommandSchema,
+  SeparateAppVerificationScopeSchema,
   SecureMcpAppSelectionSchema,
   type ApprovedProductWorkspace,
   type ProductConfigurationCommand,
@@ -48,6 +52,7 @@ export type SettingsProps = Readonly<{
   facade: RendererFacade;
   setupStep?: "signin" | "connection" | "folders" | "attachment" | undefined;
   unresolvedSheet?: boolean;
+  setupTestActionHost?: HTMLElement | null | undefined;
   setupInputsChanged?: boolean | undefined;
   onSetupInputsChange?: ((changed: boolean) => void) | undefined;
 }>;
@@ -248,6 +253,7 @@ export function Settings({
   setupStep,
   setupInputsChanged,
   onSetupInputsChange,
+  setupTestActionHost,
   unresolvedSheet,
 }: SettingsProps) {
   const configuration = snapshot.configuration;
@@ -518,6 +524,7 @@ export function Settings({
     setupStep,
     setupInputsChanged,
     onSetupInputsChange,
+    setupTestActionHost,
   };
   const pageFeedback = feedback.pages[feedbackPage(snapshot.destination)];
   const gate = setupStep
@@ -1522,6 +1529,8 @@ function AddToChatGPT({
   facade,
   actions,
   onSetupInputsChange,
+  setupStep,
+  setupTestActionHost,
 }: PageProps) {
   const connector = settings.connectors.secureMcp;
   const defaultName =
@@ -1636,6 +1645,35 @@ function AddToChatGPT({
     );
   };
   const needsNewTest = !nameChanged && canPrepareTest(snapshot);
+  const [separateConsent, setSeparateConsent] = useState<string | null>(null);
+  const separateParsed = SeparateAppVerificationScopeSchema.safeParse({
+    ownerAuthorized: true,
+    appName,
+    tunnelId: connector.tunnelId,
+    connectorGeneration: connector.generation,
+    computerGeneration: settings.computer.generation,
+    runtimeGeneration: connector.runtime?.runtimeGeneration,
+    buildId: snapshot.buildId,
+    challengeSha256: connector.challenge?.challengeSha256,
+    workspaceId: connectorWorkspaceSelection(settings),
+  });
+  const separateExpected =
+    separateParsed.success &&
+    !nameChanged &&
+    setup.canVerifySeparateEmbeddedApp &&
+    separateAppVerificationScopeCurrent(
+      settings,
+      separateParsed.data,
+      snapshot.buildId ?? "",
+    )
+      ? separateParsed.data
+      : null;
+  const separateKey = separateExpected
+    ? JSON.stringify(separateExpected)
+    : null;
+  const separateAuthorized =
+    separateKey !== null && separateConsent === separateKey;
+
   async function saveName() {
     if (!nameValid || busy.current || !connector.tunnelId) return;
     await actions.run({
@@ -1649,10 +1687,19 @@ function AddToChatGPT({
     if (
       busy.current ||
       !nameValid ||
-      !computerSetup(facade.getSnapshot()).canVerifyEmbeddedApp
+      !(
+        computerSetup(facade.getSnapshot()).canVerifyEmbeddedApp ||
+        (separateAuthorized &&
+          separateExpected &&
+          computerSetup(facade.getSnapshot()).canVerifySeparateEmbeddedApp)
+      )
     )
       return;
     busy.current = true;
+    // Consent belongs to this one admission, including a pre-submit refusal.
+    // A later click needs explicit consent again; the durable claim still
+    // prevents a second Send for the same challenge after possible dispatch.
+    if (separateAuthorized) setSeparateConsent(null);
     setChecking(true);
     try {
       const current = facade.getSnapshot();
@@ -1687,13 +1734,27 @@ function AddToChatGPT({
           saved.tunnelId
       )
         return;
-      const pending = actions.run(
-        { kind: "connector.verify-app" },
-        (current) => computerSetup(current).canVerifyEmbeddedApp,
+      const command: ProductConfigurationCommand =
+        separateAuthorized && separateExpected
+          ? {
+              kind: "connector.verify-separate-app",
+              expected: separateExpected,
+            }
+          : { kind: "connector.verify-app" };
+      const pending = actions.run(command, (current) =>
+        command.kind === "connector.verify-separate-app"
+          ? current.configuration?.status === "ready" &&
+            computerSetup(current).canVerifySeparateEmbeddedApp &&
+            separateAppVerificationScopeCurrent(
+              current.configuration.settings,
+              command.expected,
+              current.buildId ?? "",
+            )
+          : computerSetup(current).canVerifyEmbeddedApp,
       );
       if (
-        facade.getSnapshot().intents["settings:connector.verify-app:"]
-          ?.state === "pending"
+        facade.getSnapshot().intents[intention(command.kind)]?.state ===
+        "pending"
       )
         facade.navigate({
           area: "chatgpt",
@@ -1706,8 +1767,38 @@ function AddToChatGPT({
       setChecking(false);
     }
   }
+  const testDisabled =
+    checking ||
+    (waitingForConfirmation && !separateAuthorized) ||
+    needsNewTest ||
+    !nameValid ||
+    !(separateAuthorized
+      ? actions.allowed("connector.verify-separate-app") &&
+        setup.canVerifySeparateEmbeddedApp
+      : actions.allowed("connector.verify-app") && setup.canVerifyEmbeddedApp);
+  const testAction = (
+    <button
+      type="button"
+      className="primary"
+      disabled={testDisabled}
+      aria-describedby={
+        waitingForConfirmation ? "setup-test-blocked" : undefined
+      }
+      title={
+        waitingForConfirmation
+          ? "Check the saved result first. The earlier test has no confirmed outcome."
+          : undefined
+      }
+      onClick={() => void test()}
+    >
+      {checking ? "Testing in ChatGPT…" : "Test in ChatGPT"}
+    </button>
+  );
   return (
     <>
+      {setupStep === "attachment" && setupTestActionHost
+        ? createPortal(testAction, setupTestActionHost)
+        : null}
       <section aria-label="Create the ChatGPT app">
         <h3>1. Add your app in ChatGPT</h3>
 
@@ -1793,11 +1884,13 @@ function AddToChatGPT({
       </section>
       <section className="setup-test" aria-label="Test in ChatGPT">
         <h3>2. Check the connection</h3>
-        <p className="description">
+        <p className="description" id="setup-test-blocked">
           {waitingForConfirmation
-            ? unconfirmedTest
-              ? "An earlier test has no confirmed result. A new test is paused so it cannot be sent twice."
-              : "An earlier action has no confirmed result. Check its saved status before starting a test."
+            ? separateAuthorized
+              ? "A separate test is authorized for this connection. It sends one new message; the earlier test remains unconfirmed."
+              : unconfirmedTest
+                ? "An earlier test has no confirmed result. It will not be repeated. Check the saved result, or explicitly authorize a separate check below."
+                : "An earlier action has no confirmed result. Check its saved status before starting a test."
             : "Farol opens a separate chat, selects Instant and sends one test message to your app. The reply confirms that ChatGPT can reach this Mac — without reading file contents."}
         </p>
         <div
@@ -1863,6 +1956,24 @@ function AddToChatGPT({
             </p>
           )}
         </div>
+        {waitingForConfirmation && separateExpected && (
+          <label className="setting-row">
+            <input
+              type="checkbox"
+              checked={separateAuthorized}
+              disabled={
+                checking || !actions.allowed("connector.verify-separate-app")
+              }
+              onChange={(event) =>
+                setSeparateConsent(
+                  event.currentTarget.checked ? separateKey : null,
+                )
+              }
+            />
+            Authorize a separate test for this connection. Keep the earlier test
+            unconfirmed.
+          </label>
+        )}
         {gate.allowed ? (
           <div className="setup-success" role="status">
             <strong>✓ Everything works</strong>
@@ -1916,19 +2027,7 @@ function AddToChatGPT({
                     : "Finish sign-in, workspace and connection checks before testing in ChatGPT."}
               </p>
             )}
-            <button
-              type="button"
-              className="primary"
-              disabled={
-                checking ||
-                !nameValid ||
-                !actions.allowed("connector.verify-app") ||
-                !setup.canVerifyEmbeddedApp
-              }
-              onClick={() => void test()}
-            >
-              {checking ? "Testing in ChatGPT…" : "Test in ChatGPT"}
-            </button>
+            {setupStep !== "attachment" ? testAction : null}
           </>
         )}
       </section>

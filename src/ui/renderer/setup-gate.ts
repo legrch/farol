@@ -39,6 +39,7 @@ const commands: Record<SetupCheckpoint, readonly string[]> = {
   attachment: [
     "connector.select-chatgpt-app",
     "connector.verify-app",
+    "connector.verify-separate-app",
     "connector.check-attachment",
   ],
 };
@@ -47,7 +48,11 @@ const confirmingCommands: Record<SetupCheckpoint, readonly string[]> = {
   signin: ["chatgpt.verify"],
   folders: ["computer.verify-workspace"],
   connection: ["connector.check-health"],
-  attachment: ["connector.verify-app", "connector.check-attachment"],
+  attachment: [
+    "connector.verify-app",
+    "connector.verify-separate-app",
+    "connector.check-attachment",
+  ],
 };
 
 /** The sole Setup gate: only confirmed success for current inputs can advance. */
@@ -117,15 +122,24 @@ export function setupStepCheck(
         !(
           step === "attachment" &&
           confirmed &&
-          i.id === "settings:connector.verify-app:" &&
+          [
+            "settings:connector.verify-app:",
+            "settings:connector.verify-separate-app:",
+          ].includes(i.id) &&
           i.code === "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN"
         ),
     );
   const browserCheckRunning =
     step === "signin" &&
     observation?.state === "unknown" &&
-    snapshot.intents["settings:connector.verify-app:"]?.state === "pending" &&
-    snapshot.intents["settings:connector.verify-app:"]?.inFlight === true;
+    [
+      "settings:connector.verify-app:",
+      "settings:connector.verify-separate-app:",
+    ].some(
+      (id) =>
+        snapshot.intents[id]?.state === "pending" &&
+        snapshot.intents[id]?.inFlight === true,
+    );
   const pending =
     fence.pending ||
     (step === "signin" && observation?.pending === true) ||
