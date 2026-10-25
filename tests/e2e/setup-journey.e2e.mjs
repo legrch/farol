@@ -1,5 +1,6 @@
 // Built React/Electron/Go with disposable fixtures. No real account or tunnel.
 import assert from "node:assert/strict";
+import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -389,6 +390,51 @@ async function runScenario(scenario) {
     terminal = once(application.process(), "exit");
     closed = once(application.process(), "close");
     page = await application.firstWindow();
+    // The first window can precede the final atomic startup diagnostics. Wait
+    // for those writes before taking the one-shot isolation witness; never
+    // waive a disappearing path or retry a consumed admission receipt.
+    for (const [name, expected] of [
+      [".farol-startup-stage", "startup-complete"],
+      [".farol-connector-resume-stage", "connector-resume-skipped"],
+    ]) {
+      await poll(
+        async () => {
+          let handle;
+          try {
+            handle = await fs.open(
+              path.join(home, name),
+              constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+            );
+            const info = await handle.stat();
+            assert.ok(
+              info.isFile() &&
+                info.nlink === 1 &&
+                info.uid === process.getuid() &&
+                (info.mode & 0o777) === 0o600 &&
+                info.size <= 256,
+              "SETUP_STARTUP_STAGE_UNSAFE",
+            );
+            const buffer = Buffer.alloc(257);
+            const { bytesRead } = await handle.read(
+              buffer,
+              0,
+              buffer.length,
+              0,
+            );
+            assert.ok(bytesRead <= 256, "SETUP_STARTUP_STAGE_UNSAFE");
+            return buffer.subarray(0, bytesRead).toString("utf8").trim();
+          } catch (error) {
+            if (error.code === "ENOENT") return "";
+            throw error;
+          } finally {
+            await handle?.close();
+          }
+        },
+        (value) => value === expected,
+        "SETUP_STARTUP_NOT_SETTLED",
+      );
+    }
+    report.startupDiagnosticsSettled = true;
     const paths = await application.evaluate(({ app, BrowserWindow }) => ({
       pid: process.pid,
       home: app.getPath("home"),
