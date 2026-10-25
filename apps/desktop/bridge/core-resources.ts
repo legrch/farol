@@ -4,6 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseCoreArtifactDeclaration } from "./attested-core.ts";
 import { BridgeError } from "./client.ts";
+import {
+  qualificationMetrics,
+  type QualificationObserver,
+  type QualificationResult,
+} from "./qualification-metrics.ts";
 
 // One startup budget bounds resource and Shell qualification together. It is
 // liveness only: integrity comes from the digests and the final stat recheck,
@@ -70,7 +75,10 @@ export async function verifyCoreResources(
   compiled: unknown,
   expectedCore: unknown,
   deadline: number,
+  observer?: QualificationObserver,
 ): Promise<void> {
+  const metrics = qualificationMetrics("core-resources", deadline, observer);
+  let result: QualificationResult = "refused";
   try {
     const declared = record(compiled, ["schema", "core", "files"]);
     const core = parseCoreArtifactDeclaration(declared.core);
@@ -140,7 +148,9 @@ export async function verifyCoreResources(
     if (uid === undefined) refuse();
     const owned = (stat: BigIntStats): boolean =>
       stat.uid === 0n || stat.uid === BigInt(uid!);
-    const beforeRoot = await fs.lstat(root, { bigint: true });
+    const beforeRoot = await metrics.time("stat", () =>
+      fs.lstat(root, { bigint: true }),
+    );
     if (
       !beforeRoot.isDirectory() ||
       !owned(beforeRoot) ||
@@ -150,14 +160,19 @@ export async function verifyCoreResources(
     const observations: [string, BigIntStats][] = [];
     const buffer = Buffer.alloc(1024 * 1024);
     for (const file of files) {
+      metrics.file();
       checkTime();
       const target = path.join(root, file.path);
-      const handle = await fs.open(
-        target,
-        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      const handle = await metrics.time("open", () =>
+        fs.open(
+          target,
+          constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+        ),
       );
       try {
-        const before = await handle.stat({ bigint: true });
+        const before = await metrics.time("stat", () =>
+          handle.stat({ bigint: true }),
+        );
         if (
           !before.isFile() ||
           !owned(before) ||
@@ -170,31 +185,48 @@ export async function verifyCoreResources(
         let offset = 0;
         while (offset <= file.size) {
           checkTime();
-          const { bytesRead } = await handle.read(
-            buffer,
-            0,
-            Math.min(buffer.length, file.size + 1 - offset),
-            offset,
+          const { bytesRead } = await metrics.time("read", () =>
+            handle.read(
+              buffer,
+              0,
+              Math.min(buffer.length, file.size + 1 - offset),
+              offset,
+            ),
           );
           if (!bytesRead) break;
+          metrics.bytes(bytesRead);
           offset += bytesRead;
           if (offset > file.size) refuse();
-          digest.update(buffer.subarray(0, bytesRead));
+          metrics.sync("hash", () =>
+            digest.update(buffer.subarray(0, bytesRead)),
+          );
         }
         if (
           offset !== file.size ||
-          digest.digest("hex") !== file.sha256 ||
-          !same(before, await handle.stat({ bigint: true }))
+          metrics.sync("hash", () => digest.digest("hex")) !== file.sha256 ||
+          !same(
+            before,
+            await metrics.time("stat", () => handle.stat({ bigint: true })),
+          )
         )
           refuse();
         observations.push([target, before]);
       } finally {
-        await handle.close();
+        await metrics.time("open", () => handle.close());
       }
     }
     for (const [target, before] of observations) {
       checkTime();
-      if (!same(before, await fs.lstat(target, { bigint: true }))) refuse();
+      metrics.entry();
+      if (
+        !same(
+          before,
+          await metrics.time("recheck", () =>
+            fs.lstat(target, { bigint: true }),
+          ),
+        )
+      )
+        refuse();
     }
     if (
       !same(beforeRoot, await fs.lstat(root, { bigint: true })) ||
@@ -202,9 +234,14 @@ export async function verifyCoreResources(
     )
       refuse();
     checkTime();
+    result = "passed";
   } catch (error) {
-    if (error instanceof DeadlineExpired)
+    if (error instanceof DeadlineExpired) {
+      result = "deadline-expired";
       throw new BridgeError("refused", "core_resources_deadline_expired");
+    }
     refuse();
+  } finally {
+    metrics.finish(result);
   }
 }

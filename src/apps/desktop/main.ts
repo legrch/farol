@@ -46,6 +46,11 @@ import {
   startDesktopGoCore,
   type DesktopGoCore,
 } from "../../../apps/desktop/go-core-host";
+import type { QualificationObservation } from "../../../apps/desktop/bridge/qualification-metrics";
+import {
+  maintenanceFailureCode,
+  type MaintenanceObservation,
+} from "../../../apps/desktop/recovery/diagnostics";
 import { goCoreQuitClosers } from "../../../apps/desktop/go-core-quit-closers";
 import type {
   ChatComputerAdmissionResponse,
@@ -4985,6 +4990,44 @@ function startObservedDesktopGoCore(
     { source: "Setup", kind: "hub.start", target: {} },
     () => startDesktopGoCore(...args),
   );
+}
+function reportMaintenanceObservation(
+  observation: MaintenanceObservation,
+): void {
+  if (runtimeEnvironment !== "dev" && process.env.FAROL_E2E !== "1") return;
+  try {
+    process.stderr.write(
+      "FAROL_STARTUP_MAINTENANCE:" +
+        JSON.stringify({
+          schema: 1,
+          buildId: buildIdentity.buildId,
+          pid: process.pid,
+          ...observation,
+        }) +
+        "\n",
+    );
+  } catch {
+    /* Diagnostics never grant recovery or retry. */
+  }
+}
+function reportQualificationObservation(
+  observation: QualificationObservation,
+): void {
+  if (runtimeEnvironment !== "dev" && process.env.FAROL_E2E !== "1") return;
+  try {
+    process.stderr.write(
+      "FAROL_QUALIFICATION_METRICS:" +
+        JSON.stringify({
+          schema: 1,
+          buildId: buildIdentity.buildId,
+          pid: process.pid,
+          ...observation,
+        }) +
+        "\n",
+    );
+  } catch {
+    // Diagnostics never supply a positive qualification or a retry.
+  }
 }
 function reportOwnedBackendLifecycle(
   observation:
@@ -11986,6 +12029,12 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         if (savedSettings !== null) {
           try {
             await runStartupPreservedMaintenance({
+              ...(runtimeEnvironment === "dev" || process.env.FAROL_E2E === "1"
+                ? {
+                    onMaintenanceObservation: reportMaintenanceObservation,
+                    onQualificationObservation: reportQualificationObservation,
+                  }
+                : {}),
               userData: app.getPath("userData"),
               home: app.getPath("home"),
               computerId: savedSettings.computer.computerId,
@@ -12005,7 +12054,23 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
             await assertMaintenanceCurrent();
             admissionReady = true;
             startupStage("preserved-recovery-prepared");
-          } catch {
+          } catch (error) {
+            if (runtimeEnvironment === "dev" || process.env.FAROL_E2E === "1") {
+              try {
+                process.stderr.write(
+                  "FAROL_STARTUP_MAINTENANCE_FAILURE:" +
+                    JSON.stringify({
+                      schema: 1,
+                      buildId: buildIdentity.buildId,
+                      pid: process.pid,
+                      code: maintenanceFailureCode(error),
+                    }) +
+                    "\n",
+                );
+              } catch {
+                /* The original unconfirmed branch remains selected. */
+              }
+            }
             // No retry or marker repair. The existing read-only composition
             // can still expose saved Settings and independently safe reads.
             startupStage("preserved-recovery-unconfirmed");
@@ -12249,6 +12314,9 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         home: app.getPath("home"),
         settings: currentSettings,
         onLifecycleObservation: reportOwnedBackendLifecycle,
+        ...(runtimeEnvironment === "dev" || process.env.FAROL_E2E === "1"
+          ? { onQualificationObservation: reportQualificationObservation }
+          : {}),
         browser: (context) =>
           createDesktopChatBrowser({
             context,

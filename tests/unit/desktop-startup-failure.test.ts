@@ -240,7 +240,11 @@ describe("desktop startup failure boundary", () => {
       );
       expect(report).not.toContain("GO_CORE_REFUSED");
       if (spentBudget) {
-        expect(report).toContain("Open the app again");
+        expect(report).toContain("Preserve the profile and startup records");
+        expect(report).toContain(
+          "previous shutdown state before another launch",
+        );
+        expect(report).not.toContain("Open the app again");
         expect(report).not.toContain("Rebuild");
       } else {
         expect(report).toContain("Rebuild the exact candidate");

@@ -165,6 +165,33 @@ function fixture() {
 }
 
 describe("one startup preserving-maintenance attempt", () => {
+  it.each([
+    ["select", "selection"],
+    ["discover", "discovery"],
+    ["recover", "preparation"],
+  ] as const)(
+    "reports the exact failing %s stage without retry or raw exception text",
+    async (port, stage) => {
+      const f = fixture();
+      const error = Error("private /Users/owner/key");
+      ports[port].mockRejectedValueOnce(error);
+      const observer = vi.fn();
+      await expect(
+        runStartupPreservedMaintenance({
+          ...f.input,
+          onMaintenanceObservation: observer,
+        }),
+      ).rejects.toBe(error);
+      expect(ports[port]).toHaveBeenCalledOnce();
+      expect(observer.mock.calls.at(-1)![0]).toMatchObject({
+        stage,
+        result: "unknown",
+        code: "UNCLASSIFIED_MAINTENANCE_FAILURE",
+      });
+      expect(JSON.stringify(observer.mock.calls)).not.toContain("/Users/owner");
+      if (port !== "recover") expect(ports.recover).not.toHaveBeenCalled();
+    },
+  );
   it("forwards only the collector's exact legacy pin, retaining the original admission callbacks", async () => {
     const f = fixture();
     const selectedPin = Object.freeze({

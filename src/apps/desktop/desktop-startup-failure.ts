@@ -70,8 +70,8 @@ const DISPLAY_PRECONDITION_CODES = new Set([
   "WINDOW_DISPLAY_GEOMETRY_INVALID",
   "VISIBLE_TEST_VIEWPORT_UNAVAILABLE",
 ]);
-// The app's own files were not changed; checking them took longer than the
-// startup budget. Rebuilding would not help, and a later launch usually passes.
+// A spent budget is not positive attestation. Preserve startup/lifetime
+// evidence; a previous clean Quit does not qualify the failed generation.
 const QUALIFICATION_DEADLINE_CODES = new Set([
   "GO_CORE_CORE_RESOURCES_DEADLINE_EXPIRED",
   "GO_CORE_SHELL_RUNTIME_DEADLINE_EXPIRED",
@@ -170,7 +170,7 @@ export function desktopStartupFailureReport(
         : notice
           ? notice.message
           : QUALIFICATION_DEADLINE_CODES.has(code)
-            ? "Checking the app's files took longer than the startup allows. Open the app again; if the Mac is busy, wait for it to settle first."
+            ? "Checking the app's files exceeded the startup budget. Preserve the profile and startup records; inspect the qualification diagnostics and previous shutdown state before another launch."
             : PREVIOUS_DRAIN_FAILURE_CODES.has(code)
               ? "The previous session did not confirm shutdown. Preserve the existing profile and its recovery records; rebuilding the app does not settle this state. Use a qualified recovery procedure before reopening that profile."
               : DISPLAY_PRECONDITION_CODES.has(code)

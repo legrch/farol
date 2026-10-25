@@ -3,6 +3,11 @@ import { constants, type BigIntStats } from "node:fs";
 import nodeFilesystem from "node:fs/promises";
 import path from "node:path";
 import { BridgeError } from "./client.ts";
+import {
+  qualificationMetrics,
+  type QualificationObserver,
+  type QualificationResult,
+} from "./qualification-metrics.ts";
 import { parseShellSupportDeclaration } from "./shell-support.ts";
 
 const runtimeRelative = "Contents/Frameworks/Electron Runtime.app";
@@ -59,15 +64,20 @@ export async function attestShellRuntime(
   appRoot: string,
   independentlyTrustedSupport: unknown,
   deadline: number,
+  observer?: QualificationObserver,
 ): Promise<Readonly<{ path: string; device: string; inode: string }>> {
+  const metrics = qualificationMetrics("shell-runtime", deadline, observer);
+  let result: QualificationResult = "refused";
   try {
     // Electron virtualizes ASAR archives. Measure physical bytes/metadata like
     // the package producer, using its built-in original-fs module. A failed
     // import refuses; never fall back to the virtualized filesystem.
     const fs: typeof nodeFilesystem = process.versions.electron
-      ? (await import("original-fs")).promises
+      ? (await metrics.time("setup", () => import("original-fs"))).promises
       : nodeFilesystem;
-    const support = parseShellSupportDeclaration(independentlyTrustedSupport);
+    const support = metrics.sync("setup", () =>
+      parseShellSupportDeclaration(independentlyTrustedSupport),
+    );
     const now = performance.now();
     if (Number.isFinite(deadline) && deadline <= now) expire();
     if (
@@ -91,7 +101,10 @@ export async function attestShellRuntime(
     const runtime = path.join(appRoot, runtimeRelative);
     const observe = async (file: string): Promise<BigIntStats> => {
       checkTime();
-      const stat = await fs.lstat(file, { bigint: true });
+      const stat = await metrics.time("stat", () =>
+        fs.lstat(file, { bigint: true }),
+      );
+      metrics.entry();
       if (stat.uid !== 0n && stat.uid !== BigInt(uid!)) refuse();
       if (!stat.isSymbolicLink() && (stat.mode & 0o022n) !== 0n) refuse();
       if (observed.size >= maximumEntries) refuse();
@@ -128,12 +141,21 @@ export async function attestShellRuntime(
       )
         refuse();
       totalBytes += Number(before.size);
-      const handle = await fs.open(
-        file,
-        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      metrics.file();
+      const handle = await metrics.time("open", () =>
+        fs.open(
+          file,
+          constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+        ),
       );
       try {
-        if (!same(before, await handle.stat({ bigint: true }))) refuse();
+        if (
+          !same(
+            before,
+            await metrics.time("stat", () => handle.stat({ bigint: true })),
+          )
+        )
+          refuse();
         const fileDigest = createHash("sha256");
         let offset = 0;
         while (offset <= Number(before.size)) {
@@ -142,31 +164,41 @@ export async function attestShellRuntime(
             buffer.length,
             Number(before.size) + 1 - offset,
           );
-          const { bytesRead } = await handle.read(buffer, 0, size, offset);
+          const { bytesRead } = await metrics.time("read", () =>
+            handle.read(buffer, 0, size, offset),
+          );
           if (bytesRead === 0) break;
+          metrics.bytes(bytesRead);
           offset += bytesRead;
           if (offset > Number(before.size)) refuse();
-          fileDigest.update(buffer.subarray(0, bytesRead));
+          metrics.sync("hash", () =>
+            fileDigest.update(buffer.subarray(0, bytesRead)),
+          );
         }
         if (
           offset !== Number(before.size) ||
-          !same(before, await handle.stat({ bigint: true }))
+          !same(
+            before,
+            await metrics.time("stat", () => handle.stat({ bigint: true })),
+          )
         )
           refuse();
-        return fileDigest.digest();
+        return metrics.sync("hash", () => fileDigest.digest());
       } finally {
-        await handle.close();
+        await metrics.time("open", () => handle.close());
       }
     }
     async function walk(directory: string, depth: number): Promise<void> {
       if (depth > 32) refuse();
       const names: string[] = [];
-      const listing = await fs.opendir(directory);
-      for await (const entry of listing) {
-        checkTime();
-        if (names.length + observed.size >= maximumEntries) refuse();
-        names.push(entry.name);
-      }
+      await metrics.time("directory", async () => {
+        const listing = await fs.opendir(directory);
+        for await (const entry of listing) {
+          checkTime();
+          if (names.length + observed.size >= maximumEntries) refuse();
+          names.push(entry.name);
+        }
+      });
       names.sort();
       for (const name of names) {
         const file = path.join(directory, name);
@@ -215,7 +247,13 @@ export async function attestShellRuntime(
     // entry-set changes and replacement of a previously hashed file/link.
     for (const [file, before] of observed) {
       checkTime();
-      if (!same(before, await fs.lstat(file, { bigint: true }))) refuse();
+      if (
+        !same(
+          before,
+          await metrics.time("recheck", () => fs.lstat(file, { bigint: true })),
+        )
+      )
+        refuse();
     }
     checkTime();
     if (
@@ -225,14 +263,19 @@ export async function attestShellRuntime(
       refuse();
     checkTime();
     const root = observed.get(appRoot)!;
+    result = "passed";
     return Object.freeze({
       path: appRoot,
       device: String(root.dev),
       inode: String(root.ino),
     });
   } catch (error) {
-    if (error instanceof DeadlineExpired)
+    if (error instanceof DeadlineExpired) {
+      result = "deadline-expired";
       throw new BridgeError("refused", "shell_runtime_deadline_expired");
+    }
     return refuse();
+  } finally {
+    metrics.finish(result);
   }
 }

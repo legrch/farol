@@ -606,6 +606,7 @@ describe("normal Go host startup", () => {
       compiledResources,
       artifact,
       expect.any(Number),
+      undefined,
     );
     expect(ports.provision).not.toHaveBeenCalled();
     expect(ports.qualify).not.toHaveBeenCalled();
@@ -781,11 +782,13 @@ describe("normal Go host startup", () => {
       input.compiledResources,
       expect.anything(),
       expect.any(Number),
+      undefined,
     );
     expect(ports.runtime).toHaveBeenCalledWith(
       appRoot,
       input.compiledShell!.support,
       expect.any(Number),
+      undefined,
     );
     expect(start).toHaveBeenCalledTimes(1);
     expect(start.mock.calls[0]![1]!.shellMetadata).toBeInstanceOf(Uint8Array);
@@ -842,6 +845,24 @@ describe("normal Go host startup", () => {
     );
     expect(CORE_QUALIFICATION_BUDGET_MS).toBe(10_000);
     expect(ports.runtime.mock.calls[0]![2]).toBe(deadline);
+    await host.close();
+  });
+
+  it("forwards the same passive observer and deadline to both qualification stages", async () => {
+    const input = shellSelection();
+    const f = transport();
+    start.mockResolvedValue(f.client);
+    const observer = vi.fn();
+    const host = await startDesktopGoCore({
+      ...input,
+      onQualificationObservation: observer,
+    });
+    expect(ports.resources.mock.calls[0]![4]).toBe(observer);
+    expect(ports.runtime.mock.calls[0]![3]).toBe(observer);
+    expect(ports.runtime.mock.calls[0]![2]).toBe(
+      ports.resources.mock.calls[0]![3],
+    );
+    expect(start).toHaveBeenCalledOnce();
     await host.close();
   });
 
@@ -933,6 +954,7 @@ describe("normal Go host startup", () => {
       compiledResources,
       artifact,
       expect.any(Number),
+      undefined,
     );
     expect(f.events).toEqual([
       "start",

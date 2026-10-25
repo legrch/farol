@@ -48,6 +48,59 @@ const refused = { state: "refused", code: "shell_runtime_unqualified" };
 const expired = { state: "refused", code: "shell_runtime_deadline_expired" };
 
 describe("Shell nested runtime qualification", () => {
+  it("attributes metadata and read delay without leaking paths or renewing the deadline", async () => {
+    const f = await fixture();
+    const expectedBytes =
+      (await fs.stat(f.executable)).size + (await fs.stat(f.resource)).size;
+    const original = fs.lstat.bind(fs);
+    let now = 100;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const value = await original(...args);
+      now += 2;
+      return value;
+    });
+    const observations = [];
+    await attestShellRuntime(f.app, f.declaration, 10_100, (v) =>
+      observations.push(v),
+    );
+    const final = observations.at(-1);
+    expect(final).toMatchObject({
+      stage: "shell-runtime",
+      result: "passed",
+      files: 2,
+      bytes: expectedBytes,
+      deadlineMs: 10_100,
+    });
+    expect(final.statMs).toBeGreaterThan(0);
+    expect(final.recheckMs).toBeGreaterThan(0);
+    expect(JSON.stringify(observations)).not.toContain(f.app);
+    expect(JSON.stringify(observations)).not.toContain(
+      "Contents/MacOS/Electron",
+    );
+  });
+  it("reports the spent phase with partial work and retains the deadline refusal", async () => {
+    const f = await fixture();
+    const original = fs.lstat.bind(fs);
+    let now = 100;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    vi.spyOn(fs, "lstat").mockImplementation(async (file, options) => {
+      const value = await original(file, options);
+      if (file === f.resource) now += 101;
+      return value;
+    });
+    const observations = [];
+    await expect(
+      attestShellRuntime(f.app, f.declaration, 200, (v) =>
+        observations.push(v),
+      ),
+    ).rejects.toMatchObject(expired);
+    expect(observations.at(-1)).toMatchObject({
+      result: "deadline-expired",
+      deadlineMs: 200,
+    });
+    expect(observations.at(-1).statMs).toBeGreaterThanOrEqual(101);
+  });
   it("uses physical archive bytes in an Electron host with virtualized fs", async () => {
     const f = await fixture();
     const archive = path.join(path.dirname(f.resource), "default_app.asar");

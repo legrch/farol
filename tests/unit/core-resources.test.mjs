@@ -61,6 +61,46 @@ const refused = { state: "refused", code: "core_resources_unqualified" };
 const expired = { state: "refused", code: "core_resources_deadline_expired" };
 
 describe("compiled core resource closure", () => {
+  it("reports only content-free work counters without changing the original budget", async () => {
+    const f = await fixture();
+    const observations = [];
+    const deadline = performance.now() + 2000;
+    await verifyCoreResources(f.root, f.declared, f.core, deadline, (value) =>
+      observations.push(value),
+    );
+    expect(observations.map((v) => v.event)).toEqual(["begin", "end"]);
+    const final = observations.at(-1);
+    expect(final).toMatchObject({
+      stage: "core-resources",
+      result: "passed",
+      deadlineMs: deadline,
+      files: f.declared.files.length,
+      bytes: f.declared.files.reduce((n, v) => n + v.size, 0),
+    });
+    expect(final.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(final.recheckMs).toBeGreaterThanOrEqual(0);
+    expect(JSON.stringify(observations)).not.toContain(f.root);
+    expect(JSON.stringify(observations)).not.toContain("preload.cjs");
+    expect(Object.isFrozen(final)).toBe(true);
+  });
+  it("does not let a failing metrics sink hide an integrity refusal", async () => {
+    const f = await fixture();
+    await fs.writeFile(path.join(f.root, "preload.cjs"), "changed");
+    const sink = vi.fn(() => {
+      throw Error("private diagnostic sink failure");
+    });
+    await expect(
+      verifyCoreResources(
+        f.root,
+        f.declared,
+        f.core,
+        performance.now() + 2000,
+        sink,
+      ),
+    ).rejects.toMatchObject(refused);
+    expect(sink).toHaveBeenCalledTimes(2);
+    expect(sink.mock.calls.at(-1)[0].result).toBe("refused");
+  });
   it("verifies the producer's complete dependency set without a self-hash cycle", async () => {
     const f = await fixture();
     expect(f.declared.files.map((file) => file.path)).toEqual(

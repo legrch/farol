@@ -21,6 +21,8 @@ import {
   type StartupPreservedRecoveryInput,
 } from "../bridge/preserved-recovery-host";
 import { selectStartupPreservedRecovery } from "./selection";
+import { observeMaintenance, type MaintenanceObserver } from "./diagnostics";
+import type { QualificationObserver } from "../bridge/qualification-metrics";
 
 // One original startup attempt, before any read-only or normal runtime child.
 // No renderer input, retry, settings writer, provider or new authority is added.
@@ -35,43 +37,60 @@ export async function runStartupPreservedMaintenance(
     compiledArtifact: unknown;
     compiledResources: unknown;
     startup: StartupPreservedRecoveryInput["startup"];
+    onMaintenanceObservation?: MaintenanceObserver;
+    onQualificationObservation?: QualificationObserver;
   }>,
 ): Promise<Awaited<ReturnType<typeof recoverStartupPreservedChat>>> {
   const { userData, home, computerId, artifactRoot } = input;
+  const observe = <T>(
+    stage: Parameters<typeof observeMaintenance>[0],
+    run: () => T | Promise<T>,
+  ) => observeMaintenance(stage, input.onMaintenanceObservation, run);
   const build = structuredClone(input.build);
   const compiledResources = structuredClone(input.compiledResources);
-  const expected = desktopCoreExpectation({
-    build,
-    compiledArtifact: structuredClone(input.compiledArtifact),
-  });
+  const expected = await observe("host-inputs", () =>
+    desktopCoreExpectation({
+      build,
+      compiledArtifact: structuredClone(input.compiledArtifact),
+    }),
+  );
   const { lease, verify, assertCurrent } = input.startup;
   const current = async () => {
     await assertCurrent();
     if (!(await verify())) throw Error("STARTUP_PROMOTION_LEASE_LOST");
   };
-  await current();
-  const candidate = await selectStartupPreservedRecovery({
-    userData,
-    home,
-    computerId,
-    buildId: build.buildId,
-    assertCurrent: current,
-  });
+  await observe("admission", current);
+  const candidate = await observe("selection", () =>
+    selectStartupPreservedRecovery({
+      userData,
+      home,
+      computerId,
+      buildId: build.buildId,
+      assertCurrent: current,
+    }),
+  );
   const attest = async () => {
-    await current();
-    const declaration = readDesktopCoreDeclaration(artifactRoot, expected);
-    await verifyCoreResources(
-      artifactRoot,
-      compiledResources,
-      expected,
-      performance.now() + CORE_QUALIFICATION_BUDGET_MS,
+    await observe("admission", current);
+    const declaration = await observe("artifact", () =>
+      readDesktopCoreDeclaration(artifactRoot, expected),
     );
-    return verifyCoreExecutable(declaration, {
-      artifactRoot,
-      build: expected.build,
-      binary: expected.binary,
-      profileId: candidate.profile.profileId,
-    });
+    await observe("resources", () =>
+      verifyCoreResources(
+        artifactRoot,
+        compiledResources,
+        expected,
+        performance.now() + CORE_QUALIFICATION_BUDGET_MS,
+        input.onQualificationObservation,
+      ),
+    );
+    return observe("executable", () =>
+      verifyCoreExecutable(declaration, {
+        artifactRoot,
+        build: expected.build,
+        binary: expected.binary,
+        profileId: candidate.profile.profileId,
+      }),
+    );
   };
   const processesAbsent = () => {
     // Historical children may have been launched with either Dev spelling.
@@ -86,17 +105,19 @@ export async function runStartupPreservedMaintenance(
       assertClosedConnectorProcesses(path.join(state, "go-core"));
     }
   };
-  processesAbsent();
+  await observe("processes", () => processesAbsent());
   const executable = await attest();
-  const discovered = await discoverPreservedRecoveryChild(
-    executable,
-    candidate.profile,
-    candidate.selectionInput,
-    candidate.exact,
+  const discovered = await observe("discovery", () =>
+    discoverPreservedRecoveryChild(
+      executable,
+      candidate.profile,
+      candidate.selectionInput,
+      candidate.exact,
+    ),
   );
-  await candidate.recheck();
-  await current();
-  processesAbsent();
+  await observe("selection-recheck", () => candidate.recheck());
+  await observe("admission", current);
+  await observe("processes", () => processesAbsent());
   // Discovery grants no preparation. The existing host repeats canonical
   // observation from zero digest selectors under all its original fences.
   const exact = { ...candidate.exact, current: discovered.Selection.Current };
@@ -107,32 +128,34 @@ export async function runStartupPreservedMaintenance(
       Current: exact.current,
     },
   };
-  return recoverStartupPreservedChat({
-    userData,
-    executable,
-    profile: candidate.profile,
-    exact,
-    selectionInput,
-    expectedRunSha256: candidate.expectedRunSha256,
-    expectedConfigSha256: candidate.expectedConfigSha256,
-    ...(candidate.expectedQuitSha256 === undefined
-      ? {}
-      : {
-          expectedQuitSha256: candidate.expectedQuitSha256,
-        }),
-    startup: {
-      lease,
-      verify,
-      assertCurrent,
-      ...(candidate.legacyPreparation === undefined
+  return observe("preparation", () =>
+    recoverStartupPreservedChat({
+      userData,
+      executable,
+      profile: candidate.profile,
+      exact,
+      selectionInput,
+      expectedRunSha256: candidate.expectedRunSha256,
+      expectedConfigSha256: candidate.expectedConfigSha256,
+      ...(candidate.expectedQuitSha256 === undefined
         ? {}
-        : { legacyPreparation: candidate.legacyPreparation }),
-    },
-    desktopState: () => activationObligations(userData),
-    processesAbsent,
-    attest: async () => {
-      if ((await attest()) !== executable)
-        throw Error("STARTUP_RECOVERY_EXECUTABLE_CHANGED");
-    },
-  });
+        : {
+            expectedQuitSha256: candidate.expectedQuitSha256,
+          }),
+      startup: {
+        lease,
+        verify,
+        assertCurrent,
+        ...(candidate.legacyPreparation === undefined
+          ? {}
+          : { legacyPreparation: candidate.legacyPreparation }),
+      },
+      desktopState: () => activationObligations(userData),
+      processesAbsent,
+      attest: async () => {
+        if ((await attest()) !== executable)
+          throw Error("STARTUP_RECOVERY_EXECUTABLE_CHANGED");
+      },
+    }),
+  );
 }

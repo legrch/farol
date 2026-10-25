@@ -51,6 +51,7 @@ import {
 } from "./bridge/core-resources.ts";
 import { bindShellSupportDeclaration } from "./bridge/shell-support.ts";
 import { attestShellRuntime } from "./bridge/shell-runtime.ts";
+import type { QualificationObserver } from "./bridge/qualification-metrics.ts";
 import { encodeShellLaunch } from "./bridge/shell-launch.ts";
 import { GoComputerAuthority } from "./go-computer-authority.ts";
 import type { BuildIdentity } from "../../src/pkg/build-info/identity";
@@ -93,6 +94,7 @@ export type DesktopCoreSelection = Readonly<{
   settings: () => ProductSettings;
   browser: (context: Readonly<Context>) => DesktopBrowserConnection;
   onLifecycleObservation?: (observation: BackendLifecycleObservation) => void;
+  onQualificationObservation?: QualificationObserver;
 }>;
 
 // One normal Electron-owned backend lifetime. This class only composes the real
@@ -638,6 +640,7 @@ export async function startDesktopGoCore(
       selection.compiledResources,
       expected,
       qualificationDeadline,
+      selection.onQualificationObservation,
     );
   let shellBundle: Awaited<ReturnType<typeof attestShellRuntime>> | undefined;
   if (shell) {
@@ -648,6 +651,7 @@ export async function startDesktopGoCore(
       appRoot,
       shell.support,
       qualificationDeadline,
+      selection.onQualificationObservation,
     );
     if (shellBundle.path !== appRoot)
       throw new BridgeError("refused", "shell_host_layout_mismatch");
