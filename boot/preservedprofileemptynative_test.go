@@ -23,9 +23,19 @@ import (
 // Settings remain explicit fixture facts. This never opens a real Dev profile.
 func preservedEmptyProfileFixture(t *testing.T) preservedProfileInspectionInput {
 	t.Helper()
+	return preservedEmptyHistoryProfileFixture(t, 3, false)
+}
+
+// Keep consumed-but-unretired history distinct from the daily profile's empty,
+// already retired current incarnation with an acknowledged normal terminal.
+func preservedEmptyHistoryProfileFixture(t *testing.T, incarnations int, retired bool) preservedProfileInspectionInput {
+	t.Helper()
 	launch, runtime := retirementStorageFixtureOwnerAt(t, true, true, "owner-desktop", true, "Farol Dev")
 	generation := "generation-1"
-	for cycle := 1; cycle <= 2; cycle++ {
+	for cycle := 1; cycle <= incarnations; cycle++ {
+		if cycle == incarnations && !retired {
+			break
+		}
 		response := retirementCall(t, runtime, "core.retirement.prepare", wire.CoreRetirementPrepare{HandoffId: fmt.Sprintf("empty-history-%d", cycle)})
 		var publication wire.CoreRetirementPrepared
 		if response.Status != "ok" || json.Unmarshal(response.Data, &publication) != nil {
@@ -43,6 +53,9 @@ func preservedEmptyProfileFixture(t *testing.T) preservedProfileInspectionInput 
 		if err := recordNativeTerminal(context.Background(), launch.Profile, terminal, func(wire.CoreRetirementAcknowledged) error { return nil }); err != nil {
 			t.Fatal(err)
 		}
+		if cycle == incarnations {
+			break
+		}
 		generation = fmt.Sprintf("empty-generation-%d", cycle+1)
 		launch.StoreMode, launch.PreviousHostDrainConfirmed = "open", true
 		launch.HostLifetimeID, launch.ChildLaunchID = fmt.Sprintf("empty-host-%d", cycle+1), fmt.Sprintf("empty-child-%d", cycle+1)
@@ -53,10 +66,12 @@ func preservedEmptyProfileFixture(t *testing.T) preservedProfileInspectionInput 
 		}
 		runtime.settingsDelivery.store = &deliveryStoreFixture{value: delivery.Snapshot{Revision: 1, Current: delivery.Identity{ProfileID: launch.Profile.ProfileID, OwnerID: launch.OwnerID, ComputerID: launch.ComputerID, Generation: 1}}}
 	}
-	// The third consumed incarnation closes without a retirement/terminal. Native
-	// process absence is not inferred here; enclosing host fixtures own that gate.
-	if err := runtime.Close(); err != nil {
-		t.Fatal(err)
+	// Unretired fixtures close without inventing retirement or terminal. Retired
+	// fixtures have already closed and recorded their original terminal above.
+	if !retired {
+		if err := runtime.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	qualified, err := QualifyProfile(launch.Profile)
 	if err != nil {
@@ -76,6 +91,25 @@ func preservedEmptyProfileFixture(t *testing.T) preservedProfileInspectionInput 
 		Current:     chatport.PreservedRecoveryBinding{Scope: chatport.JournalScope{ProfileID: launch.Profile.ProfileID, BackendGeneration: generation}, ParentRoot: chatport.JournalRoot{Device: launch.Profile.Device, Inode: launch.Profile.Inode, OwnerUID: chat.OwnerUID}, ChatRoot: chatport.JournalRoot{Device: chat.Device, Inode: chat.Inode, OwnerUID: chat.OwnerUID}},
 		Next:        chatport.JournalScope{ProfileID: launch.Profile.ProfileID, BackendGeneration: "fresh-empty-maintenance"}, BuildID: BuildID, HostLifetimeID: "fresh-empty-host", ChildLaunchID: "fresh-empty-child",
 	}}
+}
+
+// The daily shape is not the consumed-but-unretired test-profile shape. An
+// existing retirement and normal terminal cannot be used as a new empty-owner
+// recovery admission, even with no writes and an otherwise complete history.
+func TestPreservedProfileDiscoveryNativeRetiredEmptyDailyHistoryRefuses(t *testing.T) {
+	in := preservedEmptyHistoryProfileFixture(t, 33, true)
+	before := snapshotPreservedObservationTree(t, in.Profile.Root)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	calls := 0
+	err := discoverPreservedProfile(ctx, preservedProfileDiscoveryRequest(in), func(preservedProfileInspection) error {
+		calls++
+		return nil
+	})
+	unchangedPreservedObservationTree(t, in.Profile.Root, before)
+	if err == nil || calls != 0 {
+		t.Fatal("retired daily history acquired empty recovery metadata", err, calls)
+	}
 }
 
 func TestPreservedProfileDiscoveryNativeConsumedEmptyHistory(t *testing.T) {

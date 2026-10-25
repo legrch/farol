@@ -50,6 +50,7 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 		name                  string
 		previousConfirmedQuit bool
 		startupEmptyHistory   bool
+		startupRetiredHistory bool
 		quitAbsent            bool
 		activeInstance        bool
 		unsafeInstance        bool
@@ -58,6 +59,7 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 		refusalCode           string
 	}{
 		{name: "startup-consumed-empty-three-incarnations", startupEmptyHistory: true},
+		{name: "startup-retired-empty-thirty-three-incarnations", startupEmptyHistory: true, startupRetiredHistory: true, previousConfirmedQuit: true, refusalCode: "preserved_inspection_unconfirmed"},
 		{name: "previous-quit-false"},
 		{name: "previous-quit-true", previousConfirmedQuit: true},
 		{name: "quit-absent", quitAbsent: true},
@@ -79,7 +81,11 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 			var in preservedProfileInspectionInput
 			var workspace string
 			if scenario.startupEmptyHistory {
-				in = preservedEmptyProfileFixture(t)
+				if scenario.startupRetiredHistory {
+					in = preservedEmptyHistoryProfileFixture(t, 33, true)
+				} else {
+					in = preservedEmptyProfileFixture(t)
+				}
 				base = filepath.Dir(filepath.Dir(filepath.Dir(in.Profile.Root)))
 				workspace = filepath.Join(base, "workspace")
 				if err := os.Mkdir(workspace, 0700); err != nil {
@@ -194,6 +200,11 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 				refusedConfig = snapshotPreservedObservationTree(t, filepath.Join(state, "config.json"))
 				refusedMarker = snapshotPreservedObservationTree(t, activeMarker)
 			}
+			if scenario.startupRetiredHistory {
+				refusedProfile = snapshotPreservedObservationTree(t, in.Profile.Root)
+				refusedRun = snapshotPreservedObservationTree(t, filepath.Join(state, "running.json"))
+				refusedConfig = snapshotPreservedObservationTree(t, filepath.Join(state, "config.json"))
+			}
 			if in.Mutations == nil {
 				in.Mutations = []mutationrepo.ExpectedOwnerRecord{}
 			}
@@ -235,9 +246,18 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 			if scenario.refusalCode != "" {
 				exit, exited := err.(*exec.ExitError)
 				if !exited || exit.ExitCode() <= 0 || ctx.Err() != nil || !strings.Contains(string(out), scenario.refusalCode) {
-					t.Fatalf("original host did not refuse unsafe or leased MCP instance; retain %s: %v %s", userData, err, out)
+					t.Fatalf("original host did not return the selected refusal; retain %s: %v %s", userData, err, out)
 				}
-				for _, path := range []string{archive, filepath.Join(state, "go-core.empty-recovery.pending"), filepath.Join(state, "last-quit.json")} {
+				absent := []string{archive, filepath.Join(state, "go-core.empty-recovery.pending")}
+				if scenario.quitAbsent {
+					absent = append(absent, filepath.Join(state, "last-quit.json"))
+				} else {
+					kept, readErr := os.ReadFile(filepath.Join(state, "last-quit.json"))
+					if readErr != nil || string(kept) != string(quit) {
+						t.Fatal("refusal changed original Quit", readErr)
+					}
+				}
+				for _, path := range absent {
 					if _, err := os.Lstat(path); !os.IsNotExist(err) {
 						t.Fatal("refused recovery created archive, pending or Quit", path, err)
 					}
@@ -245,7 +265,9 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 				unchangedPreservedObservationTree(t, profile.Root, refusedProfile)
 				unchangedPreservedObservationTree(t, filepath.Join(state, "running.json"), refusedRun)
 				unchangedPreservedObservationTree(t, filepath.Join(state, "config.json"), refusedConfig)
-				unchangedPreservedObservationTree(t, activeMarker, refusedMarker)
+				if activeMarker != "" {
+					unchangedPreservedObservationTree(t, activeMarker, refusedMarker)
+				}
 				unchangedPreservedObservationTree(t, workspace, beforeWorkspace)
 				if scenario.unsettledMutation != "" {
 					unchangedPreservedObservationTree(t, mutationDirectory, mutationsBefore)
@@ -259,7 +281,7 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 						t.Fatal("refused instance acquired reconciliation authority", entry.Name())
 					}
 				}
-				t.Logf("retained refused built host fixture %s; unsafe/leased MCP marker intact; original run/config/Chat/UNKNOWN/workspace unchanged, no replay", userData)
+				t.Logf("retained refused built host fixture %s; original run/config/Chat/UNKNOWN/workspace unchanged, no replay", userData)
 				return
 			}
 			if err != nil {
