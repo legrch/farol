@@ -20,14 +20,15 @@ type verificationFailedNative struct {
 	code string
 }
 
-func (n verificationFailedNative) List(ctx context.Context, request port.ListRequest) (*port.ListResponse, error) {
-	_, _ = n.settingsNativeFixture.List(ctx, request)
+func (n verificationFailedNative) Inspect(ctx context.Context, request port.ListRequest) (*port.DirectoryBinding, error) {
+	_, _ = n.settingsNativeFixture.Inspect(ctx, request)
 	if n.code != "" {
 		return nil, authority.Fail(n.code, "native-workspace")
 	}
 	return nil, errors.New("native result unavailable")
 }
-func TestComputerConnectorVerificationFailedListIsNeverRepeated(t *testing.T) {
+
+func TestComputerConnectorVerificationFailedInspectionIsNeverRepeated(t *testing.T) {
 	s, _, native, _ := verificationOpen(t)
 	s.current.route.workspace = verificationFailedNative{settingsNativeFixture: native}
 	method := s.verificationMethod(s.current)
@@ -42,7 +43,7 @@ func TestComputerConnectorVerificationFailedListIsNeverRepeated(t *testing.T) {
 	}
 }
 
-func TestComputerConnectorVerificationPreservesListRefusalWithoutPoisoning(t *testing.T) {
+func TestComputerConnectorVerificationPreservesInspectionRefusalWithoutPoisoning(t *testing.T) {
 	for _, code := range []string{"WORKSPACE_RACE_DETECTED", "WORKSPACE_HELPER_FAILED"} {
 		t.Run(code, func(t *testing.T) {
 			s, journal, native, opened := verificationOpen(t)
@@ -97,7 +98,7 @@ func verificationState(t *testing.T, out *desktop.Outcome, err error) wire.Compu
 	}
 	return state
 }
-func TestComputerConnectorVerificationUsesOneListAndCurrentHostObservation(t *testing.T) {
+func TestComputerConnectorVerificationUsesOneInspectionAndCurrentHostObservation(t *testing.T) {
 	s, _, native, opened := verificationOpen(t)
 	query := wire.ComputerConnectorVerificationQuery{Binding: opened.Endpoint.Binding}
 	out, err := verificationInvoke(t, s.verificationObservationMethod(), query)
@@ -108,7 +109,7 @@ func TestComputerConnectorVerificationUsesOneListAndCurrentHostObservation(t *te
 	input := wire.ComputerConnectorVerify{Challenge: "visible-challenge", WorkspaceId: "work", CallId: "original-call"}
 	out, err = verificationInvoke(t, s.verificationMethod(s.current), input)
 	first := verificationState(t, out, err)
-	if first.Receipt == nil || first.ReceiptSha256 == nil || first.Receipt.Binding != opened.Endpoint.Binding || first.Receipt.Execution != opened.Execution || first.Receipt.EntryCount != 2 || native.calls != 1 {
+	if first.Receipt == nil || first.ReceiptSha256 == nil || first.Receipt.Binding != opened.Endpoint.Binding || first.Receipt.Execution != opened.Execution || first.Receipt.EntryCount != 0 || native.calls != 1 {
 		t.Fatalf("missing exact Go proof: %+v", first)
 	}
 	raw, _ := json.Marshal(first.Receipt)
@@ -169,5 +170,23 @@ func TestComputerConnectorVerificationRejectsWrongOrLateState(t *testing.T) {
 				t.Fatal("refused verification reached native IO")
 			}
 		})
+	}
+}
+
+// The verifier must not inherit List's child-inventory consistency requirement.
+// Native Inspect owns physical no-follow/root checks; this double proves routing.
+type verificationNoListingNative struct{ *settingsNativeFixture }
+
+func (verificationNoListingNative) List(context.Context, port.ListRequest) (*port.ListResponse, error) {
+	return nil, authority.Fail("WORKSPACE_RACE_DETECTED", "native-workspace")
+}
+
+func TestComputerConnectorVerificationDoesNotEnumerateChangingChildren(t *testing.T) {
+	s, _, native, _ := verificationOpen(t)
+	s.current.route.workspace = verificationNoListingNative{native}
+	out, err := verificationInvoke(t, s.verificationMethod(s.current), wire.ComputerConnectorVerify{Challenge: "visible-challenge", WorkspaceId: "work", CallId: "one-check"})
+	state := verificationState(t, out, err)
+	if state.Receipt == nil || state.Receipt.EntryCount != 0 || state.Receipt.Truncated || native.calls != 1 {
+		t.Fatalf("directory-only verification lost exact proof: %+v", state)
 	}
 }

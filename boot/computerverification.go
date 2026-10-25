@@ -169,19 +169,19 @@ func (s *computerConnector) verificationMethodFor(slot *connectorSlot, catalogue
 			state, err := connectorVerificationState(ctx, slot, lease)
 			return connectorVerificationOutcome(state, err)
 		}
-		input := workspacect.ListRequest{OwnerID: e.OwnerId, SessionID: e.SessionId, TaskID: e.TaskId, TaskEpoch: epoch,
+		input := workspacect.ContextRequest{OwnerID: e.OwnerId, SessionID: e.SessionId, TaskID: e.TaskId, TaskEpoch: epoch,
 			ParticipantID: e.ParticipantId, TurnID: e.TurnId, Generation: generation, CallID: in.CallId, WorkspaceID: in.WorkspaceId, RelativePath: "."}
-		out, err := workspacect.New(service).List(ctx, input)
+		out, err := workspacect.New(service).Inspect(ctx, input)
 		if err != nil {
 			return connectorVerificationOutcome(nil, err)
 		}
 		if out == nil || out.OwnerID != input.OwnerID || out.SessionID != input.SessionID || out.TaskID != input.TaskID || out.TaskEpoch != input.TaskEpoch ||
 			out.ParticipantID != input.ParticipantID || out.TurnID != input.TurnID || out.Generation != input.Generation || out.CallID != input.CallID ||
-			out.WorkspaceID != input.WorkspaceID || out.RelativePath != "." || len(out.Entries) > 500 {
+			out.WorkspaceID != input.WorkspaceID || out.RelativePath != "." || out.Scope != "subtree" {
 			return connectorVerificationOutcome(nil, computerUnavailable())
 		}
 		observed := port.ConnectorVerification{Host: slot.guard.host, Binding: lease.Binding(), ChallengeDigest: digest,
-			WorkspaceID: out.WorkspaceID, CallID: out.CallID, EntryCount: uint32(len(out.Entries)), Truncated: out.Truncated}
+			WorkspaceID: out.WorkspaceID, CallID: out.CallID, EntryCount: 0, Truncated: false}
 		if err = slot.owner.RecordVerification(ctx, digest, observed); err != nil {
 			return connectorVerificationOutcome(nil, err)
 		}

@@ -125,13 +125,15 @@ secret write. Any partial or uncertain publication remains fenced; no retry or
 path cleanup restores it. The TypeScript loader only reads and validates the
 protected file; it grants no authority.
 
-Verification reserves one attempt in the current Go owner before native List. A
-failed or uncertain List cannot become a new attempt. A classified workspace
+Verification reserves one attempt in the current Go owner before native directory inspection.
+The inspection does not enumerate child entries; ordinary child changes do not
+invalidate directory access. A failed or uncertain inspection cannot become a new attempt. A classified workspace
 refusal keeps its original code at the desktop boundary. Observing an unfinished
 attempt reports `COMPUTER_CONNECTOR_VERIFICATION_UNCONFIRMED`; it does not claim
 that the authority Store is unavailable or clear the attempt. Successful proof retains
 the exact execution, challenge digest, workspace, original call digest and bounded
-entry count. Repeat observations return that proof without another List and still
+entry count (zero for directory-only inspection). Repeat observations return that
+proof without another inspection and still
 require current authority. The host reads proof through the inherited pipe and
 checks the current Settings binding before saving the attachment. A receipt file
 or cached UI attachment cannot establish positive liveness. This proves neither

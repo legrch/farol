@@ -28,7 +28,19 @@ type ContextResponse struct {
 }
 
 func (c *Contract) Context(ctx context.Context, request ContextRequest) (*ContextResponse, error) {
-	out, err := c.service.Context(ctx, workspacesvc.ContextRequest{OwnerID: request.OwnerID, SessionID: request.SessionID, TaskID: request.TaskID, TaskEpoch: request.TaskEpoch,
+	return c.directoryContext(ctx, request, false)
+}
+
+func (c *Contract) Inspect(ctx context.Context, request ContextRequest) (*ContextResponse, error) {
+	return c.directoryContext(ctx, request, true)
+}
+
+func (c *Contract) directoryContext(ctx context.Context, request ContextRequest, inspectOnly bool) (*ContextResponse, error) {
+	read := c.service.Context
+	if inspectOnly {
+		read = c.service.Inspect
+	}
+	out, err := read(ctx, workspacesvc.ContextRequest{OwnerID: request.OwnerID, SessionID: request.SessionID, TaskID: request.TaskID, TaskEpoch: request.TaskEpoch,
 		ParticipantID: request.ParticipantID, TurnID: request.TurnID, Generation: request.Generation, CallID: request.CallID, WorkspaceID: request.WorkspaceID, RelativePath: request.RelativePath})
 	if err != nil {
 		return nil, failure(err)

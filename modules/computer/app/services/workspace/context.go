@@ -30,12 +30,34 @@ type ContextResponse struct {
 }
 
 func (s *Service) Context(ctx context.Context, request ContextRequest) (*ContextResponse, error) {
+	return s.directoryContext(ctx, request, false)
+}
+
+// Inspect checks directory access without enumerating children. It retains the
+// same execution lease, descriptor binding and disclosure policy as Context.
+func (s *Service) Inspect(ctx context.Context, request ContextRequest) (*ContextResponse, error) {
+	return s.directoryContext(ctx, request, true)
+}
+
+func (s *Service) directoryContext(ctx context.Context, request ContextRequest, inspectOnly bool) (*ContextResponse, error) {
 	caller := caller{identity: authority.Identity{OwnerID: request.OwnerID, SessionID: request.SessionID, TaskID: request.TaskID, TaskEpoch: request.TaskEpoch}, participantID: request.ParticipantID, workspaceID: request.WorkspaceID, relativePath: request.RelativePath}
 	admitted, err := s.admit(ctx, caller, authority.List)
 	if err != nil {
 		return nil, err
 	}
-	checked, err := s.workspace.List(ctx, port.ListRequest{Workspace: cloneDescriptor(admitted.descriptor), RelativePath: request.RelativePath})
+	query := port.ListRequest{Workspace: cloneDescriptor(admitted.descriptor), RelativePath: request.RelativePath}
+	var checked *port.ListResponse
+	if inspectOnly {
+		inspector, ok := s.workspace.(port.DirectoryInspector)
+		if !ok {
+			return nil, authority.Fail("WORKSPACE_HELPER_FAILED", "native-workspace")
+		}
+		binding, failure := inspector.Inspect(ctx, query)
+		err = failure
+		checked = &port.ListResponse{Binding: binding}
+	} else {
+		checked, err = s.workspace.List(ctx, query)
+	}
 	if err != nil {
 		return nil, nativeFailure(err)
 	}
