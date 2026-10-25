@@ -411,6 +411,9 @@ async function runScenario(scenario) {
               constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
             );
             const info = await handle.stat();
+            // Atomic replacement can unlink this already-open descriptor.
+            // It is not positive evidence: wait for the current named file.
+            if (info.nlink === 0) return "";
             assert.ok(
               info.isFile() &&
                 info.nlink === 1 &&
@@ -427,6 +430,7 @@ async function runScenario(scenario) {
               0,
             );
             assert.ok(bytesRead <= 256, "SETUP_STARTUP_STAGE_UNSAFE");
+            if ((await handle.stat()).nlink === 0) return "";
             return buffer.subarray(0, bytesRead).toString("utf8").trim();
           } catch (error) {
             if (error.code === "ENOENT") return "";
