@@ -783,6 +783,11 @@ export async function launchPreview(
           ],
           {
             cwd: root,
+            // A terminal broadcasts Ctrl+C to its foreground process group.
+            // Keep Electron and its Go/tunnel children in their own group so
+            // only this launcher receives that broadcast and forwards the
+            // graceful Quit request to Electron. Descendants drain in order.
+            detached: process.platform !== "win32",
             env: devLaunchEnvironment(
               process.env,
               path.dirname(process.execPath),
