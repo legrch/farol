@@ -47,7 +47,7 @@ export function parsePreviewWindowMode(
   return values[0];
 }
 
-// Legacy launch flag retained for compatibility. Primary fallback is automatic.
+// A sole display is automatic; tests can explicitly allow primary otherwise.
 export function parseAllowPrimaryDisplay(
   arguments_: readonly string[],
 ): boolean {
@@ -124,7 +124,7 @@ export function selectPreviewWindowPlacement(
   displays: readonly PreviewDisplay[],
   primaryDisplayId: number,
   requested: Readonly<{ width: number; height: number }>,
-  _allowPrimaryDisplay = false,
+  allowPrimaryDisplay = false,
   builtInDisplayOnly = false,
   sidecarDisplayOnly = false,
 ): PreviewWindowPlacement {
@@ -148,14 +148,15 @@ export function selectPreviewWindowPlacement(
           ...secondary.filter((d) => d.internal),
           ...secondary.filter((d) => !d.internal),
         ];
-  // Display preferences never make a second screen a startup prerequisite.
-  // Keep exact requested bounds on a suitable secondary; fit the primary fallback.
+  // A sole display never blocks startup. With other displays connected, preserve
+  // the requested test surface instead of silently taking the owner’s primary.
   const selected =
     preferred.find(
       (d) =>
         d.workArea.width >= requested.width &&
         d.workArea.height >= requested.height,
-    ) ?? primary;
+    ) ?? (secondary.length === 0 || allowPrimaryDisplay ? primary : undefined);
+  if (!selected) throw new Error("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
   const isPrimary = selected.id === primaryDisplayId;
   const selection = isPrimary
     ? "owner-allowed-primary"
@@ -237,12 +238,8 @@ export function selectDevWindowPlacement(
     requested.height <= 0
   )
     throw new Error("WINDOW_DISPLAY_GEOMETRY_INVALID");
-  if (area.width < 640 || area.height < 520) {
-    const primary = displays.find((d) => d.id === primaryDisplayId)!;
-    if (selected.id !== primaryDisplayId)
-      return selectDevWindowPlacement([primary], primaryDisplayId, requested);
+  if (area.width < 640 || area.height < 520)
     throw new Error("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
-  }
   return {
     displayId: selected.id,
     internal: selected.internal,

@@ -119,8 +119,8 @@ describe("preview window placement", () => {
       });
     },
   );
-  it("uses primary when a secondary cannot hold the requested viewport", () => {
-    expect(
+  it("refuses an undersized connected secondary without taking primary", () => {
+    expect(() =>
       selectPreviewWindowPlacement(
         [
           externalPrimary,
@@ -132,7 +132,7 @@ describe("preview window placement", () => {
         externalPrimary.id,
         { width: 1180, height: 760 },
       ),
-    ).toMatchObject({ displayId: externalPrimary.id, primary: true });
+    ).toThrow("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
   });
   it("fails closed when Electron's display inventory is inconsistent", () => {
     expect(() =>
@@ -295,8 +295,8 @@ describe("explicit iPad test presentation", () => {
       bounds: { x: -1118, y: 39, width: 1100, height: 740 },
     });
   });
-  it("falls back after Sidecar removal and still rejects contradictory preferences", () => {
-    expect(
+  it("refuses a missing Sidecar while another secondary remains connected", () => {
+    expect(() =>
       selectPreviewWindowPlacement(
         [externalPrimary, builtInSecondary],
         5,
@@ -305,8 +305,8 @@ describe("explicit iPad test presentation", () => {
         false,
         true,
       ),
-    ).toMatchObject({ displayId: 5, primary: true });
-    expect(
+    ).toThrow("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
+    expect(() =>
       selectPreviewWindowPlacement(
         [sidecar, builtInSecondary],
         7,
@@ -315,7 +315,7 @@ describe("explicit iPad test presentation", () => {
         false,
         true,
       ),
-    ).toMatchObject({ displayId: 7, primary: true });
+    ).toThrow("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
     expect(() =>
       selectPreviewWindowPlacement(
         [externalPrimary, sidecar],
@@ -327,13 +327,25 @@ describe("explicit iPad test presentation", () => {
       ),
     ).toThrow("VISIBLE_TEST_DISPLAY_CONFLICT");
   });
-  it("uses primary when the preferred Sidecar cannot fit the requested viewport", () => {
-    expect(
+  it("refuses an undersized Sidecar instead of silently taking primary", () => {
+    expect(() =>
       selectPreviewWindowPlacement(
         [externalPrimary, sidecar],
         5,
         { width: 1180, height: 760 },
         false,
+        false,
+        true,
+      ),
+    ).toThrow("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
+  });
+  it("allows explicit primary permission when the preferred test surface is unavailable", () => {
+    expect(
+      selectPreviewWindowPlacement(
+        [externalPrimary, sidecar],
+        5,
+        { width: 1180, height: 760 },
+        true,
         false,
         true,
       ),
@@ -439,7 +451,7 @@ describe("ordinary Dev secondary placement", () => {
         ),
       ).toThrow("WINDOW_DISPLAY_GEOMETRY_INVALID");
     }
-    expect(
+    expect(() =>
       selectDevWindowPlacement(
         [
           externalPrimary,
@@ -448,7 +460,7 @@ describe("ordinary Dev secondary placement", () => {
         5,
         { width: 1180, height: 760 },
       ),
-    ).toMatchObject({ displayId: 5, primary: true });
+    ).toThrow("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
     expect(() =>
       selectDevWindowPlacement(
         [

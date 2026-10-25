@@ -457,6 +457,45 @@ describe("linear Setup", () => {
 });
 
 describe("Add to ChatGPT", () => {
+  it.each([false, true])(
+    "keeps one current connection test on a completed profile (legacy UNKNOWN %s)",
+    async (unknown) => {
+      const value = readySettings();
+      value.setup.journey = { currentStep: "connect", dismissed: true };
+      value.setup.connect.outcomeUnknown = unknown;
+      value.connectors.secureMcp.appVerificationPending = unknown;
+      const h = await mount({
+        step: "attachment",
+        value,
+        signIn: "authenticated",
+      });
+      await h.confirmSignIn();
+      const test = h.button("Test in ChatGPT")!;
+      expect(test).toBeTruthy();
+      expect(
+        h.host.querySelectorAll(".setup-wizard-footer .primary"),
+      ).toHaveLength(1);
+      expect(test.disabled).toBe(unknown);
+      expect(h.button("Start using Farol")).toBeUndefined();
+      expect(h.configuration().settings.setup.journey.dismissed).toBe(true);
+      expect(h.f.api.configure).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "connector.verify-app" }),
+      );
+      expect(h.f.api.configure).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "connector.verify-separate-app" }),
+      );
+      if (unknown) expect(h.button("Refresh status")).toBeTruthy();
+      await act(async () =>
+        h.c.navigate({
+          area: "home",
+          homeView: "overview",
+          homeSelection: null,
+        }),
+      );
+      expect(h.c.getSnapshot().destination.area).toBe("home");
+      expect(h.configuration().settings.setup.journey.dismissed).toBe(true);
+    },
+  );
   it("shows exact values and the honest bounded test description", async () => {
     const h = await mount({ step: "attachment", value: readySettings() });
     expect(

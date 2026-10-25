@@ -82,63 +82,72 @@ describe("step four primary action", () => {
     expect(h.c.getSnapshot().destination.area).toBe("home");
   });
 
-  it("requires scoped explicit consent and admits at most one separate IPC request on double click", async () => {
-    const h = await mount({
-      step: "attachment",
-      value: pending(),
-      signIn: "authenticated",
-    });
-    await h.confirmSignIn();
-    const consent = h.host.querySelector<HTMLInputElement>(
-      'input[type="checkbox"]',
-    )!;
-    expect(consent).toBeTruthy();
-    expect(consent.checked).toBe(false);
-    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
-    const before = structuredClone(h.configuration());
-    const calls = vi.mocked(h.f.api.configure).mock.calls.length;
-    await act(async () => consent.click());
-    expect(h.configuration()).toEqual(before);
-    expect(h.f.api.configure).toHaveBeenCalledTimes(calls);
-    expect(h.button("Test in ChatGPT")?.disabled).toBe(false);
-    const waiting = deferred<unknown>();
-    h.reply(() => waiting.promise);
-    const test = h.button("Test in ChatGPT")!;
-    await act(async () => {
-      test.click();
-      test.click();
-    });
-    const effects = () =>
-      vi
-        .mocked(h.f.api.configure)
-        .mock.calls.filter(([c]) => c.kind === "connector.verify-separate-app");
-    expect(effects()).toHaveLength(1);
-    expect(effects()[0]![0]).toMatchObject({
-      kind: "connector.verify-separate-app",
-      expected: {
-        ownerAuthorized: true,
-        appName: "Farol",
-        tunnelId: "synthetic-tunnel",
-        connectorGeneration: 1,
-        computerGeneration: 1,
-        challengeSha256: "c".repeat(64),
-      },
-    });
-    await act(async () =>
-      waiting.resolve({
-        ok: false,
-        error: "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN",
-        snapshot: h.configuration(),
-      }),
-    );
-    await h.navigate("attachment");
-    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
-    expect(h.configuration().settings.setup.connect.outcomeUnknown).toBe(true);
-    expect(
-      h.configuration().settings.connectors.secureMcp.appVerificationPending,
-    ).toBe(true);
-    expect(effects()).toHaveLength(1);
-  });
+  it.each([false, true])(
+    "requires scoped consent and admits one separate request on double click (completed %s)",
+    async (completed) => {
+      const value = pending();
+      value.setup.journey.dismissed = completed;
+      const h = await mount({
+        step: "attachment",
+        value,
+        signIn: "authenticated",
+      });
+      await h.confirmSignIn();
+      const consent = h.host.querySelector<HTMLInputElement>(
+        'input[type="checkbox"]',
+      )!;
+      expect(consent).toBeTruthy();
+      expect(consent.checked).toBe(false);
+      expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
+      const before = structuredClone(h.configuration());
+      const calls = vi.mocked(h.f.api.configure).mock.calls.length;
+      await act(async () => consent.click());
+      expect(h.configuration()).toEqual(before);
+      expect(h.f.api.configure).toHaveBeenCalledTimes(calls);
+      expect(h.button("Test in ChatGPT")?.disabled).toBe(false);
+      const waiting = deferred<unknown>();
+      h.reply(() => waiting.promise);
+      const test = h.button("Test in ChatGPT")!;
+      await act(async () => {
+        test.click();
+        test.click();
+      });
+      const effects = () =>
+        vi
+          .mocked(h.f.api.configure)
+          .mock.calls.filter(
+            ([c]) => c.kind === "connector.verify-separate-app",
+          );
+      expect(effects()).toHaveLength(1);
+      expect(effects()[0]![0]).toMatchObject({
+        kind: "connector.verify-separate-app",
+        expected: {
+          ownerAuthorized: true,
+          appName: "Farol",
+          tunnelId: "synthetic-tunnel",
+          connectorGeneration: 1,
+          computerGeneration: 1,
+          challengeSha256: "c".repeat(64),
+        },
+      });
+      await act(async () =>
+        waiting.resolve({
+          ok: false,
+          error: "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN",
+          snapshot: h.configuration(),
+        }),
+      );
+      await h.navigate("attachment");
+      expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
+      expect(h.configuration().settings.setup.connect.outcomeUnknown).toBe(
+        true,
+      );
+      expect(
+        h.configuration().settings.connectors.secureMcp.appVerificationPending,
+      ).toBe(true);
+      expect(effects()).toHaveLength(1);
+    },
+  );
 
   it("invalidates consent when the challenge changes, and on remount", async () => {
     const value = pending();
