@@ -599,7 +599,7 @@ async function runScenario(scenario) {
       (v) => v.connectors.secureMcp.chatgptApp?.name === appName,
       "SETUP_APP_NAME_NOT_SAVED",
     );
-    const finish = page.getByRole("button", {
+    let finish = page.getByRole("button", {
       name: `Start using ${productName}`,
       exact: true,
     });
@@ -632,6 +632,7 @@ async function runScenario(scenario) {
       await page.keyboard.press("Shift+Tab");
       assert.equal(
         await page
+          .locator(".setup-wizard-footer")
           .getByRole("button", { name: "Back", exact: true })
           .evaluate((element) => document.activeElement === element),
         true,
@@ -745,6 +746,10 @@ async function runScenario(scenario) {
         child,
       );
       await waitForReactShell(page);
+      finish = page.getByRole("button", {
+        name: `Start using ${productName}`,
+        exact: true,
+      });
       await openSetup(page);
       await setupStep(page, "attachment");
       const renewed = await poll(
@@ -1165,7 +1170,7 @@ async function runScenario(scenario) {
         .count(),
       0,
     );
-    assert.equal(sendCount, 1);
+    assert.equal(sendCount, separate ? 2 : 1);
     const observation = await poll(
       () => page.evaluate(() => window.farol.bootstrap()),
       (value) => value.connectionStatus?.state === "stopped",
