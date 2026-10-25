@@ -34,3 +34,13 @@ export function dualLaunchWitness(expected, actual) {
     );
   return Object.freeze({ ...actual });
 }
+
+// A completed-fixture successor must select Home by persisted launch settings.
+// Observing Home after a click cannot satisfy this stronger witness.
+export function automaticHomeWitness(expected, actual) {
+  assert.equal(actual.journeyDismissed, true, "AUTO_HOME_FINISH_NOT_SAVED");
+  assert.equal(actual.openAtLaunch, "home", "AUTO_HOME_LAUNCH_SETTING");
+  assert.equal(actual.startupRoute, "home", "AUTO_HOME_STARTUP_ROUTE");
+  assert.equal(actual.homeNavigationUsed, false, "AUTO_HOME_MANUAL_NAVIGATION");
+  return dualLaunchWitness(expected, actual);
+}

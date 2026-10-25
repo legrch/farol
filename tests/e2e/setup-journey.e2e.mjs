@@ -1,5 +1,7 @@
 // Built React/Electron/Go with disposable fixtures. No real account or tunnel.
 import assert from "node:assert/strict";
+import { parseOwnerLaunchResult } from "../../tooling/owner-launch-result.mjs";
+import { automaticHomeWitness } from "./lib/dev-dual-launch-witness.mjs";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -42,7 +44,12 @@ import {
   recheckNativePreviewIsolation,
 } from "./native-preview-admission.mjs";
 
-assert.equal(process.argv.length, 2, "SETUP_JOURNEY_ARGUMENTS_INVALID");
+const finishReopen = process.argv[2] === "--finish-reopen";
+assert.deepEqual(
+  process.argv.slice(2),
+  finishReopen ? ["--finish-reopen"] : [],
+  "SETUP_JOURNEY_ARGUMENTS_INVALID",
+);
 const root = process.cwd();
 const source = sourceIdentity(root);
 const buildRoot = path.join(root, "_output/build/app");
@@ -99,6 +106,8 @@ async function runScenario(scenario) {
     mode: "hidden",
     liveProvider: "NOT RUN",
     installed: "NOT RUN",
+    postFinishHome: finishReopen ? [] : undefined,
+    nativeQuits: finishReopen ? [] : undefined,
     steps: {
       signin: "NOT RUN",
       folders: "NOT RUN",
@@ -334,8 +343,23 @@ async function runScenario(scenario) {
     const stateRoot = path.join(userData, "farol-state");
     const before = await readQuitObservation(stateRoot);
     const request = beginQuitObservation(before, report.pid);
-    await bounded(application.close(), "SETUP_QUIT_TIMEOUT");
-    const [code, signal] = await bounded(terminal, "SETUP_TERMINAL_TIMEOUT");
+    const original = application;
+    const dispatch = finishReopen
+      ? application
+          .evaluate(({ app }) => {
+            app.quit();
+          })
+          .then(
+            () => "returned",
+            () => "transport-ended-or-rejected",
+          )
+      : application.close();
+    if (!finishReopen) await bounded(dispatch, "SETUP_QUIT_TIMEOUT");
+    const [code, signal] = await bounded(
+      terminal,
+      "SETUP_TERMINAL_TIMEOUT",
+      60000,
+    );
     await bounded(closed, "SETUP_CLOSE_TIMEOUT");
     report.terminal = { pid: report.pid, code, signal };
     assert.equal(code, 0);
@@ -348,8 +372,19 @@ async function runScenario(scenario) {
     await assert.rejects(fs.lstat(path.join(stateRoot, "running.json")), {
       code: "ENOENT",
     });
+    if (finishReopen) {
+      await bounded(dispatch, "SETUP_QUIT_DISPATCH_TIMEOUT");
+      await bounded(original.close(), "SETUP_QUIT_DRIVER_CLOSE_TIMEOUT");
+    }
     application = null;
     report.cleanup = "confirmed";
+    if (finishReopen)
+      report.nativeQuits.push({
+        pid: report.pid,
+        terminal: report.terminal,
+        quit: report.quit,
+        markerRemoved: true,
+      });
     await save();
   }
   try {
@@ -716,6 +751,142 @@ async function runScenario(scenario) {
     report.finalState = "Home";
     report.sendCount = sendCount;
     await save();
+    if (finishReopen) {
+      assert.equal(settings.general.openAtLaunch, "home");
+      const completed = await page.evaluate(async () => {
+        const b = await window.farol.bootstrap();
+        return {
+          profileId: b.chatHistoryContext?.profileId,
+          backendGeneration: b.chatHistoryContext?.backendGeneration,
+        };
+      });
+      report.finish = {
+        dismissed: true,
+        profileId: completed.profileId,
+        syntheticSendCount: sendCount,
+        liveSendCount: 0,
+      };
+      await quit();
+      let previousBackend = completed.backendGeneration;
+      for (const ordinal of [1, 2]) {
+        // The original fixture Finish is the only setup transition. Reopen the
+        // same private profile/build; do not navigate, reconnect or send again.
+        const childAdmission = await assertNativePreviewAdmission(undefined, {
+          profileRoot: home,
+          proof,
+          launchOptions,
+          fixture: fixture.server,
+          auxiliaryRoot: auxiliary,
+          previous: admission,
+        });
+        await qualifyGoBuild(buildRoot, source);
+        application = await _electron.launch(launchOptions);
+        const child = application.process();
+        report.pid = child.pid;
+        terminal = once(child, "exit");
+        closed = once(child, "close");
+        quitAttempted = false;
+        let stderr = "";
+        child.stderr.on("data", (chunk) => {
+          assert(
+            stderr.length + chunk.length <= 131072,
+            "AUTO_HOME_OUTPUT_LIMIT",
+          );
+          stderr += chunk.toString("utf8");
+        });
+        page = await application.firstWindow();
+        await poll(
+          () =>
+            fs
+              .readFile(path.join(home, ".farol-startup-stage"), "utf8")
+              .catch((e) => {
+                if (e.code === "ENOENT") return "";
+                throw e;
+              }),
+          (v) => v.trim() === "startup-complete",
+          "AUTO_HOME_STARTUP_NOT_COMPLETE",
+          30000,
+        );
+        const outcome = await poll(
+          () => parseOwnerLaunchResult(stderr),
+          (v) => v !== null,
+          "AUTO_HOME_RESULT_MISSING",
+        );
+        assert.equal(
+          outcome,
+          "primary-started",
+          "AUTO_HOME_NOT_PRIMARY_STARTED",
+        );
+        const paths = await application.evaluate(({ app, BrowserWindow }) => ({
+          pid: process.pid,
+          home: app.getPath("home"),
+          userData: app.getPath("userData"),
+          sessionData: app.getPath("sessionData"),
+          temp: app.getPath("temp"),
+          windows: BrowserWindow.getAllWindows().map((w) => ({
+            visible: w.isVisible(),
+            focused: w.isFocused(),
+          })),
+        }));
+        admission = await recheckNativePreviewIsolation(
+          childAdmission,
+          paths,
+          child,
+        );
+        assert.equal(paths.userData, userData);
+        await waitForReactShell(page);
+        await page.locator('[data-home-view="overview"]').waitFor();
+        await page
+          .getByRole("heading", { name: "Home", exact: true })
+          .waitFor();
+        const observed = await page.evaluate(async () => {
+          const b = await window.farol.bootstrap();
+          return {
+            buildId: b.build.buildId,
+            profileId: b.chatHistoryContext?.profileId,
+            backendGeneration: b.chatHistoryContext?.backendGeneration,
+            runtimeState: b.runtimeState,
+            journeyDismissed: b.configuration.settings.setup.journey.dismissed,
+            openAtLaunch: b.configuration.settings.general.openAtLaunch,
+            rendererReady: document.querySelector("main.stage") !== null,
+            startupRoute: document.querySelector('[data-home-view="overview"]')
+              ? "home"
+              : "other",
+            route: document.querySelector('[data-home-view="overview"]')
+              ? "home"
+              : "other",
+            recovery: document.body.textContent.includes(
+              "Your previous session needs recovery",
+            ),
+          };
+        });
+        const witness = automaticHomeWitness(
+          {
+            buildId: build.identity.buildId,
+            profileId: completed.profileId,
+            previousBackendGeneration: previousBackend,
+          },
+          { ...observed, outcome, homeNavigationUsed: false },
+        );
+        assert.equal(sendCount, 1, "AUTO_HOME_SENT_AGAIN");
+        await page.screenshot({
+          path: path.join(output, `automatic-home-${ordinal}.png`),
+        });
+        const lifetime = { ordinal, pid: child.pid, witness };
+        report.postFinishHome.push(lifetime);
+        await quit();
+        lifetime.quit = report.quit;
+        lifetime.terminal = report.terminal;
+        previousBackend = observed.backendGeneration;
+        await save();
+      }
+      report.status = "passed-fixture-finish-reopen";
+      return {
+        scenario,
+        status: report.status,
+        report: path.join(output, "report.json"),
+      };
+    }
     // Exercise the existing production Disconnect action once after completed
     // Setup. Observe the same stop; never reconnect or send another message.
     await setupStep(page, "connection");
@@ -799,13 +970,9 @@ async function runScenario(scenario) {
 }
 
 const matrix = [];
-for (const scenario of [
-  "happy",
-  "wrong-app",
-  "wrong-nonce",
-  "stale-receipt",
-  "late-receipt",
-]) {
+for (const scenario of finishReopen
+  ? ["happy"]
+  : ["happy", "wrong-app", "wrong-nonce", "stale-receipt", "late-receipt"]) {
   const result = await runScenario(scenario);
   matrix.push(result);
   if (result.status === "failed" || process.exitCode) break;
@@ -818,8 +985,10 @@ const matrixOutput = path.join(
 await fs.mkdir(matrixOutput, { recursive: true, mode: 0o700 });
 const matrixReport = {
   status:
-    matrix.length === 5 && !process.exitCode
-      ? "passed-fixture-setup-matrix"
+    matrix.length === (finishReopen ? 1 : 5) && !process.exitCode
+      ? finishReopen
+        ? "passed-fixture-finish-reopen"
+        : "passed-fixture-setup-matrix"
       : "failed",
   source,
   buildId: build.identity.buildId,

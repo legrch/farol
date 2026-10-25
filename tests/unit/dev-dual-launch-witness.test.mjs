@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import {
   savedDevAdmission,
   dualLaunchWitness,
+  automaticHomeWitness,
 } from "../e2e/lib/dev-dual-launch-witness.mjs";
 const clean = { ok: true, receipt: { drained: true, unconfirmed: [] } };
 it("does not upgrade an old run using a clean Quit or process/pending absence", () => {
@@ -60,3 +61,27 @@ it.each([
 ])("refuses missing or mismatched startup evidence %j", (delta) => {
   expect(() => dualLaunchWitness(expected, { ...current, ...delta })).toThrow();
 });
+
+const automatic = {
+  ...current,
+  journeyDismissed: true,
+  openAtLaunch: "home",
+  startupRoute: "home",
+  homeNavigationUsed: false,
+};
+it("requires a saved real Finish and automatic Home in the successor witness", () => {
+  expect(automaticHomeWitness(expected, automatic).startupRoute).toBe("home");
+});
+it.each([
+  { journeyDismissed: false },
+  { openAtLaunch: "settings" },
+  { startupRoute: "setup" },
+  { homeNavigationUsed: true },
+])(
+  "does not substitute manually reached Home for automatic Home %j",
+  (delta) => {
+    expect(() =>
+      automaticHomeWitness(expected, { ...automatic, ...delta }),
+    ).toThrow();
+  },
+);
