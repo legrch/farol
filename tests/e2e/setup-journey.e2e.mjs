@@ -76,6 +76,7 @@ const executablePath = path.join(
 );
 async function runScenario(scenario) {
   const separate = scenario === "separate-after-unknown";
+  const expectedFinalSends = separate || repeatAfterFinish ? 2 : 1;
   const trackQuits = finishReopen || separate || repeatAfterFinish;
   const appName = `${productName} Setup Fixture`;
   const id = randomUUID();
@@ -176,10 +177,7 @@ async function runScenario(scenario) {
   }
   async function verify(prompt) {
     sendCount++;
-    assert.ok(
-      sendCount <= (separate || repeatAfterFinish ? 2 : 1),
-      "SETUP_SEND_REPLAYED",
-    );
+    assert.ok(sendCount <= expectedFinalSends, "SETUP_SEND_REPLAYED");
     if (scenario === "late-receipt") {
       delayedPrompt = prompt;
       return;
@@ -1276,7 +1274,7 @@ async function runScenario(scenario) {
         .count(),
       0,
     );
-    assert.equal(sendCount, separate ? 2 : 1);
+    assert.equal(sendCount, expectedFinalSends);
     const observation = await poll(
       () => page.evaluate(() => window.farol.bootstrap()),
       (value) => value.connectionStatus?.state === "stopped",
@@ -1292,7 +1290,9 @@ async function runScenario(scenario) {
     };
     await setupStep(page, "attachment");
     const completedTest = page
-      .locator(".setup-wizard-footer")
+      .locator(
+        '.setup-page[data-setup-step="attachment"] .connection-test-control',
+      )
       .getByRole("button", {
         name: "Test in ChatGPT",
         exact: true,
@@ -1304,7 +1304,8 @@ async function runScenario(scenario) {
     );
     assert.equal(await completedTest.isEnabled(), false);
     assert.equal((await readSetupSettings(page)).setup.journey.dismissed, true);
-    assert.equal(sendCount, separate ? 2 : 1);
+    assert.equal(sendCount, expectedFinalSends);
+    report.sendCount = sendCount;
     report.completedConnectionReview = {
       testVisible: true,
       enabled: false,
