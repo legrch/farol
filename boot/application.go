@@ -140,7 +140,7 @@ func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Wri
 	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || *profile == "" {
 		return 2
 	}
-	if (*startupMode != "normal" && *startupMode != "recovery") || (*shellFD != 0 && *shellFD != 3) {
+	if (*startupMode != "normal" && *startupMode != "recovery" && *startupMode != "fresh") || (*shellFD != 0 && *shellFD != 3) {
 		return 2
 	}
 	codexRead, err := decodeCodexReadLaunch(codexReadHost, codexReadTemp, *root != "")
@@ -148,7 +148,7 @@ func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Wri
 		fmt.Fprintln(diagnostics, err)
 		return 2
 	}
-	if *startupMode == "recovery" && (*root == "" || *storeMode != "open" || *hostLifetime == "" || *childLaunch == "" || *settingsMutations || *previousDrain || *shellFD != 0 || codexRead != nil) {
+	if (*startupMode == "recovery" || *startupMode == "fresh") && (*root == "" || (*storeMode != "open" && !(*startupMode == "fresh" && *storeMode == "create")) || *hostLifetime == "" || *childLaunch == "" || *settingsMutations || *previousDrain || *shellFD != 0 || codexRead != nil) {
 		return 2
 	}
 	var launch *NativeLaunch

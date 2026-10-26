@@ -336,8 +336,11 @@ digest, the complete selected owner-mutation set and future maintenance
 identities remain independently supplied and verified. The known-scope
 observation and preparation entries retain their existing requirements.
 
-The trusted desktop startup composition makes one preserving-maintenance
-attempt before launching a current read-only or normal child. It borrows the
+The previous-session startup composition makes one preserving-maintenance
+attempt before launching its selected read-only or successor child. Ordinary
+independent fresh startup now has a separate current-claim path described in
+[Startup recovery](../../../startup-recovery.md#independent-fresh-admission); it
+does not call this previous-session composition or Consume. It borrows the
 original admission handle and full verifier; the enclosing Electron owner
 retains release and proves current singleton ownership and absence of admitted
 current runtime work. The collector selects an existing profile, physical roots,

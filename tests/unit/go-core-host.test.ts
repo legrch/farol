@@ -206,6 +206,12 @@ function transport(fault?: Fault) {
                 data: {},
               });
           });
+        case "core.fresh.close":
+          quiesced = true;
+          stopPoll?.();
+          stopStorePoll?.();
+          data = { drained: true };
+          break;
         case "core.retirement.prepare":
           quiesced = true;
           stopPoll?.();
@@ -1926,3 +1932,60 @@ it("observes the original recovery pipe loss without a request, replacement or n
   expect(host.isAvailable()).toBe(false);
   expect(f.close).toHaveBeenCalledTimes(1);
 });
+
+// Fresh admission has its own current-session drain, never a previous ACK.
+it("starts an independent fresh session without previous drain and withholds mutations/Shell", async () => {
+  const f = transport();
+  start.mockResolvedValueOnce(f.client);
+  const host = await startDesktopGoCore({
+    ...selection,
+    startupPurpose: "fresh",
+    previousHostDrainConfirmed: false,
+  });
+  expect(start.mock.calls[0]?.[1]).toMatchObject({
+    startupMode: "fresh",
+    previousHostDrainConfirmed: false,
+    settingsMutations: false,
+  });
+  await host.close();
+  expect(f.events).toContain("core.fresh.close");
+  expect(f.events).not.toContain("core.retirement.prepare");
+  expect(AttestedCore.prototype.completeRetirement).not.toHaveBeenCalled();
+  expect(f.closeAndObserve).toHaveBeenCalledOnce();
+});
+it.each(["drain", "terminal"] as const)(
+  "keeps fresh %s uncertainty unconfirmed without retry",
+  async (phase) => {
+    const f = transport((method, outcome) =>
+      method === "core.fresh.close" && phase === "drain"
+        ? {
+            ...outcome,
+            status: "unknown",
+            code: "FRESH_SESSION_DRAIN_UNCONFIRMED",
+          }
+        : outcome,
+    );
+    if (phase === "terminal")
+      f.closeAndObserve.mockResolvedValueOnce({
+        exitCode: 0,
+        signal: null,
+        forced: true,
+      });
+    start.mockResolvedValueOnce(f.client);
+    const host = await startDesktopGoCore({
+      ...selection,
+      startupPurpose: "fresh",
+      previousHostDrainConfirmed: false,
+    });
+    await expect(host.close()).rejects.toMatchObject({
+      code:
+        phase === "drain"
+          ? "fresh_session_drain_unconfirmed"
+          : "fresh_session_terminal_unconfirmed",
+    });
+    expect(
+      f.events.filter((method) => method === "core.fresh.close"),
+    ).toHaveLength(1);
+    expect(AttestedCore.prototype.completeRetirement).not.toHaveBeenCalled();
+  },
+);

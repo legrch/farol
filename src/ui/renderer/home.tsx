@@ -54,6 +54,7 @@ export function Home({ snapshot, facade }: Props) {
       ),
   );
   const working =
+    !snapshot.independentSession &&
     snapshot.configuration?.status === "ready" &&
     snapshot.configuration.settings.setup.journey.dismissed &&
     (checklist.ready || (computer.localConnectionCurrent && !first));
@@ -115,7 +116,26 @@ export function Home({ snapshot, facade }: Props) {
   return (
     <div className="home-candidate" data-home-view="overview">
       <h1>Home</h1>
-      {checklist.completed && !working && !checking ? (
+      {snapshot.independentSession ? (
+        <section
+          className="home-status-card home-health-warning"
+          role="status"
+          aria-label="New session with limited tools"
+        >
+          <div>
+            <h2>New session · tools limited</h2>
+            <p>
+              Your setup and previous activity are saved. File changes and
+              commands are paused until their current resources can be confirmed
+              safe.
+            </p>
+          </div>
+        </section>
+      ) : null}
+      {checklist.completed &&
+      !working &&
+      !checking &&
+      !snapshot.independentSession ? (
         <section
           className="home-status-card home-health-warning"
           aria-label="Connection needs attention"
@@ -140,7 +160,9 @@ export function Home({ snapshot, facade }: Props) {
             Review connection
           </button>
         </section>
-      ) : !working && !checking ? (
+      ) : !working &&
+        !checking &&
+        !(snapshot.independentSession && checklist.completed) ? (
         <section className="home-setup-card" aria-labelledby="home-setup-title">
           <h2 id="home-setup-title">Finish setup</h2>
           <p>Complete these four steps to connect ChatGPT to this Mac.</p>
@@ -189,7 +211,7 @@ export function Home({ snapshot, facade }: Props) {
             Continue setup
           </button>
         </section>
-      ) : (
+      ) : snapshot.independentSession ? null : (
         <>
           <section className="home-status-card" aria-label="Connection status">
             <span className="home-working-mark" aria-hidden="true">

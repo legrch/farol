@@ -175,6 +175,7 @@ export type WindowSnapshot = Readonly<{
     unmappedCodes?: number;
   }>;
   runtime: "starting" | "ready" | "offline" | "failed";
+  independentSession?: boolean;
   connectionStatus?: ConnectionStatusView;
   route: "loading" | "loaded" | "failed";
   signInObservation: SignInObservation | null;

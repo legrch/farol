@@ -30,6 +30,7 @@ import {
 import { startDesktopGoRecovery } from "../../../apps/desktop/recovery/core-host";
 import { createStartupRecoverySession } from "../../../apps/desktop/recovery/session";
 import { beginStartupMaintenanceAttempt } from "../../../apps/desktop/recovery/receipt";
+import { preserveFreshStartHistory } from "../../../apps/desktop/recovery/fresh-admission";
 import { runStartupPreservedMaintenance } from "../../../apps/desktop/recovery/maintenance";
 import {
   openStartupRecoveryWindow,
@@ -1669,6 +1670,7 @@ function bootstrap() {
       error: "SETTINGS_READ_FAILED",
     },
     runtimeState,
+    independentSession: desktopGoCore?.independentSession === true,
     browserRouteState:
       selectedTaskId === ""
         ? { state: chatGptRoute?.loadState() ?? "loading" }
@@ -3784,6 +3786,17 @@ async function stopAndConfirmComputerMcp(
   reason?: "owner_stop",
 ): Promise<void> {
   if (!connector) throw new Error("CONNECTOR_STOP_UNCONFIRMED");
+  if (
+    core?.independentSession &&
+    inFlightStart === null &&
+    !connector.isRunning()
+  ) {
+    // This run never owned the retained legacy tunnel. Close only its current
+    // native connector/account ports; old lifecycle markers remain history.
+    await savedChat?.close();
+    await core.closeComputerConnector(reason);
+    return;
+  }
   const lifecycle = computerMcpLifecycle();
   await observeOperation(
     operationsStore(),
@@ -12107,6 +12120,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   });
   installedResourcesOrigin = updateRelaunch?.resourcesOrigin;
   const stateRoot = path.join(app.getPath("userData"), "farol-state");
+  let freshStartup = false;
   const previousHostAdmissionReady = await withStartupPromotionLease(
     app.getPath("userData"),
     buildIdentity.buildId,
@@ -12126,7 +12140,40 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT",
       );
       let admissionReady = clean;
-      if (compiledGoCore !== null && !clean) {
+      // A clean legacy successor keeps its existing route. Once fresh sessions
+      // exist, every later launch stays independent of the old Chat handoff.
+      const priorFreshSession = await lstat(
+        path.join(stateRoot, "go-core", "chat", "fresh-session.claim"),
+      ).then(
+        () => true,
+        (error: unknown) => {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+          throw error;
+        },
+      );
+      freshStartup = compiledGoCore !== null && (!clean || priorFreshSession);
+      if (freshStartup) {
+        if (!clean) {
+          // Current Settings integrity remains mandatory; no default/repair path.
+          const saved = await new ProductSettingsStore({
+            root: stateRoot,
+          }).loadExisting();
+          if (!saved) throw Error("FRESH_START_SETTINGS_UNAVAILABLE");
+        }
+        if (!clean)
+          await preserveFreshStartHistory(stateRoot, async () => {
+            await updateRelaunch?.recheck();
+            if (
+              !primaryInstanceLock ||
+              !app.hasSingleInstanceLock() ||
+              quitInProgress ||
+              runtimeStopping ||
+              !(await verify())
+            )
+              throw Error("FRESH_START_CURRENT_OWNER_UNCONFIRMED");
+          });
+      }
+      if (!freshStartup && compiledGoCore !== null && !clean) {
         const assertMaintenanceCurrent = async () => {
           await updateRelaunch?.recheck();
           if (
@@ -12299,7 +12346,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
           return false;
         }
       }
-      if (compiledGoCore !== null) {
+      if (compiledGoCore !== null && !freshStartup) {
         // Admission is either a confirmed predecessor Quit or the separate
         // qualified preserving-maintenance handoff. The latter keeps the old
         // ACK/terminal unobserved; it never manufactures a clean Quit receipt.
@@ -12455,7 +12502,10 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
           )
             ? undefined
             : compiledGoShell,
-        previousHostDrainConfirmed: previousHostAdmissionReady,
+        previousHostDrainConfirmed: freshStartup
+          ? false
+          : previousHostAdmissionReady,
+        ...(freshStartup ? { startupPurpose: "fresh" as const } : {}),
         build: buildIdentity,
         // The attested path must remain immutable through spawn and lifetime.
         // Shared installation paths are writable by other administrator accounts.

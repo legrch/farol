@@ -42,33 +42,39 @@ type NativeLaunch struct {
 	shell *connectorShellConfig
 }
 type NativeRuntime struct {
-	cancel           context.CancelFunc
-	browser          *BrowserExchange
-	conversations    *ChatIngress
-	chatComputer     *ChatComputerIngress
-	results          *results.Native
-	profile          *QualifiedProfile
-	store            *accessrepo.Store
-	journal          *chatrepo.Repository
-	chat             *chatlifecycle.Service
-	ingress          *ComputerIngress
-	connector        *computerConnector
-	mutations        *SettingsMutationIngress
-	settingsDelivery *SettingsDeliveryIngress
-	settingsStore    *SettingsStoreExchange
-	mutationStore    *mutationrepo.Repository
-	closed           atomic.Bool
-	closeOnce        sync.Once
-	closeErr         error
-	retirement       *nativeRetirement
-	historyAuthority *historyReadAuthority
-	history          *chathandoff.HistoryReader
-	retiredArchive   *chatarchive.Service
-	codexRead        *nativeCodexRead
+	cancel              context.CancelFunc
+	browser             *BrowserExchange
+	conversations       *ChatIngress
+	chatComputer        *ChatComputerIngress
+	results             *results.Native
+	profile             *QualifiedProfile
+	store               *accessrepo.Store
+	journal             *chatrepo.Repository
+	chat                *chatlifecycle.Service
+	ingress             *ComputerIngress
+	connector           *computerConnector
+	mutations           *SettingsMutationIngress
+	settingsDelivery    *SettingsDeliveryIngress
+	settingsStore       *SettingsStoreExchange
+	mutationStore       *mutationrepo.Repository
+	closed              atomic.Bool
+	closeOnce           sync.Once
+	closeErr            error
+	retirement          *nativeRetirement
+	fresh               *freshSession
+	freshCloseMu        sync.Mutex
+	freshCloseAttempted bool
+	historyAuthority    *historyReadAuthority
+	history             *chathandoff.HistoryReader
+	retiredArchive      *chatarchive.Service
+	codexRead           *nativeCodexRead
 }
 
 func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation string) (*NativeRuntime, error) {
-	if launch.StartupMode != "" && launch.StartupMode != "normal" {
+	if launch.StartupMode != "" && launch.StartupMode != "normal" && launch.StartupMode != "fresh" {
+		return nil, profileFailure(ProfileInvalid)
+	}
+	if launch.StartupMode == "fresh" && (launch.PreviousHostDrainConfirmed || launch.SettingsMutations || launch.CodexRead != nil || launch.shell != nil || launch.HostLifetimeID == "" || launch.ChildLaunchID == "") {
 		return nil, profileFailure(ProfileInvalid)
 	}
 	if launch.CodexRead != nil && !launch.CodexRead.valid() {
@@ -106,9 +112,18 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 	if err != nil {
 		return fail(err)
 	}
+	if launch.StartupMode == "fresh" {
+		runtime.fresh, err = acquireFreshSession(ctx, chat, generation)
+		if err != nil {
+			return fail(err)
+		}
+		chat = runtime.fresh.root
+	}
 	journalRoot := chatrepo.Root{Path: chat.Path, ProfileID: chat.ProfileID, Device: chat.Device, Inode: chat.Inode, OwnerUID: chat.OwnerUID}
 	limits := chatrepo.Limits{Bytes: 1048576, Records: 4096}
-	if launch.HostLifetimeID != "" {
+	if launch.StartupMode == "fresh" {
+		runtime.journal, err = chatrepo.New(ctx, journalRoot, limits)
+	} else if launch.HostLifetimeID != "" {
 		runtime.retirement, err = newNativeRetirement(ctx, launch, generation, chat)
 		if err != nil {
 			return fail(err)
@@ -135,7 +150,12 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 	if err != nil {
 		return fail(err)
 	}
-	runtime.results, err = results.NewNative(ctx, lifetime, results.Root{Path: chat.Path, ProfileID: chat.ProfileID, Identity: chatport.JournalRoot{Device: chat.Device, Inode: chat.Inode, OwnerUID: chat.OwnerUID}}, scope, results.TextLimits(), launch.StoreMode)
+	runtime.results, err = results.NewNative(ctx, lifetime, results.Root{Path: chat.Path, ProfileID: chat.ProfileID, Identity: chatport.JournalRoot{Device: chat.Device, Inode: chat.Inode, OwnerUID: chat.OwnerUID}}, scope, results.TextLimits(), func() string {
+		if runtime.fresh != nil {
+			return "create"
+		}
+		return launch.StoreMode
+	}())
 	if err != nil {
 		return fail(err)
 	}
@@ -201,7 +221,7 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 			}
 		}
 	}
-	if runtime.retirement != nil {
+	if runtime.retirement != nil || runtime.fresh != nil {
 		runtime.historyAuthority, err = newHistoryReadAuthority(lifetime, chatport.HistoryReadScope{ProfileID: scope.ProfileID, BackendGeneration: scope.BackendGeneration, OwnerID: launch.OwnerID}, func() error {
 			_, _, err := qualified.Roots()
 			return err
@@ -209,7 +229,7 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 		if err != nil {
 			return fail(err)
 		}
-		if launch.StoreMode == "create" {
+		if launch.StoreMode == "create" || runtime.fresh != nil {
 			runtime.history, err = chathandoff.NewEmptyHistoryReader(scope, runtime.historyAuthority)
 		} else {
 			runtime.history, err = chathandoff.NewHistoryReader(runtime.retirement.history, chathandoff.HistoryDependencies{Authority: runtime.historyAuthority, Results: runtime.results, ResultBytesLimit: chatlifecycle.OutputBytesLimit})
@@ -225,6 +245,11 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 	if launch.CodexRead != nil {
 		runtime.selectNativeCodexRead(lifetime, *launch.CodexRead)
 		runtime.connector.codexRead = &connectorCodexRead{hostID: launch.CodexRead.HostID, reader: selectedCodexReadFunc(runtime.ReadSelectedCodex)}
+	}
+	if runtime.fresh != nil {
+		if err := runtime.fresh.verify(); err != nil {
+			return fail(err)
+		}
 	}
 	return runtime, nil
 }
@@ -277,6 +302,9 @@ func (r *NativeRuntime) closeResources() error {
 	if r.retirement != nil {
 		failures = append(failures, r.retirement.repo.Close())
 	}
+	if r.fresh != nil {
+		failures = append(failures, r.fresh.close())
+	}
 	if r.profile != nil {
 		failures = append(failures, r.profile.Close())
 	}
@@ -302,7 +330,7 @@ func (r *NativeRuntime) Methods() (map[string]desktop.Method, error) {
 			merged[name] = method
 		}
 	}
-	for _, source := range []map[string]desktop.Method{r.ingress.Methods(), r.connector.Methods(), r.browser.Methods(), r.conversations.Methods(), r.chatComputer.Methods(), r.retirementMethods()} {
+	for _, source := range []map[string]desktop.Method{r.ingress.Methods(), r.connector.Methods(), r.browser.Methods(), r.conversations.Methods(), r.chatComputer.Methods(), r.retirementMethods(), r.freshSessionMethods()} {
 		for name, method := range source {
 			if _, exists := merged[name]; exists {
 				return nil, errors.New("native_method_conflict")
@@ -320,6 +348,25 @@ func (r *NativeRuntime) Methods() (map[string]desktop.Method, error) {
 				}
 				merged[name] = method
 			}
+		}
+	}
+	if r.fresh != nil {
+		for name, method := range merged {
+			original := method.Handle
+			method.Handle = func(ctx context.Context, request desktop.Request) (*desktop.Outcome, error) {
+				unavailable := func() (*desktop.Outcome, error) {
+					return &desktop.Outcome{Status: "unknown", Code: "FRESH_SESSION_CLAIM_UNCONFIRMED"}, nil
+				}
+				if r.closed.Load() || r.fresh.verify() != nil {
+					return unavailable()
+				}
+				result, err := original(ctx, request)
+				if r.closed.Load() || r.fresh.verify() != nil {
+					return unavailable()
+				}
+				return result, err
+			}
+			merged[name] = method
 		}
 	}
 	return merged, nil

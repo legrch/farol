@@ -140,6 +140,7 @@ export const BootstrapProjectionSchema = z.object({
   build: BuildIdentitySchema,
   configuration: ProductConfigurationSnapshotSchema,
   runtimeState: z.enum(["starting", "ready", "offline", "failed"]),
+  independentSession: z.boolean().optional(),
   connectionStatus: ConnectionStatusViewSchema.optional(),
   browserRouteState: BrowserRouteStatusSchema.optional(),
   selectedTaskId: z.string().default(""),
@@ -660,6 +661,7 @@ export class WindowController implements RendererFacade {
           this.adoptConnectionStatusRead(data, connectionRead);
         this.patch({
           environment: data.environment,
+          independentSession: data.independentSession === true,
           ...(this.browserRouteRevision === browserRouteAtStart &&
           data.browserRouteState
             ? { route: data.browserRouteState.state }

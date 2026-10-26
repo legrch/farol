@@ -1063,7 +1063,7 @@ export interface NativeCoreLaunch {
   readonly ownerId: string;
   readonly computerId: string;
   readonly storeMode: "create" | "open";
-  readonly startupMode?: "normal" | "recovery";
+  readonly startupMode?: "normal" | "recovery" | "fresh";
   readonly settingsMutations?: boolean;
   readonly previousHostDrainConfirmed?: boolean;
   readonly hostLifetimeId?: string;
@@ -1100,12 +1100,14 @@ export async function spawnCore(
     if (
       native?.startupMode !== undefined &&
       native.startupMode !== "normal" &&
-      native.startupMode !== "recovery"
+      native.startupMode !== "recovery" &&
+      native.startupMode !== "fresh"
     )
       throw new BridgeError("refused", "invalid_native_launch");
     if (
-      native?.startupMode === "recovery" &&
-      (native.storeMode !== "open" ||
+      (native?.startupMode === "recovery" || native?.startupMode === "fresh") &&
+      ((native.storeMode !== "open" &&
+        !(native.startupMode === "fresh" && native.storeMode === "create")) ||
         !native.hostLifetimeId ||
         !native.childLaunchId ||
         (native.previousHostDrainConfirmed !== undefined &&

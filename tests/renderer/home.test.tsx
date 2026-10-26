@@ -307,3 +307,11 @@ it("keeps recorded unknown history out of Home without clearing it", async () =>
   expect(events.every((e) => e.outcome === "unknown")).toBe(true);
   expect(h.f.api.configure).not.toHaveBeenCalled();
 });
+
+it("shows a saved fresh session with limited tools without claiming all tools work", async () => {
+  const h = await mount({ ...working(), independentSession: true });
+  expect(h.host.textContent).toContain("New session · tools limited");
+  expect(h.host.textContent).toContain("File changes and commands are paused");
+  expect(h.host.textContent).not.toContain("Farol is working");
+  expect(h.host.querySelector(".home-setup-card")).toBeNull();
+});

@@ -1,6 +1,10 @@
 # Startup recovery availability
 
-An unconfirmed predecessor still fences normal host admission and effects. The desktop opens a recovery document before ordinary configuration services, Browser, MCP or update actions. It holds the original startup promotion lease through the recovery view and its exact child cleanup, while preserving the predecessor run marker and operation records.
+An unconfirmed predecessor still fences consumption of its Chat journal and
+replay of its effects. Independent fresh admission, described below, creates a
+separate current Chat session without consuming that predecessor. The earlier
+preserving-maintenance and restricted Recovery routes retain their original
+requirements; neither is proof of a successful historical operation.
 
 Recovery reads only an existing stable private Settings document. Missing, corrupt, unsafe or changed Settings remain unavailable without defaults, repair, migration or a backend launch. Valid Settings remain visible even when the separately selected local read owner cannot start. Approved folder selection, directory navigation and file size/SHA-256 metadata use the existing Go authority and filesystem owners, with a fresh Computer-only publication. This does not resume Chat, mutations, commands or connection actions.
 
@@ -172,7 +176,8 @@ the host refuses a mixed inventory with
 neighbors or fabricates owner file bindings for processes. A new native mixed
 consumer requires separate contract acceptance and exact-source qualification.
 Until then, this source change makes the compatibility boundary explicit but
-does not unblock the preserved daily profile or authorize a runtime attempt.
+does not admit that mixed journal to the previous-session recovery consumer or
+authorize a runtime attempt.
 
 The disposable collector fixtures use producer header/identity shapes with
 deliberately opaque receipt evidence. Pure projection tests use anonymized
@@ -180,3 +185,52 @@ process/output shapes. Neither suite proves Go codec acceptance, real process
 cleanup, native lock ownership or successful recovery. Build inclusion must use
 the ordinary clean source/resource-attested artifact path; patching an older
 running artifact or its declarations is not supported.
+
+## Independent fresh admission
+
+Ordinary Go desktop startup selects fresh admission after an unconfirmed host,
+or when the profile already contains independent sessions. A clean legacy
+successor retains its existing strict retirement route. Fresh admission never
+sets `previousHostDrainConfirmed`, calls previous `Consume`, replays stored work,
+or feeds connector/process records into the owner-settings Completed consumer.
+
+The host retains its real startup promotion lease and singleton ownership while
+preserving the original run marker and optional Quit bytes in a private,
+append-only `run-history/<UUID>` directory. It refuses an alive or unidentified
+marker owner. A dead marker owner permits preservation only, not a claim that
+the old process or operation succeeded. The ordinary new-host run marker is
+published separately. Settings integrity remains mandatory; no reset, default
+repair or permission migration is used to qualify an interrupted profile.
+
+The new Go child obtains the existing exclusive Computer owner before creating
+any new Chat state. It also holds a permanent fresh-session claim and the
+existing lifecycle, handoff and result claims when present. Busy, partial or
+changed claims refuse. An append-only `chat/fresh-<generation-hash>/chat` root
+holds this run's lifecycle/results; its generation directory is created
+exclusively and never reopened, even after an abandoned startup. Original Chat,
+mutation and Task journals remain in place. Historical UNKNOWN stays UNKNOWN.
+Every native request checks the retained claims before and after dispatch.
+
+**This first independent mode is limited.** It composes a fresh Chat session and
+the independently qualified Computer reader, without mutation storage, Shell
+or Codex read selection. A new run/claim does not prove arbitrary old workspace
+descendants stopped. Home states that file changes and commands are paused;
+it does not claim all tools work or repeat completed Setup. Current shared
+Computer/Chat owners can still block the backend because this composition
+depends on their actual claims. No isolated workspace/output bypass is added.
+
+`core.fresh.close` freezes and drains only this session and is admitted once.
+The host requires its confirmed reply and the original child's actual normal,
+unforced exit. Unknown drain or terminal remains unconfirmed without retry.
+This protocol records no previous-session retirement, ACK or terminal. A
+retained legacy tunnel not owned by this run is not stopped during its Quit;
+an actually owned running/uncertain connector keeps its existing strict drain.
+Build ownership remains a separate guard.
+
+Disposable native tests qualify current claim conflicts, two fresh generations,
+unchanged historical bytes, refused generation reuse and lost claims. Host,
+protocol and renderer fixtures cover routing, current-only drain, preserved
+markers/57 synthetic UNKNOWN and the limited Home warning. They do not establish
+live-provider behavior, arbitrary descendant cleanup, Electron restart, actual
+owner-profile admission or package/installed acceptance. No live recovery is
+implied by these tests.

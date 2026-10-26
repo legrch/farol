@@ -87,6 +87,7 @@ export type DesktopCoreSelection = Readonly<{
   // Captured before the new host writes its run marker. Only the exact prior
   // host's confirmed drain can clear that marker; Go terminal bytes cannot.
   previousHostDrainConfirmed: boolean;
+  startupPurpose?: "fresh";
   build: BuildIdentity;
   artifactRoot: string;
   stateRoot: string;
@@ -128,6 +129,7 @@ export class DesktopGoCore {
     private readonly hasMutationStorage = false,
     buildId?: string,
     private readonly qualifiedShell = false,
+    private readonly freshSession = false,
   ) {
     this.authority = new GoComputerAuthority(client, client.verifiedContext);
     this.computer = new ComputerBridge(client);
@@ -171,6 +173,9 @@ export class DesktopGoCore {
     this.chatCallerBridge = new ChatCallerBridge(this.client);
     this.pump.start();
     this.browserConnected = true;
+  }
+  get independentSession(): boolean {
+    return this.freshSession;
   }
   get chat(): ChatBridge {
     if (!this.chatBridge || this.closeResult || this.pump?.state !== "running")
@@ -503,7 +508,8 @@ export class DesktopGoCore {
       retirementError === undefined &&
       retire &&
       this.completeRetirement &&
-      this.browserConnected
+      this.browserConnected &&
+      !this.freshSession
     ) {
       try {
         const handoffId = randomUUID();
@@ -571,6 +577,24 @@ export class DesktopGoCore {
         retirementError = error;
       }
     }
+    if (retirementError === undefined && retire && this.freshSession) {
+      try {
+        const result = await this.client.request(
+          "core.fresh.close",
+          {},
+          { operationId: randomUUID(), timeoutMs: 16000 },
+        );
+        const data = result.data as { drained?: unknown } | undefined;
+        if (
+          result.status !== "ok" ||
+          !validate("CoreFreshClosed", result.data) ||
+          data?.drained !== true
+        )
+          throw new BridgeError("unknown", "fresh_session_drain_unconfirmed");
+      } catch (error) {
+        retirementError = error;
+      }
+    }
     let withdrawalError: unknown;
     try {
       this.browser?.withdraw();
@@ -582,7 +606,19 @@ export class DesktopGoCore {
     const results = await Promise.allSettled([
       this.pump?.stop(),
       this.settingsStorePump?.stop(),
-      this.client.close(),
+      this.freshSession
+        ? this.client.closeAndObserve().then((terminal) => {
+            if (
+              terminal.exitCode !== 0 ||
+              terminal.signal !== null ||
+              terminal.forced
+            )
+              throw new BridgeError(
+                "unknown",
+                "fresh_session_terminal_unconfirmed",
+              );
+          })
+        : this.client.close(),
     ]);
     for (const result of results) {
       if (result.status === "rejected") throw result.reason;
@@ -596,14 +632,20 @@ export async function startDesktopGoCore(
   selection: DesktopCoreSelection,
 ): Promise<DesktopGoCore> {
   const codexRead = copyNativeCodexReadLaunch(selection);
-  if (selection.previousHostDrainConfirmed !== true)
+  const fresh = selection.startupPurpose === "fresh";
+  if (fresh && (selection.previousHostDrainConfirmed || codexRead))
+    throw new BridgeError("refused", "invalid_fresh_launch");
+  if (
+    selection.startupPurpose !== "fresh" &&
+    selection.previousHostDrainConfirmed !== true
+  )
     throw new BridgeError("refused", "previous_host_drain_unconfirmed");
   const expected = desktopCoreExpectation(selection);
   const settings = selection.settings();
   const artifact = readDesktopCoreDeclaration(selection.artifactRoot, expected);
   // Capture trusted inputs before yielding to resource IO. The support parser
   // freezes its copy; the source copy cannot be changed by the caller later.
-  const selectedShell = selection.compiledShell;
+  const selectedShell = fresh ? undefined : selection.compiledShell;
   if (
     selectedShell &&
     (!(selectedShell.watchdogSource instanceof Uint8Array) ||
@@ -708,7 +750,8 @@ export async function startDesktopGoCore(
       ownerId: "owner-desktop",
       computerId: settings.computer.computerId,
       storeMode: storage.storeMode,
-      settingsMutations: storage.settingsMutations,
+      settingsMutations: fresh ? false : storage.settingsMutations,
+      ...(fresh ? { startupMode: "fresh" as const } : {}),
       previousHostDrainConfirmed: selection.previousHostDrainConfirmed,
       hostLifetimeId,
       childLaunchId,
@@ -730,9 +773,10 @@ export async function startDesktopGoCore(
     client,
     selection.settings,
     (ack) => attested.completeRetirement(ack),
-    storage.settingsMutations,
+    fresh ? false : storage.settingsMutations,
     selection.build.buildId,
     qualifiedShell,
+    fresh,
   );
   try {
     await host.publishCurrent();

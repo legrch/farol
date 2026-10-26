@@ -54,6 +54,7 @@
     "chat.computer.edit": "effect",
     "chat.computer.mutation.read": "read",
     "core.retirement.prepare": "effect",
+    "core.fresh.close": "effect",
     "core.retirement.ack": "effect",
     "chat.readintent.promote": "effect",
     "chat.readintent.withdraw": "effect",
@@ -5803,6 +5804,18 @@
         },
         "root": {
           "type": "ComputerSettingsRoot"
+        }
+      }
+    },
+    "CoreFreshClose": {
+      "type": "object",
+      "fields": {}
+    },
+    "CoreFreshClosed": {
+      "type": "object",
+      "fields": {
+        "drained": {
+          "type": "boolean"
         }
       }
     }
