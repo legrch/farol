@@ -1,6 +1,7 @@
 import {
   BrowserWindow,
   session,
+  systemPreferences,
   type Session,
   type WebContents,
 } from "electron";
@@ -192,7 +193,7 @@ export function classifyChatGptProviderError(
 }
 
 const hardenedRouteSessions = new WeakSet<Session>();
-const clipboardRouteOwners = new WeakMap<WebContents, () => boolean>();
+const routePermissionOwners = new WeakMap<WebContents, () => number | null>();
 
 function routeClipboardWriteAllowed(
   contents: WebContents | null,
@@ -205,7 +206,27 @@ function routeClipboardWriteAllowed(
   try {
     return (
       !contents.isDestroyed() &&
-      clipboardRouteOwners.get(contents)?.() === true &&
+      routePermissionOwners.get(contents)?.() != null &&
+      new URL(requestingUrl).origin === new URL(contents.getURL()).origin
+    );
+  } catch {
+    return false;
+  }
+}
+
+function routeMicrophoneAllowed(
+  contents: WebContents | null,
+  permission: string,
+  requestingUrl: string,
+  isMainFrame: boolean,
+  audioOnly: boolean,
+): boolean {
+  if (permission !== "media" || !audioOnly || !contents || !isMainFrame)
+    return false;
+  try {
+    return (
+      !contents.isDestroyed() &&
+      routePermissionOwners.get(contents)?.() != null &&
       new URL(requestingUrl).origin === new URL(contents.getURL()).origin
     );
   } catch {
@@ -4987,6 +5008,37 @@ export class ChatGptRoute {
           callback(true);
           return;
         }
+        if (
+          routeMicrophoneAllowed(
+            contents,
+            permission,
+            details?.requestingUrl ?? "",
+            details?.isMainFrame === true,
+            details != null &&
+              "mediaTypes" in details &&
+              details.mediaTypes?.length === 1 &&
+              details.mediaTypes[0] === "audio",
+          )
+        ) {
+          const generation = routePermissionOwners.get(contents)?.();
+          void systemPreferences.askForMediaAccess("microphone").then(
+            (granted) =>
+              callback(
+                granted &&
+                  generation != null &&
+                  routePermissionOwners.get(contents)?.() === generation &&
+                  routeMicrophoneAllowed(
+                    contents,
+                    permission,
+                    details.requestingUrl,
+                    details.isMainFrame,
+                    true,
+                  ),
+              ),
+            () => callback(false),
+          );
+          return;
+        }
         activeSignInRoute?.reportSignInBlocked({
           kind: "permission-denied",
           permission,
@@ -5001,7 +5053,15 @@ export class ChatGptRoute {
           permission,
           requestingOrigin,
           details?.isMainFrame === true,
-        ),
+        ) ||
+        (routeMicrophoneAllowed(
+          contents,
+          permission,
+          requestingOrigin,
+          details?.isMainFrame === true,
+          details?.mediaType === "audio",
+        ) &&
+          systemPreferences.getMediaAccessStatus("microphone") === "granted"),
     );
     routeSession.on("will-download", (event) => event.preventDefault());
     hardenedRouteSessions.add(routeSession);
@@ -5037,12 +5097,12 @@ export class ChatGptRoute {
     tracksRouteReadiness: boolean,
   ): void {
     if (tracksRouteReadiness)
-      clipboardRouteOwners.set(
-        contents,
-        () =>
-          this.ownsRouteContents(contents) &&
-          new URL(contents.getURL()).origin ===
-            new URL(this.options.homeUrl).origin,
+      routePermissionOwners.set(contents, () =>
+        this.ownsRouteContents(contents) &&
+        new URL(contents.getURL()).origin ===
+          new URL(this.options.homeUrl).origin
+          ? this.routeDocumentGeneration
+          : null,
       );
     const allowed = (url: string) =>
       allowedChatGptPageUrl(url, this.options.e2eOrigin);

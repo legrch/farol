@@ -60,6 +60,9 @@ describe("package macOS runtime floor", () => {
         "io.github.legrch.farol",
       );
       expect(plistValue(outerPlist, "CFBundleExecutable")).toBe("Farol");
+      expect(plistValue(outerPlist, "NSMicrophoneUsageDescription")).toBe(
+        "Use the microphone for voice input in ChatGPT when you choose it.",
+      );
       expect(plistValue(outerPlist, "CFBundleShortVersionString")).toBe(
         "0.2.0",
       );

@@ -52,6 +52,8 @@ export function packageInfoPlist({
   <string>${minimumSystemVersion}</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Use the microphone for voice input in ChatGPT when you choose it.</string>
   <key>NSHumanReadableCopyright</key>
   <string>Local development preview</string>
 </dict>

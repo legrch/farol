@@ -13,6 +13,8 @@ import type { PreloadApi } from "../../src/ui/renderer/contract";
 
 const electronMock = vi.hoisted(() => ({
   fromPartition: vi.fn(),
+  askForMediaAccess: vi.fn(),
+  getMediaAccessStatus: vi.fn(),
 }));
 const attachmentMock = vi.hoisted(() => ({
   upload: vi.fn(),
@@ -21,6 +23,10 @@ const attachmentMock = vi.hoisted(() => ({
 vi.mock("electron", () => ({
   BrowserWindow: class {},
   session: { fromPartition: electronMock.fromPartition },
+  systemPreferences: {
+    askForMediaAccess: electronMock.askForMediaAccess,
+    getMediaAccessStatus: electronMock.getMediaAccessStatus,
+  },
 }));
 
 vi.mock("../../src/apps/desktop/chatgpt-attachment-upload", () => ({
@@ -5788,6 +5794,86 @@ describe("ChatGPT embedded task surface", () => {
 });
 
 describe("ChatGPT shared partition lifecycle", () => {
+  it.each(["granted", "denied", "navigated", "disposed", "failed"])(
+    "keeps microphone permission on the owned audio-only document: %s",
+    async (mode) => {
+      const candidate = route();
+      const surface = embeddedSurface();
+      vi.spyOn(surface.webContents, "getURL").mockReturnValue(
+        "https://chatgpt.com/c/test",
+      );
+      Reflect.set(candidate, "routeWindow", surface);
+      const hardenContents = Reflect.get(candidate, "hardenContents") as (
+        contents: typeof surface.webContents,
+        tracks: boolean,
+      ) => void;
+      hardenContents.call(candidate, surface.webContents, true);
+      const sharedSession = Object.assign(new EventEmitter(), {
+        setPermissionRequestHandler: vi.fn(),
+        setPermissionCheckHandler: vi.fn(),
+      });
+      harden(candidate, sharedSession);
+      const check = sharedSession.setPermissionCheckHandler.mock.calls[0]![0];
+      const request =
+        sharedSession.setPermissionRequestHandler.mock.calls[0]![0];
+      const details = {
+        isMainFrame: true,
+        requestingUrl: "https://chatgpt.com/c/test",
+        mediaTypes: ["audio"],
+      };
+      electronMock.askForMediaAccess.mockReset();
+      electronMock.getMediaAccessStatus.mockReturnValue("not-determined");
+      expect(
+        check(surface.webContents, "media", "https://chatgpt.com", {
+          ...details,
+          mediaType: "audio",
+        }),
+      ).toBe(false);
+      electronMock.getMediaAccessStatus.mockReturnValue("granted");
+      expect(
+        check(surface.webContents, "media", "https://chatgpt.com", {
+          ...details,
+          mediaType: "audio",
+        }),
+      ).toBe(true);
+      for (const patch of [
+        { mediaTypes: [] },
+        { mediaTypes: ["video"] },
+        { mediaTypes: ["audio", "video"] },
+        { isMainFrame: false },
+        { requestingUrl: "https://other.example/" },
+      ]) {
+        const rejected = vi.fn();
+        request(surface.webContents, "media", rejected, {
+          ...details,
+          ...patch,
+        });
+        expect(rejected).toHaveBeenCalledExactlyOnceWith(false);
+      }
+      expect(electronMock.askForMediaAccess).not.toHaveBeenCalled();
+      let settle!: (granted: boolean) => void;
+      electronMock.askForMediaAccess.mockReturnValue(
+        mode === "failed"
+          ? Promise.reject(Error("OS permission unavailable"))
+          : new Promise<boolean>((resolve) => {
+              settle = resolve;
+            }),
+      );
+      const callback = vi.fn();
+      request(surface.webContents, "media", callback, details);
+      expect(electronMock.askForMediaAccess).toHaveBeenCalledExactlyOnceWith(
+        "microphone",
+      );
+      if (mode === "navigated")
+        Reflect.set(candidate, "routeDocumentGeneration", 99);
+      if (mode === "disposed") candidate.dispose();
+      if (mode !== "failed") settle(mode !== "denied");
+      await Promise.resolve();
+      expect(callback).toHaveBeenCalledExactlyOnceWith(mode === "granted");
+      candidate.dispose();
+    },
+  );
+
   it("allows Copy response on the current ChatGPT page across route replacement without a focus gate", () => {
     const sharedSession = Object.assign(new EventEmitter(), {
       setPermissionRequestHandler: vi.fn(),
