@@ -14,12 +14,15 @@ const child = spawn(
   { stdio: ["ignore", "ignore", "ignore", "ipc"] },
 );
 let requested = false;
+const drainDelay = Number(process.env.FAROL_TERMINAL_FIXTURE_DRAIN_MS ?? "50");
+if (![50, 300, 3000].includes(drainDelay))
+  throw Error("FIXTURE_DRAIN_DELAY_INVALID");
 const requestQuit = () => {
   if (requested) return;
   requested = true;
   setTimeout(() => {
     if (child.connected) child.send("quit");
-  }, 50);
+  }, drainDelay);
 };
 process.on("SIGINT", requestQuit);
 process.on("SIGTERM", requestQuit);

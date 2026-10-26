@@ -141,6 +141,10 @@ export async function reExecUnderDeclaredToolchain(target, argv) {
     {
       stdio: "inherit",
       env: environment,
+      // The outer Node alone receives the terminal broadcast, then relays it
+      // once. Sharing its foreground group would also signal this replacement
+      // directly, turning one Ctrl+C into two managed escalation steps.
+      detached: process.platform !== "win32",
     },
   );
   let exited = false;

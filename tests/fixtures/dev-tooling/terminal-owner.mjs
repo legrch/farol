@@ -9,7 +9,14 @@ await launchPreview(
     spawn(
       executable,
       [fileURLToPath(new URL("./terminal-descendants.mjs", import.meta.url))],
-      options,
+      {
+        ...options,
+        env: {
+          ...options.env,
+          FAROL_TERMINAL_FIXTURE_DRAIN_MS:
+            process.env.FAROL_TERMINAL_FIXTURE_DRAIN_MS ?? "50",
+        },
+      },
     ),
   false,
   false,

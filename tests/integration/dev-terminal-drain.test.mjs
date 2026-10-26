@@ -4,22 +4,32 @@ import { expect, it } from "vitest";
 
 // Real POSIX process-group signal, synthetic app/Go children. This does not
 // prove an Electron Quit or clean receipt for an owner profile.
-it.skipIf(process.platform === "win32")(
-  "terminal Ctrl+C reaches the Dev owner without terminating its undrained descendant",
-  async () => {
+it.skipIf(process.platform === "win32").each([
+  { lane: "direct", owner: "terminal-owner.mjs", delay: "300" },
+  {
+    lane: "toolchain re-exec",
+    owner: "terminal-reexec-owner.mjs",
+    delay: "300",
+  },
+  {
+    lane: "toolchain re-exec slow drain",
+    owner: "terminal-reexec-owner.mjs",
+    delay: "3000",
+  },
+])(
+  "one terminal Ctrl+C drains descendants without escalation: $lane",
+  async ({ owner, delay }) => {
     const wrapper = spawn(
       process.execPath,
       [
         fileURLToPath(
-          new URL(
-            "../fixtures/dev-tooling/terminal-owner.mjs",
-            import.meta.url,
-          ),
+          new URL(`../fixtures/dev-tooling/${owner}`, import.meta.url),
         ),
       ],
       {
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, FAROL_TERMINAL_FIXTURE_DRAIN_MS: delay },
       },
     );
     let output = "",
@@ -62,6 +72,8 @@ it.skipIf(process.platform === "win32")(
       expect(outcome).toEqual({ code: 130, signal: null });
       expect(output).toContain("DESCENDANT_DRAIN_CONFIRMED");
       expect(output).not.toContain("DESCENDANT_DRAIN_UNCONFIRMED");
+      expect(output).not.toContain("sending SIGTERM");
+      expect(output).not.toContain("forcing it with SIGKILL");
     } finally {
       clearTimeout(watchdog);
       if (!closed) {
