@@ -176,7 +176,10 @@ async function runScenario(scenario) {
   }
   async function verify(prompt) {
     sendCount++;
-    assert.ok(sendCount <= (separate ? 2 : 1), "SETUP_SEND_REPLAYED");
+    assert.ok(
+      sendCount <= (separate || repeatAfterFinish ? 2 : 1),
+      "SETUP_SEND_REPLAYED",
+    );
     if (scenario === "late-receipt") {
       delayedPrompt = prompt;
       return;
