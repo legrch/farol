@@ -75,8 +75,11 @@ async function captureWalkthrough(name) {
     }));
   assert.equal(geometry.overflow, false, "walkthrough must fit the window");
   assert.ok(
-    geometry.height >= 120 && geometry.height <= 155,
-    "three compact drawn cards, about 120px tall",
+    geometry.cards.length === 3 &&
+      geometry.height >= 60 &&
+      geometry.height <= 155 &&
+      geometry.cards.every((card) => card.height >= 44 && card.width > 0),
+    "three compact instruction cards fit the window with accessible controls",
   );
   report.walkthroughGeometry.push({ name, ...geometry });
   await capture(page, name);
@@ -512,6 +515,33 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
     .click();
   await page.getByRole("button", { name: "Appearance", exact: true }).click();
   await capture(page, "settings-primary-rail");
+  assert.equal(
+    await page.locator('nav[aria-label="Settings navigation"]').count(),
+    1,
+  );
+  assert.equal(
+    await page.locator('.rail[aria-label="Settings navigation"]').count(),
+    1,
+  );
+  assert.equal(await page.locator("main .settings-sections").count(), 0);
+  assert.equal(
+    await page.locator('.rail [aria-current="page"]').innerText(),
+    "Appearance",
+  );
+  await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setContentSize(760, 760),
+  );
+  await page.waitForFunction(
+    () =>
+      innerWidth === 760 &&
+      document.querySelector(".rail").getBoundingClientRect().width === 58,
+  );
+  await captureNativeGeometry("settings-primary-rail-compact", 58);
+  await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setContentSize(1100, 760),
+  );
+  await page.waitForFunction(() => innerWidth === 1100);
+
   await page.emulateMedia({ reducedMotion: "reduce" });
   assert.equal(
     await page
