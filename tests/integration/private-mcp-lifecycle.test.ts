@@ -423,24 +423,51 @@ describe.skipIf(process.platform !== "darwin")(
       await expect(lifecycle.join(newDigest)).rejects.toThrow();
     });
 
-    it("retains an unacknowledged MCP instance after its lease disappears", async () => {
+    it("preserves inactive MCP history without treating it as a live lease", async () => {
       const { root, lifecycle } = await fixture();
       await lifecycle.prepare(oldDigest);
       await fs.writeFile(
-        path.join(root, "mcp-lifecycle", "active-crash-canary"),
+        path.join(
+          root,
+          "mcp-lifecycle",
+          "active-11111111-1111-4111-8111-111111111111",
+        ),
         "1\n",
         { mode: 0o600 },
       );
       await lifecycle.beginStop();
+      await lifecycle.waitForStop(0);
+      await lifecycle.confirmStop(0);
+      await lifecycle.prepare(newDigest);
+      expect(
+        await fs.readFile(
+          path.join(
+            root,
+            "mcp-lifecycle",
+            "active-11111111-1111-4111-8111-111111111111",
+          ),
+          "utf8",
+        ),
+      ).toBe("1\n");
+    });
+
+    it("releases a drained UNKNOWN lifetime while retaining its original history", async () => {
+      const { root, lifecycle } = await fixture();
+      await lifecycle.prepare(oldDigest);
+      const live = await lifecycle.join(oldDigest);
+      await lifecycle.beginStop();
       await expect(lifecycle.waitForStop(0)).rejects.toThrow(
-        "COMPUTER_MCP_INSTANCE_CLEANUP_UNVERIFIED",
+        "COMPUTER_MCP_LIFECYCLE_UNVERIFIED",
       );
-      await expect(lifecycle.confirmStop(0)).rejects.toThrow(
-        "COMPUTER_MCP_INSTANCE_CLEANUP_UNVERIFIED",
-      );
-      await expect(lifecycle.prepare(newDigest)).rejects.toThrow(
-        "COMPUTER_MCP_INSTANCE_CLEANUP_UNVERIFIED",
-      );
+      await live.release({ effectsUnresolved: true });
+      await live.release({ effectsUnresolved: false });
+      await lifecycle.waitForStop(0);
+      await lifecycle.confirmStop(0);
+      expect(
+        (await fs.readdir(path.join(root, "mcp-lifecycle"))).filter((name) =>
+          name.startsWith("active-"),
+        ),
+      ).toHaveLength(1);
     });
 
     it("retires an inactive instance only through explicit, fenced reconciliation, without confirming its old stop", async () => {

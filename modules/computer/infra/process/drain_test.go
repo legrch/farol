@@ -135,7 +135,7 @@ func TestDirectLeafDrainDoesNotConfirmDescendants(t *testing.T) {
 		if err != nil || !observed.Waited || !observed.OutputDrained || observed.GroupCleanup != processsvc.CleanupUnverified || observed.DescendantCleanup != processsvc.CleanupUnverified {
 			t.Fatal("direct leaf drain promoted cohort cleanup", observed, err)
 		}
-		if receipt, err := child.Cancel(context.Background()); err != nil || receipt.Status != processsvc.CancelUnknown || root.killCount() != 0 {
+		if receipt, err := child.Cancel(context.Background()); err != nil || receipt.Status != processsvc.AlreadyTerminal || root.killCount() != 0 {
 			t.Fatal("post-wait cancellation signalled a replacement identity", receipt, err)
 		}
 	}

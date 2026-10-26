@@ -276,7 +276,7 @@ func TestRetainedReadRechecksAuthorityBeforeReadAndAfterObservation(t *testing.T
 }
 
 func TestRetainedReadUnknownAndCancelFencesRemainSticky(t *testing.T) {
-	for _, mode := range []string{"read-error", "malformed", "cleanup", "drain", "cancel-error", "cancel-terminal"} {
+	for _, mode := range []string{"read-error", "malformed", "cleanup", "drain", "cancel-error"} {
 		t.Run(mode, func(t *testing.T) {
 			s, c, original, r, p := setup(t)
 			start(t, s)
@@ -299,12 +299,6 @@ func TestRetainedReadUnknownAndCancelFencesRemainSticky(t *testing.T) {
 				p.child.cancelError = errors.New("synthetic lost cancel acknowledgement")
 				_, err := s.Cancel(context.Background(), CancelRequest{"owned-child"})
 				unknown(t, err)
-			case "cancel-terminal":
-				p.child.cancelStatus = AlreadyTerminal
-				out, err := s.Cancel(context.Background(), CancelRequest{"owned-child"})
-				if err != nil || out.Status != CancelUnknown {
-					t.Fatal(out, err)
-				}
 			}
 			out, err := o.Read(context.Background(), ReadRequest{Handle: "owned-child"})
 			if mode == "read-error" || mode == "malformed" {
@@ -325,7 +319,7 @@ func TestRetainedReadUnknownAndCancelFencesRemainSticky(t *testing.T) {
 			if err != nil || out.State != Unknown || s.terminal || p.calls != 1 || r.calls != 1 {
 				t.Fatal("retained unknown upgraded", out, err)
 			}
-			if mode == "cancel-error" || mode == "cancel-terminal" {
+			if mode == "cancel-error" {
 				s.Cancel(context.Background(), CancelRequest{"owned-child"})
 				if p.child.cancels != 1 {
 					t.Fatal("cancel fence replayed")

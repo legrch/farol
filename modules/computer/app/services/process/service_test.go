@@ -370,7 +370,7 @@ func TestCancelRequestUnknownIsStickyAndCleanupOutlivesDisclosureLease(t *testin
 		t.Fatal("cleanup renewed output authority")
 	}
 }
-func TestCancelRefusalAndUncorroboratedTerminalCannotBeConfirmed(t *testing.T) {
+func TestCancelRefusalStaysUnknownAndAlreadyTerminalDoesNotPublishCompletion(t *testing.T) {
 	for _, mode := range []string{"refused", "already-terminal"} {
 		t.Run(mode, func(t *testing.T) {
 			s, _, _, _, p := setup(t)
@@ -383,14 +383,33 @@ func TestCancelRefusalAndUncorroboratedTerminalCannotBeConfirmed(t *testing.T) {
 			out, err := s.Cancel(context.Background(), CancelRequest{"owned-child"})
 			if mode == "refused" {
 				unknown(t, err)
-			} else if err != nil || out.Status != CancelUnknown {
-				t.Fatal("inferred terminal from cancel ACK")
+			} else if err != nil || out.Status != AlreadyTerminal || s.terminal || s.uncertain {
+				t.Fatal("no-effect cancel ACK was lost or published terminal state")
 			}
 			s.Cancel(context.Background(), CancelRequest{"owned-child"})
 			if p.child.cancels != 1 {
 				t.Fatal("retried cancellation")
 			}
 		})
+	}
+}
+
+func TestAlreadyTerminalCancelAllowsIndependentTerminalRead(t *testing.T) {
+	s, _, _, _, p := setup(t)
+	start(t, s)
+	p.child.cancelStatus = AlreadyTerminal
+	ack, err := s.Cancel(context.Background(), CancelRequest{"owned-child"})
+	if err != nil || ack.Status != AlreadyTerminal || s.terminal {
+		t.Fatal("cancel alone supplied terminal publication", ack, err)
+	}
+	code := 0
+	p.child.observation = Observation{Handle: "owned-child", Root: RootExited, Waited: true, ExitCode: &code, GroupCleanup: CleanupConfirmed, DescendantCleanup: CleanupConfirmed, OutputDrained: true}
+	out, err := s.Read(context.Background(), ReadRequest{Handle: "owned-child"})
+	if err != nil || out.State != Terminal || !s.terminal || s.uncertain {
+		t.Fatal("independent terminal observation was poisoned by no-effect cancel", out, err)
+	}
+	if ack, err = s.Cancel(context.Background(), CancelRequest{"owned-child"}); err != nil || ack.Status != AlreadyTerminal || p.child.cancels != 1 {
+		t.Fatal("cached no-effect cancellation was repeated", ack, err)
 	}
 }
 

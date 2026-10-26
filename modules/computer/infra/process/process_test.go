@@ -146,8 +146,8 @@ func TestNativeOwningHandleSeparatesRootWaitAndCohort(t *testing.T) {
 		t.Fatal(out, err)
 	}
 	receipt, err := child.Cancel(context.Background())
-	if err != nil || receipt.Status != processsvc.CancelUnknown || b.root.killCount() != 0 {
-		t.Fatal("root Wait became cohort/cancel proof")
+	if err != nil || receipt.Status != processsvc.AlreadyTerminal || b.root.killCount() != 0 {
+		t.Fatal("reaped root did not retain a no-effect cancel acknowledgement")
 	}
 	if _, err := p.Spawn(context.Background(), processsvc.SpawnRequest{Deadline: c.Now().Add(time.Hour), Check: func(context.Context) error { return nil }}); err == nil || b.calls != 1 {
 		t.Fatal("redispatch after Wait")

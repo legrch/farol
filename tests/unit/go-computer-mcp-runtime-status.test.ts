@@ -234,12 +234,10 @@ it.each(["computer_workspace_write", "computer_mutation_read"])(
       expect(ports.hasUnresolvedEffect).toBe(false);
       terminate(terminal("closed", 0));
       await flush();
-      expect(ports.release).toHaveBeenCalledTimes(
-        name === "computer_workspace_write" ? 0 : 1,
-      );
-      expect(process.exit).toHaveBeenCalledExactlyOnceWith(
-        name === "computer_workspace_write" ? 1 : 0,
-      );
+      expect(ports.release).toHaveBeenCalledExactlyOnceWith({
+        effectsUnresolved: name === "computer_workspace_write",
+      });
+      expect(process.exit).toHaveBeenCalledExactlyOnceWith(0);
       expect(ports.request).toHaveBeenCalledTimes(1);
       expect(ports.join).toHaveBeenCalledTimes(1);
     } finally {
@@ -472,7 +470,9 @@ it("retains a submitted effect as unknown through terminal drain and refuses new
     expect(ports.request).toHaveBeenCalledTimes(1);
     expect(ports.close).toHaveBeenCalledTimes(1);
     expect(ports.hasUnresolvedEffect).toBe(true);
-    expect(ports.release).not.toHaveBeenCalled();
+    expect(ports.release).toHaveBeenCalledExactlyOnceWith({
+      effectsUnresolved: true,
+    });
     expect(process.exit).toHaveBeenCalledExactlyOnceWith(1);
   } finally {
     await client.close();
@@ -488,8 +488,10 @@ it("preserves the original marker when the selected adapter observation is missi
   signal();
   await flush();
   expect(ports.terminal?.submittedEffectCount).toBe(0);
-  expect(ports.release).not.toHaveBeenCalled();
-  expect(process.exit).toHaveBeenCalledExactlyOnceWith(1);
+  expect(ports.release).toHaveBeenCalledExactlyOnceWith({
+    effectsUnresolved: true,
+  });
+  expect(process.exit).toHaveBeenCalledExactlyOnceWith(0);
   expect(ports.request).not.toHaveBeenCalled();
 });
 
@@ -501,7 +503,7 @@ it.each([
   "timeout",
   "protocol-throw",
 ] as const)(
-  "preserves the original lease for %s effects even after handlers drain and known backend bytes exist",
+  "releases the drained lifetime while reporting %s effects independently",
   async (kind) => {
     ports.capabilities = [
       "computer.workspace.write",
@@ -616,9 +618,18 @@ it.each([
       expect(ports.handleClose).toHaveBeenCalledTimes(1);
       expect(ports.waitForHandlers).toHaveBeenCalledTimes(1);
       expect(ports.close).toHaveBeenCalledTimes(1);
-      expect(ports.release).toHaveBeenCalledTimes(kind === "known" ? 1 : 0);
-      expect(process.exit).toHaveBeenCalledExactlyOnceWith(
-        kind === "known" ? 0 : 1,
+      expect(ports.release).toHaveBeenCalledExactlyOnceWith({
+        effectsUnresolved: kind !== "known",
+      });
+      expect(process.exit).toHaveBeenCalledExactlyOnceWith(0);
+      expect(process.stderr.write).toHaveBeenCalledWith(
+        "FAROL_MCP_GO_DRAIN:" +
+          JSON.stringify({
+            schema: 1,
+            drained: true,
+            effectsUnresolved: kind !== "known",
+          }) +
+          "\n",
       );
       expect(ports.request).toHaveBeenCalledTimes(1);
       expect(ports.connect).toHaveBeenCalledTimes(1);
@@ -638,7 +649,9 @@ it.each([0, 1])(
     expect(ports.hasUnresolvedEffect).toBe(effects > 0);
     expect(ports.waitForHandlers).toHaveBeenCalledTimes(1);
     expect(ports.close).toHaveBeenCalledTimes(1);
-    expect(ports.release).toHaveBeenCalledTimes(effects === 0 ? 1 : 0);
+    expect(ports.release).toHaveBeenCalledExactlyOnceWith({
+      effectsUnresolved: effects > 0,
+    });
     expect(ports.join).toHaveBeenCalledTimes(1);
     expect(ports.request).not.toHaveBeenCalled();
     expect(process.exit).toHaveBeenCalledExactlyOnceWith(1);

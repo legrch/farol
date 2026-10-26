@@ -73,7 +73,11 @@ func (c *Child) Cancel(ctx context.Context) (*processsvc.CancelReceipt, error) {
 		return nil, &processsvc.NativeFailure{Unknown: true}
 	}
 	status := processsvc.CancelRequested
-	if !c.signalAttempted || !c.signalCompleted || c.signalUnknown {
+	if c.finished && c.waited && !c.signalAttempted && !c.signalUnknown {
+		// The retained Wait already reaped this root. There is no control effect
+		// to attempt or lose; descendant cleanup remains independently observed.
+		status = processsvc.AlreadyTerminal
+	} else if !c.signalAttempted || !c.signalCompleted || c.signalUnknown {
 		status = processsvc.CancelUnknown
 	}
 	return &processsvc.CancelReceipt{Handle: c.handle, Status: status}, nil

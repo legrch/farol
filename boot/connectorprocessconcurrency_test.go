@@ -8,6 +8,31 @@ import (
 	processct "github.com/legrch/farol/modules/computer/contracts/process"
 )
 
+func TestConnectorProcessBusyCaptureRefusesCancelWithoutUnknownEffect(t *testing.T) {
+	for _, busy := range []string{"capture", "cancel"} {
+		t.Run(busy, func(t *testing.T) {
+			s, _, child, _ := processWireFixture(t)
+			start := processWireStarted(t, s)
+			s.mutations.mu.Lock()
+			p := s.mutations.operations[start.OperationId].process
+			p.capturing, p.cancelling = busy == "capture", busy == "cancel"
+			s.mutations.mu.Unlock()
+			out, err := s.cancelProcess(context.Background(), s.current, "cancel-busy", start.OperationId, start.Handle)
+			var failure *processct.Failure
+			if out != nil || !errors.As(err, &failure) || failure.Outcome != "refused" || child.cancels != 0 {
+				t.Fatal("unadmitted control became unknown or reached the child", out, err)
+			}
+			s.mutations.mu.Lock()
+			p.capturing, p.cancelling = false, false
+			unknown := p.cancelUnknown
+			s.mutations.mu.Unlock()
+			if unknown {
+				t.Fatal("busy refusal poisoned the original operation")
+			}
+		})
+	}
+}
+
 // The existing native double's Cancel hook defines an exact in-flight
 // interleaving. No timing, native process, endpoint or provider is involved.
 func TestConnectorProcessCancelOwnerChangeCannotRepairLostACK(t *testing.T) {

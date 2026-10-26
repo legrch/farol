@@ -50,12 +50,6 @@ func (s *Service) Cancel(ctx context.Context, request CancelRequest) (*CancelRes
 		return nil, err
 	}
 	saved := *receipt
-	s.gate.Lock()
-	terminal := s.terminal && !s.uncertain
-	s.gate.Unlock()
-	if saved.Status == AlreadyTerminal && !terminal {
-		saved.Status = CancelUnknown
-	}
 	// An already-terminal ACK must still be corroborated by a later exact Wait
 	// and group/cohort observation. Cancel itself never publishes terminal state.
 	s.gate.Lock()

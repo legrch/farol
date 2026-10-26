@@ -223,13 +223,16 @@ export class PrivateMcpLifecycle {
       throw new Error("COMPUTER_MCP_SHELL_CLEANUP_UNVERIFIED");
   }
 
-  private async instancesGone(): Promise<void> {
-    if (
-      (await fs.readdir(this.directory)).some((entry) =>
-        entry.startsWith("active-"),
+  // Call only while holding the exclusive lifetime lock. That lock excludes
+  // every live MCP join; retained markers describe history, not process life.
+  private async validateInactiveInstances(): Promise<void> {
+    for (const entry of await fs.readdir(this.directory)) {
+      if (
+        entry.startsWith("active-") &&
+        (!INSTANCE.test(entry) || !(await this.existingMarker(entry)))
       )
-    )
-      throw new Error("COMPUTER_MCP_INSTANCE_CLEANUP_UNVERIFIED");
+        throw new Error("COMPUTER_MCP_LIFECYCLE_MARKER_UNSAFE");
+    }
   }
 
   private async reconciliationComplete(): Promise<void> {
@@ -276,7 +279,7 @@ export class PrivateMcpLifecycle {
       if (admittedStopRevision !== this.stopRevision)
         throw new Error("COMPUTER_MCP_PREPARATION_STOPPED");
       await this.reconciliationComplete();
-      await this.instancesGone();
+      await this.validateInactiveInstances();
       await this.shellGroupsGone();
       await this.revokePrepared();
       await this.marker(`prepared-${digest}`);
@@ -305,7 +308,13 @@ export class PrivateMcpLifecycle {
   }
 
   /** Held by the MCP process from before serveStdio until its verified shutdown. */
-  async join(digest: string): Promise<Readonly<{ release(): Promise<void> }>> {
+  async join(digest: string): Promise<
+    Readonly<{
+      release(
+        receipt?: Readonly<{ effectsUnresolved: boolean }>,
+      ): Promise<void>;
+    }>
+  > {
     if (!DIGEST.test(digest))
       throw new Error("COMPUTER_MCP_LIFECYCLE_DIGEST_INVALID");
     const lease = await this.lock(false, 0);
@@ -322,14 +331,17 @@ export class PrivateMcpLifecycle {
       await lease.close();
       throw error;
     }
-    let released = false;
+    let release: Promise<void> | undefined;
     return {
-      release: async () => {
-        if (released) return;
-        await fs.unlink(path.join(this.directory, instance));
-        await this.sync();
-        await lease.close();
-        released = true;
+      release: (receipt = { effectsUnresolved: false }) => {
+        if (release) return release;
+        release = (async () => {
+          if (!receipt.effectsUnresolved)
+            await fs.unlink(path.join(this.directory, instance));
+          await this.sync();
+          await lease.close();
+        })();
+        return release;
       },
     };
   }
@@ -424,7 +436,7 @@ export class PrivateMcpLifecycle {
       await this.reconciliationComplete();
       if (!(await this.existingMarker("stopping")))
         throw new Error("COMPUTER_MCP_LIFECYCLE_STOP_UNVERIFIED");
-      await this.instancesGone();
+      await this.validateInactiveInstances();
       await this.shellGroupsGone();
     } finally {
       await lease.close();
@@ -441,7 +453,7 @@ export class PrivateMcpLifecycle {
       if (!(await this.existingMarker("stopping")))
         throw new Error("COMPUTER_MCP_LIFECYCLE_STOP_UNVERIFIED");
       await this.revokePrepared();
-      await this.instancesGone();
+      await this.validateInactiveInstances();
       await this.shellGroupsGone();
     } finally {
       await lease.close();

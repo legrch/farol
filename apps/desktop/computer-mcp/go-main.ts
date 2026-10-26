@@ -119,18 +119,20 @@ export async function runGoComputerMcp(file: string): Promise<void> {
         transportFailed = true;
       if (results.some((result) => result.status !== "fulfilled"))
         throw new Error("COMPUTER_MCP_GO_DRAIN_UNCONFIRMED");
-      // Handler drain and backend result retention cannot exclude a caller's
-      // lost reply or earlier UNKNOWN. Keep the original active marker intact.
-      // Missing observation from this selected adapter also fails closed.
-      if (
+      // Lifetime closure is separate from the outcome of earlier effects.
+      // Preserve unresolved history while releasing this drained MCP's lock.
+      const effectsUnresolved =
         client.hasUnresolvedEffect !== false ||
         effectOutcomeUnknown ||
-        client.terminal?.submittedEffectCount !== 0
-      )
-        throw new Error("COMPUTER_MCP_GO_EFFECT_UNRESOLVED");
+        client.terminal?.submittedEffectCount !== 0;
       // This settles this adapter, not native Go handlers. The desktop then
       // closes its exact Go owner before confirming the overall connector drain.
-      await lease.release();
+      await lease.release({ effectsUnresolved });
+      process.stderr.write(
+        "FAROL_MCP_GO_DRAIN:" +
+          JSON.stringify({ schema: 1, drained: true, effectsUnresolved }) +
+          "\n",
+      );
     });
     lifecycle.closeHandlers();
     clearInterval(poll);

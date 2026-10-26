@@ -293,6 +293,16 @@ func TestChildSupervisorWaitRequiresCompleteUnfencedEvidence(t *testing.T) {
 				out.GroupCleanup != processsvc.CleanupUnverified || out.DescendantCleanup != processsvc.CleanupUnverified {
 				t.Fatal("incomplete evidence upgraded or cleanup forged", out, err)
 			}
+			if name == "known" {
+				ack, err := c.Cancel(context.Background())
+				if err != nil || ack.Status != processsvc.AlreadyTerminal || root.killCount() != 0 {
+					t.Fatal("reaped helper cancellation attempted a signal", ack, err)
+				}
+				after, err := c.Read(context.Background(), processsvc.Window{})
+				if err != nil || after.Supervisor != processsvc.SupervisorExited || after.GroupCleanup != processsvc.CleanupUnverified || after.DescendantCleanup != processsvc.CleanupUnverified {
+					t.Fatal("no-effect cancellation lost helper Wait or invented cohort proof", after, err)
+				}
+			}
 			if result.err == nil && result.result.Waited && (out.Root != processsvc.RootExited || !out.Waited || out.ExitCode == nil || *out.ExitCode != code || out.OutputDrained != result.result.Drained) {
 				t.Fatal("known root evidence lost", out)
 			}

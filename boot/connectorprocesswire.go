@@ -164,7 +164,11 @@ func (s *computerConnector) cancelProcess(ctx context.Context, slot *connectorSl
 		ledger.mu.Unlock()
 		return nil, connectorProcessRefusal("PROCESS_CONTROL_LIFETIME_MISMATCH")
 	}
-	if p.cancelling || p.cancelUnknown || p.capturing || p.publishAttempted && p.publication == "" {
+	if p.cancelling || p.capturing {
+		ledger.mu.Unlock()
+		return nil, connectorProcessRefusal("PROCESS_UNAVAILABLE")
+	}
+	if p.cancelUnknown || p.publishAttempted && p.publication == "" {
 		ledger.mu.Unlock()
 		return nil, connectorProcessUnknown()
 	}
