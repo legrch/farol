@@ -76,6 +76,32 @@ function button(host: Element, label: string) {
   if (!found) throw new Error(`BUTTON_MISSING:${label}`);
   return found;
 }
+it("keeps a stable ChatGPT sidebar control in the toolbar and uses the existing presentation command", async () => {
+  const { host, c, f } = await mount();
+  expect(
+    host.querySelector('[aria-label="Toggle ChatGPT sidebar"]'),
+  ).toBeNull();
+  await act(async () => c.navigate({ area: "chatgpt" }));
+  expect(button(host, "Toggle ChatGPT sidebar").disabled).toBe(true);
+  await act(async () => f.emit("route", { state: "loaded" }));
+  expect(c.getSnapshot()).toMatchObject({
+    route: "loaded",
+    status: "current",
+    runtime: "ready",
+  });
+  expect(button(host, "Toggle ChatGPT sidebar").disabled).toBe(false);
+  vi.mocked(f.api.configure).mockClear();
+  const held = deferred<unknown>();
+  vi.mocked(f.api.configure).mockReturnValue(held.promise);
+  await act(async () => {
+    button(host, "Toggle ChatGPT sidebar").click();
+    button(host, "Toggle ChatGPT sidebar").click();
+  });
+  expect(f.api.configure).toHaveBeenCalledExactlyOnceWith({
+    kind: "chatgpt.toggle-sidebar",
+  });
+  expect(f.api.task).not.toHaveBeenCalled();
+});
 it("shows measured transfer progress and then verification without offering installation", async () => {
   const { host, c, f } = await mount();
   await act(async () => {

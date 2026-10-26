@@ -30,6 +30,7 @@ import {
   updateVersionLabel,
 } from "./update-eligibility";
 import { AutomaticUpdateChoice } from "./automatic-update-choice";
+import { commandAllowed } from "./command-eligibility";
 import {
   UpdateDownloadProgress,
   updateDownloadMessage,
@@ -1181,6 +1182,25 @@ export function Shell() {
           <span>Find a page</span>
           <kbd>⌘ K</kbd>
         </button>
+        {destination.area === "chatgpt" && (
+          <button
+            className="notifications-trigger"
+            aria-label="Toggle ChatGPT sidebar"
+            title="Open or close the ChatGPT sidebar"
+            disabled={
+              state.route !== "loaded" ||
+              !commandAllowed(state, "chatgpt.toggle-sidebar")
+            }
+            onClick={() =>
+              void facade.configure(
+                { kind: "chatgpt.toggle-sidebar" },
+                "settings:chatgpt.toggle-sidebar:",
+              )
+            }
+          >
+            <Icon name="sidebar" />
+          </button>
+        )}
         {destination.area === "chatgpt" && !state.setupSignInReturn && (
           <ConnectionTestButton facade={facade} />
         )}
