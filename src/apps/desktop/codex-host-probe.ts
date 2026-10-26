@@ -131,7 +131,8 @@ async function pinSelectedExecutable(executablePath: string): Promise<{
       probeError("CODEX_HOST_EXECUTABLE_UNSAFE");
     }
     const digest = createHash("sha256");
-    const buffer = Buffer.allocUnsafe(64 * 1_024);
+    // 1 MiB chunks: real Codex binaries are 200+ MiB and are hashed twice.
+    const buffer = Buffer.allocUnsafe(1_024 * 1_024);
     let position = 0;
     for (;;) {
       const { bytesRead } = await handle.read(

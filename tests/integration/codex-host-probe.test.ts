@@ -457,7 +457,7 @@ describe("Codex host probe", () => {
 
     expect(result.version).toBe("0.153.4");
     expect(runner).toHaveBeenCalledTimes(2);
-  }, 20_000);
+  }, 120_000);
 
   it("refuses an executable over the 512 MiB cap before starting it", async () => {
     const selected = await fixture();

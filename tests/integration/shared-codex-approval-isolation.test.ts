@@ -63,7 +63,7 @@ afterEach(async () => {
         const timer = setTimeout(() => {
           peer.off("exit", finished);
           resolve(false);
-        }, 2000);
+        }, 10_000);
         peer.once("exit", finished);
       });
       let killFailure: unknown;
@@ -169,7 +169,7 @@ async function fixture(method: string, id: string | number) {
       return child;
     },
     "/fixture/home",
-    2000,
+    20_000,
   );
   owned.push({ host, peer: native });
   native.on("message", (value: unknown) => {

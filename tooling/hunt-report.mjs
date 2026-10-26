@@ -384,9 +384,11 @@ const huntAttempt = await openEvidenceAttempt(
 );
 huntAttempt.installProcessHandlers();
 const vitestEvidence = await collectVitestEvidence();
+// Build-check against the disposable acceptance profile so a running daily Dev
+// (from any checkout) cannot refuse the gate; shared-output owners stay checked.
 execFileSync(
   process.execPath,
-  [path.join(root, "tooling/dev.mjs"), "--check"],
+  [path.join(root, "tooling/dev.mjs"), "--check", "--acceptance-profile"],
   {
     cwd: root,
     stdio: "inherit",

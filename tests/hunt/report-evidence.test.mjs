@@ -165,7 +165,7 @@ async function createFixtureRoot() {
         `import { createBuildIdentity } from ${JSON.stringify(buildIdentityModule)};`,
         `import { BUILD_ENTRIES } from ${JSON.stringify(buildContractModule)};`,
         `import { GO_CORE_ENTRIES } from ${JSON.stringify(coreArtifactModule)};`,
-        'if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(["--check"])) throw new Error("HUNT_DEV_CHECK_REQUIRED");',
+        'if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(["--check", "--acceptance-profile"])) throw new Error("HUNT_DEV_CHECK_REQUIRED");',
         "const identity = sourceIdentity(process.cwd());",
         'const ledger = JSON.stringify([{ kind: "source", path: "src/main.ts", objectId: "0".repeat(40), sha256: "1".repeat(64), exact: true }]);',
         'const overrides = JSON.parse(process.env.FAKE_BUILD_OVERRIDES ?? "{}");',
