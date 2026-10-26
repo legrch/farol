@@ -88,6 +88,11 @@ tasks:
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/dev.mjs --acceptance-profile {{.CLI_ARGS}}
 
+  dev:test:tools:
+    desc: Headless exact-Dev File/Shell/MCP smoke on disposable state (no saved profile or live tunnel)
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/dev-tool-smoke.mjs
+
   dev:clean:
     desc: Start Dev with a new isolated first-run profile; preserve daily Dev
     cmds:

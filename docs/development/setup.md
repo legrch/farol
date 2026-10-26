@@ -66,6 +66,15 @@ Quit, run `task dev:test` again to inspect retained sign-in/settings. The ordina
 empty first-run profile. All three tasks accept `-- --display=secondary` and
 `-- --check` (the latter builds without launching or provisioning a profile).
 
+For a headless File/Shell/MCP smoke test, run `task dev:test:tools` after quitting
+Dev normally. It builds the exact Dev image through the same guards, then runs
+the existing native Go/MCP witness with source/build pins and disposable state.
+It does not open Electron, use either saved profile, copy authentication, connect
+a live tunnel, or send to ChatGPT. No second tunnel is required. Its File/Shell
+results do not prove browser, live attachment, login, or installed behavior.
+Use `task e2e:setup -- --repeat-after-finish` for the separate hidden Electron
+fixture of a new connection test after Finish; its provider/tunnel are synthetic.
+
 Each `task dev:clean` launch creates a new isolated profile. It keeps the same Dev
 build and launch behavior, and accepts the ordinary `--display=secondary`
 placement option. The lower-level `--fresh-review-profile` flag remains available

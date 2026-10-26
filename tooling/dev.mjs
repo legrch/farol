@@ -103,7 +103,7 @@ export function resolveToolchain({
   return { status: "missing" };
 }
 
-function probeToolchainAt(directory) {
+export function probeToolchainAt(directory) {
   const nodeBin = path.join(directory, "node");
   const npmBin = path.join(directory, "npm");
   if (!fs.existsSync(nodeBin) || !fs.existsSync(npmBin)) return null;
@@ -118,7 +118,7 @@ function probeToolchainAt(directory) {
   };
 }
 
-function currentNpmVersion() {
+export function currentNpmVersion() {
   const result = spawnSync("npm", ["--version"], { encoding: "utf8" });
   if (result.status !== 0) return null;
   return (result.stdout ?? "").trim();
