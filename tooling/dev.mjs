@@ -23,6 +23,7 @@ import {
   DevRuntimeSignatureError,
   DEV_CORE_EXECUTABLE_SUFFIX,
 } from "./dev-runtime.mjs";
+import { captureDevQuit, confirmedDevQuit } from "./dev-clean-quit.mjs";
 import { prepareDevBuild } from "./dev-process-control.mjs";
 import { prepareDevCoreResources } from "./dev-core-resources.mjs";
 import { resolvePhysicalDevDataDirectoryName } from "./harness-identity.ts";
@@ -401,8 +402,8 @@ export function createSignalEscalation(sequence = ESCALATION_SEQUENCE) {
   };
 }
 
-export function exitCodeForOwnerStop(stopLabel) {
-  return stopLabel ? OWNER_STOP_EXIT_CODE : null;
+export function exitCodeForOwnerStop(stopLabel, cleanQuit = false) {
+  return stopLabel ? (cleanQuit ? 0 : OWNER_STOP_EXIT_CODE) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -459,6 +460,7 @@ export async function runOwnerManagedChild({
   relayOutput = true,
   schedule = (callback, delay) => setTimeout(callback, delay),
   clearScheduled = (timer) => clearTimeout(timer),
+  observeStop = () => null,
 }) {
   const child = spawnChild();
   if (relayOutput) {
@@ -477,12 +479,22 @@ export async function runOwnerManagedChild({
   });
 
   let stopLabel = null;
+  let stopObservation = null;
+  let escalated = false;
   let exited = false;
   const escalation = createSignalEscalation();
   let stopTimer;
   const onOwnerSignal = (signalName) => {
-    if (!stopLabel) stopLabel = signalName === "SIGTERM" ? "SIGTERM" : "Ctrl+C";
+    if (!stopLabel) {
+      stopLabel = signalName === "SIGTERM" ? "SIGTERM" : "Ctrl+C";
+      try {
+        stopObservation = observeStop(child.pid);
+      } catch {
+        /* Exit remains unconfirmed. */
+      }
+    }
     const toSend = escalation.next();
+    if (toSend !== "SIGINT") escalated = true;
     log(ESCALATION_MESSAGES[toSend]);
     // `child.killed` only means "a signal was sent at least once successfully"
     // - Node sets it right after the first `kill()` call, whether or not the
@@ -538,7 +550,14 @@ export async function runOwnerManagedChild({
   signals.removeListener("SIGTERM", onSigterm);
   if (stopTimer !== undefined) clearScheduled(stopTimer);
 
-  return { stopLabel, outcome, protocolError, resultCollector };
+  return {
+    stopLabel,
+    outcome,
+    protocolError,
+    resultCollector,
+    stopObservation,
+    escalated,
+  };
 }
 
 // A fresh review has a fixed namespace and a launcher-minted identity. It never
@@ -775,50 +794,67 @@ export async function launchPreview(
   reopenOnly = false,
 ) {
   const electronBin = await prepareRuntime(root);
-  const { stopLabel, outcome, protocolError, resultCollector } =
-    await runOwnerManagedChild({
-      spawnChild: () =>
-        spawnProcess(
-          electronBin,
-          [
-            path.join(root, "_output/dev-core/Contents/Resources/app/main.cjs"),
-            `--farol-dev-user-data-dir=${devLaunchProfile(acceptanceProfile, reviewMarker)}`,
-            ...(reopenOnly ? ["--farol-dev-reopen-only"] : []),
-            ...(displayOptions.devSecondaryDisplay === true
-              ? ["--display=secondary"]
-              : []),
-            ...(displayOptions.devSecondaryDisplay !== true &&
-            (acceptanceProfile ||
-              secondaryDisplay ||
-              displayOptions.builtInDisplayOnly === true)
-              ? ["--preview-window-mode=secondary-visible"]
-              : []),
-            ...(displayOptions.builtInDisplayOnly === true
-              ? ["--built-in-display-only"]
-              : []),
-            ...(displayOptions.allowPrimaryDisplay === true
-              ? ["--allow-primary-display"]
-              : []),
-          ],
-          {
-            cwd: root,
-            // A terminal broadcasts Ctrl+C to its foreground process group.
-            // Keep Electron and its Go/tunnel children in their own group so
-            // only this launcher receives that broadcast and forwards the
-            // graceful Quit request to Electron. Descendants drain in order.
-            detached: process.platform !== "win32",
-            env: devLaunchEnvironment(
-              process.env,
-              path.dirname(process.execPath),
-              acceptanceProfile,
-              reviewMarker,
-            ),
-            stdio: ["inherit", "pipe", "pipe"],
-          },
+  const {
+    stopLabel,
+    outcome,
+    protocolError,
+    resultCollector,
+    stopObservation,
+    escalated,
+  } = await runOwnerManagedChild({
+    observeStop: (pid) =>
+      captureDevQuit(
+        path.join(
+          devLaunchProfile(acceptanceProfile, reviewMarker),
+          "farol-state",
         ),
-    });
+        pid,
+      ),
+    spawnChild: () =>
+      spawnProcess(
+        electronBin,
+        [
+          path.join(root, "_output/dev-core/Contents/Resources/app/main.cjs"),
+          `--farol-dev-user-data-dir=${devLaunchProfile(acceptanceProfile, reviewMarker)}`,
+          ...(reopenOnly ? ["--farol-dev-reopen-only"] : []),
+          ...(displayOptions.devSecondaryDisplay === true
+            ? ["--display=secondary"]
+            : []),
+          ...(displayOptions.devSecondaryDisplay !== true &&
+          (acceptanceProfile ||
+            secondaryDisplay ||
+            displayOptions.builtInDisplayOnly === true)
+            ? ["--preview-window-mode=secondary-visible"]
+            : []),
+          ...(displayOptions.builtInDisplayOnly === true
+            ? ["--built-in-display-only"]
+            : []),
+          ...(displayOptions.allowPrimaryDisplay === true
+            ? ["--allow-primary-display"]
+            : []),
+        ],
+        {
+          cwd: root,
+          // A terminal broadcasts Ctrl+C to its foreground process group.
+          // Keep Electron and its Go/tunnel children in their own group so
+          // only this launcher receives that broadcast and forwards the
+          // graceful Quit request to Electron. Descendants drain in order.
+          detached: process.platform !== "win32",
+          env: devLaunchEnvironment(
+            process.env,
+            path.dirname(process.execPath),
+            acceptanceProfile,
+            reviewMarker,
+          ),
+          stdio: ["inherit", "pipe", "pipe"],
+        },
+      ),
+  });
 
-  const ownerExitCode = exitCodeForOwnerStop(stopLabel);
+  const ownerExitCode = exitCodeForOwnerStop(
+    stopLabel,
+    !protocolError && confirmedDevQuit(stopObservation, outcome, escalated),
+  );
   if (ownerExitCode !== null) {
     process.stdout.write(
       `${productName} stopped (${stopLabel}). Nothing else was touched.\n`,
