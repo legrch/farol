@@ -142,6 +142,14 @@ func (c discoveryClock) Now() time.Time { return c.at }
 
 type discoveryWorkspace struct{ reads, lists int }
 
+func (n *discoveryWorkspace) Inspect(ctx context.Context, r port.ListRequest) (*port.DirectoryBinding, error) {
+	out, err := n.List(ctx, r)
+	if err != nil {
+		return nil, err
+	}
+	return out.Binding, nil
+}
+
 func (n *discoveryWorkspace) List(_ context.Context, r port.ListRequest) (*port.ListResponse, error) {
 	n.lists++
 	return &port.ListResponse{Binding: &port.DirectoryBinding{RelativePath: r.RelativePath, Root: r.Workspace.Root, ApprovedRoot: r.Workspace.ApprovedRoot}}, nil
