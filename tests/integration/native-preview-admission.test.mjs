@@ -221,6 +221,101 @@ describe("hidden disposable Setup admission", () => {
   }
   const admit = (value) =>
     assertNativePreviewAdmission("/unavailable-owner-profile", value);
+  it.each(["enumeration", "resolution", "final-stat"])(
+    "accepts a removed journal leaf after %s with the parent boundary intact",
+    async (stage) => {
+      const selected = await selection();
+      const receipt = await admit(selected);
+      const parent = path.join(selected.actual.userData, "operations");
+      await fs.mkdir(parent, { mode: 0o700 });
+      const leaf = path.join(parent, "atomic.tmp");
+      await fs.writeFile(leaf, "disposable", { mode: 0o600 });
+      if (stage === "enumeration") {
+        const original = fs.readdir.bind(fs);
+        vi.spyOn(fs, "readdir").mockImplementation(async (file, ...args) => {
+          const names = await original(file, ...args);
+          if (file === parent) await fs.unlink(leaf);
+          return names;
+        });
+      } else {
+        const method = stage === "resolution" ? "realpath" : "lstat";
+        const original = fs[method].bind(fs);
+        let calls = 0;
+        vi.spyOn(fs, method).mockImplementation(async (file, ...args) => {
+          if (file === leaf && ++calls === (stage === "final-stat" ? 2 : 1))
+            await fs.unlink(leaf);
+          return original(file, ...args);
+        });
+      }
+      await expect(
+        recheckNativePreviewIsolation(receipt, selected.actual),
+      ).resolves.toMatchObject({ kind: "isolated-native-preview-readback" });
+    },
+  );
+  it.each([
+    "parent-replaced",
+    "parent-mode",
+    "leaf-symlink",
+    "leaf-hardlink",
+    "denied",
+  ])(
+    "does not hide a changed boundary behind child churn: %s",
+    async (kind) => {
+      const selected = await selection();
+      const receipt = await admit(selected);
+      const parent = path.join(selected.actual.userData, "operations");
+      await fs.mkdir(parent, { mode: 0o700 });
+      const leaf = path.join(parent, "atomic.tmp");
+      await fs.writeFile(leaf, "disposable", { mode: 0o600 });
+      const original = fs.realpath.bind(fs);
+      let changed = false;
+      vi.spyOn(fs, "realpath").mockImplementation(async (file, ...args) => {
+        if (file === leaf && !changed) {
+          changed = true;
+          await fs.unlink(leaf);
+          if (kind === "parent-replaced") {
+            await fs.rename(parent, parent + "-retained");
+            await fs.mkdir(parent, { mode: 0o700 });
+          }
+          if (kind === "parent-mode") await fs.chmod(parent, 0o755);
+          if (kind === "leaf-symlink") await fs.symlink("/outside", leaf);
+          if (kind === "leaf-hardlink") {
+            const other = path.join(parent, "other");
+            await fs.writeFile(other, "disposable", { mode: 0o600 });
+            await fs.link(other, leaf);
+          }
+          throw Object.assign(new Error("synthetic metadata race"), {
+            code: kind === "denied" ? "EACCES" : "ENOENT",
+          });
+        }
+        return original(file, ...args);
+      });
+      await expect(
+        recheckNativePreviewIsolation(receipt, selected.actual),
+      ).rejects.toThrow();
+      await expect(
+        recheckNativePreviewIsolation(receipt, selected.actual),
+      ).rejects.toThrow("RECEIPT_INVALID");
+    },
+  );
+  it("refuses an observed directory disappearing during inspection", async () => {
+    const selected = await selection();
+    const receipt = await admit(selected);
+    const parent = path.join(selected.actual.userData, "operations");
+    await fs.mkdir(parent, { mode: 0o700 });
+    const original = fs.readdir.bind(fs);
+    vi.spyOn(fs, "readdir").mockImplementation(async (file, ...args) => {
+      const names = await original(file, ...args);
+      if (file === parent) await fs.rmdir(parent);
+      return names;
+    });
+    await expect(
+      recheckNativePreviewIsolation(receipt, selected.actual),
+    ).rejects.toThrow();
+    await expect(
+      recheckNativePreviewIsolation(receipt, selected.actual),
+    ).rejects.toThrow("RECEIPT_INVALID");
+  });
   // Synthetic socket metadata only: no socket/child is started or contacted.
   // The exact real resource is qualified separately by the native Setup run.
   async function singletonFixture(originalChild) {

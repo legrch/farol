@@ -145,10 +145,34 @@ async function proofRoot(root, proof, auxiliary = false) {
 // Private roots protect descendant bytes; do not read credentials or profiles.
 async function tree(root, sockets = false, links = new Map()) {
   let count = 0;
-  async function walk(value) {
+  async function missingLeaf(value, parent) {
+    // An atomic writer can rename a leaf after readdir. Prove it is absent,
+    // with the exact physical parent still intact; never accept a replacement,
+    // disappearing directory, expected singleton link or inaccessible object.
+    if (
+      !same(await fs.lstat(parent.path), parent.identity) ||
+      (await fs.realpath(parent.path)) !== parent.path
+    )
+      throw invalid("TREE_CHANGED");
+    try {
+      await fs.lstat(value);
+    } catch (error) {
+      if (error.code === "ENOENT") return;
+      throw error;
+    }
+    throw invalid("TREE_CHANGED");
+  }
+  async function walk(value, parent) {
     if (++count > 20000) throw invalid("TREE_LIMIT");
-    const info = await fs.lstat(value);
     const link = links.get(value);
+    let info;
+    try {
+      info = await fs.lstat(value);
+    } catch (error) {
+      if (error.code === "ENOENT" && parent && !link)
+        return missingLeaf(value, parent);
+      throw error;
+    }
     if (link) {
       if (
         !info.isSymbolicLink() ||
@@ -158,20 +182,31 @@ async function tree(root, sockets = false, links = new Map()) {
         throw invalid("SINGLETON_CHANGED");
       return;
     }
-    if (
-      info.uid !== process.getuid?.() ||
-      info.isSymbolicLink() ||
-      !(info.isDirectory() || info.isFile() || (sockets && info.isSocket())) ||
-      (!info.isDirectory() && info.nlink !== 1) ||
-      (await fs.realpath(value)) !== value
-    )
-      throw invalid(`TREE_UNSAFE:${path.relative(root, value)}`);
-    if (info.isDirectory()) {
-      for (const name of await fs.readdir(value))
-        await walk(path.join(value, name));
+    try {
+      if (
+        info.uid !== process.getuid?.() ||
+        info.isSymbolicLink() ||
+        !(
+          info.isDirectory() ||
+          info.isFile() ||
+          (sockets && info.isSocket())
+        ) ||
+        (!info.isDirectory() && info.nlink !== 1) ||
+        (await fs.realpath(value)) !== value
+      )
+        throw invalid(`TREE_UNSAFE:${path.relative(root, value)}`);
+      if (info.isDirectory()) {
+        const boundary = { path: value, identity: identity(info) };
+        for (const name of await fs.readdir(value))
+          await walk(path.join(value, name), boundary);
+      }
+      if (!same(await fs.lstat(value), identity(info)))
+        throw invalid("TREE_CHANGED");
+    } catch (error) {
+      if (error.code === "ENOENT" && parent && info.isFile())
+        return missingLeaf(value, parent);
+      throw error;
     }
-    if (!same(await fs.lstat(value), identity(info)))
-      throw invalid("TREE_CHANGED");
   }
   await walk(root);
 }
