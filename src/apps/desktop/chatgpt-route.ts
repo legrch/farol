@@ -3181,9 +3181,8 @@ export class ChatGptRoute {
     )
       return refuseInstant();
 
-    // Ordinary connector checks need app access, which Temporary Chat does not
-    // provide. Their freshly navigated, empty Instant composer needs no
-    // personalization toggle; preserve the owner's account preferences.
+    // An explicitly requested ordinary Instant profile needs no temporary-chat
+    // personalization controls. Preserve the owner's account preferences.
     if (!temporary) return null;
 
     // Personalization controls may depend on the selected provider model.

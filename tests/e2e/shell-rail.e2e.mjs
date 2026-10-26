@@ -296,7 +296,7 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page
     .getByRole("heading", {
-      name: `Add ${productName} to ChatGPT`,
+      name: `4. Add ${productName} to ChatGPT`,
       exact: true,
     })
     .waitFor();
@@ -511,7 +511,7 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
     .getByRole("button", { name: "Settings", exact: true })
     .click();
   await page.getByRole("button", { name: "Appearance", exact: true }).click();
-  await capture(page, "settings-inner-sections");
+  await capture(page, "settings-primary-rail");
   await page.emulateMedia({ reducedMotion: "reduce" });
   assert.equal(
     await page

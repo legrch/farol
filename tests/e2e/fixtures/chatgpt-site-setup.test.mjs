@@ -39,3 +39,17 @@ it("keeps default readiness fixtures free of Setup model/app controls", async ()
   expect(html).not.toContain('id="setup-model-power"');
   expect(html).not.toContain('data-testid="composer-app-chip"');
 });
+
+it("exposes Temporary + Personalized only on the requested Setup temporary route", async () => {
+  const f = await startChatGptFixture({
+    setupVerification: { appName: "Setup Fixture", verify: vi.fn() },
+  });
+  fixtures.push(f);
+  const ordinary = await (await fetch(f.url)).text();
+  expect(ordinary).not.toContain('aria-label="Turn off temporary chat"');
+  const temporary = new URL(f.url);
+  temporary.searchParams.set("temporary-chat", "true");
+  const html = await (await fetch(temporary)).text();
+  expect(html).toContain('aria-label="Turn off temporary chat"');
+  expect(html).toContain(">Personalized</button>");
+});
