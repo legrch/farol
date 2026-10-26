@@ -392,7 +392,7 @@ describe("ordinary Dev secondary placement", () => {
     scaleFactor: 2,
     workArea: { x: -1135, y: 30, width: 1135, height: 759 },
   };
-  it("prefers Sidecar and fits its DIP work area before showing", () => {
+  it("uses the built-in secondary while an external monitor is primary", () => {
     expect(
       selectDevWindowPlacement(
         [externalPrimary, builtInSecondary, sidecar],
@@ -400,7 +400,21 @@ describe("ordinary Dev secondary placement", () => {
         { width: 1180, height: 760 },
       ),
     ).toMatchObject({
-      displayId: 68,
+      displayId: builtInSecondary.id,
+      primary: false,
+      selection: "non-primary",
+      bounds: { x: -1346, y: 585, width: 1180, height: 760 },
+    });
+  });
+  it("prefers Sidecar over external secondaries while the built-in display is primary", () => {
+    expect(
+      selectDevWindowPlacement(
+        [externalPrimary, builtInSecondary, sidecar],
+        builtInSecondary.id,
+        { width: 1180, height: 760 },
+      ),
+    ).toMatchObject({
+      displayId: sidecar.id,
       primary: false,
       selection: "sidecar",
       bounds: sidecar.workArea,

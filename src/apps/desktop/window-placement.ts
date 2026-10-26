@@ -216,6 +216,7 @@ export function selectDevWindowPlacement(
     .filter((display) => display.id !== primaryDisplayId)
     .sort((left, right) => left.id - right.id);
   const selected =
+    secondary.find((display) => display.internal) ??
     secondary.find(
       (display) =>
         !display.internal && /\b(?:sidecar|ipad)\b/iu.test(display.label ?? ""),

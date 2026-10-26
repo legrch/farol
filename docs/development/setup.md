@@ -26,7 +26,9 @@ To keep ordinary Dev off your working display:
 task dev -- --display=secondary
 ```
 
-This prefers a non-primary Sidecar/iPad display, then another non-primary display.
+This selects the built-in secondary when an external monitor is primary. When
+the built-in display is primary, it prefers a non-primary Sidecar/iPad display.
+Otherwise it selects another non-primary display.
 The window fits the selected work area in Electron DIP coordinates, is positioned
 before its first show, and shows without activation. When no secondary display
 is available, Dev opens on the primary automatically. Recovery and authentication
@@ -113,7 +115,8 @@ launcher. No package install, credential import or profile reset is involved.
 
 `task dev -- --check` validates and builds without launching or changing profiles;
 `--fresh-review-profile` opens a new, retained disposable first-run Dev profile
-with ordinary window sizing. Combine it with `--display=secondary` for Sidecar;
+with ordinary window sizing. Combine it with `--display=secondary` for the
+owner-away display selected above;
 it fits the work area rather than requiring the fixed visible-test viewport.
 It never reuses the daily profile or enables E2E substitutions. Each invocation
 mints a new profile; the launcher does not retry or reopen a previous review.

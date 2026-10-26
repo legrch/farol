@@ -350,10 +350,21 @@ describe("runOwnerManagedChild signal escalation (real child, fake signal source
 
     const result = await resultPromise;
 
-    expect(messages).toEqual([
+    expect(
+      messages.filter((line) => !line.startsWith("FAROL_DEV_CHILD_TERMINAL:")),
+    ).toEqual([
       ESCALATION_MESSAGES.SIGINT,
       ESCALATION_MESSAGES.SIGTERM,
       ESCALATION_MESSAGES.SIGKILL,
+    ]);
+    expect(
+      messages
+        .filter((line) => line.startsWith("FAROL_DEV_CHILD_TERMINAL:"))
+        .map((line) =>
+          JSON.parse(line.slice("FAROL_DEV_CHILD_TERMINAL:".length)),
+        ),
+    ).toEqual([
+      { schema: 1, pid: child.pid, exitCode: null, signal: "SIGKILL" },
     ]);
     expect(result.stopLabel).toBe("Ctrl+C");
     expect(result.outcome.signal).toBe("SIGKILL");
@@ -398,6 +409,40 @@ describe("runOwnerManagedChild signal escalation (real child, fake signal source
     expect(result.outcome).toEqual({ status: 0, signal: null });
     expect(exitCodeForOwnerStop(result.stopLabel)).toBeNull();
   }, 15000);
+});
+
+describe("managed child terminal diagnostics", () => {
+  it("observes an actual natural child exit without converting it to an owner stop", async () => {
+    const child = spawn(process.execPath, ["-e", "process.exit(0)"], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const lines = [];
+    const result = await runOwnerManagedChild({
+      spawnChild: () => child,
+      relayOutput: false,
+      log: (line) => lines.push(line),
+    });
+    expect(result.outcome).toEqual({ status: 0, signal: null });
+    expect(result.stopLabel).toBe(null);
+    expect(
+      lines.map((line) =>
+        JSON.parse(line.slice("FAROL_DEV_CHILD_TERMINAL:".length)),
+      ),
+    ).toEqual([{ schema: 1, pid: child.pid, exitCode: 0, signal: null }]);
+  });
+  it("preserves original settlement when the diagnostic sink throws", async () => {
+    const child = new EventEmitter();
+    child.pid = 123;
+    const result = runOwnerManagedChild({
+      spawnChild: () => child,
+      relayOutput: false,
+      log: () => {
+        throw new Error("closed stdout");
+      },
+    });
+    child.emit("close", 0, null);
+    expect((await result).outcome).toEqual({ status: 0, signal: null });
+  });
 });
 
 describe("dev.mjs main() orchestration with an already-declared toolchain", () => {

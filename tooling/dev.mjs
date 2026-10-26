@@ -516,6 +516,21 @@ export async function runOwnerManagedChild({
     });
     child.once("close", (status, signal) => {
       exited = true;
+      if (Number.isSafeInteger(child.pid) && child.pid > 0) {
+        try {
+          log(
+            "FAROL_DEV_CHILD_TERMINAL:" +
+              JSON.stringify({
+                schema: 1,
+                pid: child.pid,
+                exitCode: status,
+                signal,
+              }),
+          );
+        } catch {
+          // Diagnostic output cannot replace the original child's terminal.
+        }
+      }
       resolve({ status, signal });
     });
   });
