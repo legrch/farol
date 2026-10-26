@@ -5794,7 +5794,15 @@ describe("ChatGPT embedded task surface", () => {
 });
 
 describe("ChatGPT shared partition lifecycle", () => {
-  it.each(["granted", "denied", "navigated", "disposed", "failed"])(
+  it.each([
+    "granted",
+    "denied",
+    "navigated",
+    "disposed",
+    "failed",
+    "unreadable",
+    "throws",
+  ])(
     "keeps microphone permission on the owned audio-only document: %s",
     async (mode) => {
       const candidate = route();
@@ -5830,6 +5838,15 @@ describe("ChatGPT shared partition lifecycle", () => {
         }),
       ).toBe(false);
       electronMock.getMediaAccessStatus.mockReturnValue("granted");
+      electronMock.getMediaAccessStatus.mockImplementationOnce(() => {
+        throw Error("OS permission status unavailable");
+      });
+      expect(
+        check(surface.webContents, "media", "https://chatgpt.com", {
+          ...details,
+          mediaType: "audio",
+        }),
+      ).toBe(false);
       expect(
         check(surface.webContents, "media", "https://chatgpt.com", {
           ...details,
@@ -5859,6 +5876,10 @@ describe("ChatGPT shared partition lifecycle", () => {
               settle = resolve;
             }),
       );
+      if (mode === "throws")
+        electronMock.askForMediaAccess.mockImplementationOnce(() => {
+          throw Error("OS permission unavailable");
+        });
       const callback = vi.fn();
       request(surface.webContents, "media", callback, details);
       expect(electronMock.askForMediaAccess).toHaveBeenCalledExactlyOnceWith(
@@ -5867,7 +5888,11 @@ describe("ChatGPT shared partition lifecycle", () => {
       if (mode === "navigated")
         Reflect.set(candidate, "routeDocumentGeneration", 99);
       if (mode === "disposed") candidate.dispose();
-      if (mode !== "failed") settle(mode !== "denied");
+      if (mode === "unreadable")
+        vi.spyOn(surface.webContents, "getURL").mockImplementation(() => {
+          throw Error("document unavailable");
+        });
+      if (mode !== "failed" && mode !== "throws") settle(mode !== "denied");
       await Promise.resolve();
       expect(callback).toHaveBeenCalledExactlyOnceWith(mode === "granted");
       candidate.dispose();

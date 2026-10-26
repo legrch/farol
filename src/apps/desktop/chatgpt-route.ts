@@ -195,6 +195,18 @@ export function classifyChatGptProviderError(
 const hardenedRouteSessions = new WeakSet<Session>();
 const routePermissionOwners = new WeakMap<WebContents, () => number | null>();
 
+function routePermissionGeneration(
+  contents: WebContents | null,
+): number | null {
+  try {
+    return contents && !contents.isDestroyed()
+      ? (routePermissionOwners.get(contents)?.() ?? null)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function routeClipboardWriteAllowed(
   contents: WebContents | null,
   permission: string,
@@ -206,7 +218,7 @@ function routeClipboardWriteAllowed(
   try {
     return (
       !contents.isDestroyed() &&
-      routePermissionOwners.get(contents)?.() != null &&
+      routePermissionGeneration(contents) != null &&
       new URL(requestingUrl).origin === new URL(contents.getURL()).origin
     );
   } catch {
@@ -226,7 +238,7 @@ function routeMicrophoneAllowed(
   try {
     return (
       !contents.isDestroyed() &&
-      routePermissionOwners.get(contents)?.() != null &&
+      routePermissionGeneration(contents) != null &&
       new URL(requestingUrl).origin === new URL(contents.getURL()).origin
     );
   } catch {
@@ -5020,13 +5032,20 @@ export class ChatGptRoute {
               details.mediaTypes[0] === "audio",
           )
         ) {
-          const generation = routePermissionOwners.get(contents)?.();
-          void systemPreferences.askForMediaAccess("microphone").then(
+          const generation = routePermissionGeneration(contents);
+          let request: Promise<boolean>;
+          try {
+            request = systemPreferences.askForMediaAccess("microphone");
+          } catch {
+            callback(false);
+            return;
+          }
+          void request.then(
             (granted) =>
               callback(
                 granted &&
                   generation != null &&
-                  routePermissionOwners.get(contents)?.() === generation &&
+                  routePermissionGeneration(contents) === generation &&
                   routeMicrophoneAllowed(
                     contents,
                     permission,
@@ -5047,21 +5066,29 @@ export class ChatGptRoute {
       },
     );
     routeSession.setPermissionCheckHandler(
-      (contents, permission, requestingOrigin, details) =>
-        routeClipboardWriteAllowed(
-          contents,
-          permission,
-          requestingOrigin,
-          details?.isMainFrame === true,
-        ) ||
-        (routeMicrophoneAllowed(
-          contents,
-          permission,
-          requestingOrigin,
-          details?.isMainFrame === true,
-          details?.mediaType === "audio",
-        ) &&
-          systemPreferences.getMediaAccessStatus("microphone") === "granted"),
+      (contents, permission, requestingOrigin, details) => {
+        try {
+          return (
+            routeClipboardWriteAllowed(
+              contents,
+              permission,
+              requestingOrigin,
+              details?.isMainFrame === true,
+            ) ||
+            (routeMicrophoneAllowed(
+              contents,
+              permission,
+              requestingOrigin,
+              details?.isMainFrame === true,
+              details?.mediaType === "audio",
+            ) &&
+              systemPreferences.getMediaAccessStatus("microphone") ===
+                "granted")
+          );
+        } catch {
+          return false;
+        }
+      },
     );
     routeSession.on("will-download", (event) => event.preventDefault());
     hardenedRouteSessions.add(routeSession);
