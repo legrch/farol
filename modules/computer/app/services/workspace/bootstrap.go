@@ -66,7 +66,7 @@ func (s *Service) Bootstrap(ctx context.Context, request BootstrapRequest) (*Boo
 	if err != nil {
 		return nil, err
 	}
-	first, err := s.Context(ctx, binding.contextRequest(request.WorkspaceID, request.RelativeDirectory))
+	first, err := s.Inspect(ctx, binding.contextRequest(request.WorkspaceID, request.RelativeDirectory))
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +118,7 @@ func (s *Service) Bootstrap(ctx context.Context, request BootstrapRequest) (*Boo
 			}
 		}
 	}
-	last, err := s.Context(ctx, binding.contextRequest(request.WorkspaceID, request.RelativeDirectory))
+	last, err := s.Inspect(ctx, binding.contextRequest(request.WorkspaceID, request.RelativeDirectory))
 	if err != nil {
 		return nil, err
 	}

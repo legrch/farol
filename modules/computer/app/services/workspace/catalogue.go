@@ -55,7 +55,7 @@ func (s *Service) Catalogue(ctx context.Context, request CatalogueRequest) (*Cat
 	entries := make([]CatalogueEntry, 0, len(ids))
 	for pass := 0; pass < 2; pass++ {
 		for index, id := range ids {
-			out, err := s.Context(ctx, binding.contextRequest(id, "."))
+			out, err := s.Inspect(ctx, binding.contextRequest(id, "."))
 			if err != nil {
 				return nil, err
 			}

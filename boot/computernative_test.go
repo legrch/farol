@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -128,6 +129,43 @@ func TestComputerNativeSelectedChatJournalToWorkspace(t *testing.T) {
 	}
 	invoke("computer.workspace.catalogue", wire.ComputerCatalogueRequest{OwnerId: read.OwnerId, SessionId: read.SessionId, TaskId: read.TaskId, TaskEpoch: read.TaskEpoch, ParticipantId: read.ParticipantId, TurnId: read.TurnId, Generation: read.Generation, CallId: "catalogue"})
 	invoke("computer.workspace.bootstrap", wire.ComputerBootstrapRequest{OwnerId: read.OwnerId, SessionId: read.SessionId, TaskId: read.TaskId, TaskEpoch: read.TaskEpoch, ParticipantId: read.ParticipantId, TurnId: read.TurnId, Generation: read.Generation, CallId: "bootstrap", WorkspaceId: "work", RelativeDirectory: "."})
+	// Discovery does not inventory child names. Real child creation/removal must
+	// not invalidate a checked physical root; actual List keeps its snapshot guard.
+	churnContext, stopChurn := context.WithCancel(ctx)
+	churnDone := make(chan error, 1)
+	churnStarted := make(chan struct{})
+	go func() {
+		child := filepath.Join(workspace, "disposable-churn.tmp")
+		first := true
+		for churnContext.Err() == nil {
+			if err := os.WriteFile(child, []byte("fixture"), 0600); err != nil {
+				churnDone <- err
+				return
+			}
+			if err := os.Remove(child); err != nil {
+				churnDone <- err
+				return
+			}
+			if first {
+				close(churnStarted)
+				first = false
+			}
+		}
+		churnDone <- nil
+	}()
+	var churnErr error
+	stopAndWait := sync.OnceFunc(func() { stopChurn(); churnErr = <-churnDone })
+	t.Cleanup(stopAndWait)
+	<-churnStarted
+	for index := 0; index < 20; index++ {
+		invoke("computer.workspace.catalogue", wire.ComputerCatalogueRequest{OwnerId: read.OwnerId, SessionId: read.SessionId, TaskId: read.TaskId, TaskEpoch: read.TaskEpoch, ParticipantId: read.ParticipantId, TurnId: read.TurnId, Generation: read.Generation, CallId: fmt.Sprintf("catalogue-churn-%d", index)})
+		invoke("computer.workspace.bootstrap", wire.ComputerBootstrapRequest{OwnerId: read.OwnerId, SessionId: read.SessionId, TaskId: read.TaskId, TaskEpoch: read.TaskEpoch, ParticipantId: read.ParticipantId, TurnId: read.TurnId, Generation: read.Generation, CallId: fmt.Sprintf("bootstrap-churn-%d", index), WorkspaceId: "work", RelativeDirectory: "."})
+	}
+	stopAndWait()
+	if churnErr != nil {
+		t.Fatal(churnErr)
+	}
+
 	if err := store.RevokeParticipant(ctx, 2, binding.ParticipantID); err != nil {
 		t.Fatal(err)
 	}

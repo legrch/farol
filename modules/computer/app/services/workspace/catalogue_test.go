@@ -46,6 +46,17 @@ func (n *discoveryNative) List(_ context.Context, r port.ListRequest) (*port.Lis
 	}
 	return out, nil
 }
+
+// Port double only: reuse injected binding/failure vectors. Native no-list
+// behavior and child churn are covered by the root composition witness.
+func (n *discoveryNative) Inspect(ctx context.Context, r port.ListRequest) (*port.DirectoryBinding, error) {
+	out, err := n.List(ctx, r)
+	if err != nil || out == nil {
+		return nil, err
+	}
+	return out.Binding, nil
+}
+
 func discoveryFixture(t *testing.T) (*Service, *authorities, *approvals, *discoveryNative, *clock, CatalogueRequest) {
 	t.Helper()
 	_, p, a, _, c, r := fixture(t)
@@ -241,4 +252,19 @@ func TestCatalogueChangesBetweenCompletePassesDiscardCollection(t *testing.T) {
 		t.Fatal("changed context collected")
 	}
 	expectFailure(t, err, "COMPUTER_WORKSPACE_CONTEXT_CHANGED", "contract")
+}
+
+func TestCatalogueRequiresInspectionRatherThanFallingBackToList(t *testing.T) {
+	_, p, a, n, c, r := contextFixture(t)
+	binding := port.TaskBinding{Identity: p.p.Grant.Identity, ParticipantID: r.ParticipantID, TurnID: r.TurnID}
+	s, failure := NewForExecution(selectedAccess{access: access{p: p, a: a}, binding: binding}, n, c)
+	if failure != nil {
+		t.Fatal(failure)
+	}
+	n.list.Entries = []string{"unused"}
+	out, err := s.Catalogue(context.Background(), CatalogueRequest{OwnerID: r.OwnerID, SessionID: r.SessionID, TaskID: r.TaskID, TaskEpoch: r.TaskEpoch, ParticipantID: r.ParticipantID, TurnID: r.TurnID, Generation: r.Generation, CallID: r.CallID})
+	if out != nil || n.lists != 0 {
+		t.Fatal("missing inspector fell back to enumeration")
+	}
+	expectFailure(t, err, "WORKSPACE_HELPER_FAILED", "native-workspace")
 }

@@ -73,3 +73,18 @@ func TestInspectRejectsSymlinkDeniedPathAndCancellation(t *testing.T) {
 	}
 	expectCode(t, err, "WORKSPACE_REQUEST_CANCELLED")
 }
+
+func TestInspectRejectsAccessBoundaryChange(t *testing.T) {
+	d := fixture(t)
+	w := New(d.Root + "-home")
+	w.afterRead = func() {
+		if err := os.Chmod(d.Root, 0500); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := w.Inspect(context.Background(), port.ListRequest{Workspace: d, RelativePath: "."})
+	if out != nil {
+		t.Fatal("changed access disclosed")
+	}
+	expectCode(t, err, "WORKSPACE_ROOT_CHANGED")
+}
