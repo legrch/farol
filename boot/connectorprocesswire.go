@@ -168,6 +168,29 @@ func (s *computerConnector) cancelProcess(ctx context.Context, slot *connectorSl
 		ledger.mu.Unlock()
 		return nil, connectorProcessUnknown()
 	}
+	// Acknowledged publication retains the original supervisor/root exit. A
+	// later Cancel cannot control that exited supervisor. Refuse before any
+	// claim or signal; do not promote its unverified descendant cleanup.
+	if p.result != nil && p.publication != "" {
+		if !processsvc.ValidTerminalResult(*p.result) || p.result.Scope != p.origin || p.result.Intent.OperationID != operation {
+			ledger.mu.Unlock()
+			return nil, connectorProcessUnknown()
+		}
+		if p.result.Observation.Handle != handle {
+			ledger.mu.Unlock()
+			return nil, connectorProcessRefusal("PROCESS_HANDLE_MISMATCH")
+		}
+		ledger.mu.Unlock()
+		if err := slot.guard.WithConnectorCurrent(ctx, slot.guard.host, func(current bool) error {
+			if !current {
+				return connectorProcessRefusal("PROCESS_UNAVAILABLE")
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		return nil, connectorProcessRefusal("PROCESS_ALREADY_EXITED")
+	}
 	p.cancelling = true
 	p.cancelDone = make(chan struct{})
 	settled := record.settled

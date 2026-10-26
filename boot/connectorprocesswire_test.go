@@ -366,3 +366,45 @@ func TestConnectorProcessWirePreservesPreparationAcrossAllWrappers(t *testing.T)
 		})
 	}
 }
+
+func TestConnectorCancelAfterPublishedExitDoesNotSignalOrInventUnknown(t *testing.T) {
+	for _, mode := range []string{"known", "wrong-handle", "unknown-cancel", "lost-publication"} {
+		t.Run(mode, func(t *testing.T) {
+			s, journal, n, _ := processWireFixture(t)
+			publisher := &connectorProcessPublisherDouble{connectorProcessJournalDouble: journal, s: s, digest: strings.Repeat("a", 64)}
+			s.mutations.dependencies.repository = publisher
+			started := processWireStarted(t, s)
+			n.terminal = true
+			if _, err := s.retainProcess(context.Background(), s.current, started.OperationId); err != nil {
+				t.Fatal(err)
+			}
+			p := s.mutations.operations[started.OperationId].process
+			before := p.publication
+			request := processWireCancel(s)
+			code, status := "PROCESS_ALREADY_EXITED", "refused"
+			switch mode {
+			case "wrong-handle":
+				request.Handle = "other-handle"
+				code = "PROCESS_HANDLE_MISMATCH"
+			case "unknown-cancel":
+				p.cancelUnknown = true
+				code = "PROCESS_OUTCOME_UNKNOWN"
+				status = "unknown"
+			case "lost-publication":
+				p.publication = ""
+				code = "PROCESS_OUTCOME_UNKNOWN"
+				status = "unknown"
+			}
+			out := connectorMutationInvoke(t, s, "computer.process.cancel", "late-cancel", request)
+			if out.Status != status || out.Code != code || n.cancels != 0 || p.cancelling {
+				t.Fatalf("unexpected control: %+v signals=%d", out, n.cancels)
+			}
+			if mode == "known" && (p.cancelUnknown || p.publication != before || !s.mutations.operations[started.OperationId].settled) {
+				t.Fatal("known exit changed original settlement")
+			}
+			if mode == "unknown-cancel" && !p.cancelUnknown {
+				t.Fatal("old unknown cleared")
+			}
+		})
+	}
+}
