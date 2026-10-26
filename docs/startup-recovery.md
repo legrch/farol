@@ -150,3 +150,33 @@ route. Apply it only under a separately scoped runtime grant:
 Offline contract tests demonstrate diagnostic projection and refusal propagation
 through controlled ports. They do not establish original-child cleanup, native
 leases, arbitrary interrupted-effect recovery or any successful live handoff.
+
+## Mixed retained record selection
+
+The startup collector now mechanically distinguishes owner file v2, connector
+file v3, process reservation v4, process terminal v5/v6 and process output v5.
+It pins every selected filename and the SHA-256 of all stored bytes. File origin
+and process generation metadata are retained without converting uint64 strings
+to lossy numbers. Output identities come only from their selected terminal
+parent, with one complete set of matching stream/offset/digest references.
+Unknown type/version pairs, missing identity, foreign owner/profile/computer,
+orphan output, duplicate references and incomplete output sets refuse the whole
+selection. Output bodies, commands and receipt contents are not projected.
+
+This projection is not canonical journal decoding, effect settlement or native
+eligibility. It does not infer a current generation from a historical one. The
+existing Go consumer still accepts only owner Completed records with its own
+canonical binding, receipt, key, byte and namespace checks. Before dispatch,
+the host refuses a mixed inventory with
+`STARTUP_PRESERVED_MUTATION_CONTRACT_UNSUPPORTED`; it never filters unsupported
+neighbors or fabricates owner file bindings for processes. A new native mixed
+consumer requires separate contract acceptance and exact-source qualification.
+Until then, this source change makes the compatibility boundary explicit but
+does not unblock the preserved daily profile or authorize a runtime attempt.
+
+The disposable collector fixtures use producer header/identity shapes with
+deliberately opaque receipt evidence. Pure projection tests use anonymized
+process/output shapes. Neither suite proves Go codec acceptance, real process
+cleanup, native lock ownership or successful recovery. Build inclusion must use
+the ordinary clean source/resource-attested artifact path; patching an older
+running artifact or its declarations is not supported.

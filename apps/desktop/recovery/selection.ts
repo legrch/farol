@@ -5,7 +5,10 @@ import { isDeepStrictEqual } from "node:util";
 import { closedRecoveryHostMechanics as host } from "../../../src/apps/desktop/closed-empty-chat-recovery";
 import { MAX_RUN_MARKER_BYTES } from "../../../src/apps/desktop/run-marker";
 import { MAX_QUIT_RECEIPT_BYTES } from "../../../src/apps/desktop/quit-receipt";
-import { parseJSON } from "../bridge/frame";
+import {
+  ownerCompletedInputs,
+  projectStartupRetainedRecords,
+} from "./retained-records";
 import { openExistingNativeProfileStorage } from "../bridge/profile-storage";
 import type { ProfileLaunchBinding } from "../bridge/profile";
 import type {
@@ -33,20 +36,6 @@ export type StartupPreservedSelection = Readonly<{
 function refused(): never {
   throw Error("STARTUP_PRESERVED_SELECTION_INVALID");
 }
-function record(value: unknown): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value))
-    refused();
-  return value as Record<string, unknown>;
-}
-function text(value: unknown): string {
-  if (typeof value !== "string") refused();
-  return value;
-}
-function counter(value: unknown): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
-    refused();
-  return value;
-}
 function immutable<T>(value: T): T {
   if (value !== null && typeof value === "object") {
     for (const item of Object.values(value)) immutable(item);
@@ -56,54 +45,6 @@ function immutable<T>(value: T): T {
 }
 const hash = (bytes: Buffer) =>
   createHash("sha256").update(bytes).digest("hex");
-
-// Mechanical projection of immutable owner fields, not a journal decoder or
-// phase/receipt/permission policy. Every namespace entry and its complete-byte
-// digest is selected; none is omitted for being pending, malformed or unknown.
-// The later canonical Go observation must validate all bytes, bindings, phases,
-// namespace completeness and native claims again before any preparation.
-function mutationSelection(key: string, bytes: Buffer): unknown {
-  const envelope = record(
-    parseJSON(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
-  );
-  const stored = record(envelope.record);
-  const identity = record(stored.identity);
-  return {
-    Key: key,
-    SHA256: hash(bytes),
-    Binding: {
-      Identity: {
-        OperationID: text(identity.operationId),
-        OwnerID: text(identity.ownerId),
-        ProfileID: text(identity.profileId),
-        ComputerID: text(identity.computerId),
-        Scope: text(identity.scope),
-        SessionID: "",
-        TaskID: "",
-        TaskEpoch: 0,
-        ParticipantID: "",
-      },
-      ComputerGeneration: counter(stored.computerGeneration),
-      WorkspaceID: text(stored.workspaceId),
-      RelativePath: text(stored.relativePath),
-      RequestDigest: text(stored.requestDigest),
-      Connector: {
-        BuildID: "",
-        BackendGeneration: "",
-        RuntimeID: "",
-        ConnectorGeneration: 0,
-        SessionID: "",
-        TaskID: "",
-        ParticipantID: "",
-        TurnID: "",
-        CallID: "",
-        TaskEpoch: 0,
-        Generation: 0,
-        Operation: "",
-      },
-    },
-  };
-}
 
 // Trusted startup input only. This read-only collector never provisions a
 // profile, launches a child, derives the old generation, classifies an effect,
@@ -198,11 +139,18 @@ export async function selectStartupPreservedRecovery(
     names.some((name) => !/^[a-f0-9]{64}\.json$/u.test(name))
   )
     refused();
-  const selected: unknown[] = [];
+  const retained: { key: string; bytes: Buffer }[] = [];
   for (const name of names) {
     const captured = await capture(path.join(mutations, name), 65536);
-    selected.push(mutationSelection(name, captured.bytes));
+    retained.push({ key: name, bytes: captured.bytes });
   }
+  const selected = ownerCompletedInputs(
+    projectStartupRetainedRecords(retained, {
+      ownerId: "owner-desktop",
+      profileId: storage.profileId,
+      computerId,
+    }),
+  );
   const exact: ExactPreservedRecoverySelection = {
     buildId,
     operationId: randomUUID(),

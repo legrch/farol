@@ -156,15 +156,16 @@ async function refusesUnchanged(
 }
 function mutationValue(index: number, phase: string) {
   return {
-    // Not a canonical journal fixture: only the immutable projection is tested.
-    schema: "fixture-opaque-mutation/1",
+    // Producer header/identity shape; receipts remain deliberately opaque.
+    schemaVersion: 2,
+    kind: "workspace_owner_mutation",
     record: {
       identity: {
         operationId: `fixture-operation-${index}`,
         ownerId: "owner-desktop",
         profileId: PROFILE_ID,
         computerId: COMPUTER_ID,
-        scope: "owner",
+        scope: "owner-settings",
       },
       computerGeneration: index,
       workspaceId: `fixture-workspace-${index}`,
@@ -307,6 +308,48 @@ const malformedMutations = [
 describe.skipIf(process.platform !== "darwin")(
   "startup preserved recovery selection on retained real files",
   () => {
+    it("retains every file and marker when a known process needs an unsupported native contract", async () => {
+      const f = await fixture({ quit: true });
+      await writeMutation(f, 0, "outcome_unknown");
+      await privateFile(
+        path.join(f.mutations, mutationKey(1)),
+        json({
+          schemaVersion: 6,
+          kind: "workspace_connector_process_terminal",
+          record: {
+            scope: {
+              ownerId: "owner-desktop",
+              computerId: COMPUTER_ID,
+              computerGeneration: "13",
+              generation: "2",
+              host: {
+                profileId: PROFILE_ID,
+                backendGeneration: "original-generation",
+                buildId: "original-build",
+                runtimeId: "original-runtime",
+                connectorGeneration: "3",
+                launchDigest: "b".repeat(64),
+              },
+            },
+            intent: { operationId: "original-process" },
+            phase: "exited",
+            observation: {
+              supervisorState: "exited",
+              groupCleanup: "unverified",
+              descendantCleanup: "unverified",
+            },
+            stdout: [],
+            stderr: [],
+          },
+        }),
+      );
+      await refusesUnchanged(
+        f,
+        () => selectStartupPreservedRecovery(inputFor(f)),
+        "STARTUP_PRESERVED_MUTATION_CONTRACT_UNSUPPORTED",
+      );
+    });
+
     it("retains the factory pin through immutable selection and refuses a replaced legacy inode", async () => {
       const f = await fixture();
       const legacyRoot = path.join(f.state, "chatgpt-task-journal");
