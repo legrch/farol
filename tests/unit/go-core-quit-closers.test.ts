@@ -53,6 +53,23 @@ if (
 )
   throw new Error("QUIT_COLLECTION_SOURCE_MISSING");
 const collectSource = source.slice(collect.value.start, collect.value.end);
+const recordProperty = composition.properties.find(
+  (p) =>
+    p.type === "ObjectProperty" &&
+    p.key.type === "Identifier" &&
+    p.key.name === "record",
+);
+if (
+  !recordProperty ||
+  recordProperty.type !== "ObjectProperty" ||
+  recordProperty.value.start == null ||
+  recordProperty.value.end == null
+)
+  throw new Error("QUIT_RECORD_SOURCE_MISSING");
+const recordSource = source.slice(
+  recordProperty.value.start,
+  recordProperty.value.end,
+);
 const stopNode = tree.program.body.find(
   (node) =>
     node.type === "FunctionDeclaration" &&
@@ -122,6 +139,77 @@ function deferred<T>() {
 }
 
 afterEach(() => vi.useRealTimers());
+
+describe("actual Quit record composition flushes final operation observations", () => {
+  function recording(shutdown?: () => Promise<boolean>) {
+    const receipt = vi.fn(async () => undefined),
+      marker = vi.fn(async () => undefined),
+      warn = vi.fn();
+    const record = vm.runInNewContext(
+      stripTypeScriptTypes(`(${recordSource})`, { mode: "strip" }),
+      {
+        operationsLog: shutdown ? { shutdown } : undefined,
+        recordQuitReceipt: receipt,
+        removeRunMarker: marker,
+        path: { join: (...parts: string[]) => parts.join("/") },
+        app: { getPath: () => "/fixture" },
+        process: { pid: 123 },
+        console: { warn },
+      },
+    ) as (receipt: {
+      drained: boolean;
+      unconfirmed: string[];
+    }) => Promise<void>;
+    return { record, receipt, marker, warn };
+  }
+  it("waits for the existing journal shutdown before recording Quit/removing marker", async () => {
+    const flush = deferred<boolean>();
+    const shutdown = vi.fn(() => flush.promise),
+      f = recording(shutdown);
+    const receipt = { drained: true, unconfirmed: [] };
+    const pending = f.record(receipt);
+    expect(shutdown).toHaveBeenCalledExactlyOnceWith(250);
+    expect(f.receipt).not.toHaveBeenCalled();
+    expect(f.marker).not.toHaveBeenCalled();
+    flush.resolve(true);
+    await pending;
+    expect(f.receipt).toHaveBeenCalledExactlyOnceWith(receipt);
+    expect(f.marker).toHaveBeenCalledTimes(1);
+    expect(f.warn).not.toHaveBeenCalled();
+  });
+  it.each(["false", "throw"])(
+    "keeps a content-free diagnostic on flush %s without rewriting child drain facts",
+    async (mode) => {
+      const f = recording(async () => {
+        if (mode === "throw") throw new Error("private filesystem detail");
+        return false;
+      });
+      const receipt = { drained: false, unconfirmed: ["go-core"] };
+      await f.record(receipt);
+      expect(f.warn).toHaveBeenCalledExactlyOnceWith(
+        "FAROL_OPERATIONS_LOG_FLUSH_UNCONFIRMED",
+      );
+      expect(f.receipt).toHaveBeenCalledExactlyOnceWith(receipt);
+      expect(f.marker).not.toHaveBeenCalled();
+    },
+  );
+  it("does not create an operations writer just for Quit", async () => {
+    const f = recording();
+    await f.record({ drained: true, unconfirmed: [] });
+    expect(f.receipt).toHaveBeenCalledTimes(1);
+    expect(f.warn).not.toHaveBeenCalled();
+  });
+  it("still records the original Quit when the diagnostic output is closed", async () => {
+    const f = recording(async () => false);
+    f.warn.mockImplementation(() => {
+      throw new Error("closed stderr");
+    });
+    const receipt = { drained: true, unconfirmed: [] };
+    await f.record(receipt);
+    expect(f.receipt).toHaveBeenCalledExactlyOnceWith(receipt);
+    expect(f.marker).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("Go core Quit dependency retains original closer promises", () => {
   it.each(["connector", "saved-chat-bridge"])(

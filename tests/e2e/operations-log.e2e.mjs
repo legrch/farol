@@ -11,6 +11,11 @@ import { once } from "node:events";
 import { _electron } from "playwright-core";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { qualifyGoBuild } from "./qualified-go-build.mjs";
+import {
+  readQuitObservation,
+  beginQuitObservation,
+  assertFreshQuit,
+} from "./lib/native-quit-observation.mjs";
 const root = process.cwd(),
   output = path.join(root, "_output/shell-screens");
 await fs.mkdir(output, { recursive: true });
@@ -100,10 +105,23 @@ async function launch() {
 async function close(owned) {
   const closing = application;
   application = null;
+  const state = path.join(owned.userData, "farol-state");
+  const request = beginQuitObservation(
+    await readQuitObservation(state),
+    owned.child.pid,
+  );
   await closing.close();
   const [code, signal] = await owned.terminal;
   assert.equal(code, 0);
   assert.equal(signal, null);
+  report.launches.at(-1).quit = assertFreshQuit(
+    request,
+    await readQuitObservation(state),
+    { pid: owned.child.pid, code, signal },
+  );
+  await assert.rejects(fs.lstat(path.join(state, "running.json")), {
+    code: "ENOENT",
+  });
   owned.exitCode = code;
   report.launches.at(-1).exitCode = code;
 }
@@ -248,6 +266,46 @@ try {
   await screenshot("b2-home-recent-real");
   await close(second);
   report.storage = path.join(first.userData, "farol-state/operations");
+  // Inspect final disk records after BOTH real Quits; a pre-Quit snapshot
+  // cannot prove that the last hub.stop observation reached durable storage.
+  const finalEntries = [];
+  for (const name of await fs.readdir(report.storage)) {
+    if (!name.endsWith(".jsonl")) continue;
+    for (const line of (
+      await fs.readFile(path.join(report.storage, name), "utf8")
+    ).split("\n")) {
+      if (line) finalEntries.push(JSON.parse(line));
+    }
+  }
+  const lifecycles = new Map();
+  for (const entry of finalEntries) {
+    if (!entry.lifecycle) continue;
+    const records = lifecycles.get(entry.lifecycle.id) ?? [];
+    records.push(entry);
+    lifecycles.set(entry.lifecycle.id, records);
+  }
+  for (const records of lifecycles.values()) {
+    assert.equal(
+      records.filter((r) => r.lifecycle.phase === "started").length,
+      1,
+    );
+    assert.equal(
+      records.filter((r) => r.lifecycle.phase === "observed").length,
+      1,
+      "OPERATIONS_FINAL_OBSERVATION_MISSING",
+    );
+  }
+  const stopped = finalEntries.filter((e) => e.kind === "hub.stop");
+  assert.equal(stopped.filter((e) => e.outcome === "pending").length, 2);
+  assert.equal(stopped.filter((e) => e.outcome === "done").length, 2);
+  report.finalDisk = {
+    records: finalEntries.length,
+    pairedLifecycles: lifecycles.size,
+    hubStops: 2,
+  };
+  report.checks.push(
+    "every enumerated lifecycle, including both final hub.stop observations, is durable after normal Quit",
+  );
   report.cleanup =
     "both exact hidden Electron instances exited 0; disposable profile retained as local evidence";
 } finally {

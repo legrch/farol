@@ -11908,7 +11908,8 @@ function chatGptWindowPresentation(): ChatGptWindowPresentation | undefined {
     mode: "secondary-visible",
     // Fixed test viewports stay exact. An explicit interactive viewport and
     // ordinary Dev may fit auth windows within their selected display.
-    size: devSecondaryDisplay || explicitPreviewWindowSize ? "fit" : "exact",
+    size:
+      buildEnvironment === "dev" || explicitPreviewWindowSize ? "fit" : "exact",
     place: (requested) =>
       selectedVisibleTestPlacement(
         explicitPreviewWindowSize
@@ -12803,6 +12804,24 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     // not be written, leaves the marker in place, and the next promotion
     // reads that as a stop that never confirmed, never as a clean quit.
     record: async (receipt) => {
+      // Child close observers have settled. Flush their final metadata before
+      // real Quit can truncate the asynchronous writer, inside the existing
+      // absolute recording deadline. Logging supplies no child-drain authority.
+      if (operationsLog) {
+        let flushed = false;
+        try {
+          flushed = await operationsLog.shutdown(250);
+        } catch {
+          // Preserve the original child-drain result even on journal failure.
+        }
+        if (!flushed) {
+          try {
+            console.warn("FAROL_OPERATIONS_LOG_FLUSH_UNCONFIRMED");
+          } catch {
+            // A closed diagnostic sink cannot suppress the Quit receipt.
+          }
+        }
+      }
       await recordQuitReceipt(receipt);
       if (receipt.drained) {
         await removeRunMarker(
