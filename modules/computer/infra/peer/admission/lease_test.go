@@ -78,6 +78,15 @@ func (f *workspaceFixture) List(_ context.Context, r port.ListRequest) (*port.Li
 		RelativePath: r.RelativePath, Root: r.Workspace.Root, ApprovedRoot: r.Workspace.ApprovedRoot}}, nil
 }
 
+// Preserve the same injected authority-change hook for discovery inspection.
+func (w *workspaceFixture) Inspect(ctx context.Context, r port.ListRequest) (*port.DirectoryBinding, error) {
+	out, err := w.List(ctx, r)
+	if err != nil {
+		return nil, err
+	}
+	return out.Binding, nil
+}
+
 type readFixture struct {
 	peer      peerFixture
 	access    *snapshotFixture

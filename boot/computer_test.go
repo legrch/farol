@@ -51,6 +51,15 @@ func (w *computerWorkspaceFixture) List(_ context.Context, in port.ListRequest) 
 	return &port.ListResponse{Binding: &port.DirectoryBinding{RelativePath: in.RelativePath, Root: in.Workspace.Root, ApprovedRoot: in.Workspace.ApprovedRoot}}, nil
 }
 
+// Preserve the same injected authority-change hook for discovery inspection.
+func (w *computerWorkspaceFixture) Inspect(ctx context.Context, r port.ListRequest) (*port.DirectoryBinding, error) {
+	out, err := w.List(ctx, r)
+	if err != nil {
+		return nil, err
+	}
+	return out.Binding, nil
+}
+
 func TestComputerRootListUsesCurrentSelectedOwner(t *testing.T) {
 	for _, mode := range []string{"allowed", "wrong-turn", "revoked", "late-revoke", "expired", "no-list"} {
 		t.Run(mode, func(t *testing.T) {

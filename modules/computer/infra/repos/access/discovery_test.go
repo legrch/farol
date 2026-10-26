@@ -24,8 +24,8 @@ import (
 // exercised. Every composite uses ONE already admitted fixed operation lease.
 type discoveryNative struct {
 	port.Workspace
-	reads, lists []string
-	hook         func(kind, path string)
+	reads, inspections []string
+	hook               func(kind, path string)
 }
 
 func (n *discoveryNative) Read(ctx context.Context, r port.ReadRequest) (*port.ReadResponse, error) {
@@ -39,14 +39,18 @@ func (n *discoveryNative) Read(ctx context.Context, r port.ReadRequest) (*port.R
 	}
 	return out, err
 }
-func (n *discoveryNative) List(ctx context.Context, r port.ListRequest) (*port.ListResponse, error) {
-	n.lists = append(n.lists, r.Workspace.WorkspaceID+":"+r.RelativePath)
-	out, err := n.Workspace.List(ctx, r)
+func (n *discoveryNative) Inspect(ctx context.Context, r port.ListRequest) (*port.DirectoryBinding, error) {
+	n.inspections = append(n.inspections, r.Workspace.WorkspaceID+":"+r.RelativePath)
+	out, err := n.Workspace.(port.DirectoryInspector).Inspect(ctx, r)
 	if n.hook != nil {
-		n.hook("list", r.RelativePath)
+		n.hook("inspect", r.RelativePath)
 	}
 	return out, err
 }
+func (n *discoveryNative) List(context.Context, port.ListRequest) (*port.ListResponse, error) {
+	panic("discovery must inspect the directory without enumerating children")
+}
+
 func discoveryContract(t *testing.T, f stateFixture, lease port.ExecutionAccessRepository, n port.Workspace) *workspacect.Contract {
 	t.Helper()
 	s, err := workspacesvc.NewForExecution(lease, n, f.clock)
@@ -91,7 +95,7 @@ func TestNativeBootstrapNarrowedScopeInstructionsAndMissingAreIndependent(t *tes
 	if err != nil || out == nil || !out.Complete || out.Root != filepath.Join(f.workspace, "src") || out.ApprovedRoot.Path != f.workspace || out.TurnID != l.Binding().TurnID || out.Generation != 99 || out.CallID != "disposable-bootstrap" {
 		t.Fatalf("native bootstrap: %v", err)
 	}
-	if !slices.Equal(n.reads, []string{"AGENTS.md", "nested/AGENTS.md", "nested/leaf/AGENTS.md", "AGENTS.md", "nested/AGENTS.md", "nested/leaf/AGENTS.md"}) || len(n.lists) != 2 {
+	if !slices.Equal(n.reads, []string{"AGENTS.md", "nested/AGENTS.md", "nested/leaf/AGENTS.md", "AGENTS.md", "nested/AGENTS.md", "nested/leaf/AGENTS.md"}) || len(n.inspections) != 2 {
 		t.Fatal("native traversal escaped scope")
 	}
 	if v, ok := out.Instructions[0].(workspacect.ReadInstruction); !ok || v.Text != "root rules" {
@@ -158,7 +162,7 @@ func TestNativeBootstrapConcurrentInstructionEditDiscardsAllText(t *testing.T) {
 		}
 	}
 	out, err := discoveryContract(t, f, l, n).Bootstrap(context.Background(), bootstrapRequest(l, "."))
-	if out != nil || len(n.reads) != 2 || len(n.lists) != 1 {
+	if out != nil || len(n.reads) != 2 || len(n.inspections) != 1 {
 		t.Fatal("changed native chain disclosed/retried")
 	}
 	expectContextFailure(t, err, "COMPUTER_INSTRUCTIONS_CHANGED")
@@ -202,7 +206,7 @@ func TestNativeBootstrapLaterPhaseRevocationAndFixedDeadlineDiscardCollection(t 
 				}
 			}
 			out, err := discoveryContract(t, f, l, n).Bootstrap(context.Background(), bootstrapRequest(l, "nested"))
-			if out != nil || len(n.reads) != 3 || len(n.lists) != 1 {
+			if out != nil || len(n.reads) != 3 || len(n.inspections) != 1 {
 				t.Fatal("later phase disclosed/reminted/retried")
 			}
 			expectContextFailure(t, err, test.code)
@@ -231,18 +235,18 @@ func TestNativeCatalogueOnlyMaterializedScopeIDsAndCurrentPhysicalRoots(t *testi
 	l := admittedLease(t, issuerLeases(t, f.store, f, executionsvc.Ceiling{Participant: *p, Approval: f.approval}, tasks), authority.List)
 	n := &discoveryNative{Workspace: filesystem.New(f.home)}
 	out, err := discoveryContract(t, f, l, n).Catalogue(context.Background(), catalogueRequest(l))
-	if err != nil || out == nil || len(out.Workspaces) != 2 || out.Workspaces[0].WorkspaceID != "second" || out.Workspaces[1].WorkspaceID != "work" || out.Workspaces[1].Root != f.workspace || out.Workspaces[1].ApprovedRoot.Device != f.approval.Workspaces[0].RootIdentity.Device || !slices.Equal(n.lists, []string{"second:.", "work:.", "second:.", "work:."}) || len(n.reads) != 0 {
+	if err != nil || out == nil || len(out.Workspaces) != 2 || out.Workspaces[0].WorkspaceID != "second" || out.Workspaces[1].WorkspaceID != "work" || out.Workspaces[1].Root != f.workspace || out.Workspaces[1].ApprovedRoot.Device != f.approval.Workspaces[0].RootIdentity.Device || !slices.Equal(n.inspections, []string{"second:.", "work:.", "second:.", "work:."}) || len(n.reads) != 0 {
 		t.Fatalf("native catalogue: %v", err)
 	}
 	n.hook = func(kind, _ string) {
-		if kind == "list" && len(n.lists) == 8 {
+		if kind == "inspect" && len(n.inspections) == 8 {
 			if err := f.store.RevokeApproval(context.Background(), status(t, f.store).Revision); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
 	out, err = discoveryContract(t, f, l, n).Catalogue(context.Background(), catalogueRequest(l))
-	if out != nil || len(n.lists) != 8 {
+	if out != nil || len(n.inspections) != 8 {
 		t.Fatal("revoked catalogue disclosed/retried")
 	}
 	expectContextFailure(t, err, "COMPUTER_APPROVAL_NOT_FOUND")
@@ -265,7 +269,7 @@ func TestNativeDiscoveryAcrossOuterExpiryFreshTurnReconnectAndColdRestore(t *tes
 	tasks.change(func(b *port.TaskBinding) { b.TurnID = "trusted-turn-2" })
 	n := &discoveryNative{Workspace: filesystem.New(f.home)}
 	out, err := discoveryContract(t, f, first, n).Bootstrap(context.Background(), bootstrapRequest(first, "."))
-	if out != nil || len(n.lists) != 0 {
+	if out != nil || len(n.inspections) != 0 {
 		t.Fatal("old turn entered native")
 	}
 	expectContextFailure(t, err, "AUTHORITY_TASK_MISMATCH")
@@ -335,7 +339,7 @@ func TestNativeEmptyCatalogueFinalGateCannotBeSkipped(t *testing.T) {
 			}}
 			n := &discoveryNative{Workspace: filesystem.New(f.home)}
 			out, err := discoveryContract(t, f, observed, n).Catalogue(context.Background(), catalogueRequest(l))
-			if len(n.reads) != 0 || len(n.lists) != 0 || observed.calls != 2 {
+			if len(n.reads) != 0 || len(n.inspections) != 0 || observed.calls != 2 {
 				t.Fatal("empty catalogue used IO or skipped final gate")
 			}
 			if test.code == "" {
@@ -363,7 +367,7 @@ func TestNativeBootstrapAbsenceDoesNotHideOverallRevocation(t *testing.T) {
 		}
 	}
 	out, err := discoveryContract(t, f, l, n).Bootstrap(context.Background(), bootstrapRequest(l, "."))
-	if out != nil || len(n.reads) != 2 || len(n.lists) != 1 {
+	if out != nil || len(n.reads) != 2 || len(n.inspections) != 1 {
 		t.Fatal("not_found bypassed final authority")
 	}
 	expectContextFailure(t, err, "COMPUTER_APPROVAL_NOT_FOUND")
