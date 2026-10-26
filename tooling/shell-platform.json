@@ -1,6 +1,6 @@
 {
   "schema": "farol-shell-platform/1",
-  "id": "macos-26A434-arm64-root-volume-git-python-metadata-v11",
+  "id": "macos-26A434-arm64-root-volume-git-python-sleep-v12",
   "osBuild": "26A434",
   "compiler": "approved-roots-seatbelt-v1",
   "filesystemClass": "system-apfs-kernel-mount-boundaries-v1",
@@ -207,6 +207,10 @@
     {
       "path": "/bin/ls",
       "sha256": "13f44bfe1c4af602da4465c834dbe7b16a5441ccbd843178b36116ee23422bfb"
+    },
+    {
+      "path": "/bin/sleep",
+      "sha256": "38d6b9431656a92cfa223d1325cbea4dc3f56ef29833eb2a3ff7f6ab21f95b5b"
     },
     {
       "path": "/Library/Developer/CommandLineTools/usr/bin/git",

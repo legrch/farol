@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -25,6 +26,17 @@ import (
 // descendant settlement. Select ONLY this test under a fresh native-lane grant;
 // never use it to replay TestNativeWatchdogTransport's historical failed attempt.
 func TestNativeRootScopedSupervisorBash(t *testing.T) {
+	nativeRootScopedSupervisorBash(t, false)
+}
+
+// Fresh disposable command: the declared sleep image must run under the actual
+// compiler before one cancellation through the retained supervisor. No replay
+// of the owner's exited canary or claim about its historical UNKNOWN.
+func TestNativeRootScopedPinnedSleepCancellation(t *testing.T) {
+	nativeRootScopedSupervisorBash(t, true)
+}
+
+func nativeRootScopedSupervisorBash(t *testing.T, cancelSleep bool) {
 	selection := nativeWatchdogResource(t) // One explicit pinned resource export.
 	base, err := os.MkdirTemp("/private/tmp", "farol-supervised-bash-")
 	if err != nil {
@@ -100,6 +112,25 @@ func TestNativeRootScopedSupervisorBash(t *testing.T) {
 	s.Home, s.Scratch, s.ScratchIdentity = home, scratch, identity(scratch)
 	s.MechanismSHA256 = hash(seatbeltExecutable)
 	s.Executables = []ExecutablePin{{Path: "/bin/bash", SHA256: hash("/bin/bash")}}
+	if cancelSleep {
+		raw, err := os.ReadFile("../../../../tooling/shell-platform.json")
+		must(err)
+		var declaration struct{ Executables []ExecutablePin }
+		must(json.Unmarshal(raw, &declaration))
+		found := false
+		for _, pin := range declaration.Executables {
+			if pin.Path == "/bin/sleep" {
+				if pin.SHA256 != hash(pin.Path) {
+					t.Fatal("declared sleep image changed")
+				}
+				s.Executables = append(s.Executables, pin)
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("sleep is not a declared executable")
+		}
+	}
 	s.Snapshot.Participant.Grant.Workspaces[0].Root = root
 	s.Snapshot.Approval.Workspaces[0].Root = root
 	s.Snapshot.Approval.Workspaces[0].RootIdentity = identity(root)
@@ -117,6 +148,9 @@ exit 7
 `
 	const rootCode = 7
 	command.Args = []string{"--noprofile", "--norc", "-c", script, "fixture", root, home, scratch}
+	if cancelSleep {
+		command.Args = []string{"--noprofile", "--norc", "-c", "set -eu\nsleep 0.01\nprintf 'pinned-sleep-ready\\n'\nexec sleep 10\n"}
+	}
 	command.Input, command.Write = nil, false
 	command.Environment = seatbeltEnvironment(s, false)
 	plan, err := compileSeatbelt(s, command)
@@ -129,6 +163,9 @@ exit 7
 	}
 	wantOut := append([]byte("root-scoped-bash\n"), bytes.Repeat([]byte{0, 255, 'A', '\n'}, 16385)...)
 	wantErr := append([]byte("root-scoped-stderr\n"), []byte{0, 255, 'E', 'R', 'R', '\n'}...)
+	if cancelSleep {
+		wantOut, wantErr = []byte("pinned-sleep-ready\n"), nil
+	}
 	// All retained files are synthetic. Keep the exact profile and expected
 	// bytes outside the command root if an assertion or native outcome is unknown.
 	must(os.WriteFile(filepath.Join(base, "profile.sb"), []byte(plan.source), 0600))
@@ -164,12 +201,35 @@ exit 7
 	if err := f.child.await(f.ctx, f.child.ready); err != nil {
 		f.fail(t, "original confined ready frame", err)
 	}
+	if cancelSleep {
+		for {
+			out, err := f.observed.Read(f.ctx, processsvc.Window{})
+			if err != nil || out.Root != processsvc.RootRunning || out.OutputDrained || out.CancelRequested {
+				f.fail(t, "original sleep readiness/root unavailable; no cancel", err)
+			}
+			if bytes.Equal(out.Stdout, wantOut) {
+				break
+			}
+			select {
+			case <-f.ctx.Done():
+				f.fail(t, "original sleep readiness deadline; no retry", f.ctx.Err())
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+		receipt, err := f.observed.Cancel(f.ctx)
+		if err != nil || receipt == nil || receipt.Status != processsvc.CancelRequested || receipt.Handle != f.observed.Handle() {
+			f.fail(t, "single original confined cancel ACK unavailable; no retry", err)
+		}
+	}
 	f.settle(t) // Existing exact owning Cmd.Wait witness and decoder/Child closure.
 	observation, err := f.observed.Read(context.Background(), processsvc.Window{})
+	knownExit := observation.ExitCode != nil && *observation.ExitCode == rootCode && observation.ExitSignal == 0
+	if cancelSleep {
+		knownExit = observation.ExitCode == nil && observation.ExitSignal == int(syscall.SIGKILL)
+	}
 	if err != nil || observation.Supervisor != processsvc.SupervisorExited || observation.Root != processsvc.RootExited ||
-		!observation.Waited || observation.ExitCode == nil || *observation.ExitCode != rootCode ||
-		observation.ExitSignal != 0 || !observation.OutputDrained || observation.OutputLimitReached ||
-		observation.CancelRequested || observation.TimedOut || observation.AuthorityLost ||
+		!observation.Waited || !knownExit || !observation.OutputDrained || observation.OutputLimitReached ||
+		observation.CancelRequested != cancelSleep || observation.TimedOut || observation.AuthorityLost ||
 		observation.GroupCleanup != processsvc.CleanupUnverified || observation.DescendantCleanup != processsvc.CleanupUnverified {
 		f.fail(t, "known root/supervisor facts unavailable or cleanup overclaimed", err)
 	}
