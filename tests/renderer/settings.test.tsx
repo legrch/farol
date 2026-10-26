@@ -248,8 +248,42 @@ describe("Workspace rows", () => {
     expect(h.f.api.configure).toHaveBeenCalledTimes(1);
     expect(h.button("Continue")?.disabled).toBe(true);
   });
+  it("shows legacy command access as unchecked and one click begins its guarded approval", async () => {
+    const value = readySettings();
+    value.computer.commands = "workspace";
+    value.connectors.secureMcp.runtime = null;
+    const h = await mount({ step: "folders", value });
+    const checkbox = h.host.querySelector<HTMLInputElement>(
+      '[aria-label="Commands for project"]',
+    )!;
+    expect(checkbox.checked).toBe(false);
+    expect(h.button("Allow workspace commands")).toBeUndefined();
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+    const lost = deferred<unknown>();
+    h.reply(() => lost.promise);
+    await act(async () => checkbox.click());
+    expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
+      kind: "computer.update-file-policy",
+      filePolicy: "approved-roots-v1",
+    });
+    await act(async () =>
+      lost.resolve({
+        ok: false,
+        error: "SETTINGS_WRITE_FAILED",
+        snapshot: h.configuration(),
+      }),
+    );
+    await h.remount();
+    expect(
+      h.host.querySelector<HTMLInputElement>(
+        '[aria-label="Commands for project"]',
+      )!.disabled,
+    ).toBe(true);
+    expect(h.f.api.configure).toHaveBeenCalledTimes(1);
+  });
   it("maps Commands to the existing shared policy and stops on an unknown save", async () => {
     const value = readySettings();
+    value.computer.filePolicy = "approved-roots-v1";
     value.connectors.secureMcp.runtime = null;
     const h = await mount({ step: "folders", value });
     const lost = deferred<unknown>();

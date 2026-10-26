@@ -1120,15 +1120,24 @@ function Folders(props: PageProps) {
                 <input
                   type="checkbox"
                   aria-label={`Commands for ${folderDisplayName(workspace)}`}
-                  checked={settings.computer.commands !== "none"}
+                  checked={
+                    settings.computer.commands === "workspace" &&
+                    settings.computer.filePolicy === "approved-roots-v1"
+                  }
                   disabled={
-                    paused || !actions.allowed("computer.update-commands")
+                    paused ||
+                    !actions.allowed("computer.update-commands") ||
+                    (settings.computer.filePolicy !== "approved-roots-v1" &&
+                      !actions.allowed("computer.update-file-policy"))
                   }
                   onChange={(event) =>
                     void update(workspace.workspaceId, {
                       commands: event.currentTarget.checked
                         ? "workspace"
                         : "none",
+                      ...(event.currentTarget.checked
+                        ? { filePolicy: "approved-roots-v1" as const }
+                        : {}),
                     })
                   }
                 />
@@ -1197,48 +1206,16 @@ function Folders(props: PageProps) {
       </p>
       {settings.computer.commands === "workspace" &&
         settings.computer.filePolicy !== "approved-roots-v1" && (
-          <section
-            className="notice"
-            aria-label="Command access needs approval"
-          >
-            <strong>Commands need workspace approval</strong>
-            <p>
-              File access works. Commands are blocked by this profile’s earlier
-              access policy.
-            </p>
-            <details>
-              <summary>Review command access</summary>
-              <p>
-                Allow commands inside all approved workspaces using their
-                current read/write access and exclusions. Commands may access
-                files inside those folders; network access remains off.
-                Workspace access will be checked again before the connection
-                restarts.
-              </p>
-              <button
-                disabled={
-                  paused ||
-                  !actions.allowed("computer.update-file-policy") ||
-                  !actions.allowed("computer.update-commands")
-                }
-                onClick={() => {
-                  const workspace = settings.computer.workspaces[0];
-                  if (workspace)
-                    void update(workspace.workspaceId, {
-                      commands: "workspace",
-                      filePolicy: "approved-roots-v1",
-                    });
-                }}
-              >
-                Allow workspace commands
-              </button>
-            </details>
-          </section>
+          <p className="description" role="status">
+            Commands are not enabled by this profile’s earlier access policy.
+            Select Commands above to approve command access and check your
+            workspaces in one step.
+          </p>
         )}
       {settings.computer.commands === "verification" && (
         <p className="description">
-          This profile currently allows Git checks only. Turn Commands off and
-          on to allow workspace commands.
+          This profile currently allows Git checks only. Select Commands to
+          allow workspace commands.
         </p>
       )}
       {settings.computer.workspaces.length === 0 && (
