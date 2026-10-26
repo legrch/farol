@@ -11,6 +11,16 @@ Package attestation failures still refuse startup rather than selecting a fallba
 The normal producer uses `RootScopedGit` under the captured `approved-roots-v1`
 policy; it does not activate the separate `QualifiedGitRead` selection below.
 
+The selected workspace's `GitHistoryApproved` enables `UserGitSettings` in the
+existing Seatbelt selection. It adds read-only literals for `~/.gitconfig` and
+`~/.config/git/{config,ignore,attributes}`, with parent metadata only. It adds no
+HOME/directory read grant, write grant or host file lock. Without approval,
+`GIT_CONFIG_GLOBAL=/dev/null` and XDG points at the operation's existing scratch;
+project configuration and hooks retain their scoped behavior. The approval is
+validated again by the compiler and included in the confinement digest. Native
+synthetic-HOME tests cover both choices, exact reads, denied writes and denied
+neighboring files; they do not qualify an owner's actual Git configuration.
+
 The timeout-attribution checkpoint `65d500985b091edceb7421cfb3bbd830cb736858`
 changes `process.go`, which is one of the independently pinned compiler inputs in
 `tooling/shell-platform.json`. Its portable Go regressions alone did not requalify

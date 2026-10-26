@@ -134,6 +134,8 @@ printf 'project-PASS\n'
 `, 0700)
 
 	s, command := rootScopedFixture(t)
+	s.UserGitSettings = true
+	s.Snapshot.Approval.Workspaces[0].GitHistoryApproved = true
 	s.RootVolumeOnly = true
 	s.Home, s.Scratch, s.ScratchIdentity = home, scratch, identity(scratch)
 	s.MechanismSHA256 = hash(seatbeltExecutable)

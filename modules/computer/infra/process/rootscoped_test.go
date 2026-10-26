@@ -60,9 +60,44 @@ func TestRootScopedSeatbeltHasNoImplicitCredentialOrGitNames(t *testing.T) {
 		}
 	}
 	for _, value := range command.Environment {
-		if strings.HasPrefix(value, "GIT_CONFIG_") || strings.HasPrefix(value, "NODE_OPTIONS=") || strings.HasPrefix(value, "DYLD_") {
+		if strings.HasPrefix(value, "GIT_CONFIG_") && value != "GIT_CONFIG_GLOBAL=/dev/null" || strings.HasPrefix(value, "NODE_OPTIONS=") || strings.HasPrefix(value, "DYLD_") {
 			t.Fatalf("hidden Git override or ambient loader option: %q", value)
 		}
+	}
+}
+
+func TestRootScopedGitUserSettingsRequireApprovalAndStayReadOnly(t *testing.T) {
+	var digests []string
+	for _, approved := range []bool{false, true} {
+		s, command := rootScopedFixture(t)
+		s.Snapshot.Approval.Workspaces[0].GitHistoryApproved = approved
+		s.UserGitSettings = approved
+		command.Environment = seatbeltEnvironment(s, command.Write)
+		plan, err := compileSeatbelt(s, command)
+		if err != nil {
+			t.Fatal(err)
+		}
+		digests = append(digests, plan.digest)
+		for _, relative := range []string{"/.gitconfig", "/.config/git/config", "/.config/git/ignore", "/.config/git/attributes"} {
+			if hasParameterRule(plan, "allow file-read*", "literal", s.Home+relative) != approved || hasParameterRule(plan, "allow file-write*", "literal", s.Home+relative) {
+				t.Fatal("user Git settings permission widened or missing", relative)
+			}
+		}
+		if hasParameterRule(plan, "allow file-read*", "subpath", s.Home) || hasParameterRule(plan, "allow file-read*", "subpath", s.Home+"/.config/git") {
+			t.Fatal("literal Git approval widened to a directory")
+		}
+		if slices.Contains(command.Environment, "GIT_CONFIG_GLOBAL=/dev/null") == approved || slices.Contains(command.Environment, "XDG_CONFIG_HOME="+s.Scratch) == approved {
+			t.Fatal("unapproved global settings were not disabled explicitly")
+		}
+		if approved {
+			s.Snapshot.Approval.Workspaces[0].GitHistoryApproved = false
+			if _, err := compileSeatbelt(s, command); err == nil {
+				t.Fatal("stale Git settings selection survived approval withdrawal")
+			}
+		}
+	}
+	if digests[0] == digests[1] {
+		t.Fatal("Git settings policy was absent from confinement digest")
 	}
 }
 

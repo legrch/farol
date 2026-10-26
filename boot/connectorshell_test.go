@@ -43,6 +43,21 @@ func newShellFactoryFixture(t *testing.T) *shellFactoryFixture {
 	return newShellFactoryFixtureWithApproval(t, nil)
 }
 
+func TestConnectorShellGitSettingsFollowExactWorkspaceApproval(t *testing.T) {
+	for _, approved := range []bool{false, true} {
+		f := newShellFactoryFixtureWithApproval(t, func(a *authority.Approval) {
+			a.Workspaces[0].GitHistoryApproved = approved
+		})
+		_, _, err := f.factory.selectShell(context.Background(), f.lease, shellFactoryRequest())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.policy.UserGitSettings != approved {
+			t.Fatal("workspace Git settings approval was lost")
+		}
+	}
+}
+
 func newShellFactoryFixtureWithApproval(t *testing.T, configure func(*authority.Approval)) *shellFactoryFixture {
 	t.Helper()
 	s, access, _, native, launch := connectorProcessFixture(t)

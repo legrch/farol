@@ -94,6 +94,8 @@ type SeatbeltSelection struct {
 	Git                 GitPolicy
 	GitRead             *GitReadSelection
 	GitRuntimeResources *GitRuntimeResources `json:",omitempty"`
+	// Exact owner-approved read-only Git configuration literals, never HOME access.
+	UserGitSettings bool `json:",omitempty"`
 }
 
 // Seatbelt builds the actual restrictive launch. The injected existing native
@@ -268,6 +270,15 @@ func protectedScope(root, home string) bool {
 }
 
 func validSelection(s SeatbeltSelection) bool {
+	if s.UserGitSettings {
+		if s.FilePolicy != authority.RootScopedFiles || s.Git != RootScopedGit || s.Snapshot.Approval == nil {
+			return false
+		}
+		workspace, ok := authority.FindApproved(*s.Snapshot.Approval, s.WorkspaceID)
+		if !ok || !workspace.GitHistoryApproved {
+			return false
+		}
+	}
 	if !validGitRuntime(s.GitRuntimeResources, s.Executables) || (s.GitRuntimeResources != nil && (s.FilePolicy != authority.RootScopedFiles || s.Git != RootScopedGit)) {
 		return false
 	}
@@ -519,6 +530,14 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 	if !slices.Equal(command.Environment, seatbeltEnvironment(s, command.Write)) {
 		return refuse()
 	}
+	if s.UserGitSettings {
+		for _, name := range []string{".gitconfig", ".config/git/config", ".config/git/ignore", ".config/git/attributes"} {
+			add("literal", filepath.Join(s.Home, name), &reads)
+		}
+		for _, name := range []string{s.Home, filepath.Join(s.Home, ".config"), filepath.Join(s.Home, ".config", "git")} {
+			add("literal", name, &parents)
+		}
+	}
 	pythonDeclaration := ""
 	if len(pythonRules) > 0 {
 		pythonDeclaration = "\n(define farol-python-data (require-any " + strings.Join(pythonRules, " ") + "))"
@@ -622,7 +641,8 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		GitDirectories      []gitReadDirectory   `json:",omitempty"`
 		ProtectedBundle     *ProtectedBundle     `json:",omitempty"`
 		GitRuntimeResources *GitRuntimeResources `json:",omitempty"`
-	}{source, arguments, s.ScratchIdentity, s.Executables, s.ProtectedImages, sealedRoots, s.GitRead, gitDirectories, s.ProtectedBundle, s.GitRuntimeResources})
+		UserGitSettings     bool                 `json:",omitempty"`
+	}{source, arguments, s.ScratchIdentity, s.Executables, s.ProtectedImages, sealedRoots, s.GitRead, gitDirectories, s.ProtectedBundle, s.GitRuntimeResources, s.UserGitSettings})
 	if err != nil {
 		return refuse()
 	}
@@ -649,10 +669,14 @@ func seatbeltEnvironment(s SeatbeltSelection, write bool) []string {
 	}
 	if s.FilePolicy == authority.RootScopedFiles || s.Git == QualifiedGitRead {
 		// Explicit host values, not os.Environ: no inherited tokens/loader options.
-		// Git config/hooks are not secretly disabled. Their paths/executables still
-		// need sandbox admission: pointing HOME there grants no filesystem access.
+		// User Git config needs explicit owner approval below; project config and
+		// hooks keep their normal scoped behavior. HOME alone grants no access.
 		environment := []string{"HOME=" + s.Home, "TMPDIR=" + s.Scratch, "XDG_CONFIG_HOME=" + filepath.Join(s.Home, ".config"),
 			"PATH=" + strings.Join(dirs, ":"), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=" + locks, "LANG=C", "LC_ALL=C"}
+		if s.Git == RootScopedGit && !s.UserGitSettings {
+			environment[2] = "XDG_CONFIG_HOME=" + s.Scratch
+			environment = append(environment, "GIT_CONFIG_GLOBAL=/dev/null")
+		}
 		if s.Git == QualifiedGitRead && s.GitRead != nil {
 			// Explicit metadata selection prevents a changed commondir file from
 			// redirecting this read. This value still supplies no scope authority.
