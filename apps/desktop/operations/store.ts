@@ -573,7 +573,9 @@ export class OperationsStore implements OperationsRecorder {
             () =>
               resolve({
                 ...this.cached,
-                corruptLines: this.cached.corruptLines + 1,
+                // Legacy counter covers unavailable reads as well as writes.
+                // A deadline says nothing about the stored line integrity.
+                writeFailures: this.cached.writeFailures + 1,
               }),
             deadlineMs,
           );
@@ -652,9 +654,13 @@ export class OperationsStore implements OperationsRecorder {
             diagnostics.droppedEntries += parsed.droppedEntries;
             diagnostics.unrecordedUncertainEntries +=
               parsed.unrecordedUncertainEntries;
-          } else
-            for (const line of text.split("\n")) {
+          } else {
+            const lines = text.split("\n");
+            for (const [index, line] of lines.entries()) {
               if (!line) continue;
+              // A valid historical tail remains visible. Only an invalid,
+              // unterminated fragment can belong to an append still in flight.
+              const incomplete = index === lines.length - 1;
               try {
                 const raw = JSON.parse(line) as OperationEntry;
                 const parsed = OperationEntrySchema.safeParse({
@@ -667,11 +673,14 @@ export class OperationsStore implements OperationsRecorder {
                 });
                 if (parsed.success) {
                   if (parsed.data.at >= cutoff) entries.push(parsed.data);
-                } else corruptLines++;
+                } else if (!incomplete) corruptLines++;
+                else diagnostics.writeFailures++;
               } catch {
-                corruptLines++;
+                if (!incomplete) corruptLines++;
+                else diagnostics.writeFailures++;
               }
             }
+          }
         } catch {
           corruptLines++;
         }

@@ -1105,7 +1105,10 @@ it("bounds stalled snapshot reads without delaying operation recording", async (
   const { store } = injectedStore(io);
   try {
     const started = performance.now();
-    expect((await store.snapshot(10)).corruptLines).toBe(1);
+    expect(await store.snapshot(10)).toMatchObject({
+      corruptLines: 0,
+      writeFailures: 1,
+    });
     const finish = store.begin(metadata);
     finish("done", null, 1);
     expect(performance.now() - started).toBeLessThan(500);
@@ -2278,7 +2281,8 @@ it.each([
       const started = performance.now();
       const fallback = await store.snapshot(10);
       expect(performance.now() - started).toBeLessThan(500);
-      expect(fallback.corruptLines).toBe(1);
+      expect(fallback.corruptLines).toBe(0);
+      expect(fallback.writeFailures).toBeGreaterThan(0);
       expect(fallback.entries[0]!.target).toEqual(expected);
     } finally {
       stalled = false;
@@ -2891,4 +2895,97 @@ it("records a busy browser request as refused while explicit uncertainty still d
     operationResult({ state: "pending", code: "CHATGPT_TASK_IN_PROGRESS" })
       .outcome,
   ).toBe("pending");
+});
+
+// An observed root exit is not proof of descendant cleanup or command success.
+it.each([0, 128])(
+  "records an exited root with code %i as a successful read without promoting cleanup",
+  async (exitCode) => {
+    const value = await validatedProcessRead({
+      state: "exited",
+      supervisorState: "exited",
+      exitCode,
+      groupCleanup: "unverified",
+      descendantCleanup: "unverified",
+    });
+    expect(value.status).toBe("ok");
+    expect(operationResult(value)).toEqual({ outcome: "done", code: null });
+    expect(value.data).toMatchObject({
+      state: "exited",
+      exitCode,
+      groupCleanup: "unverified",
+      descendantCleanup: "unverified",
+    });
+    for (const patch of [
+      { rootWaited: false },
+      { supervisorState: "running" },
+      { outputDrained: false },
+      { groupCleanup: "pending" },
+      { descendantCleanup: "pending" },
+    ])
+      expect(
+        operationResult({ ...value, data: { ...value.data, ...patch } })
+          .outcome,
+      ).toBe("unknown");
+    expect(
+      operationResult({ ...value, code: "PROCESS_OUTCOME_UNKNOWN" }).outcome,
+    ).toBe("unknown");
+  },
+);
+
+it("reads complete log records across a partial append without inventing corruption or losing UNKNOWN", async () => {
+  const { store, directory } = setup();
+  store.record(metadata, "unknown", "PROCESS_OUTCOME_UNKNOWN", 1);
+  await store.flush(5000);
+  const file = path.join(
+    directory,
+    fs.readdirSync(directory).find((n) => n.endsWith(".jsonl"))!,
+  );
+  const next = {
+    id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    at: 1792670400000,
+    source: "ChatGPT",
+    kind: "computer_shell_read",
+    target: {},
+    outcome: "done",
+    code: null,
+    durationMs: 1,
+  };
+  const encoded = JSON.stringify(next) + "\n";
+  const split = Math.floor(encoded.length / 2);
+  fs.appendFileSync(file, encoded.slice(0, split));
+  const during = await store.snapshot(5000);
+  expect(during.corruptLines).toBe(0);
+  expect(during.writeFailures).toBe(1);
+  expect(during.entries).toHaveLength(1);
+  expect(during.entries[0]!.outcome).toBe("unknown");
+  fs.appendFileSync(file, encoded.slice(split));
+  const completed = await store.snapshot(5000);
+  expect(completed.corruptLines).toBe(0);
+  expect(completed.writeFailures).toBe(0);
+  expect(completed.entries).toHaveLength(2);
+  fs.appendFileSync(file, "{complete-malformed}\n");
+  const damaged = await store.snapshot(5000);
+  expect(damaged.corruptLines).toBe(1);
+  expect(damaged.entries).toHaveLength(2);
+});
+
+it("keeps a readable historical UNKNOWN tail even without its final newline", async () => {
+  const { store, directory } = setup();
+  store.record(metadata, "unknown", "PROCESS_OUTCOME_UNKNOWN", 1);
+  await store.flush(5000);
+  const file = path.join(
+    directory,
+    fs.readdirSync(directory).find((n) => n.endsWith(".jsonl"))!,
+  );
+  const bytes = fs.readFileSync(file);
+  expect(bytes.at(-1)).toBe(10);
+  fs.truncateSync(file, bytes.length - 1);
+  const snapshot = await store.snapshot(5000);
+  expect(snapshot.corruptLines).toBe(0);
+  expect(snapshot.entries).toHaveLength(1);
+  expect(snapshot.entries[0]).toMatchObject({
+    outcome: "unknown",
+    code: "PROCESS_OUTCOME_UNKNOWN",
+  });
 });

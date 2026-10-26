@@ -14,17 +14,27 @@ const object = (v: unknown): Record<string, unknown> =>
     : {};
 
 /** ConnectorProcessBridge validates this diagnostic cohort against Go process
- * Read/completedState. A terminal READ confirms an observation even for nonzero
+ * Read/completedState. An exited READ confirms an observation even for nonzero
  * exits or signals; it does not establish command success or durable retention.
  * Do not parse output here or promote a generic terminal state.
  */
 function confirmedProcessRead(data: Record<string, unknown>): boolean {
+  const cleanup =
+    data.state === "terminal"
+      ? data.groupCleanup === "confirmed" &&
+        data.descendantCleanup === "confirmed"
+      : data.state === "exited" &&
+        data.supervisorState === "exited" &&
+        (data.groupCleanup === "confirmed" ||
+          data.groupCleanup === "unverified") &&
+        (data.descendantCleanup === "confirmed" ||
+          data.descendantCleanup === "unverified") &&
+        (data.groupCleanup === "unverified" ||
+          data.descendantCleanup === "unverified");
   return (
-    data.state === "terminal" &&
+    cleanup &&
     data.rootState === "exited" &&
     data.rootWaited === true &&
-    data.groupCleanup === "confirmed" &&
-    data.descendantCleanup === "confirmed" &&
     data.outputDrained === true &&
     (data.supervisorState === undefined || data.supervisorState === "exited") &&
     (data.exitCode !== undefined
