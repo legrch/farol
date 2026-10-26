@@ -1,3 +1,8 @@
+import {
+  ConnectionTestButton,
+  runFreshConnectionTest,
+  useConnectionTest,
+} from "../../../apps/desktop/renderer/connection-test";
 import { separateAppVerificationScopeCurrent } from "../../pkg/product-settings/separate-app-verification";
 import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
 import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
@@ -1026,7 +1031,11 @@ function Folders(props: PageProps) {
 
   async function update(
     workspaceId: string,
-    plan: { access?: "read" | "write"; commands?: "none" | "workspace" } = {},
+    plan: {
+      access?: "read" | "write";
+      commands?: "none" | "workspace";
+      filePolicy?: "approved-roots-v1";
+    } = {},
   ) {
     if (folderFlow.busy || folderFlow.access.requiresReadback()) return;
     folderFlow.busy = true;
@@ -1186,6 +1195,46 @@ function Folders(props: PageProps) {
         and builds; each run still asks you first. Command access is shared by
         all workspaces.
       </p>
+      {settings.computer.commands === "workspace" &&
+        settings.computer.filePolicy !== "approved-roots-v1" && (
+          <section
+            className="notice"
+            aria-label="Command access needs approval"
+          >
+            <strong>Commands need workspace approval</strong>
+            <p>
+              File access works. Commands are blocked by this profile’s earlier
+              access policy.
+            </p>
+            <details>
+              <summary>Review command access</summary>
+              <p>
+                Allow commands inside all approved workspaces using their
+                current read/write access and exclusions. Commands may access
+                files inside those folders; network access remains off.
+                Workspace access will be checked again before the connection
+                restarts.
+              </p>
+              <button
+                disabled={
+                  paused ||
+                  !actions.allowed("computer.update-file-policy") ||
+                  !actions.allowed("computer.update-commands")
+                }
+                onClick={() => {
+                  const workspace = settings.computer.workspaces[0];
+                  if (workspace)
+                    void update(workspace.workspaceId, {
+                      commands: "workspace",
+                      filePolicy: "approved-roots-v1",
+                    });
+                }}
+              >
+                Allow workspace commands
+              </button>
+            </details>
+          </section>
+        )}
       {settings.computer.commands === "verification" && (
         <p className="description">
           This profile currently allows Git checks only. Turn Commands off and
@@ -1533,6 +1582,7 @@ function AddToChatGPT({
   setupStep,
   setupTestActionHost,
 }: PageProps) {
+  const freshTest = useConnectionTest(facade);
   const connector = settings.connectors.secureMcp;
   const defaultName =
     snapshot.environment === "dev"
@@ -1691,6 +1741,10 @@ function AddToChatGPT({
     });
   }
   async function test() {
+    if (settings.setup.journey.dismissed && !nameChanged) {
+      await runFreshConnectionTest(facade);
+      return;
+    }
     if (
       busy.current ||
       !nameValid ||
@@ -1777,14 +1831,19 @@ function AddToChatGPT({
     }
   }
   const testDisabled =
-    checking ||
-    (waitingForConfirmation && !separateAvailable) ||
-    needsNewTest ||
-    !nameValid ||
-    !(separateAvailable
-      ? actions.allowed("connector.verify-separate-app") &&
-        setup.canVerifySeparateEmbeddedApp
-      : actions.allowed("connector.verify-app") && setup.canVerifyEmbeddedApp);
+    settings.setup.journey.dismissed && !nameChanged
+      ? freshTest.busy ||
+        !computerSetup(snapshot).canReconnect ||
+        !actions.allowed("connector.repair")
+      : checking ||
+        (waitingForConfirmation && !separateAvailable) ||
+        needsNewTest ||
+        !nameValid ||
+        !(separateAvailable
+          ? actions.allowed("connector.verify-separate-app") &&
+            setup.canVerifySeparateEmbeddedApp
+          : actions.allowed("connector.verify-app") &&
+            setup.canVerifyEmbeddedApp);
   const testAction = (
     <button
       type="button"
@@ -1800,7 +1859,7 @@ function AddToChatGPT({
       }
       onClick={() => void test()}
     >
-      {checking ? "Testing in ChatGPT…" : "Test in ChatGPT"}
+      {checking || freshTest.busy ? "Testing in ChatGPT…" : "Test in ChatGPT"}
     </button>
   );
   return (
@@ -1893,6 +1952,9 @@ function AddToChatGPT({
       </section>
       <section className="setup-test" aria-label="Test in ChatGPT">
         <h3>2. Check the connection</h3>
+        {settings.setup.journey.dismissed && freshTest.message && (
+          <p role="status">{freshTest.message}</p>
+        )}
         <p className="description" id="setup-test-blocked">
           {waitingForConfirmation
             ? separateAvailable
@@ -1965,6 +2027,12 @@ function AddToChatGPT({
             </p>
           )}
         </div>
+        {settings.setup.journey.dismissed && (
+          <ConnectionTestButton
+            facade={facade}
+            disabled={nameChanged || !nameValid}
+          />
+        )}
         {gate.allowed ? (
           <div className="setup-success" role="status">
             <strong>✓ Everything works</strong>

@@ -245,6 +245,7 @@ contextBridge.exposeInMainWorld('farolRecovery',{
 });
 contextBridge.exposeInMainWorld('farol',{
  bootstrap:async()=>snapshot,snapshot:async()=>snapshot,
+ operations:async()=>({entries:localStorage.getItem('notification-fixture')==='on'?[{id:'55555555-5555-4555-8555-555555555555',at:1,source:'Setup',kind:'hub.stop',target:{workspace:'Fixture'},outcome:'unknown',code:null,durationMs:1}]:[],corruptLines:0,writeFailures:0,unmappedCodes:0}),
  configure:async(command)=>{calls.push(command.kind);if(command.kind==='setup.progress'){snapshot=structuredClone(snapshot);snapshot.configuration.settings.revision++;Object.assign(snapshot.configuration.settings.setup.journey,{currentStep:command.currentStep,dismissed:command.dismissed});return {ok:true,snapshot:snapshot.configuration};}if(command.kind==='chatgpt.observe-sign-in')return {ok:true,snapshot:snapshot.configuration,evidence:{kind:'chatgpt.sign-in-status',observationId:command.observationId,buildId:command.buildId,state:'authenticated',binding:{documentGeneration:0,sequence:1}}};if(command.kind==='chatgpt.verify')return {ok:true,snapshot:snapshot.configuration,evidence:{kind:'chatgpt.readiness',state:'authenticated',code:null}};return {ok:true,snapshot:snapshot.configuration};},
  installedUpdate:async()=>({ok:true,view:{phase:'idle',checkedAt:null}}),
  task:async()=>{throw Error('NO_TASK_EFFECT_ALLOWED')},setNavigationShortcuts:async()=>({ok:true}),
@@ -569,6 +570,39 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
   report.checks.push(
     "width changes snap to native geometry; reduced motion has no width transition",
   );
+  await page.evaluate(() => localStorage.setItem("notification-fixture", "on"));
+  await page.reload();
+  await page.locator(".notification-count").waitFor();
+  assert.equal(await page.locator(".rail .attention-action").count(), 0);
+  await page
+    .getByRole("button", { name: "Notifications", exact: true })
+    .click();
+  await capture(page, "notifications-unread");
+  await page
+    .getByRole("button", { name: "Mark all as read", exact: true })
+    .click();
+  await page.getByText("No unread notifications.", { exact: true }).waitFor();
+  await page.reload();
+  await page
+    .getByRole("button", { name: "Notifications", exact: true })
+    .click();
+  await page.getByText("No unread notifications.", { exact: true }).waitFor();
+  assert.equal(await page.locator(".notification-count").count(), 0);
+  await page
+    .getByRole("button", { name: "Open Activity", exact: true })
+    .click();
+  await page.locator(".operation-row").waitFor();
+  assert.equal(
+    await page.locator('.operation-outcome[data-outcome="unknown"]').count(),
+    1,
+  );
+  await capture(page, "activity-read-history");
+  report.notifications = {
+    readSurvivesRendererReload: true,
+    unknownPreserved: true,
+    railEntryAbsent: true,
+    liveSend: 0,
+  };
   await page.evaluate(() =>
     localStorage.setItem("shell-rail-fixture", "unfinished"),
   );

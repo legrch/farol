@@ -2293,6 +2293,12 @@ export class WindowController implements RendererFacade {
     this.cursor = this.history.length - 1;
     this.navigationRevision++;
     this.patch({
+      setupReturn:
+        next.area === "setup" &&
+        this.state.destination.area !== "setup" &&
+        !this.state.destination.connectionCheckReturn
+          ? this.state.destination
+          : (this.state.setupReturn ?? null),
       destination: next,
       back: this.cursor > 0,
       forward: false,

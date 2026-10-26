@@ -200,10 +200,10 @@ describe("Unresolved actions sheet", () => {
   it("shows unknown cause and retained identity, never resubmits, and restores focus after Escape", async () => {
     const h = await mount({ page: "general", shell: true });
     await unknown(h);
-    const trigger = h.button("Review unresolved actions")!;
+    const trigger = h.button("Notifications")!;
     trigger.focus();
     vi.mocked(h.f.api.configure).mockClear();
-    await h.click("Review unresolved actions");
+    await act(async () => h.c.overlay("unresolved-actions"));
     const dialog = h.host.querySelector<HTMLDialogElement>(selector)!;
     expect(dialog.textContent).toContain(
       "The action may have taken effect; do not repeat it.",
@@ -257,7 +257,7 @@ describe("Unresolved actions sheet", () => {
       submittedAt: "2026-10-02T20:00:00.000Z",
     };
     const h = await mount({ page: "general", shell: true, value });
-    await h.click("Review unresolved actions");
+    await act(async () => h.c.overlay("unresolved-actions"));
     expect(h.host.querySelector(selector)?.textContent).toContain(operationId);
     h.reply(() => ({
       ok: true,
@@ -277,7 +277,7 @@ describe("Unresolved actions sheet", () => {
     });
     h.reply(() => ({ ok: true, snapshot: h.c.getSnapshot().configuration }));
     vi.mocked(h.f.api.configure).mockClear();
-    await h.click("Review unresolved actions");
+    await act(async () => h.c.overlay("unresolved-actions"));
     const save = [
       ...h.host.querySelectorAll<HTMLButtonElement>(`${selector} button`),
     ].find((button) => button.textContent === "Save support file…")!;
@@ -300,10 +300,10 @@ describe("Unresolved actions sheet", () => {
 describe("former callers open their real home", () => {
   const callers = [
     {
-      name: "shell unresolved rail action",
+      name: "shell notifications action",
       from: "rail",
-      to: "unresolved-actions",
-      control: '[aria-label="Review unresolved actions"]',
+      to: "notifications",
+      control: '[aria-label="Notifications"]',
     },
     {
       name: "ChatGPT placeholder unresolved action",
@@ -389,7 +389,12 @@ describe("former callers open their real home", () => {
     vi.mocked(h.f.api.configure).mockClear();
     vi.mocked(h.f.api.task).mockClear();
     await act(async () => control!.click());
-    if (caller.to === "unresolved-actions") {
+    if (caller.to === "notifications") {
+      expect(
+        h.host.querySelector('dialog[aria-label="Notifications"]'),
+      ).toBeTruthy();
+      expect(h.c.getSnapshot().overlay).toBe("notifications");
+    } else if (caller.to === "unresolved-actions") {
       expect(h.host.querySelector(selector)).toBeTruthy();
       expect(h.c.getSnapshot().overlay).toBe("unresolved-actions");
     } else {
@@ -425,7 +430,7 @@ describe("unresolved operation boundaries", () => {
         blockedBy: null,
       }),
     );
-    await h.click("Review unresolved actions");
+    await act(async () => h.c.overlay("unresolved-actions"));
     const dialog = h.host.querySelector(selector)!;
     expect(dialog.textContent).toContain("ChatGPT sign-in");
     expect(dialog.textContent).toContain(
@@ -452,7 +457,7 @@ describe("unresolved operation boundaries", () => {
     h.reply(async () => {
       throw new Error("readback lost");
     });
-    await h.click("Review unresolved actions");
+    await act(async () => h.c.overlay("unresolved-actions"));
     await h.click("Observe existing edit");
     expect(h.button("Observe existing edit")?.disabled).toBe(true);
     await h.click("Observe existing edit");
@@ -468,14 +473,14 @@ describe("unresolved operation boundaries", () => {
     const value = readySettings();
     value.setup.chatgpt.outcomeUnknown = true;
     const h = await mount({ page: "appearance", shell: true, value });
-    await h.click("Review unresolved actions");
+    await act(async () => h.c.overlay("unresolved-actions"));
     h.reply(async () => {
       throw new Error("export lost");
     });
     await h.click("Save support file…");
     await h.click("Close");
     await act(async () => h.c.refresh());
-    await h.click("Review unresolved actions");
+    await act(async () => h.c.overlay("unresolved-actions"));
     expect(h.button("Save support file…")?.disabled).toBe(true);
     await h.click("Save support file…");
     expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({

@@ -1692,7 +1692,7 @@ it.each(["full", "rail", "overlay"] as const)(
     const original = c.getSnapshot().intents["task:new"];
     expect(original?.state).toBe("unknown");
     expect(host.querySelector('[aria-label="New chat"]')).toBeNull();
-    await act(async () => button(host, "Review unresolved actions").click());
+    await act(async () => button(host, "Notifications").click());
     expect(c.getSnapshot().intents["task:new"]?.state).toBe("unknown");
     await act(async () => c.navigate({ area: "home" }));
     await act(async () => c.refresh());
@@ -1744,9 +1744,9 @@ it("keeps unknown task work discoverable after its options are dismissed and Hom
   await act(async () => c.navigate({ area: "home" }));
   await act(async () => c.toggleSidebar(false));
   expect(
-    host.querySelector('.rail [aria-label="Review unresolved actions"]'),
+    host.querySelector('.toolbar [aria-label="Notifications"]'),
   ).not.toBeNull();
-  await act(async () => button(host, "Review unresolved actions").click());
+  await act(async () => button(host, "Notifications").click());
   expect(
     Object.values(c.getSnapshot().intents).some(
       (intent) => intent.code === "TASK_CANCEL_FAILED",
@@ -3300,9 +3300,7 @@ it("shows a connected local tunnel separately from an uncertain app check", asyn
   expect(h.host.textContent).not.toContain(
     "Connected — ChatGPT can reach this Mac",
   );
-  expect(
-    h.host.querySelector('[aria-label="Review unresolved actions"]'),
-  ).toBeTruthy();
+  expect(h.host.querySelector(".notification-count")).toBeTruthy();
   expect(
     vi
       .mocked(h.f.api.configure)
@@ -3329,9 +3327,7 @@ it("keeps a live workspace chooser out of attention until its result is unknown"
   expect(
     c.getSnapshot().intents["settings:computer.choose-workspace:"]?.inFlight,
   ).toBe(true);
-  expect(
-    host.querySelector('[aria-label="Review unresolved actions"]'),
-  ).toBeNull();
+  expect(host.querySelector(".notification-count")).toBeNull();
   await act(async () => {
     reply({ ok: false, error: { code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN" } });
     await pending;
@@ -3339,7 +3335,5 @@ it("keeps a live workspace chooser out of attention until its result is unknown"
   expect(
     c.getSnapshot().intents["settings:computer.choose-workspace:"]?.inFlight,
   ).toBeUndefined();
-  expect(
-    host.querySelector('[aria-label="Review unresolved actions"]'),
-  ).not.toBeNull();
+  expect(host.querySelector(".notification-count")).not.toBeNull();
 });

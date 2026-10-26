@@ -8,6 +8,7 @@ import { onboardingFacts } from "./guided-onboarding";
 export interface WorkspaceAccessPlan {
   readonly workspaceId: string;
   readonly access?: "read" | "write";
+  readonly filePolicy?: "approved-roots-v1";
   readonly commands?: "none" | "verification" | "workspace";
   readonly gitHistoryApproved?: boolean;
   readonly connectWhenConfigured?: boolean;
@@ -310,6 +311,21 @@ export class GuidedWorkspaceAccess {
               kind: "computer.update-access",
               workspaceId: plan.workspaceId,
               access: plan.access,
+            },
+            1,
+          ))
+        )
+          return { ok: false, reason: this.unconfirmed ? "unknown" : "failed" };
+      }
+      if (
+        plan.filePolicy !== undefined &&
+        current()?.computer.filePolicy !== plan.filePolicy
+      ) {
+        if (
+          !(await run(
+            {
+              kind: "computer.update-file-policy",
+              filePolicy: plan.filePolicy,
             },
             1,
           ))

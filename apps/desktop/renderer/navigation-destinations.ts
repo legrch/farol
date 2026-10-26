@@ -23,6 +23,7 @@ export const sheets = [
   "update-recovery",
   "activity",
   "unresolved-actions",
+  "notifications",
 ] as const;
 export type SettingsPage = (typeof settingsPages)[number];
 export type SetupStep = (typeof setupPages)[number];

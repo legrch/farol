@@ -36,7 +36,7 @@ function intentDependency(id: string): Dependency {
   // This command's uncertain external Send has its own durable pending flag.
   // It is not evidence of an uncertain credential/settings write.
   if (
-    match[2] === "" &&
+    (match[2] === "" || /^[a-f0-9]{64}$/u.test(match[2]!)) &&
     (kind === "connector.verify-app" ||
       kind === "connector.verify-separate-app")
   )

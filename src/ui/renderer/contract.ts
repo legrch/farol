@@ -202,6 +202,7 @@ export type WindowSnapshot = Readonly<{
       { kind: "chatgpt.chat-account-preview" }
     >;
   }> | null;
+  setupReturn?: Destination | null;
   chatHistoryContext: ChatHistoryContext | null;
   /** Local invalidation counter, not a backend revision or restored authority. */
   chatHistoryEpoch: number;

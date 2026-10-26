@@ -475,7 +475,7 @@ describe("Add to ChatGPT", () => {
       expect(
         h.host.querySelectorAll(".setup-wizard-footer .primary"),
       ).toHaveLength(1);
-      expect(test.disabled).toBe(unknown);
+      expect(test.disabled).toBe(false);
       expect(h.button("Start using Farol")).toBeUndefined();
       expect(h.configuration().settings.setup.journey.dismissed).toBe(true);
       expect(h.f.api.configure).not.toHaveBeenCalledWith(
@@ -1156,4 +1156,24 @@ it("shows local readiness separately from an unconfirmed app on Overview", async
         ([command]) => command.kind === "connector.verify-app",
       ),
   ).toHaveLength(sends);
+});
+
+it("completed Setup keeps Next and returns to Activity rather than forcing Home", async () => {
+  const value = readySettings(true);
+  value.setup.journey.dismissed = true;
+  const h = await mount({ value, shell: true, signIn: "authenticated" });
+  await act(async () => {
+    h.c.navigate({ area: "activity" });
+    h.c.navigate({ area: "setup", setupStep: "signin" });
+  });
+  for (const expected of ["folders", "connection", "attachment"]) {
+    await act(async () =>
+      h.host
+        .querySelector<HTMLButtonElement>(".setup-wizard-footer .primary")!
+        .click(),
+    );
+    expect(h.c.getSnapshot().destination.setupStep).toBe(expected);
+  }
+  await h.click("Back to Activity");
+  expect(h.c.getSnapshot().destination.area).toBe("activity");
 });

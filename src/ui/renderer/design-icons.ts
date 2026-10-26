@@ -21,6 +21,7 @@ const paths = Object.freeze({
   home: "M3 10 10 4l7 6M5 9v8h4v-5h3v5h3V9",
   chat: "M4 4h12v10H8l-4 3V4M7 7h6M7 10h4",
   setup: "M3 6h14M3 14h14M7 3v6M13 11v6",
+  notifications: "M5 8a5 5 0 0 1 10 0v4l2 3H3l2-3V8M8 18h4",
   activity: "M3 15h3l3-10 4 12 2-6h3",
   settings:
     "M" +

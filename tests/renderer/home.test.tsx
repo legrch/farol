@@ -294,7 +294,7 @@ it("keeps completed Home connected without requiring a new external test after r
   expect(h.host.textContent).not.toContain("Review connection");
   expect(h.f.api.configure).not.toHaveBeenCalled();
 });
-it("groups recorded unknowns without clearing records or a current edit fence", async () => {
+it("keeps recorded unknown history out of Home without clearing it", async () => {
   const events = ["one", "two", "three"].map((id) => ({
     ...event(id, 1),
     kind: "hub.lifecycle",
@@ -302,14 +302,8 @@ it("groups recorded unknowns without clearing records or a current edit fence", 
     phase: "outcome_unknown" as const,
   }));
   const h = await mount({ ...working(), activity: events });
-  expect(h.host.querySelectorAll(".home-attention .home-row")).toHaveLength(1);
-  expect(h.host.textContent).toContain(
-    "3 earlier actions have unconfirmed results",
-  );
-  await h.click(
-    "3 earlier actions have unconfirmed resultsSaved in Activity. These actions will not be repeated.Review history",
-  );
-  expect(h.c.getSnapshot().overlay).toBe("unresolved-actions");
+  expect(h.host.querySelector(".home-attention")).toBeNull();
+  expect(h.host.textContent).not.toContain("Review history");
   expect(events.every((e) => e.outcome === "unknown")).toBe(true);
   expect(h.f.api.configure).not.toHaveBeenCalled();
 });

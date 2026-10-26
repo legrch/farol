@@ -1,3 +1,4 @@
+import { ConnectionTestButton } from "../../../apps/desktop/renderer/connection-test";
 import { OperationsActivity } from "../../../apps/desktop/renderer/operations-view";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode, RefObject } from "react";
@@ -11,6 +12,7 @@ import { PanelBoundary } from "./boundary";
 import { Settings, useSetupIntents, retainedSetupIntents } from "./settings";
 import type { RendererFacade, SettingsPage, WindowSnapshot } from "./contract";
 import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
+import { useActivityNotifications } from "../../../apps/desktop/renderer/activity-notifications";
 import { computerSetup } from "./computer-setup";
 import { TaskEditor } from "./task";
 import { Home } from "./home";
@@ -1037,9 +1039,7 @@ export function Shell() {
   }, [facade, state.sidebar, state.status]);
   const settings = destination.area === "settings";
   const retained = useSetupIntents(facade, state);
-  const unresolved = unresolvedActions(state, retained).some(
-    (action) => !action.inProgress,
-  );
+  const notifications = useActivityNotifications(state, retained);
   const checklist = setupChecklist(state, false, retained);
   const completedSteps = checklist.entries.filter(
     (entry) => entry.state === "verified",
@@ -1181,6 +1181,25 @@ export function Shell() {
           <span>Find a page</span>
           <kbd>⌘ K</kbd>
         </button>
+        {destination.area === "chatgpt" && !state.setupSignInReturn && (
+          <ConnectionTestButton facade={facade} />
+        )}
+        <button
+          className="notifications-trigger"
+          aria-label="Notifications"
+          aria-description={`${notifications.unread.length} unread`}
+          title="Notifications"
+          onClick={() => facade.overlay("notifications")}
+        >
+          <Icon name="notifications" />
+          {notifications.unread.length > 0 && (
+            <span className="notification-count">
+              {notifications.unread.length > 99
+                ? "99+"
+                : notifications.unread.length}
+            </span>
+          )}
+        </button>
         {destination.area === "chatgpt" && destination.taskId && (
           <button
             aria-label="Chat options"
@@ -1252,17 +1271,6 @@ export function Shell() {
               );
             })}
           </>
-        )}
-        {unresolved && (
-          <button
-            aria-label="Review unresolved actions"
-            title="Review unresolved actions · Needs attention"
-            className="attention-action"
-            onClick={() => facade.overlay("unresolved-actions")}
-          >
-            <Icon name="attention" />
-            <span className="rail-label">Unresolved actions</span>
-          </button>
         )}
         <div className="rail-footer">
           {updateRailLabel && (
@@ -1469,6 +1477,64 @@ export function Shell() {
       {state.overlay === "update-recovery" && (
         <Update snapshot={state} facade={facade} recoveryMode />
       )}{" "}
+      {state.overlay === "notifications" && (
+        <Overlay title="Notifications" onClose={() => facade.overlay("none")}>
+          <p className="description">
+            Read notifications stay in Activity. Marking one as read does not
+            change or repeat its original result.
+          </p>
+          {notifications.error && <p role="status">{notifications.error}</p>}
+          {notifications.unread.length > 0 ? (
+            <>
+              <button onClick={() => notifications.markRead()}>
+                Mark all as read
+              </button>
+              <ul className="notification-list">
+                {notifications.unread.map((row) => (
+                  <li key={row.id}>
+                    <strong>{row.label}</strong>
+                    <p>{row.cause}</p>
+                    {row.code && <code>{row.code}</code>}
+                    <div>
+                      <button onClick={() => notifications.markRead([row])}>
+                        Mark as read
+                      </button>
+                      <button
+                        onClick={() => {
+                          facade.overlay("none");
+                          if (row.id.startsWith("operation:"))
+                            facade.navigate({
+                              area: "activity",
+                              activityId: row.id.slice(10),
+                            });
+                          else facade.overlay("unresolved-actions");
+                        }}
+                      >
+                        {row.id.startsWith("operation:")
+                          ? "View in Activity"
+                          : "Review action"}
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p role="status">No unread notifications.</p>
+          )}
+          <button onClick={() => facade.overlay("unresolved-actions")}>
+            Review unconfirmed actions
+          </button>
+          <button
+            onClick={() => {
+              facade.overlay("none");
+              facade.navigate({ area: "activity" });
+            }}
+          >
+            Open Activity
+          </button>
+        </Overlay>
+      )}
       {state.overlay === "unresolved-actions" && (
         <Overlay
           title="Unresolved actions"

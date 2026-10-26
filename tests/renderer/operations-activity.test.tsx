@@ -105,7 +105,9 @@ it("filters shared operations, expands metadata and links attention to the unres
     });
     expect(host.querySelectorAll("details")).toHaveLength(2);
     await act(async () =>
-      host.querySelector<HTMLButtonElement>("button")!.click(),
+      [...host.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent === "Review unresolved actions")!
+        .click(),
     );
     expect(overlay).toHaveBeenCalledWith("unresolved-actions");
     await act(async () => {

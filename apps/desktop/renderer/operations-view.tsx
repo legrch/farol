@@ -1,3 +1,4 @@
+import { useActivityNotifications } from "./activity-notifications";
 import { useState } from "react";
 import { operationSources, operationOutcomes } from "./operations-contract";
 import type {
@@ -12,6 +13,12 @@ export function OperationsActivity({
   snapshot: WindowSnapshot;
   facade: RendererFacade;
 }) {
+  const notifications = useActivityNotifications(snapshot);
+  const unreadIds = new Set(
+    notifications.unread
+      .filter((row) => row.id.startsWith("operation:"))
+      .map((row) => row.id.slice(10)),
+  );
   const [source, setSource] = useState("all");
   const [outcome, setOutcome] = useState("all");
   const [query, setQuery] = useState("");
@@ -21,9 +28,11 @@ export function OperationsActivity({
       (row) =>
         (source === "all" || row.source === source) &&
         (outcome === "all" ||
-          (outcome === "attention"
-            ? row.outcome === "unknown" || row.outcome === "pending"
-            : row.outcome === outcome)) &&
+          (outcome === "unread"
+            ? unreadIds.has(row.id)
+            : outcome === "attention"
+              ? row.outcome === "unknown" || row.outcome === "pending"
+              : row.outcome === outcome)) &&
         [row.kind, row.source, row.outcome, row.operation, row.code]
           .filter(Boolean)
           .join(" ")
@@ -51,7 +60,8 @@ export function OperationsActivity({
           Outcome
           <select value={outcome} onChange={(e) => setOutcome(e.target.value)}>
             <option value="all">All outcomes</option>
-            <option value="attention">Needs attention</option>
+            <option value="attention">Unconfirmed results</option>
+            <option value="unread">Unread notifications</option>
             {operationOutcomes.map((s) => (
               <option key={s}>{s}</option>
             ))}
@@ -67,6 +77,7 @@ export function OperationsActivity({
           />
         </label>
       </div>
+      {notifications.error && <p role="status">{notifications.error}</p>}
       {diagnostics &&
       (diagnostics.corruptLines > 0 ||
         diagnostics.writeFailures > 0 ||
@@ -107,6 +118,9 @@ export function OperationsActivity({
               {[
                 ["Source", row.source],
                 ["Operation", row.kind],
+                ["Workspace", row.target?.workspace ?? "—"],
+                ["Path", row.target?.relativePath ?? "—"],
+                ["Command category", row.target?.command ?? "—"],
                 ["Target", row.operation || "App"],
                 ["Outcome", row.outcome],
                 ["Code", row.code ?? "—"],
@@ -124,6 +138,19 @@ export function OperationsActivity({
                   The recorded outcome remains unconfirmed. Do not repeat the
                   action.
                 </p>
+                {unreadIds.has(row.id) && (
+                  <button
+                    onClick={() =>
+                      notifications.markRead(
+                        notifications.unread.filter(
+                          (item) => item.id === `operation:${row.id}`,
+                        ),
+                      )
+                    }
+                  >
+                    Mark as read
+                  </button>
+                )}
                 <button onClick={() => facade.overlay("unresolved-actions")}>
                   Review unresolved actions
                 </button>

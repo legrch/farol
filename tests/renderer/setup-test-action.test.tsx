@@ -106,6 +106,26 @@ describe("step four primary action", () => {
           .mock.calls.filter(
             ([c]) => c.kind === "connector.verify-separate-app",
           );
+      if (completed) {
+        expect(effects()).toHaveLength(0);
+        expect(
+          vi
+            .mocked(h.f.api.configure)
+            .mock.calls.filter(([c]) => c.kind === "connector.repair"),
+        ).toHaveLength(1);
+        await act(async () =>
+          waiting.resolve({
+            ok: false,
+            error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+            snapshot: h.configuration(),
+          }),
+        );
+        expect(effects()).toHaveLength(0);
+        expect(h.configuration().settings.setup.connect.outcomeUnknown).toBe(
+          true,
+        );
+        return;
+      }
       expect(effects()).toHaveLength(1);
       expect(effects()[0]![0]).toMatchObject({
         kind: "connector.verify-separate-app",

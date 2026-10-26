@@ -62,9 +62,6 @@ export function Home({ snapshot, facade }: Props) {
   const unresolved = unresolvedActions(snapshot, local).filter(
     (action) => !action.inProgress,
   );
-  const recorded = unresolved.filter((action) =>
-    action.id.startsWith("operation:"),
-  );
   const actionable = unresolved.filter(
     (action) => !action.id.startsWith("operation:"),
   );
@@ -231,7 +228,7 @@ export function Home({ snapshot, facade }: Props) {
               {checking ? "Checking…" : "Check now"}
             </button>
           </section>
-          {(unresolved.length > 0 ||
+          {(actionable.length > 0 ||
             tasks.length > 0 ||
             refused.length > 0) && (
             <section
@@ -256,22 +253,6 @@ export function Home({ snapshot, facade }: Props) {
                   <span className="home-link">Review</span>
                 </button>
               ))}
-              {recorded.length > 0 && (
-                <button
-                  className="home-row"
-                  onClick={() => facade.overlay("unresolved-actions")}
-                >
-                  <span className="home-row-label">
-                    {recorded.length} earlier{" "}
-                    {recorded.length === 1 ? "action has" : "actions have"}{" "}
-                    unconfirmed results
-                    <small>
-                      Saved in Activity. These actions will not be repeated.
-                    </small>
-                  </span>
-                  <span className="home-link">Review history</span>
-                </button>
-              )}
               {tasks.map((task) => (
                 <button
                   className="home-row"

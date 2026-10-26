@@ -95,6 +95,8 @@ export function Setup({ snapshot, facade }: Props) {
   const completedCount = checklist.entries.filter(
     (entry) => entry.state === "verified",
   ).length;
+  const returnDestination = snapshot.setupReturn ?? { area: "home" as const };
+  const returnLabel = `Back to ${{ home: "Home", chatgpt: "ChatGPT", activity: "Activity", settings: "Settings", setup: "Setup" }[returnDestination.area]}`;
   const previous = adjacentSetupSection(step, -1);
   const next = adjacentSetupSection(step, 1);
   function navigateToStep(setupStep: SetupSection) {
@@ -210,22 +212,24 @@ export function Setup({ snapshot, facade }: Props) {
               </li>
             ))}
           </ol>
-          <button
-            type="button"
-            className="primary"
-            onClick={() =>
-              navigateToStep(
-                checklist.entries.find((entry) => entry.state !== "verified")
-                  ?.step ?? "attachment",
-              )
-            }
-          >
-            {checklist.completed || checklist.ready
-              ? "Review setup"
-              : checklist.entries.some((entry) => entry.state === "verified")
-                ? "Continue setup"
-                : "Start setup"}
-          </button>
+          {!checklist.completed && (
+            <button
+              type="button"
+              className="primary"
+              onClick={() =>
+                navigateToStep(
+                  checklist.entries.find((entry) => entry.state !== "verified")
+                    ?.step ?? "attachment",
+                )
+              }
+            >
+              {checklist.completed || checklist.ready
+                ? "Review setup"
+                : checklist.entries.some((entry) => entry.state === "verified")
+                  ? "Continue setup"
+                  : "Start setup"}
+            </button>
+          )}
           <button
             type="button"
             className="text-button"
@@ -267,7 +271,10 @@ export function Setup({ snapshot, facade }: Props) {
           >
             Back
           </button>
-          {step === "attachment" && !checklist.ready && !finishPending ? (
+          {!checklist.completed &&
+          step === "attachment" &&
+          !checklist.ready &&
+          !finishPending ? (
             <div ref={setTestActionHost} className="setup-test-action-slot" />
           ) : (
             <button
@@ -288,11 +295,15 @@ export function Setup({ snapshot, facade }: Props) {
                   latest.configuration?.status === "ready" &&
                   latest.configuration.settings.setup.journey.dismissed
                 ) {
-                  facade.navigate({
-                    area: "home",
-                    homeView: "overview",
-                    homeSelection: null,
-                  });
+                  if (next) navigateToStep(next);
+                  else
+                    facade.navigate(
+                      latest.setupReturn ?? {
+                        area: "home",
+                        homeView: "overview",
+                        homeSelection: null,
+                      },
+                    );
                   return;
                 }
                 const local = retainedSetupIntents(facade, latest);
@@ -333,7 +344,9 @@ export function Setup({ snapshot, facade }: Props) {
               }}
             >
               {checklist.completed
-                ? "Back to Home"
+                ? next
+                  ? "Next"
+                  : returnLabel
                 : next
                   ? "Continue"
                   : "Start using Farol"}

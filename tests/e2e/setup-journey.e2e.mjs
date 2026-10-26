@@ -45,16 +45,19 @@ import {
   recheckNativePreviewIsolation,
 } from "./native-preview-admission.mjs";
 
+const repeatAfterFinish = process.argv[2] === "--repeat-after-finish";
 const rebuildReopen = process.argv[2] === "--finish-rebuild-reopen";
 const finishReopen = rebuildReopen || process.argv[2] === "--finish-reopen";
 const separateOnly = process.argv[2] === "--separate-after-unknown";
 assert.deepEqual(
   process.argv.slice(2),
-  finishReopen
-    ? [rebuildReopen ? "--finish-rebuild-reopen" : "--finish-reopen"]
-    : separateOnly
-      ? ["--separate-after-unknown"]
-      : [],
+  repeatAfterFinish
+    ? ["--repeat-after-finish"]
+    : finishReopen
+      ? [rebuildReopen ? "--finish-rebuild-reopen" : "--finish-reopen"]
+      : separateOnly
+        ? ["--separate-after-unknown"]
+        : [],
   "SETUP_JOURNEY_ARGUMENTS_INVALID",
 );
 const root = process.cwd();
@@ -73,7 +76,7 @@ const executablePath = path.join(
 );
 async function runScenario(scenario) {
   const separate = scenario === "separate-after-unknown";
-  const trackQuits = finishReopen || separate;
+  const trackQuits = finishReopen || separate || repeatAfterFinish;
   const appName = `${productName} Setup Fixture`;
   const id = randomUUID();
   const output = path.join(root, "_output/evidence/setup-journey", id);
@@ -337,7 +340,10 @@ async function runScenario(scenario) {
     }
     const starts = entries.filter((e) => e.lifecycle?.phase === "started");
     if (kind !== "connector.check-attachment")
-      assert.ok(starts.length <= 1, "SETUP_VERIFICATION_REPLAYED");
+      assert.ok(
+        starts.length <= (repeatAfterFinish ? 2 : 1),
+        "SETUP_VERIFICATION_REPLAYED",
+      );
     if (starts.length === 0) return null;
     const latest = starts.at(-1);
     const done = entries.filter(
@@ -982,6 +988,66 @@ async function runScenario(scenario) {
     report.finalState = "Home";
     report.sendCount = sendCount;
     await save();
+    if (repeatAfterFinish) {
+      const originalReceipt = { ...report.receipt };
+      const oldOperation = await settledVerification();
+      const claim = path.join(
+        userData,
+        "farol-state/secure-mcp-connector/computer-authority",
+        `app-verification-${originalReceipt.challengeSha256}.json`,
+      );
+      const claimBytes = await fs.readFile(claim);
+      await page
+        .locator(".rail")
+        .getByRole("button", { name: "ChatGPT", exact: true })
+        .click();
+      const repeat = page
+        .locator(".toolbar")
+        .getByRole("button", { name: "Test in ChatGPT", exact: true });
+      await repeat.waitFor();
+      await repeat.evaluate((button) => {
+        button.click();
+        button.click();
+      });
+      const renewed = await poll(
+        () => readSetupSettings(page),
+        (s) =>
+          s.connectors.secureMcp.attachment?.challengeSha256 !==
+            originalReceipt.challengeSha256 &&
+          s.connectors.secureMcp.attachment !== null,
+        "REPEAT_CURRENT_RECEIPT_NOT_FOUND",
+        75000,
+      );
+      const operation = await poll(
+        () => settledVerification(),
+        (v) => v !== null && v.lifecycle.id !== oldOperation.lifecycle.id,
+        "REPEAT_OPERATION_NOT_SETTLED",
+        75000,
+      );
+      assert.equal(operation.outcome, "done");
+      assert.equal(sendCount, 2);
+      assert.equal(renewed.setup.journey.dismissed, true);
+      assert.notEqual(
+        report.receipt.challengeSha256,
+        originalReceipt.challengeSha256,
+      );
+      assert.equal(hash(await fs.readFile(claim)), hash(claimBytes));
+      report.repeatConnectionTest = {
+        status: "PASS",
+        original: originalReceipt,
+        current: report.receipt,
+        oldClaimUnchanged: true,
+        doubleClickSyntheticSendCount: 1,
+        totalSyntheticSends: sendCount,
+        liveSends: 0,
+      };
+      await page
+        .locator(".rail")
+        .getByRole("button", { name: "Home", exact: true })
+        .click();
+      await page.locator('[data-home-view="overview"]').waitFor();
+      await save();
+    }
     if (finishReopen) {
       assert.equal(settings.general.openAtLaunch, "home");
       const completed = await page.evaluate(async () => {
@@ -1294,7 +1360,7 @@ async function runScenario(scenario) {
 }
 
 const matrix = [];
-for (const scenario of finishReopen
+for (const scenario of finishReopen || repeatAfterFinish
   ? ["happy"]
   : separateOnly
     ? ["separate-after-unknown"]
@@ -1318,7 +1384,8 @@ const matrixOutput = path.join(
 await fs.mkdir(matrixOutput, { recursive: true, mode: 0o700 });
 const matrixReport = {
   status:
-    matrix.length === (finishReopen || separateOnly ? 1 : 6) &&
+    matrix.length ===
+      (finishReopen || separateOnly || repeatAfterFinish ? 1 : 6) &&
     !process.exitCode
       ? finishReopen
         ? "passed-fixture-finish-reopen"

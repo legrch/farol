@@ -43,6 +43,10 @@ function fixture() {
       target.gitHistoryApproved = false;
       computer.generation += 1;
     }
+    if (command.kind === "computer.update-file-policy") {
+      computer.filePolicy = command.filePolicy;
+      computer.generation += 1;
+    }
     if (command.kind === "computer.update-commands") {
       computer.commands = command.commands;
       computer.generation += 1;
@@ -766,4 +770,22 @@ describe("access acknowledgement and revocation boundaries", () => {
       ).copy,
     ).toContain("editing");
   });
+});
+
+it("changes command file scope only on an explicit plan, then verifies before reconnect", async () => {
+  const f = fixture();
+  const result = await f.controller.run(
+    f.port,
+    { ...f.plan, filePolicy: "approved-roots-v1", commands: "workspace" },
+    f.consent,
+  );
+  expect(result.ok).toBe(true);
+  expect(f.settings.computer.filePolicy).toBe("approved-roots-v1");
+  const calls = f.run.mock.calls.map(([c]) => c.kind);
+  expect(calls.indexOf("computer.update-file-policy")).toBeGreaterThan(
+    calls.indexOf("connector.stop"),
+  );
+  expect(calls.indexOf("computer.verify-workspace")).toBeGreaterThan(
+    calls.indexOf("computer.update-file-policy"),
+  );
 });
