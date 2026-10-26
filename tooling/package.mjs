@@ -55,7 +55,8 @@ exec "$contents_dir/Frameworks/Electron Runtime.app/Contents/MacOS/Electron" \\
 const manifest = JSON.parse(
   await fs.readFile(path.join(builtRoot, "build-manifest.json"), "utf8"),
 );
-if (previewVersion.startsWith("0.2.") && manifest.schema !== 4)
+// The 0.2 and 0.3 release lines ship the Go core.
+if (/^0\.[23]\./u.test(previewVersion) && manifest.schema !== 4)
   throw new Error("PACKAGE_GO_CORE_REQUIRED");
 if (
   ![3, 4].includes(manifest.schema) ||

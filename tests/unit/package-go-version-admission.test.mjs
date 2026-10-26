@@ -109,6 +109,7 @@ describe("shared package Go version admission", () => {
       "0.2.1-preview.0",
       currentVersion,
       "0.2.12-owner.beta.0",
+      "0.3.0-owner.beta.1",
     ])(`requires Go core for %s claiming schema ${schema}`, async (version) => {
       await refusesBeforeObservation(
         fixture(schema, version),

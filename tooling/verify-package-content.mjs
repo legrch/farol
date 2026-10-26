@@ -84,11 +84,11 @@ export async function verifyPackageContent({
     artifact.treeDigestVersion === TREE_DIGEST_VERSION,
     "PACKAGE_TREE_DIGEST_VERSION_INVALID",
   );
-  // Match the producer's 0.2 Go requirement before observing package bytes.
+  // Match the producer's 0.2/0.3 Go requirement before observing package bytes.
   requireValue(
     layout.core ||
       ![artifact.version, expectedVersion].some(
-        (version) => typeof version === "string" && version.startsWith("0.2."),
+        (version) => typeof version === "string" && /^0\.[23]\./u.test(version),
       ),
     "PACKAGE_GO_CORE_REQUIRED",
   );
