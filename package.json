@@ -1,6 +1,6 @@
 {
   "name": "farol",
-  "version": "3.0.0-owner.beta.1",
+  "version": "0.3.0-owner.beta.1",
   "farolRelease": {
     "updateChannel": "github-owner-beta",
     "buildVersion": "47"
