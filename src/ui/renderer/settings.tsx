@@ -1518,6 +1518,7 @@ function SignInStep({ snapshot, facade, actions }: PageProps) {
     </section>
   );
 }
+const requestedSeparateTests = new WeakMap<RendererFacade, Set<string>>();
 const automaticAttachmentReads = new WeakMap<
   RendererFacade,
   { binding: string; destination: Destination }
@@ -1645,7 +1646,6 @@ function AddToChatGPT({
     );
   };
   const needsNewTest = !nameChanged && canPrepareTest(snapshot);
-  const [separateConsent, setSeparateConsent] = useState<string | null>(null);
   const separateParsed = SeparateAppVerificationScopeSchema.safeParse({
     ownerAuthorized: true,
     appName,
@@ -1668,11 +1668,18 @@ function AddToChatGPT({
     )
       ? separateParsed.data
       : null;
-  const separateKey = separateExpected
+  // This only selects the command. Main owns the native confirmation for each
+  // fresh attempt; IPC metadata is never treated as owner consent.
+  const separateBinding = separateExpected
     ? JSON.stringify(separateExpected)
     : null;
-  const separateAuthorized =
-    separateKey !== null && separateConsent === separateKey;
+  const [requestedSeparate, setRequestedSeparate] = useState<string | null>(
+    null,
+  );
+  const separateAvailable =
+    separateBinding !== null &&
+    requestedSeparate !== separateBinding &&
+    !requestedSeparateTests.get(facade)?.has(separateBinding);
 
   async function saveName() {
     if (!nameValid || busy.current || !connector.tunnelId) return;
@@ -1689,17 +1696,19 @@ function AddToChatGPT({
       !nameValid ||
       !(
         computerSetup(facade.getSnapshot()).canVerifyEmbeddedApp ||
-        (separateAuthorized &&
+        (separateAvailable &&
           separateExpected &&
           computerSetup(facade.getSnapshot()).canVerifySeparateEmbeddedApp)
       )
     )
       return;
     busy.current = true;
-    // Consent belongs to this one admission, including a pre-submit refusal.
-    // A later click needs explicit consent again; the durable claim still
-    // prevents a second Send for the same challenge after possible dispatch.
-    if (separateAuthorized) setSeparateConsent(null);
+    if (separateAvailable && separateBinding) {
+      const requested = requestedSeparateTests.get(facade) ?? new Set<string>();
+      requested.add(separateBinding);
+      requestedSeparateTests.set(facade, requested);
+      setRequestedSeparate(separateBinding);
+    }
     setChecking(true);
     try {
       const current = facade.getSnapshot();
@@ -1735,7 +1744,7 @@ function AddToChatGPT({
       )
         return;
       const command: ProductConfigurationCommand =
-        separateAuthorized && separateExpected
+        separateAvailable && separateExpected
           ? {
               kind: "connector.verify-separate-app",
               expected: separateExpected,
@@ -1769,10 +1778,10 @@ function AddToChatGPT({
   }
   const testDisabled =
     checking ||
-    (waitingForConfirmation && !separateAuthorized) ||
+    (waitingForConfirmation && !separateAvailable) ||
     needsNewTest ||
     !nameValid ||
-    !(separateAuthorized
+    !(separateAvailable
       ? actions.allowed("connector.verify-separate-app") &&
         setup.canVerifySeparateEmbeddedApp
       : actions.allowed("connector.verify-app") && setup.canVerifyEmbeddedApp);
@@ -1886,10 +1895,10 @@ function AddToChatGPT({
         <h3>2. Check the connection</h3>
         <p className="description" id="setup-test-blocked">
           {waitingForConfirmation
-            ? separateAuthorized
-              ? "A separate test is authorized for this connection. It sends one new message; the earlier test remains unconfirmed."
+            ? separateAvailable
+              ? "Test in ChatGPT sends one new test message after confirmation. The earlier result stays in Activity and will not be repeated."
               : unconfirmedTest
-                ? "An earlier test has no confirmed result. It will not be repeated. Check the saved result, or explicitly authorize a separate check below."
+                ? "An earlier test has no confirmed result. It will not be repeated. Refresh status to check its saved result."
                 : "An earlier action has no confirmed result. Check its saved status before starting a test."
             : "Farol opens a separate chat, selects Instant and sends one test message to your app. The reply confirms that ChatGPT can reach this Mac — without reading file contents."}
         </p>
@@ -1956,24 +1965,6 @@ function AddToChatGPT({
             </p>
           )}
         </div>
-        {waitingForConfirmation && separateExpected && (
-          <label className="setting-row">
-            <input
-              type="checkbox"
-              checked={separateAuthorized}
-              disabled={
-                checking || !actions.allowed("connector.verify-separate-app")
-              }
-              onChange={(event) =>
-                setSeparateConsent(
-                  event.currentTarget.checked ? separateKey : null,
-                )
-              }
-            />
-            Authorize a separate test for this connection. Keep the earlier test
-            unconfirmed.
-          </label>
-        )}
         {gate.allowed ? (
           <div className="setup-success" role="status">
             <strong>✓ Everything works</strong>

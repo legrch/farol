@@ -5794,8 +5794,8 @@ async function verifySecureMcpApp(
                 defaultId: 0,
                 cancelId: 0,
                 noLink: true,
-                message: "Run one separate connection test?",
-                detail: `Send one new test message using ${appName} for this connection. The earlier test remains unconfirmed in Unresolved actions; it will not be repeated or cleared.`,
+                message: "Test this connection in ChatGPT?",
+                detail: `Send one test message using ${appName}. Earlier unconfirmed tests stay in Activity and will not be repeated.`,
               });
               return answer.response === 1;
             },
@@ -5923,7 +5923,7 @@ async function verifySecureMcpApp(
           claimed = true;
         },
       },
-      "connector-instant",
+      "temporary-instant",
       { name: appName },
     );
     if (

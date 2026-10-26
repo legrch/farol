@@ -17,16 +17,15 @@ function pending() {
 }
 
 describe("step four primary action", () => {
-  it("consumes separate consent even when the route refuses before submission", async () => {
+  it("keeps one admitted request per mounted binding even on pre-submit refusal", async () => {
     const h = await mount({
       step: "attachment",
       value: pending(),
       signIn: "authenticated",
     });
     await h.confirmSignIn();
-    const checkbox = () =>
-      h.host.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
-    await act(async () => checkbox().click());
+    expect(h.host.querySelector('input[type="checkbox"]')).toBeNull();
+    expect(h.button("Test in ChatGPT")?.disabled).toBe(false);
     h.reply(() => ({
       ok: false,
       error: "CHATGPT_COMPOSER_DRAFT_PRESENT",
@@ -34,7 +33,6 @@ describe("step four primary action", () => {
     }));
     await h.click("Test in ChatGPT");
     await h.navigate("attachment");
-    expect(checkbox().checked).toBe(false);
     expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
     expect(h.configuration().settings.setup.connect.outcomeUnknown).toBe(true);
     expect(
@@ -61,7 +59,7 @@ describe("step four primary action", () => {
       const footer = h.host.querySelector(".setup-wizard-footer")!;
       expect(footer.querySelectorAll(".primary")).toHaveLength(1);
       expect(footer.contains(h.button("Test in ChatGPT")!)).toBe(true);
-      expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
+      expect(h.button("Test in ChatGPT")?.disabled).toBe(state === "missing");
       expect(h.button("Start using Farol")).toBeUndefined();
     },
   );
@@ -73,7 +71,7 @@ describe("step four primary action", () => {
       signIn: "authenticated",
     });
     await h.confirmSignIn();
-    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
+    expect(h.button("Test in ChatGPT")?.disabled).toBe(false);
     await h.publish(readySettings(true));
     expect(h.button("Test in ChatGPT")).toBeUndefined();
     expect(h.button("Start using Farol")?.disabled).toBe(false);
@@ -83,7 +81,7 @@ describe("step four primary action", () => {
   });
 
   it.each([false, true])(
-    "requires scoped consent and admits one separate request on double click (completed %s)",
+    "selects the scoped native-confirmed command once on double click (completed %s)",
     async (completed) => {
       const value = pending();
       value.setup.journey.dismissed = completed;
@@ -93,17 +91,7 @@ describe("step four primary action", () => {
         signIn: "authenticated",
       });
       await h.confirmSignIn();
-      const consent = h.host.querySelector<HTMLInputElement>(
-        'input[type="checkbox"]',
-      )!;
-      expect(consent).toBeTruthy();
-      expect(consent.checked).toBe(false);
-      expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
-      const before = structuredClone(h.configuration());
-      const calls = vi.mocked(h.f.api.configure).mock.calls.length;
-      await act(async () => consent.click());
-      expect(h.configuration()).toEqual(before);
-      expect(h.f.api.configure).toHaveBeenCalledTimes(calls);
+      expect(h.host.querySelector('input[type="checkbox"]')).toBeNull();
       expect(h.button("Test in ChatGPT")?.disabled).toBe(false);
       const waiting = deferred<unknown>();
       h.reply(() => waiting.promise);
@@ -149,7 +137,7 @@ describe("step four primary action", () => {
     },
   );
 
-  it("invalidates consent when the challenge changes, and on remount", async () => {
+  it("binds each request to the current challenge without treating IPC metadata as consent", async () => {
     const value = pending();
     const h = await mount({
       step: "attachment",
@@ -157,18 +145,20 @@ describe("step four primary action", () => {
       signIn: "authenticated",
     });
     await h.confirmSignIn();
-    const checkbox = () =>
-      h.host.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
-    await act(async () => checkbox().click());
-    expect(h.button("Test in ChatGPT")?.disabled).toBe(false);
     value.connectors.secureMcp.challenge!.challengeSha256 = "f".repeat(64);
     value.revision++;
     await h.publish(value);
-    expect(checkbox().checked).toBe(false);
-    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
-    await act(async () => checkbox().click());
-    await h.remount();
-    expect(checkbox().checked).toBe(false);
-    expect(h.button("Test in ChatGPT")?.disabled).toBe(true);
+    await h.click("Test in ChatGPT");
+    expect(
+      vi
+        .mocked(h.f.api.configure)
+        .mock.calls.filter(
+          ([c]) => c.kind === "connector.verify-separate-app",
+        )[0]?.[0],
+    ).toMatchObject({
+      expected: { challengeSha256: "f".repeat(64) },
+    });
+    // Native confirmation, Go receipt and durable replay rejection are tested
+    // at their actual host boundaries; this renderer test cannot prove them.
   });
 });

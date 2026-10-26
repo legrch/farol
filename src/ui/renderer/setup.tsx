@@ -28,7 +28,7 @@ const context: Record<SetupSection, { title: string; description: string }> = {
     description: "You need two things from OpenAI: a tunnel ID and its key.",
   },
   attachment: {
-    title: "Add Farol to ChatGPT",
+    title: "4. Add Farol to ChatGPT",
     description:
       "Create the app in ChatGPT with your tunnel, then test it end to end.",
   },

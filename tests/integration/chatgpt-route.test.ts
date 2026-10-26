@@ -911,34 +911,37 @@ it.each([false, true])(
   },
 );
 
-it("stops delayed hydration collapse on trusted owner input", () => {
-  let tick: (() => void) | null = null;
-  let pointer: ((event: { isTrusted: boolean }) => void) | null = null;
-  const remove = vi.fn();
-  vm.runInNewContext(collapseChatGptSidebarScript(), {
-    document: {
-      querySelectorAll: () => [],
-      addEventListener: (_name: string, listener: typeof pointer) => {
-        pointer = listener;
+it.each(["pointerdown", "pointerover", "keydown"])(
+  "stops delayed hydration collapse on trusted owner %s",
+  (eventKind) => {
+    let tick: (() => void) | null = null;
+    let pointer: ((event: { isTrusted: boolean }) => void) | null = null;
+    const remove = vi.fn();
+    vm.runInNewContext(collapseChatGptSidebarScript(), {
+      document: {
+        querySelectorAll: () => [],
+        addEventListener: (name: string, listener: typeof pointer) => {
+          if (name === eventKind) pointer = listener;
+        },
+        removeEventListener: remove,
       },
-      removeEventListener: remove,
-    },
-    setInterval: (callback: () => void) => {
-      tick = callback;
-      return 1;
-    },
-    clearInterval: () => {
-      tick = null;
-    },
-    Date,
-    Set,
-  });
-  pointer!({ isTrusted: false });
-  expect(tick).not.toBeNull();
-  pointer!({ isTrusted: true });
-  expect(tick).toBeNull();
-  expect(remove).toHaveBeenCalledWith("pointerdown", pointer, true);
-});
+      setInterval: (callback: () => void) => {
+        tick = callback;
+        return 1;
+      },
+      clearInterval: () => {
+        tick = null;
+      },
+      Date,
+      Set,
+    });
+    pointer!({ isTrusted: false });
+    expect(tick).not.toBeNull();
+    pointer!({ isTrusted: true });
+    expect(tick).toBeNull();
+    expect(remove).toHaveBeenCalledWith("pointerdown", pointer, true);
+  },
+);
 
 it("toggles the provider sidebar through its own visible control", () => {
   let clicks = 0;

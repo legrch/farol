@@ -772,7 +772,7 @@ async function runScenario(scenario) {
         await page
           .getByRole("button", { name: "Test in ChatGPT", exact: true })
           .isEnabled(),
-        false,
+        true,
       );
       // Fixture-owned native approval port only. No shipping bypass, real owner
       // consent or live-provider acceptance is inferred from this override.
@@ -780,7 +780,7 @@ async function runScenario(scenario) {
         globalThis.__farolSeparateFixtureApprovals = 0;
         dialog.showMessageBox = async (_owner, options) => {
           if (
-            options.message !== "Run one separate connection test?" ||
+            options.message !== "Test this connection in ChatGPT?" ||
             options.defaultId !== 0
           )
             throw Error("SEPARATE_UNEXPECTED_NATIVE_PROMPT");
@@ -788,9 +788,6 @@ async function runScenario(scenario) {
           return { response: 1, checkboxChecked: false };
         };
       });
-      await page
-        .getByRole("checkbox", { name: /Authorize a separate test/ })
-        .check();
       await page
         .getByRole("button", { name: "Test in ChatGPT", exact: true })
         .click();

@@ -94,7 +94,8 @@ export function OperationsActivity({
               <span>
                 <strong>{row.label}</strong>
                 <small>
-                  {row.source} · {new Date(row.at).toLocaleString()}
+                  {row.kind} · {row.source} ·{" "}
+                  {new Date(row.at).toLocaleString()}
                   {row.operation ? ` · ${row.operation}` : ""}
                 </small>
               </span>

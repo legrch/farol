@@ -15,7 +15,7 @@ describe("Settings", () => {
     const nav = h.host.querySelector('[aria-label="Settings navigation"]')!;
     expect(
       [...nav.querySelectorAll("button")].map((x) => x.textContent?.trim()),
-    ).toEqual(["General", "Appearance", "Keyboard shortcuts"]);
+    ).toEqual(["Back to Farol", "General", "Appearance", "Keyboard shortcuts"]);
     expect(h.host.textContent).not.toContain("Start page");
     expect(h.host.querySelector("details")).toBeNull();
     expect(h.button("Open Setup")).toBeTruthy();

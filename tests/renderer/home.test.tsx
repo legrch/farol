@@ -250,7 +250,7 @@ it("Check now uses the existing health command once and does not submit another 
   await act(async () =>
     result.resolve({ ok: true, snapshot: value.configuration }),
   );
-  expect(h.host.textContent).toContain("Connection check finished.");
+  expect(h.host.textContent).toContain("Connection check finished at");
 });
 it("missing configuration cannot become a fabricated zero-workspace success", async () => {
   const h = await mount({
@@ -271,7 +271,7 @@ it("routes unresolved update evidence to the existing sheet from working Home", 
     },
   });
   expect(h.host.querySelector(".home-attention")?.textContent).toContain(
-    "An action needs review",
+    "Update recovery",
   );
   await act(async () =>
     h.host.querySelector<HTMLButtonElement>(".home-attention button")!.click(),
@@ -282,22 +282,34 @@ it("routes unresolved update evidence to the existing sheet from working Home", 
   );
 });
 
-it("keeps saved completion and historical checks while current attachment is missing", async () => {
+it("keeps completed Home connected without requiring a new external test after restart", async () => {
   const value = working();
   if (value.configuration?.status !== "ready")
     throw Error("fixture settings missing");
   value.configuration.settings.connectors.secureMcp.attachment = null;
   const h = await mount(value);
-  expect(h.host.textContent).toContain(
-    "Setup complete · connection needs attention",
-  );
-  expect(h.host.textContent).not.toContain("Finish setup");
-  expect(h.host.textContent).not.toContain("Farol is working");
+  expect(h.host.textContent).toContain("Farol is working");
+  expect(h.host.textContent).toContain("Tunnel connected · setup saved");
+  expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
+  expect(h.host.textContent).not.toContain("Review connection");
   expect(h.f.api.configure).not.toHaveBeenCalled();
-  await h.click("Review connection");
-  expect(h.c.getSnapshot().destination).toMatchObject({
-    area: "setup",
-    setupStep: "attachment",
-  });
+});
+it("groups recorded unknowns without clearing records or a current edit fence", async () => {
+  const events = ["one", "two", "three"].map((id) => ({
+    ...event(id, 1),
+    kind: "hub.lifecycle",
+    outcome: "unknown" as const,
+    phase: "outcome_unknown" as const,
+  }));
+  const h = await mount({ ...working(), activity: events });
+  expect(h.host.querySelectorAll(".home-attention .home-row")).toHaveLength(1);
+  expect(h.host.textContent).toContain(
+    "3 earlier actions have unconfirmed results",
+  );
+  await h.click(
+    "3 earlier actions have unconfirmed resultsSaved in Activity. These actions will not be repeated.Review history",
+  );
+  expect(h.c.getSnapshot().overlay).toBe("unresolved-actions");
+  expect(events.every((e) => e.outcome === "unknown")).toBe(true);
   expect(h.f.api.configure).not.toHaveBeenCalled();
 });

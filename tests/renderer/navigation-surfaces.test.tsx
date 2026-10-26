@@ -106,16 +106,17 @@ describe("closed renderer destinations", () => {
       ).toBeTruthy();
     }
   });
-  it("opens Chat flows from the ChatGPT toolbar without sending or reading on mount", async () => {
+  it("keeps retained Chat flows inert without advertising an extra toolbar entry", async () => {
     const h = await mount({ page: "general", shell: true });
     expect(h.button("Chat conversations")).toBeUndefined();
     await act(async () => h.c.navigate({ area: "chatgpt" }));
     vi.mocked(h.f.api.configure).mockClear();
     const historyRead = vi.spyOn(h.c, "readChatHistory");
     const retiredRead = vi.spyOn(h.c, "readRetiredReplies");
-    const trigger = h.button("Chat conversations")!;
+    expect(h.button("Chat conversations")).toBeUndefined();
+    const trigger = h.button("ChatGPT")!;
     trigger.focus();
-    await h.click("Chat conversations");
+    await act(async () => h.c.overlay("chat-conversations"));
     expect(h.c.getSnapshot().destination.area).toBe("chatgpt");
     expect(h.c.getSnapshot().overlay).toBe("chat-conversations");
     const dialog = h.host.querySelector(

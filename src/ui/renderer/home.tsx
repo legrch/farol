@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { commandAllowed } from "./command-eligibility";
+import { computerSetup } from "./computer-setup";
 import { setupChecklist } from "./setup-navigation";
 import { useSetupIntents, retainedSetupIntents } from "./settings";
 import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
@@ -42,17 +43,30 @@ function eventState(phase: string | null) {
 export function Home({ snapshot, facade }: Props) {
   const local = useSetupIntents(facade, snapshot);
   const checklist = setupChecklist(snapshot, false, local);
+  const computer = computerSetup(snapshot);
   const first = checklist.entries.find(
-    (entry) => entry.liveState !== "verified",
+    (entry) =>
+      entry.liveState !== "verified" &&
+      !(
+        checklist.completed &&
+        computer.localConnectionCurrent &&
+        entry.step === "attachment"
+      ),
   );
   const working =
     snapshot.configuration?.status === "ready" &&
     snapshot.configuration.settings.setup.journey.dismissed &&
-    checklist.ready;
+    (checklist.ready || (computer.localConnectionCurrent && !first));
   const [checking, setChecking] = useState(false);
   const [checkResult, setCheckResult] = useState<string | null>(null);
   const unresolved = unresolvedActions(snapshot, local).filter(
     (action) => !action.inProgress,
+  );
+  const recorded = unresolved.filter((action) =>
+    action.id.startsWith("operation:"),
+  );
+  const actionable = unresolved.filter(
+    (action) => !action.id.startsWith("operation:"),
   );
   const tasks = snapshot.tasks.tasks.filter(
     (task) =>
@@ -92,7 +106,7 @@ export function Home({ snapshot, facade }: Props) {
       );
       setCheckResult(
         result.state === "applied"
-          ? "Connection check finished."
+          ? `Connection check finished at ${new Date().toLocaleTimeString()}.`
           : result.state === "unknown"
             ? "The check has no confirmed result. Review Unresolved actions."
             : "The check could not finish. Review Setup.",
@@ -191,7 +205,10 @@ export function Home({ snapshot, facade }: Props) {
                   "Waiting for the current connection check."
                 ) : (
                   <>
-                    ChatGPT can reach this Mac · {workspaceCount}{" "}
+                    {computer.externalAccessVerified
+                      ? "ChatGPT can reach this Mac"
+                      : "Tunnel connected · setup saved"}{" "}
+                    · {workspaceCount}{" "}
                     {workspaceCount === 1 ? "workspace" : "workspaces"} ·
                     checked {checkedTime(snapshot)}
                   </>
@@ -222,14 +239,14 @@ export function Home({ snapshot, facade }: Props) {
               aria-labelledby="home-attention-title"
             >
               <h2 id="home-attention-title">Needs attention</h2>
-              {unresolved.map((item) => (
+              {actionable.map((item) => (
                 <button
                   className="home-row"
                   key={item.id}
                   onClick={() => facade.overlay("unresolved-actions")}
                 >
                   <span className="home-row-label">
-                    An action needs review
+                    {item.label}
                     <small>
                       {item.state === "unknown"
                         ? "Its result is unconfirmed"
@@ -239,6 +256,22 @@ export function Home({ snapshot, facade }: Props) {
                   <span className="home-link">Review</span>
                 </button>
               ))}
+              {recorded.length > 0 && (
+                <button
+                  className="home-row"
+                  onClick={() => facade.overlay("unresolved-actions")}
+                >
+                  <span className="home-row-label">
+                    {recorded.length} earlier{" "}
+                    {recorded.length === 1 ? "action has" : "actions have"}{" "}
+                    unconfirmed results
+                    <small>
+                      Saved in Activity. These actions will not be repeated.
+                    </small>
+                  </span>
+                  <span className="home-link">Review history</span>
+                </button>
+              )}
               {tasks.map((task) => (
                 <button
                   className="home-row"

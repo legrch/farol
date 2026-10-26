@@ -62,9 +62,11 @@ function title(snapshot: WindowSnapshot, filter: ActivityFilter) {
       : snapshot.destination.area === "activity"
         ? activityTitle(snapshot, filter)
         : snapshot.destination.area === "setup"
-          ? (setupSteps.find(
-              ([step]) => step === snapshot.destination.setupStep,
-            )?.[1] ?? "Setup")
+          ? snapshot.destination.setupStep === "attachment"
+            ? "4. Add Farol to ChatGPT"
+            : (setupSteps.find(
+                ([step]) => step === snapshot.destination.setupStep,
+              )?.[1] ?? "Setup")
           : "Home";
 }
 type ActivityFilter = "all" | "attention";
@@ -1043,12 +1045,12 @@ export function Shell() {
     (entry) => entry.state === "verified",
   ).length;
   const computer = computerSetup(state);
-  const connected = computer.ready;
+  const connected = computer.localConnectionCurrent;
   const connectionLabel = connected
-    ? "Connected — ChatGPT can reach this Mac"
-    : computer.localConnectionCurrent
-      ? "Tunnel connected — app check pending"
-      : "Not connected yet";
+    ? computer.externalAccessVerified
+      ? "Connected — ChatGPT app verified"
+      : "Connected — local tunnel; setup saved"
+    : "Not connected yet";
   const sidebarLabel = expanded ? "Collapse sidebar" : "Expand sidebar";
   const updateRailLabel =
     state.update.phase === "available"
@@ -1179,15 +1181,6 @@ export function Shell() {
           <span>Find a page</span>
           <kbd>⌘ K</kbd>
         </button>
-        {destination.area === "chatgpt" && !state.setupSignInReturn && (
-          <button
-            className="chat-conversations-trigger"
-            onClick={() => facade.overlay("chat-conversations")}
-          >
-            <Icon name="chatgpt" />
-            <span>Chat conversations</span>
-          </button>
-        )}
         {destination.area === "chatgpt" && destination.taskId && (
           <button
             aria-label="Chat options"
@@ -1199,38 +1192,67 @@ export function Shell() {
           </button>
         )}
       </header>
-      <nav id="main-sidebar" className="rail" aria-label="Sections">
-        {(["home", "chatgpt", "activity", "setup"] as const).map((area) => {
-          const label = {
-            home: "Home",
-            chatgpt: "ChatGPT",
-            activity: "Activity",
-            setup: "Setup",
-          }[area];
-          const detail =
-            area === "setup"
-              ? `${completedSteps} of 4 steps done`
-              : destination.area === area
-                ? "Current page"
-                : "Open page";
-          return (
+      <nav
+        id="main-sidebar"
+        className="rail"
+        aria-label={settings ? "Settings navigation" : "Sections"}
+      >
+        {settings ? (
+          <>
             <button
-              key={area}
-              aria-label={label}
-              title={`${label} · ${detail}`}
-              aria-current={destination.area === area ? "page" : undefined}
-              onClick={() => facade.navigate({ area })}
+              onClick={() => facade.navigate({ area: "home" })}
+              aria-label="Back to Farol"
             >
-              <Icon name={area} />
-              <span className="rail-label">{label}</span>
-              {area === "setup" && (
-                <span className="rail-label setup-count">
-                  {completedSteps === 4 ? "✓" : `${completedSteps} of 4`}
-                </span>
-              )}
+              <Icon name="back" />
+              <span className="rail-label">Back to Farol</span>
             </button>
-          );
-        })}
+            {pages.map(([page, label]) => (
+              <button
+                key={page}
+                aria-label={label}
+                aria-current={destination.page === page ? "page" : undefined}
+                onClick={() => facade.navigate({ area: "settings", page })}
+              >
+                <Icon name={page} />
+                <span className="rail-label">{label}</span>
+              </button>
+            ))}
+          </>
+        ) : (
+          <>
+            {(["home", "chatgpt", "activity", "setup"] as const).map((area) => {
+              const label = {
+                home: "Home",
+                chatgpt: "ChatGPT",
+                activity: "Activity",
+                setup: "Setup",
+              }[area];
+              const detail =
+                area === "setup"
+                  ? `${completedSteps} of 4 steps done`
+                  : destination.area === area
+                    ? "Current page"
+                    : "Open page";
+              return (
+                <button
+                  key={area}
+                  aria-label={label}
+                  title={`${label} · ${detail}`}
+                  aria-current={destination.area === area ? "page" : undefined}
+                  onClick={() => facade.navigate({ area })}
+                >
+                  <Icon name={area} />
+                  <span className="rail-label">{label}</span>
+                  {area === "setup" && (
+                    <span className="rail-label setup-count">
+                      {completedSteps === 4 ? "✓" : `${completedSteps} of 4`}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </>
+        )}
         {unresolved && (
           <button
             aria-label="Review unresolved actions"
@@ -1276,31 +1298,23 @@ export function Shell() {
           >
             <span className="connection-dot" aria-hidden="true" />
             <span className="rail-label">
-              {connected ? (
-                <>
-                  Connected<small>ChatGPT can reach this Mac</small>
-                </>
-              ) : computer.localConnectionCurrent ? (
-                <>
-                  Tunnel connected<small>App check pending</small>
-                </>
-              ) : (
-                "Not connected yet"
-              )}
+              {connected ? "Connected" : "Not connected yet"}
             </span>
           </div>
-          <button
-            className="rail-bottom"
-            aria-label="Settings"
-            title={`Settings · ${settings ? "Current page" : "Open page"}`}
-            aria-current={settings ? "page" : undefined}
-            onClick={() =>
-              facade.navigate({ area: "settings", page: "general" })
-            }
-          >
-            <Icon name="settings" />
-            <span className="rail-label">Settings</span>
-          </button>
+          {!settings && (
+            <button
+              className="rail-bottom"
+              aria-label="Settings"
+              title={`Settings · ${settings ? "Current page" : "Open page"}`}
+              aria-current={settings ? "page" : undefined}
+              onClick={() =>
+                facade.navigate({ area: "settings", page: "general" })
+              }
+            >
+              <Icon name="settings" />
+              <span className="rail-label">Settings</span>
+            </button>
+          )}
         </div>
       </nav>
       <main
@@ -1334,26 +1348,7 @@ export function Shell() {
           ) : destination.area === "setup" ? (
             <Setup snapshot={state} facade={facade} />
           ) : destination.area === "settings" ? (
-            <div className="settings-layout">
-              <nav
-                className="settings-sections"
-                aria-label="Settings navigation"
-              >
-                {pages.map(([page, label]) => (
-                  <button
-                    key={page}
-                    aria-current={
-                      destination.page === page ? "page" : undefined
-                    }
-                    onClick={() => facade.navigate({ area: "settings", page })}
-                  >
-                    <Icon name={page} />
-                    <span>{label}</span>
-                  </button>
-                ))}
-              </nav>
-              <Settings snapshot={state} facade={facade} />
-            </div>
+            <Settings snapshot={state} facade={facade} />
           ) : destination.area === "activity" ? (
             <div className="activity-page">
               <Activity

@@ -514,7 +514,7 @@ it("R05 renders hostile labels as text and stable task identity survives reorder
     });
     c.navigate({ area: "chatgpt" });
   });
-  await act(async () => button(host, "Chat conversations").click());
+  await act(async () => c.overlay("chat-conversations"));
   expect(host.querySelector("script")).toBeNull();
   const row = host.querySelector(".chat-work-list button");
   await act(async () =>
@@ -3068,7 +3068,7 @@ it("one sidebar expands to labels and collapses to a permanent rail on every are
         home: "Home",
         activity: "Activity",
         setup: "Setup",
-        settings: "Settings",
+        settings: "General",
       }[area],
     );
   }
@@ -3155,18 +3155,21 @@ it("View-menu sidebar command shares the toggle owner and keeps focused controls
   expect(trigger.title).toContain("⌃⌘S");
   expect(host.querySelector(".sidebar-overlay")).toBeNull();
 });
-it("Settings owns its inner section list and Chat conversations stays in the ChatGPT toolbar", async () => {
+it("Settings replaces the main rail and normal ChatGPT has no extra conversations button", async () => {
   const { host, c } = await mount();
   await act(async () => c.navigate({ area: "settings", page: "appearance" }));
-  expect(
-    host.querySelector('main .settings-sections [aria-current="page"]')
-      ?.textContent,
-  ).toBe("Appearance");
-  expect(host.querySelector(".rail .settings-sections")).toBeNull();
+  expect(host.querySelector('.rail [aria-current="page"]')?.textContent).toBe(
+    "Appearance",
+  );
+  expect(host.querySelector('nav[aria-label="Settings navigation"]')).toBe(
+    host.querySelector(".rail"),
+  );
+  expect(host.querySelector("main .settings-sections")).toBeNull();
+  expect(host.querySelector('.rail [aria-label="Home"]')).toBeNull();
+  await act(async () => button(host, "Back to Farol").click());
+  expect(c.getSnapshot().destination.area).toBe("home");
   await act(async () => c.navigate({ area: "chatgpt" }));
-  expect(
-    host.querySelector(".toolbar .chat-conversations-trigger")?.textContent,
-  ).toContain("Chat conversations");
+  expect(host.querySelector(".toolbar .chat-conversations-trigger")).toBeNull();
 });
 
 // DOM/transport fixtures only. Root owns real native bounds and stacking checks.
@@ -3291,7 +3294,9 @@ it("shows a connected local tunnel separately from an uncertain app check", asyn
   settings.setup.journey.dismissed = true;
   data.configuration.settings = settings;
   const h = await mount(data);
-  expect(h.host.textContent).toContain("Tunnel connected");
+  expect(h.host.querySelector(".rail-connection")?.textContent).toBe(
+    "Connected",
+  );
   expect(h.host.textContent).not.toContain(
     "Connected — ChatGPT can reach this Mac",
   );
