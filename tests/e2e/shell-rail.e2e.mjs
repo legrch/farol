@@ -245,7 +245,7 @@ contextBridge.exposeInMainWorld('farolRecovery',{
 });
 contextBridge.exposeInMainWorld('farol',{
  bootstrap:async()=>snapshot,snapshot:async()=>snapshot,
- operations:async()=>({entries:localStorage.getItem('notification-fixture')==='on'?[{id:'55555555-5555-4555-8555-555555555555',at:1,source:'Setup',kind:'hub.stop',target:{workspace:'Fixture'},outcome:'unknown',code:null,durationMs:1}]:[],corruptLines:0,writeFailures:0,unmappedCodes:0}),
+ ...(localStorage.getItem('notification-fixture')==='on'?{operations:async()=>({entries:[{id:'55555555-5555-4555-8555-555555555555',at:1,source:'Setup',kind:'hub.stop',target:{workspace:'Fixture'},outcome:'unknown',code:null,durationMs:1}],corruptLines:0,writeFailures:0,unmappedCodes:0})}:{}),
  configure:async(command)=>{calls.push(command.kind);if(command.kind==='setup.progress'){snapshot=structuredClone(snapshot);snapshot.configuration.settings.revision++;Object.assign(snapshot.configuration.settings.setup.journey,{currentStep:command.currentStep,dismissed:command.dismissed});return {ok:true,snapshot:snapshot.configuration};}if(command.kind==='chatgpt.observe-sign-in')return {ok:true,snapshot:snapshot.configuration,evidence:{kind:'chatgpt.sign-in-status',observationId:command.observationId,buildId:command.buildId,state:'authenticated',binding:{documentGeneration:0,sequence:1}}};if(command.kind==='chatgpt.verify')return {ok:true,snapshot:snapshot.configuration,evidence:{kind:'chatgpt.readiness',state:'authenticated',code:null}};return {ok:true,snapshot:snapshot.configuration};},
  installedUpdate:async()=>({ok:true,view:{phase:'idle',checkedAt:null}}),
  task:async()=>{throw Error('NO_TASK_EFFECT_ALLOWED')},setNavigationShortcuts:async()=>({ok:true}),
