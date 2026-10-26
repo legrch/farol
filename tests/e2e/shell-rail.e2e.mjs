@@ -65,22 +65,39 @@ async function captureWalkthrough(name) {
     .locator(".walkthrough-cards")
     .evaluate((list) => ({
       viewport: innerWidth,
+      columns: getComputedStyle(list).gridTemplateColumns.split(" ").length,
       width: list.getBoundingClientRect().width,
       height: list.getBoundingClientRect().height,
       overflow: list.scrollWidth > list.clientWidth,
       cards: [...list.children].map((card) => ({
         width: card.getBoundingClientRect().width,
         height: card.getBoundingClientRect().height,
+        x: card.getBoundingClientRect().x,
+        y: card.getBoundingClientRect().y,
       })),
     }));
   assert.equal(geometry.overflow, false, "walkthrough must fit the window");
+  // Wide instructions form one row; the accepted container layout stacks
+  // all three cards when narrow. Overall height is intentionally responsive.
+  assert.equal(geometry.cards.length, 3);
+  assert.equal(geometry.columns, geometry.width <= 580 ? 1 : 3);
   assert.ok(
-    geometry.cards.length === 3 &&
-      geometry.height >= 60 &&
-      geometry.height <= 155 &&
-      geometry.cards.every((card) => card.height >= 44 && card.width > 0),
-    "three compact instruction cards fit the window with accessible controls",
+    geometry.cards.every(
+      (card) =>
+        card.height >= 44 && card.width > 0 && card.width <= geometry.width,
+    ),
   );
+  for (let index = 1; index < geometry.cards.length; index++) {
+    const prior = geometry.cards[index - 1],
+      card = geometry.cards[index];
+    if (geometry.columns === 1) {
+      assert.equal(card.x, prior.x);
+      assert.ok(card.y >= prior.y + prior.height);
+    } else {
+      assert.equal(card.y, prior.y);
+      assert.ok(card.x >= prior.x + prior.width);
+    }
+  }
   report.walkthroughGeometry.push({ name, ...geometry });
   await capture(page, name);
 }
