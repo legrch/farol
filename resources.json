@@ -2,7 +2,7 @@
   "schema": "farol.resource-manifest/1",
   "product": {
     "name": "Farol",
-    "version": "0.2.8-owner.beta.10",
+    "version": "3.0.0-owner.beta.1",
     "bundleId": "io.github.legrch.farol",
     "updateChannel": "github-owner-beta"
   },
