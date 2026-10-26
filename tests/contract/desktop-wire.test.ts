@@ -468,16 +468,23 @@ async function fixture(
 it("preserves settings delivery after a native pipe reply waits through an event-loop stall", async () => {
   // Real child/stdout and blocked Node event loop; the peer's empty Go-style
   // reply is controlled. This is not Electron dialog or live Go acceptance.
-  const { client } = await fixture(`
+  const { client, child } = await fixture(`
 const context={profileId:'test',backendGeneration:'verified'};
 function send(req,data){const body=Buffer.from(JSON.stringify({jsonrpc:'2.0',id:req.id,result:{status:'ok',requestId:req.id,context,data}}));const h=Buffer.alloc(4);h.writeUInt32BE(body.length);process.stdout.write(Buffer.concat([h,body]));}
 let input=Buffer.alloc(0),polls=0,held;
 process.stdin.on('data',chunk=>{input=Buffer.concat([input,chunk]);while(input.length>=4){const n=input.readUInt32BE();if(input.length<4+n)return;const req=JSON.parse(input.subarray(4,4+n));input=input.subarray(4+n);
 if(req.method==='core.handshake')send(req,{protocolMajor:1,protocolMinor:0,buildId:'k0-test',profileId:'test',backendGeneration:'verified',capabilities:[],maxFrameBytes:1048576});
-else if(req.method==='computer.settings.store.next'){if(++polls===1)send(req,{});else held=req;}
+else if(req.method==='computer.settings.store.next'){if(++polls===1)send(req,{});else {held=req;process.stderr.write('second-poll-held\\n');}}
 else if(req.method==='core.status'){if(held){send(held,{});held=undefined;}send(req,{polls});}
 }});
 `);
+  let secondPollHeld = false;
+  let diagnostic = "";
+  const observePoll = (chunk: Buffer) => {
+    diagnostic += chunk.toString();
+    secondPollHeld = diagnostic.includes("second-poll-held\n");
+  };
+  child.stderr?.on("data", observePoll);
   let fences = 0;
   let physicalCalls = 0;
   const pump = new SettingsStorePump(client, {
@@ -505,7 +512,12 @@ else if(req.method==='core.status'){if(held){send(held,{});held=undefined;}send(
     );
     pump.start();
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 16000);
-    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    // Wait for the actual original peer to receive the second poll. A fixed
+    // 20 ms delay also raced the parent's pending pipe IO under host load.
+    await vi.waitFor(() => expect(secondPollHeld).toBe(true), {
+      timeout: 3000,
+      interval: 10,
+    });
     expect(pump.state).toBe("running");
     expect(fences).toBe(0);
     expect(physicalCalls).toBe(0);
@@ -516,6 +528,7 @@ else if(req.method==='core.status'){if(held){send(held,{});held=undefined;}send(
     expect(pump.state).toBe("stopped");
     expect(fences).toBe(1);
   } finally {
+    child.stderr?.off("data", observePoll);
     await client.close();
     await pump.stop();
   }
