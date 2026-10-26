@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { observeOperation } from "../../apps/desktop/operations/observe";
+import type { OperationsRecorder } from "../../apps/desktop/renderer/operations-contract";
+import { drainOwnedChildren } from "../../src/apps/desktop/quit-drain";
 import {
   drainComputerConnector,
   type ComputerConnectorDrainPorts,
@@ -62,6 +65,152 @@ function fixture(options: FixtureOptions = {}) {
 }
 
 describe("Computer connector drain", () => {
+  // Controlled ports only: no live connector, process, lease or cleanup proof.
+  it("keeps a classified connector failure unconfirmed in the Quit receipt", async () => {
+    const f = fixture({
+      waitForMcpStop: async () => {
+        throw Error("COMPUTER_MCP_INSTANCE_CLEANUP_UNVERIFIED");
+      },
+    });
+    await expect(
+      drainOwnedChildren(
+        [{ name: "connector", close: () => drainComputerConnector(f.ports) }],
+        1000,
+      ),
+    ).resolves.toEqual({ drained: false, unconfirmed: ["connector"] });
+    expect(f.ports.stopConnector).toHaveBeenCalledOnce();
+    expect(f.ports.closeSavedChat).toHaveBeenCalledOnce();
+    expect(f.ports.confirmStop).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "COMPUTER_MCP_INSTANCE_CLEANUP_UNVERIFIED",
+    "COMPUTER_MCP_SHELL_CLEANUP_UNVERIFIED",
+    "COMPUTER_MCP_LIFECYCLE_STOP_UNVERIFIED",
+    "COMPUTER_MCP_LIFECYCLE_UNVERIFIED",
+    "CONNECTOR_STOP_UNCONFIRMED",
+  ])(
+    "records the exact local %s without confirming or retrying Stop",
+    async (code) => {
+      const error = new Error(code, { cause: Error("PRIVATE_CAUSE") });
+      const f = fixture({
+        waitForMcpStop: async () => {
+          throw error;
+        },
+      });
+      const recorder = { record: vi.fn() } satisfies OperationsRecorder;
+      const metadata = {
+        source: "You",
+        kind: "connection.stop",
+        target: {},
+      } as const;
+      await expect(
+        observeOperation(recorder, metadata, () =>
+          drainComputerConnector(f.ports),
+        ),
+      ).rejects.toMatchObject({ code, state: "outcome_unknown", cause: error });
+      expect(recorder.record).toHaveBeenCalledExactlyOnceWith(
+        metadata,
+        "unknown",
+        code,
+        expect.any(Number),
+      );
+      expect(JSON.stringify(recorder.record.mock.calls)).not.toContain(
+        "PRIVATE_CAUSE",
+      );
+      expect(f.events).toEqual([
+        "beginStop",
+        "waitForMcpStop",
+        "stopConnector",
+        "closeSavedChat",
+      ]);
+      expect(f.ports.confirmStop).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    "beginStop",
+    "stopConnector",
+    "closeSavedChat",
+    "confirmStop",
+  ] as const)(
+    "retains an unconfirmed reason from %s without making it a successful Quit",
+    async (stage) => {
+      const error = Error("CONNECTOR_STOP_UNCONFIRMED");
+      const f = fixture({
+        [stage]: async () => {
+          throw error;
+        },
+      });
+      const recorder = { record: vi.fn() } satisfies OperationsRecorder;
+      await expect(
+        observeOperation(
+          recorder,
+          { source: "You", kind: "connection.stop", target: {} },
+          () => drainComputerConnector(f.ports),
+        ),
+      ).rejects.toMatchObject({
+        code: "CONNECTOR_STOP_UNCONFIRMED",
+        cause: error,
+      });
+      expect(recorder.record.mock.calls[0]?.slice(1, 3)).toEqual([
+        "unknown",
+        "CONNECTOR_STOP_UNCONFIRMED",
+      ]);
+      expect(f.ports[stage]).toHaveBeenCalledOnce();
+      expect(f.ports.closeSavedChat).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    "PRIVATE_ERROR /Users/private/file",
+    "CONNECTOR_STOP_UNCONFIRMED extra",
+    "PHYSICAL_TERMINAL_CONFIRMED",
+  ])(
+    "keeps an opaque error unchanged and out of Operations: %s",
+    async (message) => {
+      const error = Error(message);
+      const f = fixture({
+        waitForMcpStop: async () => {
+          throw error;
+        },
+      });
+      const recorder = { record: vi.fn() } satisfies OperationsRecorder;
+      await expect(
+        observeOperation(
+          recorder,
+          { source: "You", kind: "connection.stop", target: {} },
+          () => drainComputerConnector(f.ports),
+        ),
+      ).rejects.toBe(error);
+      expect(recorder.record.mock.calls[0]?.slice(1, 3)).toEqual([
+        "unknown",
+        "OPERATION_OUTCOME_UNKNOWN",
+      ]);
+      expect(JSON.stringify(recorder.record.mock.calls)).not.toContain(message);
+      expect(f.ports.confirmStop).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not invoke an exception message getter", async () => {
+    const error = Error();
+    const message = vi.fn(() => "COMPUTER_MCP_INSTANCE_CLEANUP_UNVERIFIED");
+    Object.defineProperty(error, "message", { get: message });
+    const f = fixture({
+      waitForMcpStop: async () => {
+        throw error;
+      },
+    });
+    let caught: unknown;
+    try {
+      await drainComputerConnector(f.ports);
+    } catch (failure) {
+      caught = failure;
+    }
+    expect(caught === error).toBe(true);
+    expect(message).not.toHaveBeenCalled();
+  });
+
   it("admits stop before awaiting the same in-flight start", async () => {
     const admission = deferred<void>();
     const start = deferred<void>();

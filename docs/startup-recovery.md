@@ -102,3 +102,51 @@ paths, provider output, predecessor drain or invented child terminal facts are
 recorded. These diagnostic receipts are not a replacement for the existing Go
 maintenance completion/ACK/terminal contract or authority to settle old UNKNOWN.
 No receipt is backfilled for a historical attempt whose outcome was lost.
+
+## Unconfirmed connector Quit: diagnostic and later recovery boundary
+
+`drainComputerConnector` preserves a small closed set of local cleanup error
+codes for Operations while retaining `outcome_unknown`. It recognizes only an
+exact own Error message data property; unknown text, getters, stacks and causes
+are not added to Operations. Its cleanup ordering and final confirmation gates
+are unchanged. A later cleanup exception can still supersede an earlier failure
+under that ordering; the recorded code identifies the propagated failure, not
+every preceding cause. This diagnostic change cannot recover an exception lost
+by an older build or turn an existing failed Quit into a clean one.
+
+The following is a prospective plan, not an executed recovery or a new admission
+route. Apply it only under a separately scoped runtime grant:
+
+1. Pin the original failed run, failed Quit, Settings, physical roots, journals
+   and prior maintenance receipts. Preserve their bytes and UNKNOWN records.
+   A previous clean Quit, a dead numeric PID or absent processes cannot substitute
+   for the original owner's verified terminal/drain. Correlate process start,
+   writer, executable and generation; PID reuse does not transfer ownership.
+2. Inspect the existing selection/maintenance contract against those exact
+   identities before considering a constructor or maintenance effect. Admission
+   must retain the original promotion lease/native handle, owner/work absence,
+   Computer fence, roots/journals, pending/archive guards and all required
+   handoff/ACK/terminal witnesses. An old UNKNOWN attempt is not SAFE_TO_APPLY.
+   If the native contract cannot qualify the actual state, stop with its exact
+   blocker; do not remove markers, waive descendants or repair journals.
+3. If separately admitted, use only the existing
+   `selectStartupPreservedRecovery` → `runStartupPreservedMaintenance` path once,
+   with its write-ahead receipt and exact discovery/preparation correlation.
+   Preserve the original failed run and UNKNOWN. An ambiguous result stops this
+   route without retry. Read-only Recovery availability remains separate from
+   `primary-started` or successful retirement.
+4. Build only after the existing shared-output ownership preflight admits the
+   exact checkout/profile and no original writer owns those outputs. Do not
+   bypass `DEV_BUILD_LIVE_OUTPUTS_REFUSED`, substitute another profile to hide
+   the owner, or rebuild underneath it. A dependency cycle between admissible
+   recovery and build is a blocker to resolve explicitly, not permission to
+   modify the retained profile. Use clean committed bytes and the ordinary
+   build/package entrypoints with their source/resource attestation intact.
+5. Qualify the new build independently on disposable native fixtures before
+   any admitted preserved-profile launch. Then require actual normal readiness,
+   exact child terminal/drain and a fresh clean Quit receipt. Package, installed,
+   live connector and update acceptance remain independent gates.
+
+Offline contract tests demonstrate diagnostic projection and refusal propagation
+through controlled ports. They do not establish original-child cleanup, native
+leases, arbitrary interrupted-effect recovery or any successful live handoff.
