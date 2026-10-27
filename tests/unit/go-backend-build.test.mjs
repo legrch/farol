@@ -1110,17 +1110,21 @@ describe("owned temporary build directories", () => {
       (name) => name.startsWith("go-dev-control-"),
     );
 
-  it("removes the development stop helper scratch when its build fails", async () => {
-    const f = await fixture();
-    await fs.writeFile(path.join(f.sdk, "pkg/tool/compiler"), "modified");
-    await expect(
-      buildDevControl(f.root, {
-        toolchain: f.toolchain,
-        moduleInputs: f.modules.inputs,
-      }),
-    ).rejects.toThrow("GO_BACKEND_TOOLCHAIN_DIGEST_MISMATCH");
-    expect(await scratch(f.root)).toEqual([]);
-  });
+  // The helper is built only for the host Mac; elsewhere it refuses earlier.
+  it.runIf(process.platform === "darwin" && process.arch === "arm64")(
+    "removes the development stop helper scratch when its build fails",
+    async () => {
+      const f = await fixture();
+      await fs.writeFile(path.join(f.sdk, "pkg/tool/compiler"), "modified");
+      await expect(
+        buildDevControl(f.root, {
+          toolchain: f.toolchain,
+          moduleInputs: f.modules.inputs,
+        }),
+      ).rejects.toThrow("GO_BACKEND_TOOLCHAIN_DIGEST_MISMATCH");
+      expect(await scratch(f.root)).toEqual([]);
+    },
+  );
 
   it("releases exactly one returned owned directory and refuses any other path", async () => {
     const f = await fixture();
