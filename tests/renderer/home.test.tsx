@@ -316,7 +316,7 @@ it("shows a matching earlier ChatGPT verification as history, not current readin
   expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
   expect(h.f.api.configure).not.toHaveBeenCalled();
 });
-it("does not attribute an earlier verification to a different tunnel", async () => {
+it("labels an earlier verification for a different tunnel as previous settings", async () => {
   const value = working();
   if (value.configuration?.status !== "ready")
     throw Error("fixture settings missing");
@@ -328,6 +328,10 @@ it("does not attribute an earlier verification to a different tunnel", async () 
   connector.attachment = null;
   const h = await mount(value);
   expect(h.host.textContent).not.toContain("Last ChatGPT verification:");
+  expect(h.host.textContent).toContain(
+    "Earlier ChatGPT verification (previous settings):",
+  );
+  expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
 });
 it("keeps recorded unknown history out of Home without clearing it", async () => {
   const events = ["one", "two", "three"].map((id) => ({

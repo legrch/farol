@@ -25,22 +25,25 @@ function checkedTime(snapshot: WindowSnapshot) {
     ? date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
     : "time unavailable";
 }
-function previousAppCheck(snapshot: WindowSnapshot): string | null {
+function previousAppCheck(
+  snapshot: WindowSnapshot,
+): { when: string; currentSettings: boolean } | null {
   if (snapshot.configuration?.status !== "ready") return null;
   const settings = snapshot.configuration.settings;
   const connector = settings.connectors.secureMcp;
   const previous = connector.lastVerifiedAttachment;
-  if (
-    !previous ||
-    previous.tunnelId !== connector.tunnelId ||
-    previous.connectorGeneration !== connector.generation ||
-    previous.computerGeneration !== settings.computer.generation ||
-    previous.workspaceId !== connectorWorkspaceSelection(settings) ||
-    selectedConnectorApp(connector) === null
-  )
-    return null;
+  if (!previous) return null;
   const at = new Date(previous.verifiedAt);
-  return Number.isFinite(at.getTime()) ? at.toLocaleString() : null;
+  if (!Number.isFinite(at.getTime())) return null;
+  return {
+    when: at.toLocaleString(),
+    currentSettings:
+      previous.tunnelId === connector.tunnelId &&
+      previous.connectorGeneration === connector.generation &&
+      previous.computerGeneration === settings.computer.generation &&
+      previous.workspaceId === connectorWorkspaceSelection(settings) &&
+      selectedConnectorApp(connector) !== null,
+  };
 }
 function taskStatus(task: WindowSnapshot["tasks"]["tasks"][number]) {
   if (task.agent?.observation === "unavailable") return "Status unavailable";
@@ -261,7 +264,14 @@ export function Home({ snapshot, facade }: Props) {
                     {workspaceCount === 1 ? "workspace" : "workspaces"} ·
                     checked {checkedTime(snapshot)}
                     {!computer.externalAccessVerified && previousCheck && (
-                      <> · Last ChatGPT verification: {previousCheck}</>
+                      <>
+                        {" "}
+                        ·{" "}
+                        {previousCheck.currentSettings
+                          ? "Last ChatGPT verification"
+                          : "Earlier ChatGPT verification (previous settings)"}
+                        : {previousCheck.when}
+                      </>
                     )}
                   </>
                 )}
