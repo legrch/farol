@@ -1157,6 +1157,13 @@ async function runScenario(scenario) {
         syntheticSendCount: sendCount,
         liveSendCount: 0,
       };
+      const initialCheck = await poll(
+        settledVerification,
+        (value) => value !== null,
+        "AUTO_HOME_INITIAL_CHECK_UNSETTLED",
+      );
+      assert.equal(initialCheck.outcome, "done");
+      let previousVerification = initialCheck.lifecycle.id;
       await quit();
       let previousBackend = completed.backendGeneration;
       for (const ordinal of [1, 2]) {
@@ -1273,6 +1280,30 @@ async function runScenario(scenario) {
           () => readSetupSettings(page),
           (v) => v.connectors.secureMcp.attachment !== null,
           "AUTO_HOME_FRESH_ATTACHMENT_NOT_CONFIRMED",
+          30000,
+        );
+        // A receipt is published before the enclosing check and renderer
+        // observations settle. Do not Quit an active automatic check.
+        const automaticCheck = await poll(
+          settledVerification,
+          (value) =>
+            value !== null && value.lifecycle.id !== previousVerification,
+          "AUTO_HOME_CHECK_UNSETTLED",
+          30000,
+        );
+        assert.equal(automaticCheck.outcome, "done");
+        previousVerification = automaticCheck.lifecycle.id;
+        await poll(
+          () =>
+            page.evaluate(() => ({
+              warning: document.querySelector(".home-health-warning") !== null,
+              badge: document
+                .querySelector('.rail [aria-label="Setup"]')
+                ?.getAttribute("title"),
+            })),
+          (value) =>
+            !value.warning && value.badge?.includes("4 of 4 checks current"),
+          "AUTO_HOME_RENDERER_CHECK_UNSETTLED",
           30000,
         );
         const observed = await page.evaluate(async () => {
