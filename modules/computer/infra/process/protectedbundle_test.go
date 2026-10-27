@@ -453,8 +453,15 @@ func TestProtectedBundleSelectionDigestAndOriginalDeadline(t *testing.T) {
 
 // The no-bundle root-scoped class includes ordinary-Git config metadata and
 // the exact uname reads. Nil bundle and disabled mount-boundary fields stay omitted.
+// Unapproved user Git config now selects /dev/null and scratch XDG config. This
+// intentionally changes the invocation/selection digest, not the profile or
+// support digests. The frozen selection below includes that narrower environment.
 func TestProtectedBundleNilPreservesFrozenBaselineDigests(t *testing.T) {
 	f := platformFixtureCPU(t)
+	if f.policy.UserGitSettings || !slices.Contains(f.original.Environment, "GIT_CONFIG_GLOBAL=/dev/null") ||
+		!slices.Contains(f.original.Environment, "XDG_CONFIG_HOME="+f.policy.Scratch) {
+		t.Fatal("frozen unapproved selection omitted the explicit config restriction")
+	}
 	strategy := f.strategy(t)
 	selected, err := strategy.Select(context.Background(), f.policy, f.original, f.watchdog)
 	if err != nil {
@@ -466,7 +473,7 @@ func TestProtectedBundleNilPreservesFrozenBaselineDigests(t *testing.T) {
 	}
 	if plan.digest != "3aee32564e93dfe3948599bf93a5cf7ce105f9622a5111e02a238f8b15c55e9a" ||
 		strategy.Binding().SupportSHA256 != "d4fedcdb8be2faef765b57e849add5738d2e6299b462634ef1d4d4ea2169e84b" ||
-		selected.Binding().SelectionSHA256 != "64a12d98a655d67aba35f60d4971cbddaf9a577e446d54cd15da131ff3adca57" {
+		selected.Binding().SelectionSHA256 != "684537ecc4ae70c14274fccb7e501c2e3ef32e2d33d9242b8744407788ed3794" {
 		t.Fatalf("nil bundle altered frozen baseline digests: profile=%s support=%s selection=%s", plan.digest, strategy.Binding().SupportSHA256, selected.Binding().SelectionSHA256)
 	}
 }
