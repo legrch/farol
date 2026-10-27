@@ -4,11 +4,11 @@ Farol makes selected local resources available to a connected ChatGPT app. Folde
 
 ## Folder and command boundaries
 
-You approve workspaces and saved read or write access in Farol. A model cannot expand those grants by asking for another path. **Read & write** still requires approval for changes. Empty workspace selection grants no file access.
+You approve workspaces and saved read or write access in Farol. A model cannot expand those grants by asking for another path. ChatGPT manages action confirmations; Farol enforces the saved workspace access. Empty workspace selection grants no file access.
 
 Use a narrow project folder and review exclusions. Approved roots may contain sensitive material; Farol does not promise to identify every secret by filename. Path containment is not object-level confidentiality: hardlink aliases and Git history can expose content beyond what a current-file view suggests. Read-only limits allowed changes, not disclosure of readable data.
 
-Shell, full Git/history/user-settings access and networking are separate authority boundaries. Their source controls do not establish [installed/live qualification](file-and-shell.md). Git history can contain older excluded data, and hooks/configuration can affect commands. Git SSH is not a shipped capability claim.
+Selecting **Commands** includes Git history, hooks and user Git settings for the approved workspaces. File read/write access remains separate, and networking is separately restricted. These source controls do not establish [installed/live qualification](file-and-shell.md). Git history can contain older excluded data, and hooks/configuration can affect commands. Git SSH is not a shipped capability claim.
 
 ## Credentials and browser state
 
