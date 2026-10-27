@@ -3,6 +3,7 @@
 This is the engineering entrypoint. Ordinary users should start with [installation status](../start/installation.md) and [the connection guide](../start/first-connection.md).
 
 - [Source setup](setup.md) — pinned toolchains, declared Go inputs and ordinary Farol Dev.
+- [Output retention](output-retention.md) — who removes which disk output, budgets and `task disk:status`.
 - [Contributing](contributing.md) — scope, checkpoints and review.
 - [Pull request checks and tagged releases](ci.md) — CI status checks, native coverage, and the tagged release flow.
 - [Standalone build](../standalone-build.md) — compiler and dependency verification.

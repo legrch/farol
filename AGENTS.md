@@ -99,6 +99,12 @@ identities. See [identity cutover](docs/identity-cutover.md).
   outcome-unknown effect.
 - The owner guard is a fingerprint, not a sandbox; a changed protected path fails
   a gate. It must not import or invoke a V0 implementation.
+- **Disk hygiene:** whoever creates output removes it in teardown, including on
+  failure and cancellation. Do not keep local copies of packages, installed apps
+  or retired images: rollback comes from the GitHub Release asset and its digest.
+  Do not hand-create Docker volumes; use `testops.py volumes`. Run
+  `task disk:status` before finishing a task. See
+  [output retention](docs/development/output-retention.md).
 - Never commit credentials, tokens, authentication state, browser profiles,
   private prompts/transcripts, caches, or vendor runtime state.
 - **Public-source delivery:** the owner approved publishing source/history to `legrch/farol` on 11 October 2026. Before public publication, inspect the outgoing range and scan source/history for credentials, authentication state, private prompts/transcripts, browser profiles, caches, vendor runtime state and unrelated personal data. Preserve local evidence and recovery bundles privately. New or changed remotes, GitHub rename/create, visibility changes, installation, activation, release, signing and licensing require a separate explicit owner decision.

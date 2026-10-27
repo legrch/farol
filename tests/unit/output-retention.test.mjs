@@ -1,0 +1,175 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  OWNER_FILE,
+  POLICY,
+  PROTECTED_EVIDENCE,
+  inspectOutput,
+  pruneOutput,
+} from "../../tooling/output-retention.mjs";
+
+const DAY = 24 * 60 * 60 * 1000;
+const NOW = Date.parse("2026-10-27T12:00:00Z");
+const START = "Tue Oct 27 10:00:00 2026";
+
+// Real disposable filesystem; the process table is an injected observation.
+describe("_output retention", () => {
+  let root, output;
+  beforeEach(async () => {
+    root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-output-")),
+    );
+    output = path.join(root, "_output");
+    await fs.mkdir(path.join(output, "tmp"), { recursive: true });
+    await fs.mkdir(path.join(output, "evidence"), { recursive: true });
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  async function entry(relative, { ageDays = 0, bytes = 16, owner } = {}) {
+    const directory = path.join(output, relative);
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(path.join(directory, "data"), Buffer.alloc(bytes));
+    if (owner)
+      await fs.writeFile(
+        path.join(directory, OWNER_FILE),
+        JSON.stringify({ schema: 1, ...owner }),
+      );
+    const time = new Date(NOW - ageDays * DAY);
+    for (const name of await fs.readdir(directory))
+      await fs.utimes(path.join(directory, name), time, time);
+    await fs.utimes(directory, time, time);
+    return directory;
+  }
+  const observe = (processes = [], open = []) => ({ processes, open });
+  const prune = (observation, policy = POLICY) =>
+    pruneOutput(root, { observation, now: NOW, policy });
+  const exists = (directory) =>
+    fs.lstat(directory).then(
+      () => true,
+      () => false,
+    );
+
+  it("removes owned scratch only once its owner, group and users are gone", async () => {
+    const owner = { pid: 4242, pgid: 4240, start: START };
+    const gone = await entry("tmp/go-dev-control-AAAAAA", { owner });
+    const running = await entry("tmp/go-dev-control-BBBBBB", {
+      owner: { ...owner, pid: 4343 },
+    });
+    const child = await entry("tmp/go-dev-control-CCCCCC", {
+      owner: { ...owner, pgid: 5000 },
+    });
+    const opened = await entry("tmp/go-dev-control-DDDDDD", {
+      owner: { ...owner, pgid: 6000 },
+    });
+    const unowned = await entry("tmp/retirement-boot-123", { ageDays: 30 });
+    const result = await prune(
+      observe(
+        [
+          { pid: 4343, pgid: 1, start: START, command: "node" },
+          // The creator was killed; its child in the same group lives on.
+          { pid: 5001, pgid: 5000, start: START, command: "go test" },
+        ],
+        [path.join(opened, "data")],
+      ),
+    );
+    expect(await exists(gone)).toBe(false);
+    for (const kept of [running, child, opened, unowned])
+      expect(await exists(kept)).toBe(true);
+    expect(
+      result.entries.find(({ path: item }) => item === unowned).state,
+    ).toBe("unknown");
+  });
+
+  it("treats a reused pid with a different start time as a finished owner", async () => {
+    const reused = await entry("tmp/go-artifact-EEEEEE", {
+      owner: { pid: 77, pgid: 77, start: START },
+    });
+    await prune(
+      observe([
+        { pid: 77, pgid: 9, start: "Tue Oct 27 11:59:00 2026", command: "x" },
+      ]),
+    );
+    expect(await exists(reused)).toBe(false);
+  });
+
+  it("never removes declared evidence, however old or large", async () => {
+    const declared = await Promise.all(
+      PROTECTED_EVIDENCE.map((name) =>
+        entry(`evidence/${name}`, { ageDays: 90 }),
+      ),
+    );
+    await prune(observe(), { ...POLICY, evidenceCapBytes: 0 });
+    for (const directory of declared)
+      expect(await exists(directory)).toBe(true);
+  });
+
+  it("expires finished undeclared evidence and enforces the cap oldest first", async () => {
+    const expired = await entry("evidence/old-run", { ageDays: 8 });
+    const older = await entry("evidence/older-week", {
+      ageDays: 3,
+      bytes: 64 * 1024,
+    });
+    const newer = await entry("evidence/newer-week", {
+      ageDays: 1,
+      bytes: 64 * 1024,
+    });
+    await prune(observe(), { ...POLICY, evidenceCapBytes: 100 * 1024 });
+    expect(await exists(expired)).toBe(false);
+    expect(await exists(older)).toBe(false);
+    expect(await exists(newer)).toBe(true);
+  });
+
+  it("keeps undeclared evidence a live writer still uses, even over the cap", async () => {
+    const written = await entry("evidence/writing-now", { ageDays: 0 });
+    const held = await entry("evidence/held-open", { ageDays: 9 });
+    const named = await entry("evidence/named-in-argv", { ageDays: 9 });
+    await prune(
+      observe(
+        [{ pid: 1, pgid: 1, start: START, command: `node script ${named}` }],
+        [path.join(held, "data")],
+      ),
+      { ...POLICY, evidenceCapBytes: 0 },
+    );
+    for (const directory of [written, held, named])
+      expect(await exists(directory)).toBe(true);
+    // Once the writer has finished, the same entry becomes removable.
+    await prune(observe(), { ...POLICY, evidenceCapBytes: 0 });
+    for (const directory of [held, named])
+      expect(await exists(directory)).toBe(false);
+  });
+
+  it("keeps everything when the process table cannot be read", async () => {
+    const scratch = await entry("tmp/go-dev-control-FFFFFF", {
+      owner: { pid: 1, pgid: 1, start: START },
+    });
+    const old = await entry("evidence/old-run", { ageDays: 30 });
+    await pruneOutput(root, { observation: null, now: NOW });
+    expect(await exists(scratch)).toBe(true);
+    expect(await exists(old)).toBe(true);
+  });
+
+  it("reports top-level entries no producer owns without removing them", async () => {
+    const legacy = await entry("preserved-package-old", { ageDays: 60 });
+    await entry("build/app");
+    const report = await inspectOutput(root, {
+      observation: observe(),
+      now: NOW,
+    });
+    const states = Object.fromEntries(
+      report.entries.map(({ path: item, state }) => [
+        path.relative(output, item),
+        state,
+      ]),
+    );
+    expect(states).toMatchObject({
+      "preserved-package-old": "unknown",
+      build: "current",
+    });
+    await prune(observe());
+    expect(await exists(legacy)).toBe(true);
+  });
+});
