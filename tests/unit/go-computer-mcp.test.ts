@@ -2071,3 +2071,82 @@ it.each(
     );
   },
 );
+
+it.each(["computer_shell_read", "computer_shell_cancel"] as const)(
+  "records the completed %s handler without promoting process state",
+  async (name) => {
+    const record = vi.fn();
+    const processes: NonNullable<GoComputerMcpOptions["processes"]> = {
+      start: async () => {
+        throw Error("unused fixture start");
+      },
+      read: async (input, call) => ({
+        status: "ok",
+        requestId: call.requestId,
+        context: call.context,
+        operationId: input.operationId,
+        data: {
+          execution: binding,
+          callId: call.requestId,
+          operationId: input.operationId,
+          handle: input.handle,
+          state: "running",
+          rootState: "running",
+          rootWaited: false,
+          supervisorState: "running",
+          exitSignal: 0,
+          groupCleanup: "pending",
+          descendantCleanup: "pending",
+          stdoutBase64: "",
+          stderrBase64: "",
+          stdoutOffset: "0",
+          stderrOffset: "0",
+          stdoutNext: "0",
+          stderrNext: "0",
+          stdoutBytes: "0",
+          stderrBytes: "0",
+          outputLimitReached: false,
+          outputDrained: false,
+          cancelRequested: false,
+          timedOut: false,
+          authorityLost: false,
+        },
+      }),
+      cancel: async (input, cancelOperationId, call) => ({
+        status: "ok",
+        requestId: call.requestId,
+        context: call.context,
+        operationId: input.operationId,
+        cancelOperationId,
+        data: {
+          execution: binding,
+          callId: call.requestId,
+          operationId: input.operationId,
+          handle: input.handle,
+          cancelOperationId,
+          status: "requested",
+        },
+      }),
+    };
+    const { client } = await setup({ processes, operations: { record } });
+    const result = await client.callTool({
+      name,
+      arguments: {
+        operationId: "process-operation",
+        handle: "original-handle",
+        ...(name === "computer_shell_cancel"
+          ? { cancelOperationId: "cancel-operation" }
+          : {}),
+      },
+    });
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record.mock.calls[0]?.slice(1, 3)).toEqual(["done", null]);
+    expect(result.structuredContent).toMatchObject({
+      status: "ok",
+      data:
+        name === "computer_shell_read"
+          ? { state: "running" }
+          : { status: "requested" },
+    });
+  },
+);

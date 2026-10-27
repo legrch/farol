@@ -2,7 +2,7 @@ import type {
   OperationMetadata,
   OperationsRecorder,
 } from "../renderer/operations-contract";
-import { operationResult } from "../operations/observe";
+import { observedOperationResult } from "../operations/observe";
 import { randomUUID } from "node:crypto";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
@@ -409,7 +409,10 @@ export function createGoComputerMcpServer(
         retainUnknown();
       }
     }
-    const recorded = operationResult(result.structuredContent);
+    const recorded = observedOperationResult(
+      metadata.kind,
+      result.structuredContent,
+    );
     finish(recorded.outcome, recorded.code, performance.now() - started);
     return result;
   };

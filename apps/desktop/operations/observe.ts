@@ -150,6 +150,34 @@ export function operationResult(value: unknown): {
     return { outcome: "unknown", code: code ?? "OPERATION_RESULT_UNCONFIRMED" };
   return { outcome: "done", code };
 }
+/** Classify a completed tool request without promoting the process it observes. */
+export function observedOperationResult(
+  kind: string,
+  value: unknown,
+): ReturnType<typeof operationResult> {
+  const result = object(value),
+    data = object(result.data);
+  if (
+    result.status === "ok" &&
+    kind === "computer_shell_read" &&
+    data.state === "running"
+  )
+    return operationResult({
+      ...result,
+      data: { ...data, state: "completed" },
+    });
+  if (
+    result.status === "ok" &&
+    kind === "computer_shell_cancel" &&
+    data.status === "requested"
+  )
+    return operationResult({
+      ...result,
+      data: { ...data, status: "completed" },
+    });
+  return operationResult(value);
+}
+
 /** Observe settlement without replacing the action's promise or admitting work. */
 export function observeOperation<T>(
   recorder: OperationsRecorder,
@@ -194,23 +222,7 @@ export function observeOperation<T>(
           ? operationResult({ ...classified, status: "completed" })
           : metadata.kind === "connection.health" && value === false
             ? operationResult({ code: "CONNECTION_HEALTH_FAILED" })
-            : classified.status === "ok" &&
-                metadata.kind === "computer_shell_read" &&
-                object(classified.data).state === "running"
-              ? operationResult({
-                  ...classified,
-                  data: { ...object(classified.data), state: "completed" },
-                })
-              : classified.status === "ok" &&
-                  metadata.kind === "computer_shell_cancel" &&
-                  object(classified.data).status === "requested"
-                ? // The tool request completed. Its ACK is not process-exit or
-                  // cleanup proof; those facts remain on the original handle.
-                  operationResult({
-                    ...classified,
-                    data: { ...object(classified.data), status: "completed" },
-                  })
-                : operationResult(value);
+            : observedOperationResult(metadata.kind, value);
       finish(result.outcome, result.code, performance.now() - start);
     } catch {
       // The observer cannot replace settlement, including the original error.
