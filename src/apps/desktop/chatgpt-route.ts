@@ -457,16 +457,17 @@ export function collapseChatGptSidebarScript(): string {
     let lastAttempt = 0;
     let stopped = false;
     let timer;
+    const ownerInputKinds = ["pointerdown", "pointerover", "pointermove", "keydown"];
     const ownerInput = (event) => { if (event.isTrusted) stop(); };
     const stop = () => {
       if (stopped) return;
       stopped = true;
       clearInterval(timer);
-      for (const kind of ["pointerdown", "pointerover", "keydown"]) document.removeEventListener(kind, ownerInput, true);
+      for (const kind of ownerInputKinds) document.removeEventListener(kind, ownerInput, true);
       if (globalThis[cancelKey] === stop) delete globalThis[cancelKey];
     };
     globalThis[cancelKey] = stop;
-    for (const kind of ["pointerdown", "pointerover", "keydown"]) document.addEventListener(kind, ownerInput, true);
+    for (const kind of ownerInputKinds) document.addEventListener(kind, ownerInput, true);
     timer = setInterval(() => {
       if (stopped) return;
       if (Date.now() > deadline) { stop(); return; }

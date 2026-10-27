@@ -917,7 +917,7 @@ it.each([false, true])(
   },
 );
 
-it.each(["pointerdown", "pointerover", "keydown"])(
+it.each(["pointerdown", "pointerover", "pointermove", "keydown"])(
   "stops delayed hydration collapse on trusted owner %s",
   (eventKind) => {
     let tick: (() => void) | null = null;
@@ -945,7 +945,8 @@ it.each(["pointerdown", "pointerover", "keydown"])(
     expect(tick).not.toBeNull();
     pointer!({ isTrusted: true });
     expect(tick).toBeNull();
-    expect(remove).toHaveBeenCalledWith("pointerdown", pointer, true);
+    for (const kind of ["pointerdown", "pointerover", "pointermove", "keydown"])
+      expect(remove).toHaveBeenCalledWith(kind, pointer, true);
   },
 );
 
