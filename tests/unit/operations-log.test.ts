@@ -2972,6 +2972,7 @@ it("reads complete log records across a partial append without inventing corrupt
 
 it.each([
   "same-tail",
+  "same-tail-utf8",
   "foreign-append",
   "foreign-newline",
   "tail-read-failure",
@@ -2979,18 +2980,12 @@ it.each([
   "suppresses an append/read warning only for the completed original tail (%s)",
   async (kind) => {
     let completeDuringRead = false;
-    let remainder = "";
+    let remainder = Buffer.alloc(0);
     const io = {
       ...fs.promises,
       open: async (...args: Parameters<typeof fs.promises.open>) => {
         const handle = await fs.promises.open(...args);
         if (String(args[0]).endsWith(".jsonl")) {
-          if (kind === "tail-read-failure")
-            handle.read = (async () => {
-              throw Object.assign(Error("synthetic read failure"), {
-                code: "EIO",
-              });
-            }) as typeof handle.read;
           const readFile = handle.readFile.bind(handle);
           handle.readFile = (async (
             ...readArgs: Parameters<typeof readFile>
@@ -2999,6 +2994,12 @@ it.each([
             if (completeDuringRead) {
               completeDuringRead = false;
               await fs.promises.appendFile(args[0], remainder);
+              if (kind === "tail-read-failure")
+                handle.read = (async () => {
+                  throw Object.assign(Error("synthetic read failure"), {
+                    code: "EIO",
+                  });
+                }) as typeof handle.read;
             }
             return snapshot;
           }) as typeof handle.readFile;
@@ -3009,48 +3010,66 @@ it.each([
     const { store, directory } = injectedStore(io);
     store.record(metadata, "unknown", "PROCESS_OUTCOME_UNKNOWN", 1);
     await store.flush(5000);
+    const finish = store.begin({
+      source: "You",
+      kind: "connection.start",
+      target: {},
+    });
+    await store.flush(5000);
+    const liveId = (await store.snapshot(5000)).activeLifecycleIds![0]!;
     const file = path.join(directory, segmentFiles(directory)[0]!);
-    const next =
+    const next = Buffer.from(
       JSON.stringify({
         id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         at: 1792670400000,
         source: "ChatGPT",
         kind: "computer_shell_read",
-        target: {},
+        target: { workspace: "Café" },
         outcome: "done",
         code: null,
         durationMs: 1,
-      }) + "\n";
-    const split = Math.floor(next.length / 2);
+      }) + "\n",
+    );
+    const split =
+      kind === "same-tail-utf8"
+        ? next.indexOf(Buffer.from("é")) + 1
+        : Math.floor(next.length / 2);
+    const continuation =
+      kind === "same-tail" ||
+      kind === "same-tail-utf8" ||
+      kind === "tail-read-failure";
     await fs.promises.appendFile(
       file,
-      kind === "same-tail" || kind === "tail-read-failure"
-        ? next.slice(0, split)
-        : "{damaged-tail",
+      continuation ? next.slice(0, split) : "{damaged-tail",
     );
-    remainder =
-      kind === "same-tail" || kind === "tail-read-failure"
-        ? next.slice(split)
-        : (kind === "foreign-newline" ? "\n" : "") + next;
+    remainder = continuation
+      ? next.slice(split)
+      : Buffer.concat([
+          Buffer.from(kind === "foreign-newline" ? "\n" : ""),
+          next,
+        ]);
     completeDuringRead = true;
     const during = await store.snapshot(5000);
     expect(completeDuringRead).toBe(false);
     expect(during).toMatchObject({
       corruptLines: 0,
-      writeFailures: kind === "same-tail" ? 0 : 1,
+      writeFailures: kind === "same-tail" || kind === "same-tail-utf8" ? 0 : 1,
     });
-    expect(during.entries).toHaveLength(1);
+    expect(during.entries).toHaveLength(2);
+    expect(during.activeLifecycleIds).toEqual(
+      kind === "same-tail" || kind === "same-tail-utf8" ? [liveId] : [],
+    );
     expect(during.entries[0]!.outcome).toBe("unknown");
     const after = await store.snapshot(5000);
     expect(after).toMatchObject({
-      corruptLines:
-        kind === "same-tail" || kind === "tail-read-failure" ? 0 : 1,
+      corruptLines: continuation ? 0 : 1,
       writeFailures: 0,
     });
-    expect(after.entries).toHaveLength(kind === "foreign-append" ? 1 : 2);
+    expect(after.entries).toHaveLength(kind === "foreign-append" ? 2 : 3);
     expect(after.entries.some((entry) => entry.outcome === "unknown")).toBe(
       true,
     );
+    finish("unknown", "OPERATION_OUTCOME_UNKNOWN", 1);
   },
 );
 

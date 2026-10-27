@@ -651,7 +651,7 @@ export class OperationsStore implements OperationsRecorder {
               corruptLines++;
               continue;
             }
-            text = await handle.readFile("utf8");
+            const snapshot = await handle.readFile();
             const after = await handle.stat();
             // Growth alone does not repair an invalid tail: an unrelated append
             // can follow durable corruption. Re-read this exact fragment through
@@ -660,11 +660,11 @@ export class OperationsStore implements OperationsRecorder {
               segmentName.test(name) &&
               after.size > stat.size &&
               after.size <= this.limits.segmentBytes + 16384 &&
-              text.length > 0 &&
-              !text.endsWith("\n")
+              snapshot.length > 0 &&
+              snapshot.at(-1) !== 10
             ) {
-              const start = text.lastIndexOf("\n") + 1;
-              const offset = Buffer.byteLength(text.slice(0, start));
+              const offset = snapshot.lastIndexOf(10) + 1;
+              const fragment = snapshot.subarray(offset);
               const size = after.size - offset;
               if (size > 0) {
                 try {
@@ -675,19 +675,23 @@ export class OperationsStore implements OperationsRecorder {
                     size,
                     offset,
                   );
-                  const observed = tail.subarray(0, bytesRead).toString("utf8");
-                  const newline = observed.indexOf("\n");
+                  const observed = tail.subarray(0, bytesRead);
+                  const newline = observed.indexOf(10);
                   if (
                     bytesRead === size &&
                     newline >= 0 &&
-                    observed.slice(0, newline).startsWith(text.slice(start))
+                    newline >= fragment.length &&
+                    observed.subarray(0, fragment.length).equals(fragment)
                   )
-                    completedTail = observed.slice(0, newline);
+                    completedTail = observed
+                      .subarray(0, newline)
+                      .toString("utf8");
                 } catch {
                   // Keep the first snapshot and its warning if tail read fails.
                 }
               }
             }
+            text = snapshot.toString("utf8");
           } finally {
             await handle.close();
           }
