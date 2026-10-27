@@ -156,3 +156,23 @@
     padding: 24px;
   }
 }
+
+.home-progress-spinner {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: home-connection-spin 900ms linear infinite;
+}
+@keyframes home-connection-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .home-progress-spinner {
+    animation: none;
+  }
+}

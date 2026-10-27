@@ -2,6 +2,7 @@ import { useState } from "react";
 import { commandAllowed } from "./command-eligibility";
 import { computerSetup } from "./computer-setup";
 import { setupChecklist } from "./setup-navigation";
+import { connectorVerificationInFlight } from "./setup-gate";
 import { useSetupIntents, retainedSetupIntents } from "./settings";
 import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
 import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
@@ -106,6 +107,41 @@ export function Home({ snapshot, facade }: Props) {
       ? snapshot.configuration.settings.computer.workspaces.length
       : 0;
   const previousCheck = previousAppCheck(snapshot);
+  const appChecking = connectorVerificationInFlight(snapshot, local);
+  const restoring =
+    snapshot.status === "starting" || snapshot.runtime === "starting";
+  const connectionPending = snapshot.activity.some(
+    (entry) =>
+      entry.inFlight === true &&
+      entry.outcome === "pending" &&
+      [
+        "connection.start",
+        "connection.repair",
+        "connector.repair",
+        "connection.health",
+      ].includes(entry.kind),
+  );
+  const progress =
+    !snapshot.independentSession &&
+    (restoring ||
+      checking ||
+      appChecking ||
+      (checklist.completed &&
+        (connectionPending || snapshot.signInObservation?.pending === true)));
+  const progressTitle = restoring
+    ? "Starting Farol…"
+    : appChecking
+      ? "Checking ChatGPT connection…"
+      : connectionPending && !computer.localConnectionCurrent
+        ? "Connecting to this Mac…"
+        : snapshot.signInObservation?.pending === true
+          ? "Checking ChatGPT sign-in…"
+          : "Checking connection…";
+  const progressDetail = restoring
+    ? "Loading your saved setup and connection."
+    : appChecking
+      ? "Waiting for ChatGPT to confirm it can reach this Mac."
+      : "Checking the local connection. Your saved setup stays in place.";
   async function checkNow() {
     const latest = facade.getSnapshot();
     if (
@@ -155,10 +191,33 @@ export function Home({ snapshot, facade }: Props) {
           </div>
         </section>
       ) : null}
-      {checklist.completed &&
-      !working &&
-      !checking &&
-      !snapshot.independentSession ? (
+      {progress ? (
+        <section
+          className="home-status-card home-connection-progress"
+          role="status"
+          aria-live="polite"
+          aria-busy="true"
+          aria-label={progressTitle}
+        >
+          <span className="home-progress-spinner" aria-hidden="true" />
+          <div>
+            <h2>{progressTitle}</h2>
+            <p>{progressDetail}</p>
+          </div>
+          {appChecking ? (
+            <button
+              onClick={() => facade.navigate({ area: "chatgpt", taskId: "" })}
+            >
+              View check
+            </button>
+          ) : checking ? (
+            <button disabled>Checking…</button>
+          ) : null}
+        </section>
+      ) : checklist.completed &&
+        !working &&
+        !checking &&
+        !snapshot.independentSession ? (
         <section
           className="home-status-card home-health-warning"
           aria-label="Connection needs attention"

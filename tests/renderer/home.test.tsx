@@ -354,3 +354,55 @@ it("shows a saved fresh session with limited tools without claiming all tools wo
   expect(h.host.textContent).not.toContain("Farol is working");
   expect(h.host.querySelector(".home-setup-card")).toBeNull();
 });
+
+it("shows calm startup progress instead of a premature connection warning", async () => {
+  const h = await mount({ ...working(), runtime: "starting" });
+  expect(
+    h.host.querySelector('[role="status"][aria-busy="true"]')?.textContent,
+  ).toContain("Starting Farol");
+  expect(h.host.querySelector(".home-health-warning")).toBeNull();
+  expect(h.host.textContent).not.toContain("Farol is working");
+  await h.set({ ...working(), runtime: "failed", status: "stale" });
+  expect(h.host.querySelector(".home-health-warning")).not.toBeNull();
+});
+
+it("shows automatic ChatGPT check progress and reveals the same browser without another test", async () => {
+  const value = working();
+  const pending: ActivityEntry = {
+    ...event("automatic-check", 10),
+    kind: "connector.verify-app",
+    outcome: "pending",
+    source: "Setup",
+    phase: "pending",
+    inFlight: true,
+    lifecycle: { id: crypto.randomUUID(), phase: "started" },
+  };
+  const h = await mount({
+    ...value,
+    setupSignInCheck: null,
+    activity: [pending],
+  });
+  expect(h.host.querySelector(".home-health-warning")).toBeNull();
+  expect(
+    h.host.querySelector(".home-connection-progress")?.textContent,
+  ).toContain("Checking ChatGPT connection");
+  await h.click("View check");
+  expect(h.c.getSnapshot().destination.area).toBe("chatgpt");
+  expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
+    kind: "chatgpt.present-browser",
+  });
+  await h.set({
+    ...value,
+    activity: [
+      {
+        ...event("settled-check", 11),
+        kind: "connector.verify-app",
+        outcome: "refused",
+        code: "CONNECTOR_APP_VERIFICATION_NOT_READY",
+      },
+    ],
+    setupSignInCheck: null,
+  });
+  expect(h.host.querySelector(".home-connection-progress")).toBeNull();
+  expect(h.host.querySelector(".home-health-warning")).not.toBeNull();
+});
