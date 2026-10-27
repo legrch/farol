@@ -479,7 +479,9 @@ try {
       ]),
     ["graphite", "cobalt", "system"],
   );
-  await window.getByRole("button", { name: "Home", exact: true }).click();
+  await window
+    .getByRole("button", { name: "Back to Farol", exact: true })
+    .click();
   await window
     .getByRole("button", { name: "Find a page", exact: true })
     .click();
@@ -497,6 +499,38 @@ try {
   );
   assert.equal(opened.ok, true, JSON.stringify(opened));
   const fixtureHome = await fixtureContents();
+  // A real hidden WebContentsView, with a synthetic page-declared drag region.
+  // This proves computed CSS on the built application; it is not OS hit-testing.
+  const pageDrag = await application.evaluate(async ({ webContents }, id) => {
+    const contents = webContents.fromId(id);
+    if (!contents || contents.isDestroyed())
+      throw Error("FIXTURE_CONTENTS_MISSING");
+    return contents.executeJavaScript(`(() => {
+      const bar = document.createElement('div');
+      const button = document.createElement('button');
+      bar.style.setProperty('-webkit-app-region', 'drag', 'important');
+      button.style.setProperty('-webkit-app-region', 'drag', 'important');
+      bar.append(button);
+      document.body.append(bar);
+      const result = [getComputedStyle(bar).webkitAppRegion, getComputedStyle(button).webkitAppRegion];
+      bar.remove();
+      return result;
+    })()`);
+  }, fixtureHome.id);
+  assert.deepEqual(
+    pageDrag,
+    ["no-drag", "no-drag"],
+    "EMBEDDED_PAGE_DRAG_DISABLED",
+  );
+  assert.equal(
+    await window
+      .locator(".toolbar")
+      .evaluate((element) => getComputedStyle(element).webkitAppRegion),
+    "drag",
+    "HOST_TOOLBAR_DRAG_ENABLED",
+  );
+  report.checks.push("hidden-embedded-page-no-drag-and-host-toolbar-drag");
+  await save();
   assert.equal(
     await application.evaluate(async ({ webContents }, id) => {
       const contents = webContents.fromId(id);
