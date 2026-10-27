@@ -2970,6 +2970,57 @@ it("reads complete log records across a partial append without inventing corrupt
   expect(damaged.entries).toHaveLength(2);
 });
 
+it("does not report an append observed during snapshot read as a failed log write", async () => {
+  let completeDuringRead = false;
+  let remainder = "";
+  const io = {
+    ...fs.promises,
+    open: async (...args: Parameters<typeof fs.promises.open>) => {
+      const handle = await fs.promises.open(...args);
+      if (String(args[0]).endsWith(".jsonl")) {
+        const readFile = handle.readFile.bind(handle);
+        handle.readFile = (async (...readArgs: Parameters<typeof readFile>) => {
+          const snapshot = await readFile(...readArgs);
+          if (completeDuringRead) {
+            completeDuringRead = false;
+            await fs.promises.appendFile(args[0], remainder);
+          }
+          return snapshot;
+        }) as typeof handle.readFile;
+      }
+      return handle;
+    },
+  };
+  const { store, directory } = injectedStore(io);
+  store.record(metadata, "unknown", "PROCESS_OUTCOME_UNKNOWN", 1);
+  await store.flush(5000);
+  const file = path.join(directory, segmentFiles(directory)[0]!);
+  const next =
+    JSON.stringify({
+      id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      at: 1792670400000,
+      source: "ChatGPT",
+      kind: "computer_shell_read",
+      target: {},
+      outcome: "done",
+      code: null,
+      durationMs: 1,
+    }) + "\n";
+  const split = Math.floor(next.length / 2);
+  await fs.promises.appendFile(file, next.slice(0, split));
+  remainder = next.slice(split);
+  completeDuringRead = true;
+  const during = await store.snapshot(5000);
+  expect(completeDuringRead).toBe(false);
+  expect(during).toMatchObject({ corruptLines: 0, writeFailures: 0 });
+  expect(during.entries).toHaveLength(1);
+  expect(during.entries[0]!.outcome).toBe("unknown");
+  const after = await store.snapshot(5000);
+  expect(after).toMatchObject({ corruptLines: 0, writeFailures: 0 });
+  expect(after.entries).toHaveLength(2);
+  expect(after.entries.some((entry) => entry.outcome === "unknown")).toBe(true);
+});
+
 it("keeps a readable historical UNKNOWN tail even without its final newline", async () => {
   const { store, directory } = setup();
   store.record(metadata, "unknown", "PROCESS_OUTCOME_UNKNOWN", 1);

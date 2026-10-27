@@ -638,12 +638,18 @@ export class OperationsStore implements OperationsRecorder {
             fs.constants.O_RDONLY,
           );
           let text: string;
+          let appendObserved = false;
           try {
             if (stat.size > this.limits.segmentBytes + 16384) {
               corruptLines++;
               continue;
             }
             text = await handle.readFile("utf8");
+            // Another process can append while this snapshot reads the same
+            // descriptor. An invalid final fragment then has no terminal loss
+            // witness yet. Stable truncation and malformed complete lines must
+            // still remain visible as logging failures.
+            appendObserved = (await handle.stat()).size > stat.size;
           } finally {
             await handle.close();
           }
@@ -674,10 +680,10 @@ export class OperationsStore implements OperationsRecorder {
                 if (parsed.success) {
                   if (parsed.data.at >= cutoff) entries.push(parsed.data);
                 } else if (!incomplete) corruptLines++;
-                else diagnostics.writeFailures++;
+                else if (!appendObserved) diagnostics.writeFailures++;
               } catch {
                 if (!incomplete) corruptLines++;
-                else diagnostics.writeFailures++;
+                else if (!appendObserved) diagnostics.writeFailures++;
               }
             }
           }
