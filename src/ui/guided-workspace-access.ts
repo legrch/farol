@@ -11,7 +11,9 @@ export interface WorkspaceAccessPlan {
   readonly filePolicy?: "approved-roots-v1";
   readonly commands?: "none" | "verification" | "workspace";
   readonly gitHistoryApproved?: boolean;
+  readonly includeGitWithCommands?: boolean;
   readonly connectWhenConfigured?: boolean;
+  readonly previousRuntimeGeneration?: string;
 }
 export type WorkspaceCommandOutcome = "applied" | "refused" | "unknown";
 
@@ -193,6 +195,11 @@ export class GuidedWorkspaceAccess {
     if (this.unconfirmed) return { ok: false, reason: "unknown" };
     const initial = port.settings();
     const facts = onboardingFacts(initial, port.buildId());
+    const gitApproval =
+      plan.gitHistoryApproved ??
+      (plan.includeGitWithCommands && plan.commands === "workspace"
+        ? true
+        : undefined);
     if (
       !initial ||
       facts.authority !== consent.authority ||
@@ -205,7 +212,9 @@ export class GuidedWorkspaceAccess {
     if (facts.outcomeUnknown) return { ok: false, reason: "unknown" };
     const scope = scopeIdentity(initial);
     const previousRuntimeGeneration =
-      initial.connectors.secureMcp.runtime?.runtimeGeneration ?? null;
+      plan.previousRuntimeGeneration ??
+      initial.connectors.secureMcp.runtime?.runtimeGeneration ??
+      null;
     let generation = initial.computer.generation;
     const current = (): ProductSettings | null => {
       const settings = port.settings();
@@ -346,7 +355,7 @@ export class GuidedWorkspaceAccess {
       }
       // Revocation must land even when the folder can no longer be opened.
       if (
-        plan.gitHistoryApproved === false &&
+        gitApproval === false &&
         current()?.computer.workspaces.find(
           (workspace) => workspace.workspaceId === plan.workspaceId,
         )?.gitHistoryApproved === true
@@ -386,15 +395,15 @@ export class GuidedWorkspaceAccess {
       )
         return { ok: false, reason: "changed" };
       if (
-        plan.gitHistoryApproved !== undefined &&
-        (target.gitHistoryApproved === true) !== plan.gitHistoryApproved
+        gitApproval !== undefined &&
+        (target.gitHistoryApproved === true) !== gitApproval
       ) {
         if (
           !(await run(
             {
               kind: "computer.update-git-history",
               workspaceId: plan.workspaceId,
-              approved: plan.gitHistoryApproved,
+              approved: gitApproval,
             },
             1,
           )) ||
@@ -416,11 +425,43 @@ export class GuidedWorkspaceAccess {
       if (
         !after ||
         !verified ||
-        (plan.gitHistoryApproved !== undefined &&
-          (verified.gitHistoryApproved === true) !== plan.gitHistoryApproved) ||
+        (gitApproval !== undefined &&
+          (verified.gitHistoryApproved === true) !== gitApproval) ||
         !folderAccessChecked(after, verified, port.buildId())
       )
         return { ok: false, reason: "changed" };
+      if (
+        gitApproval === true &&
+        plan.includeGitWithCommands &&
+        plan.commands === "workspace"
+      ) {
+        for (const workspace of after.computer.workspaces) {
+          if (workspace.workspaceId === plan.workspaceId) continue;
+          const saved = current()?.computer.workspaces.find(
+            (item) => item.workspaceId === workspace.workspaceId,
+          );
+          if (saved?.gitHistoryApproved === true) continue;
+          if (
+            !(await run({
+              kind: "computer.verify-workspace",
+              workspaceId: workspace.workspaceId,
+            })) ||
+            !(await run(
+              {
+                kind: "computer.update-git-history",
+                workspaceId: workspace.workspaceId,
+                approved: true,
+              },
+              1,
+            ))
+          )
+            return {
+              ok: false,
+              reason: this.unconfirmed ? "unknown" : "failed",
+              workspaceId: workspace.workspaceId,
+            };
+        }
+      }
       for (const workspace of after.computer.workspaces) {
         if (
           !folderAccessChecked(current()!, workspace, port.buildId()) &&

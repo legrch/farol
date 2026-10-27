@@ -253,19 +253,67 @@ describe("Workspace rows", () => {
     expect(h.f.api.configure).toHaveBeenCalledTimes(1);
     expect(h.button("Continue")?.disabled).toBe(true);
   });
-  it("requires an explicit Git user-settings choice and verifies the existing workspace", async () => {
+  it("reconnects a previously connected tunnel after adding a verified workspace", async () => {
+    let value = readySettings();
+    const h = await mount({ step: "folders", value });
+    h.reply((command) => {
+      value = structuredClone(value);
+      if (command.kind === "computer.choose-workspace")
+        return {
+          ok: true,
+          snapshot: { status: "ready", settings: value },
+          evidence: { kind: "computer.workspace-pick", selectionId },
+        };
+      value.revision++;
+      if (command.kind === "computer.add-workspace") {
+        value.computer.generation++;
+        value.computer.workspaces[0]!.access = "read";
+        value.computer.workspaces[0]!.accessCheck = null;
+        value.connectors.secureMcp.runtime = null;
+        return {
+          ok: true,
+          snapshot: { status: "ready", settings: value },
+          evidence: { kind: "computer.workspace-selection", workspaceId },
+        };
+      }
+      if (command.kind === "computer.verify-workspace") {
+        value.computer.workspaces[0]!.accessCheck = {
+          ...readySettings().computer.workspaces[0]!.accessCheck!,
+          computerGeneration: value.computer.generation,
+          checkId: command.checkId,
+        };
+      }
+      if (command.kind === "connector.start")
+        value.connectors.secureMcp.runtime = {
+          ...readySettings().connectors.secureMcp.runtime!,
+          computerGeneration: value.computer.generation,
+          runtimeGeneration: "e".repeat(64),
+        };
+      return { ok: true, snapshot: { status: "ready", settings: value } };
+    });
+    await h.click("+ Add workspace");
+    expect(
+      vi.mocked(h.f.api.configure).mock.calls.map(([command]) => command.kind),
+    ).toEqual([
+      "computer.choose-workspace",
+      "computer.add-workspace",
+      "computer.verify-workspace",
+      "connector.start",
+    ]);
+  });
+  it("enables Git user settings with the Commands choice and verifies the workspace", async () => {
     let value = readySettings();
     value.computer.commands = "workspace";
     value.computer.filePolicy = "approved-roots-v1";
     value.connectors.secureMcp.runtime = null;
     const h = await mount({ step: "folders", value });
     const checkbox = h.host.querySelector<HTMLInputElement>(
-      '[aria-label="Allow full Git and user settings for project"]',
+      '[aria-label="Commands for project"]',
     )!;
     expect(checkbox.checked).toBe(false);
     expect(checkbox.disabled).toBe(false);
     expect(h.host.textContent).toContain(
-      "Includes Git history, hooks and your Git configuration.",
+      "including Git history, hooks and your Git configuration.",
     );
     expect(h.f.api.configure).not.toHaveBeenCalled();
     h.reply((command) => {
@@ -303,7 +351,7 @@ describe("Workspace rows", () => {
     });
     expect(
       h.host.querySelector<HTMLInputElement>(
-        '[aria-label="Allow full Git and user settings for project"]',
+        '[aria-label="Commands for project"]',
       )!.checked,
     ).toBe(true);
   });

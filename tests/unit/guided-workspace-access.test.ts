@@ -215,6 +215,83 @@ describe("one explicit Setup workspace access transition", () => {
     expect(f.settings.computer.commands).toBe("workspace");
   });
 
+  it("enables Commands and Git for every checked workspace before reconnecting", async () => {
+    const f = fixture();
+    const otherId = "00000000-0000-4000-8000-000000000099";
+    f.settings.computer.workspaces.push({
+      ...structuredClone(f.settings.computer.workspaces[0]!),
+      workspaceId: otherId,
+      root: "/tmp/other-workspace",
+    });
+    const result = await f.controller.run(
+      f.port,
+      {
+        workspaceId: fixtureWorkspaceId,
+        commands: "workspace",
+        includeGitWithCommands: true,
+      },
+      onboardingFacts(f.settings, fixtureBuildId),
+    );
+    expect(result).toEqual({ ok: true, reconnected: true });
+    expect(
+      f.settings.computer.workspaces.every((w) => w.gitHistoryApproved),
+    ).toBe(true);
+    const calls = f.run.mock.calls.map(([command]) => command);
+    expect(calls).toContainEqual({
+      kind: "computer.update-git-history",
+      workspaceId: otherId,
+      approved: true,
+    });
+    expect(calls.at(-1)?.kind).toBe("connector.start");
+  });
+
+  it("does not reconnect or retry when Git approval has an unknown outcome", async () => {
+    const f = fixture();
+    const original = f.run.getMockImplementation()!;
+    f.run.mockImplementation(async (command) =>
+      command.kind === "computer.update-git-history"
+        ? "unknown"
+        : original(command),
+    );
+    expect(await f.controller.run(f.port, f.plan, f.consent)).toMatchObject({
+      ok: false,
+      reason: "unknown",
+    });
+    const count = f.run.mock.calls.length;
+    expect(await f.controller.run(f.port, f.plan, f.consent)).toMatchObject({
+      ok: false,
+      reason: "unknown",
+    });
+    expect(f.run).toHaveBeenCalledTimes(count);
+    expect(
+      f.run.mock.calls.some(([command]) => command.kind === "connector.start"),
+    ).toBe(false);
+  });
+
+  it("keeps an explicit Git revocation when Commands remains enabled", async () => {
+    const f = fixture();
+    const result = await f.controller.run(
+      f.port,
+      {
+        workspaceId: fixtureWorkspaceId,
+        commands: "workspace",
+        gitHistoryApproved: false,
+        includeGitWithCommands: true,
+      },
+      f.consent,
+    );
+    expect(result).toEqual({ ok: true, reconnected: true });
+    expect(f.settings.computer.workspaces[0]!.gitHistoryApproved).not.toBe(
+      true,
+    );
+    expect(
+      f.run.mock.calls.some(
+        ([command]) =>
+          command.kind === "computer.update-git-history" && command.approved,
+      ),
+    ).toBe(false);
+  });
+
   it.each(["build", "computer", "connector", "instance"] as const)(
     "does not report reconnect success from a stale %s witness",
     async (stale) => {
@@ -318,6 +395,21 @@ describe("one explicit Setup workspace access transition", () => {
       "computer.verify-workspace",
       "connector.start",
     ]);
+  });
+
+  it("does not accept the old runtime generation after a workspace change", async () => {
+    const f = fixture();
+    f.settings.connectors.secureMcp.runtime = null;
+    const result = await f.controller.run(
+      f.port,
+      {
+        workspaceId: fixtureWorkspaceId,
+        connectWhenConfigured: true,
+        previousRuntimeGeneration: "f".repeat(64),
+      },
+      onboardingFacts(f.settings, fixtureBuildId),
+    );
+    expect(result).toEqual({ ok: false, reason: "failed" });
   });
 
   it("does not start an unconfigured connection after automatic folder checking", async () => {

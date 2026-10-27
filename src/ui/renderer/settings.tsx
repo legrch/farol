@@ -912,6 +912,12 @@ function Folders(props: PageProps) {
     setAdding(true);
     try {
       const picking = facade.getSnapshot();
+      const initialFacts = onboardingFacts(
+        picking.configuration?.status === "ready"
+          ? picking.configuration.settings
+          : null,
+        picking.buildId ?? "",
+      );
       const picked = await actions.run({ kind: "computer.choose-workspace" });
       const before = facade.getSnapshot();
       const evidence = before.evidence;
@@ -971,7 +977,35 @@ function Folders(props: PageProps) {
                 : "unknown";
           },
         },
-        { workspaceId: selection.workspaceId, connectWhenConfigured: false },
+        {
+          workspaceId: selection.workspaceId,
+          includeGitWithCommands: true,
+          ...(initialFacts.available &&
+          picking.configuration?.status === "ready" &&
+          picking.configuration.settings.computer.commands === "workspace" &&
+          picking.configuration.settings.computer.filePolicy ===
+            "approved-roots-v1" &&
+          picking.configuration.settings.computer.workspaces.every(
+            (workspace) => workspace.gitHistoryApproved === true,
+          )
+            ? { commands: "workspace" as const }
+            : {}),
+          connectWhenConfigured:
+            initialFacts.runtimeCurrent &&
+            onboardingFacts(
+              current.configuration.settings,
+              current.buildId ?? "",
+            ).connectionIdentity === initialFacts.connectionIdentity,
+          ...(initialFacts.runtimeCurrent &&
+          picking.configuration?.status === "ready" &&
+          picking.configuration.settings.connectors.secureMcp.runtime
+            ? {
+                previousRuntimeGeneration:
+                  picking.configuration.settings.connectors.secureMcp.runtime
+                    .runtimeGeneration,
+              }
+            : {}),
+        },
         onboardingFacts(current.configuration.settings, current.buildId ?? ""),
       );
     } finally {
@@ -984,6 +1018,10 @@ function Folders(props: PageProps) {
     if (folderFlow.busy || folderFlow.access.requiresReadback()) return;
     const before = facade.getSnapshot();
     if (before.configuration?.status !== "ready") return;
+    const initialFacts = onboardingFacts(
+      before.configuration.settings,
+      before.buildId ?? "",
+    );
     const previous = before.configuration.settings.computer;
     const expected = {
       ...previous,
@@ -1026,7 +1064,23 @@ function Folders(props: PageProps) {
     }
     // The existing guarded flow checks every retained folder with its saved
     // access/commands, and keeps original unknown effects fenced.
-    if (remaining !== undefined) await update(remaining);
+    if (remaining !== undefined) {
+      const current = facade.getSnapshot();
+      const facts = onboardingFacts(
+        current.configuration?.status === "ready"
+          ? current.configuration.settings
+          : null,
+        current.buildId ?? "",
+      );
+      await update(
+        remaining,
+        {},
+        initialFacts.runtimeCurrent &&
+          facts.connectionIdentity === initialFacts.connectionIdentity,
+        before.configuration.settings.connectors.secureMcp.runtime
+          ?.runtimeGeneration,
+      );
+    }
   }
 
   async function update(
@@ -1037,12 +1091,18 @@ function Folders(props: PageProps) {
       filePolicy?: "approved-roots-v1";
       gitHistoryApproved?: boolean;
     } = {},
+    connectWhenConfigured = false,
+    previousRuntimeGeneration?: string,
   ) {
     if (folderFlow.busy || folderFlow.access.requiresReadback()) return;
     folderFlow.busy = true;
     setAdding(true);
     const current = facade.getSnapshot();
     try {
+      const computer =
+        current.configuration?.status === "ready"
+          ? current.configuration.settings.computer
+          : null;
       await folderFlow.access.run(
         {
           settings: () => {
@@ -1061,7 +1121,21 @@ function Folders(props: PageProps) {
                 : "unknown";
           },
         },
-        { workspaceId, ...plan, connectWhenConfigured: false },
+        {
+          workspaceId,
+          includeGitWithCommands: true,
+          ...(plan.commands === undefined &&
+          computer?.commands === "workspace" &&
+          computer.filePolicy === "approved-roots-v1" &&
+          computer.workspaces.every(
+            (workspace) => workspace.gitHistoryApproved === true,
+          )
+            ? { commands: "workspace" as const }
+            : {}),
+          ...plan,
+          connectWhenConfigured,
+          ...(previousRuntimeGeneration ? { previousRuntimeGeneration } : {}),
+        },
         onboardingFacts(
           current.configuration?.status === "ready"
             ? current.configuration.settings
@@ -1076,6 +1150,12 @@ function Folders(props: PageProps) {
   }
   const paused =
     adding || folderFlow.busy || folderFlow.access.requiresReadback();
+  const commandsReady =
+    settings.computer.commands === "workspace" &&
+    settings.computer.filePolicy === "approved-roots-v1" &&
+    settings.computer.workspaces.every(
+      (workspace) => workspace.gitHistoryApproved === true,
+    );
   return (
     <>
       <div className="setup-workspaces" aria-label="Approved workspaces">
@@ -1121,10 +1201,7 @@ function Folders(props: PageProps) {
                 <input
                   type="checkbox"
                   aria-label={`Commands for ${folderDisplayName(workspace)}`}
-                  checked={
-                    settings.computer.commands === "workspace" &&
-                    settings.computer.filePolicy === "approved-roots-v1"
-                  }
+                  checked={commandsReady}
                   disabled={
                     paused ||
                     !actions.allowed("computer.update-commands") ||
@@ -1144,34 +1221,6 @@ function Folders(props: PageProps) {
                 />
                 Commands
               </label>
-              <div className="workspace-git-permission">
-                <label>
-                  <input
-                    type="checkbox"
-                    aria-label={`Allow full Git and user settings for ${folderDisplayName(workspace)}`}
-                    checked={workspace.gitHistoryApproved === true}
-                    disabled={
-                      paused ||
-                      !actions.allowed(
-                        "computer.update-git-history",
-                        workspace.workspaceId,
-                      ) ||
-                      (workspace.gitHistoryApproved !== true &&
-                        (settings.computer.commands !== "workspace" ||
-                          settings.computer.filePolicy !== "approved-roots-v1"))
-                    }
-                    onChange={(event) =>
-                      void update(workspace.workspaceId, {
-                        gitHistoryApproved: event.currentTarget.checked,
-                      })
-                    }
-                  />
-                  Full Git and user settings
-                </label>
-                <small>
-                  Includes Git history, hooks and your Git configuration.
-                </small>
-              </div>
               <div className="workspace-row-result" role="status">
                 {checked ? (
                   <span className="setup-success">✓ Works</span>
@@ -1227,10 +1276,19 @@ function Folders(props: PageProps) {
         {adding ? "Checking workspace…" : "+ Add workspace"}
       </button>
       <p className="description">
-        Commands lets ChatGPT run Git, tests and builds in approved workspaces.
-        ChatGPT manages action confirmations; Farol enforces your approved
-        access. Command access is shared by all workspaces.
+        Commands lets ChatGPT run Git, tests and builds in approved workspaces,
+        including Git history, hooks and your Git configuration. ChatGPT manages
+        action confirmations; Farol enforces your approved access. Command
+        access is shared by all workspaces.
       </p>
+      {settings.computer.commands === "workspace" &&
+        settings.computer.filePolicy === "approved-roots-v1" &&
+        !commandsReady && (
+          <p className="description" role="status">
+            Select Commands to enable Git and user settings for the approved
+            workspaces.
+          </p>
+        )}
       {settings.computer.commands === "workspace" &&
         settings.computer.filePolicy !== "approved-roots-v1" && (
           <p className="description" role="status">
