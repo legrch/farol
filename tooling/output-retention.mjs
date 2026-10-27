@@ -387,10 +387,17 @@ export async function pruneOutput(root, options = {}) {
     // removals take time, and a use that began meanwhile keeps its entry.
     const final = observe();
     if (!final) break;
-    if (referenced(entry.path, final)) continue;
-    const owner = await readOwner(entry.path);
-    if (owner === "invalid") continue;
-    if (owner && ownerFinished(owner, entry.path, final)) continue;
+    // Re-run the same classification on fresh state: still finished, and
+    // its content unchanged since it was judged removable.
+    const fresh = await classifyChild(
+      entry.path,
+      entry.kind,
+      final,
+      options.now ?? Date.now(),
+      options.policy ?? POLICY,
+    );
+    if (!fresh || fresh.state !== "finished" || fresh.newest !== entry.newest)
+      continue;
     try {
       await fs.rm(entry.path, { recursive: true, force: true });
       removed.push(entry);

@@ -484,4 +484,36 @@ describe("_output retention", () => {
     });
     expect(await exists(old)).toBe(true);
   });
+
+  it("keeps an entry rewritten after it was judged removable", async () => {
+    const first = await entry("evidence/old-a", { ageDays: 30 });
+    const second = await entry("evidence/old-b", { ageDays: 30 });
+    let calls = 0;
+    await pruneOutput(root, {
+      observation: observe(),
+      observe: () => {
+        // A producer updates the second entry and exits while the first is
+        // being removed: no holder remains, but its content is fresh.
+        if (++calls === 3)
+          return fs
+            .utimes(path.join(second, "data"), new Date(NOW), new Date(NOW))
+            .then(() => observe());
+        return observe();
+      },
+      now: NOW,
+      protect: PROTECTED_EVIDENCE,
+    });
+    expect(await exists(first)).toBe(false);
+    expect(await exists(second)).toBe(true);
+  });
+
+  it("removes an expired regular evidence file", async () => {
+    const file = path.join(output, "evidence", "ad-hoc-report.json");
+    await fs.writeFile(file, "{}");
+    const old = new Date(NOW - 30 * DAY);
+    await fs.utimes(file, old, old);
+    const result = await prune(observe());
+    expect(result.removed.map(({ path: item }) => item)).toEqual([file]);
+    expect(await exists(file)).toBe(false);
+  });
 });
