@@ -112,12 +112,12 @@ async function discardImage(output, name, identity) {
   const wrapper = await fs.mkdtemp(path.join(output, ".dev-core-trash-"));
   const image = path.join(wrapper, "image");
   try {
-    // rename(2) never copies: a different volume fails EXDEV and is refused.
+    // rename(2) never copies: a different volume fails EXDEV and is kept.
     await fs.rename(path.join(output, name), image);
   } catch (error) {
     await fs.rmdir(wrapper);
-    if (error.code === "ENOENT") return;
-    throw error;
+    if (error.code === "ENOENT") return true;
+    return keep(name, error);
   }
   const info = await fs.lstat(image);
   if (
@@ -131,8 +131,21 @@ async function discardImage(output, name, identity) {
     await fs.rmdir(wrapper);
     throw new Error("DEV_CORE_RETIRED_CHANGED");
   }
-  // fs.rm removes links as links; it never resolves or follows them.
-  await fs.rm(wrapper, { recursive: true, force: true });
+  // fs.rm removes links as links; it never resolves or follows them. The new
+  // image is already live, so a failure keeps the trash for the next reap.
+  try {
+    await fs.rm(wrapper, { recursive: true, force: true });
+    return true;
+  } catch (error) {
+    return keep(path.basename(wrapper), error);
+  }
+}
+
+function keep(name, error) {
+  process.stderr.write(
+    `Dev image cleanup kept _output/${name}: ${error.code ?? error.message}. The next task dev retries.\n`,
+  );
+  return false;
 }
 
 const ORPHAN =
@@ -157,8 +170,9 @@ export async function reapDevCoreOrphans(root) {
     if (!ORPHAN.test(name)) continue;
     const info = await fs.lstat(path.join(output, name));
     if (info.uid !== process.getuid()) continue;
-    if (info.isDirectory()) await discardImage(output, name, null);
-    else if (info.isFile()) await fs.rm(path.join(output, name));
+    if (info.isDirectory()) {
+      if (!(await discardImage(output, name, null))) continue;
+    } else if (info.isFile()) await fs.rm(path.join(output, name));
     else continue;
     removed.push(name);
   }

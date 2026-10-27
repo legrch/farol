@@ -21,19 +21,21 @@ from __future__ import annotations
 import contextlib
 import datetime
 import fcntl
+import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import stat
 import subprocess
 import time
+from pathlib import Path
 
 LABEL = "farol.testops.task"
 CREATED = "farol.testops.created"
 RETAIN = "farol.testops.retain"
 CACHE_KEY = "farol.testops.cache-key"
-RESERVED = {LABEL, CREATED, RETAIN, CACHE_KEY}
+CHECKOUT = "farol.testops.checkout"
+RESERVED = {LABEL, CREATED, RETAIN, CACHE_KEY, CHECKOUT}
 PREFIX = "farol-testops-"
 SCOPE = re.compile(r"farol-testops-[a-f0-9]{8}")
 CACHE_KEEP = 2
@@ -61,6 +63,11 @@ class Engine:
     def call(self, *args):
         return subprocess.run(self.prefix + list(args), env=self.env, stdin=subprocess.DEVNULL,
                               capture_output=True, text=True, timeout=DOCKER_SECONDS)
+
+
+def checkout_id(root):
+    """Leases live in one checkout while Docker is engine-wide: label the owner."""
+    return hashlib.sha256(str(Path(root).resolve()).encode()).hexdigest()[:16]
 
 
 def scope_id(scope):
@@ -245,7 +252,8 @@ def prepare(root, engine, scope, names, retain, cache_key, extra, owner_pid, tim
     if not start:
         raise Refused("LIVE_LEASE_OWNER_REQUIRED")
     created = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    labels.update({LABEL: scope_id(scope), CREATED: created, RETAIN: retain})
+    labels.update({LABEL: scope_id(scope), CREATED: created, RETAIN: retain,
+                   CHECKOUT: checkout_id(root)})
     if cache_key is not None:
         labels[CACHE_KEY] = cache_key
     with locked(root, timeout):
@@ -318,6 +326,9 @@ def release(root, engine, scope, timeout):
                 if row["labels"] is None:
                     errors.append("LABELS_UNREADABLE:" + name)
                     continue
+                if name not in targets and row["labels"].get(CHECKOUT) != checkout_id(root):
+                    errors.append("NOT_THIS_CHECKOUT:" + name)
+                    continue
                 if row["labels"].get(RETAIN) == "cache":
                     targets[name] = "cache"
                 else:
@@ -362,6 +373,7 @@ def classify(root, engine, sizes=None):
             unknown_names |= names
         lease_rows.append({"scope": scope, "state": state, "owner": lease["owner"], "volumes": sorted(names)})
     rows, cache = [], {}
+    here = checkout_id(root)
     for name, item in labelled(engine).items():
         labels = item["labels"]
         row = {"name": name, "size": (sizes or {}).get(name)}
@@ -373,6 +385,9 @@ def classify(root, engine, sizes=None):
                    created=labels.get(CREATED) or item.get("createdAt"))
         if not SCOPE.fullmatch(row["scope"]) or not owned_name(row["scope"], name):
             row.update(state="unknown", reason="LABEL_NAME_MISMATCH")
+        elif labels.get(CHECKOUT) != here:
+            # Another checkout's lease is invisible here; never judge its volume.
+            row.update(state="unknown", reason="NOT_THIS_CHECKOUT")
         elif name in live:
             row.update(state="active", reason="LIVE_LEASE")
         elif name in unknown_names or labels[LABEL] in unknown_scopes:

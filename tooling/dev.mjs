@@ -573,15 +573,20 @@ export async function runDevBuild(
       if (status === 0) {
         try {
           await prepareDevCoreResources(vnextRoot);
-          // Under the lifecycle lock, after the no-holder proof: nothing
-          // else can be using a leftover of an interrupted transition.
-          await reapDevCoreOrphans(vnextRoot);
         } catch (error) {
           process.stderr.write(
             `Dev resources refused: ${error.message}. No launch was attempted.\n`,
           );
           return 1;
         }
+        // Under the lifecycle lock, after the no-holder proof: nothing else
+        // can be using a leftover of an interrupted transition. Cleanup never
+        // blocks a launch of the published image.
+        await reapDevCoreOrphans(vnextRoot).catch((error) =>
+          process.stderr.write(
+            `Dev leftover cleanup skipped: ${error.message}. The next task dev retries.\n`,
+          ),
+        );
       }
       return status;
     },

@@ -22,8 +22,9 @@ export const POLICY = Object.freeze({
   budgetBytes: 15 * 1024 ** 3,
 });
 
-// Consumers read these by path (qualification lanes, Hunt, test scopes and
-// one recorded recovery input). They are counted, never removed here.
+// Declared qualification lanes and roots tooling reads by path. They are
+// counted, never removed here; protectedEvidence() adds every other name the
+// repository refers to as `_output/evidence/<name>`.
 export const PROTECTED_EVIDENCE = Object.freeze(
   [
     ...new Set([
@@ -36,6 +37,31 @@ export const PROTECTED_EVIDENCE = Object.freeze(
     ]),
   ].sort(),
 );
+
+// Every `_output/evidence/<name>` the tracked source mentions is a by-path
+// consumer (a sealed predecessor, a journey's screenshots, ...). A trailing
+// `-` marks a name prefix. `null` (git unreadable) protects all evidence.
+export function protectedEvidence(root, run = spawnSync) {
+  const grep = run(
+    "/usr/bin/git",
+    ["-C", root, "grep", "-ohE", "_output/evidence/[A-Za-z0-9._-]+"],
+    { encoding: "utf8", timeout: 30_000, maxBuffer: 16 * 1024 * 1024 },
+  );
+  if (grep.error || ![0, 1].includes(grep.status)) return null;
+  const names = new Set(PROTECTED_EVIDENCE);
+  for (const line of grep.stdout.split("\n"))
+    if (line) names.add(line.slice("_output/evidence/".length));
+  return [...names].filter((name) => name && name !== "evidence");
+}
+
+function isProtected(child, names) {
+  return (
+    names === null ||
+    names.some((name) =>
+      name.endsWith("-") ? child.startsWith(name) : child === name,
+    )
+  );
+}
 
 // Current outputs that their producers overwrite or manage in place.
 export const CURRENT_OUTPUTS = Object.freeze([
@@ -137,7 +163,12 @@ function ownerFinished(owner, directory, observation) {
     )
   )
     return "owner running";
-  if (observation.processes.some(({ pgid }) => pgid === owner.pgid))
+  // A process group outlives its leader only through the leader's children;
+  // an owner inside a shell's or harness's group is judged by references.
+  if (
+    owner.pid === owner.pgid &&
+    observation.processes.some(({ pgid }) => pgid === owner.pgid)
+  )
     return "owner process group running";
   if (referenced(directory, observation)) return "path in use";
   return null;
@@ -201,15 +232,25 @@ async function classifyChild(directory, kind, observation, now, policy) {
 
 export async function inspectOutput(
   root,
-  { observation = observeProcesses(), now = Date.now(), policy = POLICY } = {},
+  {
+    observation = observeProcesses(),
+    now = Date.now(),
+    policy = POLICY,
+    protect = protectedEvidence(root),
+  } = {},
 ) {
   const output = path.join(root, "_output");
   const entries = [];
   let names;
   try {
+    const info = await fs.lstat(output);
+    // A redirected _output is never walked: removal stays in the checkout.
+    if (!info.isDirectory() || info.uid !== process.getuid())
+      throw Error("OUTPUT_ROOT_NOT_OWNED_DIRECTORY");
     names = await fs.readdir(output);
   } catch (error) {
-    if (error.code === "ENOENT") return { output, entries, totalBytes: 0 };
+    if (error.code === "ENOENT")
+      return { output, entries, totalBytes: 0, budgetedBytes: 0 };
     throw error;
   }
   for (const name of names.sort()) {
@@ -233,7 +274,7 @@ export async function inspectOutput(
     if (name === "tmp" || name === "evidence") {
       for (const child of (await fs.readdir(full)).sort()) {
         const childPath = path.join(full, child);
-        if (name === "evidence" && PROTECTED_EVIDENCE.includes(child)) {
+        if (name === "evidence" && isProtected(child, protect)) {
           const { bytes, newest } = await measure(childPath);
           entries.push({
             path: childPath,

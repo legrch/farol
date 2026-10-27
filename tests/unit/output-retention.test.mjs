@@ -7,6 +7,7 @@ import {
   POLICY,
   PROTECTED_EVIDENCE,
   inspectOutput,
+  protectedEvidence,
   pruneOutput,
 } from "../../tooling/output-retention.mjs";
 import { settleDevControl } from "../../tooling/dev-process-control.mjs";
@@ -52,6 +53,7 @@ describe("_output retention", () => {
       observe: () => observation,
       now: NOW,
       policy,
+      protect: PROTECTED_EVIDENCE,
     });
   const exists = (directory) =>
     fs.lstat(directory).then(
@@ -65,8 +67,9 @@ describe("_output retention", () => {
     const running = await entry("tmp/go-dev-control-BBBBBB", {
       owner: { ...owner, pid: 4343 },
     });
+    // A group leader killed while its child lives on in the same group.
     const child = await entry("tmp/go-dev-control-CCCCCC", {
-      owner: { ...owner, pgid: 5000 },
+      owner: { ...owner, pid: 5000, pgid: 5000 },
     });
     const opened = await entry("tmp/go-dev-control-DDDDDD", {
       owner: { ...owner, pgid: 6000 },
@@ -153,7 +156,11 @@ describe("_output retention", () => {
       owner: { pid: 1, pgid: 1, start: START },
     });
     const old = await entry("evidence/old-run", { ageDays: 30 });
-    await pruneOutput(root, { observation: null, now: NOW });
+    await pruneOutput(root, {
+      observation: null,
+      now: NOW,
+      protect: PROTECTED_EVIDENCE,
+    });
     expect(await exists(scratch)).toBe(true);
     expect(await exists(old)).toBe(true);
   });
@@ -164,6 +171,7 @@ describe("_output retention", () => {
     const report = await inspectOutput(root, {
       observation: observe(),
       now: NOW,
+      protect: PROTECTED_EVIDENCE,
     });
     const states = Object.fromEntries(
       report.entries.map(({ path: item, state }) => [
@@ -186,6 +194,7 @@ describe("_output retention", () => {
       observation: observe(),
       observe: () => observe([], [path.join(scratch, "data")]),
       now: NOW,
+      protect: PROTECTED_EVIDENCE,
     });
     expect(await exists(scratch)).toBe(true);
   });
@@ -218,6 +227,7 @@ describe("_output retention", () => {
     const report = await inspectOutput(root, {
       observation: observe(),
       now: NOW,
+      protect: PROTECTED_EVIDENCE,
     });
     const legacyBytes = report.entries.find(
       ({ path: item }) => item === legacy,
@@ -246,5 +256,48 @@ describe("_output retention", () => {
     expect(
       result.entries.find(({ path: item }) => item === retained).state,
     ).toBe("unknown");
+  });
+
+  it("judges an owner inside a foreign process group by references only", async () => {
+    // Created from a long-lived shell: the shell's group stays alive.
+    const scratch = await entry("tmp/go-artifact-KKKKKK", {
+      owner: { pid: 4242, pgid: 100, start: START },
+    });
+    await prune(
+      observe([{ pid: 100, pgid: 100, start: START, command: "zsh" }]),
+    );
+    expect(await exists(scratch)).toBe(false);
+  });
+
+  it("protects every evidence name the repository reads by path", () => {
+    const names = protectedEvidence(path.resolve("."));
+    expect(names).toEqual(
+      expect.arrayContaining(["predecessors", "setup-journey", "hunt"]),
+    );
+    expect(protectedEvidence(root)).toBeNull();
+  });
+
+  it("keeps all evidence when the by-path consumers cannot be read", async () => {
+    const old = await entry("evidence/old-run", { ageDays: 30 });
+    await pruneOutput(root, {
+      observation: observe(),
+      observe: () => observe(),
+      now: NOW,
+      protect: null,
+    });
+    expect(await exists(old)).toBe(true);
+  });
+
+  it("refuses to walk a redirected _output", async () => {
+    const real = await fs.mkdtemp(path.join(os.tmpdir(), "farol-real-out-"));
+    try {
+      await fs.rm(output, { recursive: true });
+      await fs.symlink(real, output);
+      await expect(
+        inspectOutput(root, { observation: observe(), now: NOW }),
+      ).rejects.toThrow("OUTPUT_ROOT_NOT_OWNED_DIRECTORY");
+    } finally {
+      await fs.rm(real, { recursive: true, force: true });
+    }
   });
 });

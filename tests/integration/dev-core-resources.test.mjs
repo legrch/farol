@@ -158,6 +158,36 @@ describe("admitted source Dev resources", () => {
     expect(await leftovers()).toEqual([]);
   });
 
+  it("launches the verified image even when discarding the old one fails", async () => {
+    await prepareDevCoreResources(root);
+    await advanceBuild(1);
+    const original = fs.rm.bind(fs);
+    const failing = vi
+      .spyOn(fs, "rm")
+      .mockImplementation(async (target, options) => {
+        if (path.basename(target).startsWith(".dev-core-trash-"))
+          throw Object.assign(new Error("controlled EACCES"), {
+            code: "EACCES",
+          });
+        return original(target, options);
+      });
+    try {
+      expect(await prepareDevCoreResources(root)).toBe(destination);
+    } finally {
+      failing.mockRestore();
+    }
+    expect(
+      JSON.parse(
+        await fs.readFile(path.join(root, "_output/dev-core-resources.json")),
+      ).schema,
+    ).toBe(1);
+    expect(
+      (await leftovers()).filter((n) => n.startsWith(".dev-core-trash-")),
+    ).toHaveLength(1);
+    await reapDevCoreOrphans(root);
+    expect(await leftovers()).toEqual([]);
+  });
+
   it("removes links inside a discarded image without following them", async () => {
     await prepareDevCoreResources(root);
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), "farol-sentinel-"));

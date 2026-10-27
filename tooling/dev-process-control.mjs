@@ -411,6 +411,8 @@ async function prepareDevBuildOnce(
         log(
           `Stopping the previous ${harnessDesktopIdentity("dev", "/").applicationName} before rebuilding its app outputs...`,
         );
+        // Until the stop is confirmed, its outcome is unknown: keep the helper.
+        control.retain = true;
         const result = await stopRetainedDevProcess(retained, retainedScope, {
           clock: () => performance.now(),
           sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -436,11 +438,11 @@ async function prepareDevBuildOnce(
           },
         });
         if (result.status !== "absent") {
-          control.retain = true;
           throw Error(
             `DEV_STOP_${result.reason}: ${inspectionFailure}. Quit the previous ${harnessDesktopIdentity("dev", "/").applicationName} from this checkout/profile using its own Quit command, then run task dev again.`,
           );
         }
+        control.retain = false;
         log(
           `Previous Dev process is absent (${result.attemptedSignals.join(", ") || "already stopped"}). Profile outcomes remain unchanged.`,
         );

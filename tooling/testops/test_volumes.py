@@ -96,6 +96,9 @@ sys.exit(code)
 
 
 class Volumes(unittest.TestCase):
+    def here(self):
+        return {volumes.CHECKOUT: volumes.checkout_id(self.root)}
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="testops-volumes-")
         self.addCleanup(self.temp.cleanup)
@@ -212,11 +215,15 @@ class Volumes(unittest.TestCase):
 
     def test_prune_touches_only_unreferenced_labelled_volumes_without_live_lease(self):
         orphan, used, cached = "farol-testops-0000000a-old", "farol-testops-0000000b-src", "farol-testops-0000000c-x"
+        # Another checkout's lease is invisible here; an unlabelled one has no owner at all.
+        foreign, legacy = "farol-testops-0000000d-other", "farol-testops-0000000e-legacy"
         self.set_state({"partners-service_db": {"Labels": {}}, "taplex-cache": {"Labels": None},
                         "sc-platform_pg": {"Labels": {"com.docker.compose.project": "sc"}},
-                        orphan: {"Labels": {volumes.LABEL: "0000000a"}},
-                        used: {"Labels": {volumes.LABEL: "0000000b", volumes.RETAIN: "run"}},
-                        cached: {"Labels": {volumes.LABEL: "0000000c", volumes.RETAIN: "bogus"}}},
+                        orphan: {"Labels": {volumes.LABEL: "0000000a", **self.here()}},
+                        foreign: {"Labels": {volumes.LABEL: "0000000d", volumes.CHECKOUT: "0" * 16}},
+                        legacy: {"Labels": {volumes.LABEL: "0000000e"}},
+                        used: {"Labels": {volumes.LABEL: "0000000b", volumes.RETAIN: "run", **self.here()}},
+                        cached: {"Labels": {volumes.LABEL: "0000000c", volumes.RETAIN: "bogus", **self.here()}}},
                        containers=[{"id": "c1", "name": "other", "labels": {}, "mounts": [used]}])
         code, result = self.cli("prepare", *self.prepare_args(NAMES[:1]))
         self.assertEqual((code, result["status"]), (0, "PASS"))  # Owner: this live test process.
@@ -224,7 +231,9 @@ class Volumes(unittest.TestCase):
         self.assertEqual((code, result["status"], result["removed"]), (0, "PASS", [orphan]))
         kept = {row["name"]: (row["state"], row["reason"]) for row in result["kept"]}
         self.assertEqual(kept, {NAMES[0]: ("active", "LIVE_LEASE"), used: ("active", "CONTAINER_REFERENCE"),
-                                cached: ("unknown", "RETAIN_OR_CACHE_KEY_LABEL_INVALID")})
+                                cached: ("unknown", "RETAIN_OR_CACHE_KEY_LABEL_INVALID"),
+                                foreign: ("unknown", "NOT_THIS_CHECKOUT"),
+                                legacy: ("unknown", "NOT_THIS_CHECKOUT")})
         for argv in self.log():
             if argv[:1] != ["volume"] or argv[1] == "ls":
                 continue
@@ -267,9 +276,9 @@ class Volumes(unittest.TestCase):
 
     def test_release_removes_owned_containers_first_and_keeps_cache(self):
         cache = SCOPE + "-gomod"
-        self.set_state({NAMES[0]: {"Labels": {volumes.LABEL: SCOPE[-8:]}},
+        self.set_state({NAMES[0]: {"Labels": {volumes.LABEL: SCOPE[-8:], **self.here()}},
                         cache: {"Labels": {volumes.LABEL: SCOPE[-8:], volumes.RETAIN: "cache",
-                                           volumes.CACHE_KEY: "go-1"}}},
+                                           volumes.CACHE_KEY: "go-1", **self.here()}}},
                        containers=[{"id": "c1", "name": SCOPE + "-nonce-core", "mounts": [NAMES[0]],
                                     "labels": {volumes.LABEL: SCOPE[-8:]}}])
         code, result = self.cli("release", "--scope", SCOPE)
@@ -281,7 +290,7 @@ class Volumes(unittest.TestCase):
     def test_status_and_prune_keep_two_newest_unreferenced_caches_per_key(self):
         def cache(scope, created, key):
             return {"Labels": {volumes.LABEL: scope, volumes.RETAIN: "cache", volumes.CACHE_KEY: key,
-                               volumes.CREATED: created}}
+                               volumes.CREATED: created, **self.here()}}
         names = ["farol-testops-0000000%d-gomod" % i for i in range(4)]
         self.set_state({names[0]: cache("00000000", "2026-10-01T00:00:00.000000Z", "go-1"),
                         names[1]: cache("00000001", "2026-10-02T00:00:00.000000Z", "go-1"),

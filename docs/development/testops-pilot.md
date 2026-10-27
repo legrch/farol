@@ -157,7 +157,9 @@ lease and leak. Use `python3 -B tooling/testops/testops.py volumes ACTION
 - `release --scope ...` force-removes the scope's own labelled containers, then
   its run volumes by exact name, and verifies absence. Cache volumes are left to
   prune. The lease is deleted only after verified absence.
-- `prune` considers only volumes with the `farol.testops.task` label. It keeps
+- `prune` considers only volumes with the `farol.testops.task` label and this
+  checkout's `farol.testops.checkout` label: leases are per checkout, Docker is
+  shared, so another checkout's volume is reported `unknown`, never removed. It keeps
   volumes of a live lease (same pid and start time), volumes referenced by any
   container including stopped ones, and the two newest unreferenced cache
   volumes per `farol.testops.cache-key`. It removes the rest by exact name.
