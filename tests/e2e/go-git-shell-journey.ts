@@ -357,13 +357,12 @@ export async function runShellControlJourney(input: {
         Number.isInteger(observed.exitSignal) &&
           (observed.exitSignal as number) > 0,
       );
-      // Darwin's published root-scoped contract deliberately does not infer
-      // group/descendant quiescence from this root Wait (see native cancel tests).
-      assert.equal(observed.groupCleanup, "unverified");
+      // The watchdog confirms the owned process group separately from the
+      // root Wait. Descendants outside that group are not covered.
+      assert.equal(observed.groupCleanup, "confirmed");
       assert.equal(observed.descendantCleanup, "unverified");
-      witness.scope =
-        "owned-root-only; group and descendant cleanup unverified";
-      witness.state = "passed-owned-root-cancel-readback";
+      witness.scope = "owned-root-and-group; descendants unverified";
+      witness.state = "passed-owned-group-cancel-readback";
       await input.checkpoint();
       return;
     }
