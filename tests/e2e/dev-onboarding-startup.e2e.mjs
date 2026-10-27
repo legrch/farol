@@ -1119,7 +1119,7 @@ try {
   report.status = "passed";
   report.limits = [
     "Fresh/partial current React and real Go startup/retention only",
-    "Hidden Electron bounds/child attachment, computed divider source and renderer-directed overlay input only; window visibility/focus checked at sampled boundaries",
+    "Hidden Electron bounds/child attachment, embedded drag CSS and renderer-directed overlay input only; window visibility/focus checked at sampled boundaries",
     "No visible compositor, OS AX, IME, native keyboard focus or installed/browser-provider qualification",
     "No external attachment, provider Send, live credentials, native dialog or visible focus acceptance",
     "Ready-profile Review Setup and actual external retained observation have separate ordinary Dev evidence",
