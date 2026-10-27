@@ -1,4 +1,5 @@
 import "../../../apps/desktop/bridge/e2e-window-bootstrap.ts";
+import { preventEmbeddedWindowDrag } from "./embedded-web-drag";
 import { separateAppVerificationScopeCurrent } from "../../pkg/product-settings/separate-app-verification";
 import type { SeparateAppVerificationScope } from "../../pkg/product-settings/contract";
 import type { SeparateAppVerification } from "./connector-app-verification-attempt";
@@ -10905,6 +10906,7 @@ function liveChatGptSurfaceFactory(taskId: string): ChatGptRouteSurfaceFactory {
       },
     });
     const contents = view.webContents;
+    preventEmbeddedWindowDrag(contents);
     const closingListeners = new Set<() => void>();
     const closedListeners = new Set<() => void>();
     let closingNotified = false;

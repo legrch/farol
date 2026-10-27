@@ -202,7 +202,7 @@ code {
   align-items: center;
   border-bottom: 1px solid var(--line);
   background: var(--bg);
-  -webkit-app-region: no-drag;
+  -webkit-app-region: drag;
   gap: 18px;
   min-width: 0;
   padding-right: 18px;
@@ -212,7 +212,6 @@ code {
   -webkit-app-region: no-drag;
 }
 .navigation-chrome {
-  -webkit-app-region: drag;
   display: flex;
   align-items: center;
   width: calc(var(--rail-width) + var(--side-width));
