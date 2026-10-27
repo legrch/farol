@@ -1158,6 +1158,29 @@ it("shows local readiness separately from an unconfirmed app on Overview", async
   ).toHaveLength(sends);
 });
 
+it("shows saved completion without claiming a stale app check is current", async () => {
+  const value = readySettings(true);
+  value.setup.journey.dismissed = true;
+  value.connectors.secureMcp.attachment = null;
+  const h = await mount({ step: "overview", value, signIn: "authenticated" });
+  await h.confirmSignIn();
+  await h.navigate("overview");
+  expect(h.host.textContent).toContain("Setup complete");
+  expect(h.host.textContent).toContain("3 of 4 current checks are ready");
+  const row = h.host.querySelector<HTMLButtonElement>(
+    '.setup-overview-step[aria-label="Add to ChatGPT"]',
+  );
+  expect(row?.textContent).toContain("Check the app connection in ChatGPT");
+  expect(row?.textContent).not.toContain("App confirmed in ChatGPT");
+  expect(row?.closest("li")?.getAttribute("data-check-state")).not.toBe(
+    "verified",
+  );
+  expect(
+    h.host.querySelector('[aria-label="4. Add to ChatGPT, completed"]'),
+  ).toBeNull();
+  expect(h.configuration().settings.setup.journey.dismissed).toBe(true);
+});
+
 it("completed Setup keeps Next and returns to Activity rather than forcing Home", async () => {
   const value = readySettings(true);
   value.setup.journey.dismissed = true;

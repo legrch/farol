@@ -59,16 +59,16 @@ export function SetupNavigation({
       </li>
       {setupChecklist(snapshot, inputsChanged, local).entries.map(
         (entry, index) => (
-          <li key={entry.step} data-check-state={entry.state}>
+          <li key={entry.step} data-check-state={entry.liveState}>
             <button
               type="button"
               className="setup-progress-step"
-              aria-label={`${index + 1}. ${entry.label}${entry.state === "verified" ? ", completed" : ""}`}
+              aria-label={`${index + 1}. ${entry.label}${entry.liveState === "verified" ? ", completed" : ""}`}
               aria-current={entry.step === selected ? "step" : undefined}
               onClick={() => onNavigate(entry.step)}
             >
               <span aria-hidden="true">
-                {entry.state === "verified" && entry.step !== selected
+                {entry.liveState === "verified" && entry.step !== selected
                   ? "✓"
                   : index + 1}
               </span>{" "}
@@ -93,7 +93,7 @@ export function Setup({ snapshot, facade }: Props) {
   const finishPending =
     snapshot.intents["settings:setup.progress:"]?.state === "pending";
   const completedCount = checklist.entries.filter(
-    (entry) => entry.state === "verified",
+    (entry) => entry.liveState === "verified",
   ).length;
   const returnDestination = snapshot.setupReturn ?? { area: "home" as const };
   const returnLabel = `Back to ${{ home: "Home", chatgpt: "ChatGPT", activity: "Activity", settings: "Settings", setup: "Setup" }[returnDestination.area]}`;
@@ -128,12 +128,12 @@ export function Setup({ snapshot, facade }: Props) {
       />
       <header className="setup-wizard-intro">
         <h1>
-          {step === "overview" && completedCount > 0
+          {step === "overview" && (checklist.completed || completedCount > 0)
             ? "Your setup"
             : context[step].title}
         </h1>
         <p className="description">
-          {step === "overview" && completedCount > 0
+          {step === "overview" && (checklist.completed || completedCount > 0)
             ? checklist.completed
               ? "Setup is complete. Current connection checks are shown on Home."
               : "Your progress is saved. Review any step or finish the remaining setup."
@@ -150,7 +150,7 @@ export function Setup({ snapshot, facade }: Props) {
             </strong>
             <p className="description">
               {checklist.completed
-                ? "All four setup steps were completed. Review current connection status on Home."
+                ? `Setup was completed. ${completedCount} of 4 current checks are ready.`
                 : checklist.ready
                   ? "Everything is ready. You can review any step."
                   : checklist.entries
@@ -162,7 +162,7 @@ export function Setup({ snapshot, facade }: Props) {
           </div>
           <ol>
             {checklist.entries.map((entry, index) => (
-              <li key={entry.step} data-check-state={entry.state}>
+              <li key={entry.step} data-check-state={entry.liveState}>
                 <button
                   type="button"
                   className="setup-overview-step"
@@ -171,7 +171,7 @@ export function Setup({ snapshot, facade }: Props) {
                   onClick={() => navigateToStep(entry.step)}
                 >
                   <span className="setup-overview-marker" aria-hidden="true">
-                    {entry.state === "verified" ? "✓" : index + 1}
+                    {entry.liveState === "verified" ? "✓" : index + 1}
                   </span>
                   <span className="setup-overview-copy">
                     <strong>{entry.label}</strong>
@@ -179,32 +179,42 @@ export function Setup({ snapshot, facade }: Props) {
                       className="description"
                       id={`setup-overview-${entry.step}-status`}
                     >
-                      {entry.state === "verified"
+                      {entry.liveState === "verified"
                         ? {
                             signin: "Signed in to ChatGPT",
                             folders: "Workspace access checked",
                             connection: "Tunnel connected",
                             attachment: "App confirmed in ChatGPT",
                           }[entry.step]
-                        : entry.state === "pending"
+                        : entry.liveState === "pending"
                           ? "Checking…"
-                          : entry.state === "unknown"
+                          : entry.liveState === "unknown"
                             ? "Waiting for confirmation"
-                            : {
-                                signin: "Sign in with your ChatGPT account",
-                                folders: "Choose folders for ChatGPT",
-                                connection: "Connect this Mac with your tunnel",
-                                attachment:
-                                  "Add your app and confirm the connection",
-                              }[entry.step]}
+                            : checklist.completed
+                              ? {
+                                  signin: "Check sign-in in ChatGPT",
+                                  folders: "Check workspace access",
+                                  connection:
+                                    "Check the connection to this Mac",
+                                  attachment:
+                                    "Check the app connection in ChatGPT",
+                                }[entry.step]
+                              : {
+                                  signin: "Sign in with your ChatGPT account",
+                                  folders: "Choose folders for ChatGPT",
+                                  connection:
+                                    "Connect this Mac with your tunnel",
+                                  attachment:
+                                    "Add your app and confirm the connection",
+                                }[entry.step]}
                     </span>
                   </span>
                   <span className="setup-overview-state">
-                    {entry.state === "verified"
+                    {entry.liveState === "verified"
                       ? "Ready"
-                      : entry.state === "pending"
+                      : entry.liveState === "pending"
                         ? "Checking"
-                        : entry.state === "needed"
+                        : entry.liveState === "needed"
                           ? "Set up"
                           : "Review"}
                   </span>

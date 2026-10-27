@@ -288,7 +288,8 @@ it("keeps completed Home connected without requiring a new external test after r
     throw Error("fixture settings missing");
   value.configuration.settings.connectors.secureMcp.attachment = null;
   const h = await mount(value);
-  expect(h.host.textContent).toContain("Farol is working");
+  expect(h.host.textContent).toContain("Tunnel connected");
+  expect(h.host.textContent).not.toContain("Farol is working");
   expect(h.host.textContent).toContain("Tunnel connected · setup saved");
   expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
   expect(h.host.textContent).not.toContain("Review connection");

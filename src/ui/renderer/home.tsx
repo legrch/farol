@@ -218,7 +218,13 @@ export function Home({ snapshot, facade }: Props) {
               {checking ? "…" : "✓"}
             </span>
             <div>
-              <h2>{checking ? "Checking connection…" : "Farol is working"}</h2>
+              <h2>
+                {checking
+                  ? "Checking connection…"
+                  : computer.externalAccessVerified
+                    ? "Farol is working"
+                    : "Tunnel connected"}
+              </h2>
               <p>
                 {checking ? (
                   "Waiting for the current connection check."
