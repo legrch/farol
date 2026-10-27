@@ -44,6 +44,16 @@ export function setupChecklist(
       // Live health cannot retain verification through UNKNOWN or stale evidence.
       const verified =
         check.allowed ||
+        // A read-only recheck reports its own outcome in Activity. It cannot
+        // revoke a still-current attachment merely by waiting or refusing.
+        (step === "attachment" &&
+          confirmed[step] &&
+          check.state === "refused" &&
+          !inputsChanged &&
+          settings?.connectors.secureMcp.challenge === null &&
+          [...Object.values(snapshot.intents), ...local].some((intent) =>
+            /^settings:connector\.verify-app:[a-f0-9]{64}$/u.test(intent.id),
+          )) ||
         (check.state === "pending" &&
           confirmed[step] &&
           !(inputsChanged && (step === "connection" || step === "attachment")));

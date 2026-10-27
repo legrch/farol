@@ -80,7 +80,10 @@ function fixture() {
     async (
       _prompt: string,
       _files: unknown[],
-      hooks: { onDispatchIntent(): Promise<void> },
+      hooks: {
+        onDispatchIntent(): Promise<void>;
+        readConnectorReceipt?(): Promise<boolean>;
+      },
     ): Promise<{ state: string; code?: string }> => {
       await hooks.onDispatchIntent();
       send();
@@ -169,6 +172,47 @@ function fixture() {
 }
 
 describe("actual separate-check desktop admission", () => {
+  it("rechecks a current attachment after consuming its one-shot challenge", async () => {
+    const f = fixture();
+    const original = guidedSettingsFixture();
+    const connector = f.settings.connectors.secureMcp;
+    connector.challenge = null;
+    connector.attachment = original.connectors.secureMcp.attachment;
+    connector.appVerificationPending = false;
+    f.settings.setup.connect = original.setup.connect;
+    f.readGo.mockResolvedValue({
+      binding: f.binding,
+      checkId: "status-check-fixture",
+    } as ReturnType<typeof f.readGo> extends Promise<infer T> ? T : never);
+    f.context.connectorVerificationProof = () => ({
+      receipt: { challengeSha256: "c".repeat(64), binding: f.binding },
+      workspaceId: fixtureWorkspaceId,
+    });
+    f.context.waitForConnectorAppReceipt = async (
+      read: () => Promise<unknown>,
+    ) => read();
+    const check = vi.fn(async () => ({ ok: true }));
+    f.context.checkSecureMcpAttachment = check;
+    f.route.mockImplementation(async (prompt, _files, hooks) => {
+      expect(prompt).toContain(
+        'computer_connection_status once with checkId "status-check-fixture"',
+      );
+      await hooks.onDispatchIntent();
+      expect(
+        f.context.desktopGoCore.expectComputerConnectorStatusCheck,
+      ).toHaveBeenCalledExactlyOnceWith("status-check-fixture");
+      expect(await hooks.readConnectorReceipt?.()).toBe(true);
+      return { state: "receipt_confirmed" };
+    });
+    expect(await f.verify()).toEqual({ ok: true });
+    expect(f.prepare).not.toHaveBeenCalled();
+    expect(connector.attachment).toEqual(
+      original.connectors.secureMcp.attachment,
+    );
+    expect(connector.challenge).toBeNull();
+    expect(check).toHaveBeenCalledTimes(1);
+  });
+
   it("runs an automatic fresh check on a hidden page while the owner route is untouched", async () => {
     const f = fixture();
     f.settings.setup.connect.outcomeUnknown = false;

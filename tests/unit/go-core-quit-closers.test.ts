@@ -149,6 +149,7 @@ describe("actual Quit record composition flushes final operation observations", 
       stripTypeScriptTypes(`(${recordSource})`, { mode: "strip" }),
       {
         operationsLog: shutdown ? { shutdown } : undefined,
+        QUIT_RECORD_RESERVE_MS: 2_000,
         recordQuitReceipt: receipt,
         removeRunMarker: marker,
         path: { join: (...parts: string[]) => parts.join("/") },
@@ -168,7 +169,7 @@ describe("actual Quit record composition flushes final operation observations", 
       f = recording(shutdown);
     const receipt = { drained: true, unconfirmed: [] };
     const pending = f.record(receipt);
-    expect(shutdown).toHaveBeenCalledExactlyOnceWith(250);
+    expect(shutdown).toHaveBeenCalledExactlyOnceWith(1_000);
     expect(f.receipt).not.toHaveBeenCalled();
     expect(f.marker).not.toHaveBeenCalled();
     flush.resolve(true);

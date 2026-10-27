@@ -1085,15 +1085,6 @@ async function runScenario(scenario) {
         button.click();
         button.click();
       });
-      const renewed = await poll(
-        () => readSetupSettings(page),
-        (s) =>
-          s.connectors.secureMcp.attachment !== null &&
-          s.connectors.secureMcp.attachment.verifiedAt !==
-            beforeRepeat.connectors.secureMcp.attachment.verifiedAt,
-        "REPEAT_CURRENT_RECEIPT_NOT_FOUND",
-        75000,
-      );
       const operation = await poll(
         () => settledVerification(),
         (v) => v !== null && v.lifecycle.id !== oldOperation.lifecycle.id,
@@ -1101,6 +1092,11 @@ async function runScenario(scenario) {
         75000,
       );
       assert.equal(operation.outcome, "done");
+      const renewed = await readSetupSettings(page);
+      assert.deepEqual(
+        renewed.connectors.secureMcp.attachment,
+        beforeRepeat.connectors.secureMcp.attachment,
+      );
       assert.equal(sendCount, 2);
       assert.equal(renewed.setup.journey.dismissed, true);
       assert.equal(

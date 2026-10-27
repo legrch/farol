@@ -9,6 +9,34 @@ import { computerSetup } from "../../src/ui/renderer/computer-setup";
 
 // Actual renderer/controller with scripted responses, never live verification.
 describe("linear Setup", () => {
+  it("retains current attachment presentation after a refused read-only recheck", async () => {
+    const value = readySettings(true);
+    value.connectors.secureMcp.challenge = null;
+    const h = await mount({ value, shell: true, signIn: "authenticated" });
+    await h.confirmSignIn();
+    const id = `settings:connector.verify-app:${"a".repeat(64)}`;
+    const snapshot = {
+      ...h.c.getSnapshot(),
+      intents: {
+        [id]: {
+          id,
+          state: "refused" as const,
+          code: "CONNECTOR_APP_VERIFICATION_NOT_READY",
+        },
+      },
+    };
+    expect(
+      setupChecklist(snapshot).entries.find((e) => e.step === "attachment")
+        ?.liveState,
+    ).toBe("verified");
+    expect(setupStepCheck(snapshot, "attachment").allowed).toBe(false);
+    expect(snapshot.intents[id]!.state).toBe("refused");
+    expect(
+      setupChecklist({ ...snapshot, buildId: "f".repeat(64) }).entries.some(
+        (e) => e.liveState === "verified",
+      ),
+    ).toBe(false);
+  });
   it.each([false, true])(
     "retains confirmed progress during the workspace chooser without opening gates (%s)",
     async (complete) => {

@@ -5572,7 +5572,12 @@ function connectorAppBindingCurrent(
     connector.generation === expected.connectorGeneration &&
     connector.runtime?.runtimeGeneration === expected.runtimeGeneration &&
     connector.runtime?.buildId === expected.buildId &&
-    connector.challenge?.challengeSha256 === expected.challengeSha256 &&
+    (connector.challenge?.challengeSha256 ??
+      currentConnectorAttachment(
+        settings,
+        expected.buildId,
+        expected.workspaceId,
+      )?.challengeSha256) === expected.challengeSha256 &&
     (expected.appName === undefined ||
       selectedConnectorApp(connector) === expected.appName)
   );
@@ -5608,7 +5613,7 @@ async function checkSecureMcpAttachment(
       buildIdentity.buildId,
       expectedWorkspaceId,
     );
-    if (existing && expectedBinding === undefined) {
+    if (existing) {
       return ProductConfigurationResultSchema.parse({
         ok: true,
         snapshot,
@@ -5742,6 +5747,15 @@ async function verifySecureMcpApp(
     if (appName === null)
       return configurationFailure("CONNECTOR_APP_TARGET_REQUIRED");
     const workspaceId = connectorWorkspaceSelection(settings);
+    const existing =
+      !separate && workspaceId !== undefined
+        ? currentConnectorAttachment(
+            settings,
+            buildIdentity.buildId,
+            workspaceId,
+          )
+        : null;
+    const proofScope = existing ?? challenge;
     if (
       (!automatic && !chatGptTaskAdmissionReady()) ||
       quitInProgress ||
@@ -5752,10 +5766,10 @@ async function verifySecureMcpApp(
       runtime.buildId !== buildIdentity.buildId ||
       runtime.computerGeneration !== settings.computer.generation ||
       runtime.connectorGeneration !== connector.generation ||
-      challenge === null ||
-      challenge.buildId !== runtime.buildId ||
-      challenge.computerGeneration !== runtime.computerGeneration ||
-      challenge.runtimeGeneration !== runtime.runtimeGeneration ||
+      proofScope === null ||
+      proofScope.buildId !== runtime.buildId ||
+      proofScope.computerGeneration !== runtime.computerGeneration ||
+      proofScope.runtimeGeneration !== runtime.runtimeGeneration ||
       workspaceId === undefined
     ) {
       return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
@@ -5764,17 +5778,13 @@ async function verifySecureMcpApp(
       return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
     }
     requestedWorkspaceId = workspaceId;
-    if (
-      !separate &&
-      currentConnectorAttachment(settings, buildIdentity.buildId, workspaceId)
-    )
-      statusCheckId = randomUUID();
+    if (existing) statusCheckId = randomUUID();
     expectedBinding = {
       tunnelId: connector.tunnelId,
       connectorGeneration: connector.generation,
       computerGeneration: settings.computer.generation,
       runtimeGeneration: runtime.runtimeGeneration,
-      challengeSha256: challenge.challengeSha256,
+      challengeSha256: proofScope.challengeSha256,
       buildId: runtime.buildId,
       workspaceId,
       appName,
@@ -5895,7 +5905,7 @@ async function verifySecureMcpApp(
         statusCheckId === null &&
         (await connectorAppVerificationAttemptExists(
           stateRoot,
-          challenge.challengeSha256,
+          proofScope.challengeSha256,
         ))
       ) {
         return configurationFailure(
@@ -5962,8 +5972,8 @@ async function verifySecureMcpApp(
       statusCheckId !== null
         ? `Use the selected ${appName} app to call computer_connection_status once with checkId "${statusCheckId}". Do not read files or run commands. Reply briefly with the result.`
         : workspaceId === null
-          ? `Use the selected ${appName} app to call farol_connector_verify_catalogue once with challenge "${challenge.value}". No workspace is configured. Do not read files or run commands. Reply briefly with the result.`
-          : `Use the selected ${appName} app to call farol_connector_verify once with challenge "${challenge.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`;
+          ? `Use the selected ${appName} app to call farol_connector_verify_catalogue once with challenge "${challenge!.value}". No workspace is configured. Do not read files or run commands. Reply briefly with the result.`
+          : `Use the selected ${appName} app to call farol_connector_verify once with challenge "${challenge!.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`;
     let claimed = false;
     const timingId = runtimeEnvironment === "dev" ? randomUUID() : null;
     const result = await verificationRoute.runReadonlyTask(
@@ -6035,7 +6045,7 @@ async function verifySecureMcpApp(
           else
             await prepareConnectorAppVerificationAttempt(
               stateRoot,
-              challenge.challengeSha256,
+              proofScope.challengeSha256,
               async () =>
                 (
                   await configuration!.recordSecureMcpAppPending(
@@ -12990,7 +13000,10 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       if (operationsLog) {
         let flushed = false;
         try {
-          flushed = await operationsLog.shutdown(250);
+          // Reserve half of Quit's existing recording budget for final metadata.
+          // A populated Activity journal can need more than 250 ms to fsync and
+          // prune; a stalled writer still times out before the receipt reserve.
+          flushed = await operationsLog.shutdown(QUIT_RECORD_RESERVE_MS / 2);
         } catch {
           // Preserve the original child-drain result even on journal failure.
         }
