@@ -1047,6 +1047,15 @@ export function Shell() {
   ).length;
   const setupChecking = connectorVerificationInFlight(state, retained);
   const computer = computerSetup(state);
+  const keepSetupConfirmation =
+    completedSteps === 4 ||
+    (setupChecking &&
+      computer.facts.attachmentCurrent &&
+      state.configuration?.status === "ready" &&
+      state.configuration.settings.setup.journey.dismissed &&
+      state.configuration.settings.setup.chatgpt.verified?.buildId ===
+        state.buildId &&
+      !state.configuration.settings.setup.chatgpt.outcomeUnknown);
   const connected = computer.localConnectionCurrent;
   const connectionLabel = connected
     ? computer.externalAccessVerified
@@ -1104,14 +1113,28 @@ export function Shell() {
           <div className="traffic-light-space" />
           <button
             aria-label="Back"
-            disabled={!state.back}
+            disabled={
+              !(
+                state.back ||
+                (destination.area === "chatgpt" &&
+                  state.browserHistory?.taskId === destination.taskId &&
+                  state.browserHistory.back)
+              )
+            }
             onClick={() => facade.travel(-1)}
           >
             <Icon name="back" />
           </button>
           <button
             aria-label="Forward"
-            disabled={!state.forward}
+            disabled={
+              !(
+                state.forward ||
+                (destination.area === "chatgpt" &&
+                  state.browserHistory?.taskId === destination.taskId &&
+                  state.browserHistory.forward)
+              )
+            }
             onClick={() => facade.travel(1)}
           >
             <Icon name="forward" />
@@ -1251,7 +1274,9 @@ export function Shell() {
               const detail =
                 area === "setup"
                   ? setupChecking
-                    ? `Checking setup · ${completedSteps} of 4 checks current`
+                    ? keepSetupConfirmation
+                      ? "Setup saved · checking connection"
+                      : "Checking setup"
                     : `${completedSteps} of 4 checks current`
                   : destination.area === area
                     ? "Current page"
@@ -1268,7 +1293,7 @@ export function Shell() {
                   <span className="rail-label">{label}</span>
                   {area === "setup" && (
                     <span className="rail-label setup-count">
-                      {completedSteps === 4
+                      {keepSetupConfirmation
                         ? "✓"
                         : setupChecking
                           ? "Checking…"

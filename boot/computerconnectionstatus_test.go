@@ -57,7 +57,7 @@ func TestConnectorSocketRegistersBoundReadOnlyVerificationObservation(t *testing
 	if armed.CheckId != nil {
 		t.Fatal("desktop pipe fabricated a socket status acknowledgement")
 	}
-	out, err = verificationInvoke(t, method, checkedQuery)
+	out, err = verificationInvoke(t, method, query)
 	checked := verificationState(t, out, err)
 	if checked.CheckId == nil || *checked.CheckId != checkID || *checked.Receipt != *proof.Receipt || native.calls != 1 {
 		t.Fatal("socket status failed to acknowledge the fresh read without changing proof")
@@ -72,10 +72,10 @@ func TestConnectorSocketRegistersBoundReadOnlyVerificationObservation(t *testing
 	otherID := "independent-status-check"
 	otherQuery := query
 	otherQuery.CheckId = &otherID
-	out, err = verificationInvoke(t, method, otherQuery)
+	out, err = verificationInvoke(t, method, query)
 	independent := verificationState(t, out, err)
-	if independent.CheckId == nil || *independent.CheckId != otherID {
-		t.Fatal("independent status did not correlate its own response")
+	if independent.CheckId == nil || *independent.CheckId != checkID {
+		t.Fatal("independent status did not retain the active host check")
 	}
 	out, err = verificationInvoke(t, s.verificationObservationMethod(), query)
 	observed = verificationState(t, out, err)
@@ -88,13 +88,15 @@ func TestConnectorSocketRegistersBoundReadOnlyVerificationObservation(t *testing
 		t.Fatal("new host check inherited the previous acknowledgement")
 	}
 	out, err = verificationInvoke(t, method, checkedQuery)
-	_ = verificationState(t, out, err)
+	if err == nil && out != nil && out.Status == "ok" {
+		t.Fatal("socket selected a host correlation")
+	}
 	out, err = verificationInvoke(t, s.verificationObservationMethod(), query)
 	observed = verificationState(t, out, err)
 	if observed.CheckId != nil {
 		t.Fatal("late previous reply acknowledged the newer host check")
 	}
-	out, err = verificationInvoke(t, method, otherQuery)
+	out, err = verificationInvoke(t, method, query)
 	_ = verificationState(t, out, err)
 	out, err = verificationInvoke(t, s.verificationObservationMethod(), query)
 	observed = verificationState(t, out, err)

@@ -15,3 +15,12 @@ export const BrowserRouteStatusSchema = z.strictObject({
 });
 
 export type BrowserRouteStatus = z.infer<typeof BrowserRouteStatusSchema>;
+
+export const BrowserHistoryStateSchema = z.strictObject({
+  taskId: z.string().max(200),
+  back: z.boolean(),
+  forward: z.boolean(),
+});
+export const BrowserHistoryReplySchema = BrowserHistoryStateSchema.extend({
+  handled: z.boolean(),
+});

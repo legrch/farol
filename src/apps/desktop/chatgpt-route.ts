@@ -1461,6 +1461,9 @@ export type ChatGptRouteOptions = Readonly<{
     state: "idle" | "running" | "outcome_unknown",
   ) => void;
   onLoadStateChanged?: (state: "loading" | "loaded" | "failed") => void;
+  onNavigationHistoryChanged?: (
+    state: Readonly<{ back: boolean; forward: boolean }>,
+  ) => void;
   onDisposed?: () => void;
   // One best-effort notification per refused acquisition/recheck or failed release.
   // Cleanup failures supersede an earlier probe refusal; repeated release shares
@@ -1653,7 +1656,7 @@ export type ChatGptTaskObserver = Readonly<{
   // Content-free elapsed times for the one app-bound check; diagnostic only.
   onConnectorTiming?: (
     event: Readonly<{
-      phase:
+      stage:
         | "started"
         | "profile_ready"
         | "send_requested"
@@ -2364,6 +2367,55 @@ export class ChatGptRoute {
       return await opening;
     } finally {
       this.releaseOpening(opening);
+    }
+  }
+
+  navigationHistory(): Readonly<{ back: boolean; forward: boolean }> {
+    const current = this.routeWindow;
+    if (!current || current.isDestroyed())
+      return { back: false, forward: false };
+    const history = current.webContents.navigationHistory;
+    return {
+      back: history?.canGoBack() ?? false,
+      forward: history?.canGoForward() ?? false,
+    };
+  }
+
+  travelHistory(direction: -1 | 1): boolean {
+    const current = this.routeWindow;
+    if (!current || current.isDestroyed()) return false;
+    const history = current.webContents.navigationHistory;
+    if (
+      !history ||
+      !(direction === -1 ? history.canGoBack() : history.canGoForward())
+    )
+      return false;
+    if (direction === -1) history.goBack();
+    else history.goForward();
+    return true;
+  }
+
+  /** Ordinary browser navigation. It preserves Chromium's Back/Forward stack
+   * and never submits, retries a task, or edits a retained provider message. */
+  async openTemporaryChat(): Promise<ChatGptOpenResult> {
+    if (this.taskInFlight || (await this.open()).status !== "opened")
+      return { status: "unreachable" };
+    const current = this.routeWindow;
+    if (!current || current.isDestroyed()) return { status: "unreachable" };
+    const url = new URL(this.options.homeUrl);
+    url.searchParams.set("temporary-chat", "true");
+    try {
+      await this.awaitRouteOpenStep(
+        current,
+        current.loadURL(url.href),
+        Date.now() + ROUTE_OPEN_DEADLINE_MS,
+      );
+      if (this.routeWindow !== current || current.isDestroyed())
+        return { status: "unreachable" };
+      this.options.onNavigationHistoryChanged?.(this.navigationHistory());
+      return { status: "opened" };
+    } catch {
+      return { status: "unreachable" };
     }
   }
 
@@ -3082,7 +3134,12 @@ export class ChatGptRoute {
     if (temporary) temporaryUrl.searchParams.set("temporary-chat", "true");
     else temporaryUrl.searchParams.delete("temporary-chat");
     try {
-      await candidate.loadURL(temporaryUrl.href);
+      if (
+        !temporary ||
+        contents.getURL() !== temporaryUrl.href ||
+        initial.data.temporary !== temporary
+      )
+        await candidate.loadURL(temporaryUrl.href);
     } catch {
       return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
     }
@@ -3381,7 +3438,7 @@ export class ChatGptRoute {
     this.taskInFlight = true;
     const timingStart = performance.now();
     const timing = (
-      phase:
+      stage:
         | "started"
         | "profile_ready"
         | "send_requested"
@@ -3398,7 +3455,7 @@ export class ChatGptRoute {
       const elapsed = performance.now() - timingStart;
       if (!Number.isFinite(elapsed) || elapsed < 0) return;
       try {
-        observer.onConnectorTiming({ phase, elapsedMs: Math.round(elapsed) });
+        observer.onConnectorTiming({ stage, elapsedMs: Math.round(elapsed) });
       } catch {
         /* Diagnostics cannot affect the original check. */
       }
@@ -5227,6 +5284,15 @@ export class ChatGptRoute {
     contents: WebContents,
     tracksRouteReadiness: boolean,
   ): void {
+    if (tracksRouteReadiness) {
+      const publishHistory = () => {
+        if (this.ownsRouteContents(contents))
+          this.options.onNavigationHistoryChanged?.(this.navigationHistory());
+      };
+      contents.on("did-navigate", publishHistory);
+      contents.on("did-navigate-in-page", publishHistory);
+      contents.on("did-finish-load", publishHistory);
+    }
     if (tracksRouteReadiness)
       routePermissionOwners.set(contents, () =>
         this.ownsRouteContents(contents) &&

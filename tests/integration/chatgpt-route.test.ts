@@ -5556,6 +5556,34 @@ describe("ChatGPT embedded task surface", () => {
     expect(onConversationChanged).toHaveBeenCalledExactlyOnceWith(null);
   });
 
+  it("opens a temporary chat in the retained browser and delegates native history", async () => {
+    const surface = embeddedSurface();
+    const history = {
+      canGoBack: vi.fn(() => true),
+      canGoForward: vi.fn(() => false),
+      goBack: vi.fn(),
+      goForward: vi.fn(),
+    };
+    Reflect.set(surface.webContents, "navigationHistory", history);
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/c/original",
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+    });
+    await candidate.open();
+    expect(await candidate.openTemporaryChat()).toEqual({ status: "opened" });
+    expect(surface.loadURL).toHaveBeenLastCalledWith(
+      "https://chatgpt.com/?temporary-chat=true",
+    );
+    expect(candidate.travelHistory(-1)).toBe(true);
+    expect(history.goBack).toHaveBeenCalledOnce();
+    expect(candidate.travelHistory(1)).toBe(false);
+    expect(history.goForward).not.toHaveBeenCalled();
+    candidate.dispose();
+  });
+
   it("ignores closing and navigation events from a retired surface", async () => {
     const surface = embeddedSurface();
     const onConversationChanged = vi.fn();
@@ -8044,7 +8072,7 @@ describe("connector receipt completion before provider output", () => {
     async (profile) => {
       const { execute, candidate } = fixture();
       const readConnectorReceipt = vi.fn(async () => true);
-      const timings: Array<{ phase: string; elapsedMs: number }> = [];
+      const timings: Array<{ stage: string; elapsedMs: number }> = [];
       expect(
         await candidate.runReadonlyTask(
           "connection fixture",
@@ -8064,7 +8092,7 @@ describe("connector receipt completion before provider output", () => {
       });
       expect(execute).toHaveBeenCalledTimes(4);
       expect(readConnectorReceipt).toHaveBeenCalledTimes(1);
-      expect(timings.map(({ phase }) => phase)).toEqual([
+      expect(timings.map(({ stage }) => stage)).toEqual([
         "started",
         "profile_ready",
         "send_requested",

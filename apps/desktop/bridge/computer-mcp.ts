@@ -432,10 +432,10 @@ export function createGoComputerMcpServer(
         title: "Check the current Farol connection",
         description:
           "Use for a general Farol test or connection check. No challenge is needed. Observes current Go authorization and its retained attachment proof, without another verification List, workspace file read, command or credential change. Registered tools are not proof that their operations were tested. A refusal must not be treated as a healthy connection.",
-        inputSchema: z.strictObject({ checkId: IdentifierSchema.optional() }),
+        inputSchema: z.strictObject({}),
         annotations,
       },
-      async ({ checkId }, ctx) =>
+      async (_input, ctx) =>
         run(
           {
             source: "ChatGPT",
@@ -447,7 +447,7 @@ export function createGoComputerMcpServer(
             status: "ok",
             requestId: call.requestId,
             context: call.context,
-            data: await observeConnectionStatus(observation, exposure, checkId),
+            data: await observeConnectionStatus(observation, exposure),
           }),
         ),
     );

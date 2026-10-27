@@ -19,10 +19,11 @@ integrations without pretending they are configured.
 The first normal launch opens Guided Setup in the app sidebar in both Dev and
 packaged Preview. Folder sharing and embedded ChatGPT sign-in are optional;
 ordinary Computer access requires an approved folder and current connector
-receipts, not Model or Agent. Connection checks use a dedicated temporary
-ChatGPT window in the existing authenticated partition, preserving the owner's
-conversation and draft. The check window follows the selected display policy;
-native fixtures keep their hidden presentation. A clean restart of a previously verified, still-selected
+receipts, not Model or Agent. Connection checks navigate the retained embedded
+browser to a new personalized temporary ChatGPT chat, in the existing authenticated
+partition. No second window is created and no conversation restoration is required.
+Back and Forward use browser history before the Farol section history.
+A clean restart of a previously verified, still-selected
 app admits one new check for the new runtime challenge. First setup and changed
 app selections require an explicit test; pending or UNKNOWN checks are never
 automatically repeated. Rechecking a healthy connection uses the read-only

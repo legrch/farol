@@ -6,7 +6,6 @@ import type { ConnectorVerificationBridge } from "./connector-verification.ts";
 export async function observeConnectionStatus(
   verification: Pick<ConnectorVerificationBridge, "observe">,
   exposure: Readonly<{ workspaceMutations: boolean; processes: boolean }>,
-  checkId?: string,
 ) {
   // Capture registration metadata before awaiting IO. Registration is not proof
   // of current command permission or of a successful exercise of that command.
@@ -26,9 +25,7 @@ export async function observeConnectionStatus(
   });
   // The real bridge validates exact context, binding, receipt digest and origin.
   // Let its original refusal/UNKNOWN propagate through the existing MCP run().
-  const state = await (checkId === undefined
-    ? verification.observe()
-    : verification.observe(checkId));
+  const state = await verification.observe();
   return Object.freeze({
     connection: "responding" as const,
     attachment:

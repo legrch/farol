@@ -1685,6 +1685,15 @@ function bootstrap() {
       selectedTaskId === ""
         ? { state: chatGptRoute?.loadState() ?? "loading" }
         : undefined,
+    browserHistoryState: {
+      taskId: selectedTaskId,
+      back: false,
+      forward: false,
+      ...(selectedTaskId === ""
+        ? chatGptRoute
+        : liveTaskRoutes.get(selectedTaskId)
+      )?.navigationHistory(),
+    },
     connectionStatus: currentConnectionStatus(),
     runtimeError,
     runtimeIdentity: runtime?.identity ?? null,
@@ -1895,6 +1904,11 @@ function createLiveChatGptRoute(
     parent: () => window,
     ...chatGptWindowPresentationOption(),
     surfaceFactory: liveChatGptSurfaceFactory(taskId),
+    onNavigationHistoryChanged: (state) =>
+      window?.webContents.send(channels.browserHistoryState, {
+        taskId,
+        ...state,
+      }),
     title: `${label} · ${displayProductName}`,
     onClosed: (conversationUrl, taskRunning) => {
       recordConversationUrl(conversationUrl);
@@ -5917,21 +5931,11 @@ async function verifySecureMcpApp(
         "CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE",
       );
     }
-    // A separate visible check page preserves the owner's conversation/draft.
-    // Native fixtures still inherit their hidden presentation contract.
-    const checkEntry = new URL(chatGptHomeUrl);
-    checkEntry.searchParams.set("temporary-chat", "true");
-    verificationRoute = createManagedChatGptRoute({
-      homeUrl: chatGptHomeUrl,
-      initialUrl: checkEntry.href,
-      e2eOrigin: chatGptE2eOrigin,
-      parent: () => window,
-      ...chatGptWindowPresentationOption(),
-      title: "Farol · Connection check",
-      ...(process.env.FAROL_E2E === "1" && chatGptE2eOrigin !== null
-        ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
-        : {}),
-    });
+    // Use the retained browser as a browser. A new temporary document keeps
+    // Chromium history, without a second window or a parallel conversation.
+    verificationRoute = chatGptRoute;
+    if ((await verificationRoute.openTemporaryChat()).status !== "opened")
+      return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
     const ready = await waitForConnectorCheckReadiness(
       verificationRoute,
       () => {
@@ -5972,7 +5976,7 @@ async function verifySecureMcpApp(
     }
     const prompt =
       statusCheckId !== null
-        ? `Use the selected ${appName} app to call computer_connection_status once with checkId "${statusCheckId}". Do not read files or run commands. Reply briefly with the result.`
+        ? `Use the selected ${appName} app to call computer_connection_status once. Do not read files or run commands. Reply briefly with the result.`
         : workspaceId === null
           ? `Use the selected ${appName} app to call farol_connector_verify_catalogue once with challenge "${challenge!.value}". No workspace is configured. Do not read files or run commands. Reply briefly with the result.`
           : `Use the selected ${appName} app to call farol_connector_verify once with challenge "${challenge!.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`;
@@ -6115,11 +6119,23 @@ async function verifySecureMcpApp(
       return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
     }
   } finally {
+    chatGptTaskAdmission = false;
+    connectorTaskAdmission = false;
+    // The managed task can temporarily suppress pure page observations. Ask
+    // the renderer to read the retained document again after that fence ends.
     try {
-      verificationRoute?.dispose();
-    } finally {
-      chatGptTaskAdmission = false;
-      connectorTaskAdmission = false;
+      if (
+        verificationRoute &&
+        window &&
+        !window.isDestroyed() &&
+        window.webContents &&
+        !window.webContents.isDestroyed()
+      )
+        window.webContents.send(channels.browserRouteState, {
+          state: verificationRoute.loadState(),
+        });
+    } catch {
+      // A closing renderer cannot change the original check result.
     }
   }
   if (requestedWorkspaceId === undefined || expectedBinding === null) {
@@ -11895,6 +11911,36 @@ function installIpc(): void {
       },
     );
   });
+  ipcMain.handle(channels.browserHistory, (event, value: unknown) => {
+    const request = z
+      .object({
+        taskId: z.string().max(200),
+        direction: z.union([z.literal(-1), z.literal(1)]),
+      })
+      .strict()
+      .safeParse(value);
+    if (
+      !request.success ||
+      quitInProgress ||
+      installedUpdateAdmission ||
+      !isTrustedIpcSender(event, window) ||
+      section !== "browser" ||
+      setupOpen ||
+      shellOverlay !== "none" ||
+      request.data.taskId !== selectedTaskId
+    )
+      return { handled: false, taskId: "", back: false, forward: false };
+    const route =
+      selectedTaskId === "" ? chatGptRoute : liveTaskRoutes.get(selectedTaskId);
+    const handled = route?.travelHistory(request.data.direction) ?? false;
+    return {
+      handled,
+      taskId: selectedTaskId,
+      back: false,
+      forward: false,
+      ...route?.navigationHistory(),
+    };
+  });
   ipcMain.on(channels.layout, (event, value: unknown) => {
     if (
       quitInProgress ||
@@ -12861,6 +12907,11 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   chatGptRoute = createManagedChatGptRoute({
     homeUrl: chatGptUrl,
     initialUrl: chatGptInitialUrl,
+    onNavigationHistoryChanged: (state) =>
+      window?.webContents.send(channels.browserHistoryState, {
+        taskId: "",
+        ...state,
+      }),
     e2eOrigin: e2eChatGptOrigin,
     parent: () => window,
     ...chatGptWindowPresentationOption(),

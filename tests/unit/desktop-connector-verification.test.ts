@@ -87,19 +87,17 @@ it("requires the exact fresh socket check acknowledgement without changing the r
   const f = fixture();
   await expect(f.bridge.expectStatusCheck("new-read")).resolves.toBeUndefined();
   // Registering the correlation on the host pipe is not a socket ACK.
-  await expect(f.bridge.observe("new-read")).rejects.toMatchObject({
-    state: "unknown",
-  });
+  expect((await f.bridge.observe()).checkId).toBeUndefined();
   f.request.mockImplementation(async (_method, _body, options) => ({
     status: "ok",
     requestId: options!.id!,
     context,
     data: { ...f.state, checkId: "new-read" } as unknown as Json,
   }));
-  expect((await f.bridge.observe("new-read")).receipt).toEqual(f.receipt);
+  expect((await f.bridge.observe()).receipt).toEqual(f.receipt);
+  expect((await f.bridge.observe()).checkId).toBe("new-read");
   expect(f.request.mock.calls.at(-1)?.[1]).toEqual({
     binding,
-    checkId: "new-read",
   });
 });
 it("distinguishes known absence from a successful verification", async () => {

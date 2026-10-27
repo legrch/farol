@@ -59,13 +59,21 @@ export function connectorVerificationInFlight(
   snapshot: WindowSnapshot,
   local: readonly Intent[] = [],
 ): boolean {
-  return [...Object.values(snapshot.intents), ...local].some(
-    (intent) =>
-      /^settings:connector\.(?:verify-app|verify-separate-app):(?:[a-f0-9]{64})?$/u.test(
-        intent.id,
-      ) &&
-      intent.state === "pending" &&
-      intent.inFlight === true,
+  return (
+    snapshot.activity.some(
+      (entry) =>
+        entry.kind === "connector.verify-app" &&
+        entry.outcome === "pending" &&
+        entry.inFlight === true,
+    ) ||
+    [...Object.values(snapshot.intents), ...local].some(
+      (intent) =>
+        /^settings:connector\.(?:verify-app|verify-separate-app):(?:[a-f0-9]{64})?$/u.test(
+          intent.id,
+        ) &&
+        intent.state === "pending" &&
+        intent.inFlight === true,
+    )
   );
 }
 

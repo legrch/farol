@@ -127,14 +127,19 @@ it("registers a read-only status and observes without verification", async () =>
   expect(verify).not.toHaveBeenCalled();
   expect(f.request).not.toHaveBeenCalled();
 });
-it("passes a fresh status identifier to the authenticated Go observation only", async () => {
+it("retains the existing empty input schema for cached ChatGPT tool catalogues", async () => {
   const observe = vi.fn(async () => ({ binding }));
   const f = await connect({ connectionStatus: { observe } });
+  const tools = await f.client.listTools();
+  expect(
+    tools.tools.find((t) => t.name === "computer_connection_status")
+      ?.inputSchema.properties,
+  ).toEqual({});
   await f.client.callTool({
     name: "computer_connection_status",
-    arguments: { checkId: "fresh-status-check" },
+    arguments: {},
   });
-  expect(observe).toHaveBeenCalledWith("fresh-status-check");
+  expect(observe).toHaveBeenCalledWith();
   expect(f.request).not.toHaveBeenCalled();
 });
 it("does not enter Go observation when the existing fence refuses", async () => {

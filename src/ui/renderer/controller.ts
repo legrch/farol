@@ -67,6 +67,8 @@ import {
 import { BuildIdentitySchema } from "../../pkg/build-info/identity";
 import {
   BrowserRouteStatusSchema,
+  BrowserHistoryStateSchema,
+  BrowserHistoryReplySchema,
   RuntimeStatusSchema,
 } from "../../pkg/ipc/runtime-status";
 import { TaskSurfaceStatusSchema } from "../../pkg/ipc/task-surface-status";
@@ -143,6 +145,7 @@ export const BootstrapProjectionSchema = z.object({
   independentSession: z.boolean().optional(),
   connectionStatus: ConnectionStatusViewSchema.optional(),
   browserRouteState: BrowserRouteStatusSchema.optional(),
+  browserHistoryState: BrowserHistoryStateSchema.optional(),
   selectedTaskId: z.string().default(""),
   taskRevision: z.number().int().nonnegative(),
   tasks: ProductTasksStateSchema.shape.tasks,
@@ -460,6 +463,7 @@ export class WindowController implements RendererFacade {
   private tasksInitialized = false;
   private runtimeRevision = 0;
   private browserRouteRevision = 0;
+  private browserHistoryRevision = 0;
   private updateRevision = 0;
   private pendingUpdateCheck = false;
   private staleRevision = 0;
@@ -610,6 +614,16 @@ export class WindowController implements RendererFacade {
         }
       }),
       this.api.onInstalledUpdateState((value) => this.adoptUpdate(value)),
+      this.api.onBrowserHistoryState?.((value) => {
+        const parsed = BrowserHistoryStateSchema.safeParse(value);
+        if (
+          parsed.success &&
+          parsed.data.taskId === this.state.destination.taskId
+        ) {
+          this.browserHistoryRevision++;
+          this.patch({ browserHistory: parsed.data });
+        }
+      }) ?? (() => {}),
       this.api.onBrowserRouteState((value) => {
         this.resetSavedSignInObservation();
         this.invalidateSignInObservation();
@@ -638,6 +652,7 @@ export class WindowController implements RendererFacade {
     ];
     const runtimeAtStart = this.runtimeRevision;
     const browserRouteAtStart = this.browserRouteRevision;
+    const browserHistoryAtStart = this.browserHistoryRevision;
     const windowAtStart = this.state.window;
     const order = this.configOrder.begin();
     if (this.api.operations) {
@@ -661,6 +676,10 @@ export class WindowController implements RendererFacade {
           this.adoptConnectionStatusRead(data, connectionRead);
         this.patch({
           environment: data.environment,
+          ...(this.browserHistoryRevision === browserHistoryAtStart &&
+          data.browserHistoryState
+            ? { browserHistory: data.browserHistoryState }
+            : {}),
           independentSession: data.independentSession === true,
           ...(this.browserRouteRevision === browserRouteAtStart &&
           data.browserRouteState
@@ -1478,7 +1497,9 @@ export class WindowController implements RendererFacade {
           );
         if (
           command.kind === "chatgpt.open-sign-in" ||
-          command.kind === "chatgpt.open-browser"
+          command.kind === "chatgpt.open-browser" ||
+          command.kind === "connector.verify-app" ||
+          command.kind === "connector.verify-separate-app"
         ) {
           if (
             command.kind === "chatgpt.open-sign-in" ||
@@ -2325,6 +2346,37 @@ export class WindowController implements RendererFacade {
     }
   }
   travel(direction: -1 | 1): void {
+    if (this.disposed || this.state.update.phase === "applying") return;
+    if (this.state.destination.area === "chatgpt" && this.api.browserHistory) {
+      const revision = this.navigationRevision;
+      const historyRevision = this.browserHistoryRevision;
+      const destination = this.state.destination;
+      void this.api
+        .browserHistory({ taskId: destination.taskId, direction })
+        .then((value) => {
+          if (
+            this.disposed ||
+            revision !== this.navigationRevision ||
+            this.state.destination !== destination
+          )
+            return;
+          const result = BrowserHistoryReplySchema.safeParse(value);
+          if (!result.success) return;
+          if (
+            result.data.taskId === destination.taskId &&
+            this.browserHistoryRevision === historyRevision
+          )
+            this.patch({ browserHistory: result.data });
+          if (!result.data.handled) this.travelSection(direction);
+        })
+        .catch(() => {
+          // An uncertain native navigation never triggers a second navigation.
+        });
+      return;
+    }
+    this.travelSection(direction);
+  }
+  private travelSection(direction: -1 | 1): void {
     if (this.disposed || this.state.update.phase === "applying") return;
     const wasSignIn = this.isSignInEntry();
     const cursor = this.cursor + direction;

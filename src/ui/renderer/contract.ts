@@ -51,6 +51,11 @@ export type PreloadApi = Readonly<{
   onRuntimeState(listener: (value: unknown) => void): () => void;
   onInstalledUpdateState(listener: (value: unknown) => void): () => void;
   onBrowserRouteState(listener: (value: unknown) => void): () => void;
+  browserHistory?(request: {
+    taskId: string;
+    direction: -1 | 1;
+  }): Promise<unknown>;
+  onBrowserHistoryState?(listener: (value: unknown) => void): () => void;
   onTaskSurfaceState(listener: (value: unknown) => void): () => void;
   onLayout(listener: (value: unknown) => void): () => void;
   onShellAction(listener: (value: unknown) => void): () => void;
@@ -225,6 +230,11 @@ export type WindowSnapshot = Readonly<{
   destination: Destination;
   back: boolean;
   forward: boolean;
+  browserHistory?: Readonly<{
+    taskId: string;
+    back: boolean;
+    forward: boolean;
+  }>;
   sidebar: "full" | "rail" | "overlay";
   overlay: "none" | Sheet;
   window: WindowState;

@@ -209,6 +209,9 @@ func (s *computerConnector) verificationObservationMethodFor(expected *connector
 		if json.Unmarshal(request.Body, &in) != nil {
 			return invalidIngress()
 		}
+		if expected != nil && in.CheckId != nil {
+			return invalidIngress() // Correlation is selected only by the host pipe.
+		}
 		if err := s.enter(ctx); err != nil {
 			return connectorVerificationOutcome(nil, err)
 		}
@@ -222,8 +225,8 @@ func (s *computerConnector) verificationObservationMethodFor(expected *connector
 			return connectorVerificationOutcome(nil, err)
 		}
 		state, err := connectorVerificationState(ctx, slot, lease)
-		if err == nil && in.CheckId != nil {
-			if expected == nil {
+		if err == nil {
+			if expected == nil && in.CheckId != nil {
 				// Register correlation, never evidence. Only the matching socket
 				// observation can acknowledge this check. Replacing the expected
 				// ID also fences late replies from the previous host check.
@@ -232,11 +235,12 @@ func (s *computerConnector) verificationObservationMethodFor(expected *connector
 					slot.statusCheckID = ""
 					state.CheckId = nil
 				}
-			} else {
-				if slot.expectedStatusCheckID == *in.CheckId {
-					slot.statusCheckID = *in.CheckId
-				}
-				value := *in.CheckId
+			} else if expected != nil && slot.expectedStatusCheckID != "" {
+				// An actual bound socket read after host registration is fresh
+				// reachability evidence. The public status tool keeps its original
+				// empty input schema, including cached ChatGPT tool catalogues.
+				slot.statusCheckID = slot.expectedStatusCheckID
+				value := slot.statusCheckID
 				state.CheckId = &value
 			}
 		}

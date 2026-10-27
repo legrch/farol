@@ -16,6 +16,8 @@ export const channels = Object.freeze({
   connectionStatus: "farol:connection-status",
   runtimeState: "farol:runtime-state",
   browserRouteState: "farol:browser-route-state",
+  browserHistory: "farol:browser-history",
+  browserHistoryState: "farol:browser-history-state",
   taskSurfaceState: "farol:task-surface-state",
   tasksState: "farol:tasks-state",
   shellAction: "farol:shell-action",

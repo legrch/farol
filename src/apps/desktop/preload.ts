@@ -101,6 +101,15 @@ if (process.argv.includes("--farol-startup-recovery")) {
       return () =>
         ipcRenderer.removeListener(channels.browserRouteState, wrapped);
     },
+    browserHistory: (request: unknown) =>
+      ipcRenderer.invoke(channels.browserHistory, request) as Promise<unknown>,
+    onBrowserHistoryState: (listener: (value: unknown) => void) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) =>
+        listener(value);
+      ipcRenderer.on(channels.browserHistoryState, wrapped);
+      return () =>
+        ipcRenderer.removeListener(channels.browserHistoryState, wrapped);
+    },
     onTaskSurfaceState: (listener: (status: unknown) => void) => {
       const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) =>
         listener(value);

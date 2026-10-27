@@ -193,10 +193,9 @@ async function runScenario(scenario) {
     const c = current.connectors.secureMcp;
     const challenge = c.challenge;
     const workspaceId = current.setup.computer.verified.workspaceId;
-    const statusCheckId =
-      /call computer_connection_status once with checkId "([^"]+)"/u.exec(
-        prompt,
-      )?.[1];
+    const statusCheckId = prompt.includes(
+      "call computer_connection_status once.",
+    );
     assert.ok(
       (statusCheckId ? current.connectors.secureMcp.attachment : challenge) &&
         current.setup.computer.verified,
@@ -205,7 +204,7 @@ async function runScenario(scenario) {
     assert.equal(
       prompt,
       statusCheckId
-        ? `Use the selected ${appName} app to call computer_connection_status once with checkId "${statusCheckId}". Do not read files or run commands. Reply briefly with the result.`
+        ? `Use the selected ${appName} app to call computer_connection_status once. Do not read files or run commands. Reply briefly with the result.`
         : `Use the selected ${appName} app to call farol_connector_verify once with challenge "${challenge.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`,
     );
     const connectorRoot = path.join(
@@ -281,7 +280,7 @@ async function runScenario(scenario) {
             ? "computer_connection_status"
             : "farol_connector_verify",
           arguments: statusCheckId
-            ? { checkId: statusCheckId }
+            ? {}
             : {
                 challenge:
                   scenario === "wrong-nonce" || (separate && sendCount === 1)
@@ -294,9 +293,9 @@ async function runScenario(scenario) {
       );
       let value = result.structuredContent;
       if (statusCheckId) {
-        assert.equal(
-          value?.data?.verification?.checkId,
-          statusCheckId,
+        assert.ok(
+          typeof value?.data?.verification?.checkId === "string" &&
+            value.data.verification.checkId.length > 0,
           "STATUS_CHECK_ACK_MISSING",
         );
         value = { ...value, data: value.data.verification };
@@ -992,9 +991,7 @@ async function runScenario(scenario) {
           const owner = webContents.fromId(expected.id);
           return {
             url: owner?.getURL(),
-            draft: await owner?.executeJavaScript(
-              "document.getElementById('prompt-textarea').innerText",
-            ),
+            windows: BrowserWindow.getAllWindows().length,
             visibleWindows: BrowserWindow.getAllWindows().filter((w) =>
               w.isVisible(),
             ).length,
@@ -1005,19 +1002,33 @@ async function runScenario(scenario) {
         },
         preservedOwner,
       );
-      assert.equal(
+      assert.notEqual(
         preserved.url,
         preservedOwner.url,
-        "OWNER_CONVERSATION_NAVIGATED",
-      );
-      assert.equal(
-        preserved.draft,
-        "unsent fixture draft",
-        "OWNER_DRAFT_REPLACED",
+        "CHECK_DID_NOT_NAVIGATE_BROWSER",
       );
       assert.equal(preserved.visibleWindows, 0, "CHECK_WINDOW_BECAME_VISIBLE");
       assert.equal(preserved.focusedWindows, 0, "CHECK_WINDOW_STOLE_FOCUS");
-      report.ownerConversationPreserved = true;
+      assert.equal(preserved.windows, 1, "CHECK_CREATED_SECOND_WINDOW");
+      await page.getByRole("button", { name: "Back", exact: true }).click();
+      const ownerUrl = () =>
+        application.evaluate(
+          ({ webContents }, id) => webContents.fromId(id)?.getURL(),
+          preservedOwner.id,
+        );
+      await poll(
+        ownerUrl,
+        (url) => url === preservedOwner.url,
+        "BROWSER_BACK_DID_NOT_RETURN",
+      );
+      await page.getByRole("button", { name: "Forward", exact: true }).click();
+      await poll(
+        ownerUrl,
+        (url) => url === preserved.url,
+        "BROWSER_FORWARD_DID_NOT_RETURN",
+      );
+      report.connectionCheckUsesRetainedBrowser = true;
+      report.browserBackForward = "PASS";
     }
     if (scenario !== "late-receipt")
       await page

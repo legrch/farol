@@ -91,7 +91,10 @@ function fixture() {
     },
   );
   const dispose = vi.fn();
-  const ownerRoute = { runReadonlyTask: vi.fn() };
+  const ownerRoute = {
+    runReadonlyTask: route,
+    openTemporaryChat: vi.fn(async () => ({ status: "opened" })),
+  };
   const createRoute = vi.fn((_options: unknown) => ({
     runReadonlyTask: route,
     dispose,
@@ -195,9 +198,7 @@ describe("actual separate-check desktop admission", () => {
     const check = vi.fn(async () => ({ ok: true }));
     f.context.checkSecureMcpAttachment = check;
     f.route.mockImplementation(async (prompt, _files, hooks) => {
-      expect(prompt).toContain(
-        'computer_connection_status once with checkId "status-check-fixture"',
-      );
+      expect(prompt).toContain("computer_connection_status once.");
       await hooks.onDispatchIntent();
       expect(
         f.context.desktopGoCore.expectComputerConnectorStatusCheck,
@@ -214,17 +215,17 @@ describe("actual separate-check desktop admission", () => {
     expect(check).toHaveBeenCalledTimes(1);
   });
 
-  it("runs an automatic fresh check on a hidden page while the owner route is untouched", async () => {
+  it("runs an automatic fresh check by navigating the retained browser", async () => {
     const f = fixture();
     f.settings.setup.connect.outcomeUnknown = false;
     f.settings.connectors.secureMcp.appVerificationPending = false;
     expect(await f.verify(undefined, f.expected)).toMatchObject({
       error: "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN",
     });
-    expect(f.createRoute).toHaveBeenCalledTimes(1);
+    expect(f.createRoute).not.toHaveBeenCalled();
     expect(f.send).toHaveBeenCalledTimes(1);
-    expect(f.ownerRoute.runReadonlyTask).not.toHaveBeenCalled();
-    expect(f.dispose).toHaveBeenCalledTimes(1);
+    expect(f.ownerRoute.openTemporaryChat).toHaveBeenCalledTimes(1);
+    expect(f.dispose).not.toHaveBeenCalled();
   });
 
   it("does not dispatch an automatic check after its captured lifetime changes", async () => {
@@ -271,17 +272,9 @@ describe("actual separate-check desktop admission", () => {
     expect(f.send).toHaveBeenCalledTimes(1);
     expect(f.clearOld).not.toHaveBeenCalled();
     expect(f.settings.setup.connect.outcomeUnknown).toBe(true);
-    expect(f.ownerRoute.runReadonlyTask).not.toHaveBeenCalled();
-    expect(f.createRoute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        homeUrl: "https://chatgpt.com/",
-        initialUrl: "https://chatgpt.com/?temporary-chat=true",
-        windowPresentation: { mode: "hidden" },
-      }),
-    );
-    const options = f.createRoute.mock.calls[0]![0] as { parent(): unknown };
-    expect(options.parent()).toBe(f.context.window);
-    expect(f.dispose).toHaveBeenCalledTimes(1);
+    expect(f.ownerRoute.openTemporaryChat).toHaveBeenCalledTimes(1);
+    expect(f.createRoute).not.toHaveBeenCalled();
+    expect(f.dispose).not.toHaveBeenCalled();
   });
   it("does not dispatch after scope drift during native approval", async () => {
     const f = fixture();
@@ -321,6 +314,6 @@ describe("actual separate-check desktop admission", () => {
     expect(f.clearOld).not.toHaveBeenCalled();
     expect(f.settings.setup.connect.outcomeUnknown).toBe(true);
     expect(f.settings.connectors.secureMcp.appVerificationPending).toBe(true);
-    expect(f.dispose).toHaveBeenCalledTimes(1);
+    expect(f.dispose).not.toHaveBeenCalled();
   });
 });
