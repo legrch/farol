@@ -516,4 +516,67 @@ describe("_output retention", () => {
     expect(result.removed.map(({ path: item }) => item)).toEqual([file]);
     expect(await exists(file)).toBe(false);
   });
+
+  it("keeps a cap-only candidate once the remaining evidence fits the cap", async () => {
+    const a = await entry("evidence/cap-a", { ageDays: 3, bytes: 64 * 1024 });
+    const b = await entry("evidence/cap-b", { ageDays: 2, bytes: 64 * 1024 });
+    const c = await entry("evidence/cap-c", { ageDays: 1, bytes: 64 * 1024 });
+    let calls = 0;
+    await pruneOutput(root, {
+      observation: observe(),
+      observe: () => {
+        // Another producer removes the newest entry while the first is removed.
+        if (++calls === 3)
+          return fs.rm(c, { recursive: true }).then(() => observe());
+        return observe();
+      },
+      now: NOW,
+      policy: { ...POLICY, evidenceCapBytes: 100 * 1024 },
+      protect: PROTECTED_EVIDENCE,
+    });
+    expect(await exists(a)).toBe(false);
+    expect(await exists(b)).toBe(true);
+  });
+
+  it("keeps an entry that became protected before its removal", async () => {
+    const first = await entry("evidence/old-a", { ageDays: 30 });
+    const second = await entry("evidence/old-b", { ageDays: 30 });
+    const protect = [...PROTECTED_EVIDENCE];
+    let calls = 0;
+    await pruneOutput(root, {
+      observation: observe(),
+      observe: () => {
+        if (++calls === 3) protect.push("old-b");
+        return observe();
+      },
+      now: NOW,
+      protect,
+    });
+    expect(await exists(first)).toBe(false);
+    expect(await exists(second)).toBe(true);
+  });
+
+  it("reports earlier removals when a later re-check fails", async () => {
+    const first = await entry("evidence/old-a", { ageDays: 30 });
+    const second = await entry("evidence/old-b", { ageDays: 30 });
+    let calls = 0;
+    const result = await pruneOutput(root, {
+      observation: observe(),
+      observe: () => {
+        if (++calls === 3) {
+          const blocked = path.join(second, "nested");
+          return fs
+            .mkdir(blocked)
+            .then(() => fs.chmod(blocked, 0))
+            .then(() => observe());
+        }
+        return observe();
+      },
+      now: NOW,
+      protect: PROTECTED_EVIDENCE,
+    });
+    await fs.chmod(path.join(second, "nested"), 0o700);
+    expect(result.removed.map(({ path: item }) => item)).toEqual([first]);
+    expect(result.failed.map(({ path: item }) => item)).toEqual([second]);
+  });
 });

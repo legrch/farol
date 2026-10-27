@@ -351,6 +351,7 @@ export async function inspectOutput(
     if (expired || kept > policy.evidenceCapBytes) {
       entry.state = "removable";
       entry.reason = expired ? "older than 7 days" : "over the 2 GB cap";
+      entry.capOnly = !expired;
       kept -= entry.bytes;
     } else entry.state = "kept";
   }
@@ -387,17 +388,13 @@ export async function pruneOutput(root, options = {}) {
     // removals take time, and a use that began meanwhile keeps its entry.
     const final = observe();
     if (!final) break;
-    // Re-run the same classification on fresh state: still finished, and
-    // its content unchanged since it was judged removable.
-    const fresh = await classifyChild(
-      entry.path,
-      entry.kind,
-      final,
-      options.now ?? Date.now(),
-      options.policy ?? POLICY,
-    );
-    if (!fresh || fresh.state !== "finished" || fresh.newest !== entry.newest)
+    try {
+      if (!(await stillRemovable(entry, final, root, report, removed, options)))
+        continue;
+    } catch (error) {
+      failed.push({ ...entry, error: error.code ?? error.message });
       continue;
+    }
     try {
       await fs.rm(entry.path, { recursive: true, force: true });
       removed.push(entry);
@@ -407,6 +404,47 @@ export async function pruneOutput(root, options = {}) {
     }
   }
   return { ...report, removed, failed };
+}
+
+// Re-derives every eligibility input on fresh state right before a removal:
+// the same classification (finished, content unchanged), current by-path
+// protection, and, for an entry chosen only by the size cap, whether the
+// remaining finished evidence still exceeds the cap.
+async function stillRemovable(
+  entry,
+  observation,
+  root,
+  report,
+  removed,
+  options,
+) {
+  const policy = options.policy ?? POLICY;
+  const fresh = await classifyChild(
+    entry.path,
+    entry.kind,
+    observation,
+    options.now ?? Date.now(),
+    policy,
+  );
+  if (!fresh || fresh.state !== "finished" || fresh.newest !== entry.newest)
+    return false;
+  if (entry.kind !== "evidence") return true;
+  const protect =
+    options.protect === undefined ? protectedEvidence(root) : options.protect;
+  if (isProtected(path.basename(entry.path), protect)) return false;
+  if (!entry.capOnly) return true;
+  const gone = new Set(removed.map(({ path: item }) => item));
+  let remaining = 0;
+  for (const other of report.entries) {
+    if (other.kind !== "evidence" || gone.has(other.path)) continue;
+    if (!["kept", "removable"].includes(other.state)) continue;
+    const present = await fs.lstat(other.path).then(
+      () => true,
+      () => false,
+    );
+    if (present) remaining += other.bytes;
+  }
+  return remaining > policy.evidenceCapBytes;
 }
 
 const gb = (bytes) => `${(bytes / 1024 ** 3).toFixed(2)} GB`;
