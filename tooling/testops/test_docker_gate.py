@@ -685,7 +685,8 @@ class ClientConfigCleanup(unittest.TestCase):
             if launch:
                 # Run one executor up to its container launch, then stop it there.
                 probe = self.parent / "probe-job"
-                probe.mkdir()
+                probe.mkdir(mode=0o700)
+                probe.chmod(0o700)  # Independent of the runner's umask.
                 real_popen = subprocess.Popen
                 launches = []
 
