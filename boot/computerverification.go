@@ -209,9 +209,6 @@ func (s *computerConnector) verificationObservationMethodFor(expected *connector
 		if json.Unmarshal(request.Body, &in) != nil {
 			return invalidIngress()
 		}
-		if in.CheckId != nil && expected == nil {
-			return invalidIngress() // Only the live MCP socket can acknowledge a status check.
-		}
 		if err := s.enter(ctx); err != nil {
 			return connectorVerificationOutcome(nil, err)
 		}
@@ -226,9 +223,22 @@ func (s *computerConnector) verificationObservationMethodFor(expected *connector
 		}
 		state, err := connectorVerificationState(ctx, slot, lease)
 		if err == nil && in.CheckId != nil {
-			slot.statusCheckID = *in.CheckId
-			value := slot.statusCheckID
-			state.CheckId = &value
+			if expected == nil {
+				// Register correlation, never evidence. Only the matching socket
+				// observation can acknowledge this check. Replacing the expected
+				// ID also fences late replies from the previous host check.
+				if slot.expectedStatusCheckID != *in.CheckId {
+					slot.expectedStatusCheckID = *in.CheckId
+					slot.statusCheckID = ""
+					state.CheckId = nil
+				}
+			} else {
+				if slot.expectedStatusCheckID == *in.CheckId {
+					slot.statusCheckID = *in.CheckId
+				}
+				value := *in.CheckId
+				state.CheckId = &value
+			}
 		}
 		return connectorVerificationOutcome(state, err)
 	}}

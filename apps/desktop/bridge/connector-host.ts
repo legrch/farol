@@ -355,6 +355,20 @@ export class ConnectorHostBridge {
       );
     return result;
   }
+  async expectStatusCheck(checkId: string) {
+    const current = this.current;
+    if (!current || !this.proof || this.pending || this.blocked)
+      throw new BridgeError(
+        "unavailable",
+        "connector_verification_unavailable",
+      );
+    await this.proof.expectStatusCheck(checkId);
+    if (this.current !== current || this.pending || this.blocked)
+      throw new BridgeError(
+        "unavailable",
+        "connector_verification_unavailable",
+      );
+  }
   get currentBinding() {
     return this.current?.endpoint.binding;
   }

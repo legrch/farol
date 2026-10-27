@@ -421,6 +421,11 @@ export class DesktopGoCore {
       throw new BridgeError("unavailable", "host_connector_unavailable");
     return this.connector.verification();
   }
+  expectComputerConnectorStatusCheck(checkId: string) {
+    if (this.closeResult || !this.connector)
+      throw new BridgeError("unavailable", "host_connector_unavailable");
+    return this.connector.expectStatusCheck(checkId);
+  }
   snapshotSettingsWorkspace(
     computerGeneration: number,
     workspaceId: string,

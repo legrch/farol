@@ -123,7 +123,10 @@ function fixture() {
     installedUpdateAdmission: false,
     process: { env: {} },
     secureMcpConnectorRuntime: { isRunning: () => true },
-    desktopGoCore: { observeComputerConnectorVerification: readGo },
+    desktopGoCore: {
+      observeComputerConnectorVerification: readGo,
+      expectComputerConnectorStatusCheck: vi.fn(async () => {}),
+    },
     window: { isDestroyed: () => false },
     dialog: { showMessageBox: nativeConfirmation },
     buildIdentity: { buildId: fixtureBuildId },

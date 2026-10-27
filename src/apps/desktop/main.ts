@@ -6028,7 +6028,11 @@ async function verifySecureMcpApp(
             !connectorAppBindingCurrent(admitted.settings, expectedBinding)
           )
             throw new Error("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
-          if (statusCheckId === null)
+          if (statusCheckId !== null)
+            await verificationCore.expectComputerConnectorStatusCheck(
+              statusCheckId,
+            );
+          else
             await prepareConnectorAppVerificationAttempt(
               stateRoot,
               challenge.challengeSha256,

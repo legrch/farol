@@ -85,6 +85,8 @@ it("observes exact Go proof and retains its original call on repeated verificati
 });
 it("requires the exact fresh socket check acknowledgement without changing the receipt", async () => {
   const f = fixture();
+  await expect(f.bridge.expectStatusCheck("new-read")).resolves.toBeUndefined();
+  // Registering the correlation on the host pipe is not a socket ACK.
   await expect(f.bridge.observe("new-read")).rejects.toMatchObject({
     state: "unknown",
   });

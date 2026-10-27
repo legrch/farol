@@ -34,6 +34,12 @@ export class ConnectorVerificationBridge {
       throw new BridgeError("unknown", "crossed_connector_verification");
     return state;
   }
+  async expectStatusCheck(checkId: string): Promise<void> {
+    await this.request("computer.connector.verification", {
+      binding: this.binding,
+      checkId,
+    });
+  }
   async verify(
     challenge: string,
     workspaceId: string,

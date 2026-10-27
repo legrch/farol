@@ -53,7 +53,8 @@ func TestConnectorSocketRegistersBoundReadOnlyVerificationObservation(t *testing
 	checkedQuery := query
 	checkedQuery.CheckId = &checkID
 	out, err = verificationInvoke(t, s.verificationObservationMethod(), checkedQuery)
-	if err == nil && out != nil && out.Status == "ok" {
+	armed := verificationState(t, out, err)
+	if armed.CheckId != nil {
 		t.Fatal("desktop pipe fabricated a socket status acknowledgement")
 	}
 	out, err = verificationInvoke(t, method, checkedQuery)
@@ -65,6 +66,40 @@ func TestConnectorSocketRegistersBoundReadOnlyVerificationObservation(t *testing
 	observed := verificationState(t, out, err)
 	if observed.CheckId == nil || *observed.CheckId != checkID || native.calls != 1 {
 		t.Fatal("desktop did not observe the exact socket read acknowledgement")
+	}
+	// A concurrent unrelated status read cannot consume/replace the host's
+	// acknowledgement. A later host check also fences the previous late reply.
+	otherID := "independent-status-check"
+	otherQuery := query
+	otherQuery.CheckId = &otherID
+	out, err = verificationInvoke(t, method, otherQuery)
+	independent := verificationState(t, out, err)
+	if independent.CheckId == nil || *independent.CheckId != otherID {
+		t.Fatal("independent status did not correlate its own response")
+	}
+	out, err = verificationInvoke(t, s.verificationObservationMethod(), query)
+	observed = verificationState(t, out, err)
+	if observed.CheckId == nil || *observed.CheckId != checkID {
+		t.Fatal("independent status replaced the in-progress check acknowledgement")
+	}
+	out, err = verificationInvoke(t, s.verificationObservationMethod(), otherQuery)
+	armed = verificationState(t, out, err)
+	if armed.CheckId != nil {
+		t.Fatal("new host check inherited the previous acknowledgement")
+	}
+	out, err = verificationInvoke(t, method, checkedQuery)
+	_ = verificationState(t, out, err)
+	out, err = verificationInvoke(t, s.verificationObservationMethod(), query)
+	observed = verificationState(t, out, err)
+	if observed.CheckId != nil {
+		t.Fatal("late previous reply acknowledged the newer host check")
+	}
+	out, err = verificationInvoke(t, method, otherQuery)
+	_ = verificationState(t, out, err)
+	out, err = verificationInvoke(t, s.verificationObservationMethod(), query)
+	observed = verificationState(t, out, err)
+	if observed.CheckId == nil || *observed.CheckId != otherID || native.calls != 1 {
+		t.Fatal("current host check did not retain its own acknowledgement")
 	}
 	// Even a matching public binding cannot transfer an old endpoint's method
 	// to another retained slot. This is a synthetic slot-identity regression.

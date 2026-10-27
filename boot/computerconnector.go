@@ -53,18 +53,19 @@ type computerConnector struct {
 	closed    *connectorRecoveryOrigin // effects-owned, exact successful Close only
 }
 type connectorSlot struct {
-	guard            *connectorHostGuard
-	owner            *connectorsvc.Service
-	route            *ComputerRoute
-	endpoint         connectorEndpoint
-	opened           wire.ComputerConnectorOpened
-	closing          bool
-	closeErr         error
-	startupUncertain bool
-	renewalCancel    context.CancelFunc
-	renewalDone      chan struct{}
-	renewalScope     *connectorRenewalScope
-	statusCheckID    string // Socket-only read acknowledgement; never attachment authority.
+	guard                 *connectorHostGuard
+	owner                 *connectorsvc.Service
+	route                 *ComputerRoute
+	endpoint              connectorEndpoint
+	opened                wire.ComputerConnectorOpened
+	closing               bool
+	closeErr              error
+	startupUncertain      bool
+	renewalCancel         context.CancelFunc
+	renewalDone           chan struct{}
+	renewalScope          *connectorRenewalScope
+	statusCheckID         string // Socket-only read acknowledgement; never attachment authority.
+	expectedStatusCheckID string // Host-selected current check; other socket reads cannot replace it.
 }
 type connectorHostGuard struct {
 	mu          sync.Mutex
