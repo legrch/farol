@@ -52,6 +52,9 @@ export const operationCodesByOutcome = {
     "supported",
   ],
   refused: [
+    "FRESH_START_SETTINGS_UNAVAILABLE",
+    "STARTUP_PRESERVED_MUTATION_CONTRACT_UNSUPPORTED",
+    "invalid_fresh_launch",
     "ABSENT",
     "AGENT_AUTHORITY_CONTINUITY_INVALID",
     "AGENT_AUTHORITY_DENIED",
@@ -1871,6 +1874,12 @@ export const operationCodesByOutcome = {
     "write-failed",
   ],
   unknown: [
+    "FRESH_SESSION_PROCESS_SCOPE_UNAVAILABLE",
+    "FRESH_START_CURRENT_OWNER_UNCONFIRMED",
+    "FRESH_START_HISTORY_UNCONFIRMED",
+    "fresh_session_drain_unconfirmed",
+    "fresh_session_terminal_unconfirmed",
+    "fresh_mcp_owner_unconfirmed",
     "backend_child_closed",
     "backend_unclassified_failure",
     "owner_outcome_unknown",

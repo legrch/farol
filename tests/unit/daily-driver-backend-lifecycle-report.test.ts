@@ -172,43 +172,50 @@ it("forwards the selected original observer through the actual attested launch",
   expect(callback).toBe(report);
 });
 
-it("omits an absent optional observer from the actual native launch object", () => {
-  const call = selected(host, hostTree, (node) => {
-    const callee = node.callee as
-      { object?: { name?: string }; property?: { name?: string } } | undefined;
-    return (
-      node.type === "CallExpression" &&
-      callee?.object?.name === "attested" &&
-      callee.property?.name === "start"
+it.each([false, true])(
+  "omits an absent optional observer from the actual native launch object (fresh=%s)",
+  (fresh) => {
+    const call = selected(host, hostTree, (node) => {
+      const callee = node.callee as
+        | { object?: { name?: string }; property?: { name?: string } }
+        | undefined;
+      return (
+        node.type === "CallExpression" &&
+        callee?.object?.name === "attested" &&
+        callee.property?.name === "start"
+      );
+    });
+    const budgetDeclaration = selected(
+      host,
+      hostTree,
+      (node) =>
+        node.type === "VariableDeclaration" &&
+        (node.declarations as { id?: { name?: string } }[]).some(
+          (value) => value.id?.name === "DESKTOP_CORE_STARTUP_TIMEOUT_MS",
+        ),
     );
-  });
-  const budgetDeclaration = selected(
-    host,
-    hostTree,
-    (node) =>
-      node.type === "VariableDeclaration" &&
-      (node.declarations as { id?: { name?: string } }[]).some(
-        (value) => value.id?.name === "DESKTOP_CORE_STARTUP_TIMEOUT_MS",
-      ),
-  );
-  const budget = vm.runInNewContext(
-    `${stripTypeScriptTypes(budgetDeclaration)}; DESKTOP_CORE_STARTUP_TIMEOUT_MS`,
-  );
-  const options = vm.runInNewContext(stripTypeScriptTypes(call), {
-    DESKTOP_CORE_STARTUP_TIMEOUT_MS: budget,
-    attested: { start: (_budget: number, options: object) => options },
-    profile: {},
-    settings: { computer: { computerId: "controlled-only" } },
-    storage: { storeMode: "open", settingsMutations: true },
-    selection: { previousHostDrainConfirmed: true },
-    hostLifetimeId: "controlled-host-lifetime",
-    childLaunchId: "controlled-child-launch",
-    codexRead: undefined,
-    shellMetadata: undefined,
-  });
-  expect(Object.hasOwn(options, "onLifecycleObservation")).toBe(false);
-  expect(Object.hasOwn(options, "codexRead")).toBe(false);
-});
+    const budget = vm.runInNewContext(
+      `${stripTypeScriptTypes(budgetDeclaration)}; DESKTOP_CORE_STARTUP_TIMEOUT_MS`,
+    );
+    const options = vm.runInNewContext(stripTypeScriptTypes(call), {
+      DESKTOP_CORE_STARTUP_TIMEOUT_MS: budget,
+      fresh,
+      attested: { start: (_budget: number, options: object) => options },
+      profile: {},
+      settings: { computer: { computerId: "controlled-only" } },
+      storage: { storeMode: "open", settingsMutations: true },
+      selection: { previousHostDrainConfirmed: true },
+      hostLifetimeId: "controlled-host-lifetime",
+      childLaunchId: "controlled-child-launch",
+      codexRead: undefined,
+      shellMetadata: undefined,
+    });
+    expect(Object.hasOwn(options, "onLifecycleObservation")).toBe(false);
+    expect(Object.hasOwn(options, "codexRead")).toBe(false);
+    expect(Object.hasOwn(options, "startupMode")).toBe(fresh);
+    if (fresh) expect(options.startupMode).toBe("fresh");
+  },
+);
 
 it("passes compiled Shell and the protected root through the actual desktop caller", () => {
   const call = selected(

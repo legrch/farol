@@ -1,6 +1,6 @@
 {
   "schema": "farol-shell-platform/1",
-  "id": "macos-26A434-arm64-root-volume-git-python-sleep-v12",
+  "id": "macos-26A434-arm64-root-volume-git-python-sleep-v13",
   "osBuild": "26A434",
   "compiler": "approved-roots-seatbelt-v1",
   "filesystemClass": "system-apfs-kernel-mount-boundaries-v1",
@@ -21,11 +21,11 @@
     },
     {
       "path": "modules/computer/infra/process/cancel.go",
-      "sha256": "3343fee963d0131fbf6a82921d69364e4d0be87a6e08737b294f9ff5d6b7d866"
+      "sha256": "2b2ca12e80cb77b46a9a491088e071dc6f5236cbfc5afc675b2df8d508a08fb2"
     },
     {
       "path": "modules/computer/infra/process/confinement.go",
-      "sha256": "7ae6dadcb558b759b3c6d25bea98af1ab410f89f21294640d9d5fbcd6cf60e38"
+      "sha256": "d1f67e1819ae9bee74416e6af9aaefe269774656b726d88478de65fac5b1fadc"
     },
     {
       "path": "modules/computer/infra/process/darwin.go",
@@ -129,7 +129,7 @@
     },
     {
       "path": "modules/computer/infra/process/process.go",
-      "sha256": "2d9688918cd9216cef357ead45b99f7db2412af580d5fa85f9cacaf7e379e786"
+      "sha256": "03eb96026a640dd46f27518c10d80a844479ac3ef340d61c14c22b7300e53dd0"
     },
     {
       "path": "modules/computer/infra/process/pythonruntime.go",
@@ -145,7 +145,7 @@
     },
     {
       "path": "modules/computer/infra/process/read.go",
-      "sha256": "2191ed002f8ce6d940b772de5e03466fd979e546584747c2971041e9d97b4b27"
+      "sha256": "fa687d66028e9dc13bae5ac4ea6c3302aa9a741c661bc5688e3310df65a2a44a"
     },
     {
       "path": "modules/computer/infra/process/rootscoped.go",
@@ -161,15 +161,15 @@
     },
     {
       "path": "modules/computer/infra/process/watchdog.go",
-      "sha256": "cbf51c83a8b16e491475af24d654ed8b901e5645e038e7f2ad35c295558876d8"
+      "sha256": "e043f2a07fad7065977915c6e939454aca6581549276a5aa66c431556067d28c"
     },
     {
       "path": "modules/computer/infra/process/watchdogdarwin.go",
-      "sha256": "824fc5754ad87e359f6145cb403f93cefdde38c94823946423e8b0a429cd6654"
+      "sha256": "7b7aca0a49e95d8f750639eed1f8328f048b0feee387b75b539d10965d17a073"
     },
     {
       "path": "modules/computer/infra/process/watchdogipc.go",
-      "sha256": "11fd02bf82e639e971d76e1da49a4e0d7b54e1b1917460b7c6e9cdb63746fcfb"
+      "sha256": "2340c782956f806311d7ab1349964ee7242917843cd80a5c6d209089e4a05bb5"
     },
     {
       "path": "modules/computer/infra/process/watchdogother.go",
@@ -178,8 +178,8 @@
   ],
   "watchdogSource": {
     "path": "src/modules/computer/infra/native/shell-watchdog-source.ts",
-    "fileSHA256": "88c61408d11fa4877ad7a60115f6749346287deb86dca9b6ca4937ab1912b5d2",
-    "sourceSHA256": "603c6d4d351ca5aaf52d9da7329e1b060e9d7148f7e27d4b73ace773a6337928"
+    "fileSHA256": "fd9ab143f959faece257ce9d2cdc1b862a0585c41ce41e3d5750ffc2cb1ec5f9",
+    "sourceSHA256": "48c1f613543ab960ac712f4718b83eb9732a81db9f678ee6e4f5a7b3877dc1a1"
   },
   "mechanism": {
     "path": "/usr/bin/sandbox-exec",
