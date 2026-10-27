@@ -345,3 +345,35 @@ it("keeps running work inspectable without treating it as abandoned and never hi
     c.dispose();
   }
 });
+
+it("retains historical shell observations without hiding unknown command outcomes", async () => {
+  const f = fixture(),
+    c = new WindowController(f.api);
+  await c.start();
+  try {
+    const observations = ["computer_shell_read", "computer_shell_cancel"].map(
+      (kind) => ({
+        ...entries[2]!,
+        id: kind,
+        kind,
+        lifecycle: { id: crypto.randomUUID(), phase: "observed" as const },
+      }),
+    );
+    const unknown = {
+      ...observations[1]!,
+      id: "cancel-unknown",
+      outcome: "unknown" as const,
+      code: "PROCESS_OUTCOME_UNKNOWN",
+    };
+    const snapshot = {
+      ...c.getSnapshot(),
+      activity: [...observations, unknown],
+    };
+    expect(unresolvedActions(snapshot).map((row) => row.id)).toEqual([
+      "operation:cancel-unknown",
+    ]);
+    expect(snapshot.activity).toEqual([...observations, unknown]);
+  } finally {
+    c.dispose();
+  }
+});

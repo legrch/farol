@@ -194,7 +194,23 @@ export function observeOperation<T>(
           ? operationResult({ ...classified, status: "completed" })
           : metadata.kind === "connection.health" && value === false
             ? operationResult({ code: "CONNECTION_HEALTH_FAILED" })
-            : operationResult(value);
+            : classified.status === "ok" &&
+                metadata.kind === "computer_shell_read" &&
+                object(classified.data).state === "running"
+              ? operationResult({
+                  ...classified,
+                  data: { ...object(classified.data), state: "completed" },
+                })
+              : classified.status === "ok" &&
+                  metadata.kind === "computer_shell_cancel" &&
+                  object(classified.data).status === "requested"
+                ? // The tool request completed. Its ACK is not process-exit or
+                  // cleanup proof; those facts remain on the original handle.
+                  operationResult({
+                    ...classified,
+                    data: { ...object(classified.data), status: "completed" },
+                  })
+                : operationResult(value);
       finish(result.outcome, result.code, performance.now() - start);
     } catch {
       // The observer cannot replace settlement, including the original error.

@@ -30,6 +30,30 @@ const closedContractCoverage: [
 
 const metadata = { source: "You", kind: "general.update", target: {} } as const;
 
+it.each([
+  ["computer_shell_read", { state: "running" }],
+  ["computer_shell_cancel", { status: "requested" }],
+] as const)(
+  "records a completed %s observation without claiming command completion",
+  async (kind, data) => {
+    const record = vi.fn();
+    const value = { status: "ok", data };
+    const original = Promise.resolve(value);
+    expect(
+      observeOperation({ record }, { ...metadata, kind }, () => original),
+    ).toBe(original);
+    expect(await original).toBe(value);
+    expect(record.mock.calls[0]?.[1]).toBe("done");
+    expect(operationResult(value).outcome).toBe("pending");
+    const unknown = Promise.resolve({
+      ...value,
+      code: "PROCESS_OUTCOME_UNKNOWN",
+    });
+    await observeOperation({ record }, { ...metadata, kind }, () => unknown);
+    expect(record.mock.calls.at(-1)?.[1]).toBe("unknown");
+  },
+);
+
 it("does not turn a rejected promise carrying a success code into done", async () => {
   const record = vi.fn();
   const error = { kind: "completed", code: "PHYSICAL_SEND_ACKNOWLEDGED" };

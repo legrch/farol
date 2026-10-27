@@ -65,6 +65,17 @@ export function unresolvedActions(
     )
       continue;
     if (entry.outcome !== "unknown" && entry.outcome !== "pending") continue;
+    // Old readers classified an observed running snapshot / cancellation ACK
+    // as pending. Preserve those rows in Activity without treating a completed
+    // observation as an unresolved effect. Actual UNKNOWN stays inspectable.
+    if (
+      entry.outcome === "pending" &&
+      entry.code === null &&
+      entry.lifecycle?.phase === "observed" &&
+      (entry.kind === "computer_shell_read" ||
+        entry.kind === "computer_shell_cancel")
+    )
+      continue;
     if (
       entry.outcome === "pending" &&
       entry.inFlight === true &&
