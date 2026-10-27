@@ -1650,6 +1650,19 @@ export type ChatGptTaskObserver = Readonly<{
   // Only an app-bound connector check may finish from its exact
   // local receipt. This proves the connector effect, never a model answer.
   readConnectorReceipt?: () => Promise<boolean>;
+  // Content-free elapsed times for the one app-bound check; diagnostic only.
+  onConnectorTiming?: (
+    event: Readonly<{
+      phase:
+        | "started"
+        | "profile_ready"
+        | "send_requested"
+        | "send_acknowledged"
+        | "receipt_confirmed"
+        | "finished";
+      elapsedMs: number;
+    }>,
+  ) => void;
   onCorrelation?: (
     correlation: Readonly<{
       turnUserId: string;
@@ -3366,6 +3379,31 @@ export class ChatGptRoute {
     }
     this.exitSignInMode();
     this.taskInFlight = true;
+    const timingStart = performance.now();
+    const timing = (
+      phase:
+        | "started"
+        | "profile_ready"
+        | "send_requested"
+        | "send_acknowledged"
+        | "receipt_confirmed"
+        | "finished",
+    ) => {
+      if (
+        !appTarget ||
+        !observer.readConnectorReceipt ||
+        !observer.onConnectorTiming
+      )
+        return;
+      const elapsed = performance.now() - timingStart;
+      if (!Number.isFinite(elapsed) || elapsed < 0) return;
+      try {
+        observer.onConnectorTiming({ phase, elapsedMs: Math.round(elapsed) });
+      } catch {
+        /* Diagnostics cannot affect the original check. */
+      }
+    };
+    timing("started");
     const observationGeneration = ++this.taskObservationGeneration;
     let publicTurn: ChatGptPublicTurn | null = null;
     const semanticOutput =
@@ -3461,6 +3499,7 @@ export class ChatGptRoute {
           };
         }
       }
+      timing("profile_ready");
       if (profile === "temporary-instant" || profile === "connector-instant") {
         // Profile preparation may navigate. Its composer/model probes are not
         // authentication evidence for the new document's dispatch.
@@ -3774,6 +3813,7 @@ export class ChatGptRoute {
         }
         // App verification above awaits the browser. Recheck cancellation and
         // identity after that final await, immediately before dispatching Send.
+        timing("send_requested");
         const beforeSend = dispatchReadinessRefusal();
         if (beforeSend) return beforeSend;
         if (dispatchIdentityLost()) {
@@ -3840,6 +3880,7 @@ export class ChatGptRoute {
         }
         if (activated.data.activated) {
           submissionPhase = "submitted";
+          timing("send_acknowledged");
           break;
         }
         submissionPhase = "not_attempted";
@@ -3868,6 +3909,8 @@ export class ChatGptRoute {
       );
       const pollMs = this.options.taskPollMs ?? 250;
       const deadline = Date.now() + (this.options.taskTimeoutMs ?? 180_000);
+      const probePending = Symbol("probe pending");
+      let connectorProbe: Promise<unknown> | null = null;
       while (Date.now() < deadline) {
         if (observationGeneration !== this.taskObservationGeneration)
           throw new Error("CHATGPT_TASK_CANCELLED");
@@ -3977,6 +4020,7 @@ export class ChatGptRoute {
           if (createdByReceipt) pinnedConversationUrl = createdConversation;
           currentUrl = afterReceiptUrl;
           if (receipt === true) {
+            timing("receipt_confirmed");
             return {
               state: "receipt_confirmed",
               code: null,
@@ -3987,8 +4031,8 @@ export class ChatGptRoute {
             };
           }
         }
-        const probe = taskProbeSchema.safeParse(
-          await active.webContents.executeJavaScript(
+        const readProbe = () =>
+          active.webContents.executeJavaScript(
             taskProbeScript(
               prompt,
               preparedTask.baselineMessageIds,
@@ -4000,8 +4044,31 @@ export class ChatGptRoute {
               requiredAppName,
             ),
             true,
-          ),
-        );
+          );
+        let probeValue: unknown;
+        if (appTarget !== undefined && observer.readConnectorReceipt) {
+          // A stuck, read-only page probe must not hide a subsequently arrived
+          // connector receipt. Keep only one outstanding probe and never retry
+          // the effectful Send.
+          connectorProbe ??= readProbe();
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          probeValue = await Promise.race([
+            connectorProbe,
+            new Promise<typeof probePending>((resolve) => {
+              timer = setTimeout(
+                () => resolve(probePending),
+                Math.min(pollMs, Math.max(0, deadline - Date.now())),
+              );
+            }),
+          ]).finally(() => {
+            if (timer !== undefined) clearTimeout(timer);
+          });
+          if (probeValue === probePending) continue;
+          connectorProbe = null;
+        } else {
+          probeValue = await readProbe();
+        }
+        const probe = taskProbeSchema.safeParse(probeValue);
         const afterProbeUrl = active.webContents.getURL();
         const createdConversation = canonicalChatGptConversationUrl(
           afterProbeUrl,
@@ -4217,6 +4284,7 @@ export class ChatGptRoute {
         ...correlation(),
       };
     } finally {
+      timing("finished");
       this.taskInFlight = false;
     }
   }

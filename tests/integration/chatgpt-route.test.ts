@@ -8046,11 +8046,15 @@ describe("connector receipt completion before provider output", () => {
     async (profile) => {
       const { execute, candidate } = fixture();
       const readConnectorReceipt = vi.fn(async () => true);
+      const timings: Array<{ phase: string; elapsedMs: number }> = [];
       expect(
         await candidate.runReadonlyTask(
           "connection fixture",
           [],
-          { readConnectorReceipt },
+          {
+            readConnectorReceipt,
+            onConnectorTiming: (event) => timings.push(event),
+          },
           profile,
           { name: "NEW fixture" },
         ),
@@ -8062,9 +8066,60 @@ describe("connector receipt completion before provider output", () => {
       });
       expect(execute).toHaveBeenCalledTimes(4);
       expect(readConnectorReceipt).toHaveBeenCalledTimes(1);
+      expect(timings.map(({ phase }) => phase)).toEqual([
+        "started",
+        "profile_ready",
+        "send_requested",
+        "send_acknowledged",
+        "receipt_confirmed",
+        "finished",
+      ]);
+      expect(
+        timings.every(
+          (item, i) =>
+            Number.isFinite(item.elapsedMs) &&
+            (i === 0 || item.elapsedMs >= timings[i - 1]!.elapsedMs),
+        ),
+      ).toBe(true);
       expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
     },
   );
+
+  it("observes a later receipt while one page probe is stalled", async () => {
+    const { execute, candidate } = fixture();
+    execute.mockImplementationOnce(() => new Promise(() => {}));
+    const readConnectorReceipt = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true);
+    const result = await candidate.runReadonlyTask(
+      "connection fixture",
+      [],
+      { readConnectorReceipt },
+      "temporary-instant",
+      { name: "NEW fixture" },
+    );
+    expect(result.state).toBe("receipt_confirmed");
+    expect(readConnectorReceipt).toHaveBeenCalledTimes(2);
+    expect(execute).toHaveBeenCalledTimes(5);
+  });
+
+  it("does not let diagnostic failures change a confirmed check", async () => {
+    const { candidate } = fixture();
+    const result = await candidate.runReadonlyTask(
+      "connection fixture",
+      [],
+      {
+        readConnectorReceipt: async () => true,
+        onConnectorTiming: () => {
+          throw new Error("diagnostic sink unavailable");
+        },
+      },
+      "temporary-instant",
+      { name: "NEW fixture" },
+    );
+    expect(result.state).toBe("receipt_confirmed");
+  });
 
   it.each(["temporary-instant", "connector-instant"] as const)(
     "keeps a missing or rejected proof unknown without a second send (%s)",
