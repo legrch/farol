@@ -28,6 +28,7 @@ import re
 import stat
 import subprocess
 import time
+import uuid
 from pathlib import Path
 
 LABEL = "farol.testops.task"
@@ -74,8 +75,28 @@ class Engine:
 
 
 def checkout_id(root):
-    """Leases live in one checkout while Docker is engine-wide: label the owner."""
-    return hashlib.sha256(str(Path(root).resolve()).encode()).hexdigest()[:16]
+    """Leases live in one checkout while Docker may be shared: label the owner.
+
+    A path alone is not unique (another client or container can use the same
+    path against the same daemon), so a random identity is minted once per
+    checkout. Losing it makes earlier volumes "unknown", which keeps them.
+    """
+    base, _ = output_dirs(root)
+    path = base / "checkout.id"
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        pass
+    else:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(uuid.uuid4().hex + "\n")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd) as handle:
+        token = handle.read().strip()
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise Refused("CHECKOUT_IDENTITY_INVALID")
+    material = token + "\0" + str(Path(root).resolve())
+    return hashlib.sha256(material.encode()).hexdigest()[:16]
 
 
 def scope_id(scope):

@@ -136,6 +136,13 @@ class Volumes(unittest.TestCase):
                 continue
             self.assertEqual(argv[:2], ["--host", "unix:///fake/docker.sock"], argv)
 
+    def test_checkout_identity_is_minted_once_and_not_derived_from_the_path(self):
+        first = volumes.checkout_id(self.root)
+        self.assertEqual(volumes.checkout_id(self.root), first)
+        # Another client at the same path has its own identity.
+        (self.root / "_output/testops/checkout.id").unlink()
+        self.assertNotEqual(volumes.checkout_id(self.root), first)
+
     def here(self):
         return {volumes.CHECKOUT: volumes.checkout_id(self.root)}
 
