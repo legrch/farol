@@ -2970,56 +2970,89 @@ it("reads complete log records across a partial append without inventing corrupt
   expect(damaged.entries).toHaveLength(2);
 });
 
-it("does not report an append observed during snapshot read as a failed log write", async () => {
-  let completeDuringRead = false;
-  let remainder = "";
-  const io = {
-    ...fs.promises,
-    open: async (...args: Parameters<typeof fs.promises.open>) => {
-      const handle = await fs.promises.open(...args);
-      if (String(args[0]).endsWith(".jsonl")) {
-        const readFile = handle.readFile.bind(handle);
-        handle.readFile = (async (...readArgs: Parameters<typeof readFile>) => {
-          const snapshot = await readFile(...readArgs);
-          if (completeDuringRead) {
-            completeDuringRead = false;
-            await fs.promises.appendFile(args[0], remainder);
-          }
-          return snapshot;
-        }) as typeof handle.readFile;
-      }
-      return handle;
-    },
-  };
-  const { store, directory } = injectedStore(io);
-  store.record(metadata, "unknown", "PROCESS_OUTCOME_UNKNOWN", 1);
-  await store.flush(5000);
-  const file = path.join(directory, segmentFiles(directory)[0]!);
-  const next =
-    JSON.stringify({
-      id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-      at: 1792670400000,
-      source: "ChatGPT",
-      kind: "computer_shell_read",
-      target: {},
-      outcome: "done",
-      code: null,
-      durationMs: 1,
-    }) + "\n";
-  const split = Math.floor(next.length / 2);
-  await fs.promises.appendFile(file, next.slice(0, split));
-  remainder = next.slice(split);
-  completeDuringRead = true;
-  const during = await store.snapshot(5000);
-  expect(completeDuringRead).toBe(false);
-  expect(during).toMatchObject({ corruptLines: 0, writeFailures: 0 });
-  expect(during.entries).toHaveLength(1);
-  expect(during.entries[0]!.outcome).toBe("unknown");
-  const after = await store.snapshot(5000);
-  expect(after).toMatchObject({ corruptLines: 0, writeFailures: 0 });
-  expect(after.entries).toHaveLength(2);
-  expect(after.entries.some((entry) => entry.outcome === "unknown")).toBe(true);
-});
+it.each([
+  "same-tail",
+  "foreign-append",
+  "foreign-newline",
+  "tail-read-failure",
+] as const)(
+  "suppresses an append/read warning only for the completed original tail (%s)",
+  async (kind) => {
+    let completeDuringRead = false;
+    let remainder = "";
+    const io = {
+      ...fs.promises,
+      open: async (...args: Parameters<typeof fs.promises.open>) => {
+        const handle = await fs.promises.open(...args);
+        if (String(args[0]).endsWith(".jsonl")) {
+          if (kind === "tail-read-failure")
+            handle.read = (async () => {
+              throw Object.assign(Error("synthetic read failure"), {
+                code: "EIO",
+              });
+            }) as typeof handle.read;
+          const readFile = handle.readFile.bind(handle);
+          handle.readFile = (async (
+            ...readArgs: Parameters<typeof readFile>
+          ) => {
+            const snapshot = await readFile(...readArgs);
+            if (completeDuringRead) {
+              completeDuringRead = false;
+              await fs.promises.appendFile(args[0], remainder);
+            }
+            return snapshot;
+          }) as typeof handle.readFile;
+        }
+        return handle;
+      },
+    };
+    const { store, directory } = injectedStore(io);
+    store.record(metadata, "unknown", "PROCESS_OUTCOME_UNKNOWN", 1);
+    await store.flush(5000);
+    const file = path.join(directory, segmentFiles(directory)[0]!);
+    const next =
+      JSON.stringify({
+        id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        at: 1792670400000,
+        source: "ChatGPT",
+        kind: "computer_shell_read",
+        target: {},
+        outcome: "done",
+        code: null,
+        durationMs: 1,
+      }) + "\n";
+    const split = Math.floor(next.length / 2);
+    await fs.promises.appendFile(
+      file,
+      kind === "same-tail" || kind === "tail-read-failure"
+        ? next.slice(0, split)
+        : "{damaged-tail",
+    );
+    remainder =
+      kind === "same-tail" || kind === "tail-read-failure"
+        ? next.slice(split)
+        : (kind === "foreign-newline" ? "\n" : "") + next;
+    completeDuringRead = true;
+    const during = await store.snapshot(5000);
+    expect(completeDuringRead).toBe(false);
+    expect(during).toMatchObject({
+      corruptLines: 0,
+      writeFailures: kind === "same-tail" ? 0 : 1,
+    });
+    expect(during.entries).toHaveLength(1);
+    expect(during.entries[0]!.outcome).toBe("unknown");
+    const after = await store.snapshot(5000);
+    expect(after).toMatchObject({
+      corruptLines:
+        kind === "same-tail" || kind === "tail-read-failure" ? 0 : 1,
+      writeFailures: 0,
+    });
+    expect(after.entries).toHaveLength(kind === "foreign-append" ? 1 : 2);
+    expect(after.entries.some((entry) => entry.outcome === "unknown")).toBe(
+      true,
+    );
+  },
+);
 
 it("keeps a readable historical UNKNOWN tail even without its final newline", async () => {
   const { store, directory } = setup();

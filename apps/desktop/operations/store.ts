@@ -618,6 +618,13 @@ export class OperationsStore implements OperationsRecorder {
     const entries: OperationEntry[] = [];
     const labels = this.currentLabels ?? (await this.readLabels());
     this.readLabelsCache = labels;
+    const parseLine = (line: string) => {
+      const raw = JSON.parse(line) as OperationEntry;
+      return OperationEntrySchema.safeParse({
+        ...raw,
+        target: resolveOperationTarget(raw.target, labels, "persisted"),
+      });
+    };
     const diagnostics = {
       writeFailures: 0,
       droppedEntries: 0,
@@ -638,18 +645,49 @@ export class OperationsStore implements OperationsRecorder {
             fs.constants.O_RDONLY,
           );
           let text: string;
-          let appendObserved = false;
+          let completedTail: string | undefined;
           try {
             if (stat.size > this.limits.segmentBytes + 16384) {
               corruptLines++;
               continue;
             }
             text = await handle.readFile("utf8");
-            // Another process can append while this snapshot reads the same
-            // descriptor. An invalid final fragment then has no terminal loss
-            // witness yet. Stable truncation and malformed complete lines must
-            // still remain visible as logging failures.
-            appendObserved = (await handle.stat()).size > stat.size;
+            const after = await handle.stat();
+            // Growth alone does not repair an invalid tail: an unrelated append
+            // can follow durable corruption. Re-read this exact fragment through
+            // the same descriptor and require a complete, valid record below.
+            if (
+              segmentName.test(name) &&
+              after.size > stat.size &&
+              after.size <= this.limits.segmentBytes + 16384 &&
+              text.length > 0 &&
+              !text.endsWith("\n")
+            ) {
+              const start = text.lastIndexOf("\n") + 1;
+              const offset = Buffer.byteLength(text.slice(0, start));
+              const size = after.size - offset;
+              if (size > 0) {
+                try {
+                  const tail = Buffer.alloc(size);
+                  const { bytesRead } = await handle.read(
+                    tail,
+                    0,
+                    size,
+                    offset,
+                  );
+                  const observed = tail.subarray(0, bytesRead).toString("utf8");
+                  const newline = observed.indexOf("\n");
+                  if (
+                    bytesRead === size &&
+                    newline >= 0 &&
+                    observed.slice(0, newline).startsWith(text.slice(start))
+                  )
+                    completedTail = observed.slice(0, newline);
+                } catch {
+                  // Keep the first snapshot and its warning if tail read fails.
+                }
+              }
+            }
           } finally {
             await handle.close();
           }
@@ -661,6 +699,14 @@ export class OperationsStore implements OperationsRecorder {
             diagnostics.unrecordedUncertainEntries +=
               parsed.unrecordedUncertainEntries;
           } else {
+            let tailCompleted = false;
+            if (completedTail !== undefined) {
+              try {
+                tailCompleted = parseLine(completedTail).success;
+              } catch {
+                // An unrelated or malformed append cannot clear the failure.
+              }
+            }
             const lines = text.split("\n");
             for (const [index, line] of lines.entries()) {
               if (!line) continue;
@@ -668,22 +714,14 @@ export class OperationsStore implements OperationsRecorder {
               // unterminated fragment can belong to an append still in flight.
               const incomplete = index === lines.length - 1;
               try {
-                const raw = JSON.parse(line) as OperationEntry;
-                const parsed = OperationEntrySchema.safeParse({
-                  ...raw,
-                  target: resolveOperationTarget(
-                    raw.target,
-                    labels,
-                    "persisted",
-                  ),
-                });
+                const parsed = parseLine(line);
                 if (parsed.success) {
                   if (parsed.data.at >= cutoff) entries.push(parsed.data);
                 } else if (!incomplete) corruptLines++;
-                else if (!appendObserved) diagnostics.writeFailures++;
+                else if (!tailCompleted) diagnostics.writeFailures++;
               } catch {
                 if (!incomplete) corruptLines++;
-                else if (!appendObserved) diagnostics.writeFailures++;
+                else if (!tailCompleted) diagnostics.writeFailures++;
               }
             }
           }
