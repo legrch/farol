@@ -1200,9 +1200,10 @@ function Folders(props: PageProps) {
       <p className="description">
         Workspace access is checked automatically when you add or change a
         workspace. “Works” means that check passed for the current settings; no
-        repeat check is needed to continue. Commands lets ChatGPT run git, tests
-        and builds; each run still asks you first. Command access is shared by
-        all workspaces.
+        repeat check is needed to continue. Commands lets ChatGPT run Git, tests
+        and builds in approved workspaces. ChatGPT manages action confirmations;
+        Farol enforces your approved access. Command access is shared by all
+        workspaces.
       </p>
       {settings.computer.commands === "workspace" &&
         settings.computer.filePolicy !== "approved-roots-v1" && (

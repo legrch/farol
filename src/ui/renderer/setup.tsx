@@ -21,7 +21,7 @@ const context: Record<SetupSection, { title: string; description: string }> = {
   folders: {
     title: "Choose workspaces",
     description:
-      "ChatGPT can see only the workspaces you add here. Every change it wants to make still asks you first.",
+      "Farol enforces the workspace access you approve here. ChatGPT manages action confirmations.",
   },
   connection: {
     title: "Connect this Mac",
