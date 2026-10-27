@@ -595,6 +595,14 @@ export class DesktopGoCore {
           data?.drained !== true
         )
           throw new BridgeError("unknown", "fresh_session_drain_unconfirmed");
+        // Native quiescence wakes reciprocal reads without losing their replies.
+        // Join both pumps before EOF can cancel a still-writing Go poll worker.
+        await Promise.all([this.pump?.stop(), this.settingsStorePump?.stop()]);
+        if (
+          (this.pump && this.pump.state !== "stopped") ||
+          (this.settingsStorePump && this.settingsStorePump.state !== "stopped")
+        )
+          throw new BridgeError("unknown", "fresh_session_drain_unconfirmed");
       } catch (error) {
         retirementError = error;
       }

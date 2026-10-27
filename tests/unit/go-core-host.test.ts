@@ -1956,6 +1956,57 @@ it("starts a fresh session under MCP exclusion with the qualified mutation stora
   expect(host.limitedSession).toBe(false);
 });
 
+it("waits for the quiesced Settings poll before closing the fresh child pipe", async () => {
+  const f = transport();
+  const original = f.request.getMockImplementation()!;
+  let deliver!: () => void;
+  let delivered = false;
+  f.request.mockImplementation((method, body, options) => {
+    if (method !== "computer.settings.store.next")
+      return original(method, body, options);
+    return new Promise<Outcome>((resolve) => {
+      deliver = () => {
+        delivered = true;
+        resolve({ status: "ok", requestId: options!.id!, context, data: {} });
+      };
+    });
+  });
+  // Real IPC would exit nonzero if EOF cancels a still-writing poll worker.
+  f.closeAndObserve.mockImplementation(async () => ({
+    exitCode: delivered ? 0 : 1,
+    signal: null,
+    forced: false,
+  }));
+  const host = new DesktopGoCore(
+    f.client,
+    () => settings,
+    undefined,
+    true,
+    undefined,
+    false,
+    true,
+  );
+  const fence = vi.fn(async () => undefined);
+  host.connectSettingsStore(() => ({
+    read: async () => ({ status: "unavailable" }),
+    replace: async () => ({ status: "unknown" }),
+    fence,
+  }));
+  const closing = host.close();
+  void closing.catch(() => undefined);
+  await vi.waitFor(() => expect(f.events).toContain("core.fresh.close"));
+  const closedBeforeReply = f.closeAndObserve.mock.calls.length;
+  deliver();
+  await expect(closing).resolves.toBeUndefined();
+  expect(closedBeforeReply).toBe(0);
+  expect(f.closeAndObserve).toHaveBeenCalledOnce();
+  expect(fence).toHaveBeenCalledOnce();
+  expect(
+    f.events.filter((method) => method === "core.fresh.close"),
+  ).toHaveLength(1);
+  expect(host.close()).toBe(closing);
+});
+
 it("forwards qualified Shell resources in fresh admission without a prior drain ACK", async () => {
   const f = transport();
   start.mockResolvedValueOnce(f.client);
@@ -1989,7 +2040,7 @@ it("refuses fresh startup before artifact IO without the current MCP exclusion",
   expect(start).not.toHaveBeenCalled();
   expect(ports.provision).not.toHaveBeenCalled();
 });
-it.each(["drain", "terminal"] as const)(
+it.each(["drain", "terminal", "nonzero", "signal"] as const)(
   "keeps fresh %s uncertainty unconfirmed without retry",
   async (phase) => {
     const f = transport((method, outcome) =>
@@ -2001,11 +2052,11 @@ it.each(["drain", "terminal"] as const)(
           }
         : outcome,
     );
-    if (phase === "terminal")
+    if (phase !== "drain")
       f.closeAndObserve.mockResolvedValueOnce({
-        exitCode: 0,
-        signal: null,
-        forced: true,
+        exitCode: phase === "nonzero" ? 1 : phase === "signal" ? null : 0,
+        signal: phase === "signal" ? "SIGTERM" : null,
+        forced: phase === "terminal",
       });
     start.mockResolvedValueOnce(f.client);
     const host = await startDesktopGoCore({

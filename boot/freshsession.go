@@ -33,7 +33,13 @@ func (r *NativeRuntime) freshSessionMethods() map[string]desktop.Method {
 		if _, err := r.chat.Retire(ctx); err != nil {
 			return fail()
 		}
-		if r.browser.QuiescePolling() != nil || r.fresh.verify() != nil {
+		if r.browser.QuiescePolling() != nil {
+			return fail()
+		}
+		if r.settingsStore != nil && r.settingsStore.QuiescePolling() != nil {
+			return fail()
+		}
+		if r.fresh.verify() != nil {
 			return fail()
 		}
 		return &desktop.Outcome{Status: "ok", Data: json.RawMessage(`{"drained":true}`)}, nil

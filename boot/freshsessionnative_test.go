@@ -74,6 +74,62 @@ func TestFreshSessionWritableReopenRetainsOriginalUnknown(t *testing.T) {
 	}
 }
 
+// A signed-out packaged host still has an idle reciprocal Settings poll.
+// Fresh drain must wake it normally before the host closes the inherited pipe.
+func TestFreshSessionQuiescesSettingsPollingBeforeDrainReply(t *testing.T) {
+	for _, fenced := range []bool{false, true} {
+		t.Run(fmt.Sprint("fenced-", fenced), func(t *testing.T) {
+			launch, _, _ := recoveryNativeFixture(t)
+			launch.StartupMode, launch.SettingsMutations = "fresh", true
+			r, err := NewNativeRuntime(context.Background(), launch, "fresh-idle-settings")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close()
+			// Saved Settings/consent is an explicit fixture, not a host RPC.
+			r.settingsDelivery.store = &deliveryStoreFixture{value: delivery.Snapshot{Revision: 1, Current: delivery.Identity{ProfileID: launch.Profile.ProfileID, OwnerID: launch.OwnerID, ComputerID: launch.ComputerID, Generation: 2}}}
+			if fenced {
+				r.settingsStore.fence()
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				command, err := r.settingsStore.next(ctx, uint64(time.Now().Add(5*time.Second).UnixMilli()))
+				if command != nil {
+					done <- fmt.Errorf("unexpected Settings command")
+					return
+				}
+				done <- err
+			}()
+			closed := nativeSettingsCall(t, r, "core.fresh.close", "close-idle-settings", wire.CoreFreshClose{})
+			if fenced {
+				if closed.Status != "unknown" {
+					t.Fatal("fenced exchange reported drained", closed)
+				}
+				return
+			}
+			if closed.Status != "ok" {
+				t.Fatal("current fresh drain failed", closed)
+			}
+			r.settingsStore.mu.Lock()
+			quiesced := r.settingsStore.quiesced
+			r.settingsStore.mu.Unlock()
+			if !quiesced {
+				t.Fatal("drained reply left the reciprocal Settings poll active")
+			}
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal("poll lost instead of quiesced", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("quiesced Settings poll did not complete")
+			}
+		})
+	}
+}
+
 // Disposable native stores only, with no Electron, provider, Shell, process
 // cleanup or real-profile admission. Existing UNKNOWN bytes remain historical.
 func TestFreshSessionRetainsHistoryWithoutPreviousRetirement(t *testing.T) {
