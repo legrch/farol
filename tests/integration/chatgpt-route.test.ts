@@ -288,6 +288,22 @@ describe("temporary Instant connector profile", () => {
     expect(route.pickerOpens()).toBe(1);
   });
 
+  it("refuses if the page changes again during the hydration recheck", async () => {
+    const route = profileRoute();
+    const execute = route.executeJavaScript.getMockImplementation()!;
+    let reads = 0;
+    route.executeJavaScript.mockImplementation(async (script: string) => {
+      if (script === temporaryInstantProfileProbe && ++reads >= 2)
+        route.navigate();
+      return execute(script);
+    });
+    await expect(route.prepare()).resolves.toBe(
+      "CHATGPT_INSTANT_MODEL_REQUIRED",
+    );
+    expect(route.pickerOpens()).toBe(0);
+    expect(route.sendInputEvent).not.toHaveBeenCalled();
+  });
+
   it("waits for the opened model picker to expose its slider before changing the model", async () => {
     const route = profileRoute();
     const execute = route.executeJavaScript.getMockImplementation()!;
