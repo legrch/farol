@@ -12673,11 +12673,17 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     connectorCredentialStore = null;
   }
   try {
-    chatGptTaskJournal = new PrivateChatGptTaskJournal({
+    const journal = new PrivateChatGptTaskJournal({
       root: chatGptTaskJournalRoot(),
     });
-    recoverableChatGptTask = await chatGptTaskJournal.reconcileAfterRestart();
-    if (recoverableChatGptTask?.result) {
+    const retained = freshStartup
+      ? await journal.load()
+      : await journal.reconcileAfterRestart();
+    // Fresh Go generations keep legacy history read-only, without redelivery
+    // or a writer that could acknowledge or replace an earlier operation.
+    chatGptTaskJournal = freshStartup && retained !== null ? null : journal;
+    recoverableChatGptTask = freshStartup ? null : retained;
+    if (!freshStartup && recoverableChatGptTask?.result) {
       const recorded = await configuration.recordChatGptObservation(
         chatGptJournalObservation(recoverableChatGptTask.result),
       );
