@@ -4698,6 +4698,85 @@ describe("automatic Setup sign-in after the owner login flow", () => {
   );
 });
 
+it("rechecks sign-in after a challenge-scoped connector check outlasts the passive-read budget", async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  const data = bootstrap();
+  data.configuration.settings = readySettings();
+  vi.mocked(f.api.bootstrap).mockResolvedValue(data);
+  const pending = deferred<unknown>();
+  let checking = false;
+  let after = false;
+  let readsAfter = 0;
+  let sends = 0;
+  vi.mocked(f.api.configure).mockImplementation(async (command) => {
+    if (command.kind === "chatgpt.observe-sign-in") {
+      const status =
+        checking || (after && ++readsAfter === 1) ? "unknown" : "authenticated";
+      const reply = signInReply(command, status, {
+        status: "ready",
+        settings: data.configuration.settings,
+      });
+      return {
+        ...reply,
+        evidence: {
+          ...reply.evidence,
+          binding: {
+            documentGeneration: checking || after ? 2 : 1,
+            sequence: 3,
+          },
+        },
+      };
+    }
+    if (command.kind === "chatgpt.verify")
+      return {
+        ok: true,
+        snapshot: data.configuration,
+        evidence: {
+          kind: "chatgpt.readiness",
+          state: "authenticated",
+          code: null,
+        },
+      };
+    if (command.kind === "connector.verify-app") {
+      sends++;
+      checking = true;
+      f.emit("route", { state: "loading" });
+      f.emit("route", { state: "loaded" });
+      await pending.promise;
+      checking = false;
+      after = true;
+      return { ok: true, snapshot: data.configuration };
+    }
+    throw Error("unexpected effect");
+  });
+  const c = new WindowController(f.api);
+  try {
+    await c.start();
+    f.emit("route", { state: "loaded" });
+    await vi.advanceTimersByTimeAsync(0);
+    const check = c.configure(
+      { kind: "connector.verify-app" },
+      `settings:connector.verify-app:${"a".repeat(64)}`,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sends).toBe(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(c.getSnapshot().signInObservation?.state).toBe("unknown");
+    pending.resolve(undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    await check;
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(c.getSnapshot().signInObservation?.state).toBe("authenticated");
+    expect(setupChecklist(c.getSnapshot()).entries[0]?.state).toBe("verified");
+    expect(readsAfter).toBeGreaterThanOrEqual(2);
+    expect(sends).toBe(1);
+  } finally {
+    c.dispose();
+    vi.useRealTimers();
+  }
+});
+
 it.each([false, true])(
   "reconsiders login after the actual return command settles, retaining unknown=%s",
   async (unknown) => {

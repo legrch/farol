@@ -5,6 +5,7 @@ export type UnresolvedAction = Readonly<{
   label: string;
   cause: string;
   state: "pending" | "unknown";
+  at?: number;
   code?: string | null;
   inProgress?: boolean;
 }>;
@@ -59,6 +60,7 @@ export function unresolvedActions(
       id: `operation:${entry.id}`,
       label: `${entry.source}: ${entry.label}`,
       state: entry.outcome,
+      at: entry.at,
       inProgress:
         snapshot.status === "current" &&
         snapshot.runtime === "ready" &&

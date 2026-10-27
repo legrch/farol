@@ -1373,12 +1373,12 @@ export class WindowController implements RendererFacade {
       // that route owns its task. Sample again after the original command
       // settles; this pure query cannot replay the check or settle an effect.
       if (
-        [
-          "settings:connector.verify-app:",
-          "settings:connector.verify-separate-app:",
-        ].includes(key) &&
+        /^settings:connector\.(?:verify-app|verify-separate-app):(?:[a-f0-9]{64})?$/u.test(
+          key,
+        ) &&
         this.isSetupSignInObservationEntry()
       ) {
+        this.resetSavedSignInObservation();
         this.invalidateSignInObservation();
         this.observeSignIn();
       }

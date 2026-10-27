@@ -1791,6 +1791,12 @@ kbd {
 .notification-list p {
   color: var(--muted);
 }
+.notification-time {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
 .notification-list li > div {
   display: flex;
   gap: 8px;

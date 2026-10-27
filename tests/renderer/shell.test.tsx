@@ -76,6 +76,60 @@ function button(host: Element, label: string) {
   if (!found) throw new Error(`BUTTON_MISSING:${label}`);
   return found;
 }
+it("shows the recorded event time in notifications without changing the outcome", async () => {
+  const f = fixture();
+  vi.mocked(f.api.bootstrap).mockResolvedValue(completedBootstrap());
+  const at = Date.UTC(2026, 9, 27, 14, 30);
+  const operations = vi.fn(async () => ({
+    entries: [
+      {
+        id: "00000000-0000-4000-8000-000000000001",
+        at,
+        source: "ChatGPT" as const,
+        kind: "computer_shell_read",
+        target: {},
+        outcome: "unknown" as const,
+        code: "PROCESS_OUTCOME_UNKNOWN" as const,
+        durationMs: 1,
+      },
+    ],
+    corruptLines: 0,
+    writeFailures: 0,
+    droppedEntries: 0,
+    unrecordedUncertainEntries: 0,
+    unmappedCodes: 0,
+  }));
+  const c = new WindowController({ ...f.api, operations });
+  await c.start();
+  await vi.waitFor(() => expect(c.getSnapshot().activity).toHaveLength(1));
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () =>
+      root.render(
+        <Services value={c}>
+          <Shell />
+        </Services>,
+      ),
+    );
+    await act(async () => button(host, "Notifications").click());
+    const time = host.querySelector<HTMLTimeElement>(".notification-list time");
+    expect(time?.dateTime).toBe(new Date(at).toISOString());
+    expect(time?.textContent).toBe(new Date(at).toLocaleString());
+    vi.mocked(f.api.task).mockRejectedValueOnce(new Error("result lost"));
+    await act(async () => c.task({ kind: "task.create-chatgpt" }, "task:new"));
+    expect(host.querySelector(".notification-list")?.textContent).toContain(
+      "Time unavailable",
+    );
+    expect(c.getSnapshot().activity[0]?.outcome).toBe("unknown");
+    expect(f.api.configure).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => root.unmount());
+    c.dispose();
+    host.remove();
+  }
+});
 it("leaves ChatGPT sidebar controls to the embedded page", async () => {
   const { host, c, f } = await mount();
   expect(

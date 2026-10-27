@@ -1493,6 +1493,19 @@ export function Shell() {
                 {notifications.unread.map((row) => (
                   <li key={row.id}>
                     <strong>{row.label}</strong>
+                    {row.at !== undefined &&
+                    Number.isFinite(new Date(row.at).getTime()) ? (
+                      <time
+                        className="notification-time"
+                        dateTime={new Date(row.at).toISOString()}
+                      >
+                        {new Date(row.at).toLocaleString()}
+                      </time>
+                    ) : (
+                      <span className="notification-time">
+                        Time unavailable
+                      </span>
+                    )}
                     <p>{row.cause}</p>
                     {row.code && <code>{row.code}</code>}
                     <div>
