@@ -344,6 +344,15 @@ func (c *watchdogChild) Wait() (exit, error) {
 		<-c.done
 	}
 	c.mutex.Lock()
+	canObserveGroup := helperErr == nil && c.rootExited && c.rootClosed && c.root.Drained && !c.uncertain
+	c.mutex.Unlock()
+	groupGone := false
+	if canObserveGroup {
+		if observation, ok := c.process.(watchdogGroupObservation); ok {
+			groupGone = observation.GroupGone(c.deadline)
+		}
+	}
+	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	if !c.rootExited {
 		return exit{}, &processsvc.NativeFailure{Unknown: true}
@@ -352,9 +361,9 @@ func (c *watchdogChild) Wait() (exit, error) {
 	result.Code = copyCode(result.Code)
 	result.Drained = result.Drained && !c.uncertain
 	result.supervisorExited = helperErr == nil && c.rootClosed && result.Drained && !c.uncertain
-	// Retain known root exit even when helper/IPC/cleanup is uncertain. The
-	// existing Child keeps cleanup unverified. Only the separate supervisor fact
-	// can preserve a known root result; this NEVER supplies cohort=true.
+	result.groupGone = groupGone && result.supervisorExited
+	// A read-only ESRCH observation confirms only the original group. It neither
+	// supplies cohort=true nor proves escaped descendants or lost IPC/output.
 	return result, nil
 }
 

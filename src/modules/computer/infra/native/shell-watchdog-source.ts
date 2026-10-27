@@ -23,6 +23,8 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
   let selected = null;
   let command = null;
   let timer = null;
+  let groupTimer = null;
+  let rootExitTimer = null;
   let id = null;
   let started = false;
   let ready = false;
@@ -50,6 +52,8 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
     pending.length = 0;
     pendingBytes = 0;
     if (timer) clearTimeout(timer);
+    if (groupTimer) clearTimeout(groupTimer);
+    if (rootExitTimer) clearTimeout(rootExitTimer);
     if (stopRefused) {
       // Retire only this observer. A refused signal remains unknown and
       // never authorizes another signal; helper exit is not root completion.
@@ -93,7 +97,10 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
     // drain; signal acceptance proves neither process-tree nor group cleanup.
     groupStopAttempted = true;
     try { process.kill(-process.pid, "SIGTERM"); }
-    catch { refuseStop(); }
+    catch { refuseStop(); return; }
+    // The still-live observer anchors this PGID through the one escalation.
+    // A refused signal stays fenced; no numeric-PGID signal follows helper Wait.
+    groupTimer = setTimeout(stopNow, Math.max(1, Math.min(500, selected.deadlineAt - Date.now())));
   }
   function pump() {
     if (pumping) return;
@@ -226,7 +233,14 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
         if (!ready || (signal !== null && !Number.isInteger(number))) { refuse(errorReason.invalidExit); return; }
         // Root exit is useful even while a descendant keeps a stdio pipe open.
         rootExited = true;
-        emit("exit", { code, signal: number });
+        emit("exit", { code, signal: number }, () => {
+          // Background members can hold inherited pipes after root exit. Stop
+          // this anchored group before awaiting close/EOF, not after PID reap.
+          rootExitTimer = setTimeout(() => {
+            rootExitTimer = null;
+            if (!closed && !groupStopAttempted && !stopRefused) stopCommand();
+          }, 0);
+        });
       });
       command.on("close", (code, signal) => {
         if (closed || stopped) return;

@@ -18,7 +18,7 @@ import (
 // Exact reported PIDs are queried read-only with Getpgid; never discovered or
 // signalled by this test. Only the original retained Child.Cancel sends Stop.
 // This is not Seatbelt/MCP/package or escaped-descendant qualification. Public
-// cleanup remains unverified: these observations do not grant new authority.
+// group cleanup is confirmed separately; escaped descendants stay unverified.
 func TestNativeWatchdogOwnedTreeCancellation(t *testing.T) {
 	f := nativeWatchdogStart(t, nativeWatchdogResource(t))
 	f.observed.mutex.Lock()
@@ -96,7 +96,7 @@ child.once("message", message => process.stdout.write(JSON.stringify({root:proce
 	want := append(ready, []byte("leaf-final\nleaf-waited-0\n")...)
 	if err != nil || out.Root != processsvc.RootExited || !out.Waited || !out.OutputDrained || !out.CancelRequested ||
 		out.ExitCode != nil || out.ExitSignal != int(syscall.SIGKILL) || !bytes.Equal(out.Stdout, want) || len(out.Stderr) != 0 ||
-		out.GroupCleanup != processsvc.CleanupUnverified || out.DescendantCleanup != processsvc.CleanupUnverified {
+		out.GroupCleanup != processsvc.CleanupConfirmed || out.DescendantCleanup != processsvc.CleanupUnverified {
 		f.fail(t, "owned tree terminal/output facts absent or public cleanup overclaimed", err)
 	}
 	f.helperExit(t, true)
@@ -123,5 +123,5 @@ child.once("message", message => process.stdout.write(JSON.stringify({root:proce
 	if err := syscall.Kill(-f.retained.Pid, 0); !errors.Is(err, syscall.ESRCH) {
 		f.fail(t, "original anchored group still exists or is unreadable", err)
 	}
-	t.Logf("owned-tree-only: helper=%d root=%d child=%d grandchild=%d; same PGID before one Cancel; all exact PIDs and anchored group ESRCH after original Wait; leaf exit0 observed by its parent; public group/descendant cleanup remains unverified", f.retained.Pid, pids.Root, pids.Middle, pids.Leaf)
+	t.Logf("owned-tree-only: helper=%d root=%d child=%d grandchild=%d; same PGID before one Cancel; all exact PIDs and anchored group ESRCH after original Wait; leaf exit0 observed by its parent; public group confirmed by separate ESRCH observation; escaped descendants remain unverified", f.retained.Pid, pids.Root, pids.Middle, pids.Leaf)
 }

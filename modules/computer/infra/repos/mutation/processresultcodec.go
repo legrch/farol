@@ -236,7 +236,7 @@ func decodeProcessOutput(raw []byte, parent, stream string, d processOutputDiges
 	return bytes.Clone(r.Data), nil
 }
 
-// A valid stored exit remains separate from confirmed resource cleanup.
-func processTerminalCleanupConfirmed(result *processsvc.TerminalResult) bool {
-	return result != nil && result.Observation.GroupCleanup == processsvc.CleanupConfirmed && result.Observation.DescendantCleanup == processsvc.CleanupConfirmed
+// A valid stored exit remains separate from the positive owned-group witness.
+func processTerminalGroupConfirmed(result *processsvc.TerminalResult) bool {
+	return result != nil && result.Observation.GroupCleanup == processsvc.CleanupConfirmed
 }

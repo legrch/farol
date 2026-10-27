@@ -75,7 +75,7 @@ func (c *Child) wait() {
 		c.mutex.Lock()
 	}
 	// os.Process.Wait is EXACT root evidence only. Unsupported descendant tracking
-	// and anchor-less group cleanup remain unverified even for a clean exit 0.
+	// remain unverified even for a clean exit 0; group cleanup needs its own witness.
 	if c.supervisor != "" {
 		previous := c.supervisor
 		c.supervisor = processsvc.SupervisorUnknown
@@ -87,6 +87,9 @@ func (c *Child) wait() {
 	c.finished = true
 	c.group = processsvc.CleanupUnverified
 	c.descendants = processsvc.CleanupUnverified
+	if c.supervisor == processsvc.SupervisorExited && observed.groupGone && !c.signalUnknown {
+		c.group = processsvc.CleanupConfirmed
+	}
 	if err == nil && observed.Waited && observed.Drained && observed.cohort && !c.signalAttempted {
 		c.group, c.descendants = processsvc.CleanupConfirmed, processsvc.CleanupConfirmed
 	}

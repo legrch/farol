@@ -10,7 +10,7 @@ import (
 
 func TestFreshProcessHistorySeparatesReservationExitAndCleanup(t *testing.T) {
 	selection := SettledSelection{OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}
-	for _, kind := range []string{"read-reservation", "write-reservation", "clean-terminal", "unconfirmed-terminal", "read-unconfirmed-terminal"} {
+	for _, kind := range []string{"read-reservation", "write-reservation", "clean-terminal", "group-only-terminal", "unconfirmed-terminal", "read-unconfirmed-terminal"} {
 		t.Run(kind, func(t *testing.T) {
 			value := terminalValue([]byte("retained output"), nil)
 			value.Intent.Seal.Write = kind != "read-reservation" && kind != "read-unconfirmed-terminal"
@@ -21,6 +21,10 @@ func TestFreshProcessHistorySeparatesReservationExitAndCleanup(t *testing.T) {
 			if kind == "read-reservation" || kind == "write-reservation" {
 				raw, err = encodeProcess(value.Scope, value.Intent)
 			} else {
+				if kind == "group-only-terminal" {
+					value.Observation.Supervisor = processsvc.SupervisorExited
+					value.Observation.DescendantCleanup = processsvc.CleanupUnverified
+				}
 				if kind == "unconfirmed-terminal" || kind == "read-unconfirmed-terminal" {
 					value.Observation.Supervisor = processsvc.SupervisorExited
 					value.Observation.GroupCleanup, value.Observation.DescendantCleanup = processsvc.CleanupUnverified, processsvc.CleanupUnverified

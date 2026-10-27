@@ -88,6 +88,6 @@ func (s *computerConnector) retainProcessResult(ctx context.Context, operation s
 		return "", err
 	}
 	retained.publication = digest
-	record.settled = result.Observation.GroupCleanup == processsvc.CleanupConfirmed && result.Observation.DescendantCleanup == processsvc.CleanupConfirmed
+	record.settled = result.Observation.GroupCleanup == processsvc.CleanupConfirmed
 	return digest, nil
 }

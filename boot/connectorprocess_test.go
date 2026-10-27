@@ -63,6 +63,7 @@ type connectorProcessNativeDouble struct {
 	readErr       error
 	terminal      bool
 	supervisor    processsvc.SupervisorState
+	groupGone     bool
 	completed     chan struct{}
 	completionErr error
 }
@@ -150,6 +151,9 @@ func (n *connectorProcessNativeDouble) Read(_ context.Context, window processsvc
 	if n.supervisor != "" {
 		out.Supervisor = n.supervisor
 		out.GroupCleanup, out.DescendantCleanup = processsvc.CleanupUnverified, processsvc.CleanupUnverified
+		if n.groupGone {
+			out.GroupCleanup = processsvc.CleanupConfirmed
+		}
 	}
 	return out, nil
 }

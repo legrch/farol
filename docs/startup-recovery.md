@@ -236,8 +236,9 @@ facts. No new PID scanner, cleanup retry or lease protocol is introduced.
 `core.fresh.close` freezes and drains only this session and is admitted once.
 It drains current Settings delivery, process publication and mutation owners,
 Codex read, Chat and browser exchanges. A no-op Cancel after reap does not create
-UNKNOWN; only original exit plus confirmed group/descendant cleanup and durable
-publication settle a process. Known results with unverified cleanup remain
+UNKNOWN; original exit, successful supervisor Wait, confirmed group cleanup
+and durable publication settle a process. Descendants that escape through
+`setsid` remain explicitly unverified and are outside this group guarantee. Known results with unverified cleanup remain
 recorded without being rewritten. The host still requires the original child's
 actual normal, unforced exit. Unknown drain or terminal is never retried. This
 protocol records no previous-session retirement, ACK or terminal.
@@ -250,3 +251,19 @@ collector tests qualify reap→Cancel→publication ordering. None of these prov
 one assembled writable Shell→Quit→Electron-reopen journey, live provider tools,
 actual owner-profile admission, package or installed acceptance. These remain
 separate gates. No live recovery is implied by these tests.
+
+### Watchdog group observation
+
+The live watchdog performs its existing anchored-group TERM and KILL. Root exit
+with inherited pipes still open schedules the same group stop; the grace period
+is at most 500 ms and never extends the original command deadline. Refused or
+unknown signals remain fenced without another signal attempt. After the original
+helper Wait and complete root/output reports, Go queries only that retained
+PGID with signal zero. ESRCH confirms the group. A bounded, read-only observation
+allows ordinary reap latency; live/reused groups and errors stay unverified.
+Go sends no TERM/KILL after helper reap, where numeric PGID reuse is possible.
+
+The existing legacy v4–v6 records do not carry a kernel boot-session UUID. No
+ordinary fresh-start reboot exception is inferred from mtime, a PID, or an
+unbound run marker. The explicit preserved cold-inspection route still requires
+its independently pinned before-session and retains all original guards.

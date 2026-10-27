@@ -222,6 +222,11 @@ func (w *nativeWatchdogWaitWitness) Wait() error {
 	return w.err
 }
 
+func (w *nativeWatchdogWaitWitness) GroupGone(deadline time.Time) bool {
+	observer, ok := w.process.(watchdogGroupObservation)
+	return ok && observer.GroupGone(deadline)
+}
+
 type nativeWatchdogFixture struct {
 	selection WatchdogSelection
 	base      string
@@ -347,7 +352,7 @@ func (f *nativeWatchdogFixture) helperExit(t *testing.T, killed bool) {
 	t.Helper()
 	f.logDiagnostics(t)
 	status, ok := f.native.command.ProcessState.Sys().(syscall.WaitStatus)
-	t.Logf("exact helper Wait: PID=%d status=%v calls=%d; group/descendants unverified", f.retained.Pid, status, f.witness.calls.Load())
+	t.Logf("exact helper Wait: PID=%d status=%v calls=%d; group/descendant evidence is separate", f.retained.Pid, status, f.witness.calls.Load())
 	if !ok || killed && (!status.Signaled() || status.Signal() != syscall.SIGKILL) ||
 		!killed && (!status.Exited() || status.ExitStatus() != 0) {
 		t.Fatal("real helper exit differs from independent command-root facts")
@@ -367,15 +372,15 @@ func (f *nativeWatchdogFixture) logDiagnostics(t *testing.T) {
 	}
 	if f.child != nil {
 		f.child.mutex.Lock()
-		t.Logf("decoder state: prepared=%t ready=%t startSent=%t uncertain=%t rootExited=%t rootClosed=%t bytes=%d; group/descendants unverified",
+		t.Logf("decoder state: prepared=%t ready=%t startSent=%t uncertain=%t rootExited=%t rootClosed=%t bytes=%d; group observation is separate",
 			f.child.preparedSeen, f.child.readySeen, f.child.startSent, f.child.uncertain, f.child.rootExited, f.child.rootClosed, f.child.bytes)
 		f.child.mutex.Unlock()
 	}
 	if f.decoder != nil {
 		f.decoder.mutex.Lock()
-		t.Logf("decoder Wait: completed=%t error=%s rootWaited=%t drained=%t code=%s signal=%d cohort=%t",
+		t.Logf("decoder Wait: completed=%t error=%s rootWaited=%t drained=%t code=%s signal=%d cohort=%t groupGone=%t",
 			f.decoder.completed, f.decoder.failure, f.decoder.result.Waited, f.decoder.result.Drained,
-			watchdogDiagnosticCode(f.decoder.result.Code), f.decoder.result.Signal, f.decoder.result.cohort)
+			watchdogDiagnosticCode(f.decoder.result.Code), f.decoder.result.Signal, f.decoder.result.cohort, f.decoder.result.groupGone)
 		f.decoder.mutex.Unlock()
 	}
 	if f.witness == nil {

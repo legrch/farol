@@ -56,7 +56,7 @@ func qualifyFreshProcessHistory(entries []settledBytes, selection SettledSelecti
 			}
 			identity = processIdentity(result.Scope, result.Intent.OperationID)
 			parents[entry.key] = identity
-			if result.Intent.Seal.Write && !processTerminalCleanupConfirmed(result) {
+			if result.Intent.Seal.Write && !processTerminalGroupConfirmed(result) {
 				unknownWrite = true
 			}
 		case header.Version == 5 && header.Kind == "workspace_connector_process_output":

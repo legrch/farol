@@ -142,6 +142,12 @@ type watchdogProcess interface {
 	// or group/descendant settlement; command exit comes only from its private IPC.
 	Wait() error
 }
+
+// Optional native observation of the original helper's group, after its one
+// successful Wait. It may query existence only, never signal a reused PGID.
+type watchdogGroupObservation interface {
+	GroupGone(time.Time) bool
+}
 type watchdogChannel interface {
 	io.ReadWriteCloser
 	SetReadDeadline(time.Time) error

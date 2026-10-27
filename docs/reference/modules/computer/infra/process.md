@@ -780,3 +780,23 @@ anchor result/ACK/Wait, descendant/unknown cases, independent review, aggregate
 checks, package/installed/live and release gates remain open. `connector.processes`
 remains unset; no shared contract, authority, boot/schema or desktop change is
 included here.
+
+### Watchdog owned-group cleanup
+
+The production watchdog keeps its own PGID anchored while it sends TERM and,
+after at most 500 ms within the original deadline, KILL. An ordinary root exit
+with inherited pipes still open selects that same stop after the exit report;
+no command is restarted. A refused signal remains fenced. After the exact
+helper Wait and complete, unfenced root/output report, the native owner makes
+read-only `kill(-pgid, 0)` observations for at most 250 ms within the original
+deadline. Only ESRCH sets `GroupCleanup=confirmed`. A live/reused group, permission
+error, failed Wait or lost output stays unverified. No post-reap effect signal is
+sent to the numeric PGID. `DescendantCleanup` remains unverified for processes
+escaping with `setsid`; group confirmation does not manufacture a cohort witness.
+
+The current collector may settle a durably published exit with this group
+witness, and ordinary fresh admission accepts that unchanged canonical terminal.
+The earlier preserved recovery/inspection predicates retain their original
+requirements. Disposable native watchdog tests cover exit 0, inherited background
+pipes, ordinary same-group child/grandchild cleanup and one Cancel; they are
+separate from package, installed and provider acceptance.

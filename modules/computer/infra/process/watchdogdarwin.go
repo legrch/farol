@@ -4,6 +4,7 @@ package process
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -70,4 +71,40 @@ func (p *nativeWatchdogProcess) Wait() error {
 		return nil
 	}
 	return &processsvc.NativeFailure{Unknown: true}
+}
+
+// GroupGone only queries the PGID established by this retained helper. A reused
+// group can make the answer unverified, never authorize a new signal. Cleanup
+// signals remain inside the live watchdog, which still anchors its own group.
+func (p *nativeWatchdogProcess) GroupGone(deadline time.Time) bool {
+	if p == nil || p.command == nil || p.command.Process == nil || p.command.ProcessState == nil ||
+		p.command.Process.Pid <= 1 || p.command.ProcessState.Pid() != p.command.Process.Pid ||
+		p.command.SysProcAttr == nil || !p.command.SysProcAttr.Setpgid {
+		return false
+	}
+	return observeWatchdogGroupGone(p.command.Process.Pid, deadline, syscall.Kill, time.Now, time.Sleep)
+}
+
+func observeWatchdogGroupGone(pgid int, deadline time.Time, query func(int, syscall.Signal) error, now func() time.Time, pause func(time.Duration)) bool {
+	if pgid <= 1 || query == nil || now == nil || pause == nil {
+		return false
+	}
+	end := now().Add(250 * time.Millisecond)
+	if deadline.Before(end) {
+		end = deadline
+	}
+	for {
+		err := query(-pgid, 0)
+		if errors.Is(err, syscall.ESRCH) {
+			return true
+		}
+		if err != nil || !now().Before(end) {
+			return false
+		}
+		remaining := end.Sub(now())
+		if remaining <= 0 {
+			return false
+		}
+		pause(min(10*time.Millisecond, remaining))
+	}
 }

@@ -71,19 +71,23 @@ child.once("message", (message) => {
 			if err := f.child.await(f.ctx, f.child.ready); err != nil {
 				f.fail(t, "original root ready frame", err)
 			}
-			nativeGroupCancelBeforeStop(t, f, mode)
+			if mode == "live-root" {
+				nativeGroupCancelBeforeStop(t, f, mode)
+			}
 
-			// Exactly one Cancel on this retained Child. Refusal/unknown is a
-			// failure, never permission to resend, signal a PID or run another case.
-			receipt, err := f.observed.Cancel(f.ctx)
-			if err != nil || receipt == nil || receipt.Status != processsvc.CancelRequested || receipt.Handle != f.observed.Handle() {
-				f.fail(t, "original group cancel ACK refused/unknown; no retry", err)
+			// Live roots receive one Cancel. Exited roots select automatic group
+			// cleanup without a new control call. Any uncertainty stops this fixture.
+			if mode == "live-root" {
+				receipt, err := f.observed.Cancel(f.ctx)
+				if err != nil || receipt == nil || receipt.Status != processsvc.CancelRequested || receipt.Handle != f.observed.Handle() {
+					f.fail(t, "original group cancel ACK refused/unknown; no retry", err)
+				}
 			}
 			f.settle(t)
 			out, err := f.observed.Read(f.ctx, processsvc.Window{})
 			if err != nil || out.Root != processsvc.RootExited || out.Supervisor != processsvc.SupervisorExited ||
-				!out.Waited || !out.OutputDrained || !out.CancelRequested || out.OutputLimitReached || out.TimedOut || out.AuthorityLost ||
-				out.GroupCleanup != processsvc.CleanupUnverified || out.DescendantCleanup != processsvc.CleanupUnverified {
+				!out.Waited || !out.OutputDrained || out.CancelRequested != (mode == "live-root") || out.OutputLimitReached || out.TimedOut || out.AuthorityLost ||
+				out.GroupCleanup != processsvc.CleanupConfirmed || out.DescendantCleanup != processsvc.CleanupUnverified {
 				f.fail(t, "group cancellation settlement unavailable or cleanup overclaimed", err)
 			}
 			if mode == "live-root" {
@@ -101,7 +105,7 @@ child.once("message", (message) => {
 			f.child.mutex.Lock()
 			closed, uncertain, cohort, ack := f.child.rootClosed, f.child.uncertain, f.child.root.cohort, f.child.stopSeen
 			f.child.mutex.Unlock()
-			if !closed || uncertain || cohort || !ack {
+			if !closed || uncertain || cohort || ack != (mode == "live-root") {
 				f.fail(t, "original decoder closure/ACK unknown or promoted to cleanup evidence", nil)
 			}
 			// Observe the real channel metadata; no fabricated frame or new owner.
@@ -114,7 +118,7 @@ child.once("message", (message) => {
 				counts[frame.Type]++
 			}
 			if frames.Stopped != "" || counts["prepared"] != 1 || counts["ready"] != 1 ||
-				counts["stop-requested"] != 1 || counts["exit"] != 1 || counts["close"] != 1 ||
+				counts["stop-requested"] != map[bool]int{true: 1, false: 0}[mode == "live-root"] || counts["exit"] != 1 || counts["close"] != 1 ||
 				counts["signal-refused"] != 0 || counts["error"] != 0 || counts["deadline"] != 0 {
 				f.fail(t, "single original start/stop/exit facts unavailable", nil)
 			}

@@ -168,3 +168,20 @@ func TestConnectorSupervisedProgressWireStillRejectsContradictions(t *testing.T)
 		}
 	}
 }
+
+// Collector settlement uses the positive group witness only; escaped descendants
+// remain explicitly unverified. The child and publisher are controlled fixtures.
+func TestConnectorSupervisedConfirmedGroupAllowsCurrentDrain(t *testing.T) {
+	s, _, journal, child, _ := connectorProcessFixture(t)
+	publisher := &connectorProcessPublisherDouble{connectorProcessJournalDouble: journal, s: s, digest: strings.Repeat("a", 64)}
+	s.mutations.dependencies.repository = publisher
+	start := startConnectorProcessFixture(t, s, child)
+	child.terminal, child.supervisor, child.groupGone = true, processsvc.SupervisorExited, true
+	done := processCollectionDone(s, start.OperationID)
+	close(child.completed)
+	awaitProcessCollectionDone(t, done)
+	if publisher.publishes != 1 || publisher.result == nil || publisher.result.Observation.DescendantCleanup != processsvc.CleanupUnverified ||
+		s.drainProcessesForRetirement(context.Background()) != nil || s.mutations.freezeForRetirement() != nil {
+		t.Fatal("confirmed group could not drain, or escaped descendants were promoted")
+	}
+}

@@ -1,8 +1,8 @@
 // Package process owns a real Go child and bounded retained output. It never
-// looks up an old numeric PID/PGID, restores a child from disk, or reports root
-// Wait as group/cohort completion. The separate fresh anchor role may signal its
-// OWN current live group once; that request is not settlement evidence. Native
-// qualification and product activation remain separate gates.
+// reconstructs a PID/PGID from disk or signals an unanchored numeric group.
+// Root Wait alone is not cleanup proof; the watchdog's retained group may be
+// queried read-only after Wait. Escaped descendants remain a separate fact.
+// Native qualification and product activation remain separate gates.
 package process
 
 import (
@@ -55,6 +55,7 @@ type exit struct {
 	Waited, Drained  bool
 	cohort           bool
 	supervisorExited bool
+	groupGone        bool
 }
 type owned interface {
 	Wait() (exit, error)

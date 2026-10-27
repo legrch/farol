@@ -140,7 +140,9 @@ describe("explicitly selected prepared watchdog without native effects", () => {
     const f = fixture();
     f.selection.deadlineAt = 601000;
     f.prepare();
-    expect([...f.timers.values()].map((timer) => timer.at)).toEqual([601000]);
+    expect([
+      ...new Set([...f.timers.values()].map((timer) => timer.at)),
+    ]).toEqual([601000]);
     f.tick(17000);
     f.start();
     expect(f.spawn).toHaveBeenCalledTimes(1);
@@ -149,9 +151,32 @@ describe("explicitly selected prepared watchdog without native effects", () => {
     f.stop();
     expect(f.child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
     expect(f.signals).toEqual([[-4242, "SIGTERM"]]);
-    expect([...f.timers.values()].map((timer) => timer.at)).toEqual([601000]);
+    expect([
+      ...new Set([...f.timers.values()].map((timer) => timer.at)),
+    ]).toEqual([601000]);
     f.tick(601000);
     expect(f.messages).toContainEqual({ type: "deadline", id: f.id });
+    expect(f.signals).toEqual([
+      [-4242, "SIGTERM"],
+      [-4242, "SIGKILL"],
+    ]);
+  });
+
+  it("bounds same-group TERM grace before its one anchored KILL", () => {
+    const f = fixture();
+    f.prepare();
+    f.start();
+    f.stop();
+    expect(f.signals).toEqual([[-4242, "SIGTERM"]]);
+    f.tick(1499);
+    expect(f.signals).toEqual([[-4242, "SIGTERM"]]);
+    f.tick(1500);
+    expect(f.signals).toEqual([
+      [-4242, "SIGTERM"],
+      [-4242, "SIGKILL"],
+    ]);
+    f.tick(f.selection.deadlineAt);
+    f.stop();
     expect(f.signals).toEqual([
       [-4242, "SIGTERM"],
       [-4242, "SIGKILL"],
