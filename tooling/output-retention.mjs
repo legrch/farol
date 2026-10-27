@@ -9,7 +9,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { EVIDENCE_LANES } from "./evidence-cases.mjs";
-import { OWNER_FILE } from "./owned-scratch.mjs";
+import { OWNER_FILE, PS_ENVIRONMENT } from "./owned-scratch.mjs";
 
 export { OWNER_FILE };
 
@@ -93,6 +93,7 @@ export function observeProcesses(run = spawnSync) {
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
     timeout: 10_000,
+    env: PS_ENVIRONMENT,
   });
   if (ps.error || ps.status !== 0) return null;
   const processes = [];

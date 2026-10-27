@@ -11,6 +11,7 @@ import {
   protectedEvidence,
   pruneOutput,
 } from "../../tooling/output-retention.mjs";
+import { writeOwner } from "../../tooling/owned-scratch.mjs";
 import {
   quarantineDevControl,
   settleDevControl,
@@ -414,5 +415,25 @@ describe("_output retention", () => {
       ],
       open: ["/elsewhere"],
     });
+  });
+
+  it("records and observes start times in one environment, whatever the caller's zone", async () => {
+    const directory = path.join(output, "tmp", "go-artifact-ZONEZZ");
+    await fs.mkdir(directory);
+    const zone = process.env.TZ;
+    process.env.TZ = "Pacific/Kiritimati";
+    try {
+      await writeOwner(directory);
+    } finally {
+      if (zone === undefined) delete process.env.TZ;
+      else process.env.TZ = zone;
+    }
+    const owner = JSON.parse(
+      await fs.readFile(path.join(directory, OWNER_FILE), "utf8"),
+    );
+    const live = observeProcesses().processes.find(
+      ({ pid }) => pid === process.pid,
+    );
+    expect(owner.start).toBe(live.start);
   });
 });

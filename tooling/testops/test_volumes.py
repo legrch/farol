@@ -143,6 +143,23 @@ class Volumes(unittest.TestCase):
         (self.root / "_output/testops/checkout.id").unlink()
         self.assertNotEqual(volumes.checkout_id(self.root), first)
 
+    def test_concurrent_first_use_never_reads_a_partial_identity(self):
+        import threading
+        results, errors = [], []
+        def mint():
+            try:
+                results.append(volumes.checkout_id(self.root))
+            except Exception as error:  # noqa: BLE001 - the test records any failure
+                errors.append(error)
+        threads = [threading.Thread(target=mint) for _ in range(16)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(len(set(results)), 1)
+        self.assertEqual(sorted(p.name for p in (self.root / "_output/testops").glob(".checkout.id.*")), [])
+
     def here(self):
         return {volumes.CHECKOUT: volumes.checkout_id(self.root)}
 

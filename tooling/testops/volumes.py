@@ -83,13 +83,19 @@ def checkout_id(root):
     """
     base, _ = output_dirs(root)
     path = base / "checkout.id"
-    try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    except FileExistsError:
-        pass
-    else:
+    if not path.exists():
+        # Publish a complete file atomically: link(2) fails if another client
+        # won the race, and nobody can read a half-written identity.
+        temporary = base / (".checkout.id." + uuid.uuid4().hex)
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "w") as handle:
             handle.write(uuid.uuid4().hex + "\n")
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            pass
+        finally:
+            os.unlink(temporary)
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd) as handle:
         token = handle.read().strip()
@@ -111,7 +117,7 @@ def process_start(pid):
     """Owner start time; '' when no such process, None when unknown."""
     try:
         result = subprocess.run([PS, "-o", "lstart=", "-p", str(pid)], stdin=subprocess.DEVNULL,
-                                env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+                                env={"PATH": "/usr/bin:/bin", "TZ": "UTC", "LANG": "C", "LC_ALL": "C"},
                                 capture_output=True, text=True, timeout=15)
     except (OSError, subprocess.SubprocessError):
         return None
