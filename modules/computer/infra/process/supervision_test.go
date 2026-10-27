@@ -192,11 +192,13 @@ func TestWatchdogSupervisorCancellationRequiresAcknowledgedStopAndObservedExit(t
 			f.host.reply = reply
 			start := f.start(t)
 			supervisorWatchdogEvent(t, f, "stdout")
-			supervisorWatchdogEvent(t, f, "close")
 			out := readSupervisorWatchdog(t, f, start.Handle)
 			if out.State != processcontract.Running || out.Supervisor != processcontract.SupervisorRunning {
 				t.Fatal("held helper prematurely settled", out)
 			}
+			// Publish the root only after the original live stop is dispatched,
+			// before its ACK/refusal. Already-reaped cancellation is separate.
+			f.host.beforeStop = func() { supervisorWatchdogEvent(t, f, "close") }
 			cancel, err := f.route.Cancel(context.Background(), processcontract.CancelRequest{Handle: start.Handle})
 			status := processcontract.CancelRequested
 			if reply != "" {

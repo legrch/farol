@@ -19,7 +19,7 @@ type Child struct {
 	signal                                                                                int
 	stdout, stderr                                                                        []byte
 	outputLimit, cancelRequested, timedOut, authorityLost, signalAttempted, signalUnknown bool
-	signalCompleted                                                                       bool
+	signalCompleted, signalTerminal                                                       bool
 	signalDone                                                                            chan struct{}
 	deadline, watch                                                                       timer
 	done                                                                                  chan struct{}
@@ -90,7 +90,7 @@ func (c *Child) wait() {
 	if c.supervisor == processsvc.SupervisorExited && observed.groupGone && !c.signalUnknown {
 		c.group = processsvc.CleanupConfirmed
 	}
-	if err == nil && observed.Waited && observed.Drained && observed.cohort && !c.signalAttempted {
+	if err == nil && observed.Waited && observed.Drained && observed.cohort && (!c.signalAttempted || c.signalTerminal) && !c.signalUnknown {
 		c.group, c.descendants = processsvc.CleanupConfirmed, processsvc.CleanupConfirmed
 	}
 	deadline, watch := c.deadline, c.watch

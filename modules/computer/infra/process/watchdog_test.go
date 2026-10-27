@@ -49,6 +49,7 @@ type watchdogTestHost struct {
 	selection      WatchdogSelection
 	beforeStart    func()
 	beforePrepared func()
+	beforeStop     func()
 	holdWait       bool
 	reply          string
 	reservation    *parentReservation
@@ -117,6 +118,9 @@ func (h *watchdogTestHost) start(selection WatchdogSelection, cwd string) (watch
 				response = map[string]any{"type": "ready", "id": id}
 			case "stop":
 				h.stops.Add(1)
+				if h.beforeStop != nil {
+					h.beforeStop()
+				}
 				if h.reply == "lost-stop" {
 					return
 				}
@@ -428,7 +432,20 @@ func TestWatchdogFencePublishesUnknownBeforeHelperWait(t *testing.T) {
 				t.Fatal("fenced operation accepted Start")
 			}
 			for i := 0; i < 2; i++ {
-				if _, err := f.route.Cancel(context.Background(), processcontract.CancelRequest{Handle: start.Handle}); err != nil {
+				if scenario.root != "" {
+					// Root exit is a no-effect observation while this unknown helper
+					// remains held. Expiring that observation cannot signal it.
+					ctx, cancel := context.WithCancel(context.Background())
+					marked := &settlementContext{Context: ctx, waiting: make(chan struct{})}
+					pending := settlementCancel(child, marked)
+					settlementReceive(t, marked.waiting)
+					cancel()
+					result := settlementReceive(t, pending)
+					var failure *processsvc.NativeFailure
+					if !errors.As(result.err, &failure) || !failure.Unknown {
+						t.Fatal("unresolved helper fabricated a cancellation ACK", result)
+					}
+				} else if _, err := f.route.Cancel(context.Background(), processcontract.CancelRequest{Handle: start.Handle}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -498,10 +515,14 @@ func TestWatchdogRootExitSurvivesOpenPipesAndLostChannel(t *testing.T) {
 		t.Fatal("root exit settled retained helper")
 	default:
 	}
-	if _, err := f.route.Cancel(context.Background(), processcontract.CancelRequest{Handle: start.Handle}); err != nil || f.host.stops.Load() != 1 {
-		t.Fatal("exited root lost retained live cleanup control", err)
-	}
+	ctx := &settlementContext{Context: context.Background(), waiting: make(chan struct{})}
+	cancel := settlementCancel(f.child(), ctx)
+	settlementReceive(t, ctx.waiting)
 	f.settle(t) // No close observation: descendant pipes/helper are unknown.
+	result := settlementReceive(t, cancel)
+	if result.err != nil || result.receipt.Status != processsvc.AlreadyTerminal || f.host.stops.Load() != 0 {
+		t.Fatal("exited root caused a new cleanup control", result)
+	}
 	out, err := f.route.Read(context.Background(), processcontract.ReadRequest{Handle: start.Handle})
 	if err != nil || out.State != processcontract.Unknown || out.RootState != processcontract.RootExited || !out.RootWaited || out.OutputDrained || out.ExitCode == nil || *out.ExitCode != 0 || out.StdoutBase64 != "QQ==" {
 		t.Fatal("root fact erased or false drain", out, err)

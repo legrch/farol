@@ -1,6 +1,6 @@
 {
   "schema": "farol-shell-platform/1",
-  "id": "macos-26A434-arm64-root-volume-git-python-sleep-v13",
+  "id": "macos-26A434-arm64-root-volume-git-python-sleep-v14",
   "osBuild": "26A434",
   "compiler": "approved-roots-seatbelt-v1",
   "filesystemClass": "system-apfs-kernel-mount-boundaries-v1",
@@ -21,7 +21,7 @@
     },
     {
       "path": "modules/computer/infra/process/cancel.go",
-      "sha256": "2b2ca12e80cb77b46a9a491088e071dc6f5236cbfc5afc675b2df8d508a08fb2"
+      "sha256": "cc3a03fe971e439b16dd9b583c14ee6e93715af11f62d414c323314705f73455"
     },
     {
       "path": "modules/computer/infra/process/confinement.go",
@@ -145,7 +145,7 @@
     },
     {
       "path": "modules/computer/infra/process/read.go",
-      "sha256": "fa687d66028e9dc13bae5ac4ea6c3302aa9a741c661bc5688e3310df65a2a44a"
+      "sha256": "9f8a69d09e1dc5540e258f34aa988aac1c2a12fea45285875f6ebca311978453"
     },
     {
       "path": "modules/computer/infra/process/rootscoped.go",
@@ -169,7 +169,7 @@
     },
     {
       "path": "modules/computer/infra/process/watchdogipc.go",
-      "sha256": "2340c782956f806311d7ab1349964ee7242917843cd80a5c6d209089e4a05bb5"
+      "sha256": "bb2c62015e687632fdc9ed81c1f3be970ab772bdc45c0cda2b1fdc3f33c73b8d"
     },
     {
       "path": "modules/computer/infra/process/watchdogother.go",

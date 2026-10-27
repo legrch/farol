@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -150,6 +151,10 @@ func (c *watchdogChild) send(ctx context.Context, message any) error {
 // Local send completion and stop-requested ACK are not cleanup evidence.
 func (c *watchdogChild) Kill() error {
 	c.mutex.Lock()
+	if c.rootExited && !c.stopSent {
+		c.mutex.Unlock()
+		return os.ErrProcessDone
+	}
 	if c.stopSent || c.uncertain {
 		c.mutex.Unlock()
 		return &processsvc.NativeFailure{Unknown: true}

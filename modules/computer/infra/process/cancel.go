@@ -2,7 +2,10 @@ package process
 
 import (
 	"context"
+	"errors"
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
+	"os"
+	"syscall"
 )
 
 func (c *Child) stop(timeout bool) {
@@ -19,6 +22,11 @@ func (c *Child) requestStop(timeout bool) <-chan struct{} {
 		settled := c.signalDone
 		c.mutex.Unlock()
 		return settled
+	}
+	if c.waited && !c.finished {
+		settled := c.done
+		c.mutex.Unlock()
+		return settled // Observe the original waiter; an exited root needs no stop.
 	}
 	if c.finished {
 		c.mutex.Unlock()
@@ -37,7 +45,11 @@ func (c *Child) requestStop(timeout bool) <-chan struct{} {
 	go func() {
 		err := root.Kill()
 		c.mutex.Lock()
-		if err != nil {
+		if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
+			// Retained OS owner reports no signal effect after reap. Keep the
+			// one-shot result and let the existing waiter publish exit/cleanup.
+			c.signalTerminal = true
+		} else if err != nil {
 			c.markStopUnknown()
 		}
 		c.signalCompleted = true
@@ -67,17 +79,30 @@ func (c *Child) Cancel(ctx context.Context) (*processsvc.CancelReceipt, error) {
 		}
 	}
 	c.mutex.Lock()
+	// Kill can learn that OS Wait won before Child.wait acquired this mutex.
+	// Joining done cannot deadlock the waiter's independent signalDone join.
+	if c.signalTerminal && !c.finished {
+		done := c.done
+		c.mutex.Unlock()
+		select {
+		case <-done:
+		case <-ctx.Done():
+		}
+		c.mutex.Lock()
+	}
 	defer c.mutex.Unlock()
 	if ctx.Err() != nil {
-		c.markStopUnknown()
+		if c.signalAttempted && !c.signalTerminal {
+			c.markStopUnknown()
+		}
 		return nil, &processsvc.NativeFailure{Unknown: true}
 	}
 	status := processsvc.CancelRequested
-	if c.finished && c.waited && !c.signalAttempted && !c.signalUnknown {
+	if c.finished && c.waited && (!c.signalAttempted || c.signalTerminal) && !c.signalUnknown {
 		// The retained Wait already reaped this root. There is no control effect
 		// to attempt or lose; descendant cleanup remains independently observed.
 		status = processsvc.AlreadyTerminal
-	} else if !c.signalAttempted || !c.signalCompleted || c.signalUnknown {
+	} else if c.signalTerminal || !c.signalAttempted || !c.signalCompleted || c.signalUnknown {
 		status = processsvc.CancelUnknown
 	}
 	return &processsvc.CancelReceipt{Handle: c.handle, Status: status}, nil
