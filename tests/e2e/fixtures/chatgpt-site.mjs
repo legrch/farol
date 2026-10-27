@@ -173,7 +173,11 @@ export async function startChatGptFixture(options = {}) {
           window.__farolAttachmentProof = [];
           let attachmentLoading = false;
           let responseGeneration = 0;
-          const readinessDeadline = Date.now() + ${setup?.readinessDelayMs ?? 0};
+          // Delay hydration of an already signed-in document, not the initial
+          // interactive sign-in transition exercised by the setup harness.
+          const readinessDelay = localStorage.getItem('farol-e2e-authenticated') === '1'
+            ? ${setup?.readinessDelayMs ?? 0} : 0;
+          const readinessDeadline = Date.now() + readinessDelay;
           const updateSend = () => {
             send.disabled = composer.textContent.trim().length === 0 || attachmentLoading;
           };
@@ -184,7 +188,7 @@ export async function startChatGptFixture(options = {}) {
             composer.hidden = !authenticated || Date.now() < readinessDeadline;
             send.hidden = !authenticated || Date.now() < readinessDeadline;
           };
-          setTimeout(() => render(), ${setup?.readinessDelayMs ?? 0});
+          setTimeout(() => render(), readinessDelay);
           const restoreConversation = () => {
             if (location.pathname !== conversationPath) return;
             try {
