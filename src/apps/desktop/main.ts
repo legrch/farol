@@ -1,4 +1,5 @@
 import "../../../apps/desktop/bridge/e2e-window-bootstrap.ts";
+import { guardDiagnosticPipes } from "./diagnostic-pipes";
 import { preventEmbeddedWindowDrag } from "./embedded-web-drag";
 import { separateAppVerificationScopeCurrent } from "../../pkg/product-settings/separate-app-verification";
 import type { SeparateAppVerificationScope } from "../../pkg/product-settings/contract";
@@ -559,6 +560,7 @@ import {
 import { resolvePhysicalDevDataDirectoryName } from "./dev-profile-directory";
 import { observeRendererLifecycle } from "../../../apps/desktop/renderer-lifecycle-observation";
 
+guardDiagnosticPipes([process.stdout, process.stderr]);
 const directory = __dirname;
 // A legacy build has no Go declaration; a Go build never falls back after a
 // failed launch, publication or operation. The builder supplies this constant.
