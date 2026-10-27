@@ -63,6 +63,12 @@ async function main() {
     }
     return true;
   };
+  // The witness also loads the Dev runtime in this process. Re-exec the whole
+  // entrypoint so its own APIs and the child checks use the same pinned Node.
+  if (toolchain.status === "found") {
+    run([fileURLToPath(import.meta.url)]);
+    return;
+  }
   if (!run(["tooling/dev.mjs", "--check", "--acceptance-profile"])) return;
   const image = await readPreparedDevCore(root);
   for (const args of devToolSmokePlan(root, image)) if (!run(args)) return;
