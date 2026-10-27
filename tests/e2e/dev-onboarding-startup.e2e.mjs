@@ -704,8 +704,15 @@ try {
       { id: originalWindow.id, width, height: originalWindow.size[1] },
     );
     await reopenedWindow.waitForFunction(
-      (width) => window.innerWidth === width,
-      width,
+      ({ width, compactMaxWidth }) => {
+        const shell = document.querySelector(".desktop");
+        const saved = localStorage.getItem("farol.sidebar.v2") ?? "full";
+        const expected = width <= compactMaxWidth ? "rail" : saved;
+        return (
+          window.innerWidth === width && shell?.dataset.sidebar === expected
+        );
+      },
+      { width, compactMaxWidth: shellGeometry.compactMaxWidth },
     );
     assert.deepEqual(
       await application.evaluate(
