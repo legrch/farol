@@ -38,7 +38,10 @@ export function resumedConnectorCheck(
     !historical ||
     historical.tunnelId !== prior.tunnelId ||
     appName === null ||
-    appName !== selectedConnectorApp(prior) ||
+    appName !==
+      (prior.chatgptApp?.tunnelId === prior.tunnelId
+        ? prior.chatgptApp.name
+        : null) ||
     current.tunnelId === null ||
     current.tunnelId !== prior.tunnelId ||
     prior.appVerificationPending === true ||

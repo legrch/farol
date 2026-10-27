@@ -127,7 +127,10 @@ import {
   type ConfirmedUpdateRestart,
   type InstalledUpdater,
 } from "../../modules/release/app/installed-updater";
-import { selectedConnectorApp } from "../../pkg/product-settings/connector-app-selection";
+import {
+  selectedConnectorApp,
+  restartedConnectorAppSelection,
+} from "../../pkg/product-settings/connector-app-selection";
 import { describeTaskModels } from "../../pkg/owner-config/contract";
 import { ReadCodexModelCatalogue } from "../../modules/chat/app/service/read-codex-model-catalogue";
 import type { CodexModelCatalogueResult } from "../../modules/chat/app/port/codex-model-catalogue";
@@ -5518,9 +5521,23 @@ async function startAdmittedSecureMcpConnector(
     await configuration.recordSecureMcpStopped().catch(() => undefined);
     return ProductConfigurationResultSchema.parse(challenged);
   }
+  const afterChallenge = configuration.snapshot();
+  const retainedSelection =
+    afterChallenge.status === "ready"
+      ? restartedConnectorAppSelection(afterChallenge.settings)
+      : null;
+  if (
+    retainedSelection &&
+    afterChallenge.status === "ready" &&
+    selectedConnectorApp(afterChallenge.settings.connectors.secureMcp) === null
+  ) {
+    const selected =
+      await configuration.selectSecureMcpChatGptApp(retainedSelection);
+    if (!selected.ok) return ProductConfigurationResultSchema.parse(selected);
+  }
   return ProductConfigurationResultSchema.parse({
     ok: true,
-    snapshot: challenged.snapshot,
+    snapshot: configuration.snapshot(),
     evidence: {
       kind: "connector.runtime",
       state: "ready",

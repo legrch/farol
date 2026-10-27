@@ -1,4 +1,8 @@
 import { connectorRuntimeUncertain } from "../../src/pkg/product-settings/connector-uncertainty.ts";
+import {
+  restartedConnectorAppSelection,
+  selectedConnectorApp,
+} from "../../src/pkg/product-settings/connector-app-selection.ts";
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
@@ -132,6 +136,11 @@ function fixture({ pause, startResult = originalStart, openError } = {}) {
       return { ok: true, snapshot: structuredClone(snapshot) };
     }),
     recordSecureMcpCredential: vi.fn(async () => ({ ok: true })),
+    selectSecureMcpChatGptApp: vi.fn(async (selection) => {
+      events.push("select-app");
+      snapshot.settings.connectors.secureMcp.chatgptApp = { ...selection };
+      return { ok: true, snapshot: structuredClone(snapshot) };
+    }),
   };
   async function barrier(phase) {
     // Every async port must stay under the original admitted owner. Neither
@@ -194,6 +203,8 @@ function fixture({ pause, startResult = originalStart, openError } = {}) {
   };
   const context = {
     connectorRuntimeUncertain,
+    restartedConnectorAppSelection,
+    selectedConnectorApp,
     configuration: owner,
     connectorCredentialStore: {
       reference: port("credential", "fixture-key-reference"),
@@ -404,6 +415,30 @@ describe("actual admitted transport start with controlled IO", () => {
       assertFinishedOwner(f);
     },
   );
+
+  it("rebinds the saved same-tunnel app choice after a known ready start", async () => {
+    const f = fixture();
+    f.snapshot.settings.connectors.secureMcp.chatgptApp = {
+      name: "Farol Dev",
+      tunnelId: "fixture-tunnel",
+      connectorGeneration: 1,
+    };
+    const result = await f.direct(undefined);
+    expect(result.ok).toBe(true);
+    expect(f.owner.selectSecureMcpChatGptApp).toHaveBeenCalledExactlyOnceWith({
+      name: "Farol Dev",
+      tunnelId: "fixture-tunnel",
+      connectorGeneration: 3,
+    });
+    expect(f.events).toEqual([
+      ...phases,
+      "record-runtime",
+      "challenge",
+      "select-app",
+    ]);
+    expect(f.snapshot.settings.connectors.secureMcp.attachment).toBeUndefined();
+    assertFinishedOwner(f);
+  });
 
   it.each([undefined, () => false])(
     "keeps ordinary start without recoveryFrom unchanged (%s)",

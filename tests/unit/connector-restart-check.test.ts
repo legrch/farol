@@ -49,6 +49,17 @@ describe("automatic attachment check after connector resume", () => {
     expect(f.before).toEqual(original.before);
     expect(f.after).toEqual(original.after);
   });
+  it("retains the earlier explicit choice after a known generation-only restart", () => {
+    const f = fixture();
+    f.before.connectors.secureMcp.generation = 2;
+    f.after.connectors.secureMcp.generation = 3;
+    f.after.connectors.secureMcp.chatgptApp!.connectorGeneration = 3;
+    f.after.connectors.secureMcp.runtime!.connectorGeneration = 3;
+    expect(f.check()).toMatchObject({
+      appName: "Farol Dev",
+      connectorGeneration: 3,
+    });
+  });
 
   it.each<[string, (before: ProductSettings, after: ProductSettings) => void]>([
     [
