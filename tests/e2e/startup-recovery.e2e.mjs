@@ -1,9 +1,8 @@
 import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
-// Explicit native lane: exact Go build and synthetic data, with either a
-// synthetic predecessor or an actual idle normal-host crash. Hidden recovery
-// UI -> Quit or exact-host SIGKILL -> same-profile reopen. No live provider,
-// installed profile, operation replay or arbitrary descendant claim. The optional
-// Computer store refusal is a future post-fix journey, not baseline qualification.
+// Explicit native lane: qualified Go build, completed-Setup fixture and hidden
+// fresh Home -> Quit/reopen, or one exact idle host SIGKILL. Invalid settings or
+// Computer storage stay BLOCKED. Historical UI reads are reported NOT RUN.
+// No live provider, installed profile, replay or descendant claim.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomUUID, createHash } from "node:crypto";
@@ -30,6 +29,14 @@ import {
   stopChatGptFixture,
 } from "./fixtures/chatgpt-site.mjs";
 
+import {
+  freshChatNamespaces,
+  selectFreshChatJournal,
+  assertFreshReady,
+  assertPreservedEntries,
+} from "./fixtures/fresh-startup-witness.ts";
+import { reportRetiredJourney } from "../../tooling/setup-journey-retirement.mjs";
+
 const {
   savedSettings,
   forceQuit,
@@ -38,6 +45,13 @@ const {
   backendCrash,
   computerStoreRefusal,
 } = parseRecoveryArguments(process.argv.slice(2));
+if (backendCrash) {
+  reportRetiredJourney(
+    "startup-recovery-pending-stored-read",
+    "The explicit recovery-only stored-read UI is not the ordinary fresh startup route. No backend fault was launched.",
+  );
+  process.exit(2);
+}
 assert.equal(process.platform, "darwin");
 const root = process.cwd(),
   source = sourceIdentity(root),
@@ -76,7 +90,7 @@ const report = {
   fault: normalHostCrash
     ? "original-normal-host-SIGKILL"
     : forceQuit
-      ? "first-recovery-host-SIGKILL"
+      ? "first-fresh-host-SIGKILL"
       : backendCrash
         ? "original-recovery-backend-SIGSTOP-pending-UI-read-SIGKILL"
         : computerStoreRefusal
@@ -94,7 +108,7 @@ const report = {
     stage: "preparing",
   },
   limits:
-    "Synthetic data only. Stored-reply mode seeds real Go result records with an explicit UNKNOWN after the old backend exits, without original terminal/ACK or Browser Send; it is native archive/IPC/UI custody evidence only. Normal-host crash uses its actual marker, original Go owner and loopback Browser fixture. Optional recovery-host/backend crash retains a synthetic predecessor marker. Backend-loss mode suspends only the exact observed Go child, starts one explicit UI read and then kills that same child; pending UI is not proof the backend received/processed the request. Computer-store refusal retains the original fixed access snapshot in the same fresh private namespace, replaces only that snapshot with malformed JSON, and selects no folder read. This expected post-fix journey requires separate qualification against actual built bytes. Observed direct-child absence is not arbitrary descendant settlement, interrupted workspace-effect, machine restart, installed or live provider evidence.",
+    "Disposable completed-Setup data only: dismissed=true is a synthetic historical Finish, not current attachment or owner Finish evidence. Ordinary fresh Home, current writable launch claims, exact observed child closure and clean Quit are checked against qualified built bytes. Original journals/UNKNOWN stay in place and failed run bytes are copied into run-history. Stored-reply mode seeds native Go records without original terminal/ACK or Send; only disk custody is checked, while stored-answer UI is NOT RUN. Backend-loss/stored-read UI mode is retired before launch. Invalid settings or Computer storage must stop with the actual startup code, without retry. No Shell execution, arbitrary descendant settlement, interrupted workspace-effect, reboot, installed or live-provider proof.",
 };
 const save = () =>
   fs.writeFile(evidence, JSON.stringify(report, null, 2) + "\n", {
@@ -300,6 +314,14 @@ async function injectComputerStoreRefusal() {
   };
 }
 
+async function seedHistoricalCompletion() {
+  const file = path.join(stateRoot, "config.json");
+  const value = JSON.parse(await fs.readFile(file, "utf8"));
+  value.setup.journey.dismissed = true;
+  await fs.writeFile(file, JSON.stringify(value) + "\n", { mode: 0o600 });
+  report.fixture.setupCompletion =
+    "synthetic historical Finish; no current attachment or Finish proof";
+}
 await save();
 let seeded;
 try {
@@ -335,8 +357,12 @@ try {
       await assert.rejects(fs.lstat(path.join(stateRoot, "go-core")), {
         code: "ENOENT",
       });
+      await seedHistoricalCompletion();
       await crashNormalHost();
-    } else seeded = await seedRecoveryProfile(input);
+    } else {
+      seeded = await seedRecoveryProfile(input);
+      await seedHistoricalCompletion();
+    }
   }
   if (storedReplies) {
     // Independent test setup after exact original child cleanup. The tested
@@ -390,7 +416,15 @@ const retained = new Map([
     "running.json",
     normalHostCrash
       ? await fs.readFile(path.join(stateRoot, "running.json"))
-      : Buffer.from('{"synthetic":"unconfirmed predecessor"}\n'),
+      : Buffer.from(
+          JSON.stringify({
+            schema: 1,
+            pid: 2147483647,
+            startedAt: new Date().toISOString(),
+            bootTime: null,
+            processStart: null,
+          }) + "\n",
+        ),
   ],
   ...(normalHostCrash
     ? []
@@ -408,19 +442,20 @@ for (const [name, bytes] of retained)
       mode: 0o600,
       flag: "wx",
     });
-// Capture before either recovery lifetime; never derive expected bytes from
+// Capture before either fresh lifetime; never derive expected bytes from
 // the filesystem after the operation being checked. Access time is excluded
 // because ordinary reads may update it.
 const expectedNote = savedSettings
   ? await fs.readFile(path.join(profile, "workspace", "note.md"))
   : null;
-const preserved = async () => {
+const preserved = async (includeStateFiles = true) => {
   const result = {};
-  if (normalHostCrash)
+  if (normalHostCrash && includeStateFiles)
     await assert.rejects(fs.lstat(path.join(stateRoot, "last-quit.json")), {
       code: "ENOENT",
     });
   for (const [name, bytes] of retained) {
+    if (!includeStateFiles) continue;
     const actual = await fs.readFile(path.join(stateRoot, name));
     assert.deepEqual(actual, bytes, `PREDECESSOR_CHANGED:${name}`);
     const info = await fs.lstat(path.join(stateRoot, name), { bigint: true });
@@ -483,12 +518,14 @@ const preserved = async () => {
     }
     assert.deepEqual(await faultDirectories(true), computerFault.directories);
   }
-  if (report.preservedBaseline)
-    assert.deepEqual(
-      result,
-      report.preservedBaseline,
-      "OLD_SETTINGS_NATIVE_JOURNALS_OR_WORKSPACE_CHANGED",
+  if (report.preservedBaseline) {
+    const baseline = Object.fromEntries(
+      Object.entries(report.preservedBaseline).filter(
+        ([key]) => includeStateFiles || !retained.has(key),
+      ),
     );
+    assertPreservedEntries(baseline, result);
+  }
   return result;
 };
 // Wait for these exact observed PIDs only; never kill a child to make the
@@ -517,40 +554,6 @@ async function waitForObservedChildrenExit(observed) {
 // The renderer can otherwise hand capturePage its preceding compositor frame
 // after focus/media/size changes. Unthrottle only this test-owned document for
 // two paint frames, capture without making it visible, then restore its setting.
-async function captureRecoveryPage(application, page) {
-  const throttled = await application.evaluate(({ BrowserWindow }) => {
-    const contents = BrowserWindow.getAllWindows()[0].webContents;
-    const before = contents.getBackgroundThrottling();
-    contents.setBackgroundThrottling(false);
-    return before;
-  });
-  try {
-    await bounded(
-      page.evaluate(
-        () =>
-          new Promise((resolve) =>
-            requestAnimationFrame(() => requestAnimationFrame(resolve)),
-          ),
-      ),
-      "RECOVERY_CAPTURE_PAINT_TIMEOUT",
-    );
-    return await application.evaluate(async ({ BrowserWindow }) => {
-      const contents = BrowserWindow.getAllWindows()[0].webContents;
-      contents.invalidate();
-      return (await contents.capturePage(undefined, { stayHidden: true }))
-        .toPNG()
-        .toString("base64");
-    });
-  } finally {
-    await application.evaluate(
-      ({ BrowserWindow }, before) =>
-        BrowserWindow.getAllWindows()[0].webContents.setBackgroundThrottling(
-          before,
-        ),
-      throttled,
-    );
-  }
-}
 
 function launchOptions(extra = {}) {
   return {
@@ -719,15 +722,159 @@ async function crashNormalHost() {
   }
 }
 
+function ownerChoices(settings) {
+  return {
+    general: settings.general,
+    tasks: settings.tasks,
+    computer: {
+      computerId: settings.computer.computerId,
+      commands: settings.computer.commands,
+      pendingEdit: settings.computer.pendingEdit,
+      workspaces: settings.computer.workspaces.map(
+        ({
+          workspaceId,
+          root,
+          label,
+          access,
+          rootIdentity,
+          excludedPaths,
+          gitHistoryApproved,
+        }) => ({
+          workspaceId,
+          root,
+          label,
+          access,
+          rootIdentity,
+          excludedPaths,
+          gitHistoryApproved,
+        }),
+      ),
+    },
+    dismissed: settings.setup.journey.dismissed,
+  };
+}
+const expectedChoices = savedSettings
+  ? ownerChoices(JSON.parse(retained.get("config.json").toString("utf8")))
+  : null;
+async function runFreshLaunch(application, page, child, launch, before) {
+  await page.locator(".desktop").waitFor();
+  const deadline = performance.now() + 20000;
+  let bootstrap;
+  do {
+    bootstrap = await page.evaluate(() => window.farol.bootstrap());
+    if (
+      bootstrap.runtimeState === "ready" &&
+      bootstrap.configuration.status === "ready"
+    )
+      break;
+    assert.ok(performance.now() < deadline, "FRESH_BOOTSTRAP_NOT_READY");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  } while (true);
+  await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
+  launch.children = children(child.pid);
+  const backends = launch.children.filter(({ command }) =>
+    /farol-backend/u.test(command),
+  );
+  assert.equal(backends.length, 1, "CURRENT_FRESH_BACKEND_AMBIGUOUS");
+  launch.backend = backends[0];
+  assertFreshReady(bootstrap, launch.backend.command);
+  const current = await selectFreshChatJournal(stateRoot, before);
+  launch.generation = current.generation;
+  launch.currentJournal = current.file;
+  launch.normalAPI = await page.evaluate(() => ({
+    normal: typeof window.farol,
+    recovery: typeof window.farolRecovery,
+  }));
+  assert.deepEqual(launch.normalAPI, {
+    normal: "object",
+    recovery: "undefined",
+  });
+  const windows = await application.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().map((win) => ({
+      visible: win.isVisible(),
+      focused: win.isFocused(),
+    })),
+  );
+  for (const win of windows)
+    assert.deepEqual(win, { visible: false, focused: false });
+  assert.deepEqual(
+    ownerChoices(bootstrap.configuration.settings),
+    expectedChoices,
+  );
+  assert.equal(
+    JSON.parse(await fs.readFile(path.join(stateRoot, "running.json"))).pid,
+    child.pid,
+  );
+  // Original journals stay in place. New fresh namespaces are append-only extras.
+  await preserved(false);
+  const archives = await fs.readdir(path.join(stateRoot, "run-history"));
+  const originalMarker = retained.get("running.json");
+  const matching = [];
+  for (const name of archives) {
+    const copy = await fs.readFile(
+      path.join(stateRoot, "run-history", name, "running.json"),
+    );
+    if (copy.equals(originalMarker)) matching.push(name);
+  }
+  assert.equal(matching.length, 1, "ORIGINAL_FAILED_MARKER_COPY_NOT_UNIQUE");
+  launch.originalMarkerArchive = matching[0];
+  const originalQuit = retained.get("last-quit.json");
+  const quitCopy = path.join(
+    stateRoot,
+    "run-history",
+    matching[0],
+    "last-quit.json",
+  );
+  if (originalQuit) assert.deepEqual(await fs.readFile(quitCopy), originalQuit);
+  else await assert.rejects(fs.lstat(quitCopy), { code: "ENOENT" });
+  launch.coverage = {
+    home: "PASS",
+    globallyLimited: false,
+    storedReplyUI: "NOT_RUN-normal-history-UI-unavailable",
+  };
+  launch.beforeQuit = await preserved(false);
+  launch.closeRequested = true;
+  await save();
+  const crash = forceQuit && launch.ordinal === 1;
+  if (crash) assert.equal(child.kill("SIGKILL"), true);
+  else await application.evaluate(({ app }) => app.quit());
+  const [code, signal] = await bounded(exit, "CURRENT_FRESH_TERMINAL_UNKNOWN");
+  launch.exitCode = code;
+  launch.signal = signal;
+  assert.equal(code, crash ? null : 0);
+  assert.equal(signal, crash ? "SIGKILL" : null);
+  await waitForObservedChildrenExit(launch.children);
+  if (!crash) {
+    const quit = JSON.parse(
+      await fs.readFile(path.join(stateRoot, "last-quit.json")),
+    );
+    assert.equal(quit.drained, true);
+    assert.deepEqual(quit.unconfirmed, []);
+    await assert.rejects(fs.lstat(path.join(stateRoot, "running.json")), {
+      code: "ENOENT",
+    });
+  }
+  await preserved(false);
+  assert.equal(await isPromotionLeaseHeld(userData), false);
+  launch.cleanupConfirmed = true;
+  app = null;
+  await save();
+}
+let freshSite;
 let app, exit, launch;
 try {
   report.preservedBaseline = await preserved();
+  freshSite =
+    savedSettings && !computerStoreRefusal ? await startChatGptFixture() : null;
   await save();
   for (let ordinal = 1; ordinal <= 2; ordinal++) {
     launch = { ordinal, closeRequested: false, cleanupConfirmed: false };
     report.launches.push(launch);
     await save();
-    app = await electron.launch(launchOptions());
+    const namespacesBefore = await freshChatNamespaces(stateRoot);
+    app = await electron.launch(
+      launchOptions(freshSite ? { FAROL_E2E_CHATGPT_URL: freshSite.url } : {}),
+    );
     const child = app.process();
     launch.pid = child.pid;
     // Keep only the original producer's bounded content-free observations.
@@ -735,6 +882,7 @@ try {
     const originalLaunch = launch;
     originalLaunch.backendLifecycle = [];
     let diagnostics = "";
+    launch.startupCodes = [];
     child.stderr.on("data", (chunk) => {
       diagnostics += chunk.toString("utf8");
       if (diagnostics.length > 65536) {
@@ -745,6 +893,10 @@ try {
       const lines = diagnostics.split("\n");
       diagnostics = lines.pop();
       for (const line of lines) {
+        const failure = /^FAROL_STARTUP_FAILURE:([A-Z][A-Z0-9_]{2,63})$/u.exec(
+          line,
+        );
+        if (failure) originalLaunch.startupCodes.push(failure[1]);
         const prefix = "FAROL_BACKEND_LIFECYCLE:";
         if (!line.startsWith(prefix)) continue;
         try {
@@ -791,582 +943,44 @@ try {
     });
     exit = once(child, "exit");
     void exit.catch(() => undefined);
+    if (!savedSettings || computerStoreRefusal) {
+      const [code, signal] = await bounded(
+        exit,
+        "BLOCKED_STARTUP_TERMINAL_UNKNOWN",
+      );
+      launch.exitCode = code;
+      launch.signal = signal;
+      launch.closeRequested = true;
+      assert.equal(code, 1);
+      assert.equal(signal, null);
+      assert.equal(
+        launch.startupCodes.length,
+        1,
+        "EXACT_STARTUP_BLOCKER_MISSING",
+      );
+      if (!savedSettings)
+        assert.equal(launch.startupCodes[0], "SETTINGS_CORRUPT");
+      launch.blocker = launch.startupCodes[0];
+      await preserved();
+      launch.cleanupConfirmed = true;
+      report.status = "BLOCKED";
+      report.profileRetained = true;
+      process.exitCode = 2;
+      app = null;
+      break; // No retry/reopen after this blocked attempt.
+    }
     const page = await app.firstWindow({ timeout: 15000 });
-    await page
-      .getByRole("heading", { name: "Your previous session needs recovery" })
-      .waitFor();
-    launch.windows = await app.evaluate(({ app, BrowserWindow }) => ({
-      userData: app.getPath("userData"),
-      windows: BrowserWindow.getAllWindows().map((win) => ({
-        visible: win.isVisible(),
-        focused: win.isFocused(),
-        url: win.webContents.getURL(),
-        bounds: win.getBounds(),
-      })),
-    }));
-    assert.equal(launch.windows.userData, userData);
-    assert.equal(launch.windows.windows.length, 1);
-    assert.equal(launch.windows.windows[0].visible, false);
-    assert.equal(launch.windows.windows[0].focused, false);
-    assert.ok(
-      launch.windows.windows[0].url.endsWith(
-        "/shell.html#farol-startup-recovery",
-      ),
-    );
-    launch.api = await page.evaluate(() => ({
-      recovery: Object.keys(window.farolRecovery ?? {}).sort(),
-      normal: typeof window.farol,
-    }));
-    assert.deepEqual(launch.api, {
-      recovery: ["quit", "read", "state"],
-      normal: "undefined",
-    });
-    if (savedSettings) {
-      await page
-        .getByRole("heading", { name: "Saved settings", exact: true })
-        .waitFor();
-      await page.getByLabel("Saved folder").selectOption(seeded.workspaceId);
-      if (computerStoreRefusal) {
-        await page
-          .getByText(
-            "Folder reads are unavailable. Your saved folder selection is still shown below.",
-            { exact: true },
-          )
-          .waitFor();
-        launch.availability = await page.evaluate(() =>
-          window.farolRecovery.state(),
-        );
-        assert.equal(launch.availability.status, "ready");
-        assert.equal(launch.availability.revision, seeded.settingsRevision);
-        assert.equal(launch.availability.computer, "unavailable");
-        assert.equal(launch.availability.archive, "available");
-        assert.deepEqual(launch.availability.folders, [
-          {
-            workspaceId: seeded.workspaceId,
-            label: "Recovery fixture",
-            root: path.join(profile, "workspace"),
-          },
-        ]);
-        assert.equal(
-          await page
-            .getByRole("button", { name: "Open folder", exact: true })
-            .isDisabled(),
-          true,
-        );
-        assert.equal(
-          await page.getByLabel("Folder contents", { exact: true }).count(),
-          0,
-        );
-        assert.equal(await page.locator(".recovery-metadata").count(), 0);
-        launch.reads = {
-          folder: false,
-          nested: false,
-          folderReadSelected: false,
-        };
-      } else {
-        await page
-          .getByRole("button", { name: "Open folder", exact: true })
-          .click();
-        await page
-          .getByRole("button", { name: "note.md", exact: true })
-          .waitFor();
-        await page
-          .getByRole("button", { name: "folder/", exact: true })
-          .click();
-        await page
-          .getByRole("button", { name: "nested.txt", exact: true })
-          .waitFor();
-        await page.getByRole("button", { name: "Up", exact: true }).click();
-        await page
-          .getByRole("button", { name: "note.md", exact: true })
-          .click();
-        assert.ok(expectedNote);
-        const bytes = expectedNote;
-        await page
-          .getByText(`SHA-256 ${hash(bytes)}`, { exact: true })
-          .waitFor();
-        launch.reads = {
-          folder: true,
-          nested: true,
-          metadata: { bytes: bytes.length, sha256: hash(bytes) },
-        };
-      }
-      if (storedReplies) {
-        await page
-          .getByRole("button", { name: "Stored replies", exact: true })
-          .click();
-        assert.equal(await page.getByLabel("Stored reply copies").count(), 0);
-        await page
-          .getByRole("button", { name: "Load stored replies", exact: true })
-          .click();
-        const rows = page.getByRole("button", {
-          name: /^Open stored reply \d+$/u,
-        });
-        await rows.nth(31).waitFor();
-        assert.equal(await rows.count(), 32);
-        await page
-          .getByText("Some records remain unresolved or cannot be displayed.", {
-            exact: true,
-          })
-          .waitFor();
-        await page
-          .getByRole("button", { name: "Load more replies", exact: true })
-          .click();
-        await rows.nth(32).waitFor();
-        assert.equal(await rows.count(), 33);
-        assert.equal(
-          await page
-            .getByRole("button", { name: "Load more replies", exact: true })
-            .count(),
-          0,
-        );
-        launch.archivePaging = { pages: [32, 1], totalRows: 33 };
-        await save();
-        const expected = [...seeded.stored.entries].sort((a, b) =>
-          a.key.localeCompare(b.key),
-        );
-        const readIndexes = computerStoreRefusal
-          ? expected.map((_, index) => index)
-          : [0, 32];
-        for (const index of readIndexes) {
-          await page
-            .getByRole("button", {
-              name: `Open stored reply ${index + 1}`,
-              exact: true,
-            })
-            .click();
-          // Compare literal retained bytes, without text-selector whitespace
-          // normalization. Observe a refusal as a failure, never issue a read
-          // again; retain the actual UI projection even if waiting fails.
-          try {
-            await page.waitForFunction(
-              (text) =>
-                document.querySelector('[aria-label="Stored reply text"]')
-                  ?.textContent === text ||
-                document.querySelector('.recovery-archive [role="alert"]') !==
-                  null,
-              expected[index].text,
-              { timeout: 15000 },
-            );
-          } finally {
-            const observation = await page.evaluate(() => ({
-              text:
-                document.querySelector('[aria-label="Stored reply text"]')
-                  ?.textContent ?? null,
-              alert:
-                document.querySelector('.recovery-archive [role="alert"]')
-                  ?.textContent ?? null,
-              selected:
-                document
-                  .querySelector('.recovery-reply-list [aria-pressed="true"]')
-                  ?.getAttribute("aria-label") ?? null,
-            }));
-            (launch.archiveViews ??= []).push({
-              key: expected[index].key,
-              ...observation,
-            });
-            await save();
-          }
-          const observed = launch.archiveViews.at(-1);
-          assert.equal(observed.alert, null, "STORED_REPLY_UI_REFUSED");
-          assert.equal(
-            observed.text,
-            expected[index].text,
-            "STORED_REPLY_TEXT_CHANGED",
-          );
-          if (computerStoreRefusal) {
-            assert.equal(observed.selected, `Open stored reply ${index + 1}`);
-            const entry = expected[index];
-            assert.match(entry.key, /^[a-f0-9]{64}$/u);
-            assert.match(entry.digest, /^[a-f0-9]{64}$/u);
-            // Publication digests cover the complete original .attempt record,
-            // not just its payload. Bind the UI text to that seed receipt and
-            // the preserved original commit without issuing a second API read.
-            const record = path.join(
-              "go-core",
-              "chat",
-              "chat-results",
-              entry.key,
-            );
-            assert.equal(
-              JSON.parse(report.preservedBaseline[record + ".attempt"]).bytes,
-              entry.digest,
-              "STORED_REPLY_ORIGINAL_DIGEST_CHANGED",
-            );
-            assert.equal(
-              JSON.parse(report.preservedBaseline[record + ".commit"]).bytes,
-              hash(Buffer.from(entry.digest)),
-              "STORED_REPLY_ORIGINAL_COMMIT_CHANGED",
-            );
-            observed.originalRecordSha256 = entry.digest;
-            observed.textSha256 = hash(Buffer.from(observed.text));
-            assert.equal(observed.textSha256, hash(Buffer.from(entry.text)));
-            assert.equal(
-              await page
-                .locator(
-                  ".recovery-copy-text script, .recovery-copy-text a, .recovery-copy-text iframe",
-                )
-                .count(),
-              0,
-            );
-          }
-        }
-        await page.getByText("Outcome unconfirmed", { exact: true }).waitFor();
-        assert.equal(
-          await page
-            .locator(
-              ".recovery-copy-text script, .recovery-copy-text a, .recovery-copy-text iframe",
-            )
-            .count(),
-          0,
-        );
-        launch.reads.archive = {
-          observation: "stored_unconfirmed",
-          pages: [32, 1],
-          readKeys: readIndexes.map((index) => expected[index].key),
-          originalFencePreserved: true,
-        };
-      }
-    } else
-      await page
-        .getByRole("alert")
-        .filter({ hasText: "Saved settings are unavailable" })
-        .waitFor();
-    if (computerStoreRefusal) {
-      launch.afterArchiveAvailability = await page.evaluate(() =>
-        window.farolRecovery.state(),
-      );
-      assert.deepEqual(launch.afterArchiveAvailability, launch.availability);
-      assert.equal(
-        await page
-          .getByRole("heading", { name: "Saved settings", exact: true })
-          .isVisible(),
-        true,
-      );
-      assert.equal(
-        await page
-          .getByRole("button", {
-            name: "Open folder",
-            exact: true,
-            includeHidden: true,
-          })
-          .isDisabled(),
-        true,
-      );
-    }
-    launch.beforeQuit = await preserved();
-    const leasePath = path.join(stateRoot, "promotion.lease");
-    const leaseBytes = await fs.readFile(leasePath);
-    const lease = JSON.parse(leaseBytes.toString("utf8"));
-    const leaseIdentity = await fs.lstat(leasePath, { bigint: true });
-    assert.equal(lease.pid, child.pid);
-    assert.equal(lease.role, "admission");
-    assert.equal(
-      await isPromotionLeaseHeld(userData),
-      true,
-      "RECOVERY_LEASE_NOT_HELD",
-    );
-    launch.children = children(child.pid);
-    const backends = launch.children.filter(({ command }) =>
-      /farol-backend/u.test(command),
-    );
-    assert.equal(
-      backends.length,
-      savedSettings ? 1 : 0,
-      "UNEXPECTED_BACKEND_COMPOSITION",
-    );
-    if (savedSettings) {
-      launch.backend = backends[0];
-      assert.match(launch.backend.command, /--startup-mode recovery/u);
-      assert.doesNotMatch(
-        launch.backend.command,
-        /--settings-mutations|--previous-host-drain-confirmed|--shell-support-fd|--codex-read-host/u,
-      );
-    }
-    assert.equal(
-      launch.children.some(({ command }) =>
-        /(?:^|\/)runtime\.cjs(?:\s|$)/u.test(command),
-      ),
-      false,
-      "EFFECT_RUNTIME_STARTED",
-    );
-    if (ordinal === 1) {
-      report.screenshots = [];
-      for (const [name, width, height, colorScheme] of savedSettings
-        ? [
-            ["compact", 640, 520, "light"],
-            ["wide-dark", 840, 760, "dark"],
-          ]
-        : [["unavailable", 640, 520, "light"]]) {
-        await page.emulateMedia({ colorScheme, reducedMotion: "reduce" });
-        await app.evaluate(
-          ({ BrowserWindow }, { width, height }) =>
-            BrowserWindow.getAllWindows()[0].setSize(width, height),
-          { width, height },
-        );
-        // Chromium-only keyboard modality in the owned hidden document; no
-        // BrowserWindow activation or native focus acceptance is claimed.
-        await page.keyboard.press("Tab");
-        await page.getByRole("button", { name: "Quit", exact: true }).focus();
-        const screenshot = evidence.replace(/\.json$/u, `-${name}.png`);
-        const pixels = await captureRecoveryPage(app, page);
-        await fs.writeFile(screenshot, Buffer.from(pixels, "base64"), {
-          mode: 0o600,
-        });
-        const layout = await page.evaluate(() => ({
-          width: innerWidth,
-          scrollWidth: document.documentElement.scrollWidth,
-          focus: document.activeElement?.textContent,
-          outline: getComputedStyle(document.activeElement).outlineWidth,
-        }));
-        assert.ok(
-          layout.scrollWidth <= layout.width,
-          "RECOVERY_HORIZONTAL_OVERFLOW",
-        );
-        assert.equal(layout.focus, "Quit");
-        assert.equal(layout.outline, "3px");
-        report.screenshots.push({
-          screenshot,
-          name,
-          layout,
-          presentation:
-            "two-paint-frames-then-stay-hidden-capture; native-window-hidden-unfocused",
-        });
-      }
-      const windows = await app.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows().map((win) => ({
-          visible: win.isVisible(),
-          focused: win.isFocused(),
-        })),
-      );
-      assert.deepEqual(windows, [{ visible: false, focused: false }]);
-    }
-    if (backendCrash && ordinal === 1) {
-      // This is the one observed child of the current test-owned Electron host.
-      // Revalidate exact PID, parent and command before each deliberate signal.
-      // No PID/name scan is used to select a replacement or signal a group.
-      const original = launch.backend;
-      const signalBackend = async (signal) => {
-        assert.ok(
-          original &&
-            original.command.startsWith(
-              path.join(buildRoot, "farol-backend") + " serve ",
-            ),
-        );
-        assert.ok(original.command.includes(` --profile ${seeded.profileId} `));
-        assert.ok(
-          original.command.includes(
-            ` --profile-root ${path.join(stateRoot, "go-core")} --profile-device `,
-          ),
-        );
-        const current = children(child.pid).find(
-          (item) => item.pid === original.pid,
-        );
-        assert.deepEqual(
-          current,
-          original,
-          "ORIGINAL_BACKEND_CHANGED_BEFORE_FAULT",
-        );
-        const intent = {
-          pid: original.pid,
-          signal,
-          commandSHA256: hash(Buffer.from(original.command)),
-          delivered: false,
-        };
-        (launch.backendSignals ??= []).push(intent);
-        await save();
-        assert.deepEqual(
-          children(child.pid).find((item) => item.pid === original.pid),
-          original,
-          "ORIGINAL_BACKEND_CHANGED_AT_SIGNAL",
-        );
-        process.kill(original.pid, signal);
-        intent.delivered = true;
-        await save();
-      };
-      const retainedText = launch.archiveViews.at(-1).text;
-      await signalBackend("SIGSTOP");
-      await page
-        .getByRole("button", { name: "Open stored reply 2", exact: true })
-        .click();
-      await page
-        .getByText("Reading the stored copy…", { exact: true })
-        .waitFor({ timeout: 5000 });
-      launch.pendingArchiveUI = {
-        ordinal: 2,
-        backendSuspended: true,
-        previousText: retainedText,
-        limits: "UI call pending; backend receipt/processing not observed",
-      };
-      await save();
-      await signalBackend("SIGKILL");
-      await waitForObservedChildrenExit([original]);
-      launch.observedKilledBackendAbsent = original.pid;
-      const hostLifetimeId = / --host-lifetime ([a-f0-9-]{36}) /u.exec(
-        original.command,
-      )?.[1];
-      const childLaunchId = / --child-launch ([a-f0-9-]{36}) /u.exec(
-        original.command,
-      )?.[1];
-      assert.ok(hostLifetimeId && childLaunchId);
-      const deadline = performance.now() + 5000;
-      let terminal;
-      do {
-        terminal = launch.backendLifecycle.find(
-          (value) =>
-            value.event === "child-close" &&
-            value.hostLifetimeId === hostLifetimeId &&
-            value.childLaunchId === childLaunchId,
-        );
-        if (terminal) break;
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      } while (performance.now() < deadline);
-      assert.ok(terminal, "ORIGINAL_BACKEND_TERMINAL_UNOBSERVED");
-      assert.equal(terminal.state, "observed");
-      assert.equal(terminal.exitCode, null);
-      assert.equal(terminal.signal, "SIGKILL");
-      assert.equal(terminal.forced, false);
-      launch.originalBackendTerminal = terminal;
-      assert.ok(
-        !launch.diagnosticsInvalid && !launch.diagnosticsOverflow,
-        "BACKEND_LIFECYCLE_UNQUALIFIED",
-      );
-      await page
-        .getByText(
-          "Stored replies are unavailable for this recovery session. Original records remain in place.",
-          { exact: true },
-        )
-        .waitFor({ timeout: 5000 });
-      await page
-        .locator('.recovery-archive [role="alert"]')
-        .waitFor({ timeout: 5000 });
-      const paused = await page.evaluate(async () => ({
-        state: await window.farolRecovery.state(),
-        text:
-          document.querySelector('[aria-label="Stored reply text"]')
-            ?.textContent ?? null,
-        enabledStoredReads: [
-          ...document.querySelectorAll(".recovery-reply-list button"),
-        ].filter((button) => !button.disabled).length,
-      }));
-      assert.equal(paused.state.status, "ready");
-      assert.equal(paused.state.computer, "unavailable");
-      assert.equal(paused.state.archive, "unavailable");
-      assert.equal(
-        paused.text,
-        retainedText,
-        "PENDING_READ_REPLACED_RETAINED_COPY",
-      );
-      assert.equal(paused.enabledStoredReads, 0);
-      launch.pausedAfterBackendLoss = paused;
-      launch.afterBackendFault = await preserved();
-      launch.backendAbsenceSamples = [];
-      for (let sample = 0; sample < 3; sample++) {
-        const current = children(child.pid).filter((item) =>
-          /farol-backend/u.test(item.command),
-        );
-        assert.equal(
-          current.length,
-          0,
-          "RECOVERY_BACKEND_RESTARTED_AFTER_LOSS",
-        );
-        launch.backendAbsenceSamples.push({
-          elapsedSample: sample,
-          backends: current,
-        });
-        if (sample < 2)
-          await new Promise((resolve) => setTimeout(resolve, 750));
-      }
-      const screenshot = evidence.replace(/\.json$/u, "-backend-paused.png");
-      const pixels = await captureRecoveryPage(app, page);
-      await fs.writeFile(screenshot, Buffer.from(pixels, "base64"), {
-        mode: 0o600,
-      });
-      report.screenshots.push({
-        screenshot,
-        name: "backend-paused",
-        presentation:
-          "hidden original window after original child loss; retained copy remains unconfirmed",
-      });
-      await save();
-    }
-    launch.closeRequested = true;
-    await save();
-    const crash = forceQuit && ordinal === 1;
-    if (crash) {
-      // The live ChildProcess handle selects only this test's original host.
-      // Do not call renderer Quit, kill a group, clear a marker or repair state.
-      launch.faultRequested = "SIGKILL";
-      await save();
-      assert.equal(child.kill("SIGKILL"), true, "RECOVERY_FAULT_NOT_DELIVERED");
-    } else
-      await page.getByRole("button", { name: "Quit", exact: true }).click();
-    const [code, signal] = await bounded(exit, "RECOVERY_QUIT_UNKNOWN");
-    launch.exitCode = code;
-    launch.signal = signal;
-    await save();
-    assert.equal(code, crash ? null : 0);
-    assert.equal(signal, crash ? "SIGKILL" : null);
-    if (crash) {
-      await waitForObservedChildrenExit(launch.children);
-      launch.observedDirectChildrenAbsent = launch.children.map(
-        ({ pid }) => pid,
-      );
-    }
-    launch.afterQuit = await preserved();
-    if (launch.backend) {
-      assert.throws(
-        () => process.kill(launch.backend.pid, 0),
-        (error) => error?.code === "ESRCH",
-        "ORIGINAL_RECOVERY_BACKEND_STILL_EXISTS",
-      );
-    }
-    // The existing lease protocol retains its inode and clears its record.
-    // Kernel lock release, not pathname absence, permits the next generation.
-    assert.equal(
-      await isPromotionLeaseHeld(userData),
-      false,
-      "RECOVERY_LEASE_RETAINED",
-    );
-    const afterLease = await fs.readFile(leasePath);
-    if (crash) {
-      assert.deepEqual(
-        afterLease,
-        leaseBytes,
-        "CRASH_LEASE_DIAGNOSTIC_REWRITTEN",
-      );
-      const afterIdentity = await fs.lstat(leasePath, { bigint: true });
-      assert.equal(afterIdentity.dev, leaseIdentity.dev);
-      assert.equal(afterIdentity.ino, leaseIdentity.ino);
-      launch.retainedLeaseDiagnostic = hash(afterLease);
-    } else assert.equal(afterLease.length, 0, "RECOVERY_LEASE_RECORD_RETAINED");
-    assert.equal(children(child.pid).length, 0, "RECOVERY_CHILDREN_RETAINED");
-    launch.cleanupConfirmed = true;
-    app = null;
-    await save();
+    await runFreshLaunch(app, page, child, launch, namespacesBefore);
   }
-  if (computerStoreRefusal) {
-    // Keep the original inode and malformed snapshot available for inspection.
-    report.profileRetained = "computer-store-refusal-original-and-replacement";
-  } else {
-    await fs.rm(profile, { recursive: true });
-    report.profileRemoved = true;
+
+  if (report.status !== "BLOCKED") {
+    assert.equal(freshSite.driver.snapshot().acceptedSends, 0);
+    report.status = storedReplies
+      ? "PARTIAL-original-custody-PASS-history-UI-NOT_RUN"
+      : "PASS-fresh-Home-current-claims-clean-Quit-originals-preserved";
+    report.profileRetained = true;
+    if (storedReplies) process.exitCode = 2;
   }
-  report.status = savedSettings
-    ? storedReplies
-      ? backendCrash
-        ? "passed-hidden-stored-unconfirmed-backend-loss-pending-UI-read-reopen-originals-preserved"
-        : forceQuit
-          ? "passed-hidden-stored-unconfirmed-host-SIGKILL-reopen-originals-preserved"
-          : computerStoreRefusal
-            ? "passed-hidden-computer-store-refusal-33-stored-unconfirmed-replies-two-recovery-lifetimes-originals-retained"
-            : "passed-hidden-stored-unconfirmed-33-replies-UNKNOWN-preserved-two-recovery-lifetimes"
-      : normalHostCrash
-        ? "passed-normal-host-SIGKILL-real-marker-two-recovery-lifetimes-reads-originals-preserved"
-        : forceQuit
-          ? "passed-hidden-recovery-host-SIGKILL-observed-children-exit-reopen-reads-originals-preserved"
-          : "passed-hidden-saved-settings-Go-recovery-reads-quit-reopen-old-journals-preserved"
-    : "passed-hidden-recovery-quit-reopen-predecessor-preserved-zero-runtime";
 } catch (error) {
   report.status = "failed-or-unknown";
   report.error = String(error?.stack ?? error);
@@ -1383,6 +997,7 @@ try {
   }
   process.exitCode = 1;
 } finally {
+  if (freshSite) await stopChatGptFixture(freshSite);
   await save();
   process.stdout.write(
     `Startup recovery evidence: ${evidence} (${report.status})\n`,

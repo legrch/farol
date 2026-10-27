@@ -34,15 +34,17 @@ import {
   conversationId,
   conversationSeed,
   conversationScript,
-  conversationJournalWitness,
   conversationQuitWitness,
-  runConversationJourney,
 } from "./lib/read-conversation-witness.mjs";
-import {
-  historyOriginals,
-  runHistoryReadJourney,
-} from "./lib/chat-history-witness.mjs";
+import { runHistoryReadJourney } from "./lib/chat-history-witness.mjs";
 import { reportRetiredJourney } from "../../tooling/setup-journey-retirement.mjs";
+
+import {
+  freshChatNamespaces,
+  selectFreshChatJournal,
+  assertFreshReady,
+  assertPreservedEntries,
+} from "./fixtures/fresh-startup-witness.ts";
 
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -51,28 +53,35 @@ const root = path.resolve(
 const buildRoot = path.join(root, "_output/build/app");
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const contract = {
-  schema: "farol-writable-recovery-native/1",
+  schema: "farol-writable-recovery-native/2",
   owned: "tests/e2e/writable-recovery.e2e.mjs",
   modes: [
     "--contract",
     "--run-native --source-sha SHA --build-id ID [--scenario normal|crash|connector-failed-quit] [--expect-restart normal-writable]",
   ],
+  coverage: {
+    nativeFileLifecycle:
+      "Guarded File edit/read/result ACK across fresh generations",
+    chatAndHistoryUI: "NOT_RUN: removed conversation/acceptance-tools UI",
+    setupFinish:
+      "Synthetic historical completion only; no current attachment or owner Finish proof",
+    shell: "NOT_RUN: writable launch claims are not Shell execution evidence",
+  },
   normal:
-    "Normal main.cjs/Go -> approved disposable folder -> real Chat results/ACK/settlement -> Go-owned guarded File edit/read/result ACK -> ordinary confirmed Quit -> same-profile fresh writable generation -> original saved Chat answers/workspace/result -> second File edit/read/result ACK -> confirmed Quit",
+    "Normal Home/Go -> approved disposable folder -> Go-owned guarded File edit/read/result ACK -> confirmed Quit -> same-profile fresh Home/writable generation -> original disk custody -> second File edit/read/result ACK -> confirmed Quit",
   crash:
-    "Fresh normal main.cjs/Go -> same real work -> exact observed Electron host SIGKILL -> observe original direct Go child absent -> one same-profile automatic preserving startup -> exact archived history/results and actual normal-session stored-copy UI -> new writable File ACK -> ordinary confirmed Quit",
+    "Normal Home/Go -> guarded File work -> exact observed Electron host SIGKILL -> observe original direct Go child absent -> one same-profile fresh Home/writable startup -> original journals/UNKNOWN unchanged in place and failed-run marker copied -> new File result/read/ACK -> confirmed Quit",
   connectorFailedQuit:
-    "Explicit only: normal main.cjs/attested Go + saved Chat/File work -> prove original Electron/anchor/synthetic tunnel ancestry -> one exact anchor SIGKILL with original tunnel still running -> ordinary app Quit -> require drained=false/unconfirmed=[connector], real original Go absence and unchanged run marker -> settle the nonce-bound owned tunnel -> one same-profile ordinary restart -> record actual normal/read-only/UI outcome and preservation; no forced recovery or success",
+    "NOT_RUN: retired before launch because its Chat/navigation adapter used removed acceptance-tools UI",
   limits: [
-    "Synthetic loopback provider/account/tasks and disposable workspace; existing admitted normal preload/UI flows, no product seam or injected journal/result",
-    "E2E_JOURNEY_RETIRED:writable-recovery-diagnostics-navigation: Its Home navigation adapter depended on the removed Settings Diagnostics ChatGPT acceptance-tools disclosure",
+    "Synthetic loopback account/connection fixture and disposable workspace, no Chat Send or live-provider verification",
+    "Historical Setup dismissed=true is disposable fixture input, not proof that Finish is admitted or persisted by the current UI",
     "Go owns Settings edit admission/pending/result; existing typed host storage performs conditional filesystem writes, not an autonomous model tool call",
-    "Hidden windows throughout; no focus, real picker, real provider/control plane, installed profile, sleep/reboot or interrupted-effect qualification; connector-failed-quit uses a synthetic loopback tunnel only",
-    "Connector-only failure is a hypothesis until native qualification. Any other failed-drain shape is NONMATCHING_FIXTURE, never R04 PASS. A read-only restart records that limit and performs no write or recovery action",
-    "--expect-restart normal-writable requires an actual normal-ready restart, retained history and a new File result/read/ACK; it rejects read-only recovery after ordinary cleanup",
+    "Hidden windows; no focus, real picker, provider/control plane, installed profile, reboot, interrupted-effect or Shell qualification",
     "Exact observed direct child absence is not arbitrary descendant settlement or an original Go terminal/ACK receipt after host SIGKILL",
-    "Historical Desktop prepared/readonly/null metadata is deliberately seeded on the fresh disposable crash fixture only after the original host/direct Go child are absent; this is not original historical or production state",
-    "Owned parent/child queries only; no machine-wide process inventory, arbitrary descendants or old Go ACK/terminal are established",
+    "Historical Desktop prepared/readonly/null metadata is seeded only after the disposable original host/direct Go child are absent; it is not production or original historical state",
+    "Original Chat disk custody is checked; no original saved-answer UI read or legacy-operation replay is performed",
+    "Ambiguous or refused startup fails this scenario; no automatic recovery or retry",
   ],
 };
 const args = process.argv.slice(2);
@@ -107,12 +116,13 @@ if (args.length === 0 || (args.length === 1 && args[0] === "--contract")) {
         pins["--scenario"] === "connector-failed-quit"),
     "INVALID_RESTART_EXPECTATION",
   );
-  reportRetiredJourney(
-    "writable-recovery-native-history",
-    "The native history scenarios require the removed Diagnostics navigation adapter.",
-  );
-  process.exit(0);
-  await main(pins);
+  if (pins["--scenario"] === "connector-failed-quit") {
+    reportRetiredJourney(
+      "writable-recovery-native-history",
+      "The connector fault history UI adapter remains unavailable; no native acceptance claimed.",
+    );
+    process.exitCode = 2;
+  } else await main(pins);
 }
 
 async function bounded(promise, code, ms = 20000) {
@@ -294,11 +304,8 @@ async function custody(stateRoot, workspace, retiredChat) {
   await walk(workspace, "workspace");
   return result;
 }
-function preserved(original, current, allowJournalAdvance = false) {
-  for (const [name, value] of Object.entries(original)) {
-    if (allowJournalAdvance && name === "chat/chat-lifecycle.json") continue;
-    assert.deepEqual(current[name], value, `ORIGINAL_CHANGED:${name}`);
-  }
+function preserved(original, current, advancingJournal) {
+  assertPreservedEntries(original, current, advancingJournal);
 }
 
 async function main(pins) {
@@ -401,7 +408,7 @@ async function main(pins) {
     assert.deepEqual(sourceIdentity(root), source, "SOURCE_CHANGED_DURING_RUN");
     await qualifyGoBuild(buildRoot, source);
     report.status = report.scenarios.every((row) => row.status === "PASS")
-      ? "PASS"
+      ? "PASS_FILE_LIFECYCLE"
       : "FAILED_OR_BLOCKED";
   } catch (error) {
     report.status = "FAILED_OR_UNKNOWN";
@@ -414,7 +421,7 @@ async function main(pins) {
     process.stdout.write(
       `${report.status}: ${evidence}\nretained: ${retainedRoot}\n`,
     );
-    process.exitCode = report.status === "PASS" ? 0 : 1;
+    process.exitCode = report.status === "PASS_FILE_LIFECYCLE" ? 0 : 1;
   }
 }
 
@@ -454,7 +461,13 @@ async function scenario({
   );
   await fs.writeFile(
     path.join(stateRoot, "config.json"),
-    JSON.stringify(conversationSeed(randomUUID())) + "\n",
+    JSON.stringify(
+      (() => {
+        const value = conversationSeed(randomUUID());
+        value.setup.journey.dismissed = true;
+        return value;
+      })(),
+    ) + "\n",
     { mode: 0o600, flag: "wx" },
   );
   const proof = randomUUID();
@@ -663,8 +676,8 @@ async function scenario({
     );
     return reply;
   };
-  const journal = () =>
-    json(path.join(stateRoot, "go-core/chat/chat-lifecycle.json"));
+  const journal = () => json(launch.currentJournal);
+
   const start = async (recovery = false, observeStartup = false) => {
     active();
     assert.deepEqual(sourceIdentity(root), source);
@@ -677,6 +690,7 @@ async function scenario({
     };
     row.launches.push(launch);
     await save();
+    launch.namespacesBefore = await freshChatNamespaces(stateRoot);
     app = child = ended = page = undefined;
     app = await electron.launch({
       executablePath: path.join(
@@ -881,8 +895,14 @@ async function scenario({
       launch.marker = await json(path.join(stateRoot, "running.json"));
       assert.equal(launch.marker.pid, child.pid);
       if (observeStartup) row.restartOutcome = "normal-ready";
-      launch.journal = await journal();
-      launch.generation = launch.journal.scope.BackendGeneration;
+      const current = await selectFreshChatJournal(
+        stateRoot,
+        launch.namespacesBefore,
+      );
+      launch.currentJournal = current.file;
+      launch.currentJournalLabel = current.label;
+      launch.journal = current.value;
+      launch.generation = current.generation;
       assert.ok(launch.generation);
     }
     await hidden();
@@ -901,7 +921,13 @@ async function scenario({
       recovery,
       "WRONG_BACKEND_MODE",
     );
-    launch.status = recovery ? "recovery-read-only" : "normal-ready";
+    assert.equal(recovery, false, "UNEXPECTED_RECOVERY_IN_FRESH_JOURNEY");
+    assertFreshReady(
+      await page.evaluate(() => window.farol.bootstrap()),
+      launch.backend.command,
+    );
+    await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
+    launch.status = "normal-ready";
     await save();
   };
   const quit = async (recovery = false) => {
@@ -1060,28 +1086,13 @@ async function scenario({
     await configure({ kind: "chatgpt.open-browser" });
     const readiness = await configure({ kind: "chatgpt.verify" });
     assert.equal(readiness.evidence.state, "authenticated");
-    row.chat = {};
-    await runConversationJourney({
-      window: journeyPage,
-      workspace: readiness.snapshot.settings.computer.workspaces[0],
-      configured: readiness.snapshot.settings,
-      driver: site.driver,
-      script,
-      session,
-      active,
-      hidden,
-      save,
-      report: row.chat,
-      journal: async (ui, acknowledged) =>
-        conversationJournalWitness(
-          await journal(),
-          row.launches[0].journal,
-          ui,
-          acknowledged,
-        ),
-    });
-    const originals = historyOriginals(row.chat);
-    row.originalResultIds = originals.map((value) => value.go.resultId);
+    row.chat = { status: "NOT_RUN-retired-conversation-UI; no Send" };
+    const originals = [];
+    row.originalResultIds = [];
+    row.history = {
+      status:
+        "NOT_RUN-retired-history-UI; original filesystem custody checked separately",
+    };
     await configure({
       kind: "computer.update-access",
       workspaceId: row.workspaceId,
@@ -1105,11 +1116,11 @@ async function scenario({
       ),
       { code: "ENOENT" },
     );
-    row.legacyGoMirror = "PASS-no-active-legacy-journal-after-real-Go-Chat-ACK";
+    row.legacyGoMirror = "PASS-no-active-legacy-journal-after-native-File-ACK";
     row.beforeTransition = await custody(stateRoot, workspace);
     row.ledger = site.driver.snapshot();
     await save();
-    assert.equal(row.ledger.acceptedSends, 2);
+    assert.equal(row.ledger.acceptedSends, 0);
     if (connectorFailure) {
       // Compare every persisted owner choice, including filePolicy and the
       // selected tunnel/client/credential binding. Only documented runtime
@@ -1445,7 +1456,11 @@ async function scenario({
     } else if (name === "normal") {
       await quit();
       row.afterQuit = await custody(stateRoot, workspace);
-      preserved(row.beforeTransition, row.afterQuit, true);
+      preserved(
+        row.beforeTransition,
+        row.afterQuit,
+        row.launches[0].currentJournalLabel,
+      );
       await start();
       assert.notEqual(
         launch.generation,
@@ -1453,22 +1468,11 @@ async function scenario({
         "GENERATION_REUSED",
       );
       row.afterReopen = await custody(stateRoot, workspace);
-      preserved(row.afterQuit, row.afterReopen, true);
-      const originalLedger = site.driver.snapshot(),
-        originalJournal = await journal();
-      row.history = {};
-      await runHistoryReadJourney({
-        window: journeyPage,
-        originals,
-        hidden,
-        active,
-        report: row.history,
-        save,
-        unchanged: async () => {
-          assert.deepEqual(site.driver.snapshot(), originalLedger);
-          assert.deepEqual(await journal(), originalJournal);
-        },
-      });
+      preserved(row.afterQuit, row.afterReopen);
+      row.history = {
+        status: "NOT_RUN-history-UI-unavailable",
+        custody: "PASS-original-records-in-place",
+      };
       await edit(
         "Farol disposable first edited canary",
         "Farol disposable second edited canary",
@@ -1509,14 +1513,7 @@ async function scenario({
       // A distinct NEW retained profile: seed only the historical Desktop
       // duplicate that older builds produced. This fixture is explicit; the
       // original quarantined c52 profile is never reopened, fixed or replayed.
-      const prepared = row.chat.observations.find(
-        (o) => o.label === "react-prepared-zero-send",
-      );
-      const operationId = prepared?.ui?.operationId;
-      assert.match(
-        operationId,
-        /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u,
-      );
+      const operationId = randomUUID();
       const legacyRoot = path.join(stateRoot, "chatgpt-task-journal");
       const legacyFile = path.join(legacyRoot, "chatgpt-task-journal.json");
       await assert.rejects(fs.lstat(legacyFile), { code: "ENOENT" });
@@ -1540,7 +1537,7 @@ async function scenario({
         sha256: legacyOriginal.sha256,
         physical: legacyOriginal.physical,
         limit:
-          "Explicit old-format metadata fixture on a NEW disposable profile; Chat/File/Go operations and startup are actual. No production/historical profile was edited.",
+          "Explicit old-format metadata fixture on a NEW disposable profile; File/Go operations and startup are actual; Chat/history UI is NOT RUN. No production/historical profile was edited.",
       };
       await save();
       await start();
@@ -1558,93 +1555,44 @@ async function scenario({
         "OLD_GENERATION_REUSED",
       );
       const coreRoot = path.join(stateRoot, "go-core");
-      const names = (await fs.readdir(coreRoot)).filter((name) =>
-        /^chat-retired-[a-f0-9-]{36}$/u.test(name),
+      assert.deepEqual(
+        (await fs.readdir(coreRoot)).filter((name) =>
+          /^chat-retired-/u.test(name),
+        ),
+        [],
+        "FRESH_START_RENAMED_ORIGINAL_CHAT",
       );
-      assert.equal(names.length, 1, "EXACT_RETIRED_CHAT_NOT_OBSERVED");
-      const retiredChat = names[0],
-        archive = path.join(coreRoot, retiredChat);
-      const completion = await json(
-        path.join(archive, "maintenance-completed.json"),
+      assert.deepEqual(
+        await regular(legacyFile),
+        legacyOriginal,
+        "LEGACY_UNKNOWN_CHANGED_OR_CONSUMED",
       );
-      assert.deepEqual(completion.selectedLegacyPreparation, {
-        operationId,
-        sha256: legacyOriginal.sha256,
-        originalPhase: "prepared",
-        legacyDisposition: "selected_for_retirement",
-        correspondingGoOutcome: "unobserved",
-      });
+      const copies = [];
+      for (const name of await fs.readdir(
+        path.join(stateRoot, "run-history"),
+      )) {
+        const file = path.join(stateRoot, "run-history", name, "running.json");
+        const copy = await regular(file);
+        if (copy.sha256 === marker.sha256) copies.push(copy);
+      }
+      assert.equal(copies.length, 1, "ORIGINAL_FAILED_RUN_COPY_NOT_UNIQUE");
+      assert.deepEqual(copies[0].bytes, marker.bytes);
       assert.equal(
-        Object.hasOwn(completion, "retainedLegacyPreparation"),
-        false,
+        (await json(path.join(stateRoot, "running.json"))).pid,
+        child.pid,
       );
-      const legacyRetired = await regular(
-        path.join(archive, "legacy-chatgpt-prepared.json"),
-      );
-      assert.deepEqual(legacyRetired.bytes, legacyBytes);
-      for (const key of Object.keys(legacyOriginal.physical).filter(
-        (k) => k !== "ctimeNs",
-      ))
-        assert.equal(
-          legacyRetired.physical[key],
-          legacyOriginal.physical[key],
-          `LEGACY_PREPARATION_CHANGED:${key}`,
-        );
-      await assert.rejects(fs.lstat(legacyFile), { code: "ENOENT" });
-      row.legacyRetirement =
-        "PASS-original-bytes-inode-and-phase-retained-without-Go-outcome-claim";
-
-      assert.equal(completion.schema, "farol.closed-preserved-chat-recovery/1");
-      assert.equal(completion.buildId, build.identity.buildId);
-      assert.equal(completion.failedRunSha256, marker.sha256);
-      assert.equal(completion.preservedHistory.originalACK, "unobserved");
-      assert.equal(completion.preservedHistory.originalTerminal, "unobserved");
-      assert.equal(
-        completion.preservedHistory.scope.Scope.BackendGeneration,
-        row.launches[0].generation,
-      );
-      const retainedMarker = await regular(
-        path.join(archive, "failed-running.json"),
-      );
-      assert.deepEqual(retainedMarker.bytes, marker.bytes);
-      for (const key of Object.keys(marker.physical).filter(
-        (key) => key !== "ctimeNs",
-      ))
-        assert.equal(
-          retainedMarker.physical[key],
-          marker.physical[key],
-          `FAILED_RUN_CHANGED:${key}`,
-        );
-      row.failedRunRename = {
-        before: marker.physical,
-        after: retainedMarker.physical,
-        ctimeLimit:
-          "Rename may change ctime; original byte digest/inode/device/other metadata remain exact.",
-      };
-      await fs.lstat(path.join(archive, "maintenance-intent.json"));
-      await assert.rejects(
-        fs.lstat(path.join(stateRoot, "go-core.empty-recovery.pending")),
-        { code: "ENOENT" },
-      );
-      const oldChat = path.join(coreRoot, "chat");
-      const relocated = structuredClone(row.beforeTransition);
-      for (const [key, value] of Object.entries(relocated))
-        if ((key === "chat" || key.startsWith("chat/")) && value.path)
-          value.path = value.path.replace(oldChat, archive);
-      row.afterRecovery = await custody(stateRoot, workspace, retiredChat);
-      preserved(relocated, row.afterRecovery);
+      row.afterRecovery = await custody(stateRoot, workspace);
+      preserved(row.beforeTransition, row.afterRecovery);
       assert.deepEqual(
         site.driver.snapshot(),
         row.ledger,
-        "RECOVERY_PROVIDER_ACTIVITY",
+        "FRESH_START_PROVIDER_ACTIVITY",
       );
       row.preservation =
-        "PASS-original-chat-and-workspace-at-exact-archive-inodes";
-      row.archive = {
-        name: retiredChat,
-        operationId: completion.operationId,
-        originalACK: "unobserved",
-        originalTerminal: "unobserved",
+        "PASS-original-Chat-and-UNKNOWN-in-place; failed-run-bytes-copied";
+      row.history = {
+        status: "NOT_RUN-history-UI-unavailable",
+        custody: "PASS-original-records-in-place",
       };
       await save();
       await edit(
@@ -1652,78 +1600,24 @@ async function scenario({
         "Farol disposable second edited canary",
       );
       row.writable = "PASS-fresh-writable-generation-after-exact-host-crash";
-      await assert.rejects(fs.lstat(legacyFile), { code: "ENOENT" });
       assert.deepEqual(
-        await regular(path.join(archive, "legacy-chatgpt-prepared.json")),
-        legacyRetired,
-      );
-
-      await journeyPage
-        .getByRole("button", { name: "Home", exact: true })
-        .click();
-      const stored = page.locator("section.recovery-archive");
-      assert.equal(await stored.count(), 1, "NORMAL_STORED_READER_NOT_UNIQUE");
-      await stored
-        .getByRole("button", { name: "Load stored replies", exact: true })
-        .click();
-      const replies = stored.getByRole("button", {
-        name: /^Open stored reply \d+$/u,
-      });
-      await replies.nth(1).waitFor();
-      assert.equal(await replies.count(), 2, "NORMAL_RETIRED_REPLY_COUNT");
-      const expected = originals.map((value) => value.ui.answer).sort();
-      row.recoveredAnswers = [];
-      for (let i = 0; i < 2; i++) {
-        await replies.nth(i).click();
-        await page.waitForFunction(
-          ({ expected, previous }) => {
-            const text = document.querySelector(
-              '[aria-label="Stored reply text"]',
-            )?.textContent;
-            return expected.includes(text) && text !== previous;
-          },
-          { expected, previous: row.recoveredAnswers.at(-1) ?? null },
-        );
-        row.recoveredAnswers.push(
-          await stored
-            .locator('[aria-label="Stored reply text"]')
-            .textContent(),
-        );
-        assert.equal(
-          await stored
-            .getByText("Outcome unconfirmed", { exact: true })
-            .count(),
-          1,
-        );
-        assert.equal(await stored.locator("textarea,script").count(), 0);
-        assert.equal(
-          await stored
-            .getByRole("button", { name: /^(Send|Resume|Acknowledge)/u })
-            .count(),
-          0,
-        );
-        await hidden();
-        await save();
-      }
-      assert.deepEqual(
-        [...row.recoveredAnswers].sort(),
-        expected,
-        "ORIGINAL_STORED_REPLY_TEXT_CHANGED",
+        await regular(legacyFile),
+        legacyOriginal,
+        "LEGACY_UNKNOWN_CHANGED_AFTER_NEW_WRITE",
       );
       assert.deepEqual(
         site.driver.snapshot(),
         row.ledger,
-        "STORED_READER_PROVIDER_ACTIVITY",
+        "NEW_WRITE_SENT_PROVIDER_MESSAGE",
       );
-      row.retainedHistoryUI = "PASS-normal-unconfirmed-stored-copies";
       await quit();
-      row.afterRecoveryQuit = await custody(stateRoot, workspace, retiredChat);
+      row.afterRecoveryQuit = await custody(stateRoot, workspace);
       for (const [key, value] of Object.entries(row.beforeTransition))
         if (key === "chat" || key.startsWith("chat/"))
           assert.deepEqual(
             row.afterRecoveryQuit[key],
-            relocated[key],
-            `ARCHIVED_CHAT_CHANGED_AFTER_NEW_WRITE:${key}`,
+            value,
+            `ORIGINAL_CHAT_CHANGED:${key}`,
           );
       row.status = "PASS";
     }
