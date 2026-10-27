@@ -92,6 +92,9 @@
   font-size: 18px;
   flex: none;
 }
+.home-working-mark[data-attention] {
+  background: var(--amber-swatch, #8b5b1d);
+}
 .home-attention,
 .home-recent {
   margin-top: 28px;

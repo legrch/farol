@@ -4,6 +4,8 @@ import { computerSetup } from "./computer-setup";
 import { setupChecklist } from "./setup-navigation";
 import { useSetupIntents, retainedSetupIntents } from "./settings";
 import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
+import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
+import { selectedConnectorApp } from "../../pkg/product-settings/connector-app-selection";
 import type { RendererFacade, WindowSnapshot } from "./contract";
 
 type Props = { snapshot: WindowSnapshot; facade: RendererFacade };
@@ -22,6 +24,23 @@ function checkedTime(snapshot: WindowSnapshot) {
   return date && Number.isFinite(date.getTime())
     ? date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
     : "time unavailable";
+}
+function previousAppCheck(snapshot: WindowSnapshot): string | null {
+  if (snapshot.configuration?.status !== "ready") return null;
+  const settings = snapshot.configuration.settings;
+  const connector = settings.connectors.secureMcp;
+  const previous = connector.lastVerifiedAttachment;
+  if (
+    !previous ||
+    previous.tunnelId !== connector.tunnelId ||
+    previous.connectorGeneration !== connector.generation ||
+    previous.computerGeneration !== settings.computer.generation ||
+    previous.workspaceId !== connectorWorkspaceSelection(settings) ||
+    selectedConnectorApp(connector) === null
+  )
+    return null;
+  const at = new Date(previous.verifiedAt);
+  return Number.isFinite(at.getTime()) ? at.toLocaleString() : null;
 }
 function taskStatus(task: WindowSnapshot["tasks"]["tasks"][number]) {
   if (task.agent?.observation === "unavailable") return "Status unavailable";
@@ -83,6 +102,7 @@ export function Home({ snapshot, facade }: Props) {
     snapshot.configuration?.status === "ready"
       ? snapshot.configuration.settings.computer.workspaces.length
       : 0;
+  const previousCheck = previousAppCheck(snapshot);
   async function checkNow() {
     const latest = facade.getSnapshot();
     if (
@@ -214,8 +234,12 @@ export function Home({ snapshot, facade }: Props) {
       ) : snapshot.independentSession ? null : (
         <>
           <section className="home-status-card" aria-label="Connection status">
-            <span className="home-working-mark" aria-hidden="true">
-              {checking ? "…" : "✓"}
+            <span
+              className="home-working-mark"
+              data-attention={!computer.externalAccessVerified || undefined}
+              aria-hidden="true"
+            >
+              {checking ? "…" : computer.externalAccessVerified ? "✓" : "!"}
             </span>
             <div>
               <h2>
@@ -223,7 +247,7 @@ export function Home({ snapshot, facade }: Props) {
                   ? "Checking connection…"
                   : computer.externalAccessVerified
                     ? "Farol is working"
-                    : "Tunnel connected"}
+                    : "ChatGPT connection needs a check"}
               </h2>
               <p>
                 {checking ? (
@@ -232,29 +256,42 @@ export function Home({ snapshot, facade }: Props) {
                   <>
                     {computer.externalAccessVerified
                       ? "ChatGPT can reach this Mac"
-                      : "Tunnel connected · setup saved"}{" "}
+                      : "Tunnel connected · Check the ChatGPT app connection"}{" "}
                     · {workspaceCount}{" "}
                     {workspaceCount === 1 ? "workspace" : "workspaces"} ·
                     checked {checkedTime(snapshot)}
+                    {!computer.externalAccessVerified && previousCheck && (
+                      <> · Last ChatGPT verification: {previousCheck}</>
+                    )}
                   </>
                 )}
               </p>
             </div>
-            <button
-              disabled={
-                checking ||
-                snapshot.update.phase === "applying" ||
-                !commandAllowed(
-                  snapshot,
-                  "connector.check-health",
-                  undefined,
-                  local,
-                )
-              }
-              onClick={() => void checkNow()}
-            >
-              {checking ? "Checking…" : "Check now"}
-            </button>
+            {computer.externalAccessVerified || checking ? (
+              <button
+                disabled={
+                  checking ||
+                  snapshot.update.phase === "applying" ||
+                  !commandAllowed(
+                    snapshot,
+                    "connector.check-health",
+                    undefined,
+                    local,
+                  )
+                }
+                onClick={() => void checkNow()}
+              >
+                {checking ? "Checking…" : "Check now"}
+              </button>
+            ) : (
+              <button
+                onClick={() =>
+                  facade.navigate({ area: "setup", setupStep: "attachment" })
+                }
+              >
+                Review ChatGPT connection
+              </button>
+            )}
           </section>
           {(actionable.length > 0 ||
             tasks.length > 0 ||

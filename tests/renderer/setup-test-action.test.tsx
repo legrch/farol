@@ -17,6 +17,24 @@ function pending() {
 }
 
 describe("step four primary action", () => {
+  it("offers the ChatGPT test in the footer when setup is complete but attachment needs checking", async () => {
+    const value = readySettings();
+    value.setup.journey.dismissed = true;
+    value.connectors.secureMcp.attachment = null;
+    const h = await mount({
+      step: "attachment",
+      value,
+      signIn: "authenticated",
+    });
+    await h.confirmSignIn();
+    await act(async () => {
+      h.c.navigate({ area: "home" });
+      h.c.navigate({ area: "setup", setupStep: "attachment" });
+    });
+    const footer = h.host.querySelector(".setup-wizard-footer")!;
+    expect(footer.contains(h.button("Test in ChatGPT")!)).toBe(true);
+    expect(footer.textContent).not.toContain("Back to Home");
+  });
   it("keeps one admitted request per mounted binding even on pre-submit refusal", async () => {
     const h = await mount({
       step: "attachment",

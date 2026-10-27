@@ -87,7 +87,11 @@ identities. See [identity cutover](docs/identity-cutover.md).
 - Native tests use disposable state and exact owned process cleanup. **Farol Dev is
   development-owned:** the active Lead may start, quit, restart, rebuild, and when
   required by the test plan recreate Dev-only runtime/profile state without per-run
-  owner approval. Preserve explicitly quarantined unknown-effect evidence and never
+  owner approval. The owner explicitly permits the Lead to stop an already-running
+  Farol Dev, including by terminating its positively identified Dev-owned process
+  when necessary, and launch the needed Dev build without waiting for the owner.
+  Prefer a normal Quit and preserve Dev history and unknown-effect evidence.
+  Preserve explicitly quarantined unknown-effect evidence and never
   mutate the installed production Farol profile under this rule. When two displays
   are active, place visible Farol Dev work on the display the owner is not working
   on: the MacBook built-in display when an external monitor is primary, or the iPad

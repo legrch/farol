@@ -3223,6 +3223,31 @@ it("does not show a complete Setup checkmark when the saved connection is offlin
   expect(setup.querySelector(".setup-count")?.textContent).not.toBe("✓");
   expect(setup.getAttribute("title")).toContain("checks current");
 });
+it("labels a challenge-scoped connection test as checking while it is in flight", async () => {
+  const data = completedBootstrap();
+  data.configuration.settings = readySettings();
+  const { host, c, f } = await mount(data);
+  const wait = deferred<unknown>();
+  vi.mocked(f.api.configure).mockImplementation((command) =>
+    command.kind === "connector.verify-app"
+      ? wait.promise
+      : Promise.resolve({ ok: true, snapshot: data.configuration }),
+  );
+  let pending!: ReturnType<typeof c.configure>;
+  await act(async () => {
+    pending = c.configure(
+      { kind: "connector.verify-app" },
+      `settings:connector.verify-app:${"a".repeat(64)}`,
+    );
+  });
+  const setup = host.querySelector('.rail [aria-label="Setup"]')!;
+  expect(setup.querySelector(".setup-count")?.textContent).toBe("Checking…");
+  expect(setup.getAttribute("title")).toContain("Checking setup");
+  await act(async () => {
+    wait.resolve({ ok: true, snapshot: data.configuration });
+    await pending;
+  });
+});
 it("View-menu sidebar command shares the toggle owner and keeps focused controls usable", async () => {
   const { host, c, f } = await mount();
   const trigger = button(host, "Collapse sidebar");

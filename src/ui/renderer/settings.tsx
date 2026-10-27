@@ -1926,7 +1926,9 @@ function AddToChatGPT({
   );
   return (
     <>
-      {setupStep === "attachment" && setupTestActionHost
+      {setupStep === "attachment" &&
+      setupTestActionHost &&
+      !settings.setup.journey.dismissed
         ? createPortal(testAction, setupTestActionHost)
         : null}
       <section aria-label="Create the ChatGPT app">
@@ -2089,12 +2091,22 @@ function AddToChatGPT({
             </p>
           )}
         </div>
-        {settings.setup.journey.dismissed && (
-          <ConnectionTestButton
-            facade={facade}
-            disabled={nameChanged || !nameValid}
-          />
-        )}
+        {settings.setup.journey.dismissed &&
+          (setupStep === "attachment" && setupTestActionHost ? (
+            createPortal(
+              <ConnectionTestButton
+                facade={facade}
+                disabled={nameChanged || !nameValid}
+                primary
+              />,
+              setupTestActionHost,
+            )
+          ) : (
+            <ConnectionTestButton
+              facade={facade}
+              disabled={nameChanged || !nameValid}
+            />
+          ))}
         {gate.allowed ? (
           <div className="setup-success" role="status">
             <strong>✓ Everything works</strong>

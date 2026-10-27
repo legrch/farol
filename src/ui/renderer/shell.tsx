@@ -14,6 +14,7 @@ import type { RendererFacade, SettingsPage, WindowSnapshot } from "./contract";
 import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
 import { useActivityNotifications } from "../../../apps/desktop/renderer/activity-notifications";
 import { computerSetup } from "./computer-setup";
+import { connectorVerificationInFlight } from "./setup-gate";
 import { TaskEditor } from "./task";
 import { Home } from "./home";
 import { Setup } from "./setup";
@@ -1044,6 +1045,7 @@ export function Shell() {
   const completedSteps = checklist.entries.filter(
     (entry) => entry.liveState === "verified",
   ).length;
+  const setupChecking = connectorVerificationInFlight(state, retained);
   const computer = computerSetup(state);
   const connected = computer.localConnectionCurrent;
   const connectionLabel = connected
@@ -1248,7 +1250,9 @@ export function Shell() {
               }[area];
               const detail =
                 area === "setup"
-                  ? `${completedSteps} of 4 checks current`
+                  ? setupChecking
+                    ? `Checking setup · ${completedSteps} of 4 checks current`
+                    : `${completedSteps} of 4 checks current`
                   : destination.area === area
                     ? "Current page"
                     : "Open page";
@@ -1264,7 +1268,11 @@ export function Shell() {
                   <span className="rail-label">{label}</span>
                   {area === "setup" && (
                     <span className="rail-label setup-count">
-                      {completedSteps === 4 ? "✓" : `${completedSteps} of 4`}
+                      {setupChecking
+                        ? "Checking…"
+                        : completedSteps === 4
+                          ? "✓"
+                          : `${completedSteps} of 4`}
                     </span>
                   )}
                 </button>

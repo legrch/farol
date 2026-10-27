@@ -854,39 +854,42 @@ it("allows only receipt readback while app Send is unknown, and qualifies matchi
   expect(setupStepCheck(saveUnknown, "attachment").allowed).toBe(false);
 });
 
-it("explains a busy connection-test browser without treating it as sign-out or granting completion", async () => {
-  const h = await mount({
-    step: "attachment",
-    value: readySettings(),
-    signIn: "authenticated",
-  });
-  const original = h.c.getSnapshot();
-  const id = "settings:connector.verify-app:";
-  const snapshot = {
-    ...original,
-    signInObservation: {
-      observationId: crypto.randomUUID(),
-      buildId,
-      counter: 1,
-      pending: false,
-      state: "unknown" as const,
-      binding: null,
-    },
-    intents: {
-      ...original.intents,
-      [id]: {
-        id,
-        state: "pending" as const,
-        code: null,
-        inFlight: true as const,
+it.each(["", "a".repeat(64)])(
+  "explains a busy connection-test browser for suffix %s without granting completion",
+  async (suffix) => {
+    const h = await mount({
+      step: "attachment",
+      value: readySettings(),
+      signIn: "authenticated",
+    });
+    const original = h.c.getSnapshot();
+    const id = `settings:connector.verify-app:${suffix}`;
+    const snapshot = {
+      ...original,
+      signInObservation: {
+        observationId: crypto.randomUUID(),
+        buildId,
+        counter: 1,
+        pending: false,
+        state: "unknown" as const,
+        binding: null,
       },
-    },
-  };
-  const gate = setupStepCheck(snapshot, "signin");
-  expect(gate.state).toBe("pending");
-  expect(gate.allowed).toBe(false);
-  expect(gate.cause).toContain("automatically");
-  expect(setupStepCheck(snapshot, "folders").allowed).toBe(true);
-  expect(setupStepCheck(snapshot, "connection").allowed).toBe(true);
-  expect(setupStepCheck(snapshot, "attachment").allowed).toBe(false);
-});
+      intents: {
+        ...original.intents,
+        [id]: {
+          id,
+          state: "pending" as const,
+          code: null,
+          inFlight: true as const,
+        },
+      },
+    };
+    const gate = setupStepCheck(snapshot, "signin");
+    expect(gate.state).toBe("pending");
+    expect(gate.allowed).toBe(false);
+    expect(gate.cause).toContain("automatically");
+    expect(setupStepCheck(snapshot, "folders").allowed).toBe(true);
+    expect(setupStepCheck(snapshot, "connection").allowed).toBe(true);
+    expect(setupStepCheck(snapshot, "attachment").allowed).toBe(false);
+  },
+);

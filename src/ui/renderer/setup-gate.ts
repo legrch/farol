@@ -55,6 +55,20 @@ const confirmingCommands: Record<SetupCheckpoint, readonly string[]> = {
   ],
 };
 
+export function connectorVerificationInFlight(
+  snapshot: WindowSnapshot,
+  local: readonly Intent[] = [],
+): boolean {
+  return [...Object.values(snapshot.intents), ...local].some(
+    (intent) =>
+      /^settings:connector\.(?:verify-app|verify-separate-app):(?:[a-f0-9]{64})?$/u.test(
+        intent.id,
+      ) &&
+      intent.state === "pending" &&
+      intent.inFlight === true,
+  );
+}
+
 /** The sole Setup gate: only confirmed success for current inputs can advance. */
 export function setupStepCheck(
   snapshot: WindowSnapshot,
@@ -132,14 +146,7 @@ export function setupStepCheck(
   const browserCheckRunning =
     step === "signin" &&
     observation?.state === "unknown" &&
-    [
-      "settings:connector.verify-app:",
-      "settings:connector.verify-separate-app:",
-    ].some(
-      (id) =>
-        snapshot.intents[id]?.state === "pending" &&
-        snapshot.intents[id]?.inFlight === true,
-    );
+    connectorVerificationInFlight(snapshot, local);
   const pending =
     fence.pending ||
     (step === "signin" && observation?.pending === true) ||

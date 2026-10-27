@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { setupStepCheck } from "./setup-gate";
+import { connectorVerificationInFlight, setupStepCheck } from "./setup-gate";
 import type { RendererFacade, WindowSnapshot } from "./contract";
 import { Settings, retainedSetupIntents, useSetupIntents } from "./settings";
 import { setupChecklist } from "./setup-navigation";
@@ -95,6 +95,7 @@ export function Setup({ snapshot, facade }: Props) {
   const completedCount = checklist.entries.filter(
     (entry) => entry.liveState === "verified",
   ).length;
+  const setupChecking = connectorVerificationInFlight(snapshot, local);
   const returnDestination = snapshot.setupReturn ?? { area: "home" as const };
   const returnLabel = `Back to ${{ home: "Home", chatgpt: "ChatGPT", activity: "Activity", settings: "Settings", setup: "Setup" }[returnDestination.area]}`;
   const previous = adjacentSetupSection(step, -1);
@@ -150,7 +151,9 @@ export function Setup({ snapshot, facade }: Props) {
             </strong>
             <p className="description">
               {checklist.completed
-                ? `Setup was completed. ${completedCount} of 4 current checks are ready.`
+                ? setupChecking
+                  ? `Checking your setup. ${completedCount} of 4 current checks are ready.`
+                  : `Setup was completed. ${completedCount} of 4 current checks are ready.`
                 : checklist.ready
                   ? "Everything is ready. You can review any step."
                   : checklist.entries
@@ -281,10 +284,10 @@ export function Setup({ snapshot, facade }: Props) {
           >
             Back
           </button>
-          {!checklist.completed &&
-          step === "attachment" &&
+          {step === "attachment" &&
           !checklist.ready &&
-          !finishPending ? (
+          !finishPending &&
+          (!checklist.completed || returnDestination.area === "home") ? (
             <div ref={setTestActionHost} className="setup-test-action-slot" />
           ) : (
             <button

@@ -288,9 +288,11 @@ export function useConnectionTest(facade: RendererFacade) {
 export function ConnectionTestButton({
   facade,
   disabled = false,
+  primary = false,
 }: {
   facade: RendererFacade;
   disabled?: boolean;
+  primary?: boolean;
 }) {
   const test = useConnectionTest(facade),
     snapshot = facade.getSnapshot();
@@ -300,6 +302,7 @@ export function ConnectionTestButton({
   return (
     <div className="connection-test-control">
       <button
+        className={primary ? "primary" : undefined}
         title="Send one new connection test in a temporary ChatGPT chat"
         disabled={disabled || test.busy || !allowed}
         onClick={() => void runFreshConnectionTest(facade)}

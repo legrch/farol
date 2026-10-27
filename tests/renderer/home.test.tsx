@@ -282,18 +282,52 @@ it("routes unresolved update evidence to the existing sheet from working Home", 
   );
 });
 
-it("keeps completed Home connected without requiring a new external test after restart", async () => {
+it("shows that ChatGPT needs checking when the tunnel is connected but attachment is unconfirmed", async () => {
   const value = working();
   if (value.configuration?.status !== "ready")
     throw Error("fixture settings missing");
   value.configuration.settings.connectors.secureMcp.attachment = null;
   const h = await mount(value);
-  expect(h.host.textContent).toContain("Tunnel connected");
+  expect(h.host.textContent).toContain("ChatGPT connection needs a check");
   expect(h.host.textContent).not.toContain("Farol is working");
-  expect(h.host.textContent).toContain("Tunnel connected · setup saved");
+  expect(h.host.textContent).toContain(
+    "Tunnel connected · Check the ChatGPT app connection",
+  );
   expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
   expect(h.host.textContent).not.toContain("Review connection");
   expect(h.f.api.configure).not.toHaveBeenCalled();
+  await h.click("Review ChatGPT connection");
+  expect(h.c.getSnapshot().destination).toMatchObject({
+    area: "setup",
+    setupStep: "attachment",
+  });
+  expect(h.f.api.configure).not.toHaveBeenCalled();
+});
+it("shows a matching earlier ChatGPT verification as history, not current readiness", async () => {
+  const value = working();
+  if (value.configuration?.status !== "ready")
+    throw Error("fixture settings missing");
+  const connector = value.configuration.settings.connectors.secureMcp;
+  connector.lastVerifiedAttachment = connector.attachment;
+  connector.attachment = null;
+  const h = await mount(value);
+  expect(h.host.textContent).toContain("Last ChatGPT verification:");
+  expect(h.host.textContent).toContain("ChatGPT connection needs a check");
+  expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
+  expect(h.f.api.configure).not.toHaveBeenCalled();
+});
+it("does not attribute an earlier verification to a different tunnel", async () => {
+  const value = working();
+  if (value.configuration?.status !== "ready")
+    throw Error("fixture settings missing");
+  const connector = value.configuration.settings.connectors.secureMcp;
+  connector.lastVerifiedAttachment = {
+    ...connector.attachment!,
+    tunnelId: "different",
+  };
+  connector.attachment = null;
+  const h = await mount(value);
+  expect(h.host.textContent).not.toContain("Last ChatGPT verification:");
 });
 it("keeps recorded unknown history out of Home without clearing it", async () => {
   const events = ["one", "two", "three"].map((id) => ({
