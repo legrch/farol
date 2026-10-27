@@ -1886,7 +1886,6 @@ function createLiveChatGptRoute(
     parent: () => window,
     ...chatGptWindowPresentationOption(),
     surfaceFactory: liveChatGptSurfaceFactory(taskId),
-    collapseSidebarByDefault: embeddedBrowserEnabled(),
     title: `${label} · ${displayProductName}`,
     onClosed: (conversationUrl, taskRunning) => {
       recordConversationUrl(conversationUrl);
@@ -12732,7 +12731,6 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   chatGptRoute = createManagedChatGptRoute({
     homeUrl: chatGptUrl,
     initialUrl: chatGptInitialUrl,
-    collapseSidebarByDefault: embeddedBrowserEnabled(),
     e2eOrigin: e2eChatGptOrigin,
     parent: () => window,
     ...chatGptWindowPresentationOption(),

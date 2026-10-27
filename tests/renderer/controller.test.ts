@@ -4561,6 +4561,64 @@ it("can present despite a failed Settings read without adopting its reply snapsh
 
 describe("automatic Setup sign-in after the owner login flow", () => {
   it.each([false, true])(
+    "confirms the authenticated page while the owner stays in ChatGPT; uncertain=%s",
+    async (uncertain) => {
+      const f = fixture();
+      const data = bootstrap();
+      let authenticated = false;
+      let checks = 0;
+      vi.mocked(f.api.configure).mockImplementation(async (command) => {
+        if (command.kind === "chatgpt.observe-sign-in")
+          return signInReply(
+            command,
+            authenticated ? "authenticated" : "signed_out",
+          );
+        if (command.kind === "chatgpt.verify") {
+          checks++;
+          if (uncertain) throw Error("fixture lost verifier reply");
+          return {
+            ok: true,
+            snapshot: { status: "ready", settings: readySettings() },
+            evidence: {
+              kind: "chatgpt.readiness",
+              state: "authenticated",
+              code: null,
+            },
+          };
+        }
+        return { ok: true, snapshot: data.configuration };
+      });
+      const c = new WindowController(f.api);
+      await c.start();
+      try {
+        c.navigate({ area: "setup", setupStep: "signin" });
+        await c.configure(
+          { kind: "chatgpt.open-sign-in" },
+          "settings:chatgpt.open-sign-in:",
+        );
+        expect(c.getSnapshot().destination.area).toBe("chatgpt");
+        authenticated = true;
+        f.emit("route", { state: "loading" });
+        f.emit("route", { state: "loaded" });
+        await vi.waitFor(() => expect(checks).toBe(1));
+        await vi.waitFor(() =>
+          expect(
+            c.getSnapshot().intents["settings:chatgpt.verify:"]?.state,
+          ).toBe(uncertain ? "unknown" : "applied"),
+        );
+        expect(c.getSnapshot().destination.area).toBe("chatgpt");
+        f.emit("route", { state: "loaded" });
+        await vi.waitFor(() =>
+          expect(c.getSnapshot().signInObservation?.pending).toBe(false),
+        );
+        expect(checks).toBe(1);
+        expect(f.api.task).not.toHaveBeenCalled();
+      } finally {
+        c.dispose();
+      }
+    },
+  );
+  it.each([false, true])(
     "confirms once and preserves an uncertain verifier: %s",
     async (uncertain) => {
       const f = fixture();

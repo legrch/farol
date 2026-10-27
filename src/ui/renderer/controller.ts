@@ -2365,6 +2365,9 @@ export class WindowController implements RendererFacade {
   private isSetupSignInObservationEntry(): boolean {
     return (
       this.isSignInEntry() ||
+      (this.automaticSignInRequested &&
+        this.state.destination.area === "chatgpt" &&
+        this.state.setupSignInReturn !== null) ||
       (this.state.configuration?.status === "ready" &&
         this.state.configuration.settings.setup.chatgpt.verified !== null)
     );

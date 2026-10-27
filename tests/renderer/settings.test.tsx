@@ -205,7 +205,7 @@ describe("Workspace rows", () => {
       if (command.kind === "computer.add-workspace") {
         value = { ...readySettings(), revision: ++rev };
         value.connectors.secureMcp.runtime = null;
-        value.computer.workspaces[0]!.access = "write";
+        value.computer.workspaces[0]!.access = "read";
         value.computer.workspaces[0]!.accessCheck = null;
         value.setup.computer.verified = null;
         return {
@@ -216,7 +216,7 @@ describe("Workspace rows", () => {
       }
       if (command.kind === "computer.verify-workspace") {
         value = { ...readySettings(), revision: ++rev };
-        value.computer.workspaces[0]!.access = "write";
+        value.computer.workspaces[0]!.access = "read";
         value.connectors.secureMcp.runtime = null;
         return { ok: true, snapshot: { status: "ready", settings: value } };
       }
@@ -234,6 +234,11 @@ describe("Workspace rows", () => {
       "computer.add-workspace",
       "computer.verify-workspace",
     ]);
+    expect(h.f.api.configure).toHaveBeenCalledWith({
+      kind: "computer.add-workspace",
+      selectionId,
+      access: "read",
+    });
     expect(h.host.textContent).toContain("✓ Works");
     expect(h.button("Continue")?.disabled).toBe(false);
   });
@@ -247,6 +252,60 @@ describe("Workspace rows", () => {
     await h.click("+ Add workspace");
     expect(h.f.api.configure).toHaveBeenCalledTimes(1);
     expect(h.button("Continue")?.disabled).toBe(true);
+  });
+  it("requires an explicit Git user-settings choice and verifies the existing workspace", async () => {
+    let value = readySettings();
+    value.computer.commands = "workspace";
+    value.computer.filePolicy = "approved-roots-v1";
+    value.connectors.secureMcp.runtime = null;
+    const h = await mount({ step: "folders", value });
+    const checkbox = h.host.querySelector<HTMLInputElement>(
+      '[aria-label="Allow full Git and user settings for project"]',
+    )!;
+    expect(checkbox.checked).toBe(false);
+    expect(checkbox.disabled).toBe(false);
+    expect(h.host.textContent).toContain(
+      "Includes Git history, hooks and your Git configuration.",
+    );
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+    h.reply((command) => {
+      value = structuredClone(value);
+      value.revision++;
+      const workspace = value.computer.workspaces[0]!;
+      if (command.kind === "computer.update-git-history") {
+        value.computer.generation++;
+        workspace.gitHistoryApproved = command.approved;
+      } else if (command.kind === "computer.verify-workspace") {
+        workspace.accessCheck = {
+          ...readySettings().computer.workspaces[0]!.accessCheck!,
+          computerGeneration: value.computer.generation,
+          checkId: command.checkId,
+        };
+        value.setup.computer.verified = {
+          ...readySettings().setup.computer.verified!,
+          configRevision: value.computer.generation,
+        };
+      }
+      return { ok: true, snapshot: { status: "ready", settings: value } };
+    });
+    await act(async () => checkbox.click());
+    expect(
+      vi.mocked(h.f.api.configure).mock.calls.map(([command]) => command.kind),
+    ).toEqual([
+      "computer.verify-workspace",
+      "computer.update-git-history",
+      "computer.verify-workspace",
+    ]);
+    expect(h.f.api.configure).toHaveBeenCalledWith({
+      kind: "computer.update-git-history",
+      workspaceId,
+      approved: true,
+    });
+    expect(
+      h.host.querySelector<HTMLInputElement>(
+        '[aria-label="Allow full Git and user settings for project"]',
+      )!.checked,
+    ).toBe(true);
   });
   it("shows legacy command access as unchecked and one click begins its guarded approval", async () => {
     const value = readySettings();

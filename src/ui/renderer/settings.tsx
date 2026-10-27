@@ -929,7 +929,7 @@ function Folders(props: PageProps) {
       const result = await actions.run({
         kind: "computer.add-workspace",
         selectionId: evidence.value.selectionId,
-        access: "write",
+        access: "read",
       });
       const current = facade.getSnapshot();
       const selection = current.evidence?.value;
@@ -1035,6 +1035,7 @@ function Folders(props: PageProps) {
       access?: "read" | "write";
       commands?: "none" | "workspace";
       filePolicy?: "approved-roots-v1";
+      gitHistoryApproved?: boolean;
     } = {},
   ) {
     if (folderFlow.busy || folderFlow.access.requiresReadback()) return;
@@ -1143,6 +1144,34 @@ function Folders(props: PageProps) {
                 />
                 Commands
               </label>
+              <div className="workspace-git-permission">
+                <label>
+                  <input
+                    type="checkbox"
+                    aria-label={`Allow full Git and user settings for ${folderDisplayName(workspace)}`}
+                    checked={workspace.gitHistoryApproved === true}
+                    disabled={
+                      paused ||
+                      !actions.allowed(
+                        "computer.update-git-history",
+                        workspace.workspaceId,
+                      ) ||
+                      (workspace.gitHistoryApproved !== true &&
+                        (settings.computer.commands !== "workspace" ||
+                          settings.computer.filePolicy !== "approved-roots-v1"))
+                    }
+                    onChange={(event) =>
+                      void update(workspace.workspaceId, {
+                        gitHistoryApproved: event.currentTarget.checked,
+                      })
+                    }
+                  />
+                  Full Git and user settings
+                </label>
+                <small>
+                  Includes Git history, hooks and your Git configuration.
+                </small>
+              </div>
               <div className="workspace-row-result" role="status">
                 {checked ? (
                   <span className="setup-success">✓ Works</span>
@@ -1198,12 +1227,9 @@ function Folders(props: PageProps) {
         {adding ? "Checking workspace…" : "+ Add workspace"}
       </button>
       <p className="description">
-        Workspace access is checked automatically when you add or change a
-        workspace. “Works” means that check passed for the current settings; no
-        repeat check is needed to continue. Commands lets ChatGPT run Git, tests
-        and builds in approved workspaces. ChatGPT manages action confirmations;
-        Farol enforces your approved access. Command access is shared by all
-        workspaces.
+        Commands lets ChatGPT run Git, tests and builds in approved workspaces.
+        ChatGPT manages action confirmations; Farol enforces your approved
+        access. Command access is shared by all workspaces.
       </p>
       {settings.computer.commands === "workspace" &&
         settings.computer.filePolicy !== "approved-roots-v1" && (

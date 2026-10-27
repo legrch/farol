@@ -198,6 +198,16 @@
   flex-basis: 100%;
   font-size: 12px;
 }
+.workspace-git-permission {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+.workspace-git-permission small {
+  color: var(--muted);
+}
 .setup-success {
   color: var(--good);
 }
