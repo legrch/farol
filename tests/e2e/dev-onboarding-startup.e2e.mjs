@@ -238,9 +238,13 @@ async function ready(window) {
   throw new Error("DEV_REACT_BOOTSTRAP_NOT_READY");
 }
 async function settingsPage(window, name) {
-  await window.getByRole("button", { name: "Settings", exact: true }).click();
+  const navigation = window.getByRole("navigation", {
+    name: "Settings navigation",
+  });
+  if (!(await navigation.isVisible()))
+    await window.getByRole("button", { name: "Settings", exact: true }).click();
   await window
-    .locator(".contextual-sidebar")
+    .getByRole("navigation", { name: "Settings navigation" })
     .getByRole("button", {
       name: name === "Shortcuts" ? "Keyboard shortcuts" : name,
       exact: true,
@@ -427,7 +431,7 @@ try {
     await window
       .locator('nav[aria-label="Settings navigation"] button')
       .allTextContents(),
-    ["General", "Appearance", "Keyboard shortcuts"],
+    ["Back to Farol", "General", "Appearance", "Keyboard shortcuts"],
     "SETTINGS_NAVIGATION_CURRENT_CATEGORIES",
   );
   assert.equal(
