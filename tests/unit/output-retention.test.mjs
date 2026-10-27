@@ -373,4 +373,24 @@ describe("_output retention", () => {
     }
     expect(await exists(first)).toBe(false);
   });
+
+  it("sees an entry named relative to the checkout root", async () => {
+    const old = await entry("evidence/ad-hoc-run", { ageDays: 30 });
+    await prune(
+      observe([
+        {
+          pid: 9,
+          pgid: 9,
+          start: START,
+          command: "python3 consumer.py --input=_output/evidence/ad-hoc-run",
+        },
+      ]),
+    );
+    expect(await exists(old)).toBe(true);
+  });
+
+  it("returns an empty failure list when nothing is removable", async () => {
+    const result = await prune(observe());
+    expect(result.failed).toEqual([]);
+  });
 });

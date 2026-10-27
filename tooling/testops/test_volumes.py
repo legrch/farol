@@ -23,8 +23,13 @@ import fcntl, json, sys
 from pathlib import Path
 here = Path(__file__).resolve().parent
 args = sys.argv[1:]
+with open(here / "argv.log", "a") as raw:
+    raw.write(json.dumps(args) + "\n")
 while args and args[0] in ("--host", "--config"):
     args = args[2:]
+if args[:2] == ["context", "inspect"]:
+    print("unix:///fake/docker.sock")
+    raise SystemExit(0)
 with open(here / "state.lock", "w") as guard:
     fcntl.flock(guard, fcntl.LOCK_EX)
     with open(here / "docker.log", "a") as log:
@@ -118,6 +123,18 @@ class Volumes(unittest.TestCase):
         self.assertEqual(sorted(e.split(":")[0] for e in result["errors"]), ["NOT_THIS_CHECKOUT"] * 2)
         self.assertEqual(set(self.state()["volumes"]), set(NAMES[:2]))
         self.assertFalse([argv for argv in self.log() if argv[:1] == ["rm"] or argv[:2] == ["volume", "rm"]])
+
+    def test_every_call_is_pinned_to_the_endpoint_resolved_at_start(self):
+        code, _ = self.cli("prepare", *self.prepare_args(NAMES[:1]))
+        self.assertEqual(code, 0)
+        code, _ = self.cli("release", "--scope", SCOPE)
+        self.assertEqual(code, 0)
+        raw = [json.loads(line) for line in (self.docker.parent / "argv.log").read_text().splitlines()]
+        self.assertTrue(raw)
+        for argv in raw:
+            if argv[:2] == ["context", "inspect"]:
+                continue
+            self.assertEqual(argv[:2], ["--host", "unix:///fake/docker.sock"], argv)
 
     def here(self):
         return {volumes.CHECKOUT: volumes.checkout_id(self.root)}

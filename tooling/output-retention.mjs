@@ -137,8 +137,13 @@ function mentions(command, directory) {
 
 function referenced(directory, observation) {
   const prefix = directory.endsWith("/") ? directory : `${directory}/`;
+  // Tools run from the checkout root also name entries relative to it.
+  const relative = directory.slice(directory.lastIndexOf("/_output/") + 1);
   return (
-    observation.processes.some(({ command }) => mentions(command, directory)) ||
+    observation.processes.some(
+      ({ command }) =>
+        mentions(command, directory) || mentions(command, relative),
+    ) ||
     observation.open.some(
       (file) => file === directory || file.startsWith(prefix),
     )
@@ -361,7 +366,7 @@ export async function pruneOutput(root, options = {}) {
   const report = await inspectOutput(root, options);
   const removed = [];
   if (!report.entries.some(({ state }) => state === "removable"))
-    return { ...report, removed };
+    return { ...report, removed, failed: [] };
   // Removal needs a second, fresh observation: an entry first used after the
   // first scan is no longer removable and stays.
   const { observe = observeProcesses } = options;

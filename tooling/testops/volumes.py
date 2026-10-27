@@ -59,6 +59,14 @@ class Engine:
             self.prefix += ["--host", "unix://" + str(socket)]
         self.env = {"PATH": "/usr/bin:/bin", "HOME": os.environ.get("HOME", "/var/empty"),
                     "LANG": "C", "LC_ALL": "C"}
+        if socket is None:
+            # Pin the current context's endpoint once: ownership verified on one
+            # engine must never authorize a removal on another after a switch.
+            result = self.call("context", "inspect", "--format", "{{.Endpoints.docker.Host}}")
+            host = result.stdout.strip()
+            if result.returncode != 0 or not re.fullmatch(r"(unix|tcp|ssh|npipe)://\S+", host):
+                raise Refused("DOCKER_ENDPOINT_UNRESOLVED")
+            self.prefix += ["--host", host]
 
     def call(self, *args):
         return subprocess.run(self.prefix + list(args), env=self.env, stdin=subprocess.DEVNULL,
