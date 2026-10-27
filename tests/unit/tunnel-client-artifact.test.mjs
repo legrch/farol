@@ -1,0 +1,177 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Synthetic identity only: these tests qualify bounded copying and refusal,
+// not the upstream executable, its licenses or native execution.
+vi.mock("../../apps/desktop/tunnel-client-contract.ts", async () => {
+  const { createHash } = await import("node:crypto");
+  const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  const binary = Buffer.alloc(1024);
+  binary.writeUInt32LE(0xfeedfacf, 0);
+  binary.writeUInt32LE(0x0100000c, 4);
+  return {
+    TUNNEL_CLIENT: Object.freeze({
+      version: "fixture",
+      entry: "tunnel-client",
+      size: binary.length,
+      sha256: sha256(binary),
+    }),
+    TUNNEL_CLIENT_NOTICES: [
+      {
+        source: "LICENSE",
+        entry: "tunnel-client-LICENSE.txt",
+        sha256: sha256("fixture license\n"),
+      },
+      {
+        source: "NOTICE",
+        entry: "tunnel-client-NOTICE.txt",
+        sha256: sha256("fixture notice\n"),
+      },
+    ],
+  };
+});
+
+import { TUNNEL_CLIENT } from "../../apps/desktop/tunnel-client-contract.ts";
+import {
+  embedTunnelClient,
+  prepareTunnelClientInput,
+  tunnelClientInputDirectory,
+  verifyBundledTunnelClient,
+} from "../../tooling/tunnel-client-artifact.mjs";
+
+let root;
+let source;
+let binary;
+beforeEach(async () => {
+  root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-tunnel-input-")),
+  );
+  source = path.join(root, "upstream");
+  await fs.mkdir(source);
+  binary = Buffer.alloc(TUNNEL_CLIENT.size);
+  binary.writeUInt32LE(0xfeedfacf, 0);
+  binary.writeUInt32LE(0x0100000c, 4);
+  await fs.writeFile(path.join(source, "tunnel-client"), binary);
+  await fs.writeFile(path.join(source, "LICENSE"), "fixture license\n");
+  await fs.writeFile(path.join(source, "NOTICE"), "fixture notice\n");
+});
+afterEach(async () => {
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+describe("bundled Tunnel Client input", () => {
+  it("copies reviewed bytes with private modes and preserves source", async () => {
+    const output = await prepareTunnelClientInput(root, source);
+    expect(output).toBe(tunnelClientInputDirectory(root));
+    expect(await fs.readFile(path.join(output, "tunnel-client"))).toEqual(
+      binary,
+    );
+    expect(
+      (await fs.stat(path.join(output, "tunnel-client"))).mode & 0o777,
+    ).toBe(0o500);
+    expect(
+      (await fs.stat(path.join(output, "tunnel-client-LICENSE.txt"))).mode &
+        0o777,
+    ).toBe(0o400);
+    expect(await fs.readFile(path.join(source, "tunnel-client"))).toEqual(
+      binary,
+    );
+    await expect(verifyBundledTunnelClient(output)).resolves.toBeUndefined();
+    expect(await fs.readdir(path.join(root, "_output"))).toEqual([
+      "tunnel-client",
+    ]);
+  });
+
+  it.each(["binary", "license", "wrapper", "oversize"])(
+    "refuses %s corruption before publishing any input",
+    async (kind) => {
+      if (kind === "license")
+        await fs.writeFile(path.join(source, "LICENSE"), "different license");
+      else if (kind === "wrapper")
+        await fs.writeFile(
+          path.join(source, "tunnel-client"),
+          "#!/bin/sh\nexit 0\n",
+        );
+      else if (kind === "oversize")
+        await fs.appendFile(path.join(source, "tunnel-client"), "extra");
+      else {
+        binary[100] = 1;
+        await fs.writeFile(path.join(source, "tunnel-client"), binary);
+      }
+      await expect(prepareTunnelClientInput(root, source)).rejects.toThrow(
+        "BUNDLED_TUNNEL_CLIENT_INVALID",
+      );
+      expect(await fs.readdir(path.join(root, "_output"))).toEqual([]);
+    },
+  );
+
+  it.each(["symlink", "hardlink"])(
+    "refuses %s source without modifying it",
+    async (kind) => {
+      const from = path.join(source, "tunnel-client");
+      const original = path.join(source, "original");
+      await fs.rename(from, original);
+      if (kind === "symlink") await fs.symlink(original, from);
+      else await fs.link(original, from);
+      await expect(prepareTunnelClientInput(root, source)).rejects.toThrow();
+      expect(await fs.readFile(original)).toEqual(binary);
+      expect(await fs.readdir(path.join(root, "_output"))).toEqual([]);
+    },
+  );
+
+  it("reuses a verified cache without executing or rereading an external source", async () => {
+    const output = await prepareTunnelClientInput(root, source);
+    await fs.rm(source, { recursive: true });
+    expect(await prepareTunnelClientInput(root, source)).toBe(output);
+    await expect(verifyBundledTunnelClient(output)).resolves.toBeUndefined();
+  });
+
+  it("does not repair or overwrite a tampered cache from the source", async () => {
+    const output = await prepareTunnelClientInput(root, source);
+    const file = path.join(output, "tunnel-client");
+    await fs.chmod(file, 0o700);
+    await fs.writeFile(file, "tampered");
+    await expect(prepareTunnelClientInput(root, source)).rejects.toThrow(
+      "BUNDLED_TUNNEL_CLIENT_INVALID",
+    );
+    expect(await fs.readFile(file, "utf8")).toBe("tampered");
+  });
+
+  it("refuses a writable executable even when its digest matches", async () => {
+    const output = await prepareTunnelClientInput(root, source);
+    await fs.chmod(path.join(output, "tunnel-client"), 0o770);
+    await expect(verifyBundledTunnelClient(output)).rejects.toThrow(
+      "BUNDLED_TUNNEL_CLIENT_INVALID",
+    );
+  });
+
+  it("refuses a redirected cache directory", async () => {
+    const output = await prepareTunnelClientInput(root, source);
+    const moved = path.join(root, "redirected");
+    await fs.rename(output, moved);
+    await fs.symlink(moved, output);
+    await expect(prepareTunnelClientInput(root, source)).rejects.toThrow(
+      "BUNDLED_TUNNEL_CLIENT_INVALID",
+    );
+  });
+
+  it("embeds the pinned binary and notices without clobbering existing files", async () => {
+    await prepareTunnelClientInput(root, source);
+    const build = path.join(root, "build");
+    await fs.mkdir(build);
+    expect(await embedTunnelClient(build, root)).toEqual({
+      kind: "dependency",
+      path: "vendor/tunnel-client-vfixture-darwin-arm64",
+      sha256: TUNNEL_CLIENT.sha256,
+    });
+    await expect(verifyBundledTunnelClient(build)).resolves.toBeUndefined();
+    await expect(embedTunnelClient(build, root)).rejects.toMatchObject({
+      code: "EEXIST",
+    });
+    expect(await fs.readFile(path.join(build, "tunnel-client"))).toEqual(
+      binary,
+    );
+  });
+});
