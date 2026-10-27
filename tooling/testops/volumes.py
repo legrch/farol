@@ -131,7 +131,7 @@ def references(engine, name):
 
 
 def labelled(engine, value=None):
-    """Exact-name inventory of Farol-labelled volumes; unreadable rows are retained as unknown."""
+    """Exact-name inventory of task-labelled volumes; unreadable rows are retained as unknown."""
     selector = LABEL if value is None else LABEL + "=" + value
     result = engine.call("volume", "ls", "--quiet", "--filter", "label=" + selector)
     if result.returncode != 0:
