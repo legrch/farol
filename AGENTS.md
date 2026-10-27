@@ -105,7 +105,13 @@ identities. See [identity cutover](docs/identity-cutover.md).
   a gate. It must not import or invoke a V0 implementation.
 - **Disk hygiene:** whoever creates output removes it in teardown, including on
   failure and cancellation. Do not keep local copies of packages, installed apps
-  or retired images: rollback comes from the GitHub Release asset and its digest.
+  or retired images. The owner-approved exception is one necessary predecessor
+  image (`previous.app`) for the current update, held by the existing update and
+  recovery owners; never accumulate an archive of predecessors. Preserve unknown
+  outcomes and unfinished operations. Release that image only after its existing
+  consumers are confirmed finished. A rollback downloaded from GitHub still needs
+  its own asset-digest and installed-path qualification; this rule does not claim
+  that route is implemented.
   Do not hand-create Docker volumes; use `testops.py volumes`. Run
   `task disk:status` before finishing a task. See
   [output retention](docs/development/output-retention.md).

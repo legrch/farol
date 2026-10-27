@@ -28,8 +28,15 @@ recovery store.
    up through the budget guard.
 5. **Builds live in GitHub Releases.** Locally, keep only the current
    `_output/package` candidate and the current Dev image. Do not keep copies of
-   packages or of the installed application. A rollback downloads the
-   qualified release asset and checks its digest.
+   packages or of the installed application as an accumulating archive. The
+   owner-approved exception is one necessary `previous.app` for the current
+   update, managed by the existing update/recovery owner and its journal. It
+   remains while an active update or retained rollback consumer needs it;
+   release requires confirmed completion of those consumers. UNKNOWN and
+   unfinished operations retain their original evidence, never cleanup authority.
+   Downloading a predecessor from a qualified Release asset requires separate
+   digest, restore-path and installed acceptance. It is not established by this
+   retention policy or a reason to remove the input the existing helper needs.
 
 ## Commands
 
