@@ -18,6 +18,7 @@ import uuid
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dag import Budget, Job, Outcome, run, Blocked
+from volumes import locked as volume_lock
 from testops import identity
 from gate_observer import COMMANDS, TOOLS, evidence_file, validate_stage_logs, natural_retirement
 from dependency_seal import ALGORITHM, reference
@@ -399,8 +400,11 @@ def gate(options, parent, source, source_binding, config, state):
     volumes = [options.source_volume, options.seed_volume, options.sdk_volume]
     if options.dependency_volume is not None:
         volumes.append(options.dependency_volume)
-    for volume in volumes:
-        docker.volume(volume, options.scope, source["head"] if volume == options.source_volume else None)
+    # Admit volumes under the lifecycle lock: a concurrent prune cannot remove
+    # them between its check and its rm, and this command line names them after.
+    with volume_lock(ROOT, 120):
+        for volume in volumes:
+            docker.volume(volume, options.scope, source["head"] if volume == options.source_volume else None)
     jobs = [Job(key, cpu=2, memory_mib=3072, effects="owned-fixture") for key in COMMANDS]
     nonce = uuid.uuid4().hex[:12]
     stop = threading.Event()

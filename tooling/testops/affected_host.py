@@ -23,6 +23,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from affected_run import DEPENDENCIES, evidence_bytes, projection, commands, NODE
 from dag import Budget, Job, Outcome, run, Blocked
+from volumes import locked as volume_lock
 from dependency_seal import reference
 from docker_gate import Docker, ROOT, IMAGE, TOOLS, container_command, memory_events_closed
 from testops import identity, changed, compiler_affected
@@ -329,8 +330,11 @@ def iterate(options, parent, source, bound_source, config, state):
         (config / "bin" / tool).symlink_to("/testops-seed/testops/linux-tools-bootstrap-03/bin/" + tool)
     docker = Docker(options.docker, options.socket, config)
     engine = docker.engine()
-    for volume in (options.source_volume, options.seed_volume, options.sdk_volume, options.dependency_volume):
-        docker.volume(volume, options.scope, source["head"] if volume == options.source_volume else None)
+    # Admit volumes under the lifecycle lock: a concurrent prune cannot remove
+    # them between its check and its rm, and this command line names them after.
+    with volume_lock(ROOT, 120):
+        for volume in (options.source_volume, options.seed_volume, options.sdk_volume, options.dependency_volume):
+            docker.volume(volume, options.scope, source["head"] if volume == options.source_volume else None)
     stop = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     signal.signal(signal.SIGTERM, lambda *_: stop.set())

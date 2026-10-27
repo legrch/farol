@@ -701,6 +701,18 @@ class ClientConfigCleanup(unittest.TestCase):
         self.assertEqual(json.loads((self.parent / "failed-run/report.json").read_text())["status"], "FAIL")
         self.assert_clean()
 
+    def test_volume_admission_holds_the_lifecycle_lock(self):
+        import contextlib
+        events = []
+        @contextlib.contextmanager
+        def recording(root, timeout):
+            events.append(("lock", Path(root), timeout))
+            yield
+            events.append(("unlock",))
+        with patch("docker_gate.volume_lock", recording):
+            self.main({"status": "FAIL", "leaseRetained": False})
+        self.assertEqual(events, [("lock", self.root, 120), ("unlock",)])
+
     def test_unconfirmed_container_retirement_keeps_the_bind_mounted_config(self):
         self.assertEqual(self.main({"status": "UNKNOWN", "leaseRetained": True}), 1)
         self.assertEqual(len(list(self.parent.glob("docker-client-*"))), 1)

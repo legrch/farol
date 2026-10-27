@@ -498,6 +498,13 @@ def prune(root, engine, timeout):
         for row in rows:
             if row["state"] != "removable":
                 continue
+            # Refresh process references right before each removal: earlier
+            # Docker calls and removals can make the classification stale.
+            commands = process_commands()
+            if commands is None or any(row["name"] in c or row["scope"] in c for c in commands):
+                row.update(state="active" if commands else "unknown",
+                           reason="PROCESS_REFERENCE" if commands else "PROCESSES_UNREADABLE")
+                continue
             error = remove_volume(engine, row["name"])
             if error:
                 errors.append(row["name"] + ":" + error)

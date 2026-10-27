@@ -456,6 +456,23 @@ describe("_output retention", () => {
     expect(await exists(old)).toBe(true);
   });
 
+  it("observes again before each removal, after earlier removals", async () => {
+    const first = await entry("evidence/old-a", { ageDays: 30 });
+    const second = await entry("evidence/old-b", { ageDays: 30 });
+    let calls = 0;
+    await pruneOutput(root, {
+      observation: observe(),
+      // Second scan and the first removal see no use; a reader opens the
+      // second entry while the first is being removed.
+      observe: () =>
+        ++calls <= 2 ? observe() : observe([], [path.join(second, "data")]),
+      now: NOW,
+      protect: PROTECTED_EVIDENCE,
+    });
+    expect(await exists(first)).toBe(false);
+    expect(await exists(second)).toBe(true);
+  });
+
   it("removes nothing when the pre-removal observation fails", async () => {
     const old = await entry("evidence/old-run", { ageDays: 30 });
     let calls = 0;

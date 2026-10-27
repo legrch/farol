@@ -121,6 +121,17 @@ class Volumes(unittest.TestCase):
         code, result = self.cli("prune")
         self.assertEqual(result["removed"], [NAMES[0]])
 
+    def test_prune_rechecks_process_references_right_before_each_removal(self):
+        from unittest.mock import patch
+        self.set_state({NAMES[0]: {"Labels": {volumes.LABEL: SCOPE[-8:], volumes.RETAIN: "run", **self.here()}}})
+        engine = volumes.Engine(self.docker)
+        # Classification sees no user; a gate naming the scope starts before the rm.
+        with patch.object(volumes, "process_commands", side_effect=[[], ["gate --scope " + SCOPE]]):
+            result, code = volumes.prune(self.root, engine, 5)
+        self.assertEqual((code, result["removed"]), (0, []))
+        self.assertIn(NAMES[0], self.state()["volumes"])
+        self.assertNotIn(["volume", "rm", NAMES[0]], self.log())
+
     def test_release_refuses_a_lease_from_another_engine(self):
         self.set_state({NAMES[0]: {"Labels": {volumes.LABEL: SCOPE[-8:], **self.here()}}})
         self.write_own_lease([NAMES[0]], endpoint="unix:///other/docker.sock")
