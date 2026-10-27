@@ -465,6 +465,8 @@ async function scenario({
       (() => {
         const value = conversationSeed(randomUUID());
         value.setup.journey.dismissed = true;
+        // The conversation fixture defaults to ChatGPT; this lane asserts Home.
+        value.general.openAtLaunch = "home";
         return value;
       })(),
     ) + "\n",
@@ -891,6 +893,21 @@ async function scenario({
       assert.equal(
         bootstrap.applicationId,
         harnessDesktopIdentity("dev", "/").applicationId,
+      );
+      launch.startupSelection = {
+        completed: bootstrap.configuration.settings.setup.journey.dismissed,
+        openAtLaunch: bootstrap.configuration.settings.general.openAtLaunch,
+      };
+      await save();
+      assert.equal(
+        launch.startupSelection.completed,
+        true,
+        "FIXTURE_SETUP_COMPLETION_LOST",
+      );
+      assert.equal(
+        launch.startupSelection.openAtLaunch,
+        "home",
+        "FIXTURE_STARTUP_DESTINATION_CROSSED",
       );
       launch.marker = await json(path.join(stateRoot, "running.json"));
       assert.equal(launch.marker.pid, child.pid);

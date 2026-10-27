@@ -318,6 +318,7 @@ async function seedHistoricalCompletion() {
   const file = path.join(stateRoot, "config.json");
   const value = JSON.parse(await fs.readFile(file, "utf8"));
   value.setup.journey.dismissed = true;
+  value.general.openAtLaunch = "home";
   await fs.writeFile(file, JSON.stringify(value) + "\n", { mode: 0o600 });
   report.fixture.setupCompletion =
     "synthetic historical Finish; no current attachment or Finish proof";
