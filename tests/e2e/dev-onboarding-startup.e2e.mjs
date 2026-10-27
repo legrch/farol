@@ -11,7 +11,6 @@ import { runBoundedProcess } from "./bounded-process.mjs";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { verifyInputManifest } from "../../tooling/build-contract.mjs";
 import { verifyGoCoreArtifact } from "../../tooling/go-core-artifact.mjs";
-import { retiredJourneyReport } from "../../tooling/setup-journey-retirement.mjs";
 import {
   shellGeometry,
   shellRailWidth,
@@ -1064,14 +1063,8 @@ try {
         "DEV_STARTUP_SMOKE_WORKSPACE_VERIFICATION_MISSING",
       );
     } else {
-      const retirement = retiredJourneyReport(
-        "startup-partial-profile-overview-continuation",
-        "Continue setup and Set up Connection checklist cards were removed; Setup now uses the welcome/progress flow.",
-      );
-      report.retirements.push(retirement);
-      report.status = "NOT_RUN";
-      await save();
       const value = await legacyWindow.evaluate(() => window.farol.bootstrap());
+      assert.equal(value.configuration.status, "ready");
       assert.deepEqual(
         value.configuration.settings.computer.workspaces,
         savedWorkspace.workspaces,
@@ -1080,6 +1073,29 @@ try {
         value.configuration.settings.setup.computer.verified,
         savedWorkspace.verified,
       );
+      await openSetup(legacyWindow);
+      await legacyWindow
+        .locator('.setup-overview-step[aria-label="Workspaces"]')
+        .waitFor({ state: "visible" });
+      await setupStep(legacyWindow, "folders", "Workspaces");
+      const retainedRow = legacyWindow.locator(
+        ".setup-page .setup-workspace-row:visible",
+      );
+      await retainedRow.waitFor({ state: "visible" });
+      assert.equal(await retainedRow.count(), 1);
+      assert.match(await retainedRow.innerText(), /approved-folder/u);
+      const retained = await legacyWindow.evaluate(() =>
+        window.farol.bootstrap(),
+      );
+      assert.equal(retained.configuration.status, "ready");
+      assert.deepEqual(
+        retained.configuration.settings.computer.workspaces,
+        savedWorkspace.workspaces,
+      );
+      report.checks.push(
+        "partial-setup-reopen-current-progress-and-retained-workspace",
+      );
+      await save();
     }
     await assertHiddenWindows(application);
     await closeApplication(application);
