@@ -19,12 +19,15 @@ integrations without pretending they are configured.
 The first normal launch opens Guided Setup in the app sidebar in both Dev and
 packaged Preview. Folder sharing and embedded ChatGPT sign-in are optional;
 ordinary Computer access requires an approved folder and current connector
-receipts, not Model or Agent. Connection checks use a dedicated hidden temporary
-ChatGPT page in the existing authenticated partition, preserving the owner's
-conversation and draft. A clean restart of a previously verified, still-selected
+receipts, not Model or Agent. Connection checks use a dedicated temporary
+ChatGPT window in the existing authenticated partition, preserving the owner's
+conversation and draft. The check window follows the selected display policy;
+native fixtures keep their hidden presentation. A clean restart of a previously verified, still-selected
 app admits one new check for the new runtime challenge. First setup and changed
 app selections require an explicit test; pending or UNKNOWN checks are never
-automatically repeated. The retained five-step qualification modal
+automatically repeated. Rechecking a healthy connection uses the read-only
+status tool with a fresh socket acknowledgement, preserving its current proof
+and running tools. It does not repair or restart the connector. The retained five-step qualification modal
 belongs to explicit demo/legacy fixture mode, not normal first-run Setup.
 
 ## Owner-selected visual direction: Watch Rail

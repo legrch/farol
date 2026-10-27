@@ -83,6 +83,23 @@ it("observes exact Go proof and retains its original call on repeated verificati
   ]);
   expect(Object.isFrozen(result.receipt?.execution)).toBe(true);
 });
+it("requires the exact fresh socket check acknowledgement without changing the receipt", async () => {
+  const f = fixture();
+  await expect(f.bridge.observe("new-read")).rejects.toMatchObject({
+    state: "unknown",
+  });
+  f.request.mockImplementation(async (_method, _body, options) => ({
+    status: "ok",
+    requestId: options!.id!,
+    context,
+    data: { ...f.state, checkId: "new-read" } as unknown as Json,
+  }));
+  expect((await f.bridge.observe("new-read")).receipt).toEqual(f.receipt);
+  expect(f.request.mock.calls.at(-1)?.[1]).toEqual({
+    binding,
+    checkId: "new-read",
+  });
+});
 it("distinguishes known absence from a successful verification", async () => {
   const f = fixture();
   f.request.mockImplementation(async (_m, _b, options) => ({

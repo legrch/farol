@@ -25,10 +25,14 @@ export class ConnectorVerificationBridge {
     this.binding = Object.freeze({ ...opened.endpoint.binding });
     this.execution = Object.freeze({ ...opened.execution });
   }
-  observe(): Promise<ComputerConnectorVerificationState> {
-    return this.request("computer.connector.verification", {
+  async observe(checkId?: string): Promise<ComputerConnectorVerificationState> {
+    const state = await this.request("computer.connector.verification", {
       binding: this.binding,
+      ...(checkId === undefined ? {} : { checkId }),
     });
+    if (checkId !== undefined && state.checkId !== checkId)
+      throw new BridgeError("unknown", "crossed_connector_verification");
+    return state;
   }
   async verify(
     challenge: string,

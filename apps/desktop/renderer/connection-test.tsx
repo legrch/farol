@@ -37,8 +37,8 @@ const text = (state: State) =>
               ? `The connection test needs attention. ${state.code ?? "Review the connection in Setup."}`
               : "";
 
-/** One explicit click prepares a distinct runtime/challenge via the existing
- * confirmed stop/start. No old claim is reset, replayed or treated as consent. */
+/** Check the live route without disturbing its proof. When recovery is needed,
+ * prepare a distinct runtime through confirmed stop/start; never replay a claim. */
 export async function runFreshConnectionTest(
   facade: RendererFacade,
 ): Promise<Intent> {
@@ -92,6 +92,29 @@ export async function runFreshConnectionTest(
   active.running = true;
   publish({ phase: "preparing", code: null });
   try {
+    // A healthy live route gets a read-only status check. Restarting it would
+    // discard its valid proof, interrupt tools and make the check itself break
+    // the connection it is supposed to observe.
+    const live = before.connectors.secureMcp;
+    if (
+      computerSetup(initial).localConnectionCurrent &&
+      !live.appVerificationPending &&
+      !before.setup.connect.outcomeUnknown &&
+      live.chatgptApp!.connectorGeneration === live.generation &&
+      commandAllowed(initial, "connector.verify-app")
+    ) {
+      publish({ phase: "testing", code: null });
+      const key = (crypto.randomUUID() + crypto.randomUUID()).replaceAll(
+        "-",
+        "",
+      );
+      return finish(
+        await facade.configure(
+          { kind: "connector.verify-app" },
+          `settings:connector.verify-app:${key}`,
+        ),
+      );
+    }
     const repaired = await facade.configure(
       { kind: "connector.repair" },
       "settings:connector.repair:",

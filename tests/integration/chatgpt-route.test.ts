@@ -4758,6 +4758,7 @@ describe("ChatGPT route submission boundary", () => {
 
   it("F2-3 refuses a later retry once navigation is observed mid-loop, without submitting twice", async () => {
     let currentUrl = "https://chatgpt.com/";
+    let now = 3_000;
     const executeJavaScript = vi
       .fn()
       .mockResolvedValueOnce(prepared)
@@ -4765,13 +4766,10 @@ describe("ChatGPT route submission boundary", () => {
         // The click control was not yet ready, and the page navigated away
         // right after this read.
         currentUrl = "https://chatgpt.com/c/another-conversation";
+        now = 4_000;
         return { activated: false };
       });
-    vi.spyOn(Date, "now")
-      .mockReturnValueOnce(3_000)
-      .mockReturnValueOnce(4_000)
-      .mockReturnValueOnce(6_000)
-      .mockReturnValue(9_000);
+    vi.spyOn(Date, "now").mockImplementation(() => now);
     const candidate = route();
     vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
     Reflect.set(candidate, "load", "loaded");
@@ -8119,6 +8117,37 @@ describe("connector receipt completion before provider output", () => {
       { name: "NEW fixture" },
     );
     expect(result.state).toBe("receipt_confirmed");
+  });
+
+  it("bounds a stalled Send acknowledgement without sending again", async () => {
+    vi.useFakeTimers();
+    try {
+      let acknowledge!: (value: unknown) => void;
+      const { execute, candidate } = fixture(
+        new Promise((resolve) => {
+          acknowledge = resolve;
+        }),
+      );
+      const readConnectorReceipt = vi.fn(async () => true);
+      const running = candidate.runReadonlyTask(
+        "connection fixture",
+        [],
+        { readConnectorReceipt },
+        "temporary-instant",
+        { name: "NEW fixture" },
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(execute).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(await running).toMatchObject({ state: "outcome_unknown" });
+      acknowledge({ activated: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(readConnectorReceipt).not.toHaveBeenCalled();
+      expect(execute).toHaveBeenCalledTimes(4);
+      expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each(["temporary-instant", "connector-instant"] as const)(

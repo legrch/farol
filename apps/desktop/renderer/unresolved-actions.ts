@@ -24,7 +24,16 @@ export function unresolvedActions(
   );
   retained.forEach((intent) => intents.set(intent.id, intent));
   const rows: UnresolvedAction[] = [...intents.values()]
-    .filter(unresolved)
+    .filter(
+      (intent) =>
+        unresolved(intent) &&
+        !(
+          intent.state === "pending" &&
+          intent.inFlight === true &&
+          snapshot.status === "current" &&
+          snapshot.runtime === "ready"
+        ),
+    )
     .map((intent) => ({
       id: intent.id,
       label: intent.id.startsWith("settings:")
@@ -56,6 +65,13 @@ export function unresolvedActions(
     )
       continue;
     if (entry.outcome !== "unknown" && entry.outcome !== "pending") continue;
+    if (
+      entry.outcome === "pending" &&
+      entry.inFlight === true &&
+      snapshot.status === "current" &&
+      snapshot.runtime === "ready"
+    )
+      continue;
     rows.push({
       id: `operation:${entry.id}`,
       label: `${entry.source}: ${entry.label}`,

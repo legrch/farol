@@ -39,6 +39,10 @@ func connectorVerificationState(ctx context.Context, slot *connectorSlot, lease 
 		return nil, err
 	}
 	state := &wire.ComputerConnectorVerificationState{Binding: slot.opened.Endpoint.Binding}
+	if slot.statusCheckID != "" {
+		value := slot.statusCheckID
+		state.CheckId = &value
+	}
 	if proof != nil {
 		call := sha256.Sum256([]byte(proof.CallID))
 		var receiptValue any
@@ -205,6 +209,9 @@ func (s *computerConnector) verificationObservationMethodFor(expected *connector
 		if json.Unmarshal(request.Body, &in) != nil {
 			return invalidIngress()
 		}
+		if in.CheckId != nil && expected == nil {
+			return invalidIngress() // Only the live MCP socket can acknowledge a status check.
+		}
 		if err := s.enter(ctx); err != nil {
 			return connectorVerificationOutcome(nil, err)
 		}
@@ -218,6 +225,11 @@ func (s *computerConnector) verificationObservationMethodFor(expected *connector
 			return connectorVerificationOutcome(nil, err)
 		}
 		state, err := connectorVerificationState(ctx, slot, lease)
+		if err == nil && in.CheckId != nil {
+			slot.statusCheckID = *in.CheckId
+			value := slot.statusCheckID
+			state.CheckId = &value
+		}
 		return connectorVerificationOutcome(state, err)
 	}}
 }

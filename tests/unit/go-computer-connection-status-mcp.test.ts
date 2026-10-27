@@ -87,7 +87,7 @@ it("does not advertise status merely because verification exists", async () => {
     false,
   );
 });
-it("registers a no-argument read-only status and observes without verification", async () => {
+it("registers a read-only status and observes without verification", async () => {
   const observe = vi.fn(async () => ({ binding }));
   const verify = vi.fn(async () => {
     throw new Error("must not verify");
@@ -125,6 +125,16 @@ it("registers a no-argument read-only status and observes without verification",
   });
   expect(observe).toHaveBeenCalledTimes(1);
   expect(verify).not.toHaveBeenCalled();
+  expect(f.request).not.toHaveBeenCalled();
+});
+it("passes a fresh status identifier to the authenticated Go observation only", async () => {
+  const observe = vi.fn(async () => ({ binding }));
+  const f = await connect({ connectionStatus: { observe } });
+  await f.client.callTool({
+    name: "computer_connection_status",
+    arguments: { checkId: "fresh-status-check" },
+  });
+  expect(observe).toHaveBeenCalledWith("fresh-status-check");
   expect(f.request).not.toHaveBeenCalled();
 });
 it("does not enter Go observation when the existing fence refuses", async () => {

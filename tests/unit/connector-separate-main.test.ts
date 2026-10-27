@@ -7,6 +7,7 @@ import { confirmSeparateAppVerificationAttempt } from "../../src/apps/desktop/co
 import { separateAppVerificationScopeCurrent } from "../../src/pkg/product-settings/separate-app-verification";
 import { selectedConnectorApp } from "../../src/pkg/product-settings/connector-app-selection";
 import { connectorWorkspaceSelection } from "../../src/pkg/product-settings/connector-workspace-selection";
+import { currentConnectorAttachment } from "../../src/apps/desktop/connector-app-receipt-wait";
 import {
   fixtureBuildId,
   fixtureWorkspaceId,
@@ -109,6 +110,12 @@ function fixture() {
     chatGptHomeUrl: "https://chatgpt.com/",
     chatGptE2eOrigin: null,
     runtimeEnvironment: "owner-preview",
+    randomUUID: () => "status-check-fixture",
+    currentConnectorAttachment,
+    waitForConnectorCheckReadiness: async () => true,
+    chatGptWindowPresentationOption: () => ({
+      windowPresentation: { mode: "hidden" },
+    }),
     activeDesktopIdentity: {
       chatGptPartition: "persist:farol-owner-preview-chatgpt",
     },
@@ -225,7 +232,7 @@ describe("actual separate-check desktop admission", () => {
       }),
     );
     const options = f.createRoute.mock.calls[0]![0] as { parent(): unknown };
-    expect(options.parent()).toBeNull();
+    expect(options.parent()).toBe(f.context.window);
     expect(f.dispose).toHaveBeenCalledTimes(1);
   });
   it("does not dispatch after scope drift during native approval", async () => {

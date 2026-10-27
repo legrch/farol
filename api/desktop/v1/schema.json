@@ -4463,6 +4463,10 @@
       "fields": {
         "binding": {
           "type": "ComputerConnectorBinding"
+        },
+        "checkId": {
+          "type": "id",
+          "optional": true
         }
       }
     },
@@ -4499,6 +4503,10 @@
       "fields": {
         "binding": {
           "type": "ComputerConnectorBinding"
+        },
+        "checkId": {
+          "type": "id",
+          "optional": true
         },
         "receipt": {
           "type": "ComputerConnectorVerificationReceipt",

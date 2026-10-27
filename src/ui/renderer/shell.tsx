@@ -1268,10 +1268,10 @@ export function Shell() {
                   <span className="rail-label">{label}</span>
                   {area === "setup" && (
                     <span className="rail-label setup-count">
-                      {setupChecking
-                        ? "Checking…"
-                        : completedSteps === 4
-                          ? "✓"
+                      {completedSteps === 4
+                        ? "✓"
+                        : setupChecking
+                          ? "Checking…"
                           : `${completedSteps} of 4`}
                     </span>
                   )}

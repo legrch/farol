@@ -49,6 +49,23 @@ func TestConnectorSocketRegistersBoundReadOnlyVerificationObservation(t *testing
 			t.Fatal("status repeated List or changed retained proof")
 		}
 	}
+	checkID := "fresh-status-check"
+	checkedQuery := query
+	checkedQuery.CheckId = &checkID
+	out, err = verificationInvoke(t, s.verificationObservationMethod(), checkedQuery)
+	if err == nil && out != nil && out.Status == "ok" {
+		t.Fatal("desktop pipe fabricated a socket status acknowledgement")
+	}
+	out, err = verificationInvoke(t, method, checkedQuery)
+	checked := verificationState(t, out, err)
+	if checked.CheckId == nil || *checked.CheckId != checkID || *checked.Receipt != *proof.Receipt || native.calls != 1 {
+		t.Fatal("socket status failed to acknowledge the fresh read without changing proof")
+	}
+	out, err = verificationInvoke(t, s.verificationObservationMethod(), query)
+	observed := verificationState(t, out, err)
+	if observed.CheckId == nil || *observed.CheckId != checkID || native.calls != 1 {
+		t.Fatal("desktop did not observe the exact socket read acknowledgement")
+	}
 	// Even a matching public binding cannot transfer an old endpoint's method
 	// to another retained slot. This is a synthetic slot-identity regression.
 	original := s.current

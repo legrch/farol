@@ -132,7 +132,13 @@ export function OperationsActivity({
                 </div>
               ))}
             </dl>
-            {(row.outcome === "unknown" || row.outcome === "pending") && (
+            {row.outcome === "pending" && (
+              <p role="status">
+                Waiting for the result. This entry updates when the operation
+                finishes.
+              </p>
+            )}
+            {row.outcome === "unknown" && (
               <>
                 <p>
                   The recorded outcome remains unconfirmed. Do not repeat the

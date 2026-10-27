@@ -197,9 +197,15 @@ async function runScenario(scenario) {
       "SETUP_NO_FRESH_CHALLENGE",
     );
     const workspaceId = current.setup.computer.verified.workspaceId;
+    const statusCheckId =
+      /call computer_connection_status once with checkId "([^"]+)"/u.exec(
+        prompt,
+      )?.[1];
     assert.equal(
       prompt,
-      `Use the selected ${appName} app to call farol_connector_verify once with challenge "${challenge.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`,
+      statusCheckId
+        ? `Use the selected ${appName} app to call computer_connection_status once with checkId "${statusCheckId}". Do not read files or run commands. Reply briefly with the result.`
+        : `Use the selected ${appName} app to call farol_connector_verify once with challenge "${challenge.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`,
     );
     const connectorRoot = path.join(
       userData,
@@ -265,18 +271,30 @@ async function runScenario(scenario) {
       await bounded(client.connect(transport), "SETUP_MCP_CONNECT_TIMEOUT");
       const result = await bounded(
         client.callTool({
-          name: "farol_connector_verify",
-          arguments: {
-            challenge:
-              scenario === "wrong-nonce" || (separate && sendCount === 1)
-                ? randomUUID()
-                : challenge.value,
-            workspaceId,
-          },
+          name: statusCheckId
+            ? "computer_connection_status"
+            : "farol_connector_verify",
+          arguments: statusCheckId
+            ? { checkId: statusCheckId }
+            : {
+                challenge:
+                  scenario === "wrong-nonce" || (separate && sendCount === 1)
+                    ? randomUUID()
+                    : challenge.value,
+                workspaceId,
+              },
         }),
         "SETUP_MCP_VERIFY_TIMEOUT",
       );
-      const value = result.structuredContent;
+      let value = result.structuredContent;
+      if (statusCheckId) {
+        assert.equal(
+          value?.data?.verification?.checkId,
+          statusCheckId,
+          "STATUS_CHECK_ACK_MISSING",
+        );
+        value = { ...value, data: value.data.verification };
+      }
       if (scenario === "wrong-nonce" || (separate && sendCount === 1)) {
         assert.equal(
           value?.status,
@@ -416,6 +434,7 @@ async function runScenario(scenario) {
       setupVerification: {
         appName: scenario === "wrong-app" ? "Other Setup App" : appName,
         verify,
+        readinessDelayMs: finishReopen || repeatAfterFinish ? 1500 : 0,
       },
     });
     const launchOptions = {
@@ -1046,6 +1065,7 @@ async function runScenario(scenario) {
     await save();
     if (repeatAfterFinish) {
       const originalReceipt = { ...report.receipt };
+      const beforeRepeat = await readSetupSettings(page);
       const oldOperation = await settledVerification();
       const claim = path.join(
         userData,
@@ -1068,9 +1088,9 @@ async function runScenario(scenario) {
       const renewed = await poll(
         () => readSetupSettings(page),
         (s) =>
-          s.connectors.secureMcp.attachment?.challengeSha256 !==
-            originalReceipt.challengeSha256 &&
-          s.connectors.secureMcp.attachment !== null,
+          s.connectors.secureMcp.attachment !== null &&
+          s.connectors.secureMcp.attachment.verifiedAt !==
+            beforeRepeat.connectors.secureMcp.attachment.verifiedAt,
         "REPEAT_CURRENT_RECEIPT_NOT_FOUND",
         75000,
       );
@@ -1083,10 +1103,15 @@ async function runScenario(scenario) {
       assert.equal(operation.outcome, "done");
       assert.equal(sendCount, 2);
       assert.equal(renewed.setup.journey.dismissed, true);
-      assert.notEqual(
+      assert.equal(
         report.receipt.challengeSha256,
         originalReceipt.challengeSha256,
       );
+      assert.equal(
+        renewed.connectors.secureMcp.runtime.runtimeGeneration,
+        beforeRepeat.connectors.secureMcp.runtime.runtimeGeneration,
+      );
+      assert.equal(report.receipt.receiptSha256, originalReceipt.receiptSha256);
       assert.equal(hash(await fs.readFile(claim)), hash(claimBytes));
       report.repeatConnectionTest = {
         status: "PASS",

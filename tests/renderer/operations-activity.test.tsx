@@ -331,7 +331,8 @@ it("keeps running work inspectable without treating it as abandoned and never hi
       activity: [live, unknown, busy],
     };
     const rows = unresolvedActions(snapshot);
-    expect(rows.find((r) => r.id === "operation:live")?.inProgress).toBe(true);
+    expect(rows.some((r) => r.id === "operation:live")).toBe(false);
+    expect(snapshot.activity.some((entry) => entry.id === "live")).toBe(true);
     expect(rows.find((r) => r.id === "operation:two")?.inProgress).toBe(false);
     expect(rows.some((r) => r.id === "operation:busy")).toBe(false);
     expect(

@@ -3826,16 +3826,28 @@ export class ChatGptRoute {
           };
         }
         submissionPhase = "awaiting_acknowledgement";
+        let acknowledgementTimer: ReturnType<typeof setTimeout> | undefined;
         const activated = activatedTaskSchema.safeParse(
-          await candidate.webContents.executeJavaScript(
-            activateTaskScript(
-              dispatchIdentityUrl,
-              requiredAppName,
-              profile === "temporary-instant",
-              profile === "connector-instant",
+          await Promise.race([
+            candidate.webContents.executeJavaScript(
+              activateTaskScript(
+                dispatchIdentityUrl,
+                requiredAppName,
+                profile === "temporary-instant",
+                profile === "connector-instant",
+              ),
+              true,
             ),
-            true,
-          ),
+            new Promise<null>((resolve) => {
+              acknowledgementTimer = setTimeout(
+                () => resolve(null),
+                Math.max(0, submitDeadline - Date.now()),
+              );
+            }),
+          ]).finally(() => {
+            if (acknowledgementTimer !== undefined)
+              clearTimeout(acknowledgementTimer);
+          }),
         );
         if (!activated.success) {
           return {

@@ -30,6 +30,7 @@ async function setup() {
     if (command.kind === "connector.repair") {
       const next = structuredClone(settings),
         runtime = next.connectors.secureMcp.runtime!;
+      runtime.state = "ready";
       runtime.runtimeGeneration = (++count % 2 ? "f" : "a").repeat(64);
       next.connectors.secureMcp.challenge = {
         ...readySettings(false).connectors.secureMcp.challenge!,
@@ -65,7 +66,7 @@ async function setup() {
     cleanup: () => controller.dispose(),
   };
 }
-it("a second explicit test uses new identities rather than repeating a consumed challenge", async () => {
+it("repeated checks use fresh observation identities without repairing a healthy connection", async () => {
   const h = await setup();
   try {
     expect((await runFreshConnectionTest(h.facade)).state).toBe("applied");
@@ -77,7 +78,11 @@ it("a second explicit test uses new identities rather than repeating a consumed 
     expect(verifies[0]![1]).not.toBe(verifies[1]![1]);
     expect(
       h.configure.mock.calls.filter(([c]) => c.kind === "connector.repair"),
-    ).toHaveLength(2);
+    ).toHaveLength(0);
+    expect(
+      h.snapshot.configuration?.status === "ready" &&
+        h.snapshot.configuration.settings.connectors.secureMcp.attachment,
+    ).not.toBeNull();
   } finally {
     h.cleanup();
   }
@@ -155,13 +160,13 @@ it.each(["selection-refused", "binding-changed"])(
     }
   },
 );
-it("two simultaneous controls admit at most one preparation and one test", async () => {
+it("two simultaneous controls admit at most one status check", async () => {
   const h = await setup();
   try {
     const wait = deferred<void>(),
       original = h.configure.getMockImplementation()!;
     h.configure.mockImplementation(async (c, id) => {
-      if (c.kind === "connector.repair") await wait.promise;
+      if (c.kind === "connector.verify-app") await wait.promise;
       return original(c, id);
     });
     const first = runFreshConnectionTest(h.facade),
@@ -169,7 +174,7 @@ it("two simultaneous controls admit at most one preparation and one test", async
     expect(second.code).toBe("CONNECTION_TEST_IN_PROGRESS");
     wait.resolve();
     expect((await first).state).toBe("applied");
-    expect(h.configure).toHaveBeenCalledTimes(2);
+    expect(h.configure).toHaveBeenCalledTimes(1);
   } finally {
     h.cleanup();
   }
@@ -179,6 +184,7 @@ it.each(["lost-ack", "same-binding", "changed-owner", "stale"])(
   async (mode) => {
     const h = await setup();
     try {
+      h.settings.connectors.secureMcp.runtime!.state = "unreachable";
       const original = h.configure.getMockImplementation()!;
       h.configure.mockImplementation(async (c, id) => {
         const result =

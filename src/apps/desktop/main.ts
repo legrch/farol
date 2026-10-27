@@ -2,6 +2,7 @@ import "../../../apps/desktop/bridge/e2e-window-bootstrap.ts";
 import { guardDiagnosticPipes } from "./diagnostic-pipes";
 import { preventEmbeddedWindowDrag } from "./embedded-web-drag";
 import { separateAppVerificationScopeCurrent } from "../../pkg/product-settings/separate-app-verification";
+import { waitForConnectorCheckReadiness } from "../../../apps/desktop/bridge/connector-check-readiness";
 import type { SeparateAppVerificationScope } from "../../pkg/product-settings/contract";
 import type { SeparateAppVerification } from "./connector-app-verification-attempt";
 import {
@@ -5697,7 +5698,7 @@ async function checkSecureMcpAttachment(
   }
 }
 
-// A manual check or one admitted restart check owns a separate hidden page.
+// A manual check or one admitted restart check owns a separate visible page.
 // Only its exact Computer MCP receipt can complete the attachment.
 async function verifySecureMcpApp(
   separate?: SeparateAppVerificationScope,
@@ -5723,6 +5724,7 @@ async function verifySecureMcpApp(
   let receiptPending = false;
   let expectedBinding: ConnectorAppVerificationBinding | null = null;
   let verificationRoute: ChatGptRoute | null = null;
+  let statusCheckId: string | null = null;
   try {
     const snapshot = configuration.snapshot();
     if (snapshot.status !== "ready")
@@ -5762,6 +5764,11 @@ async function verifySecureMcpApp(
       return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
     }
     requestedWorkspaceId = workspaceId;
+    if (
+      !separate &&
+      currentConnectorAttachment(settings, buildIdentity.buildId, workspaceId)
+    )
+      statusCheckId = randomUUID();
     expectedBinding = {
       tunnelId: connector.tunnelId,
       connectorGeneration: connector.generation,
@@ -5885,10 +5892,11 @@ async function verifySecureMcpApp(
     const stateRoot = secureMcpLaunchRoot();
     try {
       if (
-        await connectorAppVerificationAttemptExists(
+        statusCheckId === null &&
+        (await connectorAppVerificationAttemptExists(
           stateRoot,
           challenge.challengeSha256,
-        )
+        ))
       ) {
         return configurationFailure(
           "CONNECTOR_APP_VERIFICATION_ALREADY_ATTEMPTED",
@@ -5899,23 +5907,36 @@ async function verifySecureMcpApp(
         "CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE",
       );
     }
-    // Never navigate the retained owner conversation, including an unsaved
-    // temporary chat or its draft. Only the authenticated partition is shared.
+    // A separate visible check page preserves the owner's conversation/draft.
+    // Native fixtures still inherit their hidden presentation contract.
     verificationRoute = createManagedChatGptRoute({
       homeUrl: chatGptHomeUrl,
       initialUrl: chatGptHomeUrl,
       e2eOrigin: chatGptE2eOrigin,
-      parent: () => null,
-      windowPresentation: { mode: "hidden" },
+      parent: () => window,
+      ...chatGptWindowPresentationOption(),
       title: "Farol · Connection check",
       ...(process.env.FAROL_E2E === "1" && chatGptE2eOrigin !== null
         ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
         : {}),
     });
+    const ready = await waitForConnectorCheckReadiness(
+      verificationRoute,
+      () => {
+        const latest = configuration!.snapshot();
+        return (
+          !quitInProgress &&
+          !installedUpdateAdmission &&
+          desktopGoCore === verificationCore &&
+          latest.status === "ready" &&
+          expectedBinding !== null &&
+          connectorAppBindingCurrent(latest.settings, expectedBinding)
+        );
+      },
+    );
+    if (!ready)
+      return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
     if (automatic) {
-      const opened = await verificationRoute.preload();
-      const observed =
-        opened.status === "opened" ? await verificationRoute.observe() : null;
       const latest = configuration.snapshot();
       if (
         quitInProgress ||
@@ -5925,8 +5946,6 @@ async function verifySecureMcpApp(
         !connectorAppBindingCurrent(latest.settings, automatic)
       )
         return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
-      if (observed?.state !== "authenticated")
-        return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
       const signedIn = await configuration.recordChatGptObservation(
         {
           state: "authenticated",
@@ -5940,9 +5959,11 @@ async function verifySecureMcpApp(
       if (!signedIn.ok) return ProductConfigurationResultSchema.parse(signedIn);
     }
     const prompt =
-      workspaceId === null
-        ? `Use the selected ${appName} app to call farol_connector_verify_catalogue once with challenge "${challenge.value}". No workspace is configured. Do not read files or run commands. Reply briefly with the result.`
-        : `Use the selected ${appName} app to call farol_connector_verify once with challenge "${challenge.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`;
+      statusCheckId !== null
+        ? `Use the selected ${appName} app to call computer_connection_status once with checkId "${statusCheckId}". Do not read files or run commands. Reply briefly with the result.`
+        : workspaceId === null
+          ? `Use the selected ${appName} app to call farol_connector_verify_catalogue once with challenge "${challenge.value}". No workspace is configured. Do not read files or run commands. Reply briefly with the result.`
+          : `Use the selected ${appName} app to call farol_connector_verify once with challenge "${challenge.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`;
     let claimed = false;
     const timingId = runtimeEnvironment === "dev" ? randomUUID() : null;
     const result = await verificationRoute.runReadonlyTask(
@@ -5967,9 +5988,11 @@ async function verifySecureMcpApp(
             !connectorAppBindingCurrent(current.settings, expectedBinding)
           )
             return false;
-          const proof = connectorVerificationProof(
-            await verificationCore.observeComputerConnectorVerification(),
-          );
+          const observed =
+            await verificationCore.observeComputerConnectorVerification();
+          if (statusCheckId !== null && observed.checkId !== statusCheckId)
+            return false;
+          const proof = connectorVerificationProof(observed);
           if (!proof || desktopGoCore !== verificationCore) return false;
           const { receipt, workspaceId } = proof;
           const afterRead = configuration!.snapshot();
@@ -6005,17 +6028,18 @@ async function verifySecureMcpApp(
             !connectorAppBindingCurrent(admitted.settings, expectedBinding)
           )
             throw new Error("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
-          await prepareConnectorAppVerificationAttempt(
-            stateRoot,
-            challenge.challengeSha256,
-            async () =>
-              (
-                await configuration!.recordSecureMcpAppPending(
-                  runtime.runtimeGeneration,
-                )
-              ).ok,
-            separateAttempt,
-          );
+          if (statusCheckId === null)
+            await prepareConnectorAppVerificationAttempt(
+              stateRoot,
+              challenge.challengeSha256,
+              async () =>
+                (
+                  await configuration!.recordSecureMcpAppPending(
+                    runtime.runtimeGeneration,
+                  )
+                ).ok,
+              separateAttempt,
+            );
           claimed = true;
         },
       },
@@ -6106,6 +6130,8 @@ async function verifySecureMcpApp(
         if (desktopGoCore !== verificationCore) return { state: "changed" };
         const state =
           await verificationCore.observeComputerConnectorVerification();
+        if (statusCheckId !== null && state.checkId !== statusCheckId)
+          return null;
         const proof = connectorVerificationProof(state);
         if (!proof) return null;
         return {

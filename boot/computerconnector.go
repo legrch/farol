@@ -64,6 +64,7 @@ type connectorSlot struct {
 	renewalCancel    context.CancelFunc
 	renewalDone      chan struct{}
 	renewalScope     *connectorRenewalScope
+	statusCheckID    string // Socket-only read acknowledgement; never attachment authority.
 }
 type connectorHostGuard struct {
 	mu          sync.Mutex

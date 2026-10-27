@@ -26,6 +26,13 @@ export async function startChatGptFixture(options = {}) {
         typeof setup.verify === "function",
       "SETUP_FIXTURE_INVALID",
     );
+  if (setup?.readinessDelayMs !== undefined)
+    assert.ok(
+      Number.isSafeInteger(setup.readinessDelayMs) &&
+        setup.readinessDelayMs >= 0 &&
+        setup.readinessDelayMs <= 5000,
+      "SETUP_FIXTURE_READINESS_DELAY_INVALID",
+    );
   const fixture = createServer(async (request, response) => {
     const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
     if (pathname === "/setup-verify" && setup) {
@@ -166,6 +173,7 @@ export async function startChatGptFixture(options = {}) {
           window.__farolAttachmentProof = [];
           let attachmentLoading = false;
           let responseGeneration = 0;
+          const readinessDeadline = Date.now() + ${setup?.readinessDelayMs ?? 0};
           const updateSend = () => {
             send.disabled = composer.textContent.trim().length === 0 || attachmentLoading;
           };
@@ -173,9 +181,10 @@ export async function startChatGptFixture(options = {}) {
             const authenticated = localStorage.getItem('farol-e2e-authenticated') === '1';
             login.hidden = authenticated;
             expire.hidden = !authenticated;
-            composer.hidden = !authenticated;
-            send.hidden = !authenticated;
+            composer.hidden = !authenticated || Date.now() < readinessDeadline;
+            send.hidden = !authenticated || Date.now() < readinessDeadline;
           };
+          setTimeout(() => render(), ${setup?.readinessDelayMs ?? 0});
           const restoreConversation = () => {
             if (location.pathname !== conversationPath) return;
             try {
