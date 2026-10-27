@@ -149,18 +149,32 @@ async function measure(directory) {
   const pending = [directory];
   while (pending.length) {
     const current = pending.pop();
-    const info = await fs.lstat(current);
+    let info;
+    try {
+      info = await fs.lstat(current);
+    } catch (error) {
+      // A producer may remove its own scratch while this scan runs.
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
     bytes += info.blocks * 512;
     newest = Math.max(newest, info.mtimeMs);
     if (info.isDirectory())
-      for (const name of await fs.readdir(current))
+      for (const name of await fs.readdir(current).catch((error) => {
+        if (error.code === "ENOENT") return [];
+        throw error;
+      }))
         pending.push(path.join(current, name));
   }
   return { bytes, newest };
 }
 
 async function classifyChild(directory, kind, observation, now, policy) {
-  const info = await fs.lstat(directory);
+  const info = await fs.lstat(directory).catch((error) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!info) return null;
   const { bytes, newest } = await measure(directory);
   const entry = { path: directory, kind, bytes, newest };
   if (info.uid !== process.getuid() || info.isSymbolicLink())
@@ -200,6 +214,22 @@ export async function inspectOutput(
   }
   for (const name of names.sort()) {
     const full = path.join(output, name);
+    const parentInfo = await fs.lstat(full);
+    if (
+      (name === "tmp" || name === "evidence") &&
+      (!parentInfo.isDirectory() || parentInfo.uid !== process.getuid())
+    ) {
+      // A redirected scratch root is never walked: removal stays inside _output.
+      entries.push({
+        path: full,
+        kind: "output",
+        bytes: parentInfo.blocks * 512,
+        newest: parentInfo.mtimeMs,
+        state: "unknown",
+        reason: "not an owned directory; not walked",
+      });
+      continue;
+    }
     if (name === "tmp" || name === "evidence") {
       for (const child of (await fs.readdir(full)).sort()) {
         const childPath = path.join(full, child);
@@ -213,10 +243,16 @@ export async function inspectOutput(
             state: "protected",
             reason: "declared evidence consumer",
           });
-        } else
-          entries.push(
-            await classifyChild(childPath, name, observation, now, policy),
+        } else {
+          const entry = await classifyChild(
+            childPath,
+            name,
+            observation,
+            now,
+            policy,
           );
+          if (entry) entries.push(entry);
+        }
       }
       continue;
     }
@@ -253,14 +289,33 @@ export async function inspectOutput(
     } else entry.state = "kept";
   }
   const totalBytes = entries.reduce((sum, { bytes }) => sum + bytes, 0);
-  return { output, entries, totalBytes };
+  // Current outputs are bounded by their producers and protected evidence is
+  // never removed here, so only what can accumulate counts toward the budget.
+  const budgetedBytes = entries
+    .filter(({ state }) => !["current", "protected"].includes(state))
+    .reduce((sum, { bytes }) => sum + bytes, 0);
+  return { output, entries, totalBytes, budgetedBytes };
 }
 
 export async function pruneOutput(root, options = {}) {
   const report = await inspectOutput(root, options);
   const removed = [];
+  if (!report.entries.some(({ state }) => state === "removable"))
+    return { ...report, removed };
+  // Removal needs a second, fresh observation: an entry first used after the
+  // first scan is no longer removable and stays.
+  const { observe = observeProcesses } = options;
+  const confirmed = await inspectOutput(root, {
+    ...options,
+    observation: observe(),
+  });
+  const removable = new Set(
+    confirmed.entries
+      .filter(({ state }) => state === "removable")
+      .map(({ path: item }) => item),
+  );
   for (const entry of report.entries) {
-    if (entry.state !== "removable") continue;
+    if (entry.state !== "removable" || !removable.has(entry.path)) continue;
     await fs.rm(entry.path, { recursive: true, force: true });
     removed.push(entry);
   }
@@ -305,12 +360,12 @@ async function main([command = "status"]) {
     const report = await pruneOutput(root);
     console.log(formatReport(report));
     const remaining =
-      report.totalBytes -
+      report.budgetedBytes -
       report.removed.reduce((sum, { bytes }) => sum + bytes, 0);
     if (command === "guard" && remaining > POLICY.budgetBytes) {
       console.error(
-        `\n_output is over its ${gb(POLICY.budgetBytes)} budget after pruning (${gb(remaining)}). ` +
-          "Heavy work is refused until the unknown or active entries above are resolved. " +
+        `\n_output holds ${gb(remaining)} of unknown, active or kept entries after pruning, over its ${gb(POLICY.budgetBytes)} budget. ` +
+          "Heavy work is refused until the unknown or active entries above are resolved (delete what nothing needs, or finish what is running). " +
           "`task output:status` and `task output:prune` remain available.",
       );
       return 1;

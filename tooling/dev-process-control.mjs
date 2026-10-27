@@ -11,6 +11,7 @@ import { performance } from "node:perf_hooks";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { buildDevControl, releaseOwnedTemporary } from "./go-backend-build.mjs";
 import { stopRetainedDevProcess } from "./dev-owned-stop.mjs";
+import { OWNER_FILE } from "./owned-scratch.mjs";
 import {
   readRunMarker,
   currentBootTimeMs,
@@ -259,19 +260,22 @@ export async function prepareDevBuild(options) {
   try {
     return await prepareDevBuildOnce(options, control);
   } finally {
-    if (
-      control.binary !== undefined &&
-      !control.retain &&
-      control.binary.startsWith(
-        path.join(control.root, "_output/tmp/go-dev-control-"),
-      )
-    )
-      await releaseOwnedTemporary(
-        control.root,
-        control.binary,
-        "go-dev-control-",
-      );
+    await settleDevControl(control);
   }
+}
+
+// A helper retained after a refused or outcome-unknown stop drops its owner
+// record, so retention reports it as unknown and never reaps it as finished
+// scratch. Every other helper in owned scratch is released.
+export async function settleDevControl({ root, binary, retain }) {
+  if (
+    binary === undefined ||
+    !binary.startsWith(path.join(root, "_output/tmp/go-dev-control-"))
+  )
+    return;
+  if (retain)
+    fs.rmSync(path.join(path.dirname(binary), OWNER_FILE), { force: true });
+  else await releaseOwnedTemporary(root, binary, "go-dev-control-");
 }
 
 async function prepareDevBuildOnce(

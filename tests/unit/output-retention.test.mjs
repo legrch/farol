@@ -9,6 +9,7 @@ import {
   inspectOutput,
   pruneOutput,
 } from "../../tooling/output-retention.mjs";
+import { settleDevControl } from "../../tooling/dev-process-control.mjs";
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.parse("2026-10-27T12:00:00Z");
@@ -46,7 +47,12 @@ describe("_output retention", () => {
   }
   const observe = (processes = [], open = []) => ({ processes, open });
   const prune = (observation, policy = POLICY) =>
-    pruneOutput(root, { observation, now: NOW, policy });
+    pruneOutput(root, {
+      observation,
+      observe: () => observation,
+      now: NOW,
+      policy,
+    });
   const exists = (directory) =>
     fs.lstat(directory).then(
       () => true,
@@ -171,5 +177,74 @@ describe("_output retention", () => {
     });
     await prune(observe());
     expect(await exists(legacy)).toBe(true);
+  });
+
+  it("re-observes before removal and keeps an entry first used after the scan", async () => {
+    const owner = { pid: 4242, pgid: 4240, start: START };
+    const scratch = await entry("tmp/go-artifact-GGGGGG", { owner });
+    await pruneOutput(root, {
+      observation: observe(),
+      observe: () => observe([], [path.join(scratch, "data")]),
+      now: NOW,
+    });
+    expect(await exists(scratch)).toBe(true);
+  });
+
+  it("never walks a redirected scratch root", async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "farol-outside-"));
+    try {
+      await fs.mkdir(path.join(outside, "go-artifact-HHHHHH"));
+      await fs.writeFile(
+        path.join(outside, "go-artifact-HHHHHH", OWNER_FILE),
+        JSON.stringify({ schema: 1, pid: 4242, pgid: 4240, start: START }),
+      );
+      await fs.rm(path.join(output, "tmp"), { recursive: true });
+      await fs.symlink(outside, path.join(output, "tmp"));
+      const result = await prune(observe());
+      expect(await exists(path.join(outside, "go-artifact-HHHHHH"))).toBe(true);
+      expect(
+        result.entries.find(({ path: item }) => item.endsWith("_output/tmp"))
+          .state,
+      ).toBe("unknown");
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("budgets only what can accumulate, not current or protected output", async () => {
+    await entry("package/Farol.app", { bytes: 64 * 1024 });
+    await entry(`evidence/${PROTECTED_EVIDENCE[0]}`, { bytes: 64 * 1024 });
+    const legacy = await entry("preserved-package-old", { bytes: 8 * 1024 });
+    const report = await inspectOutput(root, {
+      observation: observe(),
+      now: NOW,
+    });
+    const legacyBytes = report.entries.find(
+      ({ path: item }) => item === legacy,
+    ).bytes;
+    expect(report.budgetedBytes).toBe(legacyBytes);
+    expect(report.totalBytes).toBeGreaterThan(report.budgetedBytes);
+  });
+
+  it("keeps a stop helper retained as evidence and releases any other", async () => {
+    const owner = { pid: 4242, pgid: 4240, start: START };
+    const retained = await entry("tmp/go-dev-control-IIIIII", { owner });
+    const released = await entry("tmp/go-dev-control-JJJJJJ", { owner });
+    await settleDevControl({
+      root,
+      binary: path.join(retained, "dev-control"),
+      retain: true,
+    });
+    await settleDevControl({
+      root,
+      binary: path.join(released, "dev-control"),
+      retain: false,
+    });
+    expect(await exists(released)).toBe(false);
+    const result = await prune(observe());
+    expect(await exists(retained)).toBe(true);
+    expect(
+      result.entries.find(({ path: item }) => item === retained).state,
+    ).toBe("unknown");
   });
 });

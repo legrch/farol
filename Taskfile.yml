@@ -316,7 +316,12 @@ tasks:
     desc: One report for _output and Farol-owned Docker volumes; run at the end of a task
     cmds:
       - node tooling/output-retention.mjs status
-      - /usr/bin/python3 -B tooling/testops/testops.py volumes status
+      - |
+        if docker_cli="$(command -v docker)"; then
+          /usr/bin/python3 -B tooling/testops/testops.py volumes status --docker "$docker_cli"
+        else
+          echo "Docker CLI not found: no Farol volumes to report."
+        fi
 
   output:check:
     desc: Check the generated build, coverage, Hunt, logs and scratch layout
