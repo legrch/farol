@@ -52,6 +52,7 @@ export const CURRENT_OUTPUTS = Object.freeze([
   "package",
   "preview",
   "preview-assets",
+  "shell-screens",
   "testops",
   "tests",
   "tmp",
