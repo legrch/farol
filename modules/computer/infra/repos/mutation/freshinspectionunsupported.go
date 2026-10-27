@@ -4,6 +4,6 @@ package mutation
 
 import "context"
 
-func (*Repository) InspectFreshProcesses(context.Context, SettledSelection) error {
-	return unavailable()
+func (*Repository) InspectFreshProcesses(context.Context, SettledSelection) (bool, error) {
+	return false, unavailable()
 }

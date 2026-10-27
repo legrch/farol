@@ -897,7 +897,10 @@ export class WindowController implements RendererFacade {
           taskId: "",
           turnId: "",
           generation: 0,
-          label: entry.kind.replaceAll("_", " ").replaceAll(".", " "),
+          label:
+            entry.code === "FRESH_SESSION_INTERRUPTED_COMMAND_UNKNOWN"
+              ? "Interrupted command: outcome unknown"
+              : entry.kind.replaceAll("_", " ").replaceAll(".", " "),
           phase:
             entry.outcome === "unknown" ? "outcome_unknown" : entry.outcome,
           operation:

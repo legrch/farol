@@ -2,7 +2,6 @@ package mutation
 
 import (
 	"bytes"
-	"errors"
 	"testing"
 
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
@@ -38,23 +37,23 @@ func TestFreshProcessHistorySeparatesReservationExitAndCleanup(t *testing.T) {
 			for _, chunk := range chunks {
 				entries = append(entries, settledBytes{chunk.key, bytes.Clone(chunk.raw)})
 			}
-			err = qualifyFreshProcessHistory(entries, selection)
-			blocked := kind == "write-reservation" || kind == "unconfirmed-terminal"
-			if blocked && !errors.Is(err, ErrFreshProcessScopeUnavailable) || !blocked && err != nil {
-				t.Fatal("cwd or root exit supplied missing original scope/cleanup authority", err)
+			unknown, err := qualifyFreshProcessHistory(entries, selection)
+			wantUnknown := kind == "write-reservation" || kind == "unconfirmed-terminal"
+			if err != nil || unknown != wantUnknown {
+				t.Fatal("historical uncertainty blocked fresh work or was promoted to cleanup", unknown, err)
 			}
 			if !bytes.Equal(entries[0].raw, raw) {
 				t.Fatal("retained operation was changed")
 			}
 			if len(chunks) > 0 {
 				entries[1].raw[len(entries[1].raw)/2] ^= 1
-				if err := qualifyFreshProcessHistory(entries, selection); err == nil || errors.Is(err, ErrFreshProcessScopeUnavailable) {
+				if _, err := qualifyFreshProcessHistory(entries, selection); err == nil {
 					t.Fatal("corrupt output was hidden by a valid terminal")
 				}
 			}
 			crossed := selection
 			crossed.ComputerID = "other"
-			if err := qualifyFreshProcessHistory(entries[:1], crossed); err == nil || errors.Is(err, ErrFreshProcessScopeUnavailable) {
+			if _, err := qualifyFreshProcessHistory(entries[:1], crossed); err == nil {
 				t.Fatal("crossed old Computer identity admitted")
 			}
 		})
@@ -67,7 +66,7 @@ func TestFreshProcessHistoryRefusesUnsupportedOrExcessInventory(t *testing.T) {
 		make([]settledBytes, maxPreservedRecords+1),
 		{{key: "unknown", raw: []byte(`{"schemaVersion":99,"kind":"workspace_connector_process","record":{}}`)}},
 	} {
-		if err := qualifyFreshProcessHistory(entries, selection); err == nil || errors.Is(err, ErrFreshProcessScopeUnavailable) {
+		if _, err := qualifyFreshProcessHistory(entries, selection); err == nil {
 			t.Fatal("unsupported history escaped complete inventory qualification", err)
 		}
 	}

@@ -54,6 +54,7 @@
     "chat.computer.edit": "effect",
     "chat.computer.mutation.read": "read",
     "core.retirement.prepare": "effect",
+    "core.fresh.status": "read",
     "core.fresh.close": "effect",
     "core.retirement.ack": "effect",
     "chat.readintent.promote": "effect",
@@ -5804,6 +5805,14 @@
         },
         "root": {
           "type": "ComputerSettingsRoot"
+        }
+      }
+    },
+    "CoreFreshStatus": {
+      "type": "object",
+      "fields": {
+        "interruptedCommand": {
+          "type": "boolean"
         }
       }
     },

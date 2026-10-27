@@ -52,6 +52,7 @@ export const operationCodesByOutcome = {
     "supported",
   ],
   refused: [
+    "invalid_fresh_status",
     "FRESH_START_SETTINGS_UNAVAILABLE",
     "STARTUP_PRESERVED_MUTATION_CONTRACT_UNSUPPORTED",
     "invalid_fresh_launch",
@@ -1874,6 +1875,7 @@ export const operationCodesByOutcome = {
     "write-failed",
   ],
   unknown: [
+    "FRESH_SESSION_INTERRUPTED_COMMAND_UNKNOWN",
     "FRESH_SESSION_PROCESS_SCOPE_UNAVAILABLE",
     "FRESH_START_CURRENT_OWNER_UNCONFIRMED",
     "FRESH_START_HISTORY_UNCONFIRMED",

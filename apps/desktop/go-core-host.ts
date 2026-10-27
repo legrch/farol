@@ -178,6 +178,13 @@ export class DesktopGoCore {
   get independentSession(): boolean {
     return this.freshSession;
   }
+  async interruptedCommand(): Promise<boolean> {
+    if (!this.freshSession) return false;
+    const result = await this.client.request("core.fresh.status", {});
+    if (result.status !== "ok" || !validate("CoreFreshStatus", result.data))
+      throw new BridgeError("unavailable", "invalid_fresh_status");
+    return (result.data as { interruptedCommand: boolean }).interruptedCommand;
+  }
   get limitedSession(): boolean {
     return this.freshSession && !this.hasMutationStorage;
   }

@@ -10,11 +10,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
+	computerport "github.com/legrch/farol/modules/computer/app/port"
+	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	delivery "github.com/legrch/farol/modules/computer/app/services/settingsdelivery"
+	"github.com/legrch/farol/modules/computer/domain/authority"
+	mutationrepo "github.com/legrch/farol/modules/computer/infra/repos/mutation"
 	"github.com/legrch/farol/transport/desktop"
 	"golang.org/x/sys/unix"
 )
@@ -23,7 +28,43 @@ import (
 // Settings-store/consent fixture. Separate OS-process framing is tested by the
 // read-only CLI journey; this does not claim real Electron/MCP/Shell acceptance.
 func TestFreshSessionWritableReopenRetainsOriginalUnknown(t *testing.T) {
+	testFreshSessionWritableReopen(t, false)
+}
+
+func TestFreshSessionWriteReservationWithoutTerminalKeepsWritableReopenAndHistory(t *testing.T) {
+	testFreshSessionWritableReopen(t, true)
+}
+
+func testFreshSessionWritableReopen(t *testing.T, interruptedProcess bool) {
+	t.Helper()
 	launch, workspace, _ := recoveryNativeFixture(t)
+	if interruptedProcess {
+		// Canonical reservation in actual private storage, without spawning a
+		// process or inventing an exit/cleanup receipt for the old operation.
+		computer := filepath.Join(launch.Profile.Root, "computer")
+		var root unix.Stat_t
+		if err := unix.Lstat(computer, &root); err != nil {
+			t.Fatal(err)
+		}
+		journal, err := mutationrepo.New(context.Background(), mutationrepo.Root{Path: computer, Device: uint64(root.Dev), Inode: root.Ino, OwnerUID: root.Uid})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer journal.Close()
+		scope := processsvc.ConnectorReservationScope{Host: computerport.ConnectorHost{ProfileID: launch.Profile.ProfileID, BackendGeneration: "old-backend", BuildID: "old-build", RuntimeID: "old-runtime", LaunchDigest: strings.Repeat("b", 64), ConnectorGeneration: 1}, OwnerID: launch.OwnerID, ComputerID: launch.ComputerID, CallID: "old-call", ComputerGeneration: 1, Generation: 1}
+		reservation, err := journal.ConnectorProcessReservation(scope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		intent := processsvc.Intent{OperationID: "interrupted-shell-write", Binding: computerport.TaskBinding{Identity: authority.Identity{OwnerID: launch.OwnerID, SessionID: "old-session", TaskID: "old-task", TaskEpoch: 1}, ParticipantID: "old-participant", TurnID: "old-turn"}, Seal: processsvc.Seal{Write: true, Digest: strings.Repeat("a", 64), WorkspaceID: "old-workspace", Root: workspace, Cwd: workspace, RootIdentity: authority.RootIdentity{Device: "12", Inode: "34"}}, Deadline: time.Unix(1900000000, 0)}
+		receipt, err := reservation.Reserve(context.Background(), intent)
+		if err != nil || receipt == nil || receipt.Status != processsvc.Reserved {
+			t.Fatal("old write reservation missing", err)
+		}
+		if err := journal.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	before := recoverySnapshot(t, launch.Profile.Root)
 	launch.StartupMode, launch.SettingsMutations = "fresh", true
 	for n := 0; n < 2; n++ {
@@ -33,6 +74,15 @@ func TestFreshSessionWritableReopenRetainsOriginalUnknown(t *testing.T) {
 		}
 		if r.retirement != nil || r.mutations == nil {
 			t.Fatal("fresh native mutation composition unavailable")
+		}
+		methods, err := r.Methods()
+		if err != nil {
+			t.Fatal(err)
+		}
+		status, err := methods["core.fresh.status"].Handle(context.Background(), desktop.Request{Body: json.RawMessage(`{}`)})
+		var observed wire.CoreFreshStatus
+		if err != nil || status == nil || status.Status != "ok" || json.Unmarshal(status.Data, &observed) != nil || observed.InterruptedCommand != interruptedProcess {
+			t.Fatal("fresh history observation missing or promoted to cleanup", status, err)
 		}
 		generation := n + 2
 		r.settingsDelivery.store = &deliveryStoreFixture{value: delivery.Snapshot{Revision: 1, Current: delivery.Identity{ProfileID: launch.Profile.ProfileID, OwnerID: launch.OwnerID, ComputerID: launch.ComputerID, Generation: uint64(generation)}}}

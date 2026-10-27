@@ -2077,3 +2077,38 @@ it.each(["drain", "terminal", "nonzero", "signal"] as const)(
     expect(AttestedCore.prototype.completeRetirement).not.toHaveBeenCalled();
   },
 );
+
+it("reads only the current fresh history observation without an effect or replay", async () => {
+  const f = transport();
+  f.request.mockResolvedValueOnce({
+    status: "ok",
+    requestId: "fresh-status",
+    context,
+    data: { interruptedCommand: true },
+  });
+  const host = new DesktopGoCore(
+    f.client,
+    () => settings,
+    undefined,
+    true,
+    undefined,
+    false,
+    true,
+  );
+  await expect(host.interruptedCommand()).resolves.toBe(true);
+  expect(f.request).toHaveBeenCalledWith("core.fresh.status", {});
+  expect(f.request).toHaveBeenCalledTimes(1);
+  f.request.mockResolvedValueOnce({
+    status: "ok",
+    requestId: "bad-status",
+    context,
+    data: { interruptedCommand: "true" },
+  });
+  await expect(host.interruptedCommand()).rejects.toThrow(
+    "invalid_fresh_status",
+  );
+  expect(f.request).toHaveBeenCalledTimes(2);
+  const legacy = new DesktopGoCore(f.client, () => settings);
+  await expect(legacy.interruptedCommand()).resolves.toBe(false);
+  expect(f.request).toHaveBeenCalledTimes(2);
+});

@@ -225,15 +225,19 @@ chunks and original owner/profile/computer bindings must qualify within the
 existing 128-record bound. Corruption, unsupported records, changed roots or
 excess inventory refuse as `FRESH_SESSION_PROCESS_SAFETY_UNCONFIRMED`.
 
-An old writable process reservation or terminal with unconfirmed cleanup refuses
-with nested `FRESH_SESSION_PROCESS_SCOPE_UNAVAILABLE`. Its stored cwd/root does
-not identify every originally writable resource: RootScoped Shell can access
-other approved roots too. Flock and successful supervisor Wait cannot supply
-missing cleanup or resource-scope evidence. This checkpoint therefore does not
-admit a profile containing that ambiguity; it does not globally strip tools or
-pretend that a cwd-only restriction safely isolates an old group. Resource-local
-admission for such legacy records remains BLOCKED without adequate original
-facts. No new PID scanner, cleanup retry or lease protocol is introduced.
+After the existing core and MCP owner locks exclude the old owners, a canonical
+writable process reservation without a terminal, or a terminal without confirmed
+group cleanup, remains untouched historical uncertainty. It does not block a new
+fresh runtime or remove its independently approved capabilities. Flock does not
+prove group cleanup: the watchdog remains responsible for its existing EOF-driven
+group stop, and escaped `setsid` descendants remain outside that guarantee.
+
+The read-only `core.fresh.status` observation reports only whether this history
+contains an interrupted writable command. Desktop records one summary in the
+existing Activity log: “Interrupted command: outcome unknown.” The notice is
+deduplicated against retained summaries and can be marked read normally. It
+contains no command or output, changes no historical record and admits no replay.
+No new PID scanner, cleanup retry or lease protocol is introduced.
 
 `core.fresh.close` freezes and drains only this session and is admitted once.
 It drains current Settings delivery, process publication and mutation owners,

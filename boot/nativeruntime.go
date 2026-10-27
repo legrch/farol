@@ -42,32 +42,33 @@ type NativeLaunch struct {
 	shell *connectorShellConfig
 }
 type NativeRuntime struct {
-	cancel              context.CancelFunc
-	browser             *BrowserExchange
-	conversations       *ChatIngress
-	chatComputer        *ChatComputerIngress
-	results             *results.Native
-	profile             *QualifiedProfile
-	store               *accessrepo.Store
-	journal             *chatrepo.Repository
-	chat                *chatlifecycle.Service
-	ingress             *ComputerIngress
-	connector           *computerConnector
-	mutations           *SettingsMutationIngress
-	settingsDelivery    *SettingsDeliveryIngress
-	settingsStore       *SettingsStoreExchange
-	mutationStore       *mutationrepo.Repository
-	closed              atomic.Bool
-	closeOnce           sync.Once
-	closeErr            error
-	retirement          *nativeRetirement
-	fresh               *freshSession
-	freshCloseMu        sync.Mutex
-	freshCloseAttempted bool
-	historyAuthority    *historyReadAuthority
-	history             *chathandoff.HistoryReader
-	retiredArchive      *chatarchive.Service
-	codexRead           *nativeCodexRead
+	cancel                   context.CancelFunc
+	browser                  *BrowserExchange
+	conversations            *ChatIngress
+	chatComputer             *ChatComputerIngress
+	results                  *results.Native
+	profile                  *QualifiedProfile
+	store                    *accessrepo.Store
+	journal                  *chatrepo.Repository
+	chat                     *chatlifecycle.Service
+	ingress                  *ComputerIngress
+	connector                *computerConnector
+	mutations                *SettingsMutationIngress
+	settingsDelivery         *SettingsDeliveryIngress
+	settingsStore            *SettingsStoreExchange
+	mutationStore            *mutationrepo.Repository
+	closed                   atomic.Bool
+	closeOnce                sync.Once
+	closeErr                 error
+	retirement               *nativeRetirement
+	fresh                    *freshSession
+	freshCloseMu             sync.Mutex
+	freshCloseAttempted      bool
+	historicalProcessUnknown bool
+	historyAuthority         *historyReadAuthority
+	history                  *chathandoff.HistoryReader
+	retiredArchive           *chatarchive.Service
+	codexRead                *nativeCodexRead
 }
 
 func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation string) (*NativeRuntime, error) {
@@ -195,7 +196,7 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 			return fail(err)
 		}
 		if runtime.fresh != nil {
-			err = runtime.mutationStore.InspectFreshProcesses(ctx, mutationrepo.SettledSelection{OwnerID: launch.OwnerID, ProfileID: launch.Profile.ProfileID, ComputerID: launch.ComputerID})
+			runtime.historicalProcessUnknown, err = runtime.mutationStore.InspectFreshProcesses(ctx, mutationrepo.SettledSelection{OwnerID: launch.OwnerID, ProfileID: launch.Profile.ProfileID, ComputerID: launch.ComputerID})
 			if err != nil {
 				return fail(errors.Join(errors.New("FRESH_SESSION_PROCESS_SAFETY_UNCONFIRMED"), err))
 			}

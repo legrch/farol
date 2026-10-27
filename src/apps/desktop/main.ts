@@ -9,6 +9,7 @@ import {
 import { operationsDirectory } from "../../../apps/desktop/operations/paths";
 import { OperationsStore } from "../../../apps/desktop/operations/store";
 import { observeOperation } from "../../../apps/desktop/operations/observe";
+import { recordInterruptedCommand } from "../../../apps/desktop/operations/interrupted-command";
 import {
   configurationOperation,
   configurationResultTarget,
@@ -12560,6 +12561,12 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
           }),
       }),
     );
+    try {
+      await recordInterruptedCommand(desktopGoCore, operationsStore());
+    } catch {
+      // Observation failure cannot turn old uncertainty into a startup fence.
+      console.warn("The interrupted command notice is unavailable.");
+    }
     if (runtimeEnvironment === "dev")
       console.info(
         "FAROL_DEV_SHELL:" +

@@ -4,7 +4,6 @@ package mutation
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"testing"
 )
@@ -29,8 +28,8 @@ func TestNativeProcessRootsBorrowOriginalWriterAndPreserveRecords(t *testing.T) 
 				t.Fatal(err)
 			}
 			defer r.Close()
-			if err := r.InspectFreshProcesses(context.Background(), selection); write && !errors.Is(err, ErrFreshProcessScopeUnavailable) || !write && err != nil {
-				t.Fatal("legacy cwd was accepted as the full writable resource scope", err)
+			if unknown, err := r.InspectFreshProcesses(context.Background(), selection); err != nil || unknown != write {
+				t.Fatal("historical reservation blocked startup or lost its unknown observation", err)
 			}
 			if other, err := New(context.Background(), root); other != nil || err == nil {
 				if other != nil {

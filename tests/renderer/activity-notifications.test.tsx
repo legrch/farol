@@ -122,3 +122,48 @@ it("does not hide uncertainty when storage fails", async () => {
   expect(h.host.textContent).toContain("Read status could not be saved");
   expect(h.host.querySelector("output")!.textContent).toBe("1");
 });
+
+it("presents the fresh history observation as an interrupted command without blocking new work", async () => {
+  const f = fixture();
+  const operations = vi.fn(async () => ({
+    entries: [
+      {
+        id: "00000000-0000-4000-8000-000000000001",
+        at: 1,
+        source: "Setup",
+        kind: "computer_shell_start",
+        target: {},
+        outcome: "unknown",
+        code: "FRESH_SESSION_INTERRUPTED_COMMAND_UNKNOWN",
+        durationMs: 0,
+      },
+    ],
+    corruptLines: 0,
+    writeFailures: 0,
+    droppedEntries: 0,
+    unrecordedUncertainEntries: 0,
+    unmappedCodes: 0,
+  }));
+  const controller = new WindowController({ ...f.api, operations });
+  try {
+    await controller.start();
+    await vi.waitFor(() =>
+      expect(controller.getSnapshot().activity).toHaveLength(1),
+    );
+    const snapshot = controller.getSnapshot();
+    expect(snapshot.activity[0]!.label).toBe(
+      "Interrupted command: outcome unknown",
+    );
+    const notices = unresolvedActions(snapshot);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({
+      state: "unknown",
+      code: "FRESH_SESSION_INTERRUPTED_COMMAND_UNKNOWN",
+    });
+    expect(notices[0]!.cause).toContain("New work is available");
+    expect(commandAllowed(snapshot, "computer.update-commands")).toBe(true);
+    expect(f.api.configure).not.toHaveBeenCalled();
+  } finally {
+    controller.dispose();
+  }
+});

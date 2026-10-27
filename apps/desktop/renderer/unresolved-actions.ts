@@ -66,9 +66,11 @@ export function unresolvedActions(
         entry.inFlight === true,
       code: entry.code,
       cause:
-        entry.inFlight === true && entry.outcome === "pending"
-          ? "This action is still running. Wait for its result."
-          : "This is the recorded outcome of an earlier operation. Inspect its original result; do not submit it again.",
+        entry.code === "FRESH_SESSION_INTERRUPTED_COMMAND_UNKNOWN"
+          ? "An earlier command was interrupted. Its outcome is unknown. New work is available; do not repeat the original command."
+          : entry.inFlight === true && entry.outcome === "pending"
+            ? "This action is still running. Wait for its result."
+            : "This is the recorded outcome of an earlier operation. Inspect its original result; do not submit it again.",
     });
   }
   const settings =
