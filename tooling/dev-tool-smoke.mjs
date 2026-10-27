@@ -11,6 +11,12 @@ import {
   resolveToolchain,
 } from "./dev.mjs";
 
+export function devToolSmokeNode(toolchain, currentNode) {
+  if (toolchain.status === "current") return currentNode;
+  if (toolchain.status === "found") return toolchain.nodeBin;
+  throw Error("DEV_TOOL_SMOKE_TOOLCHAIN_REQUIRED");
+}
+
 export function devToolSmokePlan(root, image) {
   const pins = [
     "--candidate-root",
@@ -40,12 +46,7 @@ async function main() {
     candidates: candidateToolchainDirectories(process.env.HOME),
     probe: probeToolchainAt,
   });
-  if (toolchain.status !== "current" && toolchain.status !== "found")
-    throw Error("DEV_TOOL_SMOKE_TOOLCHAIN_REQUIRED");
-  const node =
-    toolchain.status === "found"
-      ? path.join(toolchain.directory, "node")
-      : process.execPath;
+  const node = devToolSmokeNode(toolchain, process.execPath);
   const run = (args) => {
     const child = spawnSync(node, args, {
       cwd: root,
