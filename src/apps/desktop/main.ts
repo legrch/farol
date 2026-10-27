@@ -12562,7 +12562,11 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       }),
     );
     try {
-      await recordInterruptedCommand(desktopGoCore, operationsStore());
+      await recordInterruptedCommand(
+        desktopGoCore,
+        operationsStore(),
+        computerMcpLifecycle().hasInterruptedShellHistory,
+      );
     } catch {
       // Observation failure cannot turn old uncertainty into a startup fence.
       console.warn("The interrupted command notice is unavailable.");

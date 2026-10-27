@@ -2112,3 +2112,29 @@ it("reads only the current fresh history observation without an effect or replay
   await expect(legacy.interruptedCommand()).resolves.toBe(false);
   expect(f.request).toHaveBeenCalledTimes(2);
 });
+
+it("aborts the new core if fresh marker preservation fails after native admission", async () => {
+  const f = transport();
+  f.closeAndObserve.mockImplementation(async () => {
+    // The real Client closes inherited pipes while observing exit. This port
+    // double must also wake the retained browser poll on an abort without drain.
+    await f.close();
+    return { exitCode: 0, signal: null, forced: false };
+  });
+  start.mockResolvedValueOnce(f.client);
+  const failure = Error("archive-refused-fixture");
+  await expect(
+    startDesktopGoCore({
+      ...selection,
+      startupPurpose: "fresh",
+      previousHostDrainConfirmed: false,
+      withInactiveMcp: async (start) => {
+        await start();
+        throw failure;
+      },
+    }),
+  ).rejects.toBe(failure);
+  expect(f.closeAndObserve).toHaveBeenCalledOnce();
+  expect(f.events).not.toContain("core.retirement.prepare");
+  expect(f.events).not.toContain("core.fresh.close");
+});

@@ -212,8 +212,8 @@ Historical UNKNOWN stays UNKNOWN. Every native request rechecks retained claims.
 
 Desktop holds the existing MCP exclusive lifetime lock through Go admission.
 Active MCP leases refuse startup; safe old instance markers are retained as
-history. Original prepared launches are revoked, not replayed. Unconfirmed
-legacy shell-group markers and incomplete reconciliation still refuse. The
+history. Original prepared launches are revoked, not replayed. Incomplete
+reconciliation still refuses. The
 in-memory current-start permission neither fabricates an old stop ACK nor
 survives a new stop revision or a new lifecycle owner.
 
@@ -232,8 +232,18 @@ fresh runtime or remove its independently approved capabilities. Flock does not
 prove group cleanup: the watchdog remains responsible for its existing EOF-driven
 group stop, and escaped `setsid` descendants remain outside that guarantee.
 
+Fresh startup also preserves legacy `shell-*` execution-fence markers as
+`unresolved-shell-*` in the same private directory. It holds MCP exclusion,
+waits for new native Go admission, then borrows the existing exclusive execution
+admission lock before renaming. Bytes, inode and modification time are retained,
+including empty or partial marker contents. Unsafe files and destination
+collisions refuse without overwriting history. If preservation fails after Go
+admission, startup aborts that unreturned core. Ordinary prepare/Stop/admission
+keeps its existing refusal while original shell markers remain.
+
 The read-only `core.fresh.status` observation reports only whether this history
-contains an interrupted writable command. Desktop records one summary in the
+contains an interrupted writable command. Desktop combines this observation
+with the preserved legacy Shell markers and records one summary in the
 existing Activity log: “Interrupted command: outcome unknown.” The notice is
 deduplicated against retained summaries and can be marked read normally. It
 contains no command or output, changes no historical record and admits no replay.

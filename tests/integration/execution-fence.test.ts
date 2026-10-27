@@ -22,6 +22,86 @@ afterEach(async () => {
 });
 
 describe("private execution fence", () => {
+  it.each(["", '{"schema":', '{"schema":1,"operationId":"old"}'])(
+    "preserves partial or complete shell history bytes %j without parsing them",
+    async (bytes) => {
+      root = await makeRoot();
+      const directory = path.join(root, EXECUTION_FENCE_DIRECTORY);
+      await fs.mkdir(directory, { mode: 0o700 });
+      const name = `shell-${"a".repeat(64)}.json`;
+      const source = path.join(directory, name);
+      const target = path.join(directory, `unresolved-${name}`);
+      await fs.writeFile(source, bytes, { mode: 0o600 });
+      const before = await fs.stat(source);
+      const fence = new PrivateExecutionFence({ root });
+      expect(await fence.archiveShellHistoryForFreshStart()).toBe(true);
+      expect(await fs.readFile(target, "utf8")).toBe(bytes);
+      expect((await fs.stat(target)).ino).toBe(before.ino);
+      expect(await fence.archiveShellHistoryForFreshStart()).toBe(true);
+      expect(await fs.readFile(target, "utf8")).toBe(bytes);
+    },
+  );
+
+  it("does not overwrite retained shell history on a name collision", async () => {
+    root = await makeRoot();
+    const directory = path.join(root, EXECUTION_FENCE_DIRECTORY);
+    await fs.mkdir(directory, { mode: 0o700 });
+    const name = `shell-${"a".repeat(64)}.json`;
+    const source = path.join(directory, name);
+    const target = path.join(directory, `unresolved-${name}`);
+    await fs.writeFile(source, "original", { mode: 0o600 });
+    await fs.writeFile(target, "retained", { mode: 0o600 });
+    await expect(
+      new PrivateExecutionFence({ root }).archiveShellHistoryForFreshStart(),
+    ).rejects.toThrow("EXECUTION_FENCE_UNVERIFIED_SHELL");
+    expect(await fs.readFile(source, "utf8")).toBe("original");
+    expect(await fs.readFile(target, "utf8")).toBe("retained");
+  });
+
+  it.each(["symlink", "hardlink", "public"])(
+    "refuses an unsafe %s shell marker without moving it",
+    async (kind) => {
+      root = await makeRoot();
+      const directory = path.join(root, EXECUTION_FENCE_DIRECTORY);
+      await fs.mkdir(directory, { mode: 0o700 });
+      const original = path.join(root, "original-fixture");
+      await fs.writeFile(original, "preserve", { mode: 0o600 });
+      const name = `shell-${"a".repeat(64)}.json`;
+      const source = path.join(directory, name);
+      if (kind === "symlink") await fs.symlink(original, source);
+      else if (kind === "hardlink") await fs.link(original, source);
+      else {
+        await fs.writeFile(source, "preserve", { mode: 0o600 });
+        await fs.chmod(source, 0o644);
+      }
+      await expect(
+        new PrivateExecutionFence({ root }).archiveShellHistoryForFreshStart(),
+      ).rejects.toThrow("EXECUTION_FENCE_LOCK_UNSAFE");
+      expect(await fs.readFile(original, "utf8")).toBe("preserve");
+      expect(await fs.readFile(source, "utf8")).toBe("preserve");
+      await expect(
+        fs.lstat(path.join(directory, `unresolved-${name}`)),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it("keeps the existing execution admission lock exclusive during shell archival", async () => {
+    root = await makeRoot();
+    const fence = new PrivateExecutionFence({ root });
+    const admission = await fence.acquireAdmission();
+    if (!admission.admitted) throw Error(admission.code);
+    try {
+      await fence.reserveShell("old-command");
+      fence.quarantineShell("old-command");
+      await expect(fence.archiveShellHistoryForFreshStart()).rejects.toThrow(
+        "EXECUTION_FENCE_ACTIVE_COMPUTER_WORK",
+      );
+    } finally {
+      await admission.release();
+    }
+    expect(await fence.archiveShellHistoryForFreshStart()).toBe(true);
+  });
+
   it("holds closed recovery admission without leaving a crash-sticky mutation directory", async () => {
     root = await makeRoot();
     const recovery = new PrivateExecutionFence({ root });

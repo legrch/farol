@@ -4,6 +4,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PrivateMcpLifecycle } from "../../src/modules/computer/infra/mcp/private-mcp-lifecycle";
+import { PrivateExecutionFence } from "../../src/modules/computer/infra/mcp/execution-fence";
+import { OperationsStore } from "../../apps/desktop/operations/store";
+import { recordInterruptedCommand } from "../../apps/desktop/operations/interrupted-command";
 
 const roots: string[] = [];
 const oldDigest = "a".repeat(64);
@@ -514,6 +517,110 @@ describe.skipIf(process.platform !== "darwin")(
         }),
       ).rejects.toThrow("native owner busy");
       expect(await lifecycle.hasUnconfirmedStop()).toBe(true);
+    });
+
+    it("archives quarantined Shell history after fresh owner admission and retains one notice", async () => {
+      const { root, lifecycle } = await fixture();
+      await lifecycle.prepare(oldDigest);
+      const live = await lifecycle.join(oldDigest);
+      const fence = new PrivateExecutionFence({ root });
+      const admission = await fence.acquireAdmission();
+      if (!admission.admitted) throw Error(admission.code);
+      try {
+        await fence.reserveShell("interrupted-command");
+        fence.quarantineShell("interrupted-command");
+      } finally {
+        await admission.release();
+      }
+      const directory = path.join(root, "execution-fence");
+      const name = (await fs.readdir(directory)).find((entry) =>
+        entry.startsWith("shell-"),
+      )!;
+      const original = path.join(directory, name);
+      const archived = path.join(directory, `unresolved-${name}`);
+      const bytes = await fs.readFile(original);
+      const before = await fs.stat(original);
+      await lifecycle.beginStop();
+      const start = vi.fn(async () => "current-Go-owner-fixture");
+      try {
+        await expect(
+          lifecycle.withInactiveForFreshStart(start),
+        ).rejects.toThrow("COMPUTER_MCP_LIFECYCLE_UNVERIFIED");
+        expect(start).not.toHaveBeenCalled();
+        expect(await fs.readFile(original)).toEqual(bytes);
+      } finally {
+        await live.release({ effectsUnresolved: true });
+      }
+      // The ordinary startup route retains its old refusal. Failed fresh Go
+      // admission also leaves the marker in its original namespace.
+      await expect(lifecycle.prepare(newDigest)).rejects.toThrow(
+        "COMPUTER_MCP_SHELL_CLEANUP_UNVERIFIED",
+      );
+      await expect(
+        lifecycle.withInactiveForFreshStart(async () => {
+          throw Error("old-Go-owner-busy");
+        }),
+      ).rejects.toThrow("old-Go-owner-busy");
+      expect(await fs.readFile(original)).toEqual(bytes);
+      await expect(fs.lstat(archived)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+
+      await expect(
+        lifecycle.withInactiveForFreshStart(async () => {
+          expect(await fs.readFile(original)).toEqual(bytes);
+          return start();
+        }),
+      ).resolves.toBe("current-Go-owner-fixture");
+      expect(lifecycle.hasInterruptedShellHistory).toBe(true);
+      expect(await fs.readFile(archived)).toEqual(bytes);
+      const after = await fs.stat(archived);
+      expect(after.ino).toBe(before.ino);
+      expect(after.mtimeMs).toBe(before.mtimeMs);
+      await expect(fs.lstat(original)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      const nextFence = new PrivateExecutionFence({ root });
+      const nextAdmission = await nextFence.acquireAdmission();
+      if (!nextAdmission.admitted) throw Error(nextAdmission.code);
+      await nextAdmission.release();
+
+      // Actual private Activity storage; Go observation is a port double.
+      // Both uncertainty sources share the existing summary and read status.
+      const activity = path.join(root, "activity-fixture");
+      const first = new OperationsStore(activity);
+      let second: OperationsStore | undefined;
+      try {
+        await recordInterruptedCommand(
+          { interruptedCommand: async () => true },
+          first,
+          lifecycle.hasInterruptedShellHistory,
+        );
+        expect(await first.shutdown(1000)).toBe(true);
+        const next = new PrivateMcpLifecycle(root);
+        await next.withInactiveForFreshStart(
+          async () => "next-Go-owner-fixture",
+        );
+        expect(next.hasInterruptedShellHistory).toBe(true);
+        second = new OperationsStore(activity);
+        const saved = await second.snapshot();
+        await recordInterruptedCommand(
+          { interruptedCommand: async () => false },
+          second,
+          next.hasInterruptedShellHistory,
+        );
+        expect(await second.shutdown(1000)).toBe(true);
+        expect(saved.entries).toHaveLength(1);
+        expect(saved.entries[0]).toMatchObject({
+          outcome: "unknown",
+          code: "FRESH_SESSION_INTERRUPTED_COMMAND_UNKNOWN",
+        });
+        expect((await second.snapshot()).entries).toEqual(saved.entries);
+        expect(await fs.readFile(archived)).toEqual(bytes);
+      } finally {
+        await first.shutdown(1000);
+        await second?.shutdown(1000);
+      }
     });
 
     it("retires an inactive instance only through explicit, fenced reconciliation, without confirming its old stop", async () => {

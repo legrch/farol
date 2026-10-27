@@ -7,6 +7,7 @@ import { z } from "zod";
 export const EXECUTION_FENCE_DIRECTORY = "execution-fence";
 const ADMISSION_LOCK = "admission.lock";
 const SHELL_MARKER = /^shell-[a-f0-9]{64}\.json$/u;
+const SHELL_HISTORY = /^unresolved-shell-[a-f0-9]{64}\.json$/u;
 // BSD open(2) locks. The inode is never removed: unlinking a held lock would
 // allow another process to acquire a different inode at the same path.
 const SHARED_LOCK = 0x10;
@@ -63,8 +64,8 @@ function shellFileName(operationId: string): string {
 
 /**
  * The fence as files under the launch root: one record per raised
- * operation. Any record, readable or not, fences execution; the directory
- * being absent or empty admits it. The connector creates only the shared
+ * operation. Summary records and unowned Shell markers fence execution;
+ * preserved fresh-start Shell history does not. The connector creates the shared
  * lock inode; summary records remain desktop-owned.
  */
 export class PrivateExecutionFence implements ExecutionFenceReader {
@@ -330,8 +331,61 @@ export class PrivateExecutionFence implements ExecutionFenceReader {
 
   quarantineShell(operationId: string): void {
     // A failed group proof is no longer an active, known-cleanup reservation.
-    // Its durable marker remains and every later admission fails closed.
+    // Ordinary admission stays fenced. Only fresh startup after owner exclusion
+    // may preserve this marker as history, without supplying a cleanup receipt.
     this.ownedShellMarkers.delete(shellFileName(operationId));
+  }
+
+  /** Fresh startup only: the caller holds MCP exclusion and a newly admitted Go
+   * owner. Borrow existing execution exclusion; preserve bytes, never replay. */
+  async archiveShellHistoryForFreshStart(): Promise<boolean> {
+    try {
+      await fs.lstat(this.directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+    const lease = await this.lock(true);
+    if (!lease) throw new Error("EXECUTION_FENCE_ACTIVE_COMPUTER_WORK");
+    try {
+      let interrupted = false;
+      for (const entry of await fs.readdir(this.directory)) {
+        if (!SHELL_MARKER.test(entry) && !SHELL_HISTORY.test(entry)) {
+          if (
+            entry.startsWith("shell-") ||
+            entry.startsWith("unresolved-shell-")
+          )
+            throw new Error("EXECUTION_FENCE_UNVERIFIED_SHELL");
+          continue;
+        }
+        const source = path.join(this.directory, entry);
+        const info = await fs.lstat(source);
+        if (
+          !info.isFile() ||
+          info.isSymbolicLink() ||
+          info.nlink !== 1 ||
+          (info.mode & 0o077) !== 0 ||
+          info.uid !== process.geteuid?.()
+        )
+          throw new Error("EXECUTION_FENCE_LOCK_UNSAFE");
+        interrupted = true;
+        if (SHELL_HISTORY.test(entry)) continue;
+        const destination = path.join(this.directory, `unresolved-${entry}`);
+        try {
+          await fs.lstat(destination);
+          throw new Error("EXECUTION_FENCE_UNVERIFIED_SHELL");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        // Both namespaces are protected by the same held admission lock. A
+        // partial marker is history too: do not parse, rewrite or discard it.
+        await fs.rename(source, destination);
+        await this.syncDirectory();
+      }
+      return interrupted;
+    } finally {
+      await lease.close();
+    }
   }
 
   async raise(

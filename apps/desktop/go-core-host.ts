@@ -655,9 +655,18 @@ export async function startDesktopGoCore(
       throw new BridgeError("refused", "invalid_fresh_launch");
     if (typeof selection.withInactiveMcp !== "function")
       throw new BridgeError("refused", "fresh_mcp_owner_unconfirmed");
-    return selection.withInactiveMcp(() =>
-      startSelectedDesktopGoCore(selection),
-    );
+    let current: DesktopGoCore | undefined;
+    try {
+      return await selection.withInactiveMcp(async () => {
+        current = await startSelectedDesktopGoCore(selection);
+        return current;
+      });
+    } catch (error) {
+      // Fresh marker archival and lock release happen after native admission.
+      // If either refuses, retain no unreturned running core.
+      if (current) await current.abortStartup();
+      throw error;
+    }
   }
   return startSelectedDesktopGoCore(selection);
 }

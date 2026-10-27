@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { z } from "zod";
+import { PrivateExecutionFence } from "./execution-fence";
 
 const SHARED_LOCK = 0x10;
 const EXCLUSIVE_LOCK = 0x20;
@@ -46,6 +47,11 @@ export class PrivateMcpLifecycle {
   private preparationRevision = 0;
   private confirmedStopRevision: number | null = null;
   private freshStartRevision: number | null = null;
+  private interruptedShellHistory = false;
+
+  get hasInterruptedShellHistory(): boolean {
+    return this.interruptedShellHistory;
+  }
 
   constructor(private readonly root: string) {
     if (!path.isAbsolute(root) || root.includes("\0"))
@@ -395,10 +401,15 @@ export class PrivateMcpLifecycle {
     try {
       await this.reconciliationComplete();
       await this.validateInactiveInstances();
-      await this.shellGroupsGone();
       await this.revokePrepared();
       this.freshStartRevision = this.stopRevision;
-      return await start();
+      const current = await start();
+      // Native admission excludes the old Go owner too. Keep MCP exclusion
+      // through preservation; its failure must abort the unreturned core.
+      this.interruptedShellHistory = await new PrivateExecutionFence({
+        root: this.root,
+      }).archiveShellHistoryForFreshStart();
+      return current;
     } catch (error) {
       this.freshStartRevision = null;
       throw error;
