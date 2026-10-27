@@ -106,14 +106,14 @@ export function observeProcesses(run = spawnSync) {
         command: match[4],
       });
   }
-  const lsof = run("/usr/sbin/lsof", ["-n", "-P", "-w", "-F", "n"], {
-    encoding: "utf8",
-    maxBuffer: 256 * 1024 * 1024,
-    timeout: 30_000,
-  });
-  // lsof exits 1 when some processes could not be read; that is still a
-  // complete list for this account's processes, which are what matter here.
-  if (lsof.error || ![0, 1].includes(lsof.status) || !lsof.stdout) return null;
+  // Only this account's processes can use its private outputs. Any lsof error
+  // (status 1 included) may hide a holder, so it is unknown, never "unused".
+  const lsof = run(
+    "/usr/sbin/lsof",
+    ["-n", "-P", "-w", "-F", "n", "-u", String(process.getuid())],
+    { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, timeout: 30_000 },
+  );
+  if (lsof.error || lsof.status !== 0 || !lsof.stdout) return null;
   const open = lsof.stdout
     .split("\n")
     .filter((line) => line.startsWith("n/"))

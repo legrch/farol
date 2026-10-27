@@ -7,6 +7,7 @@ import {
   POLICY,
   PROTECTED_EVIDENCE,
   inspectOutput,
+  observeProcesses,
   protectedEvidence,
   pruneOutput,
 } from "../../tooling/output-retention.mjs";
@@ -392,5 +393,26 @@ describe("_output retention", () => {
   it("returns an empty failure list when nothing is removable", async () => {
     const result = await prune(observe());
     expect(result.failed).toEqual([]);
+  });
+
+  it("treats any lsof error as an unknown process table", () => {
+    const ps = {
+      status: 0,
+      stdout: "  42    42 Tue Oct 27 10:00:00 2026 node consumer.mjs\n",
+    };
+    const observe = (lsof) =>
+      observeProcesses((command) => (command === "/bin/ps" ? ps : lsof));
+    expect(observe({ status: 1, stdout: "p42\nn/elsewhere\n" })).toBeNull();
+    expect(observe({ status: 0, stdout: "p42\nn/elsewhere\n" })).toEqual({
+      processes: [
+        {
+          pid: 42,
+          pgid: 42,
+          start: "Tue Oct 27 10:00:00 2026",
+          command: "node consumer.mjs",
+        },
+      ],
+      open: ["/elsewhere"],
+    });
   });
 });
