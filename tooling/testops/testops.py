@@ -3,6 +3,7 @@
 
 This prototype never executes a selected test or changes the accepted CI graph.
 Unknown mappings widen selection and require review; a plan is never a test PASS.
+The separate `volumes` subcommand (volumes.py) owns labelled Docker volume lifecycle.
 """
 from __future__ import annotations
 
@@ -455,7 +456,12 @@ def main():
     dag = sub.add_parser("dag")
     dag.add_argument("--manifest", type=Path, required=True)
     dag.add_argument("--jobs", type=int, default=1)
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import volumes
+    volumes.add_parser(sub)
     args = parser.parse_args()
+    if args.command == "volumes":
+        return volumes.command(args, args.root.resolve(strict=True))
     try:
         root = args.root.resolve(strict=True)
         if args.command == "inventory":

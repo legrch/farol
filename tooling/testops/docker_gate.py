@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import stat
 import subprocess
@@ -17,6 +18,7 @@ import uuid
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dag import Budget, Job, Outcome, run, Blocked
+from volumes import locked as volume_lock
 from testops import identity
 from gate_observer import COMMANDS, TOOLS, evidence_file, validate_stage_logs, natural_retirement
 from dependency_seal import ALGORITHM, reference
@@ -300,7 +302,8 @@ def container_command(job, directory, source, options, docker, nonce, *, depende
     return name, docker.prefix + args
 
 
-def execute_container(job, directory, binding, options, docker, nonce, engine, stop, deadline_hit):
+def execute_container(job, directory, binding, options, docker, nonce, engine, stop, deadline_hit,
+                      on_launch=None):
     if docker.engine() != engine:
         return Outcome("BLOCKED", True, reason="ENGINE_IDENTITY_CHANGED")
     if stop.is_set():
@@ -315,6 +318,8 @@ def execute_container(job, directory, binding, options, docker, nonce, engine, s
         with (directory / "docker.stdout.log").open("xb") as stdout, (directory / "docker.stderr.log").open("xb") as stderr:
             if stop.is_set():
                 return Outcome("BLOCKED", True, reason="CANCELLED_BEFORE_DOCKER")
+            if on_launch is not None:
+                on_launch()
             child = subprocess.Popen(command, env=docker.env, stdin=subprocess.DEVNULL,
                                      stdout=stdout, stderr=stderr, start_new_session=True)
             code, timed_out = wait_container(child, job, name, directory, options, docker, stop, deadline_hit, engine)
@@ -375,6 +380,18 @@ def main():
     source = source_binding()
     config = parent / ("docker-client-" + uuid.uuid4().hex)
     config.mkdir(mode=0o700)
+    state = {"retain": False}
+    try:
+        return gate(options, parent, source, source_binding, config, state)
+    finally:
+        # The private client config is per run, but containers bind-mount it. Keep it
+        # while any container's retirement is unconfirmed (unknown-effect evidence).
+        # Borrowed volumes are never removed here; see `testops.py volumes`.
+        if not state["retain"]:
+            shutil.rmtree(config)
+
+
+def gate(options, parent, source, source_binding, config, state):
     (config / "config.json").write_text("{}\n")
     (config / "passwd").write_text("root:x:0:0:root:/root:/bin/sh\ntestops:x:501:20:TestOps:/tmp/testops-home:/bin/sh\n")
     (config / "group").write_text("root:x:0:\nstaff:x:20:testops\n")
@@ -386,8 +403,11 @@ def main():
     volumes = [options.source_volume, options.seed_volume, options.sdk_volume]
     if options.dependency_volume is not None:
         volumes.append(options.dependency_volume)
-    for volume in volumes:
-        docker.volume(volume, options.scope, source["head"] if volume == options.source_volume else None)
+    # Admit volumes under the lifecycle lock: a concurrent prune cannot remove
+    # them between its check and its rm, and this command line names them after.
+    with volume_lock(ROOT, 120):
+        for volume in volumes:
+            docker.volume(volume, options.scope, source["head"] if volume == options.source_volume else None)
     jobs = [Job(key, cpu=2, memory_mib=3072, effects="owned-fixture") for key in COMMANDS]
     nonce = uuid.uuid4().hex[:12]
     stop = threading.Event()
@@ -395,11 +415,18 @@ def main():
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
 
+    def launched():
+        # From the first container launch on, keep the bind-mounted config until
+        # the scheduler reports every container retired.
+        state["retain"] = state["launched"] = True
+
     def execute(job, directory, binding):
-        return execute_container(job, directory, binding, options, docker, nonce, engine, stop, deadline_hit)
+        return execute_container(job, directory, binding, options, docker, nonce, engine, stop, deadline_hit,
+                                 on_launch=launched)
 
     result = run(ROOT, jobs, Budget(options.jobs, 4, 6144), "linux", source_binding,
                  execute, options.output, stop)
+    state["retain"] = state.get("launched", False) and bool(result.get("leaseRetained"))
     result["engine"] = engine
     if deadline_hit.is_set():
         result["schedulerStatus"] = result["status"]

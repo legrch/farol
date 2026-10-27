@@ -25,7 +25,14 @@ import {
 } from "./dev-runtime.mjs";
 import { captureDevQuit, confirmedDevQuit } from "./dev-clean-quit.mjs";
 import { prepareDevBuild } from "./dev-process-control.mjs";
-import { prepareDevCoreResources } from "./dev-core-resources.mjs";
+import {
+  prepareDevCoreResources,
+  reapDevCoreOrphans,
+} from "./dev-core-resources.mjs";
+import {
+  acquireDevLifecycleLock,
+  releaseDevLifecycleLock,
+} from "./dev-lifecycle-lock.mjs";
 import { resolvePhysicalDevDataDirectoryName } from "./harness-identity.ts";
 import {
   dependencyDrift,
@@ -610,6 +617,14 @@ export async function runDevBuild(
           );
           return 1;
         }
+        // Under the lifecycle lock, after the no-holder proof: nothing else
+        // can be using a leftover of an interrupted transition. Cleanup never
+        // blocks a launch of the published image.
+        await reapDevCoreOrphans(vnextRoot).catch((error) =>
+          process.stderr.write(
+            `Dev leftover cleanup skipped: ${error.message}. The next task dev retries.\n`,
+          ),
+        );
       }
       return status;
     },
@@ -810,8 +825,8 @@ export async function launchPreview(
         ),
         pid,
       ),
-    spawnChild: () =>
-      spawnProcess(
+    spawnChild: () => {
+      const child = spawnProcess(
         electronBin,
         [
           path.join(root, "_output/dev-core/Contents/Resources/app/main.cjs"),
@@ -848,7 +863,11 @@ export async function launchPreview(
           ),
           stdio: ["inherit", "pipe", "pipe"],
         },
-      ),
+      );
+      // The new Dev is now visible to the next launcher's process proof.
+      void releaseDevLifecycleLock();
+      return child;
+    },
   });
 
   const ownerExitCode = exitCodeForOwnerStop(
@@ -923,8 +942,11 @@ export async function main(argv, overrides = {}) {
     ensureDependencies: ensureDependenciesFn = () =>
       ensureDependencies(vnextRoot, "npm", log),
     runBuild = runDevBuild,
-    prepareBuild = (options) =>
-      prepareDevBuild({ root: vnextRoot, ...options, log }),
+    prepareBuild = async (options) => {
+      // Held until the new Dev is spawned; process exit releases the flock.
+      await acquireDevLifecycleLock(vnextRoot);
+      return prepareDevBuild({ root: vnextRoot, ...options, log });
+    },
     reopenExisting = (
       existing,
       acceptanceProfile,

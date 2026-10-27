@@ -3,7 +3,7 @@ import {
   checkExactPackageWitnessInputs,
 } from "./exact-package-witness-inputs.mjs";
 import { assertPreviewRuntimeHostScope } from "./preview-runtime-scope.mjs";
-import { buildGoBackend } from "./go-backend-build.mjs";
+import { buildGoBackend, releaseOwnedTemporary } from "./go-backend-build.mjs";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { embedBuiltCore, GO_CORE_ENTRIES } from "./go-core-artifact.mjs";
 import { declareCoreResources } from "./core-resources.mjs";
@@ -429,7 +429,12 @@ if (goInputs) {
     },
     moduleInputs: goInputs.moduleInputs,
   });
-  core = await embedBuiltCore(output, built, buildIdentity);
+  try {
+    core = await embedBuiltCore(output, built, buildIdentity);
+  } finally {
+    // The embedded copy is the build output; the compiler artifact is scratch.
+    await releaseOwnedTemporary(repositoryRoot, built.path, "go-artifact-");
+  }
   const coreResources = await declareCoreResources(output, core, buildIdentity);
   await verifyHostShellResources();
   const shellSupport = await declareShellSupport(

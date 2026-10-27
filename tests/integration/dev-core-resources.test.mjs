@@ -10,6 +10,7 @@ import {
 import {
   prepareDevCoreResources,
   readPreparedDevCore,
+  reapDevCoreOrphans,
 } from "../../tooling/dev-core-resources.mjs";
 import { BUILD_ENTRIES } from "../../tooling/build-contract.mjs";
 import { GO_CORE_ENTRIES } from "../../tooling/go-core-artifact.mjs";
@@ -200,39 +201,113 @@ describe("admitted source Dev resources", () => {
       first.ino,
     );
   });
-  it("retains retired images without recursive deletion during publication or reuse", async () => {
+  const leftovers = async () =>
+    (await fs.readdir(path.join(root, "_output"))).filter((name) =>
+      name.startsWith(".dev-core-"),
+    );
+
+  it("keeps no retired image after verified replacements", async () => {
+    await prepareDevCoreResources(root);
+    for (const hour of [1, 2]) {
+      await advanceBuild(hour);
+      expect(await prepareDevCoreResources(root)).toBe(destination);
+      expect(await leftovers()).toEqual([]);
+    }
+    expect(await fs.readFile(path.join(destination, "main.cjs"), "utf8")).toBe(
+      "fixture main.cjs",
+    );
+    expect(await prepareDevCoreResources(root)).toBe(destination);
+    expect(await leftovers()).toEqual([]);
+  });
+
+  it("launches the verified image even when discarding the old one fails", async () => {
     await prepareDevCoreResources(root);
     await advanceBuild(1);
     const original = fs.rm.bind(fs);
-    const cleanup = vi
+    const failing = vi
       .spyOn(fs, "rm")
       .mockImplementation(async (target, options) => {
-        expect(path.basename(target).startsWith(".dev-core-retired-")).toBe(
-          false,
-        );
+        if (path.basename(target).startsWith(".dev-core-trash-"))
+          throw Object.assign(new Error("controlled EACCES"), {
+            code: "EACCES",
+          });
         return original(target, options);
       });
     try {
       expect(await prepareDevCoreResources(root)).toBe(destination);
-      expect(await prepareDevCoreResources(root)).toBe(destination);
-      const retired = (await fs.readdir(path.join(root, "_output"))).filter(
-        (name) => name.startsWith(".dev-core-retired-"),
-      );
-      expect(retired).toHaveLength(1);
-      expect(
-        await fs.readFile(
-          path.join(
-            root,
-            "_output",
-            retired[0],
-            "Contents/Resources/app/main.cjs",
-          ),
-          "utf8",
-        ),
-      ).toBe("fixture main.cjs");
     } finally {
-      cleanup.mockRestore();
+      failing.mockRestore();
     }
+    expect(
+      JSON.parse(
+        await fs.readFile(path.join(root, "_output/dev-core-resources.json")),
+      ).schema,
+    ).toBe(1);
+    expect(
+      (await leftovers()).filter((n) => n.startsWith(".dev-core-trash-")),
+    ).toHaveLength(1);
+    await reapDevCoreOrphans(root);
+    expect(await leftovers()).toEqual([]);
+  });
+
+  it("removes links inside a discarded image without following them", async () => {
+    await prepareDevCoreResources(root);
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "farol-sentinel-"));
+    await fs.writeFile(path.join(outside, "keep.txt"), "keep");
+    try {
+      const orphan = path.join(
+        root,
+        "_output/.dev-core-retired-44444444-4444-4444-8444-444444444444",
+      );
+      await fs.mkdir(path.join(orphan, "Contents"), { recursive: true });
+      await fs.symlink(outside, path.join(orphan, "Contents/link"));
+      await reapDevCoreOrphans(root);
+      expect(await leftovers()).toEqual([]);
+      expect(await fs.readFile(path.join(outside, "keep.txt"), "utf8")).toBe(
+        "keep",
+      );
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("reaps interrupted leftovers only once the current image is settled", async () => {
+    await prepareDevCoreResources(root);
+    const output = path.join(root, "_output");
+    const names = [
+      ".dev-core-retired-22222222-2222-4222-8222-222222222222",
+      ".dev-core-trash-AbC123",
+      ".dev-core-Xy9876",
+    ];
+    for (const name of names) {
+      await fs.mkdir(path.join(output, name, "Contents"), { recursive: true });
+      await fs.writeFile(path.join(output, name, "Contents/file"), "old");
+    }
+    await fs.writeFile(
+      path.join(
+        output,
+        ".dev-core-receipt-33333333-3333-4333-8333-333333333333.json",
+      ),
+      "{}",
+    );
+    await fs.mkdir(path.join(output, ".dev-core-unrelated-name"));
+    const file = path.join(output, "dev-core-resources.json");
+    const settled = await fs.readFile(file, "utf8");
+    await fs.writeFile(
+      file,
+      JSON.stringify({ ...JSON.parse(settled), schema: 3, retired: null }),
+    );
+    expect(await reapDevCoreOrphans(root)).toEqual([]);
+    expect((await leftovers()).length).toBe(5);
+    await fs.writeFile(file, settled);
+    expect((await reapDevCoreOrphans(root)).sort()).toEqual(
+      [
+        ...names,
+        ".dev-core-receipt-33333333-3333-4333-8333-333333333333.json",
+      ].sort(),
+    );
+    expect(await leftovers()).toEqual([".dev-core-unrelated-name"]);
+    expect(await prepareDevCoreResources(root)).toBe(destination);
   });
 
   it("recovers interruption after atomic retirement but before publishing the new image", async () => {
@@ -257,7 +332,11 @@ describe("admitted source Dev resources", () => {
     }
     await expect(fs.lstat(bundle)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await prepareDevCoreResources(root)).toBe(destination);
+    // The only other complete image survives recovery; once the recovered
+    // image is settled it is an orphan for the reaper.
     expect((await fs.lstat(retired)).isDirectory()).toBe(true);
+    await reapDevCoreOrphans(root);
+    await expect(fs.lstat(retired)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("does not clean a retired directory whose recorded identity changed", async () => {

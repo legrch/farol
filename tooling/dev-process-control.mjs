@@ -9,9 +9,10 @@ import { devExecutables, devEntrypointForExecutable } from "./dev-runtime.mjs";
 import { resolvePhysicalDevDataDirectoryName } from "./harness-identity.ts";
 import { performance } from "node:perf_hooks";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
-import { buildDevControl } from "./go-backend-build.mjs";
+import { buildDevControl, releaseOwnedTemporary } from "./go-backend-build.mjs";
 import { stopRetainedDevProcess } from "./dev-owned-stop.mjs";
 import { readPreparedDevCore } from "./dev-core-resources.mjs";
+import { OWNER_FILE } from "./owned-scratch.mjs";
 import {
   readRunMarker,
   currentBootTimeMs,
@@ -253,16 +254,51 @@ function nativeCall(binary, request, remaining = 3000) {
   }
 }
 
-export async function prepareDevBuild({
-  root,
-  buildArguments,
-  replace,
-  reuse = false,
-  qualifyImage = readPreparedDevCore,
-  profilePath: selectedProfilePath,
-  createControl = buildControl,
-  log = () => {},
-}) {
+// The stop helper lives in owned scratch. A refused or outcome-unknown stop
+// retains it as evidence; every other exit releases it.
+export async function prepareDevBuild(options) {
+  const control = { root: undefined, binary: undefined, retain: false };
+  try {
+    return await prepareDevBuildOnce(options, control);
+  } finally {
+    await settleDevControl(control);
+  }
+}
+
+// A helper retained after a refused or outcome-unknown stop drops its owner
+// record, so retention reports it as unknown and never reaps it as finished
+// scratch. Every other helper in owned scratch is released.
+export async function settleDevControl({ root, binary, retain }) {
+  if (
+    binary === undefined ||
+    !binary.startsWith(path.join(root, "_output/tmp/go-dev-control-"))
+  )
+    return;
+  if (retain) quarantineDevControl(root, binary);
+  else await releaseOwnedTemporary(root, binary, "go-dev-control-");
+}
+
+// Drops the helper's owner record so retention reports it as unknown and never
+// reaps it. Called before a stop whose outcome is not yet known.
+export function quarantineDevControl(root, binary) {
+  if (!binary.startsWith(path.join(root, "_output/tmp/go-dev-control-")))
+    return;
+  fs.rmSync(path.join(path.dirname(binary), OWNER_FILE), { force: true });
+}
+
+async function prepareDevBuildOnce(
+  {
+    root,
+    buildArguments,
+    replace,
+    reuse = false,
+    qualifyImage = readPreparedDevCore,
+    profilePath: selectedProfilePath,
+    createControl = buildControl,
+    log = () => {},
+  },
+  control,
+) {
   if (process.platform !== "darwin")
     throw Error("DEV_PROCESS_PLATFORM_REFUSED");
   const writerRoot = fs.realpathSync(root);
@@ -285,9 +321,9 @@ export async function prepareDevBuild({
     ? fs.realpathSync(profileName)
     : profileName;
   const scope = { uid: process.getuid(), writerRoot, appPath, profilePath };
-  let controlBinary;
+  control.root = writerRoot;
   const getControl = async () =>
-    (controlBinary ??= await createControl(writerRoot, buildArguments));
+    (control.binary ??= await createControl(writerRoot, buildArguments));
   const markerFile = path.join(profilePath, "farol-state/running.json");
   const marker = await readDevRunMarker(profilePath);
   if (marker.status === "unreadable")
@@ -403,6 +439,11 @@ export async function prepareDevBuild({
         log(
           `Stopping the previous ${harnessDesktopIdentity("dev", "/").applicationName} before rebuilding its app outputs...`,
         );
+        // Until the stop is confirmed, its outcome is unknown: keep the helper.
+        // Dropping its owner record first makes that durable even if this
+        // launcher is killed before it can settle (retention then sees unknown).
+        control.retain = true;
+        quarantineDevControl(writerRoot, binary);
         const result = await stopRetainedDevProcess(retained, retainedScope, {
           clock: () => performance.now(),
           sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -427,10 +468,12 @@ export async function prepareDevBuild({
             return outcome;
           },
         });
-        if (result.status !== "absent")
+        if (result.status !== "absent") {
           throw Error(
             `DEV_STOP_${result.reason}: ${inspectionFailure}. Quit the previous ${harnessDesktopIdentity("dev", "/").applicationName} from this checkout/profile using its own Quit command, then run task dev again.`,
           );
+        }
+        control.retain = false;
         log(
           `Previous Dev process is absent (${result.attemptedSignals.join(", ") || "already stopped"}). Profile outcomes remain unchanged.`,
         );
