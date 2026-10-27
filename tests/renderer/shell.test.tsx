@@ -3157,7 +3157,17 @@ it("Setup keeps the same rail, active item, progress and gated Continue", async 
   expect(button(host, "Back")).toBeTruthy();
   expect(
     host.querySelector('.rail [aria-label="Setup"]')?.getAttribute("title"),
-  ).toContain("of 4 steps done");
+  ).toContain("of 4 checks current");
+});
+it("does not show a complete Setup checkmark when the saved connection is offline", async () => {
+  const data = completedBootstrap();
+  data.configuration.settings = readySettings();
+  data.configuration.settings.setup.journey.dismissed = true;
+  data.configuration.settings.connectors.secureMcp.runtime = null;
+  const { host } = await mount(data);
+  const setup = host.querySelector('.rail [aria-label="Setup"]')!;
+  expect(setup.querySelector(".setup-count")?.textContent).not.toBe("✓");
+  expect(setup.getAttribute("title")).toContain("checks current");
 });
 it("View-menu sidebar command shares the toggle owner and keeps focused controls usable", async () => {
   const { host, c, f } = await mount();

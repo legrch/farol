@@ -275,6 +275,19 @@ describe("temporary Instant connector profile", () => {
     });
   });
 
+  it("binds a same-document hydration update before opening the model picker", async () => {
+    const route = profileRoute();
+    const execute = route.executeJavaScript.getMockImplementation()!;
+    let reads = 0;
+    route.executeJavaScript.mockImplementation(async (script: string) => {
+      if (script === temporaryInstantProfileProbe && ++reads === 2)
+        route.navigate();
+      return execute(script);
+    });
+    await expect(route.prepare()).resolves.toBeNull();
+    expect(route.pickerOpens()).toBe(1);
+  });
+
   it("waits for the opened model picker to expose its slider before changing the model", async () => {
     const route = profileRoute();
     const execute = route.executeJavaScript.getMockImplementation()!;

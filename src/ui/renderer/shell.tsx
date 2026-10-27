@@ -1042,7 +1042,7 @@ export function Shell() {
   const notifications = useActivityNotifications(state, retained);
   const checklist = setupChecklist(state, false, retained);
   const completedSteps = checklist.entries.filter(
-    (entry) => entry.state === "verified",
+    (entry) => entry.liveState === "verified",
   ).length;
   const computer = computerSetup(state);
   const connected = computer.localConnectionCurrent;
@@ -1248,7 +1248,7 @@ export function Shell() {
               }[area];
               const detail =
                 area === "setup"
-                  ? `${completedSteps} of 4 steps done`
+                  ? `${completedSteps} of 4 checks current`
                   : destination.area === area
                     ? "Current page"
                     : "Open page";

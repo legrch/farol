@@ -1229,7 +1229,7 @@ async function runScenario(scenario) {
           false,
           "AUTO_HOME_REPEATS_SETUP",
         );
-        assert.match(observed.setupBadge ?? "", /4 of 4 steps done/u);
+        assert.match(observed.setupBadge ?? "", /[0-3] of 4 checks current/u);
         assert.equal(sendCount, 1, "AUTO_HOME_SENT_AGAIN");
         await page.screenshot({
           path: path.join(output, `automatic-home-${ordinal}.png`),

@@ -3076,7 +3076,7 @@ export class ChatGptRoute {
     if (this.routeWindow !== candidate || candidate.isDestroyed())
       return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
     const profileUrl = contents.getURL();
-    const profileDocumentGeneration = this.routeDocumentGeneration;
+    let profileDocumentGeneration = this.routeDocumentGeneration;
     const profilePhysicalDocumentGeneration =
       this.chatPhysicalDocumentGeneration;
     const profileObservationGeneration = this.taskObservationGeneration;
@@ -3135,7 +3135,30 @@ export class ChatGptRoute {
       profile.data.draftPresent
     )
       return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    if (!profile.data.modelReady || profileIdentityLost())
+    // Hydration can emit an in-place navigation before we interact with the
+    // page. Bind the subsequent picker to the newly observed document only
+    // when the physical document, URL, operation and surface are unchanged.
+    // Once interaction begins, every later navigation still fences the action.
+    if (
+      this.routeWindow === candidate &&
+      !candidate.isDestroyed() &&
+      this.chatPhysicalDocumentGeneration ===
+        profilePhysicalDocumentGeneration &&
+      this.taskObservationGeneration === profileObservationGeneration &&
+      contents.getURL() === profileUrl &&
+      this.routeDocumentGeneration !== profileDocumentGeneration
+    ) {
+      profileDocumentGeneration = this.routeDocumentGeneration;
+      profile = await read();
+    }
+    if (
+      !profile.success ||
+      !profile.data.composerReady ||
+      profile.data.draftPresent ||
+      profile.data.temporary !== temporary ||
+      !profile.data.modelReady ||
+      profileIdentityLost()
+    )
       return refuseInstant();
 
     stage = "picker";
