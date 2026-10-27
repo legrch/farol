@@ -17,7 +17,6 @@ const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 export const POLICY = Object.freeze({
   evidenceTtlMs: 7 * DAY,
-  evidenceCapBytes: 2 * 1024 ** 3,
   quietMs: HOUR,
   budgetBytes: 15 * 1024 ** 3,
 });
@@ -337,22 +336,17 @@ export async function inspectOutput(
     });
   }
   // Retention applies to finished entries only: owned tmp is removable at
-  // once; finished undeclared evidence beyond its TTL, then oldest first
-  // while finished evidence exceeds its cap.
+  // once; finished undeclared evidence beyond its TTL. There is no size-based
+  // removal: its eligibility depends on every other entry and cannot be
+  // re-checked per entry, so size pressure surfaces through the budget guard.
   for (const entry of entries)
     if (entry.state === "finished" && entry.kind === "tmp")
       entry.state = "removable";
-  const evidence = entries
-    .filter(({ kind, state }) => kind === "evidence" && state === "finished")
-    .sort((left, right) => left.newest - right.newest);
-  let kept = evidence.reduce((sum, { bytes }) => sum + bytes, 0);
-  for (const entry of evidence) {
-    const expired = now - entry.newest > policy.evidenceTtlMs;
-    if (expired || kept > policy.evidenceCapBytes) {
+  for (const entry of entries) {
+    if (entry.kind !== "evidence" || entry.state !== "finished") continue;
+    if (now - entry.newest > policy.evidenceTtlMs) {
       entry.state = "removable";
-      entry.reason = expired ? "older than 7 days" : "over the 2 GB cap";
-      entry.capOnly = !expired;
-      kept -= entry.bytes;
+      entry.reason = "older than 7 days";
     } else entry.state = "kept";
   }
   const totalBytes = entries.reduce((sum, { bytes }) => sum + bytes, 0);
@@ -389,8 +383,7 @@ export async function pruneOutput(root, options = {}) {
     const final = observe();
     if (!final) break;
     try {
-      if (!(await stillRemovable(entry, final, root, report, removed, options)))
-        continue;
+      if (!(await stillRemovable(entry, final, root, options))) continue;
     } catch (error) {
       failed.push({ ...entry, error: error.code ?? error.message });
       continue;
@@ -408,16 +401,8 @@ export async function pruneOutput(root, options = {}) {
 
 // Re-derives every eligibility input on fresh state right before a removal:
 // the same classification (finished, content unchanged), current by-path
-// protection, and, for an entry chosen only by the size cap, whether the
-// remaining finished evidence still exceeds the cap.
-async function stillRemovable(
-  entry,
-  observation,
-  root,
-  report,
-  removed,
-  options,
-) {
+// protection.
+async function stillRemovable(entry, observation, root, options) {
   const policy = options.policy ?? POLICY;
   const fresh = await classifyChild(
     entry.path,
@@ -432,19 +417,7 @@ async function stillRemovable(
   const protect =
     options.protect === undefined ? protectedEvidence(root) : options.protect;
   if (isProtected(path.basename(entry.path), protect)) return false;
-  if (!entry.capOnly) return true;
-  const gone = new Set(removed.map(({ path: item }) => item));
-  let remaining = 0;
-  for (const other of report.entries) {
-    if (other.kind !== "evidence" || gone.has(other.path)) continue;
-    if (!["kept", "removable"].includes(other.state)) continue;
-    const present = await fs.lstat(other.path).then(
-      () => true,
-      () => false,
-    );
-    if (present) remaining += other.bytes;
-  }
-  return remaining > policy.evidenceCapBytes;
+  return true;
 }
 
 const gb = (bytes) => `${(bytes / 1024 ** 3).toFixed(2)} GB`;

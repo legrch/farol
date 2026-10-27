@@ -20,12 +20,12 @@ recovery store.
    killed creator is therefore still cleaned up. An entry in an unknown state
    is kept and reported, never guessed at.
 4. **Evidence has a budget.** Lane roots declared in `tooling/evidence-cases.mjs`
-   and the roots that other tooling reads (Hunt, test scopes) are never removed
-   automatically; they only count toward the budget. Other evidence directories
-   are removed once finished: an owner record shows them finished, or they have
-   been quiet for an hour with no open file or command-line reference. They are
-   then removed after 7 days, or oldest first while finished undeclared evidence
-   exceeds 2 GB.
+   and every evidence name the tracked source reads by path are never removed
+   automatically; they only count toward the budget. Other evidence
+   directories are removed once finished and older than 7 days: an owner record
+   shows them finished, or they have been quiet for an hour with no open file or
+   command-line reference. There is no size-based removal; size pressure shows
+   up through the budget guard.
 5. **Builds live in GitHub Releases.** Locally, keep only the current
    `_output/package` candidate and the current Dev image. Do not keep copies of
    packages or of the installed application. A rollback downloads the

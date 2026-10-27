@@ -1,3 +1,4 @@
+import { chmodSync, mkdirSync, utimesSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -117,12 +118,12 @@ describe("_output retention", () => {
         entry(`evidence/${name}`, { ageDays: 90 }),
       ),
     );
-    await prune(observe(), { ...POLICY, evidenceCapBytes: 0 });
+    await prune(observe());
     for (const directory of declared)
       expect(await exists(directory)).toBe(true);
   });
 
-  it("expires finished undeclared evidence and enforces the cap oldest first", async () => {
+  it("expires only finished undeclared evidence older than seven days", async () => {
     const expired = await entry("evidence/old-run", { ageDays: 8 });
     const older = await entry("evidence/older-week", {
       ageDays: 3,
@@ -132,13 +133,14 @@ describe("_output retention", () => {
       ageDays: 1,
       bytes: 64 * 1024,
     });
-    await prune(observe(), { ...POLICY, evidenceCapBytes: 100 * 1024 });
+    await prune(observe());
     expect(await exists(expired)).toBe(false);
-    expect(await exists(older)).toBe(false);
+    // No size-based removal: younger evidence stays and counts in the budget.
+    expect(await exists(older)).toBe(true);
     expect(await exists(newer)).toBe(true);
   });
 
-  it("keeps undeclared evidence a live writer still uses, even over the cap", async () => {
+  it("keeps expired undeclared evidence a live writer still uses", async () => {
     const written = await entry("evidence/writing-now", { ageDays: 0 });
     const held = await entry("evidence/held-open", { ageDays: 9 });
     const named = await entry("evidence/named-in-argv", { ageDays: 9 });
@@ -147,12 +149,11 @@ describe("_output retention", () => {
         [{ pid: 1, pgid: 1, start: START, command: `node script ${named}` }],
         [path.join(held, "data")],
       ),
-      { ...POLICY, evidenceCapBytes: 0 },
     );
     for (const directory of [written, held, named])
       expect(await exists(directory)).toBe(true);
     // Once the writer has finished, the same entry becomes removable.
-    await prune(observe(), { ...POLICY, evidenceCapBytes: 0 });
+    await prune(observe());
     for (const directory of [held, named])
       expect(await exists(directory)).toBe(false);
   });
@@ -495,9 +496,7 @@ describe("_output retention", () => {
         // A producer updates the second entry and exits while the first is
         // being removed: no holder remains, but its content is fresh.
         if (++calls === 3)
-          return fs
-            .utimes(path.join(second, "data"), new Date(NOW), new Date(NOW))
-            .then(() => observe());
+          utimesSync(path.join(second, "data"), new Date(NOW), new Date(NOW));
         return observe();
       },
       now: NOW,
@@ -515,27 +514,6 @@ describe("_output retention", () => {
     const result = await prune(observe());
     expect(result.removed.map(({ path: item }) => item)).toEqual([file]);
     expect(await exists(file)).toBe(false);
-  });
-
-  it("keeps a cap-only candidate once the remaining evidence fits the cap", async () => {
-    const a = await entry("evidence/cap-a", { ageDays: 3, bytes: 64 * 1024 });
-    const b = await entry("evidence/cap-b", { ageDays: 2, bytes: 64 * 1024 });
-    const c = await entry("evidence/cap-c", { ageDays: 1, bytes: 64 * 1024 });
-    let calls = 0;
-    await pruneOutput(root, {
-      observation: observe(),
-      observe: () => {
-        // Another producer removes the newest entry while the first is removed.
-        if (++calls === 3)
-          return fs.rm(c, { recursive: true }).then(() => observe());
-        return observe();
-      },
-      now: NOW,
-      policy: { ...POLICY, evidenceCapBytes: 100 * 1024 },
-      protect: PROTECTED_EVIDENCE,
-    });
-    expect(await exists(a)).toBe(false);
-    expect(await exists(b)).toBe(true);
   });
 
   it("keeps an entry that became protected before its removal", async () => {
@@ -565,10 +543,8 @@ describe("_output retention", () => {
       observe: () => {
         if (++calls === 3) {
           const blocked = path.join(second, "nested");
-          return fs
-            .mkdir(blocked)
-            .then(() => fs.chmod(blocked, 0))
-            .then(() => observe());
+          mkdirSync(blocked);
+          chmodSync(blocked, 0);
         }
         return observe();
       },
@@ -577,6 +553,8 @@ describe("_output retention", () => {
     });
     await fs.chmod(path.join(second, "nested"), 0o700);
     expect(result.removed.map(({ path: item }) => item)).toEqual([first]);
-    expect(result.failed.map(({ path: item }) => item)).toEqual([second]);
+    expect(result.failed).toEqual([
+      expect.objectContaining({ path: second, error: "EACCES" }),
+    ]);
   });
 });

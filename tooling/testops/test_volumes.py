@@ -348,10 +348,13 @@ class Volumes(unittest.TestCase):
             volumes.write_lease(self.lease(), {"schema": 1, "scope": SCOPE, "created": "now",
                                                "owner": {"pid": os.getpid(), "start": volumes.process_start(os.getpid())},
                                                "volumes": [{"name": NAMES[0], "retain": "run"}]})
-            self.set_state({NAMES[0]: {"Labels": {volumes.LABEL: SCOPE[-8:], volumes.RETAIN: "run"}}})
+            self.set_state({NAMES[0]: {"Labels": {volumes.LABEL: SCOPE[-8:], volumes.RETAIN: "run",
+                                                  **self.here()}}})
         output, _ = pruning.communicate(timeout=30)
         result = json.loads(output)
         self.assertEqual((pruning.returncode, result["removed"]), (0, []))
+        # Kept because of the live lease, not because of a missing ownership label.
+        self.assertIn({"name": NAMES[0], "state": "active", "reason": "LIVE_LEASE"}, result["kept"])
         self.assertIn(NAMES[0], self.state()["volumes"])
         self.assertNotIn(["volume", "rm", NAMES[0]], self.log())
 
