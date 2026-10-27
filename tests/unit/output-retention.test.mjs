@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -431,9 +432,12 @@ describe("_output retention", () => {
     const owner = JSON.parse(
       await fs.readFile(path.join(directory, OWNER_FILE), "utf8"),
     );
-    const live = observeProcesses().processes.find(
-      ({ pid }) => pid === process.pid,
-    );
+    // Real ps, stubbed lsof: this test is about start times, not open files.
+    const live = observeProcesses((command, args, options) =>
+      command === "/usr/sbin/lsof"
+        ? { status: 0, stdout: "n/unrelated\n" }
+        : spawnSync(command, args, options),
+    ).processes.find(({ pid }) => pid === process.pid);
     expect(owner.start).toBe(live.start);
   });
 });
