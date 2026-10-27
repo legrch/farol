@@ -50,7 +50,9 @@ export function protectedEvidence(root, run = spawnSync) {
   if (grep.error || ![0, 1].includes(grep.status)) return null;
   const names = new Set(PROTECTED_EVIDENCE);
   for (const line of grep.stdout.split("\n"))
-    if (line) names.add(line.slice("_output/evidence/".length));
+    // Prose may end a path with a period; the directory name never does.
+    if (line)
+      names.add(line.slice("_output/evidence/".length).replace(/\.+$/u, ""));
   return [...names].filter((name) => name && name !== "evidence");
 }
 
@@ -418,4 +420,9 @@ async function main([command = "status"]) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url))
-  process.exitCode = await main(process.argv.slice(2));
+  process.exitCode = await main(process.argv.slice(2)).catch((error) => {
+    console.error(
+      `_output retention refused: ${error.message}. Nothing was removed.`,
+    );
+    return 1;
+  });

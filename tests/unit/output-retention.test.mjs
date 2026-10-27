@@ -275,6 +275,11 @@ describe("_output retention", () => {
       expect.arrayContaining(["predecessors", "setup-journey", "hunt"]),
     );
     expect(protectedEvidence(root)).toBeNull();
+    const trailing = protectedEvidence(root, () => ({
+      status: 0,
+      stdout: "_output/evidence/sealed-run.\n_output/evidence/prefix-\n",
+    }));
+    expect(trailing).toEqual(expect.arrayContaining(["sealed-run", "prefix-"]));
   });
 
   it("keeps all evidence when the by-path consumers cannot be read", async () => {
