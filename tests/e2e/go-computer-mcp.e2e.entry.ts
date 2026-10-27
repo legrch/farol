@@ -332,6 +332,25 @@ export async function run(input: {
           await diagnostics.checkpoint("workspace-verification");
         },
       });
+      // Mirror the Settings flow: Commands includes Git, but the Go owner
+      // still requires the verified workspace's explicit durable grant.
+      if (!input.commandsDisabled) {
+        assert.equal(
+          (await configuration.updateWorkspaceGitHistory(gitWorkspaceId, true))
+            .ok,
+          true,
+        );
+        await verifyGitWorkspaceScopes({
+          configuration,
+          host,
+          workspaceIds: [workspaceId, gitWorkspaceId],
+          buildId: input.build.buildId,
+          observe: async (value) => {
+            observations.push(value);
+            await diagnostics.checkpoint("workspace-verification-after-git");
+          },
+        });
+      }
     }
     const challenge = randomUUID();
     const opened = await diagnostics.stage(

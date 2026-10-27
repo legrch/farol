@@ -120,13 +120,21 @@ if Path('.fixture-reject').exists():
   input.report.gitShell = witness;
   await input.checkpoint();
   const script = `set -eu
+stage=user-name
+trap 'code=$?; if test "$code" -ne 0; then printf "git-fixture-failed=%s\\n" "$stage" >&2; fi' EXIT
 # HOME, PATH and Git configuration are supplied only by the product host.
 test "$(git config --get user.name)" = '${productName} Fixture Author'
+stage=xdg-config
 test "$(git config --get farolFixture.xdg)" = xdg-config-read
+stage=relative-include
 test "$(git config --get farolFixture.included)" = relative-include-read
+stage=conditional-include
 test "$(git config --get farolFixture.conditional)" = linked-worktree-include-read
+stage=worktree-config
 test "$(git config --worktree --get farolFixture.worktree)" = only-this-worktree
+stage=attributes
 test "$(git check-attr diff -- fixture.swift)" = 'fixture.swift: diff: swift'
+stage=commit-and-hooks
 base=$(git rev-parse HEAD)
 printf 'foreign staged\\n' > foreign.txt
 printf 'owned unstaged\\n' > owned.txt
