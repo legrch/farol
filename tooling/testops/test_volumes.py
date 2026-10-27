@@ -96,6 +96,29 @@ sys.exit(code)
 
 
 class Volumes(unittest.TestCase):
+    def write_own_lease(self, names):
+        volumes.output_dirs(self.root)
+        volumes.write_lease(self.lease(), {"schema": 1, "scope": SCOPE, "created": "now",
+                                           "owner": {"pid": os.getpid(), "start": volumes.process_start(os.getpid())},
+                                           "volumes": [{"name": n, "retain": "run"} for n in names]})
+
+    def test_release_needs_this_checkouts_lease_and_verified_volumes(self):
+        foreign = {volumes.LABEL: SCOPE[-8:], volumes.CHECKOUT: "0" * 16}
+        self.set_state({NAMES[0]: {"Labels": foreign}, NAMES[1]: {"Labels": {volumes.LABEL: SCOPE[-8:]}}},
+                       containers=[{"id": "c9", "name": SCOPE + "-nonce-core", "mounts": [NAMES[0]],
+                                    "labels": {volumes.LABEL: SCOPE[-8:]}}])
+        # No local lease: nothing is touched, not even a scope-labelled container.
+        code, result = self.cli("release", "--scope", SCOPE)
+        self.assertEqual((code, result["status"]), (2, "BLOCKED"))
+        # A stale or lost-race lease naming another checkout's or an unlabelled volume.
+        self.write_own_lease(NAMES[:2])
+        code, result = self.cli("release", "--scope", SCOPE)
+        self.assertEqual((code, result["status"], result["removed"], result["removedContainers"]),
+                         (1, "INCOMPLETE", [], []))
+        self.assertEqual(sorted(e.split(":")[0] for e in result["errors"]), ["NOT_THIS_CHECKOUT"] * 2)
+        self.assertEqual(set(self.state()["volumes"]), set(NAMES[:2]))
+        self.assertFalse([argv for argv in self.log() if argv[:1] == ["rm"] or argv[:2] == ["volume", "rm"]])
+
     def here(self):
         return {volumes.CHECKOUT: volumes.checkout_id(self.root)}
 
@@ -281,6 +304,7 @@ class Volumes(unittest.TestCase):
                                            volumes.CACHE_KEY: "go-1", **self.here()}}},
                        containers=[{"id": "c1", "name": SCOPE + "-nonce-core", "mounts": [NAMES[0]],
                                     "labels": {volumes.LABEL: SCOPE[-8:]}}])
+        self.write_own_lease([NAMES[0]])
         code, result = self.cli("release", "--scope", SCOPE)
         self.assertEqual((code, result["removedContainers"], result["removed"], result["retainedCache"]),
                          (0, ["c1"], [NAMES[0]], [cache]))

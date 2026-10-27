@@ -154,9 +154,12 @@ lease and leak. Use `python3 -B tooling/testops/testops.py volumes ACTION
   the calling process's parent: the long-lived runner that prepares, runs the
   gate and releases. A failed prepare leaves the lease, so cleanup still sees
   every requested name.
-- `release --scope ...` force-removes the scope's own labelled containers, then
-  its run volumes by exact name, and verifies absence. Cache volumes are left to
-  prune. The lease is deleted only after verified absence.
+- `release --scope ...` needs this checkout's lease for the scope; without it,
+  nothing is touched. It acts only on volumes that currently carry this
+  checkout's and scope's labels. It force-removes the scope-named containers
+  that mount those run volumes, then removes the volumes by exact name and
+  verifies absence. Cache volumes are left to prune. The lease is deleted only
+  after verified absence.
 - `prune` considers only volumes with the `farol.testops.task` label and this
   checkout's `farol.testops.checkout` label: leases are per checkout, Docker is
   shared, so another checkout's volume is reported `unknown`, never removed. It keeps

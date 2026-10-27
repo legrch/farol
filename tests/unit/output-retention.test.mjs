@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   OWNER_FILE,
   POLICY,
@@ -10,7 +10,10 @@ import {
   protectedEvidence,
   pruneOutput,
 } from "../../tooling/output-retention.mjs";
-import { settleDevControl } from "../../tooling/dev-process-control.mjs";
+import {
+  quarantineDevControl,
+  settleDevControl,
+} from "../../tooling/dev-process-control.mjs";
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.parse("2026-10-27T12:00:00Z");
@@ -304,5 +307,70 @@ describe("_output retention", () => {
     } finally {
       await fs.rm(real, { recursive: true, force: true });
     }
+  });
+
+  it("sees a directory named in the middle of a command line", async () => {
+    const owner = { pid: 4242, pgid: 4242, start: START };
+    const scratch = await entry("tmp/go-artifact-LLLLLL", { owner });
+    const sibling = await entry("tmp/go-artifact-LLLLLLX", { owner });
+    await prune(
+      observe([
+        {
+          pid: 9,
+          pgid: 9,
+          start: START,
+          command: `node consumer.mjs --input ${scratch} --wait`,
+        },
+      ]),
+    );
+    expect(await exists(scratch)).toBe(true);
+    // A longer name sharing the prefix is not the same directory.
+    expect(await exists(sibling)).toBe(false);
+  });
+
+  it("quarantines a stop helper durably before its stop is known", async () => {
+    const owner = { pid: 4242, pgid: 4242, start: START };
+    const helper = await entry("tmp/go-dev-control-MMMMMM", { owner });
+    quarantineDevControl(root, path.join(helper, "dev-control"));
+    await prune(observe());
+    expect(await exists(helper)).toBe(true);
+  });
+
+  it("counts testops runs toward the budget without pruning them", async () => {
+    const run = await entry("testops/run-1", { ageDays: 30, bytes: 64 * 1024 });
+    const report = await inspectOutput(root, {
+      observation: observe(),
+      now: NOW,
+      protect: PROTECTED_EVIDENCE,
+    });
+    const testops = report.entries.find(({ path: item }) =>
+      item.endsWith("_output/testops"),
+    );
+    expect(testops.state).toBe("kept");
+    expect(report.budgetedBytes).toBeGreaterThanOrEqual(testops.bytes);
+    await prune(observe());
+    expect(await exists(run)).toBe(true);
+  });
+
+  it("reports every completed removal when a later one fails", async () => {
+    const owner = { pid: 4242, pgid: 4242, start: START };
+    const first = await entry("tmp/go-artifact-NNNNN1", { owner });
+    const second = await entry("tmp/go-artifact-NNNNN2", { owner });
+    const original = fs.rm.bind(fs);
+    const failing = vi
+      .spyOn(fs, "rm")
+      .mockImplementation(async (target, options) => {
+        if (target === second)
+          throw Object.assign(new Error("denied"), { code: "EACCES" });
+        return original(target, options);
+      });
+    try {
+      const result = await prune(observe());
+      expect(result.removed.map(({ path: item }) => item)).toEqual([first]);
+      expect(result.failed.map(({ path: item }) => item)).toEqual([second]);
+    } finally {
+      failing.mockRestore();
+    }
+    expect(await exists(first)).toBe(false);
   });
 });

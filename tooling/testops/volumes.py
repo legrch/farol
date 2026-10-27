@@ -298,50 +298,67 @@ def release(root, engine, scope, timeout):
             lease = False
         if lease is None:
             return {"status": "INCOMPLETE", "reason": "LEASE_UNREADABLE", "lease": str(path)}, 1
+        if lease is False:
+            # Ownership is this checkout's lease; a scope label alone is not.
+            raise Refused("LOCAL_LEASE_REQUIRED")
         errors, removed, absent, retained, containers = [], [], [], [], []
+        here = checkout_id(root)
+        targets = {}
+        for row in lease["volumes"]:
+            targets[row["name"]] = row["retain"]
+        try:
+            for name, row in labelled(engine, scope_id(scope)).items():
+                if name not in targets and row["labels"] is not None \
+                        and row["labels"].get(CHECKOUT) == here and owned_name(scope, name):
+                    targets[name] = "cache" if row["labels"].get(RETAIN) == "cache" else "run"
+        except OSError as error:
+            errors.append(str(error))
+        # Every effect below needs the volume to be verifiably this checkout's now:
+        # a stale or lost-race lease name never authorizes deleting someone else's.
+        verified = {}
+        for name in sorted(targets):
+            present, record = inspect(engine, name)
+            if present is False:
+                absent.append(name)  # E.g. a lease name whose create never happened.
+                continue
+            labels = (record or {}).get("Labels") if present else None
+            if present is None or not isinstance(labels, dict):
+                errors.append(name + ":" + (record if isinstance(record, str) else "LABELS_UNREADABLE"))
+                continue
+            if labels.get(CHECKOUT) != here or labels.get(LABEL) != scope_id(scope):
+                errors.append("NOT_THIS_CHECKOUT:" + name)
+                continue
+            verified[name] = "cache" if labels.get(RETAIN) == "cache" else targets[name]
+        runs = sorted(name for name, kind in verified.items() if kind == "run")
+        retained.extend(sorted(name for name, kind in verified.items() if kind == "cache"))
+        # Only containers that mount this checkout's verified run volumes are removed.
+        users = set()
+        for name in runs:
+            found = references(engine, name)
+            if found is None:
+                errors.append("CONTAINER_REFERENCES_UNKNOWN:" + name)
+            else:
+                users.update(found)
         listing = engine.call("ps", "-a", "--no-trunc", "--filter", "label=" + LABEL + "=" + scope_id(scope),
                               "--format", "{{.ID}} {{.Names}}")
+        labelled_containers = {}
         if listing.returncode != 0:
             errors.append("CONTAINER_LIST_FAILED:" + listing.stderr.strip()[:200])
         for line in listing.stdout.splitlines() if listing.returncode == 0 else []:
             cid, _, names = line.strip().partition(" ")
-            if not cid:
-                continue
-            if not all(owned_name(scope, n) for n in names.split(",")):
-                errors.append("FOREIGN_NAMED_LABELLED_CONTAINER:" + cid)
+            if cid:
+                labelled_containers[cid] = names
+        for cid in sorted(users):
+            names = next((n for full, n in labelled_containers.items() if full.startswith(cid) or cid.startswith(full)), None)
+            if names is None or not all(owned_name(scope, n) for n in names.split(",")):
+                errors.append("FOREIGN_CONTAINER_USES_VOLUME:" + cid)
                 continue
             result = engine.call("rm", "--force", cid)
             if result.returncode != 0:
                 errors.append("CONTAINER_RM_FAILED:" + cid + ":" + result.stderr.strip()[:200])
             else:
                 containers.append(cid)
-        targets = {}
-        for row in lease["volumes"] if lease else []:
-            targets[row["name"]] = row["retain"]
-        try:
-            for name, row in labelled(engine, scope_id(scope)).items():
-                if not owned_name(scope, name):
-                    errors.append("LABEL_NAME_MISMATCH:" + name)
-                    continue
-                if row["labels"] is None:
-                    errors.append("LABELS_UNREADABLE:" + name)
-                    continue
-                if name not in targets and row["labels"].get(CHECKOUT) != checkout_id(root):
-                    errors.append("NOT_THIS_CHECKOUT:" + name)
-                    continue
-                if row["labels"].get(RETAIN) == "cache":
-                    targets[name] = "cache"
-                else:
-                    targets.setdefault(name, "run")
-        except OSError as error:
-            errors.append(str(error))
-        for name in sorted(targets):
-            if targets[name] == "cache":
-                retained.append(name)
-                continue
-            if inspect(engine, name)[0] is False:
-                absent.append(name)  # E.g. a lease name whose create never happened.
-                continue
+        for name in runs:
             error = remove_volume(engine, name)
             if error:
                 errors.append(name + ":" + error)

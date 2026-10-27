@@ -41,7 +41,11 @@ recovery store.
 
 `task dev`, `task dev:clean` and `task ci` start with a prune. If `_output`
 still exceeds its 15 GB budget afterwards, they refuse to start and print the
-largest unknown and active entries. Status and prune stay available.
+largest unknown and active entries. Status and prune stay available. The
+budget counts everything that can accumulate, including `_output/testops` runs,
+which prune never removes. It excludes only outputs replaced in place and
+protected evidence. A partial prune reports every removal it completed and exits
+non-zero.
 
 ## Limits
 

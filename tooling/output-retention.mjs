@@ -81,7 +81,6 @@ export const CURRENT_OUTPUTS = Object.freeze([
   "preview",
   "preview-assets",
   "shell-screens",
-  "testops",
   "tests",
   "tmp",
   "toolchains",
@@ -122,12 +121,24 @@ export function observeProcesses(run = spawnSync) {
   return { processes, open };
 }
 
+// A command refers to the directory when its path appears followed by a path
+// separator, whitespace, a quote, a delimiter or the end of the line.
+function mentions(command, directory) {
+  for (
+    let at = command.indexOf(directory);
+    at !== -1;
+    at = command.indexOf(directory, at + 1)
+  ) {
+    const next = command[at + directory.length];
+    if (next === undefined || /[\s/'"=:,;)]/u.test(next)) return true;
+  }
+  return false;
+}
+
 function referenced(directory, observation) {
   const prefix = directory.endsWith("/") ? directory : `${directory}/`;
   return (
-    observation.processes.some(
-      ({ command }) => command.includes(prefix) || command.endsWith(directory),
-    ) ||
+    observation.processes.some(({ command }) => mentions(command, directory)) ||
     observation.open.some(
       (file) => file === directory || file.startsWith(prefix),
     )
@@ -305,12 +316,18 @@ export async function inspectOutput(
       kind: "output",
       bytes,
       newest,
-      state: CURRENT_OUTPUTS.includes(name) ? "current" : "unknown",
+      state: CURRENT_OUTPUTS.includes(name)
+        ? "current"
+        : name === "testops"
+          ? "kept"
+          : "unknown",
       reason: CURRENT_OUTPUTS.includes(name)
         ? "managed in place"
-        : name.startsWith(".dev-core-")
-          ? "Dev transition leftover; the next task dev reaps it"
-          : "no producer owns this entry",
+        : name === "testops"
+          ? "testops runs and leases: counted toward the budget, never pruned here"
+          : name.startsWith(".dev-core-")
+            ? "Dev transition leftover; the next task dev reaps it"
+            : "no producer owns this entry",
     });
   }
   // Retention applies to finished entries only: owned tmp is removable at
@@ -357,12 +374,18 @@ export async function pruneOutput(root, options = {}) {
       .filter(({ state }) => state === "removable")
       .map(({ path: item }) => item),
   );
+  const failed = [];
   for (const entry of report.entries) {
     if (entry.state !== "removable" || !removable.has(entry.path)) continue;
-    await fs.rm(entry.path, { recursive: true, force: true });
-    removed.push(entry);
+    try {
+      await fs.rm(entry.path, { recursive: true, force: true });
+      removed.push(entry);
+    } catch (error) {
+      // Keep going: every completed removal stays reported.
+      failed.push({ ...entry, error: error.code ?? error.message });
+    }
   }
-  return { ...report, removed };
+  return { ...report, removed, failed };
 }
 
 const gb = (bytes) => `${(bytes / 1024 ** 3).toFixed(2)} GB`;
@@ -402,6 +425,16 @@ async function main([command = "status"]) {
   if (command === "prune" || command === "guard") {
     const report = await pruneOutput(root);
     console.log(formatReport(report));
+    if (report.failed.length) {
+      for (const entry of report.failed)
+        console.error(
+          `Could not remove ${path.relative(report.output, entry.path)}: ${entry.error}`,
+        );
+      console.error(
+        `Pruning was partial: removed ${report.removed.length}, failed ${report.failed.length}.`,
+      );
+      return 1;
+    }
     const remaining =
       report.budgetedBytes -
       report.removed.reduce((sum, { bytes }) => sum + bytes, 0);

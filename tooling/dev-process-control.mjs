@@ -273,9 +273,16 @@ export async function settleDevControl({ root, binary, retain }) {
     !binary.startsWith(path.join(root, "_output/tmp/go-dev-control-"))
   )
     return;
-  if (retain)
-    fs.rmSync(path.join(path.dirname(binary), OWNER_FILE), { force: true });
+  if (retain) quarantineDevControl(root, binary);
   else await releaseOwnedTemporary(root, binary, "go-dev-control-");
+}
+
+// Drops the helper's owner record so retention reports it as unknown and never
+// reaps it. Called before a stop whose outcome is not yet known.
+export function quarantineDevControl(root, binary) {
+  if (!binary.startsWith(path.join(root, "_output/tmp/go-dev-control-")))
+    return;
+  fs.rmSync(path.join(path.dirname(binary), OWNER_FILE), { force: true });
 }
 
 async function prepareDevBuildOnce(
@@ -412,7 +419,10 @@ async function prepareDevBuildOnce(
           `Stopping the previous ${harnessDesktopIdentity("dev", "/").applicationName} before rebuilding its app outputs...`,
         );
         // Until the stop is confirmed, its outcome is unknown: keep the helper.
+        // Dropping its owner record first makes that durable even if this
+        // launcher is killed before it can settle (retention then sees unknown).
         control.retain = true;
+        quarantineDevControl(writerRoot, binary);
         const result = await stopRetainedDevProcess(retained, retainedScope, {
           clock: () => performance.now(),
           sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
