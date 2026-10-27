@@ -21,7 +21,7 @@ import {
   GO_CORE_ENTRIES,
   verifyGoCoreArtifact,
 } from "./go-core-artifact.mjs";
-import { buildGoBackend } from "./go-backend-build.mjs";
+import { buildGoBackend, releaseOwnedTemporary } from "./go-backend-build.mjs";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { assertResourceManifest } from "./resource-contract.mjs";
 import { trustedOwnerHome } from "./promotion-destination.mjs";
@@ -200,7 +200,17 @@ export async function verifyClosedRecoveryDevBuild(
     platform: manifest.core.build.platform,
     moduleInputs: inputs.moduleInputs,
   });
-  const expected = declarationFromBuiltCore(reproduced, identity);
+  let expected;
+  try {
+    expected = declarationFromBuiltCore(reproduced, identity);
+  } finally {
+    if (rebuildGo === buildGoBackend)
+      await releaseOwnedTemporary(
+        repositoryRoot,
+        reproduced.path,
+        "go-artifact-",
+      );
+  }
   await verifyGoCoreArtifact(directory, expected, identity);
   // Reproduction can take time. Refuse an edited host, ledger or declaration
   // instead of accepting the first read as authority for later maintenance.

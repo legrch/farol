@@ -9,7 +9,7 @@ import { devExecutables, devEntrypointForExecutable } from "./dev-runtime.mjs";
 import { resolvePhysicalDevDataDirectoryName } from "./harness-identity.ts";
 import { performance } from "node:perf_hooks";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
-import { buildDevControl } from "./go-backend-build.mjs";
+import { buildDevControl, releaseOwnedTemporary } from "./go-backend-build.mjs";
 import { stopRetainedDevProcess } from "./dev-owned-stop.mjs";
 import {
   readRunMarker,
@@ -252,14 +252,39 @@ function nativeCall(binary, request, remaining = 3000) {
   }
 }
 
-export async function prepareDevBuild({
-  root,
-  buildArguments,
-  replace,
-  profilePath: selectedProfilePath,
-  createControl = buildControl,
-  log = () => {},
-}) {
+// The stop helper lives in owned scratch. A refused or outcome-unknown stop
+// retains it as evidence; every other exit releases it.
+export async function prepareDevBuild(options) {
+  const control = { root: undefined, binary: undefined, retain: false };
+  try {
+    return await prepareDevBuildOnce(options, control);
+  } finally {
+    if (
+      control.binary !== undefined &&
+      !control.retain &&
+      control.binary.startsWith(
+        path.join(control.root, "_output/tmp/go-dev-control-"),
+      )
+    )
+      await releaseOwnedTemporary(
+        control.root,
+        control.binary,
+        "go-dev-control-",
+      );
+  }
+}
+
+async function prepareDevBuildOnce(
+  {
+    root,
+    buildArguments,
+    replace,
+    profilePath: selectedProfilePath,
+    createControl = buildControl,
+    log = () => {},
+  },
+  control,
+) {
   if (process.platform !== "darwin")
     throw Error("DEV_PROCESS_PLATFORM_REFUSED");
   const writerRoot = fs.realpathSync(root);
@@ -282,9 +307,9 @@ export async function prepareDevBuild({
     ? fs.realpathSync(profileName)
     : profileName;
   const scope = { uid: process.getuid(), writerRoot, appPath, profilePath };
-  let controlBinary;
+  control.root = writerRoot;
   const getControl = async () =>
-    (controlBinary ??= await createControl(writerRoot, buildArguments));
+    (control.binary ??= await createControl(writerRoot, buildArguments));
   const markerFile = path.join(profilePath, "farol-state/running.json");
   const marker = await readDevRunMarker(profilePath);
   if (marker.status === "unreadable")
@@ -406,10 +431,12 @@ export async function prepareDevBuild({
             return outcome;
           },
         });
-        if (result.status !== "absent")
+        if (result.status !== "absent") {
+          control.retain = true;
           throw Error(
             `DEV_STOP_${result.reason}: ${inspectionFailure}. Quit the previous ${harnessDesktopIdentity("dev", "/").applicationName} from this checkout/profile using its own Quit command, then run task dev again.`,
           );
+        }
         log(
           `Previous Dev process is absent (${result.attemptedSignals.join(", ") || "already stopped"}). Profile outcomes remain unchanged.`,
         );

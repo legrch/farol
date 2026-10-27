@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
-import { measureGoToolchain } from "../../tooling/go-backend-build.mjs";
+import {
+  measureGoToolchain,
+  releaseOwnedTemporary,
+} from "../../tooling/go-backend-build.mjs";
 import { createBuildIdentity } from "../../tooling/build-identity-contract.mjs";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 
@@ -43,6 +46,26 @@ catch (error) { process.stdout.write(JSON.stringify({ error: error.message, caus
   );
   if (result.error) throw new Error(result.error, { cause: result.cause });
   return Object.freeze(result.evidence);
+}
+
+async function buildDevControl(root, inputs) {
+  // The helper refuses any Node execArgv, so run a plain module file.
+  const entry = path.join(path.dirname(root), "build-dev-control.mjs");
+  await fs.writeFile(
+    entry,
+    `import { buildDevControl } from ${JSON.stringify(new URL("../../tooling/go-backend-build.mjs", import.meta.url).href)};
+try { process.stdout.write(JSON.stringify({ binary: await buildDevControl(${JSON.stringify(root)}, ${JSON.stringify(inputs)}) })); }
+catch (error) { process.stdout.write(JSON.stringify({ error: error.message })); }`,
+  );
+  const result = JSON.parse(
+    execFileSync(process.execPath, [entry], {
+      encoding: "utf8",
+      env: { PATH: "/usr/bin:/bin", HOME: root },
+      maxBuffer: 1024 * 1024,
+    }),
+  );
+  if (result.error) throw new Error(result.error);
+  return result.binary;
 }
 
 const MODULE = "github.com/legrch/farol";
@@ -1078,5 +1101,55 @@ describe("explicit committed-sum-bound offline module inputs", () => {
         ({ modulePath }) => modulePath,
       ),
     ).toEqual(moduleVersions.map(([modulePath]) => modulePath));
+  });
+});
+
+describe("owned temporary build directories", () => {
+  const scratch = async (root) =>
+    (await fs.readdir(path.join(root, "_output/tmp")).catch(() => [])).filter(
+      (name) => name.startsWith("go-dev-control-"),
+    );
+
+  it("removes the development stop helper scratch when its build fails", async () => {
+    const f = await fixture();
+    await fs.writeFile(path.join(f.sdk, "pkg/tool/compiler"), "modified");
+    await expect(
+      buildDevControl(f.root, {
+        toolchain: f.toolchain,
+        moduleInputs: f.modules.inputs,
+      }),
+    ).rejects.toThrow("GO_BACKEND_TOOLCHAIN_DIGEST_MISMATCH");
+    expect(await scratch(f.root)).toEqual([]);
+  });
+
+  it("releases exactly one returned owned directory and refuses any other path", async () => {
+    const f = await fixture();
+    const parent = path.join(f.root, "_output/tmp");
+    await fs.mkdir(parent, { recursive: true });
+    const owned = await fs.mkdtemp(path.join(parent, "go-artifact-"));
+    const sibling = await fs.mkdtemp(path.join(parent, "go-artifact-"));
+    await fs.writeFile(path.join(owned, "farol-backend"), "built");
+    await releaseOwnedTemporary(
+      f.root,
+      path.join(owned, "farol-backend"),
+      "go-artifact-",
+    );
+    await expect(fs.lstat(owned)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await fs.lstat(sibling)).isDirectory()).toBe(true);
+    await releaseOwnedTemporary(
+      f.root,
+      path.join(owned, "farol-backend"),
+      "go-artifact-",
+    );
+    for (const outside of [
+      path.join(f.root, "_output/farol-backend"),
+      path.join(parent, "go-dev-control-abcdef/dev-control"),
+      path.join(sibling, "nested/farol-backend"),
+      path.join(f.base, "go-artifact-abcdef/farol-backend"),
+    ])
+      await expect(
+        releaseOwnedTemporary(f.root, outside, "go-artifact-"),
+      ).rejects.toThrow("GO_BACKEND_OWNED_TEMPORARY_PATH_INVALID");
+    expect((await fs.lstat(sibling)).isDirectory()).toBe(true);
   });
 });
