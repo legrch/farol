@@ -80,6 +80,15 @@ export async function runFreshConnectionTest(
       state: "refused",
       code: "CONNECTOR_CHATGPT_APP_REQUIRED",
     });
+  if (
+    before.connectors.secureMcp.chatgptApp.tunnelId !==
+    before.connectors.secureMcp.tunnelId
+  )
+    return finish({
+      id,
+      state: "refused",
+      code: "CONNECTOR_APP_TARGET_REQUIRED",
+    });
   active.running = true;
   publish({ phase: "preparing", code: null });
   try {
@@ -88,7 +97,7 @@ export async function runFreshConnectionTest(
       "settings:connector.repair:",
     );
     if (repaired.state !== "applied") return finish(repaired);
-    const current = facade.getSnapshot();
+    let current = facade.getSnapshot();
     if (
       current.status !== "current" ||
       current.runtime !== "ready" ||
@@ -101,7 +110,7 @@ export async function runFreshConnectionTest(
         state: "refused",
         code: "CONNECTION_TEST_STATE_CHANGED",
       });
-    const settings = current.configuration.settings,
+    let settings = current.configuration.settings,
       connector = settings.connectors.secureMcp;
     if (
       settings.computer.computerId !== before.computer.computerId ||
@@ -109,7 +118,15 @@ export async function runFreshConnectionTest(
       connector.tunnelId !== before.connectors.secureMcp.tunnelId ||
       connector.chatgptApp?.name !==
         before.connectors.secureMcp.chatgptApp.name ||
+      connector.runtime?.state !== "ready" ||
+      connector.runtime.connectorGeneration !== connector.generation ||
+      connector.runtime.computerGeneration !== settings.computer.generation ||
+      connector.runtime.buildId !== current.buildId ||
       !connector.challenge ||
+      connector.challenge.runtimeGeneration !==
+        connector.runtime.runtimeGeneration ||
+      connector.challenge.computerGeneration !== settings.computer.generation ||
+      connector.challenge.buildId !== current.buildId ||
       connector.challenge.challengeSha256 ===
         before.connectors.secureMcp.challenge?.challengeSha256 ||
       connector.runtime?.runtimeGeneration ===
@@ -120,6 +137,72 @@ export async function runFreshConnectionTest(
         state: "refused",
         code: "CONNECTION_TEST_FRESH_BINDING_REQUIRED",
       });
+    // A verified restart can advance the connector generation while retaining
+    // the owner's app label. Rebind that same selection only to the same
+    // tunnel; it remains a routing choice, not an attachment receipt.
+    if (connector.chatgptApp?.tunnelId !== connector.tunnelId)
+      return finish({
+        id,
+        state: "refused",
+        code: "CONNECTOR_APP_TARGET_REQUIRED",
+      });
+    if (connector.chatgptApp.connectorGeneration !== connector.generation) {
+      if (!commandAllowed(current, "connector.select-chatgpt-app"))
+        return finish({
+          id,
+          state: "refused",
+          code: "CONNECTOR_APP_TARGET_REQUIRED",
+        });
+      const expected = {
+        name: connector.chatgptApp.name,
+        tunnelId: connector.tunnelId!,
+        connectorGeneration: connector.generation,
+        runtimeGeneration: connector.runtime!.runtimeGeneration,
+        challengeSha256: connector.challenge!.challengeSha256,
+      };
+      const selected = await facade.configure(
+        {
+          kind: "connector.select-chatgpt-app",
+          name: expected.name,
+          tunnelId: expected.tunnelId,
+          connectorGeneration: expected.connectorGeneration,
+        },
+        "settings:connector.select-chatgpt-app:",
+      );
+      if (selected.state !== "applied") return finish(selected);
+      current = facade.getSnapshot();
+      if (
+        current.status !== "current" ||
+        current.runtime !== "ready" ||
+        current.buildId !== initial.buildId ||
+        current.destination !== initial.destination ||
+        current.configuration?.status !== "ready"
+      )
+        return finish({
+          id,
+          state: "refused",
+          code: "CONNECTION_TEST_STATE_CHANGED",
+        });
+      settings = current.configuration.settings;
+      connector = settings.connectors.secureMcp;
+      if (
+        settings.computer.computerId !== before.computer.computerId ||
+        settings.computer.generation !== before.computer.generation ||
+        connector.tunnelId !== expected.tunnelId ||
+        connector.generation !== expected.connectorGeneration ||
+        connector.runtime?.runtimeGeneration !== expected.runtimeGeneration ||
+        connector.challenge?.challengeSha256 !== expected.challengeSha256 ||
+        connector.chatgptApp?.name !== expected.name ||
+        connector.chatgptApp.tunnelId !== expected.tunnelId ||
+        connector.chatgptApp.connectorGeneration !==
+          expected.connectorGeneration
+      )
+        return finish({
+          id,
+          state: "refused",
+          code: "CONNECTION_TEST_STATE_CHANGED",
+        });
+    }
     const separate =
       connector.appVerificationPending && settings.setup.connect.outcomeUnknown;
     const setup = computerSetup(current);

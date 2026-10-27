@@ -896,6 +896,18 @@ function injectedStore(io: typeof fs.promises, queueLimit = 4) {
   stores.push(store);
   return { store, directory };
 }
+it("does not start a new retention scan for an already drained shutdown", async () => {
+  const readdir = vi.fn(fs.promises.readdir);
+  const { store } = injectedStore({
+    ...fs.promises,
+    readdir: readdir as unknown as typeof fs.promises.readdir,
+  });
+  store.record(metadata, "done", null, 1);
+  expect(await store.flush(5000)).toBe(true);
+  readdir.mockClear();
+  expect(await store.shutdown(5000)).toBe(true);
+  expect(readdir).not.toHaveBeenCalled();
+});
 it("returns begin/completion immediately while async durability is stalled and bounds shutdown", async () => {
   const entered = deferred(),
     release = deferred();

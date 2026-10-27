@@ -552,6 +552,20 @@ export class OperationsStore implements OperationsRecorder {
   async shutdown(deadlineMs = 250): Promise<boolean> {
     this.closed = true;
     clearInterval(this.retentionTimer);
+    // A clean, idle writer has nothing left to flush. Starting a new drain
+    // would needlessly scan old segments inside the shutdown deadline. Any
+    // queued work, retention request or in-flight writer still uses flush().
+    if (
+      !this.running &&
+      !this.queue.length &&
+      !this.labels &&
+      !this.retentionPending &&
+      !this.diagnosticsDirty
+    ) {
+      if (this.scheduled) clearImmediate(this.scheduled);
+      this.scheduled = undefined;
+      return true;
+    }
     return this.flush(deadlineMs);
   }
   /** Reads never prune or wait for the writer. Slow reads return the last snapshot. */

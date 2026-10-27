@@ -82,6 +82,79 @@ it("a second explicit test uses new identities rather than repeating a consumed 
     h.cleanup();
   }
 });
+it("rebinds an existing app selection to the current generation on the same tunnel before verification", async () => {
+  const h = await setup();
+  try {
+    h.settings.connectors.secureMcp.chatgptApp!.connectorGeneration -= 1;
+    const original = h.configure.getMockImplementation()!;
+    h.configure.mockImplementation(async (command, id) => {
+      if (command.kind === "connector.select-chatgpt-app") {
+        if (h.snapshot.configuration?.status !== "ready")
+          throw Error("fixture");
+        h.snapshot.configuration.settings.connectors.secureMcp.chatgptApp = {
+          name: command.name,
+          tunnelId: command.tunnelId,
+          connectorGeneration: command.connectorGeneration,
+        };
+        return { id, state: "applied", code: null };
+      }
+      return original(command, id);
+    });
+    expect((await runFreshConnectionTest(h.facade)).state).toBe("applied");
+    expect(h.configure.mock.calls.map(([c]) => c.kind)).toEqual([
+      "connector.repair",
+      "connector.select-chatgpt-app",
+      "connector.verify-app",
+    ]);
+  } finally {
+    h.cleanup();
+  }
+});
+it("does not carry an app selection to a different tunnel", async () => {
+  const h = await setup();
+  try {
+    h.settings.connectors.secureMcp.chatgptApp!.tunnelId = "other-tunnel";
+    expect((await runFreshConnectionTest(h.facade)).state).toBe("refused");
+    expect(h.configure).not.toHaveBeenCalled();
+  } finally {
+    h.cleanup();
+  }
+});
+it.each(["selection-refused", "binding-changed"])(
+  "does not verify after %s during app rebind",
+  async (mode) => {
+    const h = await setup();
+    try {
+      h.settings.connectors.secureMcp.chatgptApp!.connectorGeneration -= 1;
+      const original = h.configure.getMockImplementation()!;
+      h.configure.mockImplementation(async (command, id) => {
+        if (command.kind !== "connector.select-chatgpt-app")
+          return original(command, id);
+        if (mode === "selection-refused")
+          return { id, state: "refused", code: "SETTINGS_UNAVAILABLE" };
+        if (h.snapshot.configuration?.status !== "ready")
+          throw Error("fixture");
+        const connector =
+          h.snapshot.configuration.settings.connectors.secureMcp;
+        connector.chatgptApp = {
+          name: command.name,
+          tunnelId: command.tunnelId,
+          connectorGeneration: command.connectorGeneration,
+        };
+        connector.challenge!.challengeSha256 = "9".repeat(64);
+        return { id, state: "applied", code: null };
+      });
+      expect((await runFreshConnectionTest(h.facade)).state).toBe("refused");
+      expect(
+        h.configure.mock.calls.filter(([command]) =>
+          command.kind.startsWith("connector.verify"),
+        ),
+      ).toHaveLength(0);
+    } finally {
+      h.cleanup();
+    }
+  },
+);
 it("two simultaneous controls admit at most one preparation and one test", async () => {
   const h = await setup();
   try {
