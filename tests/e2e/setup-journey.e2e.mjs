@@ -192,15 +192,16 @@ async function runScenario(scenario) {
     const current = await readSetupSettings(page);
     const c = current.connectors.secureMcp;
     const challenge = c.challenge;
-    assert.ok(
-      challenge && current.setup.computer.verified,
-      "SETUP_NO_FRESH_CHALLENGE",
-    );
     const workspaceId = current.setup.computer.verified.workspaceId;
     const statusCheckId =
       /call computer_connection_status once with checkId "([^"]+)"/u.exec(
         prompt,
       )?.[1];
+    assert.ok(
+      (statusCheckId ? current.connectors.secureMcp.attachment : challenge) &&
+        current.setup.computer.verified,
+      "SETUP_NO_FRESH_CHALLENGE",
+    );
     assert.equal(
       prompt,
       statusCheckId
@@ -236,7 +237,12 @@ async function runScenario(scenario) {
       launch.opened.endpoint.binding.buildId,
       build.identity.buildId,
     );
-    assert.equal(launch.challengeSha256, hash(challenge.value));
+    assert.equal(
+      launch.challengeSha256,
+      statusCheckId
+        ? current.connectors.secureMcp.attachment.challengeSha256
+        : hash(challenge.value),
+    );
     const transport = new StdioClientTransport({
       command: executablePath,
       args: [

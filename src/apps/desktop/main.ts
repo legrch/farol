@@ -5919,9 +5919,11 @@ async function verifySecureMcpApp(
     }
     // A separate visible check page preserves the owner's conversation/draft.
     // Native fixtures still inherit their hidden presentation contract.
+    const checkEntry = new URL(chatGptHomeUrl);
+    checkEntry.searchParams.set("temporary-chat", "true");
     verificationRoute = createManagedChatGptRoute({
       homeUrl: chatGptHomeUrl,
-      initialUrl: chatGptHomeUrl,
+      initialUrl: checkEntry.href,
       e2eOrigin: chatGptE2eOrigin,
       parent: () => window,
       ...chatGptWindowPresentationOption(),

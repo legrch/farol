@@ -101,6 +101,7 @@ function fixture() {
   const context = vm.createContext({
     Error,
     Object,
+    URL,
     embeddedBrowserEnabled: () => true,
     configuration: {
       snapshot: () => ({ status: "ready", settings }),
@@ -274,7 +275,7 @@ describe("actual separate-check desktop admission", () => {
     expect(f.createRoute).toHaveBeenCalledWith(
       expect.objectContaining({
         homeUrl: "https://chatgpt.com/",
-        initialUrl: "https://chatgpt.com/",
+        initialUrl: "https://chatgpt.com/?temporary-chat=true",
         windowPresentation: { mode: "hidden" },
       }),
     );
