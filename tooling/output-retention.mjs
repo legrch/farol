@@ -52,7 +52,7 @@ export function protectedEvidence(root, run = spawnSync) {
     // Prose may end a path with a period; the directory name never does.
     if (line)
       names.add(line.slice("_output/evidence/".length).replace(/\.+$/u, ""));
-  return [...names].filter((name) => name && name !== "evidence");
+  return [...names].filter(Boolean);
 }
 
 function isProtected(child, names) {

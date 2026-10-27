@@ -279,7 +279,13 @@ describe("_output retention", () => {
   it("protects every evidence name the repository reads by path", () => {
     const names = protectedEvidence(path.resolve("."));
     expect(names).toEqual(
-      expect.arrayContaining(["predecessors", "setup-journey", "hunt"]),
+      // `_output/evidence/evidence` is a real report root (codex inventory).
+      expect.arrayContaining([
+        "predecessors",
+        "setup-journey",
+        "hunt",
+        "evidence",
+      ]),
     );
     expect(protectedEvidence(root)).toBeNull();
     const trailing = protectedEvidence(root, () => ({
