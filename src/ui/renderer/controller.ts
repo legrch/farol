@@ -907,6 +907,7 @@ export class WindowController implements RendererFacade {
       );
       if (this.disposed) return;
       this.patch({
+        connectionChecking: result.connectionChecking === true,
         activity: result.entries.map((entry) => ({
           ...entry,
           ...(entry.lifecycle?.phase === "started" &&

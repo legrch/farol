@@ -125,6 +125,7 @@ export function Home({ snapshot, facade }: Props) {
     !snapshot.independentSession &&
     (restoring ||
       checking ||
+      snapshot.connectionChecking === true ||
       appChecking ||
       (checklist.completed &&
         (connectionPending || snapshot.signInObservation?.pending === true)));

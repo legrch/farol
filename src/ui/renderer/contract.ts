@@ -172,6 +172,8 @@ export type WindowSnapshot = Readonly<{
   configuration: ProductConfigurationSnapshot | null;
   tasks: ProductTasksState;
   activity: readonly ActivityEntry[];
+  /** Current host work, independent of journal reads; never connection proof. */
+  connectionChecking?: boolean;
   activityDiagnostics?: Readonly<{
     corruptLines: number;
     writeFailures: number;

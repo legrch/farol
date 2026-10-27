@@ -3197,7 +3197,7 @@ it("compact collapse keeps the expanded preference and never opens a page-list o
     });
   }
 });
-it("Setup keeps the same rail, active item, progress and gated Continue", async () => {
+it("Setup keeps navigation stable and progress inside its own page", async () => {
   const { host, c } = await mount(bootstrap());
   await act(async () => c.toggleSidebar(false));
   await act(async () => c.navigate({ area: "setup", setupStep: "connection" }));
@@ -3211,7 +3211,10 @@ it("Setup keeps the same rail, active item, progress and gated Continue", async 
   expect(button(host, "Back")).toBeTruthy();
   expect(
     host.querySelector('.rail [aria-label="Setup"]')?.getAttribute("title"),
-  ).toContain("of 4 checks current");
+  ).toBe("Setup · Current page");
+  expect(
+    host.querySelector('.rail [aria-label="Setup"] .setup-count'),
+  ).toBeNull();
 });
 it("does not show a complete Setup checkmark when the saved connection is offline", async () => {
   const data = completedBootstrap();
@@ -3221,7 +3224,8 @@ it("does not show a complete Setup checkmark when the saved connection is offlin
   const { host } = await mount(data);
   const setup = host.querySelector('.rail [aria-label="Setup"]')!;
   expect(setup.querySelector(".setup-count")?.textContent).not.toBe("✓");
-  expect(setup.getAttribute("title")).toContain("checks current");
+  expect(setup.querySelector(".setup-count")).toBeNull();
+  expect(setup.getAttribute("title")).toBe("Setup · Open page");
 });
 it("labels a challenge-scoped connection test as checking while it is in flight", async () => {
   const data = completedBootstrap();
@@ -3241,8 +3245,11 @@ it("labels a challenge-scoped connection test as checking while it is in flight"
     );
   });
   const setup = host.querySelector('.rail [aria-label="Setup"]')!;
-  expect(setup.querySelector(".setup-count")?.textContent).toBe("Checking…");
-  expect(setup.getAttribute("title")).toContain("Checking setup");
+  expect(setup.querySelector(".setup-count")).toBeNull();
+  expect(setup.getAttribute("title")).toBe("Setup · Open page");
+  expect(
+    host.querySelector('.rail-connection[data-checking="true"]'),
+  ).toBeTruthy();
   await act(async () => {
     wait.resolve({ ok: true, snapshot: data.configuration });
     await pending;
@@ -3406,8 +3413,11 @@ it("shows a connected local tunnel separately from an uncertain app check", asyn
   data.configuration.settings = settings;
   const h = await mount(data);
   expect(h.host.querySelector(".rail-connection")?.textContent).toBe(
-    "Connected",
+    "Tunnel connected",
   );
+  expect(
+    h.host.querySelector('.rail-connection[data-connected="true"]'),
+  ).toBeNull();
   expect(h.host.textContent).not.toContain(
     "Connected — ChatGPT can reach this Mac",
   );

@@ -14,7 +14,7 @@ import type { RendererFacade, SettingsPage, WindowSnapshot } from "./contract";
 import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
 import { useActivityNotifications } from "../../../apps/desktop/renderer/activity-notifications";
 import { computerSetup } from "./computer-setup";
-import { connectorVerificationInFlight } from "./setup-gate";
+import { connectionPresentation } from "../../../apps/desktop/renderer/connection-presentation";
 import { TaskEditor } from "./task";
 import { Home } from "./home";
 import { Setup } from "./setup";
@@ -22,7 +22,7 @@ import { ChatDirect } from "./chat-direct";
 import { ChatReadonly } from "./chat-readonly";
 import { ChatHistory } from "./chat-history";
 import { RetiredReplies } from "./retired-replies";
-import { setupSteps, setupChecklist } from "./setup-navigation";
+import { setupSteps } from "./setup-navigation";
 import { designIconPath, designIconViewBox } from "./design-icons";
 import { UpdateNotice, acknowledgeUpdateNotice } from "./update-notice";
 import {
@@ -1041,27 +1041,9 @@ export function Shell() {
   const settings = destination.area === "settings";
   const retained = useSetupIntents(facade, state);
   const notifications = useActivityNotifications(state, retained);
-  const checklist = setupChecklist(state, false, retained);
-  const completedSteps = checklist.entries.filter(
-    (entry) => entry.liveState === "verified",
-  ).length;
-  const setupChecking = connectorVerificationInFlight(state, retained);
-  const computer = computerSetup(state);
-  const keepSetupConfirmation =
-    completedSteps === 4 ||
-    (setupChecking &&
-      computer.facts.attachmentCurrent &&
-      state.configuration?.status === "ready" &&
-      state.configuration.settings.setup.journey.dismissed &&
-      state.configuration.settings.setup.chatgpt.verified?.buildId ===
-        state.buildId &&
-      !state.configuration.settings.setup.chatgpt.outcomeUnknown);
-  const connected = computer.localConnectionCurrent;
-  const connectionLabel = connected
-    ? computer.externalAccessVerified
-      ? "Connected — ChatGPT app verified"
-      : "Connected — local tunnel; setup saved"
-    : "Not connected yet";
+  const connectionState = connectionPresentation(state, retained);
+  const connected = connectionState.connected;
+  const connectionLabel = connectionState.label;
   const sidebarLabel = expanded ? "Collapse sidebar" : "Expand sidebar";
   const updateRailLabel =
     state.update.phase === "available"
@@ -1272,15 +1254,7 @@ export function Shell() {
                 setup: "Setup",
               }[area];
               const detail =
-                area === "setup"
-                  ? setupChecking
-                    ? keepSetupConfirmation
-                      ? "Setup saved · checking connection"
-                      : "Checking setup"
-                    : `${completedSteps} of 4 checks current`
-                  : destination.area === area
-                    ? "Current page"
-                    : "Open page";
+                destination.area === area ? "Current page" : "Open page";
               return (
                 <button
                   key={area}
@@ -1291,15 +1265,6 @@ export function Shell() {
                 >
                   <Icon name={area} />
                   <span className="rail-label">{label}</span>
-                  {area === "setup" && (
-                    <span className="rail-label setup-count">
-                      {keepSetupConfirmation
-                        ? "✓"
-                        : setupChecking
-                          ? "Checking…"
-                          : `${completedSteps} of 4`}
-                    </span>
-                  )}
                 </button>
               );
             })}
@@ -1332,15 +1297,14 @@ export function Shell() {
           <div
             className="rail-connection"
             data-connected={connected}
+            data-checking={connectionState.checking}
             role="status"
             aria-label={connectionLabel}
             title={connectionLabel}
             tabIndex={0}
           >
             <span className="connection-dot" aria-hidden="true" />
-            <span className="rail-label">
-              {connected ? "Connected" : "Not connected yet"}
-            </span>
+            <span className="rail-label">{connectionState.text}</span>
           </div>
           {!settings && (
             <button

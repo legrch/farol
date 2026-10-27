@@ -366,6 +366,61 @@ it("shows calm startup progress instead of a premature connection warning", asyn
   expect(h.host.querySelector(".home-health-warning")).not.toBeNull();
 });
 
+it("keeps host startup work calm through unavailable journal reads and transient sign-in samples", async () => {
+  const saved = working();
+  const unknown: ActivityEntry = {
+    ...event("historical-command", 1),
+    kind: "computer_shell_start",
+    outcome: "unknown",
+    phase: "outcome_unknown",
+  };
+  const checking: Partial<WindowSnapshot> = {
+    ...saved,
+    connectionChecking: true,
+    activity: [unknown],
+    activityDiagnostics: { corruptLines: 0, writeFailures: 1 },
+    signInObservation: {
+      ...saved.signInObservation!,
+      pending: false,
+      state: "unknown",
+    },
+  };
+  const h = await mount(checking);
+  expect(
+    h.host.querySelector('[role="status"][aria-busy="true"]'),
+  ).toBeTruthy();
+  expect(h.host.textContent).not.toContain("needs attention");
+  expect(h.host.textContent).not.toContain("could not read");
+  await h.set({
+    ...checking,
+    activityDiagnostics: { corruptLines: 0, writeFailures: 0 },
+  });
+  expect(h.host.querySelector('[aria-busy="true"]')).toBeTruthy();
+  await h.set({ ...saved, connectionChecking: false, activity: [unknown] });
+  expect(h.host.textContent).toContain("Farol is working");
+  expect(h.host.querySelector('[aria-busy="true"]')).toBeNull();
+  expect(unknown.outcome).toBe("unknown");
+  expect(h.f.api.configure).not.toHaveBeenCalled();
+});
+
+it("reveals a real sign-in problem only after host checking settles", async () => {
+  const saved = working();
+  const value: Partial<WindowSnapshot> = {
+    ...saved,
+    connectionChecking: true,
+    signInObservation: {
+      ...saved.signInObservation!,
+      state: "unknown",
+      pending: false,
+    },
+  };
+  const h = await mount(value);
+  expect(h.host.textContent).not.toContain("needs attention");
+  await h.set({ ...value, connectionChecking: false });
+  expect(h.host.textContent).toContain("needs attention");
+  expect(h.host.querySelector('[aria-busy="true"]')).toBeNull();
+});
+
 it("shows automatic ChatGPT check progress and reveals the same browser without another test", async () => {
   const value = working();
   const pending: ActivityEntry = {

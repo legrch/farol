@@ -341,6 +341,9 @@ kbd {
 .rail-connection[data-connected="true"] {
   color: var(--good);
 }
+.rail-connection[data-checking="true"] {
+  color: var(--muted);
+}
 .rail-connection small {
   font-size: 11px;
   color: inherit;

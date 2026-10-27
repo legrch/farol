@@ -906,6 +906,9 @@ let connectorCredentialStore: PrivateConnectorKeyStore | null = null;
 let secureMcpConnectorRuntime: SecureMcpConnectorRuntime | null = null;
 let modelLifecycle: FarolModelLifecycle | null = null;
 let connectorTaskAdmission = false;
+// Presentation spans workspace admission, tunnel startup and the app check.
+// It conveys no authority and is never restored from Activity or saved settings.
+let startupConnectionChecking = true;
 let connectorStartInFlight: Promise<void> | null = null;
 let startupConnectorResumeCancelled = false;
 let connectorTransportWatch: ConnectorTransportWatch<ConnectorTransportCapture> | null =
@@ -11815,11 +11818,15 @@ function installIpc(): void {
   const settings = configuration?.snapshot();
   if (settings?.status === "ready")
     operationsStore().setWorkspaceLabels(settings.settings.computer.workspaces);
-  ipcMain.handle(channels.operations, (event) =>
-    isTrustedIpcSender(event, window)
-      ? operationsStore().snapshot()
-      : { entries: [], corruptLines: 0, writeFailures: 1 },
-  );
+  ipcMain.handle(channels.operations, async (event) => {
+    if (!isTrustedIpcSender(event, window))
+      return { entries: [], corruptLines: 0, writeFailures: 1 };
+    const snapshot = await operationsStore().snapshot();
+    return {
+      ...snapshot,
+      connectionChecking: startupConnectionChecking || connectorTaskAdmission,
+    };
+  });
   ipcMain.handle(channels.installedUpdate, (event, value: unknown) =>
     isTrustedIpcSender(event, window)
       ? installedUpdateCommand(value)
@@ -13232,55 +13239,62 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         configureProduct({ kind: "computer.verify-workspace", workspaceId }),
       start: () => startSecureMcpConnector(false, true),
     },
-  ).then(
-    (status) => {
-      startupStage(
-        status === "started"
-          ? "connector-resumed"
-          : status === "skipped"
-            ? "connector-resume-skipped"
-            : "connector-resume-refused",
-      );
+  )
+    .then(
+      (status) => {
+        startupStage(
+          status === "started"
+            ? "connector-resumed"
+            : status === "skipped"
+              ? "connector-resume-skipped"
+              : "connector-resume-refused",
+        );
+        if (!quitInProgress && window && !window.isDestroyed())
+          window.webContents.send(channels.configurationChanged);
+        startConnectorTransportWatch();
+        const check =
+          status === "started" && !quitInProgress && !installedUpdateAdmission
+            ? resumedConnectorCheck(
+                beforeConnectorResume,
+                configuration!.snapshot(),
+                buildIdentity.buildId,
+              )
+            : null;
+        if (check) {
+          // Startup has one continuation only. Durable challenge claims and the
+          // ordinary admissions still forbid a second Send after UNKNOWN.
+          return observeOperation(
+            operationsStore(),
+            {
+              source: "Setup",
+              kind: "connector.verify-app",
+              target: { workspace: check.workspaceId ?? undefined },
+            },
+            () => verifySecureMcpApp(undefined, check),
+          ).then(
+            () => {
+              if (!quitInProgress && window && !window.isDestroyed())
+                window.webContents.send(channels.configurationChanged);
+            },
+            () => {
+              console.warn(
+                "Automatic connection check did not finish; its original result is retained in Activity.",
+              );
+            },
+          );
+        }
+        return undefined;
+      },
+      () => {
+        startupStage("connector-resume-failed");
+        startConnectorTransportWatch();
+      },
+    )
+    .finally(() => {
+      startupConnectionChecking = false;
       if (!quitInProgress && window && !window.isDestroyed())
         window.webContents.send(channels.configurationChanged);
-      startConnectorTransportWatch();
-      const check =
-        status === "started" && !quitInProgress && !installedUpdateAdmission
-          ? resumedConnectorCheck(
-              beforeConnectorResume,
-              configuration!.snapshot(),
-              buildIdentity.buildId,
-            )
-          : null;
-      if (check) {
-        // Startup has one continuation only. Durable challenge claims and the
-        // ordinary admissions still forbid a second Send after UNKNOWN.
-        void observeOperation(
-          operationsStore(),
-          {
-            source: "Setup",
-            kind: "connector.verify-app",
-            target: { workspace: check.workspaceId ?? undefined },
-          },
-          () => verifySecureMcpApp(undefined, check),
-        ).then(
-          () => {
-            if (!quitInProgress && window && !window.isDestroyed())
-              window.webContents.send(channels.configurationChanged);
-          },
-          () => {
-            console.warn(
-              "Automatic connection check did not finish; its original result is retained in Activity.",
-            );
-          },
-        );
-      }
-    },
-    () => {
-      startupStage("connector-resume-failed");
-      startConnectorTransportWatch();
-    },
-  );
+    });
 }
 
 const primaryInstanceLock = app.requestSingleInstanceLock(instanceRequest);
