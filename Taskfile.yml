@@ -19,6 +19,7 @@ tasks:
   ci:
     desc: Complete local source/build gate; ci:fast remains a compatibility alias, native/package/live qualification stays separate
     cmds:
+      - task: output:guard
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run ci
       - task: test:core
       - task: test:tooling
@@ -81,11 +82,13 @@ tasks:
     # current strict behavior unchanged. Ctrl+C stops only what this started.
     desc: Ordinary React/Go Dev - toolchain, locked deps, approved Go inputs, run here (not a candidate)
     cmds:
+      - task: output:guard
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/dev.mjs {{.CLI_ARGS}}
 
   dev:clean:
     desc: Start Dev with a new isolated first-run profile; preserve daily Dev
     cmds:
+      - task: output:guard
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/dev.mjs --fresh-review-profile {{.CLI_ARGS}}
 
   e2e:setup:
@@ -292,6 +295,33 @@ tasks:
     desc: Compatibility alias for ci; there is no separate fast gate
     cmds:
       - task: ci
+
+  output:status:
+    desc: Report every _output entry as current, protected, active, kept, removable or unknown
+    cmds:
+      - node tooling/output-retention.mjs status
+
+  output:prune:
+    desc: Remove finished owned scratch and expired or over-cap undeclared evidence; keeps everything else
+    cmds:
+      - node tooling/output-retention.mjs prune
+
+  output:guard:
+    desc: Prune, then refuse heavy work while _output stays over its budget
+    internal: true
+    cmds:
+      - node tooling/output-retention.mjs guard
+
+  disk:status:
+    desc: One report for _output and Farol-owned Docker volumes; run at the end of a task
+    cmds:
+      - node tooling/output-retention.mjs status
+      - |
+        if docker_cli="$(command -v docker)"; then
+          /usr/bin/python3 -B tooling/testops/testops.py volumes status --docker "$docker_cli"
+        else
+          echo "Docker CLI not found: no Farol volumes to report."
+        fi
 
   output:check:
     desc: Check the generated build, coverage, Hunt, logs and scratch layout

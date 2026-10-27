@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -22,6 +23,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from affected_run import DEPENDENCIES, evidence_bytes, projection, commands, NODE
 from dag import Budget, Job, Outcome, run, Blocked
+from volumes import locked as volume_lock
 from dependency_seal import reference
 from docker_gate import Docker, ROOT, IMAGE, TOOLS, container_command, memory_events_closed
 from testops import identity, changed, compiler_affected
@@ -310,6 +312,16 @@ def main():
         raise Blocked("SOURCE_CHANGED_DURING_ADMISSION")
     config = parent / ("docker-client-" + uuid.uuid4().hex)
     config.mkdir(mode=0o700)
+    state = {"retain": False}
+    try:
+        return iterate(options, parent, source, bound_source, config, state)
+    finally:
+        # Containers bind-mount this config; keep it while any retirement is unconfirmed.
+        if not state["retain"]:
+            shutil.rmtree(config)
+
+
+def iterate(options, parent, source, bound_source, config, state):
     (config / "config.json").write_text("{}\n")
     (config / "passwd").write_text("root:x:0:0:root:/root:/bin/sh\ntestops:x:501:20:TestOps:/tmp/testops-home:/bin/sh\n")
     (config / "group").write_text("root:x:0:\nstaff:x:20:testops\n")
@@ -318,8 +330,11 @@ def main():
         (config / "bin" / tool).symlink_to("/testops-seed/testops/linux-tools-bootstrap-03/bin/" + tool)
     docker = Docker(options.docker, options.socket, config)
     engine = docker.engine()
-    for volume in (options.source_volume, options.seed_volume, options.sdk_volume, options.dependency_volume):
-        docker.volume(volume, options.scope, source["head"] if volume == options.source_volume else None)
+    # Admit volumes under the lifecycle lock: a concurrent prune cannot remove
+    # them between its check and its rm, and this command line names them after.
+    with volume_lock(ROOT, 120):
+        for volume in (options.source_volume, options.seed_volume, options.sdk_volume, options.dependency_volume):
+            docker.volume(volume, options.scope, source["head"] if volume == options.source_volume else None)
     stop = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
@@ -339,6 +354,9 @@ def main():
         with (directory / "docker.stdout.log").open("xb") as stdout, (directory / "docker.stderr.log").open("xb") as stderr:
             if stop.is_set():
                 return Outcome("BLOCKED", True, reason="CANCELLED_BEFORE_DOCKER")
+            # From the first container launch on, keep the bind-mounted config
+            # until the scheduler reports every container retired.
+            state["retain"] = state["launched"] = True
             child = subprocess.Popen(command, env=docker.env, stdin=subprocess.DEVNULL,
                                      stdout=stdout, stderr=stderr, start_new_session=True)
             try:
@@ -362,6 +380,7 @@ def main():
 
     result = run(ROOT, [Job("affected", cpu=2, memory_mib=3072, effects="owned-fixture")],
                  Budget(1, 2, 3072), "linux", bound_source, execute, options.output, stop)
+    state["retain"] = state.get("launched", False) and bool(result.get("leaseRetained"))
     print(json.dumps({"status": result["status"], "acceptance": False,
                       "report": str(parent / options.output / "report.json"),
                       "limits": ["Opt-in iteration only; public task remains PLAN_ONLY; full CI/native/package gates remain mandatory"]}))

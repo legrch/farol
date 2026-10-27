@@ -435,7 +435,7 @@ describe("dev.mjs main() orchestration with an already-declared toolchain", () =
 
   it("defines dev:clean as the isolated-profile wrapper and forwards task arguments", () => {
     expect(taskfile).toMatch(
-      /  dev:clean:\n    desc: Start Dev with a new isolated first-run profile; preserve daily Dev\n    cmds:\n      - \/usr\/bin\/python3 -I \.\/scripts\/assert-owner-untouched\.py -- node tooling\/dev\.mjs --fresh-review-profile \{\{\.CLI_ARGS\}\}/,
+      /  dev:clean:\n    desc: Start Dev with a new isolated first-run profile; preserve daily Dev\n    cmds:\n      - task: output:guard\n      - \/usr\/bin\/python3 -I \.\/scripts\/assert-owner-untouched\.py -- node tooling\/dev\.mjs --fresh-review-profile \{\{\.CLI_ARGS\}\}/,
     );
   });
 

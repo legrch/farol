@@ -76,7 +76,13 @@ async function publishReceipt(output, destination, value) {
   }
 }
 
-async function verifyRetiredImage(output, receipt) {
+// Discards the previous image only after the current one is published and
+// verified (`discard`). The caller holds the Dev lifecycle lock and has proved
+// that no process uses these outputs. Trust model: crash recovery and
+// cooperating agents, not a same-account adversary. The image is first moved
+// into a fresh private wrapper on the same volume and re-identified there, so a
+// substituted tree is moved back and refused instead of deleted.
+async function verifyRetiredImage(output, receipt, { discard = false } = {}) {
   if (receipt?.schema !== 3 || receipt.retired === null) return;
   const retired = receipt.retired;
   if (
@@ -99,9 +105,78 @@ async function verifyRetiredImage(output, receipt) {
   }
   if (String(info.dev) !== retired.device || String(info.ino) !== retired.inode)
     throw new Error("DEV_CORE_RETIRED_CHANGED");
-  // Retain old images. A path identity check cannot bind recursive deletion
-  // atomically to this inode; publication must never delete a substituted tree.
-  // Explicit build-output cleanup belongs outside this launch transition.
+  if (discard) await discardImage(output, retired.name, retired);
+}
+
+async function discardImage(output, name, identity) {
+  const wrapper = await fs.mkdtemp(path.join(output, ".dev-core-trash-"));
+  const image = path.join(wrapper, "image");
+  try {
+    // rename(2) never copies: a different volume fails EXDEV and is kept.
+    await fs.rename(path.join(output, name), image);
+  } catch (error) {
+    await fs.rmdir(wrapper);
+    if (error.code === "ENOENT") return true;
+    return keep(name, error);
+  }
+  const info = await fs.lstat(image);
+  if (
+    !info.isDirectory() ||
+    info.uid !== process.getuid() ||
+    (identity &&
+      (String(info.dev) !== identity.device ||
+        String(info.ino) !== identity.inode))
+  ) {
+    await fs.rename(image, path.join(output, name));
+    await fs.rmdir(wrapper);
+    throw new Error("DEV_CORE_RETIRED_CHANGED");
+  }
+  // fs.rm removes links as links; it never resolves or follows them. The new
+  // image is already live, so a failure keeps the trash for the next reap.
+  try {
+    await fs.rm(wrapper, { recursive: true, force: true });
+    return true;
+  } catch (error) {
+    return keep(path.basename(wrapper), error);
+  }
+}
+
+function keep(name, error) {
+  process.stderr.write(
+    `Dev image cleanup kept _output/${name}: ${error.code ?? error.message}. The next task dev retries.\n`,
+  );
+  return false;
+}
+
+const ORPHAN =
+  /^\.dev-core-(?:retired-[0-9a-f-]{36}|trash-[A-Za-z0-9]{6}|[A-Za-z0-9]{6}|receipt-[0-9a-f-]{36}\.json)$/u;
+
+// Removes leftovers of interrupted transitions once the current image is
+// settled (schema 1 receipt) and present. The caller holds the Dev lifecycle
+// lock and has proved that no process uses Dev outputs, so no concurrent
+// builder can own a staging directory here.
+export async function reapDevCoreOrphans(root) {
+  const output = path.join(root, "_output");
+  await ownedDirectory(output);
+  const receipt = JSON.parse(
+    (
+      await readOwnedFile(path.join(output, "dev-core-resources.json"), 8192)
+    ).bytes.toString("utf8"),
+  );
+  if (receipt.schema !== 1) return [];
+  await ownedDirectory(path.join(output, "dev-core"));
+  const removed = [];
+  for (const name of await fs.readdir(output)) {
+    if (!ORPHAN.test(name)) continue;
+    const info = await fs.lstat(path.join(output, name));
+    if (info.uid !== process.getuid()) continue;
+    if (info.isDirectory()) {
+      if (!(await discardImage(output, name, null))) continue;
+    } else if (info.isFile()) await fs.rm(path.join(output, name));
+    else continue;
+    removed.push(name);
+  }
+  return removed;
 }
 
 function settledReceipt(previous) {
@@ -193,7 +268,7 @@ export async function prepareDevCoreResources(root) {
       verifyDevSignature(
         path.join(bundle, "Contents/Frameworks", `${DEV_DISPLAY_NAME}.app`),
       );
-      await verifyRetiredImage(output, previous);
+      await verifyRetiredImage(output, previous, { discard: true });
       if ([2, 3].includes(previous.schema)) {
         await publishReceipt(output, receiptPath, settledReceipt(previous));
       }
@@ -278,7 +353,7 @@ export async function prepareDevCoreResources(root) {
     }
     await fs.rename(staging, bundle);
     published = true;
-    await verifyRetiredImage(output, transition);
+    await verifyRetiredImage(output, transition, { discard: true });
     await publishReceipt(output, receiptPath, receipt);
     return destination;
   } finally {

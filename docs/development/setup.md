@@ -85,10 +85,18 @@ bundle and profile. The Go host applies the same resource, runtime, protected-ro
 and Shell support checks used for a package; workspace scope, Commands and task
 grants still apply to every command. Unexpected changes to the prepared tree
 refuse launch rather than being repaired or disabling Shell. A replacement first
-atomically retires the previous complete image. Retired images remain under
-`_output/.dev-core-retired-*`; launch never recursively deletes them, because a
-pathname identity check cannot make recursive removal atomic. Clean build outputs
-only after all owned Dev processes have exited. Workspace File writes and edits
+atomically retires the previous complete image, publishes and verifies the new
+one, and only then discards the retired image: it is renamed into a private
+`_output/.dev-core-trash-*` wrapper on the same volume, re-identified by inode
+(a substituted tree is moved back and refused) and removed, links as links. No
+retired image is kept. One `task dev` per checkout holds
+`_output/.dev-lifecycle.lock` (a kernel flock) from the process proof until the
+new Dev is spawned; a second one fails with `DEV_LIFECYCLE_BUSY`. Under that lock
+and after the proof, leftovers of an interrupted transition are reaped once the
+current image is settled. This protects against crashes and cooperating agents,
+not against another process of the same account. The temporary Go stop helper
+and compiler output are removed by their creators; see
+[output retention](output-retention.md). Workspace File writes and edits
 also exclude the actual backend image by kernel directory identity, independently
 of Commands. Legacy raw preview launches keep File tools but cannot qualify Shell
 against a separate image; `npm run preview:development` uses the canonical Dev
