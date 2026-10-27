@@ -9,6 +9,7 @@ import {
   type NativeViewHost,
 } from "../../apps/desktop/bridge/native-view-visibility";
 import { deriveSurfaceLayout } from "../../src/apps/desktop/surface-layout";
+import { preventEmbeddedWindowDrag } from "../../src/apps/desktop/embedded-web-drag";
 import { ShellLayoutSchema } from "../../src/pkg/ipc/shell-state";
 
 // Native-interface fakes and extracted production callbacks only. These tests
@@ -408,6 +409,7 @@ function desktopFixture() {
     channels: { browserRouteState: "fixture-route" },
     embeddedBrowserEnabled: () => true,
     deriveSurfaceLayout,
+    preventEmbeddedWindowDrag,
     ShellLayoutSchema,
     focusForLayoutAfterRendererCommit: () => f.events.push("deferred-focus"),
     compactBrowserSelected: () => false,
