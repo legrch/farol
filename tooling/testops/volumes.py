@@ -58,6 +58,7 @@ class Engine:
             if not stat.S_ISSOCK(socket.stat().st_mode):
                 raise Refused("EXPLICIT_LOCAL_UNIX_DOCKER_SOCKET_REQUIRED")
             self.prefix += ["--host", "unix://" + str(socket)]
+            self.endpoint = "unix://" + str(socket)
         self.env = {"PATH": "/usr/bin:/bin", "HOME": os.environ.get("HOME", "/var/empty"),
                     "LANG": "C", "LC_ALL": "C"}
         if socket is None:
@@ -68,6 +69,7 @@ class Engine:
             if result.returncode != 0 or not re.fullmatch(r"(unix|tcp|ssh|npipe)://\S+", host):
                 raise Refused("DOCKER_ENDPOINT_UNRESOLVED")
             self.prefix += ["--host", host]
+            self.endpoint = host
 
     def call(self, *args):
         return subprocess.run(self.prefix + list(args), env=self.env, stdin=subprocess.DEVNULL,
@@ -302,6 +304,7 @@ def prepare(root, engine, scope, names, retain, cache_key, extra, owner_pid, tim
                 raise Refused("VOLUME_NAME_NOT_FREE:" + name)
         # Registered before any create, so a partial prepare is still accounted.
         write_lease(path, {"schema": 1, "scope": scope, "created": created,
+                           "endpoint": engine.endpoint,
                            "owner": {"pid": owner_pid, "start": start},
                            "volumes": [{"name": n, "retain": retain} for n in names]})
         made = []
@@ -336,6 +339,9 @@ def release(root, engine, scope, timeout):
         if lease is False:
             # Ownership is this checkout's lease; a scope label alone is not.
             raise Refused("LOCAL_LEASE_REQUIRED")
+        if lease.get("endpoint") != engine.endpoint:
+            # Absence on another daemon proves nothing about the original one.
+            raise Refused("LEASE_ENGINE_MISMATCH")
         errors, removed, absent, retained, containers = [], [], [], [], []
         here = checkout_id(root)
         targets = {}
@@ -408,8 +414,22 @@ def release(root, engine, scope, timeout):
         return {"status": "PASS", "leaseRemoved": bool(lease), **report}, 0
 
 
+def process_commands():
+    """Command lines of live processes; None when unreadable (keep everything)."""
+    try:
+        result = subprocess.run([PS, "-axww", "-o", "command="], stdin=subprocess.DEVNULL,
+                                env={"PATH": "/usr/bin:/bin", "TZ": "UTC", "LANG": "C", "LC_ALL": "C"},
+                                capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.splitlines() if result.returncode == 0 and result.stdout else None
+
+
 def classify(root, engine, sizes=None):
     _, scopes = output_dirs(root)
+    # A gate can outlive the runner that owns its lease and run between
+    # containers; it names its scope and volumes on its own command line.
+    commands = process_commands()
     found = leases(scopes)
     live, unknown_names, unknown_scopes, lease_rows = set(), set(), set(), []
     for scope, lease in found.items():
@@ -442,6 +462,10 @@ def classify(root, engine, sizes=None):
             row.update(state="unknown", reason="NOT_THIS_CHECKOUT")
         elif name in live:
             row.update(state="active", reason="LIVE_LEASE")
+        elif commands is None:
+            row.update(state="unknown", reason="PROCESSES_UNREADABLE")
+        elif any(name in command or row["scope"] in command for command in commands):
+            row.update(state="active", reason="PROCESS_REFERENCE")
         elif name in unknown_names or labels[LABEL] in unknown_scopes:
             row.update(state="unknown", reason="LEASE_STATE_UNKNOWN")
         else:
@@ -486,7 +510,8 @@ def prune(root, engine, timeout):
                 continue
             lease = found[item["scope"]]
             runs = [r["name"] for r in lease["volumes"] if r["retain"] == "run"]
-            if all(inspect(engine, name)[0] is False for name in runs):
+            if lease.get("endpoint") == engine.endpoint and \
+                    all(inspect(engine, name)[0] is False for name in runs):
                 (scopes / (item["scope"] + ".json")).unlink()
                 dropped.append(item["scope"])
         kept = [{k: row[k] for k in ("name", "state", "reason")} for row in rows if row["state"] != "removable"]

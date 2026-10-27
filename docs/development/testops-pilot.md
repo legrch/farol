@@ -154,8 +154,8 @@ lease and leak. Use `python3 -B tooling/testops/testops.py volumes ACTION
   the calling process's parent: the long-lived runner that prepares, runs the
   gate and releases. A failed prepare leaves the lease, so cleanup still sees
   every requested name.
-- `release --scope ...` needs this checkout's lease for the scope; without it,
-  nothing is touched. It acts only on volumes that currently carry this
+- `release --scope ...` needs this checkout's lease for the scope, made on the
+  same Docker endpoint; otherwise nothing is touched. It acts only on volumes that currently carry this
   checkout's and scope's labels. It force-removes the scope-named containers
   that mount those run volumes, then removes the volumes by exact name and
   verifies absence. Cache volumes are left to prune. The lease is deleted only
@@ -166,7 +166,8 @@ lease and leak. Use `python3 -B tooling/testops/testops.py volumes ACTION
   another checkout's volume is reported `unknown`, never removed. It keeps
   volumes of a live lease (same pid and start time), volumes referenced by any
   container including stopped ones, and the two newest unreferenced cache
-  volumes per `farol.testops.cache-key`. It removes the rest by exact name.
+  volumes per `farol.testops.cache-key`. A volume whose name or scope appears on a live process's command line
+  (a gate that outlived its runner) is kept as active. It removes the rest by exact name.
 - `status` prints JSON with each labelled volume, its size when Docker reports
   one, and `active`, `removable`, `protected` or `unknown`.
 

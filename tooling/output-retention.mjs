@@ -380,9 +380,17 @@ export async function pruneOutput(root, options = {}) {
       .filter(({ state }) => state === "removable")
       .map(({ path: item }) => item),
   );
+  // The last observation is taken after both scans, just before removal, so
+  // a use that began while the second scan ran still keeps its entry.
+  const final = observe();
   const failed = [];
+  if (!final) return { ...report, removed, failed };
   for (const entry of report.entries) {
     if (entry.state !== "removable" || !removable.has(entry.path)) continue;
+    if (referenced(entry.path, final)) continue;
+    const owner = await readOwner(entry.path);
+    if (owner === "invalid") continue;
+    if (owner && ownerFinished(owner, entry.path, final)) continue;
     try {
       await fs.rm(entry.path, { recursive: true, force: true });
       removed.push(entry);

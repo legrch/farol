@@ -101,11 +101,33 @@ sys.exit(code)
 
 
 class Volumes(unittest.TestCase):
-    def write_own_lease(self, names):
+    def write_own_lease(self, names, endpoint="unix:///fake/docker.sock"):
         volumes.output_dirs(self.root)
         volumes.write_lease(self.lease(), {"schema": 1, "scope": SCOPE, "created": "now",
+                                           "endpoint": endpoint,
                                            "owner": {"pid": os.getpid(), "start": volumes.process_start(os.getpid())},
                                            "volumes": [{"name": n, "retain": "run"} for n in names]})
+
+    def test_a_gate_outliving_its_runner_keeps_its_volumes(self):
+        self.set_state({NAMES[0]: {"Labels": {volumes.LABEL: SCOPE[-8:], volumes.RETAIN: "run", **self.here()}}})
+        # Stands for a gate that names its scope on its command line.
+        gate = subprocess.Popen(["/usr/bin/python3", "-c", "import time; time.sleep(30)", "--scope", SCOPE])
+        self.addCleanup(gate.kill)
+        code, result = self.cli("prune")
+        self.assertEqual((code, result["removed"]), (0, []))
+        self.assertIn({"name": NAMES[0], "state": "active", "reason": "PROCESS_REFERENCE"}, result["kept"])
+        gate.kill()
+        gate.wait()
+        code, result = self.cli("prune")
+        self.assertEqual(result["removed"], [NAMES[0]])
+
+    def test_release_refuses_a_lease_from_another_engine(self):
+        self.set_state({NAMES[0]: {"Labels": {volumes.LABEL: SCOPE[-8:], **self.here()}}})
+        self.write_own_lease([NAMES[0]], endpoint="unix:///other/docker.sock")
+        code, result = self.cli("release", "--scope", SCOPE)
+        self.assertEqual((code, result["status"]), (2, "BLOCKED"))
+        self.assertTrue(self.lease().exists())
+        self.assertIn(NAMES[0], self.state()["volumes"])
 
     def test_release_needs_this_checkouts_lease_and_verified_volumes(self):
         foreign = {volumes.LABEL: SCOPE[-8:], volumes.CHECKOUT: "0" * 16}

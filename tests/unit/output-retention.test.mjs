@@ -440,4 +440,31 @@ describe("_output retention", () => {
     ).processes.find(({ pid }) => pid === process.pid);
     expect(owner.start).toBe(live.start);
   });
+
+  it("keeps an entry whose use begins after the second scan", async () => {
+    const old = await entry("evidence/old-run", { ageDays: 30 });
+    let calls = 0;
+    await pruneOutput(root, {
+      observation: observe(),
+      // Second scan: unused. Final pre-removal observation: a reader started.
+      observe: () =>
+        ++calls === 1 ? observe() : observe([], [path.join(old, "data")]),
+      now: NOW,
+      protect: PROTECTED_EVIDENCE,
+    });
+    expect(calls).toBe(2);
+    expect(await exists(old)).toBe(true);
+  });
+
+  it("removes nothing when the pre-removal observation fails", async () => {
+    const old = await entry("evidence/old-run", { ageDays: 30 });
+    let calls = 0;
+    await pruneOutput(root, {
+      observation: observe(),
+      observe: () => (++calls === 1 ? observe() : null),
+      now: NOW,
+      protect: PROTECTED_EVIDENCE,
+    });
+    expect(await exists(old)).toBe(true);
+  });
 });
