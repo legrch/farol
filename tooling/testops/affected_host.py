@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -310,6 +311,16 @@ def main():
         raise Blocked("SOURCE_CHANGED_DURING_ADMISSION")
     config = parent / ("docker-client-" + uuid.uuid4().hex)
     config.mkdir(mode=0o700)
+    state = {"retain": False}
+    try:
+        return iterate(options, parent, source, bound_source, config, state)
+    finally:
+        # Containers bind-mount this config; keep it while any retirement is unconfirmed.
+        if not state["retain"]:
+            shutil.rmtree(config)
+
+
+def iterate(options, parent, source, bound_source, config, state):
     (config / "config.json").write_text("{}\n")
     (config / "passwd").write_text("root:x:0:0:root:/root:/bin/sh\ntestops:x:501:20:TestOps:/tmp/testops-home:/bin/sh\n")
     (config / "group").write_text("root:x:0:\nstaff:x:20:testops\n")
@@ -360,8 +371,10 @@ def main():
         report = json.loads(evidence_bytes(directory / "report.json"))
         return Outcome("PASS", True, iteration_receipt(report, bound, directory, options.focused))
 
+    state["retain"] = True
     result = run(ROOT, [Job("affected", cpu=2, memory_mib=3072, effects="owned-fixture")],
                  Budget(1, 2, 3072), "linux", bound_source, execute, options.output, stop)
+    state["retain"] = bool(result.get("leaseRetained"))
     print(json.dumps({"status": result["status"], "acceptance": False,
                       "report": str(parent / options.output / "report.json"),
                       "limits": ["Opt-in iteration only; public task remains PLAN_ONLY; full CI/native/package gates remain mandatory"]}))

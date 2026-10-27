@@ -626,5 +626,91 @@ class HostCustody(unittest.TestCase):
         self.assertTrue(json.loads((self.directory / "original-docker-terminal.json").read_text())["terminal"])
 
 
+GATE_FAKE_DOCKER = r'''#!/usr/bin/python3
+import json, sys
+from pathlib import Path
+here = Path(__file__).resolve().parent
+args = sys.argv[5:]  # --config DIR --host unix://SOCKET
+with open(here / "docker.log", "a") as log:
+    log.write(json.dumps(args) + "\n")
+if args[0] == "info":
+    if (here / "fail-info").exists():
+        sys.exit("Cannot connect to the Docker daemon")
+    print(json.dumps({"ID": "engine", "OSType": "linux", "Architecture": "aarch64", "NCPU": 8,
+                      "MemTotal": 16 * 1024**3, "ServerVersion": "fake"}))
+elif args[:2] == ["volume", "inspect"]:
+    labels = {"farol.testops.task": "0a1b2c3d", "farol.testops.source": "a" * 40}
+    print(json.dumps([{"Name": args[2], "Driver": "local", "Options": None, "Labels": labels}]))
+else:
+    sys.exit("unexpected docker call")
+'''
+
+
+class ClientConfigCleanup(unittest.TestCase):
+    """docker_gate owns only its per-run client config; borrowed volumes are never removed."""
+
+    def setUp(self):
+        import socket
+        self.temp = tempfile.TemporaryDirectory(prefix="gate-")
+        self.addCleanup(self.temp.cleanup)
+        base = Path(self.temp.name).resolve()
+        self.root, fake = base / "repo", base / "fake"
+        self.parent = self.root / "_output/testops"
+        self.parent.mkdir(parents=True)
+        fake.mkdir()
+        (self.root / "package-lock.json").write_text("{}")
+        self.reference = self.parent / "reference.json"
+        self.reference.write_text("{}")
+        self.docker = fake / "docker"
+        self.docker.write_text(GATE_FAKE_DOCKER)
+        self.docker.chmod(0o700)
+        self.log, self.fail_info = fake / "docker.log", fake / "fail-info"
+        self.socket_path = base / "d.sock"
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(self.socket_path))
+        self.addCleanup(listener.close)
+
+    def main(self, outcome):
+        from docker_gate import main
+        scope = "farol-testops-0a1b2c3d"
+        argv = ["docker_gate.py", "--docker", str(self.docker), "--socket", str(self.socket_path),
+                "--scope", scope, "--source-volume", scope + "-source", "--seed-volume", scope + "-seed",
+                "--sdk-volume", scope + "-sdk", "--dependency-reference", str(self.reference),
+                "--dependency-reference-sha256", "c" * 64, "--jobs", "1", "--output", "failed-run"]
+        tree = {"algorithm": "node-modules-tree-v1", "treeSha256": "d" * 64, "files": 1, "logicalBytes": 1}
+
+        def scheduler(*args, **kwargs):
+            (self.parent / "failed-run").mkdir()
+            return outcome
+
+        with patch.object(sys, "argv", argv), patch("docker_gate.os.geteuid", return_value=501), \
+                patch("docker_gate.ROOT", self.root), patch("docker_gate.signal.signal"), \
+                patch("docker_gate.identity", return_value={"head": "a" * 40, "dirty": False}), \
+                patch("docker_gate.reference", return_value=tree), \
+                patch("docker_gate.run", side_effect=scheduler):
+            return main()
+
+    def assert_clean(self):
+        self.assertEqual(sorted(p.name for p in self.parent.glob("docker-client-*")), [])
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertTrue(calls)
+        self.assertFalse([c for c in calls if c[:1] == ["rm"] or c[:2] == ["volume", "rm"]])
+
+    def test_failed_run_removes_client_config_and_leaves_borrowed_volumes(self):
+        self.assertEqual(self.main({"status": "FAIL", "leaseRetained": False}), 1)
+        self.assertEqual(json.loads((self.parent / "failed-run/report.json").read_text())["status"], "FAIL")
+        self.assert_clean()
+
+    def test_unconfirmed_container_retirement_keeps_the_bind_mounted_config(self):
+        self.assertEqual(self.main({"status": "UNKNOWN", "leaseRetained": True}), 1)
+        self.assertEqual(len(list(self.parent.glob("docker-client-*"))), 1)
+
+    def test_engine_error_still_removes_client_config(self):
+        self.fail_info.write_text("")
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.main({"status": "PASS"})
+        self.assert_clean()
+
+
 if __name__ == "__main__":
     unittest.main()

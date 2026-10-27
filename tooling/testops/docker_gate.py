@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import stat
 import subprocess
@@ -375,6 +376,18 @@ def main():
     source = source_binding()
     config = parent / ("docker-client-" + uuid.uuid4().hex)
     config.mkdir(mode=0o700)
+    state = {"retain": False}
+    try:
+        return gate(options, parent, source, source_binding, config, state)
+    finally:
+        # The private client config is per run, but containers bind-mount it. Keep it
+        # while any container's retirement is unconfirmed (unknown-effect evidence).
+        # Borrowed volumes are never removed here; see `testops.py volumes`.
+        if not state["retain"]:
+            shutil.rmtree(config)
+
+
+def gate(options, parent, source, source_binding, config, state):
     (config / "config.json").write_text("{}\n")
     (config / "passwd").write_text("root:x:0:0:root:/root:/bin/sh\ntestops:x:501:20:TestOps:/tmp/testops-home:/bin/sh\n")
     (config / "group").write_text("root:x:0:\nstaff:x:20:testops\n")
@@ -398,8 +411,11 @@ def main():
     def execute(job, directory, binding):
         return execute_container(job, directory, binding, options, docker, nonce, engine, stop, deadline_hit)
 
+    # Until the scheduler reports every container retired, keep the bind-mounted config.
+    state["retain"] = True
     result = run(ROOT, jobs, Budget(options.jobs, 4, 6144), "linux", source_binding,
                  execute, options.output, stop)
+    state["retain"] = bool(result.get("leaseRetained"))
     result["engine"] = engine
     if deadline_hit.is_set():
         result["schedulerStatus"] = result["status"]
