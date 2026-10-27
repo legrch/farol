@@ -309,6 +309,7 @@ async function fixture(options = {}) {
   const script = `#!/bin/sh
 set -eu
 printf '%s\\n' "$*" >> ${quote(log)}
+${options.startAction ?? ""}
 case "$1" in
   version)
     if [ "$#" = 1 ]; then
@@ -655,7 +656,14 @@ describe("candidate-local Go backend build contract", () => {
     expect(
       (await fs.readFile(f.log, "utf8")).split("\n").filter(Boolean),
     ).toHaveLength(2);
-    expect(await artifacts(f.root)).toEqual([]);
+    // A descendant may still use the scratch: it is retained without an
+    // owner record (so retention never reaps it), and no artifact exists.
+    const retained = await artifacts(f.root);
+    expect(retained).toHaveLength(1);
+    expect(retained[0]).toMatch(/^go-backend-/u);
+    await expect(
+      fs.lstat(path.join(f.root, "_output/tmp", retained[0], ".owner")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("rejects module replacements before any compiler reads external input", async () => {
@@ -1123,6 +1131,26 @@ describe("owned temporary build directories", () => {
         }),
       ).rejects.toThrow("GO_BACKEND_TOOLCHAIN_DIGEST_MISMATCH");
       expect(await scratch(f.root)).toEqual([]);
+    },
+  );
+
+  it.runIf(process.platform === "darwin" && process.arch === "arm64")(
+    "retains the stop helper scratch when its compiler outcome is unknown",
+    async () => {
+      const f = await fixture({
+        startAction: '[ "$1" = build ] && kill -TERM $$',
+      });
+      await expect(
+        buildDevControl(f.root, {
+          toolchain: f.toolchain,
+          moduleInputs: f.modules.inputs,
+        }),
+      ).rejects.toThrow("GO_BACKEND_COMMAND_OUTCOME_UNKNOWN");
+      const retained = await scratch(f.root);
+      expect(retained).toHaveLength(1);
+      await expect(
+        fs.lstat(path.join(f.root, "_output/tmp", retained[0], ".owner")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
 

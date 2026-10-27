@@ -5,7 +5,7 @@ import path from "node:path";
 import { crc32, inflateRawSync } from "node:zlib";
 import { assertBuildIdentity } from "./build-identity-contract.mjs";
 import { sourceSnapshot } from "./source-identity.mjs";
-import { writeOwner } from "./owned-scratch.mjs";
+import { OWNER_FILE, writeOwner } from "./owned-scratch.mjs";
 
 const MODULE = "github.com/legrch/farol";
 const VERSION = "go1.26.2";
@@ -103,10 +103,21 @@ export async function buildDevControl(repositoryRoot, inputs) {
       platform,
     );
   } catch (error) {
-    // Nothing was signaled with a helper that was never returned.
-    await fs.rm(scratch, { recursive: true, force: true });
+    // Nothing was signaled with a helper that was never returned, but an
+    // outcome-unknown compiler may leave descendants using the scratch.
+    await settleFailedScratch(scratch, error);
     throw error;
   }
+}
+
+// A known failure removes its scratch. An outcome-unknown command (signal,
+// timeout, spawn failure) does not prove its descendants stopped, so the
+// scratch is retained as evidence without an owner record: retention then
+// reports it as unknown and never reaps it.
+async function settleFailedScratch(scratch, error) {
+  if (String(error?.message).startsWith("GO_BACKEND_COMMAND_OUTCOME_UNKNOWN"))
+    await fs.rm(path.join(scratch, OWNER_FILE), { force: true });
+  else await fs.rm(scratch, { recursive: true, force: true });
 }
 
 // Remove one returned owned temporary directory (helper or built backend).
@@ -995,6 +1006,7 @@ export async function buildGoBackend({
     path.join(await ownedParent(root, initial), "go-backend-"),
   );
   let artifact;
+  let failure;
   try {
     await writeOwner(scratch);
     const source = path.join(scratch, "source");
@@ -1125,8 +1137,10 @@ export async function buildGoBackend({
     });
   } catch (error) {
     if (artifact) await fs.rm(artifact, { recursive: true, force: true });
+    failure = error;
     throw error;
   } finally {
-    await fs.rm(scratch, { recursive: true, force: true });
+    if (failure) await settleFailedScratch(scratch, failure);
+    else await fs.rm(scratch, { recursive: true, force: true });
   }
 }
